@@ -814,12 +814,16 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
 
    ```go
    import (
+       "github.com/gaborage/go-bricks/config"
        "github.com/gaborage/go-bricks/logger"
        "github.com/gaborage/go-bricks/observability"
        "github.com/gaborage/go-bricks/server"
    )
 
-   func wireLogging(cfg *config.Config, e *echo.Echo) (observability.Provider, logger.Logger, error) {
+   // The raw HTTP engine is no longer exposed; register middleware through a
+   // server.RouteRegistrar (e.g. a module group from RegisterRoutes, or the
+   // runner's RootGroup()). server.LoggerWithConfig now returns server.MiddlewareFunc.
+   func wireLogging(cfg *config.Config, r server.RouteRegistrar) (observability.Provider, logger.Logger, error) {
        var obsCfg observability.Config
        if err := cfg.Unmarshal("observability", &obsCfg); err != nil {
            return nil, nil, err
@@ -832,7 +836,7 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
        appLogger := logger.New(cfg.Log.Level, cfg.Log.Pretty).
            WithOTelProvider(obsProvider)
 
-       e.Use(server.LoggerWithConfig(appLogger, server.LoggerConfig{
+       r.Use(server.LoggerWithConfig(appLogger, server.LoggerConfig{
            HealthPath:           "/health",
            ReadyPath:            "/ready",
            SlowRequestThreshold: obsCfg.Logs.SlowRequestThreshold,

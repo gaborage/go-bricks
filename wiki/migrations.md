@@ -2,6 +2,252 @@
 
 Historical migration tables for upgrading existing GoBricks-based applications. Greenfield work can ignore this file — the new APIs are the only ones documented in CLAUDE.md.
 
+## Echo-Free Boundary Types (ADR-034)
+
+Per [ADR-034](adr_034_echo_boundary_types.md) (issue #623), every `github.com/labstack/echo/v5`
+type was removed from the public surface. Echo stays the engine inside `server/`, but **no
+`echo.*` symbol appears in any code an application developer writes, names, or imports**. This
+is a **big-bang** breaking change — the old echo-typed methods are removed (not
+`// Deprecated:`), so every consumer migrates at once and the compiler flags each removed symbol.
+
+After upgrading, no `github.com/labstack/echo/v5` import should remain in your application **source**
+— though it stays an **indirect** dependency in `go.mod` (and survives `go mod tidy`), because
+`server/` still uses Echo as its engine internally. Run `git grep -nE 'ctx\.Echo|hctx\.Echo|echo\.(HandlerFunc|MiddlewareFunc|Context|Echo)|runner\.Echo\(\)|server\.EscalateSeverity'`
+across your service to find every call site.
+
+### (a) Custom middleware: Echo nested closure → flat `server.MiddlewareFunc`
+
+The middleware shape is now flat: run your logic, then call `next()` to continue the chain (or
+return an `IAPIError` **without** calling `next()` to abort). Propagate context with
+`c.SetRequestContext(...)` instead of `c.SetRequest(c.Request().WithContext(...))`.
+
+**Before:**
+
+```go
+func Auth(next echo.HandlerFunc) echo.HandlerFunc {
+    return func(c *echo.Context) error {
+        token := c.Request().Header.Get("Authorization")
+        if token == "" {
+            return server.NewUnauthorizedError("missing authorization header")
+        }
+        ctx := withUser(c.Request().Context(), token)
+        c.SetRequest(c.Request().WithContext(ctx)) // context propagation
+        return next(c)
+    }
+}
+```
+
+**After:**
+
+```go
+func Auth() server.MiddlewareFunc {
+    return func(c server.HandlerContext, next func() error) error {
+        token := c.RequestHeader("Authorization")
+        if token == "" {
+            return server.NewUnauthorizedError("missing authorization header")
+        }
+        c.SetRequestContext(withUser(c.RequestContext(), token)) // context propagation
+        return next()
+    }
+}
+```
+
+A no-argument middleware can also be a plain function whose signature *is* `server.MiddlewareFunc`
+(`func(c server.HandlerContext, next func() error) error`); register it directly with
+`r.Use(MyMiddleware)` / `r.Group("/admin", MyMiddleware)`.
+
+### (b) Request access: `ctx.Echo.Request().Context()` → `ctx.RequestContext()`
+
+`HandlerContext.Echo` is removed. Use the typed accessors: `RequestContext()` for the request
+`context.Context`, `Request()` / `ResponseWriter()` for the stdlib values, `Param` / `Query` /
+`RequestHeader` / `Get` / `Set` for the rest.
+
+**Before:**
+
+```go
+func (h *Handler) getUser(req GetReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+    reqCtx := ctx.Echo.Request().Context()
+    user, err := h.svc.Find(reqCtx, req.ID)
+    // ...
+}
+```
+
+**After:**
+
+```go
+func (h *Handler) getUser(req GetReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
+    reqCtx := ctx.RequestContext()
+    user, err := h.svc.Find(reqCtx, req.ID)
+    // ...
+}
+```
+
+### (c) `ServerRunner.Echo()` removed → use `ModuleGroup()` / `RootGroup()`
+
+The raw `*echo.Echo` is no longer exposed. Register routes and middleware through a
+`server.RouteRegistrar`: `ModuleGroup()` (basePath-applied, for application routes) or the new
+`RootGroup()` (no basePath, for `_sys`/debug-style endpoints).
+
+**Before:**
+
+```go
+e := runner.Echo()
+e.Use(server.LoggerWithConfig(appLogger, cfg))
+e.GET("/_sys/ping", pingHandler)
+```
+
+**After:**
+
+```go
+root := runner.RootGroup()
+root.Use(server.LoggerWithConfig(appLogger, cfg)) // constructor now returns server.MiddlewareFunc
+root.Add(http.MethodGet, "/_sys/ping", pingHandler) // pingHandler is a server.Handler
+```
+
+### (d) `RegisterReadyHandler`: raw echo handler → `server.Handler`
+
+**Before:**
+
+```go
+runner.RegisterReadyHandler(func(c *echo.Context) error {
+    return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+})
+```
+
+**After:**
+
+```go
+runner.RegisterReadyHandler(func(c server.HandlerContext) error {
+    return c.JSON(http.StatusOK, map[string]string{"status": "ready"})
+})
+// Passing nil restores the framework's built-in readiness check.
+```
+
+### (e) `scheduler.CIDRMiddleware` returns `server.MiddlewareFunc`
+
+The exported scheduler middleware moved to the flat shape. The call site is unchanged
+(`Use` now takes `server.MiddlewareFunc`); only direct type references need updating.
+
+**Before:**
+
+```go
+var mw echo.MiddlewareFunc = scheduler.CIDRMiddleware(allowed, logger)
+sysGroup.Use(mw)
+```
+
+**After:**
+
+```go
+var mw server.MiddlewareFunc = scheduler.CIDRMiddleware(allowed, logger)
+sysGroup.Use(mw)
+```
+
+### (f) Framework middleware constructors return `server.MiddlewareFunc` (call unchanged)
+
+`server.CORS`, `RateLimit`, `Timeout`, `Timing`, `LoggerWithConfig`, `IPPreGuard`,
+`RequestIDMiddleware`, `RequestEnrich`, `TenantMiddleware`, `TraceContext`, and
+`PerformanceStats` now return `server.MiddlewareFunc` instead of `echo.MiddlewareFunc`. **Call
+sites are unchanged** — only update any explicit variable types.
+
+**Before:**
+
+```go
+var cors echo.MiddlewareFunc = server.CORS(exposeResponseTime, env)
+r.Use(server.RateLimit(rps), cors)
+```
+
+**After:**
+
+```go
+var cors server.MiddlewareFunc = server.CORS(exposeResponseTime, env)
+r.Use(server.RateLimit(rps), cors) // call sites identical
+```
+
+### (g) `SkipperFunc` takes `*http.Request`; `EscalateSeverity` is a `HandlerContext` method
+
+`SkipperFunc` is now `func(r *http.Request) bool` (a skip decision needs only the request),
+and severity escalation is the `HandlerContext.EscalateSeverity(level)` method — the old
+package-level `server.EscalateSeverity(c, level)` is removed.
+
+**Before:**
+
+```go
+func rateLimit(next echo.HandlerFunc) echo.HandlerFunc {
+    return func(c *echo.Context) error {
+        if exceeded(c) {
+            server.EscalateSeverity(c, zerolog.WarnLevel)
+            return c.JSON(429, errBody)
+        }
+        return next(c)
+    }
+}
+```
+
+**After:**
+
+```go
+func rateLimit(c server.HandlerContext, next func() error) error {
+    if exceeded(c) {
+        c.EscalateSeverity(zerolog.WarnLevel)
+        return c.JSON(429, errBody)
+    }
+    return next()
+}
+```
+
+### (h) Tests: build the context via `server.NewHandlerContextForTest`
+
+Tests that built a context with `echo.New().NewContext(...)` now use the exported helper, which
+returns a `server.HandlerContext` backed by a real (server-internal) echo context.
+
+**Before:**
+
+```go
+e := echo.New()
+c := e.NewContext(req, rec)
+err := handler.GetUser(c) // raw echo handler
+```
+
+**After:**
+
+```go
+ctx := server.NewHandlerContextForTest(rec, req, cfg)
+err := handler.GetUser(ctx) // handler is now a server.Handler
+```
+
+### Performance note
+
+Custom-middleware routes pay a bounded **+1 heap-alloc per request per middleware-layer** — the
+`func() error { return next(c) }` baton that bridges the flat shape to Echo's chain, which is
+structurally unavoidable under the locked flat signature. This is incurred **only** on routes that
+carry a flat middleware (your custom middleware, the debug endpoints, `/_sys/job`). The **framework
+default middleware chain is unaffected**: it is registered echo-native via `e.Use` and the typed
+handler hot path stays echo-direct, so the [ADR-026](adr_026_zero_overhead_request_path.md)
+zero-overhead default path is preserved byte-for-byte.
+
+### Behavior notes (debug/system endpoints only)
+
+Converting the framework's own debug and `/_sys` denial paths from `echo.NewHTTPError(...)` to
+`server.New*Error(...)` — which `classifyError` returns as-is (an `IAPIError`) rather than
+mapping/sanitizing as it does an `*echo.HTTPError` — carries three small, intended deltas. None
+touch the typed-handler envelope, `Result`/`ResultWithMeta`, raw-response mode, or JOSE, and all
+affect only the IP-whitelisted, auth-gated admin endpoints:
+
+- **Debug auth denial log (security improvement).** The invalid-token denial now logs the
+  trusted-proxy-aware `server.ClientIP(...)` instead of echo's spoofable `c.RealIP()`. The
+  IP-whitelist-before-auth ordering, constant-time token compare, and CIDR localhost-only fallback
+  are unchanged; the 403/401 response bodies stay byte-identical in production.
+- **Goroutine-dump 500 message.** When a goroutine dump fails, the production response message is
+  now the verbatim, non-sensitive constant `"Failed to get goroutine dump"` rather than the generic
+  sanitized string — 500-sanitization applies to *untyped* errors, and a deliberate
+  `NewInternalServerError` with a safe constant follows the same convention as every other framework
+  typed error. Status (500) and code (`INTERNAL_ERROR`) are unchanged.
+- **Dev-mode denial details.** In development only, converted middleware denials now surface
+  `details.stackTrace` (when stack capture is on) instead of the old `details.error` echo string.
+- **Debug trusted-proxies WARN.** An invalid `debug.trustedproxies` CIDR entry now logs its startup
+  WARN whenever debug endpoints are enabled (the trusted-proxy set is parsed once and shared by the
+  IP-whitelist and auth middleware), rather than only when an IP allowlist was also configured.
+
 ## Bounded Publish Retries + Status-Driven Outbox Dead-Lettering (ADR-033)
 
 Per [ADR-033](adr_033_outbox_retry_count_status_parking.md), the outbox relay now advances an

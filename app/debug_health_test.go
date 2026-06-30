@@ -6,13 +6,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/server"
 )
 
 func TestDebugHealthHandlers(t *testing.T) {
@@ -116,10 +116,9 @@ func TestDebugHealthHandlers(t *testing.T) {
 
 			debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
 
-			e := echo.New()
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
 			rec := httptest.NewRecorder()
-			c := e.NewContext(req, rec)
+			c := server.NewHandlerContextForTest(rec, req, nil)
 
 			err := debugHandlers.handleHealthDebug(c)
 			assert.NoError(t, err)

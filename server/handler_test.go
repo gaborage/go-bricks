@@ -18,6 +18,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
@@ -600,7 +601,7 @@ func TestHandlerRegistryRegistersRoutes(t *testing.T) {
 	v := NewValidator()
 	require.NotNil(t, v)
 	e.Validator = v
-	registrar := newRouteGroup(e.Group(""), "")
+	registrar := newRouteGroup(e.Group(""), "", nil)
 
 	type emptyReq struct{}
 
@@ -1951,4 +1952,398 @@ func TestFrameworkEnvelopeWireParity(t *testing.T) {
 		_, err := time.Parse(time.RFC3339, ts)
 		require.NoError(t, err)
 	})
+}
+
+// ==================== HandlerContext accessor / adapter tests (issue #623) ====================
+
+// TestHandlerContextAccessors exercises the full echo-free accessor surface that replaced
+// the exported HandlerContext.Echo field: Request/RequestContext/ResponseWriter/Param/
+// Query/RequestHeader/Get/Set/JSON/String. It builds the context in-package via
+// newHandlerContext so path params can be seeded.
+func TestHandlerContextAccessors(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/widgets/42?q=hello", http.NoBody)
+	req.Header.Set("X-Foo", "bar")
+	rec := httptest.NewRecorder()
+	ec := e.NewContext(req, rec)
+	ec.SetPathValues(echo.PathValues{{Name: "id", Value: "42"}})
+
+	c := newHandlerContext(ec, cfg)
+
+	// Config is the go-bricks type, preserved on the struct.
+	assert.Same(t, cfg, c.Config)
+
+	// Request / RequestContext.
+	assert.Same(t, req, c.Request())
+	assert.Equal(t, req.Context(), c.RequestContext())
+
+	// ResponseWriter — writing a header lands on the recorder.
+	c.ResponseWriter().Header().Set("X-Written", "1")
+	assert.Equal(t, "1", rec.Header().Get("X-Written"))
+
+	// Path param, query param, request header.
+	assert.Equal(t, "42", c.Param("id"))
+	assert.Equal(t, "hello", c.Query("q"))
+	assert.Equal(t, "bar", c.RequestHeader("X-Foo"))
+	assert.Empty(t, c.Query("missing"))
+	assert.Empty(t, c.RequestHeader("X-Absent"))
+
+	// Per-request store (Get/Set) — NOT the context.Context.
+	assert.Nil(t, c.Get("k"))
+	c.Set("k", "v")
+	assert.Equal(t, "v", c.Get("k"))
+}
+
+// TestHandlerContextJSONAndString verifies the response-writer convenience methods.
+func TestHandlerContextJSONAndString(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	t.Run("json", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+		c := NewHandlerContextForTest(rec, req, cfg)
+		require.NoError(t, c.JSON(http.StatusCreated, map[string]string{"hello": "world"}))
+		assert.Equal(t, http.StatusCreated, rec.Code)
+		var got map[string]string
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+		assert.Equal(t, "world", got["hello"])
+	})
+
+	t.Run("string", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+		c := NewHandlerContextForTest(rec, req, cfg)
+		require.NoError(t, c.String(http.StatusOK, "plain text"))
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "plain text", rec.Body.String())
+	})
+}
+
+// TestHandlerContextSetRequestContextPropagation asserts SetRequestContext makes a value
+// visible to a downstream RequestContext() read — the canonical middleware→handler
+// context-propagation pattern the locked flat MiddlewareFunc shape relies on.
+func TestHandlerContextSetRequestContextPropagation(t *testing.T) {
+	type ctxKey string
+	const key ctxKey = "principal"
+
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := NewHandlerContextForTest(rec, req, cfg)
+
+	// Before: value absent.
+	assert.Nil(t, c.RequestContext().Value(key))
+
+	// Inject via SetRequestContext (mirrors middleware behavior).
+	c.SetRequestContext(context.WithValue(c.RequestContext(), key, "alice"))
+
+	// After: a downstream RequestContext() read observes the injected value.
+	assert.Equal(t, "alice", c.RequestContext().Value(key))
+}
+
+// TestHandlerContextSetRequest verifies SetRequest swaps the underlying *http.Request.
+func TestHandlerContextSetRequest(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/orig", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := NewHandlerContextForTest(rec, req, cfg)
+
+	newReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/replaced", http.NoBody)
+	c.SetRequest(newReq)
+	assert.Same(t, newReq, c.Request())
+	assert.Equal(t, "/replaced", c.Request().URL.Path)
+}
+
+// TestNewHandlerContextForTestSmoke verifies the exported test constructor produces a
+// usable HandlerContext backed by the supplied writer/request.
+func TestNewHandlerContextForTestSmoke(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "production"}}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x?n=7", http.NoBody)
+	req.Header.Set("X-Trace", "abc")
+	rec := httptest.NewRecorder()
+
+	c := NewHandlerContextForTest(rec, req, cfg)
+	assert.Same(t, cfg, c.Config)
+	assert.Same(t, req, c.Request())
+	assert.Equal(t, "7", c.Query("n"))
+	assert.Equal(t, "abc", c.RequestHeader("X-Trace"))
+}
+
+// TestAdaptHandlerRoundTrip proves a go-bricks Handler adapted to echo runs and writes
+// its own response.
+func TestAdaptHandlerRoundTrip(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	eh := adaptHandler(func(c HandlerContext) error {
+		return c.String(http.StatusTeapot, "brewed")
+	}, cfg)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	require.NoError(t, eh(e.NewContext(req, rec)))
+	assert.Equal(t, http.StatusTeapot, rec.Code)
+	assert.Equal(t, "brewed", rec.Body.String())
+}
+
+// TestAdaptMiddlewareChainsThrough verifies a flat MiddlewareFunc that calls next()
+// runs its logic and chains to the wrapped handler.
+func TestAdaptMiddlewareChainsThrough(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	em := adaptMiddleware(func(c HandlerContext, next func() error) error {
+		c.ResponseWriter().Header().Set("X-MW", "ran")
+		return next()
+	}, cfg)
+
+	nextCalled := false
+	wrapped := em(func(c *echo.Context) error {
+		nextCalled = true
+		return c.String(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	require.NoError(t, wrapped(e.NewContext(req, rec)))
+	assert.True(t, nextCalled, "next must be invoked when the middleware calls next()")
+	assert.Equal(t, "ran", rec.Header().Get("X-MW"))
+	assert.Equal(t, "ok", rec.Body.String())
+}
+
+// TestAdaptMiddlewareAbortPropagatesError verifies a flat MiddlewareFunc that returns an
+// IAPIError WITHOUT calling next aborts the chain and the error flows to the standard
+// error handler (producing the usual envelope).
+func TestAdaptMiddlewareAbortPropagatesError(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	e := echo.New()
+	e.HTTPErrorHandler = func(c *echo.Context, err error) { customErrorHandler(c, err, cfg) }
+
+	rg := newRouteGroup(e.Group(""), "", cfg)
+
+	nextCalled := false
+	rg.Use(func(_ HandlerContext, _ func() error) error {
+		return NewForbiddenError("blocked")
+	})
+	rg.Add(http.MethodGet, "/guard", func(c HandlerContext) error {
+		nextCalled = true
+		return c.String(http.StatusOK, "should not reach")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/guard", http.NoBody)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	assert.False(t, nextCalled, "handler must not run when middleware aborts without next()")
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "FORBIDDEN", resp.Error.Code)
+}
+
+// TestFromEchoMiddlewareRunsAndChains proves the inverse adapter: an echo-native
+// middleware exposed as a flat MiddlewareFunc still runs its echo logic and chains.
+func TestFromEchoMiddlewareRunsAndChains(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	flat := fromEchoMiddleware(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			c.Response().Header().Set("X-Echo-Native", "1")
+			return next(c)
+		}
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	rec := httptest.NewRecorder()
+	c := newHandlerContext(e.NewContext(req, rec), cfg)
+
+	nextCalled := false
+	require.NoError(t, flat(c, func() error {
+		nextCalled = true
+		return nil
+	}))
+	assert.True(t, nextCalled, "fromEchoMiddleware must chain to next()")
+	assert.Equal(t, "1", rec.Header().Get("X-Echo-Native"), "echo-native logic must still run through the flat form")
+}
+
+// TestPublicMiddlewareConstructorsReturnFlatForm drives the echo-free public middleware
+// constructors (L6 class) through routeGroup.Use as a consumer would, proving each returns
+// a working server.MiddlewareFunc and the whole flat chain flows a request end-to-end.
+func TestPublicMiddlewareConstructorsReturnFlatForm(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	rg := newRouteGroup(e.Group(""), "", cfg)
+
+	// Every constructor below MUST return server.MiddlewareFunc for these to compile.
+	mw := []MiddlewareFunc{
+		CORS(false, "development"),
+		RequestIDMiddleware(),
+		RequestEnrich(),
+		TraceContext(),
+		PerformanceStats(),
+		IPPreGuard(1000),
+		RateLimit(1000),
+		Timeout(5 * time.Second),
+		Timing(),
+		LoggerWithConfig(&noopLogger{}, LoggerConfig{SlowRequestThreshold: time.Second}),
+	}
+	rg.Use(mw...)
+
+	rg.Add(http.MethodGet, "/chained", func(c HandlerContext) error {
+		return c.String(http.StatusOK, "through")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/chained", http.NoBody)
+	req.Header.Set("Origin", "http://localhost:3000")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "through", rec.Body.String())
+	// CORS ran (origin echoed in dev) and RequestID middleware set the response header.
+	assert.Equal(t, "http://localhost:3000", rec.Header().Get(HeaderAccessControlAllowOrigin))
+	assert.NotEmpty(t, rec.Header().Get(echo.HeaderXRequestID))
+}
+
+// TestPublicTenantMiddlewareReturnsFlatForm covers TenantMiddleware + the flat SkipperFunc
+// (CreateProbeSkipper) separately, since it needs a resolver and a skipper argument.
+// capturingRegistrar is a RouteRegistrar that deliberately does NOT implement the
+// unexported echoAdder seam, so RegisterHandler takes its fallback branch
+// (adapting the echo handler into a Handler via the unexported escape hatch). It records
+// the adapted Handler so a test can invoke it and verify the round-trip works.
+type capturingRegistrar struct{ handler Handler }
+
+func (cr *capturingRegistrar) Add(_, _ string, handler Handler, _ ...MiddlewareFunc) {
+	cr.handler = handler
+}
+func (cr *capturingRegistrar) Group(string, ...MiddlewareFunc) RouteRegistrar { return cr }
+func (cr *capturingRegistrar) Use(...MiddlewareFunc)                          {}
+func (cr *capturingRegistrar) FullPath(p string) string                       { return p }
+
+type fallbackProbeResp struct {
+	Greeting string `json:"greeting"`
+}
+
+// TestRegisterHandlerFallbackForNonEchoRegistrar exercises the RegisterHandler fallback
+// for registrars that don't implement echoAdder: the adapted Handler must, when
+// invoked, round-trip through HandlerContext.echoContext() and run the full typed
+// pipeline, producing the standard data/meta envelope.
+func TestRegisterHandlerFallbackForNonEchoRegistrar(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	hr := NewHandlerRegistry(cfg)
+	cr := &capturingRegistrar{}
+
+	GET(hr, cr, "/fallback-probe", func(_ struct{}, _ HandlerContext) (fallbackProbeResp, IAPIError) {
+		return fallbackProbeResp{Greeting: "hi"}, nil
+	})
+	require.NotNil(t, cr.handler, "non-echoAdder must receive the adapted Handler via the fallback branch")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/fallback-probe", http.NoBody)
+	require.NoError(t, cr.handler(NewHandlerContextForTest(rec, req, cfg)))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"data":{"greeting":"hi"}`, "fallback must run the typed pipeline and emit the data envelope")
+	assert.Contains(t, rec.Body.String(), `"meta"`, "fallback must emit the framework meta envelope")
+}
+
+func TestPublicTenantMiddlewareReturnsFlatForm(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	rg := newRouteGroup(e.Group(""), "", cfg)
+
+	resolver := &multitenant.HeaderResolver{HeaderName: HeaderXTenantID}
+	skipper := CreateProbeSkipper("/health", "/ready")
+	tm := TenantMiddleware(resolver, skipper)
+	rg.Use(tm)
+
+	rg.Add(http.MethodGet, "/tenant-check", func(c HandlerContext) error {
+		tenant, _ := multitenant.GetTenant(c.RequestContext())
+		return c.String(http.StatusOK, tenant)
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/tenant-check", http.NoBody)
+	req.Header.Set(HeaderXTenantID, "acme")
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "acme", rec.Body.String(), "tenant resolved by the flat TenantMiddleware must reach the handler context")
+}
+
+// TestCreateProbeSkipperFlatForm verifies CreateProbeSkipper returns the echo-free
+// func(*http.Request) bool form and skips exactly the configured probe paths.
+func TestCreateProbeSkipperFlatForm(t *testing.T) {
+	skipper := CreateProbeSkipper("/health", "/ready")
+
+	cases := []struct {
+		path string
+		skip bool
+	}{
+		{"/health", true},
+		{"/ready", true},
+		{"/api/users", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, http.NoBody)
+		assert.Equal(t, tc.skip, skipper(req), "skipper decision for %s", tc.path)
+	}
+}
+
+// newTypedPathServer wires a typed GET handler through a real routeGroup (which implements
+// the echoAdder addEcho seam) so benchmarks/alloc tests measure the ADR-026 hot path.
+func newTypedPathServer(tb testing.TB) (*echo.Echo, *http.Request) {
+	tb.Helper()
+	e := echo.New()
+	e.Validator = NewValidator()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	hr := NewHandlerRegistry(cfg)
+	rg := newRouteGroup(e.Group(""), "", cfg)
+	GET(hr, rg, "/bench", func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: "ok"}, nil
+	})
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/bench", http.NoBody)
+	return e, req
+}
+
+// BenchmarkTypedHandlerPath drives a typed-handler request end-to-end through the
+// addEcho seam (ADR-026 zero-overhead path).
+func BenchmarkTypedHandlerPath(b *testing.B) {
+	e, req := newTypedPathServer(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+	}
+}
+
+// typedHandlerPathMaxAllocs locks in the typed request path's allocation count so a future
+// change to newHandlerContext, the HandlerContext accessors, or the addEcho seam that adds
+// per-request allocations is caught (ADR-026). The ceiling is the measured baseline plus a
+// tiny margin for cross-platform/Go-version noise. Measured baseline: 20 allocs/op.
+const typedHandlerPathMaxAllocs = 23
+
+// TestTypedHandlerPathAllocsStable asserts the typed request path's allocs/op stays at or
+// below the locked baseline — proving newHandlerContext + accessors + the addEcho seam add
+// no allocation (ADR-026).
+func TestTypedHandlerPathAllocsStable(t *testing.T) {
+	if raceDetectorEnabled {
+		t.Skip("testing.AllocsPerRun is unreliable under -race; alloc baseline enforced in the non-race matrix")
+	}
+	e, req := newTypedPathServer(t)
+	// Warm any one-time lazy state before measuring.
+	e.ServeHTTP(httptest.NewRecorder(), req)
+
+	got := testing.AllocsPerRun(100, func() {
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+	})
+	t.Logf("typed handler path allocs/op = %.1f (ceiling %d)", got, typedHandlerPathMaxAllocs)
+	assert.LessOrEqual(t, got, float64(typedHandlerPathMaxAllocs),
+		"typed request path allocs/op regressed beyond the ADR-026 baseline")
 }

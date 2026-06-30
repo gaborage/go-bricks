@@ -26,7 +26,16 @@ func enrichTraceContext(c *echo.Context) context.Context {
 // TraceContext injects the resolved trace ID and W3C trace context headers
 // from the Echo request/response into the request context, so that outbound
 // HTTP clients can propagate them without depending on Echo.
-func TraceContext() echo.MiddlewareFunc {
+//
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
+// echo-native logic lives in traceContextEcho.
+func TraceContext() MiddlewareFunc {
+	return fromEchoMiddleware(traceContextEcho())
+}
+
+// traceContextEcho is the echo-native trace-context middleware constructor. Public
+// callers use TraceContext (echo-free).
+func traceContextEcho() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			req := c.Request()

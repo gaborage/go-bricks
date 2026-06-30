@@ -74,10 +74,128 @@ type APIErrorResponse struct {
 // HandlerFunc defines the new handler signature that focuses on business logic.
 type HandlerFunc[T any, R any] func(request T, ctx HandlerContext) (R, IAPIError)
 
-// HandlerContext provides access to Echo context and additional utilities when needed.
+// MiddlewareFunc is the framework-neutral middleware signature. A middleware runs
+// its own logic, then calls next() to invoke the rest of the chain — or returns an
+// IAPIError WITHOUT calling next to abort the request (the returned error flows through
+// the standard error handler, producing the usual envelope). It is a flat baton-pass
+// rather than Echo's nested func(next) next form; the framework adapts it to Echo
+// internally, so application code never names an echo type.
+type MiddlewareFunc func(c HandlerContext, next func() error) error
+
+// Handler is the untyped, echo-free handler signature for raw routes, the readiness
+// probe, and debug/system endpoints. It writes its own response (via c.JSON / c.String)
+// and is the low-level counterpart to the typed HandlerFunc[T, R].
+//
+// Handler is NOT related to Raw Response Mode (WithRawResponse / RouteDescriptor.RawResponse,
+// which bypasses the APIResponse envelope for Strangler-Fig routes): the two concepts share
+// no machinery. Handler simply means "an echo-free handler the framework adapts to Echo."
+type Handler func(c HandlerContext) error
+
+// HandlerContext gives handlers and middleware framework-neutral access to the request,
+// response, and per-request state. Standard-library types (*http.Request,
+// http.ResponseWriter) are the currency at this boundary; the underlying Echo engine is
+// reachable only through the unexported escape hatch, so application code cannot name an
+// echo type.
 type HandlerContext struct {
-	Echo   *echo.Context
 	Config *config.Config
+	ectx   *echo.Context // unexported escape hatch; application code cannot name it
+}
+
+// newHandlerContext wraps an Echo context as a HandlerContext. Framework-internal.
+func newHandlerContext(c *echo.Context, cfg *config.Config) HandlerContext {
+	return HandlerContext{Config: cfg, ectx: c}
+}
+
+// NewHandlerContextForTest builds a HandlerContext backed by a real Echo context for use
+// in external-package tests (e.g. app/, scheduler/) that exercise Handler / MiddlewareFunc
+// code but cannot name the unexported escape hatch. It keeps the echo dependency confined
+// to package server. Test-support only — not for production wiring.
+func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *config.Config) HandlerContext {
+	e := echo.New()
+	// Register the framework validator so contexts built here drive the typed pipeline
+	// (which calls c.Validate) exactly as a live request would.
+	if v := NewValidator(); v != nil {
+		e.Validator = v
+	}
+	return newHandlerContext(e.NewContext(r, w), cfg)
+}
+
+// Request returns the underlying *http.Request.
+func (c HandlerContext) Request() *http.Request { return c.ectx.Request() }
+
+// RequestContext returns the request's context.Context. Convenience for the dominant
+// pattern (deadline/cancellation, trace and tenant propagation) so callers rarely need
+// Request() directly.
+func (c HandlerContext) RequestContext() context.Context { return c.ectx.Request().Context() }
+
+// ResponseWriter returns the http.ResponseWriter for the current response.
+func (c HandlerContext) ResponseWriter() http.ResponseWriter { return c.ectx.Response() }
+
+// Param returns the path parameter for name (empty string if absent).
+func (c HandlerContext) Param(name string) string { return c.ectx.Param(name) }
+
+// Query returns the first query-string value for name (empty string if absent).
+func (c HandlerContext) Query(name string) string { return c.ectx.QueryParam(name) }
+
+// RequestHeader returns the first request header value for name (empty string if absent).
+func (c HandlerContext) RequestHeader(name string) string { return c.ectx.Request().Header.Get(name) }
+
+// Get returns a per-request value previously stored with Set (nil if absent).
+func (c HandlerContext) Get(key string) any { return c.ectx.Get(key) }
+
+// Set stores a per-request value retrievable with Get. Note: this is the request-scoped
+// store, NOT the request's context.Context — to propagate values to downstream handlers
+// and tenant-aware resources (deps.DB(ctx) etc.), use SetRequestContext.
+func (c HandlerContext) Set(key string, val any) { c.ectx.Set(key, val) }
+
+// SetRequest replaces the underlying *http.Request (e.g. to attach a derived context).
+func (c HandlerContext) SetRequest(r *http.Request) { c.ectx.SetRequest(r) }
+
+// SetRequestContext replaces the request's context.Context, the canonical way for
+// middleware to inject values (tenant ID, authenticated principal) that downstream
+// handlers and context-aware resources observe. Equivalent to
+// SetRequest(Request().WithContext(ctx)).
+func (c HandlerContext) SetRequestContext(ctx context.Context) {
+	c.ectx.SetRequest(c.ectx.Request().WithContext(ctx))
+}
+
+// JSON writes v as a JSON response with the given status code. For raw/system handlers;
+// typed handlers return (R, IAPIError) and let the framework encode.
+func (c HandlerContext) JSON(code int, v any) error { return c.ectx.JSON(code, v) }
+
+// String writes s as a text/plain response with the given status code.
+func (c HandlerContext) String(code int, s string) error { return c.ectx.String(code, s) }
+
+// echoContext returns the underlying Echo context. UNEXPORTED escape hatch for
+// package-server framework code only (adapters, test helpers); greppable and unnameable
+// from other packages.
+func (c HandlerContext) echoContext() *echo.Context { return c.ectx }
+
+// adaptHandler converts a go-bricks Handler into an echo.HandlerFunc for registration.
+func adaptHandler(h Handler, cfg *config.Config) echo.HandlerFunc {
+	return func(c *echo.Context) error { return h(newHandlerContext(c, cfg)) }
+}
+
+// adaptMiddleware converts a flat MiddlewareFunc into an echo.MiddlewareFunc. The
+// per-request baton closure (func() error { return next(c) }) is the one allocation this
+// adapter adds; it lands only on middleware-bearing routes, never the framework's typed
+// default path (which registers echo handlers directly via the addEcho seam).
+func adaptMiddleware(m MiddlewareFunc, cfg *config.Config) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			return m(newHandlerContext(c, cfg), func() error { return next(c) })
+		}
+	}
+}
+
+// fromEchoMiddleware exposes an echo-native middleware as a flat MiddlewareFunc so the
+// framework's own middleware constructors keep an echo-free public signature while their
+// logic stays echo-native (and baton-free) on the default path inside SetupMiddlewares.
+func fromEchoMiddleware(em echo.MiddlewareFunc) MiddlewareFunc {
+	return func(c HandlerContext, next func() error) error {
+		h := em(func(*echo.Context) error { return next() })
+		return h(c.echoContext())
+	}
 }
 
 // RequestBinder handles binding request data to structs with validation.
@@ -325,7 +443,7 @@ func (hw *handlerWrapper[T, R]) wrap(handlerFunc HandlerFunc[T, R]) echo.Handler
 			return formatErr(c, cancelErr, hw.responder.cfg)
 		}
 
-		response, apiErr := handlerFunc(request, HandlerContext{Echo: c, Config: hw.responder.cfg})
+		response, apiErr := handlerFunc(request, newHandlerContext(c, hw.responder.cfg))
 		if c.Request().Context().Err() != nil {
 			return formatErr(c, NewServiceUnavailableError("Request timeout or canceled during handler execution"), hw.responder.cfg)
 		}
@@ -1046,12 +1164,25 @@ func ensureTraceParentHeader(c *echo.Context) {
 
 // RouteRegistrar abstracts the subset of Echo's routing features that modules need
 // while allowing the server to enforce common behavior such as base-path handling.
-// Implementations may wrap Echo groups to ensure routes are consistently registered.
+// Implementations wrap Echo groups internally; the public surface is echo-free —
+// handlers are server.Handler and middleware is server.MiddlewareFunc.
+//
+// Add does not return a route handle: the value was never consumed anywhere and exposing
+// echo.RouteInfo would re-introduce the leak this abstraction removes.
 type RouteRegistrar interface {
-	Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) echo.RouteInfo
-	Group(prefix string, middleware ...echo.MiddlewareFunc) RouteRegistrar
-	Use(middleware ...echo.MiddlewareFunc)
+	Add(method, path string, handler Handler, middleware ...MiddlewareFunc)
+	Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar
+	Use(middleware ...MiddlewareFunc)
 	FullPath(path string) string
+}
+
+// echoAdder is the unexported, echo-direct registration seam. Only routeGroup
+// implements it (within package server), so the framework's typed-handler hot path can
+// register a pre-built echo.HandlerFunc with zero per-request adapter overhead (honoring
+// ADR-026), while consumers use the echo-free RouteRegistrar.Add. It is an optional
+// interface upgrade in the style of io.ReaderFrom.
+type echoAdder interface {
+	addEcho(method, path string, h echo.HandlerFunc)
 }
 
 // HandlerRegistry manages enhanced handlers and provides registration utilities.
@@ -1135,7 +1266,21 @@ func RegisterHandler[T any, R any](
 		}
 	}
 	wrappedHandler := wrapHandlerWithJOSE(handler, hr.binder, hr.cfg, hr.log, descriptor.RawResponse, joseCfg)
-	r.Add(method, path, wrappedHandler)
+	// Hot path: register the echo handler directly through the unexported seam so the typed
+	// handler path adds zero per-request adapter overhead (ADR-026). The fallback adapts for
+	// non-routeGroup registrars (test fakes); it round-trips through the unexported escape
+	// hatch and never executes on the framework's real registrar.
+	if er, ok := r.(echoAdder); ok {
+		er.addEcho(method, path, wrappedHandler)
+	} else {
+		r.Add(method, path, func(c HandlerContext) error {
+			ec := c.echoContext()
+			if ec == nil {
+				return NewInternalServerError("typed handler invoked with a HandlerContext lacking a request context")
+			}
+			return wrappedHandler(ec)
+		})
+	}
 }
 
 // GET registers a GET handler with optional route configuration.

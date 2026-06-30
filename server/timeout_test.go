@@ -62,7 +62,7 @@ func TestTimeoutHandling(t *testing.T) {
 
 			// Create handler registry
 			hr := NewHandlerRegistry(cfg)
-			registrar := newRouteGroup(e.Group(""), "")
+			registrar := newRouteGroup(e.Group(""), "", nil)
 
 			// Define a simple handler
 			handler := func(_ EmptyRequest, _ HandlerContext) (Response, IAPIError) {
@@ -113,7 +113,7 @@ func TestContextDeadlineDetectionBeforeBinding(t *testing.T) {
 	}
 
 	hr := NewHandlerRegistry(cfg)
-	registrar := newRouteGroup(e.Group(""), "")
+	registrar := newRouteGroup(e.Group(""), "", nil)
 
 	// Handler that should never be called
 	handlerCalled := false
@@ -182,7 +182,7 @@ func TestTimeoutDuringValidation(t *testing.T) {
 	e.Validator = NewValidator()
 
 	hr := NewHandlerRegistry(cfg)
-	registrar := newRouteGroup(e.Group(""), "")
+	registrar := newRouteGroup(e.Group(""), "", nil)
 
 	type SlowValidationRequest struct {
 		Name string `json:"name" validate:"required,min=3"`
@@ -235,7 +235,7 @@ func TestContextCancellationDuringHandlerExecution(t *testing.T) {
 	}
 
 	hr := NewHandlerRegistry(cfg)
-	registrar := newRouteGroup(e.Group(""), "")
+	registrar := newRouteGroup(e.Group(""), "", nil)
 
 	// Handler that simulates work and allows context cancellation
 	handler := func(_ EmptyRequest, _ HandlerContext) (Response, IAPIError) {
@@ -293,12 +293,12 @@ func TestTimeoutWithLoggerMiddleware(t *testing.T) {
 	}
 
 	// Apply timeout middleware
-	e.Use(Timeout(cfg.Server.Timeout.Middleware))
+	e.Use(timeoutEcho(cfg.Server.Timeout.Middleware))
 
 	// Apply logger middleware (this is where the panic occurred in production)
 	// Use a thread-safe no-op logger for concurrency tests
 	log := &noopLogger{}
-	e.Use(LoggerWithConfig(log, LoggerConfig{
+	e.Use(loggerWithConfigEcho(log, LoggerConfig{
 		HealthPath:           "/health",
 		ReadyPath:            "/ready",
 		SlowRequestThreshold: 1 * time.Second,
@@ -352,9 +352,9 @@ func TestTimeoutWithLoggerHighConcurrency(t *testing.T) {
 		customErrorHandler(c, err, cfg)
 	}
 
-	e.Use(Timeout(cfg.Server.Timeout.Middleware))
+	e.Use(timeoutEcho(cfg.Server.Timeout.Middleware))
 	log := &noopLogger{}
-	e.Use(LoggerWithConfig(log, LoggerConfig{
+	e.Use(loggerWithConfigEcho(log, LoggerConfig{
 		HealthPath:           "/health",
 		ReadyPath:            "/ready",
 		SlowRequestThreshold: 1 * time.Second,

@@ -18,7 +18,18 @@ import (
 // (c.Response() returns nil), causing panics in logging/middleware that access
 // response headers/status. By using context-only timeouts, we maintain response
 // validity while still enforcing deadlines.
-func Timeout(duration time.Duration) echo.MiddlewareFunc {
+//
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
+// echo-native logic lives in timeoutEcho, which SetupMiddlewares wires directly on
+// the default request path (ADR-026, no per-request baton).
+func Timeout(duration time.Duration) MiddlewareFunc {
+	return fromEchoMiddleware(timeoutEcho(duration))
+}
+
+// timeoutEcho is the echo-native request-timeout middleware constructor. Public
+// callers use Timeout (echo-free); SetupMiddlewares uses this form to keep the
+// default chain baton-free.
+func timeoutEcho(duration time.Duration) echo.MiddlewareFunc {
 	if duration <= 0 {
 		return func(next echo.HandlerFunc) echo.HandlerFunc {
 			return next

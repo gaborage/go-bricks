@@ -2,14 +2,15 @@ package scheduler
 
 import (
 	"context"
-	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,63 +21,89 @@ const (
 	testPrivateAddr    = "10.0.0.1:12345"
 	testAllowList      = "10.0.0.0/8"
 	testIPAddress      = "192.168.1.100"
+
+	msgAccessDeniedLocalhost = "Access denied: localhost-only"
+	msgAccessDeniedAllowlist = "Access denied: IP not in allowlist"
 )
+
+// invokeCIDRMiddleware runs the flat middleware against req, reporting whether the
+// downstream next() ran (allowed) and the error returned (nil when allowed).
+func invokeCIDRMiddleware(mw server.MiddlewareFunc, req *http.Request) (nextCalled bool, err error) {
+	rec := httptest.NewRecorder()
+	ctx := server.NewHandlerContextForTest(rec, req, &config.Config{})
+	err = mw(ctx, func() error {
+		nextCalled = true
+		return nil
+	})
+	return nextCalled, err
+}
+
+// assertForbidden asserts err is a go-bricks forbidden (403) IAPIError with wantMessage.
+// assertCIDRDecision asserts the allow/deny outcome of a CIDR middleware invocation,
+// shared across the gating tests to avoid repeating the same allow/deny block.
+func assertCIDRDecision(t *testing.T, nextCalled bool, err error, expectAllowed bool, wantMessage string) {
+	t.Helper()
+	if expectAllowed {
+		assert.True(t, nextCalled, "next should be called when allowed")
+		assert.NoError(t, err)
+	} else {
+		assert.False(t, nextCalled, "next must not be called when denied")
+		assertForbidden(t, err, wantMessage)
+	}
+}
+
+func assertForbidden(t *testing.T, err error, wantMessage string) {
+	t.Helper()
+	require.Error(t, err)
+	var apiErr server.IAPIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusForbidden, apiErr.HTTPStatus())
+	assert.Equal(t, wantMessage, apiErr.Message())
+}
 
 // TestCIDRMiddlewareLocalhostOnly verifies localhost-only access when allowlist is empty
 func TestCIDRMiddlewareLocalhostOnly(t *testing.T) {
 	tests := []struct {
-		name       string
-		remoteAddr string
-		expectCode int
+		name          string
+		remoteAddr    string
+		expectAllowed bool
+		expectMessage string
 	}{
 		{
-			name:       "allows localhost IPv4",
-			remoteAddr: testLocalhostAddr,
-			expectCode: http.StatusOK,
+			name:          "allows_localhost_ipv4",
+			remoteAddr:    testLocalhostAddr,
+			expectAllowed: true,
 		},
 		{
-			name:       "allows localhost IPv6",
-			remoteAddr: "[::1]:12345",
-			expectCode: http.StatusOK,
+			name:          "allows_localhost_ipv6",
+			remoteAddr:    "[::1]:12345",
+			expectAllowed: true,
 		},
 		{
-			name:       "blocks external IP",
-			remoteAddr: "192.168.1.100:12345",
-			expectCode: http.StatusForbidden,
+			name:          "blocks_external_ip",
+			remoteAddr:    "192.168.1.100:12345",
+			expectAllowed: false,
+			expectMessage: msgAccessDeniedLocalhost,
 		},
 		{
-			name:       "blocks public IP",
-			remoteAddr: "8.8.8.8:12345",
-			expectCode: http.StatusForbidden,
+			name:          "blocks_public_ip",
+			remoteAddr:    "8.8.8.8:12345",
+			expectAllowed: false,
+			expectMessage: msgAccessDeniedLocalhost,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
-			middleware := CIDRMiddleware(nil, []string{}, []string{}) // Empty allowlist = localhost-only, no trusted proxies
-
-			handler := middleware(func(c *echo.Context) error {
-				return c.String(http.StatusOK, "OK")
-			})
+			// Empty allowlist = localhost-only, no trusted proxies
+			mw := CIDRMiddleware(nil, []string{}, []string{})
 
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
-			rec := httptest.NewRecorder()
-			c := e.NewContext(req, rec)
 
-			err := handler(c)
+			nextCalled, err := invokeCIDRMiddleware(mw, req)
 
-			if tt.expectCode == http.StatusOK {
-				assert.NoError(t, err)
-				assert.Equal(t, http.StatusOK, rec.Code)
-			} else {
-				assert.Error(t, err)
-				var httpErr *echo.HTTPError
-				ok := errors.As(err, &httpErr)
-				require.True(t, ok)
-				assert.Equal(t, tt.expectCode, httpErr.Code)
-			}
+			assertCIDRDecision(t, nextCalled, err, tt.expectAllowed, tt.expectMessage)
 		})
 	}
 }
@@ -84,69 +111,57 @@ func TestCIDRMiddlewareLocalhostOnly(t *testing.T) {
 // TestCIDRMiddlewareAllowlistMode verifies CIDR allowlist filtering
 func TestCIDRMiddlewareAllowlistMode(t *testing.T) {
 	tests := []struct {
-		name       string
-		allowlist  []string
-		remoteAddr string
-		expectCode int
+		name          string
+		allowlist     []string
+		remoteAddr    string
+		expectAllowed bool
+		expectMessage string
 	}{
 		{
-			name:       "allows IP in allowlist range",
-			allowlist:  []string{testPrivateNetCIDR},
-			remoteAddr: "192.168.1.100:12345",
-			expectCode: http.StatusOK,
+			name:          "allows_ip_in_allowlist_range",
+			allowlist:     []string{testPrivateNetCIDR},
+			remoteAddr:    "192.168.1.100:12345",
+			expectAllowed: true,
 		},
 		{
-			name:       "blocks IP outside allowlist range",
-			allowlist:  []string{testPrivateNetCIDR},
-			remoteAddr: "192.168.2.100:12345",
-			expectCode: http.StatusForbidden,
+			name:          "blocks_ip_outside_allowlist_range",
+			allowlist:     []string{testPrivateNetCIDR},
+			remoteAddr:    "192.168.2.100:12345",
+			expectAllowed: false,
+			expectMessage: msgAccessDeniedAllowlist,
 		},
 		{
-			name:       "allows IP in multiple ranges",
-			allowlist:  []string{testPrivateNetCIDR, testAllowList},
-			remoteAddr: "10.1.2.3:12345",
-			expectCode: http.StatusOK,
+			name:          "allows_ip_in_multiple_ranges",
+			allowlist:     []string{testPrivateNetCIDR, testAllowList},
+			remoteAddr:    "10.1.2.3:12345",
+			expectAllowed: true,
 		},
 		{
-			name:       "allows specific IP with /32",
-			allowlist:  []string{"203.0.113.42/32"},
-			remoteAddr: "203.0.113.42:12345",
-			expectCode: http.StatusOK,
+			name:          "allows_specific_ip_with_32",
+			allowlist:     []string{"203.0.113.42/32"},
+			remoteAddr:    "203.0.113.42:12345",
+			expectAllowed: true,
 		},
 		{
-			name:       "blocks localhost when not in allowlist",
-			allowlist:  []string{testPrivateNetCIDR},
-			remoteAddr: testLocalhostAddr,
-			expectCode: http.StatusForbidden,
+			name:          "blocks_localhost_when_not_in_allowlist",
+			allowlist:     []string{testPrivateNetCIDR},
+			remoteAddr:    testLocalhostAddr,
+			expectAllowed: false,
+			expectMessage: msgAccessDeniedAllowlist,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
-			middleware := CIDRMiddleware(nil, tt.allowlist, []string{}) // No trusted proxies in basic tests
-
-			handler := middleware(func(c *echo.Context) error {
-				return c.String(http.StatusOK, "OK")
-			})
+			// No trusted proxies in basic tests
+			mw := CIDRMiddleware(nil, tt.allowlist, []string{})
 
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
-			rec := httptest.NewRecorder()
-			c := e.NewContext(req, rec)
 
-			err := handler(c)
+			nextCalled, err := invokeCIDRMiddleware(mw, req)
 
-			if tt.expectCode == http.StatusOK {
-				assert.NoError(t, err)
-				assert.Equal(t, http.StatusOK, rec.Code)
-			} else {
-				assert.Error(t, err)
-				var httpErr *echo.HTTPError
-				ok := errors.As(err, &httpErr)
-				require.True(t, ok)
-				assert.Equal(t, tt.expectCode, httpErr.Code)
-			}
+			assertCIDRDecision(t, nextCalled, err, tt.expectAllowed, tt.expectMessage)
 		})
 	}
 }
@@ -160,52 +175,49 @@ func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 		remoteAddr     string
 		xForwardedFor  string
 		xRealIP        string
-		expectCode     int
+		expectAllowed  bool
+		expectMessage  string
 		description    string
 	}{
 		{
-			name:           "uses X-Forwarded-For when present and peer is trusted",
+			name:           "uses_xff_when_present_and_peer_is_trusted",
 			allowlist:      []string{testPrivateNetCIDR},
 			trustedProxies: []string{testAllowList}, // Trust the proxy network
 			remoteAddr:     testPrivateAddr,
 			xForwardedFor:  "192.168.1.100, 10.0.0.5",
-			expectCode:     http.StatusOK,
+			expectAllowed:  true,
 			description:    "Should use first IP from X-Forwarded-For when peer is trusted",
 		},
 		{
-			name:           "uses X-Real-IP when X-Forwarded-For absent and peer is trusted",
+			name:           "uses_xrealip_when_xff_absent_and_peer_is_trusted",
 			allowlist:      []string{testPrivateNetCIDR},
 			trustedProxies: []string{testAllowList},
 			remoteAddr:     testPrivateAddr,
 			xRealIP:        testIPAddress,
-			expectCode:     http.StatusOK,
+			expectAllowed:  true,
 		},
 		{
-			name:           "uses RemoteAddr when no proxy headers",
+			name:           "uses_remoteaddr_when_no_proxy_headers",
 			allowlist:      []string{testAllowList},
 			trustedProxies: []string{},
 			remoteAddr:     testPrivateAddr,
-			expectCode:     http.StatusOK,
+			expectAllowed:  true,
 		},
 		{
-			name:           "blocks when X-Forwarded-For IP not in allowlist",
+			name:           "blocks_when_xff_ip_not_in_allowlist",
 			allowlist:      []string{testPrivateNetCIDR},
 			trustedProxies: []string{testPrivateNetCIDR}, // Trust proxy network
 			remoteAddr:     "192.168.1.50:12345",
 			xForwardedFor:  "203.0.113.1",
-			expectCode:     http.StatusForbidden,
+			expectAllowed:  false,
+			expectMessage:  msgAccessDeniedAllowlist,
 			description:    "X-Forwarded-For takes precedence over RemoteAddr when peer is trusted",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
-			middleware := CIDRMiddleware(nil, tt.allowlist, tt.trustedProxies)
-
-			handler := middleware(func(c *echo.Context) error {
-				return c.String(http.StatusOK, "OK")
-			})
+			mw := CIDRMiddleware(nil, tt.allowlist, tt.trustedProxies)
 
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
@@ -215,20 +227,15 @@ func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 			if tt.xRealIP != "" {
 				req.Header.Set(server.HeaderXRealIP, tt.xRealIP)
 			}
-			rec := httptest.NewRecorder()
-			c := e.NewContext(req, rec)
 
-			err := handler(c)
+			nextCalled, err := invokeCIDRMiddleware(mw, req)
 
-			if tt.expectCode == http.StatusOK {
+			if tt.expectAllowed {
+				assert.True(t, nextCalled, tt.description)
 				assert.NoError(t, err, tt.description)
-				assert.Equal(t, http.StatusOK, rec.Code)
 			} else {
-				assert.Error(t, err, tt.description)
-				var httpErr *echo.HTTPError
-				ok := errors.As(err, &httpErr)
-				require.True(t, ok)
-				assert.Equal(t, tt.expectCode, httpErr.Code)
+				assert.False(t, nextCalled, tt.description)
+				assertForbidden(t, err, tt.expectMessage)
 			}
 		})
 	}
@@ -243,73 +250,73 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 		remoteAddr     string
 		xForwardedFor  string
 		xRealIP        string
-		expectCode     int
+		expectAllowed  bool
+		expectMessage  string
 		description    string
 	}{
 		{
-			name:           "SECURITY: blocks spoofed XFF when no trusted proxies",
+			name:           "blocks_spoofed_xff_when_no_trusted_proxies",
 			allowlist:      []string{testPrivateNetCIDR},
 			trustedProxies: []string{},          // No trusted proxies - headers should be ignored
 			remoteAddr:     "203.0.113.1:12345", // Attacker's IP (not in allowlist)
 			xForwardedFor:  testIPAddress,       // Spoofed header claiming to be in allowlist
-			expectCode:     http.StatusForbidden,
+			expectAllowed:  false,
+			expectMessage:  msgAccessDeniedAllowlist,
 			description:    "Without trusted proxies, X-Forwarded-For must be ignored to prevent spoofing",
 		},
 		{
-			name:           "SECURITY: blocks spoofed X-Real-IP when no trusted proxies",
+			name:           "blocks_spoofed_xrealip_when_no_trusted_proxies",
 			allowlist:      []string{testPrivateNetCIDR},
 			trustedProxies: []string{},
 			remoteAddr:     "203.0.113.1:12345", // Attacker's IP
 			xRealIP:        testIPAddress,       // Spoofed header
-			expectCode:     http.StatusForbidden,
+			expectAllowed:  false,
+			expectMessage:  msgAccessDeniedAllowlist,
 			description:    "Without trusted proxies, X-Real-IP must be ignored",
 		},
 		{
-			name:           "allows legitimate proxy with trusted configuration",
+			name:           "allows_legitimate_proxy_with_trusted_configuration",
 			allowlist:      []string{testPrivateNetCIDR},
 			trustedProxies: []string{testAllowList}, // Trust the proxy network
 			remoteAddr:     testPrivateAddr,         // Request from trusted proxy
 			xForwardedFor:  testIPAddress,           // Real client IP
-			expectCode:     http.StatusOK,
+			expectAllowed:  true,
 			description:    "Trusted proxy can provide X-Forwarded-For",
 		},
 		{
-			name:           "SECURITY: ignores headers from untrusted proxy",
+			name:           "ignores_headers_from_untrusted_proxy",
 			allowlist:      []string{testPrivateNetCIDR},
 			trustedProxies: []string{"172.16.0.0/12"}, // Trust different network
 			remoteAddr:     testPrivateAddr,           // Untrusted proxy (not in 172.16.0.0/12)
 			xForwardedFor:  testIPAddress,             // Spoofed header
-			expectCode:     http.StatusForbidden,
+			expectAllowed:  false,
+			expectMessage:  msgAccessDeniedAllowlist,
 			description:    "Untrusted proxy's headers must be ignored",
 		},
 		{
-			name:           "SECURITY: right-to-left XFF resolution prevents injection",
+			name:           "right_to_left_xff_resolution_prevents_injection",
 			allowlist:      []string{"203.0.113.0/24"},
 			trustedProxies: []string{testAllowList, testPrivateNetCIDR},
 			remoteAddr:     "10.0.0.5:12345",                      // Trusted proxy
 			xForwardedFor:  "203.0.113.42, 192.168.1.1, 10.0.0.5", // Proper chain
-			expectCode:     http.StatusOK,
+			expectAllowed:  true,
 			description:    "Walk right-to-left: 10.0.0.5 (trusted), 192.168.1.1 (trusted), 203.0.113.42 (client)",
 		},
 		{
-			name:           "SECURITY: detects client IP when intermediate proxy is untrusted",
+			name:           "detects_client_ip_when_intermediate_proxy_is_untrusted",
 			allowlist:      []string{"198.51.100.0/24"},
 			trustedProxies: []string{testAllowList},
 			remoteAddr:     "10.0.0.5:12345",                       // Trusted proxy
 			xForwardedFor:  "198.51.100.42, 192.168.1.1, 10.0.0.5", // 192.168.1.1 is untrusted
-			expectCode:     http.StatusForbidden,
+			expectAllowed:  false,
+			expectMessage:  msgAccessDeniedAllowlist,
 			description:    "Walk right-to-left: 10.0.0.5 (trusted), 192.168.1.1 (untrusted = client), blocks 192.168.1.1",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := echo.New()
-			middleware := CIDRMiddleware(nil, tt.allowlist, tt.trustedProxies)
-
-			handler := middleware(func(c *echo.Context) error {
-				return c.String(http.StatusOK, "OK")
-			})
+			mw := CIDRMiddleware(nil, tt.allowlist, tt.trustedProxies)
 
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = tt.remoteAddr
@@ -319,20 +326,15 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 			if tt.xRealIP != "" {
 				req.Header.Set(server.HeaderXRealIP, tt.xRealIP)
 			}
-			rec := httptest.NewRecorder()
-			c := e.NewContext(req, rec)
 
-			err := handler(c)
+			nextCalled, err := invokeCIDRMiddleware(mw, req)
 
-			if tt.expectCode == http.StatusOK {
+			if tt.expectAllowed {
+				assert.True(t, nextCalled, tt.description)
 				assert.NoError(t, err, tt.description)
-				assert.Equal(t, http.StatusOK, rec.Code)
 			} else {
-				assert.Error(t, err, tt.description)
-				var httpErr *echo.HTTPError
-				ok := errors.As(err, &httpErr)
-				require.True(t, ok)
-				assert.Equal(t, tt.expectCode, httpErr.Code)
+				assert.False(t, nextCalled, tt.description)
+				assertForbidden(t, err, tt.expectMessage)
 			}
 		})
 	}
@@ -340,36 +342,24 @@ func TestCIDRMiddlewareHeaderSpoofingPrevention(t *testing.T) {
 
 // TestCIDRMiddlewareInvalidCIDR verifies fallback to localhost-only for invalid CIDRs
 func TestCIDRMiddlewareInvalidCIDR(t *testing.T) {
-	e := echo.New()
 	// Invalid CIDR should fall back to localhost-only
-	middleware := CIDRMiddleware(nil, []string{"not-a-valid-cidr", "also invalid"}, []string{})
-
-	handler := middleware(func(c *echo.Context) error {
-		return c.String(http.StatusOK, "OK")
-	})
+	mw := CIDRMiddleware(nil, []string{"not-a-valid-cidr", "also invalid"}, []string{})
 
 	// Test localhost is allowed
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	req.RemoteAddr = testLocalhostAddr
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
 
-	err := handler(c)
+	nextCalled, err := invokeCIDRMiddleware(mw, req)
+	assert.True(t, nextCalled, "localhost should be allowed in localhost-only fallback")
 	assert.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
 
 	// Test external IP is blocked
 	req2 := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 	req2.RemoteAddr = "192.168.1.1:12345"
-	rec2 := httptest.NewRecorder()
-	c2 := e.NewContext(req2, rec2)
 
-	err2 := handler(c2)
-	assert.Error(t, err2)
-	var httpErr *echo.HTTPError
-	ok := errors.As(err2, &httpErr)
-	require.True(t, ok)
-	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	nextCalled2, err2 := invokeCIDRMiddleware(mw, req2)
+	assert.False(t, nextCalled2, "external IP must be blocked in localhost-only fallback")
+	assertForbidden(t, err2, msgAccessDeniedLocalhost)
 }
 
 // TestParseCIDRAllowlistReturnsInvalidEntries verifies the parser surfaces invalid
@@ -478,7 +468,7 @@ func TestParseTrustedProxiesReturnsInvalidEntries(t *testing.T) {
 
 // TestCIDRMiddlewareLogsInvalidEntries exercises the WARN-logging branches
 // of CIDRMiddleware that the other tests skip by passing a nil logger. The
-// assertion is structural (middleware constructs and serves without error)
+// assertion is structural (middleware constructs and serves without panic)
 // rather than message-content based, but this guarantees the logging code
 // paths are covered so changes there can't regress silently.
 func TestCIDRMiddlewareLogsInvalidEntries(t *testing.T) {
@@ -486,57 +476,66 @@ func TestCIDRMiddlewareLogsInvalidEntries(t *testing.T) {
 		name           string
 		allowlist      []string
 		trustedProxies []string
+		wantWarn       bool
 	}{
 		{
 			name:           "invalid_allowlist_triggers_warn",
 			allowlist:      []string{"not-a-cidr", "192.168.1.0/240"},
 			trustedProxies: []string{},
+			wantWarn:       true,
 		},
 		{
 			name:           "invalid_trusted_proxy_triggers_warn",
 			allowlist:      []string{"10.0.0.0/8"},
 			trustedProxies: []string{"bogus"},
+			wantWarn:       true,
 		},
 		{
 			name:           "both_invalid_triggers_both_warns",
 			allowlist:      []string{"bad-allowlist"},
 			trustedProxies: []string{"bad-proxy"},
+			wantWarn:       true,
 		},
 		{
 			name:           "all_valid_emits_no_warn",
 			allowlist:      []string{"10.0.0.0/8"},
 			trustedProxies: []string{"192.168.0.0/16"},
+			wantWarn:       false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Use a real logger writing to a buffer would let us assert content,
-			// but that requires importing zerolog internals. Pass a real production
-			// logger — it'll print to stdout during the test run, but the WARN
-			// branch coverage is the goal here.
-			log := logger.New("warn", false)
-			middleware := CIDRMiddleware(log, tc.allowlist, tc.trustedProxies)
-
-			// Construct + invoke through a request to make sure the middleware
-			// is fully wired (not just constructed).
-			e := echo.New()
-			handler := middleware(func(c *echo.Context) error {
-				return c.String(http.StatusOK, "OK")
+			// CIDRMiddleware emits the invalid-entry WARNs during construction. logger.New
+			// writes to os.Stdout (the logger package exposes no buffer-injectable constructor),
+			// so capture stdout and assert the WARN actually fires — otherwise this test would
+			// pass even if both WARN branches in CIDRMiddleware were deleted.
+			out := captureStdout(t, func() {
+				_ = CIDRMiddleware(logger.New("warn", false), tc.allowlist, tc.trustedProxies)
 			})
-
-			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-			req.RemoteAddr = testLocalhostAddr
-			rec := httptest.NewRecorder()
-			c := e.NewContext(req, rec)
-
-			err := handler(c)
-			// Localhost is always allowed (localhost-only fallback OR explicit allowlist
-			// — either way an allowlist with 10.0.0.0/8 doesn't include 127.0.0.1, so
-			// some sub-cases expect Forbidden). We only care that the middleware
-			// constructed and ran without panic; the response code varies by sub-case.
-			_ = err
-			assert.NotNil(t, rec)
+			if tc.wantWarn {
+				assert.Contains(t, out, "invalid", "invalid CIDR entries must emit a WARN")
+			} else {
+				assert.NotContains(t, out, "invalid", "all-valid config must not emit an invalid-entry WARN")
+			}
 		})
 	}
+}
+
+// captureStdout redirects os.Stdout for the duration of fn and returns everything written.
+// These CIDR tests are not parallel, so swapping the process-global writer is safe.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	rp, wp, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = wp
+	defer func() { os.Stdout = old }()
+
+	fn()
+
+	require.NoError(t, wp.Close())
+	data, readErr := io.ReadAll(rp)
+	require.NoError(t, readErr)
+	return string(data)
 }

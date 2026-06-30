@@ -107,7 +107,7 @@ type LegacyUser struct {
 }
 
 func (h *Handler) getLegacyUser(req GetReq, ctx server.HandlerContext) (LegacyUser, server.IAPIError) {
-    user, err := h.svc.Find(ctx.Echo.Request().Context(), req.ID)
+    user, err := h.svc.Find(ctx.RequestContext(), req.ID)
     if err != nil {
         return LegacyUser{}, server.NewNotFoundError("user")
     }
@@ -140,7 +140,7 @@ type ListUsersResp struct {
 }
 
 func (h *Handler) listUsers(req ListUsersReq, hctx server.HandlerContext) (server.ResultWithMeta[ListUsersResp], server.IAPIError) {
-    ctx := hctx.Echo.Request().Context()
+    ctx := hctx.RequestContext()
     users, total, err := h.svc.List(ctx, req.Limit, req.Offset)
     if err != nil {
         return server.ResultWithMeta[ListUsersResp]{}, server.NewInternalServerError("failed to list users")

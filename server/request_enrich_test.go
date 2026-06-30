@@ -23,7 +23,7 @@ func TestRequestEnrichInjectsTraceAndCounters(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	var captured context.Context
-	handler := RequestEnrich()(func(c *echo.Context) error {
+	handler := requestEnrichEcho()(func(c *echo.Context) error {
 		captured = c.Request().Context()
 		logger.IncrementAMQPCounter(captured)
 		logger.IncrementDBCounter(captured)
@@ -57,7 +57,7 @@ func TestRequestEnrichPropagatesW3CHeaders(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	var captured context.Context
-	handler := RequestEnrich()(func(c *echo.Context) error {
+	handler := requestEnrichEcho()(func(c *echo.Context) error {
 		captured = c.Request().Context()
 		return nil
 	})
@@ -85,7 +85,7 @@ func TestRequestEnrichShortCircuitsOnCancelledContext(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	nextCalled := false
-	handler := RequestEnrich()(func(_ *echo.Context) error {
+	handler := requestEnrichEcho()(func(_ *echo.Context) error {
 		nextCalled = true
 		return nil
 	})

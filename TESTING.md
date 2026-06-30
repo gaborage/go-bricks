@@ -285,8 +285,8 @@ func TestUserModule_Integration(t *testing.T) {
     assert.NoError(t, err)
 
     // Test route registration. NewHandlerRegistry needs a *config.Config, and
-    // RegisterRoutes takes a server.RouteRegistrar (from srv.ModuleGroup()), not
-    // a raw *echo.Echo.
+    // RegisterRoutes takes a server.RouteRegistrar (from srv.ModuleGroup()) — the
+    // raw HTTP engine is never exposed to modules.
     srv := server.New(mockConfig, mockLogger)
     hr := server.NewHandlerRegistry(mockConfig)
     module.RegisterRoutes(hr, srv.ModuleGroup())
@@ -319,19 +319,19 @@ func TestUserHandlerGetUser(t *testing.T) {
         },
     })
 
+    cfg := &config.Config{}
     handler := &UserHandler{db: mockDB}
 
-    // Create test request
-    req := httptest.NewRequest(http.MethodGet, "/users/1", nil)
+    // Create test request. NewHandlerContextForTest builds a server.HandlerContext
+    // backed by a real (server-internal) echo context — tests never touch echo.
+    // Path params are populated by routing, so drive an isolated handler test
+    // through the request itself (query/body/headers), read via c.Query/c.RequestHeader.
+    req := httptest.NewRequest(http.MethodGet, "/users?id=1", nil)
     rec := httptest.NewRecorder()
+    ctx := server.NewHandlerContextForTest(rec, req, cfg)
 
-    e := echo.New()
-    c := e.NewContext(req, rec)
-    c.SetParamNames("id")
-    c.SetParamValues("1")
-
-    // Execute handler
-    err := handler.GetUser(c)
+    // Execute handler (GetUser is now a server.Handler: func(server.HandlerContext) error)
+    err := handler.GetUser(ctx)
     assert.NoError(t, err)
 
     // Verify response

@@ -141,7 +141,7 @@ make lint                       # Run golangci-lint
 - **logger/** — Structured logging (zerolog)
 - **messaging/** — AMQP client for RabbitMQ
 - **scheduler/** — gocron-based job scheduling with observability and CIDR-restricted APIs
-- **server/** — Echo-based HTTP server
+- **server/** — Echo-based HTTP server. Echo stays the engine but no `echo.*` type appears on the consumer surface (ADR-034): custom middleware is `server.MiddlewareFunc` (flat `func(c HandlerContext, next func() error) error`), raw/ready handlers are `server.Handler`, and request access goes through `ctx.RequestContext()` / `ctx.Request()` accessors (the `Echo` field is removed).
 - **migration/** — Flyway integration with single- and multi-tenant runners; pairs with `tools/migration` CLI (`go-bricks-migrate`) for CI/CD fleet rollouts. Emits `migration.applied` audit events on every migrate invocation via OTel by default; opt-in `AuditRecorder` for compliance-grade durable delivery. PostgreSQL migrator-vs-runtime role separation (`ProvisionPGRoles` / `PGRoleProvisioningSQL`) gives auditors a flat *no* to "can the running service alter its own schema?". The `migration/provisioning/` subpackage carries a durable, crash-recoverable per-tenant state machine (`pending → schema_created → role_created → migrated → seeded → ready`, with `cleanup → failed` branches) for dynamic tenant provisioning. A deployment **quiesce flag** (`QuiesceController` / `Executor.WithQuiesce` / `MigrateAllOptions.Quiesce`) lets a deployment-time migration pause worker pickup and tenant fan-out — in-flight work drains, nothing is interrupted — with read-side TTL auto-release (crash-safe, no sweeper) and fail-open on control-plane errors. See [multi_tenant_migration.md](wiki/multi_tenant_migration.md), [migration_roles.md](wiki/migration_roles.md), [migration_provisioning.md](wiki/migration_provisioning.md), [migration_quiesce.md](wiki/migration_quiesce.md), [migration_audit.md](wiki/migration_audit.md), [ADR-018](wiki/adr_018_multi_tenant_migration_cli.md), [ADR-019](wiki/adr_019_migration_audit_delivery.md), and [ADR-021](wiki/adr_021_provisioning_state_machine.md).
 - **multitenant/** — Tenant identifier resolution from incoming HTTP requests. Four resolver types: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate; e.g. `/itsp/{tenantID}/...`), and `composite` (header → subdomain → path fallback chain). All run before route matching so the resolved tenant is in `context.Context` for every middleware and handler. Per-tenant DB/cache/messaging accessors (`deps.DB(ctx)`, etc.) consume the value transparently. See [multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md).
 - **observability/** — OpenTelemetry tracing and metrics
@@ -222,7 +222,7 @@ type CreateReq struct {
     Email string `json:"email" validate:"email"`
 }
 
-server.POST(handlerRegistry, echo, "/users", h.createUser)
+server.POST(handlerRegistry, r, "/users", h.createUser)
 ```
 
 Benefits: automatic binding/validation, standardized response envelopes, type safety.

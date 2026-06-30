@@ -24,7 +24,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 - Configure via `observability.logs.samplingrate` (0.0-1.0, default 0.0 drops INFO/DEBUG)
 - Sampling is deterministic per trace (all logs in same trace sampled together)
 
-**Request Logging:** HTTP requests track severity escalation via `requestLogContext`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `server.EscalateSeverity(c, zerolog.WarnLevel)`. Configure `observability.logs.slowrequestthreshold` for slow request detection.
+**Request Logging:** HTTP requests track severity escalation via `requestLogContext`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `c.EscalateSeverity(zerolog.WarnLevel)` (the `HandlerContext` method). Configure `observability.logs.slowrequestthreshold` for slow request detection.
 
 **Testing:** Use `observability/testing` package:
 ```go

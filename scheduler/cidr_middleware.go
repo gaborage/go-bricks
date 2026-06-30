@@ -7,7 +7,6 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/labstack/echo/v5"
 )
 
 // CIDRMiddleware creates middleware that restricts access based on CIDR allowlist.
@@ -21,7 +20,7 @@ import (
 // receives a WARN with the invalid entries so operators see misconfigurations rather
 // than silently degrading to a more restrictive posture (allowlist) or losing real
 // client IPs from behind a reverse proxy (trustedProxies).
-func CIDRMiddleware(log logger.Logger, allowlist, trustedProxies []string) echo.MiddlewareFunc {
+func CIDRMiddleware(log logger.Logger, allowlist, trustedProxies []string) server.MiddlewareFunc {
 	allowedNets, localhostOnly, invalidAllowlist := parseCIDRAllowlist(allowlist)
 	trustedNets, invalidProxies := server.ParseCIDRs(trustedProxies)
 
@@ -41,8 +40,17 @@ func CIDRMiddleware(log logger.Logger, allowlist, trustedProxies []string) echo.
 		}
 	}
 
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return createIPCheckHandler(next, allowedNets, trustedNets, localhostOnly)
+	return func(c server.HandlerContext, next func() error) error {
+		ip, err := parseRemoteIP(c.Request(), trustedNets)
+		if err != nil {
+			return err
+		}
+
+		if !isIPAllowed(ip, allowedNets, localhostOnly) {
+			return createAccessDeniedError(localhostOnly)
+		}
+
+		return next()
 	}
 }
 
@@ -70,22 +78,6 @@ func parseCIDRAllowlist(allowlist []string) (nets []*net.IPNet, localhostOnly bo
 	return nets, localhostOnly, invalid
 }
 
-// createIPCheckHandler creates the handler function that validates IP addresses
-func createIPCheckHandler(next echo.HandlerFunc, allowedNets, trustedNets []*net.IPNet, localhostOnly bool) echo.HandlerFunc {
-	return func(c *echo.Context) error {
-		ip, err := parseRemoteIP(c.Request(), trustedNets)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusForbidden, "Invalid IP address")
-		}
-
-		if !isIPAllowed(ip, allowedNets, localhostOnly) {
-			return createAccessDeniedError(localhostOnly)
-		}
-
-		return next(c)
-	}
-}
-
 // parseRemoteIP extracts and parses the remote IP from the request, using the shared
 // trusted-proxy-aware extractor in package server so the scheduler and the debug
 // endpoints share one canonical, spoofing-resistant implementation.
@@ -93,7 +85,7 @@ func parseRemoteIP(r *http.Request, trustedNets []*net.IPNet) (net.IP, error) {
 	remoteIPStr := server.ClientIP(r, trustedNets)
 	ip := net.ParseIP(remoteIPStr)
 	if ip == nil {
-		return nil, echo.NewHTTPError(http.StatusForbidden, "Invalid IP address")
+		return nil, server.NewForbiddenError("Invalid IP address")
 	}
 	return ip, nil
 }
@@ -109,9 +101,9 @@ func isIPAllowed(ip net.IP, allowedNets []*net.IPNet, localhostOnly bool) bool {
 // createAccessDeniedError creates the appropriate error message
 func createAccessDeniedError(localhostOnly bool) error {
 	if localhostOnly {
-		return echo.NewHTTPError(http.StatusForbidden, "Access denied: localhost-only")
+		return server.NewForbiddenError("Access denied: localhost-only")
 	}
-	return echo.NewHTTPError(http.StatusForbidden, "Access denied: IP not in allowlist")
+	return server.NewForbiddenError("Access denied: IP not in allowlist")
 }
 
 // isLocalhost checks if an IP is localhost (127.0.0.1 or ::1)

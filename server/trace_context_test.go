@@ -20,7 +20,7 @@ const (
 
 func TestTraceContext(t *testing.T) {
 	e := echo.New()
-	e.Use(TraceContext())
+	e.Use(traceContextEcho())
 
 	var capturedContext context.Context
 
@@ -132,7 +132,7 @@ func TestTraceContext(t *testing.T) {
 
 func TestTraceContextWithErrorHandler(t *testing.T) {
 	e := echo.New()
-	e.Use(TraceContext())
+	e.Use(traceContextEcho())
 
 	var capturedContext context.Context
 
@@ -176,7 +176,7 @@ func TestTraceContextMiddlewareOrder(t *testing.T) {
 		}
 	})
 
-	e.Use(TraceContext())
+	e.Use(traceContextEcho())
 
 	// Middleware after trace context
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -216,7 +216,7 @@ func TestTraceContextMiddlewareOrder(t *testing.T) {
 
 func TestTraceContextInvalidHeaders(t *testing.T) {
 	e := echo.New()
-	e.Use(TraceContext())
+	e.Use(traceContextEcho())
 
 	var capturedContext context.Context
 
@@ -298,7 +298,7 @@ func TestTraceContextInvalidHeaders(t *testing.T) {
 
 func TestTraceContextConcurrentRequests(t *testing.T) {
 	e := echo.New()
-	e.Use(TraceContext())
+	e.Use(traceContextEcho())
 
 	type requestResult struct {
 		traceID     string

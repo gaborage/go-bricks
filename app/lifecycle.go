@@ -11,10 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v5"
-
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/server"
 )
 
 // startMaintenanceLoops starts background cleanup processes for managers
@@ -110,7 +109,7 @@ func (a *App) assertMessagingConfiguredIfDeclared(decls *messaging.Declarations)
 func (a *App) registerDebugHandlers() {
 	if a.cfg.Debug.Enabled {
 		debugHandlers := NewDebugHandlers(a, &a.cfg.Debug, a.logger)
-		debugHandlers.RegisterDebugEndpoints(a.server.Echo())
+		debugHandlers.RegisterDebugEndpoints(a.server.RootGroup())
 	}
 }
 
@@ -441,8 +440,8 @@ func (a *App) Shutdown(ctx context.Context) error {
 }
 
 // readyCheck handles the health check endpoint
-func (a *App) readyCheck(c *echo.Context) error {
-	ctx := c.Request().Context()
+func (a *App) readyCheck(c server.HandlerContext) error {
+	ctx := c.RequestContext()
 
 	componentStatus := make(map[string]HealthStatus, len(a.healthProbes))
 	for _, probe := range a.healthProbes {

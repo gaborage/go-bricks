@@ -3,6 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-04-06
 
+> Superseded by [ADR-034](adr_034_echo_boundary_types.md) for the public boundary types — the `HandlerContext.Echo` field, the `echo.HandlerFunc`/`echo.MiddlewareFunc` signatures, and the raw-echo `RegisterReadyHandler` described below are no longer the public surface (Echo remains the engine inside `server/`). **Treat the public-surface details throughout this ADR as a historical record of the v4→v5 migration; [ADR-034](adr_034_echo_boundary_types.md) is the source of truth for today's boundary types.**
+
 ## Context
 
 GoBricks uses Echo v4 as its HTTP framework foundation, deeply integrated across ~92 files spanning the server, app, and scheduler packages. Echo v5.0.0 was released January 18, 2026, with the latest stable release being v5.1.0 (March 31, 2026). The "critical API change window" for v5 closed on March 31, 2026, meaning the API surface is now stable.

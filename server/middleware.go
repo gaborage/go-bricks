@@ -28,7 +28,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// stock middleware.RequestID() which echoes the inbound header verbatim
 	// without validation, exposing the framework to log poisoning and
 	// CRLF-injection via attacker-controlled request IDs.
-	e.Use(RequestIDMiddleware())
+	e.Use(requestIDMiddlewareEcho())
 
 	// OpenTelemetry instrumentation - creates spans AND metrics for HTTP requests
 	// Skip health/ready probes to avoid noisy traces/metrics
@@ -50,7 +50,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 			ServerName:     cfg.App.Name,
 			TracerProvider: otel.GetTracerProvider(),
 			Skipper: func(c *echo.Context) bool {
-				return probeSkipper(c)
+				return probeSkipper(c.Request())
 			},
 			MetricAttributes: func(c *echo.Context, v *echootel.Values) []attribute.KeyValue {
 				// echo-opentelemetry treats a non-empty MetricAttributes return as a
@@ -86,16 +86,16 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// W3C headers for outbound propagation, plus the per-request AMQP/DB operation
 	// counters. Combines the standalone TraceContext + PerformanceStats middlewares
 	// (which remain exported for callers that register them individually).
-	e.Use(RequestEnrich())
+	e.Use(requestEnrichEcho())
 
 	// CORS — pass cfg.App.Env so the policy honors the Koanf default of
 	// EnvDevelopment (instead of falling back to os.Getenv which is empty
 	// when the operator relies on config.yaml / framework defaults).
-	e.Use(CORS(cfg.Server.ResponseTime.Enabled, cfg.App.Env))
+	e.Use(corsEcho(cfg.Server.ResponseTime.Enabled, cfg.App.Env))
 
 	// IP pre-guard rate limiting (runs before tenant resolution for attack prevention)
 	if cfg.App.Rate.IPPreGuard.Enabled {
-		e.Use(IPPreGuard(cfg.App.Rate.IPPreGuard.Threshold))
+		e.Use(ipPreGuardEcho(cfg.App.Rate.IPPreGuard.Threshold))
 	}
 
 	// Multi-tenant tenant resolver middleware (if enabled)
@@ -104,14 +104,14 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		if resolver != nil {
 			// Use skipper-aware middleware to bypass tenant resolution for health probes
 			skipper := CreateProbeSkipper(healthPath, readyPath)
-			e.Use(TenantMiddleware(resolver, skipper))
+			e.Use(tenantMiddlewareEcho(resolver, skipper))
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
 		}
 	}
 
 	// Logger middleware with zerolog
-	e.Use(LoggerWithConfig(log, LoggerConfig{
+	e.Use(loggerWithConfigEcho(log, LoggerConfig{
 		HealthPath:           healthPath,
 		ReadyPath:            readyPath,
 		SlowRequestThreshold: 1 * time.Second,
@@ -131,7 +131,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 
 	// Timeout - add a request-scoped deadline without swapping the response writer.
 	// This prevents goroutine panics when the context is canceled mid-flight.
-	e.Use(Timeout(cfg.Server.Timeout.Middleware))
+	e.Use(timeoutEcho(cfg.Server.Timeout.Middleware))
 
 	// Body limit
 	e.Use(middleware.BodyLimit(10 * 1024 * 1024)) // 10 MB
@@ -144,14 +144,14 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	}))
 
 	// Rate limit
-	e.Use(RateLimit(cfg.App.Rate.Limit))
+	e.Use(rateLimitEcho(cfg.App.Rate.Limit))
 
 	// Timing — opt-in. The X-Response-Time header costs a per-response header
 	// allocation (net/textproto.MIMEHeader.Set allocates a []string per Set) and
 	// OTel provides richer latency telemetry, so it defaults off. Enable via
 	// server.responsetime.enabled for local debugging or consumer compatibility.
 	if cfg.Server.ResponseTime.Enabled {
-		e.Use(Timing())
+		e.Use(timingEcho())
 	}
 }
 

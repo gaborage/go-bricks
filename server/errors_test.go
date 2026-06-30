@@ -773,7 +773,7 @@ func TestPanicRecoveryStructuredLogging(t *testing.T) {
 	// structured field logging without depending on the full middleware chain.
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/panic", http.NoBody)
 	rec := httptest.NewRecorder()
-	c := srv.Echo().NewContext(req, rec)
+	c := srv.echo.NewContext(req, rec)
 	c.Response().Header().Set(echo.HeaderXRequestID, "req-42")
 
 	panicErr := &middleware.PanicStackError{
@@ -781,7 +781,7 @@ func TestPanicRecoveryStructuredLogging(t *testing.T) {
 		Stack: []byte("goroutine 1 [running]:\nmain.handler()"),
 	}
 
-	srv.Echo().HTTPErrorHandler(c, panicErr)
+	srv.echo.HTTPErrorHandler(c, panicErr)
 
 	// Verify structured log fields
 	entries := log.logEntries()

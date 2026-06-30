@@ -73,7 +73,7 @@ func TestIPPreGuard(t *testing.T) {
 			t.Parallel()
 			// Create fresh Echo instance for each test to avoid interference
 			e := echo.New()
-			e.Use(IPPreGuard(tt.requestsPerSec))
+			e.Use(ipPreGuardEcho(tt.requestsPerSec))
 
 			e.GET("/test", func(c *echo.Context) error {
 				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -111,7 +111,7 @@ func TestIPPreGuard(t *testing.T) {
 
 func TestIPPreGuardDifferentIPs(t *testing.T) {
 	e := echo.New()
-	e.Use(IPPreGuard(2)) // Very low limit to trigger easily
+	e.Use(ipPreGuardEcho(2)) // Very low limit to trigger easily
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -151,7 +151,7 @@ func TestIPPreGuardDifferentIPs(t *testing.T) {
 
 func TestIPPreGuardErrorResponse(t *testing.T) {
 	e := echo.New()
-	e.Use(IPPreGuard(1)) // Very restrictive limit
+	e.Use(ipPreGuardEcho(1)) // Very restrictive limit
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -201,7 +201,7 @@ func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
 			return next(c)
 		}
 	})
-	e.Use(IPPreGuard(3))
+	e.Use(ipPreGuardEcho(3))
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})

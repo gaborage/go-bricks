@@ -149,7 +149,18 @@ func (rl *requestLogger) extractStatus(c *echo.Context, err error) int {
 // The middleware tracks request-scoped severity escalation. If any log during the request
 // lifecycle reaches WARN+, the request is logged as a trace log. Otherwise, a synthesized
 // action log summary is emitted at request completion.
-func LoggerWithConfig(log logger.Logger, cfg LoggerConfig) echo.MiddlewareFunc {
+//
+// The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
+// echo-native logic lives in loggerWithConfigEcho, which SetupMiddlewares wires
+// directly on the default request path (ADR-026, no per-request baton).
+func LoggerWithConfig(log logger.Logger, cfg LoggerConfig) MiddlewareFunc {
+	return fromEchoMiddleware(loggerWithConfigEcho(log, cfg))
+}
+
+// loggerWithConfigEcho is the echo-native request-logging middleware constructor.
+// Public callers use LoggerWithConfig (echo-free); SetupMiddlewares uses this form
+// to keep the default chain baton-free.
+func loggerWithConfigEcho(log logger.Logger, cfg LoggerConfig) echo.MiddlewareFunc {
 	rl := newRequestLogger(log, cfg)
 	return rl.Handle
 }

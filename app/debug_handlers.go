@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v5"
-
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/server"
@@ -77,33 +75,45 @@ func NewDebugHandlers(app *App, cfg *config.DebugConfig, log logger.Logger) *Deb
 }
 
 // RegisterDebugEndpoints registers all debug endpoints if enabled
-func (d *DebugHandlers) RegisterDebugEndpoints(e *echo.Echo) {
+func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) {
 	if !d.config.Enabled {
 		d.logger.Info().Msg("Debug endpoints disabled")
 		return
 	}
 
-	debugGroup := e.Group(d.config.PathPrefix)
+	g := r.Group(d.config.PathPrefix)
 
-	// Apply security middleware
-	debugGroup.Use(d.ipWhitelistMiddleware())
+	// Parse trusted proxies once and surface any invalid entries here so the warning is
+	// logged a single time at registration rather than on every middleware construction.
+	// The parsed nets are threaded into both security middlewares so client-IP derivation
+	// is trusted-proxy aware (server.ClientIP) rather than echo's spoofable c.RealIP().
+	trustedNets, invalid := server.ParseCIDRs(d.config.TrustedProxies)
+	if len(invalid) > 0 {
+		d.logger.Warn().
+			Int("count", len(invalid)).
+			Interface("entries", invalid).
+			Msg("Debug endpoint trustedproxies list contains invalid CIDR entries; proxy headers from those ranges will not be trusted")
+	}
+
+	// Apply security middleware (ipWhitelist before auth — ordering preserved via Use order).
+	g.Use(d.ipWhitelistMiddleware(trustedNets))
 	if d.config.BearerToken != "" {
-		debugGroup.Use(d.authMiddleware())
+		g.Use(d.authMiddleware(trustedNets))
 	}
 
 	// Register endpoints
 	if d.config.Endpoints.Goroutines {
-		debugGroup.GET("/goroutines", d.handleGoroutines)
+		g.Add(http.MethodGet, "/goroutines", d.handleGoroutines)
 	}
 	if d.config.Endpoints.GC {
-		debugGroup.GET("/gc", d.handleGC)
-		debugGroup.POST("/gc", d.handleForceGC)
+		g.Add(http.MethodGet, "/gc", d.handleGC)
+		g.Add(http.MethodPost, "/gc", d.handleForceGC)
 	}
 	if d.config.Endpoints.Health {
-		debugGroup.GET("/health-debug", d.handleHealthDebug)
+		g.Add(http.MethodGet, "/health-debug", d.handleHealthDebug)
 	}
 	if d.config.Endpoints.Info {
-		debugGroup.GET("/info", d.handleInfo)
+		g.Add(http.MethodGet, "/info", d.handleInfo)
 	}
 
 	d.logger.Info().
@@ -180,24 +190,16 @@ func (w *IPWhitelist) normalizeToCIDR(ipStr string) string {
 	return ipStr + "/32" // IPv4
 }
 
-// ipWhitelistMiddleware restricts access to allowed IPs
-func (d *DebugHandlers) ipWhitelistMiddleware() echo.MiddlewareFunc {
+// ipWhitelistMiddleware restricts access to allowed IPs. The trusted-proxy nets are parsed
+// once by RegisterDebugEndpoints and threaded in so client-IP derivation is spoof-resistant.
+func (d *DebugHandlers) ipWhitelistMiddleware(trustedNets []*net.IPNet) server.MiddlewareFunc {
 	if len(d.config.AllowedIPs) == 0 {
-		return func(next echo.HandlerFunc) echo.HandlerFunc {
-			return func(c *echo.Context) error {
-				return next(c)
-			}
+		return func(_ server.HandlerContext, next func() error) error {
+			return next()
 		}
 	}
 
 	whitelist := NewIPWhitelist(d.config.AllowedIPs, d.logger)
-	trustedNets, invalid := server.ParseCIDRs(d.config.TrustedProxies)
-	if len(invalid) > 0 {
-		d.logger.Warn().
-			Int("count", len(invalid)).
-			Interface("entries", invalid).
-			Msg("Debug endpoint trustedproxies list contains invalid CIDR entries; proxy headers from those ranges will not be trusted")
-	}
 	return d.createIPCheckHandler(whitelist, trustedNets)
 }
 
@@ -206,18 +208,16 @@ func (d *DebugHandlers) ipWhitelistMiddleware() echo.MiddlewareFunc {
 // echo's spoofable c.RealIP(): X-Forwarded-For / X-Real-IP are honored only when the
 // immediate peer is a configured trusted proxy, so the allowlist cannot be bypassed by an
 // unauthenticated client sending a forged X-Forwarded-For header.
-func (d *DebugHandlers) createIPCheckHandler(whitelist *IPWhitelist, trustedNets []*net.IPNet) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c *echo.Context) error {
-			clientIP := server.ClientIP(c.Request(), trustedNets)
-			if allowed, err := d.isIPAllowed(clientIP, whitelist); err != nil {
-				return d.handleAccessDenied(clientIP, "invalid IP")
-			} else if !allowed {
-				return d.handleAccessDenied(clientIP, "IP not whitelisted")
-			}
-
-			return next(c)
+func (d *DebugHandlers) createIPCheckHandler(whitelist *IPWhitelist, trustedNets []*net.IPNet) server.MiddlewareFunc {
+	return func(c server.HandlerContext, next func() error) error {
+		clientIP := server.ClientIP(c.Request(), trustedNets)
+		if allowed, err := d.isIPAllowed(clientIP, whitelist); err != nil {
+			return d.handleAccessDenied(clientIP, "invalid IP")
+		} else if !allowed {
+			return d.handleAccessDenied(clientIP, "IP not whitelisted")
 		}
+
+		return next()
 	}
 }
 
@@ -233,26 +233,26 @@ func (d *DebugHandlers) isIPAllowed(clientIP string, whitelist *IPWhitelist) (bo
 // handleAccessDenied logs the denial and returns a forbidden error
 func (d *DebugHandlers) handleAccessDenied(clientIP, reason string) error {
 	d.logger.Warn().Str("client_ip", clientIP).Msgf("Debug endpoint access denied: %s", reason)
-	return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+	return server.NewForbiddenError("Access denied")
 }
 
-// authMiddleware provides bearer token authentication
-func (d *DebugHandlers) authMiddleware() echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c *echo.Context) error {
-			authHeader := c.Request().Header.Get("Authorization")
-			if !strings.HasPrefix(authHeader, "Bearer ") {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Bearer token required")
-			}
-
-			token := strings.TrimPrefix(authHeader, "Bearer ")
-			if subtle.ConstantTimeCompare([]byte(token), []byte(d.config.BearerToken)) != 1 {
-				d.logger.Warn().Str("client_ip", c.RealIP()).Msg("Debug endpoint access denied: invalid token")
-				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token")
-			}
-
-			return next(c)
+// authMiddleware provides bearer token authentication. The trusted-proxy nets are threaded
+// in so the invalid-token denial log records the trusted-proxy-aware client IP
+// (server.ClientIP) instead of echo's spoofable c.RealIP().
+func (d *DebugHandlers) authMiddleware(trustedNets []*net.IPNet) server.MiddlewareFunc {
+	return func(c server.HandlerContext, next func() error) error {
+		authHeader := c.RequestHeader("Authorization")
+		// The Authorization scheme is case-insensitive per RFC 7235; match it with EqualFold.
+		scheme, token, ok := strings.Cut(authHeader, " ")
+		if !ok || !strings.EqualFold(scheme, "Bearer") {
+			return server.NewUnauthorizedError("Bearer token required")
 		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(d.config.BearerToken)) != 1 {
+			d.logger.Warn().Str("client_ip", server.ClientIP(c.Request(), trustedNets)).Msg("Debug endpoint access denied: invalid token")
+			return server.NewUnauthorizedError("Invalid token")
+		}
+
+		return next()
 	}
 }
 
@@ -270,7 +270,7 @@ func (d *DebugHandlers) newDebugResponse(start time.Time, data any, err error) *
 }
 
 // handleInfo returns basic system information
-func (d *DebugHandlers) handleInfo(c *echo.Context) error {
+func (d *DebugHandlers) handleInfo(c server.HandlerContext) error {
 	start := time.Now()
 
 	info := map[string]any{

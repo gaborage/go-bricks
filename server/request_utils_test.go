@@ -113,7 +113,7 @@ func TestSafeGetRequestIDValidatesResponseHeaderToo(t *testing.T) {
 
 func TestRequestIDMiddlewareValidInboundIsEchoed(t *testing.T) {
 	e := echo.New()
-	mw := RequestIDMiddleware()
+	mw := requestIDMiddlewareEcho()
 	handler := mw(func(_ *echo.Context) error { return nil })
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
@@ -137,7 +137,7 @@ func TestRequestIDMiddlewareInvalidInboundReplacedWithUUID(t *testing.T) {
 	for name, junk := range cases {
 		t.Run(name, func(t *testing.T) {
 			e := echo.New()
-			mw := RequestIDMiddleware()
+			mw := requestIDMiddlewareEcho()
 			handler := mw(func(_ *echo.Context) error { return nil })
 
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
@@ -156,7 +156,7 @@ func TestRequestIDMiddlewareInvalidInboundReplacedWithUUID(t *testing.T) {
 
 func TestRequestIDMiddlewareMissingInboundGeneratesUUID(t *testing.T) {
 	e := echo.New()
-	mw := RequestIDMiddleware()
+	mw := requestIDMiddlewareEcho()
 	handler := mw(func(_ *echo.Context) error { return nil })
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)

@@ -25,6 +25,9 @@ build: ## Build the project
 test: ## Run unit tests only
 	go test -race $(PKGS)
 
+test-alloc: ## Enforce ADR-026 alloc-stability guards WITHOUT -race (the detector inflates testing.AllocsPerRun counts; see server/alloc_guard_*_test.go)
+	go test ./server/ -run 'AllocsStable' -count=1
+
 test-integration: docker-check ## Run integration tests (requires Docker)
 	@echo "Running integration tests with testcontainers..."
 	go test -v -race -count=1 -tags=integration $(INTEGRATION_PKGS)
@@ -76,7 +79,7 @@ clean: ## Clean build cache and test artifacts
 	rm -f coverage.out coverage-integration.out coverage.html coverage.func
 	rm -f *.test
 
-check: fmt lint test vuln ## Run fmt, lint, test, and vuln scan (pre-commit checks)
+check: fmt lint test test-alloc vuln ## Run fmt, lint, test, alloc guards, and vuln scan (pre-commit checks)
 
 vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
