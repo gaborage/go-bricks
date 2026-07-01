@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.45.0](https://github.com/gaborage/go-bricks/compare/v0.44.0...v0.45.0) (2026-07-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* hide echo.* types behind go-bricks boundary abstractions ([#627](https://github.com/gaborage/go-bricks/issues/627))
+* advance outbox retry_count on every failure; bound AMQP publish retries ([#626](https://github.com/gaborage/go-bricks/issues/626))
+
+### Added
+
+* hide echo.* types behind go-bricks boundary abstractions ([#627](https://github.com/gaborage/go-bricks/issues/627)) ([b0ef71d](https://github.com/gaborage/go-bricks/commit/b0ef71d1285b9a05eef93abc115f2a621786ba03))
+
+
+### Fixed
+
+* advance outbox retry_count on every failure; bound AMQP publish retries ([#626](https://github.com/gaborage/go-bricks/issues/626)) ([771493e](https://github.com/gaborage/go-bricks/commit/771493e12b72ce1c48781f5795404eaf7b1e1f9a))
+* **deps:** update aws-sdk-go-v2 monorepo ([#621](https://github.com/gaborage/go-bricks/issues/621)) ([aac8687](https://github.com/gaborage/go-bricks/commit/aac86872fb4786b04b4858b4ce09bf8313a4132c))
+* **deps:** update module github.com/gaborage/go-bricks to v0.44.0 ([#618](https://github.com/gaborage/go-bricks/issues/618)) ([0deceb6](https://github.com/gaborage/go-bricks/commit/0deceb65a1308eb47355ea7650edd6f8ab282478))
+* update deps ([#628](https://github.com/gaborage/go-bricks/issues/628)) ([85fd79a](https://github.com/gaborage/go-bricks/commit/85fd79a9f45a286db82beed88bdef5f1f0281e62))
+
 ## [0.44.0](https://github.com/gaborage/go-bricks/compare/v0.43.0...v0.44.0) (2026-06-25)
 
 
