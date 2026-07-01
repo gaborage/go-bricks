@@ -384,13 +384,13 @@ if cfg.Pool.KeepAlive.IsEnabled() { ... }      // nil-safe; nil is treated as di
 - Code that reads `Enabled` as a `bool` must switch to the nil-safe `IsEnabled()` accessor. After validation `Enabled` is always non-nil, but `IsEnabled()` is the safe reader for structs built without validation (e.g. tests).
 - **YAML/env config is unchanged:** `database.pool.keepalive.enabled: true|false` still binds. The behavioral fix is that `enabled: false` with `interval` unset now actually disables keep-alive (previously it was re-enabled). Configs that omit `enabled` still default to `true`.
 
-## Environment Variables Are Now Ingested Only Under Known Config Prefixes (M4)
+## Bare Section-Name Environment Variables Are Now Dropped (M4)
 
-Environment-variable config loading now ignores any variable whose first dotted segment is not a recognized top-level config section (`app`, `server`, `database`, `databases`, `cache`, `log`, `messaging`, `multitenant`, `debug`, `source`, `scheduler`, `outbox`, `inbox`, `keystore`, `observability`, `custom`). Previously **every** process environment variable was merged, so a bare variable matching a section name (`DEBUG=1`, `CACHE=…`, `DATABASE=…`) — or a Kubernetes Docker-link variable like `SERVER_PORT=tcp://10.96.0.1:80` — replaced that section's map with a scalar and crashed startup with `expected a map, got string`. A defensive merge guard also drops any remaining scalar that would overwrite an existing config map.
+The environment-variable loader has **no prefix filter — it still ingests every process environment variable**. What changed is a targeted guard: a **bare** variable whose fully-transformed key is *exactly* a top-level config-section name — `app`, `server`, `database`, `databases`, `cache`, `log`, `messaging`, `multitenant`, `debug`, `source`, `scheduler`, `outbox`, `inbox`, `keystore`, `observability` (the set **deliberately excludes `custom`**) — is now dropped before koanf unflattens. Previously **every** process environment variable was merged, so a bare variable matching a section name (`DEBUG=1`, `CACHE=…`, `DATABASE=…`) — or a Kubernetes Docker-link variable like `SERVER_PORT=tcp://10.96.0.1:80` — replaced that section's map with a scalar and crashed startup with `expected a map, got string`. A defensive merge guard also drops any remaining scalar that would overwrite an existing config map.
 
 **Action:**
 - Configure the framework only through fully-qualified, sub-keyed variables (e.g. `CACHE_ENABLED=true`, `CACHE_REDIS_HOST=…`, `DATABASE_HOST=…`) — these are unaffected.
-- Application-specific settings must live under the `CUSTOM_` prefix (`custom.*`); other unprefixed variables are no longer read into config (and no longer crash startup).
+- Sub-keyed variables (`CACHE_REDIS_HOST`, `DATABASE_HOST`, `DEBUG_ENABLED`, …) and all unrelated variables still bind exactly as before — they are **not** filtered out. Only bare section-name vars (and scalars that would clobber a map) are dropped; `custom` is not in the drop-set, so `custom.*` settings continue to bind.
 - No action is needed for deployments that already use sub-keyed variables or YAML; this change only removes the ability of unrelated/bare env vars to clobber a config section.
 
 ## Graceful Shutdown Now Stops Inbound Work First (ADR-029)
