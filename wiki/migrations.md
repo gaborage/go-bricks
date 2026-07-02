@@ -371,7 +371,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
               return server.NewUnauthorizedError("missing authorization header")
           }
           c.SetRequestContext(withUser(c.RequestContext(), token)) // context propagation
-          return next() // return an IAPIError WITHOUT calling next() to abort
+          return next() // continue the chain; to ABORT, return an IAPIError instead of calling next()
       }
   }
   ```
