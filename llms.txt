@@ -4,9 +4,9 @@ Enterprise Go microservice toolkit (Go 1.26+). Provides multi-database access, t
 
 ## Version & Compatibility
 
-- Reflects **go-bricks v0.45.0** (unreleased — `main` HEAD; latest tagged release is v0.44.0). Requires **Go 1.26+**.
-- Authoritative sources: `CHANGELOG.md` (release log) and `wiki/migrations.md` (code-verified, per-ADR breaking-change guide with before/after snippets). This file is the condensed upgrade path — see **Upgrade & Breaking Changes (v0.39 → v0.45)** at the end of this document.
-- Upgrading an existing app? Read that section first. Across v0.40 → v0.45 **most breaks fail silently** — a renamed config key stops binding, a default flips — with no compile error. The two v0.45.0 API breaks (echo-free boundary types; the `outbox.Store` interface) are the only compiler-caught ones.
+- Reflects **go-bricks v0.45.0** (released). Requires **Go 1.26+**.
+- Authoritative sources: `CHANGELOG.md` (release log) and `wiki/migrations.md` — the **per-hop migration runbook** (detect → apply → verify atoms, one hop per release, chainable across any version range). This file carries the ladder + agent protocol; the runbook holds the full atoms.
+- Upgrading an existing app? Read that section first. Across v0.40 → v0.45 **most breaks fail silently** — a renamed config key stops binding, a default flips — with no compile error. The compiler-caught API breaks are concentrated in v0.41.0 (CORS / LogEvent / SetupMiddlewares), v0.43.0 (per-tenant `ReleaseFunc`, `PoolKeepAliveConfig.Enabled`), and v0.45.0 (echo-free boundary types, the `outbox.Store` interface); everything else fails silently.
 
 ## Quick Start
 - `go get github.com/gaborage/go-bricks`
@@ -5139,54 +5139,28 @@ Same domain errors, different boundary handling:
 
 ## Upgrade & Breaking Changes (v0.39 → v0.45)
 
-Condensed upgrade path. Authoritative long form (per-ADR, before/after snippets): `wiki/migrations.md`; version dates/PRs: `CHANGELOG.md`. **Most v0.40 → v0.45 breaks fail silently** (a renamed config key stops binding, a default flips — no compile error). The v0.45.0 API breaks (echo-free types; `outbox.Store`) are the compiler-caught ones. Getter renames (`GetString`→`String`, `deps.GetDB`→`deps.DB`), interface renames (S8196), `ToSql()`→`ToSQL()`, and scheduler-UTC (ADR-023) predate v0.39 — see `wiki/migrations.md` if coming from older releases.
+The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.45), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
 
-### Direct-jump checklist (v0.39 → v0.45 in one bump)
-1. **Rename config keys to flat-smushed** (v0.40.1, ADR-024) — highest-impact and SILENT. Every underscored *leaf* key in YAML **and** env: `outbox.table_name`→`tablename`, `auto_create_table`→`autocreatetable`, `default_exchange`→`defaultexchange`, `poll_interval`→`pollinterval`, `batch_size`→`batchsize`, `max_retries`→`maxretries`, `retention_period`→`retentionperiod` (same shape for `inbox.*`, `cache.manager.*`, `messaging.reconnect.*`, `messaging.publisher.*`); `log.sensitive_fields`→`sensitivefields`; `keystore.secret_min_length`→`secretminlength`; observability (#554) `metrics.histogram_aggregation`→`histogramaggregation`, `logs.{disable_stdout,slow_request_threshold,sampling_rate}`→`{disablestdout,slowrequestthreshold,samplingrate}`. Full 21+4-row tables in `wiki/migrations.md`. Go field names unchanged.
-2. **Fix echo-free handler code** (v0.45.0, ADR-034) — compiler-caught. `ctx.Echo.Request().Context()`→`ctx.RequestContext()`; `ctx.Echo.Request()`→`ctx.Request()`; custom middleware → flat `server.MiddlewareFunc`; tests → `server.NewHandlerContextForTest(rec, req, cfg)`.
-3. **Outbox** (v0.45.0, ADR-033) — add `outbox.publishtimeout` (≥ `messaging.reconnect.connectiontimeout`); prune soft-parked `pending` rows before first boot; `maxretries` is now poison-only.
-4. **Verify the SILENT default flips at runtime**: `server.gzip.minlength` 0→1024 (small bodies now uncompressed); `database.pool.idle.connections` 2→max; `X-Response-Time` header now off; DB spans gated on `observability.enabled`.
+Ladder:
+```
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0
+```
 
-### v0.40.0 — additive only (no breaks)
-Opt-in APIs; existing code unchanged: `database.WithTx`/`WithTxOptions`; inbox `ProcessOnce` durable idempotency ledger; `outbox.EventIDFromHeaders` + exported `x-outbox-event-id`; vendor-aware DB error classifiers (unique / FK / not-found).
+| edge | hop | worst risk | compiler-caught | preflight |
+|------|-----|-----------|-----------------|-----------|
+| E40  | v0.39.1 → v0.40.0 | additive | none | none |
+| E401 | v0.40.0 → v0.40.1 | silent-config | none | none |
+| E41  | v0.40.1 → v0.41.0 | compile-break | 3 | DB connection budget |
+| E42  | v0.41.0 → v0.42.0 | silent (fail-closed) | none | TLS CA / dynamic-multitenant |
+| E43  | v0.42.0 → v0.43.0 | compile-break | 2 | bare section-named env vars |
+| E44  | v0.43.0 → v0.44.0 | noop | none | none |
+| E45  | v0.44.0 → v0.45.0 | compile-break | 6 | outbox re-delivery count |
 
-### v0.40.1 — Config keys → flat-smushed (ADR-024, #549) — SILENT
-21 snake_case keys renamed to the underscore-free convention so they become env-settable (the env loader maps `_`→`.`, koanf's nesting delimiter, so underscored leaf keys were unreachable from env). Underscored YAML keys now bind to **nothing** — the field silently falls back to its zero value/default with no error (e.g. `outbox.auto_create_table` → `autocreatetable` unset → `false` → the outbox table is never auto-created; `default_exchange` → empty → events don't route). Update YAML and env vars. Companion #554 (shipped 0.41.0) flat-smushes four `observability.*` keys that never bound from YAML *or* env. Go field names unchanged.
-
-### v0.41.0 — Zero-overhead request path (ADR-026, #559) + X-Response-Time opt-in (#563) + pool idle default (ADR-025, #558)
-- **`server.gzip.minlength` default 0 → 1024** [SILENT wire change]: responses < 1KB are no longer gzip-compressed. Set `server.gzip.minlength: 0` to restore always-compress.
-- **`X-Response-Time` now opt-in, default off**: enable with `server.responsetime.enabled: true` (env `SERVER_RESPONSETIME_ENABLED=true`). Koanf key is the single word **`responsetime`** (not `response_time`). Direct callers of `server.CORS(...)` get a new **leading** `exposeResponseTime bool` param; CORS also stops advertising the header in `Access-Control-Expose-Headers` when off. `X-Request-ID` / `traceparent` unaffected.
-- **`logger.LogEvent` gains `Enabled() bool`** — custom adapters / test doubles must add it (compiler-caught).
-- **`server.SetupMiddlewares`** gains `observabilityEnabled bool` right after `cfg` (direct callers only).
-- **DB OTel spans/metrics now gated on `observability.enabled`** — standalone `database`-package users (no `app` bootstrap) must call `database.SetObservabilityEnabled(true)` or DB telemetry is silently suppressed even with a global OTel provider. `app.New()` users: automatic.
-- **`database.pool.idle.connections` default 2 → tracks `pool.max` (25)** [SILENT]: more warm idle connections held. Verify DB `max_connections`; set `database.pool.idle.connections: 2` to restore the old cap.
-Apps using the standard `app.New()`/server bootstrap need no *code* change here — only config/default awareness.
-
-### v0.42.0 — DB TLS (ADR-027, #582), PG upsert bind (ADR-028, #583), APP_ENV overlay (#578), graceful shutdown (ADR-029, #585)
-- **`database.tls.cert/key/ca` now honored.** PostgreSQL: a config that set `mode: require` + `ca:` was previously encrypted-but-**unauthenticated** (MITM-able) and now performs real CA verification — a wrong/missing/mismatched CA now **fails** the connection; a half-configured client cert (cert XOR key) now **fails startup validation**. Oracle: `tls.cert/key/ca` are now **rejected at startup** (remove them); `tls.mode` alone stays a no-op. No-TLS configs unaffected.
-- **PostgreSQL `BuildUpsert` now binds `updateColumns` values** (`col = $N`) instead of `col = EXCLUDED.col`. Signature unchanged; behavior changes only when update values differ from the insert values, or an update column is absent from the insert set (previously silently wrong). Update exact-SQL test assertions; the `DO NOTHING` path is unchanged.
-- **`APP_ENV` now selects the `config.<env>.yaml` overlay** (previously read too late to matter). Review any `config.<env>.yaml` that was silently ignored before; a malformed `APP_ENV` is now rejected at startup.
-- **Graceful shutdown reordered** to server → consumers → modules → observability → cleanup, so in-flight handlers no longer run against torn-down modules (behavior-only; `messaging.Manager` gains additive `StopConsumers()`).
-- Also: debug-endpoint IP allowlist now requires a trusted proxy (blocks XFF spoofing, #576); `httpclient` redacts credentials/secrets from logged URLs (#575); migration `Config.DryRun` is now honored (validate-only) (#580).
-
-### v0.43.0 — Identifier validation (ADR-031, #604), lease/refcount (ADR-032, #606/#607), env + keepalive hardening (#601)
-- **Query builder validates string identifiers** passed to `From`, the JOIN family, `OrderBy`, `GroupBy`, `Set`/`SetMap`, `Update(table)`, `Delete(table)` on **all** vendors (closes the M9 PostgreSQL raw-interpolation SQLi). Violations surface as a **`ToSQL()` error** (deferred — never a panic — so always check it). Allowed: bare/qualified names, inline alias (`"users u"`), trailing `ASC/DESC [NULLS FIRST|LAST]`. Move functions/expressions to `qb.Expr()`/`qb.MustExpr()`. **Asymmetry to know:** `Select()` columns are **NOT** validated — `Select("COUNT(*)")` still works, but `OrderBy("COUNT(*) DESC")` now errors. Allowlist user-supplied sort columns. Parameterized *values* (Filter API `f.Eq`, …) were never affected.
-- **Raw managers return a `ReleaseFunc`**: `database.DbManager.Get` / `messaging.Manager.Publisher` / `cache.CacheManager.Get` → `(handle, ReleaseFunc, error)` (nil on error — check `err` first; `release()` returns the lease, does **not** close the shared handle). **Application code is UNCHANGED**: `deps.DB/DBByName/Cache/Messaging` and `ResourceProvider` keep two-value `(handle, error)`; the framework releases at each request/message/job boundary — do **not** add a manual `release()` there. ADR-032 rule: a handle/ctx from `deps.*` is valid only within its unit of work — never hand it to a goroutine that outlives the request/message/job (a latent use-after-release once tenant eviction can fire).
-- **`config.PoolKeepAliveConfig.Enabled` is now `*bool`** with nil-safe `IsEnabled()`. Direct constructors pass a `*bool`; readers use `IsEnabled()`. YAML/env `database.pool.keepalive.enabled` unchanged — the fix is that `enabled: false` with `interval` unset now truly disables keep-alive.
-- **Env ingestion hardening (M4):** the env loader has **no prefix filter — it still ingests every process env var.** What changed: a **bare** env var whose full name maps *exactly* onto a top-level section (`DEBUG`, `CACHE`, `SERVER`, `DATABASE`, a k8s `SERVER_PORT=tcp://…`) is now dropped before koanf unflattens (previously it crashed startup with `expected a map, got string`), and a scalar can no longer overwrite an existing config map. **Sub-keyed vars (`DEBUG_ENABLED`, `CACHE_REDIS_HOST`) and all unrelated vars still bind exactly as before**; `custom` is deliberately *not* in the dropped set. (⚠ `wiki/migrations.md`'s M4 section currently mis-frames this as a prefix *whitelist* that ignores "any variable whose first segment is not a recognized section (…custom…)"; the code is a bare-section-name *blacklist* that ingests everything else and omits `custom` — trust the code / this entry.)
-- Also: outbox relay/cleanup jobs now fan out across static `multitenant.tenants`; **outbox + `multitenant.enabled` + dynamic tenant source now fails fast at Init** (rather than silently never relaying). Validated startup-budget/manager-tuning config keys are now consumed (#600).
-
-### v0.44.0 — no consumer-facing change
-The sole ⚠ BREAKING entry is `actions/checkout@v7` (#609) — a bump in **go-bricks' own CI workflows**, not the Go module. It is a semantic-release artifact of the `chore(deps)!:` subject. **Zero action** for apps importing go-bricks.
-
-### v0.45.0 (unreleased, `main` HEAD) — Echo-free boundary (ADR-034, #627) + Outbox retry/dead-letter (ADR-033, #626)
-- **Echo-free boundary types (big-bang, compiler-caught).** Every `echo.*` type is removed from the public surface (Echo stays the internal engine; it remains an *indirect* `go.mod` dep). Migrate:
-  - `HandlerContext.Echo` removed → `ctx.RequestContext()` (request `context.Context`), `ctx.Request()` / `ctx.ResponseWriter()`, `ctx.Param/Query/RequestHeader/Get/Set`. There is no `ctx.Bind` — the typed pipeline binds the `req` struct before the handler runs.
-  - Custom middleware → flat `server.MiddlewareFunc` = `func(c server.HandlerContext, next func() error) error` (call `next()` to continue, or return an `IAPIError` to abort); propagate context via `c.SetRequestContext(...)`.
-  - `ServerRunner.Echo()` removed → `RootGroup()` (no basePath, for `_sys`/debug) / `ModuleGroup()`. `RegisterReadyHandler` takes a `server.Handler`. `scheduler.CIDRMiddleware` and framework middleware constructors return `server.MiddlewareFunc` (call sites unchanged). `SkipperFunc` is `func(r *http.Request) bool`; package-level `server.EscalateSeverity(c, lvl)` → method `c.EscalateSeverity(lvl)`.
-  - **Tests:** build the context with `server.NewHandlerContextForTest(rec, req, cfg)`.
-  - Find every site: `git grep -nE 'ctx\.Echo|echo\.(HandlerFunc|MiddlewareFunc|Context)|runner\.Echo\(\)|server\.EscalateSeverity'`.
-- **Outbox retry / status-driven dead-lettering (ADR-033).** No DB schema migration. Two new config keys (safe defaults): `messaging.reconnect.maxpublishattempts` (5) and `outbox.publishtimeout` (60s). **Hard startup invariant: `outbox.publishtimeout` ≥ `messaging.reconnect.connectiontimeout` (default 30s) or the outbox module fails to Init.** `messaging.PublishToExchange`/`Publish` now return `ErrPublishRetriesExhausted` (wrapping the cause) after `maxpublishattempts` instead of blocking forever; cancel/deadline errors are now **wrapped** → match with `errors.Is`, not `==`. `outbox.Store.FetchPending` drops its `maxRetries` param and gains `MarkDeadLettered` (custom `Store` implementers only). Semantics: `outbox.maxretries` now dead-letters **poison events only** (undecodable headers → `status='failed'`); connectivity failures (broker down, NACK, confirm timeout, missing exchange) advance `retry_count` and retry **indefinitely** — monitor `retry_count`, prune `status='failed'` manually (`DeletePublished` purges only `published`). **⚠ Upgrade hazard:** rows previously soft-parked (`retry_count ≥ maxretries`) become eligible again and re-publish in a **burst** on the first post-upgrade relay cycle — inspect/prune `SELECT count(*) FROM <outbox> WHERE status='pending' AND retry_count >= <maxretries>` before upgrading; consumers must be idempotent. **Apps using `deps.Outbox` need no code change.**
+Agent protocol (condensed — full version in the runbook):
+1. Detect CURRENT: `go list -m -f '{{.Version}}{{if .Replace}} =>{{.Replace.Path}}{{end}}' github.com/gaborage/go-bricks` (a local `replace` → resolve the checkout's tag).
+2. Select every edge to the right of CURRENT up to TARGET; apply in ascending order.
+3. Act on each atom's `when` gate. **`when: no-match` = a default flip: you are affected because the key is UNSET — the miss is the actionable case** (a naive "grep found nothing → not affected" is wrong for these). Compile-break atoms are caught by `go build ./...`; silent atoms have no safety net — run their `detect`.
+4. **WALK** hop-by-hop (build-gated; `go.mod` sits at a real tag after each hop) or **DIRECT-JUMP** (run every preflight first, one bump, let one `go build` batch the compile-breaks, then sweep the silent gates).
 
 ### Terminology: framework upgrade vs schema migration
-In this document, `## Multi-Tenant Migrations (CI/CD)` refers to **DB/Flyway schema** migrations, not go-bricks **version** upgrades. This section is the version-upgrade guide; `wiki/migrations.md` is its authoritative long form.
+In this document, `## Multi-Tenant Migrations (CI/CD)` refers to **DB/Flyway schema** migrations, not go-bricks **version** upgrades. The version-upgrade runbook is `wiki/migrations.md`.
