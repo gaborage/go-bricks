@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.46.0](https://github.com/gaborage/go-bricks/compare/v0.45.0...v0.46.0) (2026-07-03)
+
+
+### Added
+
+* **server:** restore route-template and path-param access on HandlerContext ([#635](https://github.com/gaborage/go-bricks/issues/635)) ([6b89824](https://github.com/gaborage/go-bricks/commit/6b898241c94960102fc7600193b3a5ab9f735961))
+
+
+### Fixed
+
+* **deps:** update module github.com/gaborage/go-bricks to v0.45.0 ([#630](https://github.com/gaborage/go-bricks/issues/630)) ([dddc824](https://github.com/gaborage/go-bricks/commit/dddc824beebadb080317a725cbbe8c5c5ad8543e))
+
 ## [0.45.0](https://github.com/gaborage/go-bricks/compare/v0.44.0...v0.45.0) (2026-07-01)
 
 
