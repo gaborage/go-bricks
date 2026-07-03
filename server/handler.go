@@ -1281,10 +1281,10 @@ func RegisterHandler[T any, R any](
 	descriptor := RouteDescriptor{
 		Method:       method,
 		Path:         fullPath,
-		HandlerID:    fmt.Sprintf("%s:%s", method, fullPath),
+		HandlerID:    formatHandlerID(method, fullPath),
 		RequestType:  reflect.TypeOf(reqType),
 		ResponseType: reflect.TypeOf(respType),
-		Package:      getCallerPackage(),
+		Package:      getCallerPackage(3), // getCallerPackage → RegisterHandler → GET/POST/etc → module
 		HandlerName:  extractHandlerName(handler),
 	}
 
@@ -1497,9 +1497,12 @@ func WithLogger(log logger.Logger) HandlerRegistryOption {
 	}
 }
 
-// getCallerPackage extracts the package path of the calling function
-func getCallerPackage() string {
-	pc, _, _, ok := runtime.Caller(3) // Skip this func + RegisterHandler + GET/POST/etc
+// getCallerPackage extracts the package path of the calling function. skip is the number of
+// stack frames above getCallerPackage to inspect: the typed registration path passes 3
+// (getCallerPackage → RegisterHandler → GET/POST/etc → module), the raw RouteRegistrar.Add
+// path passes 2 (getCallerPackage → Add → module).
+func getCallerPackage(skip int) string {
+	pc, _, _, ok := runtime.Caller(skip)
 	if !ok {
 		return ""
 	}

@@ -167,6 +167,64 @@ func TestTypedHandlerThroughRouteGroupSeam(t *testing.T) {
 	assert.NotEmpty(t, resp.Meta["timestamp"])
 }
 
+// TestRouteGroupAddEmitsRouteDescriptor verifies that a raw route registered through
+// RouteRegistrar.Add is recorded in DefaultRouteRegistry (issue #634), mirroring the typed
+// GET/POST path so startup inventories keyed by route template see the full surface. Fields
+// that only make sense for typed routes stay zero-valued.
+func TestRouteGroupAddEmitsRouteDescriptor(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	defer DefaultRouteRegistry.Clear()
+
+	e := echo.New()
+	base := newRouteGroup(e.Group("/api"), "/api", nil)
+
+	base.Add(http.MethodGet, "/raw-widgets", func(c HandlerContext) error {
+		return c.String(http.StatusOK, "ok")
+	})
+
+	routes := DefaultRouteRegistry.ByPath("/api/raw-widgets")
+	require.Len(t, routes, 1, "raw Add must emit exactly one descriptor")
+
+	d := routes[0]
+	assert.Equal(t, http.MethodGet, d.Method)
+	assert.Equal(t, "/api/raw-widgets", d.Path)
+	assert.Equal(t, "GET:/api/raw-widgets", d.HandlerID)
+	assert.NotEmpty(t, d.HandlerName, "HandlerName falls back to the reflected function name")
+	// getCallerPackage(2) walks getCallerPackage → Add → this test function. Because the test is
+	// itself in package server, the attributed package is the server package. This pins the value
+	// but cannot, by construction, catch an under-shot skip that lands on Add's own frame (also
+	// package server) — validating that requires a caller in a different package.
+	assert.Equal(t, "github.com/gaborage/go-bricks/server", d.Package,
+		"Package is derived from the registering caller's frame, same mechanism as typed routes")
+
+	// Typed-only metadata stays zero-valued for raw routes.
+	assert.Nil(t, d.RequestType)
+	assert.Nil(t, d.ResponseType)
+	assert.Nil(t, d.InboundJOSE)
+	assert.Nil(t, d.OutboundJOSE)
+	assert.False(t, d.RawResponse)
+	assert.Empty(t, d.ModuleName)
+}
+
+// TestRouteGroupAddDescriptorUsesFullPath verifies the emitted descriptor records the fully
+// resolved path (group prefix + route), matching what typed routes store via FullPath.
+func TestRouteGroupAddDescriptorUsesFullPath(t *testing.T) {
+	DefaultRouteRegistry.Clear()
+	defer DefaultRouteRegistry.Clear()
+
+	e := echo.New()
+	base := newRouteGroup(e.Group("/api"), "/api", nil)
+	child := base.Group("/v1")
+
+	child.Add(http.MethodPost, "/widgets", func(c HandlerContext) error {
+		return c.String(http.StatusOK, "ok")
+	})
+
+	routes := DefaultRouteRegistry.ByPath("/api/v1/widgets")
+	require.Len(t, routes, 1)
+	assert.Equal(t, "POST:/api/v1/widgets", routes[0].HandlerID)
+}
+
 // TestRouteGroupGroupAppliesFlatMiddleware verifies Group(prefix, ...MiddlewareFunc) wires
 // flat middleware onto the nested registrar and a raw Handler registered via Add runs.
 func TestRouteGroupGroupAppliesFlatMiddleware(t *testing.T) {
