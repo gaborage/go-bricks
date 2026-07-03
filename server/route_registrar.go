@@ -31,8 +31,25 @@ func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc) {
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
 // adapters are built once here at registration time; the route handle (echo.RouteInfo)
 // is intentionally discarded.
+//
+// It also records a RouteDescriptor in DefaultRouteRegistry so raw routes are discoverable
+// alongside typed ones (issue #634). The framework's routeGroup implements the addEcho seam, so
+// typed handlers register through addEcho (which emits its own descriptor and never traverses
+// Add) — framework-registered routes are never double-counted. Only the fields derivable at this
+// seam are populated (method, full path, handler ID/name, caller package); type- and JOSE-related
+// fields stay zero-valued because raw handlers carry no request/response models.
 func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...MiddlewareFunc) {
-	rg.group.Add(method, rg.relativePath(path), adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...)
+	relative := rg.relativePath(path)
+	rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...)
+
+	fullPath := rg.fullPathFromRelative(relative)
+	DefaultRouteRegistry.Register(&RouteDescriptor{
+		Method:      method,
+		Path:        fullPath,
+		HandlerID:   formatHandlerID(method, fullPath),
+		HandlerName: extractHandlerName(handler),
+		Package:     getCallerPackage(2), // getCallerPackage → Add → module (best-effort, as typed routes)
+	})
 }
 
 func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar {
@@ -63,7 +80,12 @@ func (rg *routeGroup) adaptAll(mw []MiddlewareFunc) []echo.MiddlewareFunc {
 }
 
 func (rg *routeGroup) FullPath(path string) string {
-	relative := rg.relativePath(path)
+	return rg.fullPathFromRelative(rg.relativePath(path))
+}
+
+// fullPathFromRelative joins the group prefix with an already-resolved relative path. Add uses it
+// to avoid recomputing relativePath (which FullPath would otherwise do a second time per route).
+func (rg *routeGroup) fullPathFromRelative(relative string) string {
 	if relative == "" {
 		if rg.prefix == "" {
 			return "/"

@@ -819,7 +819,9 @@ func (packageCaller) callPackage() string {
 }
 
 func packageCallerNested() string {
-	return getCallerPackage()
+	// skip 3: getCallerPackage → packageCallerNested → callPackage → TestGetCallerPackage,
+	// mirroring the typed path's getCallerPackage → RegisterHandler → GET/POST → module depth.
+	return getCallerPackage(3)
 }
 
 func TestExtractHandlerName(t *testing.T) {

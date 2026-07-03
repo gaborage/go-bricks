@@ -8,23 +8,35 @@ import (
 	"github.com/gaborage/go-bricks/jose"
 )
 
-// RouteDescriptor captures metadata about a registered route
+// RouteDescriptor captures metadata about a registered route.
+//
+// Routes registered through the raw RouteRegistrar.Add path (as opposed to the typed
+// server.GET/POST helpers) carry only method/path/handler metadata: RequestType, ResponseType,
+// InboundJOSE, and OutboundJOSE are nil, and ModuleName is empty, because a raw handler exposes
+// no request/response models. Consumers iterating the registry must nil-check those fields.
 type RouteDescriptor struct {
 	Method       string       // HTTP method (GET, POST, etc.)
 	Path         string       // Route path pattern (/users/:id)
 	HandlerID    string       // Unique identifier for handler function
 	HandlerName  string       // Function name (e.g., "getUser")
-	ModuleName   string       // Module that registered this route
+	ModuleName   string       // Module that registered this route (empty for raw routes)
 	Package      string       // Go package path
-	RequestType  reflect.Type // Request type T from HandlerFunc[T, R]
-	ResponseType reflect.Type // Response type R from HandlerFunc[T, R]
+	RequestType  reflect.Type // Request type T from HandlerFunc[T, R]; nil for raw routes
+	ResponseType reflect.Type // Response type R from HandlerFunc[T, R]; nil for raw routes
 	Middleware   []string     // Applied middleware names
 	Tags         []string     // Optional grouping tags
 	Summary      string       // Optional summary from comments
 	Description  string       // Optional description from comments
 	RawResponse  bool         // If true, bypass APIResponse envelope (for Strangler Fig migration)
-	InboundJOSE  *jose.Policy // Resolved at registration time from request type's jose: tag
-	OutboundJOSE *jose.Policy // Resolved at registration time from response type's jose: tag
+	InboundJOSE  *jose.Policy // Resolved at registration time from request type's jose: tag; nil for raw routes
+	OutboundJOSE *jose.Policy // Resolved at registration time from response type's jose: tag; nil for raw routes
+}
+
+// formatHandlerID builds the canonical HandlerID for a route ("METHOD:/full/path"). Both the
+// typed registration path (RegisterHandler) and the raw path (RouteRegistrar.Add) use it so the
+// identifiers stay identical across paths — consumers keying inventories by HandlerID depend on it.
+func formatHandlerID(method, fullPath string) string {
+	return method + ":" + fullPath
 }
 
 // RouteRegistry maintains discovered routes for introspection
