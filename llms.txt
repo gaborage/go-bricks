@@ -4,7 +4,7 @@ Enterprise Go microservice toolkit (Go 1.26+). Provides multi-database access, t
 
 ## Version & Compatibility
 
-- Reflects **go-bricks v0.45.0** (released). Requires **Go 1.26+**.
+- Reflects **go-bricks v0.46.0** (route-template/path-param accessors; v0.45.0 plus additive API). Requires **Go 1.26+**.
 - Authoritative sources: `CHANGELOG.md` (release log) and `wiki/migrations.md` — the **per-hop migration runbook** (detect → apply → verify atoms, one hop per release, chainable across any version range). This file carries the ladder + agent protocol; the runbook holds the full atoms.
 - Upgrading an existing app? Read that section first. Across v0.40 → v0.45 **most breaks fail silently** — a renamed config key stops binding, a default flips — with no compile error. The compiler-caught API breaks are concentrated in v0.41.0 (CORS / LogEvent / SetupMiddlewares), v0.43.0 (per-tenant `ReleaseFunc`, `PoolKeepAliveConfig.Enabled`), and v0.45.0 (echo-free boundary types, the `outbox.Store` interface); everything else fails silently.
 
@@ -993,6 +993,48 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
 | `r.Group("/path", middleware)` | Apply to route subtree | Auth for /admin/* |
 | Skipper function | Conditionally skip | Skip rate limit for /health |
 | Context propagation | Pass data downstream | User ID, tenant ID |
+
+### Route Template & Path Parameters (v0.46.0+)
+
+```go
+// RouteTemplate() = registered route incl. base path ("/users/:id"), NOT the concrete URL
+// ("/users/42" — use c.Request().URL.Path for that). Always non-empty inside consumer
+// middleware/handlers (they only run on matched routes); empty only on unrouted contexts.
+// PathParams() = matched params in route-template order (defensive copy, safe to retain;
+// empty when no route matched). NEVER use raw param values as metric labels — unbounded
+// cardinality, and path-embedded IDs (card/user IDs) would leak to the metrics vendor.
+func RouteMetrics(c server.HandlerContext, next func() error) error {
+	start := time.Now()
+	err := next()
+	recordLatency(c.RouteTemplate(), time.Since(start)) // template only: low-cardinality, no PII
+	return err
+}
+
+// SetPathParams replaces the set; Param(name) AND `param:"..."` binding observe it.
+// Values pass through verbatim — a promoted query param is still user input, validate as usual.
+// Replace an existing entry instead of appending a duplicate: params can match empty
+// (e.g. /cards//status) and Param() is first-match-wins, so an appended duplicate is invisible.
+func PromoteID(c server.HandlerContext, next func() error) error {
+	if c.Param("id") == "" {
+		if id := c.Query("id"); id != "" {
+			params := c.PathParams()
+			replaced := false
+			for i := range params {
+				if params[i].Name == "id" {
+					params[i].Value = id
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				params = append(params, server.PathParam{Name: "id", Value: id})
+			}
+			c.SetPathParams(params)
+		}
+	}
+	return next()
+}
+```
 
 ## Database Builder & Operations
 

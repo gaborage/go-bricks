@@ -2056,6 +2056,247 @@ func TestHandlerContextSetRequest(t *testing.T) {
 	assert.Equal(t, "/replaced", c.Request().URL.Path)
 }
 
+// withGroupRoutedHandlerContext registers routePath (under groupPrefix when non-empty)
+// on a fresh echo router, drives requestURL through it, and hands the routed
+// HandlerContext to fn INSIDE the request lifecycle — echo contexts are pooled, so
+// touching the context after ServeHTTP returns would read recyclable state. ServeHTTP
+// runs synchronously on the test goroutine, so fn may use require/assert directly.
+func withGroupRoutedHandlerContext(t *testing.T, groupPrefix, routePath, requestURL string, fn func(c HandlerContext)) {
+	t.Helper()
+	e := echo.New()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	handlerRan := false
+	handler := func(ec *echo.Context) error {
+		handlerRan = true
+		fn(newHandlerContext(ec, cfg))
+		return ec.NoContent(http.StatusOK)
+	}
+	if groupPrefix != "" {
+		e.Group(groupPrefix).GET(routePath, handler)
+	} else {
+		e.GET(routePath, handler)
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, requestURL, http.NoBody)
+	e.ServeHTTP(httptest.NewRecorder(), req)
+	require.True(t, handlerRan, "route %s%s must match request %s", groupPrefix, routePath, requestURL)
+}
+
+// withRoutedHandlerContext is withGroupRoutedHandlerContext without a group prefix.
+func withRoutedHandlerContext(t *testing.T, routePath, requestURL string, fn func(c HandlerContext)) {
+	t.Helper()
+	withGroupRoutedHandlerContext(t, "", routePath, requestURL, fn)
+}
+
+// unmatchedRouteObservation is what an engine-level middleware saw on a request
+// whose route resolution ended in the given sentinel (404/405).
+type unmatchedRouteObservation struct {
+	params   []PathParam
+	template string
+	captured bool
+}
+
+// observeUnmatchedRoute installs engine-level middleware (which, unlike group
+// middleware, also runs on 404/405 — what a SetupMiddlewares escape-hatch
+// consumer would observe) capturing PathParams/RouteTemplate whenever the
+// request resolved to the given sentinel route name.
+func observeUnmatchedRoute(e *echo.Echo, sentinelRouteName string) *unmatchedRouteObservation {
+	obs := &unmatchedRouteObservation{}
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(ec *echo.Context) error {
+			if ec.RouteInfo().Name == sentinelRouteName {
+				c := newHandlerContext(ec, cfg)
+				obs.params = c.PathParams()
+				obs.template = c.RouteTemplate()
+				obs.captured = true
+			}
+			return next(ec)
+		}
+	})
+	return obs
+}
+
+// TestHandlerContextRouteTemplate verifies RouteTemplate returns the registered route
+// template (not the concrete URL), includes any group prefix, and is empty on an
+// unrouted context.
+func TestHandlerContextRouteTemplate(t *testing.T) {
+	t.Run("parameterized_route", func(t *testing.T) {
+		withRoutedHandlerContext(t, "/cards/:cardId/status", "/cards/42/status", func(c HandlerContext) {
+			assert.Equal(t, "/cards/:cardId/status", c.RouteTemplate())
+			// The template is NOT the concrete URL.
+			assert.Equal(t, "/cards/42/status", c.Request().URL.Path)
+		})
+	})
+
+	t.Run("group_prefixed_route_includes_base_path", func(t *testing.T) {
+		withGroupRoutedHandlerContext(t, "/api", "/cards/:cardId/status", "/api/cards/42/status", func(c HandlerContext) {
+			assert.Equal(t, "/api/cards/:cardId/status", c.RouteTemplate())
+		})
+	})
+
+	t.Run("empty_on_unrouted_context", func(t *testing.T) {
+		cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/anything", http.NoBody)
+		c := NewHandlerContextForTest(httptest.NewRecorder(), req, cfg)
+		assert.Empty(t, c.RouteTemplate())
+	})
+}
+
+// TestHandlerContextPathParams verifies PathParams returns the matched parameters in
+// route-template declaration order, covers catch-all routes, and returns a defensive
+// copy decoupled from the pooled engine state.
+func TestHandlerContextPathParams(t *testing.T) {
+	t.Run("ordered_by_template_declaration", func(t *testing.T) {
+		// Deliberately non-alphabetical template: order must follow the template,
+		// not the param names.
+		withRoutedHandlerContext(t, "/order/:zebra/:alpha/:mike", "/order/z1/a2/m3", func(c HandlerContext) {
+			assert.Equal(t, []PathParam{
+				{Name: "zebra", Value: "z1"},
+				{Name: "alpha", Value: "a2"},
+				{Name: "mike", Value: "m3"},
+			}, c.PathParams())
+		})
+	})
+
+	t.Run("catch_all_route", func(t *testing.T) {
+		withRoutedHandlerContext(t, "/files/*", "/files/docs/report.pdf", func(c HandlerContext) {
+			assert.Equal(t, []PathParam{
+				{Name: "*", Value: "docs/report.pdf"},
+			}, c.PathParams())
+		})
+	})
+
+	t.Run("empty_on_method_not_allowed", func(t *testing.T) {
+		e := echo.New()
+		e.GET("/users/:userId", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
+		e.GET("/cards/:cardId/status", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
+		obs := observeUnmatchedRoute(e, echo.MethodNotAllowedRouteName)
+
+		// Warm the router and context pool with a matched parameterized request so
+		// stale param names exist for the regression vector (phantom params on 405).
+		warm := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/users/7", http.NoBody)
+		e.ServeHTTP(httptest.NewRecorder(), warm)
+
+		// POST to a GET-only route → 405: no route method matched, so no parameter
+		// names were stamped for this request.
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/cards/42/status", http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+		require.True(t, obs.captured, "engine-level middleware must run on 405")
+		assert.Empty(t, obs.params, "PathParams must be empty when no route method matched")
+		// Engine-defined (echo v5.2.1): on 405 the best-matching route's template is
+		// set. Not a go-bricks contract — if an echo upgrade breaks this assertion,
+		// update the RouteTemplate doc comment and ADR-035 instead of the engine.
+		assert.Equal(t, "/cards/:cardId/status", obs.template)
+	})
+
+	t.Run("empty_on_not_found", func(t *testing.T) {
+		e := echo.New()
+		e.GET("/users/:userId", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
+		obs := observeUnmatchedRoute(e, echo.NotFoundRouteName)
+
+		// Warm the router and context pool with a matched request so stale param
+		// names sit in the pooled backing array — if a future echo version starts
+		// exposing traversal state on 404 (as v5.2.1 already does on 405), this
+		// pin catches it via the NotFoundRouteName branch of the guard.
+		warm := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/users/7", http.NoBody)
+		e.ServeHTTP(httptest.NewRecorder(), warm)
+
+		// NOTE: /users/9/extra would NOT 404 — echo v5 path params match greedily
+		// across "/" (userId would bind "9/extra"). Use a genuinely unmatched path.
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/nope", http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusNotFound, rec.Code)
+		require.True(t, obs.captured, "engine-level middleware must run on 404")
+		assert.Empty(t, obs.params, "PathParams must be empty when no route matched")
+		assert.Empty(t, obs.template, "RouteTemplate must be empty on 404")
+	})
+
+	t.Run("defensive_copy", func(t *testing.T) {
+		withRoutedHandlerContext(t, "/cards/:cardId/status", "/cards/42/status", func(c HandlerContext) {
+			params := c.PathParams()
+			require.Equal(t, []PathParam{{Name: "cardId", Value: "42"}}, params)
+
+			// Mutating the returned slice must not affect the engine state.
+			params[0].Name = "mutatedName"
+			params[0].Value = "mutatedValue"
+
+			assert.Equal(t, "42", c.Param("cardId"), "Param must be unaffected by mutating the PathParams copy")
+			assert.Equal(t, []PathParam{{Name: "cardId", Value: "42"}}, c.PathParams(),
+				"a second PathParams call must be unaffected by mutating the first copy")
+		})
+	})
+}
+
+type setPathParamsBindReq struct {
+	ID int `param:"id" json:"id" validate:"min=1"`
+}
+
+// TestHandlerContextSetPathParams verifies SetPathParams replaces the parameter set for
+// Param and struct-tag binding, clears on nil without panicking, and copies its input.
+func TestHandlerContextSetPathParams(t *testing.T) {
+	t.Run("param_observes_replacement", func(t *testing.T) {
+		withRoutedHandlerContext(t, "/cards/:cardId/status", "/cards/42/status", func(c HandlerContext) {
+			c.SetPathParams([]PathParam{{Name: "cardId", Value: "99"}})
+			assert.Equal(t, "99", c.Param("cardId"))
+			assert.Equal(t, []PathParam{{Name: "cardId", Value: "99"}}, c.PathParams())
+		})
+	})
+
+	t.Run("struct_tag_binding_observes_injected_params", func(t *testing.T) {
+		e := echo.New()
+		v := NewValidator()
+		require.NotNil(t, v)
+		e.Validator = v
+
+		binder := NewRequestBinder()
+		cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+		var bound setPathParamsBindReq
+		handler := func(req setPathParamsBindReq, _ HandlerContext) (setPathParamsBindReq, IAPIError) {
+			bound = req
+			return req, nil
+		}
+		h := WrapHandler(handler, binder, cfg)
+
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/users/5", http.NoBody)
+		rec := httptest.NewRecorder()
+		ec := e.NewContext(req, rec)
+
+		// Inject params through the framework-neutral accessor instead of echo's
+		// SetPathValues, then drive the typed pipeline.
+		newHandlerContext(ec, cfg).SetPathParams([]PathParam{{Name: "id", Value: "5"}})
+
+		require.NoError(t, h(ec))
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, 5, bound.ID, "param struct-tag binding must observe injected params")
+	})
+
+	t.Run("nil_clears_all_params", func(t *testing.T) {
+		withRoutedHandlerContext(t, "/cards/:cardId/status", "/cards/42/status", func(c HandlerContext) {
+			require.NotPanics(t, func() { c.SetPathParams(nil) })
+			assert.Empty(t, c.PathParams())
+			assert.Empty(t, c.Param("cardId"))
+		})
+	})
+
+	t.Run("copies_input_slice", func(t *testing.T) {
+		withRoutedHandlerContext(t, "/cards/:cardId/status", "/cards/42/status", func(c HandlerContext) {
+			input := []PathParam{{Name: "cardId", Value: "7"}}
+			c.SetPathParams(input)
+
+			// Mutating the caller's slice after the call must not leak into the context.
+			input[0].Value = "tampered"
+
+			assert.Equal(t, "7", c.Param("cardId"), "SetPathParams must copy its input slice")
+		})
+	})
+}
+
 // TestNewHandlerContextForTestSmoke verifies the exported test constructor produces a
 // usable HandlerContext backed by the supplied writer/request.
 func TestNewHandlerContextForTestSmoke(t *testing.T) {
