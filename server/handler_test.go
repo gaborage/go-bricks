@@ -2087,6 +2087,35 @@ func withRoutedHandlerContext(t *testing.T, routePath, requestURL string, fn fun
 	withGroupRoutedHandlerContext(t, "", routePath, requestURL, fn)
 }
 
+// unmatchedRouteObservation is what an engine-level middleware saw on a request
+// whose route resolution ended in the given sentinel (404/405).
+type unmatchedRouteObservation struct {
+	params   []PathParam
+	template string
+	captured bool
+}
+
+// observeUnmatchedRoute installs engine-level middleware (which, unlike group
+// middleware, also runs on 404/405 — what a SetupMiddlewares escape-hatch
+// consumer would observe) capturing PathParams/RouteTemplate whenever the
+// request resolved to the given sentinel route name.
+func observeUnmatchedRoute(e *echo.Echo, sentinelRouteName string) *unmatchedRouteObservation {
+	obs := &unmatchedRouteObservation{}
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(ec *echo.Context) error {
+			if ec.RouteInfo().Name == sentinelRouteName {
+				c := newHandlerContext(ec, cfg)
+				obs.params = c.PathParams()
+				obs.template = c.RouteTemplate()
+				obs.captured = true
+			}
+			return next(ec)
+		}
+	})
+	return obs
+}
+
 // TestHandlerContextRouteTemplate verifies RouteTemplate returns the registered route
 // template (not the concrete URL), includes any group prefix, and is empty on an
 // unrouted context.
@@ -2139,26 +2168,9 @@ func TestHandlerContextPathParams(t *testing.T) {
 
 	t.Run("empty_on_method_not_allowed", func(t *testing.T) {
 		e := echo.New()
-		cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 		e.GET("/users/:userId", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
 		e.GET("/cards/:cardId/status", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
-
-		// Engine-level middleware (unlike group middleware) also runs on 405s —
-		// this is what a SetupMiddlewares escape-hatch consumer would observe.
-		var params []PathParam
-		var template string
-		captured := false
-		e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-			return func(ec *echo.Context) error {
-				if ec.RouteInfo().Name == echo.MethodNotAllowedRouteName {
-					c := newHandlerContext(ec, cfg)
-					params = c.PathParams()
-					template = c.RouteTemplate()
-					captured = true
-				}
-				return next(ec)
-			}
-		})
+		obs := observeUnmatchedRoute(e, echo.MethodNotAllowedRouteName)
 
 		// Warm the router and context pool with a matched parameterized request so
 		// stale param names exist for the regression vector (phantom params on 405).
@@ -2172,12 +2184,36 @@ func TestHandlerContextPathParams(t *testing.T) {
 		e.ServeHTTP(rec, req)
 
 		require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
-		require.True(t, captured, "engine-level middleware must run on 405")
-		assert.Empty(t, params, "PathParams must be empty when no route method matched")
+		require.True(t, obs.captured, "engine-level middleware must run on 405")
+		assert.Empty(t, obs.params, "PathParams must be empty when no route method matched")
 		// Engine-defined (echo v5.2.1): on 405 the best-matching route's template is
 		// set. Not a go-bricks contract — if an echo upgrade breaks this assertion,
 		// update the RouteTemplate doc comment and ADR-035 instead of the engine.
-		assert.Equal(t, "/cards/:cardId/status", template)
+		assert.Equal(t, "/cards/:cardId/status", obs.template)
+	})
+
+	t.Run("empty_on_not_found", func(t *testing.T) {
+		e := echo.New()
+		e.GET("/users/:userId", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
+		obs := observeUnmatchedRoute(e, echo.NotFoundRouteName)
+
+		// Warm the router and context pool with a matched request so stale param
+		// names sit in the pooled backing array — if a future echo version starts
+		// exposing traversal state on 404 (as v5.2.1 already does on 405), this
+		// pin catches it via the NotFoundRouteName branch of the guard.
+		warm := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/users/7", http.NoBody)
+		e.ServeHTTP(httptest.NewRecorder(), warm)
+
+		// NOTE: /users/9/extra would NOT 404 — echo v5 path params match greedily
+		// across "/" (userId would bind "9/extra"). Use a genuinely unmatched path.
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/nope", http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+
+		require.Equal(t, http.StatusNotFound, rec.Code)
+		require.True(t, obs.captured, "engine-level middleware must run on 404")
+		assert.Empty(t, obs.params, "PathParams must be empty when no route matched")
+		assert.Empty(t, obs.template, "RouteTemplate must be empty on 404")
 	})
 
 	t.Run("defensive_copy", func(t *testing.T) {
