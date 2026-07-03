@@ -166,6 +166,58 @@ func (c HandlerContext) JSON(code int, v any) error { return c.ectx.JSON(code, v
 // String writes s as a text/plain response with the given status code.
 func (c HandlerContext) String(code int, s string) error { return c.ectx.String(code, s) }
 
+// PathParam is one matched path parameter. Ordered slices preserve
+// route-template order.
+type PathParam struct {
+	Name  string
+	Value string
+}
+
+// RouteTemplate returns the registered route path that matched this request,
+// including any group/base-path prefix (e.g. "/api/cards/:cardId/status").
+// It is the template the application registered, NOT the concrete URL
+// (use Request().URL.Path for that). Empty before routing completes and on
+// unmatched (404) requests; on 405 the engine sets the best-matching route's
+// template (engine-defined, not a contract).
+func (c HandlerContext) RouteTemplate() string { return c.ectx.Path() }
+
+// PathParams returns the matched path parameters in route-template order.
+// The returned slice is a defensive copy: safe to retain past the request;
+// mutating it does not affect Param() or struct-tag binding. Empty when no
+// route matched (pre-route, 404, 405) — parameter state is only meaningful
+// for a matched route.
+func (c HandlerContext) PathParams() []PathParam {
+	// Param names are stamped only on a full method+path match; on 404/405 the
+	// pooled context's value slots can pair with a PREVIOUS request's names
+	// (phantom params), so treat unmatched requests as having no parameters.
+	if name := c.ectx.RouteInfo().Name; name == echo.NotFoundRouteName || name == echo.MethodNotAllowedRouteName {
+		return []PathParam{}
+	}
+	// echo's PathValues() returns a slice header ALIASING the pooled context's
+	// backing array (reused across requests) — element-wise copy is mandatory.
+	values := c.ectx.PathValues()
+	params := make([]PathParam, len(values))
+	for i, v := range values {
+		params[i] = PathParam{Name: v.Name, Value: v.Value}
+	}
+	return params
+}
+
+// SetPathParams replaces the request's path parameters. Subsequent Param(name)
+// calls and param:"name" struct-tag binding observe the new set. The input
+// slice is copied; nil clears all parameters. Injected params are
+// application-supplied — treat them with the same trust as their source value.
+func (c HandlerContext) SetPathParams(params []PathParam) {
+	// echo's SetPathValues panics on nil, so always hand it a non-nil slice
+	// (len 0 clears). Echo copies the input into its pooled array, so the
+	// temporary is safe.
+	values := make(echo.PathValues, len(params))
+	for i, p := range params {
+		values[i] = echo.PathValue{Name: p.Name, Value: p.Value}
+	}
+	c.ectx.SetPathValues(values)
+}
+
 // echoContext returns the underlying Echo context. UNEXPORTED escape hatch for
 // package-server framework code only (adapters, test helpers); greppable and unnameable
 // from other packages.

@@ -472,6 +472,29 @@ preserved); only middleware routes pay a bounded +1 baton alloc.
 
 ---
 
+### [ADR-035: Route Template and Path-Parameter Accessors on HandlerContext](adr_035_route_template_path_params.md)
+
+**Date:** 2026-07-02 | **Status:** Accepted
+
+Resolves issue #633. ADR-034's accessor set was scoped to "what handlers actually use
+today" without checking capability parity against `echo.Context` — the matched route
+template (`Path()`), ordered path parameters (`PathValues()`), and path-parameter
+mutation (`SetPathValues()`) were dropped by silent omission, breaking template-keyed
+registries, positional param substitution, and query-param→path-param promotion
+middleware. Adds `RouteTemplate() string`, `PathParams() []PathParam` (defensive copy —
+echo's `PathValues()` aliases the pooled context's backing array), and
+`SetPathParams([]PathParam)` (always passes echo a non-nil `PathValues`; echo v5.2.1
+panics on nil) plus the neutral `PathParam{Name, Value}` struct, delegating through the
+unexported `echoContext()` hatch. Mutation had **no** public channel (`Set()`/
+`SetRequestContext()`/stdlib `SetPathValue()` are all invisible to `Param()` and the
+`param:"x"` binder), and blessing `Request().Pattern` for the template would re-couple
+consumers to unpromised engine behavior. Purely additive — apidiff green, minor
+v0.46.0, `feat(server):` not `feat!:`.
+
+**Key Benefits:** Template-keyed registries, positional substitution, and param-rewriting middleware work through a supported vendor-neutral surface; no `reflect`+`unsafe` hacks against the escape hatch; echo's pooled-aliasing and nil-panic gotchas absorbed at the boundary
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -481,7 +504,7 @@ preserved); only middleware routes pay a bounded +1 baton alloc.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-034) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-035) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
