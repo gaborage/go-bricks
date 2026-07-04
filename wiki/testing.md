@@ -228,6 +228,55 @@ assert.Error(t, err)
 
 See [outbox/testing](../outbox/testing/) package for full API documentation.
 
+## Server / HandlerContext Testing
+
+Unit-test a `Handler` or `MiddlewareFunc` without standing up a router by building a
+`HandlerContext` directly. Use `server.NewHandlerContextForTest` when no routing state is
+needed, or `server.NewHandlerContextForTestWithOptions` to seed it. The synthetic context is
+never routed, so routing-derived state is empty by default — seed only what the code under
+test reads:
+
+| State | How to seed | Read back via |
+|---|---|---|
+| Route template (`RouteTemplate()`) | `server.WithRouteTemplate("/api/orders/:id")` construction option | `ctx.RouteTemplate()` |
+| Path params (`Param`, `param:"…"` binding) | `ctx.SetPathParams([]server.PathParam{…})` | `ctx.Param("id")` / `PathParams()` |
+| Query params | already read from the request URL | `ctx.Query("limit")` |
+| Request headers | already read from the request | `ctx.RequestHeader("X-…")` |
+
+The two routing seams are deliberately different shapes: `RouteTemplate` is set once by the
+router and has no runtime mutation path, so it is seeded by a **test-only construction
+option** (it cannot corrupt a live routed context); path params have a legitimate runtime
+setter (`SetPathParams`), reused as-is in tests.
+
+Seed the context, then **drive the middleware/handler under test** and assert on its
+observable effect — don't just assert on the seeded context:
+
+```go
+// Production middleware under test: record the matched route template.
+func RouteTemplateRecorder(sink *string) server.MiddlewareFunc {
+    return func(c server.HandlerContext, next func() error) error {
+        *sink = c.RouteTemplate()
+        return next()
+    }
+}
+
+func TestRouteTemplateRecorder(t *testing.T) {
+    req := httptest.NewRequest(http.MethodGet, "/api/orders/42", http.NoBody)
+    c := server.NewHandlerContextForTestWithOptions(httptest.NewRecorder(), req, cfg,
+        server.WithRouteTemplate("/api/orders/:id"),
+    )
+
+    var recorded string
+    err := RouteTemplateRecorder(&recorded)(c, func() error { return nil }) // exercise the middleware
+
+    require.NoError(t, err)
+    assert.Equal(t, "/api/orders/:id", recorded) // asserts the middleware's behavior, not the seed
+}
+```
+
+For end-to-end fidelity (real router populating template *and* params), register the route on
+a `server.Server` and drive it with `httptest` / `ServeHTTP` instead.
+
 ## Integration Testing with Testcontainers
 
 **Prerequisites:** Docker Desktop or Docker Engine running
