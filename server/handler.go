@@ -106,18 +106,47 @@ func newHandlerContext(c *echo.Context, cfg *config.Config) HandlerContext {
 	return HandlerContext{Config: cfg, ectx: c}
 }
 
+// TestContextOption customizes a HandlerContext built by NewHandlerContextForTest. It
+// seeds pre-routing state the engine would otherwise populate during matching, so unit
+// tests can exercise code that reads that state without standing up a router. Test-support
+// only: options are applied at test construction, never on a live request context.
+type TestContextOption func(*HandlerContext)
+
+// WithRouteTemplate stamps the matched route template so RouteTemplate() reports it on an
+// otherwise-unrouted test context (which never routes and would report ""). On a live
+// request the router owns this value; the option is reachable only through the test
+// constructor, so it cannot mutate a routed context's identity. See issue #639.
+func WithRouteTemplate(template string) TestContextOption {
+	return func(c *HandlerContext) { c.ectx.SetPath(template) }
+}
+
 // NewHandlerContextForTest builds a HandlerContext backed by a real Echo context for use
 // in external-package tests (e.g. app/, scheduler/) that exercise Handler / MiddlewareFunc
 // code but cannot name the unexported escape hatch. It keeps the echo dependency confined
-// to package server. Test-support only — not for production wiring.
+// to package server. Test-support only — not for production wiring. To seed routing state
+// the synthetic context would otherwise leave empty, use NewHandlerContextForTestWithOptions.
 func NewHandlerContextForTest(w http.ResponseWriter, r *http.Request, cfg *config.Config) HandlerContext {
+	return NewHandlerContextForTestWithOptions(w, r, cfg)
+}
+
+// NewHandlerContextForTestWithOptions is NewHandlerContextForTest plus TestContextOption
+// values (e.g. WithRouteTemplate) that seed pre-routing state the engine would otherwise
+// populate during matching. It exists as a separate constructor rather than a variadic on
+// NewHandlerContextForTest so the already-released signature stays API-compatible (adding a
+// variadic changes a function's type identity — apidiff classifies it as incompatible).
+// Test-support only — not for production wiring.
+func NewHandlerContextForTestWithOptions(w http.ResponseWriter, r *http.Request, cfg *config.Config, opts ...TestContextOption) HandlerContext {
 	e := echo.New()
 	// Register the framework validator so contexts built here drive the typed pipeline
 	// (which calls c.Validate) exactly as a live request would.
 	if v := NewValidator(); v != nil {
 		e.Validator = v
 	}
-	return newHandlerContext(e.NewContext(r, w), cfg)
+	c := newHandlerContext(e.NewContext(r, w), cfg)
+	for _, opt := range opts {
+		opt(&c)
+	}
+	return c
 }
 
 // Request returns the underlying *http.Request.
