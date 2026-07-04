@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.47.0](https://github.com/gaborage/go-bricks/compare/v0.46.0...v0.47.0) (2026-07-04)
+
+
+### Added
+
+* **server:** add WithRouteTemplate test option for HandlerContext ([#640](https://github.com/gaborage/go-bricks/issues/640)) ([53d4701](https://github.com/gaborage/go-bricks/commit/53d47010e2b0ad5f2cb3f09a4444e9d807889d78))
+* **server:** emit RouteDescriptor for raw RouteRegistrar.Add routes ([#638](https://github.com/gaborage/go-bricks/issues/638)) ([2884188](https://github.com/gaborage/go-bricks/commit/2884188e643710a165166c6ea5ebdb0416275354))
+
+
+### Fixed
+
+* **deps:** update module github.com/gaborage/go-bricks to v0.46.0 ([#636](https://github.com/gaborage/go-bricks/issues/636)) ([408b038](https://github.com/gaborage/go-bricks/commit/408b038e806f133189beb91cc178e37aacb058ab))
+
 ## [0.46.0](https://github.com/gaborage/go-bricks/compare/v0.45.0...v0.46.0) (2026-07-03)
 
 
