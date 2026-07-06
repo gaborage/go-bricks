@@ -103,7 +103,8 @@ services, and infrastructure access (DB/cache/messaging) under one name.
 For testability and reuse, separate the layers:
 
 - **Module** (`module.go`) — implements `app.Module` (+ optional
-  `RouteRegisterer`, `MessagingDeclarer`, `JobProvider`). Owns wiring only:
+  `RouteRegisterer`, `MessagingDeclarer`, `JobProvider`,
+  `GlobalMiddlewareRegisterer`). Owns wiring only:
   no business logic, no HTTP parsing, no SQL.
 - **Handler** (`handler.go`) — HTTP boundary. Translates request DTOs ↔
   service calls and maps domain errors to `server.IAPIError`. Imports
