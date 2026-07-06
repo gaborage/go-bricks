@@ -108,7 +108,7 @@ This method **must** live in package `server`: `adaptMiddleware` is unexported (
 
   The default path constructs a concrete `*server.Server` (`app/app.go:143` → `server.New`), so the assertion succeeds in production. `ServerRunner` stays byte-identical.
 
-  **Documented trade-off:** a test/alt `ServerRunner` fake that does *not* implement `RegisterGlobalMiddleware` silently drops global middleware. This is acceptable and consistent with the existing optional-capability pattern; tests that need coverage provide a fake implementing the assertion too.
+  **Fail-closed:** if a module registers global middleware but the configured `ServerRunner` does not implement `RegisterGlobalMiddleware`, startup aborts with an error rather than silently dropping the (canonically auth) middleware. A fake needing the capability implements the assertion; one that omits it is valid only when no module contributes global middleware.
 
 ---
 
@@ -209,7 +209,7 @@ Registration is framework-controlled and lands on the root chain, so **there is 
   - Add an index entry in `wiki/architecture_decisions.md` after the ADR-035 block.
   - Bump the counter note (`architecture_decisions.md:507`): "…through ADR-035" → "…through ADR-036".
 - **Conventional-commit type: `feat:`** (additive interface, `ServerRunner` untouched — apidiff agrees, release-please reads the squash title).
-- **migrations.md:** an additive, adopt-only note (no consumer action required) referencing `ADR-036 · #<PR> · wiki/adr_036_*.md`. **Not** a breaking-change row.
+- **migrations.md:** intentionally **not** updated — it is a breaking-change runbook (its version ladder does not track additive hops) and this change needs no upgrade action; documented in ADR-036 + CLAUDE.md instead.
 - **Docs (not a new package → no Core Components / File Organization / Key Interfaces churn):**
   - New wiki deep-dive `wiki/global_middleware.md` (ordering, health/ready skip, run-once guarantee, 401 envelope, JOSE/raw limitations, public-route-exemption guidance).
   - `CLAUDE.md`: add a `GlobalMiddlewareRegisterer` stub in the Module System section beside the two existing optional interfaces + a Quick Reference link.
@@ -263,17 +263,18 @@ For cross-package invocation of the flat `MiddlewareFunc`, use `server.NewHandle
 ## 11. Open risks
 
 1. **Root chain vs group (RESOLVED).** Implementation must call `s.echo.Use`, not `RootGroup()/ModuleGroup().Use()`. Regression test (f) guards it.
-2. **ServerRunner apidiff trap.** If the wiring is ever forced onto `app.ServerRunner`, the change flips to `feat!:` + `breaking-approved`. The type-assertion approach (§3.3) avoids it; verify before committing to `feat:`. The accepted gap: a `ServerRunner` fake lacking the method silently drops global middleware — document it.
+2. **ServerRunner apidiff trap.** If the wiring is ever forced onto `app.ServerRunner`, the change flips to `feat!:` + `breaking-approved`. The inline type-assertion approach (§3.3) avoids it. A `ServerRunner` fake lacking the method makes startup **fail closed** when a module contributes global middleware (§3.3), so the gap is surfaced, not silent.
 3. **ADR number.** Re-confirm `036` with `ls wiki/adr_*.md` at PR time (concurrent-ADR risk).
 4. **Innermost-slot placement (ACCEPTED).** Auth runs after rate-limit/timeout/gzip/bodyLimit; the hook cannot express "run before those." Documented as an auth gate, not a general early hook.
 5. **Raw-response error-shape divergence (ACCEPTED/documented).** Global 401/403 on a raw route emits the standard envelope, not the legacy raw shape.
 6. **JOSE ordering (ACCEPTED/documented).** Global auth cannot see decrypted bodies; body-dependent authorization belongs at the handler.
 7. **Echo serve-time behavior** was reasoned from Echo internals; test (a)/(f) double as empirical confirmation.
 
-## 12. As-shipped deviations (review-driven)
+## 12. Review-driven changes (PR #643)
 
-Two changes from the design above were made during implementation review (PR #643) and are the shipped behavior:
+The sections above reflect the **shipped** implementation. Two behaviors were hardened during code review:
 
-- **Fail-closed, not fail-open.** §3.3/§11 originally accepted "a `ServerRunner` fake silently drops global middleware (WARN)". `/code-review` correctly flagged this as unsafe for an auth gate: `applyGlobalMiddleware` now **returns an error** (aborts startup) when a module registered middleware but the server cannot install it. Silently serving unguarded traffic is worse than refusing to start.
-- **Inline capability assertion, not a named interface.** The `globalMiddlewareRegistrar` named interface tripped SonarCloud S8196 (single-method interface naming) and case-collided with the exported `GlobalMiddlewareRegisterer`. It was replaced with an inline anonymous interface at the assertion site in `applyGlobalMiddleware`.
-- **migrations.md skipped.** Purely additive, no upgrade action; the runbook is for breaking changes (its ladder does not even track additive hops), so the change is documented in ADR-036 + CLAUDE.md instead.
+- **Fail-closed startup** (§3.3, §11): if a module registers global middleware but the server cannot install it, `applyGlobalMiddleware` returns an error and startup aborts — dropping a (canonically auth) gate silently is unsafe.
+- **Inline capability assertion**: the app-side check is an inline anonymous interface, not a named `globalMiddlewareRegistrar` (avoids SonarCloud S8196 and a case-collision with the exported `GlobalMiddlewareRegisterer`).
+
+`migrations.md` is intentionally skipped (§8, above).
