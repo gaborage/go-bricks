@@ -995,7 +995,7 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
 | `r.Group("/path", middleware)` | Apply to route subtree | Auth for /admin/* |
 | Skipper function | Conditionally skip | Skip rate limit for /health |
 | Context propagation | Pass data downstream | User ID, tenant ID |
-| `GlobalMiddleware()` (module interface) | App-wide, once, un-skippable | Auth gate on every route |
+| `GlobalMiddleware()` (module interface) | App-wide, once; no route opt-out (probes exempt) | Auth gate on every route |
 
 ### App-Wide Global Middleware (`GlobalMiddlewareRegisterer`, v0.48.0+)
 
