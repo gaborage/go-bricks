@@ -11,6 +11,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/server"
 )
 
 const (
@@ -179,13 +180,13 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create minimal app with mocked server
-	server := newMockServer()
+	mockSrv := newMockServer()
 
 	app := &App{
 		cfg:      cfg,
 		logger:   testLogger,
 		registry: registry,
-		server:   server,
+		server:   mockSrv,
 		closers:  []namedCloser{},
 	}
 
@@ -296,4 +297,58 @@ func TestPrepareRuntimeSucceedsWithDeclarationsAndConfiguredMessaging(t *testing
 	require.NoError(t, app.RegisterModule(publisherDeclaringModule{}))
 
 	require.NoError(t, app.prepareRuntime())
+}
+
+// globalMWCapturingServer implements ServerRunner (via embedded mockServer) plus the
+// optional RegisterGlobalMiddleware capability, capturing what it receives.
+type globalMWCapturingServer struct {
+	*mockServer
+	received []server.MiddlewareFunc
+}
+
+func (s *globalMWCapturingServer) RegisterGlobalMiddleware(mw ...server.MiddlewareFunc) {
+	s.received = append(s.received, mw...)
+}
+
+// TestApplyGlobalMiddlewareRegistersOnSupportingServer verifies collected middleware is
+// handed to a server that supports registration.
+func TestApplyGlobalMiddlewareRegistersOnSupportingServer(t *testing.T) {
+	log := logger.New("debug", true)
+	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
+	require.NoError(t, registry.Register(&globalMWModule{name: "auth", mws: []server.MiddlewareFunc{
+		func(_ server.HandlerContext, next func() error) error { return next() },
+	}}))
+
+	srv := &globalMWCapturingServer{mockServer: &mockServer{}}
+	app := &App{server: srv, registry: registry, logger: log}
+
+	require.NoError(t, app.applyGlobalMiddleware())
+	assert.Len(t, srv.received, 1, "supporting server must receive the collected middleware")
+}
+
+// TestApplyGlobalMiddlewareFailsClosedOnUnsupportingServer verifies startup aborts (rather
+// than silently dropping a security gate) when the server cannot install global middleware.
+func TestApplyGlobalMiddlewareFailsClosedOnUnsupportingServer(t *testing.T) {
+	log := logger.New("debug", true)
+	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
+	require.NoError(t, registry.Register(&globalMWModule{name: "auth", mws: []server.MiddlewareFunc{
+		func(_ server.HandlerContext, next func() error) error { return next() },
+	}}))
+
+	app := &App{server: &mockServer{}, registry: registry, logger: log}
+
+	err := app.applyGlobalMiddleware()
+	require.Error(t, err, "startup must fail closed when the server cannot install global middleware")
+	assert.Contains(t, err.Error(), "global middleware")
+}
+
+// TestApplyGlobalMiddlewareNoopWhenNoModulesContribute verifies an unsupporting server is
+// fine as long as no module actually contributes middleware.
+func TestApplyGlobalMiddlewareNoopWhenNoModulesContribute(t *testing.T) {
+	log := logger.New("debug", true)
+	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
+	require.NoError(t, registry.Register(&minimalModule{name: "minimal"}))
+
+	app := &App{server: &mockServer{}, registry: registry, logger: log}
+	require.NoError(t, app.applyGlobalMiddleware(), "no contributing modules → no error even on an unsupporting server")
 }

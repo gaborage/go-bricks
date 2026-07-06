@@ -149,6 +149,22 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	}
 }
 
+// CollectGlobalMiddleware gathers middleware from modules that implement
+// GlobalMiddlewareRegisterer, in registration order. Modules without global middleware are
+// silently skipped.
+func (r *ModuleRegistry) CollectGlobalMiddleware() []server.MiddlewareFunc {
+	var mws []server.MiddlewareFunc
+	for _, module := range r.modules {
+		if gm, ok := module.(GlobalMiddlewareRegisterer); ok {
+			r.logger.Info().
+				Str("module", module.Name()).
+				Msg("Collecting module global middleware")
+			mws = append(mws, gm.GlobalMiddleware()...)
+		}
+	}
+	return mws
+}
+
 // DeclareMessaging calls DeclareMessaging on modules that implement MessagingDeclarer.
 // Modules without messaging declarations are silently skipped.
 func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {

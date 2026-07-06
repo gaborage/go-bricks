@@ -41,6 +41,13 @@ type MessagingDeclarer interface {
 	DeclareMessaging(decls *messaging.Declarations)
 }
 
+// GlobalMiddlewareRegisterer is an optional interface that modules can implement to
+// contribute middleware to the root request chain. It runs once per request after tenant
+// resolution, before handlers, and cannot be skipped per-route.
+type GlobalMiddlewareRegisterer interface {
+	GlobalMiddleware() []server.MiddlewareFunc
+}
+
 // JobRegistrar defines the interface for scheduling jobs.
 // This interface is defined here to avoid circular imports between app and scheduler packages.
 // The scheduler package implements this interface via its Module type.

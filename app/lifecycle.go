@@ -60,9 +60,31 @@ func (a *App) prepareRuntime() error {
 		return err
 	}
 
+	if err := a.applyGlobalMiddleware(); err != nil {
+		return err
+	}
+
 	a.registry.RegisterRoutes(a.server.ModuleGroup())
 	a.startMaintenanceLoops()
 
+	return nil
+}
+
+// applyGlobalMiddleware registers module-contributed global middleware on the server. It
+// fails closed: if any module registered middleware but the server cannot install it, the
+// gate (canonically auth) would be silently absent, so startup aborts rather than serving
+// unguarded traffic.
+func (a *App) applyGlobalMiddleware() error {
+	mws := a.registry.CollectGlobalMiddleware()
+	if len(mws) == 0 {
+		return nil
+	}
+	reg, ok := a.server.(globalMiddlewareRegistrar)
+	if !ok {
+		return fmt.Errorf("%d module(s) registered global middleware but the configured server does not support it", len(mws))
+	}
+	reg.RegisterGlobalMiddleware(mws...)
+	a.logger.Info().Int("count", len(mws)).Msg("Registered global middleware")
 	return nil
 }
 
