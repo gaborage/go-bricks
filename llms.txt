@@ -103,7 +103,8 @@ services, and infrastructure access (DB/cache/messaging) under one name.
 For testability and reuse, separate the layers:
 
 - **Module** (`module.go`) — implements `app.Module` (+ optional
-  `RouteRegisterer`, `MessagingDeclarer`, `JobProvider`). Owns wiring only:
+  `RouteRegisterer`, `MessagingDeclarer`, `JobProvider`,
+  `GlobalMiddlewareRegisterer`). Owns wiring only:
   no business logic, no HTTP parsing, no SQL.
 - **Handler** (`handler.go`) — HTTP boundary. Translates request DTOs ↔
   service calls and maps domain errors to `server.IAPIError`. Imports
@@ -931,7 +932,8 @@ func LoggingMiddleware(log logger.Logger) server.MiddlewareFunc {
 // === Register Middleware in Module ===
 
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	// Global middleware for all routes in this module
+	// Group-scoped middleware — applies to routes registered on this registrar
+	// (NOT app-wide; for that see GlobalMiddlewareRegisterer below)
 	r.Use(LoggingMiddleware(m.logger))
 
 	// Group with auth middleware - all routes inherit it
@@ -993,6 +995,67 @@ func (h *Handler) GetUser(req GetUserReq, ctx server.HandlerContext) (server.Res
 | `r.Group("/path", middleware)` | Apply to route subtree | Auth for /admin/* |
 | Skipper function | Conditionally skip | Skip rate limit for /health |
 | Context propagation | Pass data downstream | User ID, tenant ID |
+| `GlobalMiddleware()` (module interface) | App-wide, once; no route opt-out (probes exempt) | Auth gate on every route |
+
+### App-Wide Global Middleware (`GlobalMiddlewareRegisterer`, v0.48.0+)
+
+`r.Use` / `r.Group` above are **group-scoped** — they wrap only routes registered on that
+registrar. For middleware that must run on **every** request across the whole app (auth
+gates, API-key checks, global audit) — once per request, **after tenant resolution**, before
+handlers, with **no per-route opt-out** — a module implements `GlobalMiddlewareRegisterer`.
+The framework collects it after `Init()` and registers it once on the root chain, skipping
+only the health/ready probes.
+
+```go
+// Unlike r.Use / r.Group (group-scoped), GlobalMiddlewareRegisterer contributes middleware
+// that runs once per request on EVERY route. Built after Init(), so it can capture
+// dependencies the module wired up there (e.g. a keystore-backed verifier).
+type AuthModule struct {
+	verifier *TokenVerifier
+}
+
+func (m *AuthModule) Name() string { return "auth" }
+
+func (m *AuthModule) Init(deps *app.ModuleDeps) error {
+	m.verifier = NewTokenVerifier(deps.KeyStore) // captured by the closure below
+	return nil
+}
+
+func (m *AuthModule) Shutdown() error { return nil }
+
+// GlobalMiddleware satisfies app.GlobalMiddlewareRegisterer.
+func (m *AuthModule) GlobalMiddleware() []server.MiddlewareFunc {
+	return []server.MiddlewareFunc{
+		func(c server.HandlerContext, next func() error) error {
+			// No route can opt out, so public-path exemptions live HERE, in the gate body.
+			if isPublicPath(c.Request().URL.Path) {
+				return next()
+			}
+			if !m.verifier.Valid(c.RequestHeader("Authorization")) {
+				return server.NewUnauthorizedError("invalid token") // → 401, standard envelope
+			}
+			// Tenant is already resolved: multitenant.GetTenant(c.RequestContext()).
+			return next()
+		},
+	}
+}
+
+// Register like any module; no r.Use needed.
+//   fw.RegisterModules(keystore.NewModule(), &AuthModule{}, ...)
+```
+
+Behavior and limits (see [wiki/global_middleware.md](wiki/global_middleware.md) / ADR-036):
+- **Innermost slot**: runs after the built-in chain (tenant resolution, `Recover`,
+  rate-limiting), before the handler. An unauthenticated request still consumes rate-limit
+  budget — this is an auth-gate hook, not a general "run early" hook.
+- **Before JOSE decryption**: authenticates on headers/token/tenant, never a decrypted body
+  (JOSE runs in the typed-handler leaf, after middleware).
+- **Fires before 404/405**: an unauthenticated request to an unknown path gets 401, not 404.
+- **Gated**: `/_sys` and `/debug` are subject to the gate (their own CIDR/bearer checks still
+  apply); only `/health` and `/ready` are exempt.
+- **Fail-closed**: if the configured server cannot install it (a custom `ServerRunner`),
+  startup aborts rather than serving unguarded traffic.
+- **Ordering**: across modules, middleware composes in module-registration order.
 
 ### Route Template & Path Parameters (v0.46.0+)
 
