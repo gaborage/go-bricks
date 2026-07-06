@@ -79,7 +79,9 @@ func (a *App) applyGlobalMiddleware() error {
 	if len(mws) == 0 {
 		return nil
 	}
-	reg, ok := a.server.(globalMiddlewareRegistrar)
+	reg, ok := a.server.(interface {
+		RegisterGlobalMiddleware(mw ...server.MiddlewareFunc)
+	})
 	if !ok {
 		return fmt.Errorf("%d module(s) registered global middleware but the configured server does not support it", len(mws))
 	}

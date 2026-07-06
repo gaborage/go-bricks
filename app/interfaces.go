@@ -47,9 +47,3 @@ type TenantStore interface {
 type declarationSetter interface {
 	SetDeclarations(*messaging.Declarations)
 }
-
-// globalMiddlewareRegistrar is the optional server capability for registering global
-// middleware. Asserted at wiring time so the exported ServerRunner need not grow a method.
-type globalMiddlewareRegistrar interface {
-	RegisterGlobalMiddleware(mw ...server.MiddlewareFunc)
-}

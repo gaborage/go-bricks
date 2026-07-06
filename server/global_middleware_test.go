@@ -33,7 +33,7 @@ func TestSkipProbesBypassesProbePathsOnly(t *testing.T) {
 	wrapped := skipProbes(func(_ HandlerContext, next func() error) error {
 		mwCalls++
 		return next()
-	}, "/health", "/ready")
+	}, CreateProbeSkipper("/health", "/ready"))
 
 	cases := []struct {
 		path   string

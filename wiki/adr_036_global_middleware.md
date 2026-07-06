@@ -41,9 +41,9 @@ routing, independent of route-registration order — dissolving the group-scopin
 Appended after the built-in chain, global middleware lands at the innermost slot: after
 tenant resolution, inside `Recover`, before the handler.
 
-The app invokes the server method through an optional type assertion
-(`globalMiddlewareRegistrar`) rather than adding a method to the exported `ServerRunner`
-interface — keeping `ServerRunner` byte-identical and the change apidiff-additive (`feat:`).
+The app invokes the server method through an optional (inline) type assertion rather than
+adding a method to the exported `ServerRunner` interface — keeping `ServerRunner`
+byte-identical and the change apidiff-additive (`feat:`).
 If a module registers global middleware but the configured `ServerRunner` does not implement
 the assertion, startup **fails closed** with an error: silently dropping a security gate is
 unsafe, so the app refuses to start rather than serve unguarded traffic.
