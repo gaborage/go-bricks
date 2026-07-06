@@ -623,6 +623,72 @@ func (m *routeModule) RegisterRoutes(_ *server.HandlerRegistry, _ server.RouteRe
 	m.routeCalls++
 }
 
+// globalMWModule implements Module + GlobalMiddlewareRegisterer.
+type globalMWModule struct {
+	name  string
+	mws   []server.MiddlewareFunc
+	calls int
+}
+
+func (m *globalMWModule) Name() string             { return m.name }
+func (m *globalMWModule) Init(_ *ModuleDeps) error { return nil }
+func (m *globalMWModule) Shutdown() error          { return nil }
+func (m *globalMWModule) GlobalMiddleware() []server.MiddlewareFunc {
+	m.calls++
+	return m.mws
+}
+
+// TestCollectGlobalMiddlewareGathersFromImplementers verifies middleware is collected from
+// modules implementing GlobalMiddlewareRegisterer, calling the method exactly once.
+func TestCollectGlobalMiddlewareGathersFromImplementers(t *testing.T) {
+	log := logger.New("debug", true)
+	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
+
+	require.NoError(t, registry.Register(&minimalModule{name: "minimal"}))
+	gm := &globalMWModule{name: "auth", mws: []server.MiddlewareFunc{
+		func(_ server.HandlerContext, next func() error) error { return next() },
+	}}
+	require.NoError(t, registry.Register(gm))
+
+	collected := registry.CollectGlobalMiddleware()
+	assert.Len(t, collected, 1, "one middleware collected from the sole implementer")
+	assert.Equal(t, 1, gm.calls, "GlobalMiddleware must be called exactly once")
+}
+
+// TestCollectGlobalMiddlewareSkipsModulesWithoutInterface verifies modules that do not
+// implement GlobalMiddlewareRegisterer are silently skipped.
+func TestCollectGlobalMiddlewareSkipsModulesWithoutInterface(t *testing.T) {
+	log := logger.New("debug", true)
+	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
+	require.NoError(t, registry.Register(&minimalModule{name: "minimal"}))
+
+	assert.Empty(t, registry.CollectGlobalMiddleware(), "no implementers → no middleware")
+}
+
+// TestCollectGlobalMiddlewarePreservesRegistrationOrder verifies middleware composes in
+// module-registration order.
+func TestCollectGlobalMiddlewarePreservesRegistrationOrder(t *testing.T) {
+	log := logger.New("debug", true)
+	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
+
+	var order []string
+	mark := func(name string) server.MiddlewareFunc {
+		return func(_ server.HandlerContext, next func() error) error {
+			order = append(order, name)
+			return next()
+		}
+	}
+	require.NoError(t, registry.Register(&globalMWModule{name: "first", mws: []server.MiddlewareFunc{mark("first")}}))
+	require.NoError(t, registry.Register(&globalMWModule{name: "second", mws: []server.MiddlewareFunc{mark("second")}}))
+
+	collected := registry.CollectGlobalMiddleware()
+	require.Len(t, collected, 2)
+	for _, mw := range collected {
+		require.NoError(t, mw(server.HandlerContext{}, func() error { return nil }))
+	}
+	assert.Equal(t, []string{"first", "second"}, order, "middleware collected in module-registration order")
+}
+
 // TestRegisterRoutesSkipsModulesWithoutRouteRegisterer verifies that modules
 // without RegisterRoutes are silently skipped during route registration.
 func TestRegisterRoutesSkipsModulesWithoutRouteRegisterer(t *testing.T) {

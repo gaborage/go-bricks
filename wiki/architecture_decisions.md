@@ -495,6 +495,27 @@ v0.46.0, `feat(server):` not `feat!:`.
 
 ---
 
+### [ADR-036: Module-Contributed Global Middleware](adr_036_global_middleware.md)
+
+**Date:** 2026-07-05 | **Status:** Accepted
+
+Adds an optional duck-typed module interface `GlobalMiddlewareRegisterer` (mirroring
+`RouteRegisterer` / `MessagingDeclarer`) so a module can contribute app-wide middleware —
+canonically an auth gate — that runs once per request, after tenant resolution, before
+handlers, and cannot be skipped per-route. The framework collects implementers after
+`Init()` and registers them once on the **raw root echo chain** (`s.echo.Use`, not a group:
+root `Use` recompiles the global chain and applies to every request regardless of
+route-registration order, dissolving echo's group-scoping/order trap) via a new
+`*server.Server.RegisterGlobalMiddleware`, wrapping each with the health/ready probe skipper.
+The app invokes it through an optional type assertion, leaving the exported `ServerRunner`
+interface byte-identical — purely additive, apidiff green, `feat:` not `feat!:`. Documented
+limitations: runs after rate-limiting and before JOSE body decryption (header/token/tenant
+auth only), and emits the standard envelope on raw-response routes.
+
+**Key Benefits:** Un-skippable app-wide auth/audit gates with the tenant already resolved; single framework-controlled registration (no per-module duplication or order-fragility); no change to the `ServerRunner` contract
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -504,7 +525,7 @@ v0.46.0, `feat(server):` not `feat!:`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-035) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-036) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

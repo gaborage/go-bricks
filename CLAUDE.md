@@ -172,6 +172,12 @@ type MessagingDeclarer interface {
     DeclareMessaging(decls *messaging.Declarations)
 }
 
+// Optional: contribute global middleware (e.g. auth) that runs once per request,
+// after tenant resolution, before handlers, and cannot be skipped per-route (ADR-036).
+type GlobalMiddlewareRegisterer interface {
+    GlobalMiddleware() []server.MiddlewareFunc
+}
+
 // Simplified — see app/module.go for the full struct (~12 fields including
 // Scheduler, Outbox, Tracer, MeterProvider, DBByName, etc.)
 type ModuleDeps struct {
