@@ -68,19 +68,24 @@ type GlobalMiddlewareRegisterer interface {
 // Must be called during startup, before Start(). Safe to call once with all
 // collected middleware, or repeatedly; ordering follows call order.
 func (s *Server) RegisterGlobalMiddleware(mw ...MiddlewareFunc) {
-    healthPath := s.buildFullPath(s.healthRoute)
-    readyPath  := s.buildFullPath(s.readyRoute)
+    skipper := CreateProbeSkipper(s.buildFullPath(s.healthRoute), s.buildFullPath(s.readyRoute))
+    adapted := make([]echo.MiddlewareFunc, 0, len(mw))
     for _, m := range mw {
-        wrapped := skipProbes(m, healthPath, readyPath)
-        s.echo.Use(adaptMiddleware(wrapped, s.cfg)) // RAW ROOT CHAIN — see §5
+        if m == nil {
+            continue
+        }
+        adapted = append(adapted, adaptMiddleware(skipProbes(m, skipper), s.cfg)) // RAW ROOT CHAIN — see §5
     }
+    if len(adapted) == 0 {
+        return
+    }
+    s.echo.Use(adapted...)
 }
 
-// skipProbes wraps a MiddlewareFunc so it is bypassed for the health/ready
-// endpoints, reusing CreateProbeSkipper for byte-identical semantics with the
-// tenant middleware (server/tenant_middleware.go:57).
-func skipProbes(mw MiddlewareFunc, healthPath, readyPath string) MiddlewareFunc {
-    skipper := CreateProbeSkipper(healthPath, readyPath) // exact-path match on r.URL.Path
+// skipProbes wraps a MiddlewareFunc so it is bypassed for the health/ready endpoints. The
+// skipper is built once by the caller (CreateProbeSkipper) for byte-identical semantics with
+// the tenant middleware (server/tenant_middleware.go:57).
+func skipProbes(mw MiddlewareFunc, skipper SkipperFunc) MiddlewareFunc {
     return func(c HandlerContext, next func() error) error {
         if skipper(c.Request()) {
             return next()
@@ -114,7 +119,7 @@ This method **must** live in package `server`: `adaptMiddleware` is unexported (
 
 ## 4. Lifecycle & wiring
 
-**Collection point:** `app/lifecycle.go`, in `prepareRuntime()`, immediately before `RegisterRoutes` (`lifecycle.go:63`). By then all module `Init()` has run synchronously inside `ModuleRegistry.Register` (`app/module_registry.go:55`), and the serve loop has not started — the same window `RegisterJobs` (`lifecycle.go:59`) and `RegisterRoutes` (`lifecycle.go:63`) already use.
+**Collection point:** `app/lifecycle.go`, in `prepareRuntime()`: `applyGlobalMiddleware()` runs at `lifecycle.go:63`, immediately before `RegisterRoutes` (`lifecycle.go:67`). By then all module `Init()` has run synchronously inside `ModuleRegistry.Register` (`app/module_registry.go:55`), and the serve loop has not started — the same window `RegisterJobs` (`lifecycle.go:59`) and `RegisterRoutes` (`lifecycle.go:67`) already use.
 
 **New collector on `*ModuleRegistry`** — a drop-in analogue of the `RegisterRoutes` loop (`module_registry.go:141-149`):
 
