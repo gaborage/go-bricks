@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.48.0](https://github.com/gaborage/go-bricks/compare/v0.47.0...v0.48.0) (2026-07-06)
+
+
+### Added
+
+* **server:** add GlobalMiddlewareRegisterer for module-contributed global middleware ([#643](https://github.com/gaborage/go-bricks/issues/643)) ([534d106](https://github.com/gaborage/go-bricks/commit/534d10637b3a6ac9d455f09350691637e42b264c))
+
+
+### Fixed
+
+* **deps:** update module github.com/gaborage/go-bricks to v0.47.0 ([#641](https://github.com/gaborage/go-bricks/issues/641)) ([25d9b6f](https://github.com/gaborage/go-bricks/commit/25d9b6fb8ef515d565c66117102bbbd3a159afba))
+
 ## [0.47.0](https://github.com/gaborage/go-bricks/compare/v0.46.0...v0.47.0) (2026-07-04)
 
 
