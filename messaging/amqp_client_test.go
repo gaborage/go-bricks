@@ -1283,6 +1283,134 @@ func TestWithMaxPublishAttemptsOption(t *testing.T) {
 	assert.Equal(t, 7, c.maxPublishAttempts)
 }
 
+// TestPublishToExchangeWaitsForReadyClient reproduces issue #655: a client that
+// is not yet ready (cold start, or mid-reconnect) must NOT fail the publish
+// instantly. It must wait, bounded by readyTimeout, and succeed once the client
+// becomes ready. ON CURRENT MAIN (no pre-flight wait) this returns
+// ErrNotConnected in microseconds and the assertion below fails — see this
+// task's pristine-main repro step for the captured behavioral failure.
+func TestPublishToExchangeWaitsForReadyClient(t *testing.T) {
+	c := &AMQPClientImpl{
+		m:                 &sync.RWMutex{},
+		log:               &stubLogger{},
+		connectionTimeout: 15 * time.Millisecond,
+		resendDelay:       5 * time.Millisecond,
+		reInitDelay:       5 * time.Millisecond,
+		reconnectDelay:    5 * time.Millisecond,
+		done:              make(chan bool),
+		isReady:           false, // cold: not ready yet
+		readyTimeout:      2 * time.Second,
+	}
+	t.Cleanup(func() {
+		select {
+		case <-c.done:
+			// already closed by the test itself
+		default:
+			_ = c.Close()
+		}
+	})
+
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	}()
+
+	// Outlast one 100ms readiness poll tick so the pre-flight wait is actually
+	// exercised (not a lucky first check).
+	time.Sleep(150 * time.Millisecond)
+
+	ch := &fakeChannel{}
+	c.m.Lock()
+	c.isReady = true
+	c.m.Unlock()
+	c.changeChannel(ch)
+	sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
+
+	select {
+	case err := <-resultCh:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("PublishToExchange did not return after the client became ready")
+	}
+}
+
+// TestPublishToExchangeReadyTimeoutExpires proves that when the client never
+// becomes ready, the pre-flight wait gives up after readyTimeout and returns
+// the raw (unwrapped) ErrNotConnected — not wrapped by ErrPublishRetriesExhausted,
+// since the retry loop was never entered.
+func TestPublishToExchangeReadyTimeoutExpires(t *testing.T) {
+	c := &AMQPClientImpl{
+		m:            &sync.RWMutex{},
+		log:          &stubLogger{},
+		done:         make(chan bool),
+		isReady:      false,
+		readyTimeout: 200 * time.Millisecond,
+	}
+
+	start := time.Now()
+	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	elapsed := time.Since(start)
+
+	assert.ErrorIs(t, err, ErrNotConnected)
+	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+}
+
+// TestPublishToExchangeReadyWaitDisabled proves readyTimeout<=0 is a complete
+// no-op pre-flight, preserving the pre-#655 instant fail-fast byte-for-byte —
+// this is the Go zero value every existing struct-literal test client already
+// has, so it also guards against a regression in every not-ready test in this
+// file (e.g. TestPublishNotReadyReturnsErrNotConnected).
+func TestPublishToExchangeReadyWaitDisabled(t *testing.T) {
+	c := &AMQPClientImpl{
+		m:    &sync.RWMutex{},
+		log:  &stubLogger{},
+		done: make(chan bool),
+		// isReady and readyTimeout both left at their Go zero values.
+	}
+
+	start := time.Now()
+	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	elapsed := time.Since(start)
+
+	assert.ErrorIs(t, err, ErrNotConnected)
+	assert.Less(t, elapsed, 50*time.Millisecond)
+}
+
+// TestPublishToExchangeReadyWaitRespectsContext proves a ctx deadline that
+// fires during the pre-flight wait aborts promptly (not waiting out the full
+// readyTimeout), and reports a context-related error.
+func TestPublishToExchangeReadyWaitRespectsContext(t *testing.T) {
+	c := &AMQPClientImpl{
+		m:            &sync.RWMutex{},
+		log:          &stubLogger{},
+		done:         make(chan bool),
+		isReady:      false,
+		readyTimeout: 5 * time.Second,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	elapsed := time.Since(start)
+
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, elapsed, 200*time.Millisecond)
+}
+
+// TestWithReadyTimeoutOption mirrors TestWithMaxPublishAttemptsOption: the
+// constructor option sets the field and ignores non-positive values.
+func TestWithReadyTimeoutOption(t *testing.T) {
+	c := &AMQPClientImpl{}
+	WithReadyTimeout(3 * time.Second)(c)
+	assert.Equal(t, 3*time.Second, c.readyTimeout)
+	WithReadyTimeout(0)(c)
+	assert.Equal(t, 3*time.Second, c.readyTimeout)
+	WithReadyTimeout(-1 * time.Second)(c)
+	assert.Equal(t, 3*time.Second, c.readyTimeout)
+}
+
 // TestPublishToExchangeNackBackoffHonorsContextCancel proves the new backoff
 // between NACK retries is cancelable (not a blind sleep) — a 1h backoff returns
 // promptly when the context is canceled.
