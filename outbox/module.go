@@ -131,6 +131,12 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 // routes the message, but the relay never marks it published and re-publishes it on every
 // cycle — an unbounded duplicate-delivery loop. That is severe enough to reject at startup
 // (Fail Fast) rather than emit a warning an operator might miss.
+//
+// It also requires publishtimeout >= messaging.reconnect.readytimeout: a shorter value makes
+// the per-record deadline expire INSIDE the client's readiness pre-flight, so a not-ready
+// broker surfaces as context.DeadlineExceeded instead of ErrNotConnected — which silently
+// defeats the relay's mid-batch broker-drop detection (outcomeBrokerDown never fires) and
+// reintroduces the serial per-record stall it exists to cap.
 func (m *Module) validatePublishTimeout() error {
 	if m.config == nil {
 		return nil
@@ -140,6 +146,12 @@ func (m *Module) validatePublishTimeout() error {
 		return fmt.Errorf("outbox: publishtimeout (%s) must be >= messaging.reconnect.connectiontimeout (%s); "+
 			"a shorter value truncates every publish confirmation into a false failure (duplicate-delivery loop)",
 			m.cfg.PublishTimeout, ct)
+	}
+	rt := m.config.Messaging.Reconnect.ReadyTimeout
+	if rt > 0 && m.cfg.PublishTimeout < rt {
+		return fmt.Errorf("outbox: publishtimeout (%s) must be >= messaging.reconnect.readytimeout (%s); "+
+			"a shorter value expires inside the readiness pre-flight and defeats the relay's mid-batch broker-drop detection",
+			m.cfg.PublishTimeout, rt)
 	}
 	return nil
 }

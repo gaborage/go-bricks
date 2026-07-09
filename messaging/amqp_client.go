@@ -85,6 +85,13 @@ type AMQPClientImpl struct {
 	reInitDelay       time.Duration
 	resendDelay       time.Duration
 	connectionTimeout time.Duration
+	// readyTimeout bounds PublishToExchange's pre-flight wait for a not-yet-ready
+	// client (cold start or mid-reconnect) to become ready before the publish
+	// attempt begins. Zero or negative disables the wait entirely, reproducing the
+	// pre-#655 instant fail-fast — this is the Go zero value, so struct-literal
+	// test clients that don't set the field keep their old behavior. See
+	// waitForReady.
+	readyTimeout time.Duration
 	// maxPublishAttempts bounds the per-publish retry loop so PublishToExchange
 	// always returns to its caller. A value <= 0 means unbounded (the historical
 	// behavior) — kept so struct-literal test clients that don't set the field
@@ -106,6 +113,11 @@ const (
 	// typical reconnect (reconnectDelay 5s + reInitDelay 2s) across a few resend
 	// cycles before giving up and returning a classifiable error to the caller.
 	defaultMaxPublishAttempts = 5
+	// defaultReadyTimeout bounds PublishToExchange's pre-flight wait for a cold or
+	// mid-reconnect client to become ready before the publish attempt begins. 5s
+	// covers the common case (broker handshake + channel init) without materially
+	// extending a caller's request budget. See issue #655.
+	defaultReadyTimeout = 5 * time.Second
 	// defaultNackBackoff is a small cancelable pause between NACK retries so a
 	// transiently-unroutable publish (e.g. a binding still being created) gets a
 	// few spaced attempts without busy-spinning, while staying well under a tight
@@ -181,6 +193,18 @@ func WithMaxPublishAttempts(n int) ClientOption {
 	}
 }
 
+// WithReadyTimeout bounds PublishToExchange's pre-flight wait for a not-yet-ready
+// client to become ready before the publish attempt begins (see waitForReady).
+// The wait does not consume a maxPublishAttempts slot. Non-positive values are
+// ignored, leaving the 5s default in place.
+func WithReadyTimeout(d time.Duration) ClientOption {
+	return func(c *AMQPClientImpl) {
+		if d > 0 {
+			c.readyTimeout = d
+		}
+	}
+}
+
 // NewAMQPClient creates a new AMQP client instance.
 // It automatically attempts to connect to the broker and handles reconnections.
 // Optional Option values (e.g. WithConnectionTimeout) override the defaults.
@@ -196,6 +220,7 @@ func NewAMQPClient(brokerURL string, log logger.Logger, opts ...ClientOption) *A
 		reInitDelay:        defaultReInitDelay,
 		resendDelay:        defaultResendDelay,
 		connectionTimeout:  defaultConnectionTimeout,
+		readyTimeout:       defaultReadyTimeout,
 		maxPublishAttempts: defaultMaxPublishAttempts,
 		nackBackoff:        defaultNackBackoff,
 	}
@@ -298,6 +323,26 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 	ctx, span := createPublishSpan(ctx, options, len(data), startTime)
 	defer span.End()
 
+	// Pre-flight: give a cold or mid-reconnect client a bounded, context-aware
+	// window to become ready BEFORE entering the retry loop below. This wait does
+	// NOT consume a maxPublishAttempts slot — a cold client failing fast on the
+	// very first publish (before handleReconnect's async connect finishes) was
+	// the root cause of issue #655. A zero/negative readyTimeout disables the
+	// wait entirely, reproducing the pre-#655 behavior byte-for-byte.
+	if err := c.publishPreflight(ctx, options, startTime, span); err != nil {
+		return err
+	}
+
+	// publishStart marks the beginning of the actual broker attempt, AFTER the
+	// pre-flight readiness wait resolved. The retry loop below feeds this — not
+	// startTime — into publish-latency metrics/logging: startTime→publishStart can
+	// be several seconds on a cold-start or mid-reconnect wait (bounded by
+	// readyTimeout), and folding that into "broker latency" would make a single
+	// successful publish look like a multi-second broker hiccup. The span created
+	// above intentionally keeps startTime — its duration is meant to cover the
+	// full call, wait included.
+	publishStart := time.Now()
+
 	retryCount := 0
 	// lastCause records why the most recent attempt failed (the raw publish error,
 	// ErrPublishNacked, or ErrPublishConfirmTimeout). It is wrapped into the terminal error on
@@ -307,9 +352,9 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 	for {
 		select {
 		case <-ctx.Done():
-			return c.publishAbort(ctx, options, startTime, span, ctx.Err(), lastCause)
+			return c.publishAbort(ctx, options, publishStart, span, ctx.Err(), lastCause)
 		case <-c.done:
-			return c.publishAbort(ctx, options, startTime, span, errShutdown, lastCause)
+			return c.publishAbort(ctx, options, publishStart, span, errShutdown, lastCause)
 		default:
 		}
 
@@ -379,7 +424,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 				attribute.String("error", err.Error()),
 				attribute.Int("retry_count", retryCount),
 			))
-			if termErr := c.retryBackoff(ctx, options, startTime, span, retryCount, lastCause, c.resendDelay); termErr != nil {
+			if termErr := c.retryBackoff(ctx, options, publishStart, span, retryCount, lastCause, c.resendDelay); termErr != nil {
 				return termErr
 			}
 			continue
@@ -392,14 +437,16 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		case <-ctx.Done():
 			// Cleanup so the dispatcher doesn't hold a stale chan reference.
 			c.pendingPublishes.Delete(key)
-			return c.publishAbort(ctx, options, startTime, span, ctx.Err(), lastCause)
+			return c.publishAbort(ctx, options, publishStart, span, ctx.Err(), lastCause)
 		case <-c.done:
 			c.pendingPublishes.Delete(key)
-			return c.publishAbort(ctx, options, startTime, span, errShutdown, lastCause)
+			return c.publishAbort(ctx, options, publishStart, span, errShutdown, lastCause)
 		case confirm := <-confirmCh:
 			if confirm.Ack {
-				// Track elapsed time and increment AMQP counter in context for request tracking
-				elapsed := time.Since(startTime)
+				// Track elapsed time and increment AMQP counter in context for request tracking.
+				// publishStart (not startTime) excludes the pre-flight readiness wait so a
+				// cold-start publish doesn't misreport that wait as broker latency.
+				elapsed := time.Since(publishStart)
 				logger.IncrementAMQPCounter(ctx)
 				logger.AddAMQPElapsed(ctx, elapsed.Nanoseconds())
 
@@ -440,7 +487,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			// retryBackoff applies the attempt ceiling and a cancelable backoff between
 			// NACK retries — replacing the old zero-delay hot-spin so a transiently-
 			// unroutable publish gets a few spaced attempts without pinning a core.
-			if termErr := c.retryBackoff(ctx, options, startTime, span, retryCount, lastCause, c.nackBackoff); termErr != nil {
+			if termErr := c.retryBackoff(ctx, options, publishStart, span, retryCount, lastCause, c.nackBackoff); termErr != nil {
 				return termErr
 			}
 			continue
@@ -467,11 +514,121 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			))
 			// No extra backoff — this path already waited connectionTimeout; just
 			// apply the attempt ceiling before retrying.
-			if termErr := c.retryBackoff(ctx, options, startTime, span, retryCount, lastCause, 0); termErr != nil {
+			if termErr := c.retryBackoff(ctx, options, publishStart, span, retryCount, lastCause, 0); termErr != nil {
 				return termErr
 			}
 			continue
 		}
+	}
+}
+
+// publishPreflight runs waitForReady ahead of PublishToExchange's retry loop and
+// translates the outcome into the same terminal-error shape as every other exit
+// path: a readyTimeout expiry logs the same WARN production always emitted for a
+// not-ready client and returns the raw errNotConnected; a ctx cancel or shutdown
+// is routed through publishAbort like every other abort. Split out of
+// PublishToExchange to keep its cyclomatic complexity within budget (gocyclo).
+func (c *AMQPClientImpl) publishPreflight(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span) error {
+	err := c.waitForReady(ctx)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errNotConnected) {
+		c.log.Warn().
+			Str("exchange", options.Exchange).
+			Str("routing_key", options.RoutingKey).
+			Dur("ready_timeout", c.readyTimeout).
+			Msg("AMQP client still not ready after waiting, message not published")
+		span.RecordError(errNotConnected)
+		span.SetStatus(codes.Error, errNotConnected.Error())
+		return errNotConnected
+	}
+	return c.publishAbort(ctx, options, startTime, span, err, nil)
+}
+
+// readyWaitOutcome reports why pollUntilReady's bounded wait ended. Callers
+// translate it into their own error shape — pollUntilReady itself is
+// error-shape-agnostic so it can serve both waitForReady (which distinguishes
+// timeout/cancel/shutdown into three different errors) and
+// Registry.DeclareInfrastructure (which has no shutdown channel at all).
+type readyWaitOutcome int
+
+const (
+	readyWaitBecameReady readyWaitOutcome = iota
+	readyWaitTimedOut
+	readyWaitCanceled
+	readyWaitDone
+)
+
+// pollUntilReady runs the shared timer+ticker+select poll loop behind both
+// AMQPClientImpl.waitForReady and Registry.DeclareInfrastructure's readiness
+// wait. It does NOT perform an immediate pre-check of isReady() before
+// starting the ticker — callers that want to skip the wait entirely when
+// already ready must do that check themselves first (waitForReady does;
+// DeclareInfrastructure historically does not, so it always waits for at
+// least one interval tick before its first readiness check — preserved here
+// to keep that call site's observable behavior unchanged).
+//
+// done is optional: passing nil is safe because a nil channel is never
+// selectable (that case simply never fires), which is what
+// DeclareInfrastructure needs since it has no shutdown channel to watch.
+// onTick, also optional, runs once per failed poll (i.e. every interval tick
+// where isReady() is still false) — DeclareInfrastructure uses it to preserve
+// its per-tick Debug log; waitForReady passes nil since it never logged per-tick.
+func pollUntilReady(ctx context.Context, timeout, interval time.Duration, isReady func() bool, done <-chan bool, onTick func()) readyWaitOutcome {
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return readyWaitCanceled
+		case <-done:
+			return readyWaitDone
+		case <-t.C:
+			return readyWaitTimedOut
+		case <-ticker.C:
+			if isReady() {
+				return readyWaitBecameReady
+			}
+			if onTick != nil {
+				onTick()
+			}
+		}
+	}
+}
+
+// waitForReady blocks PublishToExchange's pre-flight check until the client
+// becomes ready, the bounded readyTimeout elapses, the context is canceled, or
+// the client is shut down — whichever comes first. A readyTimeout <= 0 disables
+// the wait entirely (returns nil immediately without even checking IsReady),
+// reproducing the pre-#655 instant fail-fast for callers that opt out or for
+// struct-literal test clients that never set the field.
+//
+// Reuses the same readinessCheckInterval poll cadence (via pollUntilReady) as
+// Registry.DeclareInfrastructure so both "wait for ready" call sites share one
+// mental model. Returns errNotConnected (unwrapped) on timeout expiry — the
+// caller re-raises it as-is; ctx.Err() or errShutdown on cancellation/shutdown
+// — the caller wraps those through publishAbort like every other exit path.
+func (c *AMQPClientImpl) waitForReady(ctx context.Context) error {
+	if c.readyTimeout <= 0 {
+		return nil
+	}
+	if c.IsReady() {
+		return nil
+	}
+
+	switch pollUntilReady(ctx, c.readyTimeout, readinessCheckInterval, c.IsReady, c.done, nil) {
+	case readyWaitBecameReady:
+		return nil
+	case readyWaitCanceled:
+		return ctx.Err()
+	case readyWaitDone:
+		return errShutdown
+	default: // readyWaitTimedOut
+		return errNotConnected
 	}
 }
 

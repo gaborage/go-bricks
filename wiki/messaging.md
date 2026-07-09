@@ -184,6 +184,7 @@ GoBricks applies production-safe AMQP reconnection defaults when messaging is co
 | `reconnect.reinitdelay` | 2s | Delay between channel re-initialization |
 | `reconnect.resenddelay` | 5s | Delay before resending failed messages |
 | `reconnect.connectiontimeout` | 30s | Per-publish broker confirmation (ACK/NACK) timeout |
+| `reconnect.readytimeout` | 5s | Bounded pre-flight wait for a not-yet-ready client before a publish begins (see below) |
 | `reconnect.maxpublishattempts` | 5 | Max publish attempts before returning `ErrPublishRetriesExhausted` (see below) |
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
 | `publisher.maxcached` | 50 | Maximum cached publisher channels |
@@ -213,20 +214,85 @@ failure:
 |----------------|---------|
 | `messaging.ErrPublishNacked` | the broker received the message and returned `basic.nack` (a transient broker condition — disk alarm, mirror resync, failover; also how a missing exchange surfaces) |
 | `messaging.ErrPublishConfirmTimeout` | no ACK/NACK arrived within `connectiontimeout` |
-| `messaging.ErrNotConnected` | the client was not connected when the publish was attempted |
+
+> `messaging.ErrNotConnected` is **not** one of the wrapped causes above — it is returned directly
+> (unwrapped), most commonly by the readiness pre-flight described below, timing out after waiting
+> up to `reconnect.readytimeout`. That case means "still not ready after the bounded wait," not
+> "not connected right now." The retry loop's own per-attempt readiness check — which pre-dates the
+> pre-flight and still runs on every iteration — can also raise it immediately, with no wait, if the
+> client drops connectivity again between two retry attempts (e.g. a broker blip during a NACK
+> backoff).
 
 Cancel / shutdown / deadline returns are also wrapped with the last cause, so a deadline that
-fires after a NACK still reports `ErrPublishNacked` — **match with `errors.Is`, not `==`**.
+fires after a NACK still reports `ErrPublishNacked` — **match with `errors.Is`, not `==`**
+(use `errors.Is` for the raw `ErrNotConnected` sentinel too: it works on unwrapped errors, and
+it keeps working if a future version ever wraps it).
 Between NACK retries the client waits a small cancelable `nackBackoff` (100ms) rather than
 busy-spinning. These causes are informational for logging/observability; the outbox relay treats
-**every** publish failure (NACK included) as a recoverable *connectivity* failure that retries and
-never parks — only undecodable message bodies are poison — see
+**every** publish failure as a recoverable *connectivity* failure that retries and never parks —
+NACK included, and likewise a raw `ErrNotConnected`, though the relay rarely sees one: it checks
+`IsReady()` itself at the start of each cycle and routes a cold broker to its outage path
+(advancing `retry_count` without calling `PublishToExchange` at all). Only undecodable message
+headers are poison — see
 [outbox.md](outbox.md#retry--dead-lettering) and [ADR-033](adr_033_outbox_retry_count_status_parking.md).
 
 > **Breaking change:** before this, a persistently-failing publish looped **forever** (returning
 > only on cancel/shutdown/ACK). It now returns an error after `maxpublishattempts`. Direct
 > publishers that relied on infinite blocking should handle the error; durable delivery should go
 > through the outbox, which retries on its next cycle. See [migrations.md](migrations.md).
+
+### Cold-client readiness pre-flight (`reconnect.readytimeout`)
+
+`NewAMQPClient` starts connecting asynchronously and returns immediately — `IsReady()` only flips
+true once the broker handshake and channel init finish. Before this pre-flight existed, the very
+first publish against a freshly created (or mid-reconnect) client failed instantly with
+`messaging.ErrNotConnected`, even though the client would have become ready a moment later (issue
+#655).
+
+`PublishToExchange` now runs a bounded, context-aware wait for readiness **before** entering the
+retry loop described above. The wait polls every 100ms (the same cadence
+`Registry.DeclareInfrastructure` uses) up to `reconnect.readytimeout` (default 5s):
+
+- If the client becomes ready within the window, the publish proceeds normally into the retry loop.
+- If `reconnect.readytimeout` elapses first, `PublishToExchange` returns the raw
+  `messaging.ErrNotConnected` — the same unwrapped error **shape** pre-#655 callers received
+  (only the timing changed: up to `readytimeout` instead of instant) — without consuming a
+  `reconnect.maxpublishattempts` slot, since the wait happens entirely before the retry loop
+  starts.
+- If the context is canceled/deadlined, or the client is shutting down, while waiting, the
+  pre-flight returns that error (`ctx.Err()` / `messaging.ErrShutdown`) instead.
+
+There is no circuit breaker or single-flight coalescing at the client level: during a sustained
+broker outage, every publish independently waits up to `min(readytimeout, ctx deadline)` before
+failing — with `messaging.ErrNotConnected` when `readytimeout` expires first, or the ctx's own
+error (`context.DeadlineExceeded` / `context.Canceled`) when the ctx deadline binds — so match
+both when classifying. Prefer short ctx deadlines on latency-sensitive paths.
+
+**Need fail-fast anyway?** Two working options:
+
+- **Context deadline (preferred):** pass a `ctx` with a short deadline — the pre-flight is
+  context-aware (third bullet above), so the effective wait is the *smaller* of the ctx deadline
+  and `readytimeout`. This is the framework's context-first idiom, and the same deadline also
+  bounds the publish attempts that follow.
+- **Config:** set `reconnect.readytimeout` to a small positive value (e.g. `1ms`) for
+  near-instant failure on a not-ready client.
+
+> **Disabling the wait:** `reconnect.readytimeout: 0` in `config.yaml` is treated the same as
+> leaving the key unset — like every other `reconnect.*` duration — and defaults to 5s. A
+> **negative** value does not fall back to the default either: it fails startup with a validation
+> error (`config_invalid: messaging.reconnect.readytimeout must be non-negative`). There is no
+> way to reach a `readyTimeout <= 0` (the pre-#655 instant fail-fast) through the public API:
+> `NewAMQPClient` always initializes it to the 5s default before applying `ClientOption`s, and
+> `WithReadyTimeout` itself ignores non-positive values — the same guard `WithMaxPublishAttempts`
+> applies to `reconnect.maxpublishattempts`' `<= 0` "unbounded retries" mode. Both zero-value
+> sentinels are reachable only by building an `AMQPClientImpl` struct literal that bypasses
+> `NewAMQPClient` — a dead end outside the `messaging` package: the fields are unexported, so only
+> the package's own test suite can set them, and while a bare `&messaging.AMQPClientImpl{}` does
+> compile externally, it is non-functional (nil unexported mutex and channels — the first method
+> call panics). No *working* client with `readyTimeout <= 0` is constructible outside the
+> `messaging` package. A custom `app.Options.MessagingClientFactory` supplying a
+> different `AMQPClient` implementation sidesteps the concept entirely: it receives only
+> `(url, log)`, so `reconnect.readytimeout` never reaches it.
 
 ### Sizing the publisher pool for multi-tenant deployments
 

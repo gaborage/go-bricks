@@ -197,6 +197,31 @@ func TestModuleInitRejectsPublishTimeoutBelowConnectionTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "connectiontimeout")
 }
 
+// TestModuleInitRejectsPublishTimeoutBelowReadyTimeout guards the companion fail-fast: a
+// publishtimeout shorter than the client's readiness pre-flight wait expires INSIDE that
+// wait, so a not-ready broker surfaces as context.DeadlineExceeded instead of
+// ErrNotConnected — silently defeating the relay's mid-batch broker-drop detection.
+func TestModuleInitRejectsPublishTimeoutBelowReadyTimeout(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 3 * time.Second},
+			Messaging: config.MessagingConfig{
+				Broker:    config.BrokerConfig{URL: "amqp://localhost"},
+				Reconnect: config.ReconnectConfig{ReadyTimeout: 5 * time.Second},
+			},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publishtimeout")
+	assert.Contains(t, err.Error(), "readytimeout")
+}
+
 // TestModuleInitEnabledMessagingUnconfiguredMultiTenant verifies the static
 // check is skipped when multitenant.enabled=true — each tenant supplies its
 // own broker URL via the resource source, so a global check would be wrong.

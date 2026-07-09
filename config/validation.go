@@ -44,6 +44,7 @@ const (
 	defaultReinitDelay        = 2 * time.Second  // Delay before channel reinitialization
 	defaultResendDelay        = 5 * time.Second  // Delay before retrying failed publishes
 	defaultConnectionTimeout  = 30 * time.Second // Per-publish broker confirmation (ACK/NACK) wait
+	defaultReadyTimeout       = 5 * time.Second  // Pre-flight wait for a not-yet-ready client before a publish begins
 	defaultMaxReconnectDelay  = 60 * time.Second // Maximum delay for exponential backoff cap
 	defaultMaxPublishers      = 50               // Maximum publisher clients in cache
 	defaultPublisherIdleTTL   = 10 * time.Minute // Time before idle publishers are evicted
@@ -632,6 +633,7 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 // - Reconnect.ReinitDelay: if 0, sets to 2s; if negative, returns an error.
 // - Reconnect.ResendDelay: if 0, sets to 5s; if negative, returns an error.
 // - Reconnect.ConnectionTimeout: if 0, sets to 30s; if negative, returns an error.
+// - Reconnect.ReadyTimeout: if 0, sets to 5s; if negative, returns an error.
 // - Reconnect.MaxDelay: if 0, sets to 60s; if negative, returns an error.
 // - Publisher.MaxCached: if 0, sets to 50; if negative, returns an error.
 // - Publisher.IdleTTL: if 0, sets to 10m; if negative, returns an error.
@@ -649,6 +651,7 @@ func applyMessagingDefaults(cfg *MessagingConfig) error {
 		{&cfg.Reconnect.ReinitDelay, defaultReinitDelay, "messaging.reconnect.reinitdelay"},
 		{&cfg.Reconnect.ResendDelay, defaultResendDelay, "messaging.reconnect.resenddelay"},
 		{&cfg.Reconnect.ConnectionTimeout, defaultConnectionTimeout, "messaging.reconnect.connectiontimeout"},
+		{&cfg.Reconnect.ReadyTimeout, defaultReadyTimeout, "messaging.reconnect.readytimeout"},
 		{&cfg.Reconnect.MaxDelay, defaultMaxReconnectDelay, "messaging.reconnect.maxdelay"},
 		{&cfg.Publisher.IdleTTL, defaultPublisherIdleTTL, "messaging.publisher.idlettl"},
 	} {

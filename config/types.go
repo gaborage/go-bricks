@@ -368,6 +368,7 @@ type MessagingConfig struct {
 //   - ReinitDelay: 2s (delay before channel reinitialization)
 //   - ResendDelay: 5s (delay before retrying failed publishes)
 //   - ConnectionTimeout: 30s (per-publish broker ACK/NACK confirmation wait)
+//   - ReadyTimeout: 5s (pre-flight wait for a not-yet-ready client, before a publish begins)
 //   - MaxDelay: 60s (maximum delay for exponential backoff cap)
 type ReconnectConfig struct {
 	// Delay is the initial delay between reconnection attempts.
@@ -387,6 +388,12 @@ type ReconnectConfig struct {
 	// The TCP/AMQP connection dial itself is bounded by amqp091-go's amqp.Dial default,
 	// not by this value. Default: 30s. Set higher for high-latency networks.
 	ConnectionTimeout time.Duration `koanf:"connectiontimeout" json:"connectiontimeout" yaml:"connectiontimeout" toml:"connectiontimeout" mapstructure:"connectiontimeout"`
+
+	// ReadyTimeout bounds how long a publish will wait, before entering the
+	// bounded retry loop, for a not-yet-ready client (cold start or
+	// mid-reconnect) to become ready. The wait does not consume a
+	// MaxPublishAttempts slot. Default: 5s. Must be >= 0.
+	ReadyTimeout time.Duration `koanf:"readytimeout" json:"readytimeout" yaml:"readytimeout" toml:"readytimeout" mapstructure:"readytimeout"`
 
 	// MaxPublishAttempts bounds the per-publish retry loop: after this many failed
 	// attempts a publish returns an error instead of retrying forever. This is what

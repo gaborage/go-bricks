@@ -192,9 +192,10 @@ func TestPublishRecordMarksFailedOnInvalidHeaders(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-bad-hdr", Headers: []byte(`{not valid json}`)}
-	out := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
 
 	assert.Equal(t, outcomeFailed, out, "corrupt headers are a (poison) failure")
+	assert.NoError(t, outErr)
 	assert.Equal(t, 0, amqp.PublishCalls, "publish never attempted with bad headers")
 	assert.Equal(t, 1, store.MarkFailedCalls)
 	assert.Equal(t, "evt-bad-hdr", store.MarkFailedLastID)
@@ -215,8 +216,9 @@ func TestPublishRecordInjectsOutboxMetadataHeaders(t *testing.T) {
 		RoutingKey: "created",
 		Headers:    []byte(`{"x-correlation-id":"abc"}`),
 	}
-	out := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
 	require.Equal(t, outcomePublished, out)
+	require.NoError(t, outErr)
 
 	require.NotNil(t, amqp.LastPublishHdrs)
 	assert.Equal(t, "evt-42", amqp.LastPublishHdrs[HeaderEventID])
@@ -234,7 +236,9 @@ func TestPublishRecordInjectsHeadersWhenRecordHasNone(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-7", EventType: "x.y", Exchange: "ex", RoutingKey: "rk"}
-	require.Equal(t, outcomePublished, r.publishRecord(ctx, ctx.Logger(), db, amqp, rec))
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	require.Equal(t, outcomePublished, out)
+	require.NoError(t, outErr)
 	require.NotNil(t, amqp.LastPublishHdrs)
 	assert.Equal(t, "evt-7", amqp.LastPublishHdrs[HeaderEventID])
 }
@@ -247,9 +251,10 @@ func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-mp-fail", Exchange: "ex", RoutingKey: "rk"}
-	out := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
 
 	assert.Equal(t, outcomePublishedUnrecorded, out, "the message WAS delivered; a MarkPublished failure must not bump retry_count")
+	assert.NoError(t, outErr)
 	assert.Equal(t, 1, amqp.PublishCalls)
 	assert.Equal(t, 1, store.MarkPublishedCalls)
 	assert.Equal(t, 0, store.MarkFailedCalls, "MarkFailed not called when only MarkPublished failed")
@@ -276,7 +281,9 @@ func TestPublishRecordRehydratesTraceContextForPublish(t *testing.T) {
 		RoutingKey: "created",
 		Headers:    []byte(`{"traceparent":"` + inboundTraceparent + `","X-Request-ID":"` + inboundTraceID + `"}`),
 	}
-	require.Equal(t, outcomePublished, r.publishRecord(ctx, ctx.Logger(), db, amqp, rec))
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	require.Equal(t, outcomePublished, out)
+	require.NoError(t, outErr)
 
 	require.NotNil(t, amqp.LastPublishCtx, "publish context must be captured")
 	tp, ok := gobrickstrace.ParentFromContext(amqp.LastPublishCtx)
@@ -454,4 +461,108 @@ func TestRelayPerRecordPublishTimeoutDoesNotStarveBatch(t *testing.T) {
 	assert.Equal(t, "healthy", store.MarkPublishedLastID)
 	assert.Equal(t, 1, store.MarkFailedCalls, "the stuck record times out and advances retry_count (connectivity)")
 	assert.Equal(t, "stuck", store.MarkFailedLastID)
+}
+
+// TestRelayStopsBatchWhenBrokerDropsMidBatch guards the fix for a mid-batch broker drop:
+// before this fix, once the broker dropped after the cycle-start IsReady() gate had
+// already passed, every REMAINING record in the batch paid its own serial readiness
+// pre-flight wait inside PublishToExchange (BatchSize x readyTimeout stall). Now the
+// relay detects the drop on the record whose publish fails with ErrNotConnected AND
+// IsReady() still false, and routes the unattempted remainder through the same
+// no-publish outage path the cycle-start gate uses — stopping the loop immediately.
+func TestRelayStopsBatchWhenBrokerDropsMidBatch(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk1"},
+		{ID: "evt-2", Exchange: "ex", RoutingKey: "rk2"},
+		{ID: "evt-3", Exchange: "ex", RoutingKey: "rk3"},
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{
+		"ex:rk2": messaging.ErrNotConnected,
+	}
+	amqp.PublishHook = func(f *fakeAMQP) {
+		if f.PublishCalls == 2 {
+			// Simulate the broker dropping connectivity exactly as record 2's
+			// publish is about to fail with ErrNotConnected.
+			f.Ready = false
+		}
+	}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	err := r.Execute(ctx)
+	require.Error(t, err, "the mid-batch outage surfaces as a job-level error, like the cycle-start path")
+	assert.Contains(t, err.Error(), "messaging not available")
+
+	assert.Equal(t, 2, amqp.PublishCalls, "the loop stops after record 2's connectivity failure — record 3 is never attempted")
+	assert.Equal(t, 1, store.MarkPublishedCalls, "record 1 published normally before the drop")
+	assert.Equal(t, "evt-1", store.MarkPublishedLastID)
+	assert.Equal(t, 2, store.MarkFailedCalls, "record 2 (the failed attempt) and record 3 (the outage remainder) both advance retry_count")
+	assert.Equal(t, 0, store.MarkDeadLetteredCalls)
+}
+
+// TestRelayMidBatchDropAccountingSumsToTotal guards the cycle-accounting invariant for
+// the mid-batch broker-drop path: the outage remainder routed through markOutage is
+// marked failed in the DB, so it must be reflected in the batch result too — otherwise
+// logCycle reports published+unrecorded+failed+deadlettered < total whenever the drop
+// isn't on the last record. Tests runRelayLoop directly since relayBatchResult is the
+// seam that feeds logCycle's arguments (Execute discards it and the test logger is
+// disabled, so there is no log-capture seam in this file).
+func TestRelayMidBatchDropAccountingSumsToTotal(t *testing.T) {
+	records := []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk1"},
+		{ID: "evt-2", Exchange: "ex", RoutingKey: "rk2"},
+		{ID: "evt-3", Exchange: "ex", RoutingKey: "rk3"},
+	}
+	store := &fakeStore{}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{
+		"ex:rk2": messaging.ErrNotConnected,
+	}
+	amqp.PublishHook = func(f *fakeAMQP) {
+		if f.PublishCalls == 2 {
+			f.Ready = false
+		}
+	}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	res := r.runRelayLoop(ctx, ctx.Logger(), db, amqp, records)
+
+	assert.Equal(t, 1, res.published, "record 1 published before the drop")
+	assert.Equal(t, 0, res.unrecorded)
+	assert.Equal(t, 0, res.deadlettered)
+	assert.Equal(t, 2, res.failed, "record 2 (failed attempt) AND record 3 (outage remainder) both count as failed")
+	assert.ErrorIs(t, res.outageErr, messaging.ErrNotConnected)
+	sum := res.published + res.unrecorded + res.failed + res.deadlettered
+	assert.Equal(t, len(records), sum, "cycle accounting must sum to the batch total")
+	assert.Equal(t, res.failed, store.MarkFailedCalls, "result count matches what was actually marked failed in the DB")
+}
+
+// TestRelayContinuesBatchWhenNotConnectedButStillReady locks in the "AND IsReady()"
+// half of the mid-batch-drop detection: an ErrNotConnected on its own (e.g. a stray
+// error classification, or a flap that already recovered) must NOT stop the batch
+// when the client reports ready again by the time the check runs — that is an
+// ordinary per-record failure, not a broker-down condition.
+func TestRelayContinuesBatchWhenNotConnectedButStillReady(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk1"},
+		{ID: "evt-2", Exchange: "ex", RoutingKey: "rk2"},
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{
+		"ex:rk1": messaging.ErrNotConnected,
+	}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	require.NoError(t, r.Execute(ctx), "IsReady() stayed true, so this is an ordinary failure — no job-level outage error")
+	assert.Equal(t, 2, amqp.PublishCalls, "record 2 is still attempted despite record 1's ErrNotConnected")
+	assert.Equal(t, 1, store.MarkPublishedCalls)
+	assert.Equal(t, "evt-2", store.MarkPublishedLastID)
+	assert.Equal(t, 1, store.MarkFailedCalls)
+	assert.Equal(t, "evt-1", store.MarkFailedLastID)
 }

@@ -43,6 +43,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundl
 	configBuilder := NewManagerConfigBuilder(b.cfg.Multitenant.Enabled, b.cfg.Multitenant.Limits.Tenants)
 	configBuilder.connectionTimeout = b.cfg.Messaging.Reconnect.ConnectionTimeout
 	configBuilder.maxPublishAttempts = b.cfg.Messaging.Reconnect.MaxPublishAttempts
+	configBuilder.readyTimeout = b.cfg.Messaging.Reconnect.ReadyTimeout
 	configBuilder.publisherConfig = b.cfg.Messaging.Publisher
 	configBuilder.cacheConfig = b.cfg.Cache.Manager
 	// Only count statically-configured tenants when multitenancy is enabled. Koanf

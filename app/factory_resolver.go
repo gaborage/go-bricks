@@ -35,12 +35,42 @@ func (f *FactoryResolver) DatabaseConnector() database.Connector {
 	return database.NewConnection
 }
 
+// MessagingClientFactoryOptions bundles the per-publish tuning knobs threaded
+// into the default messaging client factory. Introduced alongside the
+// existing MessagingClientFactory (kept byte-identical for apidiff
+// compatibility — see reference_apidiff_variadic_incompatible) so ReadyTimeout
+// could be added without breaking that method's exported signature.
+type MessagingClientFactoryOptions struct {
+	ConnectionTimeout  time.Duration
+	MaxPublishAttempts int
+	ReadyTimeout       time.Duration
+}
+
 // MessagingClientFactory returns the appropriate messaging client factory function.
 // The default factory creates AMQPClient instances configured with the supplied per-publish
 // connection timeout and bounded publish-retry attempts. If a custom
 // Options.MessagingClientFactory is set it owns construction and receives only (url, log) —
 // neither connectionTimeout nor maxPublishAttempts applies to it.
+//
+// Deprecated: kept for backward compatibility (its signature cannot change without
+// breaking apidiff). Use MessagingClientFactoryWithOptions to also configure
+// ReadyTimeout.
 func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration, maxPublishAttempts int) messaging.ClientFactory {
+	return f.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
+		ConnectionTimeout:  connectionTimeout,
+		MaxPublishAttempts: maxPublishAttempts,
+	})
+}
+
+// MessagingClientFactoryWithOptions is the ReadyTimeout-aware successor to
+// MessagingClientFactory. Internal bootstrap wiring (CreateMessagingManager)
+// uses this method so messaging.reconnect.readytimeout reaches the client.
+//
+// Same custom-factory precedence as MessagingClientFactory: if
+// Options.MessagingClientFactory is set it owns construction and receives only
+// (url, log) — none of opts (ConnectionTimeout, MaxPublishAttempts, ReadyTimeout)
+// applies to it.
+func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClientFactoryOptions) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {
 			return f.opts.MessagingClientFactory(url, log)
@@ -49,8 +79,9 @@ func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration
 
 	return func(url string, log logger.Logger) messaging.AMQPClient {
 		return messaging.NewAMQPClient(url, log,
-			messaging.WithConnectionTimeout(connectionTimeout),
-			messaging.WithMaxPublishAttempts(maxPublishAttempts),
+			messaging.WithConnectionTimeout(opts.ConnectionTimeout),
+			messaging.WithMaxPublishAttempts(opts.MaxPublishAttempts),
+			messaging.WithReadyTimeout(opts.ReadyTimeout),
 		)
 	}
 }
