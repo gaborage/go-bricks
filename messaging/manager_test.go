@@ -1068,3 +1068,49 @@ func TestMessagingManagerPublisherReleaseIsIdempotent(t *testing.T) {
 		releaseA() // double release must be a safe no-op
 	})
 }
+
+// TestMessagingManagerColdRecreateAfterIdleEviction reproduces the issue #655
+// timeline: a once-daily publisher goes idle past IdleTTL, gets evicted, and
+// the NEXT Publisher() call must hand back a freshly created (cold) client
+// rather than reusing the evicted one. This is not a fail-on-main regression
+// test (stubAMQPClient has no not-ready state to model the readiness bug
+// itself — see Task 1.1's client-level tests for that); it documents and
+// locks in the eviction → cold-recreate sequence that triggers the bug.
+func TestMessagingManagerColdRecreateAfterIdleEviction(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	var mu sync.Mutex
+	created := make([]*stubAMQPClient, 0, 2)
+	factory := func(string, logger.Logger) AMQPClient {
+		c := &stubAMQPClient{}
+		mu.Lock()
+		created = append(created, c)
+		mu.Unlock()
+		return c
+	}
+
+	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
+	defer func() { _ = manager.Close() }()
+
+	first, relFirst, err := manager.Publisher(ctx, tenantID)
+	require.NoError(t, err)
+	relFirst()
+
+	// Backdate lastUsed so the cleanup pass sees the entry as idle, mirroring
+	// TestMessagingManagerCleanupIdlePublishersLogsCloseError's idiom.
+	manager.pubMu.Lock()
+	manager.publishers[tenantID].lastUsed = time.Now().Add(-2 * time.Hour)
+	manager.pubMu.Unlock()
+
+	manager.cleanupIdlePublishers()
+
+	second, relSecond, err := manager.Publisher(ctx, tenantID)
+	require.NoError(t, err)
+	defer relSecond()
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, created, 2, "idle eviction must force a fresh client on the next Publisher() call")
+	assert.NotSame(t, first, second, "publisher after idle eviction must be a newly created (cold) client")
+}
