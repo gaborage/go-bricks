@@ -301,6 +301,8 @@ both when classifying. Prefer short ctx deadlines on latency-sensitive paths.
 
 Size the cap to hold every concurrently-publishing tenant. For **statically-configured** tenants (`multitenant.tenants`) the framework counts them at startup and emits a **WARN** when the publisher pool's max size is below the configured tenant count. For **dynamic** tenant sources the count is unknown at startup, so no warning can be emitted — size the cap against your expected fleet manually.
 
+Idle-TTL eviction is sweep-driven: publishers are only checked when the cleanup goroutine wakes every `publisher.cleanupinterval` (default 2m), so an idle publisher can outlive its `publisher.idlettl` by up to one full sweep interval — keep `cleanupinterval` well below `idlettl`.
+
 Eviction churn is directly observable: both removal paths log at **Info** (`"Evicted publisher client due to LRU limit"` for LRU eviction, `"Cleaned up idle publisher client"` for idle-TTL cleanup), and `Manager.Stats()` exposes cumulative `evictions` and `idle_cleanups` counters alongside `active_publishers`. The stats map is surfaced as `messaging_stats` in the `GET /ready` response and under the `messaging_manager` component of `GET /_sys/health-debug` (when debug endpoints are enabled). A steadily climbing `evictions` count under normal load is the signature of an undersized cap.
 
 > Eviction (and idle cleanup) closes the evicted publisher **outside** the manager lock, so a slow `Close()` on an evicted tenant never blocks concurrent `Publisher()` calls for other tenants.
