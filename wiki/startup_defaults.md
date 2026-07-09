@@ -34,3 +34,7 @@ app:
     database: 15s         # More time for slow databases
     observability: 30s    # More time for remote OTLP endpoints
 ```
+
+## Messaging Pre-Warm Readiness Wait
+
+In single-tenant mode, startup pre-warms the messaging publisher and then waits for it to report `IsReady()`, bounded by `messaging.reconnect.readytimeout` (default 5s — the same key and budget as the per-publish readiness pre-flight; see [context_deadlines.md](context_deadlines.md)). A publisher that isn't ready in time logs a WARN and startup continues — the wait never fails startup; the publish-time pre-flight still absorbs a slow first publish. Cancellation of the startup context (shutdown signal) aborts the wait immediately and is reported as a cancellation, not as a readiness timeout.

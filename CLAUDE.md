@@ -447,7 +447,7 @@ For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authe
 | HTTP server read / write / idle / shutdown | `server.timeout.{read,write,idle,shutdown}` | 15s / 30s / 60s / 10s |
 | Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s |
 | Cache (Redis) dial / read / write | `cache.redis.{dialtimeout,readtimeout,writetimeout}` | 5s / 3s / 3s |
-| AMQP publish readiness pre-flight (cold/reconnecting client) | `messaging.reconnect.readytimeout` | 5s |
+| AMQP publish readiness pre-flight (cold/reconnecting client); also bounds the startup publisher pre-warm wait (WARN-only, never fails startup) | `messaging.reconnect.readytimeout` | 5s |
 | AMQP publish confirmation | `messaging.reconnect.connectiontimeout` | 30s |
 | Scheduler slow-job WARN / shutdown | `scheduler.timeout.{slowjob,shutdown}` | 25s / 30s |
 | Observability export | `observability.trace.export.timeout` | 10s (dev) / 60s (prod) |

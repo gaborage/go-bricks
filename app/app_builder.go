@@ -214,6 +214,10 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 
 	b.app.messagingInitializer = NewMessagingInitializer(b.logger, b.app.messagingManager, b.cfg.Multitenant.Enabled)
 	b.app.connectionPreWarmer = NewConnectionPreWarmer(b.logger, b.app.dbManager, b.app.messagingManager)
+	// Thread the operator's readiness budget (messaging.reconnect.readytimeout)
+	// into the pre-warm wait. Set post-construction: NewConnectionPreWarmer is
+	// shipped API and must keep its signature byte-identical (apidiff gate).
+	b.app.connectionPreWarmer.readinessTimeout = b.cfg.Messaging.Reconnect.ReadyTimeout
 
 	// Determine if we should skip pre-initialization
 	// Skip for multi-tenant mode (resources loaded per-tenant)

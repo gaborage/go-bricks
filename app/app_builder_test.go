@@ -419,6 +419,18 @@ func TestAppBuilderConfigureRuntimeHelpersErrors(t *testing.T) {
 	})
 }
 
+func TestAppBuilderConfigureRuntimeHelpersThreadsReadyTimeout(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Multitenant.Enabled = true // skip pre-initialization; only helper wiring is under test
+	cfg.Messaging.Reconnect.ReadyTimeout = 20 * time.Second
+
+	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: &App{}}
+	result := builder.ConfigureRuntimeHelpers()
+
+	require.NoError(t, result.err)
+	assert.Equal(t, 20*time.Second, result.app.connectionPreWarmer.readinessTimeout)
+}
+
 func TestAppBuilderCreateHealthProbesErrors(t *testing.T) {
 	t.Run(missingAppInstanceErrorMsg, func(t *testing.T) {
 		builder := NewAppBuilder()

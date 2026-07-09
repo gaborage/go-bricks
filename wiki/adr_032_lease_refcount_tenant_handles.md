@@ -72,8 +72,10 @@ the active scope.
   `ProcessOnce`), and **scheduler jobs** (`module.executeJob`, which also covers outbox relay and
   inbox cleanup whose per-tenant `SetTenant` children inherit the scope).
 - When a context carries **no** scope (framework health/prewarm probes using the fixed `""` key,
-  ad-hoc background work), the lease is released immediately — non-leaking, but unprotected,
-  identical to the pre-lease behavior. Those framework-internal direct callers release explicitly.
+  ad-hoc background work), the lease is released as soon as the caller's own check completes —
+  non-leaking, but unprotected, identical to the pre-lease behavior. Those framework-internal
+  direct callers release explicitly; the messaging pre-warm holds its publisher lease through a
+  bounded readiness wait (`messaging.reconnect.readytimeout`) before releasing.
 
 The `Scope`'s release slice stays `nil` until the first borrow, so a unit of work that touches no
 managed resource pays only a tiny struct (consistent with ADR-026's zero-overhead request path).

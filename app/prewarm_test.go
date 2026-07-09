@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -11,8 +10,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-
-	amqp "github.com/rabbitmq/amqp091-go"
+	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
 const (
@@ -159,41 +157,6 @@ func TestPrewarmerIsAvailable(t *testing.T) {
 	})
 }
 
-// fakeReadinessClient is a minimal messaging.AMQPClient whose IsReady() can be
-// toggled by the test, used to exercise ConnectionPreWarmer.awaitPublisherReady
-// and PreWarmMessaging without a real broker.
-type fakeReadinessClient struct {
-	mu    sync.Mutex
-	ready bool
-}
-
-func (f *fakeReadinessClient) setReady(v bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.ready = v
-}
-func (f *fakeReadinessClient) IsReady() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.ready
-}
-func (f *fakeReadinessClient) Publish(context.Context, string, []byte) error { return nil }
-func (f *fakeReadinessClient) Consume(context.Context, string) (<-chan amqp.Delivery, error) {
-	return nil, nil
-}
-func (f *fakeReadinessClient) Close() error { return nil }
-func (f *fakeReadinessClient) PublishToExchange(context.Context, messaging.PublishOptions, []byte) error {
-	return nil
-}
-func (f *fakeReadinessClient) ConsumeFromQueue(context.Context, messaging.ConsumeOptions) (<-chan amqp.Delivery, error) {
-	return nil, nil
-}
-func (f *fakeReadinessClient) DeclareQueue(string, bool, bool, bool, bool) error { return nil }
-func (f *fakeReadinessClient) DeclareExchange(string, string, bool, bool, bool, bool) error {
-	return nil
-}
-func (f *fakeReadinessClient) BindQueue(string, string, string, bool) error { return nil }
-
 // fakeBrokerURLProvider is a minimal messaging.BrokerURLProvider for tests
 // that need a real *messaging.Manager without a real broker.
 type fakeBrokerURLProvider struct{ url string }
@@ -202,50 +165,89 @@ func (f *fakeBrokerURLProvider) BrokerURL(context.Context, string) (string, erro
 	return f.url, nil
 }
 
+// newPrewarmMockClient returns a MockAMQPClient in the not-ready state with a
+// Close expectation, ready for readiness-wait tests (NewMockAMQPClient defaults
+// to ready; Manager.Close() closes cached publisher clients).
+func newPrewarmMockClient() *testmocks.MockAMQPClient {
+	client := testmocks.NewMockAMQPClient()
+	client.SetReady(false)
+	client.ExpectClose(nil)
+	return client
+}
+
+// newPrewarmTestManager wires a mock-backed *messaging.Manager for pre-warm tests.
+func newPrewarmTestManager(log logger.Logger, client *testmocks.MockAMQPClient) *messaging.Manager {
+	factory := func(string, logger.Logger) messaging.AMQPClient { return client }
+	return messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log, messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
+}
+
 func TestConnectionPreWarmerAwaitPublisherReady(t *testing.T) {
 	log := logger.New("debug", true)
 	prewarmer := &ConnectionPreWarmer{logger: log}
 
 	t.Run("already ready returns immediately", func(t *testing.T) {
-		fake := &fakeReadinessClient{ready: true}
-		assert.True(t, prewarmer.awaitPublisherReady(context.Background(), fake))
+		client := testmocks.NewMockAMQPClient() // defaults to ready
+		assert.Equal(t, preWarmReady, prewarmer.awaitPublisherReady(context.Background(), client))
 	})
 
 	t.Run("becomes ready during poll", func(t *testing.T) {
-		fake := &fakeReadinessClient{}
+		client := newPrewarmMockClient()
 		go func() {
 			time.Sleep(150 * time.Millisecond)
-			fake.setReady(true)
+			client.SetReady(true)
 		}()
-		assert.True(t, prewarmer.awaitPublisherReady(context.Background(), fake))
+		assert.Equal(t, preWarmReady, prewarmer.awaitPublisherReady(context.Background(), client))
 	})
 
-	t.Run("ctx cancellation returns false without waiting out the timeout", func(t *testing.T) {
-		fake := &fakeReadinessClient{}
+	t.Run("ctx cancellation reported distinctly without waiting out the budget", func(t *testing.T) {
+		client := newPrewarmMockClient()
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
 		start := time.Now()
-		ready := prewarmer.awaitPublisherReady(ctx, fake)
+		outcome := prewarmer.awaitPublisherReady(ctx, client)
 		elapsed := time.Since(start)
 
-		assert.False(t, ready)
-		assert.Less(t, elapsed, time.Second, "must return once ctx expires, not wait out the full preWarmReadinessTimeout")
+		assert.Equal(t, preWarmCanceled, outcome)
+		assert.Less(t, elapsed, time.Second, "must return once ctx expires, not wait out the readiness budget")
+	})
+
+	t.Run("configured budget elapses without readiness", func(t *testing.T) {
+		shortPrewarmer := &ConnectionPreWarmer{logger: log, readinessTimeout: 150 * time.Millisecond}
+		client := newPrewarmMockClient()
+
+		start := time.Now()
+		outcome := shortPrewarmer.awaitPublisherReady(context.Background(), client)
+		elapsed := time.Since(start)
+
+		assert.Equal(t, preWarmNotReadyInTime, outcome)
+		assert.Less(t, elapsed, time.Second, "must honor the configured budget, not the 5s fallback")
+	})
+}
+
+func TestConnectionPreWarmerPublisherReadinessTimeout(t *testing.T) {
+	t.Run("falls back to default when unset", func(t *testing.T) {
+		prewarmer := &ConnectionPreWarmer{}
+		assert.Equal(t, defaultPreWarmReadinessTimeout, prewarmer.publisherReadinessTimeout())
+	})
+
+	t.Run("uses the threaded operator value", func(t *testing.T) {
+		prewarmer := &ConnectionPreWarmer{readinessTimeout: 20 * time.Second}
+		assert.Equal(t, 20*time.Second, prewarmer.publisherReadinessTimeout())
 	})
 }
 
 func TestPreWarmMessagingAwaitsPublisherReadiness(t *testing.T) {
 	log := logger.New("debug", true)
-	fake := &fakeReadinessClient{}
-	factory := func(string, logger.Logger) messaging.AMQPClient { return fake }
-	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log, messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
+	client := newPrewarmMockClient()
+	manager := newPrewarmTestManager(log, client)
 	defer func() { _ = manager.Close() }()
 
 	prewarmer := NewConnectionPreWarmer(log, nil, manager)
 
 	go func() {
 		time.Sleep(150 * time.Millisecond)
-		fake.setReady(true)
+		client.SetReady(true)
 	}()
 
 	start := time.Now()
@@ -253,33 +255,51 @@ func TestPreWarmMessagingAwaitsPublisherReadiness(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.NoError(t, err)
-	assert.Less(t, elapsed, preWarmReadinessTimeout, "must return once the client reports ready, not wait out the full timeout")
+	assert.Less(t, elapsed, defaultPreWarmReadinessTimeout, "must return once the client reports ready, not wait out the full budget")
 }
 
 func TestPreWarmMessagingContinuesWhenPublisherNeverReady(t *testing.T) {
 	log := logger.New("debug", true)
-	fake := &fakeReadinessClient{} // never flips ready
-	factory := func(string, logger.Logger) messaging.AMQPClient { return fake }
-	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log, messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
+	client := newPrewarmMockClient() // never flips ready
+	manager := newPrewarmTestManager(log, client)
 	defer func() { _ = manager.Close() }()
 
 	prewarmer := NewConnectionPreWarmer(log, nil, manager)
-
-	// Force the "not ready in time" branch with a short ctx deadline rather than
-	// waiting out the full 5s preWarmReadinessTimeout — same trick as
-	// messaging/registry_test.go's TestRegistryDeclareInfrastructureClientNotReadyTimeoutSimple.
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
+	// Thread a short budget (as ConfigureRuntimeHelpers does from
+	// messaging.reconnect.readytimeout) so the genuine timeout branch fires
+	// without waiting out the 5s fallback.
+	prewarmer.readinessTimeout = 200 * time.Millisecond
 
 	start := time.Now()
-	err := prewarmer.PreWarmMessaging(ctx, testKey, nil)
+	err := prewarmer.PreWarmMessaging(context.Background(), testKey, nil)
 	elapsed := time.Since(start)
 
 	// Not-ready-in-time is a WARN, not a startup failure — pre-warm must not
 	// propagate an error; PublishToExchange's own readytimeout pre-flight will
 	// still absorb a slow first publish later.
 	assert.NoError(t, err)
-	assert.Less(t, elapsed, time.Second, "must return once ctx expires, not wait out the full preWarmReadinessTimeout")
+	assert.Less(t, elapsed, time.Second, "must return once the configured budget elapses, not the 5s fallback")
+}
+
+func TestPreWarmMessagingPropagatesContextCancellation(t *testing.T) {
+	log := logger.New("debug", true)
+	client := newPrewarmMockClient() // never flips ready
+	manager := newPrewarmTestManager(log, client)
+	defer func() { _ = manager.Close() }()
+
+	prewarmer := NewConnectionPreWarmer(log, nil, manager)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := prewarmer.PreWarmMessaging(ctx, testKey, nil)
+	elapsed := time.Since(start)
+
+	// Cancellation means shutdown/startup abort, not a broker-readiness problem —
+	// it propagates instead of being mislabeled by the generic not-ready WARN.
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, elapsed, time.Second, "must return once ctx expires")
 }
 
 func TestLogAvailability(t *testing.T) {

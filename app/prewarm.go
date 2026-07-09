@@ -18,6 +18,13 @@ type ConnectionPreWarmer struct {
 	logger           logger.Logger
 	dbManager        *database.DbManager
 	messagingManager *messaging.Manager
+	// readinessTimeout bounds PreWarmMessaging's wait for a freshly created
+	// publisher to report IsReady(). Threaded from the operator's
+	// messaging.reconnect.readytimeout by ConfigureRuntimeHelpers (see
+	// app_builder.go); zero falls back to defaultPreWarmReadinessTimeout.
+	// Unexported and set post-construction so NewConnectionPreWarmer's shipped
+	// signature stays byte-identical (apidiff gate).
+	readinessTimeout time.Duration
 }
 
 // NewConnectionPreWarmer creates a new connection pre-warmer.
@@ -33,12 +40,13 @@ func NewConnectionPreWarmer(
 	}
 }
 
-// preWarmReadinessTimeout bounds how long PreWarmMessaging waits for a freshly
-// created publisher to report IsReady() before giving up and logging a WARN.
-// Mirrors messaging.WithReadyTimeout's own 5s default (see
-// messaging/amqp_client.go) — pre-warm and the first real publish converge on
-// the same "how long is reasonable to wait for a cold client" budget.
-const preWarmReadinessTimeout = 5 * time.Second
+// defaultPreWarmReadinessTimeout is the fallback readiness budget when no
+// operator value was threaded into readinessTimeout (zero, e.g. direct
+// construction in tests). Mirrors config's defaultReadyTimeout for
+// messaging.reconnect.readytimeout (see config/validation.go) — pre-warm and
+// the first real publish converge on the same "how long is reasonable to wait
+// for a cold client" budget.
+const defaultPreWarmReadinessTimeout = 5 * time.Second
 
 // preWarmReadinessPollInterval mirrors messaging's unexported
 // readinessCheckInterval (see messaging/registry.go) so both readiness-wait
@@ -158,27 +166,57 @@ func (w *ConnectionPreWarmer) PreWarmMessaging(
 	}
 	defer release() // pre-warm only verifies connectivity; release the lease when done
 
-	if w.awaitPublisherReady(ctx, client) {
+	switch w.awaitPublisherReady(ctx, client) {
+	case preWarmReady:
 		w.logger.Info().Msg("Pre-warmed messaging publisher")
-	} else {
+	case preWarmCanceled:
+		// Startup abort / shutdown in flight — propagate the cancellation
+		// instead of mislabeling it as a broker-readiness problem.
+		return fmt.Errorf("publisher readiness wait canceled: %w", ctx.Err())
+	default: // preWarmNotReadyInTime
 		// Non-fatal: PublishToExchange's own readytimeout pre-flight (see
 		// messaging/amqp_client.go) will still absorb a slow first real publish.
-		w.logger.Warn().Msg("Messaging publisher not ready within pre-warm window; continuing startup")
+		w.logger.Warn().
+			Dur("ready_timeout", w.publisherReadinessTimeout()).
+			Msg("Messaging publisher not ready within pre-warm window; continuing startup")
 	}
 
 	return nil
 }
 
-// awaitPublisherReady polls client.IsReady() until it returns true, the
-// bounded preWarmReadinessTimeout elapses, or ctx is canceled — whichever
-// comes first. It never fails startup: PreWarmMessaging logs a WARN and
-// continues if the client isn't ready in time.
-func (w *ConnectionPreWarmer) awaitPublisherReady(ctx context.Context, client messaging.AMQPClient) bool {
+// preWarmReadyOutcome reports why awaitPublisherReady's bounded wait ended.
+// Mirrors messaging's unexported readyWaitOutcome (see messaging/amqp_client.go)
+// minus the shutdown-channel case pre-warm has no equivalent for, so ctx
+// cancellation is never conflated with a readiness timeout.
+type preWarmReadyOutcome int
+
+const (
+	preWarmReady preWarmReadyOutcome = iota
+	preWarmNotReadyInTime
+	preWarmCanceled
+)
+
+// publisherReadinessTimeout resolves the readiness budget: the operator's
+// messaging.reconnect.readytimeout when threaded (positive), the
+// defaultPreWarmReadinessTimeout fallback otherwise.
+func (w *ConnectionPreWarmer) publisherReadinessTimeout() time.Duration {
+	if w.readinessTimeout > 0 {
+		return w.readinessTimeout
+	}
+	return defaultPreWarmReadinessTimeout
+}
+
+// awaitPublisherReady polls client.IsReady() until it reports ready, the
+// bounded publisherReadinessTimeout elapses, or ctx is canceled — whichever
+// comes first — and reports which of the three ended the wait. A readiness
+// timeout never fails startup (PreWarmMessaging logs a WARN and continues);
+// cancellation propagates so shutdown isn't mislabeled as not-ready.
+func (w *ConnectionPreWarmer) awaitPublisherReady(ctx context.Context, client messaging.AMQPClient) preWarmReadyOutcome {
 	if client.IsReady() {
-		return true
+		return preWarmReady
 	}
 
-	timeout := time.NewTimer(preWarmReadinessTimeout)
+	timeout := time.NewTimer(w.publisherReadinessTimeout())
 	defer timeout.Stop()
 	ticker := time.NewTicker(preWarmReadinessPollInterval)
 	defer ticker.Stop()
@@ -186,12 +224,12 @@ func (w *ConnectionPreWarmer) awaitPublisherReady(ctx context.Context, client me
 	for {
 		select {
 		case <-ctx.Done():
-			return false
+			return preWarmCanceled
 		case <-timeout.C:
-			return false
+			return preWarmNotReadyInTime
 		case <-ticker.C:
 			if client.IsReady() {
-				return true
+				return preWarmReady
 			}
 		}
 	}
