@@ -188,7 +188,13 @@ GoBricks applies production-safe AMQP reconnection defaults when messaging is co
 | `reconnect.maxpublishattempts` | 5 | Max publish attempts before returning `ErrPublishRetriesExhausted` (see below) |
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
 | `publisher.maxcached` | 50 | Maximum cached publisher channels |
-| `publisher.idlettl` | 10m | TTL for idle publisher channels |
+| `publisher.idlettl` | 1h single-tenant / 10m multi-tenant | TTL for idle publisher channels |
+| `publisher.cleanupinterval` | 2m | How often the idle-publisher cleanup goroutine runs |
+
+The `publisher.idlettl` default is deployment-mode-dependent: `multitenant.enabled: false` gets 1h,
+`multitenant.enabled: true` gets a shorter 10m to bound per-tenant publisher churn (see
+config/validation.go: `applyMessagingDefaults`). An explicit `publisher.idlettl` always overrides
+both defaults, in either mode.
 
 **Override defaults** in `config.yaml`:
 
@@ -199,7 +205,7 @@ messaging:
     maxdelay: 120s       # Higher backoff cap
   publisher:
     maxcached: 100       # More cached publishers for high-throughput
-    idlettl: 30m         # Keep publishers longer
+    idlettl: 2h          # Keep publishers longer than the default (1h single-tenant / 10m multi-tenant)
 ```
 
 ### Bounded publish retries (`reconnect.maxpublishattempts`)
@@ -299,6 +305,8 @@ both when classifying. Prefer short ctx deadlines on latency-sensitive paths.
 `publisher.maxcached` is the LRU cap on cached publisher clients (in multi-tenant mode, it falls back to `multitenant.limits.tenants` when unset), not a per-tenant guarantee. When more tenants publish than the cap allows, every publish for a not-currently-cached tenant evicts the least-recently-used publisher and creates a fresh one — **eviction thrash** that silently degrades latency (each miss reopens a broker connection) without an error.
 
 Size the cap to hold every concurrently-publishing tenant. For **statically-configured** tenants (`multitenant.tenants`) the framework counts them at startup and emits a **WARN** when the publisher pool's max size is below the configured tenant count. For **dynamic** tenant sources the count is unknown at startup, so no warning can be emitted — size the cap against your expected fleet manually.
+
+Idle-TTL eviction is sweep-driven: publishers are only checked when the cleanup goroutine wakes every `publisher.cleanupinterval` (default 2m), so an idle publisher can outlive its `publisher.idlettl` by up to one full sweep interval — keep `cleanupinterval` well below `idlettl`.
 
 Eviction churn is directly observable: both removal paths log at **Info** (`"Evicted publisher client due to LRU limit"` for LRU eviction, `"Cleaned up idle publisher client"` for idle-TTL cleanup), and `Manager.Stats()` exposes cumulative `evictions` and `idle_cleanups` counters alongside `active_publishers`. The stats map is surfaced as `messaging_stats` in the `GET /ready` response and under the `messaging_manager` component of `GET /_sys/health-debug` (when debug endpoints are enabled). A steadily climbing `evictions` count under normal load is the signature of an undersized cap.
 

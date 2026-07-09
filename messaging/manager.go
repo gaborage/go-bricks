@@ -120,7 +120,13 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 		opts.MaxPublishers = 50 // sensible default
 	}
 	if opts.IdleTTL <= 0 {
-		opts.IdleTTL = 10 * time.Minute // shorter than DB since publishers are lighter
+		// Single-tenant default only: this package has no deployment-mode signal (a bare
+		// caller passes only ManagerOptions), so it cannot apply the multi-tenant 10m default.
+		// The real production path always resolves IdleTTL before it reaches here — via
+		// config.Validate() (config/validation.go: applyMessagingDefaults, mode-aware) and
+		// app.ManagerConfigBuilder.BuildMessagingOptions (app/managers.go, same mode split) —
+		// so this branch only serves bare/direct callers that bypass both.
+		opts.IdleTTL = 1 * time.Hour // kept in sync with app.defaultPublisherIdleTTL (see app/managers.go)
 	}
 
 	// Default to real client factory if none provided

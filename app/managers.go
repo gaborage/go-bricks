@@ -14,12 +14,21 @@ import (
 // config validation (see config/validation.go: applyMessagingDefaults and
 // applyCacheManagerDefaults) so the builder honors the same documented behavior
 // even when invoked without a fully-validated config (e.g. in unit tests).
+// defaultPublisherIdleTTL (single-tenant) has a third copy: messaging.NewMessagingManager's
+// fallback (messaging/manager.go) for bare callers that bypass this builder — that
+// fallback is single-tenant-only (see its comment), since a bare caller supplies no
+// deployment-mode signal.
 const (
-	defaultPublisherMaxCached   = 50
-	defaultPublisherIdleTTL     = 10 * time.Minute
-	defaultCacheMaxSize         = 100
-	defaultCacheIdleTTL         = 15 * time.Minute
-	defaultCacheCleanupInterval = 5 * time.Minute
+	defaultPublisherMaxCached = 50
+	defaultPublisherIdleTTL   = 1 * time.Hour // Single-tenant default; see config/validation.go
+	// defaultPublisherIdleTTLMultiTenant mirrors config/validation.go's
+	// defaultPublisherIdleTTLMultiTenant. Kept as a separate copy (not imported) for the
+	// same reason as defaultPublisherIdleTTL above: this builder must honor the documented
+	// default even when constructed directly, bypassing config validation.
+	defaultPublisherIdleTTLMultiTenant = 10 * time.Minute
+	defaultCacheMaxSize                = 100
+	defaultCacheIdleTTL                = 15 * time.Minute
+	defaultCacheCleanupInterval        = 5 * time.Minute
 )
 
 // ManagerConfigBuilder creates configuration options for database and messaging managers
@@ -78,7 +87,7 @@ func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions 
 
 // BuildMessagingOptions creates messaging manager options based on deployment mode.
 // Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
-// Single-tenant mode uses smaller fixed limits and moderate TTL.
+// Single-tenant mode uses smaller fixed limits and a longer TTL (same 1h as the DB pool).
 func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions {
 	// Operator config (messaging.publisher.*) is the source of truth. Mode-specific
 	// values are only fallbacks when the operator left the key unset (zero).
@@ -91,12 +100,18 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 		}
 	}
 
+	// This fallback only serves direct/unvalidated construction (e.g. NewManagerConfigBuilder
+	// called without going through bootstrap.go's config.Validate()-backed cfg): on the real
+	// production path, config.Validate() (config/validation.go: applyMessagingDefaults) has
+	// already applied this same mode-aware default before publisherConfig reaches the builder,
+	// so this branch is dead there — it exists only to keep the builder's documented behavior
+	// correct when invoked without a fully-validated config (e.g. unit tests).
 	idleTTL := b.publisherConfig.IdleTTL
 	if idleTTL == 0 {
 		if b.multiTenantEnabled {
-			idleTTL = 5 * time.Minute // Shorter TTL for multi-tenant churn
+			idleTTL = defaultPublisherIdleTTLMultiTenant // Documented multi-tenant default (10m)
 		} else {
-			idleTTL = defaultPublisherIdleTTL // Documented single-tenant default
+			idleTTL = defaultPublisherIdleTTL // Documented single-tenant default (1h)
 		}
 	}
 

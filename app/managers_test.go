@@ -112,9 +112,9 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		options := builder.BuildMessagingOptions()
 
 		// With no operator override, single-tenant falls back to the documented
-		// messaging.publisher defaults (maxcached=50, idlettl=10m).
+		// messaging.publisher defaults (maxcached=50, idlettl=1h).
 		assert.Equal(t, 50, options.MaxPublishers)
-		assert.Equal(t, 10*time.Minute, options.IdleTTL)
+		assert.Equal(t, 1*time.Hour, options.IdleTTL)
 	})
 
 	t.Run("multi-tenant messaging options", func(t *testing.T) {
@@ -124,7 +124,10 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		options := builder.BuildMessagingOptions()
 
 		assert.Equal(t, tenantLimit, options.MaxPublishers)
-		assert.Equal(t, 5*time.Minute, options.IdleTTL)
+		// 10m: the multi-tenant messaging.publisher.idlettl default (see
+		// config/validation.go: defaultPublisherIdleTTLMultiTenant), not the fictional 5m
+		// this test previously asserted.
+		assert.Equal(t, 10*time.Minute, options.IdleTTL)
 	})
 
 	t.Run(zeroLimitMultiTenantTest, func(t *testing.T) {
@@ -133,7 +136,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		options := builder.BuildMessagingOptions()
 
 		assert.Equal(t, 0, options.MaxPublishers)
-		assert.Equal(t, 5*time.Minute, options.IdleTTL)
+		assert.Equal(t, 10*time.Minute, options.IdleTTL)
 	})
 
 	t.Run(negativeLimitMultiTenantTest, func(t *testing.T) {
@@ -142,7 +145,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		options := builder.BuildMessagingOptions()
 
 		assert.Equal(t, -3, options.MaxPublishers)
-		assert.Equal(t, 5*time.Minute, options.IdleTTL)
+		assert.Equal(t, 10*time.Minute, options.IdleTTL)
 	})
 
 	t.Run(largeLimitTenantTest, func(t *testing.T) {
@@ -152,7 +155,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		options := builder.BuildMessagingOptions()
 
 		assert.Equal(t, largeLimit, options.MaxPublishers)
-		assert.Equal(t, 5*time.Minute, options.IdleTTL)
+		assert.Equal(t, 10*time.Minute, options.IdleTTL)
 	})
 
 	t.Run("connection_timeout_propagated_to_options", func(t *testing.T) {
@@ -182,7 +185,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 }
 
 func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
-	// Config validation applies defaults: messaging.publisher.maxcached=50, messaging.publisher.idlettl=10m
+	// Config validation applies defaults: messaging.publisher.maxcached=50, messaging.publisher.idlettl=1h
 	// cache.manager.maxsize=100, cache.manager.idlettl=15m, cache.manager.cleanupinterval=5m
 
 	t.Run("single-tenant BuildMessagingOptions should honor config defaults not hardcoded 10", func(t *testing.T) {
@@ -192,10 +195,10 @@ func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 		assert.Equal(t, 50, opts.MaxPublishers, "should honor messaging.publisher.maxcached config default of 50, not hardcode 10")
 	})
 
-	t.Run("single-tenant BuildMessagingOptions IdleTTL should honor config default 10m not hardcoded 30m", func(t *testing.T) {
+	t.Run("single-tenant BuildMessagingOptions IdleTTL should honor config default 1h not hardcoded 30m", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 100)
 		opts := builder.BuildMessagingOptions()
-		assert.Equal(t, 10*time.Minute, opts.IdleTTL, "should honor messaging.publisher.idlettl config default of 10m, not hardcode 30m")
+		assert.Equal(t, 1*time.Hour, opts.IdleTTL, "should honor messaging.publisher.idlettl config default of 1h, not hardcode 30m")
 	})
 
 	t.Run("single-tenant BuildCacheOptions should honor config defaults not hardcoded 10", func(t *testing.T) {
@@ -413,8 +416,9 @@ func TestManagerConfigBuilderConsistency(t *testing.T) {
 		assert.Equal(t, 10, dbOptions.MaxSize)
 		assert.Equal(t, 50, msgOptions.MaxPublishers)
 
-		// Database has longer TTL (1h) than messaging (10m) in single-tenant mode
-		assert.True(t, dbOptions.IdleTTL > msgOptions.IdleTTL)
+		// Invariant: the DB pool must never be shorter-lived than the messaging pool
+		// (DB connections are heavier to re-establish). Currently both default to 1h.
+		assert.GreaterOrEqual(t, dbOptions.IdleTTL, msgOptions.IdleTTL, "DB pool IdleTTL must be >= messaging pool IdleTTL in single-tenant mode")
 	})
 
 	t.Run("multi-tenant configuration consistency", func(t *testing.T) {
@@ -473,9 +477,9 @@ func TestManagerConfigBuilderEdgeCases(t *testing.T) {
 		dbOptions := builder.BuildDatabaseOptions()
 		msgOptions := builder.BuildMessagingOptions()
 
-		// Multi-tenant: DB (30min) > Messaging (5min)
+		// Multi-tenant: DB (30min) > Messaging (10min)
 		assert.Equal(t, 30*time.Minute, dbOptions.IdleTTL)
-		assert.Equal(t, 5*time.Minute, msgOptions.IdleTTL)
+		assert.Equal(t, 10*time.Minute, msgOptions.IdleTTL)
 		assert.True(t, dbOptions.IdleTTL > msgOptions.IdleTTL)
 	})
 

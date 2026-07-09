@@ -2155,7 +2155,10 @@ func TestApplyMessagingDefaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMessaging(&tt.config)
+			// Single-tenant mode: these cases exercise the non-IdleTTL defaults and the
+			// single-tenant IdleTTL default; see TestApplyMessagingDefaultsIdleTTLModeAware
+			// for the mode-dependent IdleTTL behavior.
+			err := validateMessaging(&tt.config, false)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedReconnectDelay, tt.config.Reconnect.Delay, "Reconnect.Delay mismatch")
 			assert.Equal(t, tt.expectedReinitDelay, tt.config.Reconnect.ReinitDelay, "Reconnect.ReinitDelay mismatch")
@@ -2168,10 +2171,77 @@ func TestApplyMessagingDefaults(t *testing.T) {
 	}
 }
 
+// TestApplyMessagingDefaultsIdleTTLModeAware proves Publisher.IdleTTL defaulting is
+// deployment-mode-dependent: 1h single-tenant, 10m multi-tenant. Before this fix,
+// applyMessagingDefaults always applied the single-tenant 1h default regardless of
+// mode, silently raising the multi-tenant effective TTL and making
+// ManagerConfigBuilder.BuildMessagingOptions' multi-tenant fallback dead code (see
+// app/managers_test.go).
+func TestApplyMessagingDefaultsIdleTTLModeAware(t *testing.T) {
+	t.Run("single_tenant_unset_defaults_to_1h", func(t *testing.T) {
+		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
+		require.NoError(t, validateMessaging(cfg, false))
+		assert.Equal(t, defaultPublisherIdleTTL, cfg.Publisher.IdleTTL)
+		assert.Equal(t, 1*time.Hour, cfg.Publisher.IdleTTL)
+	})
+
+	t.Run("multi_tenant_unset_defaults_to_10m", func(t *testing.T) {
+		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
+		require.NoError(t, validateMessaging(cfg, true))
+		assert.Equal(t, defaultPublisherIdleTTLMultiTenant, cfg.Publisher.IdleTTL)
+		assert.Equal(t, 10*time.Minute, cfg.Publisher.IdleTTL)
+	})
+
+	t.Run("explicit_value_preserved_regardless_of_mode", func(t *testing.T) {
+		cfg := &MessagingConfig{
+			Broker:    BrokerConfig{URL: testAMQPHost},
+			Publisher: PublisherPoolConfig{IdleTTL: 42 * time.Minute},
+		}
+		require.NoError(t, validateMessaging(cfg, true))
+		assert.Equal(t, 42*time.Minute, cfg.Publisher.IdleTTL)
+	})
+}
+
+// TestValidateMessagingPublisherIdleTTLModeAwareEndToEnd proves the mode-aware
+// default reaches Publisher.IdleTTL through the full Validate(cfg) entry point
+// (not just the internal validateMessaging seam), matching the real config.Load()
+// path that runs before app/bootstrap.go builds the manager options.
+func TestValidateMessagingPublisherIdleTTLModeAwareEndToEnd(t *testing.T) {
+	t.Run("single_tenant_validate_yields_1h", func(t *testing.T) {
+		cfg := &Config{
+			App:       createValidAppConfig(),
+			Server:    createValidServerConfig(),
+			Log:       createValidLogConfig(),
+			Messaging: MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}},
+		}
+		require.NoError(t, Validate(cfg))
+		assert.Equal(t, 1*time.Hour, cfg.Messaging.Publisher.IdleTTL)
+	})
+
+	t.Run("multi_tenant_validate_yields_10m", func(t *testing.T) {
+		cfg := &Config{
+			App:    createValidAppConfig(),
+			Server: createValidServerConfig(),
+			Log:    createValidLogConfig(),
+			Multitenant: MultitenantConfig{
+				Enabled:  true,
+				Resolver: ResolverConfig{Type: ResolverTypeHeader, Header: testTenantHeader},
+			},
+			// Dynamic source: no static multitenant.tenants, so root-level messaging is
+			// still permitted alongside multitenant.enabled (validateNoSingleTenantConflict
+			// only fires for a static source with tenants configured).
+			Messaging: MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}},
+			Source:    SourceConfig{Type: SourceTypeDynamic},
+		}
+		require.NoError(t, Validate(cfg))
+		assert.Equal(t, 10*time.Minute, cfg.Messaging.Publisher.IdleTTL)
+	})
+}
+
 func TestApplyMessagingDefaultsMaxPublishAttempts(t *testing.T) {
 	t.Run("zero_gets_default", func(t *testing.T) {
 		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
-		require.NoError(t, validateMessaging(cfg))
+		require.NoError(t, validateMessaging(cfg, false))
 		assert.Equal(t, defaultMaxPublishAttempts, cfg.Reconnect.MaxPublishAttempts)
 	})
 	t.Run("explicit_value_preserved", func(t *testing.T) {
@@ -2179,7 +2249,7 @@ func TestApplyMessagingDefaultsMaxPublishAttempts(t *testing.T) {
 			Broker:    BrokerConfig{URL: testAMQPHost},
 			Reconnect: ReconnectConfig{MaxPublishAttempts: 9},
 		}
-		require.NoError(t, validateMessaging(cfg))
+		require.NoError(t, validateMessaging(cfg, false))
 		assert.Equal(t, 9, cfg.Reconnect.MaxPublishAttempts)
 	})
 }
@@ -2187,7 +2257,7 @@ func TestApplyMessagingDefaultsMaxPublishAttempts(t *testing.T) {
 func TestApplyMessagingDefaultsReadyTimeout(t *testing.T) {
 	t.Run("zero_gets_default", func(t *testing.T) {
 		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
-		require.NoError(t, validateMessaging(cfg))
+		require.NoError(t, validateMessaging(cfg, false))
 		assert.Equal(t, defaultReadyTimeout, cfg.Reconnect.ReadyTimeout)
 	})
 	t.Run("explicit_value_preserved", func(t *testing.T) {
@@ -2195,8 +2265,24 @@ func TestApplyMessagingDefaultsReadyTimeout(t *testing.T) {
 			Broker:    BrokerConfig{URL: testAMQPHost},
 			Reconnect: ReconnectConfig{ReadyTimeout: 9 * time.Second},
 		}
-		require.NoError(t, validateMessaging(cfg))
+		require.NoError(t, validateMessaging(cfg, false))
 		assert.Equal(t, 9*time.Second, cfg.Reconnect.ReadyTimeout)
+	})
+}
+
+func TestApplyMessagingDefaultsCleanupInterval(t *testing.T) {
+	t.Run("zero_gets_default", func(t *testing.T) {
+		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
+		require.NoError(t, validateMessaging(cfg, false))
+		assert.Equal(t, defaultPublisherCleanupInterval, cfg.Publisher.CleanupInterval)
+	})
+	t.Run("explicit_value_preserved", func(t *testing.T) {
+		cfg := &MessagingConfig{
+			Broker:    BrokerConfig{URL: testAMQPHost},
+			Publisher: PublisherPoolConfig{CleanupInterval: 90 * time.Second},
+		}
+		require.NoError(t, validateMessaging(cfg, false))
+		assert.Equal(t, 90*time.Second, cfg.Publisher.CleanupInterval)
 	})
 }
 
@@ -2278,11 +2364,19 @@ func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 			},
 			errorContains: "messaging.publisher.idlettl",
 		},
+		{
+			name: "negative_publisher_cleanup_interval_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Publisher: PublisherPoolConfig{CleanupInterval: -1 * time.Second},
+			},
+			errorContains: "messaging.publisher.cleanupinterval",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMessaging(&tt.config)
+			err := validateMessaging(&tt.config, false)
 			assertValidationError(t, err, tt.errorContains)
 		})
 	}
