@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
@@ -31,6 +32,19 @@ func NewConnectionPreWarmer(
 		messagingManager: messagingManager,
 	}
 }
+
+// preWarmReadinessTimeout bounds how long PreWarmMessaging waits for a freshly
+// created publisher to report IsReady() before giving up and logging a WARN.
+// Mirrors messaging.WithReadyTimeout's own 5s default (see
+// messaging/amqp_client.go) — pre-warm and the first real publish converge on
+// the same "how long is reasonable to wait for a cold client" budget.
+const preWarmReadinessTimeout = 5 * time.Second
+
+// preWarmReadinessPollInterval mirrors messaging's unexported
+// readinessCheckInterval (see messaging/registry.go) so both readiness-wait
+// call sites share one poll cadence, without exporting an internal messaging
+// constant just for this.
+const preWarmReadinessPollInterval = 100 * time.Millisecond
 
 // PreWarmSingleTenant pre-warms connections for single-tenant deployments.
 // It establishes database connections and messaging consumers/publishers upfront.
@@ -138,14 +152,49 @@ func (w *ConnectionPreWarmer) PreWarmMessaging(
 	}
 
 	// Pre-warm publisher
-	_, release, err := w.messagingManager.Publisher(ctx, key)
+	client, release, err := w.messagingManager.Publisher(ctx, key)
 	if err != nil {
 		return fmt.Errorf("failed to get publisher: %w", err)
 	}
-	release() // pre-warm only verifies connectivity; release the lease immediately
-	w.logger.Info().Msg("Pre-warmed messaging publisher")
+	defer release() // pre-warm only verifies connectivity; release the lease when done
+
+	if w.awaitPublisherReady(ctx, client) {
+		w.logger.Info().Msg("Pre-warmed messaging publisher")
+	} else {
+		// Non-fatal: PublishToExchange's own readytimeout pre-flight (see
+		// messaging/amqp_client.go) will still absorb a slow first real publish.
+		w.logger.Warn().Msg("Messaging publisher not ready within pre-warm window; continuing startup")
+	}
 
 	return nil
+}
+
+// awaitPublisherReady polls client.IsReady() until it returns true, the
+// bounded preWarmReadinessTimeout elapses, or ctx is canceled — whichever
+// comes first. It never fails startup: PreWarmMessaging logs a WARN and
+// continues if the client isn't ready in time.
+func (w *ConnectionPreWarmer) awaitPublisherReady(ctx context.Context, client messaging.AMQPClient) bool {
+	if client.IsReady() {
+		return true
+	}
+
+	timeout := time.NewTimer(preWarmReadinessTimeout)
+	defer timeout.Stop()
+	ticker := time.NewTicker(preWarmReadinessPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timeout.C:
+			return false
+		case <-ticker.C:
+			if client.IsReady() {
+				return true
+			}
+		}
+	}
 }
 
 // IsAvailable returns true if both database and messaging managers are available.
