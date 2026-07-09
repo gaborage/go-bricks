@@ -163,10 +163,12 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 			// already ran inside publishRecord. Route the UNATTEMPTED remainder
 			// through the same outage path markOutage applies at cycle start —
 			// advance retry_count without paying each record's own serial
-			// readiness pre-flight wait — and stop the loop.
+			// readiness pre-flight wait — and stop the loop. The remainder counts
+			// as failed too (markOutage marked it in the DB), so logCycle's counts
+			// still sum to the batch total.
 			res.failed++
 			res.outageErr = pubErr
-			r.markOutage(ctx, log, db, records[i+1:])
+			res.failed += r.markOutage(ctx, log, db, records[i+1:])
 			return res
 		case outcomeAborted:
 			// Shutting down mid-publish — stop without counting this record.
@@ -178,14 +180,17 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 
 // markOutage advances retry_count for every pending record without attempting a publish,
 // used when the broker is unreachable/not-ready. Stops early on shutdown/cancel so a
-// shutdown does not inflate retry_count for records it never got to.
-func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.Interface, records []Record) {
+// shutdown does not inflate retry_count for records it never got to. Returns how many
+// records it actually marked (fewer than len(records) on early stop) so callers can
+// fold the outage remainder into their cycle accounting.
+func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.Interface, records []Record) int {
 	for i := range records {
 		if ctx.Err() != nil {
-			return
+			return i
 		}
 		r.markRecordFailed(ctx, log, db, records[i].ID, "messaging unavailable")
 	}
+	return len(records)
 }
 
 // logCycle emits the per-cycle delivery summary. "unrecorded" counts events delivered to the

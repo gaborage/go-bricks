@@ -502,6 +502,45 @@ func TestRelayStopsBatchWhenBrokerDropsMidBatch(t *testing.T) {
 	assert.Equal(t, 0, store.MarkDeadLetteredCalls)
 }
 
+// TestRelayMidBatchDropAccountingSumsToTotal guards the cycle-accounting invariant for
+// the mid-batch broker-drop path: the outage remainder routed through markOutage is
+// marked failed in the DB, so it must be reflected in the batch result too — otherwise
+// logCycle reports published+unrecorded+failed+deadlettered < total whenever the drop
+// isn't on the last record. Tests runRelayLoop directly since relayBatchResult is the
+// seam that feeds logCycle's arguments (Execute discards it and the test logger is
+// disabled, so there is no log-capture seam in this file).
+func TestRelayMidBatchDropAccountingSumsToTotal(t *testing.T) {
+	records := []Record{
+		{ID: "evt-1", Exchange: "ex", RoutingKey: "rk1"},
+		{ID: "evt-2", Exchange: "ex", RoutingKey: "rk2"},
+		{ID: "evt-3", Exchange: "ex", RoutingKey: "rk3"},
+	}
+	store := &fakeStore{}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{
+		"ex:rk2": messaging.ErrNotConnected,
+	}
+	amqp.PublishHook = func(f *fakeAMQP) {
+		if f.PublishCalls == 2 {
+			f.Ready = false
+		}
+	}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	res := r.runRelayLoop(ctx, ctx.Logger(), db, amqp, records)
+
+	assert.Equal(t, 1, res.published, "record 1 published before the drop")
+	assert.Equal(t, 0, res.unrecorded)
+	assert.Equal(t, 0, res.deadlettered)
+	assert.Equal(t, 2, res.failed, "record 2 (failed attempt) AND record 3 (outage remainder) both count as failed")
+	assert.ErrorIs(t, res.outageErr, messaging.ErrNotConnected)
+	sum := res.published + res.unrecorded + res.failed + res.deadlettered
+	assert.Equal(t, len(records), sum, "cycle accounting must sum to the batch total")
+	assert.Equal(t, res.failed, store.MarkFailedCalls, "result count matches what was actually marked failed in the DB")
+}
+
 // TestRelayContinuesBatchWhenNotConnectedButStillReady locks in the "AND IsReady()"
 // half of the mid-batch-drop detection: an ErrNotConnected on its own (e.g. a stray
 // error classification, or a flap that already recovered) must NOT stop the batch

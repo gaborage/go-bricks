@@ -264,7 +264,9 @@ retry loop described above. The wait polls every 100ms (the same cadence
 
 There is no circuit breaker or single-flight coalescing at the client level: during a sustained
 broker outage, every publish independently waits up to `min(readytimeout, ctx deadline)` before
-returning `messaging.ErrNotConnected` — prefer short ctx deadlines on latency-sensitive paths.
+failing — with `messaging.ErrNotConnected` when `readytimeout` expires first, or the ctx's own
+error (`context.DeadlineExceeded` / `context.Canceled`) when the ctx deadline binds — so match
+both when classifying. Prefer short ctx deadlines on latency-sensitive paths.
 
 **Need fail-fast anyway?** Two working options:
 
