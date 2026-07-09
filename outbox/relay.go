@@ -65,6 +65,14 @@ const (
 	outcomeFailed                                    // failed; retry_count advanced, record stays pending
 	outcomeDeadLettered                              // poison exhausted MaxRetries; parked as status=failed
 	outcomeAborted                                   // interrupted by shutdown/cancel; do NOT count, stop the batch
+	// outcomeBrokerDown signals that THIS record's publish failed with a connectivity
+	// error (messaging.ErrNotConnected) AND the client is still not ready right now —
+	// i.e. the broker dropped mid-batch rather than being down at cycle start. This
+	// record keeps normal failed accounting (markRecordFailed already ran); the
+	// caller stops the loop and routes the UNATTEMPTED remainder through the same
+	// outage semantics markOutage applies at cycle start, instead of letting every
+	// remaining record pay its own serial readiness pre-flight wait.
+	outcomeBrokerDown
 )
 
 // relayTenant runs a single relay cycle for the given (tenant-scoped) context.
@@ -111,31 +119,61 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 		return brokerUnavailableErr(msgErr)
 	}
 
-	var published, unrecorded, failed, deadlettered int
-relayLoop:
+	res := r.runRelayLoop(ctx, log, db, msgClient, records)
+
+	r.logCycle(log, tenantID, res.published, res.unrecorded, res.failed, res.deadlettered, len(records))
+	if res.outageErr != nil {
+		return brokerUnavailableErr(res.outageErr)
+	}
+	return nil
+}
+
+// relayBatchResult holds the per-record bookkeeping counts from one relay cycle's
+// publish loop, plus (if the batch stopped early on a mid-batch broker drop) the
+// outage error the caller surfaces at the job level.
+type relayBatchResult struct {
+	published, unrecorded, failed, deadlettered int
+	outageErr                                   error
+}
+
+// runRelayLoop publishes each pending record in order, stopping early on
+// shutdown/cancel, a shutdown-aborted publish, or a mid-batch broker drop
+// (outcomeBrokerDown — see publishRecord). Split out of relayTenant to keep
+// that function's cyclomatic complexity within budget (gocyclo).
+func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, records []Record) relayBatchResult {
+	var res relayBatchResult
 	for i := range records {
 		// Stop cleanly on shutdown/cancel: leave the rest pending for the next startup
 		// rather than bumping their retry_count on the way down.
 		if ctx.Err() != nil {
 			break
 		}
-		switch r.publishRecord(ctx, log, db, msgClient, &records[i]) {
+		outcome, pubErr := r.publishRecord(ctx, log, db, msgClient, &records[i])
+		switch outcome {
 		case outcomePublished:
-			published++
+			res.published++
 		case outcomePublishedUnrecorded:
-			unrecorded++
+			res.unrecorded++
 		case outcomeFailed:
-			failed++
+			res.failed++
 		case outcomeDeadLettered:
-			deadlettered++
+			res.deadlettered++
+		case outcomeBrokerDown:
+			// The broker dropped mid-batch: this record's own failed accounting
+			// already ran inside publishRecord. Route the UNATTEMPTED remainder
+			// through the same outage path markOutage applies at cycle start —
+			// advance retry_count without paying each record's own serial
+			// readiness pre-flight wait — and stop the loop.
+			res.failed++
+			res.outageErr = pubErr
+			r.markOutage(ctx, log, db, records[i+1:])
+			return res
 		case outcomeAborted:
 			// Shutting down mid-publish — stop without counting this record.
-			break relayLoop
+			return res
 		}
 	}
-
-	r.logCycle(log, tenantID, published, unrecorded, failed, deadlettered, len(records))
-	return nil
+	return res
 }
 
 // markOutage advances retry_count for every pending record without attempting a publish,
@@ -179,13 +217,15 @@ func brokerUnavailableErr(msgErr error) error {
 // publishRecord attempts to publish a single outbox record and returns the bookkeeping
 // outcome. All Mark* calls run on the parent ctx; the per-record publish deadline applies
 // only to the publish itself, so an expired deadline never fails the bookkeeping UPDATE.
-func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, record *Record) publishOutcome {
+// The second return is non-nil only for outcomeBrokerDown, carrying the connectivity
+// error the caller surfaces as the job-level outage error (see relayTenant).
+func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, record *Record) (publishOutcome, error) {
 	// Decode headers — corrupt headers are deterministic, broker-independent corruption
 	// (poison), so they dead-letter at MaxRetries rather than retrying forever. This is the
 	// ONLY poison case; every broker-side publish failure below is connectivity.
 	headers, decodeErr := decodeHeaders(record.Headers)
 	if decodeErr != nil {
-		return r.deadLetterPoison(ctx, log, db, record, decodeErr.Error())
+		return r.deadLetterPoison(ctx, log, db, record, decodeErr.Error()), nil
 	}
 
 	// Inject outbox metadata headers for consumer idempotency
@@ -217,7 +257,7 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 	if err != nil {
 		// Shutdown/cancel is not a delivery failure — do not advance retry_count.
 		if errors.Is(err, context.Canceled) || errors.Is(err, messaging.ErrShutdown) {
-			return outcomeAborted
+			return outcomeAborted, nil
 		}
 		// Every broker-side publish failure — NOT-connected, confirmation timeout, deadline,
 		// and even a broker NACK — is CONNECTIVITY: the broker either could not be reached or
@@ -226,7 +266,16 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 		// synthesized NACK too — neither means the message is bad, so neither parks. We advance
 		// retry_count and retry (at-least-once); only undecodable headers (above) are poison.
 		r.markRecordFailed(ctx, log, db, record.ID, err.Error())
-		return outcomeFailed
+		// A not-connected error AND a still-not-ready client (checked fresh, not
+		// inferred from the error alone) means the broker dropped mid-batch — the
+		// caller stops attempting the rest rather than letting each remaining
+		// record pay its own serial readiness pre-flight wait. If IsReady() has
+		// already flipped back to true (a brief flap), fall through to the normal
+		// per-record failed outcome and keep the batch going.
+		if errors.Is(err, messaging.ErrNotConnected) && !msgClient.IsReady() {
+			return outcomeBrokerDown, err
+		}
+		return outcomeFailed, nil
 	}
 
 	if err := r.store.MarkPublished(ctx, db, record.ID); err != nil {
@@ -236,10 +285,10 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 			Msg("Failed to mark outbox event as published")
 		// The message WAS delivered; do not bump retry_count. It re-delivers next
 		// cycle and the consumer dedups via the x-outbox-event-id header.
-		return outcomePublishedUnrecorded
+		return outcomePublishedUnrecorded, nil
 	}
 
-	return outcomePublished
+	return outcomePublished, nil
 }
 
 // deadLetterPoison handles a poison record (undecodable headers): it advances retry_count and,

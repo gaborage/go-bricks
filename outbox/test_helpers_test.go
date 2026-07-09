@@ -164,6 +164,12 @@ type fakeAMQP struct {
 	// until ctx is done and then return ctx.Err() — simulating a stuck broker that
 	// the relay's per-record PublishTimeout must interrupt without starving siblings.
 	PublishBlock map[string]bool
+	// PublishHook, if set, runs synchronously inside PublishToExchange (while
+	// still holding the internal lock) right after PublishCalls is incremented
+	// and before the configured error is resolved. Lets a test flip Ready
+	// exactly on a specific call number to simulate the broker dropping
+	// connectivity mid-batch (rather than being down for the whole cycle).
+	PublishHook func(f *fakeAMQP)
 
 	// Captured calls.
 	PublishCalls    int
@@ -188,6 +194,9 @@ func (f *fakeAMQP) PublishToExchange(ctx context.Context, opts messaging.Publish
 	f.LastPublishData = data
 	f.LastPublishHdrs = opts.Headers
 	f.LastPublishCtx = ctx
+	if f.PublishHook != nil {
+		f.PublishHook(f)
+	}
 	key := opts.Exchange + ":" + opts.RoutingKey
 	block := f.PublishBlock[key]
 	err := f.PublishErr
