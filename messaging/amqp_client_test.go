@@ -12,6 +12,7 @@ import (
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -926,18 +927,14 @@ func TestHandleReconnectConnectionFailureRetryCycle(t *testing.T) {
 	// Start handleReconnect in background
 	go c.handleReconnect()
 
-	// Let it try multiple times
-	time.Sleep(5 * time.Millisecond)
+	// Poll instead of a fixed sleep: the jittered backoff plus -race scheduling
+	// makes a wall-clock window flaky on loaded CI runners.
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt64(&attempts) >= 2
+	}, 5*time.Second, time.Millisecond, "expected at least 2 connection attempts")
 
 	// Signal done to stop
 	close(c.done)
-	time.Sleep(2 * time.Millisecond)
-
-	// Verify multiple connection attempts were made
-	currentAttempts := atomic.LoadInt64(&attempts)
-	if currentAttempts < 2 {
-		t.Fatalf("expected at least 2 connection attempts, got %d", currentAttempts)
-	}
 
 	// Verify client is not ready
 	if c.IsReady() {
