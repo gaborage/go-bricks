@@ -50,6 +50,12 @@ type Manager struct {
 	pubLru     *list.List
 	maxPubs    int
 	idleTTL    time.Duration
+	// evictions counts cumulative LRU-driven publisher evictions. Guarded by pubMu.
+	// Mirrors cache.CacheManager's evictions field/locking (cache/manager.go).
+	evictions int
+	// idleCleanups counts cumulative idle-TTL-driven publisher removals. Guarded
+	// by pubMu. Mirrors cache.CacheManager's idleCleanups field/locking.
+	idleCleanups int
 
 	// Consumers (long-lived)
 	consMu        sync.RWMutex
@@ -454,8 +460,9 @@ func (m *Manager) evictPublisherIfNeeded() *publisherEntry {
 	delete(m.publishers, key)
 	m.pubLru.Remove(oldest)
 	entry.detached = true
+	m.evictions++
 
-	m.logger.Debug().
+	m.logger.Info().
 		Str("key", key).
 		Msg("Evicted publisher client due to LRU limit")
 
@@ -542,8 +549,9 @@ func (m *Manager) cleanupIdlePublishers() {
 		delete(m.publishers, key)
 		m.pubLru.Remove(entry.element)
 		entry.detached = true
+		m.idleCleanups++
 
-		m.logger.Debug().
+		m.logger.Info().
 			Str("key", key).
 			Dur("idle_time", now.Sub(entry.lastUsed)).
 			Msg("Cleaned up idle publisher client")
@@ -620,6 +628,8 @@ func (m *Manager) Close() error {
 func (m *Manager) Stats() map[string]any {
 	m.pubMu.RLock()
 	pubCount := len(m.publishers)
+	evictions := m.evictions
+	idleCleanups := m.idleCleanups
 	m.pubMu.RUnlock()
 
 	m.consMu.RLock()
@@ -631,6 +641,8 @@ func (m *Manager) Stats() map[string]any {
 		"max_publishers":    m.maxPubs,
 		"active_consumers":  consCount,
 		"idle_ttl_seconds":  int(m.idleTTL.Seconds()),
+		"evictions":         evictions,
+		"idle_cleanups":     idleCleanups,
 	}
 
 	return stats

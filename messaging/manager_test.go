@@ -1114,3 +1114,47 @@ func TestMessagingManagerColdRecreateAfterIdleEviction(t *testing.T) {
 	require.Len(t, created, 2, "idle eviction must force a fresh client on the next Publisher() call")
 	assert.NotSame(t, first, second, "publisher after idle eviction must be a newly created (cold) client")
 }
+
+// TestMessagingManagerStatsTracksEvictionsAndIdleCleanups mirrors
+// cache.ManagerStats' Evictions/IdleCleanups counters (cache/manager.go),
+// exposed here as additional keys on messaging's existing map[string]any
+// Stats() (changing its return type would be a breaking API change).
+func TestMessagingManagerStatsTracksEvictionsAndIdleCleanups(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1, tenant2ID: amqpURLTenant2}},
+		log,
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	stats := manager.Stats()
+	assert.Equal(t, 0, stats["evictions"])
+	assert.Equal(t, 0, stats["idle_cleanups"])
+
+	// LRU eviction: MaxPublishers=1 forces the second Publisher() call to evict the first.
+	_, rel1, err := manager.Publisher(ctx, tenant1ID)
+	require.NoError(t, err)
+	rel1()
+	_, rel2, err := manager.Publisher(ctx, tenant2ID)
+	require.NoError(t, err)
+	rel2()
+
+	stats = manager.Stats()
+	assert.Equal(t, 1, stats["evictions"])
+	assert.Equal(t, 0, stats["idle_cleanups"], "LRU eviction must not bump idle_cleanups")
+
+	// Idle cleanup: backdate the survivor's lastUsed and run cleanup directly.
+	manager.pubMu.Lock()
+	manager.publishers[tenant2ID].lastUsed = time.Now().Add(-2 * time.Hour)
+	manager.pubMu.Unlock()
+	manager.cleanupIdlePublishers()
+
+	stats = manager.Stats()
+	assert.Equal(t, 1, stats["idle_cleanups"])
+	assert.Equal(t, 1, stats["evictions"], "idle cleanup must not bump evictions")
+}
