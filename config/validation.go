@@ -663,7 +663,7 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 	// Named databases share the primary DbManager (handles keyed "named:<name>")
 	// and have no manager of their own — a manager block here would be silently
 	// ignored, so reject it (Fail Fast, no silent config).
-	if dbCfg.Manager != (DatabaseManagerConfig{}) {
+	if dbCfg.Manager.isSet() {
 		return &ConfigError{
 			Category: errCategoryInvalid,
 			Field:    fmt.Sprintf(databasesFieldPrefix, name) + ".manager",
@@ -1325,7 +1325,7 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 
 		// Per-tenant handles live in the single shared DbManager; a per-tenant
 		// manager block would be silently ignored, so reject it (Fail Fast).
-		if tenant.Database.Manager != (DatabaseManagerConfig{}) {
+		if tenant.Database.Manager.isSet() {
 			return NewMultiTenantError(tenantID, "database.manager",
 				"database.manager.* is only supported on the primary database",
 				fmt.Sprintf("remove the manager block from multitenant.tenants.%s.database; tune the shared pool via database.manager.*", tenantID))

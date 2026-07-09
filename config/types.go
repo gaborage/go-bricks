@@ -190,6 +190,13 @@ type DatabaseManagerConfig struct {
 	CleanupInterval time.Duration `koanf:"cleanupinterval" json:"cleanupinterval" yaml:"cleanupinterval" toml:"cleanupinterval" mapstructure:"cleanupinterval"`
 }
 
+// isSet reports whether any DatabaseManagerConfig field has been explicitly
+// configured. Used by validation to reject manager blocks in locations where
+// they would be silently ignored (named and per-tenant database entries).
+func (c DatabaseManagerConfig) isSet() bool {
+	return c != (DatabaseManagerConfig{})
+}
+
 // PoolConfig holds connection pool settings.
 // Production-safe defaults are applied automatically when database is configured:
 //   - Max.Connections: 25 (maximum open connections)

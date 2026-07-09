@@ -75,77 +75,59 @@ func NewManagerConfigBuilder(multiTenantEnabled bool, tenantLimit int) *ManagerC
 	}
 }
 
+// resolveMaxSize returns the operator-configured pool cap, falling back to the
+// tenant limit (multi-tenant) or the given single-tenant default when the key is
+// unset. Non-positive is treated as unset: config.Validate rejects negatives, but
+// paths that bypass it (app.NewWithConfig with an injected config) must not leak
+// a negative into a manager's own silent coercion.
+func (b *ManagerConfigBuilder) resolveMaxSize(operatorValue, singleTenantDefault int) int {
+	if operatorValue > 0 {
+		return operatorValue
+	}
+	if b.multiTenantEnabled {
+		return b.tenantLimit
+	}
+	return singleTenantDefault
+}
+
+// resolveIdleTTL is resolveMaxSize's counterpart for mode-aware idle TTLs. On the
+// config.Load bootstrap path, config.Validate has already stamped these defaults,
+// so the fallback is inert there. It is load-bearing for construction that
+// bypasses Validate — app.NewWithConfig with an injected config, and direct
+// builder use in unit tests.
+func (b *ManagerConfigBuilder) resolveIdleTTL(operatorValue, multiTenantDefault, singleTenantDefault time.Duration) time.Duration {
+	if operatorValue > 0 {
+		return operatorValue
+	}
+	if b.multiTenantEnabled {
+		return multiTenantDefault
+	}
+	return singleTenantDefault
+}
+
 // BuildDatabaseOptions creates database manager options based on deployment mode.
 // Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
 // Single-tenant mode uses smaller fixed limits and longer TTL for stability.
+// Operator config (database.manager.*) is the source of truth; mode-specific
+// values are fallbacks when the operator left the key unset (see resolveMaxSize
+// / resolveIdleTTL).
 func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions {
-	// Operator config (database.manager.*) is the source of truth. Mode-specific
-	// values are fallbacks when the operator left the key unset. Non-positive is
-	// treated as unset: config.Validate rejects negatives, but paths that bypass it
-	// (app.NewWithConfig with an injected config) must not leak a negative through
-	// to NewDbManager, whose own coercion would silently cap the pool at 100
-	// instead of the documented mode default.
-	maxSize := b.dbConfig.MaxSize
-	if maxSize <= 0 {
-		if b.multiTenantEnabled {
-			maxSize = b.tenantLimit // Scale database handle pool with tenant limit
-		} else {
-			maxSize = defaultDatabaseMaxSize // Documented single-tenant default
-		}
-	}
-
-	// On the config.Load bootstrap path, config.Validate (applyDatabaseManagerDefaults)
-	// has already stamped this mode-aware IdleTTL default before dbConfig reaches the
-	// builder, so this branch is inert there. It is load-bearing for construction that
-	// bypasses Validate — app.NewWithConfig with an injected config, and direct builder
-	// use in unit tests — mirroring BuildMessagingOptions's IdleTTL fallback.
-	idleTTL := b.dbConfig.IdleTTL
-	if idleTTL <= 0 {
-		if b.multiTenantEnabled {
-			idleTTL = defaultDatabaseIdleTTLMultiTenant // Shorter TTL for multi-tenant
-		} else {
-			idleTTL = defaultDatabaseIdleTTL // Documented single-tenant default
-		}
-	}
-
 	return database.DbManagerOptions{
-		MaxSize: maxSize,
-		IdleTTL: idleTTL,
+		MaxSize: b.resolveMaxSize(b.dbConfig.MaxSize, defaultDatabaseMaxSize),
+		IdleTTL: b.resolveIdleTTL(b.dbConfig.IdleTTL, defaultDatabaseIdleTTLMultiTenant, defaultDatabaseIdleTTL),
 	}
 }
 
 // BuildMessagingOptions creates messaging manager options based on deployment mode.
 // Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
 // Single-tenant mode uses smaller fixed limits and a longer TTL (same 1h as the DB pool).
+// Operator config (messaging.publisher.*) is the source of truth; mode-specific
+// values are fallbacks when the operator left the key unset (see resolveMaxSize
+// / resolveIdleTTL).
 func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions {
-	// Operator config (messaging.publisher.*) is the source of truth. Mode-specific
-	// values are only fallbacks when the operator left the key unset (zero).
-	maxPublishers := b.publisherConfig.MaxCached
-	if maxPublishers == 0 {
-		if b.multiTenantEnabled {
-			maxPublishers = b.tenantLimit // Scale publisher pool with tenant limit
-		} else {
-			maxPublishers = defaultPublisherMaxCached // Documented single-tenant default
-		}
-	}
-
-	// On the config.Load bootstrap path, config.Validate (applyMessagingDefaults) has
-	// already applied this same mode-aware default before publisherConfig reaches the
-	// builder, so this branch is inert there. It is load-bearing for construction that
-	// bypasses Validate — app.NewWithConfig with an injected config, and direct builder
-	// use in unit tests.
-	idleTTL := b.publisherConfig.IdleTTL
-	if idleTTL == 0 {
-		if b.multiTenantEnabled {
-			idleTTL = defaultPublisherIdleTTLMultiTenant // Documented multi-tenant default (10m)
-		} else {
-			idleTTL = defaultPublisherIdleTTL // Documented single-tenant default (1h)
-		}
-	}
-
 	return messaging.ManagerOptions{
-		MaxPublishers:      maxPublishers,
-		IdleTTL:            idleTTL,
+		MaxPublishers:      b.resolveMaxSize(b.publisherConfig.MaxCached, defaultPublisherMaxCached),
+		IdleTTL:            b.resolveIdleTTL(b.publisherConfig.IdleTTL, defaultPublisherIdleTTLMultiTenant, defaultPublisherIdleTTL),
 		ConnectionTimeout:  b.connectionTimeout,
 		MaxPublishAttempts: b.maxPublishAttempts,
 		ReadyTimeout:       b.readyTimeout,
