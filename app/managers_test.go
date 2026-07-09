@@ -124,7 +124,10 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		options := builder.BuildMessagingOptions()
 
 		assert.Equal(t, tenantLimit, options.MaxPublishers)
-		assert.Equal(t, 5*time.Minute, options.IdleTTL)
+		// 10m: the multi-tenant messaging.publisher.idlettl default (see
+		// config/validation.go: defaultPublisherIdleTTLMultiTenant), not the fictional 5m
+		// this test previously asserted.
+		assert.Equal(t, 10*time.Minute, options.IdleTTL)
 	})
 
 	t.Run(zeroLimitMultiTenantTest, func(t *testing.T) {
@@ -133,7 +136,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		options := builder.BuildMessagingOptions()
 
 		assert.Equal(t, 0, options.MaxPublishers)
-		assert.Equal(t, 5*time.Minute, options.IdleTTL)
+		assert.Equal(t, 10*time.Minute, options.IdleTTL)
 	})
 
 	t.Run(negativeLimitMultiTenantTest, func(t *testing.T) {
@@ -142,7 +145,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		options := builder.BuildMessagingOptions()
 
 		assert.Equal(t, -3, options.MaxPublishers)
-		assert.Equal(t, 5*time.Minute, options.IdleTTL)
+		assert.Equal(t, 10*time.Minute, options.IdleTTL)
 	})
 
 	t.Run(largeLimitTenantTest, func(t *testing.T) {
@@ -152,7 +155,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		options := builder.BuildMessagingOptions()
 
 		assert.Equal(t, largeLimit, options.MaxPublishers)
-		assert.Equal(t, 5*time.Minute, options.IdleTTL)
+		assert.Equal(t, 10*time.Minute, options.IdleTTL)
 	})
 
 	t.Run("connection_timeout_propagated_to_options", func(t *testing.T) {
@@ -474,9 +477,9 @@ func TestManagerConfigBuilderEdgeCases(t *testing.T) {
 		dbOptions := builder.BuildDatabaseOptions()
 		msgOptions := builder.BuildMessagingOptions()
 
-		// Multi-tenant: DB (30min) > Messaging (5min)
+		// Multi-tenant: DB (30min) > Messaging (10min)
 		assert.Equal(t, 30*time.Minute, dbOptions.IdleTTL)
-		assert.Equal(t, 5*time.Minute, msgOptions.IdleTTL)
+		assert.Equal(t, 10*time.Minute, msgOptions.IdleTTL)
 		assert.True(t, dbOptions.IdleTTL > msgOptions.IdleTTL)
 	})
 

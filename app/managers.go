@@ -14,14 +14,21 @@ import (
 // config validation (see config/validation.go: applyMessagingDefaults and
 // applyCacheManagerDefaults) so the builder honors the same documented behavior
 // even when invoked without a fully-validated config (e.g. in unit tests).
-// defaultPublisherIdleTTL has a third copy: messaging.NewMessagingManager's
-// fallback (messaging/manager.go) for bare callers that bypass this builder.
+// defaultPublisherIdleTTL (single-tenant) has a third copy: messaging.NewMessagingManager's
+// fallback (messaging/manager.go) for bare callers that bypass this builder — that
+// fallback is single-tenant-only (see its comment), since a bare caller supplies no
+// deployment-mode signal.
 const (
-	defaultPublisherMaxCached   = 50
-	defaultPublisherIdleTTL     = 1 * time.Hour
-	defaultCacheMaxSize         = 100
-	defaultCacheIdleTTL         = 15 * time.Minute
-	defaultCacheCleanupInterval = 5 * time.Minute
+	defaultPublisherMaxCached = 50
+	defaultPublisherIdleTTL   = 1 * time.Hour // Single-tenant default; see config/validation.go
+	// defaultPublisherIdleTTLMultiTenant mirrors config/validation.go's
+	// defaultPublisherIdleTTLMultiTenant. Kept as a separate copy (not imported) for the
+	// same reason as defaultPublisherIdleTTL above: this builder must honor the documented
+	// default even when constructed directly, bypassing config validation.
+	defaultPublisherIdleTTLMultiTenant = 10 * time.Minute
+	defaultCacheMaxSize                = 100
+	defaultCacheIdleTTL                = 15 * time.Minute
+	defaultCacheCleanupInterval        = 5 * time.Minute
 )
 
 // ManagerConfigBuilder creates configuration options for database and messaging managers
@@ -93,12 +100,18 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 		}
 	}
 
+	// This fallback only serves direct/unvalidated construction (e.g. NewManagerConfigBuilder
+	// called without going through bootstrap.go's config.Validate()-backed cfg): on the real
+	// production path, config.Validate() (config/validation.go: applyMessagingDefaults) has
+	// already applied this same mode-aware default before publisherConfig reaches the builder,
+	// so this branch is dead there — it exists only to keep the builder's documented behavior
+	// correct when invoked without a fully-validated config (e.g. unit tests).
 	idleTTL := b.publisherConfig.IdleTTL
 	if idleTTL == 0 {
 		if b.multiTenantEnabled {
-			idleTTL = 5 * time.Minute // Shorter TTL for multi-tenant churn
+			idleTTL = defaultPublisherIdleTTLMultiTenant // Documented multi-tenant default (10m)
 		} else {
-			idleTTL = defaultPublisherIdleTTL // Documented single-tenant default
+			idleTTL = defaultPublisherIdleTTL // Documented single-tenant default (1h)
 		}
 	}
 

@@ -40,16 +40,23 @@ const (
 
 // Messaging reconnection defaults
 const (
-	defaultReconnectDelay           = 5 * time.Second  // Initial delay between reconnection attempts
-	defaultReinitDelay              = 2 * time.Second  // Delay before channel reinitialization
-	defaultResendDelay              = 5 * time.Second  // Delay before retrying failed publishes
-	defaultConnectionTimeout        = 30 * time.Second // Per-publish broker confirmation (ACK/NACK) wait
-	defaultReadyTimeout             = 5 * time.Second  // Pre-flight wait for a not-yet-ready client before a publish begins
-	defaultMaxReconnectDelay        = 60 * time.Second // Maximum delay for exponential backoff cap
-	defaultMaxPublishers            = 50               // Maximum publisher clients in cache
-	defaultPublisherIdleTTL         = 1 * time.Hour    // Time before idle publishers are evicted
-	defaultPublisherCleanupInterval = 2 * time.Minute  // Publisher-pool cleanup goroutine frequency
-	defaultMaxPublishAttempts       = 5                // Bounded publish retry attempts before giving up
+	defaultReconnectDelay    = 5 * time.Second  // Initial delay between reconnection attempts
+	defaultReinitDelay       = 2 * time.Second  // Delay before channel reinitialization
+	defaultResendDelay       = 5 * time.Second  // Delay before retrying failed publishes
+	defaultConnectionTimeout = 30 * time.Second // Per-publish broker confirmation (ACK/NACK) wait
+	defaultReadyTimeout      = 5 * time.Second  // Pre-flight wait for a not-yet-ready client before a publish begins
+	defaultMaxReconnectDelay = 60 * time.Second // Maximum delay for exponential backoff cap
+	defaultMaxPublishers     = 50               // Maximum publisher clients in cache
+	defaultPublisherIdleTTL  = 1 * time.Hour    // Time before idle publishers are evicted (single-tenant)
+	// defaultPublisherIdleTTLMultiTenant is the multi-tenant idle-eviction default. It is
+	// deliberately shorter than the single-tenant default to bound per-tenant publisher
+	// churn, and matches the value multi-tenant deployments actually received before
+	// applyMessagingDefaults became mode-aware (app/managers.go's BuildMessagingOptions
+	// multi-tenant fallback — previously unreachable on the production path once this
+	// function unconditionally applied the single-tenant default here first).
+	defaultPublisherIdleTTLMultiTenant = 10 * time.Minute
+	defaultPublisherCleanupInterval    = 2 * time.Minute // Publisher-pool cleanup goroutine frequency
+	defaultMaxPublishAttempts          = 5               // Bounded publish retry attempts before giving up
 )
 
 // Cache manager defaults
@@ -155,7 +162,7 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("cache config: %w", err)
 	}
 
-	if err := validateMessaging(&cfg.Messaging); err != nil {
+	if err := validateMessaging(&cfg.Messaging, cfg.Multitenant.Enabled); err != nil {
 		return fmt.Errorf("messaging config: %w", err)
 	}
 
@@ -180,14 +187,16 @@ func validateDebug(cfg *DebugConfig) error {
 }
 
 // validateMessaging validates messaging configuration and applies defaults.
+// multitenant selects the deployment-mode-dependent Publisher.IdleTTL default
+// (see applyMessagingDefaults); it has no effect on any other field.
 // Returns nil if messaging is not configured or if all settings are valid.
-func validateMessaging(cfg *MessagingConfig) error {
+func validateMessaging(cfg *MessagingConfig, multitenant bool) error {
 	if !IsMessagingConfigured(cfg) {
 		return nil
 	}
 
 	// Apply messaging defaults (reconnection, publisher pool)
-	return applyMessagingDefaults(cfg)
+	return applyMessagingDefaults(cfg, multitenant)
 }
 
 // validateApp validates the application configuration in cfg.
@@ -630,20 +639,23 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 // applyMessagingDefaults sets production-safe defaults for messaging configuration.
 //
 // It modifies cfg in-place:
-// - Reconnect.Delay: if 0, sets to 5s; if negative, returns an error.
-// - Reconnect.ReinitDelay: if 0, sets to 2s; if negative, returns an error.
-// - Reconnect.ResendDelay: if 0, sets to 5s; if negative, returns an error.
-// - Reconnect.ConnectionTimeout: if 0, sets to 30s; if negative, returns an error.
-// - Reconnect.ReadyTimeout: if 0, sets to 5s; if negative, returns an error.
-// - Reconnect.MaxDelay: if 0, sets to 60s; if negative, returns an error.
-// - Publisher.MaxCached: if 0, sets to 50; if negative, returns an error.
-// - Publisher.IdleTTL: if 0, sets to 1h; if negative, returns an error.
-// - Publisher.CleanupInterval: if 0, sets to 2m; if negative, returns an error.
+//   - Reconnect.Delay: if 0, sets to 5s; if negative, returns an error.
+//   - Reconnect.ReinitDelay: if 0, sets to 2s; if negative, returns an error.
+//   - Reconnect.ResendDelay: if 0, sets to 5s; if negative, returns an error.
+//   - Reconnect.ConnectionTimeout: if 0, sets to 30s; if negative, returns an error.
+//   - Reconnect.ReadyTimeout: if 0, sets to 5s; if negative, returns an error.
+//   - Reconnect.MaxDelay: if 0, sets to 60s; if negative, returns an error.
+//   - Publisher.MaxCached: if 0, sets to 50; if negative, returns an error.
+//   - Publisher.IdleTTL: if 0, sets to 1h when multitenant is false, 10m when true
+//     (mode-dependent — a shorter multi-tenant default bounds per-tenant publisher
+//     churn); if negative, returns an error.
+//   - Publisher.CleanupInterval: if 0, sets to 2m; if negative, returns an error.
 //
 // Returns an error when any value is invalid; otherwise returns nil.
-func applyMessagingDefaults(cfg *MessagingConfig) error {
+func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 	// Each field follows the same "zero applies the default, negative is invalid" rule,
-	// factored into applyNonNegativeDefault to keep the policy in one place.
+	// factored into applyNonNegativeDefault to keep the policy in one place. Publisher.IdleTTL
+	// is handled separately below because its default depends on the deployment mode.
 	for _, d := range []struct {
 		field *time.Duration
 		def   time.Duration
@@ -655,12 +667,19 @@ func applyMessagingDefaults(cfg *MessagingConfig) error {
 		{&cfg.Reconnect.ConnectionTimeout, defaultConnectionTimeout, "messaging.reconnect.connectiontimeout"},
 		{&cfg.Reconnect.ReadyTimeout, defaultReadyTimeout, "messaging.reconnect.readytimeout"},
 		{&cfg.Reconnect.MaxDelay, defaultMaxReconnectDelay, "messaging.reconnect.maxdelay"},
-		{&cfg.Publisher.IdleTTL, defaultPublisherIdleTTL, "messaging.publisher.idlettl"},
 		{&cfg.Publisher.CleanupInterval, defaultPublisherCleanupInterval, "messaging.publisher.cleanupinterval"},
 	} {
 		if err := applyNonNegativeDefault(d.field, d.def, d.name); err != nil {
 			return err
 		}
+	}
+
+	idleTTLDefault := defaultPublisherIdleTTL
+	if multitenant {
+		idleTTLDefault = defaultPublisherIdleTTLMultiTenant
+	}
+	if err := applyNonNegativeDefault(&cfg.Publisher.IdleTTL, idleTTLDefault, "messaging.publisher.idlettl"); err != nil {
+		return err
 	}
 
 	for _, n := range []struct {
