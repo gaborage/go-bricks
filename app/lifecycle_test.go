@@ -386,3 +386,70 @@ func TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval(t *testing.
 		return manager.Stats()["active_publishers"] == 0
 	}, time.Second, 10*time.Millisecond)
 }
+
+// TestPublisherCleanupIntervalTooLate guards the Fix-3 predicate: the previously
+// implicit guarantee (a hardcoded 2m sweep always well below any configured TTL) no
+// longer holds now that both messaging.publisher.cleanupinterval and
+// messaging.publisher.idlettl are independently operator-configurable. The predicate
+// must flag "sweep frequency >= TTL" (eviction merely lags, so this is advisory, not
+// fatal — see startMaintenanceLoops) while never flagging an idleTTL of zero, since
+// that means the raw config value was never defaulted (messaging not configured at
+// the root level; see config.IsMessagingConfigured) and there is nothing meaningful
+// to compare yet.
+func TestPublisherCleanupIntervalTooLate(t *testing.T) {
+	tests := []struct {
+		name            string
+		cleanupInterval time.Duration
+		idleTTL         time.Duration
+		want            bool
+	}{
+		{name: "cleanup_greater_than_idle_warns", cleanupInterval: 15 * time.Minute, idleTTL: 10 * time.Minute, want: true},
+		{name: "cleanup_equals_idle_warns", cleanupInterval: 10 * time.Minute, idleTTL: 10 * time.Minute, want: true},
+		{name: "cleanup_below_idle_ok", cleanupInterval: 2 * time.Minute, idleTTL: 1 * time.Hour, want: false},
+		{name: "zero_idle_ttl_skipped", cleanupInterval: 5 * time.Minute, idleTTL: 0, want: false},
+		{name: "zero_cleanup_below_positive_idle_ok", cleanupInterval: 0, idleTTL: 1 * time.Hour, want: false},
+		{name: "negative_idle_ttl_skipped", cleanupInterval: 5 * time.Minute, idleTTL: -1 * time.Second, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, publisherCleanupIntervalTooLate(tc.cleanupInterval, tc.idleTTL))
+		})
+	}
+}
+
+// TestStartMaintenanceLoopsWarnsOnLateCleanupInterval exercises the WARN path
+// end-to-end through startMaintenanceLoops: a misconfigured cleanupinterval >=
+// idlettl is advisory only, so the cleanup loop must still start and function
+// normally (an idle publisher is still eventually swept) without panicking.
+func TestStartMaintenanceLoopsWarnsOnLateCleanupInterval(t *testing.T) {
+	log := logger.New("error", false)
+
+	client := testmocks.NewMockAMQPClient()
+	client.ExpectClose(nil)
+	factory := func(string, logger.Logger) messaging.AMQPClient { return client }
+	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log, messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond}, factory)
+	defer func() { _ = manager.Close() }()
+
+	_, rel, err := manager.Publisher(context.Background(), testKey)
+	require.NoError(t, err)
+	rel()
+
+	cfg := &config.Config{
+		Messaging: config.MessagingConfig{
+			Publisher: config.PublisherPoolConfig{
+				// Misconfigured on purpose: cleanupinterval >= idlettl should WARN, not fail.
+				CleanupInterval: 20 * time.Millisecond,
+				IdleTTL:         10 * time.Millisecond,
+			},
+		},
+	}
+	a := &App{cfg: cfg, logger: log, messagingManager: manager}
+
+	require.NotPanics(t, func() { a.startMaintenanceLoops() })
+	defer a.messagingManager.StopCleanup()
+
+	assert.Eventually(t, func() bool {
+		return manager.Stats()["active_publishers"] == 0
+	}, time.Second, 10*time.Millisecond, "cleanup loop must still run despite the late-cleanupinterval WARN")
+}

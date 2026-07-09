@@ -24,9 +24,46 @@ func (a *App) startMaintenanceLoops() {
 		a.dbManager.StartCleanup(5 * time.Minute) // Database cleanup every 5 minutes
 	}
 	if a.messagingManager != nil {
+		cleanupInterval := a.cfg.Messaging.Publisher.CleanupInterval
+		idleTTL := a.cfg.Messaging.Publisher.IdleTTL
+		a.warnIfCleanupIntervalTooLate(cleanupInterval, idleTTL)
 		a.logger.Info().Msg("Starting messaging manager cleanup loop")
-		a.messagingManager.StartCleanup(a.cfg.Messaging.Publisher.CleanupInterval)
+		a.messagingManager.StartCleanup(cleanupInterval)
 	}
+}
+
+// publisherCleanupIntervalTooLate reports whether messaging.publisher.cleanupinterval
+// is configured to sweep no more often than messaging.publisher.idlettl. The invariant
+// used to hold implicitly: cleanupinterval was a hardcoded 2m sweep, always well below
+// any configured idlettl. Now that both are independently operator-configurable (see
+// config/validation.go: applyMessagingDefaults), this misconfiguration doesn't break
+// anything — idle-publisher eviction just lags by up to one extra sweep interval — so
+// callers should WARN, not fail, when this is true (matches PublisherPoolConfig's
+// "should be less than IdleTTL" godoc). idleTTL <= 0 means the raw config value was
+// never defaulted (messaging not configured at the root level; see
+// config.IsMessagingConfigured) and is skipped: there is nothing meaningful to compare.
+func publisherCleanupIntervalTooLate(cleanupInterval, idleTTL time.Duration) bool {
+	if idleTTL <= 0 {
+		return false
+	}
+	return cleanupInterval >= idleTTL
+}
+
+// warnIfCleanupIntervalTooLate emits a non-fatal structured WARN when the publisher
+// pool's cleanup sweep is configured no more frequently than its idle TTL (see
+// publisherCleanupIntervalTooLate). Validation (config/validation.go) has no logger,
+// so this check runs here instead — the first point in the startup sequence where
+// both values are read together and a logger is available.
+func (a *App) warnIfCleanupIntervalTooLate(cleanupInterval, idleTTL time.Duration) {
+	if !publisherCleanupIntervalTooLate(cleanupInterval, idleTTL) {
+		return
+	}
+	a.logger.Warn().
+		Dur("cleanupinterval", cleanupInterval).
+		Dur("idlettl", idleTTL).
+		Msg("messaging.publisher.cleanupinterval is >= messaging.publisher.idlettl; " +
+			"idle publisher eviction will lag by up to one extra cleanup cycle " +
+			"(lower messaging.publisher.cleanupinterval or raise messaging.publisher.idlettl)")
 }
 
 // prepareRuntime prepares the application for runtime execution
