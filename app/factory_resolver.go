@@ -65,6 +65,11 @@ func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration
 // MessagingClientFactoryWithOptions is the ReadyTimeout-aware successor to
 // MessagingClientFactory. Internal bootstrap wiring (CreateMessagingManager)
 // uses this method so messaging.reconnect.readytimeout reaches the client.
+//
+// Same custom-factory precedence as MessagingClientFactory: if
+// Options.MessagingClientFactory is set it owns construction and receives only
+// (url, log) — none of opts (ConnectionTimeout, MaxPublishAttempts, ReadyTimeout)
+// applies to it.
 func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClientFactoryOptions) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {

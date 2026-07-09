@@ -266,29 +266,22 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 		return fmt.Errorf("AMQP client is not available")
 	}
 
-	// Wait for AMQP client to be ready with timeout
-	timeout := time.NewTimer(readyTimeoutDuration)
-	defer timeout.Stop()
-
-	ticker := time.NewTicker(readinessCheckInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context canceled while waiting for AMQP client: %w", ctx.Err())
-		case <-timeout.C:
-			return fmt.Errorf("timeout waiting for AMQP client to be ready")
-		case <-ticker.C:
-			if r.client.IsReady() {
-				r.logger.Info().Msg("AMQP client is ready, proceeding with infrastructure declaration")
-				goto ready
-			}
-			r.logger.Debug().Msg("Waiting for AMQP client to be ready...")
-		}
+	// Wait for AMQP client to be ready with timeout. Shares its poll loop with
+	// AMQPClientImpl.waitForReady via pollUntilReady (see amqp_client.go); this
+	// call site has no shutdown channel (done is nil, so readyWaitDone never
+	// fires) and — unlike waitForReady — does not pre-check IsReady() before the
+	// first tick, preserving this method's historical behavior of always waiting
+	// at least one readinessCheckInterval before its first readiness check.
+	switch pollUntilReady(ctx, readyTimeoutDuration, readinessCheckInterval, r.client.IsReady, nil, func() {
+		r.logger.Debug().Msg("Waiting for AMQP client to be ready...")
+	}) {
+	case readyWaitBecameReady:
+		r.logger.Info().Msg("AMQP client is ready, proceeding with infrastructure declaration")
+	case readyWaitCanceled:
+		return fmt.Errorf("context canceled while waiting for AMQP client: %w", ctx.Err())
+	default: // readyWaitTimedOut (readyWaitDone is unreachable: done is nil)
+		return fmt.Errorf("timeout waiting for AMQP client to be ready")
 	}
-
-ready:
 
 	r.logger.Info().
 		Int("exchanges", len(r.exchanges)).

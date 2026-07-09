@@ -262,6 +262,10 @@ retry loop described above. The wait polls every 100ms (the same cadence
 - If the context is canceled/deadlined, or the client is shutting down, while waiting, the
   pre-flight returns that error (`ctx.Err()` / `messaging.ErrShutdown`) instead.
 
+There is no circuit breaker or single-flight coalescing at the client level: during a sustained
+broker outage, every publish independently waits up to `min(readytimeout, ctx deadline)` before
+returning `messaging.ErrNotConnected` — prefer short ctx deadlines on latency-sensitive paths.
+
 **Need fail-fast anyway?** Two working options:
 
 - **Context deadline (preferred):** pass a `ctx` with a short deadline — the pre-flight is
@@ -274,7 +278,7 @@ retry loop described above. The wait polls every 100ms (the same cadence
 > **Disabling the wait:** `reconnect.readytimeout: 0` in `config.yaml` is treated the same as
 > leaving the key unset — like every other `reconnect.*` duration — and defaults to 5s. A
 > **negative** value does not fall back to the default either: it fails startup with a validation
-> error (`messaging.reconnect.readytimeout: must be non-negative`). There is no
+> error (`config_invalid: messaging.reconnect.readytimeout must be non-negative`). There is no
 > way to reach a `readyTimeout <= 0` (the pre-#655 instant fail-fast) through the public API:
 > `NewAMQPClient` always initializes it to the 5s default before applying `ClientOption`s, and
 > `WithReadyTimeout` itself ignores non-positive values — the same guard `WithMaxPublishAttempts`
