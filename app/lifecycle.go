@@ -39,9 +39,10 @@ func (a *App) startMaintenanceLoops() {
 // config/validation.go: applyMessagingDefaults), this misconfiguration doesn't break
 // anything — idle-publisher eviction just lags by up to one extra sweep interval — so
 // callers should WARN, not fail, when this is true (matches PublisherPoolConfig's
-// "should be less than IdleTTL" godoc). idleTTL <= 0 means the raw config value was
-// never defaulted (messaging not configured at the root level; see
-// config.IsMessagingConfigured) and is skipped: there is nothing meaningful to compare.
+// "should be less than IdleTTL" godoc). idleTTL <= 0 is treated as "nothing meaningful
+// to compare" and skipped; config.Validate applies the IdleTTL default unconditionally
+// (see config/validation.go: validateMessaging), so this guard is purely defensive for
+// callers that bypass Validate.
 func publisherCleanupIntervalTooLate(cleanupInterval, idleTTL time.Duration) bool {
 	if idleTTL <= 0 {
 		return false

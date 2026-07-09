@@ -17,8 +17,10 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0
 ```
+
+> v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
 
 | edge | hop | worst risk | atoms | compiler-caught | preflight (run BEFORE the bump) |
 |------|-----|-----------|-------|-----------------|---------------------------------|
@@ -29,6 +31,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E43  | v0.42.0 → v0.43.0 | compile-break | 6 | C43.2 C43.3 | bare section-named env vars |
 | E44  | v0.43.0 → v0.44.0 | noop | 2 | none | none |
 | E45  | v0.44.0 → v0.45.0 | compile-break | 9 | C45.1 C45.2 C45.3 C45.4 C45.5 C45.6 | outbox re-delivery count |
+| E49  | v0.45.0 → v0.49.0 (unreleased) | silent-config | 2 | none | multi-tenant outbox timeout guards / negative messaging.* values |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -502,6 +505,27 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - apply: Run the count query before upgrading, then either let idempotent consumers absorb the re-delivery OR delete the rows you intend to abandon; note `'failed'` rows now accumulate (`DeletePublished` purges only `'published'`) — monitor and prune.
 - verify: `psql ... -c "SELECT count(*) FROM gobricks_outbox WHERE status='pending' AND retry_count >= <outbox.maxretries>;"`  # after the first relay cycle re-delivered volume matches the pre-upgrade count and consumers dedupe
 - ref: ADR-033 · #626 · wiki/adr_033_outbox_retry_count_status_parking.md
+
+## E49 · v0.45.0 → v0.49.0 (unreleased) — messaging defaults in all modes + publisher lifecycle hardening
+
+- gist: `config.Validate` now applies `messaging.*` reconnect/publisher defaults **unconditionally**, even when the root `messaging.broker.url` is empty — previously every no-root-broker config (all multi-tenant static deployments, since `validateNoSingleTenantConflict` rejects a root broker URL there; plus single-tenant apps without messaging) skipped both zero→default coercion and negative-value rejection. Consequences: the outbox `publishtimeout` guards (against `connectiontimeout` AND `readytimeout`, C45.8) now actually fire in multi-tenant mode, and negative `messaging.*` values now fail startup everywhere. Defaulting is publisher-mode-aware: `maxcached` 50 single-tenant / preserved-zero multi-tenant (pool scales to `multitenant.limits.tenants`). This release also raises the single-tenant publisher `IdleTTL` default 10m → 1h and adds a bounded readiness wait on cold publishes (#655/#656/#660).
+- build-caught: none
+- preflight: none
+- exit: `go get github.com/gaborage/go-bricks@v0.49.0 && go mod tidy && go build ./... && go test ./...`
+
+### [C49.1] messaging.* defaults/validation now run without a root broker URL — outbox timeout guards armed in multi-tenant · silent-config · when: match
+- detect: `git grep -nE '(^[[:space:]]*|\.)(publishtimeout|connectiontimeout|readytimeout)[[:space:]]*:' -- '*.yaml' '*.yml'` (leaf-anchored so it matches BOTH the nested `outbox:`→`publishtimeout:` form and flat-dotted keys; also grep the env forms `OUTBOX_PUBLISHTIMEOUT`, `MESSAGING_RECONNECT_CONNECTIONTIMEOUT`, `MESSAGING_RECONNECT_READYTIMEOUT` in deploy manifests) — and check `messaging.*` keys for negative values (`git grep -nE ':[[:space:]]*-[0-9]' -- '*.yaml' '*.yml'`)
+- gate: match = (a) you run multi-tenant with the outbox module and set `outbox.publishtimeout` below the effective `messaging.reconnect.connectiontimeout` (default 30s) **or** `messaging.reconnect.readytimeout` (default 5s) — both guards were silently skipped in multi-tenant mode because those timeouts stayed 0 without a root broker URL, so the config booted and then risked the unbounded duplicate-delivery loop the checks exist to prevent; startup now rejects it by design (`outbox.publishtimeout` defaults to 60s, so leaving it unset = unaffected); or (b) any deployment mode without a root `messaging.broker.url` carries a negative `messaging.*` value — previously silently ignored, now a startup validation error naming the key.
+- apply: (a) raise `outbox.publishtimeout` to `>= max(messaging.reconnect.connectiontimeout, messaging.reconnect.readytimeout)` (with defaults: `>= 30s`); (b) delete or correct negative `messaging.*` values. Single-tenant deployments WITH a broker URL already had defaults and guards applied — nothing changes for them.
+- verify: `make run`  # a previously-booting config either boots identically or aborts with a `messaging config: ...` / `outbox: publishtimeout ...` error naming the offending key
+- ref: #659 · config/validation.go: validateMessaging · wiki/outbox.md
+
+### [C49.2] Single-tenant publisher IdleTTL default 10m → 1h; cold publishes wait for readiness · silent-behavior · when: no-match
+- detect: `git grep -nE '(^[[:space:]]*|\.)idlettl[[:space:]]*:' -- '*.yaml' '*.yml'` (also `MESSAGING_PUBLISHER_IDLETTL` in deploy manifests)
+- gate: no-match = you left `messaging.publisher.idlettl` unset in a single-tenant deployment, so the effective idle-eviction TTL rises from 10m to 1h (#660) — publishers for low-frequency publish cadences stay warm longer (the fix for the once-daily cold-publish failure class, #655). Multi-tenant default stays 10m; explicitly-set values are untouched. Independently, the first publish on a cold publisher now waits up to `messaging.reconnect.readytimeout` (default 5s) for client readiness instead of failing fast with `ErrNotConnected` (#656), and evictions/idle-cleanups now log at Info with `Stats()` counters (#657).
+- apply: none required; set `messaging.publisher.idlettl` explicitly if you relied on the 10m eviction cadence.
+- verify: start the app and let a publisher idle  # eviction now logs at Info at the new TTL; a publish right after eviction no longer fails with ErrNotConnected
+- ref: #655 #656 #657 #660 · app/managers.go · messaging/amqp_client.go
 
 
 ---

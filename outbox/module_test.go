@@ -222,6 +222,87 @@ func TestModuleInitRejectsPublishTimeoutBelowReadyTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "readytimeout")
 }
 
+// TestModuleInitMessagingUnconfiguredErrorPrecedesTimeoutGuard pins Init's error
+// ordering: with no broker URL AND a publishtimeout below connectiontimeout, the
+// actionable root cause ("messaging is not configured") must surface, not the derived
+// timeout complaint (see the validatePublishTimeout call order in Init).
+func TestModuleInitMessagingUnconfiguredErrorPrecedesTimeoutGuard(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 10 * time.Second},
+			Messaging: config.MessagingConfig{
+				// Broker.URL intentionally empty; connectiontimeout mirrors the value
+				// config.Validate now defaults in every deployment mode.
+				Reconnect: config.ReconnectConfig{ConnectionTimeout: 30 * time.Second},
+			},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messaging is not configured")
+	assert.NotContains(t, err.Error(), "publishtimeout")
+}
+
+// TestModuleInitMultiTenantGuardFiresOnValidatedDefaults composes the #659 fix with
+// the outbox guard end-to-end: a multi-tenant static config (root broker URL empty)
+// run through config.Validate() picks up the defaulted 30s connectiontimeout, so an
+// explicit outbox.publishtimeout below it must fail Init — pinning that the guard can
+// no longer be silently bypassed by an un-defaulted zero.
+func TestModuleInitMultiTenantGuardFiresOnValidatedDefaults(t *testing.T) {
+	cfg := &config.Config{
+		App: config.AppConfig{Name: "outbox-test", Version: "1.0.0", Env: "development"},
+		Server: config.ServerConfig{
+			Port: 8080,
+			Timeout: config.TimeoutConfig{
+				Read:       15 * time.Second,
+				Write:      30 * time.Second,
+				Middleware: 5 * time.Second,
+				Shutdown:   10 * time.Second,
+			},
+		},
+		Log: config.LogConfig{Level: "info"},
+		Multitenant: config.MultitenantConfig{
+			Enabled:  true,
+			Resolver: config.ResolverConfig{Type: config.ResolverTypeHeader, Header: "X-Tenant-ID"},
+			Tenants: map[string]config.TenantEntry{
+				"acme": {
+					Database: config.DatabaseConfig{
+						Type:     config.PostgreSQL,
+						Host:     "acme.db",
+						Port:     5432,
+						Database: "acme",
+						Username: "acme_user",
+					},
+					Messaging: config.TenantMessagingConfig{URL: "amqp://localhost:5672/"},
+				},
+			},
+		},
+		Source: config.SourceConfig{Type: config.SourceTypeStatic},
+		Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 10 * time.Second},
+		// Root broker URL intentionally empty — Validate() must still default
+		// messaging.reconnect.connectiontimeout to 30s (#659).
+	}
+	require.NoError(t, config.Validate(cfg))
+
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger:    logger.New("info", false),
+		Config:    cfg,
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publishtimeout")
+	assert.Contains(t, err.Error(), "connectiontimeout")
+}
+
 // TestModuleInitEnabledMessagingUnconfiguredMultiTenant verifies the static
 // check is skipped when multitenant.enabled=true — each tenant supplies its
 // own broker URL via the resource source, so a global check would be wrong.

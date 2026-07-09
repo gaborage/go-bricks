@@ -72,10 +72,6 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
-	if err := m.validatePublishTimeout(); err != nil {
-		return err
-	}
-
 	// Fail fast: when outbox is enabled, DB and Messaging resolvers are required.
 	// Without them, the relay job would panic on first poll instead of failing at startup.
 	if m.getDB == nil {
@@ -109,6 +105,14 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 			return fmt.Errorf("outbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
 				"the relay would never deliver any events. Configure multitenant.tenants, or set outbox.enabled=false")
 		}
+	}
+
+	// Timeout-tuning validation runs AFTER the root-cause checks above: when messaging
+	// isn't configured at all (or the relay can't fan out), that actionable error must
+	// surface first — not a derived publishtimeout complaint against defaulted values
+	// (config.Validate now defaults connectiontimeout/readytimeout in every mode).
+	if err := m.validatePublishTimeout(); err != nil {
+		return err
 	}
 
 	// Store creation is deferred until first use (lazy init like scheduler)

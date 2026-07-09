@@ -353,7 +353,8 @@ type OutputConfig struct {
 }
 
 // MessagingConfig holds messaging/broker settings.
-// Production-safe defaults are applied automatically when messaging is configured.
+// Production-safe defaults are applied unconditionally at startup — even when
+// messaging.broker.url is unset (see config/validation.go: validateMessaging).
 type MessagingConfig struct {
 	Broker    BrokerConfig        `koanf:"broker" json:"broker" yaml:"broker" toml:"broker" mapstructure:"broker"`
 	Routing   RoutingConfig       `koanf:"routing" json:"routing" yaml:"routing" toml:"routing" mapstructure:"routing"`

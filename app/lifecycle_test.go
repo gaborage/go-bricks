@@ -392,10 +392,10 @@ func TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval(t *testing.
 // longer holds now that both messaging.publisher.cleanupinterval and
 // messaging.publisher.idlettl are independently operator-configurable. The predicate
 // must flag "sweep frequency >= TTL" (eviction merely lags, so this is advisory, not
-// fatal — see startMaintenanceLoops) while never flagging an idleTTL of zero, since
-// that means the raw config value was never defaulted (messaging not configured at
-// the root level; see config.IsMessagingConfigured) and there is nothing meaningful
-// to compare yet.
+// fatal — see startMaintenanceLoops) while treating idleTTL <= 0 as "nothing
+// meaningful to compare". config.Validate applies the IdleTTL default unconditionally
+// (see config/validation.go: validateMessaging), so that guard is purely defensive
+// for callers that bypass Validate — as the zero/negative cases here exercise.
 func TestPublisherCleanupIntervalTooLate(t *testing.T) {
 	tests := []struct {
 		name            string
