@@ -224,11 +224,16 @@ failure:
 > backoff).
 
 Cancel / shutdown / deadline returns are also wrapped with the last cause, so a deadline that
-fires after a NACK still reports `ErrPublishNacked` — **match with `errors.Is`, not `==`**.
+fires after a NACK still reports `ErrPublishNacked` — **match with `errors.Is`, not `==`**
+(use `errors.Is` for the raw `ErrNotConnected` sentinel too: it works on unwrapped errors, and
+it keeps working if a future version ever wraps it).
 Between NACK retries the client waits a small cancelable `nackBackoff` (100ms) rather than
 busy-spinning. These causes are informational for logging/observability; the outbox relay treats
-**every** publish failure (NACK included) as a recoverable *connectivity* failure that retries and
-never parks — only undecodable message bodies are poison — see
+**every** publish failure as a recoverable *connectivity* failure that retries and never parks —
+NACK included, and likewise a raw `ErrNotConnected`, though the relay rarely sees one: it checks
+`IsReady()` itself at the start of each cycle and routes a cold broker to its outage path
+(advancing `retry_count` without calling `PublishToExchange` at all). Only undecodable message
+headers are poison — see
 [outbox.md](outbox.md#retry--dead-lettering) and [ADR-033](adr_033_outbox_retry_count_status_parking.md).
 
 > **Breaking change:** before this, a persistently-failing publish looped **forever** (returning
@@ -250,23 +255,36 @@ retry loop described above. The wait polls every 100ms (the same cadence
 
 - If the client becomes ready within the window, the publish proceeds normally into the retry loop.
 - If `reconnect.readytimeout` elapses first, `PublishToExchange` returns the raw
-  `messaging.ErrNotConnected` — unwrapped, matching the pre-#655 behavior exactly — and **not**
-  counted against `reconnect.maxpublishattempts`.
+  `messaging.ErrNotConnected` — the same unwrapped error **shape** pre-#655 callers received
+  (only the timing changed: up to `readytimeout` instead of instant) — without consuming a
+  `reconnect.maxpublishattempts` slot, since the wait happens entirely before the retry loop
+  starts.
 - If the context is canceled/deadlined, or the client is shutting down, while waiting, the
-  pre-flight returns that error instead.
+  pre-flight returns that error (`ctx.Err()` / `messaging.ErrShutdown`) instead.
 
-This wait does not consume a `maxpublishattempts` slot — it happens entirely before the retry loop
-starts.
+**Need fail-fast anyway?** Two working options:
+
+- **Context deadline (preferred):** pass a `ctx` with a short deadline — the pre-flight is
+  context-aware (third bullet above), so the effective wait is the *smaller* of the ctx deadline
+  and `readytimeout`. This is the framework's context-first idiom, and the same deadline also
+  bounds the publish attempts that follow.
+- **Config:** set `reconnect.readytimeout` to a small positive value (e.g. `1ms`) for
+  near-instant failure on a not-ready client.
 
 > **Disabling the wait:** `reconnect.readytimeout: 0` in `config.yaml` is treated the same as
-> leaving the key unset — like every other `reconnect.*` duration — and defaults to 5s. There is no
+> leaving the key unset — like every other `reconnect.*` duration — and defaults to 5s. A
+> **negative** value does not fall back to the default either: it fails startup with a validation
+> error (`messaging.reconnect.readytimeout: must be non-negative`). There is no
 > way to reach a `readyTimeout <= 0` (the pre-#655 instant fail-fast) through the public API:
 > `NewAMQPClient` always initializes it to the 5s default before applying `ClientOption`s, and
 > `WithReadyTimeout` itself ignores non-positive values — the same guard `WithMaxPublishAttempts`
 > applies to `reconnect.maxpublishattempts`' `<= 0` "unbounded retries" mode. Both zero-value
-> sentinels are reachable only via a struct-literal `AMQPClientImpl{}`, which — since the fields are
-> unexported — is possible only from code inside the `messaging` package itself (its own test
-> suite), never from an external caller. A custom `app.Options.MessagingClientFactory` supplying a
+> sentinels are reachable only by building an `AMQPClientImpl` struct literal that bypasses
+> `NewAMQPClient` — a dead end outside the `messaging` package: the fields are unexported, so only
+> the package's own test suite can set them, and while a bare `&messaging.AMQPClientImpl{}` does
+> compile externally, it is non-functional (nil unexported mutex and channels — the first method
+> call panics). No *working* client with `readyTimeout <= 0` is constructible outside the
+> `messaging` package. A custom `app.Options.MessagingClientFactory` supplying a
 > different `AMQPClient` implementation sidesteps the concept entirely: it receives only
 > `(url, log)`, so `reconnect.readytimeout` never reaches it.
 
