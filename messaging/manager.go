@@ -120,7 +120,7 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 		opts.MaxPublishers = 50 // sensible default
 	}
 	if opts.IdleTTL <= 0 {
-		opts.IdleTTL = 10 * time.Minute // shorter than DB since publishers are lighter
+		opts.IdleTTL = 1 * time.Hour // kept in sync with app.defaultPublisherIdleTTL (see app/managers.go)
 	}
 
 	// Default to real client factory if none provided

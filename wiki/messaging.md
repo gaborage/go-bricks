@@ -188,7 +188,7 @@ GoBricks applies production-safe AMQP reconnection defaults when messaging is co
 | `reconnect.maxpublishattempts` | 5 | Max publish attempts before returning `ErrPublishRetriesExhausted` (see below) |
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
 | `publisher.maxcached` | 50 | Maximum cached publisher channels |
-| `publisher.idlettl` | 10m | TTL for idle publisher channels |
+| `publisher.idlettl` | 1h | TTL for idle publisher channels |
 
 **Override defaults** in `config.yaml`:
 
@@ -199,7 +199,7 @@ messaging:
     maxdelay: 120s       # Higher backoff cap
   publisher:
     maxcached: 100       # More cached publishers for high-throughput
-    idlettl: 30m         # Keep publishers longer
+    idlettl: 2h          # Keep publishers longer than the 1h default
 ```
 
 ### Bounded publish retries (`reconnect.maxpublishattempts`)

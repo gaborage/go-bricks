@@ -47,7 +47,7 @@ const (
 	defaultReadyTimeout       = 5 * time.Second  // Pre-flight wait for a not-yet-ready client before a publish begins
 	defaultMaxReconnectDelay  = 60 * time.Second // Maximum delay for exponential backoff cap
 	defaultMaxPublishers      = 50               // Maximum publisher clients in cache
-	defaultPublisherIdleTTL   = 10 * time.Minute // Time before idle publishers are evicted
+	defaultPublisherIdleTTL   = 1 * time.Hour    // Time before idle publishers are evicted
 	defaultMaxPublishAttempts = 5                // Bounded publish retry attempts before giving up
 )
 
@@ -636,7 +636,7 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 // - Reconnect.ReadyTimeout: if 0, sets to 5s; if negative, returns an error.
 // - Reconnect.MaxDelay: if 0, sets to 60s; if negative, returns an error.
 // - Publisher.MaxCached: if 0, sets to 50; if negative, returns an error.
-// - Publisher.IdleTTL: if 0, sets to 10m; if negative, returns an error.
+// - Publisher.IdleTTL: if 0, sets to 1h; if negative, returns an error.
 //
 // Returns an error when any value is invalid; otherwise returns nil.
 func applyMessagingDefaults(cfg *MessagingConfig) error {

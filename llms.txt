@@ -2611,7 +2611,7 @@ messaging:
     connectiontimeout: 30s
   publisher:
     maxcached: 50                         # Cached publisher channels (per tenant)
-    idlettl: 10m
+    idlettl: 1h
 ```
 
 Omit the entire `messaging:` block to disable AMQP. Modules implementing `MessagingDeclarer` will fail-fast at startup if messaging isn't configured (no silent degradation). For multi-tenant setups, override per tenant via `tenants.<id>.messaging.url`.

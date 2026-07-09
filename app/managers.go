@@ -14,9 +14,11 @@ import (
 // config validation (see config/validation.go: applyMessagingDefaults and
 // applyCacheManagerDefaults) so the builder honors the same documented behavior
 // even when invoked without a fully-validated config (e.g. in unit tests).
+// defaultPublisherIdleTTL has a third copy: messaging.NewMessagingManager's
+// fallback (messaging/manager.go) for bare callers that bypass this builder.
 const (
 	defaultPublisherMaxCached   = 50
-	defaultPublisherIdleTTL     = 10 * time.Minute
+	defaultPublisherIdleTTL     = 1 * time.Hour
 	defaultCacheMaxSize         = 100
 	defaultCacheIdleTTL         = 15 * time.Minute
 	defaultCacheCleanupInterval = 5 * time.Minute
@@ -78,7 +80,7 @@ func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions 
 
 // BuildMessagingOptions creates messaging manager options based on deployment mode.
 // Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
-// Single-tenant mode uses smaller fixed limits and moderate TTL.
+// Single-tenant mode uses smaller fixed limits and a longer TTL (same 1h as the DB pool).
 func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions {
 	// Operator config (messaging.publisher.*) is the source of truth. Mode-specific
 	// values are only fallbacks when the operator left the key unset (zero).
