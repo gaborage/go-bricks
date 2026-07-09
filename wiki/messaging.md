@@ -176,7 +176,9 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 
 ## Messaging Reconnection Defaults
 
-GoBricks applies production-safe AMQP reconnection defaults when messaging is configured:
+GoBricks applies production-safe AMQP reconnection defaults unconditionally at startup — even when
+`messaging.broker.url` is unset (multi-tenant deployments rely on this: per-tenant clients and
+cross-field validators like the outbox `publishtimeout` guards read these effective values):
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
@@ -187,7 +189,7 @@ GoBricks applies production-safe AMQP reconnection defaults when messaging is co
 | `reconnect.readytimeout` | 5s | Bounded pre-flight wait for a not-yet-ready client before a publish begins (see below) |
 | `reconnect.maxpublishattempts` | 5 | Max publish attempts before returning `ErrPublishRetriesExhausted` (see below) |
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
-| `publisher.maxcached` | 50 | Maximum cached publisher channels |
+| `publisher.maxcached` | 50 single-tenant / unset multi-tenant (pool scales to `multitenant.limits.tenants`) | Maximum cached publisher channels |
 | `publisher.idlettl` | 1h single-tenant / 10m multi-tenant | TTL for idle publisher channels |
 | `publisher.cleanupinterval` | 2m | How often the idle-publisher cleanup goroutine runs |
 

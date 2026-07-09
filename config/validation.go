@@ -187,14 +187,26 @@ func validateDebug(cfg *DebugConfig) error {
 }
 
 // validateMessaging validates messaging configuration and applies defaults.
-// multitenant selects the deployment-mode-dependent Publisher.IdleTTL default
-// (see applyMessagingDefaults); it has no effect on any other field.
-// Returns nil if messaging is not configured or if all settings are valid.
+// multitenant selects the deployment-mode-dependent Publisher.IdleTTL and
+// Publisher.MaxCached defaults (see applyMessagingDefaults); it has no effect
+// on any other field.
+//
+// Defaults are applied unconditionally, even when the root broker URL is empty
+// (IsMessagingConfigured is false). Multi-tenant deployments carry broker URLs
+// per-tenant — a root broker URL is rejected there by
+// validateNoSingleTenantConflict, though other root messaging.* keys remain
+// legal and are the tuning seam for per-tenant clients — yet per-tenant AMQP
+// clients and the outbox relay still run with the client-side
+// reconnect/publisher defaults. Leaving cfg.Messaging.* at zero would silently
+// defeat cross-field validators that read the effective values (e.g. outbox's
+// publishtimeout >= connectiontimeout and >= readytimeout Fail-Fast checks), so
+// defaults are materialized in every deployment mode. (The reconnect
+// delay/backoff keys — delay, reinitdelay, resenddelay, maxdelay — are
+// validated here but not yet wired into the AMQP client, which uses its own
+// hardcoded values; see messaging/amqp_client.go.)
+//
+// Returns an error if any setting is invalid; otherwise nil.
 func validateMessaging(cfg *MessagingConfig, multitenant bool) error {
-	if !IsMessagingConfigured(cfg) {
-		return nil
-	}
-
 	// Apply messaging defaults (reconnection, publisher pool)
 	return applyMessagingDefaults(cfg, multitenant)
 }
@@ -645,7 +657,9 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 //   - Reconnect.ConnectionTimeout: if 0, sets to 30s; if negative, returns an error.
 //   - Reconnect.ReadyTimeout: if 0, sets to 5s; if negative, returns an error.
 //   - Reconnect.MaxDelay: if 0, sets to 60s; if negative, returns an error.
-//   - Publisher.MaxCached: if 0, sets to 50; if negative, returns an error.
+//   - Publisher.MaxCached: if 0, sets to 50 when multitenant is false; in
+//     multi-tenant mode zero is preserved so app.ManagerConfigBuilder scales the
+//     publisher pool to the tenant limit; if negative, returns an error.
 //   - Publisher.IdleTTL: if 0, sets to 1h when multitenant is false, 10m when true
 //     (mode-dependent — a shorter multi-tenant default bounds per-tenant publisher
 //     churn); if negative, returns an error.
@@ -682,20 +696,22 @@ func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 		return err
 	}
 
-	for _, n := range []struct {
-		field *int
-		def   int
-		name  string
-	}{
-		{&cfg.Reconnect.MaxPublishAttempts, defaultMaxPublishAttempts, "messaging.reconnect.maxpublishattempts"},
-		{&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached"},
-	} {
-		if err := applyNonNegativeDefault(n.field, n.def, n.name); err != nil {
-			return err
-		}
+	if err := applyNonNegativeDefault(&cfg.Reconnect.MaxPublishAttempts, defaultMaxPublishAttempts, "messaging.reconnect.maxpublishattempts"); err != nil {
+		return err
 	}
 
-	return nil
+	// Publisher.MaxCached's multi-tenant default is dynamic — app.ManagerConfigBuilder.
+	// BuildMessagingOptions scales the publisher pool to the tenant limit when the key
+	// is unset — so zero is preserved in multi-tenant mode (negative is still rejected).
+	// Stamping the flat single-tenant default here would silently cap the pool below
+	// the tenant limit.
+	if multitenant {
+		if cfg.Publisher.MaxCached < 0 {
+			return NewValidationError("messaging.publisher.maxcached", errMustBeNonNegative)
+		}
+		return nil
+	}
+	return applyNonNegativeDefault(&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached")
 }
 
 // applyNonNegativeDefault sets *field to def when it is zero, or returns a validation

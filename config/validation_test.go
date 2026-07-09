@@ -4380,3 +4380,82 @@ func TestLoadFailsOnAllInvalidCIDRAllowlistEnv(t *testing.T) {
 	assert.Nil(t, cfg)
 	assert.Contains(t, err.Error(), "scheduler.security.cidrallowlist")
 }
+
+// TestValidateMessagingAppliesDefaultsWhenBrokerURLEmpty pins the #659 fix: defaults
+// and negative-value rejection apply even when the root broker URL is empty (see
+// validateMessaging's doc comment for why). Field-by-field defaulting is covered by
+// TestApplyMessagingDefaults; these subtests pin the no-gate behavior and the
+// mode-aware Publisher defaults.
+func TestValidateMessagingAppliesDefaultsWhenBrokerURLEmpty(t *testing.T) {
+	t.Run("single_tenant_empty_broker_applies_defaults", func(t *testing.T) {
+		cfg := &MessagingConfig{} // empty Broker.URL
+		require.NoError(t, validateMessaging(cfg, false))
+
+		assert.Equal(t, defaultConnectionTimeout, cfg.Reconnect.ConnectionTimeout)
+		assert.Equal(t, defaultPublisherIdleTTL, cfg.Publisher.IdleTTL)
+		assert.Equal(t, defaultMaxPublishers, cfg.Publisher.MaxCached)
+	})
+
+	t.Run("multi_tenant_empty_broker_applies_mode_aware_publisher_defaults", func(t *testing.T) {
+		cfg := &MessagingConfig{}
+		require.NoError(t, validateMessaging(cfg, true))
+
+		assert.Equal(t, defaultConnectionTimeout, cfg.Reconnect.ConnectionTimeout)
+		assert.Equal(t, defaultPublisherIdleTTLMultiTenant, cfg.Publisher.IdleTTL)
+		// MaxCached stays zero in multi-tenant mode so BuildMessagingOptions scales
+		// the publisher pool to the tenant limit (app/managers.go).
+		assert.Zero(t, cfg.Publisher.MaxCached)
+	})
+
+	t.Run("empty_broker_negative_value_rejected", func(t *testing.T) {
+		cfg := &MessagingConfig{Reconnect: ReconnectConfig{Delay: -1}}
+		require.Error(t, validateMessaging(cfg, false))
+	})
+
+	t.Run("multi_tenant_negative_maxcached_rejected", func(t *testing.T) {
+		cfg := &MessagingConfig{Publisher: PublisherPoolConfig{MaxCached: -1}}
+		require.Error(t, validateMessaging(cfg, true))
+	})
+}
+
+// TestValidateMultiTenantStaticAppliesMessagingDefaultsEndToEnd proves a multi-tenant
+// static config — where the root broker URL is necessarily empty — yields effective
+// messaging defaults through the full Validate() entry point, so the outbox
+// publishtimeout Fail-Fast guards have real values to compare against (see
+// validateMessaging's doc comment).
+func TestValidateMultiTenantStaticAppliesMessagingDefaultsEndToEnd(t *testing.T) {
+	cfg := &Config{
+		App:    createValidAppConfig(),
+		Server: createValidServerConfig(),
+		Log:    createValidLogConfig(),
+		Multitenant: MultitenantConfig{
+			Enabled: true,
+			Resolver: ResolverConfig{
+				Type:   ResolverTypeHeader,
+				Header: testTenantHeader,
+			},
+			Tenants: map[string]TenantEntry{
+				"acme": {
+					Database: DatabaseConfig{
+						Type:     PostgreSQL,
+						Host:     "acme.db",
+						Port:     5432,
+						Database: "acme",
+						Username: "acme_user",
+					},
+					Messaging: TenantMessagingConfig{URL: testAMQPHost},
+				},
+			},
+		},
+		Source: SourceConfig{Type: SourceTypeStatic},
+		// No root broker URL: validateNoSingleTenantConflict rejects one in
+		// static multi-tenant mode (other root messaging.* keys stay legal).
+	}
+
+	require.NoError(t, Validate(cfg))
+
+	assert.Equal(t, 30*time.Second, cfg.Messaging.Reconnect.ConnectionTimeout)
+	assert.Equal(t, 10*time.Minute, cfg.Messaging.Publisher.IdleTTL)
+	// Zero preserved: BuildMessagingOptions scales the pool to the tenant limit.
+	assert.Zero(t, cfg.Messaging.Publisher.MaxCached)
+}
