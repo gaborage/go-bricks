@@ -103,6 +103,9 @@ type ManagerOptions struct {
 	// MaxPublishAttempts bounds the per-publish retry loop for clients created by the
 	// default factory. Zero (or negative) leaves the client default (5).
 	MaxPublishAttempts int
+	// ReadyTimeout bounds the pre-flight readiness wait for clients created by the
+	// default factory. Zero (or negative) leaves the client default (5s).
+	ReadyTimeout time.Duration
 }
 
 // NewMessagingManager creates a new messaging manager
@@ -120,6 +123,7 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 			return NewAMQPClient(url, log,
 				WithConnectionTimeout(opts.ConnectionTimeout),
 				WithMaxPublishAttempts(opts.MaxPublishAttempts),
+				WithReadyTimeout(opts.ReadyTimeout),
 			)
 		}
 	}

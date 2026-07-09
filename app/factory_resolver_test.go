@@ -136,6 +136,26 @@ func TestFactoryResolverMessagingClientFactory(t *testing.T) {
 		assert.NotNil(t, client)
 		t.Cleanup(func() { _ = client.Close() })
 	})
+
+	t.Run("WithOptions variant carries ReadyTimeout, old method stays byte-identical", func(t *testing.T) {
+		resolver := NewFactoryResolver(nil)
+
+		// Old 2-arg method must still work unchanged.
+		oldFactory := resolver.MessagingClientFactory(7*time.Second, 5)
+		assert.NotNil(t, oldFactory)
+
+		// New WithOptions method carries ReadyTimeout through to the client.
+		newFactory := resolver.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
+			ConnectionTimeout:  7 * time.Second,
+			MaxPublishAttempts: 5,
+			ReadyTimeout:       9 * time.Second,
+		})
+		assert.NotNil(t, newFactory)
+
+		client := newFactory("amqp://127.0.0.1:1", logger.New("error", true))
+		assert.NotNil(t, client)
+		t.Cleanup(func() { _ = client.Close() })
+	})
 }
 
 // mockCacheInstance is a minimal mock implementation of cache.Cache for testing

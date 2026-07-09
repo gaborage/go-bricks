@@ -170,6 +170,15 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		zero := NewManagerConfigBuilder(false, 100)
 		assert.Equal(t, time.Duration(0), zero.BuildMessagingOptions().ConnectionTimeout)
 	})
+
+	t.Run("ready_timeout_propagated_to_options", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		builder.readyTimeout = 9 * time.Second
+		assert.Equal(t, 9*time.Second, builder.BuildMessagingOptions().ReadyTimeout)
+
+		zero := NewManagerConfigBuilder(false, 100)
+		assert.Equal(t, time.Duration(0), zero.BuildMessagingOptions().ReadyTimeout)
+	})
 }
 
 func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {

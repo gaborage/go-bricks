@@ -2184,6 +2184,22 @@ func TestApplyMessagingDefaultsMaxPublishAttempts(t *testing.T) {
 	})
 }
 
+func TestApplyMessagingDefaultsReadyTimeout(t *testing.T) {
+	t.Run("zero_gets_default", func(t *testing.T) {
+		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
+		require.NoError(t, validateMessaging(cfg))
+		assert.Equal(t, defaultReadyTimeout, cfg.Reconnect.ReadyTimeout)
+	})
+	t.Run("explicit_value_preserved", func(t *testing.T) {
+		cfg := &MessagingConfig{
+			Broker:    BrokerConfig{URL: testAMQPHost},
+			Reconnect: ReconnectConfig{ReadyTimeout: 9 * time.Second},
+		}
+		require.NoError(t, validateMessaging(cfg))
+		assert.Equal(t, 9*time.Second, cfg.Reconnect.ReadyTimeout)
+	})
+}
+
 func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -2245,6 +2261,14 @@ func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 				Reconnect: ReconnectConfig{MaxPublishAttempts: -1},
 			},
 			errorContains: "messaging.reconnect.maxpublishattempts",
+		},
+		{
+			name: "negative_ready_timeout_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Reconnect: ReconnectConfig{ReadyTimeout: -1 * time.Second},
+			},
+			errorContains: "messaging.reconnect.readytimeout",
 		},
 		{
 			name: "negative_publisher_idle_ttl_rejected",

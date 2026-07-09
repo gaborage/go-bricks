@@ -38,6 +38,9 @@ type ManagerConfigBuilder struct {
 	// maxPublishAttempts bounds the per-publish retry loop, sourced from
 	// messaging.reconnect.maxpublishattempts and set by bootstrap.
 	maxPublishAttempts int
+	// readyTimeout bounds the pre-flight readiness wait, sourced from
+	// messaging.reconnect.readytimeout and set by bootstrap.
+	readyTimeout time.Duration
 	// publisherConfig carries operator-configurable messaging publisher pool
 	// settings (messaging.publisher.*), sourced from validated config by bootstrap.
 	// When unset, documented defaults are applied as fallbacks.
@@ -102,6 +105,7 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 		IdleTTL:            idleTTL,
 		ConnectionTimeout:  b.connectionTimeout,
 		MaxPublishAttempts: b.maxPublishAttempts,
+		ReadyTimeout:       b.readyTimeout,
 	}
 }
 
@@ -245,7 +249,11 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 	}
 
 	msgOptions := f.configBuilder.BuildMessagingOptions()
-	clientFactory := f.factoryResolver.MessagingClientFactory(msgOptions.ConnectionTimeout, msgOptions.MaxPublishAttempts)
+	clientFactory := f.factoryResolver.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
+		ConnectionTimeout:  msgOptions.ConnectionTimeout,
+		MaxPublishAttempts: msgOptions.MaxPublishAttempts,
+		ReadyTimeout:       msgOptions.ReadyTimeout,
+	})
 
 	f.warnIfPoolBelowTenantCount("messaging", msgOptions.MaxPublishers)
 
