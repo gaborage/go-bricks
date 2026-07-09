@@ -87,8 +87,8 @@ type dbEntry struct {
 
 // DbManagerOptions configures the DbManager
 type DbManagerOptions struct {
-	MaxSize int           // Maximum number of connections to keep (0 = no limit)
-	IdleTTL time.Duration // Time after which idle connections are cleaned up (0 = no cleanup)
+	MaxSize int           // Maximum number of connections to keep (<= 0: NewDbManager defaults to 100)
+	IdleTTL time.Duration // Time after which idle connections are cleaned up (<= 0: NewDbManager defaults to 30m)
 }
 
 // NewDbManager creates a new database manager

@@ -4459,3 +4459,223 @@ func TestValidateMultiTenantStaticAppliesMessagingDefaultsEndToEnd(t *testing.T)
 	// Zero preserved: BuildMessagingOptions scales the pool to the tenant limit.
 	assert.Zero(t, cfg.Messaging.Publisher.MaxCached)
 }
+
+// TestApplyDatabaseManagerDefaults exercises the mode-aware defaulting for the
+// database connection-manager pool. MaxSize is preserved-zero in multi-tenant
+// mode so ManagerConfigBuilder.BuildDatabaseOptions can scale it to the tenant
+// limit — a flat validation-time default would silently cap the pool below the
+// tenant limit, the exact regression class fixed for messaging MaxCached in
+// commit 453d084 / PR #661.
+func TestApplyDatabaseManagerDefaults(t *testing.T) {
+	t.Run("single_tenant_zero_values_apply_all_defaults", func(t *testing.T) {
+		cfg := &DatabaseManagerConfig{}
+		require.NoError(t, applyDatabaseManagerDefaults(cfg, false))
+		assert.Equal(t, defaultDatabaseManagerMaxSize, cfg.MaxSize)
+		assert.Equal(t, defaultDatabaseManagerIdleTTL, cfg.IdleTTL)
+		assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.CleanupInterval)
+	})
+
+	t.Run("multi_tenant_zero_preserves_maxsize_uses_30m", func(t *testing.T) {
+		cfg := &DatabaseManagerConfig{}
+		require.NoError(t, applyDatabaseManagerDefaults(cfg, true))
+		// MaxSize preserved (the #661 pin): BuildDatabaseOptions scales it to the tenant limit.
+		assert.Zero(t, cfg.MaxSize)
+		assert.Equal(t, defaultDatabaseManagerIdleTTLMultiTenant, cfg.IdleTTL)
+		assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.CleanupInterval)
+	})
+
+	t.Run("explicit_values_preserved_single", func(t *testing.T) {
+		cfg := &DatabaseManagerConfig{MaxSize: 42, IdleTTL: 2 * time.Hour, CleanupInterval: 90 * time.Second}
+		require.NoError(t, applyDatabaseManagerDefaults(cfg, false))
+		assert.Equal(t, 42, cfg.MaxSize)
+		assert.Equal(t, 2*time.Hour, cfg.IdleTTL)
+		assert.Equal(t, 90*time.Second, cfg.CleanupInterval)
+	})
+
+	t.Run("explicit_values_preserved_multi", func(t *testing.T) {
+		cfg := &DatabaseManagerConfig{MaxSize: 42, IdleTTL: 2 * time.Hour, CleanupInterval: 90 * time.Second}
+		require.NoError(t, applyDatabaseManagerDefaults(cfg, true))
+		assert.Equal(t, 42, cfg.MaxSize)
+		assert.Equal(t, 2*time.Hour, cfg.IdleTTL)
+		assert.Equal(t, 90*time.Second, cfg.CleanupInterval)
+	})
+
+	t.Run("negative_maxsize_rejected_single", func(t *testing.T) {
+		cfg := &DatabaseManagerConfig{MaxSize: -1}
+		assertValidationError(t, applyDatabaseManagerDefaults(cfg, false), "database.manager.maxsize")
+	})
+
+	t.Run("negative_maxsize_rejected_multi", func(t *testing.T) {
+		cfg := &DatabaseManagerConfig{MaxSize: -1}
+		assertValidationError(t, applyDatabaseManagerDefaults(cfg, true), "database.manager.maxsize")
+	})
+
+	t.Run("negative_idlettl_rejected", func(t *testing.T) {
+		cfg := &DatabaseManagerConfig{IdleTTL: -1 * time.Second}
+		assertValidationError(t, applyDatabaseManagerDefaults(cfg, false), "database.manager.idlettl")
+	})
+
+	t.Run("negative_cleanupinterval_rejected", func(t *testing.T) {
+		cfg := &DatabaseManagerConfig{CleanupInterval: -1 * time.Second}
+		assertValidationError(t, applyDatabaseManagerDefaults(cfg, false), "database.manager.cleanupinterval")
+	})
+}
+
+// TestValidateAppliesDatabaseManagerDefaultsOnlyToPrimaryDatabase proves the
+// full top-level Validate stamps database.manager.* defaults on the primary
+// Config.Database only — named Config.Databases[name] entries have no DbManager
+// of their own, so their Manager sub-struct stays zero (no behavior change).
+func TestValidateAppliesDatabaseManagerDefaultsOnlyToPrimaryDatabase(t *testing.T) {
+	cfg := &Config{
+		App: AppConfig{
+			Name:    testAppName,
+			Version: testAppVersion,
+			Env:     EnvDevelopment,
+			Rate:    RateConfig{Limit: 100},
+		},
+		Server: ServerConfig{
+			Port: 8080,
+			Timeout: TimeoutConfig{
+				Read:       15 * time.Second,
+				Write:      30 * time.Second,
+				Middleware: 5 * time.Second,
+				Shutdown:   10 * time.Second,
+			},
+		},
+		Log: LogConfig{Level: "info"},
+		Database: DatabaseConfig{
+			Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "app",
+			Username: "user", Password: "pass",
+		},
+		Databases: map[string]DatabaseConfig{
+			"legacy": {
+				Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "legacy",
+				Username: "user", Password: "pass",
+			},
+		},
+	}
+
+	require.NoError(t, Validate(cfg))
+
+	assert.Equal(t, defaultDatabaseManagerMaxSize, cfg.Database.Manager.MaxSize)
+	assert.Equal(t, defaultDatabaseManagerIdleTTL, cfg.Database.Manager.IdleTTL)
+	assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
+	// Named DB entries are not manager-governed; their Manager sub-struct stays zero.
+	assert.Equal(t, DatabaseManagerConfig{}, cfg.Databases["legacy"].Manager)
+}
+
+// TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd pins that the
+// multitenant flag is threaded into applyDatabaseManagerDefaults through the full
+// Validate() entry point: MaxSize must come out zero-preserved (so
+// BuildDatabaseOptions scales the handle pool to the tenant limit) and IdleTTL
+// mode-aware — the wiring-level guard against the #661 MaxCached regression class.
+func TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd(t *testing.T) {
+	newCfg := func() *Config {
+		return &Config{
+			App: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 100},
+			},
+			Server: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
+			},
+			Log: LogConfig{Level: "info"},
+			Multitenant: MultitenantConfig{
+				Enabled: true,
+				Resolver: ResolverConfig{
+					Type:   ResolverTypeHeader,
+					Header: testTenantHeader,
+				},
+				Tenants: map[string]TenantEntry{
+					"acme": {
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     "acme.db",
+							Port:     5432,
+							Database: "acme",
+							Username: "acme_user",
+						},
+					},
+				},
+			},
+			Source: SourceConfig{Type: SourceTypeStatic},
+			// No root Database section: tenants carry their own DB config.
+		}
+	}
+
+	t.Run("unset_manager_keys_get_mode_aware_defaults", func(t *testing.T) {
+		cfg := newCfg()
+		require.NoError(t, Validate(cfg))
+
+		// Zero preserved: BuildDatabaseOptions scales the pool to the tenant limit.
+		assert.Zero(t, cfg.Database.Manager.MaxSize)
+		assert.Equal(t, defaultDatabaseManagerIdleTTLMultiTenant, cfg.Database.Manager.IdleTTL)
+		assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
+	})
+
+	t.Run("negative_maxsize_rejected_through_validate", func(t *testing.T) {
+		cfg := newCfg()
+		cfg.Database.Manager.MaxSize = -1
+		err := Validate(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "database.manager.maxsize")
+	})
+
+	t.Run("tenant_database_manager_block_rejected", func(t *testing.T) {
+		cfg := newCfg()
+		tenant := cfg.Multitenant.Tenants["acme"]
+		tenant.Database.Manager = DatabaseManagerConfig{IdleTTL: 5 * time.Minute}
+		cfg.Multitenant.Tenants["acme"] = tenant
+		err := Validate(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "acme")
+		assert.Contains(t, err.Error(), "manager")
+	})
+}
+
+// TestValidateRejectsManagerBlockOnNamedDatabase pins the Fail-Fast rejection of a
+// manager block under databases.<name> — it is non-functional (named handles live in
+// the primary manager) and would otherwise be silently ignored.
+func TestValidateRejectsManagerBlockOnNamedDatabase(t *testing.T) {
+	cfg := &Config{
+		App: AppConfig{
+			Name:    testAppName,
+			Version: testAppVersion,
+			Env:     EnvDevelopment,
+			Rate:    RateConfig{Limit: 100},
+		},
+		Server: ServerConfig{
+			Port: 8080,
+			Timeout: TimeoutConfig{
+				Read:       15 * time.Second,
+				Write:      30 * time.Second,
+				Middleware: 5 * time.Second,
+				Shutdown:   10 * time.Second,
+			},
+		},
+		Log: LogConfig{Level: "info"},
+		Database: DatabaseConfig{
+			Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "app",
+			Username: "user", Password: "pass",
+		},
+		Databases: map[string]DatabaseConfig{
+			"legacy": {
+				Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "legacy",
+				Username: "user", Password: "pass",
+				Manager: DatabaseManagerConfig{MaxSize: 5},
+			},
+		},
+	}
+
+	err := Validate(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "databases.legacy.manager")
+}

@@ -103,6 +103,30 @@ func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 		assert.Equal(t, largeLimit, options.MaxSize)
 		assert.Equal(t, 30*time.Minute, options.IdleTTL)
 	})
+
+	// Negative dbConfig values are rejected by config.Validate, but paths that
+	// bypass it (app.NewWithConfig with an injected config) must treat them as
+	// unset here — otherwise they'd leak to NewDbManager, whose <=0 coercion
+	// silently caps the pool at 100 instead of the documented mode default.
+	t.Run("negative_operator_values_treated_as_unset_multi_tenant", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(true, 42)
+		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: -1, IdleTTL: -time.Second}
+
+		options := builder.BuildDatabaseOptions()
+
+		assert.Equal(t, 42, options.MaxSize)
+		assert.Equal(t, 30*time.Minute, options.IdleTTL)
+	})
+
+	t.Run("negative_operator_values_treated_as_unset_single_tenant", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 0)
+		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: -1, IdleTTL: -time.Second}
+
+		options := builder.BuildDatabaseOptions()
+
+		assert.Equal(t, 10, options.MaxSize)
+		assert.Equal(t, 1*time.Hour, options.IdleTTL)
+	})
 }
 
 func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
@@ -248,6 +272,42 @@ func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 		builder.publisherConfig = config.PublisherPoolConfig{MaxCached: 888}
 		opts := builder.BuildMessagingOptions()
 		assert.Equal(t, 888, opts.MaxPublishers, "operator messaging.publisher.maxcached override must win over tenant limit")
+	})
+
+	t.Run("single-tenant BuildDatabaseOptions should honor config defaults not hardcoded 10", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		opts := builder.BuildDatabaseOptions()
+		assert.Equal(t, 10, opts.MaxSize, "should honor database.manager.maxsize config default of 10")
+	})
+
+	t.Run("single-tenant BuildDatabaseOptions IdleTTL should honor config default 1h", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		opts := builder.BuildDatabaseOptions()
+		assert.Equal(t, 1*time.Hour, opts.IdleTTL, "should honor database.manager.idlettl config default of 1h")
+	})
+
+	t.Run("operator override reaches database options", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(false, 100)
+		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: 33, IdleTTL: 8 * time.Minute}
+		opts := builder.BuildDatabaseOptions()
+		assert.Equal(t, 33, opts.MaxSize, "operator database.manager.maxsize override must reach DbManagerOptions")
+		assert.Equal(t, 8*time.Minute, opts.IdleTTL, "operator database.manager.idlettl override must reach DbManagerOptions")
+	})
+
+	t.Run("multi-tenant database MaxSize honors operator override over tenant limit", func(t *testing.T) {
+		builder := NewManagerConfigBuilder(true, 250)
+		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: 777}
+		opts := builder.BuildDatabaseOptions()
+		assert.Equal(t, 777, opts.MaxSize, "operator database.manager.maxsize override must win over tenant limit")
+	})
+
+	t.Run("multi-tenant database zero dbConfig scales to tenant limit and 30m", func(t *testing.T) {
+		// Zero-preservation pin (#661): an unset dbConfig must still let the
+		// builder scale MaxSize to the tenant limit and IdleTTL to 30m.
+		builder := NewManagerConfigBuilder(true, 250)
+		opts := builder.BuildDatabaseOptions()
+		assert.Equal(t, 250, opts.MaxSize, "unset database.manager.maxsize must scale to the tenant limit")
+		assert.Equal(t, 30*time.Minute, opts.IdleTTL, "unset database.manager.idlettl must fall back to multi-tenant 30m")
 	})
 }
 

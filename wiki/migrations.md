@@ -31,7 +31,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E43  | v0.42.0 → v0.43.0 | compile-break | 6 | C43.2 C43.3 | bare section-named env vars |
 | E44  | v0.43.0 → v0.44.0 | noop | 2 | none | none |
 | E45  | v0.44.0 → v0.45.0 | compile-break | 9 | C45.1 C45.2 C45.3 C45.4 C45.5 C45.6 | outbox re-delivery count |
-| E49  | v0.45.0 → v0.49.0 (unreleased) | silent-config | 2 | none | multi-tenant outbox timeout guards / negative messaging.* values |
+| E49  | v0.45.0 → v0.49.0 (unreleased) | silent-config | 3 | none | multi-tenant outbox timeout guards / stale messaging.* + database.manager.* values |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -506,9 +506,9 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - verify: `psql ... -c "SELECT count(*) FROM gobricks_outbox WHERE status='pending' AND retry_count >= <outbox.maxretries>;"`  # after the first relay cycle re-delivered volume matches the pre-upgrade count and consumers dedupe
 - ref: ADR-033 · #626 · wiki/adr_033_outbox_retry_count_status_parking.md
 
-## E49 · v0.45.0 → v0.49.0 (unreleased) — messaging defaults in all modes + publisher lifecycle hardening
+## E49 · v0.45.0 → v0.49.0 (unreleased) — messaging defaults in all modes + publisher lifecycle hardening + database.manager.* keys
 
-- gist: `config.Validate` now applies `messaging.*` reconnect/publisher defaults **unconditionally**, even when the root `messaging.broker.url` is empty — previously every no-root-broker config (all multi-tenant static deployments, since `validateNoSingleTenantConflict` rejects a root broker URL there; plus single-tenant apps without messaging) skipped both zero→default coercion and negative-value rejection. Consequences: the outbox `publishtimeout` guards (against `connectiontimeout` AND `readytimeout`, C45.8) now actually fire in multi-tenant mode, and negative `messaging.*` values now fail startup everywhere. Defaulting is publisher-mode-aware: `maxcached` 50 single-tenant / preserved-zero multi-tenant (pool scales to `multitenant.limits.tenants`). This release also raises the single-tenant publisher `IdleTTL` default 10m → 1h and adds a bounded readiness wait on cold publishes (#655/#656/#660).
+- gist: `config.Validate` now applies `messaging.*` reconnect/publisher defaults **unconditionally**, even when the root `messaging.broker.url` is empty — previously every no-root-broker config (all multi-tenant static deployments, since `validateNoSingleTenantConflict` rejects a root broker URL there; plus single-tenant apps without messaging) skipped both zero→default coercion and negative-value rejection. Consequences: the outbox `publishtimeout` guards (against `connectiontimeout` AND `readytimeout`, C45.8) now actually fire in multi-tenant mode, and negative `messaging.*` values now fail startup everywhere. Defaulting is publisher-mode-aware: `maxcached` 50 single-tenant / preserved-zero multi-tenant (pool scales to `multitenant.limits.tenants`). This release also raises the single-tenant publisher `IdleTTL` default 10m → 1h, adds a bounded readiness wait on cold publishes (#655/#656/#660), and introduces `database.manager.*` pool keys (C49.3) — previously-inert `database.manager.*` YAML/env values become live on upgrade.
 - build-caught: none
 - preflight: none
 - exit: `go get github.com/gaborage/go-bricks@v0.49.0 && go mod tidy && go build ./... && go test ./...`
@@ -526,6 +526,13 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - apply: none required; set `messaging.publisher.idlettl` explicitly if you relied on the 10m eviction cadence.
 - verify: start the app and let a publisher idle  # eviction now logs at Info at the new TTL; a publish right after eviction no longer fails with ErrNotConnected
 - ref: #655 #656 #657 #660 · app/managers.go · messaging/amqp_client.go
+
+### [C49.3] database.manager.* pool keys go live (maxsize/idlettl/cleanupinterval) · silent-config · when: match
+- detect: `git grep -nE '(^[[:space:]]*|\.)(maxsize|idlettl|cleanupinterval)[[:space:]]*:' -- '*.yaml' '*.yml'` then keep only hits under a `database:`/`databases:`/tenant `database:` block (leaf-anchored: matches nested and flat-dotted forms); also grep `DATABASE_MANAGER_` in deploy manifests
+- gate: match = you already carry `database.manager.*` keys or `DATABASE_MANAGER_*` env vars — inert (silently ignored) on v0.45–v0.48, they now bind: negative values abort startup naming the key, and a `manager` block under `databases.<name>` or `multitenant.tenants.<id>.database` is now rejected at startup (it was and remains non-functional — only the primary `database.manager.*` is honored). no-match = adopt-only: unset keys default to today's exact hardcoded behavior, byte-identical (single-tenant 10 / 1h / 5m; multi-tenant `maxsize` still scales to `multitenant.limits.tenants`, `idlettl` 30m, `cleanupinterval` 5m). The keys govern the single process-wide manager, which also caches named `databases.<name>` and per-tenant handles — count those when sizing `maxsize` (see wiki/database.md).
+- apply: delete stale/negative `database.manager.*` values and any `manager` block under named/tenant database entries; set the primary keys only to tune the pool.
+- verify: `make run`  # boots identically when unset; a negative value or misplaced manager block aborts with an error naming the key
+- ref: #658 · config/validation.go: applyDatabaseManagerDefaults · app/managers.go: BuildDatabaseOptions · wiki/database.md
 
 
 ---

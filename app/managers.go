@@ -29,6 +29,9 @@ const (
 	defaultCacheMaxSize                = 100
 	defaultCacheIdleTTL                = 15 * time.Minute
 	defaultCacheCleanupInterval        = 5 * time.Minute
+	defaultDatabaseMaxSize             = 10
+	defaultDatabaseIdleTTL             = 1 * time.Hour    // Single-tenant default; see config/validation.go
+	defaultDatabaseIdleTTLMultiTenant  = 30 * time.Minute // Multi-tenant default; see config/validation.go
 )
 
 // ManagerConfigBuilder creates configuration options for database and messaging managers
@@ -58,6 +61,10 @@ type ManagerConfigBuilder struct {
 	// (cache.manager.*), sourced from validated config by bootstrap.
 	// When unset, documented defaults are applied as fallbacks.
 	cacheConfig config.CacheManagerConfig
+	// dbConfig carries operator-configurable database manager settings
+	// (database.manager.*), sourced from validated config by bootstrap.
+	// When unset, documented defaults are applied as fallbacks.
+	dbConfig config.DatabaseManagerConfig
 }
 
 // NewManagerConfigBuilder creates a new manager configuration builder.
@@ -72,16 +79,38 @@ func NewManagerConfigBuilder(multiTenantEnabled bool, tenantLimit int) *ManagerC
 // Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
 // Single-tenant mode uses smaller fixed limits and longer TTL for stability.
 func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions {
-	if b.multiTenantEnabled {
-		return database.DbManagerOptions{
-			MaxSize: b.tenantLimit,    // Use configured tenant limit
-			IdleTTL: 30 * time.Minute, // Shorter TTL for multi-tenant
+	// Operator config (database.manager.*) is the source of truth. Mode-specific
+	// values are fallbacks when the operator left the key unset. Non-positive is
+	// treated as unset: config.Validate rejects negatives, but paths that bypass it
+	// (app.NewWithConfig with an injected config) must not leak a negative through
+	// to NewDbManager, whose own coercion would silently cap the pool at 100
+	// instead of the documented mode default.
+	maxSize := b.dbConfig.MaxSize
+	if maxSize <= 0 {
+		if b.multiTenantEnabled {
+			maxSize = b.tenantLimit // Scale database handle pool with tenant limit
+		} else {
+			maxSize = defaultDatabaseMaxSize // Documented single-tenant default
+		}
+	}
+
+	// On the config.Load bootstrap path, config.Validate (applyDatabaseManagerDefaults)
+	// has already stamped this mode-aware IdleTTL default before dbConfig reaches the
+	// builder, so this branch is inert there. It is load-bearing for construction that
+	// bypasses Validate — app.NewWithConfig with an injected config, and direct builder
+	// use in unit tests — mirroring BuildMessagingOptions's IdleTTL fallback.
+	idleTTL := b.dbConfig.IdleTTL
+	if idleTTL <= 0 {
+		if b.multiTenantEnabled {
+			idleTTL = defaultDatabaseIdleTTLMultiTenant // Shorter TTL for multi-tenant
+		} else {
+			idleTTL = defaultDatabaseIdleTTL // Documented single-tenant default
 		}
 	}
 
 	return database.DbManagerOptions{
-		MaxSize: 10,            // Small fixed size for single-tenant
-		IdleTTL: 1 * time.Hour, // Longer TTL for single-tenant
+		MaxSize: maxSize,
+		IdleTTL: idleTTL,
 	}
 }
 
@@ -100,12 +129,11 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 		}
 	}
 
-	// This fallback only serves direct/unvalidated construction (e.g. NewManagerConfigBuilder
-	// called without going through bootstrap.go's config.Validate()-backed cfg): on the real
-	// production path, config.Validate() (config/validation.go: applyMessagingDefaults) has
-	// already applied this same mode-aware default before publisherConfig reaches the builder,
-	// so this branch is dead there — it exists only to keep the builder's documented behavior
-	// correct when invoked without a fully-validated config (e.g. unit tests).
+	// On the config.Load bootstrap path, config.Validate (applyMessagingDefaults) has
+	// already applied this same mode-aware default before publisherConfig reaches the
+	// builder, so this branch is inert there. It is load-bearing for construction that
+	// bypasses Validate — app.NewWithConfig with an injected config, and direct builder
+	// use in unit tests.
 	idleTTL := b.publisherConfig.IdleTTL
 	if idleTTL == 0 {
 		if b.multiTenantEnabled {
@@ -234,8 +262,9 @@ func (f *ResourceManagerFactory) warnIfPoolBelowTenantCount(resource string, max
 		Msg("Resource pool max size is below the number of configured tenants; " +
 			"the LRU manager will evict and recreate handles on requests for uncached tenants " +
 			"(eviction thrash). Raise the pool size for this resource " +
-			"(cache.manager.maxsize, messaging.publisher.maxcached, or multitenant.limits.tenants " +
-			"for the database) to at least the tenant count.")
+			"(cache.manager.maxsize, messaging.publisher.maxcached, or for the database: " +
+			"database.manager.maxsize when set, otherwise multitenant.limits.tenants) " +
+			"to at least the tenant count.")
 }
 
 // poolBelowTenantCount reports whether a per-tenant pool of the given maxSize is
