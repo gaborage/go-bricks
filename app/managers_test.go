@@ -413,8 +413,9 @@ func TestManagerConfigBuilderConsistency(t *testing.T) {
 		assert.Equal(t, 10, dbOptions.MaxSize)
 		assert.Equal(t, 50, msgOptions.MaxPublishers)
 
-		// Database and messaging now share the same 1h idle TTL in single-tenant mode.
-		assert.Equal(t, dbOptions.IdleTTL, msgOptions.IdleTTL)
+		// Invariant: the DB pool must never be shorter-lived than the messaging pool
+		// (DB connections are heavier to re-establish). Currently both default to 1h.
+		assert.GreaterOrEqual(t, dbOptions.IdleTTL, msgOptions.IdleTTL, "DB pool IdleTTL must be >= messaging pool IdleTTL in single-tenant mode")
 	})
 
 	t.Run("multi-tenant configuration consistency", func(t *testing.T) {
