@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/logger"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
@@ -1332,6 +1333,76 @@ func TestPublishToExchangeWaitsForReadyClient(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("PublishToExchange did not return after the client became ready")
 	}
+}
+
+// TestPublishToExchangeExcludesReadyWaitFromLatencyMetrics reproduces the follow-up
+// finding to issue #655: the readiness pre-flight wait must NOT be reported as
+// publish/broker latency. Reuses TestPublishToExchangeWaitsForReadyClient's exact
+// choreography (client becomes ready only after outlasting one 100ms poll tick) and
+// asserts, via the logger.GetAMQPElapsed seam, that the elapsed time PublishToExchange
+// records on its ACK success path excludes the ~150ms wait.
+//
+// This seam is used instead of asserting against the OTel metrics SDK directly:
+// tracking.RecordAMQPPublishMetrics is fed the exact same local `elapsed` variable as
+// logger.AddAMQPElapsed on the ACK branch (see amqp_client.go), and the metrics
+// package's own singleton meter is process-wide and reset only via an unexported
+// tracking-package test helper unreachable from this package — so this lower-level,
+// exported context seam gives a deterministic, package-local assertion of the exact
+// value both call sites share, without depending on OTel global-provider delegation
+// ordering across this whole test binary.
+//
+// ON PRE-FIX CODE (elapsed measured from before the pre-flight wait) this reports
+// >=150ms and the assertion below fails.
+func TestPublishToExchangeExcludesReadyWaitFromLatencyMetrics(t *testing.T) {
+	c := &AMQPClientImpl{
+		m:                 &sync.RWMutex{},
+		log:               &stubLogger{},
+		connectionTimeout: 15 * time.Millisecond,
+		resendDelay:       5 * time.Millisecond,
+		reInitDelay:       5 * time.Millisecond,
+		reconnectDelay:    5 * time.Millisecond,
+		done:              make(chan bool),
+		isReady:           false, // cold: not ready yet
+		readyTimeout:      2 * time.Second,
+	}
+	t.Cleanup(func() {
+		select {
+		case <-c.done:
+			// already closed by the test itself
+		default:
+			_ = c.Close()
+		}
+	})
+
+	ctx := logger.WithRequestCounters(context.Background())
+
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	}()
+
+	// Outlast one 100ms readiness poll tick so the pre-flight wait is actually
+	// exercised (not a lucky first check) — same choreography as
+	// TestPublishToExchangeWaitsForReadyClient.
+	time.Sleep(150 * time.Millisecond)
+
+	ch := &fakeChannel{}
+	c.m.Lock()
+	c.isReady = true
+	c.m.Unlock()
+	c.changeChannel(ch)
+	sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
+
+	select {
+	case err := <-resultCh:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("PublishToExchange did not return after the client became ready")
+	}
+
+	elapsed := time.Duration(logger.GetAMQPElapsed(ctx))
+	assert.Less(t, elapsed, 100*time.Millisecond,
+		"publish-latency elapsed must exclude the ~150ms readiness wait, got %s", elapsed)
 }
 
 // TestPublishToExchangeReadyTimeoutExpires proves that when the client never
