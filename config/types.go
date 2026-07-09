@@ -154,6 +154,29 @@ type DatabaseConfig struct {
 
 	PostgreSQL PostgreSQLConfig `koanf:"postgresql" json:"postgresql" yaml:"postgresql" toml:"postgresql" mapstructure:"postgresql"`
 	Oracle     OracleConfig     `koanf:"oracle" json:"oracle" yaml:"oracle" toml:"oracle" mapstructure:"oracle"`
+
+	// Manager applies only to the primary Config.Database, whose single
+	// database.DbManager also caches named databases.<name> and per-tenant handles.
+	Manager DatabaseManagerConfig `koanf:"manager" json:"manager" yaml:"manager" toml:"manager" mapstructure:"manager"`
+}
+
+// DatabaseManagerConfig holds database manager (key-cached connection pool)
+// lifecycle settings. Per-mode defaults are documented on each field.
+type DatabaseManagerConfig struct {
+	// MaxSize is the maximum number of active database handles. 0 = use default
+	// (10 single-tenant / tenant limit multi-tenant); negative values are invalid.
+	MaxSize int `koanf:"maxsize" json:"maxsize" yaml:"maxsize" toml:"maxsize" mapstructure:"maxsize"`
+
+	// IdleTTL is the idle timeout before a database handle is closed.
+	// Default: 1h single-tenant / 30m multi-tenant.
+	IdleTTL time.Duration `koanf:"idlettl" json:"idlettl" yaml:"idlettl" toml:"idlettl" mapstructure:"idlettl"`
+
+	// CleanupInterval is how often the cleanup goroutine runs. Default: 5m.
+	CleanupInterval time.Duration `koanf:"cleanupinterval" json:"cleanupinterval" yaml:"cleanupinterval" toml:"cleanupinterval" mapstructure:"cleanupinterval"`
+}
+
+func (c DatabaseManagerConfig) isSet() bool {
+	return c != (DatabaseManagerConfig{})
 }
 
 // PoolConfig holds connection pool settings.

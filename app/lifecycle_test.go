@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
+	dbtest "github.com/gaborage/go-bricks/database/testing"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -387,16 +389,38 @@ func TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval(t *testing.
 	}, time.Second, 10*time.Millisecond)
 }
 
-// TestPublisherCleanupIntervalTooLate guards the Fix-3 predicate: the previously
-// implicit guarantee (a hardcoded 2m sweep always well below any configured TTL) no
-// longer holds now that both messaging.publisher.cleanupinterval and
-// messaging.publisher.idlettl are independently operator-configurable. The predicate
-// must flag "sweep frequency >= TTL" (eviction merely lags, so this is advisory, not
-// fatal — see startMaintenanceLoops) while treating idleTTL <= 0 as "nothing
-// meaningful to compare". config.Validate applies the IdleTTL default unconditionally
-// (see config/validation.go: validateMessaging), so that guard is purely defensive
-// for callers that bypass Validate — as the zero/negative cases here exercise.
-func TestPublisherCleanupIntervalTooLate(t *testing.T) {
+// TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval proves the
+// configured 20ms interval reached DbManager.StartCleanup: the 5m hardcoded
+// default would never fire in this test's 1s window, so a swept idle connection
+// is the proof.
+func TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval(t *testing.T) {
+	log := logger.New("error", false)
+
+	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+		return dbtest.NewTestDB("postgresql"), nil
+	}
+	dbManager := database.NewDbManager(&stubTenantResource{}, log, database.DbManagerOptions{MaxSize: 5, IdleTTL: 10 * time.Millisecond}, connector)
+	defer func() { _ = dbManager.Close() }()
+
+	_, rel, err := dbManager.Get(context.Background(), testKey)
+	require.NoError(t, err)
+	rel()
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Manager: config.DatabaseManagerConfig{CleanupInterval: 20 * time.Millisecond},
+		},
+	}
+	a := &App{cfg: cfg, logger: log, dbManager: dbManager}
+	a.startMaintenanceLoops()
+	defer a.dbManager.StopCleanup()
+
+	assert.Eventually(t, func() bool {
+		return dbManager.Stats()["active_connections"] == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestCleanupIntervalTooLate(t *testing.T) {
 	tests := []struct {
 		name            string
 		cleanupInterval time.Duration
@@ -413,7 +437,7 @@ func TestPublisherCleanupIntervalTooLate(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, publisherCleanupIntervalTooLate(tc.cleanupInterval, tc.idleTTL))
+			assert.Equal(t, tc.want, cleanupIntervalTooLate(tc.cleanupInterval, tc.idleTTL))
 		})
 	}
 }

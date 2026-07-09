@@ -289,6 +289,28 @@ Size `multitenant.limits.tenants` to at least the number of tenants you expect t
 >
 > A connection that is **still in use** when evicted (held by an in-flight request, message, or job) is detached from the cache immediately but its `Close()` is **deferred until the last borrower releases its lease** — so an in-use connection is never closed under an active caller ([ADR-032](adr_032_lease_refcount_tenant_handles.md), the M3 fix). The lease is reference-counted by `DbManager` and released by the framework at each request/message/job boundary; **application code is unchanged** (`deps.DB(ctx)` keeps its `(Interface, error)` signature). Direct callers of `DbManager.Get` see a new `ReleaseFunc` third return — see [migrations.md](migrations.md).
 
+### Connection-manager pool tunables (`database.manager.*`)
+
+The manager's own lifecycle is operator-tunable, matching the `messaging.publisher.*` and `cache.manager.*` surfaces. All three keys default to today's hardcoded behavior, so leaving them unset changes nothing.
+
+| Key | Default (single-tenant) | Default (multi-tenant) | Purpose |
+|-----|-------------------------|------------------------|---------|
+| `database.manager.maxsize` | `10` | `multitenant.limits.tenants` | Max cached database handles (LRU cap) |
+| `database.manager.idlettl` | `1h` | `30m` | Idle timeout before a cached handle is closed |
+| `database.manager.cleanupinterval` | `5m` | `5m` | How often the background cleanup sweep runs |
+
+```yaml
+database:
+  manager:
+    maxsize: 20       # raise the LRU cap above the default 10 single-tenant handles
+    idlettl: 2h
+    cleanupinterval: 10m
+```
+
+Each key also binds from the environment (`DATABASE_MANAGER_MAXSIZE`, `DATABASE_MANAGER_IDLETTL`, `DATABASE_MANAGER_CLEANUPINTERVAL`); negative values fail startup naming the key. In multi-tenant mode a zero/unset `maxsize` is **preserved** so the manager keeps scaling the cap to `multitenant.limits.tenants` — set an explicit positive value only to override that scaling.
+
+These keys are set under the primary `database:` section only, but they govern the **single process-wide manager**, which caches the primary handle, every named `databases.<name>` handle (keyed `named:<name>` via `deps.DBByName`), and per-tenant handles. **Count named databases when sizing `maxsize`**: a single-tenant app with the primary plus 12 named databases needs `maxsize >= 13` to avoid LRU eviction churn. A `manager` sub-block under `databases.<name>` or `multitenant.tenants.<id>.database` is rejected at startup — it would otherwise be silently ignored.
+
 ## Repository Method Attribution
 
 The `db.client.operation.duration` metric carries `db.operation.name` (the SQL verb:

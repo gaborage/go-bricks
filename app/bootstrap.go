@@ -46,6 +46,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundl
 	configBuilder.readyTimeout = b.cfg.Messaging.Reconnect.ReadyTimeout
 	configBuilder.publisherConfig = b.cfg.Messaging.Publisher
 	configBuilder.cacheConfig = b.cfg.Cache.Manager
+	configBuilder.dbConfig = b.cfg.Database.Manager
 	// Only count statically-configured tenants when multitenancy is enabled. Koanf
 	// populates Multitenant.Tenants from YAML regardless of the enabled flag, but
 	// those entries are meaningless in single-tenant mode (mirrors the guard in
