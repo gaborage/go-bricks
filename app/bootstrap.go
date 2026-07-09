@@ -35,18 +35,21 @@ func (b *appBootstrap) coreComponents() (SignalHandler, TimeoutProvider, ServerR
 	return signalHandler, timeoutProvider, resolveServer(b.cfg, b.log, b.opts)
 }
 
-// dependencies creates and configures all resource managers and dependencies.
-// Returns a bundle containing the database manager, messaging manager, cache manager, resource provider, and observability.
-func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundle {
-	// Create factory resolver and configuration builder
-	resolver := NewFactoryResolver(b.opts)
-	configBuilder := NewManagerConfigBuilder(b.cfg.Multitenant.Enabled, b.cfg.Multitenant.Limits.Tenants)
-	configBuilder.connectionTimeout = b.cfg.Messaging.Reconnect.ConnectionTimeout
-	configBuilder.maxPublishAttempts = b.cfg.Messaging.Reconnect.MaxPublishAttempts
-	configBuilder.readyTimeout = b.cfg.Messaging.Reconnect.ReadyTimeout
-	configBuilder.publisherConfig = b.cfg.Messaging.Publisher
-	configBuilder.cacheConfig = b.cfg.Cache.Manager
-	configBuilder.dbConfig = b.cfg.Database.Manager
+// newManagerConfigBuilderFromConfig copies every operator-tunable manager setting
+// from validated config into the builder — the seam where a key silently reverts
+// to validated-but-ignored if an assignment is dropped or cross-wired (#662).
+func newManagerConfigBuilderFromConfig(cfg *config.Config) *ManagerConfigBuilder {
+	configBuilder := NewManagerConfigBuilder(cfg.Multitenant.Enabled, cfg.Multitenant.Limits.Tenants)
+	configBuilder.connectionTimeout = cfg.Messaging.Reconnect.ConnectionTimeout
+	configBuilder.maxPublishAttempts = cfg.Messaging.Reconnect.MaxPublishAttempts
+	configBuilder.readyTimeout = cfg.Messaging.Reconnect.ReadyTimeout
+	configBuilder.reconnectDelay = cfg.Messaging.Reconnect.Delay
+	configBuilder.reconnectMaxDelay = cfg.Messaging.Reconnect.MaxDelay
+	configBuilder.reInitDelay = cfg.Messaging.Reconnect.ReinitDelay
+	configBuilder.resendDelay = cfg.Messaging.Reconnect.ResendDelay
+	configBuilder.publisherConfig = cfg.Messaging.Publisher
+	configBuilder.cacheConfig = cfg.Cache.Manager
+	configBuilder.dbConfig = cfg.Database.Manager
 	// Only count statically-configured tenants when multitenancy is enabled. Koanf
 	// populates Multitenant.Tenants from YAML regardless of the enabled flag, but
 	// those entries are meaningless in single-tenant mode (mirrors the guard in
@@ -54,9 +57,17 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundl
 	// would trip a spurious pool-below-tenant-count WARN even though single-tenant
 	// pools are never per-tenant keyed — and would contradict StaticTenantCount's
 	// documented "0 for single-tenant" contract.
-	if b.cfg.Multitenant.Enabled {
-		configBuilder.staticTenantCount = len(b.cfg.Multitenant.Tenants)
+	if cfg.Multitenant.Enabled {
+		configBuilder.staticTenantCount = len(cfg.Multitenant.Tenants)
 	}
+	return configBuilder
+}
+
+// dependencies creates and configures all resource managers and dependencies.
+// Returns a bundle containing the database manager, messaging manager, cache manager, resource provider, and observability.
+func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundle {
+	resolver := NewFactoryResolver(b.opts)
+	configBuilder := newManagerConfigBuilderFromConfig(b.cfg)
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 
 	// Log factory configuration for debugging

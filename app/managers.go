@@ -53,6 +53,12 @@ type ManagerConfigBuilder struct {
 	// readyTimeout bounds the pre-flight readiness wait, sourced from
 	// messaging.reconnect.readytimeout and set by bootstrap.
 	readyTimeout time.Duration
+	// Reconnect delays, sourced from messaging.reconnect.{delay,maxdelay,reinitdelay,resenddelay}
+	// and set by bootstrap.
+	reconnectDelay    time.Duration
+	reconnectMaxDelay time.Duration
+	reInitDelay       time.Duration
+	resendDelay       time.Duration
 	// publisherConfig carries operator-configurable messaging publisher pool
 	// settings (messaging.publisher.*), sourced from validated config by bootstrap.
 	// When unset, documented defaults are applied as fallbacks.
@@ -117,6 +123,10 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 		ConnectionTimeout:  b.connectionTimeout,
 		MaxPublishAttempts: b.maxPublishAttempts,
 		ReadyTimeout:       b.readyTimeout,
+		ReconnectDelay:     b.reconnectDelay,
+		ReconnectMaxDelay:  b.reconnectMaxDelay,
+		ReinitDelay:        b.reInitDelay,
+		ResendDelay:        b.resendDelay,
 	}
 }
 
@@ -126,12 +136,15 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 func (b *ManagerConfigBuilder) BuildCacheOptions() cache.ManagerConfig {
 	// Operator config (cache.manager.*) is the source of truth. Mode-specific
 	// values are only fallbacks when the operator left the key unset (zero).
+	// Not resolveMaxSize: cache.NewCacheManager rejects negatives (unlike the
+	// db/messaging managers, which coerce), so a negative must pass through and
+	// fail loudly there instead of being silently swallowed into a live pool.
 	maxSize := b.cacheConfig.MaxSize
 	if maxSize == 0 {
 		if b.multiTenantEnabled {
-			maxSize = b.tenantLimit // Scale cache instances with tenant limit
+			maxSize = b.tenantLimit
 		} else {
-			maxSize = defaultCacheMaxSize // Documented single-tenant default
+			maxSize = defaultCacheMaxSize
 		}
 	}
 
@@ -265,6 +278,10 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 		ConnectionTimeout:  msgOptions.ConnectionTimeout,
 		MaxPublishAttempts: msgOptions.MaxPublishAttempts,
 		ReadyTimeout:       msgOptions.ReadyTimeout,
+		ReconnectDelay:     msgOptions.ReconnectDelay,
+		ReconnectMaxDelay:  msgOptions.ReconnectMaxDelay,
+		ReinitDelay:        msgOptions.ReinitDelay,
+		ResendDelay:        msgOptions.ResendDelay,
 	})
 
 	f.warnIfPoolBelowTenantCount("messaging", msgOptions.MaxPublishers)

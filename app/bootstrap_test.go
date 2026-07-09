@@ -719,3 +719,50 @@ observability:
 	// The fallback provider must shut down cleanly (no-op).
 	assert.NoError(t, got.Shutdown(context.Background()))
 }
+
+// TestNewManagerConfigBuilderFromConfig pins the config-to-builder seam — the one
+// place a validated key can silently revert to validated-but-ignored (#662) if an
+// assignment is dropped or cross-wired. Every value is distinct to catch swaps.
+func TestNewManagerConfigBuilderFromConfig(t *testing.T) {
+	cfg := &config.Config{
+		Multitenant: config.MultitenantConfig{
+			Enabled: true,
+			Limits:  config.LimitsConfig{Tenants: 42},
+			Tenants: map[string]config.TenantEntry{"a": {}, "b": {}, "c": {}},
+		},
+		Messaging: config.MessagingConfig{
+			Reconnect: config.ReconnectConfig{
+				ConnectionTimeout:  31 * time.Second,
+				MaxPublishAttempts: 6,
+				ReadyTimeout:       7 * time.Second,
+				Delay:              8 * time.Second,
+				MaxDelay:           91 * time.Second,
+				ReinitDelay:        3 * time.Second,
+				ResendDelay:        11 * time.Second,
+			},
+			Publisher: config.PublisherPoolConfig{MaxCached: 12, IdleTTL: 13 * time.Minute},
+		},
+		Cache:    config.CacheConfig{Manager: config.CacheManagerConfig{MaxSize: 14}},
+		Database: config.DatabaseConfig{Manager: config.DatabaseManagerConfig{MaxSize: 15}},
+	}
+
+	b := newManagerConfigBuilderFromConfig(cfg)
+
+	assert.True(t, b.multiTenantEnabled)
+	assert.Equal(t, 42, b.tenantLimit)
+	assert.Equal(t, 3, b.staticTenantCount)
+	assert.Equal(t, 31*time.Second, b.connectionTimeout)
+	assert.Equal(t, 6, b.maxPublishAttempts)
+	assert.Equal(t, 7*time.Second, b.readyTimeout)
+	assert.Equal(t, 8*time.Second, b.reconnectDelay)
+	assert.Equal(t, 91*time.Second, b.reconnectMaxDelay)
+	assert.Equal(t, 3*time.Second, b.reInitDelay)
+	assert.Equal(t, 11*time.Second, b.resendDelay)
+	assert.Equal(t, cfg.Messaging.Publisher, b.publisherConfig)
+	assert.Equal(t, cfg.Cache.Manager, b.cacheConfig)
+	assert.Equal(t, cfg.Database.Manager, b.dbConfig)
+
+	// Single-tenant: leftover tenants entries must not count (StaticTenantCount contract).
+	cfg.Multitenant.Enabled = false
+	assert.Zero(t, newManagerConfigBuilderFromConfig(cfg).staticTenantCount)
+}

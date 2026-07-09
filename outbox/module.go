@@ -157,6 +157,12 @@ func (m *Module) validatePublishTimeout() error {
 			"a shorter value expires inside the readiness pre-flight and defeats the relay's mid-batch broker-drop detection",
 			m.cfg.PublishTimeout, rt)
 	}
+	rd := m.config.Messaging.Reconnect.ResendDelay
+	if rd > 0 && m.cfg.PublishTimeout < rd {
+		return fmt.Errorf("outbox: publishtimeout (%s) must be >= messaging.reconnect.resenddelay (%s); "+
+			"a shorter value expires inside a single publish-retry wait, so each retryable event burns its whole timeout delivering nothing",
+			m.cfg.PublishTimeout, rd)
+	}
 	return nil
 }
 

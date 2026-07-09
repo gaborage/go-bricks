@@ -2435,7 +2435,7 @@ func TestApplyCacheManagerDefaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateCache(&tt.config)
+			err := validateCache(&tt.config, false)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedMaxSize, tt.config.Manager.MaxSize, "Manager.MaxSize mismatch")
 			assert.Equal(t, tt.expectedIdleTTL, tt.config.Manager.IdleTTL, "Manager.IdleTTL mismatch")
@@ -2484,10 +2484,68 @@ func TestApplyCacheManagerDefaultsNegativeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateCache(&tt.config)
+			err := validateCache(&tt.config, false)
 			assertValidationError(t, err, tt.errorContains)
 		})
 	}
+}
+
+// TestApplyCacheManagerDefaultsModeAware mirrors TestApplyDatabaseManagerDefaults:
+// multi-tenant preserves an unset MaxSize (so app.ManagerConfigBuilder scales the
+// pool to the tenant limit), single-tenant stamps the flat default, and negatives
+// are rejected in both modes (#668). IdleTTL/CleanupInterval stay mode-independent.
+func TestApplyCacheManagerDefaultsModeAware(t *testing.T) {
+	t.Run("single_tenant_zero_values_apply_all_defaults", func(t *testing.T) {
+		cfg := &CacheConfig{}
+		require.NoError(t, applyCacheManagerDefaults(cfg, false))
+		assert.Equal(t, defaultCacheMaxSize, cfg.Manager.MaxSize)
+		assert.Equal(t, defaultCacheIdleTTL, cfg.Manager.IdleTTL)
+		assert.Equal(t, defaultCacheCleanupInterval, cfg.Manager.CleanupInterval)
+	})
+
+	t.Run("multi_tenant_zero_preserves_maxsize", func(t *testing.T) {
+		cfg := &CacheConfig{}
+		require.NoError(t, applyCacheManagerDefaults(cfg, true))
+		assert.Zero(t, cfg.Manager.MaxSize)
+		assert.Equal(t, defaultCacheIdleTTL, cfg.Manager.IdleTTL)
+		assert.Equal(t, defaultCacheCleanupInterval, cfg.Manager.CleanupInterval)
+	})
+
+	t.Run("explicit_values_preserved_single", func(t *testing.T) {
+		cfg := &CacheConfig{Manager: CacheManagerConfig{MaxSize: 42, IdleTTL: 30 * time.Minute, CleanupInterval: 90 * time.Second}}
+		require.NoError(t, applyCacheManagerDefaults(cfg, false))
+		assert.Equal(t, 42, cfg.Manager.MaxSize)
+		assert.Equal(t, 30*time.Minute, cfg.Manager.IdleTTL)
+		assert.Equal(t, 90*time.Second, cfg.Manager.CleanupInterval)
+	})
+
+	t.Run("explicit_values_preserved_multi", func(t *testing.T) {
+		cfg := &CacheConfig{Manager: CacheManagerConfig{MaxSize: 42, IdleTTL: 30 * time.Minute, CleanupInterval: 90 * time.Second}}
+		require.NoError(t, applyCacheManagerDefaults(cfg, true))
+		assert.Equal(t, 42, cfg.Manager.MaxSize)
+		assert.Equal(t, 30*time.Minute, cfg.Manager.IdleTTL)
+		assert.Equal(t, 90*time.Second, cfg.Manager.CleanupInterval)
+	})
+
+	t.Run("negative_maxsize_rejected_single", func(t *testing.T) {
+		cfg := &CacheConfig{Manager: CacheManagerConfig{MaxSize: -1}}
+		assertValidationError(t, applyCacheManagerDefaults(cfg, false), "cache.manager.maxsize")
+	})
+
+	t.Run("negative_maxsize_rejected_multi", func(t *testing.T) {
+		cfg := &CacheConfig{Manager: CacheManagerConfig{MaxSize: -1}}
+		assertValidationError(t, applyCacheManagerDefaults(cfg, true), "cache.manager.maxsize")
+	})
+
+	t.Run("negative_idlettl_rejected", func(t *testing.T) {
+		cfg := &CacheConfig{Manager: CacheManagerConfig{IdleTTL: -1 * time.Minute}}
+		assertValidationError(t, applyCacheManagerDefaults(cfg, false), "cache.manager.idlettl")
+	})
+
+	t.Run("negative_cleanupinterval_rejected", func(t *testing.T) {
+		cfg := &CacheConfig{Manager: CacheManagerConfig{CleanupInterval: -1 * time.Minute}}
+		assertValidationError(t, applyCacheManagerDefaults(cfg, false), "cache.manager.cleanupinterval")
+	})
 }
 
 func TestApplyStartupDefaults(t *testing.T) {
@@ -3553,7 +3611,7 @@ func TestValidateMultitenantDynamicSource(t *testing.T) {
 
 func TestValidateCacheDisabled(t *testing.T) {
 	cfg := CacheConfig{Enabled: false}
-	err := validateCache(&cfg)
+	err := validateCache(&cfg, false)
 	assert.NoError(t, err)
 }
 
@@ -3576,7 +3634,7 @@ func TestValidateCacheSuccess(t *testing.T) {
 		},
 	}
 
-	err := validateCache(&cfg)
+	err := validateCache(&cfg, false)
 	assert.NoError(t, err)
 }
 
@@ -3610,7 +3668,7 @@ func TestValidateCacheTypeFailures(t *testing.T) {
 				Type:    tt.cacheType,
 			}
 
-			err := validateCache(&cfg)
+			err := validateCache(&cfg, false)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -3731,7 +3789,7 @@ func TestValidateRedisCacheFailures(t *testing.T) {
 				Redis:   tt.redis,
 			}
 
-			err := validateCache(&cfg)
+			err := validateCache(&cfg, false)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -3794,7 +3852,7 @@ func TestValidateRedisCacheEdgeCases(t *testing.T) {
 				Redis:   tt.redis,
 			}
 
-			err := validateCache(&cfg)
+			err := validateCache(&cfg, false)
 			if tt.valid {
 				assert.NoError(t, err)
 			} else {
@@ -4418,6 +4476,32 @@ func TestValidateMessagingAppliesDefaultsWhenBrokerURLEmpty(t *testing.T) {
 	})
 }
 
+// TestValidateMessagingRejectsMaxDelayBelowDelay pins the cross-field guard: an
+// inverted pair would be silently clamped by computeBackoff, leaving the
+// configured ceiling ignored (#662).
+func TestValidateMessagingRejectsMaxDelayBelowDelay(t *testing.T) {
+	t.Run("explicit_maxdelay_below_default_delay_rejected", func(t *testing.T) {
+		cfg := &MessagingConfig{Reconnect: ReconnectConfig{MaxDelay: 2 * time.Second}} // delay defaults to 5s
+		err := validateMessaging(cfg, false)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "messaging.reconnect.maxdelay")
+	})
+
+	t.Run("explicit_delay_above_default_maxdelay_rejected", func(t *testing.T) {
+		cfg := &MessagingConfig{Reconnect: ReconnectConfig{Delay: 90 * time.Second}} // maxdelay defaults to 60s
+		require.Error(t, validateMessaging(cfg, false))
+	})
+
+	t.Run("consistent_pair_accepted", func(t *testing.T) {
+		cfg := &MessagingConfig{Reconnect: ReconnectConfig{Delay: 10 * time.Second, MaxDelay: 2 * time.Minute}}
+		require.NoError(t, validateMessaging(cfg, false))
+	})
+
+	t.Run("defaults_accepted", func(t *testing.T) {
+		require.NoError(t, validateMessaging(&MessagingConfig{}, false))
+	})
+}
+
 // TestValidateMultiTenantStaticAppliesMessagingDefaultsEndToEnd proves a multi-tenant
 // static config — where the root broker URL is necessarily empty — yields effective
 // messaging defaults through the full Validate() entry point, so the outbox
@@ -4622,6 +4706,83 @@ func TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd(t *testing.T)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "acme")
 		assert.Contains(t, err.Error(), "manager")
+	})
+}
+
+// TestValidateMultiTenantAppliesCacheManagerDefaultsEndToEnd pins that Validate()
+// threads the multitenant flag into applyCacheManagerDefaults, guarding the #668
+// regression where a >100-tenant fleet's cache pool was silently capped at 100.
+func TestValidateMultiTenantAppliesCacheManagerDefaultsEndToEnd(t *testing.T) {
+	newCfg := func(multitenant bool) *Config {
+		cfg := &Config{
+			App: AppConfig{
+				Name:    testAppName,
+				Version: testAppVersion,
+				Env:     EnvDevelopment,
+				Rate:    RateConfig{Limit: 100},
+			},
+			Server: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
+			},
+			Log: LogConfig{Level: "info"},
+			Cache: CacheConfig{
+				Enabled: true,
+				Type:    "redis",
+				Redis:   RedisConfig{Host: "localhost", Port: 6379, PoolSize: 10},
+			},
+		}
+		if multitenant {
+			cfg.Multitenant = MultitenantConfig{
+				Enabled:  true,
+				Resolver: ResolverConfig{Type: ResolverTypeHeader, Header: testTenantHeader},
+				Tenants: map[string]TenantEntry{
+					"acme": {
+						Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     "acme.db",
+							Port:     5432,
+							Database: "acme",
+							Username: "acme_user",
+						},
+					},
+				},
+			}
+			cfg.Source = SourceConfig{Type: SourceTypeStatic}
+		} else {
+			cfg.Database = DatabaseConfig{
+				Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "app",
+				Username: "user", Password: "pass",
+			}
+		}
+		return cfg
+	}
+
+	t.Run("multi_tenant_unset_maxsize_preserved", func(t *testing.T) {
+		cfg := newCfg(true)
+		require.NoError(t, Validate(cfg))
+		assert.Zero(t, cfg.Cache.Manager.MaxSize)
+		assert.Equal(t, defaultCacheIdleTTL, cfg.Cache.Manager.IdleTTL)
+		assert.Equal(t, defaultCacheCleanupInterval, cfg.Cache.Manager.CleanupInterval)
+	})
+
+	t.Run("multi_tenant_negative_maxsize_rejected_through_validate", func(t *testing.T) {
+		cfg := newCfg(true)
+		cfg.Cache.Manager.MaxSize = -1
+		err := Validate(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cache.manager.maxsize")
+	})
+
+	t.Run("single_tenant_unset_maxsize_stamps_100", func(t *testing.T) {
+		cfg := newCfg(false)
+		require.NoError(t, Validate(cfg))
+		assert.Equal(t, defaultCacheMaxSize, cfg.Cache.Manager.MaxSize)
 	})
 }
 

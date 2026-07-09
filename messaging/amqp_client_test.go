@@ -1682,6 +1682,58 @@ func TestAMQPClientInitChannelCreationFailure(t *testing.T) {
 	assert.False(t, client.IsReady())
 }
 
+// TestWithReconnectDelayOptions mirrors TestWithReadyTimeoutOption: each
+// constructor option sets its field and ignores non-positive values (#662).
+func TestWithReconnectDelayOptions(t *testing.T) {
+	c := &AMQPClientImpl{}
+
+	WithReconnectDelay(7 * time.Second)(c)
+	assert.Equal(t, 7*time.Second, c.reconnectDelay)
+	WithReconnectDelay(0)(c)
+	assert.Equal(t, 7*time.Second, c.reconnectDelay)
+	WithReconnectDelay(-1 * time.Second)(c)
+	assert.Equal(t, 7*time.Second, c.reconnectDelay)
+
+	WithReconnectMaxDelay(90 * time.Second)(c)
+	assert.Equal(t, 90*time.Second, c.reconnectMaxDelay)
+	WithReconnectMaxDelay(0)(c)
+	assert.Equal(t, 90*time.Second, c.reconnectMaxDelay)
+	WithReconnectMaxDelay(-1 * time.Second)(c)
+	assert.Equal(t, 90*time.Second, c.reconnectMaxDelay)
+
+	WithReinitDelay(3 * time.Second)(c)
+	assert.Equal(t, 3*time.Second, c.reInitDelay)
+	WithReinitDelay(0)(c)
+	assert.Equal(t, 3*time.Second, c.reInitDelay)
+	WithReinitDelay(-1 * time.Second)(c)
+	assert.Equal(t, 3*time.Second, c.reInitDelay)
+
+	WithResendDelay(11 * time.Second)(c)
+	assert.Equal(t, 11*time.Second, c.resendDelay)
+	WithResendDelay(0)(c)
+	assert.Equal(t, 11*time.Second, c.resendDelay)
+	WithResendDelay(-1 * time.Second)(c)
+	assert.Equal(t, 11*time.Second, c.resendDelay)
+}
+
+// TestNewAMQPClientReconnectDefaults pins that an unset construction leaves the
+// four reconnect delays at their documented defaults (byte-identical to pre-#662).
+func TestNewAMQPClientReconnectDefaults(t *testing.T) {
+	oldDial := getAmqpDialFunc()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+	// t.Cleanup (LIFO) so the client is closed BEFORE the real dialer is restored;
+	// a defer here would restore first, letting the live reconnect goroutine dial out.
+	t.Cleanup(func() { setAmqpDialFunc(oldDial) })
+
+	c := NewAMQPClient(amqpHost, &stubLogger{})
+	t.Cleanup(func() { closeAndWaitForReconnect(c) })
+
+	assert.Equal(t, defaultReconnectDelay, c.reconnectDelay)
+	assert.Equal(t, defaultReconnectMaxDelay, c.reconnectMaxDelay)
+	assert.Equal(t, defaultReInitDelay, c.reInitDelay)
+	assert.Equal(t, defaultResendDelay, c.resendDelay)
+}
+
 // closeAndWaitForReconnect closes the client and waits for its background
 // reconnection goroutine to fully exit. Without this wait a goroutine leaked
 // from one test can, via the package-global dial func, dial a later test's fake

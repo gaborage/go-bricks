@@ -44,6 +44,10 @@ type MessagingClientFactoryOptions struct {
 	ConnectionTimeout  time.Duration
 	MaxPublishAttempts int
 	ReadyTimeout       time.Duration
+	ReconnectDelay     time.Duration
+	ReconnectMaxDelay  time.Duration
+	ReinitDelay        time.Duration
+	ResendDelay        time.Duration
 }
 
 // MessagingClientFactory returns the appropriate messaging client factory function.
@@ -53,8 +57,9 @@ type MessagingClientFactoryOptions struct {
 // neither connectionTimeout nor maxPublishAttempts applies to it.
 //
 // Deprecated: kept for backward compatibility (its signature cannot change without
-// breaking apidiff). Use MessagingClientFactoryWithOptions to also configure
-// ReadyTimeout.
+// breaking apidiff). Use MessagingClientFactoryWithOptions, which also carries
+// ReadyTimeout and the four reconnect delays (messaging.reconnect.*) — clients
+// built through this method keep the hardcoded client defaults for those.
 func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration, maxPublishAttempts int) messaging.ClientFactory {
 	return f.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
 		ConnectionTimeout:  connectionTimeout,
@@ -62,14 +67,15 @@ func (f *FactoryResolver) MessagingClientFactory(connectionTimeout time.Duration
 	})
 }
 
-// MessagingClientFactoryWithOptions is the ReadyTimeout-aware successor to
+// MessagingClientFactoryWithOptions is the options-struct successor to
 // MessagingClientFactory. Internal bootstrap wiring (CreateMessagingManager)
-// uses this method so messaging.reconnect.readytimeout reaches the client.
+// uses this method so every messaging.reconnect.* client knob reaches the client.
 //
 // Same custom-factory precedence as MessagingClientFactory: if
 // Options.MessagingClientFactory is set it owns construction and receives only
-// (url, log) — none of opts (ConnectionTimeout, MaxPublishAttempts, ReadyTimeout)
-// applies to it.
+// (url, log) — NO field of opts applies to it, so all messaging.reconnect.*
+// config (timeouts, attempts, and the four reconnect delays) is bypassed and
+// custom-built clients keep the hardcoded client defaults.
 func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClientFactoryOptions) messaging.ClientFactory {
 	if f.opts != nil && f.opts.MessagingClientFactory != nil {
 		return func(url string, log logger.Logger) messaging.AMQPClient {
@@ -82,6 +88,10 @@ func (f *FactoryResolver) MessagingClientFactoryWithOptions(opts MessagingClient
 			messaging.WithConnectionTimeout(opts.ConnectionTimeout),
 			messaging.WithMaxPublishAttempts(opts.MaxPublishAttempts),
 			messaging.WithReadyTimeout(opts.ReadyTimeout),
+			messaging.WithReconnectDelay(opts.ReconnectDelay),
+			messaging.WithReconnectMaxDelay(opts.ReconnectMaxDelay),
+			messaging.WithReinitDelay(opts.ReinitDelay),
+			messaging.WithResendDelay(opts.ResendDelay),
 		)
 	}
 }
