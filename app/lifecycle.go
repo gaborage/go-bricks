@@ -25,7 +25,7 @@ func (a *App) startMaintenanceLoops() {
 	}
 	if a.messagingManager != nil {
 		a.logger.Info().Msg("Starting messaging manager cleanup loop")
-		a.messagingManager.StartCleanup(2 * time.Minute) // Messaging cleanup every 2 minutes
+		a.messagingManager.StartCleanup(a.cfg.Messaging.Publisher.CleanupInterval)
 	}
 }
 

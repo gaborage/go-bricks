@@ -189,6 +189,7 @@ GoBricks applies production-safe AMQP reconnection defaults when messaging is co
 | `reconnect.maxdelay` | 60s | Maximum backoff cap for exponential retry |
 | `publisher.maxcached` | 50 | Maximum cached publisher channels |
 | `publisher.idlettl` | 1h | TTL for idle publisher channels |
+| `publisher.cleanupinterval` | 2m | How often the idle-publisher cleanup goroutine runs |
 
 **Override defaults** in `config.yaml`:
 

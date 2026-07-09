@@ -40,15 +40,16 @@ const (
 
 // Messaging reconnection defaults
 const (
-	defaultReconnectDelay     = 5 * time.Second  // Initial delay between reconnection attempts
-	defaultReinitDelay        = 2 * time.Second  // Delay before channel reinitialization
-	defaultResendDelay        = 5 * time.Second  // Delay before retrying failed publishes
-	defaultConnectionTimeout  = 30 * time.Second // Per-publish broker confirmation (ACK/NACK) wait
-	defaultReadyTimeout       = 5 * time.Second  // Pre-flight wait for a not-yet-ready client before a publish begins
-	defaultMaxReconnectDelay  = 60 * time.Second // Maximum delay for exponential backoff cap
-	defaultMaxPublishers      = 50               // Maximum publisher clients in cache
-	defaultPublisherIdleTTL   = 1 * time.Hour    // Time before idle publishers are evicted
-	defaultMaxPublishAttempts = 5                // Bounded publish retry attempts before giving up
+	defaultReconnectDelay           = 5 * time.Second  // Initial delay between reconnection attempts
+	defaultReinitDelay              = 2 * time.Second  // Delay before channel reinitialization
+	defaultResendDelay              = 5 * time.Second  // Delay before retrying failed publishes
+	defaultConnectionTimeout        = 30 * time.Second // Per-publish broker confirmation (ACK/NACK) wait
+	defaultReadyTimeout             = 5 * time.Second  // Pre-flight wait for a not-yet-ready client before a publish begins
+	defaultMaxReconnectDelay        = 60 * time.Second // Maximum delay for exponential backoff cap
+	defaultMaxPublishers            = 50               // Maximum publisher clients in cache
+	defaultPublisherIdleTTL         = 1 * time.Hour    // Time before idle publishers are evicted
+	defaultPublisherCleanupInterval = 2 * time.Minute  // Publisher-pool cleanup goroutine frequency
+	defaultMaxPublishAttempts       = 5                // Bounded publish retry attempts before giving up
 )
 
 // Cache manager defaults
@@ -637,6 +638,7 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 // - Reconnect.MaxDelay: if 0, sets to 60s; if negative, returns an error.
 // - Publisher.MaxCached: if 0, sets to 50; if negative, returns an error.
 // - Publisher.IdleTTL: if 0, sets to 1h; if negative, returns an error.
+// - Publisher.CleanupInterval: if 0, sets to 2m; if negative, returns an error.
 //
 // Returns an error when any value is invalid; otherwise returns nil.
 func applyMessagingDefaults(cfg *MessagingConfig) error {
@@ -654,6 +656,7 @@ func applyMessagingDefaults(cfg *MessagingConfig) error {
 		{&cfg.Reconnect.ReadyTimeout, defaultReadyTimeout, "messaging.reconnect.readytimeout"},
 		{&cfg.Reconnect.MaxDelay, defaultMaxReconnectDelay, "messaging.reconnect.maxdelay"},
 		{&cfg.Publisher.IdleTTL, defaultPublisherIdleTTL, "messaging.publisher.idlettl"},
+		{&cfg.Publisher.CleanupInterval, defaultPublisherCleanupInterval, "messaging.publisher.cleanupinterval"},
 	} {
 		if err := applyNonNegativeDefault(d.field, d.def, d.name); err != nil {
 			return err

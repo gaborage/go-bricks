@@ -12,6 +12,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
+	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
 const (
@@ -351,4 +352,37 @@ func TestApplyGlobalMiddlewareNoopWhenNoModulesContribute(t *testing.T) {
 
 	app := &App{server: &mockServer{}, registry: registry, logger: log}
 	require.NoError(t, app.applyGlobalMiddleware(), "no contributing modules → no error even on an unsupporting server")
+}
+
+// TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval proves
+// startMaintenanceLoops passes the operator-configured
+// messaging.publisher.cleanupinterval through to Manager.StartCleanup instead
+// of the old hardcoded 2m literal. A 2m default interval would never fire
+// within this test's window; observing the idle publisher actually get swept
+// proves the short configured interval was used.
+func TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval(t *testing.T) {
+	log := logger.New("error", false)
+
+	client := testmocks.NewMockAMQPClient()
+	client.ExpectClose(nil)
+	factory := func(string, logger.Logger) messaging.AMQPClient { return client }
+	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log, messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond}, factory)
+	defer func() { _ = manager.Close() }()
+
+	_, rel, err := manager.Publisher(context.Background(), testKey)
+	require.NoError(t, err)
+	rel()
+
+	cfg := &config.Config{
+		Messaging: config.MessagingConfig{
+			Publisher: config.PublisherPoolConfig{CleanupInterval: 20 * time.Millisecond},
+		},
+	}
+	a := &App{cfg: cfg, logger: log, messagingManager: manager}
+	a.startMaintenanceLoops()
+	defer a.messagingManager.StopCleanup()
+
+	assert.Eventually(t, func() bool {
+		return manager.Stats()["active_publishers"] == 0
+	}, time.Second, 10*time.Millisecond)
 }

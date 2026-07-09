@@ -410,6 +410,7 @@ type ReconnectConfig struct {
 // Production-safe defaults are applied automatically:
 //   - MaxCached: 50 (maximum publisher clients in cache)
 //   - IdleTTL: 1h (time before idle publishers are evicted)
+//   - CleanupInterval: 2m (cleanup goroutine frequency)
 type PublisherPoolConfig struct {
 	// MaxCached is the maximum number of publisher clients to keep in the cache.
 	// Default: 50. Set higher for applications with many tenants.
@@ -418,6 +419,10 @@ type PublisherPoolConfig struct {
 	// IdleTTL is the time after which idle publisher clients are evicted.
 	// Default: 1h. Set lower for memory-constrained environments.
 	IdleTTL time.Duration `koanf:"idlettl" json:"idlettl" yaml:"idlettl" toml:"idlettl" mapstructure:"idlettl"`
+
+	// CleanupInterval is how often the publisher-pool cleanup goroutine runs.
+	// Default: 2m. Should be less than IdleTTL for effective cleanup.
+	CleanupInterval time.Duration `koanf:"cleanupinterval" json:"cleanupinterval" yaml:"cleanupinterval" toml:"cleanupinterval" mapstructure:"cleanupinterval"`
 }
 
 // BrokerConfig holds message broker connection settings.

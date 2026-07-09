@@ -2200,6 +2200,22 @@ func TestApplyMessagingDefaultsReadyTimeout(t *testing.T) {
 	})
 }
 
+func TestApplyMessagingDefaultsCleanupInterval(t *testing.T) {
+	t.Run("zero_gets_default", func(t *testing.T) {
+		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
+		require.NoError(t, validateMessaging(cfg))
+		assert.Equal(t, defaultPublisherCleanupInterval, cfg.Publisher.CleanupInterval)
+	})
+	t.Run("explicit_value_preserved", func(t *testing.T) {
+		cfg := &MessagingConfig{
+			Broker:    BrokerConfig{URL: testAMQPHost},
+			Publisher: PublisherPoolConfig{CleanupInterval: 90 * time.Second},
+		}
+		require.NoError(t, validateMessaging(cfg))
+		assert.Equal(t, 90*time.Second, cfg.Publisher.CleanupInterval)
+	})
+}
+
 func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -2277,6 +2293,14 @@ func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 				Publisher: PublisherPoolConfig{IdleTTL: -1 * time.Second},
 			},
 			errorContains: "messaging.publisher.idlettl",
+		},
+		{
+			name: "negative_publisher_cleanup_interval_rejected",
+			config: MessagingConfig{
+				Broker:    BrokerConfig{URL: testAMQPHost},
+				Publisher: PublisherPoolConfig{CleanupInterval: -1 * time.Second},
+			},
+			errorContains: "messaging.publisher.cleanupinterval",
 		},
 	}
 
