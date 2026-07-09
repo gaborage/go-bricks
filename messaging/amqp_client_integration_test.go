@@ -377,3 +377,52 @@ func TestAMQPClientClose(t *testing.T) {
 	err = client.Close()
 	assert.Error(t, err, "Second close should return error")
 }
+
+// TestAMQPClientPublishImmediatelyOnColdStart is the secondary (real-broker)
+// confirmation for issue #655: publish IMMEDIATELY on a freshly constructed
+// client, WITHOUT the require.Eventually(IsReady) wait every other test in
+// this file uses first. The default 5s messaging.reconnect.readytimeout
+// pre-flight inside PublishToExchange must absorb the connect+channel-init
+// window against a real broker — on unpatched code this regresses to an
+// instant ErrNotConnected.
+func TestAMQPClientPublishImmediatelyOnColdStart(t *testing.T) {
+	brokerURL := setupTestBroker(t)
+	log := logger.New("disabled", true)
+
+	// Topology declaration is unaffected by #655 (only PublishToExchange gets a
+	// pre-flight wait), so set it up with a client that has already reached
+	// readiness. The fix is exercised by a SEPARATE, freshly constructed client
+	// below.
+	setup := NewAMQPClient(brokerURL, log)
+	defer setup.Close()
+	require.Eventually(t, setup.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
+
+	ctx := context.Background()
+	exchangeName := uniqueName(t, "cold-start-exchange")
+	queueName := uniqueName(t, "cold-start-queue")
+	routingKey := "cold-start-route"
+
+	require.NoError(t, setup.DeclareExchange(exchangeName, "direct", false, true, false, false))
+	require.NoError(t, setup.DeclareQueue(queueName, false, true, false, false))
+	require.NoError(t, setup.BindQueue(queueName, exchangeName, routingKey, false))
+	deliveries, err := setup.Consume(ctx, queueName)
+	require.NoError(t, err)
+
+	cold := NewAMQPClient(brokerURL, log)
+	defer cold.Close()
+
+	testMsg := []byte("cold start message")
+	err = cold.PublishToExchange(ctx, PublishOptions{
+		Exchange:   exchangeName,
+		RoutingKey: routingKey,
+	}, testMsg)
+	require.NoError(t, err, "publish immediately after client construction must succeed via the readytimeout pre-flight wait")
+
+	select {
+	case delivery := <-deliveries:
+		assert.Equal(t, testMsg, delivery.Body)
+		_ = delivery.Ack(false)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for cold-start published message")
+	}
+}
