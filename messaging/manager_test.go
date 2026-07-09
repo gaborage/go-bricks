@@ -1146,6 +1146,7 @@ func TestMessagingManagerStatsTracksEvictionsAndIdleCleanups(t *testing.T) {
 
 	stats = manager.Stats()
 	assert.Equal(t, 1, stats["evictions"])
+	assert.Equal(t, 0, stats["idle_cleanups"], "LRU eviction must not bump idle_cleanups")
 
 	// Idle cleanup: backdate the survivor's lastUsed and run cleanup directly.
 	manager.pubMu.Lock()
@@ -1155,4 +1156,5 @@ func TestMessagingManagerStatsTracksEvictionsAndIdleCleanups(t *testing.T) {
 
 	stats = manager.Stats()
 	assert.Equal(t, 1, stats["idle_cleanups"])
+	assert.Equal(t, 1, stats["evictions"], "idle cleanup must not bump evictions")
 }
