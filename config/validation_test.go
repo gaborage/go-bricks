@@ -4460,12 +4460,6 @@ func TestValidateMultiTenantStaticAppliesMessagingDefaultsEndToEnd(t *testing.T)
 	assert.Zero(t, cfg.Messaging.Publisher.MaxCached)
 }
 
-// TestApplyDatabaseManagerDefaults exercises the mode-aware defaulting for the
-// database connection-manager pool. MaxSize is preserved-zero in multi-tenant
-// mode so ManagerConfigBuilder.BuildDatabaseOptions can scale it to the tenant
-// limit — a flat validation-time default would silently cap the pool below the
-// tenant limit, the exact regression class fixed for messaging MaxCached in
-// commit 453d084 / PR #661.
 func TestApplyDatabaseManagerDefaults(t *testing.T) {
 	t.Run("single_tenant_zero_values_apply_all_defaults", func(t *testing.T) {
 		cfg := &DatabaseManagerConfig{}
@@ -4478,7 +4472,6 @@ func TestApplyDatabaseManagerDefaults(t *testing.T) {
 	t.Run("multi_tenant_zero_preserves_maxsize_uses_30m", func(t *testing.T) {
 		cfg := &DatabaseManagerConfig{}
 		require.NoError(t, applyDatabaseManagerDefaults(cfg, true))
-		// MaxSize preserved (the #661 pin): BuildDatabaseOptions scales it to the tenant limit.
 		assert.Zero(t, cfg.MaxSize)
 		assert.Equal(t, defaultDatabaseManagerIdleTTLMultiTenant, cfg.IdleTTL)
 		assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.CleanupInterval)
@@ -4521,10 +4514,6 @@ func TestApplyDatabaseManagerDefaults(t *testing.T) {
 	})
 }
 
-// TestValidateAppliesDatabaseManagerDefaultsOnlyToPrimaryDatabase proves the
-// full top-level Validate stamps database.manager.* defaults on the primary
-// Config.Database only — named Config.Databases[name] entries have no DbManager
-// of their own, so their Manager sub-struct stays zero (no behavior change).
 func TestValidateAppliesDatabaseManagerDefaultsOnlyToPrimaryDatabase(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{
@@ -4560,15 +4549,12 @@ func TestValidateAppliesDatabaseManagerDefaultsOnlyToPrimaryDatabase(t *testing.
 	assert.Equal(t, defaultDatabaseManagerMaxSize, cfg.Database.Manager.MaxSize)
 	assert.Equal(t, defaultDatabaseManagerIdleTTL, cfg.Database.Manager.IdleTTL)
 	assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
-	// Named DB entries are not manager-governed; their Manager sub-struct stays zero.
 	assert.Equal(t, DatabaseManagerConfig{}, cfg.Databases["legacy"].Manager)
 }
 
-// TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd pins that the
-// multitenant flag is threaded into applyDatabaseManagerDefaults through the full
-// Validate() entry point: MaxSize must come out zero-preserved (so
-// BuildDatabaseOptions scales the handle pool to the tenant limit) and IdleTTL
-// mode-aware — the wiring-level guard against the #661 MaxCached regression class.
+// TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd is the wiring-level
+// counterpart to the applyDatabaseManagerDefaults unit tests: it pins that Validate()
+// threads the multitenant flag through, guarding the #661 MaxCached regression class.
 func TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd(t *testing.T) {
 	newCfg := func() *Config {
 		return &Config{
@@ -4607,7 +4593,6 @@ func TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd(t *testing.T)
 				},
 			},
 			Source: SourceConfig{Type: SourceTypeStatic},
-			// No root Database section: tenants carry their own DB config.
 		}
 	}
 
@@ -4615,7 +4600,6 @@ func TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd(t *testing.T)
 		cfg := newCfg()
 		require.NoError(t, Validate(cfg))
 
-		// Zero preserved: BuildDatabaseOptions scales the pool to the tenant limit.
 		assert.Zero(t, cfg.Database.Manager.MaxSize)
 		assert.Equal(t, defaultDatabaseManagerIdleTTLMultiTenant, cfg.Database.Manager.IdleTTL)
 		assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
@@ -4641,9 +4625,6 @@ func TestValidateMultiTenantAppliesDatabaseManagerDefaultsEndToEnd(t *testing.T)
 	})
 }
 
-// TestValidateRejectsManagerBlockOnNamedDatabase pins the Fail-Fast rejection of a
-// manager block under databases.<name> — it is non-functional (named handles live in
-// the primary manager) and would otherwise be silently ignored.
 func TestValidateRejectsManagerBlockOnNamedDatabase(t *testing.T) {
 	cfg := &Config{
 		App: AppConfig{

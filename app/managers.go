@@ -30,8 +30,8 @@ const (
 	defaultCacheIdleTTL                = 15 * time.Minute
 	defaultCacheCleanupInterval        = 5 * time.Minute
 	defaultDatabaseMaxSize             = 10
-	defaultDatabaseIdleTTL             = 1 * time.Hour    // Single-tenant default; see config/validation.go
-	defaultDatabaseIdleTTLMultiTenant  = 30 * time.Minute // Multi-tenant default; see config/validation.go
+	defaultDatabaseIdleTTL             = 1 * time.Hour    // mirrors config/validation.go
+	defaultDatabaseIdleTTLMultiTenant  = 30 * time.Minute // mirrors config/validation.go
 )
 
 // ManagerConfigBuilder creates configuration options for database and messaging managers
@@ -61,9 +61,7 @@ type ManagerConfigBuilder struct {
 	// (cache.manager.*), sourced from validated config by bootstrap.
 	// When unset, documented defaults are applied as fallbacks.
 	cacheConfig config.CacheManagerConfig
-	// dbConfig carries operator-configurable database manager settings
-	// (database.manager.*), sourced from validated config by bootstrap.
-	// When unset, documented defaults are applied as fallbacks.
+	// dbConfig holds database.manager.* settings, set by bootstrap from validated config.
 	dbConfig config.DatabaseManagerConfig
 }
 
@@ -75,11 +73,9 @@ func NewManagerConfigBuilder(multiTenantEnabled bool, tenantLimit int) *ManagerC
 	}
 }
 
-// resolveMaxSize returns the operator-configured pool cap, falling back to the
-// tenant limit (multi-tenant) or the given single-tenant default when the key is
-// unset. Non-positive is treated as unset: config.Validate rejects negatives, but
-// paths that bypass it (app.NewWithConfig with an injected config) must not leak
-// a negative into a manager's own silent coercion.
+// resolveMaxSize treats non-positive as unset (not just zero) so a negative from a
+// Validate-bypassing path (app.NewWithConfig) can't skip the mode-aware fallback and
+// reach the managers' own <=0->default coercion (see database/manager.go, messaging/manager.go).
 func (b *ManagerConfigBuilder) resolveMaxSize(operatorValue, singleTenantDefault int) int {
 	if operatorValue > 0 {
 		return operatorValue
@@ -90,11 +86,7 @@ func (b *ManagerConfigBuilder) resolveMaxSize(operatorValue, singleTenantDefault
 	return singleTenantDefault
 }
 
-// resolveIdleTTL is resolveMaxSize's counterpart for mode-aware idle TTLs. On the
-// config.Load bootstrap path, config.Validate has already stamped these defaults,
-// so the fallback is inert there. It is load-bearing for construction that
-// bypasses Validate — app.NewWithConfig with an injected config, and direct
-// builder use in unit tests.
+// resolveIdleTTL mirrors resolveMaxSize: the fallback is inert once config.Validate stamps defaults, but load-bearing when Validate is bypassed (NewWithConfig, unit tests).
 func (b *ManagerConfigBuilder) resolveIdleTTL(operatorValue, multiTenantDefault, singleTenantDefault time.Duration) time.Duration {
 	if operatorValue > 0 {
 		return operatorValue
@@ -108,9 +100,6 @@ func (b *ManagerConfigBuilder) resolveIdleTTL(operatorValue, multiTenantDefault,
 // BuildDatabaseOptions creates database manager options based on deployment mode.
 // Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
 // Single-tenant mode uses smaller fixed limits and longer TTL for stability.
-// Operator config (database.manager.*) is the source of truth; mode-specific
-// values are fallbacks when the operator left the key unset (see resolveMaxSize
-// / resolveIdleTTL).
 func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions {
 	return database.DbManagerOptions{
 		MaxSize: b.resolveMaxSize(b.dbConfig.MaxSize, defaultDatabaseMaxSize),
@@ -121,9 +110,6 @@ func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions 
 // BuildMessagingOptions creates messaging manager options based on deployment mode.
 // Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
 // Single-tenant mode uses smaller fixed limits and a longer TTL (same 1h as the DB pool).
-// Operator config (messaging.publisher.*) is the source of truth; mode-specific
-// values are fallbacks when the operator left the key unset (see resolveMaxSize
-// / resolveIdleTTL).
 func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions {
 	return messaging.ManagerOptions{
 		MaxPublishers:      b.resolveMaxSize(b.publisherConfig.MaxCached, defaultPublisherMaxCached),

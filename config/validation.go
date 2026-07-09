@@ -68,10 +68,10 @@ const (
 
 // Database manager defaults
 const (
-	defaultDatabaseManagerMaxSize            = 10               // Maximum active database handles (single-tenant)
-	defaultDatabaseManagerIdleTTL            = 1 * time.Hour    // Idle timeout per handle (single-tenant)
-	defaultDatabaseManagerIdleTTLMultiTenant = 30 * time.Minute // Idle timeout per handle (multi-tenant)
-	defaultDatabaseManagerCleanupInterval    = 5 * time.Minute  // Cleanup goroutine frequency
+	defaultDatabaseManagerMaxSize            = 10
+	defaultDatabaseManagerIdleTTL            = 1 * time.Hour
+	defaultDatabaseManagerIdleTTLMultiTenant = 30 * time.Minute
+	defaultDatabaseManagerCleanupInterval    = 5 * time.Minute
 )
 
 // Redis cache defaults. The top-level cache.* keys receive these via koanf
@@ -158,9 +158,7 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("database config: %w", err)
 	}
 
-	// Applied only to the primary Config.Database — named Config.Databases[name]
-	// entries have no DbManager of their own, so their Manager sub-struct stays
-	// unpopulated (validateNamedDatabases does not touch it).
+	// Named/tenant DBs share the primary DbManager (see validateNamedDatabaseEntry), so manager defaults apply only here.
 	if err := applyDatabaseManagerDefaults(&cfg.Database.Manager, cfg.Multitenant.Enabled); err != nil {
 		return fmt.Errorf("database config: %w", err)
 	}
@@ -660,9 +658,8 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 		return fmt.Errorf("databases.%s: %w", name, err)
 	}
 
-	// Named databases share the primary DbManager (handles keyed "named:<name>")
-	// and have no manager of their own — a manager block here would be silently
-	// ignored, so reject it (Fail Fast, no silent config).
+	// Named databases share the single primary DbManager; a per-entry manager
+	// block would be silently ignored, so reject it (Fail Fast).
 	if dbCfg.Manager.isSet() {
 		return &ConfigError{
 			Category: errCategoryInvalid,
@@ -797,9 +794,6 @@ func applyCacheManagerDefaults(cfg *CacheConfig) error {
 //     zero is preserved so app.ManagerConfigBuilder.BuildDatabaseOptions scales
 //     the handle pool to the tenant limit; if negative, errors.
 //
-// The multitenant flag exists because MaxSize's multi-tenant default is dynamic —
-// see the inline comment on the MaxSize block below.
-//
 // Returns an error when any value is invalid; otherwise returns nil.
 func applyDatabaseManagerDefaults(cfg *DatabaseManagerConfig, multitenant bool) error {
 	idleTTLDefault := defaultDatabaseManagerIdleTTL
@@ -813,11 +807,7 @@ func applyDatabaseManagerDefaults(cfg *DatabaseManagerConfig, multitenant bool) 
 		return err
 	}
 
-	// MaxSize's multi-tenant default is dynamic — the builder scales the handle
-	// pool to the tenant limit when the key is unset — so zero is preserved in
-	// multi-tenant mode (negative is still rejected). Stamping the flat
-	// single-tenant default here would silently cap the pool below the tenant
-	// limit (the #661 MaxCached lesson).
+	// Multi-tenant: keep zero so the builder scales the pool — don't stamp the default (#661).
 	if multitenant {
 		if cfg.MaxSize < 0 {
 			return NewValidationError("database.manager.maxsize", errMustBeNonNegative)
@@ -1323,8 +1313,7 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 			return fmt.Errorf("tenant %s database: %w", tenantID, err)
 		}
 
-		// Per-tenant handles live in the single shared DbManager; a per-tenant
-		// manager block would be silently ignored, so reject it (Fail Fast).
+		// A per-tenant manager block would be silently ignored — tenants share the primary DbManager — so reject it.
 		if tenant.Database.Manager.isSet() {
 			return NewMultiTenantError(tenantID, "database.manager",
 				"database.manager.* is only supported on the primary database",

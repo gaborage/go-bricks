@@ -389,13 +389,10 @@ func TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval(t *testing.
 	}, time.Second, 10*time.Millisecond)
 }
 
-// TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval mirrors
-// TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval for the
-// database manager: it proves startMaintenanceLoops passes the operator-
-// configured database.manager.cleanupinterval through to DbManager.StartCleanup
-// instead of the old hardcoded 5m literal. A 5m default interval would never
-// fire within this test's window; observing the idle connection actually get
-// swept proves the short configured interval was used.
+// TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval proves the
+// configured 20ms interval reached DbManager.StartCleanup: the 5m hardcoded
+// default would never fire in this test's 1s window, so a swept idle connection
+// is the proof.
 func TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval(t *testing.T) {
 	log := logger.New("error", false)
 
@@ -423,13 +420,6 @@ func TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval(t *testing.T
 	}, time.Second, 10*time.Millisecond)
 }
 
-// TestCleanupIntervalTooLate guards the shared predicate: the previously
-// implicit guarantee (hardcoded sweeps always well below any configured TTL) no
-// longer holds now that cleanupinterval and idlettl are independently
-// operator-configurable for both messaging.publisher.* and database.manager.*.
-// The predicate must flag "sweep frequency >= TTL" (eviction merely lags, so this
-// is advisory, not fatal — see startMaintenanceLoops) while treating idleTTL <= 0
-// as "nothing meaningful to compare" — as the zero/negative cases here exercise.
 func TestCleanupIntervalTooLate(t *testing.T) {
 	tests := []struct {
 		name            string

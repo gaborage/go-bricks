@@ -155,28 +155,13 @@ type DatabaseConfig struct {
 	PostgreSQL PostgreSQLConfig `koanf:"postgresql" json:"postgresql" yaml:"postgresql" toml:"postgresql" mapstructure:"postgresql"`
 	Oracle     OracleConfig     `koanf:"oracle" json:"oracle" yaml:"oracle" toml:"oracle" mapstructure:"oracle"`
 
-	// Manager holds database connection-manager (key-cached pool) lifecycle
-	// settings. It is honored only when this DatabaseConfig is Config.Database
-	// (the primary): that single database.DbManager also caches named
-	// databases.<name> handles (keyed "named:<name>") and per-tenant handles, so
-	// these keys govern all of them. A manager block on Config.Databases[name] or
-	// per-tenant database entries is rejected at startup (it would otherwise be
-	// silently ignored).
+	// Manager applies only to the primary Config.Database, whose single
+	// database.DbManager also caches named databases.<name> and per-tenant handles.
 	Manager DatabaseManagerConfig `koanf:"manager" json:"manager" yaml:"manager" toml:"manager" mapstructure:"manager"`
 }
 
 // DatabaseManagerConfig holds database manager (key-cached connection pool)
-// lifecycle settings. Production-safe defaults are applied automatically:
-//   - MaxSize: 10 (maximum active database handles, single-tenant)
-//   - IdleTTL: 1h (idle timeout per handle, single-tenant)
-//   - CleanupInterval: 5m (cleanup goroutine frequency)
-//
-// In multi-tenant mode, validation stamps IdleTTL to 30m when unset, while a
-// zero MaxSize is preserved so app.ManagerConfigBuilder.BuildDatabaseOptions
-// scales it to multitenant.limits.tenants at build time. An explicit positive
-// value always overrides the mode default, matching the messaging.publisher.* /
-// cache.manager.* precedent. Honored only on Config.Database; a manager block
-// on named or per-tenant database entries fails startup validation.
+// lifecycle settings. Per-mode defaults are documented on each field.
 type DatabaseManagerConfig struct {
 	// MaxSize is the maximum number of active database handles. 0 = use default
 	// (10 single-tenant / tenant limit multi-tenant); negative values are invalid.
@@ -190,9 +175,6 @@ type DatabaseManagerConfig struct {
 	CleanupInterval time.Duration `koanf:"cleanupinterval" json:"cleanupinterval" yaml:"cleanupinterval" toml:"cleanupinterval" mapstructure:"cleanupinterval"`
 }
 
-// isSet reports whether any DatabaseManagerConfig field has been explicitly
-// configured. Used by validation to reject manager blocks in locations where
-// they would be silently ignored (named and per-tenant database entries).
 func (c DatabaseManagerConfig) isSet() bool {
 	return c != (DatabaseManagerConfig{})
 }

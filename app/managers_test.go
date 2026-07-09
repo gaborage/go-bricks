@@ -104,10 +104,7 @@ func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 		assert.Equal(t, 30*time.Minute, options.IdleTTL)
 	})
 
-	// Negative dbConfig values are rejected by config.Validate, but paths that
-	// bypass it (app.NewWithConfig with an injected config) must treat them as
-	// unset here — otherwise they'd leak to NewDbManager, whose <=0 coercion
-	// silently caps the pool at 100 instead of the documented mode default.
+	// Negatives can reach here via the app.NewWithConfig Validate-bypass; they must resolve to the mode default, not leak into NewDbManager's <=0 coercion (see resolveMaxSize).
 	t.Run("negative_operator_values_treated_as_unset_multi_tenant", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, 42)
 		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: -1, IdleTTL: -time.Second}
@@ -302,8 +299,7 @@ func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 	})
 
 	t.Run("multi-tenant database zero dbConfig scales to tenant limit and 30m", func(t *testing.T) {
-		// Zero-preservation pin (#661): an unset dbConfig must still let the
-		// builder scale MaxSize to the tenant limit and IdleTTL to 30m.
+		// Pins #661: unset dbConfig must fall through to multi-tenant defaults, not literal 0.
 		builder := NewManagerConfigBuilder(true, 250)
 		opts := builder.BuildDatabaseOptions()
 		assert.Equal(t, 250, opts.MaxSize, "unset database.manager.maxsize must scale to the tenant limit")

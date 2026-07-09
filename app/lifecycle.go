@@ -23,8 +23,8 @@ func (a *App) startMaintenanceLoops() {
 		a.warnIfCleanupIntervalTooLate("database.manager",
 			a.cfg.Database.Manager.CleanupInterval, a.cfg.Database.Manager.IdleTTL)
 		a.logger.Info().Msg("Starting database manager cleanup loop")
-		// DbManager.StartCleanup self-defaults a non-positive interval to 5m, so a
-		// zero/unset database.manager.cleanupinterval preserves the prior behavior.
+		// cleanupinterval has no builder fallback (unlike maxsize/idlettl); on the
+		// Validate-bypassing NewWithConfig path, StartCleanup's <=0->5m self-default is the only guard.
 		a.dbManager.StartCleanup(a.cfg.Database.Manager.CleanupInterval)
 	}
 	if a.messagingManager != nil {
@@ -36,16 +36,9 @@ func (a *App) startMaintenanceLoops() {
 	}
 }
 
-// cleanupIntervalTooLate reports whether a manager's cleanupinterval is configured
-// to sweep no more often than its idlettl. The invariant used to hold implicitly:
-// cleanup intervals were hardcoded sweeps, always well below any configured idlettl.
-// Now that both values are independently operator-configurable for
-// messaging.publisher.* and database.manager.* (see config/validation.go), this
-// misconfiguration doesn't break anything — idle-handle eviction just lags by up to
-// one extra sweep interval — so callers should WARN, not fail, when this is true.
-// idleTTL <= 0 is treated as "nothing meaningful to compare" and skipped;
-// config.Validate applies the IdleTTL defaults unconditionally, so this guard is
-// purely defensive for callers that bypass Validate.
+// cleanupIntervalTooLate reports whether cleanupInterval sweeps no more often than
+// idleTTL. idleTTL <= 0 returns false: config.Validate defaults IdleTTL
+// unconditionally, so this guard only covers Validate-bypassing callers.
 func cleanupIntervalTooLate(cleanupInterval, idleTTL time.Duration) bool {
 	if idleTTL <= 0 {
 		return false
@@ -53,13 +46,8 @@ func cleanupIntervalTooLate(cleanupInterval, idleTTL time.Duration) bool {
 	return cleanupInterval >= idleTTL
 }
 
-// warnIfCleanupIntervalTooLate emits a non-fatal structured WARN when a manager's
-// cleanup sweep is configured no more frequently than its idle TTL (see
-// cleanupIntervalTooLate). keyPrefix names the config section ("database.manager",
-// "messaging.publisher") so the message points at the actual knobs. Validation
-// (config/validation.go) has no logger, so this check runs here instead — the first
-// point in the startup sequence where both values are read together and a logger is
-// available.
+// warnIfCleanupIntervalTooLate WARNs (never fails) when cleanupIntervalTooLate holds.
+// Lives here, not config.Validate, because Validate has no logger.
 func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, idleTTL time.Duration) {
 	if !cleanupIntervalTooLate(cleanupInterval, idleTTL) {
 		return
