@@ -196,10 +196,11 @@ func (fm *FlywayMigrator) defaultMigrationConfig() *Config {
 }
 
 // Migrate executes pending migrations against the migrator's configured
-// database. The Result carries the parsed per-target outcome; if Flyway's
-// JSON output fails to parse, Result is zero-valued even though the returned
-// error may be nil when the underlying flyway process itself succeeded (the
-// parse failure is only Debug-logged, see runFor).
+// database. It returns a non-nil error when the Flyway process fails, when its
+// JSON output is empty/malformed/redaction-suppressed (errors.Is
+// ErrFlywayOutputUnparsed), or when Flyway reports a failed migration via a
+// success=false envelope even on a zero exit (errors.Is ErrFlywayReportedFailure).
+// The Result is returned best-effort alongside any error.
 func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) (Result, error) {
 	if cfg == nil {
 		cfg = fm.DefaultMigrationConfig()
@@ -209,7 +210,7 @@ func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) (Result, err
 
 // MigrateFor executes pending migrations against the supplied database.
 // Used by multi-tenant migrations to target a tenant-specific DatabaseConfig.
-// See Migrate for the Result contract.
+// See Migrate for the Result and error contract.
 func (fm *FlywayMigrator) MigrateFor(ctx context.Context, db *config.DatabaseConfig, cfg *Config) (Result, error) {
 	return fm.runFor(ctx, db, cfg, flywayCmdMigrate)
 }
@@ -290,21 +291,22 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 	}
 
 	result, parseErr := parseFlywayJSON(output)
-	if parseErr != nil {
-		fm.logger.Debug().Err(parseErr).Msg("Failed to parse Flyway JSON output")
-	}
+	outErr := migrateOutcome(runErr, parseErr, &result)
 
-	// ADR-019: migration.applied fires only for actual applications.
+	// ADR-019: migration.applied fires only for actual applications. Feeding the
+	// classified error (not just runErr) records an unparsable output or a
+	// success=false envelope as AuditOutcomeFailed instead of a silent
+	// AuditOutcomeSuccess (#673).
 	fm.emitMigrationApplied(ctx, db, cfg, &flywayRunOutcome{
 		Vendor:      vendor,
 		StartedAt:   startedAt,
 		CompletedAt: time.Now(),
 		Output:      output,
 		Result:      result,
-		Err:         runErr,
+		Err:         outErr,
 	})
 
-	return result, runErr
+	return result, outErr
 }
 
 // flywayRunOutcome bundles the result of a single Flyway subprocess

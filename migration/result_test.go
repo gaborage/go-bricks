@@ -100,3 +100,29 @@ func TestParseFlywayJSONStopsAtFirstObject(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, got.Success)
 }
+
+func TestMigrateOutcomeRunErrorWins(t *testing.T) {
+	runErr := errors.New("flyway command failed: exit status 1")
+	err := migrateOutcome(runErr, errEmptyFlywayOutput, &Result{})
+	assert.ErrorIs(t, err, runErr, "subprocess error takes precedence")
+	assert.False(t, errors.Is(err, ErrFlywayOutputUnparsed), "parse error must not shadow the subprocess error")
+}
+
+func TestMigrateOutcomeParseErrorWrapped(t *testing.T) {
+	err := migrateOutcome(nil, errEmptyFlywayOutput, &Result{})
+	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed, "unparsable output surfaces as an error")
+	assert.ErrorIs(t, err, errEmptyFlywayOutput, "the underlying parse cause stays inspectable via the %w:%w chain")
+}
+
+func TestMigrateOutcomeEnvelopeFailure(t *testing.T) {
+	res := Result{Success: false, ErrorCode: "VALIDATE_ERROR", ErrorMessage: "checksum mismatch on V1 -> host secret leak"}
+	err := migrateOutcome(nil, nil, &res)
+	assert.ErrorIs(t, err, ErrFlywayReportedFailure, "a success:false envelope surfaces even at exit 0")
+	assert.Contains(t, err.Error(), "VALIDATE_ERROR", "the errorCode enum is safe to surface")
+	assert.NotContains(t, err.Error(), "host secret leak",
+		"result.ErrorMessage is free-text and must never enter the propagated error string")
+}
+
+func TestMigrateOutcomeSuccessIsNil(t *testing.T) {
+	assert.NoError(t, migrateOutcome(nil, nil, &Result{Success: true}))
+}

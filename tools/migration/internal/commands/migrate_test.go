@@ -37,7 +37,11 @@ func stubFlyway(t *testing.T) string {
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flyway-stub.sh")
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	// Emit a parseable migrate success envelope: the migration engine now treats
+	// empty/unparseable output from a zero-exit run as a failure (#673), so a
+	// bare `exit 0` no longer represents a successful migration.
+	const migrateJSON = `{"operation":"migrate","success":true,"targetSchemaVersion":"2","flywayVersion":"12.8.1"}`
+	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho '"+migrateJSON+"'\nexit 0\n"), 0o755))
 	return path
 }
 
@@ -109,10 +113,10 @@ func TestMigrateCommandSuccessAcrossPagesAndShapes(t *testing.T) {
 
 	smSrv := fakeSecretsManager(t, map[string]string{
 		// Canonical shape
-		"gobricks/migrate/t1": `{"type":"postgresql","host":"h1","port":5432,"database":"d1","username":"u1","password":"p1"}`,
-		"gobricks/migrate/t2": `{"type":"postgresql","host":"h2","port":5432,"database":"d2","username":"u2","password":"p2"}`,
+		"gobricks/migrate/t1": `{"type":"postgresql","host":"h1","port":5432,"database":"d1","username":"u1","password":"pw-tenant-1"}`,
+		"gobricks/migrate/t2": `{"type":"postgresql","host":"h2","port":5432,"database":"d2","username":"u2","password":"pw-tenant-2"}`,
 		// RDS rotation fallback
-		"gobricks/migrate/t3": `{"engine":"postgres","host":"h3","port":5432,"dbname":"d3","username":"u3","password":"p3"}`,
+		"gobricks/migrate/t3": `{"engine":"postgres","host":"h3","port":5432,"dbname":"d3","username":"u3","password":"pw-tenant-3"}`,
 	})
 	defer smSrv.Close()
 

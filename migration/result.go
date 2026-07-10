@@ -83,6 +83,39 @@ type flywayErrorPayload struct {
 // before Flyway could write its JSON envelope.
 var errEmptyFlywayOutput = errors.New("migration: empty Flyway JSON output")
 
+// ErrFlywayOutputUnparsed wraps the underlying parse failure (errEmptyFlywayOutput
+// or a JSON decode error) so a zero-exit run whose output is empty, malformed, or
+// redaction-suppressed surfaces as a non-nil error instead of a silent success.
+// Match with errors.Is.
+var ErrFlywayOutputUnparsed = errors.New("flyway output could not be parsed")
+
+// ErrFlywayReportedFailure is returned when Flyway emitted a well-formed JSON
+// envelope that itself reports failure (Result.Success == false), including when
+// the subprocess exited 0. Match with errors.Is.
+var ErrFlywayReportedFailure = errors.New("flyway reported a failed migration")
+
+// migrateOutcome collapses the three failure signals of a migrate invocation into
+// a single error with fixed precedence: subprocess error > unparsable output >
+// envelope-reported failure. A nil return means the Result is authoritative. Pure
+// (no receiver, no I/O) so it is unit-testable without a subprocess stub. The
+// sentinel messages omit a "migration:" prefix because the wrapped parseErr
+// already carries one, keeping the rendered chain free of a doubled prefix.
+func migrateOutcome(runErr, parseErr error, result *Result) error {
+	switch {
+	case runErr != nil:
+		return runErr
+	case parseErr != nil:
+		return fmt.Errorf("%w: %w", ErrFlywayOutputUnparsed, parseErr)
+	case !result.Success:
+		// Only the Flyway errorCode enum (e.g. VALIDATE_ERROR) is interpolated;
+		// result.ErrorMessage is deliberately omitted so no free-text field that
+		// could echo connection details enters a propagated/logged error string.
+		return fmt.Errorf("%w: code=%q", ErrFlywayReportedFailure, result.ErrorCode)
+	default:
+		return nil
+	}
+}
+
 // parseFlywayJSON parses Flyway's -outputType=json output into a Result.
 // The first JSON object embedded in output is consumed; any leading non-JSON
 // noise (e.g. JVM warnings printed before the envelope) is skipped over

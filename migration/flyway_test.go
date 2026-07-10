@@ -27,14 +27,17 @@ func createFlywayStub(t *testing.T, vendor string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flyway-stub.sh")
+	// Emit a parseable success envelope so migrate callers get a valid Result;
+	// info/validate callers take the !isMigrate early return and discard stdout.
+	emit := "echo '" + minimalMigrateSuccessJSON + "'\n"
 	var content string
 	switch vendor {
 	case "postgresql":
-		content = "#!/bin/sh\n: \"${DB_HOST:?}\"\n: \"${DB_PORT:?}\"\n: \"${DB_USER:?}\"\n: \"${DB_PASSWORD:?}\"\n: \"${DB_NAME:?}\"\nexit 0\n"
+		content = "#!/bin/sh\n: \"${DB_HOST:?}\"\n: \"${DB_PORT:?}\"\n: \"${DB_USER:?}\"\n: \"${DB_PASSWORD:?}\"\n: \"${DB_NAME:?}\"\n" + emit + "exit 0\n"
 	case "oracle":
-		content = "#!/bin/sh\n: \"${ORACLE_HOST:?}\"\n: \"${ORACLE_PORT:?}\"\n: \"${ORACLE_USER:?}\"\n: \"${ORACLE_PASSWORD:?}\"\n: \"${ORACLE_PDB:?}\"\nexit 0\n"
+		content = "#!/bin/sh\n: \"${ORACLE_HOST:?}\"\n: \"${ORACLE_PORT:?}\"\n: \"${ORACLE_USER:?}\"\n: \"${ORACLE_PASSWORD:?}\"\n: \"${ORACLE_PDB:?}\"\n" + emit + "exit 0\n"
 	default:
-		content = "#!/bin/sh\nexit 0\n"
+		content = "#!/bin/sh\n" + emit + "exit 0\n"
 	}
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
 	return path
@@ -45,7 +48,7 @@ func createSimpleFlywayStub(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "flyway-simple.sh")
-	content := "#!/bin/sh\nexit 0\n"
+	content := "#!/bin/sh\necho '" + minimalMigrateSuccessJSON + "'\nexit 0\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
 	return path
 }
@@ -133,7 +136,7 @@ func TestRunFlywayCommandSuccessWithEnv(t *testing.T) {
 		Host:     "h",
 		Port:     15432,
 		Username: "user",
-		Password: "pass",
+		Password: "longenough-pw",
 		Database: "db",
 	}, App: config.AppConfig{Env: "test"}}
 
@@ -375,7 +378,8 @@ func TestRunMigrationsAtStartup(t *testing.T) {
 
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 
-			stub, capturePath := createCommandCapturingStub(t, "")
+			// dev env runs migrate (needs parseable JSON); other envs validate (stdout discarded).
+			stub, capturePath := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 			tempDir := t.TempDir()
 			configPath := filepath.Join(tempDir, "flyway.conf")
 			migrationPath := filepath.Join(tempDir, "migrations")
@@ -428,13 +432,14 @@ func TestFlywayMigratorDryRunRunsValidate(t *testing.T) {
 			cfg := &config.Config{
 				Database: config.DatabaseConfig{
 					Type: "postgresql", Host: "h", Port: 5432,
-					Username: "u", Password: "p", Database: "d",
+					Username: "u", Password: "longenough-pw", Database: "d",
 				},
 				App: config.AppConfig{Env: "test"},
 			}
 			fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 
-			stub, capturePath := createCommandCapturingStub(t, "")
+			// migrate emits parseable JSON; the dry-run (validate) case discards stdout.
+			stub, capturePath := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 			tempDir := t.TempDir()
 			configPath := filepath.Join(tempDir, "flyway.conf")
 			migrationPath := filepath.Join(tempDir, "migrations")
@@ -837,7 +842,7 @@ func TestMigrateEdgeCases(t *testing.T) {
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 
 	t.Run("migrate_with_nil_config_uses_default", func(t *testing.T) {
-		stub, capturePath := createCommandCapturingStub(t, "")
+		stub, capturePath := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 		tempDir := t.TempDir()
 		configPath := filepath.Join(tempDir, "flyway.conf")
 		migrationPath := filepath.Join(tempDir, "migrations")
@@ -1128,4 +1133,100 @@ func TestInfoAndValidateDoNotRequestJSONOutput(t *testing.T) {
 				"info/validate keep default pretty-printed output for operator-facing sessions")
 		})
 	}
+}
+
+// minimalMigrateSuccessJSON is the smallest Flyway envelope that parses to a
+// successful Result — enough for stubs that only need "migrate reported success".
+const minimalMigrateSuccessJSON = `{"operation":"migrate","success":true,"targetSchemaVersion":"2","flywayVersion":"12.8.1"}`
+
+// newMigrateFixture builds a FlywayMigrator plus a ready-to-run migrate Config
+// pointed at stub. password sets the migrator's DB password, which drives
+// redactPassword: pass a >=8-char value to keep output un-suppressed, or a
+// shorter one to exercise the redaction-suppression path (#673).
+func newMigrateFixture(t *testing.T, stub, password string) (*FlywayMigrator, *Config) {
+	t.Helper()
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Type: "postgresql", Password: password},
+		App:      config.AppConfig{Env: "test"},
+	}
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
+	dir := t.TempDir()
+	mcfg := &Config{
+		FlywayPath:    stub,
+		ConfigPath:    filepath.Join(dir, "flyway.conf"),
+		MigrationPath: filepath.Join(dir, "migrations"),
+		Timeout:       10 * time.Second,
+		Environment:   cfg.App.Env,
+	}
+	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+	return fm, mcfg
+}
+
+func TestMigrateReturnsErrorOnUnparseableOutput(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	stub, _ := createCommandCapturingStub(t, "SLF4J: warning\nboom, not json\n")
+	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+	_, err := fm.Migrate(context.Background(), mcfg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed)
+	assert.ErrorIs(t, err, errEmptyFlywayOutput, "no-'{' output maps to the empty sentinel underneath")
+}
+
+func TestMigrateReturnsErrorOnMalformedJSON(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	stub, _ := createCommandCapturingStub(t, `{"success": notabool}`)
+	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+	_, err := fm.Migrate(context.Background(), mcfg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed)
+	assert.NotErrorIs(t, err, errEmptyFlywayOutput, "malformed JSON is distinct from empty output")
+	assert.NotErrorIs(t, err, ErrFlywayReportedFailure)
+}
+
+func TestMigrateReturnsErrorOnErrorEnvelopeExitZero(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	stub, _ := createCommandCapturingStub(t, readFixture(t, "migrate_checksum_fail.json"))
+	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+	res, err := fm.Migrate(context.Background(), mcfg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrFlywayReportedFailure, "a success:false envelope must surface even at exit 0")
+	assert.False(t, res.Success)
+	assert.Equal(t, "VALIDATE_ERROR", res.ErrorCode)
+	assert.NotContains(t, err.Error(), "checksum mismatch", "free-text ErrorMessage must not leak into the error")
+	assert.NotContains(t, err.Error(), "longenough-pw", "password must never appear in the error")
+}
+
+func TestMigrateShortPasswordSuppressedOutputFailsUniformly(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	// The stub emits valid JSON, but a <8-char password makes redactPassword
+	// replace the whole output with the no-'{' sentinel, so parsing fails. Per
+	// the #673 decision this is treated exactly like malformed output.
+	stub, _ := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
+	fm, mcfg := newMigrateFixture(t, stub, "short")
+	_, err := fm.Migrate(context.Background(), mcfg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed)
+}
+
+func TestMigrateNoopStillSucceeds(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	// Non-breakage guard: a genuine no-op emits valid JSON, so strict parsing
+	// must NOT turn "nothing to migrate" into a failure.
+	stub, _ := createCommandCapturingStub(t, readFixture(t, "migrate_noop.json"))
+	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+	res, err := fm.Migrate(context.Background(), mcfg)
+	require.NoError(t, err)
+	assert.True(t, res.Success)
+	assert.Equal(t, "2", res.EndingVersion)
 }
