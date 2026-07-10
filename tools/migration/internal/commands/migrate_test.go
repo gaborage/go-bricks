@@ -159,9 +159,9 @@ func TestMigrateCommandFailFastStopsAfterFirstFailure(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		"gobricks/migrate/t1": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"p"}`,
-		"gobricks/migrate/t2": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"p"}`,
-		"gobricks/migrate/t3": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"p"}`,
+		"gobricks/migrate/t1": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
+		"gobricks/migrate/t2": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
+		"gobricks/migrate/t3": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
 	})
 	defer smSrv.Close()
 
@@ -206,8 +206,8 @@ func TestMigrateCommandContinueOnErrorListsAllFailures(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		"gobricks/migrate/t1": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"p"}`,
-		"gobricks/migrate/t2": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"p"}`,
+		"gobricks/migrate/t1": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
+		"gobricks/migrate/t2": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
 	})
 	defer smSrv.Close()
 

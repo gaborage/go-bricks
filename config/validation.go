@@ -103,6 +103,13 @@ const (
 	Oracle     = "oracle"
 )
 
+// MinDatabasePasswordLength is the minimum length for a non-empty database
+// password. Below this, the migration engine cannot safely substring-redact the
+// password from Flyway output and suppresses the whole output instead, which
+// hides a migration's outcome (see migration.redactPassword). Empty passwords
+// (trust/IAM auth) are exempt.
+const MinDatabasePasswordLength = 8
+
 // Environment constants
 const (
 	EnvDevelopment = "development"
@@ -117,24 +124,25 @@ const (
 
 // Validation error message constants
 const (
-	errMustBeNonNegative = "must be non-negative"
-	errMustBePositive    = "must be positive"
-	errNotSupportedFmt   = "'%s' is not supported"
-	portRange            = "1-65535"
-	fieldDatabase        = "database"
-	fieldDatabasePort    = "database.port"
-	fieldMessaging       = "messaging"
-	fieldCache           = "cache"
-	fieldDebug           = "debug"
-	fieldServerPort      = "server.port"
-	fieldLogLevel        = "log.level"
-	fieldAppEnv          = "app.env"
-	fieldAppRateLimit    = "app.rate.limit"
-	fieldCacheRedisDB    = "cache.redis.database"
-	fieldCacheRedisPool  = "cache.redis.poolsize"
-	errInvalidField      = "invalid value: %v"
-	databasesFieldPrefix = "databases.%s"
-	defaultHost          = "localhost"
+	errMustBeNonNegative  = "must be non-negative"
+	errMustBePositive     = "must be positive"
+	errNotSupportedFmt    = "'%s' is not supported"
+	portRange             = "1-65535"
+	fieldDatabase         = "database"
+	fieldDatabasePort     = "database.port"
+	fieldDatabasePassword = "database.password"
+	fieldMessaging        = "messaging"
+	fieldCache            = "cache"
+	fieldDebug            = "debug"
+	fieldServerPort       = "server.port"
+	fieldLogLevel         = "log.level"
+	fieldAppEnv           = "app.env"
+	fieldAppRateLimit     = "app.rate.limit"
+	fieldCacheRedisDB     = "cache.redis.database"
+	fieldCacheRedisPool   = "cache.redis.poolsize"
+	errInvalidField       = "invalid value: %v"
+	databasesFieldPrefix  = "databases.%s"
+	defaultHost           = "localhost"
 )
 
 func Validate(cfg *Config) error {
@@ -393,6 +401,18 @@ func validateDatabaseCoreFields(cfg *DatabaseConfig) error {
 
 	if cfg.Username == "" {
 		return NewMissingFieldError("database.username", "DATABASE_USERNAME", "database.username")
+	}
+
+	// A non-empty password below MinDatabasePasswordLength cannot be safely
+	// redacted from Flyway output at migration time, so the engine would suppress
+	// the whole output and hide the migration outcome. Reject it here (message
+	// never echoes the value). Empty passwords (trust/IAM auth) are exempt.
+	if cfg.Password != "" && len(cfg.Password) < MinDatabasePasswordLength {
+		return NewInvalidFieldError(
+			fieldDatabasePassword,
+			fmt.Sprintf("must be at least %d characters when set", MinDatabasePasswordLength),
+			[]string{fmt.Sprintf("%d+ characters", MinDatabasePasswordLength)},
+		)
 	}
 
 	return nil

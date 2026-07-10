@@ -34,13 +34,17 @@ const (
 
 	// minRedactablePasswordLength gates substring-style password redaction.
 	// Short needles (1-7 bytes) are statistically likely to appear inside
-	// unrelated Flyway output (timestamps, error codes, table names),
-	// causing false-positive over-redaction that obscures the real diagnostic
-	// AND failing to mask encoded variants whose alphabet differs from the
-	// raw password. 8 bytes matches the same minimum we expect at config
-	// validation; below that we drop the output entirely. ASCII-only sentinel
-	// so log pipelines without UTF-8 don't mangle it.
-	minRedactablePasswordLength = 8
+	// unrelated Flyway output (timestamps, error codes, table names), causing
+	// false-positive over-redaction that obscures the real diagnostic AND failing
+	// to mask encoded variants whose alphabet differs from the raw password. It is
+	// single-sourced from config.MinDatabasePasswordLength, which config.Validate
+	// now enforces for static configs; the migrate path additionally rejects a
+	// short password up front (see ErrDatabasePasswordTooShort), covering
+	// per-tenant configs. The whole-output suppression below therefore remains
+	// only as a fallback for the non-migrate (info/validate) verbs, whose output
+	// is not parsed. ASCII-only sentinel so log pipelines without UTF-8 don't
+	// mangle it.
+	minRedactablePasswordLength = config.MinDatabasePasswordLength
 	outputSuppressedSentinel    = "[REDACTED -- output suppressed: password too short for safe substring redaction]"
 	redactionPlaceholder        = "[REDACTED]"
 )
@@ -268,6 +272,16 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 	// as an application, and migration.dry_run stays accurate on real applications.
 	verb = effectiveVerb(cfg, verb)
 
+	// A migrate whose password is too short to redact safely is rejected up front
+	// rather than run-then-suppressed (which would hide the outcome and audit a
+	// real success as failed). This covers per-tenant configs that never pass
+	// through config.Validate (#675).
+	if verb == flywayCmdMigrate {
+		if err := ensurePasswordRedactable(db); err != nil {
+			return Result{}, err
+		}
+	}
+
 	vendor := dbVendor(db, fm.config.Database.Type)
 	fm.logger.Info().
 		Str("vendor", vendor).
@@ -430,6 +444,26 @@ func dbVendor(db *config.DatabaseConfig, fallback string) string {
 // rejecting at the boundary prevents a compromised secret writer from
 // propagating multi-line surprises into downstream logs or env-parsing tools.
 var ErrEnvFieldHasControlChar = errors.New("migration: env field contains forbidden control character (CR/LF/NUL)")
+
+// ErrDatabasePasswordTooShort is returned by the migrate path when a non-empty
+// database password is shorter than minRedactablePasswordLength. Such passwords
+// cannot be safely redacted from Flyway output, so the migration is rejected
+// before running rather than suppressing the output and hiding the outcome.
+// Match with errors.Is. Empty passwords (trust/IAM auth) are exempt.
+var ErrDatabasePasswordTooShort = errors.New("migration: database password too short to safely redact Flyway output")
+
+// ensurePasswordRedactable rejects a non-empty database password that is too
+// short to substring-redact from Flyway output. The error never echoes the
+// password.
+func ensurePasswordRedactable(db *config.DatabaseConfig) error {
+	if db == nil || db.Password == "" {
+		return nil
+	}
+	if len(db.Password) < minRedactablePasswordLength {
+		return ErrDatabasePasswordTooShort
+	}
+	return nil
+}
 
 // buildEnvironmentVariables builds Flyway environment variables for the supplied database.
 // Returns ErrEnvFieldHasControlChar wrapped with the offending field name when

@@ -1272,18 +1272,34 @@ func TestMigrateReturnsErrorOnErrorEnvelopeExitZero(t *testing.T) {
 	assert.NotContains(t, err.Error(), "longenough-pw", "password must never appear in the error")
 }
 
-func TestMigrateShortPasswordSuppressedOutputFailsUniformly(t *testing.T) {
+func TestMigrateRejectsShortPassword(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
 	}
-	// The stub emits valid JSON, but a <8-char password makes redactPassword
-	// replace the whole output with the no-'{' sentinel, so parsing fails. Per
-	// the #673 decision this is treated exactly like malformed output.
+	// A <8-char password can't be safely redacted from Flyway output, so the
+	// migrate path rejects it before running Flyway rather than suppressing the
+	// output and mis-reporting the outcome (#675).
 	stub, _ := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
-	fm, mcfg := newMigrateFixture(t, stub, "short")
+	fm, mcfg := newMigrateFixture(t, stub, "pw12345") // 7 bytes, distinct from the error text
 	_, err := fm.Migrate(context.Background(), mcfg)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed)
+	assert.ErrorIs(t, err, ErrDatabasePasswordTooShort)
+	assert.NotErrorIs(t, err, ErrFlywayOutputUnparsed, "rejected before Flyway runs, not a parse failure")
+	assert.NotContains(t, err.Error(), "pw12345", "the error must not echo the password")
+}
+
+func TestMigrateForRejectsShortTenantPassword(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	// Per-tenant coverage: a tenant DatabaseConfig (from a store / AWS secrets)
+	// never passes config.Validate(), so MigrateFor must reject a short password.
+	stub, _ := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
+	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+	tenantDB := &config.DatabaseConfig{Type: "postgresql", Password: "tiny"}
+	_, err := fm.MigrateFor(context.Background(), tenantDB, mcfg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrDatabasePasswordTooShort)
 }
 
 func TestMigrateNoopStillSucceeds(t *testing.T) {
