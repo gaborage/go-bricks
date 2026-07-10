@@ -3,12 +3,14 @@ package migration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +42,7 @@ const (
 	// so log pipelines without UTF-8 don't mangle it.
 	minRedactablePasswordLength = 8
 	outputSuppressedSentinel    = "[REDACTED -- output suppressed: password too short for safe substring redaction]"
+	redactionPlaceholder        = "[REDACTED]"
 )
 
 // FlywayMigrator handles database migrations using Flyway
@@ -527,9 +530,9 @@ func (fm *FlywayMigrator) validateFlywayPath(flywayPath string) error {
 // redactPassword scrubs the database password from Flyway's stdout/stderr so
 // connection-string echoes in error logs don't leak credentials. Flyway echoes
 // resolved JDBC URLs (jdbc:postgresql://user:password@host/db) on connection
-// failures, and JDBC drivers percent-encode reserved characters in the
-// userinfo segment per RFC 3986 — so we redact both the raw password and its
-// PathEscape / QueryEscape forms. Passwords shorter than
+// failures, and JDBC drivers percent-encode reserved characters in the userinfo
+// segment per RFC 3986 — so we redact the raw password plus its PathEscape,
+// QueryEscape, and JSON-string-escaped forms. Passwords shorter than
 // minRedactablePasswordLength are not substring-redacted (they collide with
 // unrelated bytes); we drop the output entirely instead.
 func redactPassword(output string, db *config.DatabaseConfig) string {
@@ -540,19 +543,85 @@ func redactPassword(output string, db *config.DatabaseConfig) string {
 		return outputSuppressedSentinel
 	}
 
-	const placeholder = "[REDACTED]"
-	redacted := strings.ReplaceAll(output, db.Password, placeholder)
+	forms := passwordRedactionForms(db.Password)
+	// For valid-JSON output, redact only inside string literals. Flyway echoes the
+	// password only within strings (JDBC URLs in error messages), never as a bare
+	// token, so string-scoped redaction masks every real credential while leaving
+	// numbers and structure intact: a numeric password can't corrupt a number
+	// token (which would turn a real success into an unparsable-output failure,
+	// #673), and a genuine credential is never restored by an all-or-nothing
+	// revert. Non-JSON error text is redacted byte-for-byte.
+	if json.Valid([]byte(output)) {
+		return redactWithinJSONStrings(output, forms)
+	}
+	return replaceAllForms(output, forms)
+}
 
-	// JDBC URL userinfo uses RFC 3986 percent-encoding (PathEscape semantics).
-	if encoded := url.PathEscape(db.Password); encoded != db.Password {
-		redacted = strings.ReplaceAll(redacted, encoded, placeholder)
+// passwordRedactionForms returns the distinct byte-forms the password can take
+// in Flyway output: the raw bytes plus its percent-encoded userinfo (JDBC URLs),
+// form-encoded, and JSON-string-escaped variants.
+func passwordRedactionForms(pw string) []string {
+	forms := []string{pw}
+	for _, enc := range []string{url.PathEscape(pw), url.QueryEscape(pw), jsonStringEscape(pw)} {
+		if !slices.Contains(forms, enc) {
+			forms = append(forms, enc)
+		}
 	}
-	// Belt and suspenders: form-encoded variant (spaces as '+') in case any
-	// helper logs the password in application/x-www-form-urlencoded form.
-	if encoded := url.QueryEscape(db.Password); encoded != db.Password {
-		redacted = strings.ReplaceAll(redacted, encoded, placeholder)
+	return forms
+}
+
+// replaceAllForms replaces every form of the password with the placeholder.
+func replaceAllForms(s string, forms []string) string {
+	for _, f := range forms {
+		s = strings.ReplaceAll(s, f, redactionPlaceholder)
 	}
-	return redacted
+	return s
+}
+
+// redactWithinJSONStrings replaces password forms with the placeholder, but only
+// inside JSON string literals, so number/bareword tokens stay untouched and the
+// envelope remains valid JSON. Assumes s is valid JSON (the caller checks), so
+// string literals are well-formed and the escape scan cannot overrun.
+func redactWithinJSONStrings(s string, forms []string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		if s[i] != '"' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		// Scan the string literal to its closing quote, skipping escaped bytes.
+		j := i + 1
+		for j < len(s) {
+			if s[j] == '\\' {
+				j += 2
+				continue
+			}
+			if s[j] == '"' {
+				j++
+				break
+			}
+			j++
+		}
+		if j > len(s) {
+			j = len(s)
+		}
+		b.WriteString(replaceAllForms(s[i:j], forms))
+		i = j
+	}
+	return b.String()
+}
+
+// jsonStringEscape returns s as it appears inside a JSON string value
+// (backslash-escaped), without the surrounding quotes. Returns s unchanged if
+// marshaling fails (it cannot for a Go string).
+func jsonStringEscape(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return s
+	}
+	return string(b[1 : len(b)-1])
 }
 
 // RunMigrationsAtStartup executes migrations automatically at application
