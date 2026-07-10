@@ -227,6 +227,51 @@ func TestLoadResponseTimeEnabledEnv(t *testing.T) {
 	})
 }
 
+func TestConfigShouldLogRoutes(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		ptr  *bool
+		want bool
+	}{
+		{name: "unset_defaults_on_in_development", env: "development", ptr: nil, want: true},
+		{name: "unset_defaults_on_for_local", env: "local", ptr: nil, want: true},
+		{name: "unset_defaults_off_in_production", env: "production", ptr: nil, want: false},
+		{name: "unset_defaults_off_in_staging", env: "staging", ptr: nil, want: false},
+		{name: "explicit_false_honored_in_development", env: "development", ptr: new(false), want: false},
+		{name: "explicit_true_honored_in_production", env: "production", ptr: new(true), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{}
+			cfg.App.Env = tt.env
+			cfg.Server.LogRoutes = tt.ptr
+			assert.Equal(t, tt.want, cfg.ShouldLogRoutes())
+		})
+	}
+}
+
+// TestLoadServerLogRoutesEnv verifies the opt-in per-route log flag stays nil
+// when unset (so ShouldLogRoutes can derive from app.env) and binds from
+// SERVER_LOGROUTES.
+func TestLoadServerLogRoutesEnv(t *testing.T) {
+	t.Run("unset_is_nil", func(t *testing.T) {
+		clearEnvironmentVariables()
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Nil(t, cfg.Server.LogRoutes, "absent key must stay nil so ShouldLogRoutes derives from app.env")
+	})
+
+	t.Run("env_sets_true", func(t *testing.T) {
+		clearEnvironmentVariables()
+		t.Setenv("SERVER_LOGROUTES", "true")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg.Server.LogRoutes)
+		assert.True(t, *cfg.Server.LogRoutes)
+	})
+}
+
 func TestLoadInvalidEnvironmentVariables(t *testing.T) {
 	baseEnv := map[string]string{
 		testDatabaseDatabase: "testdb",

@@ -94,6 +94,14 @@ type ServerConfig struct {
 	Gzip    GzipConfig    `koanf:"gzip" json:"gzip" yaml:"gzip" toml:"gzip" mapstructure:"gzip"`
 
 	ResponseTime ResponseTimeConfig `koanf:"responsetime" json:"responsetime" yaml:"responsetime" toml:"responsetime" mapstructure:"responsetime"`
+
+	// LogRoutes toggles the per-route "Route registered" startup log lines
+	// (one Info line per registered HTTP route). Pointer tri-state: an explicit
+	// server.logroutes value always wins; an absent key (nil) defaults to
+	// app-env development via Config.ShouldLogRoutes (on in dev/local, off in
+	// prod/staging), so a large service pays zero extra boot lines in production
+	// unless an operator opts in. Env override: SERVER_LOGROUTES.
+	LogRoutes *bool `koanf:"logroutes" json:"logroutes" yaml:"logroutes" toml:"logroutes" mapstructure:"logroutes"`
 }
 
 // TimeoutConfig holds various timeout durations for the server.
