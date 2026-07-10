@@ -416,6 +416,93 @@ func TestMigrateForEmitsClassifiedErrorOnFailure(t *testing.T) {
 	assert.Equal(t, ErrorClassChecksumMismatch, events[0].ErrorClass)
 }
 
+func TestMigrateForRecordsFailedOutcomeOnErrorEnvelope(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	setupTestTracer(t)
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql", Host: "h", Port: 15432,
+			Username: "user", Password: "longenough-pw", Database: "db",
+		},
+		App: config.AppConfig{Env: "test"},
+	}
+	sink := newRecordingSink()
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditRecorder(sink)
+	t.Cleanup(func() { _ = fm.Close(context.Background()) })
+
+	// Stub emits a Flyway error envelope (success:false) but exits 0 — facet 3:
+	// the process succeeds yet the migration failed. The audit event must record
+	// Outcome=Failed, not a silent Success.
+	stub, _ := createCommandCapturingStub(t, readFixture(t, "migrate_checksum_fail.json"))
+	mcfg := &Config{
+		FlywayPath:    stub,
+		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
+		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
+		Timeout:       10 * time.Second,
+		Environment:   cfg.App.Env,
+		Audit:         AuditContext{Principal: "deployer@example.com"},
+	}
+	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+
+	_, err := fm.Migrate(context.Background(), mcfg)
+	require.Error(t, err, "a success:false envelope at exit 0 must be reported as a failure")
+	assert.ErrorIs(t, err, ErrFlywayReportedFailure)
+
+	sink.waitForFirst(t, 2*time.Second)
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+	assert.Equal(t, AuditOutcomeFailed, events[0].Outcome)
+	assert.Equal(t, ErrorClassChecksumMismatch, events[0].ErrorClass)
+	assert.Equal(t, "deployer@example.com", events[0].AppliedByPrincipal)
+}
+
+func TestMigrateForRecordsFailedOutcomeOnUnparseableOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	setupTestTracer(t)
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql", Host: "h", Port: 15432,
+			Username: "user", Password: "longenough-pw", Database: "db",
+		},
+		App: config.AppConfig{Env: "test"},
+	}
+	sink := newRecordingSink()
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditRecorder(sink)
+	t.Cleanup(func() { _ = fm.Close(context.Background()) })
+
+	// Subprocess exits 0 but emits no parseable JSON — the #673 headline case:
+	// a run whose outcome is unobservable must be audited as Failed, never a
+	// silent Success.
+	stub, _ := createCommandCapturingStub(t, "SLF4J: warning\nno json here\n")
+	mcfg := &Config{
+		FlywayPath:    stub,
+		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
+		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
+		Timeout:       10 * time.Second,
+		Environment:   cfg.App.Env,
+		Audit:         AuditContext{Principal: "deployer@example.com"},
+	}
+	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+
+	_, err := fm.Migrate(context.Background(), mcfg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrFlywayOutputUnparsed)
+
+	sink.waitForFirst(t, 2*time.Second)
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+	assert.Equal(t, AuditOutcomeFailed, events[0].Outcome)
+	assert.Equal(t, ErrorClassInternal, events[0].ErrorClass)
+}
+
 func TestInfoAndValidateDoNotEmitMigrationApplied(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script stub not supported on windows CI")

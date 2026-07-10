@@ -95,9 +95,9 @@ func TestMigrateAllSequentialSuccess(t *testing.T) {
 	base := makeBaseConfig(t, stub)
 
 	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
-		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "p2"},
-		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "p3"},
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
+		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
 	})
 
 	var hookCalls int
@@ -134,9 +134,9 @@ func TestMigrateAllSequentialFailFast(t *testing.T) {
 	base := makeBaseConfig(t, stub)
 
 	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
 		// t2 missing → DBConfig returns error → fail-fast
-		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "p3"},
+		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
 	})
 
 	var hookCalls int32
@@ -172,8 +172,8 @@ func TestMigrateAllContinueOnError(t *testing.T) {
 	base := makeBaseConfig(t, stub)
 
 	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
-		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "p3"},
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
+		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
 	})
 
 	res, err := MigrateAll(
@@ -209,7 +209,7 @@ func TestMigrateAllParallel(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		id := "tenant-" + string(rune('a'+i))
 		ids = append(ids, id)
-		cfgs[id] = &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Database: "d", Username: "u", Password: "p"}
+		cfgs[id] = &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Database: "d", Username: "u", Password: "pw-tenant-x"}
 	}
 	provider := newFakeConfigProvider(cfgs)
 
@@ -252,8 +252,8 @@ func TestMigrateAllMixedVendors(t *testing.T) {
 	oracleStub := createFlywayStub(t, "oracle")
 
 	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"pg":  {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
-		"ora": {Type: "oracle", Host: "h2", Port: 1521, Database: "PDB1", Username: "u2", Password: "p2"},
+		"pg":  {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
+		"ora": {Type: "oracle", Host: "h2", Port: 1521, Database: "PDB1", Username: "u2", Password: "pw-tenant-2"},
 	})
 
 	cases := []struct {
@@ -392,8 +392,8 @@ func TestMigrateAllStopsWhenQuiesced(t *testing.T) {
 	fm := newFlywayMigratorForTest(t)
 	base := makeBaseConfig(t, stub)
 	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
-		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "p2"},
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
 	})
 	gate := NewMemoryQuiesceController()
 	_, err := gate.Set(context.Background(), QuiesceSetOptions{By: "deployer", TTL: time.Hour})
@@ -415,8 +415,8 @@ func TestMigrateAllProceedsWhenNotQuiesced(t *testing.T) {
 	fm := newFlywayMigratorForTest(t)
 	base := makeBaseConfig(t, stub)
 	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
-		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "p2"},
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
 	})
 	gate := NewMemoryQuiesceController() // never set
 
@@ -436,10 +436,10 @@ func TestMigrateAllParallelStopsWhenQuiesced(t *testing.T) {
 	fm := newFlywayMigratorForTest(t)
 	base := makeBaseConfig(t, stub)
 	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
-		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "p2"},
-		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "p3"},
-		"t4": {Type: "postgresql", Host: "h4", Port: 5432, Database: "d4", Username: "u4", Password: "p4"},
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
+		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
+		"t4": {Type: "postgresql", Host: "h4", Port: 5432, Database: "d4", Username: "u4", Password: "pw-tenant-4"},
 	})
 	gate := NewMemoryQuiesceController()
 	_, err := gate.Set(context.Background(), QuiesceSetOptions{By: "deployer", TTL: time.Hour})
@@ -480,10 +480,10 @@ func TestMigrateAllParallelStopsDispatchWhenQuiesceFlipsMidRun(t *testing.T) {
 	fm := newFlywayMigratorForTest(t)
 	base := makeBaseConfig(t, stub)
 	provider := newFakeConfigProvider(map[string]*config.DatabaseConfig{
-		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "p1"},
-		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "p2"},
-		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "p3"},
-		"t4": {Type: "postgresql", Host: "h4", Port: 5432, Database: "d4", Username: "u4", Password: "p4"},
+		"t1": {Type: "postgresql", Host: "h1", Port: 5432, Database: "d1", Username: "u1", Password: "pw-tenant-1"},
+		"t2": {Type: "postgresql", Host: "h2", Port: 5432, Database: "d2", Username: "u2", Password: "pw-tenant-2"},
+		"t3": {Type: "postgresql", Host: "h3", Port: 5432, Database: "d3", Username: "u3", Password: "pw-tenant-3"},
+		"t4": {Type: "postgresql", Host: "h4", Port: 5432, Database: "d4", Username: "u4", Password: "pw-tenant-4"},
 	})
 	// First dispatch iteration sees not-quiesced; the flag flips before the
 	// second, so dispatch stops after exactly one tenant.
