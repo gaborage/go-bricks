@@ -219,6 +219,21 @@ func (c *Config) PerTenantJobKeys() []string {
 	return ids
 }
 
+// ShouldLogRoutes reports whether the per-route "Route registered" startup lines
+// should be emitted. An explicit server.logroutes value always wins; an absent
+// key (nil) defaults to development mode (see AppConfig.IsDevelopment) so routes
+// are visible at first `go run` while production stays silent. Nil-safe so it is
+// correct whether or not Validate has run (the NewWithConfig path bypasses it).
+func (c *Config) ShouldLogRoutes() bool {
+	if c == nil {
+		return false
+	}
+	if c.Server.LogRoutes != nil {
+		return *c.Server.LogRoutes
+	}
+	return c.App.IsDevelopment()
+}
+
 // tryLoadYAMLFile attempts to load a YAML configuration file with both .yaml and .yml extensions.
 // It tries .yaml first, then falls back to .yml if .yaml is not found.
 // Both extensions are optional - no error is returned if neither file exists.

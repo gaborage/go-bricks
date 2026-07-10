@@ -138,15 +138,86 @@ func (r *ModuleRegistry) RegisterRoutes(registrar server.RouteRegistrar) {
 	}
 	handlerRegistry := server.NewHandlerRegistry(r.deps.Config, opts...)
 
-	for _, module := range r.modules {
-		if rr, ok := module.(RouteRegisterer); ok {
-			r.logger.Info().
-				Str("module", module.Name()).
-				Msg("Registering module routes")
+	logRoutes := r.deps.Config != nil && r.deps.Config.ShouldLogRoutes()
 
-			rr.RegisterRoutes(handlerRegistry, registrar)
+	// Attribution is by registration-order delta against DefaultRouteRegistry, NOT
+	// RouteDescriptor.ModuleName (no call site populates it). Startup registration is
+	// single-threaded and append-only, so recorded start indices resolve consistently
+	// against one post-loop Routes() snapshot. The leading framework span captures debug/_sys
+	// routes registered before this loop (single-app-per-process assumed); health/ready bypass
+	// the registry entirely and are not covered here.
+	var spans []routeSpan
+	if logRoutes {
+		spans = append(spans, routeSpan{module: frameworkRouteAttribution, start: 0})
+	}
+
+	for _, module := range r.modules {
+		rr, ok := module.(RouteRegisterer)
+		if !ok {
+			continue
+		}
+		r.logger.Info().
+			Str("module", module.Name()).
+			Msg("Registering module routes")
+
+		if logRoutes {
+			spans = append(spans, routeSpan{module: module.Name(), start: server.DefaultRouteRegistry.Count()})
+		}
+		rr.RegisterRoutes(handlerRegistry, registrar)
+	}
+
+	if logRoutes {
+		for _, e := range collectRouteLogEntries(spans, server.DefaultRouteRegistry.Routes()) {
+			r.logger.Info().
+				Str("module", e.module).
+				Str("method", e.method).
+				Str("path", e.path).
+				Msg("Route registered")
 		}
 	}
+}
+
+// frameworkRouteAttribution labels routes registered before the module loop
+// (debug/_sys endpoints via registerDebugHandlers) in the route-registered log.
+const frameworkRouteAttribution = "framework"
+
+// routeSpan marks the half-open registry index range [start, next.start) whose
+// descriptors were appended by module. Recorded during the module loop; resolved
+// against one post-loop DefaultRouteRegistry.Routes() snapshot.
+type routeSpan struct {
+	module string
+	start  int
+}
+
+// routeLogEntry is the flattened, logger-free result of resolving spans against
+// a routes snapshot.
+type routeLogEntry struct {
+	module, method, path string
+}
+
+// collectRouteLogEntries resolves each span's [start, next.start) range against
+// the routes snapshot. Pure (no logger, no globals) so attribution — raw routes
+// (empty RouteDescriptor.ModuleName), zero-route modules, and the pre-loop
+// framework span — is unit-testable. Attribution is positional because no call
+// site populates RouteDescriptor.ModuleName.
+func collectRouteLogEntries(spans []routeSpan, routes []server.RouteDescriptor) []routeLogEntry {
+	var out []routeLogEntry
+	for i, span := range spans {
+		if span.start < 0 || span.start > len(routes) {
+			continue // defensive: this span's start is out of range (impossible single-threaded)
+		}
+		end := len(routes)
+		if i+1 < len(spans) {
+			end = spans[i+1].start
+		}
+		if end > len(routes) {
+			end = len(routes) // clamp: a bogus successor start must not corrupt this span
+		}
+		for j := span.start; j < end; j++ {
+			out = append(out, routeLogEntry{module: span.module, method: routes[j].Method, path: routes[j].Path})
+		}
+	}
+	return out
 }
 
 // CollectGlobalMiddleware gathers middleware from modules that implement
