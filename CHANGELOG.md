@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.49.0](https://github.com/gaborage/go-bricks/compare/v0.48.0...v0.49.0) (2026-07-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **migration:** a static config with a non-empty DB password < 8 bytes now fails config validation at startup; a per-tenant migration fails with ErrDatabasePasswordTooShort. Use >=8-char passwords (or empty for trust/IAM auth).
+
+### Added
+
+* **database:** add database.manager.* config parity (maxsize/idlettl/cleanupinterval) ([#666](https://github.com/gaborage/go-bricks/issues/666)) ([d3c864c](https://github.com/gaborage/go-bricks/commit/d3c864c838fdbb1f9d7d455601099e9a03206e00))
+* **messaging:** harden publisher lifecycle defaults ([#660](https://github.com/gaborage/go-bricks/issues/660)) ([b66e253](https://github.com/gaborage/go-bricks/commit/b66e253ba9e1ea26392c916e102beeb3cbb1d0ae))
+* **server:** log registered routes at startup behind server.logroutes ([#680](https://github.com/gaborage/go-bricks/issues/680)) ([b165c0e](https://github.com/gaborage/go-bricks/commit/b165c0e42cafad45840789e0417366413ebce27b)), closes [#678](https://github.com/gaborage/go-bricks/issues/678)
+
+
+### Fixed
+
+* **config:** apply messaging defaults in all deployment modes ([#661](https://github.com/gaborage/go-bricks/issues/661)) ([453d084](https://github.com/gaborage/go-bricks/commit/453d0843cb6c34da8ea4f50d72c00efbcaab1b8a))
+* **config:** reject unit-less numeric durations at decode time ([#670](https://github.com/gaborage/go-bricks/issues/670)) ([5db2b3b](https://github.com/gaborage/go-bricks/commit/5db2b3bfae332f70b1cc24dfb9d19d34ca754361))
+* **deps:** update aws-sdk-go-v2 monorepo ([#646](https://github.com/gaborage/go-bricks/issues/646)) ([7278bf1](https://github.com/gaborage/go-bricks/commit/7278bf1744f9685655ccc42f6e33ad9f630446a7))
+* **deps:** update module github.com/aws/aws-sdk-go-v2/config to v1.32.29 ([#652](https://github.com/gaborage/go-bricks/issues/652)) ([4e5d40a](https://github.com/gaborage/go-bricks/commit/4e5d40a3705723aba43e1fac1002e9b10b563463))
+* **deps:** update module github.com/gaborage/go-bricks to v0.48.0 ([#647](https://github.com/gaborage/go-bricks/issues/647)) ([e612fa4](https://github.com/gaborage/go-bricks/commit/e612fa462e8c388e7dca198e62d3f19dff88edf0))
+* **deps:** update module github.com/go-co-op/gocron/v2 to v2.22.0 ([#667](https://github.com/gaborage/go-bricks/issues/667)) ([d432325](https://github.com/gaborage/go-bricks/commit/d432325408950e8bb3d96289456932d13cd70232))
+* **messaging:** promote eviction/idle-cleanup logs, add counters ([#657](https://github.com/gaborage/go-bricks/issues/657)) ([d40dec6](https://github.com/gaborage/go-bricks/commit/d40dec67c0872ecf99708ef019e198a6ab594c06))
+* **messaging:** wait for cold client readiness before publish ([#656](https://github.com/gaborage/go-bricks/issues/656)) ([82de6ba](https://github.com/gaborage/go-bricks/commit/82de6ba39617094e2a373bd133a998f694ffdb17))
+* **messaging:** wire reconnect delay keys into client; make cache maxsize mode-aware ([#669](https://github.com/gaborage/go-bricks/issues/669)) ([9da8483](https://github.com/gaborage/go-bricks/commit/9da848355096acd46a5fb4c08d628f980e65bd1d))
+* **migration:** harden redactPassword against escaped-form leaks and JSON-token collisions ([#677](https://github.com/gaborage/go-bricks/issues/677)) ([d32975f](https://github.com/gaborage/go-bricks/commit/d32975f8713fbef36ffdf8bca1d6eb42bf76399a))
+* **migration:** reject database passwords shorter than 8 bytes ([bb40410](https://github.com/gaborage/go-bricks/commit/bb404106f27d2f3795e15511320783aedb9e24c5)), closes [#675](https://github.com/gaborage/go-bricks/issues/675)
+* **migration:** surface unparseable Flyway output and failure envelopes as errors ([#674](https://github.com/gaborage/go-bricks/issues/674)) ([4bcd7f5](https://github.com/gaborage/go-bricks/commit/4bcd7f5321123c1365268c39ce0837931e031905))
+
 ## [0.48.0](https://github.com/gaborage/go-bricks/compare/v0.47.0...v0.48.0) (2026-07-06)
 
 
