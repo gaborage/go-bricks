@@ -15,6 +15,7 @@ import (
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
 
+	"github.com/gaborage/go-bricks/internal/configdecode"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -243,13 +244,33 @@ func tryLoadYAMLFile(k *koanf.Koanf, baseName string) error {
 	return nil
 }
 
-// buildDecoderConfig replicates koanf's default Unmarshal decoder
-// (knadh/koanf/v2 koanf.go:265-272) so we control the DecodeHook chain.
-// koanf fills in Result and TagName at unmarshal time.
+// buildDecoderConfig is the decoder for Load: it replicates koanf's default Unmarshal
+// decoder (knadh/koanf/v2 koanf.go:265-272) plus the numeric-duration guard and the
+// comma-split slice hook (so a single env var can express a []string). koanf fills in
+// Result and TagName at unmarshal time.
 func buildDecoderConfig() *mapstructure.DecoderConfig {
 	return &mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			configdecode.NumericToDurationGuardHookFunc(),
 			stringToTrimmedSliceHookFunc(","),
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.TextUnmarshallerHookFunc(),
+		),
+		WeaklyTypedInput: true,
+	}
+}
+
+// unmarshalDecoderConfig is the decoder for the public Config.Unmarshal. It mirrors koanf's
+// default Unmarshal decoder (StringToTimeDurationHookFunc + text-unmarshaler + WeaklyTypedInput)
+// plus only the numeric-duration guard — deliberately WITHOUT the comma-split slice hook, so
+// string -> []string keeps koanf's default single-element wrap on this public seam instead of
+// silently comma-splitting. (koanf's default uses its own unexported textUnmarshalerHookFunc;
+// the exported mapstructure.TextUnmarshallerHookFunc is the closest public equivalent and
+// differs only for custom string types no framework config field uses.)
+func unmarshalDecoderConfig() *mapstructure.DecoderConfig {
+	return &mapstructure.DecoderConfig{
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			configdecode.NumericToDurationGuardHookFunc(),
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.TextUnmarshallerHookFunc(),
 		),

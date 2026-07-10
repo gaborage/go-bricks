@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -59,6 +60,35 @@ func TestLoadTenantStoreFromFileMissingPath(t *testing.T) {
 	_, err := loadTenantStoreFromFile("")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty")
+}
+
+// TestLoadTenantStoreFromFileRejectsUnitlessNumericDuration proves the CLI's tenant-config
+// load routes through the numeric-duration guard: a bare numeric time.Duration is rejected.
+func TestLoadTenantStoreFromFileRejectsUnitlessNumericDuration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tenants.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("server:\n  timeout:\n    read: 30\n"), 0o600))
+
+	_, err := loadTenantStoreFromFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unit-less numeric duration 30")
+}
+
+// TestTenantDecoderConfigCommaSplitsStringSlice proves the CLI decoder carries the same
+// comma-split []string hook as the framework's config.buildDecoderConfig, so a comma-scalar
+// []string field (e.g. a tenants.yaml allowlist) decodes to multiple elements identically
+// to a framework Load instead of a single-element wrap.
+func TestTenantDecoderConfigCommaSplitsStringSlice(t *testing.T) {
+	type target struct {
+		Allow []string `mapstructure:"allow"`
+	}
+	var out target
+	dc := tenantDecoderConfig()
+	dc.Result = &out
+	dec, err := mapstructure.NewDecoder(dc)
+	require.NoError(t, err)
+	require.NoError(t, dec.Decode(map[string]any{"allow": "a,b"}))
+	assert.Equal(t, []string{"a", "b"}, out.Allow)
 }
 
 func TestBuildListerSingleTenantPath(t *testing.T) {
