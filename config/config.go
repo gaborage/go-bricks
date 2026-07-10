@@ -224,7 +224,6 @@ func (c *Config) PerTenantJobKeys() []string {
 // Both extensions are optional - no error is returned if neither file exists.
 // However, syntax errors, permission errors, and other I/O errors are propagated.
 func tryLoadYAMLFile(k *koanf.Koanf, baseName string) error {
-	// Try .yaml extension first
 	yamlFile := baseName + ".yaml"
 	if err := k.Load(file.Provider(yamlFile), yaml.Parser()); err != nil {
 		// If file doesn't exist, try .yml fallback
