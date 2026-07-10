@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/knadh/koanf/v2"
 )
 
 const (
@@ -154,7 +156,11 @@ func (c *Config) Unmarshal(key string, out any) error {
 	if c == nil || c.k == nil {
 		return errors.New(errMsgConfigNotInitialized)
 	}
-	return c.k.Unmarshal(key, out)
+	// UnmarshalWithConf with our decoder chain so bare numeric time.Duration fields are
+	// rejected here too; empty Tag keeps koanf's "koanf" TagName (field-name fallback).
+	// unmarshalDecoderConfig (no slice hook) preserves koanf's default string -> []string
+	// single-element wrap on this public seam.
+	return c.k.UnmarshalWithConf(key, out, koanf.UnmarshalConf{DecoderConfig: unmarshalDecoderConfig()})
 }
 
 // Exists checks if a configuration key exists.

@@ -2,11 +2,14 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/observability"
 )
 
 const (
@@ -212,4 +215,43 @@ func TestRawRequiredValueErrors(t *testing.T) {
 	cfg := &Config{}
 	_, err := cfg.rawRequiredValue("missing")
 	assert.Error(t, err)
+}
+
+// TestUnmarshalRejectsUnitlessNumericDuration proves Config.Unmarshal routes through the guard
+// decoder chain: observability.Config decodes via field-name fallback under TagName "koanf".
+func TestUnmarshalRejectsUnitlessNumericDuration(t *testing.T) {
+	t.Run("bare_numeric_rejected", func(t *testing.T) {
+		cfg := setupTestConfig(t, map[string]any{
+			"observability.trace.export.timeout": 30,
+		})
+		var obs observability.Config
+		err := cfg.Unmarshal("observability", &obs)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "unit-less numeric duration 30")
+	})
+
+	t.Run("string_duration_binds", func(t *testing.T) {
+		cfg := setupTestConfig(t, map[string]any{
+			"observability.trace.export.timeout": "30s",
+		})
+		var obs observability.Config
+		require.NoError(t, cfg.Unmarshal("observability", &obs))
+		assert.Equal(t, 30*time.Second, obs.Trace.Export.Timeout)
+	})
+}
+
+// TestUnmarshalStringToSliceKeepsSingleElementWrap pins the public-seam behavior of
+// Config.Unmarshal: a scalar string bound to a []string field keeps koanf's default
+// single-element wrap ("a,b,c" -> ["a,b,c"]) and is NOT comma-split. Load's env-path
+// comma-split (buildDecoderConfig's slice hook) is a separate seam and unaffected.
+func TestUnmarshalStringToSliceKeepsSingleElementWrap(t *testing.T) {
+	cfg := setupTestConfig(t, map[string]any{
+		"custom.tags": "a,b,c",
+	})
+	var out struct {
+		Tags []string `koanf:"tags"`
+	}
+	require.NoError(t, cfg.Unmarshal("custom", &out))
+	require.Len(t, out.Tags, 1)
+	assert.Equal(t, "a,b,c", out.Tags[0])
 }

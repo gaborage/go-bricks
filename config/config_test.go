@@ -1,12 +1,14 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/knadh/koanf/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -812,6 +814,127 @@ func TestLoadDatabaseCompleteConfig(t *testing.T) {
 
 	// Verify database fields that should be zero/empty since no defaults
 	assert.Equal(t, "", cfg.Database.TLS.Mode) // No default provided
+}
+
+// unitlessDurationBaseConfig is a full, otherwise-valid config.yaml whose only variable
+// is the messaging.reconnect.delay value; used by the end-to-end unit-less-duration tests
+// so a passing case proves the config would boot were it not for the offending value.
+func unitlessDurationBaseConfig(delay string) string {
+	return "app:\n" +
+		"  name: test-svc\n" +
+		"  env: development\n" +
+		"database:\n" +
+		"  type: postgresql\n" +
+		"  host: localhost\n" +
+		"  port: 5432\n" +
+		"  database: testdb\n" +
+		"  username: testuser\n" +
+		"messaging:\n" +
+		"  broker:\n" +
+		"    url: amqp://guest:guest@localhost:5672/\n" +
+		"  reconnect:\n" +
+		"    delay: " + delay + "\n"
+}
+
+// TestBuildDecoderConfigRejectsUnitlessNumericDuration exercises the real decoder chain
+// (buildDecoderConfig) directly, isolating the numeric->duration guard from validation:
+// non-zero bare numerics targeting time.Duration are rejected with an actionable message,
+// while zero, string durations, and non-duration numeric fields decode untouched.
+func TestBuildDecoderConfigRejectsUnitlessNumericDuration(t *testing.T) {
+	type target struct {
+		Interval time.Duration `mapstructure:"interval"`
+		Port     int           `mapstructure:"port"`
+	}
+
+	tests := []struct {
+		name         string
+		input        map[string]any
+		wantErr      bool
+		errSubstr    []string
+		wantInterval time.Duration
+		wantPort     int
+	}{
+		{name: "int_seconds", input: map[string]any{"interval": 300}, wantErr: true, errSubstr: []string{"unit-less numeric duration 300", "explicit unit"}},
+		{name: "yaml_float", input: map[string]any{"interval": 2.5}, wantErr: true, errSubstr: []string{"unit-less numeric duration 2.5", "explicit unit"}},
+		{name: "negative", input: map[string]any{"interval": -5}, wantErr: true, errSubstr: []string{"unit-less numeric duration -5"}},
+		{name: "bool_rejected", input: map[string]any{"interval": true}, wantErr: true, errSubstr: []string{"unit-less numeric duration true"}},
+		{name: "zero_int", input: map[string]any{"interval": 0}, wantErr: false, wantInterval: 0},
+		{name: "zero_int64", input: map[string]any{"interval": int64(0)}, wantErr: false, wantInterval: 0},
+		{name: "zero_float", input: map[string]any{"interval": 0.0}, wantErr: false, wantInterval: 0},
+		{name: "negative_zero_float", input: map[string]any{"interval": math.Copysign(0, -1)}, wantErr: false, wantInterval: 0},
+		{name: "typed_duration_source_passes", input: map[string]any{"interval": 5 * time.Second}, wantErr: false, wantInterval: 5 * time.Second},
+		{name: "string_seconds", input: map[string]any{"interval": "300s"}, wantErr: false, wantInterval: 300 * time.Second},
+		{name: "string_composite", input: map[string]any{"interval": "1h30m"}, wantErr: false, wantInterval: 90 * time.Minute},
+		{name: "non_duration_int_untouched", input: map[string]any{"port": 9090}, wantErr: false, wantPort: 9090},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var out target
+			dc := buildDecoderConfig()
+			dc.Result = &out
+			dec, err := mapstructure.NewDecoder(dc)
+			require.NoError(t, err)
+
+			err = dec.Decode(tc.input)
+			if tc.wantErr {
+				require.Error(t, err)
+				for _, s := range tc.errSubstr {
+					assert.ErrorContains(t, err, s)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantInterval, out.Interval)
+			assert.Equal(t, tc.wantPort, out.Port)
+		})
+	}
+}
+
+// TestLoadRejectsUnitlessNumericDurationEndToEnd proves the guard surfaces through Load with
+// enough context to locate the key: a config.yaml carrying messaging.reconnect.delay: 300
+// aborts startup naming both the offending value and the key path.
+func TestLoadRejectsUnitlessNumericDurationEndToEnd(t *testing.T) {
+	clearEnvironmentVariables()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML),
+		[]byte(unitlessDurationBaseConfig("300")), 0o600))
+	t.Chdir(dir)
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "unit-less numeric duration 300")
+	assert.ErrorContains(t, err, "messaging.reconnect.delay")
+}
+
+// TestLoadUnitlessNumericDurationZeroUsesDefault proves the zero-is-unset exemption: an
+// explicit 0 still loads and the documented 5s default applies (byte-identical to pre-fix).
+func TestLoadUnitlessNumericDurationZeroUsesDefault(t *testing.T) {
+	clearEnvironmentVariables()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML),
+		[]byte(unitlessDurationBaseConfig("0")), 0o600))
+	t.Chdir(dir)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Second, cfg.Messaging.Reconnect.Delay)
+}
+
+// TestLoadUnitlessNumericDurationEnvVarStillFails pins the pre-existing env failure mode:
+// a unit-less string env var already fails via time.ParseDuration's missing-unit error, so
+// both YAML (numeric) and env (string) sources now reject unit-less durations.
+func TestLoadUnitlessNumericDurationEnvVarStillFails(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+
+	t.Setenv("MESSAGING_RECONNECT_DELAY", "300")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "missing unit in duration")
 }
 
 // TestLoad_DatabaseConnectionStringOnly test removed - connection string
