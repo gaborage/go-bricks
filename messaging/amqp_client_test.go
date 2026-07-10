@@ -927,8 +927,23 @@ func TestHandleReconnectConnectionFailureRetryCycle(t *testing.T) {
 		return nil, errors.New("connection failed")
 	})
 
-	// Start handleReconnect in background
+	// Start handleReconnect in background. stop is Once-guarded and also
+	// registered as a cleanup (LIFO: runs before the dialer restore above), so
+	// the goroutine is shut down and drained even when an assertion below
+	// fails the test early.
 	go c.handleReconnect()
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			close(c.done)
+			select {
+			case <-c.reconnectDone:
+			case <-time.After(2 * time.Second):
+				t.Error("handleReconnect did not exit after close(done)")
+			}
+		})
+	}
+	t.Cleanup(stop)
 
 	// Poll instead of a fixed sleep: the jittered backoff plus -race scheduling
 	// makes a wall-clock window flaky on loaded CI runners.
@@ -936,14 +951,8 @@ func TestHandleReconnectConnectionFailureRetryCycle(t *testing.T) {
 		return atomic.LoadInt64(&attempts) >= 2
 	}, 5*time.Second, time.Millisecond, "expected at least 2 connection attempts")
 
-	// Signal done to stop and wait for the goroutine to fully exit, so the
-	// dial-func restore in t.Cleanup can't race a live reconnect loop.
-	close(c.done)
-	select {
-	case <-c.reconnectDone:
-	case <-time.After(2 * time.Second):
-		t.Fatal("handleReconnect did not exit after close(done)")
-	}
+	// Stop and drain the goroutine before asserting terminal state.
+	stop()
 
 	// Verify client is not ready
 	if c.IsReady() {
