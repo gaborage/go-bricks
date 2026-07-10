@@ -118,7 +118,7 @@ result, err := svc.Process(ctx)  // Uses acme's TestDB
 - Vendor-agnostic RowSet builder
 - Partial SQL matching by default (or strict with StrictSQLMatching())
 
-See [database/testing](../database/testing/) package and [llms.txt:1393](../llms.txt) for full examples.
+See [database/testing](../database/testing/) package and [llms.txt:1502](../llms.txt) for full examples.
 
 ## Cache Testing
 

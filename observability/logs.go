@@ -13,7 +13,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Re-export insecure credentials to avoid variable shadowing
+// grpcInsecureCredentials holds the insecure gRPC credentials constructor used
+// when configuring the OTLP gRPC log exporter without TLS.
 var grpcInsecureCredentials = insecure.NewCredentials
 
 // logInitHook allows tests to inject failures after exporter creation but before provider setup.

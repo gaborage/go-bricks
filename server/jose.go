@@ -23,8 +23,8 @@ import (
 )
 
 // joseObservability bundles the optional logger / tracer / meter so they thread cleanly
-// through wrap() into joseDecodeRequest and joseHandleResponse without bloating those
-// signatures or the HandlerRegistry struct.
+// through wrap() into joseDecodeRequestWithObs and joseHandleResponseWithObs without bloating
+// those signatures or the HandlerRegistry struct.
 type joseObservability struct {
 	logger       logger.Logger
 	tracer       trace.Tracer

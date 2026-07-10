@@ -37,27 +37,22 @@ type ConfigError struct {
 func (e *ConfigError) Error() string {
 	var parts []string
 
-	// Add category prefix
 	if e.Category != "" {
 		parts = append(parts, fmt.Sprintf("config_%s:", e.Category))
 	}
 
-	// Add field if present
 	if e.Field != "" {
 		parts = append(parts, e.Field)
 	}
 
-	// Add message
 	if e.Message != "" {
 		parts = append(parts, e.Message)
 	}
 
-	// Add action if present
 	if e.Action != "" {
 		parts = append(parts, e.Action)
 	}
 
-	// Add details if present
 	if len(e.Details) > 0 {
 		parts = append(parts, strings.Join(e.Details, "; "))
 	}

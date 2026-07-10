@@ -205,7 +205,6 @@ func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
 // This method is called after all modules have been initialized, making module registration
 // order irrelevant for job scheduling. If no scheduler is registered, this method skips silently.
 func (r *ModuleRegistry) RegisterJobs() error {
-	// Skip if no scheduler registered
 	if r.deps.Scheduler == nil {
 		r.logger.Debug().Msg("No scheduler registered, skipping job registration")
 		return nil

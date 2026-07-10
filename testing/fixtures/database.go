@@ -40,9 +40,6 @@ const (
 	DefaultIdle            = 1
 )
 
-// DatabaseFixtures provides helper functions for creating pre-configured database mocks
-// and SQL result builders for consistent testing.
-
 // getDefaultStats returns a map containing the default database statistics for
 // open connections, in-use connections, and idle connections under the keys
 // OpenConnectionsField, InUseField, and IdleField respectively.
@@ -64,10 +61,8 @@ func createFailingRow(err error) types.Row {
 	}
 	defer db.Close()
 
-	// Setup the expectation to return an error
 	sqlMock.ExpectQuery(".*").WillReturnError(err)
 
-	// Execute the query to get the actual row
 	row := db.QueryRowContext(context.Background(), "SELECT")
 	return types.NewRowFromSQL(row)
 }
@@ -95,7 +90,6 @@ func createFailingResult(err error) sql.Result {
 func NewHealthyDatabase() *mocks.MockDatabase {
 	mockDB := &mocks.MockDatabase{}
 
-	// Setup healthy responses
 	mockDB.ExpectHealthCheck(true)
 	mockDB.ExpectDatabaseType(MockDatabaseType)
 	mockDB.ExpectStats(getDefaultStats(), nil)
@@ -169,7 +163,6 @@ func NewDatabaseWithData(data map[string][]any) *mocks.MockDatabase {
 func NewReadOnlyDatabase() *mocks.MockDatabase {
 	mockDB := NewHealthyDatabase()
 
-	// Allow read operations
 	rows := NewMockRows([]string{"colA"}, [][]any{{1}, {2}, {3}})
 	if rows.Err() != nil {
 		panic(rows.Err()) // NOSONAR: Test fixture - panic on setup failure is intentional
@@ -200,7 +193,6 @@ func NewReadOnlyDatabase() *mocks.MockDatabase {
 //	  },
 //	)
 func NewMockRows(columns []string, rows [][]any) *sql.Rows {
-	// Create a mock database connection
 	db, sqlMock, err := sqlmock.New()
 	if err != nil {
 		panic(err) // NOSONAR: Test fixture - panic on setup failure is intentional

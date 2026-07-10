@@ -198,7 +198,7 @@ func (d *Declarations) Consumers() []*ConsumerDeclaration {
 // Validate checks the integrity of all declarations.
 // It ensures that references between declarations are valid.
 func (d *Declarations) Validate() error {
-	// Check that all binding queues exist
+	// Check that all binding queues and exchanges exist
 	for _, binding := range d.Bindings {
 		if _, exists := d.Queues[binding.Queue]; !exists {
 			return fmt.Errorf("binding references non-existent queue: %s", binding.Queue)

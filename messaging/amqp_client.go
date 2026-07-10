@@ -364,7 +364,6 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error {
 	startTime := time.Now()
 
-	// Create OpenTelemetry span for publish operation
 	ctx, span := createPublishSpan(ctx, options, len(data), startTime)
 	defer span.End()
 
@@ -403,7 +402,6 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		default:
 		}
 
-		// Prepare message with headers, trace context, and message IDs
 		publishing := preparePublishing(ctx, options, data)
 		messageID := publishing.MessageId
 		correlationID := publishing.CorrelationId
@@ -461,7 +459,6 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			lastCause = err
 			c.log.Warn().Err(err).Int("retry_count", retryCount).Msg("Publish failed, retrying...")
 
-			// Record retry metric
 			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "publish_error")
 
 			span.AddEvent(eventPublishRetry, trace.WithAttributes(
@@ -520,7 +517,6 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 				Int("retry_count", retryCount).
 				Msg("Message publish not acknowledged, retrying...")
 
-			// Record retry metric
 			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "nack")
 
 			span.AddEvent(eventPublishRetry, trace.WithAttributes(
@@ -550,7 +546,6 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 			lastCause = ErrPublishConfirmTimeout
 			c.log.Warn().Int("retry_count", retryCount).Msg("Publish confirmation timeout, retrying...")
 
-			// Record retry metric
 			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "timeout")
 
 			span.AddEvent(eventPublishRetry, trace.WithAttributes(
@@ -838,14 +833,12 @@ func (c *AMQPClientImpl) Close() error {
 		if closeErr := c.channel.Close(); closeErr != nil {
 			err = closeErr
 		}
-		// Record channel close event
 		tracking.RecordChannelEvent("close", nil)
 	}
 	if c.connection != nil {
 		if closeErr := c.connection.Close(); closeErr != nil && err == nil {
 			err = closeErr
 		}
-		// Record connection close event
 		tracking.RecordConnectionEvent("close", nil)
 	}
 
@@ -955,7 +948,6 @@ func (c *AMQPClientImpl) connect() (*amqp.Connection, error) {
 	// Store as interface and also return underlying real connection when available
 	c.changeConnection(ac)
 
-	// Record connection create event
 	tracking.RecordConnectionEvent("create", nil)
 
 	c.log.Info().Msg("Connected to AMQP broker")
@@ -989,7 +981,6 @@ func (c *AMQPClientImpl) handleReInit(conn *amqp.Connection) bool {
 				return true
 			case <-c.notifyConnClose:
 				c.log.Info().Msg("AMQP connection closed, reconnecting...")
-				// Record connection close event
 				tracking.RecordConnectionEvent("close", nil)
 				return false
 			case <-time.After(c.reInitDelay):
@@ -1002,12 +993,10 @@ func (c *AMQPClientImpl) handleReInit(conn *amqp.Connection) bool {
 			return true
 		case <-c.notifyConnClose:
 			c.log.Info().Msg("AMQP connection closed, reconnecting...")
-			// Record connection close event
 			tracking.RecordConnectionEvent("close", nil)
 			return false
 		case <-c.notifyChanClose:
 			c.log.Info().Msg("AMQP channel closed, reinitializing...")
-			// Record channel close event
 			tracking.RecordChannelEvent("close", nil)
 		}
 	}
@@ -1034,7 +1023,6 @@ func (c *AMQPClientImpl) init(conn amqpConnection) error {
 	}
 	c.m.Unlock()
 
-	// Record channel create event
 	tracking.RecordChannelEvent("create", nil)
 
 	c.log.Info().Msg("AMQP client initialized and ready")

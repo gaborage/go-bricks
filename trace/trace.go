@@ -246,7 +246,6 @@ func forceAlignTraceID(traceID, traceparent string) string {
 		return traceID
 	}
 
-	// Extract trace ID from traceparent
 	if parentTraceID := extractTraceIDFromParent(traceparent); parentTraceID != "" {
 		return parentTraceID
 	}

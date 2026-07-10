@@ -231,7 +231,9 @@ func (s *Server) healthCheck(c *echo.Context) error {
 
 // readyCheck is the default readiness probe handler.
 func (s *Server) readyCheck(c *echo.Context) error {
-	// This will be extended in App to check DB connection
+	// App overrides this via RegisterReadyHandler with a probe-driven readiness check
+	// (DB, messaging, etc.); see app/lifecycle.go's App.readyCheck. This handler remains
+	// the fallback when no override is registered.
 	return c.JSON(http.StatusOK, map[string]any{
 		fieldStatus: statusReady,
 		"time":      time.Now().Unix(),

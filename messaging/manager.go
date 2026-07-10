@@ -222,7 +222,6 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		return fmt.Errorf("failed to replay messaging declarations: %w", err)
 	}
 
-	// Declare infrastructure
 	if err := registry.DeclareInfrastructure(ctx); err != nil {
 		m.closeClientOnRollback(client, key, "declare_infrastructure")
 		return fmt.Errorf("failed to declare messaging infrastructure: %w", err)
@@ -241,7 +240,6 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		return fmt.Errorf("failed to start messaging consumers: %w", err)
 	}
 
-	// Store the consumer entry
 	m.consumers[key] = &consumerEntry{
 		client:   client,
 		registry: registry,

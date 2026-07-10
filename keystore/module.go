@@ -11,10 +11,12 @@ import (
 //
 // Register before modules that need keys:
 //
-//	fw.RegisterModules(
-//	    keystore.NewModule(),
-//	    &myapp.JWEModule{},
-//	)
+//	if err := fw.RegisterModule(keystore.NewModule()); err != nil {
+//	    log.Fatal(err)
+//	}
+//	if err := fw.RegisterModule(&myapp.JWEModule{}); err != nil {
+//	    log.Fatal(err)
+//	}
 type Module struct {
 	logger logger.Logger
 	store  app.KeyStore

@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// buildPostgreSQLUpsert creates a PostgreSQL ON CONFLICT DO UPDATE statement.
-// PostgreSQL uses INSERT ... ON CONFLICT (columns) DO UPDATE SET ... syntax.
+// buildPostgreSQLUpsert creates a PostgreSQL upsert: ON CONFLICT (columns) DO UPDATE SET ...
+// when update columns are provided, or DO NOTHING otherwise.
 func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []string, insertColumns, updateKeys map[string]any) (query string, args []any, err error) {
 	// Build the base INSERT statement using the public API for consistency.
 	insertQuery := qb.Insert(table)
@@ -60,7 +60,6 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	// Append the update values (bound by the placeholders above) after the insert args.
 	args = append(args, updateVals...)
 
-	// Append the conflict clause to the INSERT statement
 	query = sql + " " + conflictClause
 	return query, args, nil
 }

@@ -2,7 +2,7 @@
 // This package follows the design patterns from observability/testing, providing fluent APIs
 // and in-memory fakes that eliminate the complexity of sqlmock and testify mocks.
 //
-// The primary type is TestDB, which implements database.Querier and database.Interface
+// The primary type is TestDB, which implements dbtypes.Querier and database.Interface
 // with expectation-based mocking. Use TestDB for unit tests where you want to verify
 // SQL queries and execution without needing a real database.
 //
@@ -47,7 +47,7 @@ const (
 	valueOverflowsUInt8ErrMsg  = "value %d overflows uint8"
 )
 
-// TestDB is an in-memory fake database that implements both database.Querier and database.Interface.
+// TestDB is an in-memory fake database that implements both dbtypes.Querier and database.Interface.
 // It provides a fluent API for setting up query expectations and tracking calls for assertions.
 //
 // TestDB supports two SQL matching modes:
@@ -56,11 +56,11 @@ const (
 //
 // Usage example:
 //
-//	db := NewTestDB(dbtypes.PostgreSQL).
-//	    ExpectQuery("SELECT * FROM users").
-//	        WillReturnRows(NewRowSet("id", "name").AddRow(1, "Alice")).
-//	    ExpectExec("INSERT INTO users").
-//	        WillReturnRowsAffected(1)
+//	db := NewTestDB(dbtypes.PostgreSQL)
+//	db.ExpectQuery("SELECT * FROM users").
+//	    WillReturnRows(NewRowSet("id", "name").AddRow(1, "Alice"))
+//	db.ExpectExec("INSERT INTO users").
+//	    WillReturnRowsAffected(1)
 //
 //	deps := &app.ModuleDeps{
 //	    DB: func(ctx context.Context) (database.Interface, error) {
@@ -119,7 +119,7 @@ type TxExpectation struct {
 // NewTestDB creates a new in-memory fake database for the specified vendor.
 // The vendor parameter should be one of: dbtypes.PostgreSQL, dbtypes.Oracle.
 //
-// The returned TestDB implements both database.Querier (for simple mocking) and
+// The returned TestDB implements both dbtypes.Querier (for simple mocking) and
 // database.Interface (for full compatibility with framework code).
 func NewTestDB(vendor string) *TestDB {
 	return &TestDB{
@@ -255,7 +255,7 @@ func (db *TestDB) findExecExpectation(actualSQL string) *ExecExpectation {
 	return nil
 }
 
-// Query implements database.Querier.Query.
+// Query implements dbtypes.Querier.Query.
 //
 // IMPORTANT: Callers MUST call defer rows.Close() immediately after Query() to prevent
 // resource leaks. The returned *sql.Rows is backed by a temporary *sql.DB that requires
@@ -295,7 +295,7 @@ func (db *TestDB) Query(_ context.Context, query string, args ...any) (*sql.Rows
 	return exp.rows.toSQLRows()
 }
 
-// QueryRow implements database.Querier.QueryRow.
+// QueryRow implements dbtypes.Querier.QueryRow.
 func (db *TestDB) QueryRow(_ context.Context, query string, args ...any) dbtypes.Row {
 	db.mu.Lock()
 	db.queryLog = append(db.queryLog, QueryCall{SQL: query, Args: args})
@@ -328,7 +328,7 @@ func (db *TestDB) QueryRow(_ context.Context, query string, args ...any) dbtypes
 	return &testRow{values: normalized}
 }
 
-// Exec implements database.Querier.Exec.
+// Exec implements dbtypes.Querier.Exec.
 func (db *TestDB) Exec(_ context.Context, query string, args ...any) (sql.Result, error) {
 	db.mu.Lock()
 	db.execLog = append(db.execLog, ExecCall{SQL: query, Args: args})
@@ -346,26 +346,23 @@ func (db *TestDB) Exec(_ context.Context, query string, args ...any) (sql.Result
 	return &testResult{rowsAffected: exp.rowsAffected}, nil
 }
 
-// DatabaseType implements database.Querier.DatabaseType.
+// DatabaseType implements dbtypes.Querier.DatabaseType.
 func (db *TestDB) DatabaseType() string {
 	return db.vendor
 }
 
-// Begin implements database.Transactor.Begin.
+// Begin implements dbtypes.Transactor.Begin.
 func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Check if there are any expectations queued
 	if len(db.txExpectations) == 0 {
 		return nil, fmt.Errorf("unexpected Begin() call (use ExpectTransaction)")
 	}
 
-	// Pop the first expectation from the queue
 	txExp := db.txExpectations[0]
 	db.txExpectations = db.txExpectations[1:]
 
-	// Track this transaction as started
 	db.startedTransactions = append(db.startedTransactions, txExp)
 
 	if txExp.shouldErr != nil {
@@ -375,7 +372,7 @@ func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
 	return txExp.tx, nil
 }
 
-// BeginTx implements database.Transactor.BeginTx.
+// BeginTx implements dbtypes.Transactor.BeginTx.
 func (db *TestDB) BeginTx(ctx context.Context, _ *sql.TxOptions) (dbtypes.Tx, error) {
 	// For test purposes, delegate to Begin (ignore opts)
 	return db.Begin(ctx)

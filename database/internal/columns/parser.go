@@ -39,6 +39,7 @@ func oracleQuoteIdentifier(column string) string {
 // Returns an error if:
 //   - structPtr is not a pointer to a struct
 //   - Any db tag contains dangerous SQL characters
+//   - No fields with `db` tags are found
 func parseStruct(vendor string, structPtr any) (*ColumnMetadata, error) {
 	// Validate input type
 	rv := reflect.ValueOf(structPtr)

@@ -44,9 +44,9 @@ Explicit database configuration requirement with no framework defaults. Database
 
 ### [ADR-004: Lazy Messaging Registry Creation in ModuleRegistry](adr_004_lazy_messaging_registry.md)
 
-**Date:** 2025-09-24 | **Status:** Accepted
+**Date:** 2025-09-24 | **Status:** Superseded by [ADR-014](adr_014_slim_module_interface.md)
 
-Lazy initialization of messaging registry to support context-aware dependency resolution in multi-tenant architecture. Uses singleflight protection for thread-safe initialization.
+Lazy initialization of messaging registry to support context-aware dependency resolution in multi-tenant architecture. Used singleflight protection for thread-safe initialization; that protection moved to `messaging.Manager.EnsureConsumers()` under the `MessagingDeclarer` duck-typing pattern introduced by ADR-014.
 
 **Key Benefits:** Maintains encapsulation, context-aware, supports multi-tenant modes
 

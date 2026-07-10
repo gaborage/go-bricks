@@ -324,7 +324,7 @@ func (h *Handler) createUser(req CreateReq, ctx server.HandlerContext) (server.R
 }
 ```
 
-Request structs use tags for binding/validation (`path`, `query`, `header`, `validate`). Responses follow consistent `{data:…, meta:…}` envelope structure. Use `server.WithRawResponse()` to bypass the envelope for legacy API migration (Strangler Fig pattern).
+Request structs use tags for binding/validation (`param`, `query`, `header`, `validate`). Responses follow consistent `{data:…, meta:…}` envelope structure. Use `server.WithRawResponse()` to bypass the envelope for legacy API migration (Strangler Fig pattern).
 
 ### Routing Configuration
 ```yaml
@@ -550,7 +550,7 @@ cache:
   redis:
     host: localhost
     port: 6379
-    password: ${CACHE_REDIS_PASSWORD}   # From environment
+    password: ""              # Set via CACHE_REDIS_PASSWORD env var (GoBricks does not expand ${VAR} in YAML)
     database: 0
     poolsize: 10               # Default: 10
 ```
@@ -691,9 +691,9 @@ keystore:
         file: certs/signing_private.der
     encryption:
       public:
-        value: ${ENCRYPTION_PUBLIC_KEY_BASE64}    # Cloud/EKS: base64-encoded DER via env var
+        value: ""    # Cloud/EKS: set via KEYSTORE_KEYS_ENCRYPTION_PUBLIC_VALUE env var (base64-encoded DER)
       private:
-        value: ${ENCRYPTION_PRIVATE_KEY_BASE64}
+        value: ""    # Set via KEYSTORE_KEYS_ENCRYPTION_PRIVATE_VALUE env var (base64-encoded DER)
 ```
 
 Each key pair has a `public` and `private` source. For required sources, set exactly one of `file:` (DER path) or `value:` (base64-encoded DER, typically referencing an environment variable). For verification-only services, the `private` entry may be omitted.

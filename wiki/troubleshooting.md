@@ -178,7 +178,7 @@ observability:
 ```bash
 # Windows-specific path failures
 # → Check for /tmp vs D:\temp in test assertions
-# → See: observability/provider_test.go for retry patterns
+# → See: migration/multi_tenant_test.go, tools/migration/internal/commands/migrate_test.go for Windows path-handling patterns
 
 # Coverage below 80%
 # → Run: make test-coverage
@@ -193,9 +193,10 @@ observability:
 # → Ensure tenant resolver configured in multitenant.resolver
 
 # Messaging registry initialization errors
-# → Check logs for "messaging not configured" warnings
+# → Fatal Init error: "messaging declarations were registered ... but
+#   messaging is not configured; set messaging.broker.url"
 # → Verify messaging.broker.url set for each tenant
-# → See ADR-004 for lazy registry creation details
+# → See ADR-014 for the MessagingDeclarer pattern details
 ```
 
 ## Messaging Issues

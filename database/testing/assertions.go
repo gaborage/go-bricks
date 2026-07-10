@@ -183,7 +183,6 @@ func AssertTransactionCommitted(t *testing.T, db *TestDB) {
 		return
 	}
 
-	// Check the last started transaction
 	txExp := startedTxs[len(startedTxs)-1]
 	if txExp.tx == nil {
 		t.Error("transaction expectation has no tx (internal error)")
@@ -213,7 +212,6 @@ func AssertTransactionRolledBack(t *testing.T, db *TestDB) {
 		return
 	}
 
-	// Check the last started transaction
 	txExp := startedTxs[len(startedTxs)-1]
 	if txExp.tx == nil {
 		t.Error("transaction expectation has no tx (internal error)")

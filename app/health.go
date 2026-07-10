@@ -120,7 +120,6 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 	return healthProbeFunc{
 		name: componentMessaging,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
-			// Get manager stats
 			stats := msgManager.Stats()
 			if stats == nil {
 				stats = map[string]any{}
@@ -140,7 +139,6 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			}
 			defer release() // probe holds no scope; release the lease when the check returns
 
-			// Check if client is ready
 			if !client.IsReady() {
 				stats[statusKey] = "not_ready"
 				return unhealthyStatus, stats, nil
@@ -170,7 +168,6 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) 
 	return healthProbeFunc{
 		name: componentCache,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
-			// Get manager stats and convert to map
 			stats := convertCacheStatsToMap(cacheManager.Stats())
 
 			// Attempt to verify readiness by getting cache instance

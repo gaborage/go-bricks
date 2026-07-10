@@ -38,7 +38,6 @@ func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (*sql
 	start := time.Now()
 	rows, err := db.DB.QueryContext(ctx, query, args...)
 
-	// Track performance metrics
 	db.trackQuery(ctx, query, args, start, 0, err) // Read operations don't have rows affected
 
 	return rows, err
@@ -60,7 +59,6 @@ func (db *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.R
 	start := time.Now()
 	result, err := db.DB.ExecContext(ctx, query, args...)
 
-	// Track performance metrics
 	db.trackQuery(ctx, query, args, start, extractRowsAffected(result, err), err)
 
 	return result, err
@@ -71,7 +69,6 @@ func (db *DB) PrepareContext(ctx context.Context, query string) (types.Statement
 	start := time.Now()
 	stmt, err := db.DB.PrepareContext(ctx, query)
 
-	// Track performance metrics
 	db.trackQuery(ctx, "PREPARE: "+query, nil, start, 0, err) // Prepare doesn't affect rows
 
 	if err != nil {

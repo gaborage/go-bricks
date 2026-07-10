@@ -2,7 +2,7 @@ package config
 
 // Test Configuration Keys
 //
-// This file defines constants for configuration keys frequently used in tests
+// This file defines constants for configuration keys, intended for use in tests
 // to eliminate string literal duplication and provide type-safe references.
 // These constants should ONLY be used in test files (*_test.go).
 

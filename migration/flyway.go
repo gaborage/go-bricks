@@ -57,7 +57,7 @@ type Config struct {
 	ConfigPath    string        // Path to the configuration file
 	MigrationPath string        // Path to migration scripts
 	Timeout       time.Duration // Timeout for migration operations
-	Environment   string        // Environment (development, staging, production)
+	Environment   string        // Environment (e.g. "development", "staging", "production", or any org-specific alias such as "local"/"stg"/"prd" — not enum-validated per ADR-022)
 	DryRun        bool          // Only validate, do not execute
 
 	// Audit carries the per-call audit-event context required by ADR-019.
@@ -196,8 +196,10 @@ func (fm *FlywayMigrator) defaultMigrationConfig() *Config {
 }
 
 // Migrate executes pending migrations against the migrator's configured
-// database. The Result carries the parsed per-target outcome; on parse
-// failure it is zero-valued and the error return is authoritative.
+// database. The Result carries the parsed per-target outcome; if Flyway's
+// JSON output fails to parse, Result is zero-valued even though the returned
+// error may be nil when the underlying flyway process itself succeeded (the
+// parse failure is only Debug-logged, see runFor).
 func (fm *FlywayMigrator) Migrate(ctx context.Context, cfg *Config) (Result, error) {
 	if cfg == nil {
 		cfg = fm.DefaultMigrationConfig()
@@ -489,9 +491,10 @@ func validateEnvFields(db *config.DatabaseConfig) error {
 	return nil
 }
 
-// validateFlywayPath ensures the Flyway path is non-empty, free of shell
-// metacharacters, and points at an existing file. Successful validations are
-// memoized per FlywayMigrator so multi-tenant runs don't re-stat the binary.
+// validateFlywayPath ensures the Flyway path is non-empty, rejects path
+// traversal ("..") and the ";"/"&" substrings, and points at an existing
+// file. Successful validations are memoized per FlywayMigrator so
+// multi-tenant runs don't re-stat the binary.
 func (fm *FlywayMigrator) validateFlywayPath(flywayPath string) error {
 	if _, ok := fm.validatedPaths.Load(flywayPath); ok {
 		return nil

@@ -44,7 +44,6 @@ func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor, s
 
 // OnEmit routes the log record to the appropriate processor based on log.type attribute.
 func (p *DualModeLogProcessor) OnEmit(ctx context.Context, rec *sdklog.Record) error {
-	// Enrich record with trace context from context parameter
 	enrichTraceContext(ctx, rec)
 
 	logType := extractLogType(rec)

@@ -141,7 +141,6 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 			return nil, err
 		}
 
-		// Get cache configuration for this tenant/key
 		cacheCfg, err := resourceSource.CacheConfig(ctx, key)
 		if err != nil {
 			log.Debug().
@@ -190,7 +189,6 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 			return nil, err
 		}
 
-		// Create Redis configuration from cache config
 		redisCfg := &redis.Config{
 			Host:            cacheCfg.Redis.Host,
 			Port:            cacheCfg.Redis.Port,
@@ -213,7 +211,6 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 			Int("pool_size", cacheCfg.Redis.PoolSize).
 			Msg("Creating Redis cache instance")
 
-		// Create Redis cache instance
 		// Note: redis.NewClient() does not accept context parameter. It creates its own
 		// 5-second timeout context for the initial PING validation during connection.
 		client, err := redis.NewClient(redisCfg)

@@ -50,7 +50,6 @@ func (m *MockAMQPClient) PublishToExchange(ctx context.Context, options messagin
 func (m *MockAMQPClient) ConsumeFromQueue(ctx context.Context, options messaging.ConsumeOptions) (<-chan amqp.Delivery, error) {
 	arguments := m.Called(ctx, options)
 
-	// Create a channel for this queue if it doesn't exist
 	m.mu.Lock()
 	if _, exists := m.messageChannels[options.Queue]; !exists {
 		m.messageChannels[options.Queue] = make(chan amqp.Delivery, 100)
@@ -69,7 +68,6 @@ func (m *MockAMQPClient) DeclareQueue(name string, durable, autoDelete, exclusiv
 	arguments := m.Called(name, durable, autoDelete, exclusive, noWait)
 	err := arguments.Error(0)
 
-	// Only update state if the operation succeeded
 	if err == nil {
 		m.mu.Lock()
 		m.declaredQueues[name] = true
@@ -84,7 +82,6 @@ func (m *MockAMQPClient) DeclareExchange(name, kind string, durable, autoDelete,
 	arguments := m.Called(name, kind, durable, autoDelete, internal, noWait)
 	err := arguments.Error(0)
 
-	// Only update state if the operation succeeded
 	if err == nil {
 		m.mu.Lock()
 		m.declaredExchanges[name] = true
@@ -99,7 +96,6 @@ func (m *MockAMQPClient) BindQueue(queue, exchange, routingKey string, noWait bo
 	arguments := m.Called(queue, exchange, routingKey, noWait)
 	err := arguments.Error(0)
 
-	// Only update state if the operation succeeded
 	if err == nil {
 		bindingKey := queue + ":" + exchange + ":" + routingKey
 		m.mu.Lock()

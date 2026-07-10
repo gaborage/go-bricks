@@ -144,7 +144,6 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 		dsn = buildPostgresDSN(cfg)
 	}
 
-	// Parse config for pgx
 	pgxConfig, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse PostgreSQL config: %w", err)
@@ -174,7 +173,6 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 			Msg("TCP keep-alive enabled for PostgreSQL connections")
 	}
 
-	// Create connection using pgx driver
 	db := openPostgresDB(pgxConfig)
 
 	// Configure connection pool

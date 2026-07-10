@@ -1,6 +1,9 @@
-// Package cryptoadapter wraps go-jose/v4 with strict allowlist enforcement and a
-// constant-time generic error surface. All upstream-library specifics (header types,
-// option structs) are kept inside this package so a future library swap touches only one file.
+// Package cryptoadapter wraps go-jose/v4's parsing/signing option structs and header
+// extraction with strict allowlist enforcement and a constant-time generic error surface.
+// Keeping wire-format specifics (header types, option structs) inside this package limits —
+// but does not eliminate — a future library swap's blast radius; algorithm-identifier types
+// (jose.SignatureAlgorithm, jose.KeyAlgorithm, jose.ContentEncryption) are still referenced
+// directly from the parent jose package.
 package cryptoadapter
 
 import (

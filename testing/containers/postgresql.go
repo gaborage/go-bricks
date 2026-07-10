@@ -58,13 +58,11 @@ func StartPostgreSQLContainer(ctx context.Context, t *testing.T, cfg *PostgreSQL
 		cfg = DefaultPostgreSQLConfig()
 	}
 
-	// Check if Docker is available - skip test if not
 	if !isDockerAvailable(ctx) {
 		t.Skip("Docker is not available - skipping integration test. Install Docker Desktop or ensure Docker daemon is running.")
 		return nil, nil // Never reached due to Skip, but satisfies return
 	}
 
-	// Create PostgreSQL container with configuration
 	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
 	// This prevents race conditions where the log appears but PostgreSQL isn't ready to accept connections
 	pgContainer, err := postgres.Run(ctx,
@@ -84,7 +82,6 @@ func StartPostgreSQLContainer(ctx context.Context, t *testing.T, cfg *PostgreSQL
 		return nil, fmt.Errorf("failed to start PostgreSQL container: %w", err)
 	}
 
-	// Get connection string
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
 		// Clean up container on error

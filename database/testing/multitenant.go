@@ -74,7 +74,6 @@ func (m *TenantDBMap) ForTenant(tenantID string) *TestDB {
 		return db
 	}
 
-	// Create new TestDB for this tenant
 	db := NewTestDB(m.defaultVendor)
 	m.databases[tenantID] = db
 	return db
@@ -101,7 +100,6 @@ func (m *TenantDBMap) ForTenantWithVendor(tenantID, vendor string) *TestDB {
 		return db
 	}
 
-	// Create new TestDB for this tenant with specific vendor
 	db := NewTestDB(vendor)
 	m.databases[tenantID] = db
 	return db
@@ -115,7 +113,9 @@ func (m *TenantDBMap) ForTenantWithVendor(tenantID, vendor string) *TestDB {
 // Example:
 //
 //	tenants := NewTenantDBMap()
-//	tenants.SetDefaultDB(NewTestDB(dbtypes.PostgreSQL).ExpectQuery(...))
+//	defaultDB := NewTestDB(dbtypes.PostgreSQL)
+//	defaultDB.ExpectQuery("SELECT ...").WillReturnRows(...)
+//	tenants.SetDefaultDB(defaultDB)
 //
 //	// When no tenant in context, uses default DB
 //	ctx := context.Background()
@@ -250,7 +250,9 @@ func (m *TenantDBMap) Reset() {
 //	        WillReturnRows(NewRowSet("count").AddRow(100))
 //
 //	// Set default database for deps.DB()
-//	namedDBs.SetDefaultDB(NewTestDB(dbtypes.PostgreSQL).ExpectQuery(...))
+//	defaultDB := NewTestDB(dbtypes.PostgreSQL)
+//	defaultDB.ExpectQuery("SELECT COUNT(*)").WillReturnRows(NewRowSet("count").AddRow(100))
+//	namedDBs.SetDefaultDB(defaultDB)
 //
 //	// Inject into ModuleDeps
 //	deps := &app.ModuleDeps{
@@ -299,7 +301,6 @@ func (m *NamedDBMap) ForName(name string) *TestDB {
 		return db
 	}
 
-	// Create new TestDB for this named database
 	db := NewTestDB(m.defaultVendor)
 	m.databases[name] = db
 	return db
@@ -327,7 +328,6 @@ func (m *NamedDBMap) ForNameWithVendor(name, vendor string) *TestDB {
 		return db
 	}
 
-	// Create new TestDB for this named database with specific vendor
 	db := NewTestDB(vendor)
 	m.databases[name] = db
 	return db

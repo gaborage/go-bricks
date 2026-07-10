@@ -91,7 +91,6 @@ func (m *Module) triggerJobHandler(req JobIDParam, _ server.HandlerContext) (ser
 	default:
 	}
 
-	// Trigger job execution asynchronously
 	go m.executeManualJob(entry)
 
 	// Return with standard GoBricks envelope
@@ -127,7 +126,6 @@ func (m *Module) executeManualJob(entry *jobEntry) {
 		m.wg.Done()
 	}()
 
-	// Create execution context
 	ctx, cancel := context.WithCancel(m.shutdownCtx)
 	defer cancel()
 

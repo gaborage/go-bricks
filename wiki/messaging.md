@@ -156,7 +156,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 **Resource Safeguards:**
 - Workers capped at 200 per consumer (prevents goroutine explosion)
 - PrefetchCount capped at 1000 (prevents memory exhaustion)
-- Warnings logged when caps are applied
+- Caps are applied silently (no warning is currently logged when a value is reduced)
 
 **Performance Impact (8-core machine, 100ms handler):**
 | Version | Workers | Throughput | Speedup |

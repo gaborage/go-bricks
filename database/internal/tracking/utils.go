@@ -63,8 +63,8 @@ const (
 	sqlOpLowerCreateTable = "create_table"
 
 	// OpenTelemetry instrumentation constants
-	dbTracerName      = "go-bricks/database" // Tracer name for database operations
-	maxDBQueryAttrLen = 2000                 // Maximum length for db.query.text attribute
+	dbTracerName      = "go-bricks/database"
+	maxDBQueryAttrLen = 2000 // Maximum length for db.query.text attribute
 )
 
 // observabilityEnabled gates OpenTelemetry span/metric emission for DB operations
@@ -101,7 +101,7 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 
 	elapsed := time.Since(start)
 
-	// Increment database operation counter for request tracking
+	// Update request-scoped DB counters: operation count and cumulative elapsed time
 	if ctx != nil {
 		logger.IncrementDBCounter(ctx)
 		logger.AddDBElapsed(ctx, elapsed.Nanoseconds())
@@ -263,7 +263,7 @@ func SanitizeArgs(args []any, maxLen int) []any {
 // createDBSpan starts an OpenTelemetry span for a database operation using the provided start time.
 // It sets standard DB and network attributes (including `db.system.name`, `db.query.text`, `db.operation.name`,
 // `db.collection.name`, `db.namespace`, `server.address`, and `server.port`) when available, records errors
-// (excluding `sql.ErrNoRows`) on the span, and ends the span.
+// (excluding `sql.ErrNoRows` and `sql.ErrTxDone`) on the span, and ends the span.
 func createDBSpan(ctx context.Context, tc *Context, query string, start time.Time, err error) {
 	tracer := otel.Tracer(dbTracerName)
 
@@ -287,31 +287,31 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 
 	// Required and recommended attributes per OTel spec
 	attrs := []attribute.KeyValue{
-		attribute.String("db.system.name", normalizeDBVendor(tc.Vendor)), // db.system.name (required)
-		semconv.DBQueryText(truncatedQuery),                              // db.query.text (recommended)
+		attribute.String("db.system.name", normalizeDBVendor(tc.Vendor)),
+		semconv.DBQueryText(truncatedQuery),
 	}
 
 	// Add operation name if identified
 	if operation != defaultOperation {
-		attrs = append(attrs, semconv.DBOperationName(operation)) // db.operation.name (recommended)
+		attrs = append(attrs, semconv.DBOperationName(operation))
 	}
 
 	// Add collection/table name if identified
 	if table != "" && table != tableUnknown {
-		attrs = append(attrs, semconv.DBCollectionName(table)) // db.collection.name (recommended)
+		attrs = append(attrs, semconv.DBCollectionName(table))
 	}
 
 	// Add namespace if available (conditionally required per OTel spec)
 	if tc.Namespace != "" {
-		attrs = append(attrs, semconv.DBNamespace(tc.Namespace)) // db.namespace
+		attrs = append(attrs, semconv.DBNamespace(tc.Namespace))
 	}
 
 	// Add server connection info if available (recommended per OTel spec)
 	if tc.ServerAddress != "" {
-		attrs = append(attrs, semconv.ServerAddress(tc.ServerAddress)) // server.address
+		attrs = append(attrs, semconv.ServerAddress(tc.ServerAddress))
 	}
 	if tc.ServerPort > 0 {
-		attrs = append(attrs, semconv.ServerPort(tc.ServerPort)) // server.port
+		attrs = append(attrs, semconv.ServerPort(tc.ServerPort))
 	}
 
 	span.SetAttributes(attrs...)
@@ -425,10 +425,8 @@ func BuildPostgreSQLNamespace(database, schema string) string {
 // returns the full format with empty placeholders for missing values.
 // Examples: "PRODDB||", "|ORCL|", "||mydb", "PRODDB|ORCL|mydb"
 func BuildOracleNamespace(serviceName, sid, database string) string {
-	// Return empty only if all values are empty
 	if serviceName == "" && sid == "" && database == "" {
 		return ""
 	}
-	// Return full format with all values (empty strings for missing ones)
 	return serviceName + "|" + sid + "|" + database
 }

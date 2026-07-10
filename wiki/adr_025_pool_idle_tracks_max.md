@@ -92,7 +92,7 @@ Rejected alternatives:
   holds up to `pool.max.connections` (default 25), still reaped after
   `pool.idle.time` (5m). For multi-tenant deployments the per-tenant idle ceiling
   rises up to ~12.5×; operators should confirm their PostgreSQL `max_connections`
-  / Oracle session budget. Documented in [migrations.md](migrations.md#connection-pool-idle-default--tracks-max-adr-025).
+  / Oracle session budget. Documented in [migrations.md](migrations.md#c416-pool-idle-connections-default-now-tracks-poolmaxconnections-was-fixed-2--silent-behavior--when-no-match) (E41 › C41.6).
 - **Observability shift:** the connection-pool idle gauges and the `Stats()`
   `max_idle_connections` / `configured_idle_connections` keys now report the
   effective max rather than `2`. Dashboards/alerts keyed to `idle == 2` must be
