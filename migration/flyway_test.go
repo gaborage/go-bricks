@@ -1098,13 +1098,26 @@ func TestRedactPasswordRedactsWithinJSONStringValue(t *testing.T) {
 
 func TestRedactPasswordRedactsNumericPasswordInsideJSONString(t *testing.T) {
 	// Safety: a numeric password that is a real credential inside a string value
-	// must still be redacted (the collision guard only reverts when redaction
-	// breaks valid JSON, which never happens for an in-string match).
+	// must still be redacted.
 	db := &config.DatabaseConfig{Password: "12345678"}
 	output := `{"error":{"message":"auth failed for 12345678"}}`
 	out := redactPassword(output, db)
 	assert.NotContains(t, out, "12345678", "a numeric credential inside a string must not leak")
 	assert.Contains(t, out, "[REDACTED]")
+}
+
+func TestRedactPasswordRedactsStringCredentialDespiteNumericCollision(t *testing.T) {
+	// The dual-occurrence case: a numeric password appears BOTH as a real
+	// credential inside a string value AND as a bare number token. Redaction must
+	// mask the in-string credential while leaving the number token intact — no
+	// leak, no corruption. (A revert-on-broken-JSON strategy would re-expose the
+	// credential here; string-scoped redaction does not.)
+	db := &config.DatabaseConfig{Password: "12345678"}
+	output := `{"msg":"connect string user:12345678@host","totalMigrationTime":12345678}`
+	out := redactPassword(output, db)
+	assert.NotContains(t, out, "user:12345678@host", "the in-string credential must be redacted")
+	assert.Contains(t, out, `"totalMigrationTime":12345678`, "the number token must be left intact")
+	assert.True(t, json.Valid([]byte(out)))
 }
 
 func TestMigrateRequestsJSONOutputAndParsesResult(t *testing.T) {
