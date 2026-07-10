@@ -1723,7 +1723,7 @@ cache:
 GoBricks uses CacheManager to handle per-tenant cache instances with automatic lifecycle management:
 
 - **Lazy Initialization:** Cache created on first access per tenant (no upfront connections)
-- **LRU Eviction:** Oldest cache evicted when MaxSize exceeded (default: 100 tenants)
+- **LRU Eviction:** Oldest cache evicted when MaxSize exceeded (single-tenant default 100; multi-tenant scales to `multitenant.limits.tenants` when unset)
 - **Idle Cleanup:** Unused caches closed after IdleTTL (default: 15m, checked every 5m)
 - **Singleflight:** Prevents duplicate cache creation during concurrent access
 
@@ -4118,7 +4118,7 @@ When `observability.enabled: true`, the framework auto-emits:
 
 | Family | Metric | Type | Attributes |
 |---|---|---|---|
-| HTTP server | `http.server.request.duration` | Histogram (s) | `http.method`, `http.route`, `http.status_code` |
+| HTTP server | `http.server.request.duration` | Histogram (s) | `http.request.method`, `http.route`, `http.response.status_code` |
 | Database | `db.client.operation.duration` | Histogram (s) | `db.system.name`, `db.operation.name`, `db.collection.name`, `db.namespace`, `repository.method` (opt-in via `database.WithRepositoryMethod`) |
 | Database pool | `db.client.connection.count` | UpDownCounter | `state` (`used`/`idle`) |
 | Database pool | `db.client.connection.max` / `.idle.max` / `.idle.min` | UpDownCounter | — |
@@ -4149,8 +4149,8 @@ When `observability.enabled: true`, the framework auto-emits:
 
 | Path | Returns | Probes |
 |---|---|---|
-| `GET /health` | `200` if all probes pass; `503` otherwise | DB `Health(ctx)`, AMQP `IsReady()`, Redis `PING` (if configured) |
-| `GET /ready` | `200` once startup completes; `503` during init | Module init lifecycle |
+| `GET /health` | `200` `{"status":"ok"}` always (liveness only — no component probes) | none |
+| `GET /ready` | `200` if all probes pass; `503` otherwise | DB `Health(ctx)`, AMQP `IsReady()`, Redis `PING` (if configured) |
 
 ### Configuration — Layered by Environment
 
@@ -4255,14 +4255,14 @@ The framework attaches the following resource attributes to every signal: `servi
 
 ### Secrets Hygiene
 
-Never hardcode OTLP auth headers in committed YAML. The framework declares header *structure* in YAML (it doesn't auto-derive header names from env-var paths), but secret *values* should come from env vars via Koanf `${VAR}` substitution — the same 12-factor pattern used elsewhere in the codebase.
+Never hardcode OTLP auth headers in committed YAML. The framework declares header *structure* in YAML, but GoBricks has **no `${VAR}` interpolation** inside YAML values — a literal `${NEW_RELIC_API_KEY}` string would be sent as-is. Render the file before `config.Load()` runs (see wiki/observability_headers_auth.md) or inject the value through the environment-variable override path.
 
 ```yaml
 # config.production.yaml — checked into git
 observability:
   trace:
     headers:
-      api-key: ${NEW_RELIC_API_KEY}    # SAFE: resolved from env at startup
+      api-key: ""    # value rendered into the file before startup, never committed
 ```
 
 For rotating tokens or secrets fetched from a manager (Vault, AWS Secrets Manager), override programmatically before `app.Run()`:
@@ -4632,8 +4632,8 @@ curl -i http://localhost:8080/health
 
 # Console output includes spans like:
 # {"Name":"HTTP GET /health","SpanContext":{"TraceID":"abc123...","SpanID":"def456..."},
-#  "StartTime":"...","EndTime":"...","Attributes":[{"Key":"http.method","Value":"GET"},
-#  {"Key":"http.route","Value":"/health"},{"Key":"http.status_code","Value":200}]}
+#  "StartTime":"...","EndTime":"...","Attributes":[{"Key":"http.request.method","Value":"GET"},
+#  {"Key":"http.route","Value":"/health"},{"Key":"http.response.status_code","Value":200}]}
 ```
 
 **Production endpoint examples:**
@@ -4675,7 +4675,7 @@ observability:
 
 **HTTP requests are automatically traced** when `observability.enabled: true`. Each incoming request creates a span:
 - Span name: `HTTP {method} {route}` (e.g., `HTTP POST /users`)
-- Attributes: `http.method`, `http.route`, `http.status_code`, `http.request.body_size`
+- Attributes: `http.request.method`, `http.route`, `http.response.status_code`, `http.request.body_size`
 - W3C `traceparent` header propagation (cross-service tracing)
 
 **No code changes required for basic tracing** — just enable in config.

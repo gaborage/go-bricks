@@ -398,11 +398,11 @@ type SampleConfig struct {
 
 // BatchConfig defines batch processing configuration, shared by both TraceConfig and LogsConfig.
 type BatchConfig struct {
-	// Timeout specifies how long to wait before sending a batch of spans.
+	// Timeout specifies how long to wait before sending a batch of spans or log records.
 	// Lower values reduce latency but increase network overhead.
 	Timeout time.Duration `mapstructure:"timeout"`
 
-	// Size limits the number of spans per export batch.
+	// Size limits the number of spans or log records per export batch.
 	// Smaller batches reduce latency, larger batches reduce overhead.
 	Size int `mapstructure:"size"`
 }

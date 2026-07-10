@@ -57,15 +57,19 @@ The actual secret lives in the deployment environment (Kubernetes Secret, AWS Se
    - `config.development.yaml` — Dev settings (committed; references `${VAR}` or default literals for local-only test keys)
 
 3. **Programmatic secret injection** (when a sidecar or secret manager provides the value at process start — e.g., rotating tokens): render the YAML file itself before calling `config.Load()` / `app.Run()`. GoBricks has no `${VAR}` interpolation step and no override hook for `observability.*` values, so the placeholder must already be a literal by the time the file is read.
+
    ```go
    // In main.go, before app.Run()
    apiKey, err := vault.GetSecret(ctx, "otel/api-key")
    if err != nil { return err }
-   rendered := strings.ReplaceAll(string(configTemplate), "${NEW_RELIC_API_KEY}", apiKey)
+   // strconv.Quote yields a valid YAML double-quoted scalar, so secrets containing
+   // quotes, ':', '#', or newlines cannot corrupt the rendered document.
+   rendered := strings.ReplaceAll(string(configTemplate), "${NEW_RELIC_API_KEY}", strconv.Quote(apiKey))
    if err := os.WriteFile("config.production.yaml", []byte(rendered), 0o600); err != nil { return err }
    // GoBricks reads the rendered file when config.Load() runs inside app.Run() —
    // no ${VAR} placeholder left to resolve.
    ```
+
    Note: `config.Config` has no `Observability` struct field, and there is no programmatic override for `observability.*` values — the rendered secret must already be present in the file GoBricks loads.
 
 ## Vendor-Specific Header Examples

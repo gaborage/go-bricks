@@ -78,7 +78,7 @@ var (
 // logMetricError logs a metric setup or teardown error to stderr.
 func logMetricError(metricName string, err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: Failed to initialize cache metric %s: %v\n", metricName, err)
+		fmt.Fprintf(os.Stderr, "WARNING: Failed to configure cache metric %s: %v\n", metricName, err)
 	}
 }
 
