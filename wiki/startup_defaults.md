@@ -45,7 +45,7 @@ In single-tenant mode, startup pre-warms the messaging publisher and then waits 
 
 Set `server.logroutes` (bool; env `SERVER_LOGROUTES`) to emit one `Info` line per registered HTTP route at startup:
 
-```
+```text
 Route registered  module=events method=POST path=/v1/events
 ```
 

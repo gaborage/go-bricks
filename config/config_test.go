@@ -227,8 +227,6 @@ func TestLoadResponseTimeEnabledEnv(t *testing.T) {
 	})
 }
 
-func boolPtr(b bool) *bool { return &b }
-
 func TestConfigShouldLogRoutes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -240,8 +238,8 @@ func TestConfigShouldLogRoutes(t *testing.T) {
 		{name: "unset_defaults_on_for_local", env: "local", ptr: nil, want: true},
 		{name: "unset_defaults_off_in_production", env: "production", ptr: nil, want: false},
 		{name: "unset_defaults_off_in_staging", env: "staging", ptr: nil, want: false},
-		{name: "explicit_false_honored_in_development", env: "development", ptr: boolPtr(false), want: false},
-		{name: "explicit_true_honored_in_production", env: "production", ptr: boolPtr(true), want: true},
+		{name: "explicit_false_honored_in_development", env: "development", ptr: new(false), want: false},
+		{name: "explicit_true_honored_in_production", env: "production", ptr: new(true), want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

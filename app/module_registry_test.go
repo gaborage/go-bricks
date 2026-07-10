@@ -14,8 +14,6 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-func routeLogPtr(b bool) *bool { return &b }
-
 // recLogger is a recording logger.Logger that captures each event's Str fields
 // and terminal Msg, for asserting the route-registered emission.
 type recLogger struct {
@@ -123,14 +121,14 @@ func TestRegisterRoutesSilentInProduction(t *testing.T) {
 }
 
 func TestRegisterRoutesExplicitFalseSilentInDevelopment(t *testing.T) {
-	reg, rec := newRouteLogRegistry(t, "development", routeLogPtr(false),
+	reg, rec := newRouteLogRegistry(t, "development", new(false),
 		&fakeRouteModule{name: "users", routes: []server.RouteDescriptor{{Method: "GET", Path: "/v1/users"}}})
 	reg.RegisterRoutes(nil)
 	assert.Empty(t, rec.routeRegisteredLines())
 }
 
 func TestRegisterRoutesExplicitTrueEmitsInProduction(t *testing.T) {
-	reg, rec := newRouteLogRegistry(t, "production", routeLogPtr(true),
+	reg, rec := newRouteLogRegistry(t, "production", new(true),
 		&fakeRouteModule{name: "users", routes: []server.RouteDescriptor{{Method: "GET", Path: "/v1/users"}}})
 	reg.RegisterRoutes(nil)
 	require.Len(t, rec.routeRegisteredLines(), 1)
