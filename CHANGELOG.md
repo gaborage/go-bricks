@@ -5,7 +5,7 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **migration:** a static config with a non-empty DB password < 8 bytes now fails config validation at startup; a per-tenant migration fails with ErrDatabasePasswordTooShort. Use >=8-char passwords (or empty for trust/IAM auth).
+* **migration:** a static config with a non-empty DB password < 8 bytes now fails config validation at startup; a per-tenant migration fails with ErrDatabasePasswordTooShort. Use >=8-byte passwords (or empty for trust/IAM auth).
 
 ### Added
 
