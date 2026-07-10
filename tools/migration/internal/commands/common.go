@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
@@ -174,16 +176,104 @@ func loadTenantStoreFromFile(path string) (*config.TenantStore, error) {
 		return nil, fmt.Errorf("load config %q: %w", path, err)
 	}
 
-	// Plain Unmarshal binds by koanf tag / case-insensitive field name and
-	// ignores mapstructure tags, so it only reaches config.Config keys that are
-	// flat-smushed (underscore-free). That invariant is enforced by
-	// config.TestConfigKoanfTagsHaveNoUnderscore; if it ever regressed, an
-	// underscored key would silently fail to bind here (see issue #554).
+	// Empty Tag keeps koanf's "koanf" TagName: binds by koanf tag / case-insensitive
+	// field name, ignoring mapstructure tags, so it only reaches config.Config keys that
+	// are flat-smushed (underscore-free). That invariant is enforced by
+	// config.TestConfigKoanfTagsHaveNoUnderscore; if it ever regressed, an underscored key
+	// would silently fail to bind here (see issue #554). The guard decoder rejects bare
+	// numeric time.Duration values here too.
 	var cfg config.Config
-	if err := k.Unmarshal("", &cfg); err != nil {
+	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{DecoderConfig: tenantDecoderConfig()}); err != nil {
 		return nil, fmt.Errorf("unmarshal config %q: %w", path, err)
 	}
 	return config.NewTenantStore(&cfg), nil
+}
+
+// durationType is time.Duration's reflect.Type, computed once for the guard hook's fast path.
+var durationType = reflect.TypeOf(time.Duration(0))
+
+// tenantDecoderConfig mirrors config.buildDecoderConfig (github.com/gaborage/go-bricks
+// config/config.go) so a tenants.yaml decodes byte-identically to the framework's Load:
+// numeric-duration guard + comma-split []string hook + StringToTimeDuration + text-unmarshaler,
+// WeaklyTypedInput. Keep the hook set in sync with buildDecoderConfig — without the slice hook
+// a comma-scalar []string field (e.g. an allowlist) would decode to one element here but two
+// under the framework.
+func tenantDecoderConfig() *mapstructure.DecoderConfig {
+	return &mapstructure.DecoderConfig{
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			numericToDurationGuardHookFunc(),
+			stringToTrimmedSliceHookFunc(","),
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.TextUnmarshallerHookFunc(),
+		),
+		WeaklyTypedInput: true,
+	}
+}
+
+// numericToDurationGuardHookFunc mirrors
+// github.com/gaborage/go-bricks/internal/configdecode.NumericToDurationGuardHookFunc — this is
+// a separate module that cannot import go-bricks/internal, so this is a byte-identical local
+// copy. Keep the two in sync (bool rejection, typed-Duration pass-through, grouped zero test,
+// message). Reject a bare non-zero numeric bound to time.Duration (WeaklyTypedInput would coerce
+// 300 -> 300ns); an explicit zero (incl. -0.0) is the "unset -> use default" idiom and stays
+// exempt; a bool is never a duration; a source already time.Duration passes untouched.
+// Guards exact time.Duration only, matching StringToTimeDurationHookFunc's scope.
+func numericToDurationGuardHookFunc() mapstructure.DecodeHookFunc {
+	return func(f, t reflect.Type, data any) (any, error) {
+		if t != durationType {
+			return data, nil
+		}
+		// A source already time.Duration (typed default) is not unit-less; its Kind is Int64
+		// and would otherwise be rejected, so pass it through before the numeric checks.
+		if f == durationType {
+			return data, nil
+		}
+		v := reflect.ValueOf(data)
+		var isZero bool
+		switch f.Kind() {
+		case reflect.Bool:
+			// A boolean is never a duration: reject with no zero exemption.
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			isZero = v.Int() == 0
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			isZero = v.Uint() == 0
+		case reflect.Float32, reflect.Float64:
+			isZero = v.Float() == 0 // == 0 (not IsZero): keeps -0.0 exempt
+		default:
+			return data, nil
+		}
+		if isZero {
+			return data, nil
+		}
+		return nil, fmt.Errorf(
+			"unit-less numeric duration %v — use a duration string with an explicit unit (e.g. \"300s\", \"5m\", \"1h30m\")",
+			data,
+		)
+	}
+}
+
+// stringToTrimmedSliceHookFunc splits a scalar string into []string on sep, trimming each
+// element and dropping empties. Scoped to string -> []string only, so []byte, other slices,
+// and YAML sequences are untouched. Local copy of config.stringToTrimmedSliceHookFunc /
+// splitAndTrimList (github.com/gaborage/go-bricks config/) — keep in sync.
+func stringToTrimmedSliceHookFunc(sep string) mapstructure.DecodeHookFunc {
+	return func(f, t reflect.Type, data any) (any, error) {
+		if f.Kind() != reflect.String || t != reflect.TypeOf([]string(nil)) {
+			return data, nil
+		}
+		raw := reflect.ValueOf(data).String()
+		if strings.TrimSpace(raw) == "" {
+			return []string{}, nil
+		}
+		parts := strings.Split(raw, sep)
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+		return out, nil
+	}
 }
 
 // validateConfigPath rejects paths with shell metacharacters or traversal
