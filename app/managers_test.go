@@ -203,6 +203,28 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 		zero := NewManagerConfigBuilder(false, 100)
 		assert.Equal(t, time.Duration(0), zero.BuildMessagingOptions().ReadyTimeout)
 	})
+
+	t.Run("reconnect_delays_propagated_to_options", func(t *testing.T) {
+		// Four distinct values so a cross-field swap is caught.
+		b := NewManagerConfigBuilder(false, 100)
+		b.reconnectDelay = 7 * time.Second
+		b.reconnectMaxDelay = 90 * time.Second
+		b.reInitDelay = 3 * time.Second
+		b.resendDelay = 11 * time.Second
+
+		opts := b.BuildMessagingOptions()
+		assert.Equal(t, 7*time.Second, opts.ReconnectDelay)
+		assert.Equal(t, 90*time.Second, opts.ReconnectMaxDelay)
+		assert.Equal(t, 3*time.Second, opts.ReinitDelay)
+		assert.Equal(t, 11*time.Second, opts.ResendDelay)
+
+		// Unset leaves zero so the client keeps its own defaults.
+		zero := NewManagerConfigBuilder(false, 100).BuildMessagingOptions()
+		assert.Equal(t, time.Duration(0), zero.ReconnectDelay)
+		assert.Equal(t, time.Duration(0), zero.ReconnectMaxDelay)
+		assert.Equal(t, time.Duration(0), zero.ReinitDelay)
+		assert.Equal(t, time.Duration(0), zero.ResendDelay)
+	})
 }
 
 func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
@@ -304,6 +326,15 @@ func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 		opts := builder.BuildDatabaseOptions()
 		assert.Equal(t, 250, opts.MaxSize, "unset database.manager.maxsize must scale to the tenant limit")
 		assert.Equal(t, 30*time.Minute, opts.IdleTTL, "unset database.manager.idlettl must fall back to multi-tenant 30m")
+	})
+
+	t.Run("multi-tenant cache zero cacheConfig scales to tenant limit", func(t *testing.T) {
+		// Pins #668: unset cache.manager.maxsize must scale to the tenant limit (>100), not cap at 100.
+		builder := NewManagerConfigBuilder(true, 500)
+		opts := builder.BuildCacheOptions()
+		assert.Equal(t, 500, opts.MaxSize, "unset cache.manager.maxsize must scale to the tenant limit")
+		assert.Equal(t, 15*time.Minute, opts.IdleTTL, "unset cache.manager.idlettl must fall back to 15m")
+		assert.Equal(t, 5*time.Minute, opts.CleanupInterval, "unset cache.manager.cleanupinterval must fall back to 5m")
 	})
 }
 

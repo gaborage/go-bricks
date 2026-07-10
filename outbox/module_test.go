@@ -222,6 +222,54 @@ func TestModuleInitRejectsPublishTimeoutBelowReadyTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "readytimeout")
 }
 
+// TestModuleInitRejectsPublishTimeoutBelowResendDelay guards the third fail-fast: a
+// resenddelay at or above publishtimeout makes each retryable event burn its whole
+// per-record deadline inside a single publish-retry wait, delivering nothing.
+func TestModuleInitRejectsPublishTimeoutBelowResendDelay(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second},
+			Messaging: config.MessagingConfig{
+				Broker:    config.BrokerConfig{URL: "amqp://localhost"},
+				Reconnect: config.ReconnectConfig{ResendDelay: 45 * time.Second},
+			},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publishtimeout")
+	assert.Contains(t, err.Error(), "resenddelay")
+}
+
+// TestModuleInitAllowsShortPublishTimeoutWhenNoRetries pins the guard's exemption:
+// with maxpublishattempts == 1 the retry loop's attempt ceiling fires before any
+// resenddelay wait, so the no-retry setup is valid despite the inverted pair.
+func TestModuleInitAllowsShortPublishTimeoutWhenNoRetries(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second},
+			Messaging: config.MessagingConfig{
+				Broker: config.BrokerConfig{URL: "amqp://localhost"},
+				Reconnect: config.ReconnectConfig{
+					ResendDelay:        45 * time.Second,
+					MaxPublishAttempts: 1,
+				},
+			},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	require.NoError(t, m.Init(deps))
+}
+
 // TestModuleInitMessagingUnconfiguredErrorPrecedesTimeoutGuard pins Init's error
 // ordering: with no broker URL AND a publishtimeout below connectiontimeout, the
 // actionable root cause ("messaging is not configured") must surface, not the derived

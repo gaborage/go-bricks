@@ -144,11 +144,17 @@ func TestFactoryResolverMessagingClientFactory(t *testing.T) {
 		oldFactory := resolver.MessagingClientFactory(7*time.Second, 5)
 		assert.NotNil(t, oldFactory)
 
-		// New WithOptions method carries ReadyTimeout through to the client.
+		// New WithOptions method carries ReadyTimeout and the reconnect delays (#662)
+		// through to the client. The app package can't read messaging's private fields,
+		// so deep verification lives in messaging's tests; here we assert construction.
 		newFactory := resolver.MessagingClientFactoryWithOptions(MessagingClientFactoryOptions{
 			ConnectionTimeout:  7 * time.Second,
 			MaxPublishAttempts: 5,
 			ReadyTimeout:       9 * time.Second,
+			ReconnectDelay:     7 * time.Second,
+			ReconnectMaxDelay:  90 * time.Second,
+			ReinitDelay:        3 * time.Second,
+			ResendDelay:        11 * time.Second,
 		})
 		assert.NotNil(t, newFactory)
 

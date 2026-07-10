@@ -171,7 +171,7 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("log config: %w", err)
 	}
 
-	if err := validateCache(&cfg.Cache); err != nil {
+	if err := validateCache(&cfg.Cache, cfg.Multitenant.Enabled); err != nil {
 		return fmt.Errorf("cache config: %w", err)
 	}
 
@@ -213,10 +213,7 @@ func validateDebug(cfg *DebugConfig) error {
 // reconnect/publisher defaults. Leaving cfg.Messaging.* at zero would silently
 // defeat cross-field validators that read the effective values (e.g. outbox's
 // publishtimeout >= connectiontimeout and >= readytimeout Fail-Fast checks), so
-// defaults are materialized in every deployment mode. (The reconnect
-// delay/backoff keys — delay, reinitdelay, resenddelay, maxdelay — are
-// validated here but not yet wired into the AMQP client, which uses its own
-// hardcoded values; see messaging/amqp_client.go.)
+// defaults are materialized in every deployment mode.
 //
 // Returns an error if any setting is invalid; otherwise nil.
 func validateMessaging(cfg *MessagingConfig, multitenant bool) error {
@@ -724,18 +721,33 @@ func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 		return err
 	}
 
-	// Publisher.MaxCached's multi-tenant default is dynamic — app.ManagerConfigBuilder.
-	// BuildMessagingOptions scales the publisher pool to the tenant limit when the key
-	// is unset — so zero is preserved in multi-tenant mode (negative is still rejected).
-	// Stamping the flat single-tenant default here would silently cap the pool below
-	// the tenant limit.
+	if err := applyModeAwarePoolDefault(&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached", multitenant); err != nil {
+		return err
+	}
+
+	// Both sides are defaulted above, so this cross-field check always compares
+	// effective values. computeBackoff silently clamps an inverted pair
+	// (maxdelay < delay), which would leave the configured ceiling ignored.
+	if cfg.Reconnect.MaxDelay < cfg.Reconnect.Delay {
+		return NewValidationError("messaging.reconnect.maxdelay", "must be >= messaging.reconnect.delay")
+	}
+	return nil
+}
+
+// applyModeAwarePoolDefault handles pool-size keys whose multi-tenant default is
+// dynamic (the builder scales the pool to the tenant limit when the key is unset):
+// zero is preserved in multi-tenant mode so that scaling can happen, negative is
+// always rejected, and single-tenant zero gets the flat default. Stamping the flat
+// default in multi-tenant mode would silently cap the pool below the tenant limit
+// (#661). Shared by the messaging, cache, and database manager appliers.
+func applyModeAwarePoolDefault(field *int, def int, name string, multitenant bool) error {
 	if multitenant {
-		if cfg.Publisher.MaxCached < 0 {
-			return NewValidationError("messaging.publisher.maxcached", errMustBeNonNegative)
+		if *field < 0 {
+			return NewValidationError(name, errMustBeNonNegative)
 		}
 		return nil
 	}
-	return applyNonNegativeDefault(&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached")
+	return applyNonNegativeDefault(field, def, name)
 }
 
 // applyNonNegativeDefault sets *field to def when it is zero, or returns a validation
@@ -754,34 +766,24 @@ func applyNonNegativeDefault[T ~int64 | ~int](field *T, def T, name string) erro
 // applyCacheManagerDefaults sets production-safe defaults for cache manager configuration.
 //
 // It modifies cfg in-place:
-// - Manager.MaxSize: if 0, sets to 100; if negative, returns an error.
-// - Manager.IdleTTL: if 0, sets to 15m; if negative, returns an error.
-// - Manager.CleanupInterval: if 0, sets to 5m; if negative, returns an error.
+//   - Manager.IdleTTL: if 0, sets to 15m; if negative, returns an error.
+//   - Manager.CleanupInterval: if 0, sets to 5m; if negative, returns an error.
+//   - Manager.MaxSize: if 0, sets to 100 when multitenant is false; in multi-tenant
+//     mode zero is preserved so app.ManagerConfigBuilder.BuildCacheOptions scales the
+//     cache pool to the tenant limit; if negative, returns an error.
+//
+// IdleTTL/CleanupInterval have no mode-specific defaults (cache carries no such constants).
 //
 // Returns an error when any value is invalid; otherwise returns nil.
-func applyCacheManagerDefaults(cfg *CacheConfig) error {
-	// Manager.MaxSize
-	if cfg.Manager.MaxSize == 0 {
-		cfg.Manager.MaxSize = defaultCacheMaxSize
-	} else if cfg.Manager.MaxSize < 0 {
-		return NewValidationError("cache.manager.maxsize", errMustBeNonNegative)
+func applyCacheManagerDefaults(cfg *CacheConfig, multitenant bool) error {
+	if err := applyNonNegativeDefault(&cfg.Manager.IdleTTL, defaultCacheIdleTTL, "cache.manager.idlettl"); err != nil {
+		return err
+	}
+	if err := applyNonNegativeDefault(&cfg.Manager.CleanupInterval, defaultCacheCleanupInterval, "cache.manager.cleanupinterval"); err != nil {
+		return err
 	}
 
-	// Manager.IdleTTL
-	if cfg.Manager.IdleTTL == 0 {
-		cfg.Manager.IdleTTL = defaultCacheIdleTTL
-	} else if cfg.Manager.IdleTTL < 0 {
-		return NewValidationError("cache.manager.idlettl", errMustBeNonNegative)
-	}
-
-	// Manager.CleanupInterval
-	if cfg.Manager.CleanupInterval == 0 {
-		cfg.Manager.CleanupInterval = defaultCacheCleanupInterval
-	} else if cfg.Manager.CleanupInterval < 0 {
-		return NewValidationError("cache.manager.cleanupinterval", errMustBeNonNegative)
-	}
-
-	return nil
+	return applyModeAwarePoolDefault(&cfg.Manager.MaxSize, defaultCacheMaxSize, "cache.manager.maxsize", multitenant)
 }
 
 // applyDatabaseManagerDefaults sets production-safe defaults for the database
@@ -807,14 +809,7 @@ func applyDatabaseManagerDefaults(cfg *DatabaseManagerConfig, multitenant bool) 
 		return err
 	}
 
-	// Multi-tenant: keep zero so the builder scales the pool — don't stamp the default (#661).
-	if multitenant {
-		if cfg.MaxSize < 0 {
-			return NewValidationError("database.manager.maxsize", errMustBeNonNegative)
-		}
-		return nil
-	}
-	return applyNonNegativeDefault(&cfg.MaxSize, defaultDatabaseManagerMaxSize, "database.manager.maxsize")
+	return applyModeAwarePoolDefault(&cfg.MaxSize, defaultDatabaseManagerMaxSize, "database.manager.maxsize", multitenant)
 }
 
 // applyTimeoutDefault validates and applies default to a component timeout.
@@ -1066,15 +1061,16 @@ func validateLog(cfg *LogConfig) error {
 	return nil
 }
 
-// validateCache validates cache configuration.
+// validateCache validates cache configuration. multitenant selects the
+// deployment-mode-dependent Manager.MaxSize default (see applyCacheManagerDefaults).
 // Returns nil if cache is disabled or if all settings are valid.
-func validateCache(cfg *CacheConfig) error {
+func validateCache(cfg *CacheConfig, multitenant bool) error {
 	if !cfg.Enabled {
 		return nil
 	}
 
 	// Apply cache manager defaults
-	if err := applyCacheManagerDefaults(cfg); err != nil {
+	if err := applyCacheManagerDefaults(cfg, multitenant); err != nil {
 		return err
 	}
 
@@ -1374,7 +1370,8 @@ func validateTenantCache(tenantID string, cache *CacheConfig) error {
 		}
 		applyRedisDefaults(&cache.Redis)
 	}
-	if err := validateCache(cache); err != nil {
+	// per-tenant caches only exist in multi-tenant mode
+	if err := validateCache(cache, true); err != nil {
 		return fmt.Errorf("tenant %s cache: %w", tenantID, err)
 	}
 	return nil

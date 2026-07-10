@@ -12,6 +12,7 @@ import (
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -910,11 +911,14 @@ func TestHandleReconnectConnectionFailureRetryCycle(t *testing.T) {
 		brokerURL:      "amqp://test",
 		reconnectDelay: 1 * time.Millisecond,
 		done:           make(chan bool),
+		reconnectDone:  make(chan struct{}),
 	}
 
 	// Mock connection failures
 	oldDial := getAmqpDialFunc()
-	defer setAmqpDialFunc(oldDial)
+	// t.Cleanup (LIFO after the goroutine-exit wait below) so the dialer is
+	// restored only after handleReconnect has fully exited.
+	t.Cleanup(func() { setAmqpDialFunc(oldDial) })
 
 	// Use atomic counter to avoid race conditions
 	var attempts int64
@@ -923,21 +927,32 @@ func TestHandleReconnectConnectionFailureRetryCycle(t *testing.T) {
 		return nil, errors.New("connection failed")
 	})
 
-	// Start handleReconnect in background
+	// Start handleReconnect in background. stop is Once-guarded and also
+	// registered as a cleanup (LIFO: runs before the dialer restore above), so
+	// the goroutine is shut down and drained even when an assertion below
+	// fails the test early.
 	go c.handleReconnect()
-
-	// Let it try multiple times
-	time.Sleep(5 * time.Millisecond)
-
-	// Signal done to stop
-	close(c.done)
-	time.Sleep(2 * time.Millisecond)
-
-	// Verify multiple connection attempts were made
-	currentAttempts := atomic.LoadInt64(&attempts)
-	if currentAttempts < 2 {
-		t.Fatalf("expected at least 2 connection attempts, got %d", currentAttempts)
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			close(c.done)
+			select {
+			case <-c.reconnectDone:
+			case <-time.After(2 * time.Second):
+				t.Error("handleReconnect did not exit after close(done)")
+			}
+		})
 	}
+	t.Cleanup(stop)
+
+	// Poll instead of a fixed sleep: the jittered backoff plus -race scheduling
+	// makes a wall-clock window flaky on loaded CI runners.
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt64(&attempts) >= 2
+	}, 5*time.Second, time.Millisecond, "expected at least 2 connection attempts")
+
+	// Stop and drain the goroutine before asserting terminal state.
+	stop()
 
 	// Verify client is not ready
 	if c.IsReady() {
@@ -1680,6 +1695,58 @@ func TestAMQPClientInitChannelCreationFailure(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no channel")
 	assert.False(t, client.IsReady())
+}
+
+// TestWithReconnectDelayOptions mirrors TestWithReadyTimeoutOption: each
+// constructor option sets its field and ignores non-positive values (#662).
+func TestWithReconnectDelayOptions(t *testing.T) {
+	c := &AMQPClientImpl{}
+
+	WithReconnectDelay(7 * time.Second)(c)
+	assert.Equal(t, 7*time.Second, c.reconnectDelay)
+	WithReconnectDelay(0)(c)
+	assert.Equal(t, 7*time.Second, c.reconnectDelay)
+	WithReconnectDelay(-1 * time.Second)(c)
+	assert.Equal(t, 7*time.Second, c.reconnectDelay)
+
+	WithReconnectMaxDelay(90 * time.Second)(c)
+	assert.Equal(t, 90*time.Second, c.reconnectMaxDelay)
+	WithReconnectMaxDelay(0)(c)
+	assert.Equal(t, 90*time.Second, c.reconnectMaxDelay)
+	WithReconnectMaxDelay(-1 * time.Second)(c)
+	assert.Equal(t, 90*time.Second, c.reconnectMaxDelay)
+
+	WithReinitDelay(3 * time.Second)(c)
+	assert.Equal(t, 3*time.Second, c.reInitDelay)
+	WithReinitDelay(0)(c)
+	assert.Equal(t, 3*time.Second, c.reInitDelay)
+	WithReinitDelay(-1 * time.Second)(c)
+	assert.Equal(t, 3*time.Second, c.reInitDelay)
+
+	WithResendDelay(11 * time.Second)(c)
+	assert.Equal(t, 11*time.Second, c.resendDelay)
+	WithResendDelay(0)(c)
+	assert.Equal(t, 11*time.Second, c.resendDelay)
+	WithResendDelay(-1 * time.Second)(c)
+	assert.Equal(t, 11*time.Second, c.resendDelay)
+}
+
+// TestNewAMQPClientReconnectDefaults pins that an unset construction leaves the
+// four reconnect delays at their documented defaults (byte-identical to pre-#662).
+func TestNewAMQPClientReconnectDefaults(t *testing.T) {
+	oldDial := getAmqpDialFunc()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+	// t.Cleanup (LIFO) so the client is closed BEFORE the real dialer is restored;
+	// a defer here would restore first, letting the live reconnect goroutine dial out.
+	t.Cleanup(func() { setAmqpDialFunc(oldDial) })
+
+	c := NewAMQPClient(amqpHost, &stubLogger{})
+	t.Cleanup(func() { closeAndWaitForReconnect(c) })
+
+	assert.Equal(t, defaultReconnectDelay, c.reconnectDelay)
+	assert.Equal(t, defaultReconnectMaxDelay, c.reconnectMaxDelay)
+	assert.Equal(t, defaultReInitDelay, c.reInitDelay)
+	assert.Equal(t, defaultResendDelay, c.resendDelay)
 }
 
 // closeAndWaitForReconnect closes the client and waits for its background

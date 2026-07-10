@@ -112,6 +112,13 @@ type ManagerOptions struct {
 	// ReadyTimeout bounds the pre-flight readiness wait for clients created by the
 	// default factory. Zero (or negative) leaves the client default (5s).
 	ReadyTimeout time.Duration
+	// Reconnect delays for clients created by the default factory. Zero (or negative)
+	// leaves the client defaults (5s/60s/2s/5s). See the WithReconnect*/WithResendDelay
+	// option docs for each knob's exact scope (jitter semantics, publish-error-only).
+	ReconnectDelay    time.Duration
+	ReconnectMaxDelay time.Duration
+	ReinitDelay       time.Duration
+	ResendDelay       time.Duration
 }
 
 // NewMessagingManager creates a new messaging manager
@@ -136,6 +143,10 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 				WithConnectionTimeout(opts.ConnectionTimeout),
 				WithMaxPublishAttempts(opts.MaxPublishAttempts),
 				WithReadyTimeout(opts.ReadyTimeout),
+				WithReconnectDelay(opts.ReconnectDelay),
+				WithReconnectMaxDelay(opts.ReconnectMaxDelay),
+				WithReinitDelay(opts.ReinitDelay),
+				WithResendDelay(opts.ResendDelay),
 			)
 		}
 	}

@@ -1158,3 +1158,32 @@ func TestMessagingManagerStatsTracksEvictionsAndIdleCleanups(t *testing.T) {
 	assert.Equal(t, 1, stats["idle_cleanups"])
 	assert.Equal(t, 1, stats["evictions"], "idle cleanup must not bump evictions")
 }
+
+// TestNewMessagingManagerDefaultFactoryForwardsReconnectOptions pins that the
+// default client factory threads the four ManagerOptions reconnect delays into
+// the constructed AMQPClient (#662).
+func TestNewMessagingManagerDefaultFactoryForwardsReconnectOptions(t *testing.T) {
+	oldDial := getAmqpDialFunc()
+	setAmqpDialFunc(func(_ string) (amqpConnection, error) { return nil, errors.New(dialFailMsg) })
+	// t.Cleanup (LIFO) so the client is closed BEFORE the real dialer is restored;
+	// a defer here would restore first, letting the live reconnect goroutine dial out.
+	t.Cleanup(func() { setAmqpDialFunc(oldDial) })
+
+	log := logger.New("error", false)
+	manager := NewMessagingManager(&stubMessagingSource{}, log, ManagerOptions{
+		MaxPublishers:     1,
+		IdleTTL:           time.Minute,
+		ReconnectDelay:    7 * time.Second,
+		ReconnectMaxDelay: 90 * time.Second,
+		ReinitDelay:       3 * time.Second,
+		ResendDelay:       11 * time.Second,
+	}, nil)
+
+	client := manager.clientFactory(amqpHost, log).(*AMQPClientImpl)
+	t.Cleanup(func() { closeAndWaitForReconnect(client) })
+
+	assert.Equal(t, 7*time.Second, client.reconnectDelay)
+	assert.Equal(t, 90*time.Second, client.reconnectMaxDelay)
+	assert.Equal(t, 3*time.Second, client.reInitDelay)
+	assert.Equal(t, 11*time.Second, client.resendDelay)
+}

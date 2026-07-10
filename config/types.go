@@ -309,13 +309,15 @@ type CacheConfig struct {
 
 // CacheManagerConfig holds cache manager lifecycle settings.
 // Production-safe defaults are applied automatically:
-//   - MaxSize: 100 (maximum tenant cache instances)
+//   - MaxSize: 100 (maximum tenant cache instances, single-tenant; multi-tenant
+//     scales to multitenant.limits.tenants when unset)
 //   - IdleTTL: 15m (idle timeout per cache)
 //   - CleanupInterval: 5m (cleanup goroutine frequency)
 type CacheManagerConfig struct {
-	// MaxSize is the maximum number of active cache instances.
-	// 0 = use default (100); negative values are invalid.
-	// Set higher for applications with many tenants.
+	// MaxSize is the maximum number of active cache instances. 0 = use default
+	// (100 single-tenant; in multi-tenant mode zero is preserved so
+	// app.ManagerConfigBuilder scales the pool to multitenant.limits.tenants);
+	// negative values are invalid.
 	MaxSize int `koanf:"maxsize" json:"maxsize" yaml:"maxsize" toml:"maxsize" mapstructure:"maxsize"`
 
 	// IdleTTL is the idle timeout before cache instances are closed.

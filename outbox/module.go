@@ -157,6 +157,15 @@ func (m *Module) validatePublishTimeout() error {
 			"a shorter value expires inside the readiness pre-flight and defeats the relay's mid-batch broker-drop detection",
 			m.cfg.PublishTimeout, rt)
 	}
+	// resenddelay only matters when the publish loop can retry: with
+	// maxpublishattempts == 1 the attempt ceiling fires before any wait
+	// (messaging/amqp_client.go: retryBackoff), so a no-retry setup is exempt.
+	rd := m.config.Messaging.Reconnect.ResendDelay
+	if rd > 0 && m.config.Messaging.Reconnect.MaxPublishAttempts != 1 && m.cfg.PublishTimeout < rd {
+		return fmt.Errorf("outbox: publishtimeout (%s) must be >= messaging.reconnect.resenddelay (%s); "+
+			"a shorter value expires inside a single publish-retry wait, so each retryable event burns its whole timeout delivering nothing",
+			m.cfg.PublishTimeout, rd)
+	}
 	return nil
 }
 

@@ -205,6 +205,51 @@ func WithReadyTimeout(d time.Duration) ClientOption {
 	}
 }
 
+// WithReconnectDelay overrides the base of the full-jitter reconnect backoff:
+// each wait is a uniform random sample in [0, min(base*2^attempt, max)), so this
+// is the first attempt's upper bound, not a minimum spacing between attempts.
+// Non-positive values are ignored, leaving the 5s default in place.
+func WithReconnectDelay(d time.Duration) ClientOption {
+	return func(c *AMQPClientImpl) {
+		if d > 0 {
+			c.reconnectDelay = d
+		}
+	}
+}
+
+// WithReconnectMaxDelay overrides the ceiling of the connection-reconnect backoff.
+// The consumer re-subscribe loop (registry.go) keeps its own fixed cap.
+// Non-positive values are ignored, leaving the 60s default in place.
+func WithReconnectMaxDelay(d time.Duration) ClientOption {
+	return func(c *AMQPClientImpl) {
+		if d > 0 {
+			c.reconnectMaxDelay = d
+		}
+	}
+}
+
+// WithReinitDelay overrides the delay before channel reinitialization after failure.
+// Non-positive values are ignored, leaving the 2s default in place.
+func WithReinitDelay(d time.Duration) ClientOption {
+	return func(c *AMQPClientImpl) {
+		if d > 0 {
+			c.reInitDelay = d
+		}
+	}
+}
+
+// WithResendDelay overrides the wait between retries after a channel-level
+// publish error only; broker NACKs retry on the fixed 100ms nackBackoff and
+// confirmation timeouts retry immediately.
+// Non-positive values are ignored, leaving the 5s default in place.
+func WithResendDelay(d time.Duration) ClientOption {
+	return func(c *AMQPClientImpl) {
+		if d > 0 {
+			c.resendDelay = d
+		}
+	}
+}
+
 // NewAMQPClient creates a new AMQP client instance.
 // It automatically attempts to connect to the broker and handles reconnections.
 // Optional Option values (e.g. WithConnectionTimeout) override the defaults.
