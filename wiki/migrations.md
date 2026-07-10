@@ -31,7 +31,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E43  | v0.42.0 → v0.43.0 | compile-break | 6 | C43.2 C43.3 | bare section-named env vars |
 | E44  | v0.43.0 → v0.44.0 | noop | 2 | none | none |
 | E45  | v0.44.0 → v0.45.0 | compile-break | 9 | C45.1 C45.2 C45.3 C45.4 C45.5 C45.6 | outbox re-delivery count |
-| E49  | v0.45.0 → v0.49.0 (unreleased) | silent-config | 6 | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool / unit-less duration guard |
+| E49  | v0.45.0 → v0.49.0 | silent-config | 6 | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool / unit-less duration guard |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -506,7 +506,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - verify: `psql ... -c "SELECT count(*) FROM gobricks_outbox WHERE status='pending' AND retry_count >= <outbox.maxretries>;"`  # after the first relay cycle re-delivered volume matches the pre-upgrade count and consumers dedupe
 - ref: ADR-033 · #626 · wiki/adr_033_outbox_retry_count_status_parking.md
 
-## E49 · v0.45.0 → v0.49.0 (unreleased) — messaging defaults in all modes + publisher lifecycle hardening + database.manager.* keys
+## E49 · v0.45.0 → v0.49.0 — messaging defaults in all modes + publisher lifecycle hardening + database.manager.* keys
 
 - gist: `config.Validate` now applies `messaging.*` reconnect/publisher defaults **unconditionally**, even when the root `messaging.broker.url` is empty — previously every no-root-broker config (all multi-tenant static deployments, since `validateNoSingleTenantConflict` rejects a root broker URL there; plus single-tenant apps without messaging) skipped both zero→default coercion and negative-value rejection. Consequences: the outbox `publishtimeout` guards (against `connectiontimeout` AND `readytimeout`, C45.8) now actually fire in multi-tenant mode, and negative `messaging.*` values now fail startup everywhere. Defaulting is publisher-mode-aware: `maxcached` 50 single-tenant / preserved-zero multi-tenant (pool scales to `multitenant.limits.tenants`). This release also raises the single-tenant publisher `IdleTTL` default 10m → 1h, adds a bounded readiness wait on cold publishes (#655/#656/#660), and introduces `database.manager.*` pool keys (C49.3) — previously-inert `database.manager.*` YAML/env values become live on upgrade. Finally, the four `messaging.reconnect` delay/backoff keys (`delay`/`maxdelay`/`reinitdelay`/`resenddelay`) now reach the AMQP client instead of being validated-but-ignored (C49.4), and `cache.manager.maxsize` defaulting becomes deployment-mode-aware so a multi-tenant fleet's cache pool scales to `multitenant.limits.tenants` rather than capping at 100 (C49.5). And a unit-less numeric YAML/JSON/TOML value on a `time.Duration` key (e.g. `delay: 300` intending seconds) — previously coerced to that many nanoseconds by `WeaklyTypedInput` and booted — now fails config decode with an actionable error naming the value; an explicit `0` still means use-the-default (C49.6).
 - build-caught: none
