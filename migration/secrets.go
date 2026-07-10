@@ -9,7 +9,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/go-viper/mapstructure/v2"
+
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/configdecode"
 )
 
 // tenantIDPattern enforces a conservative character allowlist on tenant IDs
@@ -136,8 +139,16 @@ func parseSecretPayload(raw []byte) (*config.DatabaseConfig, error) {
 		return nil, fmt.Errorf("%w: empty payload", ErrSecretMalformed)
 	}
 
+	// Decode to a generic map first so numeric duration fields (pool.idle.time,
+	// lifetime.max, keepalive.interval, query.slow.threshold, manager.*) route through the
+	// guard hook instead of JSON-coercing a bare number straight to nanoseconds.
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSecretMalformed, err)
+	}
+
 	var cfg config.DatabaseConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	if err := decodeSecretConfig(payload, &cfg); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSecretMalformed, err)
 	}
 
@@ -158,6 +169,28 @@ func parseSecretPayload(raw []byte) (*config.DatabaseConfig, error) {
 	}
 
 	return &cfg, nil
+}
+
+// decodeSecretConfig maps a JSON-decoded payload into a DatabaseConfig via mapstructure,
+// routing numeric time.Duration fields through the shared guard so a bare JSON number
+// (e.g. keepalive.interval: 60) is rejected, not silently coerced to nanoseconds. TagName
+// "json" matches the struct's json tags; WeaklyTypedInput handles float64 (JSON's numeric
+// type) -> int and preserves the prior encoding/json numeric-coercion behavior.
+func decodeSecretConfig(payload map[string]any, cfg *config.DatabaseConfig) error {
+	dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			configdecode.NumericToDurationGuardHookFunc(),
+			mapstructure.StringToTimeDurationHookFunc(),
+			mapstructure.TextUnmarshallerHookFunc(),
+		),
+		WeaklyTypedInput: true,
+		TagName:          "json",
+		Result:           cfg,
+	})
+	if err != nil {
+		return err
+	}
+	return dec.Decode(payload)
 }
 
 // normalizeEngine maps AWS-managed engine names to go-bricks vendor strings.

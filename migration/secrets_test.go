@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -209,6 +210,29 @@ func TestSecretsProviderDBConfigErrors(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "tenant-x")
 		assert.Contains(t, err.Error(), "prod/tenant-x")
+	})
+}
+
+// TestSecretsProviderDBConfigNumericDurationGuard proves per-tenant JSON secrets route pool
+// duration fields through the numeric-duration guard: a bare number is rejected naming the
+// value, while a proper duration string binds. Without the guard a JSON number would coerce
+// straight to nanoseconds (keepalive.interval: 60 -> 60ns).
+func TestSecretsProviderDBConfigNumericDurationGuard(t *testing.T) {
+	t.Run("numeric_duration_rejected", func(t *testing.T) {
+		payload := []byte(`{"type":"postgresql","host":"h","username":"u","pool":{"keepalive":{"interval":60}}}`)
+		p := &SecretsProvider{Fetch: func(context.Context, string) ([]byte, error) { return payload, nil }}
+		_, err := p.DBConfig(context.Background(), "x")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrSecretMalformed)
+		assert.ErrorContains(t, err, "unit-less numeric duration 60")
+	})
+
+	t.Run("string_duration_binds", func(t *testing.T) {
+		payload := []byte(`{"type":"postgresql","host":"h","username":"u","pool":{"keepalive":{"interval":"60s"}}}`)
+		p := &SecretsProvider{Fetch: func(context.Context, string) ([]byte, error) { return payload, nil }}
+		got, err := p.DBConfig(context.Background(), "x")
+		require.NoError(t, err)
+		assert.Equal(t, 60*time.Second, got.Pool.KeepAlive.Interval)
 	})
 }
 
