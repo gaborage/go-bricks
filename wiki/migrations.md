@@ -31,7 +31,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E43  | v0.42.0 → v0.43.0 | compile-break | 6 | C43.2 C43.3 | bare section-named env vars |
 | E44  | v0.43.0 → v0.44.0 | noop | 2 | none | none |
 | E45  | v0.44.0 → v0.45.0 | compile-break | 9 | C45.1 C45.2 C45.3 C45.4 C45.5 C45.6 | outbox re-delivery count |
-| E49  | v0.45.0 → v0.49.0 (unreleased) | silent-config | 5 | none | multi-tenant outbox timeout guards / stale messaging.* + database.manager.* values / reconnect delay keys go live / mode-aware cache pool |
+| E49  | v0.45.0 → v0.49.0 (unreleased) | silent-config | 5 | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).

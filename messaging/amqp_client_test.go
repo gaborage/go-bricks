@@ -911,11 +911,14 @@ func TestHandleReconnectConnectionFailureRetryCycle(t *testing.T) {
 		brokerURL:      "amqp://test",
 		reconnectDelay: 1 * time.Millisecond,
 		done:           make(chan bool),
+		reconnectDone:  make(chan struct{}),
 	}
 
 	// Mock connection failures
 	oldDial := getAmqpDialFunc()
-	defer setAmqpDialFunc(oldDial)
+	// t.Cleanup (LIFO after the goroutine-exit wait below) so the dialer is
+	// restored only after handleReconnect has fully exited.
+	t.Cleanup(func() { setAmqpDialFunc(oldDial) })
 
 	// Use atomic counter to avoid race conditions
 	var attempts int64
@@ -933,8 +936,14 @@ func TestHandleReconnectConnectionFailureRetryCycle(t *testing.T) {
 		return atomic.LoadInt64(&attempts) >= 2
 	}, 5*time.Second, time.Millisecond, "expected at least 2 connection attempts")
 
-	// Signal done to stop
+	// Signal done to stop and wait for the goroutine to fully exit, so the
+	// dial-func restore in t.Cleanup can't race a live reconnect loop.
 	close(c.done)
+	select {
+	case <-c.reconnectDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleReconnect did not exit after close(done)")
+	}
 
 	// Verify client is not ready
 	if c.IsReady() {
