@@ -564,6 +564,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - exit: `go get github.com/gaborage/go-bricks@v0.50.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C50.1] migrate now errors on unparseable/failure Flyway output · silent-behavior · when: no-match
+
 - detect: `git grep -nE '\.(Migrate|MigrateFor)\(' -- '*.go'` then keep call sites that ignore the returned error, plus any custom `provisioning.Steps.Migrate` that wires `MigrateFor` and drops its error
 - gate: no-match = well-behaved callers already consult the returned error and now correctly surface a previously-silent failure (a genuinely broken/unobservable migration that used to pass). Multi-tenant `MigrateAll` now lists such tenants in `Failed()`; under the default `ContinueOnError=false` the first one aborts the fan-out. Callers that discarded the error may newly observe failures — this is the fix, not a regression.
 - apply: handle the returned error (`errors.Is` the two sentinels above); never read a zero-valued `Result` as proof of success.
@@ -571,6 +572,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - ref: #673 · migration/result.go: migrateOutcome · migration/flyway.go: runFor
 
 ### [C50.2] DB passwords shorter than 8 bytes now fail migrate · silent-behavior · when: match
+
 - detect: inspect every DB password reaching migration (single-tenant `database.password`, per-tenant configs from your tenant store / AWS secrets, and the `go-bricks-migrate --source-config` tenants file) for values shorter than 8 bytes
 - gate: match = any migrated database uses a password `len < 8`. Redaction suppresses the whole Flyway output below that length (short needles can't be safely substring-redacted), so the JSON can't be parsed — a **successful** migrate is now returned as an error AND audit-logged as `migration.applied` `Outcome=failed` / `ErrorClass=internal_error` with an empty version. Do NOT read that Failed event as proof no schema changed. `RunMigrationsAtStartup` under `APP_ENV=dev`/`local` will fail startup for a short password.
 - apply: use a DB password of at least 8 bytes for every migrated database.
