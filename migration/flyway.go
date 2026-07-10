@@ -3,6 +3,7 @@ package migration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -542,17 +543,54 @@ func redactPassword(output string, db *config.DatabaseConfig) string {
 
 	const placeholder = "[REDACTED]"
 	redacted := strings.ReplaceAll(output, db.Password, placeholder)
-
-	// JDBC URL userinfo uses RFC 3986 percent-encoding (PathEscape semantics).
-	if encoded := url.PathEscape(db.Password); encoded != db.Password {
+	// Redact the encoded forms the password can take in Flyway output distinct
+	// from the raw bytes: RFC 3986 userinfo (JDBC URLs), form-encoding, and JSON
+	// string escaping (an error envelope embedding a connection string).
+	for _, encoded := range passwordRedactionVariants(db.Password) {
 		redacted = strings.ReplaceAll(redacted, encoded, placeholder)
 	}
-	// Belt and suspenders: form-encoded variant (spaces as '+') in case any
-	// helper logs the password in application/x-www-form-urlencoded form.
-	if encoded := url.QueryEscape(db.Password); encoded != db.Password {
-		redacted = strings.ReplaceAll(redacted, encoded, placeholder)
+
+	// A numeric/bareword password can collide with a JSON token (e.g. a match
+	// inside `"totalMigrationTime": 12345678`) and corrupt an otherwise-valid
+	// envelope, turning a real success into an unparsable-output failure (#673).
+	// Flyway never echoes the password in a success envelope, so if the input was
+	// valid JSON and redaction broke it, the match was a collision, not the
+	// credential — revert. Redaction inside a JSON string value never invalidates
+	// the JSON, so a genuine credential in an error envelope is still redacted;
+	// non-JSON error text (JDBC URLs) is redacted as-is.
+	if redacted != output && json.Valid([]byte(output)) && !json.Valid([]byte(redacted)) {
+		return output
 	}
 	return redacted
+}
+
+// passwordRedactionVariants returns the encoded forms of pw that can appear in
+// Flyway output distinct from the raw form (percent-encoded userinfo,
+// form-encoded, JSON-string-escaped). Forms equal to the raw password are
+// omitted so callers don't run redundant replacements.
+func passwordRedactionVariants(pw string) []string {
+	variants := make([]string, 0, 3)
+	if enc := url.PathEscape(pw); enc != pw {
+		variants = append(variants, enc)
+	}
+	if enc := url.QueryEscape(pw); enc != pw {
+		variants = append(variants, enc)
+	}
+	if enc := jsonStringEscape(pw); enc != pw {
+		variants = append(variants, enc)
+	}
+	return variants
+}
+
+// jsonStringEscape returns s as it appears inside a JSON string value
+// (backslash-escaped), without the surrounding quotes. Returns s unchanged if
+// marshaling fails (it cannot for a Go string).
+func jsonStringEscape(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return s
+	}
+	return string(b[1 : len(b)-1])
 }
 
 // RunMigrationsAtStartup executes migrations automatically at application
