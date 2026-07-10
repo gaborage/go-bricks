@@ -84,6 +84,7 @@ func logMetricError(metricName string, err error) {
 func noOpCleanup() func() {
 	// Return empty function - nothing to clean up if registration failed
 	return func() {
+		// No-op: nothing was registered, so there is nothing to release.
 	}
 }
 
