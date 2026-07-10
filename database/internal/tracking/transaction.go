@@ -48,7 +48,6 @@ func (tx *Transaction) Query(ctx context.Context, query string, args ...any) (*s
 	start := time.Now()
 	rows, err := tx.tx.Query(ctx, query, args...)
 
-	// Track performance metrics
 	tx.trackTx(ctx, query, args, start, 0, err) // Read operations don't have rows affected
 
 	return rows, err
@@ -70,7 +69,6 @@ func (tx *Transaction) Exec(ctx context.Context, query string, args ...any) (sql
 	start := time.Now()
 	result, err := tx.tx.Exec(ctx, query, args...)
 
-	// Track performance metrics
 	tx.trackTx(ctx, query, args, start, extractRowsAffected(result, err), err)
 
 	return result, err
@@ -81,7 +79,6 @@ func (tx *Transaction) Prepare(ctx context.Context, query string) (types.Stateme
 	start := time.Now()
 	stmt, err := tx.tx.Prepare(ctx, query)
 
-	// Track performance metrics
 	tx.trackTx(ctx, "TX_PREPARE: "+query, nil, start, 0, err) // Prepare doesn't affect rows
 
 	if err != nil {
@@ -96,10 +93,8 @@ func (tx *Transaction) Commit(ctx context.Context) error {
 	start := time.Now()
 	err := tx.tx.Commit(ctx)
 
-	// Track performance metrics
 	tx.trackTx(ctx, "TX_COMMIT", nil, start, 0, err) // COMMIT doesn't affect rows
 
-	// Return the original error
 	return err
 }
 
@@ -108,14 +103,11 @@ func (tx *Transaction) Rollback(ctx context.Context) error {
 	start := time.Now()
 	err := tx.tx.Rollback(ctx)
 
-	// Track performance metrics
 	tx.trackTx(ctx, "TX_ROLLBACK", nil, start, 0, err) // ROLLBACK doesn't affect rows
 
-	// Return the original error
 	return err
 }
 
-// trackTx tracks transaction operation performance
 func (tx *Transaction) trackTx(ctx context.Context, query string, args []any, start time.Time, rowsAffected int64, err error) {
 	TrackDBOperation(ctx, tx.tc, query, args, start, rowsAffected, err)
 }

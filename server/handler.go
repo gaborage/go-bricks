@@ -598,8 +598,9 @@ func WrapHandler[T any, R any](
 	return wrapHandler(handlerFunc, binder, cfg, nil, false)
 }
 
-// wrapHandler is the internal implementation that supports raw response mode.
-// RegisterHandler passes descriptor.RawResponse here; WrapHandler always passes false.
+// wrapHandler is the internal implementation that supports raw response mode; WrapHandler
+// always passes rawResponse=false here. RegisterHandler instead calls wrapHandlerWithJOSE,
+// which additionally threads a joseRouteConfig.
 func wrapHandler[T any, R any](
 	handlerFunc HandlerFunc[T, R],
 	binder *RequestBinder,

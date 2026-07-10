@@ -59,8 +59,9 @@ var validTableNamePattern = regexp.MustCompile(
 	`^` + qualified + `( ` + segment + `)?$`,
 )
 
-// validateIdentifier rejects identifier arguments (column names, UPDATE SET
-// targets) that fall outside the safe simple/qualified-identifier grammar.
+// validateIdentifier rejects identifier arguments (column names, table names/
+// aliases, UPDATE SET targets) that fall outside the safe simple/qualified-
+// identifier grammar.
 // Returns a descriptive error naming the rejected value.
 func validateIdentifier(context, identifier string) error {
 	trimmed := strings.TrimSpace(identifier)

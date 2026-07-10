@@ -62,7 +62,6 @@ func (d *DebugHandlers) analyzeGoroutines(includeStacks, detectLeaks bool) (*Gor
 		return nil, err
 	}
 
-	// Parse goroutine dump
 	stacks, err := d.parseGoroutineDump(buf.String())
 	if err != nil {
 		return nil, err
@@ -147,7 +146,6 @@ func (d *DebugHandlers) parseGoroutineHeader(line string) *GoroutineStack {
 		state = strings.Trim(parts[2], "[]:")
 	}
 
-	// Normalize goroutine state to handle composite states with annotations
 	state = d.normalizeGoroutineState(state)
 
 	return &GoroutineStack{
@@ -338,7 +336,6 @@ func (d *DebugHandlers) handleForceGC(c server.HandlerContext) error {
 	var memBefore runtime.MemStats
 	runtime.ReadMemStats(&memBefore)
 
-	// Force GC
 	runtime.GC()
 
 	var memAfter runtime.MemStats

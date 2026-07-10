@@ -267,8 +267,8 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtyp
 }
 
 // InsertStruct creates an INSERT query by extracting all fields from a struct instance.
-// Zero-value ID fields (int64 or string type with field name "ID") are automatically excluded
-// to support auto-increment primary keys.
+// Zero-value ID fields (int64, string, int, or int32 whose db-tag column name resolves to
+// exactly "id", case-insensitive) are automatically excluded to support auto-increment primary keys.
 // Table names are automatically quoted according to database vendor rules to handle reserved words.
 //
 // Example:
@@ -348,7 +348,6 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 // handling quoted identifiers and qualified names (e.g., "schema"."table"."id" -> "id").
 // Trims backticks, double quotes, and square brackets, then splits on dots.
 func extractTerminalIdentifier(column string) string {
-	// Trim leading/trailing whitespace
 	column = strings.TrimSpace(column)
 
 	// Split on dots to handle qualified names (schema.table.column)
@@ -365,7 +364,6 @@ func extractTerminalIdentifier(column string) string {
 // This is used to skip auto-increment primary keys in INSERT operations.
 // Only columns whose terminal identifier is exactly "id" (case-insensitive) are treated as ID columns.
 func (qb *QueryBuilder) isZeroValueIDField(column string, value any) bool {
-	// Extract terminal identifier and check if it's exactly "id" (case-insensitive)
 	terminalID := extractTerminalIdentifier(column)
 	isIDColumn := strings.EqualFold(terminalID, "id")
 

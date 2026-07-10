@@ -28,8 +28,10 @@ type StateStore interface {
 	// no-op if terminal).
 	//
 	// Implementations must populate Job.CreatedAt and Job.UpdatedAt on the
-	// returned record. State, Attempts, LastError, and Metadata on the
-	// passed-in job are used only when the record is newly inserted.
+	// returned record. On a newly inserted record, only job.ID, job.TenantID,
+	// and job.Metadata from the passed-in job are used — State, Attempts,
+	// and LastError are always initialized to StatePending, 0, and ""
+	// respectively, regardless of the passed-in job's values.
 	Upsert(ctx context.Context, job *Job) (*Job, error)
 
 	// Transition advances jobID's State from -> to atomically. Optimistic

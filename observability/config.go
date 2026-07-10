@@ -112,13 +112,8 @@ func (c *Config) ApplyDefaults() {
 		c.Environment = EnvironmentDevelopment
 	}
 
-	// Trace defaults
 	c.applyTraceDefaults()
-
-	// Metrics defaults
 	c.applyMetricsDefaults()
-
-	// Logs defaults
 	c.applyLogsDefaults()
 }
 
@@ -401,13 +396,13 @@ type SampleConfig struct {
 	Rate *float64 `mapstructure:"rate"`
 }
 
-// BatchConfig defines batch processing configuration for traces.
+// BatchConfig defines batch processing configuration, shared by both TraceConfig and LogsConfig.
 type BatchConfig struct {
-	// Timeout specifies how long to wait before sending a batch of spans.
+	// Timeout specifies how long to wait before sending a batch of spans or log records.
 	// Lower values reduce latency but increase network overhead.
 	Timeout time.Duration `mapstructure:"timeout"`
 
-	// Size limits the number of spans per export batch.
+	// Size limits the number of spans or log records per export batch.
 	// Smaller batches reduce latency, larger batches reduce overhead.
 	Size int `mapstructure:"size"`
 }
@@ -430,7 +425,7 @@ type MaxConfig struct {
 
 // QueueConfig defines queue size configuration.
 type QueueConfig struct {
-	// Size limits the number of spans buffered for export.
+	// Size limits the number of items (spans or log records) buffered for export.
 	// Prevents memory exhaustion under high load.
 	Size int `mapstructure:"size"`
 }

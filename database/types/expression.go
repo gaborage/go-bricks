@@ -53,17 +53,14 @@ type RawExpression struct {
 // SECURITY WARNING: Never interpolate user input directly into the sql parameter.
 // This function does NOT sanitize SQL - you are responsible for ensuring safety.
 func Expr(sql string, alias ...string) (RawExpression, error) {
-	// Validate SQL is not empty
 	if strings.TrimSpace(sql) == "" {
 		return RawExpression{}, ErrEmptyExpressionSQL
 	}
 
-	// Validate max 1 alias
 	if len(alias) > 1 {
 		return RawExpression{}, fmt.Errorf("%w: got %d", ErrTooManyAliases, len(alias))
 	}
 
-	// Extract alias if provided
 	var aliasStr string
 	if len(alias) == 1 {
 		aliasStr = alias[0]

@@ -57,7 +57,6 @@ func GetTypeName(t reflect.Type) string {
 		return ""
 	}
 
-	// Handle pointer types
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
@@ -75,7 +74,6 @@ func GetTypeNameShort(t reflect.Type) string {
 		return ""
 	}
 
-	// Handle pointer types
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}

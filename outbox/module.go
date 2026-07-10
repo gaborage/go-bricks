@@ -20,11 +20,15 @@ import (
 //
 // The module is registered like any other GoBricks module:
 //
-//	fw.RegisterModules(
-//	    scheduler.NewModule(),  // Required: relay runs as a scheduled job
-//	    outbox.NewModule(),     // Outbox module
+//	for _, m := range []app.Module{
+//	    scheduler.NewModule(), // Required: relay runs as a scheduled job
+//	    outbox.NewModule(),    // Outbox module
 //	    &myapp.OrderModule{},
-//	)
+//	} {
+//	    if err := fw.RegisterModule(m); err != nil {
+//	        log.Fatal(err)
+//	    }
+//	}
 type Module struct {
 	logger logger.Logger
 	config *config.Config
@@ -50,7 +54,8 @@ func (m *Module) Name() string {
 }
 
 // Init implements app.Module.
-// Stores dependencies, creates the vendor-specific store, and initializes the publisher.
+// Stores dependencies and initializes the publisher; the vendor-specific store is
+// created lazily on first use (see ensureStoreInitialized).
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 	m.config = deps.Config
@@ -141,6 +146,9 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 // broker surfaces as context.DeadlineExceeded instead of ErrNotConnected — which silently
 // defeats the relay's mid-batch broker-drop detection (outcomeBrokerDown never fires) and
 // reintroduces the serial per-record stall it exists to cap.
+//
+// It also requires publishtimeout >= messaging.reconnect.resenddelay unless
+// maxpublishattempts is 1 (no retry wait to expire inside).
 func (m *Module) validatePublishTimeout() error {
 	if m.config == nil {
 		return nil
@@ -171,13 +179,12 @@ func (m *Module) validatePublishTimeout() error {
 
 // ensureStoreInitialized creates the vendor-specific store on first use.
 // This is lazy because the database vendor type is only known at runtime.
-// Uses double-check locking (mutex, not sync.Once) because initialization
-// can fail and should be retried — matching the scheduler module pattern.
+// Uses a mutex (not sync.Once) because initialization can fail and should
+// be retried — matching the scheduler module pattern.
 func (m *Module) ensureStoreInitialized(ctx context.Context) error {
 	m.initMu.Lock()
 	defer m.initMu.Unlock()
 
-	// Already initialized
 	if m.store != nil {
 		return nil
 	}
@@ -249,7 +256,8 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		return fmt.Errorf("outbox: failed to register relay job: %w", err)
 	}
 
-	// Register cleanup job if retention is configured
+	// Register cleanup job (RetentionPeriod is always positive after applyDefaults,
+	// so this always registers when the module is enabled).
 	if m.cfg.RetentionPeriod > 0 {
 		cleanup := &Cleanup{
 			store:           &lazyStore{module: m},

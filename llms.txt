@@ -4,7 +4,7 @@ Enterprise Go microservice toolkit (Go 1.26+). Provides multi-database access, t
 
 ## Version & Compatibility
 
-- Reflects **go-bricks v0.46.0** (route-template/path-param accessors; v0.45.0 plus additive API). Requires **Go 1.26+**.
+- Reflects **go-bricks v0.49.0** (messaging defaults now applied in *every* deployment mode with mode-aware pool sizing — publisher `maxcached`, `database.manager.maxsize`, and cache `maxsize` scale to the tenant limit in multi-tenant; new `database.manager.*` keys; `messaging.reconnect` delay/backoff keys wired live; duration config must be unit-suffixed strings — write `"300s"`, not `300`; publisher lifecycle hardening: cold-publish readiness wait + 1h single-tenant publisher IdleTTL). Requires **Go 1.26+**.
 - Authoritative sources: `CHANGELOG.md` (release log) and `wiki/migrations.md` — the **per-hop migration runbook** (detect → apply → verify atoms, one hop per release, chainable across any version range). This file carries the ladder + agent protocol; the runbook holds the full atoms.
 - Upgrading an existing app? Read that section first. Across v0.40 → v0.45 **most breaks fail silently** — a renamed config key stops binding, a default flips — with no compile error. The compiler-caught API breaks are concentrated in v0.41.0 (CORS / LogEvent / SetupMiddlewares), v0.43.0 (per-tenant `ReleaseFunc`, `PoolKeepAliveConfig.Enabled`), and v0.45.0 (echo-free boundary types, the `outbox.Store` interface); everything else fails silently.
 
@@ -37,7 +37,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fw.RegisterModules(/* modules */)
+	for _, m := range []app.Module{ /* modules */ } {
+		if err := fw.RegisterModule(m); err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	// Graceful shutdown: flushes pending spans/metrics before exit
 	log.Fatal(fw.Run())
@@ -51,7 +55,6 @@ app:
   name: my-service
   env: development
 server:
-  enabled: true
   port: 8080
 database:
   type: postgresql    # postgresql | oracle
@@ -79,7 +82,7 @@ observability:
     name: my-service
   trace:
     endpoint: stdout  # stdout | http://collector:4318/v1/traces | collector:4317 (gRPC)
-logger:
+log:
   level: info
   output:
     format: auto  # auto (default) | console | json — auto colors TTY stdout when OTLP logs are off
@@ -87,6 +90,7 @@ logger:
 ```
 
 `Highest precedence first: env vars > config.<env>.yaml > config.yaml > struct defaults.`
+**Duration values must be unit-suffixed** (`5s`, `72h`, `500ms`, `300s` — never a bare `300`): env-var and quoted forms without a unit fail startup with a `missing unit` error, and as of v0.49.0 a bare YAML/JSON/TOML numeric on a duration key fails config decode too (`unit-less numeric duration …`) instead of being silently misread as nanoseconds. An explicit `0` still means "use the default".
 Add observability settings as needed (see Observability & Logging).
 
 ## Core Concepts
@@ -237,14 +241,16 @@ func main() {
 	}
 
 	// Order matters: providers first, then domain modules in dependency order.
-	if err := fw.RegisterModules(
+	for _, m := range []app.Module{
 		keystore.NewModule(),   // wires deps.KeyStore for downstream modules
 		scheduler.NewModule(),  // wires deps.Scheduler
 		outbox.NewModule(),     // wires deps.Outbox (needs scheduler)
 		usersMod,               // independent domain module
 		ordersMod,              // depends on users.UserService
-	); err != nil {
-		log.Fatal(err) // duplicate module / Init() failures are unrecoverable
+	} {
+		if err := fw.RegisterModule(m); err != nil {
+			log.Fatal(err) // duplicate module / Init() failures are unrecoverable
+		}
 	}
 
 	log.Fatal(fw.Run())
@@ -332,6 +338,10 @@ database:
     keepalive:
       enabled: true                       # TCP keep-alive probes
       interval: 60s
+  manager:                                # Optional: cached DB-handle pool (named + per-tenant), v0.49
+    maxsize: 10                           # Max cached handles (single-tenant default 10; unset in multi-tenant scales to multitenant.limits.tenants)
+    idlettl: 1h                           # Idle handle timeout (default 1h single-tenant / 30m multi-tenant)
+    cleanupinterval: 5m                   # Cleanup goroutine frequency
 ```
 
 Alternative — pre-built connection string (useful when a secret manager injects the full DSN):
@@ -339,10 +349,10 @@ Alternative — pre-built connection string (useful when a secret manager inject
 ```yaml
 database:
   type: postgresql
-  connection_string: ${DATABASE_URL}      # e.g. postgres://user:pass@host:5432/dbname?sslmode=require
+  connectionstring: ${DATABASE_URL}      # e.g. postgres://user:pass@host:5432/dbname?sslmode=require
 ```
 
-Per ADR-003, at least one of `host` *or* `connection_string` must be set, otherwise startup fails fast. Pool defaults are production-safe — override only when you have a measured reason (see CLAUDE.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
+Per ADR-003, at least one of `host` *or* `connectionstring` must be set, otherwise startup fails fast. Pool defaults are production-safe — override only when you have a measured reason (see CLAUDE.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
 
 ### Step 2: Access the Connection from a Module
 
@@ -1041,7 +1051,7 @@ func (m *AuthModule) GlobalMiddleware() []server.MiddlewareFunc {
 }
 
 // Register like any module; no r.Use needed.
-//   fw.RegisterModules(keystore.NewModule(), &AuthModule{}, ...)
+//   fw.RegisterModule(keystore.NewModule()); fw.RegisterModule(&AuthModule{})
 ```
 
 Behavior and limits (see [wiki/global_middleware.md](wiki/global_middleware.md) / ADR-036):
@@ -1705,7 +1715,7 @@ cache:
     port: 6379
     password: ${CACHE_REDIS_PASSWORD} # from env
     database: 0
-    pool_size: 10
+    poolsize: 10
 ```
 
 **CacheManager Lifecycle (Multi-Tenant Applications):**
@@ -1713,7 +1723,7 @@ cache:
 GoBricks uses CacheManager to handle per-tenant cache instances with automatic lifecycle management:
 
 - **Lazy Initialization:** Cache created on first access per tenant (no upfront connections)
-- **LRU Eviction:** Oldest cache evicted when MaxSize exceeded (default: 100 tenants)
+- **LRU Eviction:** Oldest cache evicted when MaxSize exceeded (single-tenant default 100; multi-tenant scales to `multitenant.limits.tenants` when unset)
 - **Idle Cleanup:** Unused caches closed after IdleTTL (default: 15m, checked every 5m)
 - **Singleflight:** Prevents duplicate cache creation during concurrent access
 
@@ -1722,7 +1732,7 @@ GoBricks uses CacheManager to handle per-tenant cache instances with automatic l
 cache:
   enabled: true
   manager:
-    maxsize: 100          # Max tenant cache instances
+    maxsize: 100          # Max tenant cache instances (single-tenant default 100; unset in multi-tenant scales to multitenant.limits.tenants)
     idlettl: 15m          # Idle timeout per cache
     cleanupinterval: 5m   # Cleanup goroutine frequency
   redis:
@@ -2093,7 +2103,7 @@ if errors.Is(err, cache.ErrNotFound) {
 | `cache.ErrInvalidTTL` | Zero or negative TTL provided | Fix code - TTL must be positive |
 | `cache.OperationError` | Network/Redis error | Log error, fallback to database |
 | `context.DeadlineExceeded` | Operation timeout | Skip cache, continue with database |
-| `config.NotConfiguredError` | Cache not enabled | Disable cache features gracefully |
+| `config.ConfigError` (category `not_configured`, check with `config.IsNotConfigured(err)`) | Cache not enabled | Disable cache features gracefully |
 
 **Health Checks & Monitoring:**
 
@@ -2105,16 +2115,12 @@ if err != nil {
     // Cache unhealthy - alert operations team
 }
 
-// Framework automatically includes cache in health endpoint:
-// GET /health
-// {
-//   "status": "healthy",
-//   "checks": {
-//     "database": "ok",
-//     "cache": "ok",       // ← Automatic when cache enabled
-//     "messaging": "ok"
-//   }
-// }
+// GET /health is a liveness-only probe with no component breakdown:
+// {"status": "ok"}
+//
+// GET /ready reports per-component status (database, messaging). A cache
+// health probe is registered internally when cache is enabled, but its
+// status is not yet surfaced as a top-level key in the /ready response.
 
 // Cache instance stats (Redis-specific)
 stats, err := cache.Stats()
@@ -2130,12 +2136,12 @@ stats, err := cache.Stats()
 
 // CacheManager stats (multi-tenant lifecycle)
 managerStats := cacheManager.Stats()
-// {
-//   "active_caches": 45,      // Current tenant caches
-//   "total_created": 128,     // Lifetime cache instances
-//   "evictions": 12,          // LRU evictions
-//   "idle_cleanups": 71,      // Idle timeout cleanups
-//   "errors": 0               // Creation/close errors
+// ManagerStats{
+//   ActiveCaches: 45,      // Current tenant caches
+//   TotalCreated: 128,     // Lifetime cache instances
+//   Evictions:    12,      // LRU evictions
+//   IdleCleanups: 71,      // Idle timeout cleanups
+//   Errors:       0        // Creation/close errors
 // }
 ```
 
@@ -2143,23 +2149,11 @@ managerStats := cacheManager.Stats()
 
 When `observability.enabled: true` in config, cache operations automatically emit:
 
-- **Traces:** Spans for Get/Set/Delete operations with `cache.operation`, `cache.key`, `cache.hit` attributes
 - **Metrics:**
-  - `cache.operation.duration{operation, status}` - Histogram of operation latency
-  - `cache.errors.total{operation, error_type}` - Counter of cache errors
-  - `cache.manager.active_caches` - Gauge of active tenant caches
-- **Logs:** Structured logs with `cache_operation`, `key`, `duration_ms`, `tenant_id` fields
-
-Example OpenTelemetry span:
-```
-Span: cache.get
-  Attributes:
-    cache.operation: "get"
-    cache.key: "user:123"
-    cache.hit: true
-    cache.duration_ms: 1.2
-    tenant.id: "acme"
-```
+  - `db.client.operation.duration{db.system.name=redis, db.operation.name, db.namespace, error.type}` - Histogram of operation latency
+  - `cache.hit` / `cache.miss` - Counters for lookup operations (Get/GetOrSet)
+  - `cache.manager.active_caches` - UpDownCounter of active tenant caches
+  - `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` - Manager lifecycle counters
 
 No code changes required - observability hooks activate automatically when configured.
 
@@ -2606,9 +2600,13 @@ messaging:
     x-app-name: my-service                 # Headers added to every published message
     x-environment: development
   reconnect:
-    delay: 5s
-    maxdelay: 60s                         # Exponential backoff cap
-    connectiontimeout: 30s
+    delay: 5s                             # Initial delay between reconnection attempts
+    maxdelay: 60s                         # Exponential backoff cap (must be >= delay)
+    reinitdelay: 2s                       # Delay before channel reinitialization after failure
+    resenddelay: 5s                       # Delay before retrying a failed publish
+    connectiontimeout: 30s                # Per-publish broker ACK/NACK confirmation wait
+    readytimeout: 5s                      # Bounded pre-flight wait for a cold/reconnecting client to become ready before a publish begins
+    maxpublishattempts: 5                 # Bounded publish retries before ErrPublishRetriesExhausted
   publisher:
     maxcached: 50                         # Cached publisher channels (per tenant)
     idlettl: 1h                           # Explicit override; unset default is 1h single-tenant / 10m multi-tenant
@@ -2807,7 +2805,7 @@ func main() {
 	fw, _, err := app.NewWithConfig(cfg, nil)
 	if err != nil { log.Fatal(err) }
 
-	if err := fw.RegisterModules(&orders.Module{}); err != nil {
+	if err := fw.RegisterModule(&orders.Module{}); err != nil {
 		log.Fatal(err) // module registration errors are fatal
 	}
 	log.Fatal(fw.Run())
@@ -2854,7 +2852,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 | Handler returns `error` | nack-WITHOUT-requeue — message is **dropped** (prevents poison-message loops) |
 | Handler panics | Recovered with stack trace, treated as error (drop) — service stays up |
 | Built-in retry | **None.** Use the Transactional Outbox for at-least-once delivery, or implement idempotent retry inside the handler (e.g. via a retry queue with TTL) |
-| Observability | Every failure emits a structured ERROR log + OTEL `messaging.errors.total` counter with `error.type` |
+| Observability | Every failure emits a structured ERROR log + OTEL `messaging.client.operation.duration` histogram tagged with `error.type` |
 
 **Sizing guidance:** if your handlers hit a database, ensure `database.pool.max.connections >= NumCPU * 4 × number_of_consumers` to avoid pool starvation under load. Test handlers with `go test -race`.
 
@@ -3077,10 +3075,14 @@ keystore:
 
 ```go
 // Register before modules that need keys
-fw.RegisterModules(
+for _, m := range []app.Module{
     keystore.NewModule(),
     &myapp.JWEModule{},
-)
+} {
+    if err := fw.RegisterModule(m); err != nil {
+        log.Fatal(err)
+    }
+}
 
 // In your module
 type Module struct {
@@ -3252,10 +3254,14 @@ keystore:
 Wire it in `main.go` — the keystore module **must** be registered before any module declaring jose-tagged routes; the framework wires `deps.KeyStore` + `deps.Logger` + `deps.Tracer` + `deps.MeterProvider` into the JOSE middleware automatically:
 
 ```go
-fw.RegisterModules(
+for _, m := range []app.Module{
     keystore.NewModule(),    // populates deps.KeyStore — REQUIRED FIRST
     &secureapi.Module{},     // declares jose-tagged routes; resolver auto-wired
-)
+} {
+    if err := fw.RegisterModule(m); err != nil {
+        log.Fatal(err)
+    }
+}
 ```
 
 ### End-to-end module example
@@ -4101,18 +4107,18 @@ When `observability.enabled: true`, the framework auto-emits:
 
 | Component | Span Name | Key Attributes | Trigger |
 |---|---|---|---|
-| HTTP server | `HTTP {method} {route}` | `http.method`, `http.route`, `http.status_code`, `http.request.body_size` | Every incoming request |
-| Database | `db.query` / `db.exec` | `db.system`, `db.statement`, `db.namespace` | Every `Query`/`Exec`/`QueryRow` |
-| AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.routing_key` | Every `Publish`/`PublishToExchange` |
-| AMQP consume | `{destination} consume` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.queue` | Every message received |
-| Outbound HTTP | propagates `traceparent` | `http.url`, `http.method` | Via `httpclient` package |
+| HTTP server | `HTTP {method} {route}` | `http.request.method`, `http.route`, `http.response.status_code`, `http.request.body_size` | Every incoming request |
+| Database | `db.query` / `db.exec` | `db.system.name`, `db.query.text`, `db.namespace` | Every `Query`/`Exec`/`QueryRow` |
+| AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.destination.routing_key` | Every `Publish`/`PublishToExchange` |
+| AMQP consume | `{queue} receive` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.exchange` | Every message received |
+| Outbound HTTP | propagates `traceparent` | `url.path`, `http.request.method` | Via `httpclient` package |
 | JOSE | `jose.decode_request` / `jose.encode_response` | `jose.kid`, `jose.alg` | Every JOSE-tagged route |
 
 **Auto-emitted metrics** (OTel semantic conventions; same names work in any backend):
 
 | Family | Metric | Type | Attributes |
 |---|---|---|---|
-| HTTP server | `http.server.request.duration` | Histogram (s) | `http.method`, `http.route`, `http.status_code` |
+| HTTP server | `http.server.request.duration` | Histogram (s) | `http.request.method`, `http.route`, `http.response.status_code` |
 | Database | `db.client.operation.duration` | Histogram (s) | `db.system.name`, `db.operation.name`, `db.collection.name`, `db.namespace`, `repository.method` (opt-in via `database.WithRepositoryMethod`) |
 | Database pool | `db.client.connection.count` | UpDownCounter | `state` (`used`/`idle`) |
 | Database pool | `db.client.connection.max` / `.idle.max` / `.idle.min` | UpDownCounter | — |
@@ -4124,7 +4130,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Messaging | `messaging.connection.create` / `.close` | Counter | — |
 | Messaging | `messaging.channel.create` / `.close` | Counter | — |
 | Cache | `cache.hit` / `cache.miss` | Counter | `cache.operation` |
-| Cache | `db.client.operation.duration` (cache shares the OTel db client family) | Histogram (s) | `db.system=redis` |
+| Cache | `db.client.operation.duration` (cache shares the OTel db client family) | Histogram (s) | `db.system.name=redis` |
 | Cache manager | `cache.manager.active_caches` | UpDownCounter | — |
 | Cache manager | `cache.manager.evictions` / `.idle_cleanups` / `.total_created` / `.errors` | Counter | — |
 | Go runtime | `process.runtime.go.{mem.*,goroutines,gc.*,sched.*}` | various | OTel runtime semconv |
@@ -4143,8 +4149,8 @@ When `observability.enabled: true`, the framework auto-emits:
 
 | Path | Returns | Probes |
 |---|---|---|
-| `GET /health` | `200` if all probes pass; `503` otherwise | DB `Health(ctx)`, AMQP `IsReady()`, Redis `PING` (if configured) |
-| `GET /ready` | `200` once startup completes; `503` during init | Module init lifecycle |
+| `GET /health` | `200` `{"status":"ok"}` always (liveness only — no component probes) | none |
+| `GET /ready` | `200` if all probes pass; `503` otherwise | DB `Health(ctx)`, AMQP `IsReady()`, Redis `PING` (if configured) |
 
 ### Configuration — Layered by Environment
 
@@ -4166,7 +4172,7 @@ observability:
     enabled: true
     slowrequestthreshold: 750ms
 
-logger:
+log:
   pretty: false                 # MUST be false when observability.logs.enabled = true
   level: info
 ```
@@ -4198,7 +4204,7 @@ observability:
     compression: gzip
     samplingrate: 0.2              # 20% of INFO/DEBUG; ERROR/WARN always 100%
 
-logger:
+log:
   pretty: false
 ```
 
@@ -4249,14 +4255,14 @@ The framework attaches the following resource attributes to every signal: `servi
 
 ### Secrets Hygiene
 
-Never hardcode OTLP auth headers in committed YAML. The framework declares header *structure* in YAML (it doesn't auto-derive header names from env-var paths), but secret *values* should come from env vars via Koanf `${VAR}` substitution — the same 12-factor pattern used elsewhere in the codebase.
+Never hardcode OTLP auth headers in committed YAML. The framework declares header *structure* in YAML, but GoBricks has **no `${VAR}` interpolation** inside YAML values — a literal `${NEW_RELIC_API_KEY}` string would be sent as-is. Render the file before `config.Load()` runs (see wiki/observability_headers_auth.md) or inject the value through the environment-variable override path.
 
 ```yaml
 # config.production.yaml — checked into git
 observability:
   trace:
     headers:
-      api-key: ${NEW_RELIC_API_KEY}    # SAFE: resolved from env at startup
+      api-key: ""    # value rendered into the file before startup, never committed
 ```
 
 For rotating tokens or secrets fetched from a manager (Vault, AWS Secrets Manager), override programmatically before `app.Run()`:
@@ -4424,7 +4430,7 @@ log:
 // reference to it.
 fw, _, err := app.New()
 if err != nil { log.Fatal(err) }
-fw.RegisterModules(myModule)
+if err := fw.RegisterModule(myModule); err != nil { log.Fatal(err) }
 log.Fatal(fw.Run())
 
 // Inside a handler — values for "pan" are masked before reaching stdout / OTLP:
@@ -4456,7 +4462,7 @@ fw, _, err := app.NewWithOptions(&app.Options{
     LoggerFilterConfig: base,
 })
 if err != nil { log.Fatal(err) }
-fw.RegisterModules(myModule)
+if err := fw.RegisterModule(myModule); err != nil { log.Fatal(err) }
 log.Fatal(fw.Run())
 
 // Opt out entirely (e.g., test fixtures emitting deterministic payloads):
@@ -4544,7 +4550,7 @@ observability:
     # endpoint: http://localhost:4318/v1/traces  # OTEL Collector (HTTP)
     # endpoint: localhost:4317                   # OTEL Collector (gRPC)
 
-logger:
+log:
   pretty: false               # Must be false when observability.logs.enabled = true
   level: info
 ```
@@ -4570,14 +4576,18 @@ func main() {
     // NewWithConfig does ALL of the following automatically:
     // 1. Creates TracerProvider from observability config
     // 2. Sets it as the global OTel provider (otel.SetTracerProvider)
-    // 3. Registers otelecho.Middleware → creates spans for every incoming HTTP request
+    // 3. Registers echootel.NewMiddlewareWithConfig → creates spans for every incoming HTTP request
     // 4. Registers W3C propagator → inbound traceparent headers create linked spans
     fw, _, err := app.NewWithConfig(cfg, nil)
     if err != nil {
         log.Fatal(err)
     }
 
-    fw.RegisterModules( /* your modules */ )
+    for _, m := range []app.Module{ /* your modules */ } {
+        if err := fw.RegisterModule(m); err != nil {
+            log.Fatal(err)
+        }
+    }
     log.Fatal(fw.Run()) // Graceful shutdown flushes pending spans
 }
 ```
@@ -4586,11 +4596,11 @@ func main() {
 
 | Component | Span Name | Key Attributes | Trigger |
 |-----------|-----------|----------------|---------|
-| HTTP server | `HTTP {method} {route}` | `http.method`, `http.route`, `http.status_code` | Every incoming request |
-| Database | `db.query` / `db.exec` | `db.system`, `db.statement` | Every `Query()`/`Exec()` call |
-| AMQP publish | `amqp.publish` | `messaging.destination`, `messaging.operation` | Every `Publish()` call |
-| AMQP consume | `amqp.consume` | `messaging.destination`, `messaging.operation` | Every message received |
-| Outbound HTTP | Propagates `traceparent` | `http.url`, `http.method` | Via `httpclient` package |
+| HTTP server | `HTTP {method} {route}` | `http.request.method`, `http.route`, `http.response.status_code` | Every incoming request |
+| Database | `db.query` / `db.exec` | `db.system.name`, `db.query.text` | Every `Query()`/`Exec()` call |
+| AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.operation.name` | Every `Publish()`/`PublishToExchange()` call |
+| AMQP consume | `{queue} receive` | `messaging.system`, `messaging.destination.name`, `messaging.operation.name` | Every message received |
+| Outbound HTTP | Propagates `traceparent` | `url.path`, `http.request.method` | Via `httpclient` package |
 
 **Initialization flow:**
 
@@ -4606,8 +4616,9 @@ config.Load()
                 → otel.SetTextMapPropagator() // W3C traceparent propagation
         → server.New(cfg, logger)
             → SetupMiddlewares()
-                → otelecho.Middleware(appName, WithTracerProvider(otel.GetTracerProvider()))
+                → echootel.NewMiddlewareWithConfig(echootel.Config{ServerName: cfg.App.Name, TracerProvider: otel.GetTracerProvider(), ...})
                     // ↑ Captures the global provider — creates spans for ALL incoming HTTP requests
+                    // (package: github.com/labstack/echo-opentelemetry)
 ```
 
 **Local verification:**
@@ -4621,8 +4632,8 @@ curl -i http://localhost:8080/health
 
 # Console output includes spans like:
 # {"Name":"HTTP GET /health","SpanContext":{"TraceID":"abc123...","SpanID":"def456..."},
-#  "StartTime":"...","EndTime":"...","Attributes":[{"Key":"http.method","Value":"GET"},
-#  {"Key":"http.route","Value":"/health"},{"Key":"http.status_code","Value":200}]}
+#  "StartTime":"...","EndTime":"...","Attributes":[{"Key":"http.request.method","Value":"GET"},
+#  {"Key":"http.route","Value":"/health"},{"Key":"http.response.status_code","Value":200}]}
 ```
 
 **Production endpoint examples:**
@@ -4664,7 +4675,7 @@ observability:
 
 **HTTP requests are automatically traced** when `observability.enabled: true`. Each incoming request creates a span:
 - Span name: `HTTP {method} {route}` (e.g., `HTTP POST /users`)
-- Attributes: `http.method`, `http.route`, `http.status_code`, `http.request.body_size`
+- Attributes: `http.request.method`, `http.route`, `http.response.status_code`, `http.request.body_size`
 - W3C `traceparent` header propagation (cross-service tracing)
 
 **No code changes required for basic tracing** — just enable in config.
@@ -5058,7 +5069,7 @@ type IAPIError interface {
     ErrorCode() string       // Machine-readable code (e.g., "NOT_FOUND")
     Message() string         // Human-readable message
     HTTPStatus() int         // HTTP status code
-    Details() map[string]any // Additional metadata (dev-mode only for 5xx)
+    Details() map[string]any // Additional metadata (dev-mode only, any status code)
 }
 ```
 
@@ -5076,7 +5087,7 @@ type IAPIError interface {
 | `NewInternalServerError(msg)` | 500 | `INTERNAL_ERROR` | Unexpected server errors |
 | `NewServiceUnavailableError(msg)` | 503 | `SERVICE_UNAVAILABLE` | Dependency down, maintenance |
 
-All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). In development mode (`app.env: development`), details are included in responses for all HTTP status codes. In production, details are hidden for 5xx errors to avoid leaking internals.
+All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). In development mode (`app.env: development`), details are included in responses for all HTTP status codes. In production (non-development mode), details are hidden for every error response regardless of status code.
 
 ### Step 1: Define Domain Errors
 
@@ -5242,14 +5253,15 @@ Same domain errors, different boundary handling:
 - **Configuration injection**: `deps.Config.InjectInto(&cfgStruct)` honors defaults and env overrides.
 - **Testing**: `obtest.NewTestTraceProvider()` captures spans, `obtest.NewTestMeterProvider()` captures metrics; mock `database.Interface` and `messaging.Client` directly.
 
-## Upgrade & Breaking Changes (v0.39 → v0.45)
+## Upgrade & Breaking Changes (v0.39 → v0.49)
 
-The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.45), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
+The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.49), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
 
 Ladder:
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0
 ```
+> v0.46.0–v0.48.0 shipped additive-only (adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
 
 | edge | hop | worst risk | compiler-caught | preflight |
 |------|-----|-----------|-----------------|-----------|
@@ -5260,6 +5272,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E43  | v0.42.0 → v0.43.0 | compile-break | 2 | bare section-named env vars |
 | E44  | v0.43.0 → v0.44.0 | noop | none | none |
 | E45  | v0.44.0 → v0.45.0 | compile-break | 6 | outbox re-delivery count |
+| E49  | v0.45.0 → v0.49.0 (unreleased) | silent-config | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool |
 
 Agent protocol (condensed — full version in the runbook):
 1. Detect CURRENT: `go list -m -f '{{.Version}}{{if .Replace}} =>{{.Replace.Path}}{{end}}' github.com/gaborage/go-bricks` (a local `replace` → resolve the checkout's tag).

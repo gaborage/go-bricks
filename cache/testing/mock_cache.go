@@ -167,7 +167,6 @@ func (m *MockCache) Get(ctx context.Context, key string) ([]byte, error) {
 
 	entry := val.(*cacheEntry)
 
-	// Check expiration
 	if time.Now().After(entry.expiration) {
 		m.data.Delete(key)
 		return nil, cache.ErrNotFound
@@ -314,13 +313,11 @@ func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue
 
 	entry := actual.(*cacheEntry)
 
-	// Check expiration
 	if time.Now().After(entry.expiration) {
 		m.data.Delete(key)
 		return false, nil
 	}
 
-	// Compare values
 	if !bytes.Equal(entry.value, expectedValue) {
 		return false, nil
 	}
@@ -393,7 +390,6 @@ func (m *MockCache) Stats() (map[string]any, error) {
 		return nil, m.statsError
 	}
 
-	// Count entries
 	count := 0
 	m.data.Range(func(_, _ any) bool {
 		count++
@@ -433,7 +429,6 @@ func (m *MockCache) Close() error {
 		return true
 	})
 
-	// Call onClose callback if registered
 	if m.onClose != nil {
 		m.onClose(m.id)
 	}

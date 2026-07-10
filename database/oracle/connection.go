@@ -100,8 +100,9 @@ func newKeepAliveDialer(interval time.Duration, log logger.Logger) *keepAliveDia
 // The function uses cfg.ConnectionString when present or constructs a DSN from host/port and Oracle service/SID/database,
 // configures the connection pool from cfg.Pool, verifies connectivity with a 10-second timeout, and logs connection details.
 // When cfg.Pool.KeepAlive.IsEnabled() is true, a custom TCP dialer is used to enable keep-alive probes.
-// When cfg.Timezone is set (non-empty and not "-"), every new physical connection runs
-// ALTER SESSION SET TIME_ZONE before being handed to the pool, guaranteeing pool-wide consistency.
+// Unless cfg.Timezone is the disabled sentinel ("-"), every new physical connection runs
+// ALTER SESSION SET TIME_ZONE (defaulting to UTC when Timezone is unset) before being handed
+// to the pool, guaranteeing pool-wide consistency.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is nil")

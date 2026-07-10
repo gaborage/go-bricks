@@ -92,7 +92,6 @@ func initAMQPMeter() {
 	var err error
 
 	// Initialize operation duration histogram with explicit bucket boundaries per OTel semconv
-	// Buckets: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10]
 	amqpOperationDuration, err = amqpMeter.Float64Histogram(
 		metricOperationDuration,
 		metric.WithDescription("Duration of messaging operation initiated by a producer or consumer client"),
@@ -101,7 +100,6 @@ func initAMQPMeter() {
 	)
 	logMetricError(metricOperationDuration, err)
 
-	// Initialize sent messages counter
 	amqpMessagesSent, err = amqpMeter.Int64Counter(
 		metricMessagesSent,
 		metric.WithDescription("Number of messages producer attempted to send to the broker"),
@@ -109,7 +107,6 @@ func initAMQPMeter() {
 	)
 	logMetricError(metricMessagesSent, err)
 
-	// Initialize consumed messages counter
 	amqpMessagesConsumed, err = amqpMeter.Int64Counter(
 		metricMessagesConsumed,
 		metric.WithDescription("Number of messages that were delivered to the application"),
@@ -117,7 +114,6 @@ func initAMQPMeter() {
 	)
 	logMetricError(metricMessagesConsumed, err)
 
-	// Initialize publish retries counter
 	amqpPublishRetries, err = amqpMeter.Int64Counter(
 		metricPublishRetries,
 		metric.WithDescription("Number of message publish retry attempts due to NACK or timeout"),
@@ -125,7 +121,6 @@ func initAMQPMeter() {
 	)
 	logMetricError(metricPublishRetries, err)
 
-	// Initialize connection create counter
 	amqpConnectionCreate, err = amqpMeter.Int64Counter(
 		metricConnectionCreate,
 		metric.WithDescription("Number of AMQP connection creation events"),
@@ -133,7 +128,6 @@ func initAMQPMeter() {
 	)
 	logMetricError(metricConnectionCreate, err)
 
-	// Initialize connection close counter
 	amqpConnectionClose, err = amqpMeter.Int64Counter(
 		metricConnectionClose,
 		metric.WithDescription("Number of AMQP connection close events"),
@@ -141,7 +135,6 @@ func initAMQPMeter() {
 	)
 	logMetricError(metricConnectionClose, err)
 
-	// Initialize channel create counter
 	amqpChannelCreate, err = amqpMeter.Int64Counter(
 		metricChannelCreate,
 		metric.WithDescription("Number of AMQP channel creation events"),
@@ -149,7 +142,6 @@ func initAMQPMeter() {
 	)
 	logMetricError(metricChannelCreate, err)
 
-	// Initialize channel close counter
 	amqpChannelClose, err = amqpMeter.Int64Counter(
 		metricChannelClose,
 		metric.WithDescription("Number of AMQP channel close events"),
@@ -181,7 +173,6 @@ func getAMQPMeter() metric.Meter {
 // The function is non-blocking and handles errors gracefully - metric recording failures
 // will not impact messaging operation execution.
 func RecordAMQPPublishMetrics(ctx context.Context, exchange, routingKey string, duration time.Duration, err error) {
-	// Ensure meter is initialized
 	meter := getAMQPMeter()
 	if meter == nil {
 		return
@@ -232,7 +223,6 @@ func RecordAMQPPublishMetrics(ctx context.Context, exchange, routingKey string, 
 //
 // The function is non-blocking and handles errors gracefully.
 func RecordAMQPConsumeMetrics(ctx context.Context, delivery *amqp.Delivery, queueName string, duration time.Duration, err error) {
-	// Ensure meter is initialized
 	meter := getAMQPMeter()
 	if meter == nil {
 		return
@@ -293,7 +283,6 @@ func RecordAMQPConsumeMetrics(ctx context.Context, delivery *amqp.Delivery, queu
 //   - routingKey: The routing key used for message delivery
 //   - reason: The reason for the retry (e.g., "nack", "timeout", "publish_error")
 func RecordPublishRetry(ctx context.Context, exchange, routingKey, reason string) {
-	// Ensure meter is initialized
 	meter := getAMQPMeter()
 	if meter == nil {
 		return
@@ -326,7 +315,6 @@ func RecordPublishRetry(ctx context.Context, exchange, routingKey, reason string
 // recordLifecycleEvent is a helper function to record connection or channel lifecycle events.
 // It reduces code duplication between RecordConnectionEvent and RecordChannelEvent.
 func recordLifecycleEvent(eventType string, err error, createCounter, closeCounter metric.Int64Counter) {
-	// Ensure meter is initialized
 	meter := getAMQPMeter()
 	if meter == nil {
 		return

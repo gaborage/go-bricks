@@ -47,9 +47,10 @@ make release VERSION=v0.38.0
 
 `make release` is **read-and-verify-only**: it asserts `VERSION == .release-please-manifest.json
 == CHANGELOG top section`, runs the full gate — `make check` + `make vuln` + `make sec` for the
-root module, and build + test + `make vuln` + `make sec` for the `tools/migration` module — probes
-signing, creates a **signed annotated** tag (`git tag -s`), verifies the signature locally, and
-pushes the tag. It does **not** edit `CHANGELOG.md` (release-please owns it).
+root module, and `make check` (fmt + lint + test + validate-cli + vuln) + `make vuln` + `make sec`
+for the `tools/migration` module — probes signing, creates a **signed annotated** tag
+(`git tag -s`), verifies the signature locally, and pushes the tag. It does **not** edit
+`CHANGELOG.md` (release-please owns it).
 
 > **Rule (release-please #1561):** never merge a Release PR you are not ready to `make release`
 > immediately. A merged-but-untagged Release PR keeps its `autorelease: pending` label and

@@ -13,7 +13,7 @@ import (
 // separate from transaction management, health checks, and migration support.
 //
 // Querier is designed for easy mocking in unit tests, requiring only 4 methods instead of the
-// full 13 methods in the Interface type. Most business logic only needs query execution capabilities.
+// full 12 methods in the Interface type. Most business logic only needs query execution capabilities.
 //
 // The database.Interface type embeds Querier, so all existing code continues to work unchanged.
 //

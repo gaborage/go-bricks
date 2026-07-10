@@ -80,7 +80,6 @@ func (r *SubdomainResolver) ResolveTenant(ctx context.Context, req *http.Request
 		return "", ErrTenantResolutionFailed
 	}
 
-	// Extract subdomain part and drop the separating dot
 	tenantPart := strings.TrimSuffix(host, "."+r.RootDomain)
 	if tenantPart == "" {
 		return "", ErrTenantResolutionFailed
@@ -107,7 +106,7 @@ func (r *CompositeResolver) ResolveTenant(ctx context.Context, req *http.Request
 		if err == nil && tenantID != "" {
 			// Validate tenant ID against pattern if configured
 			if r.TenantRegex != nil && !r.TenantRegex.MatchString(tenantID) {
-				continue // Try next resolver
+				continue
 			}
 			return tenantID, nil
 		}

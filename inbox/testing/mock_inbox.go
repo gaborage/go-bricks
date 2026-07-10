@@ -85,7 +85,9 @@ func (m *MockInbox) ProcessOnce(ctx context.Context, eventID string, fn func(ctx
 	return nil
 }
 
-// ProcessedIDs returns a copy of every eventID passed to ProcessOnce.
+// ProcessedIDs returns a copy of every eventID passed to ProcessOnce, except
+// calls short-circuited by a configured WithError error (those are not
+// recorded).
 func (m *MockInbox) ProcessedIDs() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()

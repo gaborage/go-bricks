@@ -27,7 +27,7 @@ resp, err := client.Get(ctx, &httpclient.Request{
 })
 ```
 
-**Interface:** `Get`, `Post`, `Put`, `Patch`, `Delete`, `Do` — all accept `context.Context` and `*Request`, return `*Response` and `error`.
+**Interface:** `Get`, `Post`, `Put`, `Patch`, `Delete` accept `context.Context` and `*Request`; `Do` additionally takes a `method string` (`Do(ctx, method, req)`). All return `*Response` and `error`.
 
 ## Metrics
 
@@ -191,7 +191,7 @@ Set at span end:
 |---|---|
 | `http.response.status_code` | Set when a response is received. Omitted on transport error. |
 | `http.response.body.size` | Set when response body bytes > 0. |
-| `error.type` | Set only on transport error (status 0) and on response-build errors. Mirrors the duration histogram's `error.type` attribute. |
+| `error.type` | Set on transport error (status 0), on response-build errors, and on the parent Do span for a terminal HTTP-status error (any 4xx, or 5xx after retries are exhausted — classified as `_OTHER`). Does not mirror the duration histogram's `error.type`, which stays empty for any completed roundtrip regardless of status code. |
 
 `url.full` is **never** emitted. Even with userinfo and query-string redaction, paths can still leak (`/users/{secret-token}/...`). Emitting `server.address` + `url.scheme` + `url.path` is sufficient for service-graph slicing without the leakage surface.
 

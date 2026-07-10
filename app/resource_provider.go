@@ -231,7 +231,6 @@ func (p *MultiTenantResourceProvider) Messaging(ctx context.Context) (messaging.
 		return nil, ErrNoTenantInContext
 	}
 
-	// Ensure consumers are set up for this tenant
 	if p.declarations != nil {
 		if err := p.messagingManager.EnsureConsumers(ctx, tenantID, p.declarations); err != nil {
 			return nil, err // Pass through the error from manager (already well-formatted)

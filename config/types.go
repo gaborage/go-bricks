@@ -395,6 +395,7 @@ type MessagingConfig struct {
 //   - ResendDelay: 5s (delay before retrying failed publishes)
 //   - ConnectionTimeout: 30s (per-publish broker ACK/NACK confirmation wait)
 //   - ReadyTimeout: 5s (pre-flight wait for a not-yet-ready client, before a publish begins)
+//   - MaxPublishAttempts: 5 (bounded publish retry attempts before giving up)
 //   - MaxDelay: 60s (maximum delay for exponential backoff cap)
 type ReconnectConfig struct {
 	// Delay is the initial delay between reconnection attempts.
@@ -560,6 +561,7 @@ type SourceConfig struct {
 //   - BatchSize: 100 (events per relay cycle)
 //   - MaxRetries: 5 (max publish attempts before giving up)
 //   - RetentionPeriod: 72h (cleanup published events older than this)
+//   - PublishTimeout: 60s (per-record relay publish bound)
 type OutboxConfig struct {
 	// Enabled activates the transactional outbox pattern.
 	// When false, the outbox module is a no-op and deps.Outbox is nil.

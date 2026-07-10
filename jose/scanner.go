@@ -5,8 +5,9 @@ import (
 )
 
 // SentinelFieldName is the conventional field name applications use for the jose-tagged
-// sentinel field. Any blank-named field with a jose tag also matches; this constant
-// documents the canonical choice.
+// sentinel field (by convention "_"). ScanType does not actually check the field's name —
+// any field carrying a jose tag matches; this constant exists purely to document the
+// recommended convention.
 const SentinelFieldName = "_"
 
 // ScanType inspects a Go type for a jose: sentinel field. Returns (nil, nil) if the type

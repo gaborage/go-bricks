@@ -15,7 +15,7 @@ Two roles per tenant:
 | Role | Owns | Privileges | Used by |
 |------|------|-----------|---------|
 | **Migrator** (one per deployment, shared across tenants) | The tenant schema(s) it provisioned | DDL on its own schemas | `go-bricks-migrate` CLI / `migration.MigrateAll` |
-| **Per-tenant runtime** (one per tenant) | Nothing | `USAGE` on the tenant schema; `SELECT/INSERT/UPDATE/DELETE` on all current and future tables; `USAGE/SELECT/UPDATE` on sequences | The running service (`runtime.role` in `database.yaml`) |
+| **Per-tenant runtime** (one per tenant) | Nothing | `USAGE` on the tenant schema; `SELECT/INSERT/UPDATE/DELETE` on all current and future tables; `USAGE/SELECT/UPDATE` on sequences | The running service (connects with the runtime role's credentials via `database.username`/`database.password` in `config.yaml`) |
 
 Both roles are created with the same locked-down attribute floor:
 `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`. The

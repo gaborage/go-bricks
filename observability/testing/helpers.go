@@ -43,8 +43,8 @@ const (
 	metricValueMismatchErrMsg = "metric %s value mismatch"
 	noDataPointsErrMsg        = "no data points for metric %s"
 
-	// TestTracerName is the default tracer name used in observability tests.
-	// This eliminates duplication of "test" string literal across 17+ test files.
+	// TestTracerName is the default tracer name used in observability tests,
+	// avoiding a hardcoded "test" string literal at each call site.
 	TestTracerName = "test"
 )
 
@@ -295,7 +295,7 @@ func AssertSpanError(t *testing.T, span *tracetest.SpanStub, expectedDesc string
 }
 
 // AssertMetricValue finds a metric by name and asserts its value.
-// For Sum metrics (counters, up-down counters), it asserts the first data point value.
+// For Sum and Gauge metrics (counters, up-down counters, gauges), it asserts the first data point value.
 // For Histogram metrics, it asserts the count.
 func AssertMetricValue(t *testing.T, rm metricdata.ResourceMetrics, metricName string, expectedValue any) {
 	t.Helper()

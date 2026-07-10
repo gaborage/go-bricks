@@ -184,7 +184,7 @@ var (
     ErrTooManyAliases      = errors.New("expression accepts maximum 1 alias")
     ErrDangerousAlias      = errors.New("alias contains dangerous characters")
     ErrNilSubquery         = errors.New("subquery cannot be nil")
-    ErrInvalidSubquery     = errors.New("subquery produced invalid SQL")
+    ErrInvalidSubquery     = errors.New("invalid subquery")
     ErrEmptySubquerySQL    = errors.New("subquery produced empty SQL")
 )
 ```

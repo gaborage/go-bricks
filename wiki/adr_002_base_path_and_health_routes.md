@@ -57,11 +57,16 @@ type PathConfig struct {
 
 ### RouteRegistrar Interface
 
+> **Superseded by [ADR-034](adr_034_echo_boundary_types.md)**: `RouteRegistrar` is
+> now echo-free — `Handler`/`MiddlewareFunc` are go-bricks types, not
+> `echo.HandlerFunc`/`echo.MiddlewareFunc`, and `Add` no longer returns
+> `echo.RouteInfo`. The signatures below reflect the current shape.
+
 ```go
 type RouteRegistrar interface {
-    Add(method, path string, handler echo.HandlerFunc, middleware ...echo.MiddlewareFunc) echo.RouteInfo
-    Group(prefix string, middleware ...echo.MiddlewareFunc) RouteRegistrar
-    Use(middleware ...echo.MiddlewareFunc)
+    Add(method, path string, handler Handler, middleware ...MiddlewareFunc)
+    Group(prefix string, middleware ...MiddlewareFunc) RouteRegistrar
+    Use(middleware ...MiddlewareFunc)
     FullPath(path string) string
 }
 ```

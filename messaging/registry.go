@@ -388,7 +388,6 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 		}
 	}
 
-	// Create cancellation context for all consumers
 	consumerCtx, cancel := context.WithCancel(ctx)
 	r.cancelConsumers = cancel
 
@@ -717,7 +716,6 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		Int("body_size", len(delivery.Body)).
 		Msg("Processing message")
 
-	// Process message with handler
 	err := consumer.Handler.Handle(msgCtx, delivery)
 	processingTime := time.Since(startTime)
 

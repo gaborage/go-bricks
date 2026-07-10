@@ -49,7 +49,6 @@ func (m *MessagingInitializer) SetupLazyConsumerInit(
 		return fmt.Errorf("messaging manager not configured")
 	}
 
-	// Check if provider is one of our known implementations
 	switch p := provider.(type) {
 	case *SingleTenantResourceProvider:
 		return m.setupSingleTenantLazyInit(p, declarations)
@@ -94,12 +93,10 @@ func (m *MessagingInitializer) PrepareRuntimeConsumers(
 	}
 
 	if m.multiTenant {
-		// Multi-tenant: consumers will be started on-demand per tenant
 		m.logger.Info().Msg("Multi-tenant mode: consumers will be started per tenant on demand")
 		return nil
 	}
 
-	// Single-tenant: pre-start consumers
 	if err := m.manager.EnsureConsumers(ctx, "", declarations); err != nil {
 		m.logger.Warn().Err(err).Msg("Failed to start single-tenant consumers")
 		// Don't fail the app startup for messaging issues

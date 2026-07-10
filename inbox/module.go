@@ -19,11 +19,15 @@ import (
 // Register it like any other module (the scheduler is optional but required for
 // the retention cleanup job):
 //
-//	fw.RegisterModules(
+//	for _, m := range []app.Module{
 //	    scheduler.NewModule(), // optional: enables inbox-cleanup
 //	    inbox.NewModule(),
 //	    &myapp.ConsumerModule{},
-//	)
+//	} {
+//	    if err := fw.RegisterModule(m); err != nil {
+//	        log.Fatal(err)
+//	    }
+//	}
 type Module struct {
 	logger logger.Logger
 	config *config.Config

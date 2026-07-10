@@ -49,7 +49,7 @@ func NewConnectionPreWarmer(
 const defaultPreWarmReadinessTimeout = 5 * time.Second
 
 // preWarmReadinessPollInterval mirrors messaging's unexported
-// readinessCheckInterval (see messaging/registry.go) so both readiness-wait
+// readinessCheckInterval (see messaging/constants.go) so both readiness-wait
 // call sites share one poll cadence, without exporting an internal messaging
 // constant just for this.
 const preWarmReadinessPollInterval = 100 * time.Millisecond
@@ -81,7 +81,6 @@ func (w *ConnectionPreWarmer) attemptDatabasePreWarm(ctx context.Context, errs [
 		return errs
 	}
 
-	// Pre-warm database connection
 	if err := w.PreWarmDatabase(ctx, ""); err != nil {
 		// Check if error is due to database not being configured
 		if config.IsNotConfigured(err) {
@@ -108,7 +107,6 @@ func (w *ConnectionPreWarmer) attemptMessagingPreWarm(
 		return errs
 	}
 
-	// Pre-warm messaging components
 	if err := w.PreWarmMessaging(ctx, "", declarations); err != nil {
 		// Check if error is due to messaging not being configured
 		if config.IsNotConfigured(err) {
@@ -151,7 +149,6 @@ func (w *ConnectionPreWarmer) PreWarmMessaging(
 		return fmt.Errorf("messaging manager not available")
 	}
 
-	// Ensure consumers are set up
 	if declarations != nil {
 		if err := w.messagingManager.EnsureConsumers(ctx, key, declarations); err != nil {
 			return fmt.Errorf("failed to ensure consumers: %w", err)
@@ -159,7 +156,6 @@ func (w *ConnectionPreWarmer) PreWarmMessaging(
 		w.logger.Info().Msg("Ensured messaging consumers")
 	}
 
-	// Pre-warm publisher
 	client, release, err := w.messagingManager.Publisher(ctx, key)
 	if err != nil {
 		return fmt.Errorf("failed to get publisher: %w", err)

@@ -34,7 +34,7 @@ var globalColumnRegistry = &ColumnRegistry{
 // It lazily parses the struct on first use and caches the result forever.
 //
 // Parameters:
-//   - vendor: Database vendor name (e.g., "oracle", "postgres")
+//   - vendor: Database vendor name (e.g., "oracle", "postgresql")
 //   - structPtr: Pointer to a struct with `db:"column_name"` tags
 //
 // Returns:

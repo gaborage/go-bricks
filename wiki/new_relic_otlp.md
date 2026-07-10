@@ -107,10 +107,10 @@ trace:
 
 ## Attribute Limits
 
-GoBricks automatically handles New Relic's attribute limits, but be aware of:
+New Relic enforces attribute limits on its ingest side, but be aware of:
 - **Maximum attributes per span/metric/log:** 255 attributes
 - **Maximum attribute value size:** 4095 bytes
-- **Truncation behavior:** Attributes exceeding limits are dropped with warning logs
+- **Truncation behavior:** GoBricks does not validate or truncate attributes before export — oversized or excess attributes may be silently dropped by New Relic, not by GoBricks
 
 ## Performance Impact
 
@@ -131,8 +131,8 @@ GoBricks automatically handles New Relic's attribute limits, but be aware of:
 
 ## Common Mistakes
 
-- ❌ `https://otlp.nr-data.net:4317` with `protocol: grpc` → **ERROR: "too many colons in address"**
-- ❌ `otlp.nr-data.net:4318` with `protocol: http` → **ERROR: missing scheme**
+- ❌ `https://otlp.nr-data.net:4317` with `protocol: grpc` → **ERROR: `ErrInvalidEndpointFormat` (fails at startup validation, not a network dial error)**
+- ❌ `otlp.nr-data.net:4318` with `protocol: http` → **ERROR: `ErrInvalidEndpointFormat` (fails at startup validation, not a network dial error)**
 - ✅ `otlp.nr-data.net:4317` with `protocol: grpc` → **Correct**
 - ✅ `https://otlp.nr-data.net:4318/v1/traces` with `protocol: http` → **Correct**
 

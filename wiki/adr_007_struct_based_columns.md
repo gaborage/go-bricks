@@ -202,7 +202,7 @@ database/
 ## Related ADRs
 
 - **ADR-005**: Type-Safe WHERE Clauses (establishes pattern for explicit over implicit)
-- **ADR-006**: Dual-Mode Logging (demonstrates vendor-aware caching pattern)
+- **ADR-006**: OTLP Log Export Integration (io.Writer bridge pattern for observability)
 
 ---
 

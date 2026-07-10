@@ -11,7 +11,7 @@ import (
 // request and response on different routes), and the resulting policies have different
 // required keys. A type-only key would return the wrong policy on the second scan.
 //
-// Mirrors the pattern in database/internal/columns/registry.go:24,89 (sync.Map +
+// Mirrors the pattern in database/internal/columns/registry.go:25,90 (sync.Map +
 // LoadOrStore) which is proven thread-safe and lock-free on the hot path.
 //
 // The cache stores nil to mean "this type was scanned and has no JOSE policy" — distinct

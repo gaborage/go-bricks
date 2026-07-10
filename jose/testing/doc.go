@@ -8,10 +8,11 @@
 //
 // # Basic Usage
 //
-//	priv, pub := jositest.GenerateTestKeyPair(t)
+//	ourPriv, _ := jositest.GenerateTestKeyPair(t)
+//	peerPriv, _ := jositest.GenerateTestKeyPair(t)
 //	resolver := jositest.NewTestResolver(map[string]any{
-//	    "our-key":  priv, // decrypt key (us, inbound) and encrypt target (outbound)
-//	    "peer-key": pub,  // verify key (inbound) and sign key (peer, outbound)
+//	    "our-key":  ourPriv,  // decrypt key (us, inbound) and encrypt target (outbound)
+//	    "peer-key": peerPriv, // verify key (inbound) and sign key (peer, outbound)
 //	})
 //
 //	inboundPolicy := &jose.Policy{

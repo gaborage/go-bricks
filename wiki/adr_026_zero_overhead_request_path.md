@@ -68,7 +68,7 @@ enrichment:
 - Consumers using the `database` package **without** the app bootstrap must call
   `database.SetObservabilityEnabled(true)` to emit DB spans/metrics.
 
-See [migrations.md](migrations.md#request-path-zero-overhead-changes-adr-026).
+See [migrations.md](migrations.md#e41--v0401--v0410--perf-iteration-2-zero-overhead-request-path-adr-026--pool-idle-tracks-max-adr-025) (E41 › C41.1–C41.5).
 
 Rejected alternatives:
 

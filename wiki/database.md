@@ -29,7 +29,9 @@ databases:               # Named databases — supports mixed vendors
     type: oracle
     host: legacy-oracle.example.com
     port: 1521
-    service_name: LEGACYDB
+    oracle:
+      service:
+        name: LEGACYDB
     username: legacy_user
     password: ${LEGACY_DATABASE_PASSWORD}
   analytics:

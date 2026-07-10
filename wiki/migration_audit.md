@@ -96,7 +96,7 @@ type AuditRecorder interface {
 }
 ```
 
-The event pointer matches the framework convention for medium-sized event payloads (see `outbox.OutboxPublisher`). Implementations SHOULD treat the event as read-only.
+The event pointer matches the framework convention for medium-sized event payloads (see `app.OutboxPublisher`). Implementations SHOULD treat the event as read-only.
 
 Minimal Kafka example (illustrative — your producer choice is up to you):
 
