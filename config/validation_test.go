@@ -2909,6 +2909,28 @@ func createValidServerConfig() ServerConfig {
 	}
 }
 
+func TestValidateRejectsShortDatabasePassword(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.Database.Password = "short" // 5 bytes
+	err := Validate(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database.password")
+	assert.NotContains(t, err.Error(), "short", "the error must never echo the password")
+}
+
+func TestValidateAllowsEmptyDatabasePassword(t *testing.T) {
+	// Empty means trust/IAM auth; it never reaches the redaction-suppression path.
+	cfg := createValidFullConfig()
+	cfg.Database.Password = ""
+	require.NoError(t, Validate(cfg))
+}
+
+func TestValidateAllowsLongEnoughDatabasePassword(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.Database.Password = "longenough-pw"
+	require.NoError(t, Validate(cfg))
+}
+
 // createValidDatabaseConfig returns a valid DatabaseConfig for testing
 func createValidDatabaseConfig() DatabaseConfig {
 	return DatabaseConfig{
@@ -4618,12 +4640,12 @@ func TestValidateAppliesDatabaseManagerDefaultsOnlyToPrimaryDatabase(t *testing.
 		Log: LogConfig{Level: "info"},
 		Database: DatabaseConfig{
 			Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "app",
-			Username: "user", Password: "pass",
+			Username: "user", Password: "longenough-pw",
 		},
 		Databases: map[string]DatabaseConfig{
 			"legacy": {
 				Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "legacy",
-				Username: "user", Password: "pass",
+				Username: "user", Password: "longenough-pw",
 			},
 		},
 	}
@@ -4757,7 +4779,7 @@ func TestValidateMultiTenantAppliesCacheManagerDefaultsEndToEnd(t *testing.T) {
 		} else {
 			cfg.Database = DatabaseConfig{
 				Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "app",
-				Username: "user", Password: "pass",
+				Username: "user", Password: "longenough-pw",
 			}
 		}
 		return cfg
@@ -4806,12 +4828,12 @@ func TestValidateRejectsManagerBlockOnNamedDatabase(t *testing.T) {
 		Log: LogConfig{Level: "info"},
 		Database: DatabaseConfig{
 			Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "app",
-			Username: "user", Password: "pass",
+			Username: "user", Password: "longenough-pw",
 		},
 		Databases: map[string]DatabaseConfig{
 			"legacy": {
 				Type: PostgreSQL, Host: "localhost", Port: 5432, Database: "legacy",
-				Username: "user", Password: "pass",
+				Username: "user", Password: "longenough-pw",
 				Manager: DatabaseManagerConfig{MaxSize: 5},
 			},
 		},

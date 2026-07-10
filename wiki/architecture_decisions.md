@@ -516,6 +516,16 @@ auth only), and emits the standard envelope on raw-response routes.
 
 ---
 
+### [ADR-037: Minimum Database Password Length](adr_037_min_database_password_length.md)
+
+**Date:** 2026-07-10 | **Status:** Accepted
+
+Rejects a non-empty database password shorter than `config.MinDatabasePasswordLength` (8) at two boundaries: `config.Validate` (static config — fail-fast at startup) and the migrate path (`FlywayMigrator.runFor` → `ErrDatabasePasswordTooShort`, covering per-tenant configs that never pass through `config.Validate`). Closes the ADR-019 audit false-negative from #674, where a short-password migration's output was suppressed and audited as `Outcome=failed` even on success. Empty passwords (trust/IAM auth) are exempt. `migration.redactPassword`'s `minRedactablePasswordLength` is single-sourced from the new exported constant.
+
+**Key Benefits:** Closes the migration audit false-negative for single- and multi-tenant paths; a clear startup / pre-flight error (never echoing the password) instead of a suppressed-output false failure; a single-sourced password-length floor.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -525,7 +535,7 @@ auth only), and emits the standard envelope on raw-response routes.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-036) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-037) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

@@ -32,7 +32,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E44  | v0.43.0 → v0.44.0 | noop | 2 | none | none |
 | E45  | v0.44.0 → v0.45.0 | compile-break | 9 | C45.1 C45.2 C45.3 C45.4 C45.5 C45.6 | outbox re-delivery count |
 | E49  | v0.45.0 → v0.49.0 | silent-config | 6 | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool / unit-less duration guard |
-| E50  | v0.49.0 → v0.50.0 | silent-behavior | 2 | none | Flyway migrate surfaces unparseable/failure output as an error; DB passwords < 8 bytes fail migrate |
+| E50  | v0.49.0 → v0.50.0 | config-break | 2 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -558,9 +558,9 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 ## E50 · v0.49.0 → v0.50.0 — Flyway migrate surfaces unparseable/failure output as an error
 
-- gist: `migration.Migrate`/`MigrateFor` (and everything on top of them — `RunMigrationsAtStartup`, multi-tenant `MigrateAll`, the `go-bricks-migrate` CLI) previously returned a **nil error with a zero-valued Result** when the Flyway subprocess exited 0 but its `-outputType=json` output could not be parsed — the parse error was only Debug-logged — so a migration whose outcome was unobservable was reported as success, and the `migration.applied` audit event recorded `Outcome=success` with an empty version. It now returns a non-nil error (`errors.Is` `migration.ErrFlywayOutputUnparsed` for empty/malformed/redaction-suppressed output, or `migration.ErrFlywayReportedFailure` for a `success:false` envelope even at exit 0) and the audit event records `Outcome=failed`. No exported signatures change; `parseFlywayJSON`'s own contract is unchanged.
+- gist: `migration.Migrate`/`MigrateFor` (and everything on top of them — `RunMigrationsAtStartup`, multi-tenant `MigrateAll`, the `go-bricks-migrate` CLI) previously returned a **nil error with a zero-valued Result** when the Flyway subprocess exited 0 but its `-outputType=json` output could not be parsed — the parse error was only Debug-logged — so a migration whose outcome was unobservable was reported as success, and the `migration.applied` audit event recorded `Outcome=success` with an empty version. It now returns a non-nil error (`errors.Is` `migration.ErrFlywayOutputUnparsed` for empty/malformed/redaction-suppressed output, or `migration.ErrFlywayReportedFailure` for a `success:false` envelope even at exit 0) and the audit event records `Outcome=failed`. No exported signatures change; `parseFlywayJSON`'s own contract is unchanged. Additionally, non-empty DB passwords shorter than 8 bytes are now rejected (config validation + migrate) rather than suppressed — see C50.2.
 - build-caught: none
-- preflight: none
+- preflight: run the C50.2 detect sweep BEFORE the bump — a non-empty DB password `< 8` bytes (static or per-tenant, including the ops/infra tenants file) now aborts startup or the migrate
 - exit: `go get github.com/gaborage/go-bricks@v0.50.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C50.1] migrate now errors on unparseable/failure Flyway output · silent-behavior · when: no-match
@@ -571,13 +571,13 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - verify: `go test ./...`
 - ref: #673 · migration/result.go: migrateOutcome · migration/flyway.go: runFor
 
-### [C50.2] DB passwords shorter than 8 bytes now fail migrate · silent-behavior · when: match
+### [C50.2] DB passwords shorter than 8 bytes are rejected (config validation + migrate) · config-break · when: match
 
-- detect: inspect every DB password reaching migration (single-tenant `database.password`, per-tenant configs from your tenant store / AWS secrets, and the `go-bricks-migrate --source-config` tenants file) for values shorter than 8 bytes
-- gate: match = any migrated database uses a password `len < 8`. Redaction suppresses the whole Flyway output below that length (short needles can't be safely substring-redacted), so the JSON can't be parsed — a **successful** migrate is now returned as an error AND audit-logged as `migration.applied` `Outcome=failed` / `ErrorClass=internal_error` with an empty version. Do NOT read that Failed event as proof no schema changed. `RunMigrationsAtStartup` under `APP_ENV=dev`/`local` will fail startup for a short password.
-- apply: use a DB password of at least 8 bytes for every migrated database.
-- verify: confirm each migrated database's password is `>= 8` bytes, then `make run` / `go-bricks-migrate migrate`
-- ref: #673 · migration/flyway.go: redactPassword (minRedactablePasswordLength)
+- detect: inspect every DB password for a **non-empty** value shorter than 8 bytes — static (`database.password`, named `databases.*`) and per-tenant (tenant store / AWS secrets, the `go-bricks-migrate --source-config` tenants file)
+- gate: match = any database config uses a non-empty password `len < 8`. Such passwords can't be safely redacted from Flyway output, so `config.Validate` now **rejects static configs at startup** (a `database.password` field error), and the migrate path **rejects per-tenant configs before running Flyway** (`errors.Is migration.ErrDatabasePasswordTooShort`). This replaces #674's suppress-then-fail behavior and closes the audit false-negative where a short-password migration was audited as `Outcome=failed` even on success. **Empty passwords (trust/IAM auth) are exempt.** `RunMigrationsAtStartup` under `APP_ENV=dev`/`local` fails startup for a short password.
+- apply: use a DB password of at least 8 bytes for every database (or leave it empty for trust/IAM auth).
+- verify: `make run` boots (or aborts with a `database.password` error naming the field); `go-bricks-migrate migrate` rejects a short-password tenant with `database password too short to safely redact Flyway output`
+- ref: #673 #675 · ADR-037 · config/validation.go: validateDatabaseCoreFields · migration/flyway.go: ensurePasswordRedactable
 
 
 ---
