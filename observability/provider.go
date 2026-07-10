@@ -30,7 +30,7 @@ import (
 )
 
 // debugLogger is a simple logger for observability debugging.
-// It only outputs when GOBRICKS_DEBUG environment variable is set to "true".
+// It only outputs when GOBRICKS_DEBUG environment variable is set to "true" or "1".
 // This prevents noisy [OBSERVABILITY] logs in production environments.
 var debugLogger = initDebugLogger()
 
@@ -87,7 +87,6 @@ func initDebugLogger() *log.Logger {
 	if debug == "true" || debug == "1" {
 		return log.New(os.Stderr, "[OBSERVABILITY] ", log.LstdFlags|log.Lmsgprefix)
 	}
-	// Return a no-op logger that discards all output
 	return log.New(io.Discard, "", 0)
 }
 
@@ -172,7 +171,6 @@ func NewProviderWithContext(ctx context.Context, cfg *Config) (Provider, error) 
 	debugLogger.Printf("Config after applying defaults - sample_rate=%s, batch_timeout=%v",
 		formatSampleRate(safeCfg.Trace.Sample.Rate), safeCfg.Trace.Batch.Timeout)
 
-	// Now validate the defaulted config
 	if err := safeCfg.Validate(); err != nil {
 		debugLogger.Printf("Config validation failed: %v", err)
 		return nil, fmt.Errorf("invalid observability config: %w", err)
@@ -281,7 +279,6 @@ func initializeProvider(
 
 // registerGlobalProviders sets up the global OpenTelemetry providers and propagator.
 func (p *provider) registerGlobalProviders() {
-	// Set global providers
 	if p.tracerProvider != nil {
 		debugLogger.Println("Setting global tracer provider")
 		otel.SetTracerProvider(p.tracerProvider)

@@ -121,8 +121,10 @@ func StartHTTPClientSpan(ctx context.Context, info *HTTPSpanInfo) (context.Conte
 //   - 100-499 (incl. 4xx) without err  → status unset (default OK).
 //   - 500-599                           → codes.Error, message "HTTP {code}".
 //   - transport error (statusCode == 0) → codes.Error, message = error.type.
-//   - any err != nil regardless of statusCode → RecordError(err) + error.type
-//     attribute. Without this, callers that pass (status, errType, err) for
+//   - any err != nil regardless of statusCode → adds a redacted exception event
+//     (see redactErrorMessage) — plus the error.type attribute when errType is
+//     non-empty — instead of span.RecordError(err) (which would leak
+//     query-string secrets via *url.Error). Without this, callers that pass (status, errType, err) for
 //     non-transport failures (e.g. response interceptor errors on an HTTP 200,
 //     or HTTPError wrappers on a final 5xx) would lose the error attribution
 //     that the parallel metric path records — see RecordHTTPClientMetrics.

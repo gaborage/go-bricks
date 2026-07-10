@@ -100,20 +100,17 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	if m.meterProvider != nil {
 		meter := m.meterProvider.Meter("scheduler")
 
-		// Create execution counter
 		m.executionCounter, _ = meter.Int64Counter( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
 			"job.execution.total",
 			metric.WithDescription("Total number of job executions by status"),
 		)
 
-		// Create duration histogram
 		m.durationHistogram, _ = meter.Float64Histogram( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
 			"job.execution.duration",
 			metric.WithDescription("Job execution duration in seconds"),
 			metric.WithUnit("s"),
 		)
 
-		// Create panic counter
 		m.panicCounter, _ = meter.Int64Counter( // NOSONAR: OTel meter errors intentionally ignored - nil meter results in no-op operations
 			"job.panic.total",
 			metric.WithDescription("Total number of job panics"),
@@ -160,7 +157,6 @@ func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegist
 	sysGroup := r.Group("/_sys")
 	sysGroup.Use(cidrMiddleware)
 
-	// Register routes
 	server.GET(hr, sysGroup, "/job", m.listJobsHandler)
 	server.POST(hr, sysGroup, "/job/:jobId", m.triggerJobHandler)
 }
@@ -232,7 +228,6 @@ func (m *Module) ensureSchedulerInitialized() error {
 		return err
 	}
 
-	// Create gocron scheduler
 	s, err := gocron.NewScheduler(opts...)
 	if err != nil {
 		return fmt.Errorf("scheduler: failed to create gocron scheduler: %w", err)
@@ -240,7 +235,6 @@ func (m *Module) ensureSchedulerInitialized() error {
 
 	m.scheduler = s
 
-	// Start the scheduler
 	m.scheduler.Start()
 
 	m.logger.Info().
@@ -455,7 +449,6 @@ func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfig
 		},
 	}
 
-	// Schedule the job with gocron
 	gocronJob, err := m.scheduleWithGocron(entry)
 	if err != nil {
 		return fmt.Errorf("scheduler: failed to schedule job '%s': %w", jobID, err)
@@ -463,7 +456,6 @@ func (m *Module) registerJob(jobID string, job Executor, schedule ScheduleConfig
 
 	entry.gocronJob = gocronJob
 
-	// Store job entry
 	m.jobs[jobID] = entry
 
 	m.logger.Info().
@@ -708,7 +700,6 @@ func (m *Module) executeJob(entry *jobEntry, ctx JobContext) {
 //
 // Attributes: job.id, job.status (success/failure/panic), job.schedule_type (fixed_rate/daily/weekly/hourly/monthly)
 func (m *Module) recordMetrics(jobID, status, scheduleType string, duration time.Duration) {
-	// Record job execution counter
 	if m.executionCounter != nil {
 		m.executionCounter.Add(context.Background(), 1,
 			metric.WithAttributes(
@@ -719,7 +710,6 @@ func (m *Module) recordMetrics(jobID, status, scheduleType string, duration time
 		)
 	}
 
-	// Record job execution duration histogram
 	if m.durationHistogram != nil {
 		m.durationHistogram.Record(context.Background(), duration.Seconds(),
 			metric.WithAttributes(
@@ -730,7 +720,6 @@ func (m *Module) recordMetrics(jobID, status, scheduleType string, duration time
 		)
 	}
 
-	// Record panic counter if status is panic
 	if status == "panic" && m.panicCounter != nil {
 		m.panicCounter.Add(context.Background(), 1,
 			metric.WithAttributes(

@@ -11,7 +11,7 @@ const (
 )
 
 // JobMetadata contains information about a registered job for system API responses.
-// Thread-safe access is managed by jobEntry mutex.
+// Thread-safe access is managed by its own mutex (mu, below).
 //
 // Exposed via GET /_sys/job endpoint per FR-009, FR-010.
 type JobMetadata struct {
@@ -84,7 +84,6 @@ func (m *JobMetadata) incrementSkipped() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.SkippedCount++
-	// Note: TotalExecutions is NOT incremented for skipped triggers
 }
 
 // snapshot returns a thread-safe copy of the metadata for API responses.

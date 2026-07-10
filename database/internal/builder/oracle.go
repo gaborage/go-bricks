@@ -29,12 +29,10 @@ func oracleNeedsQuoting(identifier string) bool {
 	return false
 }
 
-// isLetter checks if a character is a letter
 func isLetter(c byte) bool {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
 
-// isValidIdentifierChar checks if a character is valid in an identifier
 func isValidIdentifierChar(c byte) bool {
 	return isLetter(c) || (c >= '0' && c <= '9') || c == '_' || c == '$' || c == '#'
 }
@@ -355,8 +353,9 @@ func buildOraclePaginationClause(limit, offset int) string {
 	return strings.Join(parts, " ")
 }
 
-// BuildUpsert creates an UPSERT/MERGE query using Oracle's MERGE statement.
-// Oracle uses MERGE INTO ... USING ... ON ... WHEN MATCHED ... WHEN NOT MATCHED syntax.
+// BuildUpsert creates a vendor-specific UPSERT query: PostgreSQL emits
+// INSERT ... ON CONFLICT (columns) DO UPDATE/DO NOTHING; Oracle emits
+// MERGE INTO ... USING ... ON ... WHEN MATCHED/NOT MATCHED.
 func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
 	if qb.vendor != dbtypes.Oracle {
 		return qb.buildNonOracleUpsert(table, conflictColumns, insertColumns, updateColumns)

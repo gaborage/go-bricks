@@ -43,7 +43,6 @@ const (
 func NewWorkingMessagingClient() *mocks.MockMessagingClient {
 	mockClient := mocks.NewMockMessagingClient()
 
-	// Setup successful responses
 	mockClient.ExpectIsReady(true)
 	mockClient.ExpectPublishAny(nil)
 	mockClient.ExpectConsumeAny(nil) // Allow any queue consumption
@@ -106,9 +105,9 @@ func NewWorkingAMQPClient() *mocks.MockAMQPClient {
 	mockClient.SetReady(true)
 
 	// Setup successful responses for infrastructure operations
-	mockClient.ExpectDeclareExchangeAny(nil) // Allow any exchange
-	mockClient.ExpectDeclareQueueAny(nil)    // Allow any queue
-	mockClient.ExpectBindQueueAny(nil)       // Allow any binding
+	mockClient.ExpectDeclareExchangeAny(nil)
+	mockClient.ExpectDeclareQueueAny(nil)
+	mockClient.ExpectBindQueueAny(nil)
 
 	// Setup successful messaging operations
 	mockClient.ExpectIsReady(true)
@@ -137,7 +136,6 @@ func NewFailingAMQPClient() *mocks.MockAMQPClient {
 func NewWorkingRegistry() *mocks.MockRegistry {
 	mockRegistry := mocks.NewMockRegistry()
 
-	// Setup successful infrastructure operations
 	mockRegistry.ExpectRegistrations()
 
 	return mockRegistry

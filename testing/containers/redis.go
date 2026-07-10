@@ -49,13 +49,11 @@ func StartRedisContainer(ctx context.Context, t *testing.T, cfg *RedisContainerC
 		cfg = DefaultRedisConfig()
 	}
 
-	// Check if Docker is available - skip test if not
 	if !isDockerAvailable(ctx) {
 		t.Skip("Docker is not available - skipping integration test. Install Docker Desktop or ensure Docker daemon is running.")
 		return nil, nil // Never reached due to Skip, but satisfies return
 	}
 
-	// Create Redis container with configuration
 	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
 	// This prevents race conditions where the log appears but Redis isn't ready to accept connections
 	redisContainer, err := redis.Run(ctx,
@@ -71,7 +69,6 @@ func StartRedisContainer(ctx context.Context, t *testing.T, cfg *RedisContainerC
 		return nil, fmt.Errorf("failed to start Redis container: %w", err)
 	}
 
-	// Get host and port
 	host, err := redisContainer.Host(ctx)
 	if err != nil {
 		_ = redisContainer.Terminate(ctx)

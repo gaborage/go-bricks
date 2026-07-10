@@ -16,11 +16,15 @@ GoBricks provides a built-in **Transactional Outbox** for reliable event publish
 
 **Module Setup:**
 ```go
-fw.RegisterModules(
-    scheduler.NewModule(),  // Required: relay runs as a scheduled job
-    outbox.NewModule(),     // Outbox module
+for _, m := range []app.Module{
+    scheduler.NewModule(), // Required: relay runs as a scheduled job
+    outbox.NewModule(),    // Outbox module
     &myapp.OrderModule{},
-)
+} {
+    if err := fw.RegisterModule(m); err != nil {
+        log.Fatal(err)
+    }
+}
 
 // In your module:
 func (m *Module) Init(deps *app.ModuleDeps) error {

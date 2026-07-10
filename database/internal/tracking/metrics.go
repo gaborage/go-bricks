@@ -84,7 +84,7 @@ func logMetricError(metricName string, err error) {
 func noOpCleanup() func() {
 	// Return empty function - nothing to clean up if registration failed
 	return func() {
-		// No-op
+		// No-op: nothing was registered, so there is nothing to release.
 	}
 }
 
@@ -171,12 +171,10 @@ func initDBMeter() {
 	meterInitMu.Lock()
 	defer meterInitMu.Unlock()
 
-	// Prevent re-initialization if already set
 	if dbMeter != nil {
 		return
 	}
 
-	// Get meter from global meter provider
 	dbMeter = otel.Meter(dbMeterName)
 
 	// Initialize histogram for operation duration per OTel spec (in seconds, not milliseconds)
@@ -220,7 +218,6 @@ func getDBMeter() metric.Meter {
 // Note: The rowsAffected and error parameters are currently unused and retained for future
 // instrumentation enhancements.
 func recordDBMetrics(ctx context.Context, tc *Context, query string, duration time.Duration, _ int64, _ error) {
-	// Ensure meter is initialized
 	meter := getDBMeter()
 	if meter == nil {
 		return

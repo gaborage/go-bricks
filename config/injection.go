@@ -42,7 +42,7 @@ func (c *Config) InjectInto(target any) error {
 		}
 	}
 
-	rv = rv.Elem() // Dereference pointer to get struct value
+	rv = rv.Elem()
 	rt := rv.Type()
 
 	for i := 0; i < rv.NumField(); i++ {
@@ -63,7 +63,6 @@ func (c *Config) InjectInto(target any) error {
 		required := fieldType.Tag.Get("required") == tagValueTrue
 		defaultValue, hasDefault := fieldType.Tag.Lookup("default")
 
-		// Set field value based on config
 		if err := c.setFieldValue(field, configKey, required, defaultValue, hasDefault); err != nil {
 			// Enhance error with field name if not already present
 			var cerr *ConfigError

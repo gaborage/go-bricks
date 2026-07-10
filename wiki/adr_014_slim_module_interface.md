@@ -67,12 +67,16 @@ fw.RegisterModules(
 )
 
 // ✅ NEW
-fw.RegisterModules(
+for _, m := range []app.Module{
     scheduler.NewModule(),
     outbox.NewModule(),
     keystore.NewModule(),
     &myapp.OrderModule{},
-)
+} {
+    if err := fw.RegisterModule(m); err != nil {
+        log.Fatal(err)
+    }
+}
 ```
 
 Application modules that implement all 5 methods continue to work without changes — they naturally satisfy both the core `Module` interface and the optional `RouteRegisterer`/`MessagingDeclarer` interfaces.

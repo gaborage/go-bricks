@@ -44,10 +44,8 @@ func traceContextEcho() echo.MiddlewareFunc {
 			// If so, we should return early to avoid accessing potentially invalidated Echo state.
 			select {
 			case <-req.Context().Done():
-				// Context already canceled, return the error without processing
 				return req.Context().Err()
 			default:
-				// Context still active, proceed normally
 			}
 
 			c.SetRequest(req.WithContext(enrichTraceContext(c)))

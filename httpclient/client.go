@@ -206,10 +206,13 @@ type JOSEConfig struct {
 // and decrypts+verifies application/jose response bodies. Pass cfg.Inbound = nil when
 // the counterparty does not return JOSE-wrapped responses.
 //
-// Composition: WithJOSE wraps whatever transport is currently configured (set by an
-// earlier WithTransport or WithHTTPClient call) — so existing transport customizations
-// remain in the chain below the JOSE layer. Calling WithTransport AFTER WithJOSE
-// replaces the JOSE transport entirely.
+// Composition: WithJOSE wraps whatever transport was set via an earlier WithTransport
+// call — so that transport customization remains in the chain below the JOSE layer.
+// A Transport configured directly on the *http.Client passed to WithHTTPClient is NOT
+// threaded through: Build() overwrites httpClient.Transport whenever WithTransport or
+// WithJOSE set b.transport, so use WithTransport if a custom RoundTripper needs to
+// survive beneath WithJOSE. Calling WithTransport AFTER WithJOSE replaces the JOSE
+// transport entirely.
 //
 // Per-attempt freshness: because httpclient retries by re-running the request build
 // loop, each retry produces a freshly-sealed payload — useful for protocols that

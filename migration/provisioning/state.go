@@ -132,10 +132,13 @@ var ErrIllegalTransition = errors.New("provisioning: illegal state transition")
 // a secret manager and record only opaque references (e.g. the secret
 // name) when continuity across crashes is needed.
 type Job struct {
-	ID        string            // Idempotency key — re-running with the same ID converges on the same end state.
-	TenantID  string            // Logical tenant identifier the job provisions.
-	State     State             // Current state. Updated by every Transition.
-	Attempts  int               // Number of forward-step attempts on the current state, used for retry bookkeeping.
+	ID       string // Idempotency key — re-running with the same ID converges on the same end state.
+	TenantID string // Logical tenant identifier the job provisions.
+	State    State  // Current state. Updated by every Transition.
+	// Attempts is the monotonically increasing count of successful forward transitions
+	// persisted for this job's whole lifetime (StateCleanup/StateFailed excluded);
+	// not scoped to or reset by the current state.
+	Attempts  int
 	LastError string            // Most recent step error; persisted for diagnostics and drives the failed-outcome audit classification (the raw text is NOT placed in audit events). Empty on success paths.
 	Metadata  map[string]string // Step-specific data that must survive a crash. Consumer-owned shape; see SECURITY note above.
 	CreatedAt time.Time         // First persistence timestamp; set by Upsert.
@@ -240,8 +243,8 @@ func NewExecutor(store StateStore, steps Steps, log logger.Logger) (*Executor, e
 // Run advances jobID from its persisted state to StateReady (or StateFailed
 // if any forward step errors). Safe to call repeatedly with the same jobID:
 // if the job is already at a terminal state, Run is a no-op and returns nil
-// for StateReady or the last persisted LastError wrapped in a sentinel for
-// StateFailed.
+// for StateReady or a formatted error embedding the last persisted LastError
+// for StateFailed (there is no sentinel to match with errors.Is).
 //
 // The Executor calls each forward step at most once per Run for a given
 // state; ctx is propagated to each step so callers can use context

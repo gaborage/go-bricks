@@ -19,7 +19,7 @@ func newDebugSpanProcessor(wrapped sdktrace.SpanProcessor) sdktrace.SpanProcesso
 }
 
 // OnStart is called when a span starts.
-// This is the proof that spans ARE being created by the middleware.
+// Logs every span start observed by this processor (any span in the app, not just HTTP middleware); useful to confirm spans are actually being created.
 func (d *debugSpanProcessor) OnStart(parent context.Context, s sdktrace.ReadWriteSpan) {
 	debugLogger.Printf("[SPAN] STARTED: %s (trace=%s, span=%s)",
 		s.Name(), s.SpanContext().TraceID(), s.SpanContext().SpanID())

@@ -28,10 +28,12 @@
 //
 // Register the module before modules that need keys:
 //
-//	fw.RegisterModules(
-//	    keystore.NewModule(),
-//	    &myapp.JWEModule{},
-//	)
+//	if err := fw.RegisterModule(keystore.NewModule()); err != nil {
+//	    log.Fatal(err)
+//	}
+//	if err := fw.RegisterModule(&myapp.JWEModule{}); err != nil {
+//	    log.Fatal(err)
+//	}
 //
 // Access keys via ModuleDeps (nil-check for fail-fast if keys are required):
 //
@@ -232,7 +234,6 @@ func parsePublicKey(der []byte, keyName string) (*rsa.PublicKey, error) {
 
 // parsePrivateKey parses DER-encoded private key with PKCS8 first, PKCS1 fallback.
 func parsePrivateKey(der []byte, keyName string) (*rsa.PrivateKey, error) {
-	// Try PKCS8 first (modern format)
 	key, err := x509.ParsePKCS8PrivateKey(der)
 	if err == nil {
 		rsaKey, ok := key.(*rsa.PrivateKey)
@@ -242,7 +243,6 @@ func parsePrivateKey(der []byte, keyName string) (*rsa.PrivateKey, error) {
 		return rsaKey, nil
 	}
 
-	// Fallback to PKCS1 (legacy format)
 	rsaKey, err2 := x509.ParsePKCS1PrivateKey(der)
 	if err2 != nil {
 		return nil, fmt.Errorf("keystore: key %q private: PKCS8 failed (%w), PKCS1 fallback also failed: %w", keyName, err, err2)

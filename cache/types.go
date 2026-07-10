@@ -96,8 +96,10 @@ type Cache interface {
 //
 // Example usage:
 //
-//	manager := cache.NewManager(config, logger)
-//	manager.StartCleanup(1 * time.Minute)
+//	manager, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+//	if err != nil {
+//	    return err
+//	}
 //	defer manager.Close()
 //
 //	// Get cache for tenant (auto-creates if needed); release the lease when done

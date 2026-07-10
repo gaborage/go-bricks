@@ -75,6 +75,8 @@ func main() {
 
 ## Production Configuration
 
+> **Note:** The `${VAR}` placeholders in the header values below (e.g. `${OTEL_API_KEY}`) are illustrative only — go-bricks does not perform shell-style variable expansion inside YAML string values. Resolve them with external templating (envsubst, Helm, Kustomize, etc.) before the file reaches go-bricks, or set the header directly via the equivalent environment variable override (e.g. `OBSERVABILITY_TRACE_HEADERS_AUTHORIZATION`) and omit the header from the YAML file.
+
 ### OTLP HTTP Exporter
 
 OTLP/HTTP is recommended for production environments with HTTP-based observability backends like Grafana Cloud, Honeycomb, or self-hosted collectors.
@@ -89,7 +91,7 @@ observability:
   environment: "production"
   trace:
     enabled: true
-    endpoint: "otel-collector.monitoring.svc.cluster.local:4318"
+    endpoint: "https://otel-collector.monitoring.svc.cluster.local:4318"
     protocol: "http"
     insecure: false  # Use TLS in production
     headers:
@@ -183,7 +185,7 @@ observability:
 ```yaml
 observability:
   trace:
-    endpoint: "jaeger-collector:4318"
+    endpoint: "http://jaeger-collector:4318"
     protocol: "http"
     insecure: true  # Or false with TLS
 ```
@@ -247,7 +249,7 @@ cfg := &observability.Config{
     Environment: "production",
     Trace: observability.TraceConfig{
         Enabled:  observability.BoolPtr(true),
-        Endpoint: "localhost:4318",
+        Endpoint: "http://localhost:4318",
         Protocol: "http",
         Insecure: true,
         Headers: map[string]string{

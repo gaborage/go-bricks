@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-05-12
-**Related issues:** [#402](https://github.com/gaborage/go-bricks/issues/402) (this decision — investigation/exploration), follow-up `kind/feature` implementation issue to be opened on acceptance.
+**Related issues:** [#402](https://github.com/gaborage/go-bricks/issues/402) (this decision — investigation/exploration), [#404](https://github.com/gaborage/go-bricks/issues/404) (implementation, merged via [PR #406](https://github.com/gaborage/go-bricks/pull/406)).
 
 ## Context
 

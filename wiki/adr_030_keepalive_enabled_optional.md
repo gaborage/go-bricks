@@ -75,7 +75,7 @@ Rejected alternatives:
   as a `bool` must switch to `cfg.Pool.KeepAlive.IsEnabled()`. YAML/env config is
   unchanged (`database.pool.keepalive.enabled: true|false` binds to the pointer).
   Documented in
-  [migrations.md](migrations.md#poolkeepaliveconfigenabled-is-now-bool-adr-030).
+  [migrations.md](migrations.md#c433-poolkeepaliveconfigenabled-changed-from-bool-to-bool--compile-break--when-match).
 - **Behavioral fix:** `enabled: false` with `interval` unset now disables
   keep-alive (previously re-enabled it). An omitted `enabled` key still defaults to
   `true`, so default deployments are unaffected.

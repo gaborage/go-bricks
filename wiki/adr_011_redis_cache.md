@@ -114,9 +114,12 @@ type Cache interface {
 **Rejection Reason:** Go-only (breaks cross-language requirement for future polyglot systems)
 
 ### 4. **Multi-Tenant Isolation via Manager**
+
+> **Note (2026-06-17):** `Get` now returns a `ReleaseFunc` alongside the handle, per the lease/refcount redesign in [ADR-032](adr_032_lease_refcount_tenant_handles.md). The signature below reflects the current interface.
+
 ```go
 type Manager interface {
-    Get(ctx context.Context, tenantID string) (Cache, error)
+    Get(ctx context.Context, tenantID string) (Cache, ReleaseFunc, error)
     Stats() map[string]any
     Close() error
 }
@@ -308,6 +311,7 @@ defer c.Delete(ctx, lockKey)
 - **ADR-004**: Lazy Registry Creation (proves singleflight pattern for manager)
 - **ADR-006**: OTLP Log Export (demonstrates observability integration pattern)
 - **ADR-007**: Struct-Based Columns (shows reflection + caching performance pattern)
+- **ADR-032**: Lease/Refcount Per-Tenant Resource Handles (updates `Manager.Get` to return a `ReleaseFunc`)
 
 ---
 

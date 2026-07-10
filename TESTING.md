@@ -200,10 +200,10 @@ func TestModule_RegisterInfrastructure(t *testing.T) {
     module.DeclareMessaging(mockDeclarations)
 
     // Verify infrastructure was registered
-    exchanges := mockRegistry.GetExchanges()
+    exchanges := mockRegistry.Exchanges()
     assert.Contains(t, exchanges, "user.events")
 
-    queues := mockRegistry.GetQueues()
+    queues := mockRegistry.Queues()
     assert.Contains(t, queues, "user.notifications")
 
     mockRegistry.AssertExpectations(t)
@@ -240,7 +240,7 @@ func TestEventService_PublishFailure(t *testing.T) {
     err := service.PublishUserCreated(context.Background(), 1)
 
     assert.Error(t, err)
-    assert.Contains(t, err.Error(), "connection closed")
+    assert.Contains(t, err.Error(), "not open")
 }
 
 func TestEventService_RetryLogic(t *testing.T) {
@@ -295,7 +295,7 @@ func TestUserModule_Integration(t *testing.T) {
     module.DeclareMessaging(mockDeclarations)
 
     // Verify registrations
-    exchanges := mockRegistry.GetExchanges()
+    exchanges := mockRegistry.Exchanges()
     assert.NotEmpty(t, exchanges)
 
     // Test cleanup

@@ -57,7 +57,6 @@ func (r *MetadataRegistry) RegisterModule(name string, module Module, pkg string
 		Package: pkg,
 	}
 
-	// Get descriptor if module implements Describer
 	if describer, ok := IsDescriber(module); ok {
 		info.Descriptor = describer.DescribeModule()
 	} else {
@@ -105,7 +104,6 @@ func (r *MetadataRegistry) Count() int {
 
 // getModulePackage extracts the package path from a module instance
 func getModulePackage(module Module) string {
-	// Use reflection to get the package path
 	moduleType := reflect.TypeOf(module)
 	if moduleType.Kind() == reflect.Pointer {
 		moduleType = moduleType.Elem()

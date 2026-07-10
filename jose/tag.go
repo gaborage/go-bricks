@@ -41,8 +41,11 @@ var knownTagKeys = map[string]bool{
 
 // ParseTag parses a `jose:` struct tag value into a Policy with the given direction.
 // Direction is supplied by the caller (the scanner knows whether the type is request or
-// response from its position in HandlerFunc[T, R]). Returns an *Error wrapping
-// ErrTagInvalid on any parse failure; the caller should treat this as a registration
+// response from its position in HandlerFunc[T, R]). Returns an *Error on any parse or
+// validation failure — ErrTagInvalid for malformed tag syntax (unknown/duplicate keys,
+// empty values, bad kid characters), ErrAlgorithmDisallowed for algorithms outside the
+// allowlist, or ErrPolicyMismatch for direction/kid inconsistencies caught by the
+// trailing Validate() call; the caller should treat any of these as a registration
 // failure (panic at startup).
 func ParseTag(tagValue string, dir Direction) (*Policy, error) {
 	policy := &Policy{

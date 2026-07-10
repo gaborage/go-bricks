@@ -223,7 +223,9 @@ func validateMessaging(cfg *MessagingConfig, multitenant bool) error {
 
 // validateApp validates the application configuration in cfg.
 // It requires Name and Version to be non-empty, Env to match envFormat (see
-// envFormat docs for the policy), and Rate.Limit to be non-negative.
+// envFormat docs for the policy), and Rate.Limit/Rate.Burst to be non-negative.
+// It also applies startup timeout defaults via applyStartupDefaults, mutating
+// cfg.Startup.
 // Returns an error describing the first failed validation, or nil if valid.
 func validateApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
@@ -334,11 +336,11 @@ func validateDatabase(cfg *DatabaseConfig) error {
 }
 
 // validateDatabaseWithConnectionString validates database settings when a connection
-// string is provided and applies defaults for query-related fields when zero.
+// string is provided and applies the full database pool/session defaults via
+// applyDatabasePoolDefaults (timezone, connection counts, idle time, lifetime,
+// keep-alive, and query logging/slow-threshold) when zero.
 // It checks (and returns an error for) an explicit database Type that is not allowed,
 // an invalid optional Port, and negative values for Pool/Query fields.
-// Pool.Max.Connections defaults to 25 when 0; Query.Log.MaxLength and Query.Slow.Threshold
-// default to the respective constants when 0. Negative values are rejected.
 // The cfg argument is mutated for those default assignments.
 func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 	if cfg.Type != "" {
@@ -685,6 +687,7 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 //     (mode-dependent — a shorter multi-tenant default bounds per-tenant publisher
 //     churn); if negative, returns an error.
 //   - Publisher.CleanupInterval: if 0, sets to 2m; if negative, returns an error.
+//   - Reconnect.MaxPublishAttempts: if 0, sets to 5; if negative, returns an error.
 //
 // Returns an error when any value is invalid; otherwise returns nil.
 func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {

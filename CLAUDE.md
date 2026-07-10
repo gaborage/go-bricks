@@ -30,7 +30,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 **Most Common Commands:**
 ```bash
-make check              # Pre-commit: fmt + lint + test
+make check              # Pre-commit: fmt + lint + test + alloc guards + vuln scan
 make test               # Unit tests with race detection
 make test-integration   # Integration tests (Docker required)
 go test -run TestName   # Run specific test
@@ -111,7 +111,7 @@ go test ./...                   # Run all tests
 go test -run TestName ./package # Run specific test
 
 # Pre-commit checks
-make check                      # Fast: fmt + lint + test with race detection
+make check                      # Fast: fmt + lint + test + alloc guards + vuln scan (race detection)
 
 # Testing
 make test                       # Unit tests with race detection
@@ -369,11 +369,15 @@ For helper API, error handling deep dive, panic recovery, concurrency tuning, an
 Transactional outbox for reliable event publishing. Solves the dual-write problem: events written to an outbox table in the **same database transaction** as business data, then delivered to the broker by a background relay job.
 
 ```go
-fw.RegisterModules(
-    scheduler.NewModule(),  // Required: relay runs as a scheduled job
-    outbox.NewModule(),     // Outbox module — register BEFORE consumers
+for _, m := range []app.Module{
+    scheduler.NewModule(), // Required: relay runs as a scheduled job
+    outbox.NewModule(),    // Outbox module — register BEFORE consumers
     &myapp.OrderModule{},
-)
+} {
+    if err := fw.RegisterModule(m); err != nil {
+        return err
+    }
+}
 
 func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) error {
     tx, err := db.Begin(ctx)
@@ -493,7 +497,7 @@ For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache co
 ### Pre-commit Workflow
 ```bash
 # Daily development (fast feedback)
-make check        # fmt, lint, test with race detection
+make check        # fmt, lint, test, alloc guards, vuln scan (race detection)
 ```
 
 ### Branch Model

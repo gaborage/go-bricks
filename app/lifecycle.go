@@ -345,7 +345,6 @@ func (a *App) shutdownResource(closer namedCloser, errs *[]error) {
 		return
 	}
 
-	// Capitalize the first letter of the name for logging
 	r := []rune(name)
 	capitalizedName := strings.ToUpper(string(r[0])) + string(r[1:])
 	a.logger.Info().Msgf("%s closed successfully", capitalizedName)

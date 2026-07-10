@@ -40,7 +40,6 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 		return nil, err
 	}
 
-	// Wrap the connection with performance tracking
 	trackedConn := tracking.NewConnection(conn, log, cfg)
 
 	// Set server metadata for OTel attributes based on database type
@@ -52,7 +51,6 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 		namespace = tracking.BuildOracleNamespace(cfg.Oracle.Service.Name, cfg.Oracle.Service.SID, cfg.Database)
 	}
 
-	// Set server info on the tracking wrapper
 	if tc, ok := trackedConn.(*tracking.Connection); ok {
 		tc.SetServerInfo(cfg.Host, cfg.Port, namespace)
 	}

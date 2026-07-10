@@ -75,10 +75,10 @@ var (
 	cacheMissCounter       metric.Int64Counter
 )
 
-// logMetricError logs a metric initialization error to stderr.
+// logMetricError logs a metric setup or teardown error to stderr.
 func logMetricError(metricName string, err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "WARNING: Failed to initialize cache metric %s: %v\n", metricName, err)
+		fmt.Fprintf(os.Stderr, "WARNING: Failed to configure cache metric %s: %v\n", metricName, err)
 	}
 }
 
@@ -179,7 +179,7 @@ func classifyError(err error) string {
 		return ""
 	}
 
-	// Extract error type name
+	// errStr holds the error message, matched by substring below
 	errStr := err.Error()
 
 	// Common cache error patterns

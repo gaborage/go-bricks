@@ -73,7 +73,7 @@ type App struct {
 	cacheManager     *cache.CacheManager
 	resourceProvider ResourceProvider
 
-	// Messaging declarations for manager usage
+	// Messaging declarations/initializer, plus the connection pre-warmer (database + messaging)
 	messagingDeclarations *messaging.Declarations
 	messagingInitializer  *MessagingInitializer
 	connectionPreWarmer   *ConnectionPreWarmer

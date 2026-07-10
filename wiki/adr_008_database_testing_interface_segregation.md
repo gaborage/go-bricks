@@ -140,7 +140,7 @@ AssertTransactionCommitted(t, db)
 - `database/testing/fake_db_test.go` - Comprehensive tests
 
 ### Files Modified
-- `database/types/interfaces.go:304` - Interface now embeds Querier + Transactor
+- `database/types/interfaces.go` - Interface now embeds Querier + Transactor
 
 ### Quality Metrics
 - **Linter**: 0 issues (golangci-lint passes)

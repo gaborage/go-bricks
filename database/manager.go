@@ -230,13 +230,11 @@ func (m *DbManager) releaseEntry(entry *dbEntry) {
 // the window before the caller claims it via claimOrAcquire, so a concurrent evict/idle
 // cleanup can only detach it. Returns an existing entry unchanged on a double-create race.
 func (m *DbManager) createConnection(ctx context.Context, key string) (*dbEntry, error) {
-	// Get configuration for this key
 	dbConfig, err := m.resourceSource.DBConfig(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get database config for key %s: %w", key, err)
 	}
 
-	// Create the connection using injected connector
 	conn, err := m.connector(dbConfig, m.logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create database connection for key %s: %w", key, err)

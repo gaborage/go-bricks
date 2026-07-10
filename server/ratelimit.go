@@ -16,7 +16,7 @@ const (
 )
 
 // RateLimit returns a rate limiting middleware with the specified requests per second.
-// It limits the number of requests from each IP address to prevent abuse.
+// It limits the number of requests per tenant (or per client IP when no tenant is resolved) to prevent abuse.
 // If requestsPerSecond is 0 or negative, rate limiting is disabled.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the

@@ -126,7 +126,8 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 // Examples:
 //
 //	jf.Eq("status", "active")                          // status = ? (with placeholder)
-//	jf.Eq("amount", qb.Expr("TO_NUMBER(?)"), 100)      // amount = TO_NUMBER(?) (expression)
+//	expr, _ := qb.Expr("TO_NUMBER(amount_str)")
+//	jf.Eq("amount", expr)                              // amount = TO_NUMBER(amount_str) (expression, no bound placeholder)
 func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
 	quotedColumn := jff.qb.quoteColumnForQuery(column)
 
@@ -291,7 +292,9 @@ func (jff *JoinFilterFactory) NotNull(column string) dbtypes.JoinFilter {
 // Examples:
 //
 //	jf.Between("price", 10.0, 20.0)                  // price BETWEEN ? AND ?
-//	jf.Between("age", qb.Expr("18"), qb.Expr("65"))  // age BETWEEN 18 AND 65 (expressions)
+//	lo, _ := qb.Expr("18")
+//	hi, _ := qb.Expr("65")
+//	jf.Between("age", lo, hi)                        // age BETWEEN 18 AND 65 (expressions)
 func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any) dbtypes.JoinFilter {
 	quotedColumn := jff.qb.quoteColumnForQuery(column)
 

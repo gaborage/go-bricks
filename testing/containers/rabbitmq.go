@@ -58,13 +58,11 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 		cfg = DefaultRabbitMQConfig()
 	}
 
-	// Check if Docker is available - skip test if not
 	if !isDockerAvailable(ctx) {
 		t.Skip("Docker is not available - skipping integration test. Install Docker Desktop or ensure Docker daemon is running.")
 		return nil, nil // Never reached due to Skip, but satisfies return
 	}
 
-	// Create RabbitMQ container with configuration
 	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
 	// This prevents race conditions where the log appears but RabbitMQ isn't ready to accept connections
 	rmqContainer, err := rabbitmq.Run(ctx,
@@ -82,7 +80,6 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 		return nil, fmt.Errorf("failed to start RabbitMQ container: %w", err)
 	}
 
-	// Get AMQP URL
 	amqpURL, err := rmqContainer.AmqpURL(ctx)
 	if err != nil {
 		_ = rmqContainer.Terminate(ctx)

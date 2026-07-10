@@ -103,8 +103,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 
 **Observability Integration:**
 When `observability.enabled: true`, cache operations automatically emit:
-- **Traces**: Spans for Get/Set/Delete with `cache.operation`, `cache.key`, `cache.hit` attributes
-- **Metrics**: `cache.operation.duration`, `cache.errors.total`, `cache.manager.active_caches`
+- **Metrics**: `db.client.operation.duration` (histogram, tagged with `error.type` on failure), `cache.hit`/`cache.miss` (counters), `cache.manager.active_caches`, `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` — no distributed-tracing spans are emitted today
 - **Health**: Automatic integration with `/health` endpoint (Redis PING command)
 
 ## Cache Manager Defaults

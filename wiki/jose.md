@@ -49,10 +49,14 @@ keystore:
 // Register the keystore module BEFORE any module declaring jose-tagged routes.
 // app/module_registry.go automatically wires deps.KeyStore + deps.Logger +
 // deps.Tracer + deps.MeterProvider into the JOSE middleware.
-fw.RegisterModules(
+for _, m := range []app.Module{
     keystore.NewModule(),
     &payments.TokensModule{}, // declares jose-tagged routes
-)
+} {
+    if err := fw.RegisterModule(m); err != nil {
+        log.Fatal(err)
+    }
+}
 ```
 
 **Failure mode → IAPIError mapping (every code surfaces on the wire):**
@@ -62,8 +66,8 @@ fw.RegisterModules(
 | Body required / empty | 400 | `JOSE_BODY_REQUIRED` |
 | Wrong Content-Type (not `application/jose`) | 415 | `JOSE_PLAINTEXT_REJECTED` |
 | Compact JWE parse failure | 400 | `JOSE_MALFORMED` |
-| `enc`/`alg` not allowed | 400 | `JOSE_ALGORITHM_DISALLOWED` |
-| `alg=none` (downgrade attempt) | 400 | `JOSE_ALGORITHM_DISALLOWED` (rejected by allowlist parse) |
+| `enc`/`alg` not allowed on the wire | 400 | `JOSE_MALFORMED` |
+| `alg=none` (downgrade attempt) | 400 | `JOSE_MALFORMED` (rejected by allowlist parse) |
 | Header missing `kid` | 401 | `JOSE_KID_MISSING` |
 | Unknown `kid` in header | 401 | `JOSE_KID_UNKNOWN` |
 | Decryption failed | 401 | `JOSE_DECRYPT_FAILED` |
@@ -71,6 +75,8 @@ fw.RegisterModules(
 | JWS signature invalid | 401 | `JOSE_SIGNATURE_INVALID` |
 | Inner JWS `cty` disagrees with policy | 400 | `JOSE_CTY_REJECTED` |
 | Outbound seal failed (server-side) | 500 | `JOSE_OUTBOUND_FAILED` |
+
+`JOSE_ALGORITHM_DISALLOWED` is raised only at registration time (an invalid `jose:` struct tag or `Policy.Validate()` failure) — it is never returned to an HTTP caller at request time. A disallowed `alg`/`enc` on the wire fails go-jose's compact parse instead, which surfaces as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer) above.
 
 **Security invariant** (asserted by tests): a response is JOSE-encrypted iff inbound was successfully verified AND the route has an outbound policy. Tampered-byte negative tests must produce *plaintext* error responses; observing `Content-Type: application/jose` on the failure path is a security regression.
 
@@ -92,4 +98,6 @@ Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed 
 - `SealForTest(t, payload, policy, resolver)` — produce compact JWE for arrange step
 - `OpenForTest(t, compact, policy, resolver)` — decrypt + verify in assert step
 
-**For complete examples**, see [llms.txt](../llms.txt) JOSE section. Outbound httpclient JOSE wrapping (calls TO Visa) is planned for a follow-up release; the current scope covers server in/out only.
+**For complete examples**, see [llms.txt](../llms.txt) JOSE section.
+
+**Outbound httpclient JOSE wrapping** (calls TO Visa): `httpclient.JOSETransport` is an `http.RoundTripper` (`httpclient/jose_transport.go`) that signs+encrypts outbound request bodies via `jose.Seal` and decrypts+verifies inbound response bodies via `jose.Open`. It sits below the httpclient retry loop so each retry attempt produces a freshly-sealed request (important for protocols requiring unique `iat`/`jti` claims per attempt). Configure via `Inner` (delegate transport), `Outbound`/`Inbound` (`*jose.Policy`), `Resolver` (`jose.KeyResolver`), and `MaxResponseBytes` (caps the inbound response read; defaults to `DefaultMaxJOSEBodyBytes`, 10 MiB). Only `application/jose` responses are unwrapped — other Content-Types pass through untouched, mirroring the server's hybrid error envelope. See `httpclient/jose_transport_test.go` for usage examples.

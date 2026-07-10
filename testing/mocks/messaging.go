@@ -117,7 +117,6 @@ func (m *MockMessagingClient) SimulateMessageWithHeaders(destination string, bod
 
 	ch, exists := m.messageChannels[destination]
 	if exists && !m.closed {
-		// Send the message in a non-blocking way
 		select {
 		case ch <- delivery:
 		default:

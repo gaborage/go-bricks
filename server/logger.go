@@ -80,7 +80,6 @@ func newRequestLogger(log logger.Logger, cfg LoggerConfig) *requestLogger {
 // This method replaces the nested closure pattern with a struct-based approach.
 func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c *echo.Context) error {
-		// Initialize request logging context
 		reqCtx := newRequestLogContext()
 		c.Set(RequestLogContextKey, reqCtx)
 
@@ -93,16 +92,13 @@ func (rl *requestLogger) Handle(next echo.HandlerFunc) echo.HandlerFunc {
 			return next(c)
 		}
 
-		// Execute request
 		err := next(c)
 
 		// Calculate request latency (thread-safe read)
 		latency := time.Since(reqCtx.getStartTime())
 
-		// Extract status code from error or response
 		status := rl.extractStatus(c, err)
 
-		// Update peak severity based on final HTTP status
 		updateSeverityFromStatus(reqCtx, status, err)
 
 		// Emit action log summary if no explicit WARN+ logs occurred
@@ -221,12 +217,10 @@ func logActionSummary(
 // The caller creates the event (deciding its level) so enablement can be checked
 // before the expensive extraction; buildLogEvent only adds fields.
 func buildLogEvent(event logger.LogEvent, params *logEventParams) logger.LogEvent {
-	// Add error if present
 	if params.err != nil {
 		event = event.Err(params.err)
 	}
 
-	// Add tenant context if present
 	if params.tenantID != "" {
 		event = event.Str("tenant", params.tenantID)
 	}
