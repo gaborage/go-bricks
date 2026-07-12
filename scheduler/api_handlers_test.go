@@ -160,43 +160,48 @@ func TestListJobsHandlerExposesTimezone(t *testing.T) {
 	assert.Equal(t, "America/New_York", result.Data.Meta["timezone"])
 }
 
-// TestExecuteManualJobSkippedAfterShutdown is the distinguishing regression test
-// for the Add-after-Wait race: the pre-fix executeManualJob had no shutdown
-// re-check at all (tryLock ran first, wg.Add ran after), so a manual trigger
-// racing Shutdown would run Execute even after wg.Wait() had already returned.
-// Post-fix, wg.Add(1) runs first and the shutdown re-check bails before
-// tryLock/Execute, so the job never runs.
-func TestExecuteManualJobSkippedAfterShutdown(t *testing.T) {
-	module, _ := newTestScheduler(t, 5*time.Second)
+// TestRegisterManualTrigger is the deterministic invariant that closes the
+// Add-after-Wait race: registration is refused (no wg.Add) once shutdown is
+// signaled, and accepted (one wg.Add) while live.
+func TestRegisterManualTrigger(t *testing.T) {
+	t.Run("rejects_after_shutdown", func(t *testing.T) {
+		module, _ := newTestScheduler(t, 5*time.Second)
+		module.shutdownCancel()
+		assert.False(t, module.registerManualTrigger(), "must reject after shutdown")
+		assertWaitGroupDrains(t, module, "registerManualTrigger rejected after shutdown")
+	})
+	t.Run("accepts_when_live", func(t *testing.T) {
+		module, _ := newTestScheduler(t, 5*time.Second)
+		require.True(t, module.registerManualTrigger(), "must accept when live")
+		module.executeManualJob(&jobEntry{job: &counterJob{}, metadata: &JobMetadata{JobID: "live"}})
+		assertWaitGroupDrains(t, module, "executeManualJob balanced a live registration")
+	})
+}
 
+// TestExecuteManualJobBailsWhenShutdownAfterRegister covers the case the internal
+// re-check guards: registration succeeds, THEN shutdown fires, so runJobBody bails
+// before running the job — and the Add/Done still balances.
+func TestExecuteManualJobBailsWhenShutdownAfterRegister(t *testing.T) {
+	module, _ := newTestScheduler(t, 5*time.Second)
 	job := &counterJob{}
 	entry := &jobEntry{job: job, metadata: &JobMetadata{JobID: "manual-shutdown-test"}}
 
-	// Initiate shutdown BEFORE invoking the manual path.
-	module.shutdownCancel()
+	require.True(t, module.registerManualTrigger()) // Add(1)
+	module.shutdownCancel()                         // shutdown after registering
+	module.executeManualJob(entry)                  // defers Done; runJobBody bails at re-check
 
-	module.executeManualJob(entry)
-
-	// Execute must never have run.
-	assert.Equal(t, int64(0), job.Count(), "job Execute should not run after shutdown")
-
-	// Add/Done must balance — a hang here means wg.Add(1) was not matched by a
-	// deferred wg.Done() on the shutdown-bail path.
-	assertWaitGroupDrains(t, module, "executeManualJob returned via shutdown-bail path")
+	assert.Equal(t, int64(0), job.Count(), "job must not run when shutdown fires after registration")
+	assertWaitGroupDrains(t, module, "executeManualJob bailed via shutdown re-check")
 }
 
-// TestExecuteManualJobBalancesAddDoneOnTryLockFailPath mirrors
-// TestCreateJobWrapperBalancesAddDoneOnTryLockFailPath (module_test.go) for the
-// manual-trigger path: pre-acquire the entry lock so executeManualJob's tryLock
-// fails, and verify the skip is counted (this skip path DOES increment
-// SkippedCount, unlike the shutdown-bail path) and Add/Done stays balanced.
+// TestExecuteManualJobBalancesAddDoneOnTryLockFailPath: with the slot registered,
+// a tryLock failure still balances and counts the skip.
 func TestExecuteManualJobBalancesAddDoneOnTryLockFailPath(t *testing.T) {
 	module, _ := newTestScheduler(t, 5*time.Second)
-
 	job := &counterJob{}
 	entry := &jobEntry{job: job, metadata: &JobMetadata{JobID: "manual-trylock-test"}}
 
-	// Pre-acquire the lock so executeManualJob's tryLock fails.
+	require.True(t, module.registerManualTrigger()) // Add(1) — pairs with executeManualJob's Done
 	require.True(t, entry.tryLock(), "test setup: first tryLock must succeed")
 	defer entry.unlock()
 
@@ -204,6 +209,5 @@ func TestExecuteManualJobBalancesAddDoneOnTryLockFailPath(t *testing.T) {
 
 	assert.Equal(t, int64(0), job.Count(), "job Execute should not run when tryLock fails")
 	assert.Equal(t, int64(1), entry.metadata.snapshot().SkippedCount, "expected skip counter increment")
-
 	assertWaitGroupDrains(t, module, "executeManualJob returned via tryLock-fail path")
 }
