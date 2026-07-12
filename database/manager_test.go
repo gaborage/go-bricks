@@ -771,3 +771,33 @@ func TestDbManagerDynamicConfigExplicitPoolPreserved(t *testing.T) {
 	assert.Equal(t, int32(40), captured.Pool.Max.Connections, "explicit max connections preserved")
 	assert.Equal(t, int32(40), captured.Pool.Idle.Connections, "idle defaults to explicit max")
 }
+
+// TestDbManagerDynamicConfigInvalidPoolRejected proves an invalid dynamic pool
+// config fails createConnection before the connector is ever invoked.
+func TestDbManagerDynamicConfigInvalidPoolRejected(t *testing.T) {
+	ctx := context.Background()
+	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		"tenant": {
+			Type: "postgresql",
+			Host: "localhost",
+			Pool: config.PoolConfig{
+				Idle: config.PoolIdleConfig{Time: -1},
+			},
+		},
+	}}
+
+	connectorCalled := false
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
+		connectorCalled = true
+		return &stubDB{}, nil
+	}
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, connector)
+
+	_, err := manager.createConnection(ctx, "tenant")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "failed to apply pool defaults for key")
+	var cfgErr *config.ConfigError
+	require.ErrorAs(t, err, &cfgErr, "wraps the underlying config validation error")
+	assert.ErrorContains(t, err, "database.pool.idle.time")
+	assert.False(t, connectorCalled, "connector must not run with an invalid pool config")
+}
