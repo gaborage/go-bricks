@@ -2390,7 +2390,7 @@ func TestAdaptMiddlewareChainsThrough(t *testing.T) {
 func TestAdaptMiddlewareAbortPropagatesError(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	e := echo.New()
-	e.HTTPErrorHandler = func(c *echo.Context, err error) { customErrorHandler(c, err, cfg) }
+	e.HTTPErrorHandler = func(c *echo.Context, err error) { customErrorHandler(c, err, cfg, &testLogger{}) }
 
 	rg := newRouteGroup(e.Group(""), "", cfg)
 
