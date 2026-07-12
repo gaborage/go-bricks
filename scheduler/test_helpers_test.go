@@ -15,6 +15,21 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// assertWaitGroupDrains fails if module m's in-flight WaitGroup does not reach
+// zero within 100ms after the code path under test returned. A hang means a
+// wg.Add(1) was not matched by a deferred wg.Done() on that path — surfaced as a
+// failure, not a hung test.
+func assertWaitGroupDrains(t *testing.T, m *Module, afterContext string) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { m.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("wg.Wait() blocked after %s — Add(1) was not balanced by Done()", afterContext)
+	}
+}
+
 type testSchedulerOption func(*app.ModuleDeps)
 
 func withTracer(tr trace.Tracer) testSchedulerOption {

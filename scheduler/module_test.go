@@ -154,15 +154,7 @@ func TestCreateJobWrapperBalancesAddDoneOnShutdownPath(t *testing.T) {
 
 	wrapper() // synchronous invoke; defer wg.Done() must fire on return
 
-	// After the wrapper returns, wg counter must be back to 0 (Add balanced by Done).
-	// Use a goroutine + timeout so a leak surfaces as a test failure, not a hang.
-	done := make(chan struct{})
-	go func() { module.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("wg.Wait() blocked after wrapper returned — Add(1) was not balanced by Done()")
-	}
+	assertWaitGroupDrains(t, module, "wrapper returned on shutdown-bail path")
 }
 
 // TestCreateJobWrapperBalancesAddDoneOnTryLockFailPath asserts the same Add/Done
@@ -185,13 +177,7 @@ func TestCreateJobWrapperBalancesAddDoneOnTryLockFailPath(t *testing.T) {
 	wrapper := module.createJobWrapper(entry)
 	wrapper() // closure bails at tryLock-fail; defer Done() must still fire
 
-	done := make(chan struct{})
-	go func() { module.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("wg.Wait() blocked after wrapper returned via tryLock-fail path")
-	}
+	assertWaitGroupDrains(t, module, "wrapper returned via tryLock-fail path")
 
 	// Sanity: the skip counter should have incremented (proves we actually hit
 	// the tryLock-fail branch rather than some other path).

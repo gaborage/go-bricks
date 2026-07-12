@@ -182,13 +182,7 @@ func TestExecuteManualJobSkippedAfterShutdown(t *testing.T) {
 
 	// Add/Done must balance — a hang here means wg.Add(1) was not matched by a
 	// deferred wg.Done() on the shutdown-bail path.
-	done := make(chan struct{})
-	go func() { module.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("wg.Wait() blocked after executeManualJob returned via shutdown-bail path")
-	}
+	assertWaitGroupDrains(t, module, "executeManualJob returned via shutdown-bail path")
 }
 
 // TestExecuteManualJobBalancesAddDoneOnTryLockFailPath mirrors
@@ -211,11 +205,5 @@ func TestExecuteManualJobBalancesAddDoneOnTryLockFailPath(t *testing.T) {
 	assert.Equal(t, int64(0), job.Count(), "job Execute should not run when tryLock fails")
 	assert.Equal(t, int64(1), entry.metadata.snapshot().SkippedCount, "expected skip counter increment")
 
-	done := make(chan struct{})
-	go func() { module.wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("wg.Wait() blocked after executeManualJob returned via tryLock-fail path")
-	}
+	assertWaitGroupDrains(t, module, "executeManualJob returned via tryLock-fail path")
 }
