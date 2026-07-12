@@ -457,6 +457,14 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 	return nil
 }
 
+// ApplyDatabasePoolDefaults normalizes zero-value Pool settings on cfg to the
+// documented defaults (25 max, idle tracks max, keepalive rules). Exported so
+// callers that bypass Validate — notably dynamic multi-tenant DBConfigProviders
+// resolved in DbManager — get the same safe pool sizing as static config.
+func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
+	return applyDatabasePoolDefaults(cfg)
+}
+
 // applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.
 //
 // It modifies cfg in-place:

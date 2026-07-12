@@ -234,6 +234,9 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (*dbEntry,
 	if err != nil {
 		return nil, fmt.Errorf("failed to get database config for key %s: %w", key, err)
 	}
+	if err = config.ApplyDatabasePoolDefaults(dbConfig); err != nil {
+		return nil, fmt.Errorf("failed to apply pool defaults for key %s: %w", key, err)
+	}
 
 	conn, err := m.connector(dbConfig, m.logger)
 	if err != nil {

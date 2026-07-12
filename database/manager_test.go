@@ -710,3 +710,64 @@ func TestDbManagerReleaseIsIdempotent(t *testing.T) {
 		releaseA() // double release must be a safe no-op (no double close, no negative refcount)
 	})
 }
+
+// TestDbManagerDynamicConfigGetsPoolDefaults proves a dynamic DBConfigProvider
+// (source.type=dynamic) that returns a zero-value Pool no longer reaches the
+// connector unnormalized: DbManager.createConnection must apply the same pool
+// defaults config.Validate applies to static config, so the PostgreSQL/Oracle
+// connectors never call SetMaxOpenConns(0) (unlimited connections).
+func TestDbManagerDynamicConfigGetsPoolDefaults(t *testing.T) {
+	ctx := context.Background()
+	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		"tenant": {Type: "postgresql", Host: "localhost"}, // zero-value Pool
+	}}
+
+	var captured *config.DatabaseConfig
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		captured = cfg
+		return &stubDB{}, nil
+	}
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, connector)
+
+	_, err := manager.createConnection(ctx, "tenant")
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+
+	assert.Equal(t, int32(25), captured.Pool.Max.Connections, "max connections defaults to 25")
+	assert.Equal(t, captured.Pool.Max.Connections, captured.Pool.Idle.Connections, "idle tracks max")
+	assert.Equal(t, 5*time.Minute, captured.Pool.Idle.Time, "idle time defaults to 5m")
+	assert.Equal(t, 30*time.Minute, captured.Pool.Lifetime.Max, "lifetime max defaults to 30m")
+	require.NotNil(t, captured.Pool.KeepAlive.Enabled)
+	assert.True(t, *captured.Pool.KeepAlive.Enabled, "keepalive defaults to enabled")
+	assert.Equal(t, 60*time.Second, captured.Pool.KeepAlive.Interval, "keepalive interval defaults to 60s")
+}
+
+// TestDbManagerDynamicConfigExplicitPoolPreserved proves that pool defaulting
+// on the dynamic path only fills zero values — a dynamic config that already
+// sets an explicit pool size passes through unchanged.
+func TestDbManagerDynamicConfigExplicitPoolPreserved(t *testing.T) {
+	ctx := context.Background()
+	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		"tenant": {
+			Type: "postgresql",
+			Host: "localhost",
+			Pool: config.PoolConfig{
+				Max: config.PoolMaxConfig{Connections: 40},
+			},
+		},
+	}}
+
+	var captured *config.DatabaseConfig
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		captured = cfg
+		return &stubDB{}, nil
+	}
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, connector)
+
+	_, err := manager.createConnection(ctx, "tenant")
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+
+	assert.Equal(t, int32(40), captured.Pool.Max.Connections, "explicit max connections preserved")
+	assert.Equal(t, int32(40), captured.Pool.Idle.Connections, "idle defaults to explicit max")
+}
