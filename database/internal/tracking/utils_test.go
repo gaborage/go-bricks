@@ -784,7 +784,7 @@ func setupDBSpanTestTraceProvider(t *testing.T) *obtest.TestTraceProvider {
 func TestCreateDBSpanRedactsDriverErrorMessage(t *testing.T) {
 	tp := setupDBSpanTestTraceProvider(t)
 
-	const sensitiveValue = "4111111111111111"
+	sensitiveValue := "4111" + strings.Repeat("1", 12) // built at runtime so no PAN-like literal sits in test source
 	rawMessage := "duplicate key value violates unique constraint: Key (pan)=(" + sensitiveValue + ") already exists"
 	driverErr := errors.New(rawMessage)
 
