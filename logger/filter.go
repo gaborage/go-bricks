@@ -3,7 +3,6 @@ package logger
 
 import (
 	"fmt"
-	"net/url"
 	"reflect"
 	"strings"
 	"unsafe"
@@ -230,73 +229,11 @@ func (f *SensitiveDataFilter) maskString(value string) string {
 		return value
 	}
 
-	// Special handling for URLs to preserve structure while masking sensitive parts
-	if f.isURL(value) {
-		return f.maskURL(value)
-	}
-
-	// For all other sensitive strings, completely mask the value
-	// No partial disclosure for security reasons
+	// SECURITY: A URL value on the sensitive path is masked in full, never structure-preserved.
+	// URL query strings and fragments routinely carry the secret itself (client_secret=, apikey=,
+	// token=); partial masking (e.g. only user-info password) would leave those verbatim.
+	// For all sensitive strings, completely mask the value — no partial disclosure.
 	return f.config.MaskValue
-}
-
-// isURL checks if a string appears to be a URL
-func (f *SensitiveDataFilter) isURL(value string) bool {
-	return strings.HasPrefix(value, "http://") ||
-		strings.HasPrefix(value, "https://") ||
-		strings.HasPrefix(value, "amqp://") ||
-		strings.HasPrefix(value, "amqps://")
-}
-
-// maskURL masks sensitive information in URLs (like passwords) while preserving structure
-func (f *SensitiveDataFilter) maskURL(urlStr string) string {
-	parsed, err := url.Parse(urlStr)
-	if err != nil {
-		// If parsing fails, fallback to generic masking
-		return f.config.MaskValue
-	}
-
-	// Mask password in user info
-	if parsed.User != nil {
-		if _, hasPassword := parsed.User.Password(); hasPassword {
-			username := parsed.User.Username()
-			return f.buildMaskedURL(parsed, username)
-		}
-	}
-
-	// No password to mask, return original URL
-	return urlStr
-}
-
-// buildMaskedURL constructs a URL with masked password while preserving structure
-func (f *SensitiveDataFilter) buildMaskedURL(parsed *url.URL, username string) string {
-	var b strings.Builder
-
-	// Scheme and authority
-	b.WriteString(parsed.Scheme)
-	b.WriteString("://")
-
-	// User info with masked password
-	b.WriteString(username)
-	b.WriteByte(':')
-	b.WriteString(f.config.MaskValue)
-	b.WriteByte('@')
-	b.WriteString(parsed.Host)
-
-	// Preserve encoded path, query and fragment parts
-	if p := parsed.EscapedPath(); p != "" {
-		b.WriteString(p)
-	}
-	if q := parsed.RawQuery; q != "" {
-		b.WriteByte('?')
-		b.WriteString(q)
-	}
-	if frag := parsed.Fragment; frag != "" {
-		b.WriteByte('#')
-		b.WriteString(frag)
-	}
-
-	return b.String()
 }
 
 // filterStructWithProtection filters sensitive fields with cycle detection and depth limiting
