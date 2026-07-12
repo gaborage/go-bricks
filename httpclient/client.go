@@ -177,7 +177,9 @@ func (b *Builder) WithPeerName(name string) *Builder {
 // Build shallow-copies the provided client and never mutates it: the caller's
 // client keeps its own Transport and Timeout. If the provided client's Timeout
 // is zero, the copy gets the builder's configured Timeout.
-// The copy's Transport is preserved unless explicitly overridden via WithTransport.
+// The copy's Transport is preserved unless explicitly overridden via
+// WithTransport or WithJOSE. The copy is shallow: reference fields such as the
+// cookie Jar remain shared with the caller's client.
 func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
 	b.httpClient = client
 	return b
@@ -211,8 +213,9 @@ type JOSEConfig struct {
 // Composition: WithJOSE wraps whatever transport was set via an earlier WithTransport
 // call — so that transport customization remains in the chain below the JOSE layer.
 // A Transport configured directly on the *http.Client passed to WithHTTPClient is NOT
-// threaded through: Build() overwrites httpClient.Transport whenever WithTransport or
-// WithJOSE set b.transport, so use WithTransport if a custom RoundTripper needs to
+// threaded through: Build() sets the transport on the built client's copied *http.Client
+// whenever WithTransport or WithJOSE set b.transport (the client passed to WithHTTPClient
+// is never modified), so use WithTransport if a custom RoundTripper needs to
 // survive beneath WithJOSE. Calling WithTransport AFTER WithJOSE replaces the JOSE
 // transport entirely.
 //
