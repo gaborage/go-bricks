@@ -321,13 +321,28 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 		// sql.ErrNoRows (empty result) and sql.ErrTxDone (deferred rollback after
 		// commit) are not actual errors - do not mark the span as failed.
 		if !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, sql.ErrTxDone) {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+			// SECURITY: Do not call span.RecordError(err) or use err.Error() in the
+			// span status. Postgres/Oracle driver errors embed the offending row
+			// data (e.g. a unique-constraint violation echoes back the value that
+			// collided, which may be a PAN or other sensitive field), and the OTel
+			// pipeline has no SensitiveDataFilter (that only runs on the log path).
+			// Record the error's Go type instead of its message.
+			class := dbErrorClass(err)
+			span.AddEvent("exception", trace.WithAttributes(
+				attribute.String("exception.type", class),
+			))
+			span.SetStatus(codes.Error, class)
 		}
 	}
 
 	// End the span (will use current time, giving us the correct duration)
 	span.End()
+}
+
+// dbErrorClass returns the Go type of err (e.g. "*pq.Error") without its message,
+// so span error attribution never carries driver-embedded row data.
+func dbErrorClass(err error) string {
+	return fmt.Sprintf("%T", err)
 }
 
 // extractDBOperation determines the database operation name from the given SQL query.

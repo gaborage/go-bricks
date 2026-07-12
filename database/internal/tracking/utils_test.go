@@ -9,8 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+
+	"github.com/gaborage/go-bricks/logger"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 const (
@@ -758,5 +762,72 @@ func TestBuildOracleNamespace(t *testing.T) {
 			result := BuildOracleNamespace(tt.serviceName, tt.sid, tt.database)
 			assert.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+// setupDBSpanTestTraceProvider installs an in-memory trace provider as the
+// global tracer provider for the duration of the test. createDBSpan looks up
+// its tracer fresh on every call (no package-level cache), so no tracer reset
+// is needed between tests.
+func setupDBSpanTestTraceProvider(t *testing.T) *obtest.TestTraceProvider {
+	t.Helper()
+	tp := obtest.NewTestTraceProvider()
+	original := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp.TracerProvider)
+	t.Cleanup(func() { otel.SetTracerProvider(original) })
+	return tp
+}
+
+// TestCreateDBSpanRedactsDriverErrorMessage guards against raw driver errors
+// (which can embed offending row data, e.g. a PAN in a unique-constraint
+// violation) leaking to OTel backends unfiltered.
+func TestCreateDBSpanRedactsDriverErrorMessage(t *testing.T) {
+	tp := setupDBSpanTestTraceProvider(t)
+
+	const sensitiveValue = "4111111111111111"
+	rawMessage := "duplicate key value violates unique constraint: Key (pan)=(" + sensitiveValue + ") already exists"
+	driverErr := errors.New(rawMessage)
+
+	createDBSpan(context.Background(), &Context{Vendor: "postgresql"}, selectOne, time.Now(), driverErr)
+
+	got := obtest.NewSpanCollector(t, tp.Exporter).AssertCount(1).First()
+	obtest.AssertSpanStatus(t, &got, codes.Error)
+
+	assert.NotContains(t, got.Status.Description, sensitiveValue, "status description must not leak the raw driver error")
+	assert.NotContains(t, got.Status.Description, rawMessage, "status description must not leak the raw driver error")
+
+	if len(got.Events) != 1 {
+		t.Fatalf("expected exactly one span event, got %d", len(got.Events))
+	}
+	event := got.Events[0]
+	if event.Name != "exception" {
+		t.Fatalf("expected an %q event, got %q", "exception", event.Name)
+	}
+	for _, attr := range event.Attributes {
+		value := attr.Value.AsString()
+		if strings.Contains(value, sensitiveValue) {
+			t.Fatalf("exception event attribute %s leaked the sensitive value: %q", attr.Key, value)
+		}
+		if strings.Contains(value, rawMessage) {
+			t.Fatalf("exception event attribute %s leaked the raw driver error: %q", attr.Key, value)
+		}
+	}
+}
+
+// TestCreateDBSpanIgnoresErrNoRowsAndTxDone verifies sql.ErrNoRows and
+// sql.ErrTxDone remain benign: the span must not be marked errored.
+func TestCreateDBSpanIgnoresErrNoRowsAndTxDone(t *testing.T) {
+	tp := setupDBSpanTestTraceProvider(t)
+
+	createDBSpan(context.Background(), &Context{Vendor: "postgresql"}, selectOne, time.Now(), sql.ErrNoRows)
+	createDBSpan(context.Background(), &Context{Vendor: "postgresql"}, "ROLLBACK", time.Now(), sql.ErrTxDone)
+
+	spans := obtest.NewSpanCollector(t, tp.Exporter).AssertCount(2)
+	for i := range 2 {
+		got := spans.Get(i)
+		obtest.AssertSpanStatus(t, &got, codes.Unset)
+		if len(got.Events) != 0 {
+			t.Fatalf("expected no exception event for benign error, got %d", len(got.Events))
+		}
 	}
 }
