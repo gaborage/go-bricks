@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/labstack/echo/v5"
@@ -155,7 +153,7 @@ func TestStackTraceInErrorResponse(t *testing.T) {
 		e.HTTPErrorHandler = func(c *echo.Context, err error) {
 			customErrorHandler(c, err, &config.Config{
 				App: config.AppConfig{Env: config.EnvDevelopment},
-			})
+			}, &testLogger{})
 		}
 		e.GET("/boom", func(_ *echo.Context) error {
 			return NewBadRequestError("with trace")
@@ -213,7 +211,7 @@ func TestStackTraceInErrorResponse(t *testing.T) {
 		e.HTTPErrorHandler = func(c *echo.Context, err error) {
 			customErrorHandler(c, err, &config.Config{
 				App: config.AppConfig{Env: config.EnvProduction},
-			})
+			}, &testLogger{})
 		}
 		e.GET("/boom", func(_ *echo.Context) error {
 			// Capture flag is on (from outer Run), but the prod env must still
@@ -469,7 +467,7 @@ func TestCustomErrorHandler(t *testing.T) {
 			c := e.NewContext(req, rec)
 
 			// Call the custom error handler
-			customErrorHandler(c, tt.error, tt.config)
+			customErrorHandler(c, tt.error, tt.config, &testLogger{})
 
 			assert.Equal(t, tt.expectedStatus, rec.Code)
 
@@ -534,7 +532,7 @@ func TestErrorResponseFormatting(t *testing.T) {
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
 		customErrorHandler(c, err, &config.Config{
 			App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
-		})
+		}, &testLogger{})
 	}
 
 	e.GET("/test", func(_ *echo.Context) error {
@@ -571,56 +569,18 @@ func TestErrorResponseFormatting(t *testing.T) {
 	assert.Contains(t, response.Meta, "timestamp")
 }
 
-// logCaptureEntry stores a single slog record with its message and attributes.
-type logCaptureEntry struct {
-	message string
-	attrs   map[string]any
-}
-
-// logCapture is a slog.Handler that records log messages and their attributes.
-type logCapture struct {
-	mu      sync.Mutex
-	entries []logCaptureEntry
-}
-
-func (h *logCapture) Enabled(_ context.Context, _ slog.Level) bool { return true }
-
-func (h *logCapture) Handle(_ context.Context, r slog.Record) error { //nolint:gocritic // slog.Handler interface requires value receiver
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	attrs := make(map[string]any)
-	r.Attrs(func(a slog.Attr) bool {
-		attrs[a.Key] = a.Value.Any()
-		return true
-	})
-	h.entries = append(h.entries, logCaptureEntry{message: r.Message, attrs: attrs})
-	return nil
-}
-
-func (h *logCapture) WithAttrs(_ []slog.Attr) slog.Handler { return h }
-func (h *logCapture) WithGroup(_ string) slog.Handler      { return h }
-
-func (h *logCapture) reset() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.entries = nil
-}
-
-func (h *logCapture) count() int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return len(h.entries)
-}
-
+// TestErrorHandlerLogging verifies that only >=500 status codes emit the unhandled-error
+// log line, now routed through the injected framework logger (see server_test.go's
+// testLogger) rather than Echo's stock logger.
 func TestErrorHandlerLogging(t *testing.T) {
-	capture := &logCapture{}
+	testLog := &testLogger{}
 	e := echo.New()
-	e.Logger = slog.New(capture)
 
+	cfg := &config.Config{
+		App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
+	}
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
-		customErrorHandler(c, err, &config.Config{
-			App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
-		})
+		customErrorHandler(c, err, cfg, testLog)
 	}
 
 	tests := []struct {
@@ -647,20 +607,29 @@ func TestErrorHandlerLogging(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			capture.reset()
+			testLog.mu.Lock()
+			testLog.logs = nil
+			testLog.entries = nil
+			testLog.mu.Unlock()
 
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 
-			customErrorHandler(c, tt.error, &config.Config{
-				App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
-			})
+			customErrorHandler(c, tt.error, cfg, testLog)
+
+			logged := false
+			for _, entry := range testLog.logEntries() {
+				if entry.msg == "unhandled error" {
+					logged = true
+					break
+				}
+			}
 
 			if tt.expectLogged {
-				assert.Greater(t, capture.count(), 0, "Expected error to be logged")
+				assert.True(t, logged, "Expected error to be logged")
 			} else {
-				assert.Equal(t, 0, capture.count(), "Expected error not to be logged")
+				assert.False(t, logged, "Expected error not to be logged")
 			}
 		})
 	}
@@ -678,7 +647,7 @@ func TestErrorChaining(t *testing.T) {
 
 	customErrorHandler(c, wrappedErr, &config.Config{
 		App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
-	})
+	}, &testLogger{})
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 
@@ -707,7 +676,7 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 	}
 
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
-		customErrorHandler(c, err, cfg)
+		customErrorHandler(c, err, cfg, &testLogger{})
 	}
 
 	// Test: Call error handler when response is already committed
@@ -726,7 +695,7 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 		assert.True(t, resp.Committed)
 
 		// Call error handler - should be a no-op since response is committed
-		customErrorHandler(c, echo.NewHTTPError(http.StatusUnauthorized, "Second write"), cfg)
+		customErrorHandler(c, echo.NewHTTPError(http.StatusUnauthorized, "Second write"), cfg, &testLogger{})
 
 		// Verify body is valid JSON and matches ONLY the first write
 		body := rec.Body.Bytes()
@@ -753,7 +722,7 @@ func TestCustomErrorHandlerPreventsDoubleWrite(t *testing.T) {
 		assert.False(t, resp.Committed)
 
 		// Call error handler - should write normally
-		customErrorHandler(c, echo.NewHTTPError(http.StatusUnauthorized, "Auth failed"), cfg)
+		customErrorHandler(c, echo.NewHTTPError(http.StatusUnauthorized, "Auth failed"), cfg, &testLogger{})
 
 		// Verify error response was written
 		assert.Equal(t, http.StatusUnauthorized, rec.Code)
@@ -793,7 +762,11 @@ func TestPanicRecoveryStructuredLogging(t *testing.T) {
 			continue
 		}
 		found = true
-		assert.Contains(t, entry.fields, "error", "panic log should include err field")
+		// Non-debug: the panic cause is redacted to its type (error_type), never the
+		// raw message — same debug-gating as the unhandled-5xx path (a panicking
+		// driver/downstream error can embed PII/PCI).
+		assert.Contains(t, entry.fields, "error_type", "non-debug panic log should include the redacted error_type field")
+		assert.NotContains(t, entry.fields, "error", "non-debug panic log must not include the raw error message field")
 		assert.Contains(t, entry.fields, "stack", "panic log should include stack field")
 		assert.Contains(t, entry.fields, "request_id", "panic log should include request_id field")
 		break

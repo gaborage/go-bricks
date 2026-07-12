@@ -83,13 +83,15 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
 		var panicErr *middleware.PanicStackError
 		if goerrors.As(err, &panicErr) {
-			log.Error().
-				Err(panicErr.Unwrap()).
-				Bytes("stack", panicErr.Stack).
-				Str("request_id", safeGetRequestID(c)).
-				Msg("Panic recovered")
+			// SECURITY: debug-gate the panic cause the same way as the unhandled-5xx
+			// path — a panicking driver/downstream error can embed PII/PCI, and the
+			// SensitiveDataFilter masks by field name, not message content.
+			appendErrorDetail(
+				log.Error().Bytes("stack", panicErr.Stack).Str("request_id", safeGetRequestID(c)),
+				panicErr.Unwrap(), cfg.App.Debug,
+			).Msg("Panic recovered")
 		}
-		customErrorHandler(c, err, cfg)
+		customErrorHandler(c, err, cfg, log)
 	}
 
 	// LegacyIPExtractor restores v4-compatible IP extraction behavior for RealIP() calls.
@@ -244,7 +246,7 @@ func (s *Server) readyCheck(c *echo.Context) error {
 // into standardized APIResponse envelopes based on error type and server configuration.
 // When the request context carries the raw response flag (set by handlerWrapper.wrap),
 // it uses formatRawErrorResponse which writes minimal JSON without the envelope.
-func customErrorHandler(c *echo.Context, err error, cfg *config.Config) {
+func customErrorHandler(c *echo.Context, err error, cfg *config.Config, log logger.Logger) {
 	// SAFETY: Prevent double-writes if error handler is invoked multiple times.
 	// This can happen with certain middleware combinations (e.g., otelecho).
 	// Matches Echo's default error handler behavior.
@@ -258,14 +260,14 @@ func customErrorHandler(c *echo.Context, err error, cfg *config.Config) {
 		formatter = formatRawErrorResponse
 	}
 
-	apiErr := classifyError(err, c, cfg)
+	apiErr := classifyError(err, c, cfg, log)
 	_ = formatter(c, apiErr, cfg)
 }
 
 // classifyError converts an arbitrary error into a structured IAPIError.
 // It handles context.DeadlineExceeded, IAPIError, echo.HTTPError, and
 // untyped errors, applying production sanitization and server-error logging.
-func classifyError(err error, c *echo.Context, cfg *config.Config) IAPIError {
+func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Logger) IAPIError {
 	// Context deadline exceeded (timeout errors)
 	if goerrors.Is(err, context.DeadlineExceeded) {
 		return NewServiceUnavailableError("Request processing timed out")
@@ -301,7 +303,16 @@ func classifyError(err error, c *echo.Context, cfg *config.Config) IAPIError {
 	}
 
 	if status >= http.StatusInternalServerError {
-		c.Echo().Logger.Error("unhandled error", "error", err)
+		// SECURITY: use the injected framework logger (not Echo's stock logger) so log
+		// output is subject to the same lifecycle as the rest of the app. The
+		// SensitiveDataFilter only masks by field name, not by message content, so it
+		// cannot be trusted to scrub PII/PCI a driver error may embed (e.g. a
+		// unique-constraint value). Mirror the response-body redaction above instead:
+		// non-debug builds log the error type only, never the raw message; debug builds
+		// keep full detail for troubleshooting. Str() still routes through the injected
+		// filter as defense-in-depth for any field an operator has marked sensitive.
+		appendErrorDetail(log.Error().Str("request_id", safeGetRequestID(c)), err, cfg.App.Debug).
+			Msg("unhandled error")
 	}
 
 	code := statusToErrorCode(status)
@@ -312,6 +323,21 @@ func classifyError(err error, c *echo.Context, cfg *config.Config) IAPIError {
 	}
 
 	return base
+}
+
+// appendErrorDetail adds debug-gated error detail to a log event: the raw error
+// message only in Debug builds, the error type otherwise. SECURITY: the
+// SensitiveDataFilter masks by field name, not message content, so a raw error
+// string (which can embed driver-supplied PII/PCI) must never be logged in
+// production. Shared by the panic-recovery and unhandled-5xx log paths.
+func appendErrorDetail(event logger.LogEvent, err error, debug bool) logger.LogEvent {
+	if err == nil {
+		return event
+	}
+	if debug {
+		return event.Str("error", err.Error())
+	}
+	return event.Str("error_type", fmt.Sprintf("%T", err))
 }
 
 // statusToErrorCode maps HTTP status codes to standardized error codes.

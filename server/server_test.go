@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,23 +32,31 @@ const (
 	statusRoute       = "/status"
 )
 
-// testLogEntry captures a single log emission with its level, message, and structured field keys.
+// testLogEntry captures a single log emission with its level, message, structured field
+// keys, and (for Str fields) the values actually recorded — post-filtering when the
+// owning testLogger carries a SensitiveDataFilter, so tests can assert on masking.
 type testLogEntry struct {
 	level  string
 	msg    string
 	fields []string
+	values map[string]string
 }
 
+// testLogger is a fake logger.Logger. When filter is non-nil, Str() applies the real
+// logger.SensitiveDataFilter (mirroring logger.LogEventAdapter.Str) so tests can verify
+// that values routed through the framework logger are actually masked.
 type testLogger struct {
 	mu      sync.Mutex
 	entries []string
 	logs    []testLogEntry
+	filter  *logger.SensitiveDataFilter
 }
 
 type testLogEvent struct {
 	logger *testLogger
 	level  string
 	fields []string
+	values map[string]string
 }
 
 func (l *testLogger) Info() logger.LogEvent  { return &testLogEvent{logger: l, level: "info"} }
@@ -75,7 +84,7 @@ func (e *testLogEvent) Msg(msg string) {
 	e.logger.mu.Lock()
 	defer e.logger.mu.Unlock()
 	e.logger.entries = append(e.logger.entries, fmt.Sprintf("%s:%s", e.level, msg))
-	e.logger.logs = append(e.logger.logs, testLogEntry{level: e.level, msg: msg, fields: e.fields})
+	e.logger.logs = append(e.logger.logs, testLogEntry{level: e.level, msg: msg, fields: e.fields, values: e.values})
 }
 
 func (e *testLogEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
@@ -83,8 +92,15 @@ func (e *testLogEvent) Err(error) logger.LogEvent {
 	e.fields = append(e.fields, "error")
 	return e
 }
-func (e *testLogEvent) Str(key, _ string) logger.LogEvent {
+func (e *testLogEvent) Str(key, value string) logger.LogEvent {
 	e.fields = append(e.fields, key)
+	if e.logger.filter != nil {
+		value = e.logger.filter.FilterString(key, value)
+	}
+	if e.values == nil {
+		e.values = make(map[string]string)
+	}
+	e.values[key] = value
 	return e
 }
 func (e *testLogEvent) Int(key string, _ int) logger.LogEvent {
@@ -530,7 +546,7 @@ func TestCustomErrorHandlerRawMode(t *testing.T) {
 
 	// Simulate an IAPIError
 	apiErr := NewNotFoundError("Resource")
-	customErrorHandler(c, apiErr, cfg)
+	customErrorHandler(c, apiErr, cfg, &testLogger{})
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 
@@ -556,7 +572,7 @@ func TestCustomErrorHandlerRawModeTimeout(t *testing.T) {
 
 	c.Set(rawResponseContextKey, true)
 
-	customErrorHandler(c, context.DeadlineExceeded, cfg)
+	customErrorHandler(c, context.DeadlineExceeded, cfg, &testLogger{})
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
@@ -580,7 +596,7 @@ func TestCustomErrorHandlerRawModeEchoHTTPError(t *testing.T) {
 	c.Set(rawResponseContextKey, true)
 
 	echoErr := echo.NewHTTPError(http.StatusForbidden, "access denied")
-	customErrorHandler(c, echoErr, cfg)
+	customErrorHandler(c, echoErr, cfg, &testLogger{})
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 
@@ -591,4 +607,128 @@ func TestCustomErrorHandlerRawModeEchoHTTPError(t *testing.T) {
 
 	_, hasMeta := raw["meta"]
 	assert.False(t, hasMeta, "raw echo error should not produce meta key")
+}
+
+// ==================== 5xx Error Logging Security Tests ====================
+
+// findLogEntry returns the first captured entry with the given message, or nil.
+func findLogEntry(entries []testLogEntry, msg string) *testLogEntry {
+	for i := range entries {
+		if entries[i].msg == msg {
+			return &entries[i]
+		}
+	}
+	return nil
+}
+
+// TestClassifyError5xxUsesFilteredLogger proves the unhandled-5xx log line goes through
+// the injected framework logger (instead of Echo's stock logger, which had no filter
+// attached and wrote raw to stdout unconditionally) AND that, under the framework's real
+// default filter config in non-debug mode (the realistic default for most deployments),
+// a driver error embedding PII/PCI never reaches the log verbatim. The SensitiveDataFilter
+// only masks by field name — it cannot scan message content — so the guarantee here comes
+// from omitting the raw error text in non-debug mode, not from field-name matching alone.
+func TestClassifyError5xxUsesFilteredLogger(t *testing.T) {
+	const sensitiveValue = "topsecret-driver-value-1234"
+
+	testLog := &testLogger{filter: logger.NewSensitiveDataFilter(logger.DefaultFilterConfig())}
+
+	cfg := newTestConfig("", "", "") // Debug defaults to false — the realistic production case
+	server := New(cfg, testLog)
+	server.ModuleGroup().Add(http.MethodGet, "/boom", func(HandlerContext) error {
+		return fmt.Errorf("duplicate key value violates unique constraint: %s", sensitiveValue)
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/boom", http.NoBody)
+	rec := httptest.NewRecorder()
+	server.echo.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	found := findLogEntry(testLog.logEntries(), "unhandled error")
+	require.NotNil(t, found, "expected the framework logger to receive the unhandled-error log line")
+	assert.Equal(t, "error", found.level)
+	assert.NotContains(t, found.values["error"], sensitiveValue, "raw sensitive value must not appear verbatim in the log")
+	for _, v := range found.values {
+		assert.NotContains(t, v, sensitiveValue, "raw sensitive value must not appear in any logged field")
+	}
+}
+
+// TestClassifyError5xxDebugModeLogsFullError documents the accepted trade-off: debug mode
+// (opt-in, mirrors the response-body redaction toggle above it) restores full error detail
+// for troubleshooting, subject only to the field-name filter as defense-in-depth.
+func TestClassifyError5xxDebugModeLogsFullError(t *testing.T) {
+	testLog := &testLogger{filter: logger.NewSensitiveDataFilter(logger.DefaultFilterConfig())}
+
+	cfg := newTestConfig("", "", "")
+	cfg.App.Debug = true
+	server := New(cfg, testLog)
+	server.ModuleGroup().Add(http.MethodGet, "/boom", func(HandlerContext) error {
+		return fmt.Errorf("boom detail")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/boom", http.NoBody)
+	rec := httptest.NewRecorder()
+	server.echo.ServeHTTP(rec, req)
+
+	found := findLogEntry(testLog.logEntries(), "unhandled error")
+	require.NotNil(t, found, "expected the framework logger to receive the unhandled-error log line")
+	assert.Equal(t, "boom detail", found.values["error"])
+}
+
+// TestClassifyError4xxDoesNotLogAsServerError ensures 4xx responses never emit the
+// server-error log line (only >=500 status codes should).
+func TestClassifyError4xxDoesNotLogAsServerError(t *testing.T) {
+	testLog := &testLogger{}
+	cfg := newTestConfig("", "", "")
+	server := New(cfg, testLog)
+	server.ModuleGroup().Add(http.MethodGet, "/missing", func(HandlerContext) error {
+		return echo.NewHTTPError(http.StatusNotFound, "not found")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/missing", http.NoBody)
+	rec := httptest.NewRecorder()
+	server.echo.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	for _, entry := range testLog.logEntries() {
+		assert.NotEqual(t, "unhandled error", entry.msg, "4xx responses must not emit the server-error log line")
+	}
+}
+
+// TestAppendErrorDetailRedactsByDebugMode verifies the shared error-detail helper
+// used by BOTH the panic-recovery and unhandled-5xx log paths: production logs the
+// error type only (never the raw message, which can embed driver PII/PCI), debug
+// restores the raw message, and a nil error adds no field.
+func TestAppendErrorDetailRedactsByDebugMode(t *testing.T) {
+	pan := "4111" + strings.Repeat("1", 12) // built at runtime so no PAN-like literal sits in test source
+	sensitive := fmt.Errorf("duplicate key value: Key (pan)=(%s)", pan)
+
+	t.Run("prod_logs_type_not_message", func(t *testing.T) {
+		tl := &testLogger{}
+		appendErrorDetail(tl.Error().Str("request_id", "r1"), sensitive, false).Msg("unhandled error")
+		e := findLogEntry(tl.logEntries(), "unhandled error")
+		require.NotNil(t, e)
+		assert.Contains(t, e.fields, "error_type")
+		assert.NotContains(t, e.fields, "error")
+		assert.NotContains(t, e.values["error_type"], pan)
+	})
+
+	t.Run("debug_logs_raw_message", func(t *testing.T) {
+		tl := &testLogger{}
+		appendErrorDetail(tl.Error().Str("request_id", "r1"), sensitive, true).Msg("unhandled error")
+		e := findLogEntry(tl.logEntries(), "unhandled error")
+		require.NotNil(t, e)
+		assert.Equal(t, sensitive.Error(), e.values["error"])
+	})
+
+	t.Run("nil_error_adds_no_field", func(t *testing.T) {
+		tl := &testLogger{}
+		appendErrorDetail(tl.Error().Str("request_id", "r1"), nil, false).Msg("done")
+		e := findLogEntry(tl.logEntries(), "done")
+		require.NotNil(t, e)
+		assert.NotContains(t, e.fields, "error")
+		assert.NotContains(t, e.fields, "error_type")
+	})
 }
