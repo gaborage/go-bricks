@@ -528,76 +528,84 @@ func (m *Module) scheduleWithGocron(entry *jobEntry) (gocron.Job, error) {
 // - Graceful shutdown handling per FR-024
 func (m *Module) createJobWrapper(entry *jobEntry) func() {
 	return func() {
-		// Register as in-flight BEFORE any shutdown check or tryLock. If Add(1)
-		// happens after either, a shutdown firing concurrently with this closure
-		// can race: Shutdown's wg.Wait() observes counter==0 and returns before
-		// this wrapper increments it, then the job runs after Shutdown returned.
-		// Defer Done() immediately so every return path balances the Add.
-		m.wg.Add(1)
-		defer m.wg.Done()
-
-		// Check for shutdown
-		select {
-		case <-m.shutdownCtx.Done():
-			m.logger.Warn().
-				Str("jobID", entry.metadata.JobID).
-				Msg("Job trigger skipped - scheduler is shutting down")
-			return
-		default:
-		}
-
-		// Overlapping execution prevention per FR-026
-		if !entry.tryLock() {
-			m.logger.Warn().
-				Str("jobID", entry.metadata.JobID).
-				Str("triggerType", "scheduled").
-				Msg("Job trigger skipped - job is already running")
-			entry.metadata.incrementSkipped()
-			return
-		}
-		// Defer unlock AFTER Done() so LIFO ordering releases the lock first,
-		// matching the prior coupled-defer ordering (unlock then Done).
-		defer entry.unlock()
-
-		// Create execution context with cancellation for graceful shutdown
-		ctx, cancel := context.WithCancel(m.shutdownCtx)
-		defer cancel()
-
-		// Install the per-job lease scope (ADR-032): per-tenant handles the job borrows via
-		// JobContext.DB()/Messaging() — including the per-tenant fan-out in outbox relay and
-		// inbox cleanup, whose SetTenant children inherit this scope — are released when the
-		// job run completes, so a handle evicted mid-job is not closed under it.
-		ctx, scope := leasescope.Install(ctx)
-		defer scope.ReleaseAll()
-
-		// Create JobContext with multi-tenant resolvers
-		jobCtx := newJobContext(
-			ctx,
-			entry.metadata.JobID,
-			"scheduled",
-			m.logger,
-			func() types.Interface {
-				db, err := m.getDB(ctx)
-				if err != nil {
-					m.logger.Error().Err(err).Msg("Failed to get DB for job execution")
-					return nil
-				}
-				return db
-			},
-			func() messaging.Client {
-				msg, err := m.getMessaging(ctx)
-				if err != nil {
-					m.logger.Error().Err(err).Msg("Failed to get Messaging for job execution")
-					return nil
-				}
-				return msg
-			},
-			m.config,
-		)
-
-		// Execute job with panic recovery per FR-021
-		m.executeJob(entry, jobCtx)
+		m.runJobWithSlot(entry, "scheduled")
 	}
+}
+
+// runJobWithSlot is the shared job-execution body for both the scheduled wrapper
+// (createJobWrapper) and the manual trigger (executeManualJob). triggerType
+// ("scheduled" or "manual") distinguishes the two in logs and the JobContext.
+//
+// wg.Add(1) is the FIRST statement so every bail path (shutdown, tryLock-fail)
+// balances Shutdown's wg.Wait(): an Add placed after either would let Shutdown
+// return before this goroutine registered, then run the job afterward. The LIFO
+// defers release the per-job lock before wg.Done().
+func (m *Module) runJobWithSlot(entry *jobEntry, triggerType string) {
+	// Register as in-flight BEFORE any shutdown check or tryLock.
+	m.wg.Add(1)
+	defer m.wg.Done()
+
+	// Check for shutdown.
+	select {
+	case <-m.shutdownCtx.Done():
+		m.logger.Warn().
+			Str("jobID", entry.metadata.JobID).
+			Str("triggerType", triggerType).
+			Msg("Job trigger skipped - scheduler is shutting down")
+		return
+	default:
+	}
+
+	// Overlapping execution prevention per FR-026.
+	if !entry.tryLock() {
+		m.logger.Warn().
+			Str("jobID", entry.metadata.JobID).
+			Str("triggerType", triggerType).
+			Msg("Job trigger skipped - job is already running")
+		entry.metadata.incrementSkipped()
+		return
+	}
+	// Defer unlock AFTER Done() so LIFO ordering releases the lock first.
+	defer entry.unlock()
+
+	// Create execution context with cancellation for graceful shutdown.
+	ctx, cancel := context.WithCancel(m.shutdownCtx)
+	defer cancel()
+
+	// Install the per-job lease scope (ADR-032): per-tenant handles the job borrows via
+	// JobContext.DB()/Messaging() — including the per-tenant fan-out in outbox relay and
+	// inbox cleanup, whose SetTenant children inherit this scope — are released when the
+	// job run completes, so a handle evicted mid-job is not closed under it.
+	ctx, scope := leasescope.Install(ctx)
+	defer scope.ReleaseAll()
+
+	// Create JobContext with multi-tenant resolvers.
+	jobCtx := newJobContext(
+		ctx,
+		entry.metadata.JobID,
+		triggerType,
+		m.logger,
+		func() types.Interface {
+			db, err := m.getDB(ctx)
+			if err != nil {
+				m.logger.Error().Err(err).Msg("Failed to get DB for job execution")
+				return nil
+			}
+			return db
+		},
+		func() messaging.Client {
+			msg, err := m.getMessaging(ctx)
+			if err != nil {
+				m.logger.Error().Err(err).Msg("Failed to get Messaging for job execution")
+				return nil
+			}
+			return msg
+		},
+		m.config,
+	)
+
+	// Execute job with panic recovery per FR-021.
+	m.executeJob(entry, jobCtx)
 }
 
 // executeJob executes the job with panic recovery, metadata updates, and observability instrumentation.

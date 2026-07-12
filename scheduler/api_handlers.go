@@ -1,12 +1,8 @@
 package scheduler
 
 import (
-	"context"
 	"net/http"
 
-	"github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/internal/leasescope"
-	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -106,61 +102,10 @@ func (m *Module) triggerJobHandler(req JobIDParam, _ server.HandlerContext) (ser
 	return server.NewResult(http.StatusAccepted, response), nil
 }
 
-// executeManualJob executes a job triggered manually (not by scheduler)
+// executeManualJob executes a job triggered manually (not by scheduler). It
+// shares the full execution body — in-flight registration, shutdown re-check,
+// overlap prevention, lease scope, and the panic-recovered run — with the
+// scheduled path via runJobWithSlot, passing the "manual" trigger type.
 func (m *Module) executeManualJob(entry *jobEntry) {
-	// Overlapping prevention (same as scheduled execution)
-	if !entry.tryLock() {
-		m.logger.Warn().
-			Str("jobID", entry.metadata.JobID).
-			Str("triggerType", "manual").
-			Msg("Job trigger skipped - job is already running")
-		entry.metadata.incrementSkipped()
-		return
-	}
-
-	// Track in-flight execution
-	m.wg.Add(1)
-
-	defer func() {
-		entry.unlock()
-		m.wg.Done()
-	}()
-
-	ctx, cancel := context.WithCancel(m.shutdownCtx)
-	defer cancel()
-
-	// Install the per-job lease scope (ADR-032), same as the scheduled path: a manually
-	// triggered job (POST /_sys/job/:jobId) borrows per-tenant handles via JobContext.DB()/
-	// Messaging() and runs concurrently with other tenants' work, so its leases must be held
-	// until the run completes — otherwise an evicted handle could be closed mid-job.
-	ctx, scope := leasescope.Install(ctx)
-	defer scope.ReleaseAll()
-
-	// Create JobContext with manual trigger type
-	jobCtx := newJobContext(
-		ctx,
-		entry.metadata.JobID,
-		"manual", // Trigger type is manual, not scheduled
-		m.logger,
-		func() types.Interface {
-			db, err := m.getDB(ctx)
-			if err != nil {
-				m.logger.Error().Err(err).Msg("Failed to get database connection")
-				return nil
-			}
-			return db
-		},
-		func() messaging.Client {
-			msg, err := m.getMessaging(ctx)
-			if err != nil {
-				m.logger.Error().Err(err).Msg("Failed to get messaging client")
-				return nil
-			}
-			return msg
-		},
-		m.config,
-	)
-
-	// Execute with same panic recovery as scheduled jobs
-	m.executeJob(entry, jobCtx)
+	m.runJobWithSlot(entry, "manual")
 }
