@@ -80,13 +80,13 @@ func (m *Module) triggerJobHandler(req JobIDParam, _ server.HandlerContext) (ser
 		return server.Result[JobTriggerResponse]{}, server.NewNotFoundError("job").WithDetails("job_id", jobID)
 	}
 
-	// Check for shutdown
-	select {
-	case <-m.shutdownCtx.Done():
+	// Atomically check shutdown + register the in-flight slot under m.mu (Shutdown
+	// cancels under the same lock), so wg.Add happens-before Shutdown's wg.Wait and
+	// can never land after Wait returned. Nothing may return/panic between here and
+	// the spawn, or the Add leaks and hangs Shutdown.
+	if !m.registerManualTrigger() {
 		return server.Result[JobTriggerResponse]{}, server.NewServiceUnavailableError("scheduler is shutting down")
-	default:
 	}
-
 	go m.executeManualJob(entry)
 
 	// Return with standard GoBricks envelope
@@ -102,10 +102,11 @@ func (m *Module) triggerJobHandler(req JobIDParam, _ server.HandlerContext) (ser
 	return server.NewResult(http.StatusAccepted, response), nil
 }
 
-// executeManualJob executes a job triggered manually (not by scheduler). It
-// shares the full execution body — in-flight registration, shutdown re-check,
-// overlap prevention, lease scope, and the panic-recovered run — with the
-// scheduled path via runJobWithSlot, passing the "manual" trigger type.
+// executeManualJob runs a manually-triggered job in its own goroutine. Its caller
+// (triggerJobHandler) MUST have registered the in-flight slot via
+// registerManualTrigger (which did the wg.Add); this method owns the matching
+// wg.Done. Shares the execution body with the scheduled path via runJobBody.
 func (m *Module) executeManualJob(entry *jobEntry) {
-	m.runJobWithSlot(entry, "manual")
+	defer m.wg.Done()
+	m.runJobBody(entry, "manual")
 }

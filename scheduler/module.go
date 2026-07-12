@@ -519,6 +519,28 @@ func (m *Module) scheduleWithGocron(entry *jobEntry) (gocron.Job, error) {
 	return gocronJob, err
 }
 
+// registerManualTrigger atomically checks for shutdown and registers one in-flight
+// manual job under m.mu. Returns false (WITHOUT calling wg.Add) when the scheduler
+// is shutting down. Because Shutdown() also cancels under m.mu, the wg.Add(1) here
+// provably happens-before Shutdown's wg.Wait(): either Wait observes the Add and
+// waits for the job's Done, or the check sees the cancellation and no Add occurs.
+//
+// CONTRACT: a true return MUST be paired with exactly one wg.Done() — supplied by
+// the spawned executeManualJob — and the caller MUST NOT return or panic between
+// this call and `go m.executeManualJob(entry)`, or the Add would leak and hang
+// Shutdown's Wait.
+func (m *Module) registerManualTrigger() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	select {
+	case <-m.shutdownCtx.Done():
+		return false
+	default:
+	}
+	m.wg.Add(1)
+	return true
+}
+
 // createJobWrapper creates the execution wrapper for a job.
 // This wrapper handles:
 // - JobContext creation with multi-tenant resource resolution
@@ -528,23 +550,21 @@ func (m *Module) scheduleWithGocron(entry *jobEntry) (gocron.Job, error) {
 // - Graceful shutdown handling per FR-024
 func (m *Module) createJobWrapper(entry *jobEntry) func() {
 	return func() {
-		m.runJobWithSlot(entry, "scheduled")
+		m.wg.Add(1)
+		defer m.wg.Done()
+		m.runJobBody(entry, "scheduled")
 	}
 }
 
-// runJobWithSlot is the shared job-execution body for both the scheduled wrapper
-// (createJobWrapper) and the manual trigger (executeManualJob). triggerType
-// ("scheduled" or "manual") distinguishes the two in logs and the JobContext.
-//
-// wg.Add(1) is the FIRST statement so every bail path (shutdown, tryLock-fail)
-// balances Shutdown's wg.Wait(): an Add placed after either would let Shutdown
-// return before this goroutine registered, then run the job afterward. The LIFO
-// defers release the per-job lock before wg.Done().
-func (m *Module) runJobWithSlot(entry *jobEntry, triggerType string) {
-	// Register as in-flight BEFORE any shutdown check or tryLock.
-	m.wg.Add(1)
-	defer m.wg.Done()
-
+// runJobBody is the shared execution body for both the scheduled wrapper
+// (createJobWrapper) and the manual trigger (executeManualJob). The CALLER owns
+// the in-flight WaitGroup registration — scheduled: the gocron-invoked closure;
+// manual: registerManualTrigger + executeManualJob's deferred Done — so runJobBody
+// itself does NOT touch m.wg and is safe to call directly (e.g. from tests).
+// triggerType ("scheduled"/"manual") distinguishes them in logs and the JobContext.
+// The post-entry shutdown re-check still bails before tryLock/execute so a job
+// registered just before shutdown never runs against tearing-down managers.
+func (m *Module) runJobBody(entry *jobEntry, triggerType string) {
 	// Check for shutdown.
 	select {
 	case <-m.shutdownCtx.Done():
@@ -565,7 +585,7 @@ func (m *Module) runJobWithSlot(entry *jobEntry, triggerType string) {
 		entry.metadata.incrementSkipped()
 		return
 	}
-	// Defer unlock AFTER Done() so LIFO ordering releases the lock first.
+	// Release the per-job lock when the job body returns.
 	defer entry.unlock()
 
 	// Create execution context with cancellation for graceful shutdown.
