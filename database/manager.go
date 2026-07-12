@@ -234,8 +234,13 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (*dbEntry,
 	if err != nil {
 		return nil, fmt.Errorf("failed to get database config for key %s: %w", key, err)
 	}
+	// Shallow-clone before defaulting: providers may return long-lived shared configs.
+	cfgCopy := *dbConfig
+	if err = config.ApplyDatabasePoolDefaults(&cfgCopy); err != nil {
+		return nil, fmt.Errorf("failed to apply pool defaults for key %s: %w", key, err)
+	}
 
-	conn, err := m.connector(dbConfig, m.logger)
+	conn, err := m.connector(&cfgCopy, m.logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create database connection for key %s: %w", key, err)
 	}
@@ -283,7 +288,7 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (*dbEntry,
 
 	m.logger.Info().
 		Str("key", key).
-		Str("db_type", dbConfig.Type).
+		Str("db_type", cfgCopy.Type).
 		Msg("Created new database connection")
 
 	return entry, nil
