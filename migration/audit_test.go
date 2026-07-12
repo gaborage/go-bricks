@@ -18,6 +18,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 // recordingSink is a test AuditRecorder that captures every Record call.
@@ -76,6 +77,24 @@ func (s *recordingSink) waitForFirst(t *testing.T, timeout time.Duration) {
 	}
 }
 
+// panickingSink panics on the first Record call and records normally afterwards.
+type panickingSink struct {
+	recordingSink
+	panicked bool // consumer goroutine calls Record sequentially; no lock needed
+}
+
+func newPanickingSink() *panickingSink {
+	return &panickingSink{recordingSink: recordingSink{hits: make(chan struct{}, 256)}}
+}
+
+func (s *panickingSink) Record(ctx context.Context, event *AuditEvent) error {
+	if !s.panicked {
+		s.panicked = true
+		panic("sink exploded")
+	}
+	return s.recordingSink.Record(ctx, event)
+}
+
 // setupTestTracer installs an in-memory tracer provider for the duration of
 // the test and returns the exporter so callers can inspect emitted spans.
 func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {
@@ -89,6 +108,20 @@ func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {
 		otel.SetTracerProvider(previous)
 	})
 	return exporter
+}
+
+// setupTestMeter installs an in-memory meter provider for the duration of the
+// test so counters created via the global otel.Meter can be asserted.
+func setupTestMeter(t *testing.T) *obtest.TestMeterProvider {
+	t.Helper()
+	mp := obtest.NewTestMeterProvider()
+	previous := otel.GetMeterProvider()
+	otel.SetMeterProvider(mp)
+	t.Cleanup(func() {
+		_ = mp.Shutdown(context.Background())
+		otel.SetMeterProvider(previous)
+	})
+	return mp
 }
 
 // disabledLogger returns a no-op logger matching the convention used across
@@ -710,4 +743,21 @@ func TestNewEmitterEmitsStateTransitionedToSink(t *testing.T) {
 	assert.Equal(t, "pending", events[0].FromState)
 	assert.Equal(t, "schema_created", events[0].ToState)
 	assert.Equal(t, testPrincipal, events[0].AppliedByPrincipal)
+}
+
+func TestEmitterSinkPanicIsRecoveredAndCounted(t *testing.T) {
+	setupTestTracer(t)
+	mp := setupTestMeter(t) // BEFORE newAuditEmitter: counters bind at construction
+	sink := newPanickingSink()
+	emitter := newAuditEmitter(disabledLogger(), sink)
+	t.Cleanup(func() { _ = emitter.Close(context.Background()) })
+
+	emitter.Emit(context.Background(), baseEvent()) // sink panics on this event
+	emitter.Emit(context.Background(), baseEvent()) // consumer must survive to deliver this one
+
+	sink.waitForFirst(t, time.Second)
+	require.Len(t, sink.snapshot(), 1, "second event should be delivered after the panic")
+
+	rm := mp.Collect(t)
+	obtest.AssertMetricValue(t, rm, "migration.audit.sink_failures", int64(1))
 }

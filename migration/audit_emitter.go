@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -270,21 +271,47 @@ func (e *auditEmitter) enqueueForSink(ctx context.Context, ev *AuditEvent) {
 func (e *auditEmitter) consumeSink(ctx context.Context) {
 	defer e.consumerWG.Done()
 	for ev := range e.sinkQueue {
-		err := e.sink.Record(ctx, ev)
-		if err == nil {
-			continue
-		}
-		if e.sinkFailures != nil {
-			e.sinkFailures.Add(ctx, 1,
-				metric.WithAttributes(attribute.String(attrKeyType, string(ev.Type))),
-			)
-		}
-		e.logger.Warn().
-			Err(err).
-			Str("audit_type", string(ev.Type)).
-			Str("target", ev.Target).
-			Msg("audit sink delivery failed")
+		e.deliverToSink(ctx, ev)
 	}
+}
+
+// recordSinkFailure increments the sink-failure counter for the given event,
+// tagged by event type. Shared by the panic-recovery and error branches of
+// deliverToSink.
+func (e *auditEmitter) recordSinkFailure(ctx context.Context, ev *AuditEvent) {
+	if e.sinkFailures != nil {
+		e.sinkFailures.Add(ctx, 1,
+			metric.WithAttributes(attribute.String(attrKeyType, string(ev.Type))),
+		)
+	}
+}
+
+// deliverToSink calls the consumer-supplied sink for a single event and recovers
+// any panic so a faulty AuditRecorder cannot crash a migration mid-run (ADR-019:
+// sink errors log but don't abort — panics must behave the same).
+func (e *auditEmitter) deliverToSink(ctx context.Context, ev *AuditEvent) {
+	defer func() {
+		if r := recover(); r != nil {
+			e.recordSinkFailure(ctx, ev)
+			e.logger.Error().
+				Interface("panic", r).
+				Str("stack", string(debug.Stack())).
+				Str("audit_type", string(ev.Type)).
+				Str("target", ev.Target).
+				Msg("audit sink panicked; event dropped")
+		}
+	}()
+
+	err := e.sink.Record(ctx, ev)
+	if err == nil {
+		return
+	}
+	e.recordSinkFailure(ctx, ev)
+	e.logger.Warn().
+		Err(err).
+		Str("audit_type", string(ev.Type)).
+		Str("target", ev.Target).
+		Msg("audit sink delivery failed")
 }
 
 // Close drains the AuditRecorder queue and tears down the consumer goroutine.
