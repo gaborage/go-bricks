@@ -366,7 +366,7 @@ func TestRequestLoggerHandlesEchoNotFoundError(t *testing.T) {
 				Debug: true,
 				Env:   "development",
 			},
-		})
+		}, &testLogger{})
 	}
 
 	e.ServeHTTP(rec, req)

@@ -151,7 +151,7 @@ func TestCustomErrorHandlerTimeoutDetection(t *testing.T) {
 
 	// Configure custom error handler
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
-		customErrorHandler(c, err, cfg)
+		customErrorHandler(c, err, cfg, &testLogger{})
 	}
 
 	// Create a handler that returns context.DeadlineExceeded
@@ -289,7 +289,7 @@ func TestTimeoutWithLoggerMiddleware(t *testing.T) {
 
 	// Set up custom error handler
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
-		customErrorHandler(c, err, cfg)
+		customErrorHandler(c, err, cfg, &testLogger{})
 	}
 
 	// Apply timeout middleware
@@ -349,7 +349,7 @@ func TestTimeoutWithLoggerHighConcurrency(t *testing.T) {
 	}
 
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
-		customErrorHandler(c, err, cfg)
+		customErrorHandler(c, err, cfg, &testLogger{})
 	}
 
 	e.Use(timeoutEcho(cfg.Server.Timeout.Middleware))
