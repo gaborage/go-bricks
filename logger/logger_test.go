@@ -678,46 +678,6 @@ func TestFilterSliceNoChangesPath(t *testing.T) {
 	})
 }
 
-func TestBuildMaskedURLCoverage(t *testing.T) {
-	filter := NewSensitiveDataFilter(DefaultFilterConfig())
-
-	// Test URL without path/query/fragment to cover lines 232-242
-	t.Run("url_without_path_query_fragment", func(t *testing.T) {
-		testURL := "https://user:password@example.com"
-		result := filter.FilterString("password", testURL)
-
-		expected := "https://user:***@example.com"
-		assert.Equal(t, expected, result)
-	})
-
-	// Test URL with empty path
-	t.Run("url_with_empty_path", func(t *testing.T) {
-		testURL := "https://user:password@example.com/"
-		result := filter.FilterString("token", testURL)
-
-		expected := "https://user:***@example.com/"
-		assert.Equal(t, expected, result)
-	})
-
-	// Test URL with query but no fragment
-	t.Run("url_with_query_no_fragment", func(t *testing.T) {
-		testURL := "https://user:password@example.com/path?key=value"
-		result := filter.FilterString("secret", testURL)
-
-		expected := "https://user:***@example.com/path?key=value"
-		assert.Equal(t, expected, result)
-	})
-
-	// Test URL with fragment but no query
-	t.Run("url_with_fragment_no_query", func(t *testing.T) {
-		testURL := "https://user:password@example.com/path#section"
-		result := filter.FilterString("key", testURL)
-
-		expected := "https://user:***@example.com/path#section"
-		assert.Equal(t, expected, result)
-	})
-}
-
 func TestFilterStructEarlyReturns(t *testing.T) {
 	filter := NewSensitiveDataFilter(DefaultFilterConfig())
 

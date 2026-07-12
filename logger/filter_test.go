@@ -76,10 +76,34 @@ func TestFilterString(t *testing.T) {
 		t.Errorf(unexpectedValueMsg, testUserDoe, result)
 	}
 
-	// Test URL masking (clean masking without URL encoding)
+	// Test URL-valued sensitive field: full masking, not structure-preserving
 	result = filter.FilterString("broker_url", "amqp://user:pass@host/vhost")
-	if result != "amqp://user:***@host/vhost" {
-		t.Errorf("Expected clean masked URL, got '%s'", result)
+	if result != DefaultMaskValue {
+		t.Errorf(unexpectedValueMsg, DefaultMaskValue, result)
+	}
+}
+
+func TestFilterMasksURLValuedSensitiveFieldWithQuerySecret(t *testing.T) {
+	filter := NewSensitiveDataFilter(&FilterConfig{
+		SensitiveFields: []string{"secret"},
+		MaskValue:       DefaultMaskValue,
+	})
+
+	result := filter.FilterString("client_secret", "https://idp.example.com/oauth?client_secret=abc123")
+	if result != DefaultMaskValue {
+		t.Errorf(unexpectedValueMsg, DefaultMaskValue, result)
+	}
+}
+
+func TestFilterMasksURLValuedSensitiveFieldWithoutUserinfo(t *testing.T) {
+	filter := NewSensitiveDataFilter(&FilterConfig{
+		SensitiveFields: []string{"apikey"},
+		MaskValue:       DefaultMaskValue,
+	})
+
+	result := filter.FilterString("apikey", "https://api.example.com/v1/keys?apikey=zzz")
+	if result != DefaultMaskValue {
+		t.Errorf(unexpectedValueMsg, DefaultMaskValue, result)
 	}
 }
 
@@ -144,29 +168,6 @@ func TestFilterFields(t *testing.T) {
 	}
 	if result["email"] != testEmail {
 		t.Errorf("Expected email to remain unchanged")
-	}
-}
-
-func TestMaskURL(t *testing.T) {
-	filter := NewSensitiveDataFilter(nil)
-
-	// Test AMQP URL with password (clean masking)
-	result := filter.maskURL("amqp://user:secret@rabbitmq.example.com/vhost")
-	expected := "amqp://user:" + DefaultMaskValue + "@rabbitmq.example.com/vhost"
-	if result != expected {
-		t.Errorf(unexpectedValueMsg, expected, result)
-	}
-
-	// Test URL without password
-	result = filter.maskURL("https://api.example.com/v1/users")
-	if result != "https://api.example.com/v1/users" {
-		t.Errorf("Expected URL without password to remain unchanged")
-	}
-
-	// Test simple string (not a URL) - should pass through unchanged since no password to mask
-	result = filter.maskURL("not-a-valid-url")
-	if result != "not-a-valid-url" {
-		t.Errorf("Expected simple string to pass through unchanged, got '%s'", result)
 	}
 }
 
@@ -386,52 +387,6 @@ func TestFilterValueNonStructType(t *testing.T) {
 	mapResultTyped, ok := mapResult.(map[string]any)
 	if !ok || mapResultTyped["username"] != "alice" {
 		t.Errorf("Expected non-sensitive string map field to pass through unchanged")
-	}
-}
-
-func TestMaskURLErrorHandling(t *testing.T) {
-	filter := NewSensitiveDataFilter(nil)
-
-	// Test with malformed URL that causes parsing error
-	malformedURL := "ht!@#$%tp://invalid-url-format"
-	result := filter.maskURL(malformedURL)
-
-	// Should fallback to generic masking when URL parsing fails
-	expected := DefaultMaskValue
-	if result != expected {
-		t.Errorf("Expected fallback to generic masking for malformed URL, got '%s'", result)
-	}
-}
-
-func TestMaskURLNoUserInfo(t *testing.T) {
-	filter := NewSensitiveDataFilter(nil)
-
-	// Test URLs without user info
-	testCases := []string{
-		"https://example.com/path",
-		"http://localhost:8080",
-		"amqp://host/vhost",
-		"amqps://secure.example.com",
-	}
-
-	for _, url := range testCases {
-		result := filter.maskURL(url)
-		if result != url {
-			t.Errorf("Expected URL without user info to remain unchanged: %s, got: %s", url, result)
-		}
-	}
-}
-
-func TestMaskURLUserWithoutPassword(t *testing.T) {
-	filter := NewSensitiveDataFilter(nil)
-
-	// Test URL with username but no password
-	url := "amqp://username@host/vhost"
-	result := filter.maskURL(url)
-
-	// Should remain unchanged since there's no password to mask
-	if result != url {
-		t.Errorf("Expected URL with username but no password to remain unchanged: %s, got: %s", url, result)
 	}
 }
 
