@@ -63,12 +63,6 @@ func newIPv4TestServer(t *testing.T, handler nethttp.Handler) *httptest.Server {
 	return server
 }
 
-type roundTripperFunc func(*nethttp.Request) (*nethttp.Response, error)
-
-func (f roundTripperFunc) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
-	return f(req)
-}
-
 type stubRoundTripper struct {
 	name string
 }
@@ -141,9 +135,7 @@ func TestBuilder(t *testing.T) {
 	})
 
 	t.Run("with custom http client", func(t *testing.T) {
-		customTransport := roundTripperFunc(func(req *nethttp.Request) (*nethttp.Response, error) {
-			return nil, fmt.Errorf("not implemented: %s", req.URL)
-		})
+		customTransport := &stubRoundTripper{name: "custom"}
 		custom := &nethttp.Client{Timeout: 123 * time.Millisecond, Transport: customTransport}
 		built := NewBuilder(log).
 			WithHTTPClient(custom).
@@ -152,8 +144,9 @@ func TestBuilder(t *testing.T) {
 
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
-		assert.Equal(t, custom, clientImpl.httpClient)
+		assert.NotSame(t, custom, clientImpl.httpClient, "Build must copy, not alias, the provided client")
 		assert.Equal(t, 123*time.Millisecond, clientImpl.httpClient.Timeout)
+		assert.Same(t, customTransport, clientImpl.httpClient.Transport, "copy must keep the caller's transport when no override is set")
 	})
 
 	t.Run("with custom http client zero timeout uses builder timeout", func(t *testing.T) {
@@ -163,8 +156,64 @@ func TestBuilder(t *testing.T) {
 			WithTimeout(2 * time.Second).
 			Build()
 
-		clientImpl := built.(*client)
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
 		assert.Equal(t, 2*time.Second, clientImpl.httpClient.Timeout)
+		assert.Equal(t, time.Duration(0), custom.Timeout, "original client must not be mutated")
+	})
+
+	t.Run("build does not mutate provided client transport", func(t *testing.T) {
+		sentinel := &stubRoundTripper{name: "sentinel"}
+		tuned := &nethttp.Client{Timeout: 5 * time.Second, Transport: sentinel}
+		override := &stubRoundTripper{name: "override"}
+
+		built := NewBuilder(log).
+			WithHTTPClient(tuned).
+			WithTransport(override).
+			Build()
+
+		assert.Same(t, sentinel, tuned.Transport, "caller's client transport must be untouched by Build")
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		assert.Same(t, override, clientImpl.httpClient.Transport)
+	})
+
+	t.Run("two builders sharing one client keep independent transports", func(t *testing.T) {
+		sentinel := &stubRoundTripper{name: "sentinel"}
+		tuned := &nethttp.Client{Timeout: 5 * time.Second, Transport: sentinel}
+		transportA := &stubRoundTripper{name: "a"}
+		transportB := &stubRoundTripper{name: "b"}
+
+		builtA := NewBuilder(log).WithHTTPClient(tuned).WithTransport(transportA).Build()
+		builtB := NewBuilder(log).WithHTTPClient(tuned).WithTransport(transportB).Build()
+
+		clientImplA, ok := builtA.(*client)
+		require.True(t, ok)
+		clientImplB, ok := builtB.(*client)
+		require.True(t, ok)
+
+		assert.Same(t, transportA, clientImplA.httpClient.Transport)
+		assert.Same(t, transportB, clientImplB.httpClient.Transport)
+		assert.Same(t, sentinel, tuned.Transport, "shared client transport must remain the original sentinel")
+	})
+
+	t.Run("with JOSE does not mutate provided client", func(t *testing.T) {
+		sentinel := &stubRoundTripper{name: "sentinel"}
+		tuned := &nethttp.Client{Timeout: 5 * time.Second, Transport: sentinel}
+
+		built := NewBuilder(log).
+			WithHTTPClient(tuned).
+			WithJOSE(JOSEConfig{}).
+			Build()
+
+		assert.Same(t, sentinel, tuned.Transport, "caller's client must be untouched by WithJOSE+Build")
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
+		require.True(t, ok, "built client must carry the JOSE transport")
+		assert.Nil(t, joseTransport.Inner)
 	})
 
 	t.Run("with custom transport", func(t *testing.T) {

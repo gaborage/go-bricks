@@ -174,8 +174,12 @@ func (b *Builder) WithPeerName(name string) *Builder {
 }
 
 // WithHTTPClient allows providing a custom *http.Client instance.
-// If the provided client's Timeout is zero, the builder applies its configured Timeout; otherwise it is used as-is.
-// The client's Transport is preserved unless explicitly overridden via WithTransport.
+// Build shallow-copies the provided client and never mutates it: the caller's
+// client keeps its own Transport and Timeout. If the provided client's Timeout
+// is zero, the copy gets the builder's configured Timeout.
+// The copy's Transport is preserved unless explicitly overridden via
+// WithTransport or WithJOSE. The copy is shallow: reference fields such as the
+// cookie Jar remain shared with the caller's client.
 func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
 	b.httpClient = client
 	return b
@@ -209,8 +213,9 @@ type JOSEConfig struct {
 // Composition: WithJOSE wraps whatever transport was set via an earlier WithTransport
 // call — so that transport customization remains in the chain below the JOSE layer.
 // A Transport configured directly on the *http.Client passed to WithHTTPClient is NOT
-// threaded through: Build() overwrites httpClient.Transport whenever WithTransport or
-// WithJOSE set b.transport, so use WithTransport if a custom RoundTripper needs to
+// threaded through: Build() sets the transport on the built client's copied *http.Client
+// whenever WithTransport or WithJOSE set b.transport (the client passed to WithHTTPClient
+// is never modified), so use WithTransport if a custom RoundTripper needs to
 // survive beneath WithJOSE. Calling WithTransport AFTER WithJOSE replaces the JOSE
 // transport entirely.
 //
@@ -247,14 +252,16 @@ func (b *Builder) Build() Client {
 	var httpClient *nethttp.Client
 	if b.httpClient == nil {
 		httpClient = &nethttp.Client{Timeout: cfg.Timeout}
-	} else if b.httpClient.Timeout == 0 {
-		// Shallow-copy to avoid mutating provided client
-		c := *b.httpClient
-		c.Timeout = cfg.Timeout
-		httpClient = &c
 	} else {
-		// Use provided client as-is
-		httpClient = b.httpClient
+		// Always shallow-copy the caller-provided client: Build must never mutate
+		// a client the caller may reuse (e.g. across builders with different JOSE
+		// policies), which would let Transport be overwritten with another
+		// counterparty's JOSETransport.
+		c := *b.httpClient
+		if c.Timeout == 0 {
+			c.Timeout = cfg.Timeout
+		}
+		httpClient = &c
 	}
 
 	if b.transport != nil {
