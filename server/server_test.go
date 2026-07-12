@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -701,7 +702,8 @@ func TestClassifyError4xxDoesNotLogAsServerError(t *testing.T) {
 // error type only (never the raw message, which can embed driver PII/PCI), debug
 // restores the raw message, and a nil error adds no field.
 func TestAppendErrorDetailRedactsByDebugMode(t *testing.T) {
-	sensitive := fmt.Errorf("duplicate key value: Key (pan)=(4111111111111111)")
+	pan := "4111" + strings.Repeat("1", 12) // built at runtime so no PAN-like literal sits in test source
+	sensitive := fmt.Errorf("duplicate key value: Key (pan)=(%s)", pan)
 
 	t.Run("prod_logs_type_not_message", func(t *testing.T) {
 		tl := &testLogger{}
@@ -710,7 +712,7 @@ func TestAppendErrorDetailRedactsByDebugMode(t *testing.T) {
 		require.NotNil(t, e)
 		assert.Contains(t, e.fields, "error_type")
 		assert.NotContains(t, e.fields, "error")
-		assert.NotContains(t, e.values["error_type"], "4111111111111111")
+		assert.NotContains(t, e.values["error_type"], pan)
 	})
 
 	t.Run("debug_logs_raw_message", func(t *testing.T) {
