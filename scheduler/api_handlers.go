@@ -108,6 +108,22 @@ func (m *Module) triggerJobHandler(req JobIDParam, _ server.HandlerContext) (ser
 
 // executeManualJob executes a job triggered manually (not by scheduler)
 func (m *Module) executeManualJob(entry *jobEntry) {
+	// Register as in-flight BEFORE any shutdown check or tryLock — see
+	// createJobWrapper: Add after either races Shutdown's wg.Wait().
+	m.wg.Add(1)
+	defer m.wg.Done()
+
+	// Re-check shutdown now that the in-flight registration is visible.
+	select {
+	case <-m.shutdownCtx.Done():
+		m.logger.Warn().
+			Str("jobID", entry.metadata.JobID).
+			Str("triggerType", "manual").
+			Msg("Job trigger skipped - scheduler is shutting down")
+		return
+	default:
+	}
+
 	// Overlapping prevention (same as scheduled execution)
 	if !entry.tryLock() {
 		m.logger.Warn().
@@ -117,14 +133,7 @@ func (m *Module) executeManualJob(entry *jobEntry) {
 		entry.metadata.incrementSkipped()
 		return
 	}
-
-	// Track in-flight execution
-	m.wg.Add(1)
-
-	defer func() {
-		entry.unlock()
-		m.wg.Done()
-	}()
+	defer entry.unlock()
 
 	ctx, cancel := context.WithCancel(m.shutdownCtx)
 	defer cancel()

@@ -159,3 +159,63 @@ func TestListJobsHandlerExposesTimezone(t *testing.T) {
 	require.Nil(t, apiErr)
 	assert.Equal(t, "America/New_York", result.Data.Meta["timezone"])
 }
+
+// TestExecuteManualJobSkippedAfterShutdown is the distinguishing regression test
+// for the Add-after-Wait race: the pre-fix executeManualJob had no shutdown
+// re-check at all (tryLock ran first, wg.Add ran after), so a manual trigger
+// racing Shutdown would run Execute even after wg.Wait() had already returned.
+// Post-fix, wg.Add(1) runs first and the shutdown re-check bails before
+// tryLock/Execute, so the job never runs.
+func TestExecuteManualJobSkippedAfterShutdown(t *testing.T) {
+	module, _ := newTestScheduler(t, 5*time.Second)
+
+	job := &counterJob{}
+	entry := &jobEntry{job: job, metadata: &JobMetadata{JobID: "manual-shutdown-test"}}
+
+	// Initiate shutdown BEFORE invoking the manual path.
+	module.shutdownCancel()
+
+	module.executeManualJob(entry)
+
+	// Execute must never have run.
+	assert.Equal(t, int64(0), job.Count(), "job Execute should not run after shutdown")
+
+	// Add/Done must balance — a hang here means wg.Add(1) was not matched by a
+	// deferred wg.Done() on the shutdown-bail path.
+	done := make(chan struct{})
+	go func() { module.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("wg.Wait() blocked after executeManualJob returned via shutdown-bail path")
+	}
+}
+
+// TestExecuteManualJobBalancesAddDoneOnTryLockFailPath mirrors
+// TestCreateJobWrapperBalancesAddDoneOnTryLockFailPath (module_test.go) for the
+// manual-trigger path: pre-acquire the entry lock so executeManualJob's tryLock
+// fails, and verify the skip is counted (this skip path DOES increment
+// SkippedCount, unlike the shutdown-bail path) and Add/Done stays balanced.
+func TestExecuteManualJobBalancesAddDoneOnTryLockFailPath(t *testing.T) {
+	module, _ := newTestScheduler(t, 5*time.Second)
+
+	job := &counterJob{}
+	entry := &jobEntry{job: job, metadata: &JobMetadata{JobID: "manual-trylock-test"}}
+
+	// Pre-acquire the lock so executeManualJob's tryLock fails.
+	require.True(t, entry.tryLock(), "test setup: first tryLock must succeed")
+	defer entry.unlock()
+
+	module.executeManualJob(entry)
+
+	assert.Equal(t, int64(0), job.Count(), "job Execute should not run when tryLock fails")
+	assert.Equal(t, int64(1), entry.metadata.snapshot().SkippedCount, "expected skip counter increment")
+
+	done := make(chan struct{})
+	go func() { module.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("wg.Wait() blocked after executeManualJob returned via tryLock-fail path")
+	}
+}
