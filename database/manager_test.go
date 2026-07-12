@@ -740,6 +740,14 @@ func TestDbManagerDynamicConfigGetsPoolDefaults(t *testing.T) {
 	require.NotNil(t, captured.Pool.KeepAlive.Enabled)
 	assert.True(t, *captured.Pool.KeepAlive.Enabled, "keepalive defaults to enabled")
 	assert.Equal(t, 60*time.Second, captured.Pool.KeepAlive.Interval, "keepalive interval defaults to 60s")
+	assert.Equal(t, "UTC", captured.Timezone, "timezone defaults to UTC")
+	assert.Equal(t, 1000, captured.Query.Log.MaxLength, "query log max length defaults to 1000")
+	assert.Equal(t, 200*time.Millisecond, captured.Query.Slow.Threshold, "slow query threshold defaults to 200ms")
+
+	// The provider-owned config must stay pristine: defaults are applied to a clone.
+	assert.NotSame(t, resource.configs["tenant"], captured)
+	assert.Zero(t, resource.configs["tenant"].Pool.Max.Connections, "provider config pool untouched")
+	assert.Empty(t, resource.configs["tenant"].Timezone, "provider config timezone untouched")
 }
 
 // TestDbManagerDynamicConfigExplicitPoolPreserved proves that pool defaulting
@@ -800,4 +808,35 @@ func TestDbManagerDynamicConfigInvalidPoolRejected(t *testing.T) {
 	require.ErrorAs(t, err, &cfgErr, "wraps the underlying config validation error")
 	assert.ErrorContains(t, err, "database.pool.idle.time")
 	assert.False(t, connectorCalled, "connector must not run with an invalid pool config")
+}
+
+// TestDbManagerDynamicConfigConcurrentCreateSharedConfig guards the clone in
+// createConnection: concurrent creates against a shared provider config must
+// not race (make check runs -race).
+func TestDbManagerDynamicConfigConcurrentCreateSharedConfig(t *testing.T) {
+	ctx := context.Background()
+	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		"tenant": {Type: "postgresql", Host: "localhost"},
+	}}
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
+		return &stubDB{}, nil
+	}
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, connector)
+
+	const goroutines = 8
+	errs := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := manager.createConnection(ctx, "tenant")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
 }

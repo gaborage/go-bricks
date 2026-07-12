@@ -4843,3 +4843,12 @@ func TestValidateRejectsManagerBlockOnNamedDatabase(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "databases.legacy.manager")
 }
+
+func TestApplyDatabasePoolDefaultsNilConfig(t *testing.T) {
+	var err error
+	require.NotPanics(t, func() {
+		err = ApplyDatabasePoolDefaults(nil)
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "configuration is nil")
+}
