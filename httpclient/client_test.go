@@ -152,8 +152,10 @@ func TestBuilder(t *testing.T) {
 
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
-		assert.Equal(t, custom, clientImpl.httpClient)
+		assert.NotSame(t, custom, clientImpl.httpClient, "Build must copy, not alias, the provided client")
 		assert.Equal(t, 123*time.Millisecond, clientImpl.httpClient.Timeout)
+		// The copy keeps the caller's transport (no WithTransport/WithJOSE here).
+		assert.NotNil(t, clientImpl.httpClient.Transport)
 	})
 
 	t.Run("with custom http client zero timeout uses builder timeout", func(t *testing.T) {
@@ -165,6 +167,43 @@ func TestBuilder(t *testing.T) {
 
 		clientImpl := built.(*client)
 		assert.Equal(t, 2*time.Second, clientImpl.httpClient.Timeout)
+		assert.Equal(t, time.Duration(0), custom.Timeout, "original client must not be mutated")
+	})
+
+	t.Run("build does not mutate provided client transport", func(t *testing.T) {
+		sentinel := &stubRoundTripper{name: "sentinel"}
+		tuned := &nethttp.Client{Timeout: 5 * time.Second, Transport: sentinel}
+		override := &stubRoundTripper{name: "override"}
+
+		built := NewBuilder(log).
+			WithHTTPClient(tuned).
+			WithTransport(override).
+			Build()
+
+		assert.Same(t, sentinel, tuned.Transport, "caller's client transport must be untouched by Build")
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		assert.Same(t, override, clientImpl.httpClient.Transport)
+	})
+
+	t.Run("two builders sharing one client keep independent transports", func(t *testing.T) {
+		sentinel := &stubRoundTripper{name: "sentinel"}
+		tuned := &nethttp.Client{Timeout: 5 * time.Second, Transport: sentinel}
+		transportA := &stubRoundTripper{name: "a"}
+		transportB := &stubRoundTripper{name: "b"}
+
+		builtA := NewBuilder(log).WithHTTPClient(tuned).WithTransport(transportA).Build()
+		builtB := NewBuilder(log).WithHTTPClient(tuned).WithTransport(transportB).Build()
+
+		clientImplA, ok := builtA.(*client)
+		require.True(t, ok)
+		clientImplB, ok := builtB.(*client)
+		require.True(t, ok)
+
+		assert.Same(t, transportA, clientImplA.httpClient.Transport)
+		assert.Same(t, transportB, clientImplB.httpClient.Transport)
+		assert.Same(t, sentinel, tuned.Transport, "shared client transport must remain the original sentinel")
 	})
 
 	t.Run("with custom transport", func(t *testing.T) {
