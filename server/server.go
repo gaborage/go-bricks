@@ -83,11 +83,13 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	e.HTTPErrorHandler = func(c *echo.Context, err error) {
 		var panicErr *middleware.PanicStackError
 		if goerrors.As(err, &panicErr) {
-			log.Error().
-				Err(panicErr.Unwrap()).
-				Bytes("stack", panicErr.Stack).
-				Str("request_id", safeGetRequestID(c)).
-				Msg("Panic recovered")
+			// SECURITY: debug-gate the panic cause the same way as the unhandled-5xx
+			// path — a panicking driver/downstream error can embed PII/PCI, and the
+			// SensitiveDataFilter masks by field name, not message content.
+			appendErrorDetail(
+				log.Error().Bytes("stack", panicErr.Stack).Str("request_id", safeGetRequestID(c)),
+				panicErr.Unwrap(), cfg.App.Debug,
+			).Msg("Panic recovered")
 		}
 		customErrorHandler(c, err, cfg, log)
 	}
@@ -309,13 +311,8 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 		// non-debug builds log the error type only, never the raw message; debug builds
 		// keep full detail for troubleshooting. Str() still routes through the injected
 		// filter as defense-in-depth for any field an operator has marked sensitive.
-		event := log.Error().Str("request_id", safeGetRequestID(c))
-		if cfg.App.Debug {
-			event = event.Str("error", err.Error())
-		} else {
-			event = event.Str("error_type", fmt.Sprintf("%T", err))
-		}
-		event.Msg("unhandled error")
+		appendErrorDetail(log.Error().Str("request_id", safeGetRequestID(c)), err, cfg.App.Debug).
+			Msg("unhandled error")
 	}
 
 	code := statusToErrorCode(status)
@@ -326,6 +323,21 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 	}
 
 	return base
+}
+
+// appendErrorDetail adds debug-gated error detail to a log event: the raw error
+// message only in Debug builds, the error type otherwise. SECURITY: the
+// SensitiveDataFilter masks by field name, not message content, so a raw error
+// string (which can embed driver-supplied PII/PCI) must never be logged in
+// production. Shared by the panic-recovery and unhandled-5xx log paths.
+func appendErrorDetail(event logger.LogEvent, err error, debug bool) logger.LogEvent {
+	if err == nil {
+		return event
+	}
+	if debug {
+		return event.Str("error", err.Error())
+	}
+	return event.Str("error_type", fmt.Sprintf("%T", err))
 }
 
 // statusToErrorCode maps HTTP status codes to standardized error codes.

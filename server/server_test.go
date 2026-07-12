@@ -695,3 +695,38 @@ func TestClassifyError4xxDoesNotLogAsServerError(t *testing.T) {
 		assert.NotEqual(t, "unhandled error", entry.msg, "4xx responses must not emit the server-error log line")
 	}
 }
+
+// TestAppendErrorDetailRedactsByDebugMode verifies the shared error-detail helper
+// used by BOTH the panic-recovery and unhandled-5xx log paths: production logs the
+// error type only (never the raw message, which can embed driver PII/PCI), debug
+// restores the raw message, and a nil error adds no field.
+func TestAppendErrorDetailRedactsByDebugMode(t *testing.T) {
+	sensitive := fmt.Errorf("duplicate key value: Key (pan)=(4111111111111111)")
+
+	t.Run("prod_logs_type_not_message", func(t *testing.T) {
+		tl := &testLogger{}
+		appendErrorDetail(tl.Error().Str("request_id", "r1"), sensitive, false).Msg("unhandled error")
+		e := findLogEntry(tl.logEntries(), "unhandled error")
+		require.NotNil(t, e)
+		assert.Contains(t, e.fields, "error_type")
+		assert.NotContains(t, e.fields, "error")
+		assert.NotContains(t, e.values["error_type"], "4111111111111111")
+	})
+
+	t.Run("debug_logs_raw_message", func(t *testing.T) {
+		tl := &testLogger{}
+		appendErrorDetail(tl.Error().Str("request_id", "r1"), sensitive, true).Msg("unhandled error")
+		e := findLogEntry(tl.logEntries(), "unhandled error")
+		require.NotNil(t, e)
+		assert.Equal(t, sensitive.Error(), e.values["error"])
+	})
+
+	t.Run("nil_error_adds_no_field", func(t *testing.T) {
+		tl := &testLogger{}
+		appendErrorDetail(tl.Error().Str("request_id", "r1"), nil, false).Msg("done")
+		e := findLogEntry(tl.logEntries(), "done")
+		require.NotNil(t, e)
+		assert.NotContains(t, e.fields, "error")
+		assert.NotContains(t, e.fields, "error_type")
+	})
+}

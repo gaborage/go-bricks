@@ -762,7 +762,11 @@ func TestPanicRecoveryStructuredLogging(t *testing.T) {
 			continue
 		}
 		found = true
-		assert.Contains(t, entry.fields, "error", "panic log should include err field")
+		// Non-debug: the panic cause is redacted to its type (error_type), never the
+		// raw message — same debug-gating as the unhandled-5xx path (a panicking
+		// driver/downstream error can embed PII/PCI).
+		assert.Contains(t, entry.fields, "error_type", "non-debug panic log should include the redacted error_type field")
+		assert.NotContains(t, entry.fields, "error", "non-debug panic log must not include the raw error message field")
 		assert.Contains(t, entry.fields, "stack", "panic log should include stack field")
 		assert.Contains(t, entry.fields, "request_id", "panic log should include request_id field")
 		break
