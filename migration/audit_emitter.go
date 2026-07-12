@@ -275,17 +275,24 @@ func (e *auditEmitter) consumeSink(ctx context.Context) {
 	}
 }
 
+// recordSinkFailure increments the sink-failure counter for the given event,
+// tagged by event type. Shared by the panic-recovery and error branches of
+// deliverToSink.
+func (e *auditEmitter) recordSinkFailure(ctx context.Context, ev *AuditEvent) {
+	if e.sinkFailures != nil {
+		e.sinkFailures.Add(ctx, 1,
+			metric.WithAttributes(attribute.String(attrKeyType, string(ev.Type))),
+		)
+	}
+}
+
 // deliverToSink calls the consumer-supplied sink for a single event and recovers
 // any panic so a faulty AuditRecorder cannot crash a migration mid-run (ADR-019:
 // sink errors log but don't abort — panics must behave the same).
 func (e *auditEmitter) deliverToSink(ctx context.Context, ev *AuditEvent) {
 	defer func() {
 		if r := recover(); r != nil {
-			if e.sinkFailures != nil {
-				e.sinkFailures.Add(ctx, 1,
-					metric.WithAttributes(attribute.String(attrKeyType, string(ev.Type))),
-				)
-			}
+			e.recordSinkFailure(ctx, ev)
 			e.logger.Error().
 				Interface("panic", r).
 				Str("stack", string(debug.Stack())).
@@ -299,11 +306,7 @@ func (e *auditEmitter) deliverToSink(ctx context.Context, ev *AuditEvent) {
 	if err == nil {
 		return
 	}
-	if e.sinkFailures != nil {
-		e.sinkFailures.Add(ctx, 1,
-			metric.WithAttributes(attribute.String(attrKeyType, string(ev.Type))),
-		)
-	}
+	e.recordSinkFailure(ctx, ev)
 	e.logger.Warn().
 		Err(err).
 		Str("audit_type", string(ev.Type)).
