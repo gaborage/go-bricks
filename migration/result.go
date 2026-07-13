@@ -78,12 +78,15 @@ type flywayErrorPayload struct {
 	Message   string `json:"message"`
 }
 
-// looksLikeFlyway reports whether env carries at least one field that only
-// Flyway's success or error envelope shape would populate. A candidate '{'
-// that decodes cleanly but has none of these (e.g. an SLF4J structured log
-// line) is a JSON object, just not the one we're looking for.
+// looksLikeFlyway reports whether env matches one of Flyway's two envelope
+// shapes: the success/noop envelope (operation and success always together)
+// or the error envelope (nested error.errorCode). Single generic fields are
+// not enough — structured-log noise can carry success/operation/error alone.
 func (env *flywayJSONEnvelope) looksLikeFlyway() bool {
-	return env.Operation != "" || env.FlywayVersion != "" || env.Success != nil || env.Error != nil
+	if env.Operation != "" && env.Success != nil {
+		return true
+	}
+	return env.Error != nil && env.Error.ErrorCode != ""
 }
 
 // errEmptyFlywayOutput is returned when parseFlywayJSON receives an empty

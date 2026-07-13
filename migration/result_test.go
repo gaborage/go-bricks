@@ -169,3 +169,29 @@ func TestMigrateOutcomeEnvelopeFailure(t *testing.T) {
 func TestMigrateOutcomeSuccessIsNil(t *testing.T) {
 	assert.NoError(t, migrateOutcome(nil, nil, &Result{Success: true}))
 }
+
+func TestParseFlywayJSONSkipsEnvelopeLookalikeNoise(t *testing.T) {
+	// Single generic fields (success, operation, error) alone are not enough
+	// to identify a Flyway envelope — structured-log noise can carry any one
+	// of them without being the real thing. Only the validated combinations
+	// (operation+success together, or error.errorCode) should be promoted.
+	tests := []struct {
+		name  string
+		noise string
+	}{
+		{name: "success_without_operation", noise: `{"success":true,"msg":"connected"}`},
+		{name: "operation_without_success", noise: `{"operation":"connect","level":"info"}`},
+		{name: "error_without_errorcode", noise: `{"error":{"code":"X"},"msg":"retry"}`},
+		{name: "flywayversion_alone", noise: `{"flywayVersion":"9.0","msg":"banner"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := tt.noise + "\n" + readFixture(t, "migrate_success.json")
+			got, err := parseFlywayJSON(src)
+			require.NoError(t, err)
+			assert.True(t, got.Success)
+			assert.Equal(t, "migrate", got.Operation)
+		})
+	}
+}
