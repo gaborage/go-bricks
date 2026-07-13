@@ -103,6 +103,8 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 **"Build it simple, build it strong, and refactor when it matters."**
 
 ## Code Quality
+
+- Linting: `.golangci.yml` with staticcheck, gosec, gocritic.
 - Linting: `.golangci.yml` with staticcheck, gosec, gocritic.
 - SonarCloud: Project `gaborage_go-bricks`, 80% coverage target.
 - CI/CD: Multi-platform (Ubuntu, Windows) × Go 1.26.
