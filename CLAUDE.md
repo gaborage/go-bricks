@@ -24,7 +24,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 ## PR Review Workflow
 
 - For PR review fix sessions: read ALL review comments first, implement all fixes, run `make check`, then push once — not incrementally.
-- **Address findings from every automated reviewer, not just CodeRabbit.** SonarCloud's "Quality Gate passed" banner only summarizes the gate metrics — it hides the actual NEW-issue list. Always fetch the per-PR issues via the API and address every MAJOR/MINOR finding: `curl -sS "https://sonarcloud.io/api/issues/search?componentKeys=gaborage_go-bricks&pullRequest=<N>&statuses=OPEN,CONFIRMED"`. For framework-precedent rules (S8196 interface naming, S8179 getter naming, etc.), the precedent is **rename/refactor, never nolint** — see ADR-013 for the canonical example. Same all-or-nothing standard as CodeRabbit nitpicks: fix or document the skip in the commit message.
+- **Address findings from every automated reviewer, not just CodeRabbit.** SonarCloud's "Quality Gate passed" banner hides the per-PR NEW-issue list — run `/sonar-pr <N>` (`.claude/skills/sonar-pr`) to fetch and triage it; same all-or-nothing standard as CodeRabbit nitpicks: fix or document the skip in the commit message.
 
 ## Quick Reference
 
@@ -102,29 +102,9 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 
 **"Build it simple, build it strong, and refactor when it matters."**
 
-## Development Commands
+## Code Quality
 
-```bash
-# Build and test
-go build ./...                  # Build all packages
-go test ./...                   # Run all tests
-go test -run TestName ./package # Run specific test
-
-# Pre-commit checks
-make check                      # Fast: fmt + lint + test + alloc guards + vuln scan (race detection)
-
-# Testing
-make test                       # Unit tests with race detection
-make test-integration           # Integration tests (Docker required)
-make test-all                   # Unit + integration tests
-make test-coverage              # Coverage report
-
-# Other
-make build                      # Build project
-make lint                       # Run golangci-lint
-```
-
-### Code Quality
+- Linting: `.golangci.yml` with staticcheck, gosec, gocritic.
 - Linting: `.golangci.yml` with staticcheck, gosec, gocritic.
 - SonarCloud: Project `gaborage_go-bricks`, 80% coverage target.
 - CI/CD: Multi-platform (Ubuntu, Windows) × Go 1.26.
@@ -494,12 +474,6 @@ For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache co
 
 ## Development Workflow
 
-### Pre-commit Workflow
-```bash
-# Daily development (fast feedback)
-make check        # fmt, lint, test, alloc guards, vuln scan (race detection)
-```
-
 ### Branch Model
 - Main branch: `main` (stable releases).
 - Feature branches: `feature/*`.
@@ -548,10 +522,7 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **database/testing/** — Database-specific testing (TestDB, TenantDBMap, fluent expectations).
 - **cache/testing/** — Cache-specific testing (MockCache, assertion helpers).
 - **observability/testing/** — Test utilities for spans and metrics.
-- **outbox/** — Transactional outbox pattern (Publisher, Relay, Store, multi-vendor).
 - **outbox/testing/** — Outbox-specific testing (MockOutbox, assertion helpers).
-- **inbox/** — Exactly-once consumer-side processing (InboxProcessor, DB-vendor store, cleanup).
-- **keystore/** — Named RSA key pairs + symmetric secrets (DER/raw files + base64 env vars).
 - **keystore/testing/** — KeyStore-specific testing (MockKeyStore, assertion helpers).
 - **tools/** — Development tooling (`migration` CLI / `go-bricks-migrate`).
 - **wiki/** — Architecture documentation and ADRs.
@@ -601,16 +572,3 @@ type KeyStore interface {
     Secret(name string) ([]byte, error) // raw symmetric key material (defensive copy)
 }
 ```
-
-## Dependencies
-
-- **Echo v5** — HTTP framework
-- **zerolog** — Structured logging
-- **pgx/v5** — PostgreSQL driver
-- **go-ora/v2** — Oracle driver
-- **Squirrel** — SQL query builder
-- **Koanf v2** — Configuration management
-- **amqp091-go** — RabbitMQ client
-- **validator/v10** — Request validation
-- **testify** — Testing framework
-- **testcontainers-go** — Integration testing
