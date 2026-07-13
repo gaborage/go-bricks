@@ -101,6 +101,38 @@ func TestParseFlywayJSONStopsAtFirstObject(t *testing.T) {
 	assert.True(t, got.Success)
 }
 
+func TestParseFlywayJSONSkipsValidObjectNoise(t *testing.T) {
+	// A structured-log noise line ahead of the envelope is itself a
+	// well-formed JSON object — the first '{' alone can't distinguish it
+	// from the Flyway envelope that follows.
+	got, err := parseFlywayJSON(readFixture(t, "migrate_valid_object_noise.json"))
+	require.NoError(t, err)
+	assert.True(t, got.Success)
+	assert.Equal(t, "migrate", got.Operation)
+	assert.NoError(t, migrateOutcome(nil, nil, &got))
+}
+
+func TestParseFlywayJSONSkipsInvalidBraceNoise(t *testing.T) {
+	// Non-JSON noise that merely contains a brace (e.g. a pool config dump)
+	// must not be mistaken for a parse failure either.
+	src := "WARN com.zaxxer.hikari: config {maxPoolSize=10}\n" + readFixture(t, "migrate_success.json")
+	got, err := parseFlywayJSON(src)
+	require.NoError(t, err)
+	assert.True(t, got.Success)
+}
+
+func TestParseFlywayJSONNoFlywayEnvelopeIsUnparsed(t *testing.T) {
+	// Two well-formed JSON objects, neither carrying a Flyway field — must
+	// classify as unparsed, not as a spurious reported failure.
+	src := `{"level":"warn","logger":"a","msg":"one"}` + "\n" + `{"level":"warn","logger":"b","msg":"two"}`
+	_, err := parseFlywayJSON(src)
+	assert.ErrorIs(t, err, errEmptyFlywayOutput)
+
+	outcomeErr := migrateOutcome(nil, err, nil)
+	assert.ErrorIs(t, outcomeErr, ErrFlywayOutputUnparsed)
+	assert.False(t, errors.Is(outcomeErr, ErrFlywayReportedFailure))
+}
+
 func TestMigrateOutcomeRunErrorWins(t *testing.T) {
 	runErr := errors.New("flyway command failed: exit status 1")
 	err := migrateOutcome(runErr, errEmptyFlywayOutput, &Result{})
