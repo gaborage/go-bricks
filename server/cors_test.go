@@ -750,8 +750,13 @@ func TestCORSStrictBranchTolerantOfTrailingComma(t *testing.T) {
 
 // TestCORSStrictBranchAllWildcardFailsClosed verifies CORS_ORIGINS="*"
 // (which after dropping '*' becomes empty) falls into the fail-closed
-// branch instead of panicking Echo.
+// branch instead of panicking Echo, and that the warn names the invalid
+// allowlist as the cause — not the environment.
 func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
 	defer func() {
@@ -779,6 +784,9 @@ func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
 		"CORS_ORIGINS=* in non-dev env must fail closed, not echo the origin")
 	assert.NotEqual(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials),
 		"fail-closed mode must explicitly drop AllowCredentials so the response cannot carry session cookies cross-origin")
+	assert.Contains(t, buf.String(), "yielded no valid explicit origins")
+	assert.NotContains(t, buf.String(), "is not a development alias",
+		"the empty-allowlist warn must name the invalid allowlist as the cause, not the environment")
 }
 
 // TestCORSDevPermissiveEmitsWarn verifies the dev-permissive branch (reflect

@@ -98,35 +98,16 @@ func corsEchoWithLogger(exposeResponseTime bool, l logger.Logger, envOverride ..
 
 	switch {
 	case origins != "":
-		// Explicit allowlist — strict mode for any env. Trim whitespace so
-		// "https://a.com, https://b.com" works as operators would expect.
-		// Filter empty entries (from trailing commas or doubled separators)
-		// because echo's validateOrigin panics on "" at construction time,
-		// and operators commonly typo trailing commas.
-		raw := strings.Split(origins, ",")
-		parts := make([]string, 0, len(raw))
-		for _, p := range raw {
-			trimmed := strings.TrimSpace(p)
-			if trimmed == "" {
-				continue
-			}
-			// Reject "*" in the strict branch: it combines with
-			// AllowCredentials=true to panic echo's CORS validator.
-			// Operators wanting wildcard-with-credentials must set the
-			// env to a dev alias and leave CORS_ORIGINS unset.
-			if trimmed == "*" {
-				corsWarnf(l, "CORS_ORIGINS contains '*' which is forbidden alongside "+
-					"AllowCredentials=true; the wildcard entry is being dropped. Keep only explicit origins in "+
-					"CORS_ORIGINS. For wildcard echo behavior instead: unset CORS_ORIGINS, set APP_ENV to a "+
-					"development alias (e.g. APP_ENV=development), and set CORS_DEV_WILDCARD=true.")
-				continue
-			}
-			parts = append(parts, trimmed)
-		}
+		// Explicit allowlist — strict mode for any env.
+		parts := parseAllowedOrigins(l, origins)
 		if len(parts) == 0 {
 			// CORS_ORIGINS was set to commas/whitespace/only-'*' — treat
-			// it as the fail-closed case rather than panicking echo.
-			emitFailClosedWarn(l, appEnv)
+			// it as the fail-closed case rather than panicking echo. The
+			// warn names the invalid allowlist as the cause, not the env
+			// (this path is reachable on a dev alias too).
+			corsWarnf(l, "CORS_ORIGINS was set but yielded no valid explicit origins; "+
+				"CORS is failing closed (no Access-Control-Allow-Origin emitted). Provide "+
+				"at least one explicit origin, e.g. CORS_ORIGINS=https://your.app.")
 			failClosed(&cfg)
 			return middleware.CORSWithConfig(cfg)
 		}
@@ -166,6 +147,34 @@ func failClosed(cfg *middleware.CORSConfig) {
 	cfg.UnsafeAllowOriginFunc = func(_ *echo.Context, _ string) (string, bool, error) {
 		return "", false, nil
 	}
+}
+
+// parseAllowedOrigins splits the raw CORS_ORIGINS value into a filtered
+// strict allowlist. Whitespace is trimmed so "https://a.com, https://b.com"
+// works as operators would expect. Empty entries (from trailing commas or
+// doubled separators) are skipped because echo's validateOrigin panics on ""
+// at construction time, and operators commonly typo trailing commas. "*"
+// entries are dropped with a WARN: the wildcard combines with
+// AllowCredentials=true to panic echo's CORS validator, and operators wanting
+// wildcard-with-credentials must go through the dev opt-in instead (ADR-038).
+func parseAllowedOrigins(l logger.Logger, origins string) []string {
+	raw := strings.Split(origins, ",")
+	parts := make([]string, 0, len(raw))
+	for _, p := range raw {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == "*" {
+			corsWarnf(l, "CORS_ORIGINS contains '*' which is forbidden alongside "+
+				"AllowCredentials=true; the wildcard entry is being dropped. Keep only explicit origins in "+
+				"CORS_ORIGINS. For wildcard echo behavior instead: unset CORS_ORIGINS, set APP_ENV to a "+
+				"development alias (e.g. APP_ENV=development), and set CORS_DEV_WILDCARD=true.")
+			continue
+		}
+		parts = append(parts, trimmed)
+	}
+	return parts
 }
 
 // corsWarnf emits a CORS startup warning. With a framework logger it routes
@@ -223,18 +232,20 @@ func emitDevWildcardIgnoredWarn(l logger.Logger, appEnv string) {
 		strconv.Quote(appEnv))
 }
 
-// emitFailClosedWarn surfaces the fail-closed CORS state loudly so operators
-// notice before users do. The framework path (SetupMiddlewares) threads its
-// logger through corsEchoWithLogger so this lands in structured logging;
-// stdlib log is only the corsWarnf fallback when CORS()/corsEcho is
-// constructed without a logger. strconv.Quote sanitizes the env var
-// (escapes control chars, quotes everything as a Go string literal) before
-// it flows into the log — breaks gosec G706 taint analysis without losing
-// the operator-debugging signal.
+// emitFailClosedWarn surfaces the fail-closed CORS state on a non-dev env
+// with no CORS_ORIGINS (its only call site is the default branch — the
+// invalid-explicit-allowlist path has its own warn naming the allowlist as
+// the cause). The framework path (SetupMiddlewares) threads its logger
+// through corsEchoWithLogger so this lands in structured logging; stdlib log
+// is only the corsWarnf fallback when CORS()/corsEcho is constructed without
+// a logger. strconv.Quote sanitizes the env var (escapes control chars,
+// quotes everything as a Go string literal) before it flows into the log —
+// breaks gosec G706 taint analysis without losing the operator-debugging
+// signal.
 func emitFailClosedWarn(l logger.Logger, appEnv string) {
 	corsWarnf(l,
 		"APP_ENV=%s is not a development alias and "+
-			"CORS_ORIGINS is unset or yields no valid origins; cross-origin "+
+			"CORS_ORIGINS is unset; cross-origin "+
 			"requests will be rejected. Set CORS_ORIGINS=https://your.app "+
 			"to enable a strict allowlist.",
 		strconv.Quote(appEnv),
