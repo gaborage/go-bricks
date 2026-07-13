@@ -22,8 +22,10 @@ import (
 //     wildcard for dev convenience (explicit opt-in, ADR-038).
 //   - Otherwise (production, staging, custom envs like production-eu, or a
 //     development alias without the opt-in): fail closed — no
-//     Access-Control-Allow-Origin header is emitted, so browsers reject
-//     cross-origin requests. A WARN is logged at startup.
+//     Access-Control-Allow-Origin header is emitted, so browsers block
+//     cross-origin JavaScript from reading responses (requests still reach
+//     handlers; this is not server-side request rejection or CSRF
+//     protection). A WARN is logged at startup.
 //
 // The env can be passed explicitly via the variadic envOverride argument
 // (preferred — SetupMiddlewares passes cfg.App.Env, which honors the
@@ -103,8 +105,9 @@ func corsEcho(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFun
 			// env to a dev alias and leave CORS_ORIGINS unset.
 			if trimmed == "*" {
 				log.Printf("WARN [server.cors] CORS_ORIGINS contains '*' which is forbidden alongside " +
-					"AllowCredentials=true; the wildcard entry is being dropped. Use APP_ENV=local/dev/development " +
-					"with CORS_DEV_WILDCARD=true for wildcard echo behavior.")
+					"AllowCredentials=true; the wildcard entry is being dropped. Keep only explicit origins in " +
+					"CORS_ORIGINS. For wildcard echo behavior instead: unset CORS_ORIGINS, set APP_ENV to a " +
+					"development alias (e.g. APP_ENV=development), and set CORS_DEV_WILDCARD=true.")
 				continue
 			}
 			parts = append(parts, trimmed)

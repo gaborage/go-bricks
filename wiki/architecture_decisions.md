@@ -533,8 +533,10 @@ Rejects a non-empty database password shorter than `config.MinDatabasePasswordLe
 Requires `CORS_DEV_WILDCARD=true` (raw process env, alongside `config.IsDevelopment(appEnv)`)
 before `server/cors.go` grants the reflect-any-origin + `AllowCredentials=true` dev posture.
 Without the flag, a development-alias (or koanf-defaulted) `APP_ENV` now fails closed exactly
-like neutral and production envs — closing the "deployed without setting `APP_ENV`" hole that
-PR #696's WARN only made loud, not safe. The flag is inert outside `config.IsDevelopment`
+like neutral and production envs — eliminating the *accidental* wildcard-by-omission default
+that PR #696's WARN only made loud, not safe (a deployment that explicitly ships the flag with
+an unset `APP_ENV` still gets the wildcard; the residual risk becomes a deliberate, grep-able,
+named action). The flag is inert outside `config.IsDevelopment`
 (a non-dev env with the flag set still fails closed, with a WARN noting it's ignored), and
 unparseable values are treated as false with a WARN. Amends the CORS paragraph of
 [ADR-022](adr_022_env_policy.md).

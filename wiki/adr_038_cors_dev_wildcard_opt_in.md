@@ -37,8 +37,10 @@ closely enough to catch a WARN before the service takes traffic.
 
 Require `CORS_DEV_WILDCARD=true` (raw process env, parsed with `strconv.ParseBool`) in
 addition to `config.IsDevelopment(appEnv)` before granting the wildcard posture. Without the
-flag, a development-alias env now fails closed — identically to neutral and production envs:
-no `Access-Control-Allow-Origin` header is emitted, so browsers reject the cross-origin
+flag, a development-alias env now fails closed when no `CORS_ORIGINS` allowlist is configured
+(the strict-allowlist branch always wins first; a configured allowlist still emits headers
+for listed origins) — identically to neutral and production envs: no
+`Access-Control-Allow-Origin` header is emitted, so browsers reject the cross-origin
 request outright.
 
 **Chosen because:** it flips the default from "permissive unless proven otherwise" to
@@ -57,8 +59,10 @@ Gate the posture on a Koanf-managed config key instead of a raw env var.
 because CORS is wired before the framework's config/logger are fully bootstrapped in some
 call paths. A YAML-settable wildcard flag could also be **committed to a config file** and
 inadvertently shipped to a real environment — the exact failure mode this ADR closes. Keeping
-the knob env-only keeps the blast radius to "the shell that set it," which is never a
-committed artifact.
+the knob env-only reduces committability exposure rather than eliminating it: the flag can
+still land in compose files, `.env` files, or CI manifests, but doing so requires
+deliberately naming `CORS_DEV_WILDCARD` rather than it riding along invisibly among dozens
+of YAML config keys.
 
 ### Option D: Remove the wildcard posture entirely (Rejected)
 
@@ -124,11 +128,13 @@ unexported `corsEcho` keep their existing shapes.
 ### Positive
 
 - Forgetting `APP_ENV` (or leaving it at a dev alias) in a real deployment now fails CORS
-  closed instead of granting the most permissive posture available — closes the credential-
-  leak hole for good, not just loudly.
+  closed instead of granting the most permissive posture available — unless that deployment
+  also explicitly ships `CORS_DEV_WILDCARD=true`. The change eliminates the *accidental*
+  default (wildcard-by-omission); the residual risk becomes a deliberate, grep-able, named
+  action rather than an invisible one.
 - The opt-in is a single env var, matching the existing `CORS_ORIGINS` raw-env precedent —
-  no new config surface, no Koanf key, no risk of the flag being committed to a shared
-  config file (see Option C).
+  no new config surface, no Koanf key, reduced risk of the flag riding along invisibly in a
+  committed config file (see Option C).
 - The containment property (flag inert outside `config.IsDevelopment`) is proven by a
   dedicated regression test and by the non-dev cases of
   `TestCORSProductionAliasesTriggerStrictMode` running with the flag set.
@@ -153,7 +159,10 @@ unexported `corsEcho` keep their existing shapes.
 reflect-any-origin + credentials CORS posture must now set `CORS_DEV_WILDCARD=true`
 explicitly (or configure `CORS_ORIGINS` for a strict allowlist, which works in any
 environment). Production and staging deployments are unaffected — they already required
-`CORS_ORIGINS` to receive any CORS headers at all.
+`CORS_ORIGINS` to receive any CORS headers at all. Residual case: a deployment that
+explicitly ships `CORS_DEV_WILDCARD=true` alongside an unset (koanf-defaulted) `APP_ENV`
+still receives the wildcard — the opt-in eliminates the accidental default, not the
+deliberate action.
 
 See [wiki/migrations.md](migrations.md) atom **C50.3** for the detect/gate/apply/verify
 runbook entry.

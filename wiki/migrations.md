@@ -581,7 +581,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 ### [C50.3] dev wildcard CORS requires explicit opt-in (`CORS_DEV_WILDCARD`) · silent-behavior · when: no-match
 
-- detect: check every dev/test runtime environment (shell profiles, compose files, deployment manifests) for `CORS_DEV_WILDCARD` or `CORS_ORIGINS`
+- detect: check every dev/test runtime environment (shell profiles, compose files, deployment manifests) for a `CORS_DEV_WILDCARD` value that parses true under `strconv.ParseBool` (`true`, `1`, `t`, …) or a non-empty `CORS_ORIGINS` allowlist — a `CORS_DEV_WILDCARD` that is present but false/empty/malformed is still a no-match (runtime treats it as no opt-in; dev will fail closed and remediation is still needed)
 - gate: no-match = you relied on the old default where a development-alias `APP_ENV` (or an unset `APP_ENV`, which koanf defaults to `development`) received reflect-any-origin + `AllowCredentials=true` CORS with no explicit setting. That posture now requires `CORS_DEV_WILDCARD=true`; without it, dev fails closed exactly like neutral/production envs (no `Access-Control-Allow-Origin` header is emitted). The flag is ignored outside development aliases, and unparseable values are treated as false with a WARN. Production/staging behavior is unchanged.
 - apply: for browser-based local dev set `CORS_DEV_WILDCARD=true`; or set `CORS_ORIGINS=<comma-separated origins>` for a strict allowlist (works in any env).
 - verify: boot with `APP_ENV=development` and no flag — startup logs `WARN [server.cors] … CORS_DEV_WILDCARD is not enabled` and a cross-origin browser request gets no `Access-Control-Allow-Origin`; set `CORS_DEV_WILDCARD=true` and the wildcard-echo WARN appears instead.
