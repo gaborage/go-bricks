@@ -3,12 +3,12 @@ package inbox
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -33,12 +33,10 @@ type Module struct {
 	config *config.Config
 	getDB  func(context.Context) (dbtypes.Interface, error)
 
-	store     Store
 	processor app.InboxProcessor
 	cfg       config.InboxConfig
 
-	initMu       sync.Mutex // Protects lazy store initialization
-	tableCreated bool
+	stores tenantstore.Cache[Store] // one store per tenant ("" = single-tenant)
 }
 
 // NewModule creates a new inbox Module instance.
@@ -84,48 +82,21 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	return nil
 }
 
-// ensureStoreInitialized creates the vendor-specific store on first use.
-// Lazy because the database vendor type is only known once a connection exists.
-// Uses mutex-guarded lazy initialization (not sync.Once) so a failed init can retry.
-func (m *Module) ensureStoreInitialized(ctx context.Context) error {
-	m.initMu.Lock()
-	defer m.initMu.Unlock()
-
-	if m.store != nil {
-		return nil
-	}
-
-	db, err := m.getDB(ctx)
-	if err != nil {
-		return fmt.Errorf("inbox: database unavailable: %w", err)
-	}
-
-	var store Store
-	switch db.DatabaseType() {
-	case dbtypes.PostgreSQL:
-		store, err = NewPostgresStore(m.cfg.TableName)
-	case dbtypes.Oracle:
-		store, err = NewOracleStore(m.cfg.TableName)
-	default:
-		return fmt.Errorf("inbox: unsupported database vendor: %s", db.DatabaseType())
-	}
-	if err != nil {
-		return fmt.Errorf("inbox: failed to create store: %w", err)
-	}
-
-	// Auto-create the table if configured. Warning-only on failure: PostgreSQL
-	// uses IF NOT EXISTS (idempotent), Oracle may return ORA-00955 if it exists.
-	if m.cfg.AutoCreateTable && !m.tableCreated {
-		if createErr := store.CreateTable(ctx, db); createErr != nil {
-			m.logger.Warn().Err(createErr).
-				Str("table", m.cfg.TableName).
-				Msg("Inbox table creation failed (may already exist)")
-		}
-		m.tableCreated = true
-	}
-
-	m.store = store
-	return nil
+// ensureStoreInitialized returns the store for the tenant in ctx, creating it
+// (and, if configured, its table) on first use for that tenant. Lazy because
+// the vendor is only known once a connection exists; per-tenant because each
+// tenant has its own DB (and possibly its own vendor).
+func (m *Module) ensureStoreInitialized(ctx context.Context) (Store, error) {
+	return m.stores.Get(ctx, &tenantstore.Deps[Store]{
+		Name:            "inbox",
+		TableName:       m.cfg.TableName,
+		AutoCreateTable: m.cfg.AutoCreateTable,
+		Logger:          m.logger,
+		GetDB:           m.getDB,
+		NewPostgres:     NewPostgresStore,
+		NewOracle:       NewOracleStore,
+		WarnMsg:         "Inbox table creation failed (may already exist)",
+	})
 }
 
 // InboxProcessor implements app.InboxProvider — returns the processor for
@@ -192,24 +163,27 @@ type lazyStore struct {
 }
 
 func (s *lazyStore) MarkProcessed(ctx context.Context, tx dbtypes.Tx, rec Record) (bool, error) {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return false, err
 	}
-	return s.module.store.MarkProcessed(ctx, tx, rec)
+	return store.MarkProcessed(ctx, tx, rec)
 }
 
 func (s *lazyStore) DeleteProcessed(ctx context.Context, db dbtypes.Interface, before time.Time) (int64, error) {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return 0, err
 	}
-	return s.module.store.DeleteProcessed(ctx, db, before)
+	return store.DeleteProcessed(ctx, db, before)
 }
 
 func (s *lazyStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return err
 	}
-	return s.module.store.CreateTable(ctx, db)
+	return store.CreateTable(ctx, db)
 }
 
 // Compile-time guards.

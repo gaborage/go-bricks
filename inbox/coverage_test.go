@@ -91,9 +91,83 @@ func TestEnsureStoreInitializedOracleWithAutoCreate(t *testing.T) {
 	db.ExpectExec(`CREATE INDEX idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
 	m := newCoverageModule(db, config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true})
 
-	require.NoError(t, m.ensureStoreInitialized(t.Context()))
-	assert.True(t, m.tableCreated)
-	assert.NotNil(t, m.store)
+	store, err := m.ensureStoreInitialized(t.Context())
+	require.NoError(t, err)
+	assert.NotNil(t, store)
+}
+
+func TestEnsureStoreInitializedCreatesTablePerTenant(t *testing.T) {
+	tenants := dbtesting.NewTenantDBMap()
+	dbA := tenants.ForTenant("tenant-a")
+	dbA.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_inbox`).WillReturnRowsAffected(0)
+	dbA.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+
+	dbB := tenants.ForTenant("tenant-b")
+	dbB.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_inbox`).WillReturnRowsAffected(0)
+	dbB.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+
+	m := &Module{
+		logger: logger.New("info", false),
+		cfg:    config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true},
+		getDB:  tenants.AsGetDBFunc(),
+	}
+
+	storeA, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-a"))
+	require.NoError(t, err)
+	storeB, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-b"))
+	require.NoError(t, err)
+	storeAAgain, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-a"))
+	require.NoError(t, err)
+
+	assert.Same(t, storeA, storeAAgain, "a tenant reuses its cached store")
+	assert.NotSame(t, storeA, storeB, "different tenants receive isolated stores")
+
+	dbtesting.AssertExecExecuted(t, dbA, "CREATE TABLE")
+	dbtesting.AssertExecExecuted(t, dbB, "CREATE TABLE")
+}
+
+func TestEnsureStoreInitializedMixedVendorDialects(t *testing.T) {
+	tenants := dbtesting.NewTenantDBMap()
+	dbPG := tenants.ForTenantWithVendor("tenant-pg", dbtypes.PostgreSQL)
+	dbPG.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_inbox`).WillReturnRowsAffected(0)
+	dbPG.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+
+	dbOra := tenants.ForTenantWithVendor("tenant-oracle", dbtypes.Oracle)
+	dbOra.ExpectExec(`CREATE TABLE gobricks_inbox`).WillReturnRowsAffected(0)
+	dbOra.ExpectExec(`CREATE INDEX idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+
+	m := &Module{
+		logger: logger.New("info", false),
+		cfg:    config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true},
+		getDB:  tenants.AsGetDBFunc(),
+	}
+
+	storePG, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-pg"))
+	require.NoError(t, err)
+	storeOra, err := m.ensureStoreInitialized(multitenant.SetTenant(t.Context(), "tenant-oracle"))
+	require.NoError(t, err)
+
+	assert.IsType(t, &postgresStore{}, storePG, "postgres tenant gets the postgres dialect store")
+	assert.IsType(t, &oracleStore{}, storeOra, "oracle tenant gets the oracle dialect store")
+	dbtesting.AssertExecExecuted(t, dbPG, "CREATE TABLE")
+	dbtesting.AssertExecExecuted(t, dbOra, "CREATE TABLE")
+	assert.Len(t, dbPG.ExecLog(), 2, "postgres tenant's DB only sees its own DDL")
+	assert.Len(t, dbOra.ExecLog(), 2, "oracle tenant's DB only sees its own DDL")
+}
+
+func TestEnsureStoreInitializedSingleTenantIdempotent(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_inbox`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_inbox_processed`).WillReturnRowsAffected(0)
+	m := newCoverageModule(db, config.InboxConfig{Enabled: true, TableName: "gobricks_inbox", AutoCreateTable: true})
+
+	first, err := m.ensureStoreInitialized(t.Context())
+	require.NoError(t, err)
+	second, err := m.ensureStoreInitialized(t.Context())
+	require.NoError(t, err)
+
+	assert.Same(t, first, second, "single-tenant store identity is preserved across calls")
+	assert.Len(t, db.ExecLog(), 2, "CreateTable runs exactly once for the empty-tenant key")
 }
 
 func TestLazyStoreDelegates(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -449,22 +450,24 @@ func initEnabledModule(t *testing.T, dbVendor string, retention time.Duration) (
 
 func TestModuleEnsureStoreInitializedPostgres(t *testing.T) {
 	m, _ := initEnabledModule(t, "postgresql", 0)
-	require.NoError(t, m.ensureStoreInitialized(context.Background()))
-	assert.NotNil(t, m.store, "store created for postgres vendor")
+	store, err := m.ensureStoreInitialized(context.Background())
+	require.NoError(t, err)
+	assert.NotNil(t, store, "store created for postgres vendor")
 }
 
 func TestModuleEnsureStoreInitializedOracle(t *testing.T) {
 	m, _ := initEnabledModule(t, "oracle", 0)
-	require.NoError(t, m.ensureStoreInitialized(context.Background()))
-	assert.NotNil(t, m.store, "store created for oracle vendor")
+	store, err := m.ensureStoreInitialized(context.Background())
+	require.NoError(t, err)
+	assert.NotNil(t, store, "store created for oracle vendor")
 }
 
 func TestModuleEnsureStoreInitializedUnknownVendor(t *testing.T) {
 	m, _ := initEnabledModule(t, "mysql", 0)
-	err := m.ensureStoreInitialized(context.Background())
+	store, err := m.ensureStoreInitialized(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported database vendor")
-	assert.Nil(t, m.store, "store must remain nil on unsupported vendor")
+	assert.Nil(t, store, "store must remain nil on unsupported vendor")
 }
 
 func TestModuleEnsureStoreInitializedDBResolverError(t *testing.T) {
@@ -482,21 +485,23 @@ func TestModuleEnsureStoreInitializedDBResolverError(t *testing.T) {
 	}
 	require.NoError(t, m.Init(deps))
 
-	err := m.ensureStoreInitialized(context.Background())
+	store, err := m.ensureStoreInitialized(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "database unavailable")
 	assert.Contains(t, err.Error(), "connection refused")
+	assert.Nil(t, store)
 }
 
 func TestModuleEnsureStoreInitializedIdempotent(t *testing.T) {
 	m, _ := initEnabledModule(t, "postgresql", 0)
-	require.NoError(t, m.ensureStoreInitialized(context.Background()))
-	first := m.store
+	first, err := m.ensureStoreInitialized(context.Background())
+	require.NoError(t, err)
 
 	// Second call must not re-create the store — assert via identity since
 	// TestDB.DatabaseType() doesn't log call counts.
-	require.NoError(t, m.ensureStoreInitialized(context.Background()))
-	assert.Same(t, first, m.store, "store identity must be preserved on subsequent calls")
+	second, err := m.ensureStoreInitialized(context.Background())
+	require.NoError(t, err)
+	assert.Same(t, first, second, "store identity must be preserved on subsequent calls")
 }
 
 func TestModuleOutboxPublisherReturnsLazyPublisher(t *testing.T) {
@@ -563,7 +568,8 @@ func TestModuleRegisterJobsPropagatesCleanupError(t *testing.T) {
 
 func TestLazyPublisherPublishLazilyInitializesStore(t *testing.T) {
 	m, db := initEnabledModule(t, "postgresql", 0)
-	require.Nil(t, m.store, "store is nil before first Publish")
+	_, ok := m.stores.Cached("")
+	require.False(t, ok, "store is nil before first Publish")
 
 	// Wire the tx's INSERT expectation matching postgresStore.Insert.
 	db.ExpectTransaction().
@@ -582,7 +588,8 @@ func TestLazyPublisherPublishLazilyInitializesStore(t *testing.T) {
 	id, err := m.OutboxPublisher().Publish(context.Background(), tx, event)
 	require.NoError(t, err)
 	assert.NotEmpty(t, id, "Publish returns a generated event ID")
-	assert.NotNil(t, m.store, "store initialized lazily on first Publish")
+	_, ok = m.stores.Cached("")
+	assert.True(t, ok, "store initialized lazily on first Publish")
 }
 
 func TestLazyStoreDelegatesAllMethodsAfterInit(t *testing.T) {
@@ -597,7 +604,8 @@ func TestLazyStoreDelegatesAllMethodsAfterInit(t *testing.T) {
 
 	_, err := ls.DeletePublished(context.Background(), db, time.Now())
 	require.NoError(t, err)
-	assert.NotNil(t, m.store, "lazyStore.DeletePublished triggered lazy init")
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok, "lazyStore.DeletePublished triggered lazy init")
 }
 
 func TestLazyStoreInsertDelegatesAfterInit(t *testing.T) {
@@ -612,7 +620,8 @@ func TestLazyStoreInsertDelegatesAfterInit(t *testing.T) {
 
 	rec := &Record{ID: "evt", EventType: "x", Payload: []byte("{}"), Exchange: "ex", RoutingKey: "rk"}
 	require.NoError(t, ls.Insert(context.Background(), tx, rec))
-	assert.NotNil(t, m.store)
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok)
 }
 
 func TestLazyStoreMarkPublishedDelegatesAfterInit(t *testing.T) {
@@ -621,7 +630,8 @@ func TestLazyStoreMarkPublishedDelegatesAfterInit(t *testing.T) {
 
 	db.ExpectExec(`UPDATE gobricks_outbox SET status`).WillReturnRowsAffected(1)
 	require.NoError(t, ls.MarkPublished(context.Background(), db, "evt-id"))
-	assert.NotNil(t, m.store)
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok)
 }
 
 func TestLazyStoreMarkFailedDelegatesAfterInit(t *testing.T) {
@@ -630,7 +640,8 @@ func TestLazyStoreMarkFailedDelegatesAfterInit(t *testing.T) {
 
 	db.ExpectExec(`UPDATE gobricks_outbox SET retry_count`).WillReturnRowsAffected(1)
 	require.NoError(t, ls.MarkFailed(context.Background(), db, "evt-id", "boom"))
-	assert.NotNil(t, m.store)
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok)
 }
 
 func TestLazyStoreFetchPendingDelegatesAfterInit(t *testing.T) {
@@ -646,7 +657,8 @@ func TestLazyStoreFetchPendingDelegatesAfterInit(t *testing.T) {
 
 	_, err := ls.FetchPending(context.Background(), db, 10)
 	require.NoError(t, err)
-	assert.NotNil(t, m.store, "lazyStore.FetchPending triggered lazy init")
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok, "lazyStore.FetchPending triggered lazy init")
 }
 
 func TestLazyStoreCreateTableDelegatesAfterInit(t *testing.T) {
@@ -661,5 +673,70 @@ func TestLazyStoreCreateTableDelegatesAfterInit(t *testing.T) {
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
 
 	require.NoError(t, ls.CreateTable(context.Background(), db))
-	assert.NotNil(t, m.store, "lazyStore.CreateTable triggered lazy init")
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok, "lazyStore.CreateTable triggered lazy init")
+}
+
+func TestOutboxStorePerTenant(t *testing.T) {
+	tenants := dbtesting.NewTenantDBMap()
+	dbA := tenants.ForTenant("tenant-a")
+	dbA.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox`).WillReturnRowsAffected(0)
+	dbA.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_pending`).WillReturnRowsAffected(0)
+	dbA.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
+
+	dbB := tenants.ForTenant("tenant-b")
+	dbB.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox`).WillReturnRowsAffected(0)
+	dbB.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_pending`).WillReturnRowsAffected(0)
+	dbB.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
+
+	m := &Module{
+		logger: logger.New("info", false),
+		cfg:    config.OutboxConfig{Enabled: true, TableName: "gobricks_outbox", AutoCreateTable: true},
+		getDB:  tenants.AsGetDBFunc(),
+	}
+
+	storeA, err := m.ensureStoreInitialized(multitenant.SetTenant(context.Background(), "tenant-a"))
+	require.NoError(t, err)
+	storeB, err := m.ensureStoreInitialized(multitenant.SetTenant(context.Background(), "tenant-b"))
+	require.NoError(t, err)
+	storeAAgain, err := m.ensureStoreInitialized(multitenant.SetTenant(context.Background(), "tenant-a"))
+	require.NoError(t, err)
+
+	assert.Same(t, storeA, storeAAgain, "a tenant reuses its cached store")
+	assert.NotSame(t, storeA, storeB, "different tenants receive isolated stores")
+
+	dbtesting.AssertExecExecuted(t, dbA, "CREATE TABLE")
+	dbtesting.AssertExecExecuted(t, dbB, "CREATE TABLE")
+}
+
+func TestLazyPublisherUsesCallersTenantStore(t *testing.T) {
+	tenants := dbtesting.NewTenantDBMap()
+	dbA := tenants.ForTenantWithVendor("tenant-a", dbtypes.PostgreSQL)
+	dbA.ExpectTransaction().ExpectExec(`VALUES ($1, $2`).WillReturnRowsAffected(1)
+
+	dbB := tenants.ForTenantWithVendor("tenant-b", dbtypes.Oracle)
+	dbB.ExpectTransaction().ExpectExec(`VALUES (:1, :2`).WillReturnRowsAffected(1)
+
+	m := &Module{
+		logger: logger.New("info", false),
+		cfg:    config.OutboxConfig{Enabled: true, TableName: "gobricks_outbox", DefaultExchange: "ex"},
+		getDB:  tenants.AsGetDBFunc(),
+	}
+	pub := &lazyPublisher{module: m}
+	event := &app.OutboxEvent{EventType: "test.event", AggregateID: "agg-1", Payload: []byte(`{}`), Exchange: "ex"}
+
+	ctxA := multitenant.SetTenant(context.Background(), "tenant-a")
+	txA, err := dbA.Begin(ctxA)
+	require.NoError(t, err)
+	_, err = pub.Publish(ctxA, txA, event)
+	require.NoError(t, err)
+
+	ctxB := multitenant.SetTenant(context.Background(), "tenant-b")
+	txB, err := dbB.Begin(ctxB)
+	require.NoError(t, err)
+	// Tenant B is Oracle (:N placeholders). Before the fix, lazyPublisher cached
+	// the first Publish's store behind a sync.Once — this second call would still
+	// emit tenant A's Postgres $N-placeholder SQL and fail txB's :N-only expectation.
+	_, err = pub.Publish(ctxB, txB, event)
+	require.NoError(t, err, "tenant B's publish must use tenant B's (Oracle) store, not a cached tenant-A store")
 }
