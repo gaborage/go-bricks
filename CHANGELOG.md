@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.49.1](https://github.com/gaborage/go-bricks/compare/v0.49.0...v0.49.1) (2026-07-13)
+
+
+### Fixed
+
+* **database:** apply pool defaults to dynamic-tenant DB configs ([#690](https://github.com/gaborage/go-bricks/issues/690)) ([8f4ce60](https://github.com/gaborage/go-bricks/commit/8f4ce6096b168c8db06677a278400b393236ecee))
+* **database:** redact driver error class on DB spans instead of raw message ([#684](https://github.com/gaborage/go-bricks/issues/684)) ([a2a3353](https://github.com/gaborage/go-bricks/commit/a2a33532fa74e2c09248c6242f6f2f11b4da859c))
+* **deps:** update module github.com/gaborage/go-bricks to v0.49.0 ([#681](https://github.com/gaborage/go-bricks/issues/681)) ([97ac301](https://github.com/gaborage/go-bricks/commit/97ac301a79e80f7c7e775a2c6609a1357da2a108))
+* **docs:** harden pre-push gates to ordered /simplify -&gt; /security-audit -&gt; /code-review ([#697](https://github.com/gaborage/go-bricks/issues/697)) ([df02ba6](https://github.com/gaborage/go-bricks/commit/df02ba69c667ae68643de3924db041f53a219749))
+* **docs:** update PR review workflow to clarify SonarCloud issue handling ([#693](https://github.com/gaborage/go-bricks/issues/693)) ([49d1224](https://github.com/gaborage/go-bricks/commit/49d12243f184bef3f030d4fa3219eb89befa7230))
+* **httpclient:** shallow-copy caller-provided client before setting Transport ([#689](https://github.com/gaborage/go-bricks/issues/689)) ([4ae82cd](https://github.com/gaborage/go-bricks/commit/4ae82cd5301497daeb688afba862fa63f8806880))
+* **inbox,outbox:** initialize store/table per tenant in multi-tenant mode ([#694](https://github.com/gaborage/go-bricks/issues/694)) ([9103c9f](https://github.com/gaborage/go-bricks/commit/9103c9f0c837d66bfcc26bd4071b86195deaa5cc))
+* **logger:** fully mask URL-valued sensitive fields ([#683](https://github.com/gaborage/go-bricks/issues/683)) ([d3e61a8](https://github.com/gaborage/go-bricks/commit/d3e61a87bf5e1962e8274dffae07110c2c6889c8))
+* **migration:** recover panics in the audit-sink consumer goroutine ([#686](https://github.com/gaborage/go-bricks/issues/686)) ([e0b377f](https://github.com/gaborage/go-bricks/commit/e0b377fc0bf813c03cb78722d4a361aa94118c76))
+* **migration:** select the Flyway JSON envelope, not the first brace in noise ([#695](https://github.com/gaborage/go-bricks/issues/695)) ([5aa5c4c](https://github.com/gaborage/go-bricks/commit/5aa5c4ca331fe47a7e4ed92ffa02fdc0c214c60c))
+* **scheduler:** register manual job in-flight before tryLock and re-check shutdown ([#687](https://github.com/gaborage/go-bricks/issues/687)) ([49a207b](https://github.com/gaborage/go-bricks/commit/49a207b6fe9d1d7941415f94e76790efccf41e1c))
+* **scheduler:** register manual trigger under m.mu before spawn to close Add-after-Wait race ([#688](https://github.com/gaborage/go-bricks/issues/688)) ([b65dd05](https://github.com/gaborage/go-bricks/commit/b65dd05080bbef652b1f7d59565c56feec08a3f6))
+* **server:** route unhandled 5xx logs through the filtered framework logger ([#682](https://github.com/gaborage/go-bricks/issues/682)) ([d93dc74](https://github.com/gaborage/go-bricks/commit/d93dc743dd4fb857f0df2cd7ca0e806b78c41999))
+* **server:** warn when CORS reflects any origin with credentials (unset APP_ENV) ([#696](https://github.com/gaborage/go-bricks/issues/696)) ([2f32f5b](https://github.com/gaborage/go-bricks/commit/2f32f5baa20fa668c1ec93f0fa13fac34e74a95e))
+
 ## [0.49.0](https://github.com/gaborage/go-bricks/compare/v0.48.0...v0.49.0) (2026-07-10)
 
 
