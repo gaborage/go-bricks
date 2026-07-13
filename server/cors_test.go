@@ -850,120 +850,60 @@ func TestCORSStrictAllowlistNoDevWarn(t *testing.T) {
 	assert.NotContains(t, buf.String(), "reflects ANY origin")
 }
 
-// TestCORSDevWithoutOptInFailsClosed verifies that a development-alias env
-// without CORS_DEV_WILDCARD=true now fails closed (ADR-038) instead of
-// silently granting the reflect-any-origin + credentials posture.
-func TestCORSDevWithoutOptInFailsClosed(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+// TestCORSDevWildcardOptInMatrix drives the CORS_DEV_WILDCARD opt-in matrix
+// (ADR-038): a development-alias env fails closed without the flag, gets the
+// reflect-any-origin + credentials posture only with an explicit truthy flag
+// (the plan-009 permissive WARN still fires — opting in doesn't buy silence),
+// treats an unparseable value as false with a WARN, and ignores the flag
+// entirely outside development aliases (the containment property — the flag
+// must never grant the wildcard posture for a non-dev env).
+func TestCORSDevWildcardOptInMatrix(t *testing.T) {
+	tests := []struct {
+		name         string
+		appEnv       string
+		flag         string
+		expectEcho   bool
+		warnContains string
+	}{
+		{name: "dev_without_opt_in_fails_closed", appEnv: "development", flag: "", expectEcho: false, warnContains: "CORS_DEV_WILDCARD is not enabled"},
+		{name: "dev_opt_in_enables_wildcard", appEnv: "development", flag: "true", expectEcho: true, warnContains: "reflects ANY origin"},
+		{name: "dev_opt_in_invalid_value_fails_closed", appEnv: "development", flag: "ture", expectEcho: false, warnContains: "is not a valid boolean"},
+		{name: "flag_ignored_outside_dev", appEnv: "production", flag: "true", expectEcho: false, warnContains: "the flag is ignored outside development"},
+	}
 
-	t.Setenv("APP_ENV", "development")
-	t.Setenv("CORS_ORIGINS", "")
-	t.Setenv("CORS_DEV_WILDCARD", "x")
-	os.Unsetenv("CORS_DEV_WILDCARD")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	e := echo.New()
-	handler := corsEcho(false, "development")(func(c *echo.Context) error {
-		return c.String(http.StatusOK, "test")
-	})
+			t.Setenv("APP_ENV", tc.appEnv)
+			t.Setenv("CORS_ORIGINS", "")
+			// devWildcardOptIn treats empty and unset identically, so "" is
+			// the unset case here.
+			t.Setenv("CORS_DEV_WILDCARD", tc.flag)
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
-	req.Header.Set("Origin", "https://intruder.example.com")
-	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
+			e := echo.New()
+			handler := corsEcho(false, tc.appEnv)(func(c *echo.Context) error {
+				return c.String(http.StatusOK, "test")
+			})
 
-	require.NoError(t, handler(c))
-	assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin),
-		"dev env without CORS_DEV_WILDCARD must fail closed")
-	assert.NotEqual(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
-	assert.Contains(t, buf.String(), "CORS_DEV_WILDCARD is not enabled")
-}
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
+			req.Header.Set("Origin", "https://intruder.example.com")
+			req.Header.Set(HeaderAccessControlRequestMethod, "GET")
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
 
-// TestCORSDevOptInEnablesWildcard verifies that setting CORS_DEV_WILDCARD=true
-// on a development-alias env restores the reflect-any-origin + credentials
-// posture, and the plan-009 permissive WARN still fires (opting in doesn't
-// buy silence).
-func TestCORSDevOptInEnablesWildcard(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-
-	t.Setenv("APP_ENV", "development")
-	t.Setenv("CORS_ORIGINS", "")
-	t.Setenv("CORS_DEV_WILDCARD", "true")
-
-	e := echo.New()
-	handler := corsEcho(false, "development")(func(c *echo.Context) error {
-		return c.String(http.StatusOK, "test")
-	})
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
-	req.Header.Set("Origin", "https://intruder.example.com")
-	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	require.NoError(t, handler(c))
-	assert.Equal(t, "https://intruder.example.com", rec.Header().Get(HeaderAccessControlAllowOrigin))
-	assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
-	assert.Contains(t, buf.String(), "reflects ANY origin")
-}
-
-// TestCORSDevOptInInvalidValueFailsClosed verifies an unparseable
-// CORS_DEV_WILDCARD value is treated as false (fail closed) with a WARN,
-// rather than silently granting or denying without explanation.
-func TestCORSDevOptInInvalidValueFailsClosed(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-
-	t.Setenv("APP_ENV", "development")
-	t.Setenv("CORS_ORIGINS", "")
-	t.Setenv("CORS_DEV_WILDCARD", "ture") // typo on purpose
-
-	e := echo.New()
-	handler := corsEcho(false, "development")(func(c *echo.Context) error {
-		return c.String(http.StatusOK, "test")
-	})
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
-	req.Header.Set("Origin", "https://intruder.example.com")
-	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	require.NoError(t, handler(c))
-	assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin))
-	assert.Contains(t, buf.String(), "is not a valid boolean")
-}
-
-// TestCORSDevWildcardIgnoredOutsideDev verifies CORS_DEV_WILDCARD is inert
-// outside development aliases — the flag must never grant the wildcard
-// posture for a non-dev env (the containment property ADR-038 depends on).
-func TestCORSDevWildcardIgnoredOutsideDev(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-
-	t.Setenv("APP_ENV", "production")
-	t.Setenv("CORS_DEV_WILDCARD", "true")
-	t.Setenv("CORS_ORIGINS", "")
-
-	e := echo.New()
-	handler := corsEcho(false, "production")(func(c *echo.Context) error {
-		return c.String(http.StatusOK, "test")
-	})
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
-	req.Header.Set("Origin", "https://intruder.example.com")
-	req.Header.Set(HeaderAccessControlRequestMethod, "GET")
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	require.NoError(t, handler(c))
-	assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin),
-		"CORS_DEV_WILDCARD must be ignored outside development aliases")
-	assert.Contains(t, buf.String(), "the flag is ignored outside development")
+			require.NoError(t, handler(c))
+			if tc.expectEcho {
+				assert.Equal(t, "https://intruder.example.com", rec.Header().Get(HeaderAccessControlAllowOrigin))
+				assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
+			} else {
+				assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin),
+					"must fail closed: no Access-Control-Allow-Origin")
+				assert.NotEqual(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
+			}
+			assert.Contains(t, buf.String(), tc.warnContains)
+		})
+	}
 }

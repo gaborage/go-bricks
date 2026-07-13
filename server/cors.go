@@ -134,11 +134,7 @@ func corsEcho(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFun
 	default:
 		// Non-dev env with no explicit CORS_ORIGINS: fail closed.
 		emitFailClosedWarn(appEnv)
-		if _, ok := os.LookupEnv("CORS_DEV_WILDCARD"); ok {
-			log.Printf("WARN [server.cors] CORS_DEV_WILDCARD is set but APP_ENV=%s "+
-				"is not a development alias; the flag is ignored outside development.",
-				strconv.Quote(appEnv))
-		}
+		emitDevWildcardIgnoredWarn(appEnv)
 		failClosed(&cfg)
 	}
 
@@ -185,6 +181,18 @@ func emitDevOptInRequiredWarn(appEnv string) {
 		"Access-Control-Allow-Origin emitted). For browser-based local dev set "+
 		"CORS_DEV_WILDCARD=true, or set CORS_ORIGINS=http://localhost:3000 for "+
 		"a strict allowlist (ADR-038).", strconv.Quote(appEnv))
+}
+
+// emitDevWildcardIgnoredWarn surfaces a set-but-ignored CORS_DEV_WILDCARD on a
+// non-development env, so operators aren't confused about why the flag "does
+// nothing" there. No-op when the flag is unset.
+func emitDevWildcardIgnoredWarn(appEnv string) {
+	if _, ok := os.LookupEnv("CORS_DEV_WILDCARD"); !ok {
+		return
+	}
+	log.Printf("WARN [server.cors] CORS_DEV_WILDCARD is set but APP_ENV=%s "+
+		"is not a development alias; the flag is ignored outside development.",
+		strconv.Quote(appEnv))
 }
 
 // emitFailClosedWarn surfaces the fail-closed CORS state loudly so operators
