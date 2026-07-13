@@ -121,6 +121,17 @@ func TestParseFlywayJSONSkipsInvalidBraceNoise(t *testing.T) {
 	assert.True(t, got.Success)
 }
 
+func TestParseFlywayJSONSkipsNestedNonFlywayObjects(t *testing.T) {
+	// A brace nested inside an already-decoded noise object must not be
+	// promoted to a top-level candidate — {"operation":"connect"} would
+	// otherwise pass looksLikeFlyway and shadow the real envelope.
+	src := `{"msg":"probe","ctx":{"operation":"connect"}}` + "\n" + readFixture(t, "migrate_success.json")
+	got, err := parseFlywayJSON(src)
+	require.NoError(t, err)
+	assert.True(t, got.Success)
+	assert.Equal(t, "migrate", got.Operation)
+}
+
 func TestParseFlywayJSONNoFlywayEnvelopeIsUnparsed(t *testing.T) {
 	// Two well-formed JSON objects, neither carrying a Flyway field — must
 	// classify as unparsed, not as a spurious reported failure.

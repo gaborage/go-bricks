@@ -138,7 +138,11 @@ func parseFlywayJSON(output string) (Result, error) {
 	}
 
 	var firstDecodeErr error
+	skipBelow := 0 // candidates below this offset are inside an already-decoded JSON value
 	for _, start := range objectStarts(trimmed) {
+		if start < skipBelow {
+			continue
+		}
 		var env flywayJSONEnvelope
 		dec := json.NewDecoder(strings.NewReader(trimmed[start:]))
 		if err := dec.Decode(&env); err != nil {
@@ -147,6 +151,9 @@ func parseFlywayJSON(output string) (Result, error) {
 			}
 			continue
 		}
+		// Only after a successful decode — InputOffset is not meaningful after
+		// a failure, and braces inside malformed text must stay candidates.
+		skipBelow = start + int(dec.InputOffset())
 		if !env.looksLikeFlyway() {
 			continue
 		}
