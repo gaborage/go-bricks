@@ -105,7 +105,7 @@ func TestParseFlywayJSONSkipsValidObjectNoise(t *testing.T) {
 	// A structured-log noise line ahead of the envelope is itself a
 	// well-formed JSON object — the first '{' alone can't distinguish it
 	// from the Flyway envelope that follows.
-	got, err := parseFlywayJSON(readFixture(t, "migrate_valid_object_noise.json"))
+	got, err := parseFlywayJSON(readFixture(t, "migrate_valid_object_noise.txt"))
 	require.NoError(t, err)
 	assert.True(t, got.Success)
 	assert.Equal(t, "migrate", got.Operation)
@@ -123,9 +123,10 @@ func TestParseFlywayJSONSkipsInvalidBraceNoise(t *testing.T) {
 
 func TestParseFlywayJSONSkipsNestedNonFlywayObjects(t *testing.T) {
 	// A brace nested inside an already-decoded noise object must not be
-	// promoted to a top-level candidate — {"operation":"connect"} would
-	// otherwise pass looksLikeFlyway and shadow the real envelope.
-	src := `{"msg":"probe","ctx":{"operation":"connect"}}` + "\n" + readFixture(t, "migrate_success.json")
+	// promoted to a top-level candidate — {"operation":"connect","success":true}
+	// carries the validated operation+success combination, so it would pass
+	// looksLikeFlyway and shadow the real envelope if nested-skip regressed.
+	src := `{"msg":"probe","ctx":{"operation":"connect","success":true}}` + "\n" + readFixture(t, "migrate_success.json")
 	got, err := parseFlywayJSON(src)
 	require.NoError(t, err)
 	assert.True(t, got.Success)
@@ -183,6 +184,7 @@ func TestParseFlywayJSONSkipsEnvelopeLookalikeNoise(t *testing.T) {
 		{name: "operation_without_success", noise: `{"operation":"connect","level":"info"}`},
 		{name: "error_without_errorcode", noise: `{"error":{"code":"X"},"msg":"retry"}`},
 		{name: "flywayversion_alone", noise: `{"flywayVersion":"9.0","msg":"banner"}`},
+		{name: "flyway_shaped_object_inside_array_noise", noise: `[{"operation":"connect","success":true}]`},
 	}
 
 	for _, tt := range tests {
