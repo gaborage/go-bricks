@@ -120,6 +120,7 @@ func corsEcho(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFun
 		// Echo v5 forbids AllowOrigins=["*"] with AllowCredentials=true,
 		// so we keep credentials on for dev convenience and use the unsafe
 		// echo-back func to satisfy Echo's validation.
+		emitDevPermissiveWarn(appEnv)
 		cfg.AllowOrigins = []string{"*"}
 		cfg.UnsafeAllowOriginFunc = func(_ *echo.Context, origin string) (string, bool, error) {
 			return origin, true, nil
@@ -156,4 +157,23 @@ func emitFailClosedWarn(appEnv string) {
 			"to enable a strict allowlist.",
 		strconv.Quote(appEnv),
 	)
+}
+
+// emitDevPermissiveWarn surfaces the reflect-any-origin + AllowCredentials CORS
+// posture loudly. It checks the process environment directly: on the production
+// path CORS() receives cfg.App.Env, which koanf has already defaulted to
+// "development" when APP_ENV is unset — the argument alone cannot distinguish
+// "operator chose dev" from "operator forgot to set APP_ENV".
+func emitDevPermissiveWarn(appEnv string) {
+	source := "APP_ENV=" + strconv.Quote(appEnv)
+	if raw, ok := os.LookupEnv("APP_ENV"); !ok {
+		source = "APP_ENV is not set in the process environment (the development default, or a config-file app.env, is in effect)"
+	} else if raw != appEnv {
+		// envOverride (koanf-resolved) took precedence over a differing raw
+		// process value — surface both so operators aren't misled about the source.
+		source += " (process APP_ENV=" + strconv.Quote(raw) + ")"
+	}
+	log.Printf("WARN [server.cors] %s: CORS reflects ANY origin WITH credentials "+
+		"(the most permissive posture). If this is production, set APP_ENV=production "+
+		"and CORS_ORIGINS=https://your.app. Ignore only for local development.", source)
 }

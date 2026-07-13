@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -758,4 +760,74 @@ func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
 		"CORS_ORIGINS=* in non-dev env must fail closed, not echo the origin")
 	assert.NotEqual(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials),
 		"fail-closed mode must explicitly drop AllowCredentials so the response cannot carry session cookies cross-origin")
+}
+
+// TestCORSDevPermissiveEmitsWarn verifies the dev-permissive branch (reflect
+// any origin + AllowCredentials=true) now logs a WARN instead of staying
+// silent, and names the explicitly-set APP_ENV value.
+func TestCORSDevPermissiveEmitsWarn(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("CORS_ORIGINS", "")
+
+	_ = CORS(true, "development")
+
+	assert.Contains(t, buf.String(), "reflects ANY origin")
+	assert.Contains(t, buf.String(), `APP_ENV="development"`)
+}
+
+// TestCORSUnsetEnvWarnsAboutDefaulting verifies the WARN calls out that
+// APP_ENV was never set in the process environment (as opposed to being
+// explicitly set to a dev alias) — this is the "operator forgot APP_ENV"
+// scenario the koanf default silently papers over.
+func TestCORSUnsetEnvWarnsAboutDefaulting(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	t.Setenv("APP_ENV", "x") // registers restore-on-cleanup
+	os.Unsetenv("APP_ENV")   // truly unset — t.Setenv("APP_ENV", "") would leave it set-but-empty
+	t.Setenv("CORS_ORIGINS", "")
+
+	// The override mimics the production path, where koanf has already
+	// defaulted cfg.App.Env to "development" despite APP_ENV being unset.
+	_ = CORS(true, "development")
+
+	assert.Contains(t, buf.String(), "not set in the process environment")
+}
+
+// TestCORSDevPermissiveWarnNotesProcessOverride verifies that when the
+// effective (envOverride) value diverges from the raw process APP_ENV, the
+// WARN surfaces both rather than implying the override IS the process value.
+func TestCORSDevPermissiveWarnNotesProcessOverride(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	t.Setenv("APP_ENV", "local")
+	t.Setenv("CORS_ORIGINS", "")
+
+	// envOverride ("dev") differs from the raw process APP_ENV ("local").
+	_ = CORS(true, "dev")
+
+	assert.Contains(t, buf.String(), `APP_ENV="dev"`)
+	assert.Contains(t, buf.String(), `process APP_ENV="local"`)
+}
+
+// TestCORSStrictAllowlistNoDevWarn is a regression guard: when CORS_ORIGINS
+// is set, the strict-allowlist branch wins regardless of env, so the
+// dev-permissive WARN must not fire.
+func TestCORSStrictAllowlistNoDevWarn(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	t.Setenv("CORS_ORIGINS", "https://a.example")
+
+	_ = CORS(true, "development")
+
+	assert.NotContains(t, buf.String(), "reflects ANY origin")
 }
