@@ -754,8 +754,9 @@ func TestCORSStrictBranchTolerantOfTrailingComma(t *testing.T) {
 // allowlist as the cause — not the environment.
 func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
 	var buf bytes.Buffer
+	previousOutput := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
@@ -794,8 +795,9 @@ func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
 // silent, and names the explicitly-set APP_ENV value.
 func TestCORSDevPermissiveEmitsWarn(t *testing.T) {
 	var buf bytes.Buffer
+	previousOutput := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("CORS_ORIGINS", "")
@@ -813,8 +815,9 @@ func TestCORSDevPermissiveEmitsWarn(t *testing.T) {
 // scenario the koanf default silently papers over.
 func TestCORSUnsetEnvWarnsAboutDefaulting(t *testing.T) {
 	var buf bytes.Buffer
+	previousOutput := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	t.Setenv("APP_ENV", "x") // registers restore-on-cleanup
 	os.Unsetenv("APP_ENV")   // truly unset — t.Setenv("APP_ENV", "") would leave it set-but-empty
@@ -833,8 +836,9 @@ func TestCORSUnsetEnvWarnsAboutDefaulting(t *testing.T) {
 // WARN surfaces both rather than implying the override IS the process value.
 func TestCORSDevPermissiveWarnNotesProcessOverride(t *testing.T) {
 	var buf bytes.Buffer
+	previousOutput := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	t.Setenv("APP_ENV", "local")
 	t.Setenv("CORS_ORIGINS", "")
@@ -852,8 +856,9 @@ func TestCORSDevPermissiveWarnNotesProcessOverride(t *testing.T) {
 // dev-permissive WARN must not fire.
 func TestCORSStrictAllowlistNoDevWarn(t *testing.T) {
 	var buf bytes.Buffer
+	previousOutput := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	t.Setenv("CORS_ORIGINS", "https://a.example")
 
@@ -886,8 +891,9 @@ func TestCORSDevWildcardOptInMatrix(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
+			previousOutput := log.Writer()
 			log.SetOutput(&buf)
-			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+			t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 			t.Setenv("APP_ENV", tc.appEnv)
 			t.Setenv("CORS_ORIGINS", "")
@@ -957,8 +963,9 @@ func TestCORSWarnsRouteThroughProvidedLogger(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
+			previousOutput := log.Writer()
 			log.SetOutput(&buf)
-			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+			t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 			t.Setenv("APP_ENV", "development")
 			t.Setenv("CORS_ORIGINS", "")
