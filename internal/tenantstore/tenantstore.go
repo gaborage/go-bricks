@@ -24,7 +24,8 @@ type Deps[S TableCreator] struct {
 	AutoCreateTable bool
 	Logger          logger.Logger
 	GetDB           func(context.Context) (dbtypes.Interface, error)
-	NewStore        func(vendor, tableName string) (S, error)
+	NewPostgres     func(tableName string) (S, error)
+	NewOracle       func(tableName string) (S, error)
 	WarnMsg         string // e.g. "Inbox table creation failed (may already exist)"
 }
 
@@ -54,9 +55,17 @@ func (c *Cache[S]) Get(ctx context.Context, d *Deps[S]) (S, error) {
 		return zero, fmt.Errorf("%s: database unavailable: %w", d.Name, err)
 	}
 
-	store, err := d.NewStore(db.DatabaseType(), d.TableName)
+	var store S
+	switch db.DatabaseType() {
+	case dbtypes.PostgreSQL:
+		store, err = d.NewPostgres(d.TableName)
+	case dbtypes.Oracle:
+		store, err = d.NewOracle(d.TableName)
+	default:
+		return zero, fmt.Errorf("%s: unsupported database vendor: %s", d.Name, db.DatabaseType())
+	}
 	if err != nil {
-		return zero, err
+		return zero, fmt.Errorf("%s: failed to create store: %w", d.Name, err)
 	}
 
 	if d.AutoCreateTable {

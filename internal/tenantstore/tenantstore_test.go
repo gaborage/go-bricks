@@ -15,6 +15,7 @@ import (
 
 // fakeStore implements TableCreator with a controllable CreateTable outcome.
 type fakeStore struct {
+	vendor    string
 	tableName string
 	createErr error
 	creates   int
@@ -25,20 +26,25 @@ func (s *fakeStore) CreateTable(context.Context, dbtypes.Interface) error {
 	return s.createErr
 }
 
-// newTestDeps builds Deps backed by the given GetDB; newStore tracks calls.
-func newTestDeps(getDB func(context.Context) (dbtypes.Interface, error), autoCreate bool, createErr error) (deps *Deps[*fakeStore], storeVendors *[]string) {
+// newTestDeps builds Deps backed by the given GetDB; the per-vendor
+// constructors record which vendor was invoked into the returned slice.
+func newTestDeps(getDB func(context.Context) (dbtypes.Interface, error), autoCreate bool, createErr error) (deps *Deps[*fakeStore], constructorVendors *[]string) {
 	vendors := []string{}
+	newFor := func(vendor string) func(string) (*fakeStore, error) {
+		return func(tableName string) (*fakeStore, error) {
+			vendors = append(vendors, vendor)
+			return &fakeStore{vendor: vendor, tableName: tableName, createErr: createErr}, nil
+		}
+	}
 	d := &Deps[*fakeStore]{
 		Name:            "testmod",
 		TableName:       "test_table",
 		AutoCreateTable: autoCreate,
 		Logger:          logger.New("info", false),
 		GetDB:           getDB,
-		NewStore: func(vendor, tableName string) (*fakeStore, error) {
-			vendors = append(vendors, vendor)
-			return &fakeStore{tableName: tableName, createErr: createErr}, nil
-		},
-		WarnMsg: "test table creation failed",
+		NewPostgres:     newFor(dbtypes.PostgreSQL),
+		NewOracle:       newFor(dbtypes.Oracle),
+		WarnMsg:         "test table creation failed",
 	}
 	return d, &vendors
 }
@@ -60,8 +66,10 @@ func TestCacheGetCreatesStorePerTenant(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotSame(t, storeA, storeB, "different tenants receive isolated stores")
-	assert.Equal(t, []string{dbtypes.PostgreSQL, dbtypes.Oracle}, *vendors, "each tenant's store is built for its own vendor")
-	assert.Equal(t, "test_table", storeA.tableName, "table name passes through to the store factory")
+	assert.Equal(t, dbtypes.PostgreSQL, storeA.vendor, "postgres tenant's store comes from NewPostgres")
+	assert.Equal(t, dbtypes.Oracle, storeB.vendor, "oracle tenant's store comes from NewOracle")
+	assert.Equal(t, []string{dbtypes.PostgreSQL, dbtypes.Oracle}, *vendors, "each tenant invokes only its own vendor's constructor")
+	assert.Equal(t, "test_table", storeA.tableName, "table name passes through to the constructor")
 }
 
 func TestCacheGetReturnsCachedStoreOnHit(t *testing.T) {
@@ -74,7 +82,30 @@ func TestCacheGetReturnsCachedStoreOnHit(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Same(t, first, second, "the empty-tenant store is reused across calls")
-	assert.Len(t, *vendors, 1, "NewStore runs once per tenant")
+	assert.Len(t, *vendors, 1, "the constructor runs once per tenant")
+}
+
+func TestCacheGetOraclePath(t *testing.T) {
+	d, vendors := newTestDeps(singleDB(dbtesting.NewTestDB(dbtypes.Oracle)), false, nil)
+	c := &Cache[*fakeStore]{}
+
+	store, err := c.Get(t.Context(), d)
+	require.NoError(t, err)
+	assert.Equal(t, dbtypes.Oracle, store.vendor)
+	assert.Equal(t, []string{dbtypes.Oracle}, *vendors, "only NewOracle is invoked for an Oracle DB")
+}
+
+func TestCacheGetUnknownVendorError(t *testing.T) {
+	d, vendors := newTestDeps(singleDB(dbtesting.NewTestDB("mysql")), false, nil)
+	c := &Cache[*fakeStore]{}
+
+	store, err := c.Get(t.Context(), d)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "testmod: unsupported database vendor: mysql")
+	assert.Nil(t, store)
+	assert.Empty(t, *vendors, "no constructor runs for an unknown vendor")
+	_, ok := c.Cached("")
+	assert.False(t, ok)
 }
 
 func TestCacheGetReturnsGetDBError(t *testing.T) {
@@ -91,18 +122,19 @@ func TestCacheGetReturnsGetDBError(t *testing.T) {
 	assert.False(t, ok, "a failed init caches nothing, so it can retry")
 }
 
-func TestCacheGetReturnsNewStoreError(t *testing.T) {
+func TestCacheGetReturnsConstructorError(t *testing.T) {
 	cause := errors.New("bad table name")
 	d, _ := newTestDeps(singleDB(dbtesting.NewTestDB(dbtypes.PostgreSQL)), false, nil)
 	calls := 0
-	d.NewStore = func(_, _ string) (*fakeStore, error) {
+	d.NewPostgres = func(string) (*fakeStore, error) {
 		calls++
 		return nil, cause
 	}
 	c := &Cache[*fakeStore]{}
 
 	_, err := c.Get(t.Context(), d)
-	require.ErrorIs(t, err, cause, "factory errors propagate unwrapped (the factory owns its prefix)")
+	require.ErrorIs(t, err, cause)
+	assert.Contains(t, err.Error(), "testmod: failed to create store")
 
 	_, err = c.Get(t.Context(), d)
 	require.ErrorIs(t, err, cause)

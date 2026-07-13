@@ -186,26 +186,10 @@ func (m *Module) ensureStoreInitialized(ctx context.Context) (Store, error) {
 		AutoCreateTable: m.cfg.AutoCreateTable,
 		Logger:          m.logger,
 		GetDB:           m.getDB,
-		NewStore:        newStoreForVendor,
+		NewPostgres:     NewPostgresStore,
+		NewOracle:       NewOracleStore,
 		WarnMsg:         "Outbox table creation failed (may already exist)",
 	})
-}
-
-func newStoreForVendor(vendor, tableName string) (Store, error) {
-	var store Store
-	var err error
-	switch vendor {
-	case dbtypes.PostgreSQL:
-		store, err = NewPostgresStore(tableName)
-	case dbtypes.Oracle:
-		store, err = NewOracleStore(tableName)
-	default:
-		return nil, fmt.Errorf("outbox: unsupported database vendor: %s", vendor)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("outbox: failed to create store: %w", err)
-	}
-	return store, nil
 }
 
 // OutboxPublisher implements app.OutboxProvider — returns the Publisher for ModuleDeps wiring.
