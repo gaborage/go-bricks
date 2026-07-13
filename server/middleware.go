@@ -91,7 +91,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// CORS — pass cfg.App.Env so the policy honors the Koanf default of
 	// EnvDevelopment (instead of falling back to os.Getenv which is empty
 	// when the operator relies on config.yaml / framework defaults).
-	e.Use(corsEcho(cfg.Server.ResponseTime.Enabled, cfg.App.Env))
+	e.Use(corsEchoWithLogger(cfg.Server.ResponseTime.Enabled, log, cfg.App.Env))
 
 	// IP pre-guard rate limiting (runs before tenant resolution for attack prevention)
 	if cfg.App.Rate.IPPreGuard.Enabled {

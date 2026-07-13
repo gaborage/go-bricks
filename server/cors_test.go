@@ -3,15 +3,19 @@ package server
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 func TestCORSDevelopmentEnvironment(t *testing.T) {
@@ -26,6 +30,7 @@ func TestCORSDevelopmentEnvironment(t *testing.T) {
 	// Set development environment
 	os.Setenv("APP_ENV", "development")
 	os.Unsetenv("CORS_ORIGINS")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	// Setup Echo
 	e := echo.New()
@@ -224,6 +229,7 @@ func TestCORSAllowedHeaders(t *testing.T) {
 	}()
 
 	os.Setenv("APP_ENV", "development")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	// Setup Echo
 	e := echo.New()
@@ -263,6 +269,7 @@ func TestCORSExposedHeaders(t *testing.T) {
 	}()
 
 	os.Setenv("APP_ENV", "development")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	// Setup Echo — exposeResponseTime=true mirrors server.responsetime.enabled.
 	e := echo.New()
@@ -302,6 +309,7 @@ func TestCORSExposedHeadersResponseTimeDisabled(t *testing.T) {
 	}()
 
 	os.Setenv("APP_ENV", "development")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	e := echo.New()
 	corsMiddleware := corsEcho(false)
@@ -333,6 +341,7 @@ func TestCORSActualRequestHandling(t *testing.T) {
 	}()
 
 	os.Setenv("APP_ENV", "development")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	// Setup Echo
 	e := echo.New()
@@ -382,6 +391,7 @@ func TestCORSMaxAge(t *testing.T) {
 	}()
 
 	os.Setenv("APP_ENV", "development")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	// Setup Echo
 	e := echo.New()
@@ -414,6 +424,7 @@ func TestCORSCredentialsEnabled(t *testing.T) {
 	}()
 
 	os.Setenv("APP_ENV", "development")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	// Setup Echo
 	e := echo.New()
@@ -543,6 +554,7 @@ func TestCORSMiddlewareIntegration(t *testing.T) {
 	}()
 
 	os.Setenv("APP_ENV", "development")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	// Setup Echo with CORS middleware
 	e := echo.New()
@@ -581,6 +593,11 @@ func TestCORSProductionAliasesTriggerStrictMode(t *testing.T) {
 		os.Setenv("APP_ENV", originalAppEnv)
 		os.Setenv("CORS_ORIGINS", originalCorsOrigins)
 	}()
+
+	// Opt in once for the whole table: proves the dev case still gets the
+	// wildcard AND that the flag does not weaken the non-dev cases below
+	// (containment property, ADR-038).
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	tests := []struct {
 		name           string
@@ -636,7 +653,8 @@ func TestCORSProductionAliasesTriggerStrictMode(t *testing.T) {
 // envOverride parameter (passed by SetupMiddlewares from cfg.App.Env)
 // takes precedence over APP_ENV from the OS env. This ensures the
 // common `go run` workflow — which relies on Koanf's EnvDevelopment
-// default — gets the dev wildcard rather than fail-closed CORS.
+// default plus CORS_DEV_WILDCARD=true (ADR-038) — gets the dev wildcard
+// rather than fail-closed CORS.
 func TestCORSEnvOverrideHonorsConfigValue(t *testing.T) {
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
@@ -650,6 +668,7 @@ func TestCORSEnvOverrideHonorsConfigValue(t *testing.T) {
 	// when the operator relies on the Koanf default).
 	os.Unsetenv("APP_ENV")
 	os.Unsetenv("CORS_ORIGINS")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	e := echo.New()
 	handler := corsEcho(false, "development")(func(c *echo.Context) error {
@@ -731,8 +750,14 @@ func TestCORSStrictBranchTolerantOfTrailingComma(t *testing.T) {
 
 // TestCORSStrictBranchAllWildcardFailsClosed verifies CORS_ORIGINS="*"
 // (which after dropping '*' becomes empty) falls into the fail-closed
-// branch instead of panicking Echo.
+// branch instead of panicking Echo, and that the warn names the invalid
+// allowlist as the cause — not the environment.
 func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
+	var buf bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+
 	originalAppEnv := os.Getenv("APP_ENV")
 	originalCorsOrigins := os.Getenv("CORS_ORIGINS")
 	defer func() {
@@ -760,6 +785,9 @@ func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
 		"CORS_ORIGINS=* in non-dev env must fail closed, not echo the origin")
 	assert.NotEqual(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials),
 		"fail-closed mode must explicitly drop AllowCredentials so the response cannot carry session cookies cross-origin")
+	assert.Contains(t, buf.String(), "yielded no valid explicit origins")
+	assert.NotContains(t, buf.String(), "is not a development alias",
+		"the empty-allowlist warn must name the invalid allowlist as the cause, not the environment")
 }
 
 // TestCORSDevPermissiveEmitsWarn verifies the dev-permissive branch (reflect
@@ -767,11 +795,13 @@ func TestCORSStrictBranchAllWildcardFailsClosed(t *testing.T) {
 // silent, and names the explicitly-set APP_ENV value.
 func TestCORSDevPermissiveEmitsWarn(t *testing.T) {
 	var buf bytes.Buffer
+	previousOutput := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("CORS_ORIGINS", "")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	_ = CORS(true, "development")
 
@@ -785,12 +815,14 @@ func TestCORSDevPermissiveEmitsWarn(t *testing.T) {
 // scenario the koanf default silently papers over.
 func TestCORSUnsetEnvWarnsAboutDefaulting(t *testing.T) {
 	var buf bytes.Buffer
+	previousOutput := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	t.Setenv("APP_ENV", "x") // registers restore-on-cleanup
 	os.Unsetenv("APP_ENV")   // truly unset — t.Setenv("APP_ENV", "") would leave it set-but-empty
 	t.Setenv("CORS_ORIGINS", "")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	// The override mimics the production path, where koanf has already
 	// defaulted cfg.App.Env to "development" despite APP_ENV being unset.
@@ -804,11 +836,13 @@ func TestCORSUnsetEnvWarnsAboutDefaulting(t *testing.T) {
 // WARN surfaces both rather than implying the override IS the process value.
 func TestCORSDevPermissiveWarnNotesProcessOverride(t *testing.T) {
 	var buf bytes.Buffer
+	previousOutput := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	t.Setenv("APP_ENV", "local")
 	t.Setenv("CORS_ORIGINS", "")
+	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	// envOverride ("dev") differs from the raw process APP_ENV ("local").
 	_ = CORS(true, "dev")
@@ -822,12 +856,130 @@ func TestCORSDevPermissiveWarnNotesProcessOverride(t *testing.T) {
 // dev-permissive WARN must not fire.
 func TestCORSStrictAllowlistNoDevWarn(t *testing.T) {
 	var buf bytes.Buffer
+	previousOutput := log.Writer()
 	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	t.Setenv("CORS_ORIGINS", "https://a.example")
 
 	_ = CORS(true, "development")
 
 	assert.NotContains(t, buf.String(), "reflects ANY origin")
+}
+
+// TestCORSDevWildcardOptInMatrix drives the CORS_DEV_WILDCARD opt-in matrix
+// (ADR-038): a development-alias env fails closed without the flag, gets the
+// reflect-any-origin + credentials posture only with an explicit truthy flag
+// (the plan-009 permissive WARN still fires — opting in doesn't buy silence),
+// treats an unparseable value as false with a WARN, and ignores the flag
+// entirely outside development aliases (the containment property — the flag
+// must never grant the wildcard posture for a non-dev env).
+func TestCORSDevWildcardOptInMatrix(t *testing.T) {
+	tests := []struct {
+		name         string
+		appEnv       string
+		flag         string
+		expectEcho   bool
+		warnContains string
+	}{
+		{name: "dev_without_opt_in_fails_closed", appEnv: "development", flag: "", expectEcho: false, warnContains: "CORS_DEV_WILDCARD is not enabled"},
+		{name: "dev_opt_in_enables_wildcard", appEnv: "development", flag: "true", expectEcho: true, warnContains: "reflects ANY origin"},
+		{name: "dev_opt_in_invalid_value_fails_closed", appEnv: "development", flag: "ture", expectEcho: false, warnContains: "is not a valid boolean"},
+		{name: "flag_ignored_outside_dev", appEnv: "production", flag: "true", expectEcho: false, warnContains: "the flag is ignored outside development"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			previousOutput := log.Writer()
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(previousOutput) })
+
+			t.Setenv("APP_ENV", tc.appEnv)
+			t.Setenv("CORS_ORIGINS", "")
+			// devWildcardOptIn treats empty and unset identically, so "" is
+			// the unset case here.
+			t.Setenv("CORS_DEV_WILDCARD", tc.flag)
+
+			e := echo.New()
+			handler := corsEcho(false, tc.appEnv)(func(c *echo.Context) error {
+				return c.String(http.StatusOK, "test")
+			})
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodOptions, "/", http.NoBody)
+			req.Header.Set("Origin", "https://intruder.example.com")
+			req.Header.Set(HeaderAccessControlRequestMethod, "GET")
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+
+			require.NoError(t, handler(c))
+			if tc.expectEcho {
+				assert.Equal(t, "https://intruder.example.com", rec.Header().Get(HeaderAccessControlAllowOrigin))
+				assert.Equal(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
+			} else {
+				assert.Empty(t, rec.Header().Get(HeaderAccessControlAllowOrigin),
+					"must fail closed: no Access-Control-Allow-Origin")
+				assert.NotEqual(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
+			}
+			assert.Contains(t, buf.String(), tc.warnContains)
+		})
+	}
+}
+
+// capturingLogger records messages sent through the Warn() chain so tests can
+// assert CORS startup warnings are rerouted through the framework logger.
+// Embeds noopLogger (timeout_test.go) so only Warn() needs overriding.
+type capturingLogger struct {
+	noopLogger
+	warns []string
+}
+
+func (c *capturingLogger) Warn() logger.LogEvent { return &capturingLogEvent{sink: c} }
+
+type capturingLogEvent struct {
+	noopLogEvent
+	sink *capturingLogger
+}
+
+func (e *capturingLogEvent) Msg(msg string) { e.sink.warns = append(e.sink.warns, msg) }
+func (e *capturingLogEvent) Msgf(format string, args ...any) {
+	e.sink.warns = append(e.sink.warns, fmt.Sprintf(format, args...))
+}
+
+// TestCORSWarnsRouteThroughProvidedLogger verifies corsEchoWithLogger reroutes
+// startup warnings through the provided framework logger (structured WARN
+// level, SensitiveDataFilter, dual-mode routing) instead of the stdlib
+// fallback — rerouted, not duplicated.
+func TestCORSWarnsRouteThroughProvidedLogger(t *testing.T) {
+	tests := []struct {
+		name         string
+		flag         string
+		warnContains string
+	}{
+		{name: "without_opt_in_routes_fail_closed_warn", flag: "", warnContains: "CORS_DEV_WILDCARD is not enabled"},
+		{name: "with_opt_in_routes_permissive_warn", flag: "true", warnContains: "reflects ANY origin"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			previousOutput := log.Writer()
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(previousOutput) })
+
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("CORS_ORIGINS", "")
+			t.Setenv("CORS_DEV_WILDCARD", tc.flag)
+
+			capturer := &capturingLogger{}
+			_ = corsEchoWithLogger(false, capturer, "development")
+
+			captured := strings.Join(capturer.warns, "\n")
+			assert.Contains(t, captured, "[server.cors] ",
+				"grep-continuity prefix must survive on the framework-logger path")
+			assert.Contains(t, captured, tc.warnContains)
+			assert.NotContains(t, buf.String(), tc.warnContains,
+				"warn must be rerouted through the provided logger, not duplicated to stdlib")
+		})
+	}
 }

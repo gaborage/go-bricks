@@ -4,6 +4,11 @@
 **Date:** 2026-05-14
 **Related issues:** [#435](https://github.com/gaborage/go-bricks/issues/435)
 
+> **Amended by [ADR-038](adr_038_cors_dev_wildcard_opt_in.md) (2026-07-12):**
+> the development-alias CORS branch described below now additionally
+> requires the explicit CORS_DEV_WILDCARD=true opt-in; without it dev
+> fails closed like neutral envs.
+
 ## Context
 
 Until this ADR, `config/validation.go` rejected any `app.env` value outside the exact allowlist `{development, staging, production}`. Consumer projects with conventional short codes like `local`, `tst`, `stg`, `prd`, `dev`, `prod`, `qa`, `uat` were forced to either:
