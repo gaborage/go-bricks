@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/labstack/echo/v5/middleware"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // CORS returns a CORS middleware configured for the application.
@@ -45,10 +47,19 @@ func CORS(exposeResponseTime bool, envOverride ...string) MiddlewareFunc {
 	return fromEchoMiddleware(corsEcho(exposeResponseTime, envOverride...))
 }
 
-// corsEcho is the echo-native CORS middleware constructor. Public callers use
-// CORS (echo-free); SetupMiddlewares uses this form to keep the default chain
-// baton-free.
+// corsEcho is the echo-native CORS middleware constructor without a framework
+// logger: startup warnings fall back to the stdlib log package. The public
+// CORS constructor uses this form.
 func corsEcho(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFunc {
+	return corsEchoWithLogger(exposeResponseTime, nil, envOverride...)
+}
+
+// corsEchoWithLogger is the echo-native CORS middleware constructor.
+// SetupMiddlewares uses this form (keeping the default chain baton-free,
+// ADR-026), passing its framework logger so startup warnings flow through
+// structured logging (SensitiveDataFilter, dual-mode routing). l may be nil,
+// in which case warnings fall back to the stdlib log package via corsWarnf.
+func corsEchoWithLogger(exposeResponseTime bool, l logger.Logger, envOverride ...string) echo.MiddlewareFunc {
 	exposeHeaders := []string{echo.HeaderXRequestID}
 	if exposeResponseTime {
 		exposeHeaders = append(exposeHeaders, HeaderXResponseTime)
@@ -104,9 +115,9 @@ func corsEcho(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFun
 			// Operators wanting wildcard-with-credentials must set the
 			// env to a dev alias and leave CORS_ORIGINS unset.
 			if trimmed == "*" {
-				log.Printf("WARN [server.cors] CORS_ORIGINS contains '*' which is forbidden alongside " +
-					"AllowCredentials=true; the wildcard entry is being dropped. Keep only explicit origins in " +
-					"CORS_ORIGINS. For wildcard echo behavior instead: unset CORS_ORIGINS, set APP_ENV to a " +
+				corsWarnf(l, "CORS_ORIGINS contains '*' which is forbidden alongside "+
+					"AllowCredentials=true; the wildcard entry is being dropped. Keep only explicit origins in "+
+					"CORS_ORIGINS. For wildcard echo behavior instead: unset CORS_ORIGINS, set APP_ENV to a "+
 					"development alias (e.g. APP_ENV=development), and set CORS_DEV_WILDCARD=true.")
 				continue
 			}
@@ -115,29 +126,29 @@ func corsEcho(exposeResponseTime bool, envOverride ...string) echo.MiddlewareFun
 		if len(parts) == 0 {
 			// CORS_ORIGINS was set to commas/whitespace/only-'*' — treat
 			// it as the fail-closed case rather than panicking echo.
-			emitFailClosedWarn(appEnv)
+			emitFailClosedWarn(l, appEnv)
 			failClosed(&cfg)
 			return middleware.CORSWithConfig(cfg)
 		}
 		cfg.AllowOrigins = parts
 	case config.IsDevelopment(appEnv):
-		if !devWildcardOptIn() {
-			emitDevOptInRequiredWarn(appEnv)
+		if !devWildcardOptIn(l) {
+			emitDevOptInRequiredWarn(l, appEnv)
 			failClosed(&cfg)
 			break
 		}
 		// Echo v5 forbids AllowOrigins=["*"] with AllowCredentials=true,
 		// so we keep credentials on for dev convenience and use the unsafe
 		// echo-back func to satisfy Echo's validation.
-		emitDevPermissiveWarn(appEnv)
+		emitDevPermissiveWarn(l, appEnv)
 		cfg.AllowOrigins = []string{"*"}
 		cfg.UnsafeAllowOriginFunc = func(_ *echo.Context, origin string) (string, bool, error) {
 			return origin, true, nil
 		}
 	default:
 		// Non-dev env with no explicit CORS_ORIGINS: fail closed.
-		emitFailClosedWarn(appEnv)
-		emitDevWildcardIgnoredWarn(appEnv)
+		emitFailClosedWarn(l, appEnv)
+		emitDevWildcardIgnoredWarn(l, appEnv)
 		failClosed(&cfg)
 	}
 
@@ -157,19 +168,33 @@ func failClosed(cfg *middleware.CORSConfig) {
 	}
 }
 
+// corsWarnf emits a CORS startup warning. With a framework logger it routes
+// through structured WARN-level logging (SensitiveDataFilter, dual-mode
+// routing); without one (public CORS()/corsEcho construction, which has no
+// logger to thread) it falls back to the stdlib log package. The
+// "[server.cors] " prefix is kept on both paths for grep continuity.
+func corsWarnf(l logger.Logger, format string, args ...any) {
+	if l == nil {
+		log.Printf("WARN [server.cors] "+format, args...)
+		return
+	}
+	l.Warn().Msg("[server.cors] " + fmt.Sprintf(format, args...))
+}
+
 // devWildcardOptIn reports whether the operator explicitly granted the
 // reflect-any-origin + credentials dev posture via CORS_DEV_WILDCARD.
-// Read from the raw process env like CORS_ORIGINS (CORS is configured
-// before the framework config/logger are wired). Unparseable values are
-// treated as false — fail closed, but loudly (ADR-038).
-func devWildcardOptIn() bool {
+// Read from the raw process env like CORS_ORIGINS (the CORS policy is
+// deliberately built from raw process env, not the koanf config — ADR-038
+// Option C). Unparseable values are treated as false — fail closed, but
+// loudly (ADR-038).
+func devWildcardOptIn(l logger.Logger) bool {
 	raw, ok := os.LookupEnv("CORS_DEV_WILDCARD")
 	if !ok || raw == "" {
 		return false
 	}
 	v, err := strconv.ParseBool(raw)
 	if err != nil {
-		log.Printf("WARN [server.cors] CORS_DEV_WILDCARD=%s is not a valid boolean; "+
+		corsWarnf(l, "CORS_DEV_WILDCARD=%s is not a valid boolean; "+
 			"treating it as false (CORS fails closed).", strconv.Quote(raw))
 		return false
 	}
@@ -178,8 +203,8 @@ func devWildcardOptIn() bool {
 
 // emitDevOptInRequiredWarn explains the fail-closed outcome on a
 // development-alias env that has not opted in to the wildcard posture.
-func emitDevOptInRequiredWarn(appEnv string) {
-	log.Printf("WARN [server.cors] APP_ENV=%s is a development alias but "+
+func emitDevOptInRequiredWarn(l logger.Logger, appEnv string) {
+	corsWarnf(l, "APP_ENV=%s is a development alias but "+
 		"CORS_DEV_WILDCARD is not enabled; CORS is failing closed (no "+
 		"Access-Control-Allow-Origin emitted). For browser-based local dev set "+
 		"CORS_DEV_WILDCARD=true, or set CORS_ORIGINS=http://localhost:3000 for "+
@@ -189,25 +214,26 @@ func emitDevOptInRequiredWarn(appEnv string) {
 // emitDevWildcardIgnoredWarn surfaces a set-but-ignored CORS_DEV_WILDCARD on a
 // non-development env, so operators aren't confused about why the flag "does
 // nothing" there. No-op when the flag is unset.
-func emitDevWildcardIgnoredWarn(appEnv string) {
+func emitDevWildcardIgnoredWarn(l logger.Logger, appEnv string) {
 	if _, ok := os.LookupEnv("CORS_DEV_WILDCARD"); !ok {
 		return
 	}
-	log.Printf("WARN [server.cors] CORS_DEV_WILDCARD is set but APP_ENV=%s "+
+	corsWarnf(l, "CORS_DEV_WILDCARD is set but APP_ENV=%s "+
 		"is not a development alias; the flag is ignored outside development.",
 		strconv.Quote(appEnv))
 }
 
 // emitFailClosedWarn surfaces the fail-closed CORS state loudly so operators
-// notice before users do. The framework logger isn't wired yet at CORS()
-// construction time, so we use the stdlib log package (stderr) — matches
-// other pre-bootstrap warnings. strconv.Quote sanitizes the env var
+// notice before users do. The framework path (SetupMiddlewares) threads its
+// logger through corsEchoWithLogger so this lands in structured logging;
+// stdlib log is only the corsWarnf fallback when CORS()/corsEcho is
+// constructed without a logger. strconv.Quote sanitizes the env var
 // (escapes control chars, quotes everything as a Go string literal) before
 // it flows into the log — breaks gosec G706 taint analysis without losing
 // the operator-debugging signal.
-func emitFailClosedWarn(appEnv string) {
-	log.Printf(
-		"WARN [server.cors] APP_ENV=%s is not a development alias and "+
+func emitFailClosedWarn(l logger.Logger, appEnv string) {
+	corsWarnf(l,
+		"APP_ENV=%s is not a development alias and "+
 			"CORS_ORIGINS is unset or yields no valid origins; cross-origin "+
 			"requests will be rejected. Set CORS_ORIGINS=https://your.app "+
 			"to enable a strict allowlist.",
@@ -220,7 +246,7 @@ func emitFailClosedWarn(appEnv string) {
 // path CORS() receives cfg.App.Env, which koanf has already defaulted to
 // "development" when APP_ENV is unset — the argument alone cannot distinguish
 // "operator chose dev" from "operator forgot to set APP_ENV".
-func emitDevPermissiveWarn(appEnv string) {
+func emitDevPermissiveWarn(l logger.Logger, appEnv string) {
 	source := "APP_ENV=" + strconv.Quote(appEnv)
 	if raw, ok := os.LookupEnv("APP_ENV"); !ok {
 		source = "APP_ENV is not set in the process environment (the development default, or a config-file app.env, is in effect)"
@@ -229,7 +255,7 @@ func emitDevPermissiveWarn(appEnv string) {
 		// process value — surface both so operators aren't misled about the source.
 		source += " (process APP_ENV=" + strconv.Quote(raw) + ")"
 	}
-	log.Printf("WARN [server.cors] %s: CORS reflects ANY origin WITH credentials "+
+	corsWarnf(l, "%s: CORS reflects ANY origin WITH credentials "+
 		"(the most permissive posture). If this is production, set APP_ENV=production "+
 		"and CORS_ORIGINS=https://your.app. Ignore only for local development.", source)
 }

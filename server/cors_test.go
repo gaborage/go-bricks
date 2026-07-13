@@ -3,15 +3,19 @@ package server
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 func TestCORSDevelopmentEnvironment(t *testing.T) {
@@ -904,6 +908,63 @@ func TestCORSDevWildcardOptInMatrix(t *testing.T) {
 				assert.NotEqual(t, "true", rec.Header().Get(HeaderAccessControlAllowCredentials))
 			}
 			assert.Contains(t, buf.String(), tc.warnContains)
+		})
+	}
+}
+
+// capturingLogger records messages sent through the Warn() chain so tests can
+// assert CORS startup warnings are rerouted through the framework logger.
+// Embeds noopLogger (timeout_test.go) so only Warn() needs overriding.
+type capturingLogger struct {
+	noopLogger
+	warns []string
+}
+
+func (c *capturingLogger) Warn() logger.LogEvent { return &capturingLogEvent{sink: c} }
+
+type capturingLogEvent struct {
+	noopLogEvent
+	sink *capturingLogger
+}
+
+func (e *capturingLogEvent) Msg(msg string) { e.sink.warns = append(e.sink.warns, msg) }
+func (e *capturingLogEvent) Msgf(format string, args ...any) {
+	e.sink.warns = append(e.sink.warns, fmt.Sprintf(format, args...))
+}
+
+// TestCORSWarnsRouteThroughProvidedLogger verifies corsEchoWithLogger reroutes
+// startup warnings through the provided framework logger (structured WARN
+// level, SensitiveDataFilter, dual-mode routing) instead of the stdlib
+// fallback — rerouted, not duplicated.
+func TestCORSWarnsRouteThroughProvidedLogger(t *testing.T) {
+	tests := []struct {
+		name         string
+		flag         string
+		warnContains string
+	}{
+		{name: "without_opt_in_routes_fail_closed_warn", flag: "", warnContains: "CORS_DEV_WILDCARD is not enabled"},
+		{name: "with_opt_in_routes_permissive_warn", flag: "true", warnContains: "reflects ANY origin"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+			t.Setenv("APP_ENV", "development")
+			t.Setenv("CORS_ORIGINS", "")
+			t.Setenv("CORS_DEV_WILDCARD", tc.flag)
+
+			capturer := &capturingLogger{}
+			_ = corsEchoWithLogger(false, capturer, "development")
+
+			captured := strings.Join(capturer.warns, "\n")
+			assert.Contains(t, captured, "[server.cors] ",
+				"grep-continuity prefix must survive on the framework-logger path")
+			assert.Contains(t, captured, tc.warnContains)
+			assert.NotContains(t, buf.String(), tc.warnContains,
+				"warn must be rerouted through the provided logger, not duplicated to stdlib")
 		})
 	}
 }
