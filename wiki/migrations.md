@@ -32,7 +32,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E44  | v0.43.0 → v0.44.0 | noop | 2 | none | none |
 | E45  | v0.44.0 → v0.45.0 | compile-break | 9 | C45.1 C45.2 C45.3 C45.4 C45.5 C45.6 | outbox re-delivery count |
 | E49  | v0.45.0 → v0.49.0 | silent-config | 6 | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool / unit-less duration guard |
-| E50  | v0.49.0 → v0.50.0 | config-break | 2 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate |
+| E50  | v0.49.0 → v0.50.0 | config-break | 3 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate; dev CORS wildcard opt-in |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -558,7 +558,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 ## E50 · v0.49.0 → v0.50.0 — Flyway migrate surfaces unparseable/failure output as an error
 
-- gist: `migration.Migrate`/`MigrateFor` (and everything on top of them — `RunMigrationsAtStartup`, multi-tenant `MigrateAll`, the `go-bricks-migrate` CLI) previously returned a **nil error with a zero-valued Result** when the Flyway subprocess exited 0 but its `-outputType=json` output could not be parsed — the parse error was only Debug-logged — so a migration whose outcome was unobservable was reported as success, and the `migration.applied` audit event recorded `Outcome=success` with an empty version. It now returns a non-nil error (`errors.Is` `migration.ErrFlywayOutputUnparsed` for empty/malformed/redaction-suppressed output, or `migration.ErrFlywayReportedFailure` for a `success:false` envelope even at exit 0) and the audit event records `Outcome=failed`. No exported signatures change; `parseFlywayJSON`'s own contract is unchanged. Additionally, non-empty DB passwords shorter than 8 bytes are now rejected (config validation + migrate) rather than suppressed — see C50.2. This hop also adds one **additive, adopt-only** feature (no atom): the opt-in `server.logroutes` flag emits a `Route registered` Info line per HTTP route at startup — default dev-on/prod-off (tri-state, `SERVER_LOGROUTES`), so prod is unaffected; silence a dev boot with `server.logroutes: false`.
+- gist: `migration.Migrate`/`MigrateFor` (and everything on top of them — `RunMigrationsAtStartup`, multi-tenant `MigrateAll`, the `go-bricks-migrate` CLI) previously returned a **nil error with a zero-valued Result** when the Flyway subprocess exited 0 but its `-outputType=json` output could not be parsed — the parse error was only Debug-logged — so a migration whose outcome was unobservable was reported as success, and the `migration.applied` audit event recorded `Outcome=success` with an empty version. It now returns a non-nil error (`errors.Is` `migration.ErrFlywayOutputUnparsed` for empty/malformed/redaction-suppressed output, or `migration.ErrFlywayReportedFailure` for a `success:false` envelope even at exit 0) and the audit event records `Outcome=failed`. No exported signatures change; `parseFlywayJSON`'s own contract is unchanged. Additionally, non-empty DB passwords shorter than 8 bytes are now rejected (config validation + migrate) rather than suppressed — see C50.2. The dev-permissive reflect-any-origin + credentials CORS posture (a development-alias, or koanf-defaulted, `APP_ENV` with `CORS_ORIGINS` unset) now additionally requires `CORS_DEV_WILDCARD=true` — without it, dev fails closed like every other env — see C50.3. This hop also adds one **additive, adopt-only** feature (no atom): the opt-in `server.logroutes` flag emits a `Route registered` Info line per HTTP route at startup — default dev-on/prod-off (tri-state, `SERVER_LOGROUTES`), so prod is unaffected; silence a dev boot with `server.logroutes: false`.
 - build-caught: none
 - preflight: run the C50.2 detect sweep BEFORE the bump — a non-empty DB password `< 8` bytes (static or per-tenant, including the ops/infra tenants file) now aborts startup or the migrate
 - exit: `go get github.com/gaborage/go-bricks@v0.50.0 && go mod tidy && go build ./... && go test ./...`
@@ -579,6 +579,13 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - verify: `make run` boots (or aborts with a `database.password` error naming the field); `go-bricks-migrate migrate` rejects a short-password tenant with `database password too short to safely redact Flyway output`
 - ref: #673 #675 · ADR-037 · config/validation.go: validateDatabaseCoreFields · migration/flyway.go: ensurePasswordRedactable
 
+### [C50.3] dev wildcard CORS requires explicit opt-in (`CORS_DEV_WILDCARD`) · silent-behavior · when: no-match
+
+- detect: check every dev/test runtime environment (shell profiles, compose files, deployment manifests) for `CORS_DEV_WILDCARD` or `CORS_ORIGINS`
+- gate: no-match = you relied on the old default where a development-alias `APP_ENV` (or an unset `APP_ENV`, which koanf defaults to `development`) received reflect-any-origin + `AllowCredentials=true` CORS with no explicit setting. That posture now requires `CORS_DEV_WILDCARD=true`; without it, dev fails closed exactly like neutral/production envs (no `Access-Control-Allow-Origin` header is emitted). The flag is ignored outside development aliases, and unparseable values are treated as false with a WARN. Production/staging behavior is unchanged.
+- apply: for browser-based local dev set `CORS_DEV_WILDCARD=true`; or set `CORS_ORIGINS=<comma-separated origins>` for a strict allowlist (works in any env).
+- verify: boot with `APP_ENV=development` and no flag — startup logs `WARN [server.cors] … CORS_DEV_WILDCARD is not enabled` and a cross-origin browser request gets no `Access-Control-Allow-Origin`; set `CORS_DEV_WILDCARD=true` and the wildcard-echo WARN appears instead.
+- ref: ADR-038 · server/cors.go: corsEcho / devWildcardOptIn
 
 ---
 

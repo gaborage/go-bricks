@@ -2445,6 +2445,8 @@ func TestFromEchoMiddlewareRunsAndChains(t *testing.T) {
 // constructors (L6 class) through routeGroup.Use as a consumer would, proving each returns
 // a working server.MiddlewareFunc and the whole flat chain flows a request end-to-end.
 func TestPublicMiddlewareConstructorsReturnFlatForm(t *testing.T) {
+	t.Setenv("CORS_DEV_WILDCARD", "true")
+
 	e := echo.New()
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
 	rg := newRouteGroup(e.Group(""), "", cfg)

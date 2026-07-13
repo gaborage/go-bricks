@@ -526,6 +526,26 @@ Rejects a non-empty database password shorter than `config.MinDatabasePasswordLe
 
 ---
 
+### [ADR-038: Require Explicit Opt-In for Dev-Permissive CORS](adr_038_cors_dev_wildcard_opt_in.md)
+
+**Date:** 2026-07-12 | **Status:** Accepted
+
+Requires `CORS_DEV_WILDCARD=true` (raw process env, alongside `config.IsDevelopment(appEnv)`)
+before `server/cors.go` grants the reflect-any-origin + `AllowCredentials=true` dev posture.
+Without the flag, a development-alias (or koanf-defaulted) `APP_ENV` now fails closed exactly
+like neutral and production envs — closing the "deployed without setting `APP_ENV`" hole that
+PR #696's WARN only made loud, not safe. The flag is inert outside `config.IsDevelopment`
+(a non-dev env with the flag set still fails closed, with a WARN noting it's ignored), and
+unparseable values are treated as false with a WARN. Amends the CORS paragraph of
+[ADR-022](adr_022_env_policy.md).
+
+**Key Benefits:** Forgetting `APP_ENV` in a real deployment now fails CORS closed instead of
+granting the most permissive posture available; the opt-in follows the existing raw-env
+`CORS_ORIGINS` precedent rather than a committable Koanf config key; the containment property
+(flag never weakens non-dev envs) is test-proven.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -535,7 +555,7 @@ Rejects a non-empty database password shorter than `config.MinDatabasePasswordLe
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-037) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-038) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
