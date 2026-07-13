@@ -3,6 +3,8 @@ package tenantstore
 import (
 	"context"
 	"errors"
+	"runtime"
+	"strings"
 	"testing"
 
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
@@ -180,4 +182,91 @@ func TestCacheCached(t *testing.T) {
 
 	_, ok = c.Cached("other-tenant")
 	assert.False(t, ok, "miss for a tenant never initialized")
+}
+
+func TestCacheGetTenantsInitializeIndependently(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	getDB := func(ctx context.Context) (dbtypes.Interface, error) {
+		if tid, _ := multitenant.GetTenant(ctx); tid == "tenant-slow" {
+			started <- struct{}{}
+			<-release
+		}
+		return dbtesting.NewTestDB(dbtypes.PostgreSQL), nil
+	}
+	d, _ := newTestDeps(getDB, false, nil)
+	c := &Cache[*fakeStore]{}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Get(multitenant.SetTenant(context.Background(), "tenant-slow"), d)
+		done <- err
+	}()
+
+	<-started // tenant-slow is now blocked inside its init
+
+	// With a cache-wide init lock this Get would deadlock behind tenant-slow;
+	// per-tenant locking must let an unrelated tenant proceed immediately.
+	_, err := c.Get(multitenant.SetTenant(context.Background(), "tenant-fast"), d)
+	require.NoError(t, err, "an unrelated tenant must not block on another tenant's slow init")
+
+	close(release)
+	require.NoError(t, <-done, "the slow tenant's init completes once its DB responds")
+
+	_, ok := c.Cached("tenant-slow")
+	assert.True(t, ok)
+	_, ok = c.Cached("tenant-fast")
+	assert.True(t, ok)
+}
+
+func TestCacheGetSameTenantSerializesInit(t *testing.T) {
+	entered := make(chan struct{}, 2)
+	release := make(chan struct{})
+	getDB := func(context.Context) (dbtypes.Interface, error) {
+		entered <- struct{}{}
+		<-release
+		return dbtesting.NewTestDB(dbtypes.PostgreSQL), nil
+	}
+	d, vendors := newTestDeps(getDB, false, nil)
+	c := &Cache[*fakeStore]{}
+
+	stores := make(chan *fakeStore, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			s, err := c.Get(context.Background(), d)
+			stores <- s
+			errs <- err
+		}()
+	}
+
+	// Exactly one goroutine wins the tenant init lock and enters GetDB; hold it
+	// there until the other is observably blocked on that lock, so the loser
+	// deterministically takes the double-checked cache hit after the handoff.
+	<-entered
+	waitForGoroutineBlockedOnTenantLock()
+	close(release)
+
+	s1, s2 := <-stores, <-stores
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+	assert.Same(t, s1, s2, "both concurrent callers receive the same store")
+	assert.Len(t, *vendors, 1, "the constructor runs exactly once for a contended tenant")
+}
+
+// waitForGoroutineBlockedOnTenantLock spins until some goroutine's stack shows
+// it waiting on the per-tenant init mutex inside Cache.Get. Stack-based because
+// sync.Mutex exposes no waiter count; converges once the loser reaches the lock
+// (the winner is parked pre-store, so the loser's fast-path check always misses).
+func waitForGoroutineBlockedOnTenantLock() {
+	buf := make([]byte, 1<<20)
+	for {
+		stacks := string(buf[:runtime.Stack(buf, true)])
+		for _, g := range strings.Split(stacks, "\n\n") {
+			if strings.Contains(g, "sync.(*Mutex).Lock") && strings.Contains(g, "tenantstore.go") {
+				return
+			}
+		}
+		runtime.Gosched()
+	}
 }
