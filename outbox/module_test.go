@@ -568,7 +568,8 @@ func TestModuleRegisterJobsPropagatesCleanupError(t *testing.T) {
 
 func TestLazyPublisherPublishLazilyInitializesStore(t *testing.T) {
 	m, db := initEnabledModule(t, "postgresql", 0)
-	require.Nil(t, m.stores[""], "store is nil before first Publish")
+	_, ok := m.stores.Cached("")
+	require.False(t, ok, "store is nil before first Publish")
 
 	// Wire the tx's INSERT expectation matching postgresStore.Insert.
 	db.ExpectTransaction().
@@ -587,7 +588,8 @@ func TestLazyPublisherPublishLazilyInitializesStore(t *testing.T) {
 	id, err := m.OutboxPublisher().Publish(context.Background(), tx, event)
 	require.NoError(t, err)
 	assert.NotEmpty(t, id, "Publish returns a generated event ID")
-	assert.NotNil(t, m.stores[""], "store initialized lazily on first Publish")
+	_, ok = m.stores.Cached("")
+	assert.True(t, ok, "store initialized lazily on first Publish")
 }
 
 func TestLazyStoreDelegatesAllMethodsAfterInit(t *testing.T) {
@@ -602,7 +604,8 @@ func TestLazyStoreDelegatesAllMethodsAfterInit(t *testing.T) {
 
 	_, err := ls.DeletePublished(context.Background(), db, time.Now())
 	require.NoError(t, err)
-	assert.NotNil(t, m.stores[""], "lazyStore.DeletePublished triggered lazy init")
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok, "lazyStore.DeletePublished triggered lazy init")
 }
 
 func TestLazyStoreInsertDelegatesAfterInit(t *testing.T) {
@@ -617,7 +620,8 @@ func TestLazyStoreInsertDelegatesAfterInit(t *testing.T) {
 
 	rec := &Record{ID: "evt", EventType: "x", Payload: []byte("{}"), Exchange: "ex", RoutingKey: "rk"}
 	require.NoError(t, ls.Insert(context.Background(), tx, rec))
-	assert.NotNil(t, m.stores[""])
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok)
 }
 
 func TestLazyStoreMarkPublishedDelegatesAfterInit(t *testing.T) {
@@ -626,7 +630,8 @@ func TestLazyStoreMarkPublishedDelegatesAfterInit(t *testing.T) {
 
 	db.ExpectExec(`UPDATE gobricks_outbox SET status`).WillReturnRowsAffected(1)
 	require.NoError(t, ls.MarkPublished(context.Background(), db, "evt-id"))
-	assert.NotNil(t, m.stores[""])
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok)
 }
 
 func TestLazyStoreMarkFailedDelegatesAfterInit(t *testing.T) {
@@ -635,7 +640,8 @@ func TestLazyStoreMarkFailedDelegatesAfterInit(t *testing.T) {
 
 	db.ExpectExec(`UPDATE gobricks_outbox SET retry_count`).WillReturnRowsAffected(1)
 	require.NoError(t, ls.MarkFailed(context.Background(), db, "evt-id", "boom"))
-	assert.NotNil(t, m.stores[""])
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok)
 }
 
 func TestLazyStoreFetchPendingDelegatesAfterInit(t *testing.T) {
@@ -651,7 +657,8 @@ func TestLazyStoreFetchPendingDelegatesAfterInit(t *testing.T) {
 
 	_, err := ls.FetchPending(context.Background(), db, 10)
 	require.NoError(t, err)
-	assert.NotNil(t, m.stores[""], "lazyStore.FetchPending triggered lazy init")
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok, "lazyStore.FetchPending triggered lazy init")
 }
 
 func TestLazyStoreCreateTableDelegatesAfterInit(t *testing.T) {
@@ -666,7 +673,8 @@ func TestLazyStoreCreateTableDelegatesAfterInit(t *testing.T) {
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
 
 	require.NoError(t, ls.CreateTable(context.Background(), db))
-	assert.NotNil(t, m.stores[""], "lazyStore.CreateTable triggered lazy init")
+	_, ok := m.stores.Cached("")
+	assert.True(t, ok, "lazyStore.CreateTable triggered lazy init")
 }
 
 func TestOutboxStorePerTenant(t *testing.T) {

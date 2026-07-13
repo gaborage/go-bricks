@@ -3,15 +3,14 @@ package outbox
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Module implements the GoBricks Module interface for transactional outbox.
@@ -39,8 +38,7 @@ type Module struct {
 	publisher app.OutboxPublisher
 	cfg       config.OutboxConfig
 
-	initMu sync.Mutex       // Protects stores
-	stores map[string]Store // key: tenant id ("" = single-tenant)
+	stores tenantstore.Cache[Store] // one store per tenant ("" = single-tenant)
 }
 
 // NewModule creates a new Module instance.
@@ -180,54 +178,33 @@ func (m *Module) validatePublishTimeout() error {
 // ensureStoreInitialized returns the store for the tenant in ctx, creating it
 // (and, if configured, its table) on first use for that tenant. Lazy because
 // the vendor is only known once a connection exists; per-tenant because each
-// tenant has its own DB (and possibly its own vendor). Mutex-guarded so a
-// failed init can retry — matching the scheduler module pattern.
+// tenant has its own DB (and possibly its own vendor).
 func (m *Module) ensureStoreInitialized(ctx context.Context) (Store, error) {
-	tenantID, _ := multitenant.GetTenant(ctx)
+	return m.stores.Get(ctx, &tenantstore.Deps[Store]{
+		Name:            "outbox",
+		TableName:       m.cfg.TableName,
+		AutoCreateTable: m.cfg.AutoCreateTable,
+		Logger:          m.logger,
+		GetDB:           m.getDB,
+		NewStore:        newStoreForVendor,
+		WarnMsg:         "Outbox table creation failed (may already exist)",
+	})
+}
 
-	m.initMu.Lock()
-	defer m.initMu.Unlock()
-
-	if store, ok := m.stores[tenantID]; ok {
-		return store, nil
-	}
-
-	db, err := m.getDB(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("outbox: database unavailable: %w", err)
-	}
-
+func newStoreForVendor(vendor, tableName string) (Store, error) {
 	var store Store
-	switch db.DatabaseType() {
+	var err error
+	switch vendor {
 	case dbtypes.PostgreSQL:
-		store, err = NewPostgresStore(m.cfg.TableName)
+		store, err = NewPostgresStore(tableName)
 	case dbtypes.Oracle:
-		store, err = NewOracleStore(m.cfg.TableName)
+		store, err = NewOracleStore(tableName)
 	default:
-		return nil, fmt.Errorf("outbox: unsupported database vendor: %s", db.DatabaseType())
+		return nil, fmt.Errorf("outbox: unsupported database vendor: %s", vendor)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("outbox: failed to create store: %w", err)
 	}
-
-	// Auto-create table if configured.
-	// Warning-only on failure: PostgreSQL uses IF NOT EXISTS (idempotent),
-	// Oracle may return ORA-00955 if the table/index already exists.
-	// Both cases are benign — the table is usable either way.
-	// One attempt per tenant — map presence short-circuits subsequent calls.
-	if m.cfg.AutoCreateTable {
-		if createErr := store.CreateTable(ctx, db); createErr != nil {
-			m.logger.Warn().Err(createErr).
-				Str("table", m.cfg.TableName).
-				Str("tenant", tenantID).
-				Msg("Outbox table creation failed (may already exist)")
-		}
-	}
-
-	if m.stores == nil {
-		m.stores = make(map[string]Store) // lazy: tests build Module via struct literals
-	}
-	m.stores[tenantID] = store
 	return store, nil
 }
 
