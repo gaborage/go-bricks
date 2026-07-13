@@ -101,6 +101,50 @@ func TestParseFlywayJSONStopsAtFirstObject(t *testing.T) {
 	assert.True(t, got.Success)
 }
 
+func TestParseFlywayJSONSkipsValidObjectNoise(t *testing.T) {
+	// A structured-log noise line ahead of the envelope is itself a
+	// well-formed JSON object — the first '{' alone can't distinguish it
+	// from the Flyway envelope that follows.
+	got, err := parseFlywayJSON(readFixture(t, "migrate_valid_object_noise.txt"))
+	require.NoError(t, err)
+	assert.True(t, got.Success)
+	assert.Equal(t, "migrate", got.Operation)
+	assert.NoError(t, migrateOutcome(nil, nil, &got))
+}
+
+func TestParseFlywayJSONSkipsInvalidBraceNoise(t *testing.T) {
+	// Non-JSON noise that merely contains a brace (e.g. a pool config dump)
+	// must not be mistaken for a parse failure either.
+	src := "WARN com.zaxxer.hikari: config {maxPoolSize=10}\n" + readFixture(t, "migrate_success.json")
+	got, err := parseFlywayJSON(src)
+	require.NoError(t, err)
+	assert.True(t, got.Success)
+}
+
+func TestParseFlywayJSONSkipsNestedNonFlywayObjects(t *testing.T) {
+	// A brace nested inside an already-decoded noise object must not be
+	// promoted to a top-level candidate — {"operation":"connect","success":true}
+	// carries the validated operation+success combination, so it would pass
+	// looksLikeFlyway and shadow the real envelope if nested-skip regressed.
+	src := `{"msg":"probe","ctx":{"operation":"connect","success":true}}` + "\n" + readFixture(t, "migrate_success.json")
+	got, err := parseFlywayJSON(src)
+	require.NoError(t, err)
+	assert.True(t, got.Success)
+	assert.Equal(t, "migrate", got.Operation)
+}
+
+func TestParseFlywayJSONNoFlywayEnvelopeIsUnparsed(t *testing.T) {
+	// Two well-formed JSON objects, neither carrying a Flyway field — must
+	// classify as unparsed, not as a spurious reported failure.
+	src := `{"level":"warn","logger":"a","msg":"one"}` + "\n" + `{"level":"warn","logger":"b","msg":"two"}`
+	_, err := parseFlywayJSON(src)
+	assert.ErrorIs(t, err, errEmptyFlywayOutput)
+
+	outcomeErr := migrateOutcome(nil, err, nil)
+	assert.ErrorIs(t, outcomeErr, ErrFlywayOutputUnparsed)
+	assert.False(t, errors.Is(outcomeErr, ErrFlywayReportedFailure))
+}
+
 func TestMigrateOutcomeRunErrorWins(t *testing.T) {
 	runErr := errors.New("flyway command failed: exit status 1")
 	err := migrateOutcome(runErr, errEmptyFlywayOutput, &Result{})
@@ -125,4 +169,31 @@ func TestMigrateOutcomeEnvelopeFailure(t *testing.T) {
 
 func TestMigrateOutcomeSuccessIsNil(t *testing.T) {
 	assert.NoError(t, migrateOutcome(nil, nil, &Result{Success: true}))
+}
+
+func TestParseFlywayJSONSkipsEnvelopeLookalikeNoise(t *testing.T) {
+	// Single generic fields (success, operation, error) alone are not enough
+	// to identify a Flyway envelope — structured-log noise can carry any one
+	// of them without being the real thing. Only the validated combinations
+	// (operation+success together, or error.errorCode) should be promoted.
+	tests := []struct {
+		name  string
+		noise string
+	}{
+		{name: "success_without_operation", noise: `{"success":true,"msg":"connected"}`},
+		{name: "operation_without_success", noise: `{"operation":"connect","level":"info"}`},
+		{name: "error_without_errorcode", noise: `{"error":{"code":"X"},"msg":"retry"}`},
+		{name: "flywayversion_alone", noise: `{"flywayVersion":"9.0","msg":"banner"}`},
+		{name: "flyway_shaped_object_inside_array_noise", noise: `[{"operation":"connect","success":true}]`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := tt.noise + "\n" + readFixture(t, "migrate_success.json")
+			got, err := parseFlywayJSON(src)
+			require.NoError(t, err)
+			assert.True(t, got.Success)
+			assert.Equal(t, "migrate", got.Operation)
+		})
+	}
 }

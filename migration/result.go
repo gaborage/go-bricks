@@ -78,6 +78,17 @@ type flywayErrorPayload struct {
 	Message   string `json:"message"`
 }
 
+// looksLikeFlyway reports whether env matches one of Flyway's two envelope
+// shapes: the success/noop envelope (operation and success always together)
+// or the error envelope (nested error.errorCode). Single generic fields are
+// not enough — structured-log noise can carry success/operation/error alone.
+func (env *flywayJSONEnvelope) looksLikeFlyway() bool {
+	if env.Operation != "" && env.Success != nil {
+		return true
+	}
+	return env.Error != nil && env.Error.ErrorCode != ""
+}
+
 // errEmptyFlywayOutput is returned when parseFlywayJSON receives an empty
 // or whitespace-only payload — typically because the subprocess crashed
 // before Flyway could write its JSON envelope.
@@ -117,24 +128,72 @@ func migrateOutcome(runErr, parseErr error, result *Result) error {
 }
 
 // parseFlywayJSON parses Flyway's -outputType=json output into a Result.
-// The first JSON object embedded in output is consumed; any leading non-JSON
-// noise (e.g. JVM warnings printed before the envelope) is skipped over
-// rather than treated as a parse error.
+// output is combined stdout+stderr, so a JVM/SLF4J/driver warning line may
+// precede the envelope and may itself contain a JSON value (e.g. a structured
+// log line — object or array). Every '{' and '[' in output is tried as a
+// candidate value start, in order; each value that decodes is consumed whole
+// so its nested contents never become candidates, and the first object value
+// carrying a recognizable Flyway envelope shape wins.
 func parseFlywayJSON(output string) (Result, error) {
-	trimmed := skipToObject(output)
+	trimmed := strings.TrimSpace(output)
 	if trimmed == "" {
 		return Result{}, errEmptyFlywayOutput
 	}
 
-	var env flywayJSONEnvelope
-	dec := json.NewDecoder(strings.NewReader(trimmed))
-	if err := dec.Decode(&env); err != nil {
-		if errors.Is(err, io.EOF) {
-			return Result{}, errEmptyFlywayOutput
+	var firstDecodeErr error
+	skipBelow := 0 // candidates below this offset are inside an already-decoded JSON value
+	for _, start := range valueStarts(trimmed) {
+		if start < skipBelow {
+			continue
 		}
-		return Result{}, fmt.Errorf("migration: parse Flyway JSON: %w", err)
+		dec := json.NewDecoder(strings.NewReader(trimmed[start:]))
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			if firstDecodeErr == nil && !errors.Is(err, io.EOF) {
+				firstDecodeErr = fmt.Errorf("migration: parse Flyway JSON: %w", err)
+			}
+			continue
+		}
+		// Only after a successful decode — InputOffset is not meaningful after
+		// a failure, and braces inside malformed text must stay candidates.
+		skipBelow = start + int(dec.InputOffset())
+		if trimmed[start] != '{' {
+			continue // arrays are consumed to guard their contents, never promoted
+		}
+		var env flywayJSONEnvelope
+		if err := json.Unmarshal(raw, &env); err != nil {
+			if firstDecodeErr == nil {
+				firstDecodeErr = fmt.Errorf("migration: parse Flyway JSON: %w", err)
+			}
+			continue
+		}
+		if !env.looksLikeFlyway() {
+			continue
+		}
+		return resultFromEnvelope(&env), nil
 	}
+	if firstDecodeErr != nil {
+		return Result{}, firstDecodeErr
+	}
+	return Result{}, errEmptyFlywayOutput
+}
 
+// valueStarts returns the index of every '{' and '[' byte in s, in the order
+// they appear — each a candidate top-level JSON value for parseFlywayJSON to
+// try. Arrays are scanned too so a decoded array consumes its nested objects,
+// keeping them from being promoted as standalone envelope candidates.
+func valueStarts(s string) []int {
+	var starts []int
+	for i := 0; i < len(s); i++ {
+		if s[i] == '{' || s[i] == '[' {
+			starts = append(starts, i)
+		}
+	}
+	return starts
+}
+
+// resultFromEnvelope maps a decoded Flyway envelope onto Result.
+func resultFromEnvelope(env *flywayJSONEnvelope) Result {
 	res := Result{
 		Operation:      env.Operation,
 		DurationMillis: env.TotalMigrationTime,
@@ -173,20 +232,5 @@ func parseFlywayJSON(output string) (Result, error) {
 		res.Success = false
 	}
 
-	return res, nil
-}
-
-// skipToObject returns s sliced from the first '{' onward, or "" when none
-// is present. Lets json.Decoder consume the first object without tripping
-// on JVM / SLF4J chatter that occasionally precedes Flyway's JSON envelope.
-func skipToObject(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
-	start := strings.IndexByte(s, '{')
-	if start < 0 {
-		return ""
-	}
-	return s[start:]
+	return res
 }
