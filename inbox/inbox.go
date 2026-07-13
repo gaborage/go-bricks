@@ -27,7 +27,8 @@ type Inbox struct {
 // id short-circuits (fn is not run) and returns nil. The tenant is resolved from
 // ctx; in single-tenant mode the tenant id is empty.
 func (i *Inbox) ProcessOnce(ctx context.Context, eventID string, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
-	if err := i.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := i.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return err
 	}
 	db, err := i.module.getDB(ctx)
@@ -39,7 +40,7 @@ func (i *Inbox) ProcessOnce(ctx context.Context, eventID string, fn func(ctx con
 	rec := Record{TenantID: tenantID, EventID: eventID, ProcessedAt: time.Now()}
 
 	return database.WithTx(ctx, db, func(ctx context.Context, tx dbtypes.Tx) error {
-		inserted, err := i.module.store.MarkProcessed(ctx, tx, rec)
+		inserted, err := store.MarkProcessed(ctx, tx, rec)
 		if err != nil {
 			return err
 		}

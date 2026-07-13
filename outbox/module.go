@@ -11,6 +11,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Module implements the GoBricks Module interface for transactional outbox.
@@ -35,12 +36,11 @@ type Module struct {
 	getDB  func(context.Context) (dbtypes.Interface, error)
 	getMsg func(context.Context) (messaging.AMQPClient, error)
 
-	store     Store
 	publisher app.OutboxPublisher
 	cfg       config.OutboxConfig
 
-	initMu       sync.Mutex // Protects store initialization (lazy init from concurrent goroutines)
-	tableCreated bool
+	initMu sync.Mutex       // Protects stores
+	stores map[string]Store // key: tenant id ("" = single-tenant)
 }
 
 // NewModule creates a new Module instance.
@@ -177,24 +177,26 @@ func (m *Module) validatePublishTimeout() error {
 	return nil
 }
 
-// ensureStoreInitialized creates the vendor-specific store on first use.
-// This is lazy because the database vendor type is only known at runtime.
-// Uses a mutex (not sync.Once) because initialization can fail and should
-// be retried — matching the scheduler module pattern.
-func (m *Module) ensureStoreInitialized(ctx context.Context) error {
+// ensureStoreInitialized returns the store for the tenant in ctx, creating it
+// (and, if configured, its table) on first use for that tenant. Lazy because
+// the vendor is only known once a connection exists; per-tenant because each
+// tenant has its own DB (and possibly its own vendor). Mutex-guarded so a
+// failed init can retry — matching the scheduler module pattern.
+func (m *Module) ensureStoreInitialized(ctx context.Context) (Store, error) {
+	tenantID, _ := multitenant.GetTenant(ctx)
+
 	m.initMu.Lock()
 	defer m.initMu.Unlock()
 
-	if m.store != nil {
-		return nil
+	if store, ok := m.stores[tenantID]; ok {
+		return store, nil
 	}
 
 	db, err := m.getDB(ctx)
 	if err != nil {
-		return fmt.Errorf("outbox: database unavailable: %w", err)
+		return nil, fmt.Errorf("outbox: database unavailable: %w", err)
 	}
 
-	// Create vendor-specific store into local variable — only assign to m.store on success
 	var store Store
 	switch db.DatabaseType() {
 	case dbtypes.PostgreSQL:
@@ -202,31 +204,31 @@ func (m *Module) ensureStoreInitialized(ctx context.Context) error {
 	case dbtypes.Oracle:
 		store, err = NewOracleStore(m.cfg.TableName)
 	default:
-		return fmt.Errorf("outbox: unsupported database vendor: %s", db.DatabaseType())
+		return nil, fmt.Errorf("outbox: unsupported database vendor: %s", db.DatabaseType())
 	}
 	if err != nil {
-		return fmt.Errorf("outbox: failed to create store: %w", err)
+		return nil, fmt.Errorf("outbox: failed to create store: %w", err)
 	}
 
 	// Auto-create table if configured.
 	// Warning-only on failure: PostgreSQL uses IF NOT EXISTS (idempotent),
 	// Oracle may return ORA-00955 if the table/index already exists.
 	// Both cases are benign — the table is usable either way.
-	//
-	// m.tableCreated is set unconditionally to prevent repeated warnings on
-	// every subsequent call. If the failure was transient (e.g., network),
-	// the store operations themselves will fail with a clear error.
-	if m.cfg.AutoCreateTable && !m.tableCreated {
+	// One attempt per tenant — map presence short-circuits subsequent calls.
+	if m.cfg.AutoCreateTable {
 		if createErr := store.CreateTable(ctx, db); createErr != nil {
 			m.logger.Warn().Err(createErr).
 				Str("table", m.cfg.TableName).
+				Str("tenant", tenantID).
 				Msg("Outbox table creation failed (may already exist)")
 		}
-		m.tableCreated = true
 	}
 
-	m.store = store
-	return nil
+	if m.stores == nil {
+		m.stores = make(map[string]Store) // lazy: tests build Module via struct literals
+	}
+	m.stores[tenantID] = store
+	return store, nil
 }
 
 // OutboxPublisher implements app.OutboxProvider — returns the Publisher for ModuleDeps wiring.
@@ -286,23 +288,19 @@ func (m *Module) Shutdown() error {
 	return nil
 }
 
-// lazyPublisher wraps app.OutboxPublisher to lazily initialize the store on first use.
-// Caches the publisher instance after first successful initialization via sync.Once.
+// lazyPublisher wraps app.OutboxPublisher to resolve the tenant's store on
+// every call. No caching: a cached publisher would pin the first caller's
+// tenant store (and dialect) for the life of the process.
 type lazyPublisher struct {
-	module    *Module
-	once      sync.Once
-	cachedPub app.OutboxPublisher
+	module *Module
 }
 
 func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.OutboxEvent) (string, error) {
-	if err := p.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := p.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return "", err
 	}
-
-	p.once.Do(func() {
-		p.cachedPub = newPublisher(p.module.store, p.module.cfg.DefaultExchange)
-	})
-	return p.cachedPub.Publish(ctx, tx, event)
+	return newPublisher(store, p.module.cfg.DefaultExchange).Publish(ctx, tx, event)
 }
 
 // lazyStore wraps Store to lazily initialize via the module.
@@ -312,50 +310,57 @@ type lazyStore struct {
 }
 
 func (s *lazyStore) Insert(ctx context.Context, tx dbtypes.Tx, record *Record) error {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return err
 	}
-	return s.module.store.Insert(ctx, tx, record)
+	return store.Insert(ctx, tx, record)
 }
 
 func (s *lazyStore) FetchPending(ctx context.Context, db dbtypes.Interface, batchSize int) ([]Record, error) {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return nil, err
 	}
-	return s.module.store.FetchPending(ctx, db, batchSize)
+	return store.FetchPending(ctx, db, batchSize)
 }
 
 func (s *lazyStore) MarkPublished(ctx context.Context, db dbtypes.Interface, eventID string) error {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return err
 	}
-	return s.module.store.MarkPublished(ctx, db, eventID)
+	return store.MarkPublished(ctx, db, eventID)
 }
 
 func (s *lazyStore) MarkFailed(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return err
 	}
-	return s.module.store.MarkFailed(ctx, db, eventID, errMsg)
+	return store.MarkFailed(ctx, db, eventID, errMsg)
 }
 
 func (s *lazyStore) MarkDeadLettered(ctx context.Context, db dbtypes.Interface, eventID, errMsg string) error {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return err
 	}
-	return s.module.store.MarkDeadLettered(ctx, db, eventID, errMsg)
+	return store.MarkDeadLettered(ctx, db, eventID, errMsg)
 }
 
 func (s *lazyStore) DeletePublished(ctx context.Context, db dbtypes.Interface, before time.Time) (int64, error) {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return 0, err
 	}
-	return s.module.store.DeletePublished(ctx, db, before)
+	return store.DeletePublished(ctx, db, before)
 }
 
 func (s *lazyStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return err
 	}
-	return s.module.store.CreateTable(ctx, db)
+	return store.CreateTable(ctx, db)
 }

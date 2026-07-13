@@ -10,6 +10,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // Module implements the GoBricks Module interface for the consumer-side inbox.
@@ -33,12 +34,11 @@ type Module struct {
 	config *config.Config
 	getDB  func(context.Context) (dbtypes.Interface, error)
 
-	store     Store
 	processor app.InboxProcessor
 	cfg       config.InboxConfig
 
-	initMu       sync.Mutex // Protects lazy store initialization
-	tableCreated bool
+	initMu sync.Mutex       // Protects stores
+	stores map[string]Store // key: tenant id ("" = single-tenant)
 }
 
 // NewModule creates a new inbox Module instance.
@@ -84,20 +84,24 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	return nil
 }
 
-// ensureStoreInitialized creates the vendor-specific store on first use.
-// Lazy because the database vendor type is only known once a connection exists.
-// Uses mutex-guarded lazy initialization (not sync.Once) so a failed init can retry.
-func (m *Module) ensureStoreInitialized(ctx context.Context) error {
+// ensureStoreInitialized returns the store for the tenant in ctx, creating it
+// (and, if configured, its table) on first use for that tenant. Lazy because
+// the vendor is only known once a connection exists; per-tenant because each
+// tenant has its own DB (and possibly its own vendor). Mutex-guarded, not
+// sync.Once, so a failed init can retry.
+func (m *Module) ensureStoreInitialized(ctx context.Context) (Store, error) {
+	tenantID, _ := multitenant.GetTenant(ctx)
+
 	m.initMu.Lock()
 	defer m.initMu.Unlock()
 
-	if m.store != nil {
-		return nil
+	if store, ok := m.stores[tenantID]; ok {
+		return store, nil
 	}
 
 	db, err := m.getDB(ctx)
 	if err != nil {
-		return fmt.Errorf("inbox: database unavailable: %w", err)
+		return nil, fmt.Errorf("inbox: database unavailable: %w", err)
 	}
 
 	var store Store
@@ -107,25 +111,29 @@ func (m *Module) ensureStoreInitialized(ctx context.Context) error {
 	case dbtypes.Oracle:
 		store, err = NewOracleStore(m.cfg.TableName)
 	default:
-		return fmt.Errorf("inbox: unsupported database vendor: %s", db.DatabaseType())
+		return nil, fmt.Errorf("inbox: unsupported database vendor: %s", db.DatabaseType())
 	}
 	if err != nil {
-		return fmt.Errorf("inbox: failed to create store: %w", err)
+		return nil, fmt.Errorf("inbox: failed to create store: %w", err)
 	}
 
 	// Auto-create the table if configured. Warning-only on failure: PostgreSQL
 	// uses IF NOT EXISTS (idempotent), Oracle may return ORA-00955 if it exists.
-	if m.cfg.AutoCreateTable && !m.tableCreated {
+	// One attempt per tenant — map presence short-circuits subsequent calls.
+	if m.cfg.AutoCreateTable {
 		if createErr := store.CreateTable(ctx, db); createErr != nil {
 			m.logger.Warn().Err(createErr).
 				Str("table", m.cfg.TableName).
+				Str("tenant", tenantID).
 				Msg("Inbox table creation failed (may already exist)")
 		}
-		m.tableCreated = true
 	}
 
-	m.store = store
-	return nil
+	if m.stores == nil {
+		m.stores = make(map[string]Store) // lazy: tests build Module via struct literals
+	}
+	m.stores[tenantID] = store
+	return store, nil
 }
 
 // InboxProcessor implements app.InboxProvider — returns the processor for
@@ -192,24 +200,27 @@ type lazyStore struct {
 }
 
 func (s *lazyStore) MarkProcessed(ctx context.Context, tx dbtypes.Tx, rec Record) (bool, error) {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return false, err
 	}
-	return s.module.store.MarkProcessed(ctx, tx, rec)
+	return store.MarkProcessed(ctx, tx, rec)
 }
 
 func (s *lazyStore) DeleteProcessed(ctx context.Context, db dbtypes.Interface, before time.Time) (int64, error) {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return 0, err
 	}
-	return s.module.store.DeleteProcessed(ctx, db, before)
+	return store.DeleteProcessed(ctx, db, before)
 }
 
 func (s *lazyStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
-	if err := s.module.ensureStoreInitialized(ctx); err != nil {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
 		return err
 	}
-	return s.module.store.CreateTable(ctx, db)
+	return store.CreateTable(ctx, db)
 }
 
 // Compile-time guards.
