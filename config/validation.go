@@ -140,6 +140,7 @@ const (
 	fieldAppRateLimit     = "app.rate.limit"
 	fieldCacheRedisDB     = "cache.redis.database"
 	fieldCacheRedisPool   = "cache.redis.poolsize"
+	fieldResolverOrder    = "multitenant.resolver.order"
 	errInvalidField       = "invalid value: %v"
 	databasesFieldPrefix  = "databases.%s"
 	defaultHost           = "localhost"
@@ -1294,16 +1295,16 @@ func validateResolverOrder(cfg *ResolverConfig) error {
 	}
 
 	if cfg.Type != ResolverTypeComposite {
-		return NewValidationError("multitenant.resolver.order", "only valid when multitenant.resolver.type is 'composite'")
+		return NewValidationError(fieldResolverOrder, "only valid when multitenant.resolver.type is 'composite'")
 	}
 
 	seen := make(map[string]bool, len(cfg.Order))
 	for _, entry := range cfg.Order {
 		if !slices.Contains(resolverOrderEntries, entry) {
-			return NewInvalidFieldError("multitenant.resolver.order", fmt.Sprintf(errNotSupportedFmt, entry), resolverOrderEntries)
+			return NewInvalidFieldError(fieldResolverOrder, fmt.Sprintf(errNotSupportedFmt, entry), resolverOrderEntries)
 		}
 		if seen[entry] {
-			return NewValidationError("multitenant.resolver.order", fmt.Sprintf("duplicate entry %q", entry))
+			return NewValidationError(fieldResolverOrder, fmt.Sprintf("duplicate entry %q", entry))
 		}
 		seen[entry] = true
 	}
