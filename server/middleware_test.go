@@ -277,6 +277,25 @@ func TestBuildCompositeResolverOrder(t *testing.T) {
 	}
 }
 
+// TestBuildCompositeResolverUnavailableOrderFallsBack covers the fail-open a
+// nil sub-resolver would otherwise open: an unvalidated config naming only an
+// unconfigured resolver (subdomain without a domain) must still fall back to
+// the default order rather than yield a nil resolver — SetupMiddlewares skips
+// the tenant middleware entirely when buildTenantResolver returns nil.
+func TestBuildCompositeResolverUnavailableOrderFallsBack(t *testing.T) {
+	cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
+		Type:   config.ResolverTypeComposite,
+		Header: defaultTenantHeader,
+		Order:  []string{config.ResolverTypeSubdomain}, // no Domain set — resolver is nil
+	}}}
+
+	resolver := buildTenantResolver(cfg)
+	require.NotNil(t, resolver, "an unavailable order must not silently disable tenant resolution")
+	cr := resolver.(*multitenant.CompositeResolver)
+	require.Len(t, cr.Resolvers, 1)
+	assert.IsType(t, &multitenant.HeaderResolver{}, cr.Resolvers[0])
+}
+
 // TestBuildCompositeResolverWiresEveryOrderEntry guards the silent-skip class:
 // every name config accepts in resolver.order must actually build a sub-resolver
 // here. A new entry added to config without a case below would otherwise pass
