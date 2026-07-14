@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.50.0](https://github.com/gaborage/go-bricks/compare/v0.49.1...v0.50.0) (2026-07-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **multitenant:** require an explicit composite resolver order (ADR-039) ([#702](https://github.com/gaborage/go-bricks/issues/702))
+* **server:** require CORS_DEV_WILDCARD opt-in for dev wildcard CORS (ADR-038) ([#698](https://github.com/gaborage/go-bricks/issues/698))
+
+### Fixed
+
+* **migration:** enforce Flyway timeout with WaitDelay and process-group kill ([#704](https://github.com/gaborage/go-bricks/issues/704)) ([58192fc](https://github.com/gaborage/go-bricks/commit/58192fc373450b750d354a981f4265bee60dbaaa))
+* **multitenant:** require an explicit composite resolver order (ADR-039) ([#702](https://github.com/gaborage/go-bricks/issues/702)) ([cafd189](https://github.com/gaborage/go-bricks/commit/cafd1896e568d9133966e1ca12362e6c616ca14b))
+* **server:** require CORS_DEV_WILDCARD opt-in for dev wildcard CORS (ADR-038) ([#698](https://github.com/gaborage/go-bricks/issues/698)) ([a7841b4](https://github.com/gaborage/go-bricks/commit/a7841b41ca6fe6847bc0722c07764c587e5a2d0b))
+
 ## [0.49.1](https://github.com/gaborage/go-bricks/compare/v0.49.0...v0.49.1) (2026-07-13)
 
 
