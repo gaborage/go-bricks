@@ -211,11 +211,14 @@ checks entitlement. The obligations below are **normative** — a composite
 deployment that does not meet them does not have tenant isolation, regardless of
 which order it declares.
 
-1. **The ingress MUST validate `Host` against the tenant's own DNS name.** `Host`
-   is a request header; on a permissive wildcard vhost a caller can send
-   `Host: other-tenant.api.example.com` and `SubdomainResolver` will read
-   `other-tenant`. With `proxies: true`, the ingress MUST additionally ensure only
-   the trusted proxy can set `X-Forwarded-Host`.
+Each obligation is scoped to the order you actually declare — an obligation about a
+sub-resolver you did not list does not apply to you.
+
+1. **If `subdomain` participates in the order, the ingress MUST validate `Host`
+   against the tenant's own DNS name.** `Host` is a request header; on a permissive
+   wildcard vhost a caller can send `Host: other-tenant.api.example.com` and
+   `SubdomainResolver` will read `other-tenant`. With `proxies: true`, the ingress
+   MUST additionally ensure only the trusted proxy can set `X-Forwarded-Host`.
 2. **If `path` participates in the order, the tenant segment MUST be authorized
    against the authenticated principal.** The path is caller-authored. **The path
    segment is not an authorization boundary, and this ADR does not make it one.**
@@ -224,9 +227,13 @@ which order it declares.
    attacker-supplied.
 4. **Conversely: if your gateway OWNS `X-Tenant-ID`, you MUST pin a header-first
    order** (`[header, subdomain, path]`). Otherwise a caller-controlled `Host` or
-   path outranks the gateway's authoritative assertion.
-5. **The edge MUST force every tenant-scoped request to carry a resolvable
-   subdomain/path** — see the fall-through bypass below.
+   path outranks the gateway's authoritative assertion. This one is unconditional:
+   it is a statement about your edge, not about your order.
+5. **If `header` sits behind another source in the order, the edge MUST force every
+   tenant-scoped request to carry a resolvable subdomain/path** — otherwise the
+   fall-through below silently reinstates header trust for requests that match
+   neither. An order that omits `header` entirely is not exposed to this: a request
+   matching no source simply fails resolution (fail-closed).
 
 ### The fall-through bypass (first-match is defeated by making the winner fail)
 

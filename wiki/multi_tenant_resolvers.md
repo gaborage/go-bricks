@@ -103,7 +103,9 @@ Tries each sub-resolver named in `order` until one returns a non-empty, valid te
 | Your edge | Order to pin |
 |---|---|
 | A trusted gateway authenticates the caller and **owns `X-Tenant-ID`** (strips the inbound header, sets its own) | `[header, subdomain, path]` — otherwise a caller-controlled `Host`/path outranks the gateway's assertion |
-| Everything else (per-tenant DNS and/or path-scoped contracts) | `[subdomain, path, header]` — the recommended order |
+| Per-tenant DNS (each tenant has its own hostname) | `[subdomain, path, header]` — the recommended order |
+| **Path-scoped contracts only**, no per-tenant DNS | `[path, header]` — omit `subdomain` and you need no `domain` at all. Listing `subdomain` without per-tenant DNS just forces you to invent a `domain` the resolver will never match |
+| No legacy header clients left | Drop `header` from the order entirely (e.g. `[subdomain, path]`). The strongest option: a request matching no source then fails closed instead of falling through to the header |
 
 See [ADR-039](adr_039_composite_resolver_order.md) for why the framework refuses to pick for you.
 
@@ -117,13 +119,13 @@ See [ADR-039](adr_039_composite_resolver_order.md) for why the framework refuses
 
 The resolver extracts an identifier and puts it in `context.Context`. It performs **no entitlement check**. Whatever the order, your deployment must authorize the resolved tenant against the authenticated principal — e.g. a [global middleware](global_middleware.md) comparing `multitenant.Tenant(ctx)` against the tenant claim in the verified JWT.
 
-> **Deployment obligations (normative).** A composite deployment that does not meet these does not have tenant isolation, whatever order it declares.
+> **Deployment obligations (normative).** A composite deployment that does not meet these does not have tenant isolation, whatever order it declares. Each is scoped to the order you actually declare — an obligation about a sub-resolver you did not list does not apply to you.
 >
-> 1. The ingress **must** validate `Host` against the tenant's own DNS name. On a permissive wildcard vhost, a caller can send `Host: other-tenant.api.example.com` and the subdomain resolver reads `other-tenant`. With `proxies: true`, the ingress **must** also ensure only the trusted proxy can set `X-Forwarded-Host`.
+> 1. If `subdomain` participates in the order, the ingress **must** validate `Host` against the tenant's own DNS name. On a permissive wildcard vhost, a caller can send `Host: other-tenant.api.example.com` and the subdomain resolver reads `other-tenant`. With `proxies: true`, the ingress **must** also ensure only the trusted proxy can set `X-Forwarded-Host`.
 > 2. If `path` participates in the order, the tenant segment **must** be authorized against the authenticated principal. **The path segment is not an authorization boundary and this ordering does not make it one.**
 > 3. If `header` participates in the order, the gateway **must** strip or overwrite inbound `X-Tenant-ID`.
-> 4. Conversely, if your gateway **owns** `X-Tenant-ID`, you **must** pin a header-first order — otherwise a caller-controlled `Host`/path outranks it.
-> 5. The edge **must** force every tenant-scoped request to carry a resolvable subdomain/path — see the fall-through bypass below.
+> 4. Conversely, if your gateway **owns** `X-Tenant-ID`, you **must** pin a header-first order — otherwise a caller-controlled `Host`/path outranks it. This one is unconditional: it is a statement about your edge, not about your order.
+> 5. If `header` sits **behind** another source in the order, the edge **must** force every tenant-scoped request to carry a resolvable subdomain/path — otherwise the fall-through below silently reinstates header trust. An order that omits `header` is not exposed to this: an unmatched request simply fails closed.
 
 ### The fall-through bypass
 
