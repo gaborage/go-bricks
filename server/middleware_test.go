@@ -224,58 +224,78 @@ func TestBuildTenantResolver(t *testing.T) {
 	})
 }
 
-// TestBuildCompositeResolverDefaultOrderIsSubdomainFirst proves the security fix:
-// a spoofable X-Tenant-ID header can no longer override a network-bound
-// subdomain match on the default (unconfigured Order) composite resolver.
-func TestBuildCompositeResolverDefaultOrderIsSubdomainFirst(t *testing.T) {
-	cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
-		Type:   "composite",
-		Header: defaultTenantHeader,
-		Domain: testDomain,
-	}}}
+// TestBuildCompositeResolverOrder pins the security fix: on the default order a
+// spoofable X-Tenant-ID header can no longer override a network-bound subdomain
+// match, and an operator can still opt back into header-first explicitly.
+func TestBuildCompositeResolverOrder(t *testing.T) {
+	tests := []struct {
+		name           string
+		order          []string
+		expectedTypes  []any
+		expectedTenant string
+	}{
+		{
+			name:           "default_order_resolves_subdomain_over_spoofed_header",
+			order:          nil,
+			expectedTypes:  []any{&multitenant.SubdomainResolver{}, &multitenant.HeaderResolver{}},
+			expectedTenant: "a",
+		},
+		{
+			name:           "configured_header_first_order_is_honored",
+			order:          []string{config.ResolverTypeHeader, config.ResolverTypeSubdomain},
+			expectedTypes:  []any{&multitenant.HeaderResolver{}, &multitenant.SubdomainResolver{}},
+			expectedTenant: "b",
+		},
+	}
 
-	resolver := buildTenantResolver(cfg)
-	require.IsType(t, &multitenant.CompositeResolver{}, resolver)
-	cr := resolver.(*multitenant.CompositeResolver)
-	require.Len(t, cr.Resolvers, 2)
-	assert.IsType(t, &multitenant.SubdomainResolver{}, cr.Resolvers[0])
-	assert.IsType(t, &multitenant.HeaderResolver{}, cr.Resolvers[1])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
+				Type:   config.ResolverTypeComposite,
+				Header: defaultTenantHeader,
+				Domain: testDomain,
+				Order:  tt.order,
+			}}}
 
-	ctx := context.Background()
-	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", http.NoBody)
-	req.Host = "a." + testDomain
-	req.Header.Set(defaultTenantHeader, "b")
+			resolver := buildTenantResolver(cfg)
+			require.IsType(t, &multitenant.CompositeResolver{}, resolver)
+			cr := resolver.(*multitenant.CompositeResolver)
+			require.Len(t, cr.Resolvers, len(tt.expectedTypes))
+			for i, want := range tt.expectedTypes {
+				assert.IsType(t, want, cr.Resolvers[i])
+			}
 
-	tenantID, err := cr.ResolveTenant(ctx, req)
-	require.NoError(t, err)
-	assert.Equal(t, "a", tenantID, "subdomain must win over a conflicting spoofed header")
+			ctx := context.Background()
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", http.NoBody)
+			req.Host = "a." + testDomain
+			req.Header.Set(defaultTenantHeader, "b")
+
+			tenantID, err := cr.ResolveTenant(ctx, req)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedTenant, tenantID)
+		})
+	}
 }
 
-// TestBuildCompositeResolverHonorsConfiguredOrder proves the escape hatch: an
-// operator who explicitly opts back into header-first resolution gets it.
-func TestBuildCompositeResolverHonorsConfiguredOrder(t *testing.T) {
+// TestBuildCompositeResolverWiresEveryOrderEntry guards the silent-skip class:
+// every name config accepts in resolver.order must actually build a sub-resolver
+// here. A new entry added to config without a case below would otherwise pass
+// validation and then never resolve a tenant.
+func TestBuildCompositeResolverWiresEveryOrderEntry(t *testing.T) {
+	order := config.DefaultResolverOrder()
 	cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
-		Type:   "composite",
+		Type:   config.ResolverTypeComposite,
 		Header: defaultTenantHeader,
 		Domain: testDomain,
-		Order:  []string{"header", "subdomain"},
+		Path:   config.PathResolverConfig{Segment: 1},
+		Order:  order,
 	}}}
 
 	resolver := buildTenantResolver(cfg)
 	require.IsType(t, &multitenant.CompositeResolver{}, resolver)
 	cr := resolver.(*multitenant.CompositeResolver)
-	require.Len(t, cr.Resolvers, 2)
-	assert.IsType(t, &multitenant.HeaderResolver{}, cr.Resolvers[0])
-	assert.IsType(t, &multitenant.SubdomainResolver{}, cr.Resolvers[1])
-
-	ctx := context.Background()
-	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", http.NoBody)
-	req.Host = "a." + testDomain
-	req.Header.Set(defaultTenantHeader, "b")
-
-	tenantID, err := cr.ResolveTenant(ctx, req)
-	require.NoError(t, err)
-	assert.Equal(t, "b", tenantID, "configured header-first order must be honored")
+	assert.Len(t, cr.Resolvers, len(order),
+		"every entry config.DefaultResolverOrder() accepts must build a sub-resolver")
 }
 
 func TestMiddlewareOrder(t *testing.T) {

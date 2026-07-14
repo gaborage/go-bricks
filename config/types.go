@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"time"
 
 	"github.com/knadh/koanf/v2"
@@ -504,6 +505,8 @@ type ResolverConfig struct {
 	// Order controls composite sub-resolver precedence (type: composite only). Valid
 	// entries: header, subdomain, path. Empty defaults to DefaultResolverOrder() —
 	// network-bound sources (subdomain, path) before the client-controlled header.
+	// A sub-resolver still only participates when its own config is present
+	// (path needs path.segment > 0; subdomain needs domain).
 	Order []string `koanf:"order" json:"order" yaml:"order" toml:"order" mapstructure:"order"`
 }
 
@@ -559,13 +562,16 @@ const (
 	ResolverTypeComposite = "composite"
 )
 
-// DefaultResolverOrder returns the default composite tenant-resolver
-// sub-resolver order: network-bound sources (subdomain, path) before the
-// client-controlled header, so a spoofed header cannot override a
-// tenant already scoped by subdomain or path. Returns a fresh slice on
-// each call — callers may freely mutate the result.
+// resolverOrderEntries is the single source of truth for composite sub-resolver
+// names, listed in default precedence order: network-bound sources (subdomain,
+// path) before the client-controlled header, so a spoofed header cannot override
+// a tenant already scoped by subdomain or path.
+var resolverOrderEntries = []string{ResolverTypeSubdomain, ResolverTypePath, ResolverTypeHeader}
+
+// DefaultResolverOrder returns the default composite sub-resolver order as a
+// fresh slice — callers may freely mutate the result.
 func DefaultResolverOrder() []string {
-	return []string{ResolverTypeSubdomain, ResolverTypePath, ResolverTypeHeader}
+	return slices.Clone(resolverOrderEntries)
 }
 
 // SourceConfig controls how tenant configuration is loaded.

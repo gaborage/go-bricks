@@ -3548,6 +3548,16 @@ func TestResolverOrderValidationRejectsUnknown(t *testing.T) {
 			expectError:   false,
 			expectedOrder: []string{ResolverTypeHeader, ResolverTypeSubdomain},
 		},
+		{
+			name: "order_excluding_subdomain_does_not_require_domain",
+			config: ResolverConfig{
+				Type:  "composite",
+				Order: []string{ResolverTypePath, ResolverTypeHeader},
+				Path:  PathResolverConfig{Segment: 1},
+			},
+			expectError:   false,
+			expectedOrder: []string{ResolverTypePath, ResolverTypeHeader},
+		},
 	}
 
 	for _, tt := range tests {

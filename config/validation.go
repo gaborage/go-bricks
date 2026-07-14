@@ -1297,11 +1297,10 @@ func validateResolverOrder(cfg *ResolverConfig) error {
 		return NewValidationError("multitenant.resolver.order", "only valid when multitenant.resolver.type is 'composite'")
 	}
 
-	validEntries := []string{ResolverTypeHeader, ResolverTypeSubdomain, ResolverTypePath}
 	seen := make(map[string]bool, len(cfg.Order))
 	for _, entry := range cfg.Order {
-		if !slices.Contains(validEntries, entry) {
-			return NewInvalidFieldError("multitenant.resolver.order", fmt.Sprintf(errNotSupportedFmt, entry), validEntries)
+		if !slices.Contains(resolverOrderEntries, entry) {
+			return NewInvalidFieldError("multitenant.resolver.order", fmt.Sprintf(errNotSupportedFmt, entry), resolverOrderEntries)
 		}
 		if seen[entry] {
 			return NewValidationError("multitenant.resolver.order", fmt.Sprintf("duplicate entry %q", entry))
@@ -1313,6 +1312,11 @@ func validateResolverOrder(cfg *ResolverConfig) error {
 
 func validateSubdomainResolverFields(cfg *ResolverConfig) error {
 	if cfg.Type != ResolverTypeSubdomain && cfg.Type != ResolverTypeComposite {
+		return nil
+	}
+	// A composite whose order excludes subdomain never builds one, so it needs
+	// no root domain. Order is defaulted above, so an unset order still requires it.
+	if cfg.Type == ResolverTypeComposite && !slices.Contains(cfg.Order, ResolverTypeSubdomain) {
 		return nil
 	}
 	if strings.TrimSpace(cfg.Domain) == "" {
