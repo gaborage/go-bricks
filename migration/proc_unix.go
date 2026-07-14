@@ -15,6 +15,14 @@ import (
 func configureProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
+		// SECURITY: kill(2) with a non-positive negated PID is catastrophic — -0
+		// signals the caller's OWN process group (SIGKILLing this very service) and
+		// -1 signals every process we are permitted to signal. os/exec only invokes
+		// Cancel after a successful Start, so Pid is always > 0 today; this guard
+		// makes the blast radius independent of that stdlib invariant.
+		if cmd.Process == nil || cmd.Process.Pid <= 0 {
+			return os.ErrProcessDone
+		}
 		// Kill the whole group: -pgid. An already-empty group (ESRCH) means the
 		// process finished as the deadline fired; os.ErrProcessDone tells Wait to
 		// keep the command's real exit status instead of failing a successful run.
