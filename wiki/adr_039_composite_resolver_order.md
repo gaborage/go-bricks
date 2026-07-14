@@ -87,14 +87,14 @@ non-empty, regex-valid result from the ordered resolver list.
   loop over an empty order would append zero sub-resolvers, and
   `buildCompositeTenantResolver` returns `nil` for an empty list — silently
   disabling tenant resolution (fail-open) rather than falling back to a safe
-  default. `compositeResolverOrder` normalizes an empty or fully-unrecognized
-  order to `config.DefaultResolverOrder()` before the builder consumes it, so
-  this failure mode is closed independent of whether the config was
-  validated.
-- The default order is defined once, in `config.DefaultResolverOrder()`
-  (a function, not a package-level slice — returns a fresh slice each call so
-  callers can't mutate a shared default), and referenced from `server` rather
-  than duplicated.
+  default. The builder therefore builds sub-resolvers from the configured
+  order in one pass and, when that yields nothing recognized, rebuilds from
+  `config.DefaultResolverOrder()` — so this failure mode is closed
+  independent of whether the config was validated.
+- The default order is defined once, in `config.DefaultResolverOrder()`, which
+  returns a fresh slice each call so callers can't mutate a shared default. It
+  is also the single source of truth for which entries `order` accepts, so a
+  future sub-resolver can't be validated-but-unwired.
 
 ## Consequences
 
@@ -126,6 +126,28 @@ non-empty, regex-valid result from the ordered resolver list.
 - `multitenant.CompositeResolver`'s first-match algorithm and the individual
   sub-resolver implementations (`multitenant/resolver.go`) are unchanged —
   this ADR only changes which order `server/middleware.go` feeds them in.
+
+### Deployment assumption (what this ADR does *not* guarantee)
+
+"Network-bound" means bound by DNS/routing rather than chosen freely by the
+caller — but that holds only if the edge enforces it. `Host` is itself a
+request header: if the ingress/load balancer accepts an arbitrary `Host` for a
+wildcard vhost, a caller can send `Host: other-tenant.api.example.com` and the
+subdomain resolver will read `other-tenant`. The same applies to
+`X-Forwarded-Host` when `proxies: true` is set without a trusted proxy in
+front. This ADR removes the *header* override, which was unconditional; it does
+not make the subdomain unspoofable on a permissive edge.
+
+Operators therefore still owe the deployment side:
+
+- the ingress validates `Host` against the tenant's own DNS name (and, when
+  `proxies: true`, that only the trusted proxy can set `X-Forwarded-Host`);
+- if `header` participates in `order` at all, the gateway strips or overwrites
+  `X-Tenant-ID` from inbound requests so it cannot be attacker-supplied.
+
+Tenant IDs are still shape-validated (`^[a-z0-9-]{1,64}$`) and must resolve to
+a known tenant, so a forged value fails closed rather than reaching another
+tenant's data — but that is a second line of defense, not the first.
 
 ## Migration Impact
 

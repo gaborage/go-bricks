@@ -593,7 +593,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - gate: no-match = you relied on the old hardcoded header → subdomain → path order, where a client-supplied `X-Tenant-ID` header won over a subdomain/path match on conflict. The default now resolves subdomain → path → header, so a request already scoped to a tenant by subdomain or path can no longer have that scoping overridden by a conflicting header. `multitenant.CompositeResolver`'s first-match algorithm is unchanged — only the order `server/middleware.go` feeds it changed.
 - apply: no action needed to adopt the safer default. To keep the old header-first behavior (e.g., a trusted gateway owns the header), set `multitenant.resolver.order: [header, subdomain, path]` explicitly; `config.Validate` rejects unknown entries, duplicates, and `order` set on a non-composite type.
 - verify: `go test ./server/ ./config/ ./multitenant/`; for a live check, send a request with both a valid subdomain/path tenant and a conflicting `X-Tenant-ID` header — the resolved tenant is now the subdomain/path value, not the header value, unless `order` overrides it.
-- ref: ADR-039 · server/middleware.go: buildTenantResolver / compositeResolverOrder · config/validation.go: validateResolverOrder · config/types.go: DefaultResolverOrder
+- ref: ADR-039 · server/middleware.go: buildTenantResolver · config/validation.go: validateResolverOrder · config/types.go: DefaultResolverOrder
 
 ---
 

@@ -558,9 +558,9 @@ validated/defaulted in `config.Validate` (`multitenant.resolver.order`, composit
 unknown/duplicate entries). Closes a header-trust downgrade: since the client-controlled
 `X-Tenant-ID` header was tried first, a caller already scoped to a tenant by subdomain or path
 could override that scoping by adding a conflicting header — and the resolved tenant ID directly
-selects the per-tenant DB/cache/broker. A defense-in-depth `compositeResolverOrder` helper in
-`server/middleware.go` also normalizes an empty/unrecognized order for configs that bypass
-`config.Validate()` (e.g. hand-built in tests), preventing a fail-open zero-sub-resolver
+selects the per-tenant DB/cache/broker. As defense in depth, `buildTenantResolver` falls back to
+the default order when a config that bypassed `config.Validate()` (e.g. hand-built in tests)
+yields no recognized order entry, preventing a fail-open zero-sub-resolver
 composite. An optional `order` opt-in preserves header-first behavior for gateway-fronted
 deployments that need it.
 
