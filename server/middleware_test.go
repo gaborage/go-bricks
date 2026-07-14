@@ -224,6 +224,60 @@ func TestBuildTenantResolver(t *testing.T) {
 	})
 }
 
+// TestBuildCompositeResolverDefaultOrderIsSubdomainFirst proves the security fix:
+// a spoofable X-Tenant-ID header can no longer override a network-bound
+// subdomain match on the default (unconfigured Order) composite resolver.
+func TestBuildCompositeResolverDefaultOrderIsSubdomainFirst(t *testing.T) {
+	cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
+		Type:   "composite",
+		Header: defaultTenantHeader,
+		Domain: testDomain,
+	}}}
+
+	resolver := buildTenantResolver(cfg)
+	require.IsType(t, &multitenant.CompositeResolver{}, resolver)
+	cr := resolver.(*multitenant.CompositeResolver)
+	require.Len(t, cr.Resolvers, 2)
+	assert.IsType(t, &multitenant.SubdomainResolver{}, cr.Resolvers[0])
+	assert.IsType(t, &multitenant.HeaderResolver{}, cr.Resolvers[1])
+
+	ctx := context.Background()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", http.NoBody)
+	req.Host = "a." + testDomain
+	req.Header.Set(defaultTenantHeader, "b")
+
+	tenantID, err := cr.ResolveTenant(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, "a", tenantID, "subdomain must win over a conflicting spoofed header")
+}
+
+// TestBuildCompositeResolverHonorsConfiguredOrder proves the escape hatch: an
+// operator who explicitly opts back into header-first resolution gets it.
+func TestBuildCompositeResolverHonorsConfiguredOrder(t *testing.T) {
+	cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
+		Type:   "composite",
+		Header: defaultTenantHeader,
+		Domain: testDomain,
+		Order:  []string{"header", "subdomain"},
+	}}}
+
+	resolver := buildTenantResolver(cfg)
+	require.IsType(t, &multitenant.CompositeResolver{}, resolver)
+	cr := resolver.(*multitenant.CompositeResolver)
+	require.Len(t, cr.Resolvers, 2)
+	assert.IsType(t, &multitenant.HeaderResolver{}, cr.Resolvers[0])
+	assert.IsType(t, &multitenant.SubdomainResolver{}, cr.Resolvers[1])
+
+	ctx := context.Background()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", http.NoBody)
+	req.Host = "a." + testDomain
+	req.Header.Set(defaultTenantHeader, "b")
+
+	tenantID, err := cr.ResolveTenant(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, "b", tenantID, "configured header-first order must be honored")
+}
+
 func TestMiddlewareOrder(t *testing.T) {
 	e := echo.New()
 	log := logger.New("disabled", false)

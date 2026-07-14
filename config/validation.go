@@ -1272,10 +1272,43 @@ func validateMultitenantResolver(cfg *ResolverConfig) error {
 		cfg.Header = "X-Tenant-ID"
 	}
 
+	if err := validateResolverOrder(cfg); err != nil {
+		return err
+	}
+
 	if err := validateSubdomainResolverFields(cfg); err != nil {
 		return err
 	}
 	return validatePathResolverFields(cfg)
+}
+
+// validateResolverOrder validates and defaults the composite sub-resolver
+// order. Order is only meaningful for type: composite — setting it on any
+// other type is rejected rather than silently ignored.
+func validateResolverOrder(cfg *ResolverConfig) error {
+	if len(cfg.Order) == 0 {
+		if cfg.Type == ResolverTypeComposite {
+			cfg.Order = DefaultResolverOrder()
+		}
+		return nil
+	}
+
+	if cfg.Type != ResolverTypeComposite {
+		return NewValidationError("multitenant.resolver.order", "only valid when multitenant.resolver.type is 'composite'")
+	}
+
+	validEntries := []string{ResolverTypeHeader, ResolverTypeSubdomain, ResolverTypePath}
+	seen := make(map[string]bool, len(cfg.Order))
+	for _, entry := range cfg.Order {
+		if !slices.Contains(validEntries, entry) {
+			return NewInvalidFieldError("multitenant.resolver.order", fmt.Sprintf(errNotSupportedFmt, entry), validEntries)
+		}
+		if seen[entry] {
+			return NewValidationError("multitenant.resolver.order", fmt.Sprintf("duplicate entry %q", entry))
+		}
+		seen[entry] = true
+	}
+	return nil
 }
 
 func validateSubdomainResolverFields(cfg *ResolverConfig) error {

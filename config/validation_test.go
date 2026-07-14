@@ -3492,6 +3492,78 @@ func TestValidateMultitenantResolver(t *testing.T) {
 	}
 }
 
+func TestResolverOrderValidationRejectsUnknown(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        ResolverConfig
+		expectError   bool
+		errorContains string
+		expectedOrder []string
+	}{
+		{
+			name: "unknown_entry_rejected",
+			config: ResolverConfig{
+				Type:   "composite",
+				Domain: testDomain,
+				Order:  []string{"bogus"},
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.order",
+		},
+		{
+			name: "duplicate_entry_rejected",
+			config: ResolverConfig{
+				Type:   "composite",
+				Domain: testDomain,
+				Order:  []string{"header", "header"},
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.order",
+		},
+		{
+			name: "order_on_non_composite_type_rejected",
+			config: ResolverConfig{
+				Type:  "header",
+				Order: []string{"header"},
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.order",
+		},
+		{
+			name: "empty_order_defaults_on_composite",
+			config: ResolverConfig{
+				Type:   "composite",
+				Domain: testDomain,
+			},
+			expectError:   false,
+			expectedOrder: []string{ResolverTypeSubdomain, ResolverTypePath, ResolverTypeHeader},
+		},
+		{
+			name: "valid_configured_order_preserved",
+			config: ResolverConfig{
+				Type:   "composite",
+				Domain: testDomain,
+				Order:  []string{ResolverTypeHeader, ResolverTypeSubdomain},
+			},
+			expectError:   false,
+			expectedOrder: []string{ResolverTypeHeader, ResolverTypeSubdomain},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMultitenantResolver(&tt.config)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedOrder, tt.config.Order)
+		})
+	}
+}
+
 func TestValidateMultitenantLimits(t *testing.T) {
 	t.Run("defaults when zero", func(t *testing.T) {
 		cfg := LimitsConfig{Tenants: 0}

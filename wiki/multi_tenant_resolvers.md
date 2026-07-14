@@ -11,7 +11,7 @@ The `multitenant.resolver.type` field selects one of four strategies:
 | `header` | Request header (default `X-Tenant-ID`, configurable) | `X-Tenant-ID: acme` |
 | `subdomain` | Hostname with `.<RootDomain>` suffix | `acme.api.example.com` |
 | `path` | Path segment (1-indexed) | `/itsp/acme/lifecycle/...` |
-| `composite` | Tries header → subdomain → path in order; first non-empty wins | Mix of above |
+| `composite` | Tries the configured `order` (default: subdomain → path → header); first non-empty wins | Mix of above |
 
 All resolvers funnel through the same interface (`multitenant.TenantResolver`) and surface the result via `multitenant.SetTenant(ctx, id)` on success. Failure returns `multitenant.ErrTenantResolutionFailed`, which the server middleware maps to a 4xx error response.
 
@@ -79,15 +79,16 @@ multitenant:
   enabled: true
   resolver:
     type: composite
-    header: X-Tenant-ID         # tried first
-    domain: api.example.com     # tried second
+    header: X-Tenant-ID         # tried third (default order)
+    domain: api.example.com     # tried first (default order)
     proxies: true
     path:
-      segment: 2                # tried third
+      segment: 2                # tried second (default order)
       prefix: /itsp
+    # order: [header, subdomain, path]   # optional opt-in override; see below
 ```
 
-Tries each configured sub-resolver in order until one returns a non-empty, valid tenant ID. Order is fixed: **header → subdomain → path**. A sub-resolver is included only when its config is present (e.g., `path:` is included only when `path.segment > 0`).
+Tries each configured sub-resolver in the configured `order` until one returns a non-empty, valid tenant ID. **Default order is subdomain → path → header** — network-bound sources (fixed by the request's `Host` or URL, controlled by DNS/routing, not the caller) are tried before the client-controlled `X-Tenant-ID` header, so a request already scoped to a tenant by subdomain or path cannot have that scoping overridden by a spoofed header. Set `multitenant.resolver.order` (a list of `header`/`subdomain`/`path`, composite-only, no duplicates) to opt into a different order — e.g. header-first when a trusted gateway strips and re-sets the header, making it effectively network-bound too. A sub-resolver is included only when its config is present (e.g., `path:` is included only when `path.segment > 0`). See [ADR-039](adr_039_composite_resolver_order.md) for the full rationale.
 
 The typical use case is migrating from header-based clients to path-based clients gradually: keep header support for legacy callers, add `path` for new ones, no downtime.
 

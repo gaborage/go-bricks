@@ -501,6 +501,10 @@ type ResolverConfig struct {
 	Domain  string             `koanf:"domain" json:"domain" yaml:"domain" toml:"domain" mapstructure:"domain"`      // e.g., api.example.com or .api.example.com (leading dot optional)
 	Proxies bool               `koanf:"proxies" json:"proxies" yaml:"proxies" toml:"proxies" mapstructure:"proxies"` // trust X-Forwarded-Host
 	Path    PathResolverConfig `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"`                // path-segment resolver settings
+	// Order controls composite sub-resolver precedence (type: composite only). Valid
+	// entries: header, subdomain, path. Empty defaults to DefaultResolverOrder() —
+	// network-bound sources (subdomain, path) before the client-controlled header.
+	Order []string `koanf:"order" json:"order" yaml:"order" toml:"order" mapstructure:"order"`
 }
 
 // PathResolverConfig holds settings for the path-segment tenant resolver.
@@ -554,6 +558,15 @@ const (
 	ResolverTypePath      = "path"
 	ResolverTypeComposite = "composite"
 )
+
+// DefaultResolverOrder returns the default composite tenant-resolver
+// sub-resolver order: network-bound sources (subdomain, path) before the
+// client-controlled header, so a spoofed header cannot override a
+// tenant already scoped by subdomain or path. Returns a fresh slice on
+// each call — callers may freely mutate the result.
+func DefaultResolverOrder() []string {
+	return []string{ResolverTypeSubdomain, ResolverTypePath, ResolverTypeHeader}
+}
 
 // SourceConfig controls how tenant configuration is loaded.
 type SourceConfig struct {

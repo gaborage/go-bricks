@@ -164,10 +164,14 @@ messaging:
 multitenant:
   enabled: false
   resolver:
-    type: header                 # Options: header, subdomain, composite
+    type: header                 # Options: header, subdomain, path, composite
     header: X-Tenant-ID          # Header name for header-based resolution
     domain: api.example.com      # Root domain (leading dot optional)
     proxies: false               # Trust X-Forwarded-Host header
+    # order: [subdomain, path, header]  # composite only; default shown. Network-bound
+    #                                    # sources (subdomain, path) precede the
+    #                                    # client-controlled header so a spoofed header
+    #                                    # can't override an already-scoped tenant.
   cache:
     ttl: 5m                      # Time-to-live for cached tenant configurations
   limits:

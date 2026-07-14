@@ -204,10 +204,39 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	case config.ResolverTypePath:
 		return wrap(newPathResolver())
 	case config.ResolverTypeComposite:
-		return buildCompositeTenantResolver(tenantRegex, newHeaderResolver(), newSubdomainResolver(), newPathResolver())
+		resolverCtors := map[string]func() multitenant.TenantResolver{
+			config.ResolverTypeHeader:    newHeaderResolver,
+			config.ResolverTypeSubdomain: newSubdomainResolver,
+			config.ResolverTypePath:      newPathResolver,
+		}
+		order := compositeResolverOrder(resolverCfg.Order)
+		subs := make([]multitenant.TenantResolver, 0, len(order))
+		for _, name := range order {
+			if ctor, ok := resolverCtors[name]; ok {
+				subs = append(subs, ctor())
+			}
+		}
+		return buildCompositeTenantResolver(tenantRegex, subs...)
 	default:
 		return nil
 	}
+}
+
+// compositeResolverOrder normalizes the configured composite sub-resolver
+// order, falling back to config.DefaultResolverOrder() when the input is
+// empty or contains no recognized entry. This guards buildTenantResolver
+// against configs that never passed through config.Validate() (e.g. built
+// directly in tests) — without it, an empty Order would make the loop in
+// buildTenantResolver append zero sub-resolvers, and buildCompositeTenantResolver
+// would return nil for an empty list, silently disabling tenant resolution.
+func compositeResolverOrder(order []string) []string {
+	for _, name := range order {
+		switch name {
+		case config.ResolverTypeHeader, config.ResolverTypeSubdomain, config.ResolverTypePath:
+			return order
+		}
+	}
+	return config.DefaultResolverOrder()
 }
 
 // buildCompositeTenantResolver collects the non-nil sub-resolvers (header,

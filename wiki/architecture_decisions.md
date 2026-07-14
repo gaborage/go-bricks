@@ -548,6 +548,30 @@ granting the most permissive posture available; the opt-in follows the existing 
 
 ---
 
+### [ADR-039: Default Composite Tenant Resolver Order to Subdomain → Path → Header](adr_039_composite_resolver_order.md)
+
+**Date:** 2026-07-14 | **Status:** Accepted
+
+Flips `server/middleware.go`'s composite tenant resolver from a hardcoded header → subdomain →
+path order to subdomain → path → header, defaulted via `config.DefaultResolverOrder()` and
+validated/defaulted in `config.Validate` (`multitenant.resolver.order`, composite-only, no
+unknown/duplicate entries). Closes a header-trust downgrade: since the client-controlled
+`X-Tenant-ID` header was tried first, a caller already scoped to a tenant by subdomain or path
+could override that scoping by adding a conflicting header — and the resolved tenant ID directly
+selects the per-tenant DB/cache/broker. A defense-in-depth `compositeResolverOrder` helper in
+`server/middleware.go` also normalizes an empty/unrecognized order for configs that bypass
+`config.Validate()` (e.g. hand-built in tests), preventing a fail-open zero-sub-resolver
+composite. An optional `order` opt-in preserves header-first behavior for gateway-fronted
+deployments that need it.
+
+**Key Benefits:** Closes the spoofable-header override of subdomain/path tenant scoping in the
+default composite configuration; explicit opt-in (`resolver.order`) instead of silent
+degradation for deployments that genuinely need header-first; single-sourced default
+(`config.DefaultResolverOrder()`) referenced by both the validated-config path and the
+builder-level fail-open guard.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -557,7 +581,7 @@ granting the most permissive posture available; the opt-in follows the existing 
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-038) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-039) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
