@@ -231,19 +231,39 @@ func TestBuildCompositeResolverOrder(t *testing.T) {
 	tests := []struct {
 		name           string
 		order          []string
+		domain         string
+		pathSegment    int
 		expectedTypes  []any
 		expectedTenant string
 	}{
 		{
 			name:           "default_order_resolves_subdomain_over_spoofed_header",
 			order:          nil,
+			domain:         testDomain,
 			expectedTypes:  []any{&multitenant.SubdomainResolver{}, &multitenant.HeaderResolver{}},
+			expectedTenant: "a",
+		},
+		{
+			// No domain configured, so the default order's subdomain entry drops
+			// out and path is the network-bound source that must beat the header.
+			name:           "default_order_resolves_path_over_spoofed_header",
+			order:          nil,
+			pathSegment:    1,
+			expectedTypes:  []any{&multitenant.PathResolver{}, &multitenant.HeaderResolver{}},
 			expectedTenant: "a",
 		},
 		{
 			name:           "configured_header_first_order_is_honored",
 			order:          []string{config.ResolverTypeHeader, config.ResolverTypeSubdomain},
+			domain:         testDomain,
 			expectedTypes:  []any{&multitenant.HeaderResolver{}, &multitenant.SubdomainResolver{}},
+			expectedTenant: "b",
+		},
+		{
+			name:           "configured_header_before_path_is_honored",
+			order:          []string{config.ResolverTypeHeader, config.ResolverTypePath},
+			pathSegment:    1,
+			expectedTypes:  []any{&multitenant.HeaderResolver{}, &multitenant.PathResolver{}},
 			expectedTenant: "b",
 		},
 	}
@@ -253,7 +273,8 @@ func TestBuildCompositeResolverOrder(t *testing.T) {
 			cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
 				Type:   config.ResolverTypeComposite,
 				Header: defaultTenantHeader,
-				Domain: testDomain,
+				Domain: tt.domain,
+				Path:   config.PathResolverConfig{Segment: tt.pathSegment},
 				Order:  tt.order,
 			}}}
 
@@ -265,8 +286,10 @@ func TestBuildCompositeResolverOrder(t *testing.T) {
 				assert.IsType(t, want, cr.Resolvers[i])
 			}
 
+			// One request carrying tenant "a" on every network-bound source and a
+			// conflicting tenant "b" on the spoofable header.
 			ctx := context.Background()
-			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", http.NoBody)
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/a/orders", http.NoBody)
 			req.Host = "a." + testDomain
 			req.Header.Set(defaultTenantHeader, "b")
 
