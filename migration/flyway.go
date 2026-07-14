@@ -377,9 +377,11 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 	if err != nil && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
 		// Elapsed, not cfg.Timeout: timeoutCtx inherits an earlier parent deadline
 		// (e.g. a MigrateAll budget), so cfg.Timeout would overstate the wait.
-		err = fmt.Errorf("%w after %s and its process group was killed; schema state is "+
-			"unknown (a partially applied migration is possible): %w",
-			ErrFlywayTimeout, time.Since(startedAt).Round(time.Millisecond), err)
+		// killScopeDesc is build-tagged: the message must not promise a process-group
+		// teardown on Windows, where the JVM child tree survives.
+		err = fmt.Errorf("%w after %s and %s; schema state is unknown "+
+			"(a partially applied migration is possible): %w",
+			ErrFlywayTimeout, time.Since(startedAt).Round(time.Millisecond), killScopeDesc, err)
 	}
 	redacted := redactPassword(string(rawOutput), db)
 	if err != nil {

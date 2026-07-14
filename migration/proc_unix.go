@@ -9,6 +9,11 @@ import (
 	"syscall"
 )
 
+// killScopeDesc states what a timeout kill actually terminates on this platform.
+// It is interpolated into the operator-facing timeout error, which must not
+// promise more than the platform delivers.
+const killScopeDesc = "its process group was killed"
+
 // configureProcessGroup makes cmd the leader of a new process group so a timeout
 // can kill the launcher AND the JVM it spawns (negative-PID signal), not just the
 // direct child.

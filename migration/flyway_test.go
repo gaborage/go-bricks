@@ -1375,6 +1375,9 @@ func TestRunFlywayCommandKillsChildProcessGroup(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorIs(t, err, ErrFlywayTimeout)
 		assert.Contains(t, err.Error(), "schema state is unknown")
+		// The kill scope is build-tagged: the message must report what this platform
+		// actually terminated, never a hardcoded process-group claim (false on Windows).
+		assert.Contains(t, err.Error(), killScopeDesc)
 	case <-time.After(mcfg.Timeout + flywayKillGraceDelay + 5*time.Second):
 		t.Fatal("Migrate did not return within the guard deadline — process-group kill regressed to a hang")
 	}
