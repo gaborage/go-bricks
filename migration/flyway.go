@@ -351,6 +351,11 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 
 	// #nosec G204 -- FlywayPath is validated by validateFlywayPath function
 	cmd := exec.CommandContext(timeoutCtx, cfg.FlywayPath, args...)
+	// WaitDelay bounds how long Wait blocks on I/O after the process is signaled
+	// to stop. Without it, an orphaned JVM holding the output pipe makes
+	// CombinedOutput block indefinitely, turning the timeout into a hang.
+	cmd.WaitDelay = 10 * time.Second
+	configureProcessGroup(cmd)
 
 	envVars, err := buildEnvironmentVariables(db)
 	if err != nil {
@@ -359,6 +364,11 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 	cmd.Env = append(os.Environ(), envVars...)
 
 	rawOutput, err := cmd.CombinedOutput()
+	if err != nil && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("flyway timed out after %s and its process group was killed; "+
+			"schema state is unknown (a partially applied migration is possible): %w",
+			cfg.Timeout, err)
+	}
 	redacted := redactPassword(string(rawOutput), db)
 	if err != nil {
 		fm.logger.Error().Err(err).Str("output", redacted).Msg("Error executing Flyway command")

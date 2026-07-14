@@ -1315,3 +1315,75 @@ func TestMigrateNoopStillSucceeds(t *testing.T) {
 	assert.True(t, res.Success)
 	assert.Equal(t, "2", res.EndingVersion)
 }
+
+// createOrphanSpawningFlywayStub models the orphaned-JVM shape: the stub
+// spawns a background grandchild that inherits its stdout (the output pipe),
+// sleeps past the caller's timeout, and then writes a marker file. The stub
+// itself also sleeps past the timeout before exiting.
+func createOrphanSpawningFlywayStub(t *testing.T, markerPath string, sleepSeconds int) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "flyway-orphan.sh")
+	content := fmt.Sprintf(`#!/bin/sh
+( sleep %d; touch '%s' ) &
+sleep %d
+exit 0
+`, sleepSeconds, markerPath, sleepSeconds)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
+	return path
+}
+
+// TestRunFlywayCommandKillsChildProcessGroup guards against the orphaned-JVM
+// regression: without a process-group kill, a grandchild holding the output
+// pipe either blocks CombinedOutput indefinitely or keeps running (and keeps
+// mutating the schema) after the timeout fires. See createOrphanSpawningFlywayStub.
+func TestRunFlywayCommandKillsChildProcessGroup(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("process-group kill is unix-only")
+	}
+
+	// Must outlast cfg.Timeout below so a working group-kill catches the
+	// grandchild mid-sleep, before it writes its marker.
+	const grandchildSleepSeconds = 1
+	// Mirrors cmd.WaitDelay set in runFlywayCommandFor; used only to size this
+	// test's own hard deadline, not to configure the code under test.
+	const waitDelay = 10 * time.Second
+
+	markerPath := filepath.Join(t.TempDir(), "grandchild-survived.marker")
+	stub := createOrphanSpawningFlywayStub(t, markerPath, grandchildSleepSeconds)
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Type: "postgresql"},
+		App:      config.AppConfig{Env: "test"},
+	}
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
+
+	mcfg := &Config{
+		FlywayPath:    stub,
+		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
+		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
+		Timeout:       500 * time.Millisecond,
+	}
+	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := fm.Migrate(context.Background(), mcfg)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "flyway timed out")
+	case <-time.After(mcfg.Timeout + waitDelay + 5*time.Second):
+		t.Fatal("Migrate did not return within the guard deadline — process-group kill regressed to a hang")
+	}
+
+	// Give the grandchild's own sleep time to elapse in case it survived a
+	// (supposedly) working group kill, then confirm it never wrote its marker.
+	time.Sleep(grandchildSleepSeconds*time.Second + 500*time.Millisecond)
+	_, statErr := os.Stat(markerPath)
+	assert.True(t, os.IsNotExist(statErr), "grandchild marker file exists — orphaned grandchild survived the timeout kill")
+}
