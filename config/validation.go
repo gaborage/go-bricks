@@ -1283,19 +1283,29 @@ func validateMultitenantResolver(cfg *ResolverConfig) error {
 	return validatePathResolverFields(cfg)
 }
 
-// validateResolverOrder validates and defaults the composite sub-resolver
-// order. Order is only meaningful for type: composite — setting it on any
-// other type is rejected rather than silently ignored.
+// validateResolverOrder validates the composite sub-resolver order. Order is
+// only meaningful for type: composite — setting it on any other type is
+// rejected rather than silently ignored. For type: composite, Order is
+// REQUIRED — there is no implicit default. Any default (header-last or
+// header-first) is an unverifiable bet on the deployment's edge topology, and
+// a caller-controlled X-Tenant-ID header must never silently outrank a
+// resolver the operator explicitly wired up. See DefaultResolverOrder.
 func validateResolverOrder(cfg *ResolverConfig) error {
-	if len(cfg.Order) == 0 {
-		if cfg.Type == ResolverTypeComposite {
-			cfg.Order = DefaultResolverOrder()
+	if cfg.Type != ResolverTypeComposite {
+		if len(cfg.Order) > 0 {
+			return NewValidationError(fieldResolverOrder, "only valid when multitenant.resolver.type is 'composite'")
 		}
 		return nil
 	}
 
-	if cfg.Type != ResolverTypeComposite {
-		return NewValidationError(fieldResolverOrder, "only valid when multitenant.resolver.type is 'composite'")
+	if len(cfg.Order) == 0 {
+		err := NewMissingFieldError(fieldResolverOrder, "MULTITENANT_RESOLVER_ORDER", fieldResolverOrder)
+		err.Message = "required when multitenant.resolver.type is 'composite' — no implicit default"
+		err.Details = []string{
+			"recommended: [subdomain, path, header]",
+			"if a trusted gateway strips and sets X-Tenant-ID, use a header-first order instead, e.g. [header, subdomain, path]",
+		}
+		return err
 	}
 
 	seen := make(map[string]bool, len(cfg.Order))
@@ -1316,11 +1326,15 @@ func validateSubdomainResolverFields(cfg *ResolverConfig) error {
 		return nil
 	}
 	// A composite whose order excludes subdomain never builds one, so it needs
-	// no root domain. Order is defaulted above, so an unset order still requires it.
+	// no root domain. Order is required and validated above, so a composite
+	// reaching this point always has an explicit, non-empty Order.
 	if cfg.Type == ResolverTypeComposite && !slices.Contains(cfg.Order, ResolverTypeSubdomain) {
 		return nil
 	}
-	if strings.TrimSpace(cfg.Domain) == "" {
+	// A domain of "." (or whitespace around it) strips to "" once the leading
+	// dot is trimmed, and newSubdomainResolver builds nil from that — so reject
+	// it here too, not just the plain-empty case.
+	if strings.TrimPrefix(strings.TrimSpace(cfg.Domain), ".") == "" {
 		return NewMissingFieldError("multitenant.resolver.domain", "MULTITENANT_RESOLVER_DOMAIN", "multitenant.resolver.domain")
 	}
 	if !strings.HasPrefix(cfg.Domain, ".") {
@@ -1331,10 +1345,11 @@ func validateSubdomainResolverFields(cfg *ResolverConfig) error {
 
 // validatePathResolverFields enforces path-segment + prefix rules for the path
 // resolver and for composite configurations that opt into a path sub-resolver
-// (Segment != 0 inside a composite indicates intent to include path).
+// (cfg.Order containing "path" indicates intent to include path — Order is
+// required and validated before this runs, so it is always explicit here).
 func validatePathResolverFields(cfg *ResolverConfig) error {
 	required := cfg.Type == ResolverTypePath ||
-		(cfg.Type == ResolverTypeComposite && cfg.Path.Segment != 0)
+		(cfg.Type == ResolverTypeComposite && slices.Contains(cfg.Order, ResolverTypePath))
 	if !required {
 		return nil
 	}

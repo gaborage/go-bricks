@@ -548,27 +548,33 @@ granting the most permissive posture available; the opt-in follows the existing 
 
 ---
 
-### [ADR-039: Default Composite Tenant Resolver Order to Subdomain → Path → Header](adr_039_composite_resolver_order.md)
+### [ADR-039: Require an Explicit Composite Tenant Resolver Order](adr_039_composite_resolver_order.md)
 
 **Date:** 2026-07-14 | **Status:** Accepted
 
-Flips `server/middleware.go`'s composite tenant resolver from a hardcoded header → subdomain →
-path order to subdomain → path → header, defaulted via `config.DefaultResolverOrder()` and
-validated/defaulted in `config.Validate` (`multitenant.resolver.order`, composite-only, no
-unknown/duplicate entries). Closes a header-trust downgrade: since the client-controlled
-`X-Tenant-ID` header was tried first, a caller already scoped to a tenant by subdomain or path
-could override that scoping by adding a conflicting header — and the resolved tenant ID directly
-selects the per-tenant DB/cache/broker. As defense in depth, `buildTenantResolver` falls back to
-the default order when a config that bypassed `config.Validate()` (e.g. hand-built in tests)
-yields no recognized order entry, preventing a fail-open zero-sub-resolver
-composite. An optional `order` opt-in preserves header-first behavior for gateway-fronted
-deployments that need it.
+Makes `multitenant.resolver.order` **required** for `type: composite` — there is no implicit
+default, and a composite config without it fails `config.Validate` at startup. Replaces the
+hardcoded header → subdomain → path order, under which the `header` sub-resolver (the only one
+that participates with zero configuration — it always exists and defaults to `X-Tenant-ID`)
+unconditionally preempted whatever source the operator had explicitly configured, with no knob to
+change it. All three sources are caller-written (the URL path is authored by the caller; `Host` is
+itself a request header, constrained only if the ingress pins it), so no ordering makes any of them
+trustworthy — and both candidate defaults silently harm a real population: header-first lets a
+caller-supplied header override an explicitly-configured subdomain/path scoping, while a
+subdomain-first default would silently escalate gateway-fronted deployments whose gateway owns
+`X-Tenant-ID`. The framework therefore refuses to guess. `config.DefaultResolverOrder()` is demoted
+to the *recommended* order (`[subdomain, path, header]`) plus a last-resort fallback in
+`server/middleware.go` for configs that bypassed `config.Validate()` (preventing a fail-open
+zero-sub-resolver composite). Validation rejects unknown/duplicate entries, `order` on a
+non-composite type, and an order naming an unconfigured sub-resolver (`path` needs `path.segment`;
+`subdomain` needs a real `domain`).
 
-**Key Benefits:** Closes the spoofable-header override of subdomain/path tenant scoping in the
-default composite configuration; explicit opt-in (`resolver.order`) instead of silent
-degradation for deployments that genuinely need header-first; single-sourced default
-(`config.DefaultResolverOrder()`) referenced by both the validated-config path and the
-builder-level fail-open guard.
+**Key Benefits:** Precedence becomes an explicit operator decision instead of an unverifiable
+framework bet on the deployment's edge topology; the zero-config header sub-resolver no longer
+silently outranks an explicitly-wired subdomain/path; fails fast at startup with the env var, YAML
+key, and both candidate orders in the error. Tenant resolution remains *identification, not
+authorization* — the deployment still owes `Host` validation at the ingress, header stripping at
+the gateway, and an entitlement check on the resolved tenant.
 
 ---
 

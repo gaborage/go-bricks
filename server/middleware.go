@@ -197,11 +197,13 @@ func newSubResolver(cfg *config.ResolverConfig, name string) multitenant.TenantR
 }
 
 // compositeSubResolvers builds the sub-resolvers named by cfg.Order, skipping
-// names that are unknown or whose sub-resolver isn't configured. When that
-// yields nothing usable it falls back to config.DefaultResolverOrder(): a
-// config that never passed through config.Validate() (e.g. built directly in
-// tests) must not end up with zero sub-resolvers, because buildTenantResolver
-// then returns nil and SetupMiddlewares skips tenant resolution entirely.
+// names that are unknown or whose sub-resolver isn't configured. config.Validate
+// now requires an explicit, non-empty Order for type: composite, so this
+// fallback path only matters for a ResolverConfig that bypassed Validate
+// entirely (e.g. built directly in tests, or by an embedding app). For such a
+// config, an empty/unusable Order falls back to config.DefaultResolverOrder():
+// it must not end up with zero sub-resolvers, because buildTenantResolver then
+// returns nil and SetupMiddlewares skips tenant resolution entirely.
 func compositeSubResolvers(cfg *config.ResolverConfig) []multitenant.TenantResolver {
 	build := func(order []string) []multitenant.TenantResolver {
 		subs := make([]multitenant.TenantResolver, 0, len(order))
