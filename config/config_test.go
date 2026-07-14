@@ -584,6 +584,30 @@ func TestEnvOverrideReachesRenamedKeys(t *testing.T) {
 	assert.Equal(t, []string{"pan", "cvv2", "otp"}, cfg.Log.SensitiveFields)
 }
 
+// TestEnvOverrideReachesResolverOrder pins the env seam that wiki/migrations.md
+// atom C50.4 tells operators to use to restore header-first composite
+// resolution: MULTITENANT_RESOLVER_ORDER must bind as a comma-separated list.
+//
+// This stays green without MULTITENANT_ENABLED=true (and thus without a
+// resolver.domain, now required alongside resolver.order for a composite
+// reaching validateMultitenantResolver) only because validateMultitenant
+// short-circuits at `if !mt.Enabled { return nil }` — Load() still calls
+// Validate(), it just never reaches the resolver checks here.
+func TestEnvOverrideReachesResolverOrder(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+	t.Setenv("MULTITENANT_RESOLVER_TYPE", ResolverTypeComposite)
+	t.Setenv("MULTITENANT_RESOLVER_ORDER", "header,subdomain,path")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, ResolverTypeComposite, cfg.Multitenant.Resolver.Type)
+	assert.Equal(t,
+		[]string{ResolverTypeHeader, ResolverTypeSubdomain, ResolverTypePath},
+		cfg.Multitenant.Resolver.Order)
+}
+
 // TestEnvVarCollidesWithConfigMap is the M4 regression test. The env provider has no Prefix
 // filter, so it ingests EVERY process environment variable. A bare env var whose name maps
 // onto a top-level config section (CACHE, DEBUG, DATABASE, …) — common in Kubernetes, which
