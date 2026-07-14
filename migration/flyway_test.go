@@ -1345,9 +1345,6 @@ func TestRunFlywayCommandKillsChildProcessGroup(t *testing.T) {
 	// Must outlast cfg.Timeout below so a working group-kill catches the
 	// grandchild mid-sleep, before it writes its marker.
 	const grandchildSleepSeconds = 1
-	// Mirrors cmd.WaitDelay set in runFlywayCommandFor; used only to size this
-	// test's own hard deadline, not to configure the code under test.
-	const waitDelay = 10 * time.Second
 
 	markerPath := filepath.Join(t.TempDir(), "grandchild-survived.marker")
 	stub := createOrphanSpawningFlywayStub(t, markerPath, grandchildSleepSeconds)
@@ -1376,8 +1373,9 @@ func TestRunFlywayCommandKillsChildProcessGroup(t *testing.T) {
 	select {
 	case err := <-done:
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "flyway timed out")
-	case <-time.After(mcfg.Timeout + waitDelay + 5*time.Second):
+		require.ErrorIs(t, err, ErrFlywayTimeout)
+		assert.Contains(t, err.Error(), "schema state is unknown")
+	case <-time.After(mcfg.Timeout + flywayKillGraceDelay + 5*time.Second):
 		t.Fatal("Migrate did not return within the guard deadline — process-group kill regressed to a hang")
 	}
 

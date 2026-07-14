@@ -761,3 +761,49 @@ func TestEmitterSinkPanicIsRecoveredAndCounted(t *testing.T) {
 	rm := mp.Collect(t)
 	obtest.AssertMetricValue(t, rm, "migration.audit.sink_failures", int64(1))
 }
+
+func TestMigrateEmitsTimedOutAuditAttribute(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	setupTestTracer(t)
+
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql", Host: "h", Port: 15432,
+			Username: "user", Password: "longenough-pw", Database: "db",
+		},
+		App: config.AppConfig{Env: "test"},
+	}
+	sink := newRecordingSink()
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditRecorder(sink)
+	t.Cleanup(func() { _ = fm.Close(context.Background()) })
+
+	mcfg := &Config{
+		FlywayPath:    createSlowFlywayStub(t, 5),
+		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
+		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
+		Timeout:       500 * time.Millisecond,
+		Environment:   cfg.App.Env,
+		Audit:         AuditContext{Principal: "deployer@example.com", Target: "tenant_acme"},
+	}
+	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+
+	_, err := fm.Migrate(context.Background(), mcfg)
+	require.ErrorIs(t, err, ErrFlywayTimeout)
+
+	sink.waitForFirst(t, 2*time.Second)
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+
+	got := events[0]
+	assert.Equal(t, AuditOutcomeFailed, got.Outcome)
+	assert.Equal(t, "true", got.Attributes["migration.timed_out"],
+		"a killed run must be machine-identifiable as a timeout")
+	// Pins the documented limitation: classifyFlywayError matches on Flyway's
+	// stdout, which a SIGKILLed JVM never writes, so the class is the catch-all.
+	// migration.timed_out is what alerting keys on until an ErrorClassTimeout
+	// lands in the ADR-019 taxonomy.
+	assert.Equal(t, ErrorClassInternal, got.ErrorClass)
+}
