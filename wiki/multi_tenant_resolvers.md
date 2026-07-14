@@ -96,7 +96,7 @@ Tries each sub-resolver named in `order` until one returns a non-empty, valid te
 
 - Valid entries: `header`, `subdomain`, `path`. Unknown entries and duplicates are rejected; `order` set on any non-composite `type` is rejected outright rather than silently ignored.
 - A sub-resolver named in the order must be configured: `path` requires `path.segment > 0`; `subdomain` requires a real `domain` (a `domain` of `"."` is rejected). A composite whose order omits `subdomain` needs no `domain` at all. `header` needs no configuration — it defaults to `X-Tenant-ID`.
-- `config.DefaultResolverOrder()` returns `[subdomain, path, header]`. That is the **recommended** order, not a default that gets applied for you.
+- `config.DefaultResolverOrder()` returns `[subdomain, path, header]`. That is the **recommended** order — it is never applied to a *validated* config (validation fails instead). It is used as a last-resort fallback only for a hand-built `ResolverConfig` that bypassed `config.Validate()` entirely (an embedding app or a test), so such a config can't silently end up with zero sub-resolvers and disable tenant resolution.
 
 **Which order do you need?**
 

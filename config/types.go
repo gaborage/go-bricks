@@ -506,9 +506,11 @@ type ResolverConfig struct {
 	// is REQUIRED when type is composite — there is no implicit default; a
 	// composite config with an empty Order fails validation. Valid entries:
 	// header, subdomain, path. A sub-resolver named in Order must also be
-	// configured or it is skipped at build time (path needs path.segment > 0;
-	// subdomain needs domain) — see DefaultResolverOrder for the recommended
-	// value and the rationale for not defaulting it.
+	// configured: Validate REJECTS a composite naming path without
+	// path.segment > 0, or subdomain without a domain. (Only a config that
+	// bypasses Validate entirely reaches the builder, where an unconfigured
+	// sub-resolver is skipped instead.) See DefaultResolverOrder for the
+	// recommended value and the rationale for not defaulting it.
 	Order []string `koanf:"order" json:"order" yaml:"order" toml:"order" mapstructure:"order"`
 }
 
