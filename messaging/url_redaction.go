@@ -73,8 +73,9 @@ func buildRedactedURL(u *url.URL, username string) string {
 	}
 
 	if u.RawQuery != "" {
-		result.WriteString("?")
-		result.WriteString(u.RawQuery)
+		// SECURITY: never echo the query verbatim — AMQP URL query params can carry
+		// tokens/secrets (same class as PR #683 on the logger path). Mask in full.
+		result.WriteString("?<redacted>")
 	}
 
 	return result.String()

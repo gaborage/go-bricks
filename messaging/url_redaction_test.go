@@ -50,7 +50,12 @@ func TestRedactAMQPURL(t *testing.T) {
 		{
 			name:     "url_with_query_parameters",
 			input:    "amqp://user:pass@localhost:5672/?heartbeat=30&connection_timeout=10",
-			expected: "amqp://user:****@localhost:5672/?heartbeat=30&connection_timeout=10",
+			expected: "amqp://user:****@localhost:5672/?<redacted>",
+		},
+		{
+			name:     "query_string_is_masked_not_leaked",
+			input:    "amqp://user:secret@host:5672/vhost?token=leakme&heartbeat=60",
+			expected: "amqp://user:****@host:5672/vhost?<redacted>",
 		},
 		{
 			name:     "malformed_url_returns_placeholder",
@@ -129,4 +134,12 @@ func TestRedactAMQPURLPreservesDebuggingInfo(t *testing.T) {
 	// Should mask password
 	assert.Contains(t, result, "****")
 	assert.NotContains(t, result, "secret")
+}
+
+func TestRedactAMQPURLMasksQueryString(t *testing.T) {
+	result := redactAMQPURL("amqp://user:secret@host:5672/vhost?token=leakme&heartbeat=60")
+	assert.NotContains(t, result, "leakme")
+	assert.NotContains(t, result, "token=")
+	assert.NotContains(t, result, "heartbeat")
+	assert.Contains(t, result, "?<redacted>")
 }
