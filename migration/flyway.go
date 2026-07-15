@@ -374,22 +374,25 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 
 	startedAt := time.Now()
 	rawOutput, err := cmd.CombinedOutput()
+	// A SIGKILL from the migration's own deadline OR a parent-context cancellation
+	// (a fail-fast sibling abort in a parallel MigrateAll, or operator Ctrl-C) leaves
+	// the schema state equally unknown — classify them distinctly so the audit stream
+	// never records a false "timed out" for a cancel.
+	ctxErr := timeoutCtx.Err()
+	// Elapsed, not cfg.Timeout: timeoutCtx inherits an earlier parent deadline
+	// (e.g. a MigrateAll budget), so cfg.Timeout would overstate the wait.
+	// killScopeDesc is build-tagged: the message must not promise a process-group
+	// teardown on Windows, where the JVM child tree survives.
+	wrapKilled := func(sentinel error) error {
+		return fmt.Errorf("%w after %s and %s; schema state is unknown "+
+			"(a partially applied migration is possible): %w",
+			sentinel, time.Since(startedAt).Round(time.Millisecond), killScopeDesc, err)
+	}
 	switch {
-	case err != nil && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded):
-		// Elapsed, not cfg.Timeout: timeoutCtx inherits an earlier parent deadline
-		// (e.g. a MigrateAll budget), so cfg.Timeout would overstate the wait.
-		// killScopeDesc is build-tagged: the message must not promise a process-group
-		// teardown on Windows, where the JVM child tree survives.
-		err = fmt.Errorf("%w after %s and %s; schema state is unknown "+
-			"(a partially applied migration is possible): %w",
-			ErrFlywayTimeout, time.Since(startedAt).Round(time.Millisecond), killScopeDesc, err)
-	case err != nil && errors.Is(timeoutCtx.Err(), context.Canceled):
-		// Parent-context cancellation (a fail-fast sibling abort in a parallel
-		// MigrateAll, or operator Ctrl-C) kills the subprocess the same way a
-		// deadline does — the schema state is equally unknown.
-		err = fmt.Errorf("%w after %s and %s; schema state is unknown "+
-			"(a partially applied migration is possible): %w",
-			ErrFlywayCanceled, time.Since(startedAt).Round(time.Millisecond), killScopeDesc, err)
+	case err != nil && errors.Is(ctxErr, context.DeadlineExceeded):
+		err = wrapKilled(ErrFlywayTimeout)
+	case err != nil && errors.Is(ctxErr, context.Canceled):
+		err = wrapKilled(ErrFlywayCanceled)
 	}
 	redacted := redactPassword(string(rawOutput), db)
 	if err != nil {
