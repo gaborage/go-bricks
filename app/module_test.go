@@ -320,6 +320,8 @@ func TestModuleRegistryShutdownMixedSuccessAndFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, failErr)
 	assert.Contains(t, err.Error(), "failing-module")
+	// A cleanly-shut-down module must not appear in the joined error.
+	assert.NotContains(t, err.Error(), "ok-module")
 
 	okModule.AssertExpectations(t)
 	failModule.AssertExpectations(t)

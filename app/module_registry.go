@@ -306,7 +306,8 @@ func (r *ModuleRegistry) RegisterJobs() error {
 }
 
 // Shutdown gracefully shuts down all registered modules.
-// It calls each module's Shutdown method and logs any errors.
+// It calls each module's Shutdown method (continuing past failures), logs each
+// error, and returns them joined via errors.Join (nil if all shut down cleanly).
 // Messaging shutdown is handled by the messaging manager.
 func (r *ModuleRegistry) Shutdown() error {
 	var errs []error
