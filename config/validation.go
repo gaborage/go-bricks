@@ -36,6 +36,12 @@ const (
 	// Connection layers compare against this constant to decide whether to
 	// apply per-connection timezone setup.
 	TimezoneDisabledSentinel = "-"
+
+	// DefaultBodyLimitBytes is the maximum request body size (10 MB) applied when
+	// server.bodylimit is unset or resolves to a non-positive value. Single source
+	// of truth for both the koanf default (loadDefaults) and the server-side
+	// wire-up fallback (server.SetupMiddlewares).
+	DefaultBodyLimitBytes int64 = 10 * 1024 * 1024
 )
 
 // Messaging reconnection defaults
@@ -303,6 +309,13 @@ func validateServer(cfg *ServerConfig) error {
 
 	if cfg.Gzip.MinLength < 0 {
 		return NewValidationError("server.gzip.minlength", errMustBeNonNegative)
+	}
+
+	// A negative body limit is an operator error (a typo silently reverting to the
+	// default is worse than a startup failure). Zero is permitted and resolves to
+	// the framework default at wire-up (see server.SetupMiddlewares).
+	if cfg.BodyLimit < 0 {
+		return NewValidationError("server.bodylimit", errMustBeNonNegative)
 	}
 
 	return nil

@@ -94,6 +94,11 @@ type ServerConfig struct {
 	Path    PathConfig    `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"`
 	Gzip    GzipConfig    `koanf:"gzip" json:"gzip" yaml:"gzip" toml:"gzip" mapstructure:"gzip"`
 
+	// BodyLimit is the maximum request body size in bytes. A value of 0 resolves
+	// to the framework default (10 MB) at wire-up; a negative value is rejected by
+	// config validation.
+	BodyLimit int64 `koanf:"bodylimit" json:"bodylimit" yaml:"bodylimit" toml:"bodylimit" mapstructure:"bodylimit"`
+
 	ResponseTime ResponseTimeConfig `koanf:"responsetime" json:"responsetime" yaml:"responsetime" toml:"responsetime" mapstructure:"responsetime"`
 
 	// LogRoutes toggles the per-route "Route registered" startup log lines
