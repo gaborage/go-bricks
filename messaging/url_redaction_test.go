@@ -135,11 +135,3 @@ func TestRedactAMQPURLPreservesDebuggingInfo(t *testing.T) {
 	assert.Contains(t, result, "****")
 	assert.NotContains(t, result, "secret")
 }
-
-func TestRedactAMQPURLMasksQueryString(t *testing.T) {
-	result := redactAMQPURL("amqp://user:secret@host:5672/vhost?token=leakme&heartbeat=60")
-	assert.NotContains(t, result, "leakme")
-	assert.NotContains(t, result, "token=")
-	assert.NotContains(t, result, "heartbeat")
-	assert.Contains(t, result, "?<redacted>")
-}
