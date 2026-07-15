@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/gaborage/go-bricks/jose"
@@ -305,9 +306,11 @@ func (r *ModuleRegistry) RegisterJobs() error {
 }
 
 // Shutdown gracefully shuts down all registered modules.
-// It calls each module's Shutdown method and logs any errors.
+// It calls each module's Shutdown method (continuing past failures), logs each
+// error, and returns them joined via errors.Join (nil if all shut down cleanly).
 // Messaging shutdown is handled by the messaging manager.
 func (r *ModuleRegistry) Shutdown() error {
+	var errs []error
 	for _, module := range r.modules {
 		r.logger.Info().
 			Str("module", module.Name()).
@@ -318,7 +321,8 @@ func (r *ModuleRegistry) Shutdown() error {
 				Err(err).
 				Str("module", module.Name()).
 				Msg("Failed to shutdown module")
+			errs = append(errs, fmt.Errorf("shutdown module %s: %w", module.Name(), err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

@@ -280,15 +280,51 @@ func TestModuleRegistryShutdownWithErrors(t *testing.T) {
 	require.NoError(t, registry.Register(module2))
 
 	// Setup shutdown expectations - modules fail to shutdown
-	module1.On("Shutdown").Return(errors.New("shutdown failed 1"))
-	module2.On("Shutdown").Return(errors.New("shutdown failed 2"))
+	err1 := errors.New("shutdown failed 1")
+	err2 := errors.New("shutdown failed 2")
+	module1.On("Shutdown").Return(err1)
+	module2.On("Shutdown").Return(err2)
 
-	// Should not return error even if modules fail to shutdown
+	// Both modules still shut down; the joined error surfaces both failures.
 	err := registry.Shutdown()
-	assert.NoError(t, err)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, err1)
+	assert.ErrorIs(t, err, err2)
+	assert.Contains(t, err.Error(), "failing-module1")
+	assert.Contains(t, err.Error(), "failing-module2")
 
 	module1.AssertExpectations(t)
 	module2.AssertExpectations(t)
+}
+
+func TestModuleRegistryShutdownMixedSuccessAndFailure(t *testing.T) {
+	log := logger.New("debug", true)
+	deps := &ModuleDeps{
+		Logger: log,
+		Config: &config.Config{},
+	}
+	registry := NewModuleRegistry(deps)
+
+	okModule := &MockModule{name: "ok-module"}
+	failModule := &MockModule{name: "failing-module"}
+	okModule.On("Init", deps).Return(nil)
+	failModule.On("Init", deps).Return(nil)
+	require.NoError(t, registry.Register(okModule))
+	require.NoError(t, registry.Register(failModule))
+
+	failErr := errors.New("shutdown failed")
+	okModule.On("Shutdown").Return(nil)
+	failModule.On("Shutdown").Return(failErr)
+
+	err := registry.Shutdown()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, failErr)
+	assert.Contains(t, err.Error(), "failing-module")
+	// A cleanly-shut-down module must not appear in the joined error.
+	assert.NotContains(t, err.Error(), "ok-module")
+
+	okModule.AssertExpectations(t)
+	failModule.AssertExpectations(t)
 }
 
 func TestModuleRegistryShutdownSingleModule(t *testing.T) {
