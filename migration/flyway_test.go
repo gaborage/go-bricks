@@ -517,6 +517,22 @@ exit 0
 	return path
 }
 
+// createReadySignalingFlywayStub writes a stub that touches readyMarker the moment
+// it starts, then sleeps delaySeconds. Tests wait for that marker before acting so a
+// cancel/kill deterministically lands on an in-flight subprocess, not on test setup.
+func createReadySignalingFlywayStub(t *testing.T, readyMarker string, delaySeconds int) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "flyway-ready.sh")
+	content := fmt.Sprintf(`#!/bin/sh
+touch %q
+sleep %d
+exit 0
+`, readyMarker, delaySeconds)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
+	return path
+}
+
 func TestRunFlywayCommandErrorHandling(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
@@ -1387,4 +1403,79 @@ func TestRunFlywayCommandKillsChildProcessGroup(t *testing.T) {
 	time.Sleep(grandchildSleepSeconds*time.Second + 500*time.Millisecond)
 	_, statErr := os.Stat(markerPath)
 	assert.True(t, os.IsNotExist(statErr), "grandchild marker file exists — orphaned grandchild survived the timeout kill")
+}
+
+// TestRunFlywayCommandParentCancelSignalsUnknownState guards the cancel-kill
+// class: a fail-fast sibling abort in a parallel MigrateAll (or an operator
+// Ctrl-C) kills the subprocess via parent-context cancellation, not the
+// migration's own deadline. The SIGKILL leaves the schema state equally
+// unknown as a timeout does, so the cancel path must classify distinctly
+// (ErrFlywayCanceled) rather than collapsing into the generic
+// "flyway command failed" catch-all — and it must NOT also match
+// ErrFlywayTimeout, since nothing timed out.
+func TestRunFlywayCommandParentCancelSignalsUnknownState(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+
+	readyMarker := filepath.Join(t.TempDir(), "flyway-started.marker")
+	stub := createReadySignalingFlywayStub(t, readyMarker, 5) // sleeps 5s; signals readiness first
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Type: "postgresql"},
+		App:      config.AppConfig{Env: "test"},
+	}
+	sink := newRecordingSink()
+	fm := NewFlywayMigrator(cfg, logger.New("disabled", true)).WithAuditRecorder(sink)
+	t.Cleanup(func() { _ = fm.Close(context.Background()) })
+
+	mcfg := &Config{
+		FlywayPath:    stub,
+		ConfigPath:    filepath.Join(t.TempDir(), "flyway.conf"),
+		MigrationPath: filepath.Join(t.TempDir(), "migrations"),
+		Timeout:       10 * time.Second, // must not fire before the parent cancel below
+		Environment:   cfg.App.Env,
+		Audit:         AuditContext{Principal: "deployer@example.com", Target: "tenant_acme"},
+	}
+	require.NoError(t, os.WriteFile(mcfg.ConfigPath, []byte(""), 0o644))
+	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := fm.Migrate(ctx, mcfg)
+		done <- err
+	}()
+
+	// Cancel only once the Flyway subprocess is actually running (it touches
+	// readyMarker on start), so the cancel deterministically kills an in-flight
+	// process rather than racing test setup — no fixed sleep, no flake under load.
+	require.Eventually(t, func() bool {
+		_, statErr := os.Stat(readyMarker)
+		return statErr == nil
+	}, 5*time.Second, 10*time.Millisecond, "Flyway stub never signaled readiness")
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrFlywayCanceled)
+		assert.NotErrorIs(t, err, ErrFlywayTimeout, "a parent-cancel kill must not also classify as a timeout")
+		assert.Contains(t, err.Error(), "schema state is unknown")
+		// The kill scope is build-tagged: the message must report what this platform
+		// actually terminated, never a hardcoded process-group claim (false on Windows).
+		assert.Contains(t, err.Error(), killScopeDesc)
+	case <-time.After(flywayKillGraceDelay + 5*time.Second):
+		t.Fatal("Migrate did not return within the guard deadline — cancel-kill classification regressed to a hang")
+	}
+
+	sink.waitForFirst(t, 2*time.Second)
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+
+	got := events[0]
+	assert.Equal(t, AuditOutcomeFailed, got.Outcome)
+	assert.Equal(t, "true", got.Attributes["migration.canceled"],
+		"a parent-canceled run must be machine-identifiable as canceled")
+	_, hasTimedOut := got.Attributes["migration.timed_out"]
+	assert.False(t, hasTimedOut, "a cancel-kill must not also assert migration.timed_out")
 }
