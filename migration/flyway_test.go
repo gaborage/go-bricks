@@ -517,6 +517,22 @@ exit 0
 	return path
 }
 
+// createReadySignalingFlywayStub writes a stub that touches readyMarker the moment
+// it starts, then sleeps delaySeconds. Tests wait for that marker before acting so a
+// cancel/kill deterministically lands on an in-flight subprocess, not on test setup.
+func createReadySignalingFlywayStub(t *testing.T, readyMarker string, delaySeconds int) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "flyway-ready.sh")
+	content := fmt.Sprintf(`#!/bin/sh
+touch %q
+sleep %d
+exit 0
+`, readyMarker, delaySeconds)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
+	return path
+}
+
 func TestRunFlywayCommandErrorHandling(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
@@ -1402,7 +1418,8 @@ func TestRunFlywayCommandParentCancelSignalsUnknownState(t *testing.T) {
 		t.Skip("shell script stub not supported on windows CI")
 	}
 
-	stub := createSlowFlywayStub(t, 5) // 5 second delay, well past the parent cancel below
+	readyMarker := filepath.Join(t.TempDir(), "flyway-started.marker")
+	stub := createReadySignalingFlywayStub(t, readyMarker, 5) // sleeps 5s; signals readiness first
 	cfg := &config.Config{
 		Database: config.DatabaseConfig{Type: "postgresql"},
 		App:      config.AppConfig{Env: "test"},
@@ -1423,13 +1440,20 @@ func TestRunFlywayCommandParentCancelSignalsUnknownState(t *testing.T) {
 	require.NoError(t, os.MkdirAll(mcfg.MigrationPath, 0o755))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(300*time.Millisecond, cancel)
-
 	done := make(chan error, 1)
 	go func() {
 		_, err := fm.Migrate(ctx, mcfg)
 		done <- err
 	}()
+
+	// Cancel only once the Flyway subprocess is actually running (it touches
+	// readyMarker on start), so the cancel deterministically kills an in-flight
+	// process rather than racing test setup — no fixed sleep, no flake under load.
+	require.Eventually(t, func() bool {
+		_, statErr := os.Stat(readyMarker)
+		return statErr == nil
+	}, 5*time.Second, 10*time.Millisecond, "Flyway stub never signaled readiness")
+	cancel()
 
 	select {
 	case err := <-done:
@@ -1440,7 +1464,7 @@ func TestRunFlywayCommandParentCancelSignalsUnknownState(t *testing.T) {
 		// The kill scope is build-tagged: the message must report what this platform
 		// actually terminated, never a hardcoded process-group claim (false on Windows).
 		assert.Contains(t, err.Error(), killScopeDesc)
-	case <-time.After(300*time.Millisecond + flywayKillGraceDelay + 5*time.Second):
+	case <-time.After(flywayKillGraceDelay + 5*time.Second):
 		t.Fatal("Migrate did not return within the guard deadline — cancel-kill classification regressed to a hang")
 	}
 
