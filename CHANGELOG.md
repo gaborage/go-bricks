@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.51.0](https://github.com/gaborage/go-bricks/compare/v0.50.0...v0.51.0) (2026-07-15)
+
+
+### Added
+
+* **server:** configurable body limit + group-404 guard hardening for echo v5.3.0 ([#711](https://github.com/gaborage/go-bricks/issues/711)) ([3e6f201](https://github.com/gaborage/go-bricks/commit/3e6f201b1dfcb6a860205ccdd05e2e6fa1d6c174))
+
+
+### Fixed
+
+* **app:** propagate module Shutdown errors so Run reports an unclean shutdown ([#707](https://github.com/gaborage/go-bricks/issues/707)) ([c968ee2](https://github.com/gaborage/go-bricks/commit/c968ee244035df4703d8444db9f1c9f5b8f5e3fd))
+* **messaging:** mask AMQP URL query string in redacted log output ([#706](https://github.com/gaborage/go-bricks/issues/706)) ([55bacb6](https://github.com/gaborage/go-bricks/commit/55bacb63cd8750d23bc1da52a91eaf4152ac6597))
+* **migration:** signal schema-state-unknown on parent-cancel kill (not only deadline) ([#708](https://github.com/gaborage/go-bricks/issues/708)) ([2ebd6ee](https://github.com/gaborage/go-bricks/commit/2ebd6eeb9579d98924e63c3ae25840daa8dc4415))
+
 ## [0.50.0](https://github.com/gaborage/go-bricks/compare/v0.49.1...v0.50.0) (2026-07-14)
 
 
