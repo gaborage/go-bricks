@@ -29,6 +29,7 @@ server:
     ready: /ready     # Custom readiness endpoint path
   gzip:
     minlength: 1024   # Min response size (bytes) before gzip applies; smaller responses skip compression
+  bodylimit: 10485760 # Max request body size in bytes (default 10 MB); raise for large uploads. 0 = default; negative rejected.
   responsetime:
     enabled: false    # Opt-in X-Response-Time header (per-request processing time); off by default — OTel provides richer latency telemetry. SERVER_RESPONSETIME_ENABLED=true to restore.
 

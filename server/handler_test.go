@@ -2620,3 +2620,185 @@ func TestTypedHandlerPathAllocsStable(t *testing.T) {
 	assert.LessOrEqual(t, got, float64(typedHandlerPathMaxAllocs),
 		"typed request path allocs/op regressed beyond the ADR-026 baseline")
 }
+
+// TestHandlerContextGroupCatchAllUnmatched verifies the param-state guard treats a
+// middleware-bearing group's implicit catch-all as unmatched. echo v5.3.0 restored the v4
+// behavior where a group carrying middleware auto-registers "/*" RouteNotFound routes (see
+// group.go Group.Use) so the middleware still runs on unmatched sub-paths and method
+// mismatches. Those catch-all hits have an empty RouteInfo.Name (NOT a sentinel) but
+// Method == echo.RouteNotFound, so PathParams/RouteTemplate must key on Method: dropping
+// that clause regresses the unmatched cases to a phantom "*" param and the "/api/*" template.
+func TestHandlerContextGroupCatchAllUnmatched(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	obs := &unmatchedRouteObservation{}
+
+	e := echo.New()
+	// Pass-through group middleware mirroring scheduler/module.go's sysGroup.Use(...): its
+	// presence is what makes echo register the implicit catch-all, and being group-level it
+	// runs (and captures) even when no real route matched.
+	capture := func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(ec *echo.Context) error {
+			c := newHandlerContext(ec, cfg)
+			obs.params = c.PathParams()
+			obs.template = c.RouteTemplate()
+			obs.captured = true
+			return next(ec)
+		}
+	}
+	g := e.Group("/api", capture)
+	g.GET("/users/:id", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
+	// A nested middleware-bearing group registers its OWN implicit catch-all; the guard
+	// must treat its unmatched sub-paths identically (Method == echo.RouteNotFound).
+	sub := g.Group("/v1", capture)
+	sub.GET("/items/:id", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
+
+	// Warm the router and context pool with a matched parameterized request so stale param
+	// names sit in the pooled backing array — the phantom-param regression vector.
+	warm := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/users/7", http.NoBody)
+	e.ServeHTTP(httptest.NewRecorder(), warm)
+
+	serve := func(method, target string) int {
+		*obs = unmatchedRouteObservation{}
+		req := httptest.NewRequestWithContext(context.Background(), method, target, http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	t.Run("unmatched_sub_path", func(t *testing.T) {
+		status := serve(http.MethodGet, "/api/nope/x")
+		require.True(t, obs.captured, "group middleware must run on the implicit catch-all")
+		assert.Equal(t, http.StatusNotFound, status)
+		assert.Empty(t, obs.params, "PathParams must be empty on a group catch-all")
+		assert.Empty(t, obs.template, "RouteTemplate must be empty on a group catch-all")
+	})
+
+	t.Run("wrong_method", func(t *testing.T) {
+		// echo v5.3.0's group catch-all shadows the 405: a wrong-method request under a
+		// middleware-bearing group returns 404 (not 405). This is the headline E51/C51.1 change.
+		status := serve(http.MethodPost, "/api/users/42")
+		require.True(t, obs.captured, "group middleware must run on the implicit catch-all")
+		assert.Equal(t, http.StatusNotFound, status, "wrong-method under a group is shadowed to 404 by the catch-all")
+		assert.Empty(t, obs.params, "PathParams must be empty when no route method matched")
+		assert.Empty(t, obs.template, "RouteTemplate must be empty on a group catch-all")
+	})
+
+	t.Run("nested_group_unmatched", func(t *testing.T) {
+		status := serve(http.MethodGet, "/api/v1/nope")
+		require.True(t, obs.captured, "nested group middleware must run on its implicit catch-all")
+		assert.Equal(t, http.StatusNotFound, status)
+		assert.Empty(t, obs.params, "PathParams must be empty on a nested group catch-all")
+		assert.Empty(t, obs.template, "RouteTemplate must be empty on a nested group catch-all")
+	})
+
+	t.Run("real_match_unaffected", func(t *testing.T) {
+		status := serve(http.MethodGet, "/api/users/42")
+		require.True(t, obs.captured, "group middleware must run on a real match")
+		assert.Equal(t, http.StatusOK, status)
+		assert.Equal(t, []PathParam{{Name: "id", Value: "42"}}, obs.params,
+			"the guard must not strip params from a real match")
+		assert.Equal(t, "/api/users/:id", obs.template)
+	})
+
+	t.Run("nested_real_match_unaffected", func(t *testing.T) {
+		status := serve(http.MethodGet, "/api/v1/items/9")
+		require.True(t, obs.captured, "nested group middleware must run on a real match")
+		assert.Equal(t, http.StatusOK, status)
+		assert.Equal(t, []PathParam{{Name: "id", Value: "9"}}, obs.params)
+		assert.Equal(t, "/api/v1/items/:id", obs.template)
+	})
+}
+
+// TestHandlerContextGlobalUnmatchedTemplate pins the deliberate asymmetry between the
+// PathParams() guard (full isUnmatchedRoute — empty on 404 AND 405) and RouteTemplate()'s
+// NARROW guard (empty only for a group catch-all): on a top-level 405 RouteTemplate() must
+// still report the engine's best-match template, while PathParams() is empty.
+func TestHandlerContextGlobalUnmatchedTemplate(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	obs := &unmatchedRouteObservation{}
+
+	e := echo.New()
+	// Global middleware runs on every request incl. the global 404/405 fallbacks.
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(ec *echo.Context) error {
+			c := newHandlerContext(ec, cfg)
+			obs.params = c.PathParams()
+			obs.template = c.RouteTemplate()
+			obs.captured = true
+			return next(ec)
+		}
+	})
+	e.GET("/widget/:id", func(ec *echo.Context) error { return ec.NoContent(http.StatusOK) })
+
+	serve := func(method, target string) int {
+		*obs = unmatchedRouteObservation{}
+		req := httptest.NewRequestWithContext(context.Background(), method, target, http.NoBody)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	t.Run("global_404", func(t *testing.T) {
+		status := serve(http.MethodGet, "/nothing/here")
+		require.True(t, obs.captured)
+		assert.Equal(t, http.StatusNotFound, status)
+		assert.Empty(t, obs.params)
+		assert.Empty(t, obs.template, "global 404 has no matched template")
+	})
+
+	t.Run("global_405_keeps_best_match_template", func(t *testing.T) {
+		status := serve(http.MethodPost, "/widget/5")
+		require.True(t, obs.captured)
+		assert.Equal(t, http.StatusMethodNotAllowed, status, "a top-level wrong-method is a real 405")
+		assert.Empty(t, obs.params, "PathParams is empty on a 405")
+		assert.Equal(t, "/widget/:id", obs.template,
+			"RouteTemplate's narrow guard must preserve the engine best-match template on a global 405")
+	})
+}
+
+type trailingBytesReq struct {
+	Name string `json:"name"`
+}
+
+// TestBindJSONBodyTrailingContent pins echo v5.3.0's stricter JSON deserialize (the default
+// serializer decodes with json.Unmarshal instead of a streaming json.Decoder) from both
+// sides of the tolerance boundary: trailing NON-whitespace garbage is now rejected with a
+// 400 bind error (v5.2.1 silently ignored it), while trailing whitespace — a newline from a
+// CLI/`curl`, say — is still accepted because json.Unmarshal ignores it.
+func TestBindJSONBodyTrailingContent(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	require.NotNil(t, v)
+	e.Validator = v
+
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	handler := func(req trailingBytesReq, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: req.Name}, nil
+	}
+	h := WrapHandler(handler, binder, cfg)
+
+	bind := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", strings.NewReader(body))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		require.NoError(t, h(e.NewContext(req, rec)))
+		return rec
+	}
+
+	t.Run("rejects_trailing_garbage", func(t *testing.T) {
+		rec := bind(`{"name":"x"}garbage`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+		var resp APIResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.NotNil(t, resp.Error)
+		assert.Equal(t, "BAD_REQUEST", resp.Error.Code)
+		assert.Equal(t, "Invalid request data", resp.Error.Message)
+	})
+
+	t.Run("accepts_trailing_whitespace", func(t *testing.T) {
+		rec := bind("{\"name\":\"x\"}\n")
+		assert.Equal(t, http.StatusOK, rec.Code, "a trailing newline is whitespace and must still bind")
+	})
+}

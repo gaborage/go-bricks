@@ -11,6 +11,7 @@ const (
 	errCodeConflict           = "CONFLICT"
 	errCodeTooManyRequests    = "TOO_MANY_REQUESTS"
 	errCodeServiceUnavailable = "SERVICE_UNAVAILABLE"
+	errCodeMethodNotAllowed   = "METHOD_NOT_ALLOWED"
 	errCodeInternalError      = "INTERNAL_ERROR"
 )
 

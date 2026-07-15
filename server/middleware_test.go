@@ -452,6 +452,58 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 	})
 }
 
+func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
+	log := logger.New("disabled", false)
+
+	newEngine := func(limit int64) *echo.Echo {
+		e := echo.New()
+		cfg := &config.Config{
+			App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
+			Server: config.ServerConfig{
+				Timeout:   config.TimeoutConfig{Middleware: 30 * time.Second},
+				BodyLimit: limit,
+			},
+		}
+		SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+		e.POST("/test", func(c *echo.Context) error {
+			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		})
+		return e
+	}
+
+	post := func(e *echo.Echo, size int) int {
+		body := strings.NewReader(strings.Repeat("x", size))
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", body)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	t.Run("configured_limit_is_enforced", func(t *testing.T) {
+		e := newEngine(1024) // 1 KB
+		assert.Equal(t, http.StatusOK, post(e, 512))
+		assert.Equal(t, http.StatusRequestEntityTooLarge, post(e, 2048))
+	})
+
+	t.Run("non_positive_limit_falls_back_to_default", func(t *testing.T) {
+		// Both 0 and a negative limit must resolve to the shared 10 MB default rather than
+		// disabling the cap. Pin the boundary tightly against DefaultBodyLimitBytes: a body
+		// just under it passes, one just over it is rejected. (A negative reaches the <=0
+		// guard only for direct SetupMiddlewares callers; config.Validate rejects it on the
+		// Load path — see config/validation.go.)
+		underDefault := int(config.DefaultBodyLimitBytes) - 1024
+		overDefault := int(config.DefaultBodyLimitBytes) + 1024
+		for _, limit := range []int64{0, -1} {
+			e := newEngine(limit)
+			assert.Equal(t, http.StatusOK, post(e, underDefault),
+				"limit %d must fall back to the 10 MB default (accepts an under-default body)", limit)
+			assert.Equal(t, http.StatusRequestEntityTooLarge, post(e, overDefault),
+				"limit %d must fall back to the 10 MB default (rejects an over-default body)", limit)
+		}
+	})
+}
+
 func TestGzipMiddleware(t *testing.T) {
 	e := echo.New()
 	log := logger.New("disabled", false)

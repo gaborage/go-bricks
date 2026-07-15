@@ -370,6 +370,7 @@ func TestStatusToErrorCodeMappings(t *testing.T) {
 		{status: http.StatusUnauthorized, code: "UNAUTHORIZED"},
 		{status: http.StatusForbidden, code: "FORBIDDEN"},
 		{status: http.StatusNotFound, code: "NOT_FOUND"},
+		{status: http.StatusMethodNotAllowed, code: "METHOD_NOT_ALLOWED"},
 		{status: http.StatusConflict, code: "CONFLICT"},
 		{status: http.StatusTooManyRequests, code: "TOO_MANY_REQUESTS"},
 		{status: http.StatusServiceUnavailable, code: "SERVICE_UNAVAILABLE"},
@@ -379,6 +380,27 @@ func TestStatusToErrorCodeMappings(t *testing.T) {
 	for _, tt := range tests {
 		assert.Equal(t, tt.code, statusToErrorCode(tt.status))
 	}
+}
+
+// TestServer405ProducesMethodNotAllowedEnvelope proves the wiring end-to-end: a real 405
+// flowing through the framework error handler carries error code METHOD_NOT_ALLOWED in the
+// response envelope (before this mapping existed it fell through to INTERNAL_ERROR). The
+// route is top-level (no group middleware), so a wrong method yields a genuine 405 rather
+// than a group catch-all 404.
+func TestServer405ProducesMethodNotAllowedEnvelope(t *testing.T) {
+	srv := newTestServer("", "", "")
+	srv.echo.GET("/widget/:id", func(c *echo.Context) error { return c.NoContent(http.StatusOK) })
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/widget/5", http.NoBody)
+	rec := httptest.NewRecorder()
+	srv.echo.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "METHOD_NOT_ALLOWED", resp.Error.Code,
+		"a real 405 must carry the METHOD_NOT_ALLOWED envelope code, not INTERNAL_ERROR")
 }
 
 func TestServerConfiguration(t *testing.T) {

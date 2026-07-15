@@ -17,7 +17,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -33,6 +33,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E45  | v0.44.0 → v0.45.0 | compile-break | 9 | C45.1 C45.2 C45.3 C45.4 C45.5 C45.6 | outbox re-delivery count |
 | E49  | v0.45.0 → v0.49.0 | silent-config | 6 | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool / unit-less duration guard |
 | E50  | v0.49.0 → v0.50.0 | config-break | 4 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate; dev CORS wildcard opt-in; `multitenant.resolver.order` now REQUIRED for `type: composite` (no default — composite deployments fail to start until they declare one) |
+| E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -607,6 +608,37 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
   Env form is a comma-separated list: `MULTITENANT_RESOLVER_ORDER=header,subdomain,path`. Also delete any `multitenant.resolver.order` set on a **non-composite** type — it is now rejected at startup.
 - verify: `make run` — a composite config with no order aborts naming `multitenant.resolver.order` (`required when multitenant.resolver.type is 'composite' — no implicit default`); once set, startup succeeds. Then send a request carrying both a valid subdomain/path tenant and a conflicting `X-Tenant-ID`: the resolved tenant is whichever source you put first. `go test ./config/ ./server/ ./multitenant/`
 - ref: ADR-039 · config/validation.go: validateResolverOrder · server/middleware.go: compositeSubResolvers · config/types.go: DefaultResolverOrder
+
+## E51 · v0.50.0 → v0.51.0 — echo/v5 v5.3.0 (group implicit-404 revert + stricter JSON bind + configurable body limit)
+
+- gist: The `github.com/labstack/echo/v5` bump v5.2.1 → v5.3.0 is behavior-affecting, not a pure version bump — adopt-only for consumers (no code migration required, no exported go-bricks signature changes). Three observable shifts: (1) echo restored v4's behavior where a middleware-bearing group auto-registers an implicit `/*` catch-all, so group middleware (the scheduler `/_sys` CIDR gate, the debug auth gate, any app sub-group with middleware) now ALSO runs on unmatched sub-paths and wrong-method requests under its prefix — a defense-in-depth win — and a wrong-method request under such a group returns 404 (no `Allow` header) instead of 405; go-bricks intentionally KEEPS echo's new default (does NOT set `NoGroupAutoRegister404Routes`) to preserve the gate-coverage win and hardens `HandlerContext.PathParams()`/`RouteTemplate()` to still report "unmatched" for the catch-all. (2) JSON binding is stricter — a request body with trailing bytes after the top-level JSON value is now rejected (400) where v5.2.1 silently accepted it (echo switched `Deserialize` from `json.Decoder` to `json.Unmarshal` + a pooled buffer, also a small per-bind allocation win). (3) A new `server.bodylimit` config (int64 bytes, default 10 MB) makes the request body cap configurable.
+- build-caught: none
+- preflight: none
+- exit: `go get github.com/gaborage/go-bricks@v0.51.0 && go mod tidy && go build ./... && go test ./...`
+
+### [C51.1] Middleware-bearing groups auto-register an implicit `/*` catch-all (405 → 404 under a group; gate now covers unmatched sub-paths) · silent-behavior · when: match
+
+- detect: `git grep -nE 'StatusMethodNotAllowed|MethodNotAllowed|405|Allow\b|/_sys' -- '*_test.go'` then keep hits that assert a wrong-method response (or an `Allow` header) for a path UNDER a middleware-bearing group prefix
+- gate: match = you have a test/client/monitor that expects 405 + an `Allow` header for a wrong-method request under a group prefix (e.g. `/_sys/*`, the debug group, or any app sub-group with middleware), OR you relied on that group's middleware NOT running for unmatched sub-paths. On echo v5.3.0 the group's implicit `/*` catch-all shadows echo's automatic 405 for the WHOLE prefix: both an unmatched sub-path AND a wrong-method request to an existing route under the group now return 404 (no `Allow`), with the group middleware (CIDR gate, auth gate) running first — so an unmatched sub-path under a gated prefix is now denied by the gate instead of falling through. Scope: this is limited to routes under a middleware-bearing group. no-match = TOP-LEVEL routes (not under such a group), real matched routes, and the global 404/405 fallbacks are unaffected — a wrong-method request to a top-level route still returns 405 + `Allow`.
+- apply: none required — this is a security-positive default the framework keeps deliberately. Update any test/monitor that asserted 405 + `Allow` under a group prefix to expect 404, and confirm nothing depended on group middleware being skipped for unmatched sub-paths.
+- verify: `go test ./...`  # a wrong-method request under `/_sys/...` returns 404 through the CIDR gate; tests asserting 405/`Allow` under a middleware group now expect 404
+- ref: echo/v5 v5.3.0 · labstack/echo#530 · CHANGELOG 0.51.0
+
+### [C51.2] JSON bind rejects trailing bytes after the top-level value · silent-behavior · when: match
+
+- detect: audit any client/producer that POSTs to this service and appends content after the JSON document (concatenated objects, a trailing newline-delimited record, stray bytes) — not reliably greppable in this repo
+- gate: match = a caller sends a request body with extra bytes after the top-level JSON value — v5.2.1's `json.Decoder`-based bind silently accepted (and ignored) the trailing content; v5.3.0's `json.Unmarshal`-based bind rejects the whole body with 400. Well-formed single-document bodies are unaffected and gain a small per-bind allocation win. no-match = your callers send exactly one JSON value per body, unaffected.
+- apply: fix the offending client to send exactly one JSON value per request body; there is no opt-out.
+- verify: `go test ./...`  # then POST a body with trailing bytes and confirm a 400 (previously 200)
+- ref: echo/v5 v5.3.0 · CHANGELOG 0.51.0
+
+### [C51.3] New `server.bodylimit` config caps request body size (default 10 MB) · silent-behavior · when: no-match
+
+- detect: `grep -rniE '(^[[:space:]]*|\.)bodylimit[[:space:]]*:|SERVER_BODYLIMIT' config*.yaml 2>/dev/null`
+- gate: no-match = you leave `server.bodylimit` unset, so the new default governs — the accepted request body is capped at 10 MB (10485760 bytes) and a larger body is rejected with 413 before the handler runs. match = you set an explicit **positive** byte count, which then governs (raises or lowers the cap); an explicit `0` resolves to the 10 MB default and a negative value is rejected at config validation.
+- apply: leave unset for the 10 MB default OR set `server.bodylimit` (int64 bytes, env `SERVER_BODYLIMIT`) to a positive value to raise it for large-upload/bulk-import endpoints or lower it to tighten the boundary.
+- verify: `make run` then POST a body larger than the configured cap  # rejected with 413; a body under the cap is accepted
+- ref: echo/v5 v5.3.0 · server config · CHANGELOG 0.51.0
 
 ---
 

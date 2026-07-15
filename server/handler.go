@@ -206,9 +206,29 @@ type PathParam struct {
 // including any group/base-path prefix (e.g. "/api/cards/:cardId/status").
 // It is the template the application registered, NOT the concrete URL
 // (use Request().URL.Path for that). Empty before routing completes and on
-// unmatched (404) requests; on 405 the engine sets the best-matching route's
-// template (engine-defined, not a contract).
-func (c HandlerContext) RouteTemplate() string { return c.ectx.Path() }
+// unmatched (404) requests; on a top-level 405 the engine sets the best-matching
+// route's template (engine-defined, not a contract). Note the asymmetry under a
+// middleware-bearing group: a wrong-method or unmatched sub-path there resolves
+// to the group's implicit catch-all (a 404), so it returns "" rather than a
+// best-match template.
+func (c HandlerContext) RouteTemplate() string {
+	if c.ectx.RouteInfo().Method == echo.RouteNotFound {
+		return "" // group implicit catch-all (echo v5.3.0): unmatched, no template
+	}
+	return c.ectx.Path()
+}
+
+// isUnmatchedRoute reports whether the request did not resolve to a real
+// application route: the global 404/405 sentinel fallbacks OR a group's
+// implicit catch-all. echo v5.3.0 restored v4 per-group auto-404 routes for
+// middleware-bearing groups; their RouteInfo has an empty Name but
+// Method == echo.RouteNotFound, which the old Name-only check missed.
+func (c HandlerContext) isUnmatchedRoute() bool {
+	ri := c.ectx.RouteInfo()
+	return ri.Name == echo.NotFoundRouteName ||
+		ri.Name == echo.MethodNotAllowedRouteName ||
+		ri.Method == echo.RouteNotFound
+}
 
 // PathParams returns the matched path parameters in route-template order.
 // The returned slice is a defensive copy: safe to retain past the request;
@@ -216,10 +236,13 @@ func (c HandlerContext) RouteTemplate() string { return c.ectx.Path() }
 // route matched (pre-route, 404, 405) — parameter state is only meaningful
 // for a matched route.
 func (c HandlerContext) PathParams() []PathParam {
-	// Param names are stamped only on a full method+path match; on 404/405 the
-	// pooled context's value slots can pair with a PREVIOUS request's names
-	// (phantom params), so treat unmatched requests as having no parameters.
-	if name := c.ectx.RouteInfo().Name; name == echo.NotFoundRouteName || name == echo.MethodNotAllowedRouteName {
+	// Param names are stamped only on a real method+path match. On an unmatched
+	// request — the global 404/405 fallback, or a middleware-bearing group's
+	// implicit catch-all — echo may still leave values in the pooled slots: stale
+	// names from a prior pooled request, or the catch-all's own synthetic wildcard
+	// ("*") capture. Neither is a real application parameter, so treat unmatched
+	// requests as having none.
+	if c.isUnmatchedRoute() {
 		return []PathParam{}
 	}
 	// echo's PathValues() returns a slice header ALIASING the pooled context's

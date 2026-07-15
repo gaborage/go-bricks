@@ -51,6 +51,7 @@ func TestLoadWithDefaults(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.Server.Timeout.Middleware)
 	assert.Equal(t, 10*time.Second, cfg.Server.Timeout.Shutdown)
 	assert.Equal(t, 1024, cfg.Server.Gzip.MinLength)
+	assert.Equal(t, int64(10*1024*1024), cfg.Server.BodyLimit)
 	assert.False(t, cfg.Server.ResponseTime.Enabled, "X-Response-Time header must default to opt-out")
 
 	// Database should be disabled by default (no defaults provided)
@@ -363,6 +364,7 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	assert.Equal(t, "60s", k.String("server.timeout.idle"))
 	assert.Equal(t, "5s", k.String("server.timeout.middleware"))
 	assert.Equal(t, "10s", k.String("server.timeout.shutdown"))
+	assert.Equal(t, int64(10*1024*1024), k.Int64("server.bodylimit"))
 
 	// Database defaults should NOT be provided
 	assert.Equal(t, "", k.String("database.type"))
