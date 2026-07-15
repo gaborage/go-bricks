@@ -37,7 +37,7 @@ app:
 
 ## Server Request Body Limit
 
-`server.bodylimit` (int64 bytes; env `SERVER_BODYLIMIT`) caps the accepted HTTP request body size. A request whose body exceeds the cap is rejected with `413 Request Entity Too Large` before the handler runs:
+`server.bodylimit` (int64 bytes; env `SERVER_BODYLIMIT`) caps the accepted HTTP request body size, rejecting an over-cap request with `413 Request Entity Too Large`. A request with a known `Content-Length` above the cap is rejected up front, before the handler runs; a chunked / unknown-length body is bounded by a limited reader instead, so the 413 surfaces when the read crosses the cap while the handler consumes the body:
 
 | Setting | Default | Purpose |
 |---------|---------|---------|
