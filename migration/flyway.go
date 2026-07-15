@@ -374,7 +374,8 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 
 	startedAt := time.Now()
 	rawOutput, err := cmd.CombinedOutput()
-	if err != nil && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
+	switch {
+	case err != nil && errors.Is(timeoutCtx.Err(), context.DeadlineExceeded):
 		// Elapsed, not cfg.Timeout: timeoutCtx inherits an earlier parent deadline
 		// (e.g. a MigrateAll budget), so cfg.Timeout would overstate the wait.
 		// killScopeDesc is build-tagged: the message must not promise a process-group
@@ -382,6 +383,13 @@ func (fm *FlywayMigrator) runFlywayCommandFor(ctx context.Context, db *config.Da
 		err = fmt.Errorf("%w after %s and %s; schema state is unknown "+
 			"(a partially applied migration is possible): %w",
 			ErrFlywayTimeout, time.Since(startedAt).Round(time.Millisecond), killScopeDesc, err)
+	case err != nil && errors.Is(timeoutCtx.Err(), context.Canceled):
+		// Parent-context cancellation (a fail-fast sibling abort in a parallel
+		// MigrateAll, or operator Ctrl-C) kills the subprocess the same way a
+		// deadline does — the schema state is equally unknown.
+		err = fmt.Errorf("%w after %s and %s; schema state is unknown "+
+			"(a partially applied migration is possible): %w",
+			ErrFlywayCanceled, time.Since(startedAt).Round(time.Millisecond), killScopeDesc, err)
 	}
 	redacted := redactPassword(string(rawOutput), db)
 	if err != nil {
@@ -430,6 +438,12 @@ func (fm *FlywayMigrator) emitMigrationApplied(ctx context.Context, db *config.D
 		// so alerting can pin "schema state unknown, do not auto-retry" without a
 		// taxonomy change and without string-matching the error text.
 		attrs["migration.timed_out"] = "true"
+	}
+	if errors.Is(run.Err, ErrFlywayCanceled) {
+		// Same rationale as migration.timed_out above, for the parent-cancel
+		// kill class: alerting can pin "schema state unknown, do not
+		// auto-retry" without asserting a false "this timed out".
+		attrs["migration.canceled"] = "true"
 	}
 	if run.Result.FlywayVersion != "" {
 		attrs["migration.flyway_version"] = run.Result.FlywayVersion
@@ -492,6 +506,12 @@ var ErrDatabasePasswordTooShort = errors.New("migration: database password too s
 // which a SIGKILLed JVM never gets to write), so the machine-readable signals
 // are this sentinel and the migration.timed_out audit attribute.
 var ErrFlywayTimeout = errors.New("migration: flyway timed out")
+
+// ErrFlywayCanceled marks a run the framework killed via parent-context
+// cancellation (a fail-fast sibling abort in a parallel MigrateAll, or operator
+// Ctrl-C) rather than its own deadline. Like a timeout, the SIGKILL can leave the
+// schema partially applied — schema state is unknown; do not auto-retry blindly.
+var ErrFlywayCanceled = errors.New("migration: flyway canceled")
 
 // ensurePasswordRedactable rejects a non-empty database password that is too
 // short to substring-redact from Flyway output. The error never echoes the
