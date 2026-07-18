@@ -447,6 +447,20 @@ func TestValidateServerFailures(t *testing.T) {
 			},
 			expectedError: "server.gzip.minlength",
 		},
+		{
+			name: "negative_bodylimit",
+			cfg: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   10 * time.Second,
+				},
+				BodyLimit: -1,
+			},
+			expectedError: "server.bodylimit",
+		},
 	}
 
 	for _, tt := range tests {
@@ -3095,6 +3109,7 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 					Header:  testTenantHeader,
 					Domain:  testDomain,
 					Proxies: true,
+					Order:   []string{ResolverTypeSubdomain, ResolverTypeHeader},
 				},
 				Limits: LimitsConfig{
 					Tenants: 1000,
@@ -3141,6 +3156,7 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 					Header: testTenantHeader,
 					Domain: testDomain,
 					Path:   PathResolverConfig{Segment: 2, Prefix: "/itsp"},
+					Order:  []string{ResolverTypeSubdomain, ResolverTypePath, ResolverTypeHeader},
 				},
 				Limits:  LimitsConfig{Tenants: 100},
 				Tenants: makeSampleTenants(),
@@ -3275,6 +3291,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 					Header: testTenantHeader,
 					Domain: testDomain,
 					Path:   PathResolverConfig{Segment: -2, Prefix: "/itsp"},
+					Order:  []string{ResolverTypeSubdomain, ResolverTypePath, ResolverTypeHeader},
 				},
 				Limits:  LimitsConfig{Tenants: 100},
 				Tenants: makeSampleTenants(),
@@ -3426,6 +3443,7 @@ func TestValidateMultitenantResolver(t *testing.T) {
 				Header:  testTenantHeader,
 				Domain:  testDomain,
 				Proxies: true,
+				Order:   []string{ResolverTypeSubdomain, ResolverTypeHeader},
 			},
 			expectError: false,
 		},
@@ -3455,10 +3473,20 @@ func TestValidateMultitenantResolver(t *testing.T) {
 			expectError: false, // Now accepts and normalizes domains without leading dot
 		},
 		{
+			name: "subdomain_domain_dot_only_rejected",
+			config: ResolverConfig{
+				Type:   "subdomain",
+				Domain: ".", // Strips to "" after trimming the leading dot — newSubdomainResolver would build nil
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.domain",
+		},
+		{
 			name: "composite_missing_domain",
 			config: ResolverConfig{
 				Type:   "composite",
 				Header: testTenantHeader,
+				Order:  []string{ResolverTypeSubdomain, ResolverTypeHeader},
 				// Missing domain
 			},
 			expectError:   true,
@@ -3470,6 +3498,7 @@ func TestValidateMultitenantResolver(t *testing.T) {
 				Type:   "composite",
 				Header: testTenantHeader,
 				Domain: "api.example.com", // Will be normalized to .api.example.com
+				Order:  []string{ResolverTypeSubdomain, ResolverTypeHeader},
 			},
 			expectError: false, // Now accepts and normalizes domains without leading dot
 		},
@@ -3488,6 +3517,113 @@ func TestValidateMultitenantResolver(t *testing.T) {
 					assert.Equal(t, tt.expectedHeader, tt.config.Header)
 				}
 			}
+		})
+	}
+}
+
+func TestResolverOrderValidationRejectsUnknown(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        ResolverConfig
+		expectError   bool
+		errorContains string
+		expectedOrder []string
+	}{
+		{
+			name: "unknown_entry_rejected",
+			config: ResolverConfig{
+				Type:   "composite",
+				Domain: testDomain,
+				Order:  []string{"bogus"},
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.order",
+		},
+		{
+			name: "duplicate_entry_rejected",
+			config: ResolverConfig{
+				Type:   "composite",
+				Domain: testDomain,
+				Order:  []string{"header", "header"},
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.order",
+		},
+		{
+			name: "order_on_non_composite_type_rejected",
+			config: ResolverConfig{
+				Type:  "header",
+				Order: []string{"header"},
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.order",
+		},
+		{
+			name: "composite_without_order_is_rejected",
+			config: ResolverConfig{
+				Type:   "composite",
+				Domain: testDomain,
+				// Order intentionally unset — composite requires an explicit order,
+				// there is no implicit default (the framework can't know which
+				// sub-resolvers are attacker-reachable vs. gateway-asserted).
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.order",
+		},
+		{
+			name: "order_with_path_but_no_segment_rejected",
+			config: ResolverConfig{
+				Type:  "composite",
+				Order: []string{ResolverTypePath, ResolverTypeHeader},
+				// Path.Segment intentionally unset — order names "path" but the
+				// path sub-resolver has no segment configured, so it would build
+				// as nil and silently degrade the composite to header-only.
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.path.segment",
+		},
+		{
+			name: "order_with_subdomain_and_dot_domain_rejected",
+			config: ResolverConfig{
+				Type:   "composite",
+				Order:  []string{ResolverTypeSubdomain, ResolverTypeHeader},
+				Domain: ".", // Strips to "" after trimming the leading dot — newSubdomainResolver would build nil
+			},
+			expectError:   true,
+			errorContains: "multitenant.resolver.domain",
+		},
+		{
+			name: "valid_configured_order_preserved",
+			config: ResolverConfig{
+				Type:   "composite",
+				Domain: testDomain,
+				Order:  []string{ResolverTypeHeader, ResolverTypeSubdomain},
+			},
+			expectError:   false,
+			expectedOrder: []string{ResolverTypeHeader, ResolverTypeSubdomain},
+		},
+		{
+			name: "order_excluding_subdomain_does_not_require_domain",
+			config: ResolverConfig{
+				Type:  "composite",
+				Order: []string{ResolverTypePath, ResolverTypeHeader},
+				Path:  PathResolverConfig{Segment: 1},
+			},
+			expectError:   false,
+			expectedOrder: []string{ResolverTypePath, ResolverTypeHeader},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMultitenantResolver(&tt.config)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedOrder, tt.config.Order)
 		})
 	}
 }

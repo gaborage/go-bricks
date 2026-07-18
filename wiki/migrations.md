@@ -17,7 +17,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -32,7 +32,8 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E44  | v0.43.0 → v0.44.0 | noop | 2 | none | none |
 | E45  | v0.44.0 → v0.45.0 | compile-break | 9 | C45.1 C45.2 C45.3 C45.4 C45.5 C45.6 | outbox re-delivery count |
 | E49  | v0.45.0 → v0.49.0 | silent-config | 6 | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool / unit-less duration guard |
-| E50  | v0.49.0 → v0.50.0 | config-break | 3 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate; dev CORS wildcard opt-in |
+| E50  | v0.49.0 → v0.50.0 | config-break | 4 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate; dev CORS wildcard opt-in; `multitenant.resolver.order` now REQUIRED for `type: composite` (no default — composite deployments fail to start until they declare one) |
+| E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -558,7 +559,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 ## E50 · v0.49.0 → v0.50.0 — Flyway migrate surfaces unparseable/failure output as an error
 
-- gist: `migration.Migrate`/`MigrateFor` (and everything on top of them — `RunMigrationsAtStartup`, multi-tenant `MigrateAll`, the `go-bricks-migrate` CLI) previously returned a **nil error with a zero-valued Result** when the Flyway subprocess exited 0 but its `-outputType=json` output could not be parsed — the parse error was only Debug-logged — so a migration whose outcome was unobservable was reported as success, and the `migration.applied` audit event recorded `Outcome=success` with an empty version. It now returns a non-nil error (`errors.Is` `migration.ErrFlywayOutputUnparsed` for empty/malformed/redaction-suppressed output, or `migration.ErrFlywayReportedFailure` for a `success:false` envelope even at exit 0) and the audit event records `Outcome=failed`. No exported signatures change; `parseFlywayJSON`'s own contract is unchanged. Additionally, non-empty DB passwords shorter than 8 bytes are now rejected (config validation + migrate) rather than suppressed — see C50.2. The dev-permissive reflect-any-origin + credentials CORS posture (a development-alias, or koanf-defaulted, `APP_ENV` with `CORS_ORIGINS` unset) now additionally requires `CORS_DEV_WILDCARD=true` — without it, dev fails closed like every other env — see C50.3. This hop also adds one **additive, adopt-only** feature (no atom): the opt-in `server.logroutes` flag emits a `Route registered` Info line per HTTP route at startup — default dev-on/prod-off (tri-state, `SERVER_LOGROUTES`), so prod is unaffected; silence a dev boot with `server.logroutes: false`.
+- gist: `migration.Migrate`/`MigrateFor` (and everything on top of them — `RunMigrationsAtStartup`, multi-tenant `MigrateAll`, the `go-bricks-migrate` CLI) previously returned a **nil error with a zero-valued Result** when the Flyway subprocess exited 0 but its `-outputType=json` output could not be parsed — the parse error was only Debug-logged — so a migration whose outcome was unobservable was reported as success, and the `migration.applied` audit event recorded `Outcome=success` with an empty version. It now returns a non-nil error (`errors.Is` `migration.ErrFlywayOutputUnparsed` for empty/malformed/redaction-suppressed output, or `migration.ErrFlywayReportedFailure` for a `success:false` envelope even at exit 0) and the audit event records `Outcome=failed`. No exported signatures change; `parseFlywayJSON`'s own contract is unchanged. Additionally, non-empty DB passwords shorter than 8 bytes are now rejected (config validation + migrate) rather than suppressed — see C50.2. The dev-permissive reflect-any-origin + credentials CORS posture (a development-alias, or koanf-defaulted, `APP_ENV` with `CORS_ORIGINS` unset) now additionally requires `CORS_DEV_WILDCARD=true` — without it, dev fails closed like every other env — see C50.3. This hop also adds one **additive, adopt-only** feature (no atom): the opt-in `server.logroutes` flag emits a `Route registered` Info line per HTTP route at startup — default dev-on/prod-off (tri-state, `SERVER_LOGROUTES`), so prod is unaffected; silence a dev boot with `server.logroutes: false`. Finally, `multitenant.resolver.order` is now **required** for `type: composite` — the hardcoded header → subdomain → path order is gone and there is no implicit replacement, so **every composite deployment fails to start until it declares an order**. All three tenant sources are caller-written (the URL path is authored by the caller; `Host` is itself a request header), so the framework refuses to guess a precedence it cannot verify: either default would silently harm someone — header-first lets a caller-supplied header override an explicitly-configured subdomain/path, and subdomain-first would silently escalate gateway-fronted deployments whose gateway owns `X-Tenant-ID` — see C50.4.
 - build-caught: none
 - preflight: run the C50.2 detect sweep BEFORE the bump — a non-empty DB password `< 8` bytes (static or per-tenant, including the ops/infra tenants file) now aborts startup or the migrate
 - exit: `go get github.com/gaborage/go-bricks@v0.50.0 && go mod tidy && go build ./... && go test ./...`
@@ -586,6 +587,58 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - apply: for browser-based local dev set `CORS_DEV_WILDCARD=true`; or set `CORS_ORIGINS=<comma-separated origins>` for a strict allowlist (works in any env).
 - verify: boot with `APP_ENV=development` and no flag — startup logs `WARN [server.cors] … CORS_DEV_WILDCARD is not enabled` and a cross-origin browser request gets no `Access-Control-Allow-Origin`; set `CORS_DEV_WILDCARD=true` and the wildcard-echo WARN appears instead.
 - ref: ADR-038 · server/cors.go: corsEcho / devWildcardOptIn
+
+### [C50.4] `multitenant.resolver.order` is REQUIRED for `type: composite` (startup failure) · config-break · when: match
+
+- detect: find every composite resolver across ALL config sources — a composite resolver **anywhere** is a match. The `multitenant.resolver.order` key **does not exist at v0.49.0**; it is introduced by this hop, so no config you are upgrading *from* can already pin one and every composite is actionable by definition. (If you added an order while trialing this release, you are already compliant and `apply` is a no-op.) YAML: `git grep -nE "type: *composite" -- '*.yaml' '*.yml'`. Environment (env vars outrank YAML): `MULTITENANT_RESOLVER_TYPE=composite` — sweep shell profiles, `.env` files, compose files, and deployment manifests (`git grep -rn "MULTITENANT_RESOLVER_"` ; `grep -rn "MULTITENANT_RESOLVER_" k8s/ deploy/ .env* 2>/dev/null`). Match = you have a composite resolver. (Non-composite types are unaffected — except that `order` set on one is now a startup error instead of a silent no-op, so drop it if present.)
+- gate: match = **your app will FAIL TO START** until `multitenant.resolver.order` is set. There is no implicit default any more (the old hardcoded order was header → subdomain → path); `config.Validate` now rejects a composite config with an empty order, naming the key and both candidate values. Pick by what your **edge** enforces, because all three sources are caller-written (the URL path is authored by the caller; `Host` is itself a request header, constrained only if your ingress pins it): **(a)** a trusted gateway authenticates the caller and **owns `X-Tenant-ID`** (strips the inbound header, sets its own) → you need **header-first**, `[header, subdomain, path]` — adopting the recommended order instead would let a caller-controlled `Host`/path outrank your gateway's assertion; **(b)** per-tenant DNS (each tenant has its own hostname) → the recommended `[subdomain, path, header]`; **(c)** path-scoped contracts with **no** per-tenant DNS → `[path, header]` — omit `subdomain` and you need no `domain` at all (listing `subdomain` without per-tenant DNS just forces you to invent a `domain` the resolver never matches, and validation now requires a real one); **(d)** no legacy header clients left → drop `header` from the order entirely (e.g. `[subdomain, path]`), so an unmatched request fails closed instead of falling through to the header. A sub-resolver named in the order must also be configured: `path` requires `path.segment > 0`, `subdomain` requires a real `domain` (a `domain` of `"."` is now rejected); a composite whose order omits `subdomain` no longer needs a `domain` at all. Unknown entries and duplicates are rejected. **Ordering is identification, not authorization** — regardless of order, authorize the resolved tenant (`multitenant.Tenant(ctx)`) against the authenticated principal, and note that a request matching *no* higher-precedence source still falls through to the header (apex host + unprefixed path + `X-Tenant-ID` ⇒ header wins), so the edge must force every tenant-scoped request to carry a resolvable subdomain/path.
+- apply: add the order to the composite resolver block —
+
+  ```yaml
+  multitenant:
+    resolver:
+      type: composite
+      order: [subdomain, path, header]   # or [header, subdomain, path] if your gateway owns X-Tenant-ID
+                                         # or [path, header] if you have no per-tenant DNS
+      domain: api.example.com            # required when order contains `subdomain`
+      path:
+        segment: 2                       # required (> 0) when order contains `path`
+  ```
+
+  Env form is a comma-separated list: `MULTITENANT_RESOLVER_ORDER=header,subdomain,path`. Also delete any `multitenant.resolver.order` set on a **non-composite** type — it is now rejected at startup.
+- verify: `make run` — a composite config with no order aborts naming `multitenant.resolver.order` (`required when multitenant.resolver.type is 'composite' — no implicit default`); once set, startup succeeds. Then send a request carrying both a valid subdomain/path tenant and a conflicting `X-Tenant-ID`: the resolved tenant is whichever source you put first. `go test ./config/ ./server/ ./multitenant/`
+- ref: ADR-039 · config/validation.go: validateResolverOrder · server/middleware.go: compositeSubResolvers · config/types.go: DefaultResolverOrder
+
+## E51 · v0.50.0 → v0.51.0 — echo/v5 v5.3.0 (group implicit-404 revert + stricter JSON bind + configurable body limit)
+
+- gist: The `github.com/labstack/echo/v5` bump v5.2.1 → v5.3.0 is behavior-affecting, not a pure version bump — adopt-only for consumers (no code migration required, no exported go-bricks signature changes). Three observable shifts: (1) echo restored v4's behavior where a middleware-bearing group auto-registers an implicit `/*` catch-all, so group middleware (the scheduler `/_sys` CIDR gate, the debug auth gate, any app sub-group with middleware) now ALSO runs on unmatched sub-paths and wrong-method requests under its prefix — a defense-in-depth win — and a wrong-method request under such a group returns 404 (no `Allow` header) instead of 405; go-bricks intentionally KEEPS echo's new default (does NOT set `NoGroupAutoRegister404Routes`) to preserve the gate-coverage win and hardens `HandlerContext.PathParams()`/`RouteTemplate()` to still report "unmatched" for the catch-all. (2) JSON binding is stricter — a request body with trailing NON-whitespace after the top-level JSON value (a second value or stray bytes) is now rejected (400) where v5.2.1 silently accepted it; trailing whitespace still binds (echo switched `Deserialize` from `json.Decoder` to `json.Unmarshal` + a pooled buffer, also a small per-bind allocation win). (3) A new `server.bodylimit` config (int64 bytes, default 10 MB) makes the request body cap configurable.
+- build-caught: none
+- preflight: none
+- exit: `go get github.com/gaborage/go-bricks@v0.51.0 && go mod tidy && go build ./... && go test ./...`
+
+### [C51.1] Middleware-bearing groups auto-register an implicit `/*` catch-all (405 → 404 under a group; gate now covers unmatched sub-paths) · silent-behavior · when: match
+
+- detect: `git grep -nE 'StatusMethodNotAllowed|MethodNotAllowed|405|Allow\b|/_sys' -- '*_test.go'` then keep hits that assert a wrong-method response (or an `Allow` header) for a path UNDER a middleware-bearing group prefix
+- gate: match = you have a test/client/monitor that expects 405 + an `Allow` header for a wrong-method request under a group prefix (e.g. `/_sys/*`, the debug group, or any app sub-group with middleware), OR you relied on that group's middleware NOT running for unmatched sub-paths. On echo v5.3.0 the group's implicit `/*` catch-all shadows echo's automatic 405 for the WHOLE prefix: both an unmatched sub-path AND a wrong-method request to an existing route under the group now return 404 (no `Allow`), with the group middleware (CIDR gate, auth gate) running first — so an unmatched sub-path under a gated prefix is now denied by the gate instead of falling through. Scope: this is limited to routes under a middleware-bearing group. no-match = TOP-LEVEL routes (not under such a group), real matched routes, and the global 404/405 fallbacks are unaffected — a wrong-method request to a top-level route still returns 405 + `Allow`.
+- apply: none required — this is a security-positive default the framework keeps deliberately. Update any test/monitor that asserted 405 + `Allow` under a group prefix to expect 404, and confirm nothing depended on group middleware being skipped for unmatched sub-paths.
+- verify: `go test ./...`  # a wrong-method request under `/_sys/...` returns 404 through the CIDR gate; tests asserting 405/`Allow` under a middleware group now expect 404
+- ref: echo/v5 v5.3.0 · labstack/echo#530 · CHANGELOG 0.51.0
+
+### [C51.2] JSON bind rejects trailing bytes after the top-level value · silent-behavior · when: match
+
+- detect: audit any client/producer that POSTs to this service and appends content after the JSON document (concatenated objects, a trailing newline-delimited record, stray bytes) — not reliably greppable in this repo
+- gate: match = a caller sends a request body with extra NON-whitespace after the top-level JSON value (a second JSON value or stray bytes) — v5.2.1's `json.Decoder`-based bind silently accepted (and ignored) the trailing content; v5.3.0's `json.Unmarshal`-based bind rejects the whole body with 400. Trailing whitespace (a newline, spaces) is still accepted, and well-formed single-document bodies are unaffected and gain a small per-bind allocation win. no-match = your callers send exactly one JSON value per body, unaffected.
+- apply: fix the offending client to send exactly one JSON value per request body; there is no opt-out.
+- verify: `go test ./...`  # then POST a body with trailing non-whitespace (e.g. a second JSON value) and confirm a 400 (previously 200)
+- ref: echo/v5 v5.3.0 · CHANGELOG 0.51.0
+
+### [C51.3] New `server.bodylimit` config caps request body size (default 10 MB) · silent-behavior · when: no-match
+
+- detect: `git grep -nEi '(^[[:space:]]*|\.)bodylimit[[:space:]]*:|SERVER_BODYLIMIT'`
+- gate: no-match = you leave `server.bodylimit` unset, so the new default governs — the accepted request body is capped at 10 MB (10485760 bytes) and a larger body is rejected with 413 before the handler runs. match = you set an explicit **positive** byte count, which then governs (raises or lowers the cap); an explicit `0` resolves to the 10 MB default and a negative value is rejected at config validation.
+- apply: leave unset for the 10 MB default OR set `server.bodylimit` (int64 bytes, env `SERVER_BODYLIMIT`) to a positive value to raise it for large-upload/bulk-import endpoints or lower it to tighten the boundary.
+- verify: `make run` then POST a body larger than the configured cap  # rejected with 413; a body under the cap is accepted
+- ref: echo/v5 v5.3.0 · server config · CHANGELOG 0.51.0
 
 ---
 

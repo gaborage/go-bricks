@@ -35,6 +35,21 @@ app:
     observability: 30s    # More time for remote OTLP endpoints
 ```
 
+## Server Request Body Limit
+
+`server.bodylimit` (int64 bytes; env `SERVER_BODYLIMIT`) caps the accepted HTTP request body size, rejecting an over-cap request with `413 Request Entity Too Large`. A request with a known `Content-Length` above the cap is rejected up front, before the handler runs; a chunked / unknown-length body is bounded by a limited reader instead, so the 413 surfaces when the read crosses the cap while the handler consumes the body:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `server.bodylimit` | 10 MB (10485760 bytes) | Maximum accepted HTTP request body size |
+
+Raise it for endpoints that accept large uploads or bulk imports, or lower it to tighten the boundary:
+
+```yaml
+server:
+  bodylimit: 26214400   # 25 MB — allow larger uploads
+```
+
 ## Messaging Pre-Warm Readiness Wait
 
 In single-tenant mode, startup pre-warms the messaging publisher and then waits for it to report `IsReady()`, bounded by `messaging.reconnect.readytimeout` (default 5s — the same key and budget as the per-publish readiness pre-flight; see [context_deadlines.md](context_deadlines.md)). A publisher that isn't ready in time logs a WARN and startup continues — the wait never fails startup; the publish-time pre-flight still absorbs a slow first publish. The wait (`ConnectionPreWarmer.awaitPublisherReady`) is context-aware and reports a distinct cancellation outcome when its `ctx` is canceled, rather than mislabeling it as a readiness timeout — but that path only fires for callers that pass a cancelable context. On the framework's own boot path (`app/lifecycle.go`'s `prepareRuntime`), pre-warm runs with `context.Background()` and the OS signal handler is installed later (`waitForShutdownOrServerError`, after `prepareRuntime` returns), so a shutdown signal received during pre-warm does **not** abort the wait — it runs to ready-or-`readytimeout` regardless.

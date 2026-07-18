@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"time"
 
 	"github.com/knadh/koanf/v2"
@@ -92,6 +93,11 @@ type ServerConfig struct {
 	Timeout TimeoutConfig `koanf:"timeout" json:"timeout" yaml:"timeout" toml:"timeout" mapstructure:"timeout"`
 	Path    PathConfig    `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"`
 	Gzip    GzipConfig    `koanf:"gzip" json:"gzip" yaml:"gzip" toml:"gzip" mapstructure:"gzip"`
+
+	// BodyLimit is the maximum request body size in bytes. A value of 0 resolves
+	// to the framework default (10 MB) at wire-up; a negative value is rejected by
+	// config validation.
+	BodyLimit int64 `koanf:"bodylimit" json:"bodylimit" yaml:"bodylimit" toml:"bodylimit" mapstructure:"bodylimit"`
 
 	ResponseTime ResponseTimeConfig `koanf:"responsetime" json:"responsetime" yaml:"responsetime" toml:"responsetime" mapstructure:"responsetime"`
 
@@ -501,6 +507,16 @@ type ResolverConfig struct {
 	Domain  string             `koanf:"domain" json:"domain" yaml:"domain" toml:"domain" mapstructure:"domain"`      // e.g., api.example.com or .api.example.com (leading dot optional)
 	Proxies bool               `koanf:"proxies" json:"proxies" yaml:"proxies" toml:"proxies" mapstructure:"proxies"` // trust X-Forwarded-Host
 	Path    PathResolverConfig `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"`                // path-segment resolver settings
+	// Order controls composite sub-resolver precedence (type: composite only) and
+	// is REQUIRED when type is composite — there is no implicit default; a
+	// composite config with an empty Order fails validation. Valid entries:
+	// header, subdomain, path. A sub-resolver named in Order must also be
+	// configured: Validate REJECTS a composite naming path without
+	// path.segment > 0, or subdomain without a domain. (Only a config that
+	// bypasses Validate entirely reaches the builder, where an unconfigured
+	// sub-resolver is skipped instead.) See DefaultResolverOrder for the
+	// recommended value and the rationale for not defaulting it.
+	Order []string `koanf:"order" json:"order" yaml:"order" toml:"order" mapstructure:"order"`
 }
 
 // PathResolverConfig holds settings for the path-segment tenant resolver.
@@ -554,6 +570,28 @@ const (
 	ResolverTypePath      = "path"
 	ResolverTypeComposite = "composite"
 )
+
+// resolverOrderEntries is the single source of truth for the valid composite
+// sub-resolver names, listed in the recommended precedence order: the header
+// is the only sub-resolver that participates with zero configuration (it
+// always defaults to X-Tenant-ID), so listing it last means a caller-supplied
+// header cannot preempt whatever the operator explicitly configured. Tenant
+// resolution here is identification, not authorization.
+var resolverOrderEntries = []string{ResolverTypeSubdomain, ResolverTypePath, ResolverTypeHeader}
+
+// DefaultResolverOrder returns the recommended composite sub-resolver order as
+// a fresh slice — callers may freely mutate the result. It is NOT an implicit
+// default: config.Validate requires multitenant.resolver.order to be set
+// explicitly for type: composite, because only the operator can know which
+// sub-resolvers are attacker-reachable versus gateway-asserted in their
+// deployment. This function serves two purposes: (1) the value to point
+// operators at from validation error messages, and (2) a last-resort fallback
+// used by server.compositeSubResolvers for a ResolverConfig that was never
+// passed through config.Validate (e.g. hand-built by an embedding app or a
+// test), so such a config doesn't silently end up with zero sub-resolvers.
+func DefaultResolverOrder() []string {
+	return slices.Clone(resolverOrderEntries)
+}
 
 // SourceConfig controls how tenant configuration is loaded.
 type SourceConfig struct {

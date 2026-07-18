@@ -3447,10 +3447,10 @@ The httpclient JOSE wrapper for outbound calls (sign-then-encrypt the request bo
 
 ## Multi-Tenancy
 - Enable with `multitenant.enabled=true`.
-- Resolution strategies: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate), or `composite` (header → subdomain → path fallback chain).
+- Resolution strategies: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate), or `composite` (first-match chain over an explicit `resolver.order` — **required since v0.50.0 (ADR-039)**, no implicit default; recommended `[subdomain, path, header]`, or header-first when a trusted gateway owns `X-Tenant-ID`).
 - Each tenant gets isolated DB connections, messaging clients, and module lifecycle events.
 - Resolution runs as middleware before route matching, so `deps.DB(ctx)` / `deps.Cache(ctx)` etc. resolve to the tenant-specific instance on every request.
-- Resolved tenant IDs are validated against `^[a-z0-9-]{1,64}$` before landing in context. The composite resolver advances to the next sub-resolver on validation failure.
+- Resolved tenant IDs are validated against `^[a-z0-9-]{1,64}$` before landing in context. The composite resolver returns the first non-empty, valid tenant ID, advancing to the next sub-resolver when one yields nothing (empty result or error) or fails validation.
 
 **Header (default for internal APIs):**
 
@@ -3496,13 +3496,14 @@ multitenant:
       prefix: /itsp        # optional gate; only paths under here are eligible
 ```
 
-**Composite (header → subdomain → path fallback chain):**
+**Composite (first-match chain; `order` required since v0.50.0 — ADR-039):**
 
 ```yaml
 multitenant:
   enabled: true
   resolver:
     type: composite
+    order: [subdomain, path, header]
     header: X-Tenant-ID
     domain: api.example.com
     path:

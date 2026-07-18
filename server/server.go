@@ -351,6 +351,8 @@ func statusToErrorCode(status int) string {
 		return errCodeForbidden
 	case http.StatusNotFound:
 		return errCodeNotFound
+	case http.StatusMethodNotAllowed:
+		return errCodeMethodNotAllowed
 	case http.StatusConflict:
 		return errCodeConflict
 	case http.StatusTooManyRequests:

@@ -51,6 +51,7 @@ func TestLoadWithDefaults(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.Server.Timeout.Middleware)
 	assert.Equal(t, 10*time.Second, cfg.Server.Timeout.Shutdown)
 	assert.Equal(t, 1024, cfg.Server.Gzip.MinLength)
+	assert.Equal(t, int64(10*1024*1024), cfg.Server.BodyLimit)
 	assert.False(t, cfg.Server.ResponseTime.Enabled, "X-Response-Time header must default to opt-out")
 
 	// Database should be disabled by default (no defaults provided)
@@ -363,6 +364,7 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	assert.Equal(t, "60s", k.String("server.timeout.idle"))
 	assert.Equal(t, "5s", k.String("server.timeout.middleware"))
 	assert.Equal(t, "10s", k.String("server.timeout.shutdown"))
+	assert.Equal(t, int64(10*1024*1024), k.Int64("server.bodylimit"))
 
 	// Database defaults should NOT be provided
 	assert.Equal(t, "", k.String("database.type"))
@@ -584,6 +586,30 @@ func TestEnvOverrideReachesRenamedKeys(t *testing.T) {
 	assert.Equal(t, []string{"pan", "cvv2", "otp"}, cfg.Log.SensitiveFields)
 }
 
+// TestEnvOverrideReachesResolverOrder pins the env seam that wiki/migrations.md
+// atom C50.4 tells operators to use to restore header-first composite
+// resolution: MULTITENANT_RESOLVER_ORDER must bind as a comma-separated list.
+//
+// This stays green without MULTITENANT_ENABLED=true (and thus without a
+// resolver.domain, now required alongside resolver.order for a composite
+// reaching validateMultitenantResolver) only because validateMultitenant
+// short-circuits at `if !mt.Enabled { return nil }` — Load() still calls
+// Validate(), it just never reaches the resolver checks here.
+func TestEnvOverrideReachesResolverOrder(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+	t.Setenv("MULTITENANT_RESOLVER_TYPE", ResolverTypeComposite)
+	t.Setenv("MULTITENANT_RESOLVER_ORDER", "header,subdomain,path")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, ResolverTypeComposite, cfg.Multitenant.Resolver.Type)
+	assert.Equal(t,
+		[]string{ResolverTypeHeader, ResolverTypeSubdomain, ResolverTypePath},
+		cfg.Multitenant.Resolver.Order)
+}
+
 // TestEnvVarCollidesWithConfigMap is the M4 regression test. The env provider has no Prefix
 // filter, so it ingests EVERY process environment variable. A bare env var whose name maps
 // onto a top-level config section (CACHE, DEBUG, DATABASE, …) — common in Kubernetes, which
@@ -762,7 +788,7 @@ func clearEnvironmentVariables() {
 		"SERVER_HOST", "SERVER_PORT", "SERVER_TIMEOUT_READ", "SERVER_TIMEOUT_WRITE",
 		"SERVER_TIMEOUT_IDLE", "SERVER_TIMEOUT_MIDDLEWARE", "SERVER_TIMEOUT_SHUTDOWN",
 		"SERVER_PATH_BASE", "SERVER_PATH_HEALTH", "SERVER_PATH_READY", "SERVER_GZIP_MINLENGTH",
-		"SERVER_RESPONSETIME_ENABLED",
+		"SERVER_BODYLIMIT", "SERVER_RESPONSETIME_ENABLED",
 		"DATABASE_TYPE", "DATABASE_HOST", "DATABASE_PORT", testDatabaseDatabase,
 		testDatabaseUsername, "DATABASE_PASSWORD", "DATABASE_TLS_MODE",
 		testDatabaseMaxConns, "DATABASE_POOL_IDLE_CONNECTIONS",

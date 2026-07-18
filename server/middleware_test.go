@@ -224,6 +224,122 @@ func TestBuildTenantResolver(t *testing.T) {
 	})
 }
 
+// TestBuildCompositeResolverOrder pins the security fix: on the default order a
+// spoofable X-Tenant-ID header can no longer override a network-bound subdomain
+// match, and an operator can still opt back into header-first explicitly.
+func TestBuildCompositeResolverOrder(t *testing.T) {
+	tests := []struct {
+		name           string
+		order          []string
+		domain         string
+		pathSegment    int
+		expectedTypes  []any
+		expectedTenant string
+	}{
+		{
+			name:           "default_order_resolves_subdomain_over_spoofed_header",
+			order:          nil,
+			domain:         testDomain,
+			expectedTypes:  []any{&multitenant.SubdomainResolver{}, &multitenant.HeaderResolver{}},
+			expectedTenant: "a",
+		},
+		{
+			// No domain configured, so the default order's subdomain entry drops
+			// out and path is the network-bound source that must beat the header.
+			name:           "default_order_resolves_path_over_spoofed_header",
+			order:          nil,
+			pathSegment:    1,
+			expectedTypes:  []any{&multitenant.PathResolver{}, &multitenant.HeaderResolver{}},
+			expectedTenant: "a",
+		},
+		{
+			name:           "configured_header_first_order_is_honored",
+			order:          []string{config.ResolverTypeHeader, config.ResolverTypeSubdomain},
+			domain:         testDomain,
+			expectedTypes:  []any{&multitenant.HeaderResolver{}, &multitenant.SubdomainResolver{}},
+			expectedTenant: "b",
+		},
+		{
+			name:           "configured_header_before_path_is_honored",
+			order:          []string{config.ResolverTypeHeader, config.ResolverTypePath},
+			pathSegment:    1,
+			expectedTypes:  []any{&multitenant.HeaderResolver{}, &multitenant.PathResolver{}},
+			expectedTenant: "b",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
+				Type:   config.ResolverTypeComposite,
+				Header: defaultTenantHeader,
+				Domain: tt.domain,
+				Path:   config.PathResolverConfig{Segment: tt.pathSegment},
+				Order:  tt.order,
+			}}}
+
+			resolver := buildTenantResolver(cfg)
+			require.IsType(t, &multitenant.CompositeResolver{}, resolver)
+			cr := resolver.(*multitenant.CompositeResolver)
+			require.Len(t, cr.Resolvers, len(tt.expectedTypes))
+			for i, want := range tt.expectedTypes {
+				assert.IsType(t, want, cr.Resolvers[i])
+			}
+
+			// One request carrying tenant "a" on every network-bound source and a
+			// conflicting tenant "b" on the spoofable header.
+			ctx := context.Background()
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/a/orders", http.NoBody)
+			req.Host = "a." + testDomain
+			req.Header.Set(defaultTenantHeader, "b")
+
+			tenantID, err := cr.ResolveTenant(ctx, req)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedTenant, tenantID)
+		})
+	}
+}
+
+// TestBuildCompositeResolverUnavailableOrderFallsBack covers the fail-open a
+// nil sub-resolver would otherwise open: an unvalidated config naming only an
+// unconfigured resolver (subdomain without a domain) must still fall back to
+// the default order rather than yield a nil resolver — SetupMiddlewares skips
+// the tenant middleware entirely when buildTenantResolver returns nil.
+func TestBuildCompositeResolverUnavailableOrderFallsBack(t *testing.T) {
+	cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
+		Type:   config.ResolverTypeComposite,
+		Header: defaultTenantHeader,
+		Order:  []string{config.ResolverTypeSubdomain}, // no Domain set — resolver is nil
+	}}}
+
+	resolver := buildTenantResolver(cfg)
+	require.NotNil(t, resolver, "an unavailable order must not silently disable tenant resolution")
+	cr := resolver.(*multitenant.CompositeResolver)
+	require.Len(t, cr.Resolvers, 1)
+	assert.IsType(t, &multitenant.HeaderResolver{}, cr.Resolvers[0])
+}
+
+// TestBuildCompositeResolverWiresEveryOrderEntry guards the silent-skip class:
+// every name config accepts in resolver.order must actually build a sub-resolver
+// here. A new entry added to config without a case below would otherwise pass
+// validation and then never resolve a tenant.
+func TestBuildCompositeResolverWiresEveryOrderEntry(t *testing.T) {
+	order := config.DefaultResolverOrder()
+	cfg := &config.Config{Multitenant: config.MultitenantConfig{Resolver: config.ResolverConfig{
+		Type:   config.ResolverTypeComposite,
+		Header: defaultTenantHeader,
+		Domain: testDomain,
+		Path:   config.PathResolverConfig{Segment: 1},
+		Order:  order,
+	}}}
+
+	resolver := buildTenantResolver(cfg)
+	require.IsType(t, &multitenant.CompositeResolver{}, resolver)
+	cr := resolver.(*multitenant.CompositeResolver)
+	assert.Len(t, cr.Resolvers, len(order),
+		"every entry config.DefaultResolverOrder() accepts must build a sub-resolver")
+}
+
 func TestMiddlewareOrder(t *testing.T) {
 	e := echo.New()
 	log := logger.New("disabled", false)
@@ -333,6 +449,58 @@ func TestMiddlewareBodyLimit(t *testing.T) {
 
 		// Should be rejected due to body size limit
 		assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	})
+}
+
+func TestMiddlewareBodyLimitFromConfig(t *testing.T) {
+	log := logger.New("disabled", false)
+
+	newEngine := func(limit int64) *echo.Echo {
+		e := echo.New()
+		cfg := &config.Config{
+			App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
+			Server: config.ServerConfig{
+				Timeout:   config.TimeoutConfig{Middleware: 30 * time.Second},
+				BodyLimit: limit,
+			},
+		}
+		SetupMiddlewares(e, log, cfg, true, testHealthPath, testReadyPath)
+		e.POST("/test", func(c *echo.Context) error {
+			return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		})
+		return e
+	}
+
+	post := func(e *echo.Echo, size int) int {
+		body := strings.NewReader(strings.Repeat("x", size))
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/test", body)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	t.Run("configured_limit_is_enforced", func(t *testing.T) {
+		e := newEngine(1024) // 1 KB
+		assert.Equal(t, http.StatusOK, post(e, 512))
+		assert.Equal(t, http.StatusRequestEntityTooLarge, post(e, 2048))
+	})
+
+	t.Run("non_positive_limit_falls_back_to_default", func(t *testing.T) {
+		// Both 0 and a negative limit must resolve to the shared 10 MB default rather than
+		// disabling the cap. Pin the boundary tightly against DefaultBodyLimitBytes: a body
+		// just under it passes, one just over it is rejected. (A negative reaches the <=0
+		// guard only for direct SetupMiddlewares callers; config.Validate rejects it on the
+		// Load path — see config/validation.go.)
+		underDefault := int(config.DefaultBodyLimitBytes) - 1024
+		overDefault := int(config.DefaultBodyLimitBytes) + 1024
+		for _, limit := range []int64{0, -1} {
+			e := newEngine(limit)
+			assert.Equal(t, http.StatusOK, post(e, underDefault),
+				"limit %d must fall back to the 10 MB default (accepts an under-default body)", limit)
+			assert.Equal(t, http.StatusRequestEntityTooLarge, post(e, overDefault),
+				"limit %d must fall back to the 10 MB default (rejects an over-default body)", limit)
+		}
 	})
 }
 

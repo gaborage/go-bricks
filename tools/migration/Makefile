@@ -7,7 +7,7 @@ VERSION := $(shell git describe --tags --match "tools/migration/v*" --always --d
 GOVULNCHECK_VERSION := v1.6.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
-GOSEC_VERSION := v2.27.1
+GOSEC_VERSION := v2.28.0
 # Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION := v2.12.2

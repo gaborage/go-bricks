@@ -29,6 +29,7 @@ server:
     ready: /ready     # Custom readiness endpoint path
   gzip:
     minlength: 1024   # Min response size (bytes) before gzip applies; smaller responses skip compression
+  bodylimit: 10485760 # Max request body size in bytes (default 10 MB); raise for large uploads. 0 = default; negative rejected.
   responsetime:
     enabled: false    # Opt-in X-Response-Time header (per-request processing time); off by default — OTel provides richer latency telemetry. SERVER_RESPONSETIME_ENABLED=true to restore.
 
@@ -164,10 +165,22 @@ messaging:
 multitenant:
   enabled: false
   resolver:
-    type: header                 # Options: header, subdomain, composite
+    type: header                 # Options: header, subdomain, path, composite
     header: X-Tenant-ID          # Header name for header-based resolution
     domain: api.example.com      # Root domain (leading dot optional)
     proxies: false               # Trust X-Forwarded-Host header
+    # order: [subdomain, path, header]  # REQUIRED for `type: composite` (rejected on any other
+    #                                    # type, so it stays commented out here). No default:
+    #                                    # a composite resolver without it fails at startup.
+    #                                    # All three sources are caller-written (Host is itself a
+    #                                    # request header; the URL path is authored by the caller),
+    #                                    # so only you know which your edge pins. Recommended:
+    #                                    # [subdomain, path, header]. If a trusted gateway owns
+    #                                    # X-Tenant-ID (strips the inbound header, sets its own),
+    #                                    # pin [header, subdomain, path] instead — otherwise a
+    #                                    # caller-controlled Host/path outranks it.
+    #                                    # Resolution is identification, not authorization: still
+    #                                    # authorize the resolved tenant. See ADR-039.
   cache:
     ttl: 5m                      # Time-to-live for cached tenant configurations
   limits:

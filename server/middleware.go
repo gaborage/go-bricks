@@ -133,8 +133,15 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// This prevents goroutine panics when the context is canceled mid-flight.
 	e.Use(timeoutEcho(cfg.Server.Timeout.Middleware))
 
-	// Body limit
-	e.Use(middleware.BodyLimit(10 * 1024 * 1024)) // 10 MB
+	// Body limit — configurable via server.bodylimit (bytes). Config validation
+	// rejects a negative value; this <=0 fallback is defense-in-depth for callers
+	// that construct the server directly (bypassing Validate) and for an explicit
+	// 0, so the limit can never be silently disabled.
+	bodyLimit := cfg.Server.BodyLimit
+	if bodyLimit <= 0 {
+		bodyLimit = config.DefaultBodyLimitBytes
+	}
+	e.Use(middleware.BodyLimit(bodyLimit))
 
 	// Gzip — skip compressing tiny responses (the gzip header/overhead can exceed
 	// the savings for small JSON); threshold is configurable via server.gzip.minlength.
@@ -157,9 +164,73 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 
 var defaultTenantIDRegex = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
+func newHeaderResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {
+	name := cfg.Header
+	if name == "" {
+		name = HeaderXTenantID
+	}
+	return &multitenant.HeaderResolver{HeaderName: name}
+}
+
+func newSubdomainResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {
+	// Normalize Domain: strip leading dot to accept both ".example.com" and "example.com"
+	rootDomain := strings.TrimPrefix(cfg.Domain, ".")
+	if rootDomain == "" {
+		return nil
+	}
+	return &multitenant.SubdomainResolver{RootDomain: rootDomain, TrustProxies: cfg.Proxies}
+}
+
+func newPathResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {
+	if cfg.Path.Segment <= 0 {
+		return nil
+	}
+	return &multitenant.PathResolver{Segment: cfg.Path.Segment, Prefix: cfg.Path.Prefix}
+}
+
+// newSubResolver builds the sub-resolver named by a composite order entry, or
+// nil when the name is unknown or that sub-resolver isn't configured.
+func newSubResolver(cfg *config.ResolverConfig, name string) multitenant.TenantResolver {
+	switch name {
+	case config.ResolverTypeSubdomain:
+		return newSubdomainResolver(cfg)
+	case config.ResolverTypePath:
+		return newPathResolver(cfg)
+	case config.ResolverTypeHeader:
+		return newHeaderResolver(cfg)
+	default:
+		return nil
+	}
+}
+
+// compositeSubResolvers builds the sub-resolvers named by cfg.Order, skipping
+// names that are unknown or whose sub-resolver isn't configured. config.Validate
+// now requires an explicit, non-empty Order for type: composite, so this
+// fallback path only matters for a ResolverConfig that bypassed Validate
+// entirely (e.g. built directly in tests, or by an embedding app). For such a
+// config, an empty/unusable Order falls back to config.DefaultResolverOrder():
+// it must not end up with zero sub-resolvers, because buildTenantResolver then
+// returns nil and SetupMiddlewares skips tenant resolution entirely.
+func compositeSubResolvers(cfg *config.ResolverConfig) []multitenant.TenantResolver {
+	build := func(order []string) []multitenant.TenantResolver {
+		subs := make([]multitenant.TenantResolver, 0, len(order))
+		for _, name := range order {
+			if sub := newSubResolver(cfg, name); sub != nil {
+				subs = append(subs, sub)
+			}
+		}
+		return subs
+	}
+
+	subs := build(cfg.Order)
+	if len(subs) == 0 {
+		subs = build(config.DefaultResolverOrder())
+	}
+	return subs
+}
+
 func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
-	mtCfg := &cfg.Multitenant
-	resolverCfg := mtCfg.Resolver
+	resolverCfg := &cfg.Multitenant.Resolver
 	tenantRegex := defaultTenantIDRegex
 
 	wrap := func(res multitenant.TenantResolver) multitenant.TenantResolver {
@@ -172,39 +243,15 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 		return &multitenant.ValidatingResolver{Resolver: res, TenantRegex: tenantRegex}
 	}
 
-	newHeaderResolver := func() multitenant.TenantResolver {
-		name := resolverCfg.Header
-		if name == "" {
-			name = HeaderXTenantID
-		}
-		return &multitenant.HeaderResolver{HeaderName: name}
-	}
-
-	newSubdomainResolver := func() multitenant.TenantResolver {
-		// Normalize Domain: strip leading dot to accept both ".example.com" and "example.com"
-		rootDomain := strings.TrimPrefix(resolverCfg.Domain, ".")
-		if rootDomain == "" {
-			return nil
-		}
-		return &multitenant.SubdomainResolver{RootDomain: rootDomain, TrustProxies: resolverCfg.Proxies}
-	}
-
-	newPathResolver := func() multitenant.TenantResolver {
-		if resolverCfg.Path.Segment <= 0 {
-			return nil
-		}
-		return &multitenant.PathResolver{Segment: resolverCfg.Path.Segment, Prefix: resolverCfg.Path.Prefix}
-	}
-
 	switch resolverCfg.Type {
 	case config.ResolverTypeHeader:
-		return wrap(newHeaderResolver())
+		return wrap(newHeaderResolver(resolverCfg))
 	case config.ResolverTypeSubdomain:
-		return wrap(newSubdomainResolver())
+		return wrap(newSubdomainResolver(resolverCfg))
 	case config.ResolverTypePath:
-		return wrap(newPathResolver())
+		return wrap(newPathResolver(resolverCfg))
 	case config.ResolverTypeComposite:
-		return buildCompositeTenantResolver(tenantRegex, newHeaderResolver(), newSubdomainResolver(), newPathResolver())
+		return buildCompositeTenantResolver(tenantRegex, compositeSubResolvers(resolverCfg)...)
 	default:
 		return nil
 	}
