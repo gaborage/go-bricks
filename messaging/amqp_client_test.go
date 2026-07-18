@@ -56,6 +56,9 @@ type fakeChannel struct {
 	declaredQueue    string
 	declaredExchange string
 	boundQueue       struct{ q, ex, rk string }
+	gotQueueArgs     amqp.Table
+	gotExchangeArgs  amqp.Table
+	gotBindingArgs   amqp.Table
 	// Signal channel for test coordination
 	publishAttemptSignal chan struct{}
 	// Mutex to protect concurrent access to fields
@@ -96,16 +99,19 @@ func (f *fakeChannel) PublishWithContext(_ context.Context, exchange, key string
 func (f *fakeChannel) Consume(_, _ string, _, _, _, _ bool, _ amqp.Table) (<-chan amqp.Delivery, error) {
 	return f.consumeCh, f.consumeErr
 }
-func (f *fakeChannel) QueueDeclare(name string, _, _, _, _ bool, _ amqp.Table) (amqp.Queue, error) {
+func (f *fakeChannel) QueueDeclare(name string, _, _, _, _ bool, args amqp.Table) (amqp.Queue, error) {
 	f.declaredQueue = name
+	f.gotQueueArgs = args
 	return amqp.Queue{Name: name}, f.qDeclareErr
 }
-func (f *fakeChannel) ExchangeDeclare(name, _ string, _, _, _, _ bool, _ amqp.Table) error {
+func (f *fakeChannel) ExchangeDeclare(name, _ string, _, _, _, _ bool, args amqp.Table) error {
 	f.declaredExchange = name
+	f.gotExchangeArgs = args
 	return f.exDeclareErr
 }
-func (f *fakeChannel) QueueBind(name, key, exchange string, _ bool, _ amqp.Table) error {
+func (f *fakeChannel) QueueBind(name, key, exchange string, _ bool, args amqp.Table) error {
 	f.boundQueue = struct{ q, ex, rk string }{name, exchange, key}
+	f.gotBindingArgs = args
 	return f.bindErr
 }
 func (f *fakeChannel) NotifyClose(c chan *amqp.Error) chan *amqp.Error { f.notifyCloseCh = c; return c }
@@ -584,14 +590,49 @@ func TestConsumeNotReady(t *testing.T) {
 func TestDeclareExchangeQueueBindSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
-	if err := c.DeclareQueue("q", true, false, false, false); err != nil {
+	if err := c.DeclareQueue("q", true, false, false, false, nil); err != nil {
 		t.Fatalf("DeclareQueue err=%v", err)
 	}
-	if err := c.DeclareExchange("ex", "topic", true, false, false, false); err != nil {
+	if err := c.DeclareExchange("ex", "topic", true, false, false, false, nil); err != nil {
 		t.Fatalf("DeclareExchange err=%v", err)
 	}
-	if err := c.BindQueue("q", "ex", "rk", false); err != nil {
+	if err := c.BindQueue("q", "ex", "rk", false, nil); err != nil {
 		t.Fatalf("BindQueue err=%v", err)
+	}
+}
+
+// TestAMQPClientDeclareQueuePassesArgs pins toTable's normalization: a populated
+// args map reaches the broker as the equivalent amqp.Table, while nil and empty
+// maps both normalize to a nil table (no wire-visible arguments table) so the
+// no-args path stays byte-identical to pre-Args behavior. Covers all three
+// declare/bind methods since they share the same toTable helper.
+func TestAMQPClientDeclareQueuePassesArgs(t *testing.T) {
+	wantArgs := map[string]any{"x-dead-letter-exchange": "dlx"}
+	wantTable := amqp.Table{"x-dead-letter-exchange": "dlx"}
+
+	tests := []struct {
+		name string
+		args map[string]any
+		want amqp.Table
+	}{
+		{"populated_map", wantArgs, wantTable},
+		{"nil_map", nil, nil},
+		{"empty_map", map[string]any{}, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &fakeChannel{}
+			c := newClientWithFakeChannel(t, ch)
+
+			require.NoError(t, c.DeclareQueue("q", true, false, false, false, tt.args))
+			require.NoError(t, c.DeclareExchange("ex", "topic", true, false, false, false, tt.args))
+			require.NoError(t, c.BindQueue("q", "ex", "rk", false, tt.args))
+
+			assert.Equal(t, tt.want, ch.gotQueueArgs)
+			assert.Equal(t, tt.want, ch.gotExchangeArgs)
+			assert.Equal(t, tt.want, ch.gotBindingArgs)
+		})
 	}
 }
 
@@ -1604,7 +1645,7 @@ func TestAMQPClientDeclareQueueNotReadyError(t *testing.T) {
 	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
-	err := client.DeclareQueue(testQueue, true, false, false, false)
+	err := client.DeclareQueue(testQueue, true, false, false, false, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
@@ -1620,7 +1661,7 @@ func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
 	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
-	err := client.DeclareExchange("test-exchange", "topic", true, false, false, false)
+	err := client.DeclareExchange("test-exchange", "topic", true, false, false, false, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
@@ -1636,7 +1677,7 @@ func TestAMQPClientBindQueueNotReadyError(t *testing.T) {
 	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
-	err := client.BindQueue(testQueue, "test-exchange", "test.key", false)
+	err := client.BindQueue(testQueue, "test-exchange", "test.key", false, nil)
 
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)

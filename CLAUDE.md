@@ -339,7 +339,7 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 
 **Critical Rules:**
 - Each `queue + consumer_tag + event_type` triple must be registered exactly **once** — duplicates panic at startup.
-- Handler errors and panics → message nacked WITHOUT requeue (no infinite retry loops). Make handlers thread-safe and idempotent.
+- Handler errors and panics → message nacked WITHOUT requeue (no infinite retry loops). Make handlers thread-safe and idempotent; declare `Args["x-dead-letter-exchange"]` on the queue to park failures instead of dropping them.
 - Default consumer concurrency is `runtime.NumCPU() * 4` workers (v0.17+ breaking change). Set `Workers: 1` explicitly when message ordering matters.
 
 For helper API, error handling deep dive, panic recovery, concurrency tuning, and reconnection defaults, see [wiki/messaging.md](wiki/messaging.md).

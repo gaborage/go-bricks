@@ -32,6 +32,12 @@ type simpleMockAMQPClient struct {
 	declaredExchanges []string
 	bindings          []string
 
+	// Track args received by each declare/bind call, keyed by name
+	// (queue/exchange name, or "queue:exchange:routingKey" for bindings).
+	queueArgs    map[string]map[string]any
+	exchangeArgs map[string]map[string]any
+	bindingArgs  map[string]map[string]any
+
 	// Controllable readiness for deterministic testing
 	makeReady func()
 
@@ -63,34 +69,54 @@ func (m *simpleMockAMQPClient) ConsumeFromQueue(_ context.Context, _ ConsumeOpti
 	return m.deliveryChan, m.consumeErr
 }
 
-func (m *simpleMockAMQPClient) DeclareQueue(name string, _, _, _, _ bool) error {
+func (m *simpleMockAMQPClient) DeclareQueue(name string, _, _, _, _ bool, args map[string]any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.declareQueueErr != nil {
 		return m.declareQueueErr
 	}
 	m.declaredQueues = append(m.declaredQueues, name)
+	if m.queueArgs == nil {
+		m.queueArgs = make(map[string]map[string]any)
+	}
+	m.queueArgs[name] = args
 	return nil
 }
 
-func (m *simpleMockAMQPClient) DeclareExchange(name, _ string, _, _, _, _ bool) error {
+func (m *simpleMockAMQPClient) DeclareExchange(name, _ string, _, _, _, _ bool, args map[string]any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.declareExchangeErr != nil {
 		return m.declareExchangeErr
 	}
 	m.declaredExchanges = append(m.declaredExchanges, name)
+	if m.exchangeArgs == nil {
+		m.exchangeArgs = make(map[string]map[string]any)
+	}
+	m.exchangeArgs[name] = args
 	return nil
 }
 
-func (m *simpleMockAMQPClient) BindQueue(queue, exchange, routingKey string, _ bool) error {
+func (m *simpleMockAMQPClient) BindQueue(queue, exchange, routingKey string, _ bool, args map[string]any) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.bindQueueErr != nil {
 		return m.bindQueueErr
 	}
-	m.bindings = append(m.bindings, queue+":"+exchange+":"+routingKey)
+	bindingKey := queue + ":" + exchange + ":" + routingKey
+	m.bindings = append(m.bindings, bindingKey)
+	if m.bindingArgs == nil {
+		m.bindingArgs = make(map[string]map[string]any)
+	}
+	m.bindingArgs[bindingKey] = args
 	return nil
+}
+
+// argsFor returns the args captured for a declared queue by name, for test assertions.
+func (m *simpleMockAMQPClient) argsFor(queueName string) map[string]any {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.queueArgs[queueName]
 }
 
 func (m *simpleMockAMQPClient) Close() error {
@@ -211,6 +237,27 @@ func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 	assert.Contains(t, client.declaredExchanges, testExchangeName)
 	assert.Contains(t, client.declaredQueues, testQueueName)
 	assert.Contains(t, client.bindings, "test-queue:test-exchange:test.key")
+}
+
+// TestRegistryDeclareInfrastructurePassesArgs guards the replay path in
+// DeclareInfrastructure: it must forward a queue's Args to the broker exactly
+// as registered. An exact-map assertion means this fails if the registry call
+// site ever drops Args again. Args are set on the declaration BEFORE
+// registering — the pattern documented for users (see wiki/messaging.md).
+func TestRegistryDeclareInfrastructurePassesArgs(t *testing.T) {
+	client := &simpleMockAMQPClient{isReady: true}
+	logger := &stubLogger{}
+	registry := NewRegistry(client, logger)
+
+	q := NewQueue("args.queue")
+	q.Args["x-dead-letter-exchange"] = "orders.dlx"
+	registry.RegisterQueue(q)
+
+	ctx := context.Background()
+	err := registry.DeclareInfrastructure(ctx)
+
+	assert.NoError(t, err)
+	assert.Equal(t, map[string]any{"x-dead-letter-exchange": "orders.dlx"}, client.argsFor("args.queue"))
 }
 
 func TestRegistryDeclareInfrastructureClientNotReadyTimeoutSimple(t *testing.T) {

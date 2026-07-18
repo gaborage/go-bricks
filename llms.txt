@@ -2667,6 +2667,16 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 }
 ```
 
+Dead-letter failed messages (handler errors/panics nack without requeue) by
+setting Args BEFORE registering — `DeclareQueue` snapshots a deep copy, so
+mutating the returned pointer's Args afterward is silently dropped:
+
+```go
+q := messaging.NewQueue("orders.processing")
+q.Args["x-dead-letter-exchange"] = "orders.dlx"
+decls.RegisterQueue(q)
+```
+
 ### Step 3: Implement the Producer (publish messages)
 
 The `messaging.AMQPClient` returned by `deps.Messaging(ctx)` exposes two publish APIs:

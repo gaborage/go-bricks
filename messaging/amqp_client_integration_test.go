@@ -75,7 +75,7 @@ func TestAMQPClientPublishConsumeSimple(t *testing.T) {
 	queueName := uniqueName(t, "test-simple-queue")
 
 	// Declare queue
-	err := client.DeclareQueue(queueName, false, true, false, false)
+	err := client.DeclareQueue(queueName, false, true, false, false, nil)
 	require.NoError(t, err)
 
 	// Start consumer
@@ -128,7 +128,7 @@ func TestAMQPClientDeclareQueueVariants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := client.DeclareQueue(tt.queueName, tt.durable, tt.autoDelete, tt.exclusive, tt.noWait)
+			err := client.DeclareQueue(tt.queueName, tt.durable, tt.autoDelete, tt.exclusive, tt.noWait, nil)
 			assert.NoError(t, err)
 		})
 	}
@@ -158,7 +158,7 @@ func TestAMQPClientDeclareExchange(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := client.DeclareExchange(tt.exchangeName, tt.kind, false, true, false, false)
+			err := client.DeclareExchange(tt.exchangeName, tt.kind, false, true, false, false, nil)
 			assert.NoError(t, err)
 		})
 	}
@@ -180,15 +180,112 @@ func TestAMQPClientBindQueue(t *testing.T) {
 	queueName := uniqueName(t, "bind-test-queue")
 
 	// Declare exchange and queue
-	err := client.DeclareExchange(exchangeName, "direct", false, true, false, false)
+	err := client.DeclareExchange(exchangeName, "direct", false, true, false, false, nil)
 	require.NoError(t, err)
 
-	err = client.DeclareQueue(queueName, false, true, false, false)
+	err = client.DeclareQueue(queueName, false, true, false, false, nil)
 	require.NoError(t, err)
 
 	// Bind queue to exchange
-	err = client.BindQueue(queueName, exchangeName, "test-key", false)
+	err = client.BindQueue(queueName, exchangeName, "test-key", false, nil)
 	assert.NoError(t, err)
+}
+
+// TestAMQPClientDeclareQueueArgsDeadLetter pins the report's exact loss
+// scenario end-to-end: a queue declared with x-dead-letter-exchange parks a
+// message that is nacked without requeue (the same signal the registry sends
+// on handler error/panic) instead of dropping it forever.
+//
+// Topology is load-bearing:
+//   - the DLX is a fanout exchange. Dead-lettered messages are republished to
+//     the DLX with their ORIGINAL routing key — which is the work-queue name,
+//     because client.Publish targets the default exchange (see
+//     AMQPClientImpl.Publish). A fanout DLX ignores routing keys, so the
+//     binding can't mismatch (a direct DLX bound with routing key = the
+//     work-queue name would also work; fanout is the foolproof choice).
+//   - the DLQ is bound to the DLX with an empty binding key (irrelevant under
+//     fanout).
+//   - the work queue carries x-dead-letter-exchange pointing at the DLX.
+//
+// If this test times out, re-check the topology against the bullets above
+// (a routing-key/binding mismatch produces the identical timeout symptom)
+// before concluding the broker-side dead-lettering assumption is wrong.
+func TestAMQPClientDeclareQueueArgsDeadLetter(t *testing.T) {
+	brokerURL := setupTestBroker(t)
+	log := logger.New("disabled", true)
+
+	client := NewAMQPClient(brokerURL, log)
+	defer client.Close()
+
+	require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
+
+	ctx := context.Background()
+	dlxName := uniqueName(t, "dlx-fanout")
+	dlqName := uniqueName(t, "dlq")
+	workQueueName := uniqueName(t, "work-queue")
+
+	// Declare the DLX as a fanout exchange.
+	require.NoError(t, client.DeclareExchange(dlxName, "fanout", true, false, false, false, nil))
+
+	// Declare the DLQ and bind it to the DLX (binding key irrelevant under fanout).
+	require.NoError(t, client.DeclareQueue(dlqName, true, false, false, false, nil))
+	require.NoError(t, client.BindQueue(dlqName, dlxName, "", false, nil))
+
+	// Declare the work queue with x-dead-letter-exchange pointing at the DLX.
+	require.NoError(t, client.DeclareQueue(workQueueName, true, false, false, false, map[string]any{
+		"x-dead-letter-exchange": dlxName,
+	}))
+
+	// Consume from the work queue, then nack WITHOUT requeue — the same
+	// signal the framework's registry sends on handler error/panic.
+	workDeliveries, err := client.Consume(ctx, workQueueName)
+	require.NoError(t, err)
+
+	testMsg := []byte("dead-lettered message")
+	require.NoError(t, client.Publish(ctx, workQueueName, testMsg))
+
+	select {
+	case delivery := <-workDeliveries:
+		assert.Equal(t, testMsg, delivery.Body)
+		require.NoError(t, delivery.Nack(false, false))
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for message on work queue")
+	}
+
+	// The nacked-without-requeue message must be PARKED in the DLQ, not dropped.
+	dlqDeliveries, err := client.Consume(ctx, dlqName)
+	require.NoError(t, err)
+
+	select {
+	case delivery := <-dlqDeliveries:
+		assert.Equal(t, testMsg, delivery.Body, "dead-lettered message must retain its original body")
+		_ = delivery.Ack(false)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for dead-lettered message in DLQ — Args did not reach the broker or topology is wrong")
+	}
+}
+
+// TestAMQPClientDeclareQueueArgsQuorum pins the "cannot attach to
+// ops-provisioned queues" half of the finding: args participate in RabbitMQ's
+// declare-equivalence check, so declaring a quorum queue and then redeclaring
+// the SAME name with the SAME args must both succeed (equivalence holds).
+func TestAMQPClientDeclareQueueArgsQuorum(t *testing.T) {
+	brokerURL := setupTestBroker(t)
+	log := logger.New("disabled", true)
+
+	client := NewAMQPClient(brokerURL, log)
+	defer client.Close()
+
+	require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
+
+	queueName := uniqueName(t, "quorum-queue")
+	args := map[string]any{"x-queue-type": "quorum"}
+
+	// Quorum queues require durable=true, exclusive=false, autoDelete=false.
+	require.NoError(t, client.DeclareQueue(queueName, true, false, false, false, args))
+
+	// Redeclaring the same name with the same args must be equivalent — no 406.
+	require.NoError(t, client.DeclareQueue(queueName, true, false, false, false, args))
 }
 
 // =============================================================================
@@ -213,13 +310,13 @@ func TestAMQPClientPublishToExchange(t *testing.T) {
 	routingKey := "test-route"
 
 	// Setup exchange, queue, and binding
-	err := client.DeclareExchange(exchangeName, "direct", false, true, false, false)
+	err := client.DeclareExchange(exchangeName, "direct", false, true, false, false, nil)
 	require.NoError(t, err)
 
-	err = client.DeclareQueue(queueName, false, true, false, false)
+	err = client.DeclareQueue(queueName, false, true, false, false, nil)
 	require.NoError(t, err)
 
-	err = client.BindQueue(queueName, exchangeName, routingKey, false)
+	err = client.BindQueue(queueName, exchangeName, routingKey, false, nil)
 	require.NoError(t, err)
 
 	// Start consumer
@@ -259,7 +356,7 @@ func TestAMQPClientPublisherConfirms(t *testing.T) {
 	ctx := context.Background()
 	queueName := uniqueName(t, "confirms-test-queue")
 
-	err := client.DeclareQueue(queueName, false, true, false, false)
+	err := client.DeclareQueue(queueName, false, true, false, false, nil)
 	require.NoError(t, err)
 
 	// Publish multiple messages (tests publisher confirms in init function)
@@ -288,7 +385,7 @@ func TestAMQPClientConsumeWithOptions(t *testing.T) {
 	ctx := context.Background()
 	queueName := uniqueName(t, "consume-opts-queue")
 
-	err := client.DeclareQueue(queueName, false, true, false, false)
+	err := client.DeclareQueue(queueName, false, true, false, false, nil)
 	require.NoError(t, err)
 
 	// Consume with auto-ack
@@ -326,7 +423,7 @@ func TestAMQPClientConsumeManualAck(t *testing.T) {
 	ctx := context.Background()
 	queueName := uniqueName(t, "manual-ack-queue")
 
-	err := client.DeclareQueue(queueName, false, true, false, false)
+	err := client.DeclareQueue(queueName, false, true, false, false, nil)
 	require.NoError(t, err)
 
 	// Consume without auto-ack (manual ack)
@@ -402,9 +499,9 @@ func TestAMQPClientPublishImmediatelyOnColdStart(t *testing.T) {
 	queueName := uniqueName(t, "cold-start-queue")
 	routingKey := "cold-start-route"
 
-	require.NoError(t, setup.DeclareExchange(exchangeName, "direct", false, true, false, false))
-	require.NoError(t, setup.DeclareQueue(queueName, false, true, false, false))
-	require.NoError(t, setup.BindQueue(queueName, exchangeName, routingKey, false))
+	require.NoError(t, setup.DeclareExchange(exchangeName, "direct", false, true, false, false, nil))
+	require.NoError(t, setup.DeclareQueue(queueName, false, true, false, false, nil))
+	require.NoError(t, setup.BindQueue(queueName, exchangeName, routingKey, false, nil))
 	deliveries, err := setup.Consume(ctx, queueName)
 	require.NoError(t, err)
 

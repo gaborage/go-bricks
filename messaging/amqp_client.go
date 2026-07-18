@@ -772,8 +772,16 @@ func (c *AMQPClientImpl) ConsumeFromQueue(_ context.Context, options ConsumeOpti
 	)
 }
 
+// toTable converts declaration args to an amqp table; empty means no table.
+func toTable(args map[string]any) amqp.Table {
+	if len(args) == 0 {
+		return nil
+	}
+	return amqp.Table(args)
+}
+
 // DeclareQueue declares a queue with the given parameters.
-func (c *AMQPClientImpl) DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool) error {
+func (c *AMQPClientImpl) DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error {
 	c.m.RLock()
 	if !c.isReady {
 		c.m.RUnlock()
@@ -782,12 +790,12 @@ func (c *AMQPClientImpl) DeclareQueue(name string, durable, autoDelete, exclusiv
 	channel := c.channel
 	c.m.RUnlock()
 
-	_, err := channel.QueueDeclare(name, durable, autoDelete, exclusive, noWait, nil)
+	_, err := channel.QueueDeclare(name, durable, autoDelete, exclusive, noWait, toTable(args))
 	return err
 }
 
 // DeclareExchange declares an exchange with the given parameters.
-func (c *AMQPClientImpl) DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool) error {
+func (c *AMQPClientImpl) DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error {
 	c.m.RLock()
 	if !c.isReady {
 		c.m.RUnlock()
@@ -796,11 +804,11 @@ func (c *AMQPClientImpl) DeclareExchange(name, kind string, durable, autoDelete,
 	channel := c.channel
 	c.m.RUnlock()
 
-	return channel.ExchangeDeclare(name, kind, durable, autoDelete, internal, noWait, nil)
+	return channel.ExchangeDeclare(name, kind, durable, autoDelete, internal, noWait, toTable(args))
 }
 
 // BindQueue binds a queue to an exchange with a routing key.
-func (c *AMQPClientImpl) BindQueue(queue, exchange, routingKey string, noWait bool) error {
+func (c *AMQPClientImpl) BindQueue(queue, exchange, routingKey string, noWait bool, args map[string]any) error {
 	c.m.RLock()
 	if !c.isReady {
 		c.m.RUnlock()
@@ -809,7 +817,7 @@ func (c *AMQPClientImpl) BindQueue(queue, exchange, routingKey string, noWait bo
 	channel := c.channel
 	c.m.RUnlock()
 
-	return channel.QueueBind(queue, routingKey, exchange, noWait, nil)
+	return channel.QueueBind(queue, routingKey, exchange, noWait, toTable(args))
 }
 
 // Close gracefully shuts down the AMQP client.

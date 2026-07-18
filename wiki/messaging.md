@@ -105,9 +105,37 @@ func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 
 **Observability:** ERROR logs include `message_id`, `queue`, `event_type`, `correlation_id`, `error`. OpenTelemetry metrics track operation duration with `error.type` attribute.
 
-**Best Practices:** Thorough handler testing, monitor ERROR logs with alerts, use trace IDs for manual replay. Dead-letter queue support planned for future releases.
+**Best Practices:** Thorough handler testing, monitor ERROR logs with alerts, use trace IDs for manual replay.
 
 **Breaking Change (v2.X):** Previous behavior auto-requeued errors (infinite retry risk). New behavior drops failed messages with rich logging. Review handler error handling and set up monitoring.
+
+### User-Managed Dead-Lettering
+
+Handler errors and panics nack without requeue. Without a dead-letter exchange
+configured on the queue, that message is dropped (logged, but gone). Setting
+`Args["x-dead-letter-exchange"]` on the queue tells RabbitMQ to park the
+message on that exchange instead — the framework does not auto-provision any
+DLX/DLQ infrastructure; you declare and bind it yourself, same as any other
+exchange/queue.
+
+`Declarations.DeclareQueue(name)` snapshots a deep copy of `Args` at register
+time, so `Args` must be set on the declaration **before** registering:
+
+```go
+q := messaging.NewQueue("orders.queue")
+q.Args["x-dead-letter-exchange"] = "orders.dlx" // failed deliveries park here
+decls.RegisterQueue(q)
+```
+
+For a queue already registered elsewhere, mutate the stored copy instead:
+`decls.Queues["orders.queue"].Args["x-dead-letter-exchange"] = "orders.dlx"`.
+
+Args participate in RabbitMQ's declare-equivalence check: redeclaring an
+existing queue with different args fails the channel with 406
+PRECONDITION_FAILED. Values must be amqp091-supported types (string,
+int/int64, bool, float64, nested `amqp.Table`, ...). Framework-managed DLQ
+provisioning (auto-declaring DLX/parking queues, retry policies) remains
+future work — this is the enabling primitive only.
 
 ## Consumer Concurrency (v0.17+)
 

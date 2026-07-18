@@ -298,6 +298,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 			exchange.AutoDelete,
 			exchange.Internal,
 			exchange.NoWait,
+			exchange.Args,
 		); err != nil {
 			return fmt.Errorf("failed to declare exchange %s: %w", name, err)
 		}
@@ -315,6 +316,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 			queue.AutoDelete,
 			queue.Exclusive,
 			queue.NoWait,
+			queue.Args,
 		); err != nil {
 			return fmt.Errorf("failed to declare queue %s: %w", name, err)
 		}
@@ -330,6 +332,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 			binding.Exchange,
 			binding.RoutingKey,
 			binding.NoWait,
+			binding.Args,
 		); err != nil {
 			return fmt.Errorf("failed to bind queue %s to exchange %s: %w", binding.Queue, binding.Exchange, err)
 		}
@@ -728,8 +731,9 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		// Record failed message metrics (duration with error.type attribute)
 		tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, err)
 
-		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops
-		// Failed messages are dropped (logged above) until DLQ support is implemented
+		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops.
+		// Queues declared with x-dead-letter-exchange park the message in the DLX;
+		// queues without one drop it (logged above).
 		r.nackMessage(delivery, consumer.AutoAck, tlog)
 		return
 	}

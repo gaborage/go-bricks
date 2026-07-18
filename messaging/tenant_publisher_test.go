@@ -59,17 +59,17 @@ func (r *recordingAMQPClient) ConsumeFromQueue(_ context.Context, options Consum
 	return ch, nil
 }
 
-func (r *recordingAMQPClient) DeclareQueue(name string, _, _, _, _ bool) error {
+func (r *recordingAMQPClient) DeclareQueue(name string, _, _, _, _ bool, _ map[string]any) error {
 	r.declareQueueCalls = append(r.declareQueueCalls, name)
 	return r.declareQueueErr
 }
 
-func (r *recordingAMQPClient) DeclareExchange(name, _ string, _, _, _, _ bool) error {
+func (r *recordingAMQPClient) DeclareExchange(name, _ string, _, _, _, _ bool, _ map[string]any) error {
 	r.declareExchangeCalls = append(r.declareExchangeCalls, name)
 	return r.declareExchangeErr
 }
 
-func (r *recordingAMQPClient) BindQueue(queue, exchange, routingKey string, _ bool) error {
+func (r *recordingAMQPClient) BindQueue(queue, exchange, routingKey string, _ bool, _ map[string]any) error {
 	r.bindQueueCalls = append(r.bindQueueCalls, [3]string{queue, exchange, routingKey})
 	return r.bindQueueErr
 }
@@ -175,7 +175,7 @@ func TestTenantAwarePublisherDeclareQueueDelegates(t *testing.T) {
 	base := &recordingAMQPClient{}
 	pub := newTenantAwarePublisher(base, tenant1ID)
 
-	require.NoError(t, pub.DeclareQueue(testQueue, true, false, false, false))
+	require.NoError(t, pub.DeclareQueue(testQueue, true, false, false, false, nil))
 	assert.Equal(t, []string{testQueue}, base.declareQueueCalls)
 }
 
@@ -183,7 +183,7 @@ func TestTenantAwarePublisherDeclareExchangeDelegates(t *testing.T) {
 	base := &recordingAMQPClient{}
 	pub := newTenantAwarePublisher(base, tenant1ID)
 
-	require.NoError(t, pub.DeclareExchange(testExchange, exchangeTypeTopic, true, false, false, false))
+	require.NoError(t, pub.DeclareExchange(testExchange, exchangeTypeTopic, true, false, false, false, nil))
 	assert.Equal(t, []string{testExchange}, base.declareExchangeCalls)
 }
 
@@ -191,7 +191,7 @@ func TestTenantAwarePublisherBindQueueDelegates(t *testing.T) {
 	base := &recordingAMQPClient{}
 	pub := newTenantAwarePublisher(base, tenant1ID)
 
-	require.NoError(t, pub.BindQueue(testQueue, testExchange, testRoutingKey, false))
+	require.NoError(t, pub.BindQueue(testQueue, testExchange, testRoutingKey, false, nil))
 	require.Len(t, base.bindQueueCalls, 1)
 	assert.Equal(t, [3]string{testQueue, testExchange, testRoutingKey}, base.bindQueueCalls[0])
 }
