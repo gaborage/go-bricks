@@ -74,8 +74,8 @@ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
-github.com/gaborage/go-bricks v0.49.0 h1:nJvri62/4vl7LidmVHA7s19W9sbJNT29gOhDLOX39Dw=
-github.com/gaborage/go-bricks v0.49.0/go.mod h1:XhyKy73ZgqG083Pgm9Ytir5UP12hc5/kqHNH3mI9ii0=
+github.com/gaborage/go-bricks v0.51.0 h1:tdWEIokrQtqr9De5fxu8t+gIQC+jPCOpIFn7FfnQdbY=
+github.com/gaborage/go-bricks v0.51.0/go.mod h1:wBewqVzfLkK4gLPOkQ0buo8JkFj4h29h8VbpVAfWYBI=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
 github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=
 github.com/go-logr/logr v1.4.3/go.mod h1:9T104GzyrTigFIr8wt5mBrctHMim0Nb2HLGrmQ40KvY=
