@@ -259,7 +259,7 @@ func TestAMQPClientDeclareQueueArgsDeadLetter(t *testing.T) {
 	select {
 	case delivery := <-dlqDeliveries:
 		assert.Equal(t, testMsg, delivery.Body, "dead-lettered message must retain its original body")
-		_ = delivery.Ack(false)
+		require.NoError(t, delivery.Ack(false))
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for dead-lettered message in DLQ — Args did not reach the broker or topology is wrong")
 	}
