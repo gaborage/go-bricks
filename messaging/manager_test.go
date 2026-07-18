@@ -81,15 +81,9 @@ func (s *stubAMQPClient) lastConsumeCtx() context.Context {
 	return s.consumeCtx
 }
 
-func (s *stubAMQPClient) DeclareQueue(context.Context, string, bool, bool, bool, bool, map[string]any) error {
-	return nil
-}
-func (s *stubAMQPClient) DeclareExchange(context.Context, string, string, bool, bool, bool, bool, map[string]any) error {
-	return nil
-}
-func (s *stubAMQPClient) BindQueue(context.Context, string, string, string, bool, map[string]any) error {
-	return nil
-}
+func (s *stubAMQPClient) DeclareQueue(context.Context, *QueueDeclaration) error       { return nil }
+func (s *stubAMQPClient) DeclareExchange(context.Context, *ExchangeDeclaration) error { return nil }
+func (s *stubAMQPClient) BindQueue(context.Context, *BindingDeclaration) error        { return nil }
 
 func (s *stubAMQPClient) Close() error {
 	s.closedMu.Lock()

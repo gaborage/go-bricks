@@ -90,36 +90,36 @@ func (m *MockAMQPClient) ConsumeFromQueue(_ context.Context, _ ConsumeOptions) (
 	return ch, nil
 }
 
-func (m *MockAMQPClient) DeclareQueue(_ context.Context, name string, _, _, _, _ bool, _ map[string]any) error {
+func (m *MockAMQPClient) DeclareQueue(_ context.Context, queue *QueueDeclaration) error {
 	if !m.isReady {
 		return errNotConnected
 	}
 	if m.closed {
 		return errAlreadyClosed
 	}
-	m.queues[name] = true
+	m.queues[queue.Name] = true
 	return nil
 }
 
-func (m *MockAMQPClient) DeclareExchange(_ context.Context, name, _ string, _, _, _, _ bool, _ map[string]any) error {
+func (m *MockAMQPClient) DeclareExchange(_ context.Context, exchange *ExchangeDeclaration) error {
 	if !m.isReady {
 		return errNotConnected
 	}
 	if m.closed {
 		return errAlreadyClosed
 	}
-	m.exchanges[name] = true
+	m.exchanges[exchange.Name] = true
 	return nil
 }
 
-func (m *MockAMQPClient) BindQueue(_ context.Context, queue, exchange, routingKey string, _ bool, _ map[string]any) error {
+func (m *MockAMQPClient) BindQueue(_ context.Context, binding *BindingDeclaration) error {
 	if !m.isReady {
 		return errNotConnected
 	}
 	if m.closed {
 		return errAlreadyClosed
 	}
-	bindingKey := queue + ":" + exchange + ":" + routingKey
+	bindingKey := binding.Queue + ":" + binding.Exchange + ":" + binding.RoutingKey
 	m.bindings[bindingKey] = true
 	return nil
 }
@@ -334,7 +334,7 @@ func TestMockAMQPClientConsumeFromQueue(t *testing.T) {
 func TestMockAMQPClientDeclareQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
-	err := client.DeclareQueue(context.Background(), testQueue, true, false, false, false, nil)
+	err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: testQueue, Durable: true})
 	assert.NoError(t, err)
 	assert.True(t, client.queues[testQueue])
 }
@@ -342,7 +342,7 @@ func TestMockAMQPClientDeclareQueue(t *testing.T) {
 func TestMockAMQPClientDeclareExchange(t *testing.T) {
 	client := NewMockAMQPClient()
 
-	err := client.DeclareExchange(context.Background(), testExchange, "topic", true, false, false, false, nil)
+	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: testExchange, Type: "topic", Durable: true})
 	assert.NoError(t, err)
 	assert.True(t, client.exchanges[testExchange])
 }
@@ -350,7 +350,7 @@ func TestMockAMQPClientDeclareExchange(t *testing.T) {
 func TestMockAMQPClientBindQueue(t *testing.T) {
 	client := NewMockAMQPClient()
 
-	err := client.BindQueue(context.Background(), testQueue, testExchange, testRoute, false, nil)
+	err := client.BindQueue(context.Background(), &BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testRoute})
 	assert.NoError(t, err)
 
 	bindingKey := "test-queue:test-exchange:test.route"
@@ -375,17 +375,17 @@ func TestMockAMQPClientNotReady(t *testing.T) {
 	assert.Equal(t, errNotConnected, err)
 
 	// Test DeclareQueue
-	err = client.DeclareQueue(context.Background(), "test", true, false, false, false, nil)
+	err = client.DeclareQueue(context.Background(), &QueueDeclaration{Name: "test", Durable: true})
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 
 	// Test DeclareExchange
-	err = client.DeclareExchange(context.Background(), "test", "topic", true, false, false, false, nil)
+	err = client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "test", Type: "topic", Durable: true})
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 
 	// Test BindQueue
-	err = client.BindQueue(context.Background(), "queue", "exchange", "route", false, nil)
+	err = client.BindQueue(context.Background(), &BindingDeclaration{Queue: "queue", Exchange: "exchange", RoutingKey: "route"})
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
 }

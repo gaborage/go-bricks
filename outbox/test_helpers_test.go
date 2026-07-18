@@ -222,15 +222,9 @@ func (f *fakeAMQP) ConsumeFromQueue(_ context.Context, _ messaging.ConsumeOption
 	return nil, nil
 }
 
-func (f *fakeAMQP) DeclareQueue(_ context.Context, _ string, _, _, _, _ bool, _ map[string]any) error {
+func (f *fakeAMQP) DeclareQueue(_ context.Context, _ *messaging.QueueDeclaration) error { return nil }
+func (f *fakeAMQP) DeclareExchange(_ context.Context, _ *messaging.ExchangeDeclaration) error {
 	return nil
 }
-
-func (f *fakeAMQP) DeclareExchange(_ context.Context, _, _ string, _, _, _, _ bool, _ map[string]any) error {
-	return nil
-}
-
-func (f *fakeAMQP) BindQueue(_ context.Context, _, _, _ string, _ bool, _ map[string]any) error {
-	return nil
-}
-func (f *fakeAMQP) Close() error { return nil }
+func (f *fakeAMQP) BindQueue(_ context.Context, _ *messaging.BindingDeclaration) error { return nil }
+func (f *fakeAMQP) Close() error                                                       { return nil }

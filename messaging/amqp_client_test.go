@@ -590,13 +590,13 @@ func TestConsumeNotReady(t *testing.T) {
 func TestDeclareExchangeQueueBindSuccess(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
-	if err := c.DeclareQueue(context.Background(), "q", true, false, false, false, nil); err != nil {
+	if err := c.DeclareQueue(context.Background(), &QueueDeclaration{Name: "q", Durable: true}); err != nil {
 		t.Fatalf("DeclareQueue err=%v", err)
 	}
-	if err := c.DeclareExchange(context.Background(), "ex", "topic", true, false, false, false, nil); err != nil {
+	if err := c.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "ex", Type: "topic", Durable: true}); err != nil {
 		t.Fatalf("DeclareExchange err=%v", err)
 	}
-	if err := c.BindQueue(context.Background(), "q", "ex", "rk", false, nil); err != nil {
+	if err := c.BindQueue(context.Background(), &BindingDeclaration{Queue: "q", Exchange: "ex", RoutingKey: "rk"}); err != nil {
 		t.Fatalf("BindQueue err=%v", err)
 	}
 }
@@ -625,9 +625,9 @@ func TestAMQPClientDeclareQueuePassesArgs(t *testing.T) {
 			ch := &fakeChannel{}
 			c := newClientWithFakeChannel(t, ch)
 
-			require.NoError(t, c.DeclareQueue(context.Background(), "q", true, false, false, false, tt.args))
-			require.NoError(t, c.DeclareExchange(context.Background(), "ex", "topic", true, false, false, false, tt.args))
-			require.NoError(t, c.BindQueue(context.Background(), "q", "ex", "rk", false, tt.args))
+			require.NoError(t, c.DeclareQueue(context.Background(), &QueueDeclaration{Name: "q", Durable: true, Args: tt.args}))
+			require.NoError(t, c.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "ex", Type: "topic", Durable: true, Args: tt.args}))
+			require.NoError(t, c.BindQueue(context.Background(), &BindingDeclaration{Queue: "q", Exchange: "ex", RoutingKey: "rk", Args: tt.args}))
 
 			assert.Equal(t, tt.want, ch.gotQueueArgs)
 			assert.Equal(t, tt.want, ch.gotExchangeArgs)
@@ -645,9 +645,9 @@ func TestAMQPClientDeclareCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.ErrorIs(t, c.DeclareQueue(ctx, "q", true, false, false, false, nil), context.Canceled)
-	require.ErrorIs(t, c.DeclareExchange(ctx, "ex", "topic", true, false, false, false, nil), context.Canceled)
-	require.ErrorIs(t, c.BindQueue(ctx, "q", "ex", "rk", false, nil), context.Canceled)
+	require.ErrorIs(t, c.DeclareQueue(ctx, &QueueDeclaration{Name: "q", Durable: true}), context.Canceled)
+	require.ErrorIs(t, c.DeclareExchange(ctx, &ExchangeDeclaration{Name: "ex", Type: "topic", Durable: true}), context.Canceled)
+	require.ErrorIs(t, c.BindQueue(ctx, &BindingDeclaration{Queue: "q", Exchange: "ex", RoutingKey: "rk"}), context.Canceled)
 	assert.Empty(t, ch.declaredQueue, "no broker call after cancellation")
 	assert.Empty(t, ch.declaredExchange, "no broker call after cancellation")
 	assert.Zero(t, ch.boundQueue, "no broker call after cancellation")
@@ -1662,7 +1662,7 @@ func TestAMQPClientDeclareQueueNotReadyError(t *testing.T) {
 	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
-	err := client.DeclareQueue(context.Background(), testQueue, true, false, false, false, nil)
+	err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: testQueue, Durable: true})
 
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
@@ -1678,7 +1678,7 @@ func TestAMQPClientDeclareExchangeNotReadyError(t *testing.T) {
 	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
-	err := client.DeclareExchange(context.Background(), "test-exchange", "topic", true, false, false, false, nil)
+	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: "test-exchange", Type: "topic", Durable: true})
 
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)
@@ -1694,7 +1694,7 @@ func TestAMQPClientBindQueueNotReadyError(t *testing.T) {
 	defer closeAndWaitForReconnect(client) // Prevent goroutine leak / cross-test race
 
 	// Client not ready
-	err := client.BindQueue(context.Background(), testQueue, "test-exchange", "test.key", false, nil)
+	err := client.BindQueue(context.Background(), &BindingDeclaration{Queue: testQueue, Exchange: "test-exchange", RoutingKey: "test.key"})
 
 	assert.Error(t, err)
 	assert.Equal(t, errNotConnected, err)

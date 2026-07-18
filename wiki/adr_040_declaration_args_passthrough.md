@@ -43,15 +43,23 @@ This produced three concrete problems:
 
 ## Decision
 
-Add `ctx context.Context` as the first parameter and a trailing
-`args map[string]any` to the three `AMQPClient` declare/bind methods, and
-forward args to amqp091 at every implementation and pass-through:
+Pass `ctx context.Context` plus the existing declaration struct to the three
+`AMQPClient` declare/bind methods, and forward the declaration's fields —
+including `Args` — to amqp091 at every implementation and pass-through:
 
 ```go
-DeclareQueue(ctx context.Context, name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error
-DeclareExchange(ctx context.Context, name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error
-BindQueue(ctx context.Context, queue, exchange, routingKey string, noWait bool, args map[string]any) error
+DeclareQueue(ctx context.Context, queue *QueueDeclaration) error
+DeclareExchange(ctx context.Context, exchange *ExchangeDeclaration) error
+BindQueue(ctx context.Context, binding *BindingDeclaration) error
 ```
+
+The declaration structs (`QueueDeclaration` / `ExchangeDeclaration` /
+`BindingDeclaration`) already exist as the package's domain vocabulary: the
+registry stores and replays exactly these values, so its call sites collapse
+to `r.client.DeclareQueue(ctx, queue)`. A nil declaration returns
+`errNilDeclaration`. Build them with the `messaging.NewQueue` /
+`NewTopicExchange` / `NewBinding` helpers (production-safe defaults) or as
+struct literals.
 
 The ctx addition rides the same compile-time break: these were the only
 `AMQPClient` methods without a context parameter (`PublishToExchange` and
@@ -90,18 +98,19 @@ path this ADR closes would remain fully reachable; a caller (or an existing
 integration) using the old method would still lose its `Args` with no
 compiler signal.
 
-### Option B: Struct-based declare methods (Rejected)
+### Option B: Positional parameters plus a trailing `args` map (Superseded)
 
-Replace the positional-bool signatures with
-`DeclareQueue(*QueueDeclaration) error` (and equivalents), passing the whole
-declaration struct instead of individual fields plus `args`.
+Keep the positional-bool signatures and append `args map[string]any` (plus the
+leading ctx):
+`DeclareQueue(ctx, name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error`.
 
-**Rejected because:** `Args` is already the extensible unit on each
-declaration struct; the scalar AMQP protocol fields (`durable`, `autoDelete`,
-`exclusive`, `noWait`) are stable and unlikely to grow. Reshaping the entire
-call signature around a struct is a much larger, noisier break for a benefit
-this narrower change already captures — one new parameter closes the actual
-gap.
+**Superseded during review:** this was the initially implemented shape, but it
+puts `DeclareExchange` at 8 parameters — breaching the project's 7-parameter
+ceiling (SonarCloud S107) at the interface AND at every implementation, fake,
+and mock that must mirror it (7 flagged sites) — and every future field would
+breach further. The declaration-struct form removes that entire class, matches
+how `PublishToExchange`/`ConsumeFromQueue` already take option structs, and
+reuses the values the registry stores anyway.
 
 ### Option C: Leave `Args` dead, document the limitation (Rejected)
 
@@ -141,12 +150,13 @@ that appearance without the behavior is worse than not having the field.
 
 - **Every direct caller of `AMQPClient.DeclareQueue` / `DeclareExchange` /
   `BindQueue`, and every hand-rolled fake or mock implementing `AMQPClient`,
-  must add the trailing parameter.** Within this repo that touched
+  must move to the `(ctx, declaration)` shape.** Within this repo that touched
   `messaging/registry.go`, `messaging/tenant_publisher.go`,
-  `testing/mocks/amqp.go` (including the `ExpectDeclare*`/`ExpectBindQueue`
-  helpers and their `mock.Anything` counts), and several in-package test
-  fakes. Downstream consumers with their own fakes face the same mechanical
-  fix. Tracked as migrations atom **C52.1**.
+  `testing/mocks/amqp.go` (the `ExpectDeclare*`/`ExpectBindQueue` helpers now
+  take the declaration — nil matches any — and the `...Any` variants match two
+  parameters), and several in-package test fakes. Downstream consumers with
+  their own fakes face the same mechanical fix. Tracked as migrations atom
+  **C52.1**.
 - **Users who set `Args` on a declaration in ≤v0.51.0 (silently dropped) will
   see it take effect on upgrade.** If the broker already has a queue with
   different server-side arguments than what is now declared, the app fails

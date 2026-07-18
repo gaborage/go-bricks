@@ -69,46 +69,46 @@ func (m *simpleMockAMQPClient) ConsumeFromQueue(_ context.Context, _ ConsumeOpti
 	return m.deliveryChan, m.consumeErr
 }
 
-func (m *simpleMockAMQPClient) DeclareQueue(_ context.Context, name string, _, _, _, _ bool, args map[string]any) error {
+func (m *simpleMockAMQPClient) DeclareQueue(_ context.Context, queue *QueueDeclaration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.declareQueueErr != nil {
 		return m.declareQueueErr
 	}
-	m.declaredQueues = append(m.declaredQueues, name)
+	m.declaredQueues = append(m.declaredQueues, queue.Name)
 	if m.queueArgs == nil {
 		m.queueArgs = make(map[string]map[string]any)
 	}
-	m.queueArgs[name] = args
+	m.queueArgs[queue.Name] = queue.Args
 	return nil
 }
 
-func (m *simpleMockAMQPClient) DeclareExchange(_ context.Context, name, _ string, _, _, _, _ bool, args map[string]any) error {
+func (m *simpleMockAMQPClient) DeclareExchange(_ context.Context, exchange *ExchangeDeclaration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.declareExchangeErr != nil {
 		return m.declareExchangeErr
 	}
-	m.declaredExchanges = append(m.declaredExchanges, name)
+	m.declaredExchanges = append(m.declaredExchanges, exchange.Name)
 	if m.exchangeArgs == nil {
 		m.exchangeArgs = make(map[string]map[string]any)
 	}
-	m.exchangeArgs[name] = args
+	m.exchangeArgs[exchange.Name] = exchange.Args
 	return nil
 }
 
-func (m *simpleMockAMQPClient) BindQueue(_ context.Context, queue, exchange, routingKey string, _ bool, args map[string]any) error {
+func (m *simpleMockAMQPClient) BindQueue(_ context.Context, binding *BindingDeclaration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.bindQueueErr != nil {
 		return m.bindQueueErr
 	}
-	bindingKey := queue + ":" + exchange + ":" + routingKey
+	bindingKey := binding.Queue + ":" + binding.Exchange + ":" + binding.RoutingKey
 	m.bindings = append(m.bindings, bindingKey)
 	if m.bindingArgs == nil {
 		m.bindingArgs = make(map[string]map[string]any)
 	}
-	m.bindingArgs[bindingKey] = args
+	m.bindingArgs[bindingKey] = binding.Args
 	return nil
 }
 

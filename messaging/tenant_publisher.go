@@ -47,16 +47,16 @@ func (t *tenantAwarePublisher) ConsumeFromQueue(ctx context.Context, options Con
 	return t.base.ConsumeFromQueue(ctx, options)
 }
 
-func (t *tenantAwarePublisher) DeclareQueue(ctx context.Context, name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error {
-	return t.base.DeclareQueue(ctx, name, durable, autoDelete, exclusive, noWait, args)
+func (t *tenantAwarePublisher) DeclareQueue(ctx context.Context, queue *QueueDeclaration) error {
+	return t.base.DeclareQueue(ctx, queue)
 }
 
-func (t *tenantAwarePublisher) DeclareExchange(ctx context.Context, name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error {
-	return t.base.DeclareExchange(ctx, name, kind, durable, autoDelete, internal, noWait, args)
+func (t *tenantAwarePublisher) DeclareExchange(ctx context.Context, exchange *ExchangeDeclaration) error {
+	return t.base.DeclareExchange(ctx, exchange)
 }
 
-func (t *tenantAwarePublisher) BindQueue(ctx context.Context, queue, exchange, routingKey string, noWait bool, args map[string]any) error {
-	return t.base.BindQueue(ctx, queue, exchange, routingKey, noWait, args)
+func (t *tenantAwarePublisher) BindQueue(ctx context.Context, binding *BindingDeclaration) error {
+	return t.base.BindQueue(ctx, binding)
 }
 
 func (t *tenantAwarePublisher) Close() error {

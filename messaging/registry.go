@@ -291,16 +291,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 
 	// Declare exchanges first
 	for name, exchange := range r.exchanges {
-		if err := r.client.DeclareExchange(
-			ctx,
-			name,
-			exchange.Type,
-			exchange.Durable,
-			exchange.AutoDelete,
-			exchange.Internal,
-			exchange.NoWait,
-			exchange.Args,
-		); err != nil {
+		if err := r.client.DeclareExchange(ctx, exchange); err != nil {
 			return fmt.Errorf("failed to declare exchange %s: %w", name, err)
 		}
 		r.logger.Info().
@@ -311,15 +302,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 
 	// Declare queues
 	for name, queue := range r.queues {
-		if err := r.client.DeclareQueue(
-			ctx,
-			name,
-			queue.Durable,
-			queue.AutoDelete,
-			queue.Exclusive,
-			queue.NoWait,
-			queue.Args,
-		); err != nil {
+		if err := r.client.DeclareQueue(ctx, queue); err != nil {
 			return fmt.Errorf("failed to declare queue %s: %w", name, err)
 		}
 		r.logger.Info().
@@ -329,14 +312,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 
 	// Create bindings
 	for _, binding := range r.bindings {
-		if err := r.client.BindQueue(
-			ctx,
-			binding.Queue,
-			binding.Exchange,
-			binding.RoutingKey,
-			binding.NoWait,
-			binding.Args,
-		); err != nil {
+		if err := r.client.BindQueue(ctx, binding); err != nil {
 			return fmt.Errorf("failed to bind queue %s to exchange %s: %w", binding.Queue, binding.Exchange, err)
 		}
 		r.logger.Info().
