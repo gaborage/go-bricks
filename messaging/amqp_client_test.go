@@ -650,6 +650,7 @@ func TestAMQPClientDeclareCanceledContext(t *testing.T) {
 	require.ErrorIs(t, c.BindQueue(ctx, "q", "ex", "rk", false, nil), context.Canceled)
 	assert.Empty(t, ch.declaredQueue, "no broker call after cancellation")
 	assert.Empty(t, ch.declaredExchange, "no broker call after cancellation")
+	assert.Zero(t, ch.boundQueue, "no broker call after cancellation")
 }
 
 func TestCloseChannelAndConnectionErrors(t *testing.T) {

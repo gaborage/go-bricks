@@ -120,7 +120,9 @@ that appearance without the behavior is worse than not having the field.
 
 - **Closes the message-loss gap.** A queue declared with
   `Args["x-dead-letter-exchange"]` now has failed, non-requeued deliveries
-  parked in the broker instead of dropped — see
+  parked in the broker instead of dropped — provided the full dead-letter
+  route is provisioned (the DLX exchange, a queue, and a binding between
+  them; the arg only routes, the route retains) — see
   `TestAMQPClientDeclareQueueArgsDeadLetter`
   (`messaging/amqp_client_integration_test.go`) for the end-to-end pin.
 - **Unblocks ops-provisioned queues.** `Args["x-queue-type"] = "quorum"` (or
