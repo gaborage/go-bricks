@@ -292,6 +292,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	// Declare exchanges first
 	for name, exchange := range r.exchanges {
 		if err := r.client.DeclareExchange(
+			ctx,
 			name,
 			exchange.Type,
 			exchange.Durable,
@@ -311,6 +312,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	// Declare queues
 	for name, queue := range r.queues {
 		if err := r.client.DeclareQueue(
+			ctx,
 			name,
 			queue.Durable,
 			queue.AutoDelete,
@@ -328,6 +330,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	// Create bindings
 	for _, binding := range r.bindings {
 		if err := r.client.BindQueue(
+			ctx,
 			binding.Queue,
 			binding.Exchange,
 			binding.RoutingKey,
@@ -732,8 +735,9 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, err)
 
 		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops.
-		// Queues declared with x-dead-letter-exchange park the message in the DLX;
-		// queues without one drop it (logged above).
+		// Queues declared with x-dead-letter-exchange route the message to that
+		// exchange (retained only if a binding delivers it to a queue); queues
+		// without one drop it (logged above).
 		r.nackMessage(delivery, consumer.AutoAck, tlog)
 		return
 	}

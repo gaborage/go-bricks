@@ -43,15 +43,24 @@ This produced three concrete problems:
 
 ## Decision
 
-Append a trailing `args map[string]any` parameter to the three `AMQPClient`
-declare/bind methods and forward it to amqp091 at every implementation and
-pass-through:
+Add `ctx context.Context` as the first parameter and a trailing
+`args map[string]any` to the three `AMQPClient` declare/bind methods, and
+forward args to amqp091 at every implementation and pass-through:
 
 ```go
-DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error
-DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error
-BindQueue(queue, exchange, routingKey string, noWait bool, args map[string]any) error
+DeclareQueue(ctx context.Context, name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error
+DeclareExchange(ctx context.Context, name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error
+BindQueue(ctx context.Context, queue, exchange, routingKey string, noWait bool, args map[string]any) error
 ```
+
+The ctx addition rides the same compile-time break: these were the only
+`AMQPClient` methods without a context parameter (`PublishToExchange` and
+`ConsumeFromQueue` already take one), and `Registry.DeclareInfrastructure(ctx)`
+could not propagate cancellation into them. amqp091's declare/bind operations
+are not context-aware on the wire, so implementations honor ctx as a pre-flight
+check (`ctx.Err()` before the broker call) — canceled startup fails fast
+instead of issuing further declares. Folding this into the same release avoids
+a second break to the same interface later (Context-First Design).
 
 `AMQPClientImpl` converts `args` to `amqp.Table` via a `toTable` helper that
 normalizes `nil`/empty maps to a `nil` table, keeping the wire frame for the

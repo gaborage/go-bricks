@@ -15,7 +15,7 @@ import (
 // Example usage:
 //
 //	mockAMQP := &mocks.MockAMQPClient{}
-//	mockAMQP.On("DeclareQueue", "test.queue", true, false, false, false, mock.Anything).Return(nil)
+//	mockAMQP.On("DeclareQueue", mock.Anything, "test.queue", true, false, false, false, mock.Anything).Return(nil)
 //	mockAMQP.On("PublishToExchange", mock.Anything, mock.MatchedBy(func(opts messaging.PublishOptions) bool {
 //		return opts.Exchange == "test.exchange"
 //	}), mock.Anything).Return(nil)
@@ -64,8 +64,8 @@ func (m *MockAMQPClient) ConsumeFromQueue(ctx context.Context, options messaging
 }
 
 // DeclareQueue implements messaging.AMQPClient
-func (m *MockAMQPClient) DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error {
-	arguments := m.Called(name, durable, autoDelete, exclusive, noWait, args)
+func (m *MockAMQPClient) DeclareQueue(ctx context.Context, name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error {
+	arguments := m.Called(ctx, name, durable, autoDelete, exclusive, noWait, args)
 	err := arguments.Error(0)
 
 	if err == nil {
@@ -78,8 +78,8 @@ func (m *MockAMQPClient) DeclareQueue(name string, durable, autoDelete, exclusiv
 }
 
 // DeclareExchange implements messaging.AMQPClient
-func (m *MockAMQPClient) DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error {
-	arguments := m.Called(name, kind, durable, autoDelete, internal, noWait, args)
+func (m *MockAMQPClient) DeclareExchange(ctx context.Context, name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error {
+	arguments := m.Called(ctx, name, kind, durable, autoDelete, internal, noWait, args)
 	err := arguments.Error(0)
 
 	if err == nil {
@@ -92,8 +92,8 @@ func (m *MockAMQPClient) DeclareExchange(name, kind string, durable, autoDelete,
 }
 
 // BindQueue implements messaging.AMQPClient
-func (m *MockAMQPClient) BindQueue(queue, exchange, routingKey string, noWait bool, args map[string]any) error {
-	arguments := m.Called(queue, exchange, routingKey, noWait, args)
+func (m *MockAMQPClient) BindQueue(ctx context.Context, queue, exchange, routingKey string, noWait bool, args map[string]any) error {
+	arguments := m.Called(ctx, queue, exchange, routingKey, noWait, args)
 	err := arguments.Error(0)
 
 	if err == nil {
@@ -168,30 +168,30 @@ func argsOrAny(args map[string]any) any {
 
 // ExpectDeclareQueue sets up a declare queue expectation; nil args matches any args (see argsOrAny).
 func (m *MockAMQPClient) ExpectDeclareQueue(name string, durable, autoDelete, exclusive, noWait bool, args map[string]any, err error) *mock.Call {
-	return m.On("DeclareQueue", name, durable, autoDelete, exclusive, noWait, argsOrAny(args)).Return(err)
+	return m.On("DeclareQueue", mock.Anything, name, durable, autoDelete, exclusive, noWait, argsOrAny(args)).Return(err)
 }
 
 // ExpectDeclareExchange sets up a declare exchange expectation; nil args matches any args (see argsOrAny).
 func (m *MockAMQPClient) ExpectDeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any, err error) *mock.Call {
-	return m.On("DeclareExchange", name, kind, durable, autoDelete, internal, noWait, argsOrAny(args)).Return(err)
+	return m.On("DeclareExchange", mock.Anything, name, kind, durable, autoDelete, internal, noWait, argsOrAny(args)).Return(err)
 }
 
 // ExpectBindQueue sets up a bind queue expectation; nil args matches any args (see argsOrAny).
 func (m *MockAMQPClient) ExpectBindQueue(queue, exchange, routingKey string, noWait bool, args map[string]any, err error) *mock.Call {
-	return m.On("BindQueue", queue, exchange, routingKey, noWait, argsOrAny(args)).Return(err)
+	return m.On("BindQueue", mock.Anything, queue, exchange, routingKey, noWait, argsOrAny(args)).Return(err)
 }
 
 // ExpectDeclareExchangeAny sets up a declare exchange expectation for any parameters
 func (m *MockAMQPClient) ExpectDeclareExchangeAny(err error) *mock.Call {
-	return m.On("DeclareExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(err)
+	return m.On("DeclareExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(err)
 }
 
 // ExpectDeclareQueueAny sets up a declare queue expectation for any parameters
 func (m *MockAMQPClient) ExpectDeclareQueueAny(err error) *mock.Call {
-	return m.On("DeclareQueue", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(err)
+	return m.On("DeclareQueue", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(err)
 }
 
 // ExpectBindQueueAny sets up a bind queue expectation for any parameters
 func (m *MockAMQPClient) ExpectBindQueueAny(err error) *mock.Call {
-	return m.On("BindQueue", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(err)
+	return m.On("BindQueue", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(err)
 }

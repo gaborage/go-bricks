@@ -781,7 +781,12 @@ func toTable(args map[string]any) amqp.Table {
 }
 
 // DeclareQueue declares a queue with the given parameters.
-func (c *AMQPClientImpl) DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error {
+// ctx is honored as a pre-flight check: amqp091 declare/bind operations are not
+// context-aware on the wire, so a canceled context fails fast before the call.
+func (c *AMQPClientImpl) DeclareQueue(ctx context.Context, name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.m.RLock()
 	if !c.isReady {
 		c.m.RUnlock()
@@ -794,8 +799,11 @@ func (c *AMQPClientImpl) DeclareQueue(name string, durable, autoDelete, exclusiv
 	return err
 }
 
-// DeclareExchange declares an exchange with the given parameters.
-func (c *AMQPClientImpl) DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error {
+// DeclareExchange declares an exchange with the given parameters (ctx: pre-flight check, see DeclareQueue).
+func (c *AMQPClientImpl) DeclareExchange(ctx context.Context, name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.m.RLock()
 	if !c.isReady {
 		c.m.RUnlock()
@@ -807,8 +815,11 @@ func (c *AMQPClientImpl) DeclareExchange(name, kind string, durable, autoDelete,
 	return channel.ExchangeDeclare(name, kind, durable, autoDelete, internal, noWait, toTable(args))
 }
 
-// BindQueue binds a queue to an exchange with a routing key.
-func (c *AMQPClientImpl) BindQueue(queue, exchange, routingKey string, noWait bool, args map[string]any) error {
+// BindQueue binds a queue to an exchange with a routing key (ctx: pre-flight check, see DeclareQueue).
+func (c *AMQPClientImpl) BindQueue(ctx context.Context, queue, exchange, routingKey string, noWait bool, args map[string]any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.m.RLock()
 	if !c.isReady {
 		c.m.RUnlock()

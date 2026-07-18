@@ -118,8 +118,9 @@ message on that exchange instead — the framework does not auto-provision any
 DLX/DLQ infrastructure; you declare and bind it yourself, same as any other
 exchange/queue.
 
-`Declarations.DeclareQueue(name)` snapshots a deep copy of `Args` at register
-time, so `Args` must be set on the declaration **before** registering:
+`Declarations.RegisterQueue` deep-copies `Args` at registration — and
+`decls.DeclareQueue(name)` registers immediately — so `Args` must be set on the
+declaration **before** registering:
 
 ```go
 q := messaging.NewQueue("orders.queue")

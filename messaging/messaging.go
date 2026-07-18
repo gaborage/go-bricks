@@ -62,16 +62,17 @@ type AMQPClient interface {
 	ConsumeFromQueue(ctx context.Context, options ConsumeOptions) (<-chan amqp.Delivery, error)
 
 	// DeclareQueue declares a queue with the given parameters.
+	// ctx is checked before the broker operation (amqp091 declares are not context-aware on the wire).
 	// args carries optional AMQP queue arguments (x-dead-letter-exchange, x-queue-type, ...); nil means none.
-	DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error
+	DeclareQueue(ctx context.Context, name string, durable, autoDelete, exclusive, noWait bool, args map[string]any) error
 
 	// DeclareExchange declares an exchange with the given parameters.
-	// args carries optional AMQP exchange arguments; nil means none.
-	DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error
+	// ctx is checked before the broker operation; args carries optional AMQP exchange arguments (nil means none).
+	DeclareExchange(ctx context.Context, name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any) error
 
 	// BindQueue binds a queue to an exchange with a routing key.
-	// args carries optional AMQP binding arguments; nil means none.
-	BindQueue(queue, exchange, routingKey string, noWait bool, args map[string]any) error
+	// ctx is checked before the broker operation; args carries optional AMQP binding arguments (nil means none).
+	BindQueue(ctx context.Context, queue, exchange, routingKey string, noWait bool, args map[string]any) error
 }
 
 // MessageHandler defines the interface for processing consumed messages.
