@@ -154,37 +154,31 @@ func (m *MockAMQPClient) ExpectConsumeFromQueue(options messaging.ConsumeOptions
 	return m.On("ConsumeFromQueue", mock.Anything, options).Return(nil, err)
 }
 
-// ExpectDeclareQueue sets up a declare queue expectation.
+// argsOrAny returns the testify matcher for a declaration args parameter.
 // The framework never passes nil args at this seam (NewQueue/RegisterQueue always
 // allocate a non-nil map), and testify matches with reflect.DeepEqual, under which
-// a nil map never equals an empty map — so args == nil here falls back to
+// a nil map never equals an empty map — so a nil args expectation falls back to
 // mock.Anything rather than expecting a literal nil.
+func argsOrAny(args map[string]any) any {
+	if args == nil {
+		return mock.Anything
+	}
+	return args
+}
+
+// ExpectDeclareQueue sets up a declare queue expectation; nil args matches any args (see argsOrAny).
 func (m *MockAMQPClient) ExpectDeclareQueue(name string, durable, autoDelete, exclusive, noWait bool, args map[string]any, err error) *mock.Call {
-	argsMatcher := any(args)
-	if args == nil {
-		argsMatcher = mock.Anything
-	}
-	return m.On("DeclareQueue", name, durable, autoDelete, exclusive, noWait, argsMatcher).Return(err)
+	return m.On("DeclareQueue", name, durable, autoDelete, exclusive, noWait, argsOrAny(args)).Return(err)
 }
 
-// ExpectDeclareExchange sets up a declare exchange expectation. See ExpectDeclareQueue
-// for why a nil args parameter is matched via mock.Anything.
+// ExpectDeclareExchange sets up a declare exchange expectation; nil args matches any args (see argsOrAny).
 func (m *MockAMQPClient) ExpectDeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool, args map[string]any, err error) *mock.Call {
-	argsMatcher := any(args)
-	if args == nil {
-		argsMatcher = mock.Anything
-	}
-	return m.On("DeclareExchange", name, kind, durable, autoDelete, internal, noWait, argsMatcher).Return(err)
+	return m.On("DeclareExchange", name, kind, durable, autoDelete, internal, noWait, argsOrAny(args)).Return(err)
 }
 
-// ExpectBindQueue sets up a bind queue expectation. See ExpectDeclareQueue for why a
-// nil args parameter is matched via mock.Anything.
+// ExpectBindQueue sets up a bind queue expectation; nil args matches any args (see argsOrAny).
 func (m *MockAMQPClient) ExpectBindQueue(queue, exchange, routingKey string, noWait bool, args map[string]any, err error) *mock.Call {
-	argsMatcher := any(args)
-	if args == nil {
-		argsMatcher = mock.Anything
-	}
-	return m.On("BindQueue", queue, exchange, routingKey, noWait, argsMatcher).Return(err)
+	return m.On("BindQueue", queue, exchange, routingKey, noWait, argsOrAny(args)).Return(err)
 }
 
 // ExpectDeclareExchangeAny sets up a declare exchange expectation for any parameters

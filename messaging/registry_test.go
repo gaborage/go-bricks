@@ -112,11 +112,25 @@ func (m *simpleMockAMQPClient) BindQueue(queue, exchange, routingKey string, _ b
 	return nil
 }
 
-// argsFor returns the args captured for a declared queue by name, for test assertions.
-func (m *simpleMockAMQPClient) argsFor(queueName string) map[string]any {
+// queueArgsFor, exchangeArgsFor, and bindingArgsFor return the args captured
+// for a declare/bind call, for test assertions. Binding keys use the
+// "queue:exchange:routingKey" form.
+func (m *simpleMockAMQPClient) queueArgsFor(queueName string) map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.queueArgs[queueName]
+}
+
+func (m *simpleMockAMQPClient) exchangeArgsFor(exchangeName string) map[string]any {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.exchangeArgs[exchangeName]
+}
+
+func (m *simpleMockAMQPClient) bindingArgsFor(bindingKey string) map[string]any {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.bindingArgs[bindingKey]
 }
 
 func (m *simpleMockAMQPClient) Close() error {
@@ -240,24 +254,33 @@ func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 }
 
 // TestRegistryDeclareInfrastructurePassesArgs guards the replay path in
-// DeclareInfrastructure: it must forward a queue's Args to the broker exactly
-// as registered. An exact-map assertion means this fails if the registry call
-// site ever drops Args again. Args are set on the declaration BEFORE
-// registering — the pattern documented for users (see wiki/messaging.md).
+// DeclareInfrastructure: it must forward each declaration's Args to the broker
+// exactly as registered, at all three call sites (exchange, queue, binding).
+// Exact-map assertions mean this fails if any of the three registry call sites
+// ever drops Args again. Args are set on the declarations BEFORE registering —
+// the pattern documented for users (see wiki/messaging.md).
 func TestRegistryDeclareInfrastructurePassesArgs(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
-	logger := &stubLogger{}
-	registry := NewRegistry(client, logger)
+	registry := NewRegistry(client, &stubLogger{})
+
+	ex := NewTopicExchange("args.exchange")
+	ex.Args["alternate-exchange"] = "orders.alt"
+	registry.RegisterExchange(ex)
 
 	q := NewQueue("args.queue")
 	q.Args["x-dead-letter-exchange"] = "orders.dlx"
 	registry.RegisterQueue(q)
 
-	ctx := context.Background()
-	err := registry.DeclareInfrastructure(ctx)
+	b := NewBinding("args.queue", "args.exchange", "orders.*")
+	b.Args["x-match"] = "all"
+	registry.RegisterBinding(b)
+
+	err := registry.DeclareInfrastructure(context.Background())
 
 	assert.NoError(t, err)
-	assert.Equal(t, map[string]any{"x-dead-letter-exchange": "orders.dlx"}, client.argsFor("args.queue"))
+	assert.Equal(t, map[string]any{"alternate-exchange": "orders.alt"}, client.exchangeArgsFor("args.exchange"))
+	assert.Equal(t, map[string]any{"x-dead-letter-exchange": "orders.dlx"}, client.queueArgsFor("args.queue"))
+	assert.Equal(t, map[string]any{"x-match": "all"}, client.bindingArgsFor("args.queue:args.exchange:orders.*"))
 }
 
 func TestRegistryDeclareInfrastructureClientNotReadyTimeoutSimple(t *testing.T) {
