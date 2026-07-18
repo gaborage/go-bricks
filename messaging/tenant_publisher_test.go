@@ -184,7 +184,7 @@ func TestTenantAwarePublisherDeclareQueueDelegates(t *testing.T) {
 	queueArgs := map[string]any{"x-dead-letter-exchange": "orders.dlx"}
 	require.NoError(t, pub.DeclareQueue(t.Context(), testQueue, true, false, false, false, queueArgs))
 	assert.Equal(t, []string{testQueue}, base.declareQueueCalls)
-	assert.Equal(t, []map[string]any{queueArgs}, base.declareQueueArgs, "args must delegate unchanged")
+	assert.Equal(t, []map[string]any{{"x-dead-letter-exchange": "orders.dlx"}}, base.declareQueueArgs, "args must delegate unchanged")
 }
 
 func TestTenantAwarePublisherDeclareExchangeDelegates(t *testing.T) {
@@ -194,7 +194,7 @@ func TestTenantAwarePublisherDeclareExchangeDelegates(t *testing.T) {
 	exchangeArgs := map[string]any{"alternate-exchange": "orders.alt"}
 	require.NoError(t, pub.DeclareExchange(t.Context(), testExchange, exchangeTypeTopic, true, false, false, false, exchangeArgs))
 	assert.Equal(t, []string{testExchange}, base.declareExchangeCalls)
-	assert.Equal(t, []map[string]any{exchangeArgs}, base.declareExchangeArgs, "args must delegate unchanged")
+	assert.Equal(t, []map[string]any{{"alternate-exchange": "orders.alt"}}, base.declareExchangeArgs, "args must delegate unchanged")
 }
 
 func TestTenantAwarePublisherBindQueueDelegates(t *testing.T) {
@@ -205,7 +205,7 @@ func TestTenantAwarePublisherBindQueueDelegates(t *testing.T) {
 	require.NoError(t, pub.BindQueue(t.Context(), testQueue, testExchange, testRoutingKey, false, bindingArgs))
 	require.Len(t, base.bindQueueCalls, 1)
 	assert.Equal(t, [3]string{testQueue, testExchange, testRoutingKey}, base.bindQueueCalls[0])
-	assert.Equal(t, []map[string]any{bindingArgs}, base.bindQueueArgs, "args must delegate unchanged")
+	assert.Equal(t, []map[string]any{{"x-match": "all"}}, base.bindQueueArgs, "args must delegate unchanged")
 }
 
 func TestTenantAwarePublisherCloseDelegates(t *testing.T) {
