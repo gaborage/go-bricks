@@ -75,7 +75,7 @@ func TestAMQPClientPublishConsumeSimple(t *testing.T) {
 	queueName := uniqueName(t, "test-simple-queue")
 
 	// Declare queue
-	err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: queueName, AutoDelete: true})
+	err := client.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true})
 	require.NoError(t, err)
 
 	// Start consumer
@@ -128,7 +128,7 @@ func TestAMQPClientDeclareQueueVariants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: tt.queueName, Durable: tt.durable, AutoDelete: tt.autoDelete, Exclusive: tt.exclusive, NoWait: tt.noWait})
+			err := client.DeclareQueue(t.Context(), &QueueDeclaration{Name: tt.queueName, Durable: tt.durable, AutoDelete: tt.autoDelete, Exclusive: tt.exclusive, NoWait: tt.noWait})
 			assert.NoError(t, err)
 		})
 	}
@@ -158,7 +158,7 @@ func TestAMQPClientDeclareExchange(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: tt.exchangeName, Type: tt.kind, AutoDelete: true})
+			err := client.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: tt.exchangeName, Type: tt.kind, AutoDelete: true})
 			assert.NoError(t, err)
 		})
 	}
@@ -180,14 +180,14 @@ func TestAMQPClientBindQueue(t *testing.T) {
 	queueName := uniqueName(t, "bind-test-queue")
 
 	// Declare exchange and queue
-	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: exchangeName, Type: "direct", AutoDelete: true})
+	err := client.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: "direct", AutoDelete: true})
 	require.NoError(t, err)
 
-	err = client.DeclareQueue(context.Background(), &QueueDeclaration{Name: queueName, AutoDelete: true})
+	err = client.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true})
 	require.NoError(t, err)
 
 	// Bind queue to exchange
-	err = client.BindQueue(context.Background(), &BindingDeclaration{Queue: queueName, Exchange: exchangeName, RoutingKey: "test-key"})
+	err = client.BindQueue(t.Context(), &BindingDeclaration{Queue: queueName, Exchange: exchangeName, RoutingKey: "test-key"})
 	assert.NoError(t, err)
 }
 
@@ -312,13 +312,13 @@ func TestAMQPClientPublishToExchange(t *testing.T) {
 	routingKey := "test-route"
 
 	// Setup exchange, queue, and binding
-	err := client.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: exchangeName, Type: "direct", AutoDelete: true})
+	err := client.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: "direct", AutoDelete: true})
 	require.NoError(t, err)
 
-	err = client.DeclareQueue(context.Background(), &QueueDeclaration{Name: queueName, AutoDelete: true})
+	err = client.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true})
 	require.NoError(t, err)
 
-	err = client.BindQueue(context.Background(), &BindingDeclaration{Queue: queueName, Exchange: exchangeName, RoutingKey: routingKey})
+	err = client.BindQueue(t.Context(), &BindingDeclaration{Queue: queueName, Exchange: exchangeName, RoutingKey: routingKey})
 	require.NoError(t, err)
 
 	// Start consumer
@@ -358,7 +358,7 @@ func TestAMQPClientPublisherConfirms(t *testing.T) {
 	ctx := context.Background()
 	queueName := uniqueName(t, "confirms-test-queue")
 
-	err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: queueName, AutoDelete: true})
+	err := client.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true})
 	require.NoError(t, err)
 
 	// Publish multiple messages (tests publisher confirms in init function)
@@ -387,7 +387,7 @@ func TestAMQPClientConsumeWithOptions(t *testing.T) {
 	ctx := context.Background()
 	queueName := uniqueName(t, "consume-opts-queue")
 
-	err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: queueName, AutoDelete: true})
+	err := client.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true})
 	require.NoError(t, err)
 
 	// Consume with auto-ack
@@ -425,7 +425,7 @@ func TestAMQPClientConsumeManualAck(t *testing.T) {
 	ctx := context.Background()
 	queueName := uniqueName(t, "manual-ack-queue")
 
-	err := client.DeclareQueue(context.Background(), &QueueDeclaration{Name: queueName, AutoDelete: true})
+	err := client.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true})
 	require.NoError(t, err)
 
 	// Consume without auto-ack (manual ack)
@@ -501,9 +501,9 @@ func TestAMQPClientPublishImmediatelyOnColdStart(t *testing.T) {
 	queueName := uniqueName(t, "cold-start-queue")
 	routingKey := "cold-start-route"
 
-	require.NoError(t, setup.DeclareExchange(context.Background(), &ExchangeDeclaration{Name: exchangeName, Type: "direct", AutoDelete: true}))
-	require.NoError(t, setup.DeclareQueue(context.Background(), &QueueDeclaration{Name: queueName, AutoDelete: true}))
-	require.NoError(t, setup.BindQueue(context.Background(), &BindingDeclaration{Queue: queueName, Exchange: exchangeName, RoutingKey: routingKey}))
+	require.NoError(t, setup.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: exchangeName, Type: "direct", AutoDelete: true}))
+	require.NoError(t, setup.DeclareQueue(t.Context(), &QueueDeclaration{Name: queueName, AutoDelete: true}))
+	require.NoError(t, setup.BindQueue(t.Context(), &BindingDeclaration{Queue: queueName, Exchange: exchangeName, RoutingKey: routingKey}))
 	deliveries, err := setup.Consume(ctx, queueName)
 	require.NoError(t, err)
 

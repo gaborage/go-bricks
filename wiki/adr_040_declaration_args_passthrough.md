@@ -77,10 +77,11 @@ now passes `exchange.Args` / `queue.Args` / `binding.Args` at its three replay
 call sites. `tenantAwarePublisher` and the testify `MockAMQPClient` forward
 the new parameter unchanged.
 
-This is a **deliberate, compile-time-enforced breaking change** — new
-trailing parameters on an exported interface's methods — consistent with the
-manifesto's **Type Safety > Dynamic Hacks**: "breaking changes prioritized
-for compile-time safety" over a silently-dead field.
+This is a **deliberate, compile-time-enforced breaking change** — the
+exported interface's methods replace their positional parameters with the
+`(ctx, declaration)` shape — consistent with the manifesto's
+**Type Safety > Dynamic Hacks**: "breaking changes prioritized for
+compile-time safety" over a silently-dead field.
 
 ## Alternatives Considered
 
