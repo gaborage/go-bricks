@@ -63,8 +63,10 @@ coverage-report: ## Generate HTML coverage report from coverage.out
 docker-check: ## Check if Docker is available
 	@docker info >/dev/null 2>&1 || (echo "Error: Docker is not running. Integration tests require Docker Desktop or Docker daemon." && echo "Install Docker: https://www.docker.com/products/docker-desktop" && exit 1)
 
-lint: ## Run golangci-lint (pinned v2.12.2 + GOWORK=off, mirroring CI lint-framework's mechanism)
-	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) cache clean
+lint: ## Run golangci-lint (pinned + GOWORK=off, mirroring CI; LINT_CLEAN=1 wipes the result cache first)
+	@if [ "$(LINT_CLEAN)" = "1" ]; then \
+		GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) cache clean; \
+	fi
 	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=5m
 
 fmt: ## Format Go code
