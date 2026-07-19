@@ -13,9 +13,8 @@ docker info
 # Race condition failures
 go test -race -run TestSpecificFailing ./package
 
-# Linting errors
-golangci-lint cache clean
-golangci-lint run
+# Linting errors (force a cold run if results look stale)
+LINT_CLEAN=1 make lint
 ```
 
 ### Faster local Oracle integration runs (`GO_BRICKS_ORACLE_CONTAINER`)
