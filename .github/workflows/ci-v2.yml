@@ -875,16 +875,21 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   # ============================================================================
-  # Exported-API compatibility gate (apidiff vs latest release tag)
+  # Exported-API compatibility gate (apidiff — delta over origin/main)
   # ----------------------------------------------------------------------------
   # Diffs the PR head's exported API surface (root module only — internal/ is
   # auto-ignored by apidiff and GOWORK=off excludes the separately-versioned
-  # tools/migration submodule) against the latest release tag. FAILS on an
-  # INCOMPATIBLE change UNLESS the squash PR title carries a conventional-commit
-  # '!' marker (feat!:/fix(scope)!: …) or the PR has the 'breaking-approved'
-  # label. This catches ACCIDENTAL breaks that would otherwise ship as a
-  # patch/minor — release-please derives the bump from the squash PR title, so
-  # the same '!' that bypasses the gate also drives the version bump (no drift).
+  # tools/migration submodule) against the latest release tag, then SUBTRACTS
+  # the incompatible changes origin/main already carries. The gate fails only on
+  # the DELTA — breaks THIS PR introduces — not acknowledged-but-unreleased
+  # breaks already merged to main (those would otherwise false-fail every later
+  # PR until the next release). FAILS on a NEW INCOMPATIBLE change UNLESS the
+  # squash PR title carries a conventional-commit '!' marker (feat!:/fix(scope)!:
+  # …) or the PR has the 'breaking-approved' label. This catches ACCIDENTAL
+  # breaks that would otherwise ship as a patch/minor — release-please derives
+  # the bump from the squash PR title, so the same '!' that bypasses the gate
+  # also drives the version bump (no drift). The tag stays the baseline so the
+  # cumulative report still measures drift since the last GA release.
   #
   # Runs on pull_request ONLY: the escape hatch reads the PR title, which exists
   # only in PR context. On push to main (post-merge) the break is already
@@ -953,6 +958,20 @@ jobs:
           ( cd /tmp/apidiff-base \
             && GOWORK=off apidiff -m -w /tmp/apidiff-base.snapshot github.com/gaborage/go-bricks )
 
+      - name: Build origin/main API snapshot (unreleased baseline)
+        if: steps.baseline.outputs.skip != 'true'
+        env:
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          # Defensive pre-clean, matching the base-snapshot step.
+          git worktree remove --force /tmp/apidiff-main 2>/dev/null || true
+          rm -rf /tmp/apidiff-main
+          git fetch --quiet origin main
+          git worktree add --detach /tmp/apidiff-main origin/main
+          ( cd /tmp/apidiff-main \
+            && GOWORK=off apidiff -m -w /tmp/apidiff-main.snapshot github.com/gaborage/go-bricks )
+
       - name: Build PR-head API snapshot
         if: steps.baseline.outputs.skip != 'true'
         env:
@@ -974,25 +993,40 @@ jobs:
           # apidiff writes the change list to STDOUT and "Ignoring internal
           # package …" notices to STDERR, so stdout alone is the signal. It
           # exits 0 whether or not changes exist, and non-zero ONLY on a real
-          # tool/build error. NO `|| true` on the load-bearing capture below:
+          # tool/build error. NO `|| true` on the load-bearing captures below:
           # under `set -e` a tool failure aborts the step, so the gate fails
           # CLOSED instead of silently reporting "no breaks".
           echo "::group::Full apidiff report (base=$BASE_TAG vs PR head)"
           GOWORK=off apidiff -m /tmp/apidiff-base.snapshot /tmp/apidiff-head.snapshot || true
           echo "::endgroup::"
 
-          # The gate keys ONLY on incompatible changes. Compatible/additive
-          # changes (new funcs, new packages, added struct fields) never fail.
-          incompat="$(GOWORK=off apidiff -incompatible -m \
+          # Incompatible changes the PR head has vs the release tag, and the set
+          # origin/main already has vs the same tag. NO `|| true`: under `set -e`
+          # a tool error aborts the step, so the gate fails CLOSED.
+          incompat_head="$(GOWORK=off apidiff -incompatible -m \
             /tmp/apidiff-base.snapshot /tmp/apidiff-head.snapshot)"
+          incompat_main="$(GOWORK=off apidiff -incompatible -m \
+            /tmp/apidiff-base.snapshot /tmp/apidiff-main.snapshot)"
 
-          if [ -z "$incompat" ]; then
-            echo "✅ No incompatible exported-API changes vs $BASE_TAG."
+          # Delta = breaks THIS PR introduces = lines in head-set NOT in main-set.
+          # `comm -23` requires sorted, de-duplicated, blank-free inputs; the
+          # `grep -v '^[[:space:]]*$'` drops blank lines so an empty apidiff
+          # capture cannot inject a spurious empty-line "difference". Bash process
+          # substitution `<()` — the ubuntu-latest runner's default shell is bash;
+          # a process substitution's own exit status is not propagated to `comm`,
+          # so `grep` returning 1 on all-blank input never fails the step.
+          delta="$(comm -23 \
+            <(printf '%s\n' "$incompat_head" | grep -v '^[[:space:]]*$' | sort -u) \
+            <(printf '%s\n' "$incompat_main" | grep -v '^[[:space:]]*$' | sort -u))"
+
+          if [ -z "$delta" ]; then
+            echo "✅ No NEW incompatible exported-API changes vs origin/main (delta over already-merged breaks)."
+            echo "   (Any breaks vs $BASE_TAG are already acknowledged on main and pending release.)"
             exit 0
           fi
 
-          echo "::warning::Incompatible exported-API changes detected vs $BASE_TAG:"
-          printf '%s\n' "$incompat"
+          echo "::warning::NEW incompatible exported-API changes introduced by this PR vs origin/main (delta over already-merged breaks):"
+          printf '%s\n' "$delta"
 
           # ---- Escape hatch (only evaluated when a break exists) ----
           # 1) Conventional-commit '!' marker anchored at the ':' position.
@@ -1008,15 +1042,17 @@ jobs:
             exit 0
           fi
 
-          echo "::error::Incompatible exported-API change shipped without acknowledgement."
+          echo "::error::Incompatible exported-API change shipped without acknowledgement (delta vs origin/main, over already-merged breaks)."
           echo "Retitle the squash PR with a '!' breaking marker (e.g. 'feat!: …' /"
           echo "'fix(scope)!: …') so release-please bumps correctly, or add the"
           echo "'breaking-approved' label if the break is intentional and reviewed."
           exit 1
 
-      - name: Clean up baseline worktree
+      - name: Clean up API-snapshot worktrees
         if: always() && steps.baseline.outputs.skip != 'true'
-        run: git worktree remove --force /tmp/apidiff-base || true
+        run: |
+          git worktree remove --force /tmp/apidiff-base || true
+          git worktree remove --force /tmp/apidiff-main || true
 
   # ============================================================================
   # CI gate (fan-in aggregator — the single required status check on main)
