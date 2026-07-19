@@ -163,9 +163,10 @@ var (
 
 	// errNotConnected / errShutdown alias the exported sentinels so the many existing
 	// internal references keep compiling and assert.Equal-style tests keep matching.
-	errNotConnected  = ErrNotConnected
-	errShutdown      = ErrShutdown
-	errAlreadyClosed = errors.New("AMQP client already closed")
+	errNotConnected   = ErrNotConnected
+	errShutdown       = ErrShutdown
+	errAlreadyClosed  = errors.New("AMQP client already closed")
+	errNilDeclaration = errors.New("nil messaging declaration")
 )
 
 // ClientOption configures an AMQPClientImpl at construction time.
@@ -772,8 +773,24 @@ func (c *AMQPClientImpl) ConsumeFromQueue(_ context.Context, options ConsumeOpti
 	)
 }
 
-// DeclareQueue declares a queue with the given parameters.
-func (c *AMQPClientImpl) DeclareQueue(name string, durable, autoDelete, exclusive, noWait bool) error {
+// toTable converts declaration args to an amqp table; empty means no table.
+func toTable(args map[string]any) amqp.Table {
+	if len(args) == 0 {
+		return nil
+	}
+	return amqp.Table(args)
+}
+
+// DeclareQueue declares a queue from the given declaration.
+// ctx is honored as a pre-flight check: amqp091 declare/bind operations are not
+// context-aware on the wire, so a canceled context fails fast before the call.
+func (c *AMQPClientImpl) DeclareQueue(ctx context.Context, queue *QueueDeclaration) error {
+	if queue == nil {
+		return errNilDeclaration
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.m.RLock()
 	if !c.isReady {
 		c.m.RUnlock()
@@ -782,12 +799,18 @@ func (c *AMQPClientImpl) DeclareQueue(name string, durable, autoDelete, exclusiv
 	channel := c.channel
 	c.m.RUnlock()
 
-	_, err := channel.QueueDeclare(name, durable, autoDelete, exclusive, noWait, nil)
+	_, err := channel.QueueDeclare(queue.Name, queue.Durable, queue.AutoDelete, queue.Exclusive, queue.NoWait, toTable(queue.Args))
 	return err
 }
 
-// DeclareExchange declares an exchange with the given parameters.
-func (c *AMQPClientImpl) DeclareExchange(name, kind string, durable, autoDelete, internal, noWait bool) error {
+// DeclareExchange declares an exchange from the given declaration (ctx: pre-flight check, see DeclareQueue).
+func (c *AMQPClientImpl) DeclareExchange(ctx context.Context, exchange *ExchangeDeclaration) error {
+	if exchange == nil {
+		return errNilDeclaration
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.m.RLock()
 	if !c.isReady {
 		c.m.RUnlock()
@@ -796,11 +819,17 @@ func (c *AMQPClientImpl) DeclareExchange(name, kind string, durable, autoDelete,
 	channel := c.channel
 	c.m.RUnlock()
 
-	return channel.ExchangeDeclare(name, kind, durable, autoDelete, internal, noWait, nil)
+	return channel.ExchangeDeclare(exchange.Name, exchange.Type, exchange.Durable, exchange.AutoDelete, exchange.Internal, exchange.NoWait, toTable(exchange.Args))
 }
 
-// BindQueue binds a queue to an exchange with a routing key.
-func (c *AMQPClientImpl) BindQueue(queue, exchange, routingKey string, noWait bool) error {
+// BindQueue binds a queue to an exchange from the given declaration (ctx: pre-flight check, see DeclareQueue).
+func (c *AMQPClientImpl) BindQueue(ctx context.Context, binding *BindingDeclaration) error {
+	if binding == nil {
+		return errNilDeclaration
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.m.RLock()
 	if !c.isReady {
 		c.m.RUnlock()
@@ -809,7 +838,7 @@ func (c *AMQPClientImpl) BindQueue(queue, exchange, routingKey string, noWait bo
 	channel := c.channel
 	c.m.RUnlock()
 
-	return channel.QueueBind(queue, routingKey, exchange, noWait, nil)
+	return channel.QueueBind(binding.Queue, binding.RoutingKey, binding.Exchange, binding.NoWait, toTable(binding.Args))
 }
 
 // Close gracefully shuts down the AMQP client.

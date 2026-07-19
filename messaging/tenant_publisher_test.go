@@ -20,10 +20,13 @@ type recordingAMQPClient struct {
 	consumeFromQueue     []ConsumeOptions
 	consumeFromQueueErr  error
 	declareQueueCalls    []string
+	declareQueueArgs     []map[string]any
 	declareQueueErr      error
 	declareExchangeCalls []string
+	declareExchangeArgs  []map[string]any
 	declareExchangeErr   error
 	bindQueueCalls       [][3]string
+	bindQueueArgs        []map[string]any
 	bindQueueErr         error
 	closeErr             error
 	closed               bool
@@ -59,18 +62,21 @@ func (r *recordingAMQPClient) ConsumeFromQueue(_ context.Context, options Consum
 	return ch, nil
 }
 
-func (r *recordingAMQPClient) DeclareQueue(name string, _, _, _, _ bool) error {
-	r.declareQueueCalls = append(r.declareQueueCalls, name)
+func (r *recordingAMQPClient) DeclareQueue(_ context.Context, queue *QueueDeclaration) error {
+	r.declareQueueCalls = append(r.declareQueueCalls, queue.Name)
+	r.declareQueueArgs = append(r.declareQueueArgs, queue.Args)
 	return r.declareQueueErr
 }
 
-func (r *recordingAMQPClient) DeclareExchange(name, _ string, _, _, _, _ bool) error {
-	r.declareExchangeCalls = append(r.declareExchangeCalls, name)
+func (r *recordingAMQPClient) DeclareExchange(_ context.Context, exchange *ExchangeDeclaration) error {
+	r.declareExchangeCalls = append(r.declareExchangeCalls, exchange.Name)
+	r.declareExchangeArgs = append(r.declareExchangeArgs, exchange.Args)
 	return r.declareExchangeErr
 }
 
-func (r *recordingAMQPClient) BindQueue(queue, exchange, routingKey string, _ bool) error {
-	r.bindQueueCalls = append(r.bindQueueCalls, [3]string{queue, exchange, routingKey})
+func (r *recordingAMQPClient) BindQueue(_ context.Context, binding *BindingDeclaration) error {
+	r.bindQueueCalls = append(r.bindQueueCalls, [3]string{binding.Queue, binding.Exchange, binding.RoutingKey})
+	r.bindQueueArgs = append(r.bindQueueArgs, binding.Args)
 	return r.bindQueueErr
 }
 
@@ -175,25 +181,31 @@ func TestTenantAwarePublisherDeclareQueueDelegates(t *testing.T) {
 	base := &recordingAMQPClient{}
 	pub := newTenantAwarePublisher(base, tenant1ID)
 
-	require.NoError(t, pub.DeclareQueue(testQueue, true, false, false, false))
+	queueArgs := map[string]any{"x-dead-letter-exchange": "orders.dlx"}
+	require.NoError(t, pub.DeclareQueue(t.Context(), &QueueDeclaration{Name: testQueue, Durable: true, Args: queueArgs}))
 	assert.Equal(t, []string{testQueue}, base.declareQueueCalls)
+	assert.Equal(t, []map[string]any{{"x-dead-letter-exchange": "orders.dlx"}}, base.declareQueueArgs, "args must delegate unchanged")
 }
 
 func TestTenantAwarePublisherDeclareExchangeDelegates(t *testing.T) {
 	base := &recordingAMQPClient{}
 	pub := newTenantAwarePublisher(base, tenant1ID)
 
-	require.NoError(t, pub.DeclareExchange(testExchange, exchangeTypeTopic, true, false, false, false))
+	exchangeArgs := map[string]any{"alternate-exchange": "orders.alt"}
+	require.NoError(t, pub.DeclareExchange(t.Context(), &ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic, Durable: true, Args: exchangeArgs}))
 	assert.Equal(t, []string{testExchange}, base.declareExchangeCalls)
+	assert.Equal(t, []map[string]any{{"alternate-exchange": "orders.alt"}}, base.declareExchangeArgs, "args must delegate unchanged")
 }
 
 func TestTenantAwarePublisherBindQueueDelegates(t *testing.T) {
 	base := &recordingAMQPClient{}
 	pub := newTenantAwarePublisher(base, tenant1ID)
 
-	require.NoError(t, pub.BindQueue(testQueue, testExchange, testRoutingKey, false))
+	bindingArgs := map[string]any{"x-match": "all"}
+	require.NoError(t, pub.BindQueue(t.Context(), &BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testRoutingKey, Args: bindingArgs}))
 	require.Len(t, base.bindQueueCalls, 1)
 	assert.Equal(t, [3]string{testQueue, testExchange, testRoutingKey}, base.bindQueueCalls[0])
+	assert.Equal(t, []map[string]any{{"x-match": "all"}}, base.bindQueueArgs, "args must delegate unchanged")
 }
 
 func TestTenantAwarePublisherCloseDelegates(t *testing.T) {

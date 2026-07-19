@@ -578,6 +578,32 @@ the gateway, and an entitlement check on the resolved tenant.
 
 ---
 
+### [ADR-040: Forward Declaration `Args` to the Broker on Queue/Exchange/Binding Declares](adr_040_declaration_args_passthrough.md)
+
+**Date:** 2026-07-17 | **Status:** Accepted
+
+Appends a trailing `args map[string]any` parameter to `AMQPClient.DeclareQueue` /
+`DeclareExchange` / `BindQueue` and forwards it to amqp091 at every implementation
+(`AMQPClientImpl`), pass-through (`tenantAwarePublisher`), and replay call site
+(`Registry.DeclareInfrastructure`). `QueueDeclaration.Args`, `ExchangeDeclaration.Args`, and
+`BindingDeclaration.Args` were already deep-copied on registration and folded into the topology
+hash, but `AMQPClientImpl` hardcoded a `nil` arguments table at the one place that talks to the
+broker — silently discarding them. That meant handler errors/panics (which nack without requeue
+by design) dropped messages permanently with no `x-dead-letter-exchange` escape hatch, and a
+service could never attach to an ops-provisioned queue declared with `x-queue-type=quorum` or any
+other broker argument, since RabbitMQ's declare-equivalence check would fail with `406
+PRECONDITION_FAILED`. A deliberate, compile-time-enforced breaking change over the rejected
+alternatives of parallel `...WithArgs` methods (equally apidiff-incompatible, and leaves the dead
+field live) or a struct-based signature reshape (the scalar AMQP fields are stable; `Args` is
+already the extensible unit).
+
+**Key Benefits:** Closes a silent, permanent message-loss path (nacked-without-requeue deliveries
+can now be parked via `x-dead-letter-exchange` instead of dropped); unblocks attaching to
+operator-provisioned queues whose arguments must match at declare time; topology hash and actual
+broker state agree again since `Args` now reaches both.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -587,7 +613,7 @@ the gateway, and an entitlement check on the resolved tenant.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-039) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-040) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

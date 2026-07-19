@@ -291,14 +291,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 
 	// Declare exchanges first
 	for name, exchange := range r.exchanges {
-		if err := r.client.DeclareExchange(
-			name,
-			exchange.Type,
-			exchange.Durable,
-			exchange.AutoDelete,
-			exchange.Internal,
-			exchange.NoWait,
-		); err != nil {
+		if err := r.client.DeclareExchange(ctx, exchange); err != nil {
 			return fmt.Errorf("failed to declare exchange %s: %w", name, err)
 		}
 		r.logger.Info().
@@ -309,13 +302,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 
 	// Declare queues
 	for name, queue := range r.queues {
-		if err := r.client.DeclareQueue(
-			name,
-			queue.Durable,
-			queue.AutoDelete,
-			queue.Exclusive,
-			queue.NoWait,
-		); err != nil {
+		if err := r.client.DeclareQueue(ctx, queue); err != nil {
 			return fmt.Errorf("failed to declare queue %s: %w", name, err)
 		}
 		r.logger.Info().
@@ -325,12 +312,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 
 	// Create bindings
 	for _, binding := range r.bindings {
-		if err := r.client.BindQueue(
-			binding.Queue,
-			binding.Exchange,
-			binding.RoutingKey,
-			binding.NoWait,
-		); err != nil {
+		if err := r.client.BindQueue(ctx, binding); err != nil {
 			return fmt.Errorf("failed to bind queue %s to exchange %s: %w", binding.Queue, binding.Exchange, err)
 		}
 		r.logger.Info().
@@ -728,8 +710,10 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		// Record failed message metrics (duration with error.type attribute)
 		tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, err)
 
-		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops
-		// Failed messages are dropped (logged above) until DLQ support is implemented
+		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops.
+		// Queues declared with x-dead-letter-exchange route the message to that
+		// exchange (retained only if a binding delivers it to a queue); queues
+		// without one drop it (logged above).
 		r.nackMessage(delivery, consumer.AutoAck, tlog)
 		return
 	}

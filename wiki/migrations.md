@@ -17,7 +17,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -34,6 +34,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E49  | v0.45.0 → v0.49.0 | silent-config | 6 | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool / unit-less duration guard |
 | E50  | v0.49.0 → v0.50.0 | config-break | 4 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate; dev CORS wildcard opt-in; `multitenant.resolver.order` now REQUIRED for `type: composite` (no default — composite deployments fail to start until they declare one) |
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
+| E52  | v0.51.0 → v0.52.0 | compile-break | 2 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -639,6 +640,29 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - apply: leave unset for the 10 MB default OR set `server.bodylimit` (int64 bytes, env `SERVER_BODYLIMIT`) to a positive value to raise it for large-upload/bulk-import endpoints or lower it to tighten the boundary.
 - verify: `make run` then POST a body larger than the configured cap  # rejected with 413; a body under the cap is accepted
 - ref: echo/v5 v5.3.0 · server config · CHANGELOG 0.51.0
+
+## E52 · v0.51.0 → v0.52.0 — messaging declaration Args reach the broker (AMQPClient signature change)
+
+- gist: `AMQPClient.DeclareQueue` / `DeclareExchange` / `BindQueue` (and the testify `MockAMQPClient`'s matching `Expect*` helpers) changed shape: they now take `(ctx context.Context, decl *QueueDeclaration / *ExchangeDeclaration / *BindingDeclaration)` instead of positional fields. The declaration's `Args` is now forwarded to RabbitMQ instead of being silently dropped, and ctx is checked before each broker operation (amqp091 declares are not context-aware on the wire, so ctx is a pre-flight cancellation check aligning these methods with the Context-First rule the rest of the interface already follows). `QueueDeclaration.Args` / `ExchangeDeclaration.Args` / `BindingDeclaration.Args` were already deep-copied on registration and folded into the topology hash — only the broker-facing boundary (`AMQPClientImpl`, hardcoded `nil`) discarded them. This enables broker-side dead-lettering for nacked-without-requeue deliveries — parked only when the full DLX route (exchange + queue + binding) is provisioned; `x-dead-letter-exchange` alone routes, it does not retain — and unblocks attaching to ops-provisioned queues declared with arguments (e.g. `x-queue-type=quorum`). See [ADR-040](adr_040_declaration_args_passthrough.md).
+- build-caught: any direct call to `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue`, and any hand-rolled fake/mock implementing `messaging.AMQPClient`
+- preflight: if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state (management UI) before upgrading — see C52.2
+- exit: `go get github.com/gaborage/go-bricks@v0.52.0 && go mod tidy && go build ./... && go test -race ./...`
+
+### [C52.1] AMQPClient.DeclareQueue/DeclareExchange/BindQueue (+ mock Expect helpers) now take (ctx, declaration struct) · compile-break · when: match
+
+- detect: `git grep -nE '\.(DeclareQueue|DeclareExchange|BindQueue)\(|Expect(DeclareQueue|DeclareExchange|BindQueue)(Any)?\(|messaging\.AMQPClient' -- '*.go' | grep -vE '\bdecls?\.'` — call sites, `Expect*` helper usage, AND any type implementing or asserting `messaging.AMQPClient` (hand-rolled fakes declare the three methods; find them with `git grep -nE 'func \([^)]+\) (DeclareQueue|DeclareExchange|BindQueue)\('`). The trailing exclusion drops the `Declarations` helper API, which shares these method names (`decls.DeclareQueue(name)` etc.) but is unaffected — adjust it to your local receiver name if it isn't `decls`
+- gate: match = you call these methods directly, or maintain a hand-rolled fake/mock implementing `messaging.AMQPClient` (including a `testing/mocks.MockAMQPClient`-style testify mock using `ExpectDeclareQueue`/`ExpectDeclareExchange`/`ExpectBindQueue`/their `...Any` variants). no-match = you only use the `Declarations` helpers (`decls.DeclareQueue`, `decls.DeclareTopicExchange`, `decls.DeclareBinding`, ...) — recompile only, no source change.
+- apply: at each call site, wrap the positional values in the declaration struct and prepend ctx — `client.DeclareQueue(ctx, &messaging.QueueDeclaration{Name: n, Durable: true, Args: args})` (the `messaging.NewQueue` / `NewTopicExchange` / `NewBinding` helpers build declarations with production-safe defaults; set remaining fields and `Args` before the call). Fake/mock method signatures become `(ctx context.Context, decl *messaging.QueueDeclaration)` (and exchange/binding equivalents), reading fields from the declaration. The testify `Expect*` helpers now take the declaration itself (`ExpectDeclareQueue(queue *messaging.QueueDeclaration, err error)`; nil declaration = match any), and each `...Any` helper matches exactly two `mock.Anything` parameters.
+- verify: `go build ./... && go test -race ./...`  # compiler enumerates every remaining call site until green
+- ref: ADR-040 · `messaging/messaging.go` · `testing/mocks/amqp.go`
+
+### [C52.2] Args set on declarations are now sent to the broker (previously silently dropped) · silent-behavior · when: match
+
+- detect: `git grep -nE '\.Args\[|\.Args\s*=|Args:\s*map\[' -- '*.go'` then keep hits that populate a `QueueDeclaration`/`ExchangeDeclaration`/`BindingDeclaration`'s `Args` field — indexed writes (`q.Args[k] = v`), whole-map assignment (`q.Args = map[string]any{...}`), or struct-literal fields (`Args: map[string]any{...}`), directly or via `decls.Queues[...]`/`decls.Exchanges[...]`/`decls.Bindings[...]`
+- gate: match = you populated `.Args` on any declaration in ≤v0.51.0. Those args now participate in the actual broker calls. Queues/exchanges: args join RabbitMQ's declare-equivalence check — a pre-existing queue/exchange whose server-side arguments differ from what you now declare fails startup with `406 PRECONDITION_FAILED` (previously your `Args` were silently ignored and the mismatch never surfaced). Bindings: args do NOT trigger 406 — a binding's identity is `(source, destination, routing key, args)`, so redeclaring with different args creates an ADDITIONAL binding while the old argless one persists (both route; for headers exchanges the args change matching semantics), silently altering delivery behavior instead of failing. no-match = you never set `.Args` — no behavior change; declares still send no arguments table, byte-identical to pre-v0.52.0.
+- apply: before upgrading, verify the broker's current arguments match what your `Args` maps now declare — queues/exchanges via the management UI or `rabbitmqctl list_queues name arguments` / `rabbitmqctl list_exchanges name arguments`, bindings via `rabbitmqctl list_bindings source_name destination_name routing_key arguments`; reconcile queues/exchanges by updating your `Args` to match the broker or deleting/recreating the broker object (data-loss risk on delete — plan accordingly for durable queues with messages in flight); for bindings, delete the stale argless binding (unbind requires the SAME args the binding was created with) so only the args-bearing one remains.
+- verify: `make run` (or equivalent staging deploy) against the real broker — startup succeeds with no `406 PRECONDITION_FAILED`; for a queue carrying `x-dead-letter-exchange`, provision the complete dead-letter route first (DLX exchange + DLQ queue + binding), then confirm a nacked-without-requeue message is parked in the DLQ instead of dropped; for bindings that carry args, `rabbitmqctl list_bindings` shows exactly one binding per intended route (no stale argless duplicate)
+- ref: ADR-040 · `messaging/amqp_client.go` (`toTable`) · `messaging/registry.go` (`DeclareInfrastructure`)
 
 ---
 
