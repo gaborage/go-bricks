@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.52.0](https://github.com/gaborage/go-bricks/compare/v0.51.0...v0.52.0) (2026-07-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **messaging:** honor queue/exchange/binding declaration Args at the broker ([#714](https://github.com/gaborage/go-bricks/issues/714))
+
+### Added
+
+* **messaging:** honor queue/exchange/binding declaration Args at the broker ([#714](https://github.com/gaborage/go-bricks/issues/714)) ([b4fdcc2](https://github.com/gaborage/go-bricks/commit/b4fdcc27093322dcbf53b161b60ff38bbd76a937))
+
+
+### Fixed
+
+* **deps:** update aws-sdk-go-v2 monorepo ([#701](https://github.com/gaborage/go-bricks/issues/701)) ([3ba133d](https://github.com/gaborage/go-bricks/commit/3ba133da50d7e4b11475e2b1d7e25f4425fa2daa))
+* **deps:** update module github.com/gaborage/go-bricks to v0.51.0 ([#700](https://github.com/gaborage/go-bricks/issues/700)) ([0d71e99](https://github.com/gaborage/go-bricks/commit/0d71e99718ae18e1f140c1a88a1194c91ff0b7d0))
+* **deps:** update module google.golang.org/grpc to v1.82.1 ([#712](https://github.com/gaborage/go-bricks/issues/712)) ([9d41c1a](https://github.com/gaborage/go-bricks/commit/9d41c1a6b9ef67f03d43504f62770a9384c10b3c))
+
 ## [0.51.0](https://github.com/gaborage/go-bricks/compare/v0.50.0...v0.51.0) (2026-07-15)
 
 
