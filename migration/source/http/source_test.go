@@ -182,7 +182,7 @@ func TestHTTPTenantSourceContractErrorWithoutEnvelope(t *testing.T) {
 
 func TestHTTPTenantSourceContextCancellation(t *testing.T) {
 	srv := httptest.NewServer(stdhttp.HandlerFunc(func(_ stdhttp.ResponseWriter, _ *stdhttp.Request) {
-		time.Sleep(2 * time.Second)
+		time.Sleep(200 * time.Millisecond)
 	}))
 	defer srv.Close()
 
