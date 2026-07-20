@@ -74,6 +74,7 @@ verified leads).
       JobID string `param:"jobId" validate:"required"`
   }
   ```
+
 - `scheduler/cidr_middleware.go:23-55` — `CIDRMiddleware(log, allowlist, trustedProxies)
   server.MiddlewareFunc`: empty allowlist → localhost-only (`parseCIDRAllowlist` :60-63),
   trusted-proxy-aware client IP via **`server.ClientIP`** (:85) and **`server.ParseCIDRs`**
@@ -136,9 +137,13 @@ envelope and typed request/response structs (`scheduler/api_handlers.go:9-34` pa
   subsequent offset and later pages silently SKIP rows — and `created_at ASC` alone ties
   nondeterministically; keyset over `(created_at, id)` is stable under concurrent retry and
   deterministically tie-broken by `id`. Unlike `/_sys/job` (which returns all jobs — a small,
-  fixed set), outbox failed rows are unbounded, so the cap is REQUIRED. Surface in `meta`:
-  `limit`, `nextCursor` (null when the page exhausts the set), and — cheaply, from the same
-  count query the metric uses — `total`, so the operator sees "showing 50 of N".
+  fixed set), outbox failed rows are unbounded, so the cap is REQUIRED. **Has-more detection by
+  over-fetch:** the store queries `limit+1` and returns at most `limit` rows plus a `hasMore`
+  flag (true iff the extra row came back); `nextCursor` is non-null **iff** `hasMore` (it is the
+  `(created_at, id)` of the last returned row), so a page of exactly `limit` rows is
+  disambiguated from a truly-exhausted set. Surface in `meta`: `limit`, `nextCursor` (null when
+  `hasMore` is false), and — cheaply, from the same count query the metric uses — `total`, so
+  the operator sees "showing 50 of N".
 - **Payload EXCLUDED by default.** The `payload` column is application data (potentially PII —
   the outbox carries whatever the producer wrote). The framework's `SensitiveDataFilter`
   applies to *log lines*, **not to HTTP response bodies**, so echoing `payload` here would be
@@ -183,6 +188,7 @@ Response envelope (illustrative):
       EventID string `param:"eventID" validate:"required"`
   }
   ```
+
 - **Status codes**: 202-Accepted on a successful flip (the delivery is asynchronous, like the
   scheduler trigger at `scheduler/api_handlers.go:102`); 404 when no `status='failed'` row
   matches the id (via `server.NewNotFoundError`, `scheduler/api_handlers.go:80`).
@@ -222,10 +228,12 @@ capabilities discovered by assertion, not forced onto every implementor. The fra
 // operator surface for parked (status='failed') rows. Discovered by type assertion;
 // a Store without it degrades the /_sys/outbox endpoints gracefully.
 type DeadLetterStore interface {
-    // FetchDeadLettered returns up to limit failed rows AFTER the keyset cursor
-    // (nil cursor = first page), ordered (created_at ASC, id ASC). Keyset, not
-    // offset: stable under a concurrent retry that un-parks an earlier row.
-    FetchDeadLettered(ctx context.Context, db dbtypes.Interface, cursor *DeadLetterCursor, limit int) ([]Record, error)
+    // FetchDeadLettered queries limit+1 and returns up to limit failed rows AFTER the
+    // keyset cursor (nil cursor = first page), ordered (created_at ASC, id ASC). hasMore
+    // is true iff a further row exists — the handler derives nextCursor from the last
+    // returned row only when hasMore. Keyset, not offset: stable under a concurrent
+    // retry that un-parks an earlier row.
+    FetchDeadLettered(ctx context.Context, db dbtypes.Interface, cursor *DeadLetterCursor, limit int) (rows []Record, hasMore bool, err error)
     RetryDeadLettered(ctx context.Context, db dbtypes.Interface, eventID string) (bool, error) // (affected, err)
     CountDeadLettered(ctx context.Context, db dbtypes.Interface) (int64, error)                 // for the metric + list meta.total
 }
@@ -250,26 +258,44 @@ exactly as `MarkDeadLettered` already does (`$2`/`error` at `outbox/store_postgr
 `:2`/`error_msg` at `outbox/store_oracle.go:166`).
 
 **`FetchDeadLettered`** (payload deliberately not selected; alias Oracle's `error_msg` to the
-`Record.Error` field):
+`Record.Error` field). **Two forms per vendor**: the first page (nil cursor) OMITS the boundary
+predicate entirely; a subsequent page appends it. The boundary clause is appended ONLY when a
+cursor is supplied — passing NULL cursor params is NOT a substitute, because the comparison
+would evaluate to NULL/unknown and the first page would return ZERO rows. Both forms over-fetch
+with `limit+1` (`FETCH NEXT limit+1` on Oracle): the caller trims the extra row and uses its
+presence only as the `hasMore` signal (see the interface contract above).
 
 ```sql
--- PostgreSQL — keyset over (created_at, id). $1,$2 = cursor (created_at, id); $3 = limit.
--- First page OMITS the "AND (created_at, id) > ($1, $2)" predicate. PG's row-value
--- comparison is the clean form for a composite keyset boundary.
+-- ── PostgreSQL ──
+-- First page (nil cursor): NO boundary predicate. $1 = limit+1.
 SELECT id, event_type, aggregate_id, exchange, routing_key, retry_count, error, created_at
 FROM <table>
-WHERE status = 'failed' AND (created_at, id) > ($1, $2)
+WHERE status = 'failed'
 ORDER BY created_at ASC, id ASC
-LIMIT $3;
+LIMIT $1;                       -- $1 = limit+1; trim the extra row, it is the has-more signal
 
--- Oracle — NO row-value comparison; expand the boundary portably. :1 = cursor created_at,
--- :2 = cursor id, :3 = limit. First page OMITS the "AND (...)" boundary predicate.
--- Mirror FetchPending's FETCH FIRST form (store_oracle.go:93-100).
+-- Subsequent page: append the row-value boundary. $1,$2 = cursor (created_at, id); $3 = limit+1.
+SELECT id, event_type, aggregate_id, exchange, routing_key, retry_count, error, created_at
+FROM <table>
+WHERE status = 'failed' AND (created_at, id) > ($1, $2)   -- PG row-value comparison
+ORDER BY created_at ASC, id ASC
+LIMIT $3;                       -- $3 = limit+1
+
+-- ── Oracle ── (NO row-value comparison; expand the boundary portably;
+--    mirror FetchPending's FETCH FIRST form, store_oracle.go:93-100)
+-- First page (nil cursor): NO boundary predicate. :1 = limit+1.
+SELECT id, event_type, aggregate_id, exchange, routing_key, retry_count, error_msg, created_at
+FROM <table>
+WHERE status = 'failed'
+ORDER BY created_at ASC, id ASC
+FETCH NEXT :1 ROWS ONLY;        -- :1 = limit+1; trim the extra row, it is the has-more signal
+
+-- Subsequent page: append the expanded boundary. :1 = cursor created_at, :2 = cursor id, :3 = limit+1.
 SELECT id, event_type, aggregate_id, exchange, routing_key, retry_count, error_msg, created_at
 FROM <table>
 WHERE status = 'failed' AND (created_at > :1 OR (created_at = :1 AND id > :2))
 ORDER BY created_at ASC, id ASC
-FETCH NEXT :3 ROWS ONLY;
+FETCH NEXT :3 ROWS ONLY;        -- :3 = limit+1
 ```
 
 **`RetryDeadLettered`** — return affected-rows so the handler maps 202 vs 404:
