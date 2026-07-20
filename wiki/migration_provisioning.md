@@ -88,6 +88,11 @@ if err := exec.Run(ctx, job.ID); err != nil {
 }
 ```
 
+`Migrate` is any callback — Flyway is the common choice, and the
+single-transaction pattern (see [the section
+below](#single-transaction-provisioning-on-postgresql-consumer-side-pattern))
+is the PostgreSQL-only alternative when atomicity is required.
+
 ## API surface
 
 | Type / function | Purpose |
@@ -188,6 +193,159 @@ require.NoError(t, err)
 subpackage provides `MockStateStore` with `WithGetError`, `WithUpsertError`,
 `WithTransitionError`, `WithCreateTableError`, plus assertion helpers
 (`AssertJobReachedState`, `AssertTransitionPath`).
+
+## Single-transaction provisioning on PostgreSQL (consumer-side pattern)
+
+On PostgreSQL, a tenant's entire provisioning unit — schema, role-pair, and
+tenant-table DDL, plus the tenant registry row and the "tenant
+provisioned" outbox event (both DML) — fits in a single transaction: it
+can commit or roll back as one unit. Flyway, however, is a subprocess; it
+cannot join a `dbtypes.Tx`, so it structurally cannot participate in that
+unit. The framework deliberately ships **no** tx-scoped migration applier
+for this (decision 2026-07-18, issue #720; consistent with #375's standing
+decision against a hand-rolled migration engine — "rejected, high cost,
+low differentiation"). Consumers who need "the outbox event exists iff the
+tenant fully exists" own the in-transaction apply step themselves. This
+section is the blessed shape for it.
+
+Not every statement belongs in this transaction, though: PostgreSQL
+rejects some statements inside an explicit transaction block — e.g.
+`CREATE INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE DATABASE`,
+`VACUUM`, `ALTER SYSTEM` —
+so a consumer who needs one of those must run it outside this transaction,
+forfeiting atomicity for that step.
+
+**When to use which model.** The provisioning executor documented above
+(`provisioning.Executor` + persisted state machine + `Cleanup`
+compensation) is for flows that cross non-transactional boundaries: a
+Flyway subprocess, an external secret store, Oracle (which this package
+does not support in v1 — see "Scope" at the top of this page). The
+single-transaction pattern below is for PostgreSQL-only control planes
+where every step is SQL against one database and atomicity is worth more
+than resumability. The two can compose, too: the pattern below can be the
+entire body of a `Steps.Migrate`-style custom callback when a consumer
+wants to wrap the transactional apply in persisted crash recovery.
+
+**The pattern.**
+
+```go
+import (
+    "context"
+
+    "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/database"
+    dbtypes "github.com/gaborage/go-bricks/database/types"
+    "github.com/gaborage/go-bricks/migration"
+)
+
+err := database.WithTx(ctx, adminDB, func(ctx context.Context, tx dbtypes.Tx) error {
+    // 1. Serialize concurrent provisioning of the same tenant.
+    if _, err := tx.Exec(ctx,
+        `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, tenantID); err != nil {
+        return err
+    }
+
+    // 2. Roles + schema + grants (transactional on PostgreSQL, including
+    //    CREATE ROLE). PGRoleProvisioningSQL returns the ordered statement
+    //    list; executing it on this tx makes the ProvisionPGRoles
+    //    partial-progress caveat moot — everything rolls back together.
+    stmts, err := migration.PGRoleProvisioningSQL(spec)
+    if err != nil {
+        return err
+    }
+    for _, s := range stmts {
+        if _, err := tx.Exec(ctx, s); err != nil {
+            return err
+        }
+    }
+
+    // 3. Tenant DDL + the ledger (see below), applied in filename order.
+    // 4. Tenant registry row (consumer-owned table).
+    // 5. Outbox event — rides the same tx, so it exists iff the tenant does.
+    if _, err := outboxPub.Publish(ctx, tx, &app.OutboxEvent{
+        EventType:   "tenant.provisioned",
+        AggregateID: tenantID,
+        Payload:     payload,
+        Exchange:    "tenant.events",
+    }); err != nil {
+        return err
+    }
+    return nil
+})
+```
+
+`spec` is the same `*migration.PGRoleSpec` used in the Quick start above,
+and `outboxPub` is an `app.OutboxPublisher` (`deps.Outbox` inside a
+module). `database.WithTx` (`database/transaction.go`) commits on a nil
+return and rolls back on error or panic, so a crash or error anywhere in
+the callback rolls back schema, roles, tables, ledger, registry row, and
+outbox row together — there is no window where the tenant half-exists. A
+re-run converges: the statements from `PGRoleProvisioningSQL` are
+idempotent, and the ledger below skips scripts it has already applied.
+`PGRoleProvisioningSQL`'s own doc carries a `SECURITY` note that its
+returned statements can include a password literal in clear text — that
+applies here too; don't log the statement slice.
+
+**Why the `ProvisionPGRoles` partial-progress caveat doesn't apply here.**
+`ProvisionPGRoles`'s doc comment (`migration/roles.go:117-120`) warns that
+a partial-progress failure can leak intermediate state. That caveat is
+about `ProvisionPGRoles`'s own execution mode: it takes a bare `*sql.DB`
+and calls `db.ExecContext` once per statement with no enclosing
+transaction, so each statement lands (and can survive a later failure)
+independently. The pattern above never calls `ProvisionPGRoles` — it calls
+its sibling, `PGRoleProvisioningSQL`, which only builds the statement list,
+and then executes that list itself with `tx.Exec` against the caller's own
+transaction. Run that way, the statements are ordinary transactional DDL
+inside one explicit transaction: PostgreSQL rolls back `CREATE ROLE`
+together with everything else issued on the same transaction, so the whole
+batch commits or rolls back as one unit.
+
+### The ledger table
+
+The shape consumers should use for the apply-once bookkeeping in step 3
+above:
+
+```sql
+CREATE TABLE IF NOT EXISTS <tenant_schema>.provisioning_ledger (
+    version    TEXT PRIMARY KEY,      -- e.g. "V1__create_widgets.sql"
+    checksum   TEXT NOT NULL,         -- sha256 of the script bytes
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+Apply rule: for each embedded script, in lexical order — if a ledger row
+exists with a matching checksum, skip it; a matching version with a
+*different* checksum means edited history, fail; otherwise execute the
+script and insert the row, all on the same transaction as everything else
+in "The pattern" above.
+
+### Coexistence with `flyway_schema_history`
+
+The invariant: a given tenant schema's *ongoing* migrations have exactly
+one owner. Two blessed shapes:
+
+- **Bootstrap-then-Flyway (recommended).** The provisioning transaction
+  applies the same `V*` scripts Flyway would via the ledger above. Ongoing,
+  deployment-time migrations then run through `MigrateFor` (`cfg.ConfigPath`
+  pointing at a Flyway config file that sets Flyway's own
+  `baselineOnMigrate=true` and `baselineVersion` to the bootstrapped
+  version — these are Flyway CLI/config properties, not go-bricks
+  `migration.Config` fields), so Flyway baselines the schema on first
+  contact instead of re-applying `V1..Vn`. The ledger is bootstrap-only
+  history; `flyway_schema_history` owns everything after.
+- **Ledger-only.** The tenant schema is never pointed at Flyway; every
+  later change goes through the same in-transaction apply. Simpler
+  invariants, but gives up Flyway's `info`/`validate` tooling for tenant
+  schemas.
+
+Never run both mechanisms against the same script set without a baseline —
+that is how a second `MigrateFor` fails on objects that already exist.
+
+**Related:** [multi_tenant_migration.md](multi_tenant_migration.md) covers
+the fleet/deployment-time `MigrateFor` side of the Bootstrap-then-Flyway
+shape; [outbox.md](outbox.md) covers the delivery guarantee of the event
+published in step 5 of "The pattern"; [migration_roles.md](migration_roles.md)
+covers the role model behind `spec`.
 
 ## What's out of scope (and where it lives)
 
