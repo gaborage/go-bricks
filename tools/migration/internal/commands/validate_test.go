@@ -2,12 +2,12 @@ package commands
 
 import (
 	"bytes"
-	"context"
 	stdhttp "net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +24,7 @@ func stubFlywayCapturing(t *testing.T, operation string) (stubPath, capturePath 
 	dir := t.TempDir()
 	capturePath = filepath.Join(dir, "argv.txt")
 	envelope := `{"operation":"` + operation + `","success":true,"flywayVersion":"12.8.1"}`
-	script := "#!/bin/sh\necho \"$@\" >> \"" + capturePath + "\"\necho '" + envelope + "'\nexit 0\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"" + capturePath + "\"\necho '" + envelope + "'\nexit 0\n"
 	stubPath = filepath.Join(dir, "flyway-capture.sh")
 	require.NoError(t, os.WriteFile(stubPath, []byte(script), 0o755))
 	return stubPath, capturePath
@@ -58,13 +58,14 @@ func TestValidateCommandInvokesFlywayValidate(t *testing.T) {
 	})
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	require.NoError(t, cmd.Execute())
 
 	argv, err := os.ReadFile(capture)
 	require.NoError(t, err)
-	assert.Contains(t, string(argv), "validate")
-	assert.NotContains(t, string(argv), "migrate")
+	args := strings.Split(strings.TrimSpace(string(argv)), "\n")
+	assert.Contains(t, args, "validate")
+	assert.NotContains(t, args, "migrate")
 	assert.Contains(t, stdout.String(), "t1")
 	assert.Contains(t, stdout.String(), "Validate summary")
 }

@@ -2,10 +2,10 @@ package commands
 
 import (
 	"bytes"
-	"context"
 	stdhttp "net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,13 +40,14 @@ func TestInfoCommandInvokesFlywayInfo(t *testing.T) {
 	})
 	var stdout bytes.Buffer
 	cmd.SetOut(&stdout)
-	cmd.SetContext(context.Background())
+	cmd.SetContext(t.Context())
 	require.NoError(t, cmd.Execute())
 
 	argv, err := os.ReadFile(capture)
 	require.NoError(t, err)
-	assert.Contains(t, string(argv), "info")
-	assert.NotContains(t, string(argv), "migrate")
+	args := strings.Split(strings.TrimSpace(string(argv)), "\n")
+	assert.Contains(t, args, "info")
+	assert.NotContains(t, args, "migrate")
 	assert.Contains(t, stdout.String(), "t1")
 	assert.Contains(t, stdout.String(), "Info summary")
 }
