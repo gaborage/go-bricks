@@ -95,7 +95,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 
 	// IP pre-guard rate limiting (runs before tenant resolution for attack prevention)
 	if cfg.App.Rate.IPPreGuard.Enabled {
-		e.Use(ipPreGuardEcho(cfg.App.Rate.IPPreGuard.Threshold))
+		e.Use(ipPreGuardEcho(cfg.App.Rate.IPPreGuard.Threshold, log))
 	}
 
 	// Multi-tenant tenant resolver middleware (if enabled)
@@ -104,7 +104,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		if resolver != nil {
 			// Use skipper-aware middleware to bypass tenant resolution for health probes
 			skipper := CreateProbeSkipper(healthPath, readyPath)
-			e.Use(tenantMiddlewareEcho(resolver, skipper))
+			e.Use(tenantMiddlewareEcho(resolver, skipper, log))
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
 		}
