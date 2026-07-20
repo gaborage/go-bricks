@@ -267,8 +267,11 @@ func TestIPPreGuardLogsRejection(t *testing.T) {
 	}
 	require.True(t, rejected, "expected a 429 rejection to trip the WARN log")
 
+	require.Len(t, capturer.warns, 1, "exactly one WARN per rejected request")
 	captured := strings.Join(capturer.warns, "\n")
+	assert.Contains(t, captured, "method=GET")
 	assert.Contains(t, captured, "path=/test")
+	assert.Contains(t, captured, "client=10.0.0.200")
 	assert.Contains(t, captured, "status=429")
 }
 
