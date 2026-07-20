@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -110,6 +111,42 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 
 	execMetric := obtest.FindMetric(rm, "job.execution.total")
 	require.NotNil(t, execMetric, "Execution counter metric should be recorded")
+}
+
+// TestJobExecutionPanicEmitsActionLogSummary verifies that a panicking job still emits
+// the structured action-log summary (log.type=action) exactly once, so the 100%
+// job-execution sampling logJobResultSummary advertises actually holds on the panic path.
+func TestJobExecutionPanicEmitsActionLogSummary(t *testing.T) {
+	job := &panicJob{}
+
+	out := captureStdout(t, func() {
+		module, _ := newTestScheduler(t, 5*time.Second)
+
+		err := module.FixedRate("panic-job", job, 100*time.Millisecond)
+		require.NoError(t, err)
+
+		waitFor(t, job.wasExecuted)
+
+		// Stop the scheduler inside the capture window instead of sleeping:
+		// Shutdown's wg.Wait blocks until the in-flight job wrapper's defer
+		// completes — i.e. after the recovery defer's logJobResultSummary call —
+		// a real happens-before rather than a timing guess, and it prevents a
+		// second FixedRate tick from emitting a duplicate action line. Mirrors
+		// the stop-before-read pattern in TestJobExecutionWithTracer.
+		require.NoError(t, module.Shutdown())
+	})
+
+	// Pre-existing panic ERROR line must still fire, unregressed.
+	assert.Contains(t, out, "Job panicked - recovered and marked as failed")
+	assert.Contains(t, out, `"jobID":"panic-job"`)
+
+	// New action-log summary line must now fire on the panic path.
+	assert.Contains(t, out, `"log.type":"action"`)
+	assert.Contains(t, out, `"job.id":"panic-job"`)
+	assert.Contains(t, out, `"result_code":"ERROR"`)
+
+	// Exactly one summary line for this job's single execution — no double-emit.
+	assert.Equal(t, 1, strings.Count(out, `"job.id":"panic-job"`))
 }
 
 // TestJobSkippedDuringShutdown verifies jobs skip execution when shutdown is triggered
