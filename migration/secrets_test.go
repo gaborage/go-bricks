@@ -403,12 +403,10 @@ func TestSecretsProviderNameForNilIsUnchanged(t *testing.T) {
 }
 
 func TestSecretsProviderNameForRunsAfterValidation(t *testing.T) {
-	newRecordingProvider := func(t *testing.T) (*SecretsProvider, *bool) {
+	newRecordingProvider := func(t *testing.T) *SecretsProvider {
 		t.Helper()
-		called := false
-		p := &SecretsProvider{
+		return &SecretsProvider{
 			NameFor: func(id string) (string, error) {
-				called = true
 				t.Errorf("NameFor should not be called for an unvalidated tenantID, got %q", id)
 				return "", nil
 			},
@@ -417,21 +415,18 @@ func TestSecretsProviderNameForRunsAfterValidation(t *testing.T) {
 				return nil, nil
 			},
 		}
-		return p, &called
 	}
 
 	t.Run("invalid_characters", func(t *testing.T) {
-		p, called := newRecordingProvider(t)
+		p := newRecordingProvider(t)
 		_, err := p.DBConfig(context.Background(), "../../evil")
 		require.ErrorIs(t, err, ErrInvalidTenantID)
-		assert.False(t, *called)
 	})
 
 	t.Run("whitespace_only", func(t *testing.T) {
-		p, called := newRecordingProvider(t)
+		p := newRecordingProvider(t)
 		_, err := p.DBConfig(context.Background(), "  ")
 		require.ErrorIs(t, err, ErrEmptyTenantID)
-		assert.False(t, *called)
 	})
 }
 
