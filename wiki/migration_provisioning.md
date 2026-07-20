@@ -196,17 +196,24 @@ subpackage provides `MockStateStore` with `WithGetError`, `WithUpsertError`,
 
 ## Single-transaction provisioning on PostgreSQL (consumer-side pattern)
 
-On PostgreSQL, a tenant's entire provisioning unit — schema, role pair,
-tenant tables, the tenant registry row, and the "tenant provisioned" outbox
-event — is transactional DDL: it can commit or roll back as a single unit.
-Flyway, however, is a subprocess; it cannot join a `dbtypes.Tx`, so it
-structurally cannot participate in that unit. The framework deliberately
-ships **no** tx-scoped migration applier for this (decision 2026-07-18,
-issue #720; consistent with #375's standing decision against a hand-rolled
-migration engine — "rejected, high cost, low differentiation"). Consumers
-who need "the outbox event exists iff the tenant fully exists" own the
-in-transaction apply step themselves. This section is the blessed shape
-for it.
+On PostgreSQL, a tenant's entire provisioning unit — schema, role-pair, and
+tenant-table DDL, plus the tenant registry row and the "tenant
+provisioned" outbox event (both DML) — fits in a single transaction: it
+can commit or roll back as one unit. Flyway, however, is a subprocess; it
+cannot join a `dbtypes.Tx`, so it structurally cannot participate in that
+unit. The framework deliberately ships **no** tx-scoped migration applier
+for this (decision 2026-07-18, issue #720; consistent with #375's standing
+decision against a hand-rolled migration engine — "rejected, high cost,
+low differentiation"). Consumers who need "the outbox event exists iff the
+tenant fully exists" own the in-transaction apply step themselves. This
+section is the blessed shape for it.
+
+Not every statement belongs in this transaction, though: PostgreSQL
+rejects some statements inside an explicit transaction block — e.g.
+`CREATE INDEX CONCURRENTLY`, `REINDEX … CONCURRENTLY`, `CREATE DATABASE`,
+`VACUUM`, `ALTER SYSTEM` —
+so a consumer who needs one of those must run it outside this transaction,
+forfeiting atomicity for that step.
 
 **When to use which model.** The provisioning executor documented above
 (`provisioning.Executor` + persisted state machine + `Cleanup`
@@ -217,8 +224,7 @@ single-transaction pattern below is for PostgreSQL-only control planes
 where every step is SQL against one database and atomicity is worth more
 than resumability. The two can compose, too: the pattern below can be the
 entire body of a `Steps.Migrate`-style custom callback when a consumer
-wants persisted crash-recovery wrapped around an otherwise-transactional
-apply.
+wants to wrap the transactional apply in persisted crash recovery.
 
 **The pattern.**
 
