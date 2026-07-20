@@ -72,6 +72,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -148,3 +149,30 @@ jobs:
               || echo "note: 'autorelease: tagged' label missing on PR #$pr (non-fatal)"
             echo "Cleared autorelease:pending on PR #$pr"
           done
+      - name: Check go-bricks-migrate CLI tag freshness (non-blocking)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # At vX publish time the CLI tag for vX legitimately doesn't exist yet
+          # (RELEASING.md §6 cuts it after the proxy serves vX). Healthy state:
+          # CLI tag == previous framework release. Drift: CLI < previous release.
+          git fetch --tags --force --quiet
+          prev="$(git tag --list 'v*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)"
+          latest_cli="$(git tag --list 'tools/migration/v*' --sort=-v:refname | head -1 || true)"
+          cli_ver="${latest_cli#tools/migration/}"
+          if [ -z "$prev" ]; then echo "first release — nothing to compare"; exit 0; fi
+          if [ -n "$cli_ver" ] && [ "$(printf '%s\n%s\n' "$prev" "$cli_ver" | sort -V | head -1)" = "$prev" ]; then
+            echo "CLI tag $latest_cli is fresh (>= previous framework release $prev)"; exit 0
+          fi
+          msg="go-bricks-migrate CLI tag is stale: latest is '${latest_cli:-<none>}' but the framework is now at $TAG (previous release $prev). Cut tools/migration/$TAG per RELEASING.md §6 once $TAG is on the module proxy."
+          echo "::warning::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          title="chore(migrate): cut the tools/migration CLI tag (stale since ${latest_cli:-<none>})"
+          existing="$(gh issue list --state open --search 'chore(migrate): cut the tools/migration CLI tag in:title' --json number --jq '.[0].number' || true)"
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            gh issue comment "$existing" --body "$msg" || echo "issue comment failed (non-fatal)"
+          else
+            gh issue create --title "$title" --body "$msg" || echo "issue create failed (non-fatal)"
+          fi

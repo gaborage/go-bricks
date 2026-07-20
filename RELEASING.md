@@ -99,6 +99,8 @@ git tag -s tools/migration/v0.38.0 -m "go-bricks-migrate v0.38.0"
 git push origin tools/migration/v0.38.0
 ```
 
+The release workflow's `publish` job checks this obligation on every framework tag: if the newest `tools/migration/v*` tag trails the *previous* framework release, it emits a workflow warning and opens/updates a `chore(migrate): cut the tools/migration CLI tag` issue. The tag cut itself stays manual and signed — CI never creates tags.
+
 ## 7. Security properties NOT yet provided (Phase 2)
 
 This flow provides **tag-signature provenance only** — verified against a committed
