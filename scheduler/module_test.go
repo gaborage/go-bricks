@@ -120,17 +120,20 @@ func TestJobExecutionPanicEmitsActionLogSummary(t *testing.T) {
 	job := &panicJob{}
 
 	out := captureStdout(t, func() {
-		_, registrar := newTestScheduler(t, 5*time.Second)
+		module, _ := newTestScheduler(t, 5*time.Second)
 
-		err := registrar.FixedRate("panic-job", job, 100*time.Millisecond)
+		err := module.FixedRate("panic-job", job, 100*time.Millisecond)
 		require.NoError(t, err)
 
 		waitFor(t, job.wasExecuted)
 
-		// wasExecuted flips before the panic unwinds into the recovery defer;
-		// give the defer's log call a bounded settle window before returning
-		// (captureStdout reads the pipe only after this closure returns).
-		time.Sleep(50 * time.Millisecond)
+		// Stop the scheduler inside the capture window instead of sleeping:
+		// Shutdown's wg.Wait blocks until the in-flight job wrapper's defer
+		// completes — i.e. after the recovery defer's logJobResultSummary call —
+		// a real happens-before rather than a timing guess, and it prevents a
+		// second FixedRate tick from emitting a duplicate action line. Mirrors
+		// the stop-before-read pattern in TestJobExecutionWithTracer.
+		require.NoError(t, module.Shutdown())
 	})
 
 	// Pre-existing panic ERROR line must still fire, unregressed.
