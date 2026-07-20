@@ -659,6 +659,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx JobContext) {
 
 		if r := recover(); r != nil {
 			executionStatus = "panic"
+			panicErr := fmt.Errorf("panic: %v", r)
 
 			// Log panic with stack trace
 			m.logger.Error().
@@ -669,7 +670,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx JobContext) {
 
 			// Record panic in span (if span exists)
 			if span != nil {
-				span.RecordError(fmt.Errorf("panic: %v", r))
+				span.RecordError(panicErr)
 				span.SetStatus(codes.Error, "panic")
 				span.SetAttributes(attribute.String(jobStatusAttr, "panic"))
 			}
@@ -679,6 +680,11 @@ func (m *Module) executeJob(entry *jobEntry, ctx JobContext) {
 
 			// Record metrics
 			m.recordMetrics(entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
+
+			// Emit the structured action log so the panic path also gets the
+			// advertised 100% job-execution sampling (the normal-return call
+			// below never runs when Execute panics).
+			m.logJobResultSummary(ctx, entry.metadata.JobID, entry.metadata.ScheduleType, ctx.TriggerType(), duration, panicErr, span)
 		}
 	}()
 
