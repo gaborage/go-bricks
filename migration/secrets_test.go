@@ -324,3 +324,148 @@ func TestSecretsProviderTenantIDAllowlist(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestSecretsProviderNameForComposesSuffixGrammar(t *testing.T) {
+	payload := []byte(`{
+		"type":     "postgresql",
+		"host":     "tenant-a.db.example.com",
+		"port":     5432,
+		"database": "tenant_a",
+		"username": "tenant_a_app",
+		"password": "s3cret"
+	}`)
+
+	var requestedName string
+	p := &SecretsProvider{
+		Prefix: "legacy/",
+		NameFor: func(id string) (string, error) {
+			return "/prod/platform/" + id + "/db", nil
+		},
+		Fetch: func(_ context.Context, name string) ([]byte, error) {
+			requestedName = name
+			return payload, nil
+		},
+	}
+
+	_, err := p.DBConfig(context.Background(), "tenant-a")
+	require.NoError(t, err)
+	assert.Equal(t, "/prod/platform/tenant-a/db", requestedName)
+	// SecretName reflects only the default Prefix + tenantID composition,
+	// regardless of NameFor.
+	assert.Equal(t, "legacy/tenant-a", p.SecretName("tenant-a"))
+}
+
+func TestSecretsProviderNameForErrorWrapsRealName(t *testing.T) {
+	boom := errors.New("secret not found")
+	p := &SecretsProvider{
+		NameFor: func(id string) (string, error) {
+			return "/prod/platform/" + id + "/db", nil
+		},
+		Fetch: func(context.Context, string) ([]byte, error) { return nil, boom },
+	}
+
+	_, err := p.DBConfig(context.Background(), "tenant-a")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "/prod/platform/tenant-a/db")
+	assert.NotContains(t, err.Error(), "gobricks/migrate/tenant-a")
+}
+
+func TestSecretsProviderNameForNilIsUnchanged(t *testing.T) {
+	validPayload := []byte(`{"type":"postgresql","host":"h","username":"u"}`)
+
+	t.Run("default_prefix", func(t *testing.T) {
+		var requestedName string
+		p := &SecretsProvider{
+			Fetch: func(_ context.Context, name string) ([]byte, error) {
+				requestedName = name
+				return validPayload, nil
+			},
+		}
+		_, err := p.DBConfig(context.Background(), "tenant-a")
+		require.NoError(t, err)
+		assert.Equal(t, "gobricks/migrate/tenant-a", requestedName)
+	})
+
+	t.Run("custom_prefix", func(t *testing.T) {
+		var requestedName string
+		p := &SecretsProvider{
+			Prefix: "custom/",
+			Fetch: func(_ context.Context, name string) ([]byte, error) {
+				requestedName = name
+				return validPayload, nil
+			},
+		}
+		_, err := p.DBConfig(context.Background(), "tenant-a")
+		require.NoError(t, err)
+		assert.Equal(t, "custom/tenant-a", requestedName)
+	})
+}
+
+func TestSecretsProviderNameForRunsAfterValidation(t *testing.T) {
+	newRecordingProvider := func(t *testing.T) *SecretsProvider {
+		t.Helper()
+		return &SecretsProvider{
+			NameFor: func(id string) (string, error) {
+				t.Errorf("NameFor should not be called for an unvalidated tenantID, got %q", id)
+				return "", nil
+			},
+			Fetch: func(context.Context, string) ([]byte, error) {
+				t.Fatal("Fetch should not be called for an unvalidated tenantID")
+				return nil, nil
+			},
+		}
+	}
+
+	t.Run("invalid_characters", func(t *testing.T) {
+		p := newRecordingProvider(t)
+		_, err := p.DBConfig(context.Background(), "../../evil")
+		require.ErrorIs(t, err, ErrInvalidTenantID)
+	})
+
+	t.Run("whitespace_only", func(t *testing.T) {
+		p := newRecordingProvider(t)
+		_, err := p.DBConfig(context.Background(), "  ")
+		require.ErrorIs(t, err, ErrEmptyTenantID)
+	})
+}
+
+func TestSecretsProviderNameForBlankNameRejected(t *testing.T) {
+	cases := []struct {
+		name       string
+		blankValue string
+	}{
+		{name: "empty", blankValue: ""},
+		{name: "whitespace_only", blankValue: "   "},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &SecretsProvider{
+				NameFor: func(string) (string, error) { return tc.blankValue, nil },
+				Fetch: func(context.Context, string) ([]byte, error) {
+					t.Fatal("Fetch should not be called for a blank composed name")
+					return nil, nil
+				},
+			}
+			_, err := p.DBConfig(context.Background(), "tenant-a")
+			require.ErrorIs(t, err, ErrNameForFailed)
+		})
+	}
+}
+
+func TestSecretsProviderNameForErrorSurfacesBothSentinels(t *testing.T) {
+	errBoom := errors.New("boom")
+	p := &SecretsProvider{
+		NameFor: func(string) (string, error) { return "", errBoom },
+		Fetch: func(context.Context, string) ([]byte, error) {
+			t.Fatal("Fetch should not be called when NameFor errors")
+			return nil, nil
+		},
+	}
+
+	_, err := p.DBConfig(context.Background(), "tenant-a")
+	require.ErrorIs(t, err, ErrNameForFailed)
+	require.ErrorIs(t, err, errBoom)
+	assert.Contains(t, err.Error(), "tenant-a")
+}

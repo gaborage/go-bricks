@@ -41,6 +41,16 @@ type SecretsProvider struct {
 	// Empty defaults to DefaultSecretsPrefix at lookup time.
 	Prefix string
 
+	// NameFor, when non-nil, composes the secret name for a tenant instead
+	// of the default Prefix + tenantID. The tenantID it receives has already
+	// been trimmed and allowlist-validated. Use it for grammars that place
+	// segments after the tenant ID (e.g. "/env/platform/<id>/db"). The
+	// returned name is used as-is apart from a blank-name check — the
+	// composer owns its correctness. When NameFor is set, Prefix is ignored
+	// for lookups but a non-empty Prefix is still checked by Validate (a
+	// malformed Prefix alongside NameFor fails fast rather than lingering).
+	NameFor func(tenantID string) (string, error)
+
 	// Fetch resolves a secret name to its payload. Required.
 	Fetch SecretFetcher
 
@@ -66,6 +76,10 @@ var ErrEmptyTenantID = errors.New("migration: tenantID is empty")
 // the 128-character length bound.
 var ErrInvalidTenantID = errors.New("migration: tenantID contains characters outside [A-Za-z0-9_-] or exceeds 128 characters")
 
+// ErrNameForFailed indicates the custom NameFor hook returned an error or
+// a blank (empty/whitespace-only) name for a validated tenant ID.
+var ErrNameForFailed = errors.New("migration: NameFor failed to compose a secret name")
+
 // Validate checks that the provider is wired correctly. Callers may invoke it
 // eagerly at startup; DBConfig also calls it lazily on first lookup so library
 // callers who skip the explicit check still get a clear error before any
@@ -84,13 +98,32 @@ func (p *SecretsProvider) Validate() error {
 }
 
 // SecretName composes the full secret name for the given tenant ID using the
-// provider's prefix (or DefaultSecretsPrefix when unset).
+// provider's prefix (or DefaultSecretsPrefix when unset). When NameFor is
+// set, DBConfig uses it instead and this method reflects only the default
+// Prefix + tenantID composition.
 func (p *SecretsProvider) SecretName(tenantID string) string {
 	prefix := p.Prefix
 	if prefix == "" {
 		prefix = DefaultSecretsPrefix
 	}
 	return prefix + tenantID
+}
+
+// secretNameFor resolves the effective secret name: NameFor when set,
+// otherwise the default Prefix + tenantID composition. tenantID must already
+// be validated by the caller.
+func (p *SecretsProvider) secretNameFor(tenantID string) (string, error) {
+	if p.NameFor == nil {
+		return p.SecretName(tenantID), nil
+	}
+	name, err := p.NameFor(tenantID)
+	if err != nil {
+		return "", fmt.Errorf("%w for tenant %q: %w", ErrNameForFailed, tenantID, err)
+	}
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("%w: blank name for tenant %q", ErrNameForFailed, tenantID)
+	}
+	return name, nil
 }
 
 // DBConfig satisfies database.DBConfigProvider. Looks up the tenant's secret,
@@ -108,7 +141,10 @@ func (p *SecretsProvider) DBConfig(ctx context.Context, tenantID string) (*confi
 		return nil, ErrInvalidTenantID
 	}
 
-	name := p.SecretName(tenantID)
+	name, err := p.secretNameFor(tenantID)
+	if err != nil {
+		return nil, err
+	}
 	raw, err := p.Fetch(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("fetch secret %q for tenant %q: %w", name, tenantID, err)
