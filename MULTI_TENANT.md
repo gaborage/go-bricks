@@ -24,6 +24,7 @@ multitenant:
     header: "X-Tenant-ID"   # header name for tenant resolution
     domain: "api.example.com" # root domain for subdomain resolution
     proxies: true           # trust X-Forwarded-Host headers
+    # order: [subdomain, path, header]  # resolver.order REQUIRED for type: composite — no default; startup fails without it (ADR-039)
   limits:
     tenants: 100           # maximum number of tenants
   tenants:
@@ -67,7 +68,7 @@ The framework provides multiple built-in tenant resolution strategies:
 - **HeaderResolver**: Extracts tenant ID from HTTP headers (e.g., `X-Tenant-ID`)
 - **SubdomainResolver**: Derives tenant ID from request host subdomains with proxy support
 - **PathResolver**: Extracts tenant ID from a 1-indexed URL path segment, with an optional prefix gate (e.g. `/itsp/{tenantID}/...`)
-- **CompositeResolver**: Tries multiple resolvers sequentially until one succeeds, with optional regex validation
+- **CompositeResolver**: Tries multiple resolvers sequentially until one succeeds, with optional regex validation. `resolver.order` is **required** — there is no default chain, and a composite resolver without it fails at startup (ADR-039; see [wiki/multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md)).
 - **ValidatingResolver**: Wraps any resolver with tenant ID format validation using regex patterns
 
 All resolvers support context propagation and integrate seamlessly with the middleware layer.
