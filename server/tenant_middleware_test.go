@@ -51,9 +51,10 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 	tests := []struct {
 		name     string
 		resolver multitenant.TenantResolver
+		reason   string
 	}{
-		{name: "empty_tenant", resolver: &fixedTenantResolver{tenantID: "", err: nil}},
-		{name: "resolver_error", resolver: &fixedTenantResolver{tenantID: "tenant-canary", err: errors.New("boom")}},
+		{name: "empty_tenant", resolver: &fixedTenantResolver{tenantID: "", err: nil}, reason: `reason="empty tenant"`},
+		{name: "resolver_error", resolver: &fixedTenantResolver{tenantID: "tenant-canary", err: errors.New("boom")}, reason: `reason="resolver error"`},
 	}
 
 	for _, tc := range tests {
@@ -77,6 +78,7 @@ func TestTenantMiddlewareLogsRejection(t *testing.T) {
 			assert.Contains(t, captured, "path=/tenant-check")
 			assert.Contains(t, captured, "client=192.0.2.1")
 			assert.Contains(t, captured, "status=400")
+			assert.Contains(t, captured, tc.reason, "each resolver outcome logs its fixed reason")
 			assert.NotContains(t, captured, "tenant=", "no resolved tenant field on the reject path")
 			assert.NotContains(t, captured, "tenant-canary", "a resolver-provided tenant must never be logged on reject")
 		})
