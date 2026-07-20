@@ -136,6 +136,44 @@ Minimum IAM for the runner role:
 }
 ```
 
+## Schema targeting (PostgreSQL)
+
+When the target `DatabaseConfig` carries a non-empty `postgresql.schema`, the
+runner passes `-schemas=<schema> -defaultSchema=<schema>` to every Flyway
+invocation (migrate, info, validate). Flyway CLI args override any
+`flyway.schemas` in a shared conf file, so one conf cannot misroute a tenant —
+the schema on the tenant's `DatabaseConfig` always wins, and
+`flyway_schema_history` is created inside that same target schema. This is what
+makes schema-per-tenant topologies safe: without it, every tenant's tables land
+wherever the connection's `search_path` resolves (typically `public`) and report
+success regardless.
+
+The per-tenant secret already carries the canonical `DatabaseConfig` shape, so
+targeting a schema is the whole wiring — add a `postgresql` block to the secret:
+
+```json
+{
+  "type":     "postgresql",
+  "host":     "tenant-a.db.example.com",
+  "port":     5432,
+  "database": "tenant_a",
+  "username": "tenant_a_app",
+  "password": "...",
+  "postgresql": { "schema": "tenant_a" }
+}
+```
+
+An empty schema keeps legacy behavior unchanged — the conf file or the
+connection's `search_path` decides where migrations land. Note this koanf key
+(`database.postgresql.schema`) now has two consumers: the observability
+namespace and this migration-targeting path.
+
+Schema names must match `^[A-Za-z_][A-Za-z0-9_]{0,62}$`; an invalid name fails
+fast with `ErrInvalidPGIdentifier` before Flyway runs (the value is formatted
+into subprocess argv, and `-schemas` is comma-separated, so an unvalidated name
+could smuggle a second schema). Oracle is not applicable — its schema is the
+connecting user, which is already per-tenant.
+
 ## Installing the CLI
 
 ```bash

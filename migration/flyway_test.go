@@ -1479,3 +1479,67 @@ func TestRunFlywayCommandParentCancelSignalsUnknownState(t *testing.T) {
 	_, hasTimedOut := got.Attributes["migration.timed_out"]
 	assert.False(t, hasTimedOut, "a cancel-kill must not also assert migration.timed_out")
 }
+
+func TestMigrateForPassesSchemaFlags(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	// A per-tenant DatabaseConfig carrying postgresql.schema must target that
+	// schema explicitly so schema-per-tenant topologies don't collapse into one.
+	stub, capturePath := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
+	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+	tenantDB := &config.DatabaseConfig{
+		Type:       "postgresql",
+		Password:   "longenough-pw",
+		PostgreSQL: config.PostgreSQLConfig{Schema: "tenant_a"},
+	}
+	_, err := fm.MigrateFor(context.Background(), tenantDB, mcfg)
+	require.NoError(t, err)
+
+	captured, readErr := os.ReadFile(capturePath)
+	require.NoError(t, readErr)
+	args := string(captured)
+	assert.Contains(t, args, "-schemas=tenant_a", "a configured schema must be passed to Flyway")
+	assert.Contains(t, args, "-defaultSchema=tenant_a", "-defaultSchema pins where flyway_schema_history lives")
+}
+
+func TestMigrateOmitsSchemaFlagsWhenUnset(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	// Regression: an empty schema keeps legacy behavior — the conf / search_path
+	// decides — so no schema flags are appended.
+	stub, capturePath := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
+	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+	tenantDB := &config.DatabaseConfig{Type: "postgresql", Password: "longenough-pw"}
+	_, err := fm.MigrateFor(context.Background(), tenantDB, mcfg)
+	require.NoError(t, err)
+
+	captured, readErr := os.ReadFile(capturePath)
+	require.NoError(t, readErr)
+	args := string(captured)
+	assert.NotContains(t, args, "-schemas", "no schema configured must not emit -schemas")
+	assert.NotContains(t, args, "-defaultSchema", "no schema configured must not emit -defaultSchema")
+}
+
+func TestMigrateForRejectsInvalidSchemaName(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+	// A schema name that could smuggle a second comma-separated schema into the
+	// -schemas argv is rejected before Flyway runs, so the stub never executes.
+	stub, capturePath := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
+	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
+	tenantDB := &config.DatabaseConfig{
+		Type:       "postgresql",
+		Password:   "longenough-pw",
+		PostgreSQL: config.PostgreSQLConfig{Schema: "a,b"},
+	}
+	_, err := fm.MigrateFor(context.Background(), tenantDB, mcfg)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
+
+	_, statErr := os.Stat(capturePath)
+	assert.True(t, os.IsNotExist(statErr),
+		"schema rejected up front — the Flyway stub must never have executed")
+}

@@ -26,6 +26,8 @@ const (
 	flagConfigFiles    = "-configFiles="
 	flagLocationsFS    = "-locations=filesystem:"
 	flagOutputTypeJSON = "-outputType=json"
+	flagSchemas        = "-schemas="
+	flagDefaultSchema  = "-defaultSchema="
 
 	flywayExecutable  = "flyway"
 	flywayCmdMigrate  = "migrate"
@@ -291,6 +293,12 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 	}
 
 	vendor := dbVendor(db, fm.config.Database.Type)
+
+	schemaFlags, err := schemaArgs(db, vendor)
+	if err != nil {
+		return Result{}, err
+	}
+
 	fm.logger.Info().
 		Str("vendor", vendor).
 		Str("action", verb).
@@ -304,6 +312,7 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 		flagConfigFiles + cfg.ConfigPath,
 		flagLocationsFS + cfg.MigrationPath,
 	}
+	args = append(args, schemaFlags...)
 	if isMigrate {
 		args = append(args, flagOutputTypeJSON)
 	}
@@ -484,6 +493,27 @@ func dbVendor(db *config.DatabaseConfig, fallback string) string {
 		return db.Type
 	}
 	return fallback
+}
+
+// schemaArgs returns the explicit Flyway schema-targeting flags for the
+// supplied database, or nil when no schema is configured. Only PostgreSQL
+// participates: Oracle's schema is the connecting user, which is already
+// per-tenant. The schema name must pass the same conservative identifier
+// check as role provisioning (safePGIdentifier) — it is formatted into
+// subprocess argv, and -schemas is comma-separated, so an unvalidated value
+// could smuggle a second schema.
+func schemaArgs(db *config.DatabaseConfig, vendor string) ([]string, error) {
+	if db == nil || vendor != config.PostgreSQL {
+		return nil, nil
+	}
+	schema := db.PostgreSQL.Schema
+	if schema == "" {
+		return nil, nil
+	}
+	if !safePGIdentifier.MatchString(schema) {
+		return nil, fmt.Errorf("%w: database.postgresql.schema=%q", ErrInvalidPGIdentifier, schema)
+	}
+	return []string{flagSchemas + schema, flagDefaultSchema + schema}, nil
 }
 
 // ErrEnvFieldHasControlChar is returned when a DatabaseConfig field destined
