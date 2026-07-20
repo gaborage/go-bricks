@@ -130,9 +130,12 @@ envelope and typed request/response structs (`scheduler/api_handlers.go:9-34` pa
   `created_at ASC` at `outbox/store_postgres.go:84`).
 - **Row fields** (subset of `outbox.Record`, `outbox/store.go:24-37`): `id`, `event_type`,
   `aggregate_id`, `exchange`, `routing_key`, `retry_count`, `error`, `created_at`.
-- **Pagination — keyset/cursor, NOT offset**: a `limit` query param (**hard server-side cap**;
-  recommend **default 50, max 500**; clamp silently) plus an opaque `cursor` that encodes the
-  last-seen `(created_at, id)`. **Why keyset over offset:** `OFFSET` is evaluated against the
+- **Pagination — keyset/cursor, NOT offset**: a `limit` query param (valid range
+  `1 <= limit <= 500`; **default 50, max 500**; the handler REJECTS or CLAMPS
+  non-positive/over-cap values BEFORE calling the store, so the `limit+1` over-fetch below always
+  runs with `limit >= 1` — otherwise `limit=0` would fetch only the extra row, trim it, and leave
+  0 returned rows with `hasMore=true` and no last row to derive `nextCursor` from) plus an opaque
+  `cursor` that encodes the last-seen `(created_at, id)`. **Why keyset over offset:** `OFFSET` is evaluated against the
   *live* failed-row set, so a concurrent retry that un-parks an earlier row shifts every
   subsequent offset and later pages silently SKIP rows — and `created_at ASC` alone ties
   nondeterministically; keyset over `(created_at, id)` is stable under concurrent retry and
@@ -141,9 +144,11 @@ envelope and typed request/response structs (`scheduler/api_handlers.go:9-34` pa
   over-fetch:** the store queries `limit+1` and returns at most `limit` rows plus a `hasMore`
   flag (true iff the extra row came back); `nextCursor` is non-null **iff** `hasMore` (it is the
   `(created_at, id)` of the last returned row), so a page of exactly `limit` rows is
-  disambiguated from a truly-exhausted set. Surface in `meta`: `limit`, `nextCursor` (null when
-  `hasMore` is false), and — cheaply, from the same count query the metric uses — `total`, so
-  the operator sees "showing 50 of N".
+  disambiguated from a truly-exhausted set. Surface in `meta`: `limit` and `nextCursor` (null
+  when `hasMore` is false), plus an OPTIONAL `total` from `CountDeadLettered`. Note `total` is a
+  `status='failed'` scan that is **not index-backed today** (see the index note under New store
+  queries), so treat it as optional/cacheable — omit or sample it rather than compute it on every
+  request as parked volume grows (the metric section flags the same count-cost tradeoff).
 - **Payload EXCLUDED by default.** The `payload` column is application data (potentially PII —
   the outbox carries whatever the producer wrote). The framework's `SensitiveDataFilter`
   applies to *log lines*, **not to HTTP response bodies**, so echoing `payload` here would be
