@@ -66,9 +66,14 @@ verified leads).
   response)` (:67). Note it returns **all** jobs unpaginated — fine for a fixed, small job set,
   but not a model for unbounded outbox rows (cap REQUIRED, see API section).
 - `scheduler/api_handlers.go:70-103` — `triggerJobHandler` (POST `/_sys/job/:jobId`):
-  path param via `JobIDParam struct { JobID string ` + "`param:\"jobId\" validate:\"required\"`" + ` }`
-  (:31-34), 404 via `server.NewNotFoundError("job")` (:80), 202-Accepted via
-  `server.NewResult(http.StatusAccepted, response)` (:102).
+  path param via `JobIDParam` (:31-34), 404 via `server.NewNotFoundError("job")` (:80),
+  202-Accepted via `server.NewResult(http.StatusAccepted, response)` (:102). The param struct:
+
+  ```go
+  type JobIDParam struct {
+      JobID string `param:"jobId" validate:"required"`
+  }
+  ```
 - `scheduler/cidr_middleware.go:23-55` — `CIDRMiddleware(log, allowlist, trustedProxies)
   server.MiddlewareFunc`: empty allowlist → localhost-only (`parseCIDRAllowlist` :60-63),
   trusted-proxy-aware client IP via **`server.ClientIP`** (:85) and **`server.ParseCIDRs`**
@@ -119,15 +124,21 @@ envelope and typed request/response structs (`scheduler/api_handlers.go:9-34` pa
 
 ### `GET /_sys/outbox/dead-letter` — list parked rows
 
-- **Selects** `status='failed'` rows, ordered `created_at ASC` (oldest first — matches the
-  relay's own ordering at `outbox/store_postgres.go:84`).
+- **Selects** `status='failed'` rows, ordered `(created_at ASC, id ASC)` (oldest first; `id`
+  is the deterministic tie-breaker the keyset cursor needs — the relay's own pending ordering is
+  `created_at ASC` at `outbox/store_postgres.go:84`).
 - **Row fields** (subset of `outbox.Record`, `outbox/store.go:24-37`): `id`, `event_type`,
   `aggregate_id`, `exchange`, `routing_key`, `retry_count`, `error`, `created_at`.
-- **Pagination**: `limit` / `offset` query params with a **hard server-side cap**. Unlike
-  `/_sys/job` (which returns all jobs — the set is small and fixed), outbox failed rows are
-  unbounded, so a cap is REQUIRED. Recommend **default 50, max 500**; clamp silently and
-  surface the effective values in `meta` (`limit`, `offset`, and — cheaply, from the same
-  count query the metric uses — `total`, so the operator sees "showing 50 of N").
+- **Pagination — keyset/cursor, NOT offset**: a `limit` query param (**hard server-side cap**;
+  recommend **default 50, max 500**; clamp silently) plus an opaque `cursor` that encodes the
+  last-seen `(created_at, id)`. **Why keyset over offset:** `OFFSET` is evaluated against the
+  *live* failed-row set, so a concurrent retry that un-parks an earlier row shifts every
+  subsequent offset and later pages silently SKIP rows — and `created_at ASC` alone ties
+  nondeterministically; keyset over `(created_at, id)` is stable under concurrent retry and
+  deterministically tie-broken by `id`. Unlike `/_sys/job` (which returns all jobs — a small,
+  fixed set), outbox failed rows are unbounded, so the cap is REQUIRED. Surface in `meta`:
+  `limit`, `nextCursor` (null when the page exhausts the set), and — cheaply, from the same
+  count query the metric uses — `total`, so the operator sees "showing 50 of N".
 - **Payload EXCLUDED by default.** The `payload` column is application data (potentially PII —
   the outbox carries whatever the producer wrote). The framework's `SensitiveDataFilter`
   applies to *log lines*, **not to HTTP response bodies**, so echoing `payload` here would be
@@ -150,7 +161,7 @@ Response envelope (illustrative):
       "createdAt": "2026-07-19T04:10:00Z"
     }
   ],
-  "meta": { "total": 1, "limit": 50, "offset": 0, "timestamp": "...", "traceId": "..." }
+  "meta": { "total": 1, "limit": 50, "nextCursor": null, "timestamp": "...", "traceId": "..." }
 }
 ```
 
@@ -164,8 +175,14 @@ Response envelope (illustrative):
   decode, and immediately re-park at `RetryCount+1 >= MaxRetries` (`outbox/relay.go:304`) —
   effectively a one-shot that hides whether the fix worked. Also clear `error` (PG) /
   `error_msg` (Oracle) so a subsequent failure records the *new* cause.
-- **Path param** via a `EventIDParam struct { EventID string ` + "`param:\"eventID\" validate:\"required\"`" + ` }`
-  (mirrors `JobIDParam`, `scheduler/api_handlers.go:31-34`).
+- **Path param** via an `EventIDParam` struct (mirrors `JobIDParam`,
+  `scheduler/api_handlers.go:31-34`):
+
+  ```go
+  type EventIDParam struct {
+      EventID string `param:"eventID" validate:"required"`
+  }
+  ```
 - **Status codes**: 202-Accepted on a successful flip (the delivery is asynchronous, like the
   scheduler trigger at `scheduler/api_handlers.go:102`); 404 when no `status='failed'` row
   matches the id (via `server.NewNotFoundError`, `scheduler/api_handlers.go:80`).
@@ -205,9 +222,20 @@ capabilities discovered by assertion, not forced onto every implementor. The fra
 // operator surface for parked (status='failed') rows. Discovered by type assertion;
 // a Store without it degrades the /_sys/outbox endpoints gracefully.
 type DeadLetterStore interface {
-    FetchDeadLettered(ctx context.Context, db dbtypes.Interface, limit, offset int) ([]Record, error)
+    // FetchDeadLettered returns up to limit failed rows AFTER the keyset cursor
+    // (nil cursor = first page), ordered (created_at ASC, id ASC). Keyset, not
+    // offset: stable under a concurrent retry that un-parks an earlier row.
+    FetchDeadLettered(ctx context.Context, db dbtypes.Interface, cursor *DeadLetterCursor, limit int) ([]Record, error)
     RetryDeadLettered(ctx context.Context, db dbtypes.Interface, eventID string) (bool, error) // (affected, err)
     CountDeadLettered(ctx context.Context, db dbtypes.Interface) (int64, error)                 // for the metric + list meta.total
+}
+
+// DeadLetterCursor is the keyset boundary (the last row of the previous page),
+// encoded opaquely into the HTTP `cursor` query param. A nil cursor selects the
+// first page.
+type DeadLetterCursor struct {
+    CreatedAt time.Time
+    ID        string
 }
 ```
 
@@ -225,14 +253,23 @@ exactly as `MarkDeadLettered` already does (`$2`/`error` at `outbox/store_postgr
 `Record.Error` field):
 
 ```sql
--- PostgreSQL ($1=limit, $2=offset)
+-- PostgreSQL — keyset over (created_at, id). $1,$2 = cursor (created_at, id); $3 = limit.
+-- First page OMITS the "AND (created_at, id) > ($1, $2)" predicate. PG's row-value
+-- comparison is the clean form for a composite keyset boundary.
 SELECT id, event_type, aggregate_id, exchange, routing_key, retry_count, error, created_at
-FROM <table> WHERE status = 'failed' ORDER BY created_at ASC LIMIT $1 OFFSET $2;
+FROM <table>
+WHERE status = 'failed' AND (created_at, id) > ($1, $2)
+ORDER BY created_at ASC, id ASC
+LIMIT $3;
 
--- Oracle (:1=offset, :2=limit) — mirror FetchPending's FETCH FIRST form (store_oracle.go:93-100)
+-- Oracle — NO row-value comparison; expand the boundary portably. :1 = cursor created_at,
+-- :2 = cursor id, :3 = limit. First page OMITS the "AND (...)" boundary predicate.
+-- Mirror FetchPending's FETCH FIRST form (store_oracle.go:93-100).
 SELECT id, event_type, aggregate_id, exchange, routing_key, retry_count, error_msg, created_at
-FROM <table> WHERE status = 'failed' ORDER BY created_at ASC
-OFFSET :1 ROWS FETCH NEXT :2 ROWS ONLY;
+FROM <table>
+WHERE status = 'failed' AND (created_at > :1 OR (created_at = :1 AND id > :2))
+ORDER BY created_at ASC, id ASC
+FETCH NEXT :3 ROWS ONLY;
 ```
 
 **`RetryDeadLettered`** — return affected-rows so the handler maps 202 vs 404:
@@ -254,9 +291,10 @@ SELECT count(*) FROM <table> WHERE status = 'failed';   -- both vendors
 ```
 
 > The relay's partial index is `WHERE status='pending'` (`outbox/store_postgres.go:33`), so
-> `status='failed'` scans are not index-backed today. Given the low expected cardinality of
-> parked rows this is acceptable; if a deployment ever accumulates many, the build plan can add
-> a matching partial index. Flag, don't pre-optimize (YAGNI).
+> `status='failed'` keyset scans are not index-backed today. Given the low expected cardinality
+> of parked rows this is acceptable; if a deployment ever accumulates many, the build plan can
+> add a partial index on `(created_at, id) WHERE status='failed'` to serve the keyset order.
+> Flag, don't pre-optimize (YAGNI).
 
 ## CIDR middleware reuse — recommendation
 
