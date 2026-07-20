@@ -1493,7 +1493,7 @@ func TestMigrateForPassesSchemaFlags(t *testing.T) {
 		Password:   "longenough-pw",
 		PostgreSQL: config.PostgreSQLConfig{Schema: "tenant_a"},
 	}
-	_, err := fm.MigrateFor(context.Background(), tenantDB, mcfg)
+	_, err := fm.MigrateFor(t.Context(), tenantDB, mcfg)
 	require.NoError(t, err)
 
 	captured, readErr := os.ReadFile(capturePath)
@@ -1512,7 +1512,7 @@ func TestMigrateOmitsSchemaFlagsWhenUnset(t *testing.T) {
 	stub, capturePath := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 	fm, mcfg := newMigrateFixture(t, stub, "longenough-pw")
 	tenantDB := &config.DatabaseConfig{Type: "postgresql", Password: "longenough-pw"}
-	_, err := fm.MigrateFor(context.Background(), tenantDB, mcfg)
+	_, err := fm.MigrateFor(t.Context(), tenantDB, mcfg)
 	require.NoError(t, err)
 
 	captured, readErr := os.ReadFile(capturePath)
@@ -1535,7 +1535,7 @@ func TestMigrateForRejectsInvalidSchemaName(t *testing.T) {
 		Password:   "longenough-pw",
 		PostgreSQL: config.PostgreSQLConfig{Schema: "a,b"},
 	}
-	_, err := fm.MigrateFor(context.Background(), tenantDB, mcfg)
+	_, err := fm.MigrateFor(t.Context(), tenantDB, mcfg)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrInvalidPGIdentifier)
 
