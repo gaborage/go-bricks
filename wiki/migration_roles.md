@@ -49,6 +49,44 @@ Result: a Flyway migration adding `CREATE TABLE tenant_a.gadgets (...)` does
 not need a follow-up `GRANT` statement — the table is automatically
 DML-accessible to the runtime role.
 
+## Default search_path
+
+Every provisioning run also sets a default `search_path` on both roles:
+
+```sql
+ALTER ROLE "migrator" SET search_path = "tenant_a";
+ALTER ROLE "tenant_a_app" SET search_path = "tenant_a";
+```
+
+Like the attribute lockdown, this is idempotent and unconditional — no
+opt-out flag. Re-running the same spec converges the setting; manual drift
+(e.g. someone runs `ALTER ROLE migrator SET search_path = public`) snaps
+back on the next provisioning call.
+
+**Why it matters on both sides:**
+- **Migrator side.** Flyway's fallback when no schema is explicitly targeted
+  resolves against the *connection's* current schema, which in turn is
+  driven by the role's default `search_path`. Without this `ALTER ROLE`, a
+  freshly provisioned tenant whose migration runner omits explicit schema
+  args would silently land migrations in `public` and still report success.
+  See [Schema targeting (PostgreSQL)](multi_tenant_migration.md#schema-targeting-postgresql)
+  for how the runner passes `-schemas`/`-defaultSchema` explicitly — this
+  role-level default is the belt to that suspenders, covering any caller
+  that provisions roles without going through the runner's explicit args.
+- **Runtime side.** Without a role default, unqualified `INSERT`/`SELECT`
+  statements from the running service resolve against `public`. The grants
+  boundary still prevents cross-tenant reads (this is not a leak), but an
+  unqualified query from application code or an operator's `psql` session
+  is a silent wrong-schema bug rather than a hard failure.
+
+**Scoping decision:** the statements use plain `ALTER ROLE ... SET`
+(cluster-global default for the role), not `ALTER ROLE ... IN DATABASE ...
+SET`. These roles are provisioned per-tenant and per-purpose — a single role
+is never shared across schemas or databases — so a cluster-global default is
+equivalent to a database-scoped one in practice, and DB-scoping was deferred
+as unnecessary complexity for v1. Shared-cluster deployments that reuse role
+names across databases would need to revisit this.
+
 ## Using the helper
 
 ```go

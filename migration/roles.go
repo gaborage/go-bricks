@@ -180,8 +180,8 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 		{runtime, spec.RuntimeRole, spec.RuntimePassword},
 	}
 
-	// Pre-size for the worst case: 2 roles × (create + lockdown + password) + 6 schema/grant statements.
-	stmts := make([]string, 0, 2*3+6)
+	// Pre-size for the worst case: 2 roles × (create + lockdown + password) + 8 schema/grant/search_path statements.
+	stmts := make([]string, 0, 2*3+8)
 	for _, r := range roles {
 		stmts = append(stmts, buildRoleCreateAndLockdown(r.rolname, r.quotedIdent)...)
 		if r.password != "" {
@@ -204,6 +204,12 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 		// by future Flyway migrations auto-grant to the runtime role.
 		fmt.Sprintf(`ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s`, migrator, schema, runtime),
 		fmt.Sprintf(`ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %s`, migrator, schema, runtime),
+		// Default search_path for both roles: without it, every unqualified
+		// statement from either role resolves to public — migrations from the
+		// migrator role land in the wrong schema (pre-#716 fallback), and
+		// unqualified runtime queries silently miss tenant tables.
+		fmt.Sprintf(`ALTER ROLE %s SET search_path = %s`, migrator, schema),
+		fmt.Sprintf(`ALTER ROLE %s SET search_path = %s`, runtime, schema),
 	)
 	return stmts
 }

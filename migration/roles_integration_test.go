@@ -194,6 +194,120 @@ func TestPGRolesProvisioningIsIdempotent(t *testing.T) {
 	require.NoError(t, rotated.PingContext(ctx))
 }
 
+// TestPGRolesSearchPathSetOnBothRoles verifies that provisioning sets a
+// default search_path on both roles, pointing at the tenant schema, and that
+// the setting converges (idempotent) on rerun.
+//
+// Stored-form trap: search_path is a GUC_LIST_QUOTE parameter — PostgreSQL
+// re-normalizes the value through quote_identifier at SET time, stripping
+// quotes from any name that is legal unquoted. The test uses a lowercase
+// snake_case schema, so even though the emitted SQL says
+// SET search_path = "tenant_sp", the stored rolconfig entry is unquoted:
+// search_path=tenant_sp. Assert on that unquoted form.
+func TestPGRolesSearchPathSetOnBothRoles(t *testing.T) {
+	env := newIntegrationEnv(t)
+	spec := &PGRoleSpec{
+		Schema:           "tenant_sp",
+		MigratorRole:     "mig_sp",
+		MigratorPassword: "mig-sp-pw-1234",
+		RuntimeRole:      "rt_sp",
+		RuntimePassword:  "rt-sp-pw-1234",
+	}
+
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+	require.NoError(t, ProvisionPGRoles(ctx, admin, spec))
+
+	rolconfigs := func() map[string]string {
+		// array_to_string avoids scanning rolconfig (a PG text[]) directly —
+		// lib/pq isn't a dependency and pgx v5 stdlib doesn't scan text[]
+		// into []string natively.
+		rows, err := admin.QueryContext(ctx,
+			`SELECT rolname, array_to_string(rolconfig, ',') FROM pg_roles WHERE rolname IN ($1, $2) ORDER BY rolname`,
+			spec.MigratorRole, spec.RuntimeRole)
+		require.NoError(t, err)
+		defer func() { _ = rows.Close() }()
+
+		out := make(map[string]string)
+		for rows.Next() {
+			var rolname, cfg string
+			require.NoError(t, rows.Scan(&rolname, &cfg))
+			out[rolname] = cfg
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}
+
+	cfgs := rolconfigs()
+	require.Len(t, cfgs, 2)
+	assert.Contains(t, cfgs[spec.MigratorRole], "search_path="+spec.Schema,
+		"migrator rolconfig: %q", cfgs[spec.MigratorRole])
+	assert.Contains(t, cfgs[spec.RuntimeRole], "search_path="+spec.Schema,
+		"runtime rolconfig: %q", cfgs[spec.RuntimeRole])
+
+	// Convergence: rerunning with the same spec must not error, and the
+	// stored rolconfig must be unchanged (issue AC #3).
+	require.NoError(t, ProvisionPGRoles(ctx, admin, spec), "second run must be idempotent")
+	assert.Equal(t, cfgs, rolconfigs(), "rolconfig must be unchanged after a convergent rerun")
+}
+
+// TestPGRolesUnqualifiedResolutionUsesTenantSchema verifies the runtime-
+// ergonomics half of the search_path change: unqualified DDL from the
+// migrator role and unqualified DML from the runtime role both resolve
+// against the tenant schema instead of falling through to public.
+func TestPGRolesUnqualifiedResolutionUsesTenantSchema(t *testing.T) {
+	env := newIntegrationEnv(t)
+	spec := &PGRoleSpec{
+		Schema:           "tenant_unq",
+		MigratorRole:     "mig_unq",
+		MigratorPassword: "mig-unq-pw-1234",
+		RuntimeRole:      "rt_unq",
+		RuntimePassword:  "rt-unq-pw-1234",
+	}
+
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	admin := env.adminDB(t)
+	require.NoError(t, ProvisionPGRoles(ctx, admin, spec))
+
+	// Migrator role: the openAsRole DSN does not pin search_path, so the role
+	// default under test actually takes effect for this connection.
+	migratorDB := env.openAsRole(t, spec.MigratorRole, spec.MigratorPassword)
+	_, err := migratorDB.ExecContext(ctx, `CREATE TABLE sp_probe (id INT)`)
+	require.NoError(t, err, "migrator must be able to CREATE TABLE unqualified")
+
+	var tenantRegclass, publicRegclass *string
+	require.NoError(t, admin.QueryRowContext(ctx,
+		`SELECT to_regclass($1)`, spec.Schema+".sp_probe").Scan(&tenantRegclass))
+	assert.NotNil(t, tenantRegclass, "sp_probe must exist in the tenant schema")
+
+	require.NoError(t, admin.QueryRowContext(ctx,
+		`SELECT to_regclass('public.sp_probe')`).Scan(&publicRegclass))
+	assert.Nil(t, publicRegclass, "sp_probe must NOT exist in public")
+
+	runtimeDB := env.openAsRole(t, spec.RuntimeRole, spec.RuntimePassword)
+
+	// 1. Schema-qualified SELECT succeeds — isolates the grants chain
+	// (schema USAGE + the ALTER DEFAULT PRIVILEGES auto-grant, already
+	// pinned by TestPGRolesAlterDefaultPrivilegesAutoGrants). This is a
+	// dependency of assertion 2 below, not what this plan changes.
+	var count int
+	qualified := quotePGIdent(spec.Schema) + ".sp_probe"
+	require.NoError(t, runtimeDB.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s`, qualified)).Scan(&count),
+		"qualified SELECT must succeed via the existing grants chain")
+
+	// 2. Unqualified SELECT succeeds — isolates the new search_path default.
+	// If only this assertion fails (with #1 passing), search_path is the
+	// culprit; if #1 fails, the grants model regressed instead.
+	require.NoError(t, runtimeDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sp_probe`).Scan(&count),
+		"unqualified SELECT must succeed via the new search_path default")
+}
+
 // isPermissionDenied reports whether err looks like a PostgreSQL privilege-
 // rejection error (SQLSTATE 42501). We match on the message because the test
 // uses database/sql + pgx stdlib, which surfaces the SQLSTATE inside the

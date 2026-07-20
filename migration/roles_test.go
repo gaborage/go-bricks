@@ -140,6 +140,31 @@ func TestPGRoleProvisioningSQLContainsExpectedStatements(t *testing.T) {
 
 	// The AC-critical ALTER DEFAULT PRIVILEGES line.
 	assert.Contains(t, all, `ALTER DEFAULT PRIVILEGES FOR ROLE "migrator" IN SCHEMA "tenant_a" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "tenant_a_app"`)
+
+	// Default search_path on both roles: migrator-side keeps Flyway's
+	// no-explicit-schema fallback pointed at the tenant schema; runtime-side
+	// keeps unqualified DML off public.
+	assert.Contains(t, all, `ALTER ROLE "migrator" SET search_path = "tenant_a"`)
+	assert.Contains(t, all, `ALTER ROLE "tenant_a_app" SET search_path = "tenant_a"`)
+}
+
+// TestPGRoleProvisioningSQLSearchPathUsesQuotedIdents pins the exact quoted
+// ALTER ROLE ... SET search_path statements for a mixed-case schema — mixed
+// case is where quoting is semantically load-bearing: unquoted, PostgreSQL
+// would fold the identifier to lowercase and the search_path would miss the
+// actual (mixed-case) schema.
+func TestPGRoleProvisioningSQLSearchPathUsesQuotedIdents(t *testing.T) {
+	spec := &PGRoleSpec{
+		Schema:       "TenantX",
+		MigratorRole: "MigX",
+		RuntimeRole:  "AppX",
+	}
+	stmts, err := PGRoleProvisioningSQL(spec)
+	require.NoError(t, err)
+
+	all := strings.Join(stmts, "\n;\n")
+	assert.Contains(t, all, `ALTER ROLE "MigX" SET search_path = "TenantX"`)
+	assert.Contains(t, all, `ALTER ROLE "AppX" SET search_path = "TenantX"`)
 }
 
 func TestPGRoleProvisioningSQLOmitsEmptyPasswordALTERs(t *testing.T) {
