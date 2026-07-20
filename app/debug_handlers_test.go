@@ -270,11 +270,13 @@ func TestRegisterDebugEndpointsAccessControlWarn(t *testing.T) {
 		name        string
 		allowedIPs  []string
 		bearerToken string
+		endpoints   config.DebugEndpointsConfig
 		wantWarn    bool
 	}{
-		{name: "no_access_control_warns", allowedIPs: nil, bearerToken: "", wantWarn: true},
-		{name: "allowlist_set_no_warn", allowedIPs: []string{"127.0.0.1"}, bearerToken: "", wantWarn: false},
-		{name: "token_set_no_warn", allowedIPs: nil, bearerToken: "x", wantWarn: false},
+		{name: "no_access_control_warns", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: true},
+		{name: "allowlist_set_no_warn", allowedIPs: []string{"127.0.0.1"}, bearerToken: "", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: false},
+		{name: "token_set_no_warn", allowedIPs: nil, bearerToken: "x", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: false},
+		{name: "no_endpoints_no_warn", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{}, wantWarn: false},
 	}
 
 	for _, tt := range tests {
@@ -284,6 +286,7 @@ func TestRegisterDebugEndpointsAccessControlWarn(t *testing.T) {
 				PathPrefix:  "/_debug",
 				AllowedIPs:  tt.allowedIPs,
 				BearerToken: tt.bearerToken,
+				Endpoints:   tt.endpoints,
 			}
 
 			rec := &recLogger{}

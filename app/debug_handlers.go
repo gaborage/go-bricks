@@ -116,7 +116,9 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) {
 		g.Add(http.MethodGet, "/info", d.handleInfo)
 	}
 
-	if len(d.config.AllowedIPs) == 0 && d.config.BearerToken == "" {
+	anyEndpoint := d.config.Endpoints.Goroutines || d.config.Endpoints.GC ||
+		d.config.Endpoints.Health || d.config.Endpoints.Info
+	if anyEndpoint && len(d.config.AllowedIPs) == 0 && d.config.BearerToken == "" {
 		d.logger.Warn().
 			Str("prefix", d.config.PathPrefix).
 			Msg("Debug endpoints registered with NO access control (empty allowedips, no bearertoken): " +
