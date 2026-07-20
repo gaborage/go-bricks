@@ -73,7 +73,7 @@ func TestIPPreGuard(t *testing.T) {
 			t.Parallel()
 			// Create fresh Echo instance for each test to avoid interference
 			e := echo.New()
-			e.Use(ipPreGuardEcho(tt.requestsPerSec))
+			e.Use(ipPreGuardEcho(tt.requestsPerSec, nil))
 
 			e.GET("/test", func(c *echo.Context) error {
 				return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -111,7 +111,7 @@ func TestIPPreGuard(t *testing.T) {
 
 func TestIPPreGuardDifferentIPs(t *testing.T) {
 	e := echo.New()
-	e.Use(ipPreGuardEcho(2)) // Very low limit to trigger easily
+	e.Use(ipPreGuardEcho(2, nil)) // Very low limit to trigger easily
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -151,7 +151,7 @@ func TestIPPreGuardDifferentIPs(t *testing.T) {
 
 func TestIPPreGuardErrorResponse(t *testing.T) {
 	e := echo.New()
-	e.Use(ipPreGuardEcho(1)) // Very restrictive limit
+	e.Use(ipPreGuardEcho(1, nil)) // Very restrictive limit
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -201,7 +201,7 @@ func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
 			return next(c)
 		}
 	})
-	e.Use(ipPreGuardEcho(3))
+	e.Use(ipPreGuardEcho(3, nil))
 
 	e.GET("/test", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -233,4 +233,73 @@ func TestIPPreGuardIntegrationWithOtherMiddleware(t *testing.T) {
 	}
 
 	t.Fatal("Expected to receive a rate limited response")
+}
+
+// TestIPPreGuardLogsRejection verifies a 429 rejection emits one WARN through
+// the provided framework logger, carrying the path and status. This is the
+// audit trail for the observability-off blind spot: ipPreGuardEcho is
+// registered outer to the access logger (server/middleware.go) and never
+// calls next() on reject, so without this WARN the request leaves zero
+// server-side trail. capturingLogger is defined in cors_test.go.
+func TestIPPreGuardLogsRejection(t *testing.T) {
+	capturer := &capturingLogger{}
+	e := echo.New()
+	e.Use(ipPreGuardEcho(1, capturer)) // threshold 1: burst of 2 allowed, then rejected
+
+	e.GET("/test", func(c *echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	ip := "10.0.0.200"
+	rejected := false
+	for range 5 {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+		req.Header.Set(HeaderXRealIP, ip)
+		req.RemoteAddr = ip + portSuffix
+		rec := httptest.NewRecorder()
+
+		e.ServeHTTP(rec, req)
+
+		if rec.Code == http.StatusTooManyRequests {
+			rejected = true
+			break
+		}
+	}
+	require.True(t, rejected, "expected a 429 rejection to trip the WARN log")
+
+	captured := strings.Join(capturer.warns, "\n")
+	assert.Contains(t, captured, "path=/test")
+	assert.Contains(t, captured, "status=429")
+}
+
+// TestIPPreGuardNilLoggerDoesNotPanic verifies the nil-logger path (public
+// IPPreGuard construction, which threads nil through to ipPreGuardEcho) still
+// rejects with 429 and does not panic — guards against a future refactor
+// reintroducing an unconditional l.Warn() call.
+func TestIPPreGuardNilLoggerDoesNotPanic(t *testing.T) {
+	e := echo.New()
+	e.Use(ipPreGuardEcho(1, nil))
+
+	e.GET("/test", func(c *echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	ip := "10.0.0.201"
+	rejected := false
+	assert.NotPanics(t, func() {
+		for range 5 {
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+			req.Header.Set(HeaderXRealIP, ip)
+			req.RemoteAddr = ip + portSuffix
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusTooManyRequests {
+				rejected = true
+				break
+			}
+		}
+	})
+	assert.True(t, rejected, "expected a 429 rejection even with a nil logger")
 }
