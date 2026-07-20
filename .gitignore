@@ -38,6 +38,7 @@
 
 !docs/superpowers/specs/*.md
 !docs/superpowers/plans/*.md
+!docs/design/*.md
 
 !.github/workflows/*.yml
 !.github/workflows/*.yaml
