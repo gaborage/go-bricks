@@ -116,6 +116,14 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) {
 		g.Add(http.MethodGet, "/info", d.handleInfo)
 	}
 
+	if len(d.config.AllowedIPs) == 0 && d.config.BearerToken == "" {
+		d.logger.Warn().
+			Str("prefix", d.config.PathPrefix).
+			Msg("Debug endpoints registered with NO access control (empty allowedips, no bearertoken): " +
+				"goroutine dumps, forced GC, and build info are reachable by anyone who can reach this port. " +
+				"Set debug.allowedips and/or debug.bearertoken.")
+	}
+
 	d.logger.Info().
 		Str("prefix", d.config.PathPrefix).
 		Msgf("Debug endpoints registered (allowed_ips=%d, auth_enabled=%t)",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -243,6 +244,53 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 				assert.False(t, nextCalled)
 				assertAPIErrorStatus(t, err, http.StatusUnauthorized)
 			}
+		})
+	}
+}
+
+// loggedMsgContains reports whether rec recorded any log line whose message
+// contains substr.
+func loggedMsgContains(rec *recLogger, substr string) bool {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, e := range rec.events {
+		if strings.Contains(e.msg, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRegisterDebugEndpointsAccessControlWarn verifies the no-access-control WARN fires only
+// when debug endpoints register with neither an IP allowlist nor a bearer token (the endpoints
+// — goroutine dumps, forced GC, build info — are otherwise reachable by anyone who can reach
+// the port), and stays quiet as soon as either gate is configured.
+func TestRegisterDebugEndpointsAccessControlWarn(t *testing.T) {
+	tests := []struct {
+		name        string
+		allowedIPs  []string
+		bearerToken string
+		wantWarn    bool
+	}{
+		{name: "no_access_control_warns", allowedIPs: nil, bearerToken: "", wantWarn: true},
+		{name: "allowlist_set_no_warn", allowedIPs: []string{"127.0.0.1"}, bearerToken: "", wantWarn: false},
+		{name: "token_set_no_warn", allowedIPs: nil, bearerToken: "x", wantWarn: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			debugConfig := &config.DebugConfig{
+				Enabled:     true,
+				PathPrefix:  "/_debug",
+				AllowedIPs:  tt.allowedIPs,
+				BearerToken: tt.bearerToken,
+			}
+
+			rec := &recLogger{}
+			debugHandlers := NewDebugHandlers(&App{logger: rec}, debugConfig, rec)
+			debugHandlers.RegisterDebugEndpoints(newRecordingRegistrar())
+
+			assert.Equal(t, tt.wantWarn, loggedMsgContains(rec, "NO access control"))
 		})
 	}
 }
