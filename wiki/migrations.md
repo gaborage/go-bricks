@@ -34,7 +34,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E49  | v0.45.0 → v0.49.0 | silent-config | 6 | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool / unit-less duration guard |
 | E50  | v0.49.0 → v0.50.0 | config-break | 4 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate; dev CORS wildcard opt-in; `multitenant.resolver.order` now REQUIRED for `type: composite` (no default — composite deployments fail to start until they declare one) |
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
-| E52  | v0.51.0 → v0.52.0 | compile-break | 2 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
+| E52  | v0.51.0 → v0.52.0 | compile-break | 3 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -663,6 +663,14 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - apply: before upgrading, verify the broker's current arguments match what your `Args` maps now declare — queues/exchanges via the management UI or `rabbitmqctl list_queues name arguments` / `rabbitmqctl list_exchanges name arguments`, bindings via `rabbitmqctl list_bindings source_name destination_name routing_key arguments`; reconcile queues/exchanges by updating your `Args` to match the broker or deleting/recreating the broker object (data-loss risk on delete — plan accordingly for durable queues with messages in flight); for bindings, delete the stale argless binding (unbind requires the SAME args the binding was created with) so only the args-bearing one remains.
 - verify: `make run` (or equivalent staging deploy) against the real broker — startup succeeds with no `406 PRECONDITION_FAILED`; for a queue carrying `x-dead-letter-exchange`, provision the complete dead-letter route first (DLX exchange + DLQ queue + binding), then confirm a nacked-without-requeue message is parked in the DLQ instead of dropped; for bindings that carry args, `rabbitmqctl list_bindings` shows exactly one binding per intended route (no stale argless duplicate)
 - ref: ADR-040 · `messaging/amqp_client.go` (`toTable`) · `messaging/registry.go` (`DeclareInfrastructure`)
+
+### [C52.3] `database.postgresql.schema` now targets migrations · silent-config · when: match
+
+- detect: your config sets `database.postgresql.schema` (YAML `postgresql: { schema: ... }`, env `DATABASE_POSTGRESQL_SCHEMA`, or a tenant secret's `"postgresql": {"schema": ...}`)
+- gate: none — the key previously fed only observability namespaces; it now also appends `-schemas=<schema> -defaultSchema=<schema>` to every Flyway invocation
+- apply: if you set the key expecting schema-targeted migrations, nothing to do — it now works. If you set it for observability labeling while migrations deliberately land in `public`, unset it (or move the label elsewhere) before upgrading
+- verify: run `migrate info` against a staging target and confirm `flyway_schema_history` resolves in the intended schema
+- ref: #716
 
 ---
 

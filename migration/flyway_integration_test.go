@@ -3,6 +3,7 @@
 package migration
 
 import (
+	"database/sql"
 	"os"
 	"testing"
 
@@ -83,4 +84,46 @@ func TestFlywayMigrateChecksumMismatchFailsFast(t *testing.T) {
 	// pending migrations.
 	entries := env.schemaHistoryEntries(t, env.defaultDB)
 	assert.Len(t, entries, 1, "checksum failure must not produce a new flyway_schema_history row")
+}
+
+// TestMigrateForTargetsSchemaDespiteConfPin proves the CLI-passed -schemas /
+// -defaultSchema flags override a shared conf that pins flyway.schemas=public,
+// so a per-tenant schema on the DatabaseConfig wins and nothing lands in public.
+func TestMigrateForTargetsSchemaDespiteConfPin(t *testing.T) {
+	env := newIntegrationEnv(t)
+	env.writeMigration(t, 1, "create_widgets", "CREATE TABLE widgets (id INT);")
+
+	// Pin the WRONG schema in the conf — CLI args must win over it.
+	confBytes, err := os.ReadFile(env.configPath)
+	require.NoError(t, err)
+	confBytes = append(confBytes, []byte("flyway.schemas=public\nflyway.defaultSchema=public\n")...)
+	require.NoError(t, os.WriteFile(env.configPath, confBytes, 0o600))
+
+	dbCfg := env.dbConfigFor(env.defaultDB)
+	dbCfg.PostgreSQL.Schema = "tenant_a"
+
+	admin := env.adminDB(t)
+	ctx, cancel := testCtx(t)
+	defer cancel()
+	_, err = admin.ExecContext(ctx, "CREATE SCHEMA tenant_a")
+	require.NoError(t, err, "pre-create target schema")
+
+	_, err = env.migrator().MigrateFor(ctx, dbCfg, env.flywayConfig(t))
+	require.NoError(t, err)
+
+	regclass := func(qualified string) bool {
+		qctx, qcancel := testCtx(t)
+		defer qcancel()
+		var rel sql.NullString
+		require.NoError(t, admin.QueryRowContext(qctx, "SELECT to_regclass($1)", qualified).Scan(&rel))
+		return rel.Valid
+	}
+
+	assert.True(t, regclass("tenant_a.widgets"), "migration must land in the targeted schema")
+	assert.True(t, regclass("tenant_a.flyway_schema_history"),
+		"schema history must live in the targeted schema, not public")
+	assert.False(t, regclass("public.widgets"),
+		"conf's flyway.schemas=public must be overridden — nothing may land in public")
+	assert.False(t, regclass("public.flyway_schema_history"),
+		"schema history must not appear in public")
 }
