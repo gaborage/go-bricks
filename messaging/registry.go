@@ -714,6 +714,7 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		// Queues declared with x-dead-letter-exchange route the message to that
 		// exchange (retained only if a binding delivers it to a queue); queues
 		// without one drop it (logged above).
+		// DeclareQueueWithDLQ declares that full route in one call.
 		r.nackMessage(delivery, consumer.AutoAck, tlog)
 		return
 	}
