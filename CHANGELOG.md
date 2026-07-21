@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.53.0](https://github.com/gaborage/go-bricks/compare/v0.52.0...v0.53.0) (2026-07-21)
+
+
+### Added
+
+* **messaging:** declarative dead-letter opt-in via DeclareQueueWithDLQ ([#741](https://github.com/gaborage/go-bricks/issues/741)) ([754328d](https://github.com/gaborage/go-bricks/commit/754328dc168bb9c935859e2a61b7864677301f26))
+* **migrate:** add --timeout to go-bricks-migrate to override per-tenant Flyway timeout ([#739](https://github.com/gaborage/go-bricks/issues/739)) ([d55b690](https://github.com/gaborage/go-bricks/commit/d55b69047fb281810cf168427996daef7128cb17))
+* **migration:** optional NameFor hook for suffix-style secret-name grammars ([#734](https://github.com/gaborage/go-bricks/issues/734)) ([9b99252](https://github.com/gaborage/go-bricks/commit/9b992522f15b48a7dd76e315d9db4783b0adf3c6))
+
+
+### Fixed
+
+* **app:** warn when debug endpoints register with no allowlist and no token ([#737](https://github.com/gaborage/go-bricks/issues/737)) ([7418f18](https://github.com/gaborage/go-bricks/commit/7418f18582b4586eafc734ec603b14dbf8cd5f1c))
+* **ci:** apidiff gate fails only on the break a PR introduces (delta vs origin/main) ([#723](https://github.com/gaborage/go-bricks/issues/723)) ([dcfa173](https://github.com/gaborage/go-bricks/commit/dcfa173d54ec5b6cb9b2a6f9777cd290648f1478))
+* **database:** log the DB error type, not the raw driver message (PII/PAN redaction) ([#738](https://github.com/gaborage/go-bricks/issues/738)) ([0bb571e](https://github.com/gaborage/go-bricks/commit/0bb571ebc0d510463faab36e35af20393eb5f1b5))
+* **deps:** update module github.com/gaborage/go-bricks to v0.52.0 ([#725](https://github.com/gaborage/go-bricks/issues/725)) ([37c5302](https://github.com/gaborage/go-bricks/commit/37c530202c06bdb619e017209519286f86927c1f))
+* **deps:** update module github.com/rabbitmq/amqp091-go to v1.13.0 ([#749](https://github.com/gaborage/go-bricks/issues/749)) ([b9ea8c5](https://github.com/gaborage/go-bricks/commit/b9ea8c5417d45631026975839493fcab0ad28586))
+* **messaging:** run lazy infra setup on a bounded budget detached from the request deadline ([#740](https://github.com/gaborage/go-bricks/issues/740)) ([af1aebb](https://github.com/gaborage/go-bricks/commit/af1aebbf09ff050b517f2f9c589c974d8f4b9128))
+* **migration:** pass -schemas/-defaultSchema when the target DatabaseConfig carries a PostgreSQL schema ([#730](https://github.com/gaborage/go-bricks/issues/730)) ([ae4b6ae](https://github.com/gaborage/go-bricks/commit/ae4b6aecbcee642e50a2678b3c062fc297a0c197))
+* **migration:** serialize per-tenant provisioning and make CREATE ROLE idempotent under races ([#745](https://github.com/gaborage/go-bricks/issues/745)) ([475f49f](https://github.com/gaborage/go-bricks/commit/475f49fab77e83464490d0359ca391c02b1d5791))
+* **migration:** set provisioned roles' default search_path to the tenant schema ([#735](https://github.com/gaborage/go-bricks/issues/735)) ([938d11a](https://github.com/gaborage/go-bricks/commit/938d11a44b0d6f5e15547b6700ac8b6f3d6db660))
+* **scheduler:** emit action-log summary on job panic path so 100% sampling holds ([#736](https://github.com/gaborage/go-bricks/issues/736)) ([4fc83fa](https://github.com/gaborage/go-bricks/commit/4fc83fa61e91266b7fe93c3c3231c443e36d4781))
+* **server:** log tenant/IP-preguard rejections so denied requests are auditable ([#731](https://github.com/gaborage/go-bricks/issues/731)) ([3152635](https://github.com/gaborage/go-bricks/commit/3152635cfa98cd1da6e40f36798cf866b5f57a03))
+
+
+### Changed
+
+* **cache:** extract generic internal/resourcepool and rewire CacheManager onto it ([#748](https://github.com/gaborage/go-bricks/issues/748)) ([6db7683](https://github.com/gaborage/go-bricks/commit/6db76833c2763c887dbea97ff12c62fa791f88c7))
+* **database:** rewire DbManager onto internal/resourcepool (closes F22-db) ([#750](https://github.com/gaborage/go-bricks/issues/750)) ([e6dacaa](https://github.com/gaborage/go-bricks/commit/e6dacaa69c7c58e9a388532c7cc6a90356cc3dd2))
+* **messaging:** rewire the publisher pool onto internal/resourcepool (closes F22-msg) ([#751](https://github.com/gaborage/go-bricks/issues/751)) ([d76de47](https://github.com/gaborage/go-bricks/commit/d76de47781a68cd78f33c2c7d7b12a67a46a1636))
+* **migration:** cut parseFlywayJSON cognitive complexity below the gate ([#747](https://github.com/gaborage/go-bricks/issues/747)) ([9fc26cb](https://github.com/gaborage/go-bricks/commit/9fc26cb3b9279fde085a0b14c0cc16d14eab885c))
+* **server:** precompute the per-type tag-binding plan at route registration ([#746](https://github.com/gaborage/go-bricks/issues/746)) ([25f748c](https://github.com/gaborage/go-bricks/commit/25f748cca47799f10accc1719f63661348fbbca2))
+
 ## [0.52.0](https://github.com/gaborage/go-bricks/compare/v0.51.0...v0.52.0) (2026-07-19)
 
 
