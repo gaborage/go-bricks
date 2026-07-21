@@ -236,7 +236,7 @@ jobs:
       # distribution server (Maven Central stopped publishing the
       # self-contained platform CLI tarballs mid-11.x; see the Install step).
       # renovate: datasource=github-releases depName=flyway/flyway
-      FLYWAY_VERSION: 12.8.1
+      FLYWAY_VERSION: 13.0.0
       FLYWAY_SHA256: 706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
 
     steps:
