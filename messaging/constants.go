@@ -51,11 +51,14 @@ const (
 	// enough not to spin the CPU.
 	readinessCheckInterval = 100 * time.Millisecond
 
-	// infraSetupTimeout bounds one consumer-infrastructure setup pass
-	// (client create + readiness wait + declare loop). Independent of any
-	// caller deadline: lazy setup triggered by a ~5s HTTP request must not
-	// abort mid-declare-loop and roll back otherwise-successful setup.
-	// Must exceed readyTimeoutDuration (the wait phase) with headroom for
-	// the declares themselves.
+	// infraSetupTimeout is the best-effort budget for one consumer-infrastructure
+	// setup pass (client create + readiness wait + declare loop), independent of
+	// any caller deadline so lazy setup triggered by a ~5s HTTP request can't
+	// abort mid-declare-loop and roll back otherwise-successful setup. It is a
+	// SOFT bound, not a hard wall-clock cap: it cancels the readiness wait and
+	// fail-fasts between declares, but amqp091 declare RPCs are not context-aware
+	// on the wire, so a single already-issued declare that blocks can outlast it
+	// (and hold consMu past expiry — the F17 lock-hold tradeoff). Must exceed
+	// readyTimeoutDuration (the wait phase) with headroom for the declares.
 	infraSetupTimeout = 45 * time.Second
 )

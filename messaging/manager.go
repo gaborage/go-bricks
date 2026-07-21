@@ -209,10 +209,11 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		}
 	}
 
-	// Setup runs on its own bounded budget, detached from the caller's
+	// Setup runs on its own best-effort budget, detached from the caller's
 	// deadline: a lazy-start request's ~5s deadline expiring mid-declare
 	// would abort and roll back an otherwise-successful setup (values —
-	// trace/tenant — are preserved by WithoutCancel).
+	// trace/tenant — are preserved by WithoutCancel). The budget is soft —
+	// see infraSetupTimeout: amqp091 declares aren't ctx-cancelable on the wire.
 	setupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), infraSetupTimeout)
 	defer cancel()
 
