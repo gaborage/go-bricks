@@ -1029,3 +1029,77 @@ func TestPoolConcurrentEvictWhileLeasedRace(t *testing.T) {
 
 	require.NoError(t, p.Close())
 }
+
+// TestPoolSlowCloseDoesNotBlockConcurrentGet pins the audit's M3 property: a slow Closer on an
+// evicted entry runs OUTSIDE the pool lock, so it cannot head-of-line-block a concurrent GetOrCreate
+// on a DIFFERENT key. This latency guarantee moved from the managers into the pool with the ADR-032
+// extraction; a regression putting close back under the lock would pass -race but fail this timing pin.
+func TestPoolSlowCloseDoesNotBlockConcurrentGet(t *testing.T) {
+	const slowClose = 200 * time.Millisecond
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) } // idempotent: safe from any path
+	closeStarted := make(chan struct{})
+	closer := func(r *fakeResource) error {
+		if r.id == "slow" {
+			close(closeStarted)
+			<-release // hold the close open until the test releases it
+		}
+		return nil
+	}
+	p := New(1, 0, closer) // capacity 1: creating a new key evicts the previous
+	ctx := context.Background()
+
+	// Seed the slow-close victim and release its lease so it is evictable.
+	_, rel1, err := p.GetOrCreate(ctx, keyOne, func(context.Context) (*fakeResource, error) {
+		return newFakeResource("slow"), nil
+	})
+	require.NoError(t, err)
+	rel1()
+
+	// Evicting the victim (a Get on another key) runs its slow close in the background.
+	evictDone := make(chan struct{})
+	go func() {
+		_, rel2, gErr := p.GetOrCreate(ctx, keyTwo, func(context.Context) (*fakeResource, error) {
+			return newFakeResource("k2"), nil
+		})
+		assert.NoError(t, gErr)
+		rel2()
+		close(evictDone)
+	}()
+
+	// Wait (bounded) for the victim's slow close to begin — it holds NO pool lock.
+	select {
+	case <-closeStarted:
+	case <-time.After(2 * time.Second):
+		unblock()
+		t.Fatal("timed out waiting for the evicted victim's slow close to start")
+	}
+
+	// Run the third-key Get in a goroutine so a REGRESSION (close under the lock) surfaces as a
+	// bounded-time FAILURE rather than hanging until the package test timeout.
+	got := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		_, rel3, gErr := p.GetOrCreate(ctx, keyThree, func(context.Context) (*fakeResource, error) {
+			return newFakeResource("k3"), nil
+		})
+		if gErr == nil {
+			rel3()
+		}
+		got <- time.Since(start)
+	}()
+
+	select {
+	case elapsed := <-got:
+		assert.Less(t, elapsed, slowClose/2,
+			"a slow close on an evicted entry must not block Get on another key (close runs outside the lock)")
+	case <-time.After(slowClose / 2):
+		unblock() // let the slow close finish so the goroutines drain
+		t.Fatal("Get on a third key was blocked by the evicted victim's slow close (M3 regression: close under the lock)")
+	}
+
+	unblock()
+	<-evictDone
+	require.NoError(t, p.Close())
+}
