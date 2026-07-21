@@ -50,4 +50,12 @@ const (
 	// wait loop. Tight enough to react quickly to broker connect; loose
 	// enough not to spin the CPU.
 	readinessCheckInterval = 100 * time.Millisecond
+
+	// infraSetupTimeout bounds one consumer-infrastructure setup pass
+	// (client create + readiness wait + declare loop). Independent of any
+	// caller deadline: lazy setup triggered by a ~5s HTTP request must not
+	// abort mid-declare-loop and roll back otherwise-successful setup.
+	// Must exceed readyTimeoutDuration (the wait phase) with headroom for
+	// the declares themselves.
+	infraSetupTimeout = 45 * time.Second
 )
