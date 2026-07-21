@@ -73,6 +73,26 @@ func keyedConnector() func(context.Context, string) (*fakeResource, error) {
 	}
 }
 
+// slowConnector returns a create function that sleeps before producing a fixed-id resource,
+// widening the singleflight window so concurrent followers reliably pile up on one create.
+func slowConnector(created *atomic.Int32, id string, delay time.Duration) func(context.Context) (*fakeResource, error) {
+	return func(context.Context) (*fakeResource, error) {
+		created.Add(1)
+		time.Sleep(delay)
+		return newFakeResource(id), nil
+	}
+}
+
+// uniqueConnector returns a create function giving every resource a unique id (via the atomic
+// counter's return value, which is race-free unlike a separate Load), so a close tracker can
+// detect any double-close under concurrency.
+func uniqueConnector(created *atomic.Int32) func(context.Context) (*fakeResource, error) {
+	return func(context.Context) (*fakeResource, error) {
+		id := created.Add(1)
+		return newFakeResource(fmt.Sprintf("res-%d", id)), nil
+	}
+}
+
 // TestPoolGetOrCreateCreatesOnceAndReuses pins lazy creation and reuse of a single entry.
 func TestPoolGetOrCreateCreatesOnceAndReuses(t *testing.T) {
 	tr := newCloseTracker()
@@ -789,4 +809,125 @@ func TestPoolConcurrentGetRacesRemove(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestPoolStartCleanupAfterCloseIsNoOp pins the contract behind the StartCleanup/Close leak fix:
+// once the pool is closed, StartCleanup must not launch a cleanup goroutine (Close would never
+// stop it). Both the lock-free top guard and the under-lock re-check enforce this; removing both
+// fails this test. idleTTL and interval are positive so `closed` is the only thing that can
+// prevent the loop from starting.
+func TestPoolStartCleanupAfterCloseIsNoOp(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(5, 50*time.Millisecond, tr.closer)
+	require.NoError(t, p.Close())
+
+	p.StartCleanup(10 * time.Millisecond)
+
+	p.cleanupMu.Lock()
+	defer p.cleanupMu.Unlock()
+	assert.Nil(t, p.cleanupStop, "StartCleanup on a closed pool must not start a cleanup loop")
+}
+
+// TestPoolConcurrentLeasesAllCountedBeforeClose pins that EVERY concurrent follower's lease is
+// counted (claimOrAcquire's non-seed refs++), not just the seed claim. N callers race on one key
+// (singleflight -> one create, N leases); Remove then detaches the entry while all N are held, so
+// the deferred close must wait for the FINAL release. If the follower refs++ were dropped, refs
+// would sit at 1 and the first release would close the resource while N-1 leases still hold it.
+func TestPoolConcurrentLeasesAllCountedBeforeClose(t *testing.T) {
+	tr := newCloseTracker()
+	var creations atomic.Int32
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	create := slowConnector(&creations, "shared", 20*time.Millisecond) // widen the singleflight window
+
+	const workers = 8
+	rels := make(chan ReleaseFunc, workers)
+	var v0 *fakeResource
+	var v0mu sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			v, rel, err := p.GetOrCreate(context.Background(), keyOne, create)
+			if err != nil {
+				t.Errorf("GetOrCreate failed: %v", err)
+				return
+			}
+			v0mu.Lock()
+			v0 = v
+			v0mu.Unlock()
+			rels <- rel
+		}()
+	}
+	wg.Wait()
+	close(rels)
+	require.Equal(t, int32(1), creations.Load(), "singleflight must collapse to one create")
+
+	// Detach the entry while all N leases are outstanding: Remove must defer the close.
+	if _, shouldClose := p.Remove(keyOne); shouldClose {
+		t.Fatal("Remove must defer close while leases are held")
+	}
+
+	got := make([]ReleaseFunc, 0, workers)
+	for r := range rels {
+		got = append(got, r)
+	}
+	require.Len(t, got, workers)
+
+	// Release all but the last; the resource must stay open the entire time — which only holds if
+	// every follower lease was counted, not just the seed.
+	for i := 0; i < len(got)-1; i++ {
+		got[i]()
+		assert.Falsef(t, tr.wasClosed(v0.id),
+			"resource closed after %d of %d releases — a follower lease was uncounted", i+1, workers)
+	}
+	got[len(got)-1]()
+	assert.True(t, tr.wasClosed(v0.id), "final release must close the detached resource")
+	assert.Equal(t, 1, tr.count(v0.id), "the deferred close must run exactly once")
+}
+
+// TestPoolConcurrentEvictWhileLeasedRace drives eviction and lease-release on the same entries
+// from different goroutines with maxSize>0, exercising the #606 deferred-close path under -race
+// (the single-threaded TestPoolEvictWhileLeasedDefersClose cannot surface a data race between a
+// concurrent evict marking detached/closed and a concurrent releaseEntry reading them). Unique
+// per-resource ids let the tracker catch any double-close.
+func TestPoolConcurrentEvictWhileLeasedRace(t *testing.T) {
+	tr := newCloseTracker()
+	var creations atomic.Int32
+	p := New(2, 0, tr.closer) // small capacity forces constant eviction across 8 keys
+	ctx := context.Background()
+
+	create := uniqueConnector(&creations)
+
+	const workers = 16
+	const ops = 60
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func(w int) {
+			defer wg.Done()
+			for j := 0; j < ops; j++ {
+				key := fmt.Sprintf("key-%d", (w+j)%8)
+				_, rel, err := p.GetOrCreate(ctx, key, create)
+				if err != nil {
+					assert.Contains(t, err.Error(), "pool churn", "unexpected GetOrCreate error")
+					continue
+				}
+				time.Sleep(time.Millisecond) // hold the lease across other goroutines' evictions
+				rel()
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	// No resource may have been closed more than once during the concurrent eviction phase.
+	tr.mu.Lock()
+	for id, n := range tr.closed {
+		assert.LessOrEqualf(t, n, 1, "resource %s closed %d times (double-close under eviction race)", id, n)
+	}
+	tr.mu.Unlock()
+
+	require.NoError(t, p.Close())
 }

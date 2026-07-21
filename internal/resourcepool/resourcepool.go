@@ -1,6 +1,6 @@
 // Package resourcepool implements the ADR-032 keyed pool of leasable,
-// refcounted, LRU-capped, idle-evicted resources shared by the cache,
-// database, and messaging managers.
+// refcounted, LRU-capped, idle-evicted resources. CacheManager is the first
+// consumer; the database and messaging managers adopt it in follow-up PRs.
 //
 // A pool hands each borrower a lease (via GetOrCreate) plus an idempotent
 // ReleaseFunc. A resource evicted (LRU, idle, or explicit Remove) while a
@@ -357,6 +357,13 @@ func (p *Pool[V]) StartCleanup(interval time.Duration) {
 
 	p.cleanupMu.Lock()
 	defer p.cleanupMu.Unlock()
+	// Re-check closed under cleanupMu. A concurrent Close may have flipped closed and run its
+	// (no-op, because cleanupStop was still nil) StopCleanup between the lock-free guard above
+	// and our acquiring cleanupMu. Without this re-check we would start a cleanupLoop that Close
+	// will never stop — a goroutine leaked forever on a closed pool.
+	if p.closed.Load() {
+		return
+	}
 	if p.cleanupStop != nil {
 		return // already running
 	}
