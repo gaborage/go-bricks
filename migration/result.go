@@ -146,36 +146,62 @@ func parseFlywayJSON(output string) (Result, error) {
 		if start < skipBelow {
 			continue
 		}
-		dec := json.NewDecoder(strings.NewReader(trimmed[start:]))
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			if firstDecodeErr == nil && !errors.Is(err, io.EOF) {
-				firstDecodeErr = fmt.Errorf("migration: parse Flyway JSON: %w", err)
-			}
-			continue
+		env, consumed, decErr := tryFlywayCandidate(trimmed, start)
+		if consumed > 0 {
+			// Advance past a successfully decoded value so its nested braces
+			// never become candidates. Left at 0 on a decode failure, since
+			// InputOffset is not meaningful then and those braces must stay
+			// candidates.
+			skipBelow = consumed
 		}
-		// Only after a successful decode — InputOffset is not meaningful after
-		// a failure, and braces inside malformed text must stay candidates.
-		skipBelow = start + int(dec.InputOffset())
-		if trimmed[start] != '{' {
-			continue // arrays are consumed to guard their contents, never promoted
-		}
-		var env flywayJSONEnvelope
-		if err := json.Unmarshal(raw, &env); err != nil {
+		if decErr != nil {
 			if firstDecodeErr == nil {
-				firstDecodeErr = fmt.Errorf("migration: parse Flyway JSON: %w", err)
+				firstDecodeErr = decErr
 			}
 			continue
 		}
-		if !env.looksLikeFlyway() {
-			continue
+		if env != nil {
+			return resultFromEnvelope(env), nil
 		}
-		return resultFromEnvelope(&env), nil
 	}
 	if firstDecodeErr != nil {
 		return Result{}, firstDecodeErr
 	}
 	return Result{}, errEmptyFlywayOutput
+}
+
+// tryFlywayCandidate decodes the single JSON value starting at trimmed[start] and
+// classifies it for parseFlywayJSON. Returns:
+//   - env != nil        when the value is a well-formed Flyway envelope (a match);
+//   - consumed > 0      the offset just past a SUCCESSFULLY decoded value (the caller
+//     advances skipBelow to it); 0 when the initial decode failed, so the braces
+//     inside malformed text stay candidates;
+//   - decErr != nil     a recordable decode/unmarshal failure. A trailing io.EOF from
+//     the streaming decoder is not an error worth recording, so it maps to (nil, 0, nil).
+//
+// Non-object values (arrays) and objects that decode but aren't a Flyway envelope
+// return (nil, consumed, nil): consumed to guard their nested contents, never promoted.
+func tryFlywayCandidate(trimmed string, start int) (env *flywayJSONEnvelope, consumed int, decErr error) {
+	dec := json.NewDecoder(strings.NewReader(trimmed[start:]))
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, 0, nil
+		}
+		return nil, 0, fmt.Errorf("migration: parse Flyway JSON: %w", err)
+	}
+	consumed = start + int(dec.InputOffset())
+	if trimmed[start] != '{' {
+		return nil, consumed, nil // arrays are consumed to guard their contents, never promoted
+	}
+	var parsed flywayJSONEnvelope
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, consumed, fmt.Errorf("migration: parse Flyway JSON: %w", err)
+	}
+	if !parsed.looksLikeFlyway() {
+		return nil, consumed, nil
+	}
+	return &parsed, consumed, nil
 }
 
 // valueStarts returns the index of every '{' and '[' byte in s, in the order
