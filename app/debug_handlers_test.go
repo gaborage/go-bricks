@@ -261,10 +261,23 @@ func loggedMsgContains(rec *recLogger, substr string) bool {
 	return false
 }
 
+// loggedStr returns the value of the given Str field on the first recorded log
+// event whose message contains substr, or "" if none.
+func loggedStr(rec *recLogger, substr, field string) string {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, e := range rec.events {
+		if strings.Contains(e.msg, substr) {
+			return e.str[field]
+		}
+	}
+	return ""
+}
+
 // TestRegisterDebugEndpointsAccessControlWarn verifies the no-access-control WARN fires only
-// when debug endpoints register with neither an IP allowlist nor a bearer token (the endpoints
-// — goroutine dumps, forced GC, build info — are otherwise reachable by anyone who can reach
-// the port), and stays quiet as soon as either gate is configured.
+// when at least one debug endpoint is registered AND neither an IP allowlist nor a bearer token
+// is configured, and that the warning's "exposed" field lists exactly the enabled endpoints so
+// it cannot over-state the exposure.
 func TestRegisterDebugEndpointsAccessControlWarn(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -272,8 +285,10 @@ func TestRegisterDebugEndpointsAccessControlWarn(t *testing.T) {
 		bearerToken string
 		endpoints   config.DebugEndpointsConfig
 		wantWarn    bool
+		wantExposed string
 	}{
-		{name: "no_access_control_warns", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: true},
+		{name: "no_access_control_warns", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: true, wantExposed: "build info"},
+		{name: "lists_only_enabled_endpoints", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{Goroutines: true, Info: true}, wantWarn: true, wantExposed: "goroutine dumps, build info"},
 		{name: "allowlist_set_no_warn", allowedIPs: []string{"127.0.0.1"}, bearerToken: "", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: false},
 		{name: "token_set_no_warn", allowedIPs: nil, bearerToken: "x", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: false},
 		{name: "no_endpoints_no_warn", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{}, wantWarn: false},
@@ -294,6 +309,9 @@ func TestRegisterDebugEndpointsAccessControlWarn(t *testing.T) {
 			debugHandlers.RegisterDebugEndpoints(newRecordingRegistrar())
 
 			assert.Equal(t, tt.wantWarn, loggedMsgContains(rec, "NO access control"))
+			if tt.wantWarn {
+				assert.Equal(t, tt.wantExposed, loggedStr(rec, "NO access control", "exposed"))
+			}
 		})
 	}
 }
