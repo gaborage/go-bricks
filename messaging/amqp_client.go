@@ -875,10 +875,10 @@ func (c *AMQPClientImpl) Close() error {
 
 	// Close stays non-blocking: it signals the reconnection goroutine to stop
 	// (via close(c.done)) but does not wait for it. Waiting here would let an
-	// in-flight, uncancellable dial stall callers — and Manager invokes Close
-	// while holding pubMu/consMu (shutdown, LRU eviction, idle cleanup), so a
-	// blocking Close could wedge the publish path. The goroutine exits on its
-	// own at its next select; reconnectDone lets tests confirm that exit.
+	// in-flight, uncancellable dial stall callers — and Close runs on the
+	// shutdown, LRU-eviction, and idle-cleanup paths, so a blocking Close could
+	// wedge the publish path. The goroutine exits on its own at its next
+	// select; reconnectDone lets tests confirm that exit.
 	c.log.Info().Msg("AMQP client closed")
 	return err
 }
