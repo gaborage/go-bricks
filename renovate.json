@@ -35,6 +35,17 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?\\s+run: go install \\S+@(?<currentValue>\\S+)"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "Track the CI-pinned Flyway CLI version. Flyway 12.x tarballs ship only from Redgate's server (Maven Central stopped at 11.8.2), but flyway/flyway still tags GitHub releases (flyway-X.Y.Z), so github-releases tracks the version number; the SHA256 gate + test fixtures make the resulting bump PR fail CI until a maintainer re-pins the checksum and fixtures — that failing PR is the intended alert.",
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+FLYWAY_VERSION: (?<currentValue>\\S+)"
+      ],
+      "extractVersionTemplate": "^flyway-(?<version>.*)$"
     }
   ]
 }

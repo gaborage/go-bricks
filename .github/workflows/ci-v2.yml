@@ -230,6 +230,14 @@ jobs:
     # Gates on `code` so integration coverage is part of every merged report.
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
+    env:
+      # Pinned to match the JSON-output fixture captures in
+      # migration/testdata/flyway. Flyway 12.x ships only from Redgate's own
+      # distribution server (Maven Central stopped publishing the
+      # self-contained platform CLI tarballs mid-11.x; see the Install step).
+      # renovate: datasource=github-releases depName=flyway/flyway
+      FLYWAY_VERSION: 12.8.1
+      FLYWAY_SHA256: 706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
 
     steps:
       - uses: actions/checkout@v7
@@ -256,22 +264,15 @@ jobs:
 
       - name: Cache Flyway CLI
         id: cache-flyway
-        # Pinned to 12.8.1 to match the JSON-output fixture captures in
-        # migration/testdata/flyway. The SHA256 is part of the cache key so
-        # a version/digest bump invalidates the cached tarball automatically.
-        # NOTE: Flyway stopped publishing the self-contained platform CLI tarballs
-        # to Maven Central mid-11.x; 12.x ships only from Redgate's own distribution
-        # server (see the Install step). The SHA256 pin keeps the new host integrity-checked.
+        # The SHA256 is part of the cache key so a version/digest bump
+        # invalidates the cached tarball automatically.
         uses: actions/cache@v6
         with:
-          path: /tmp/flyway-12.8.1
-          key: flyway-12.8.1-706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
+          path: /tmp/flyway-${{ env.FLYWAY_VERSION }}
+          key: flyway-${{ env.FLYWAY_VERSION }}-${{ env.FLYWAY_SHA256 }}
 
       - name: Install Flyway CLI
         if: steps.cache-flyway.outputs.cache-hit != 'true'
-        env:
-          FLYWAY_VERSION: 12.8.1
-          FLYWAY_SHA256: 706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
         run: |
           set -euo pipefail
           # Flyway 12.x is distributed only from Redgate's server — Maven Central
@@ -291,7 +292,7 @@ jobs:
 
       - name: Wire Flyway onto PATH
         run: |
-          sudo ln -sf /tmp/flyway-12.8.1/flyway /usr/local/bin/flyway
+          sudo ln -sf "/tmp/flyway-${FLYWAY_VERSION}/flyway" /usr/local/bin/flyway
           flyway --version | head -3
 
       - name: Run integration tests
