@@ -305,8 +305,14 @@ func TestBuildBaseConfig(t *testing.T) {
 	assert.Equal(t, "flyway", cfg.FlywayPath)
 	assert.Equal(t, "x.conf", cfg.ConfigPath)
 	assert.Equal(t, "m", cfg.MigrationPath)
-	// Timeout left zero so per-vendor default wins inside MigrateAll.
+	// A zero (unset) --timeout flag still yields a zero Timeout, so mergeConfigs
+	// keeps the per-vendor default inside MigrateAll.
 	assert.Zero(t, cfg.Timeout)
+}
+
+func TestBuildBaseConfigTimeoutFlagSetsOverride(t *testing.T) {
+	cfg := buildBaseConfig(&CommonFlags{Timeout: 30 * time.Minute})
+	assert.Equal(t, 30*time.Minute, cfg.Timeout)
 }
 
 func TestBuildBaseConfigPopulatesAudit(t *testing.T) {

@@ -293,14 +293,15 @@ func validateConfigPath(path string) error {
 }
 
 // buildBaseConfig translates flag values into a *migration.Config with only
-// user-supplied fields filled. Vendor-specific defaults (including Timeout)
-// are applied per tenant inside MigrateAll, so leaving Timeout zero here lets
-// each vendor's recommended timeout win unless the user overrides it.
+// user-supplied fields filled. Vendor-specific defaults are applied per
+// tenant inside MigrateAll, so leaving Timeout zero here lets each vendor's
+// recommended timeout win; a non-zero --timeout overrides it via mergeConfigs.
 func buildBaseConfig(flags *CommonFlags) *migration.Config {
 	return &migration.Config{
 		FlywayPath:    flags.FlywayPath,
 		ConfigPath:    flags.FlywayConfig,
 		MigrationPath: flags.MigrationsDir,
+		Timeout:       flags.Timeout, // 0 -> vendor default wins in mergeConfigs
 		Audit: migration.AuditContext{
 			Principal:     flags.AppliedBy,
 			GitCommitSHA:  flags.GitSHA,
