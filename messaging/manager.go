@@ -209,8 +209,16 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		}
 	}
 
+	// Setup runs on its own best-effort budget, detached from the caller's
+	// deadline: a lazy-start request's ~5s deadline expiring mid-declare
+	// would abort and roll back an otherwise-successful setup (values —
+	// trace/tenant — are preserved by WithoutCancel). The budget is soft —
+	// see infraSetupTimeout: amqp091 declares aren't ctx-cancelable on the wire.
+	setupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), infraSetupTimeout)
+	defer cancel()
+
 	// Create AMQP client for consumers (error is already well-formatted from createAMQPClient)
-	client, err := m.createAMQPClient(ctx, key)
+	client, err := m.createAMQPClient(setupCtx, key)
 	if err != nil {
 		return err
 	}
@@ -222,7 +230,7 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		return fmt.Errorf("failed to replay messaging declarations: %w", err)
 	}
 
-	if err := registry.DeclareInfrastructure(ctx); err != nil {
+	if err := registry.DeclareInfrastructure(setupCtx); err != nil {
 		m.closeClientOnRollback(client, key, "declare_infrastructure")
 		return fmt.Errorf("failed to declare messaging infrastructure: %w", err)
 	}
@@ -233,7 +241,7 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	// supervisor goroutines would stop every consumer when the first request ends, and
 	// they would never restart. context.WithoutCancel severs the request's cancellation
 	// and deadline while preserving values (trace/tenant), so consumer lifetime is
-	// governed solely by StopConsumers/Close. (Setup calls above keep the caller deadline.)
+	// governed solely by StopConsumers/Close.
 	consumerCtx := multitenant.SetTenant(context.WithoutCancel(ctx), key)
 	if err := registry.StartConsumers(consumerCtx); err != nil {
 		m.closeClientOnRollback(client, key, "start_consumers")

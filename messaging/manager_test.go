@@ -26,14 +26,15 @@ func (s *stubMessagingSource) BrokerURL(_ context.Context, key string) (string, 
 }
 
 type stubAMQPClient struct {
-	closed        bool
-	closedMu      sync.Mutex
-	lastPublish   PublishOptions
-	consumers     int
-	consumeCtx    context.Context //nolint:containedctx // test-only: captures the ctx the supervisor subscribes with, to assert its lifecycle
-	closeCallback func()
-	closeHook     func() // optional: invoked at the start of Close (e.g. to simulate a slow close)
-	closeErr      error
+	closed         bool
+	closedMu       sync.Mutex
+	lastPublish    PublishOptions
+	consumers      int
+	consumeCtx     context.Context //nolint:containedctx // test-only: captures the ctx the supervisor subscribes with, to assert its lifecycle
+	closeCallback  func()
+	closeHook      func() // optional: invoked at the start of Close (e.g. to simulate a slow close)
+	closeErr       error
+	declaredQueues []string
 }
 
 func (s *stubAMQPClient) Publish(ctx context.Context, destination string, data []byte) error {
@@ -81,9 +82,23 @@ func (s *stubAMQPClient) lastConsumeCtx() context.Context {
 	return s.consumeCtx
 }
 
-func (s *stubAMQPClient) DeclareQueue(context.Context, *QueueDeclaration) error       { return nil }
+func (s *stubAMQPClient) DeclareQueue(_ context.Context, queue *QueueDeclaration) error {
+	s.closedMu.Lock()
+	defer s.closedMu.Unlock()
+	s.declaredQueues = append(s.declaredQueues, queue.Name)
+	return nil
+}
+
 func (s *stubAMQPClient) DeclareExchange(context.Context, *ExchangeDeclaration) error { return nil }
 func (s *stubAMQPClient) BindQueue(context.Context, *BindingDeclaration) error        { return nil }
+
+// declaredQueueNames returns the queue names DeclareQueue was called with,
+// read under the same lock they were written with.
+func (s *stubAMQPClient) declaredQueueNames() []string {
+	s.closedMu.Lock()
+	defer s.closedMu.Unlock()
+	return append([]string(nil), s.declaredQueues...)
+}
 
 func (s *stubAMQPClient) Close() error {
 	s.closedMu.Lock()
@@ -1186,4 +1201,32 @@ func TestNewMessagingManagerDefaultFactoryForwardsReconnectOptions(t *testing.T)
 	assert.Equal(t, 90*time.Second, client.reconnectMaxDelay)
 	assert.Equal(t, 3*time.Second, client.reInitDelay)
 	assert.Equal(t, 11*time.Second, client.resendDelay)
+}
+
+// TestEnsureConsumersSucceedsWithExpiredCallerContext pins that lazy consumer
+// setup runs on its own bounded budget, detached from the caller's deadline:
+// an already-expired caller context (e.g. an HTTP request whose ~5s deadline
+// passed before the first tenant touch) must not abort the declare loop.
+func TestEnsureConsumersSucceedsWithExpiredCallerContext(t *testing.T) {
+	log := logger.New("error", false)
+	client := &stubAMQPClient{}
+	factory := func(string, logger.Logger) AMQPClient { return client }
+	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+	defer func() { _ = manager.Close() }()
+
+	decls := NewDeclarations()
+	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
+
+	// Caller context is already expired BEFORE EnsureConsumers is even called —
+	// simulates a lazy-start request whose ~5s deadline passed mid-setup.
+	callerCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, manager.EnsureConsumers(callerCtx, testTenantID, decls))
+
+	assert.Contains(t, client.declaredQueueNames(), testQueue)
+	assert.Equal(t, 1, client.consumerCount())
 }

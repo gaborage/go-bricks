@@ -745,13 +745,10 @@ func (c *AMQPClientImpl) Consume(ctx context.Context, destination string) (<-cha
 
 // ConsumeFromQueue consumes messages from a queue with specific options.
 func (c *AMQPClientImpl) ConsumeFromQueue(_ context.Context, options ConsumeOptions) (<-chan amqp.Delivery, error) {
-	c.m.RLock()
-	if !c.isReady {
-		c.m.RUnlock()
-		return nil, errNotConnected
+	channel, err := c.readyChannel()
+	if err != nil {
+		return nil, err
 	}
-	channel := c.channel
-	c.m.RUnlock()
 
 	// Set QoS for fair dispatch with configurable prefetch (v0.17+)
 	prefetchCount := options.PrefetchCount
@@ -781,6 +778,18 @@ func toTable(args map[string]any) amqp.Table {
 	return amqp.Table(args)
 }
 
+// readyChannel returns the current channel under RLock, or errNotConnected
+// when the client is not ready. Callers must not retain the channel across
+// reconnects.
+func (c *AMQPClientImpl) readyChannel() (amqpChannel, error) {
+	c.m.RLock()
+	defer c.m.RUnlock()
+	if !c.isReady {
+		return nil, errNotConnected
+	}
+	return c.channel, nil
+}
+
 // DeclareQueue declares a queue from the given declaration.
 // ctx is honored as a pre-flight check: amqp091 declare/bind operations are not
 // context-aware on the wire, so a canceled context fails fast before the call.
@@ -791,15 +800,12 @@ func (c *AMQPClientImpl) DeclareQueue(ctx context.Context, queue *QueueDeclarati
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.m.RLock()
-	if !c.isReady {
-		c.m.RUnlock()
-		return errNotConnected
+	channel, err := c.readyChannel()
+	if err != nil {
+		return err
 	}
-	channel := c.channel
-	c.m.RUnlock()
 
-	_, err := channel.QueueDeclare(queue.Name, queue.Durable, queue.AutoDelete, queue.Exclusive, queue.NoWait, toTable(queue.Args))
+	_, err = channel.QueueDeclare(queue.Name, queue.Durable, queue.AutoDelete, queue.Exclusive, queue.NoWait, toTable(queue.Args))
 	return err
 }
 
@@ -811,13 +817,10 @@ func (c *AMQPClientImpl) DeclareExchange(ctx context.Context, exchange *Exchange
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.m.RLock()
-	if !c.isReady {
-		c.m.RUnlock()
-		return errNotConnected
+	channel, err := c.readyChannel()
+	if err != nil {
+		return err
 	}
-	channel := c.channel
-	c.m.RUnlock()
 
 	return channel.ExchangeDeclare(exchange.Name, exchange.Type, exchange.Durable, exchange.AutoDelete, exchange.Internal, exchange.NoWait, toTable(exchange.Args))
 }
@@ -830,13 +833,10 @@ func (c *AMQPClientImpl) BindQueue(ctx context.Context, binding *BindingDeclarat
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.m.RLock()
-	if !c.isReady {
-		c.m.RUnlock()
-		return errNotConnected
+	channel, err := c.readyChannel()
+	if err != nil {
+		return err
 	}
-	channel := c.channel
-	c.m.RUnlock()
 
 	return channel.QueueBind(binding.Queue, binding.RoutingKey, binding.Exchange, binding.NoWait, toTable(binding.Args))
 }
@@ -1257,13 +1257,10 @@ func StartConsumeSpan(ctx context.Context, delivery *amqp.Delivery, queueName st
 
 // unsafePublish publishes a message without confirmation handling.
 func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptions, data []byte) error {
-	c.m.RLock()
-	if !c.isReady {
-		c.m.RUnlock()
-		return errNotConnected
+	channel, err := c.readyChannel()
+	if err != nil {
+		return err
 	}
-	channel := c.channel
-	c.m.RUnlock()
 
 	publishing := preparePublishing(ctx, options, data)
 
