@@ -350,9 +350,10 @@ func TestTrackDBOperationDisabledWarnStillEscalates(t *testing.T) {
 }
 
 // TestTrackDBOperationDisabledErrorStillEscalates verifies the disabled-ERROR path:
-// when the error level is disabled, no fields are built but event.Msg is still called
-// with the error message and the error is attached — proving severity escalation is
-// preserved on a dropped ERROR line.
+// when the error level is disabled, no fields are built (including error_type, which is
+// only built on the enabled path) and event.Err stays nil (redaction), but event.Msg is
+// still called with the error message — proving severity escalation is preserved on a
+// dropped ERROR line.
 func TestTrackDBOperationDisabledErrorStillEscalates(t *testing.T) {
 	ctx := logger.WithDBCounter(context.Background())
 	recLogger := newRecordingLoggerWithDisabled(levelError)
@@ -374,16 +375,19 @@ func TestTrackDBOperationDisabledErrorStillEscalates(t *testing.T) {
 	if event.Level != levelError {
 		t.Fatalf("expected error level event, got %s", event.Level)
 	}
-	// The error is attached via .Err(err) before the Enabled() short-circuit; the
-	// fields map itself must remain empty (no vendor/duration/query built).
+	// error_type is only built on the ENABLED path (right before the vendor/duration/query
+	// chain); the fields map itself must remain empty on a disabled event (allocation win).
 	if len(event.Fields) != 0 {
 		t.Fatalf("expected no fields built when error level disabled, got %v", event.Fields)
 	}
-	if !errors.Is(event.Err, failure) {
-		t.Fatalf("expected error to be attached on disabled ERROR, got %v", event.Err)
+	if event.Err != nil {
+		t.Fatalf("expected the raw driver error to stay unattached (redacted), got %v", event.Err)
 	}
 	if event.Msg != msgDBOperationError {
 		t.Fatalf("expected error message on disabled ERROR, got %q", event.Msg)
+	}
+	if strings.Contains(event.Msg, failure.Error()) {
+		t.Fatalf("log message must not leak the raw driver error, got %q", event.Msg)
 	}
 }
 
@@ -566,12 +570,64 @@ func TestTrackDBOperationLogsErrors(t *testing.T) {
 	if event.Level != levelError {
 		t.Fatalf("expected error level, got %s", event.Level)
 	}
-	if !errors.Is(event.Err, failure) {
-		t.Fatalf("expected error to be recorded")
+	if event.Err != nil {
+		t.Fatalf("expected the raw driver error to stay unattached (redacted), got %v", event.Err)
+	}
+	if event.Fields["error_type"] != dbErrorClass(failure) {
+		t.Fatalf("expected error_type field to hold the driver error's Go type, got %v", event.Fields["error_type"])
+	}
+	assertNoFieldsLeak(t, event.Fields, failure.Error())
+	if event.Msg != msgDBOperationError {
+		t.Fatalf("unexpected message: %q", event.Msg)
+	}
+}
+
+// assertNoFieldsLeak fails if any field value stringifies to something containing one of
+// needles — used to prove the raw driver error / embedded row data never reaches a log field.
+func assertNoFieldsLeak(t *testing.T, fields map[string]any, needles ...string) {
+	t.Helper()
+	for key, value := range fields {
+		str := fmt.Sprintf("%v", value)
+		for _, needle := range needles {
+			assert.NotContainsf(t, str, needle, "field %s leaked %q: %q", key, needle, str)
+		}
+	}
+}
+
+// TestTrackDBOperationRedactsDriverErrorMessage guards against raw driver errors
+// (which can embed offending row data, e.g. a PAN in a unique-constraint
+// violation) leaking to log backends unfiltered via the ERROR branch's event.Err.
+func TestTrackDBOperationRedactsDriverErrorMessage(t *testing.T) {
+	ctx := logger.WithDBCounter(context.Background())
+	recLogger := newRecordingLogger()
+	settings := Settings{slowQueryThreshold: time.Second}
+
+	sensitiveValue := "4111" + strings.Repeat("1", 12) // built at runtime so no PAN-like literal sits in test source
+	rawMessage := "duplicate key value violates unique constraint: Key (pan)=(" + sensitiveValue + ") already exists"
+	driverErr := errors.New(rawMessage)
+
+	start := time.Now().Add(-10 * time.Millisecond)
+	TrackDBOperation(ctx, &Context{Logger: recLogger, Vendor: "postgresql", Settings: settings}, selectOne, nil, start, 0, driverErr)
+
+	events := recLogger.events()
+	if len(events) != 1 {
+		t.Fatalf(singleEventExpected, len(events))
+	}
+	event := events[0]
+	if event.Level != levelError {
+		t.Fatalf("expected error level, got %s", event.Level)
 	}
 	if event.Msg != msgDBOperationError {
 		t.Fatalf("unexpected message: %q", event.Msg)
 	}
+
+	assert.Nil(t, event.Err, "the raw driver error must not be attached via .Err()")
+	assert.NotContains(t, event.Msg, sensitiveValue, "log message must not leak the sensitive value")
+	assert.NotContains(t, event.Msg, rawMessage, "log message must not leak the raw driver error")
+
+	assertNoFieldsLeak(t, event.Fields, sensitiveValue, rawMessage)
+
+	assert.Equal(t, dbErrorClass(driverErr), event.Fields["error_type"], "error_type must hold the error's Go type")
 }
 
 func TestTrackDBOperationNoLoggerOrContext(t *testing.T) {

@@ -140,13 +140,14 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	log := tc.Logger.WithContext(ctx)
 	var event logger.LogEvent
 	var message string
+	var driverErr error
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		event, message = log.Debug(), msgDBOperationNoRows
 	case errors.Is(err, sql.ErrTxDone):
 		event, message = log.Debug(), msgDBTxFinalized
 	case err != nil:
-		event, message = log.Error().Err(err), msgDBOperationError
+		event, message, driverErr = log.Error(), msgDBOperationError, err
 	case elapsed > tc.Settings.SlowQueryThreshold():
 		event, message = log.Warn(), fmt.Sprintf("Slow database operation detected (%s)", elapsed)
 	default:
@@ -185,6 +186,8 @@ func TrackDBOperation(ctx context.Context, tc *Context, query string, args []any
 	// path did (full "***"). That divergence is by design for the typed-setter path and unreachable
 	// for these two keys under the default config; do not add vendor/query to the sensitive list to
 	// avoid relying on full masking here.
+	event = appendDBErrorType(event, driverErr)
+
 	event = event.
 		Str("vendor", tc.Vendor).
 		Int64("duration_ms", elapsed.Milliseconds()).
@@ -343,6 +346,22 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 // so span error attribution never carries driver-embedded row data.
 func dbErrorClass(err error) string {
 	return fmt.Sprintf("%T", err)
+}
+
+// appendDBErrorType appends an "error_type" field to event when driverErr is non-nil,
+// recording the error's Go type without its message. Returns event unchanged when
+// driverErr is nil. Extracted from TrackDBOperation to keep it under the gocyclo limit.
+//
+// SECURITY: Do not use .Err(driverErr) here. Postgres/Oracle driver errors embed the
+// offending row data (a unique-constraint violation echoes the colliding value, which may
+// be a PAN or other sensitive field). The log-path SensitiveDataFilter masks by FIELD NAME
+// only and cannot scrub a message body, so record the error's Go type instead — same posture
+// as the span path (see dbErrorClass / createDBSpan).
+func appendDBErrorType(event logger.LogEvent, driverErr error) logger.LogEvent {
+	if driverErr == nil {
+		return event
+	}
+	return event.Str("error_type", dbErrorClass(driverErr))
 }
 
 // extractDBOperation determines the database operation name from the given SQL query.
