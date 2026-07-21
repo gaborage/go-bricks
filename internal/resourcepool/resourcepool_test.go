@@ -73,6 +73,14 @@ func keyedConnector() func(context.Context, string) (*fakeResource, error) {
 	}
 }
 
+// keyedCreate binds keyedConnector to a single key, producing the func(context.Context) shape
+// GetOrCreate expects.
+func keyedCreate(key string) func(context.Context) (*fakeResource, error) {
+	return func(c context.Context) (*fakeResource, error) {
+		return keyedConnector()(c, key)
+	}
+}
+
 // slowConnector returns a create function that sleeps before producing a fixed-id resource,
 // widening the singleflight window so concurrent followers reliably pile up on one create.
 func slowConnector(created *atomic.Int32, id string, delay time.Duration) func(context.Context) (*fakeResource, error) {
@@ -814,6 +822,29 @@ func TestPoolThreadSafety(t *testing.T) {
 	assert.GreaterOrEqual(t, st.TotalCreated, st.Size)
 }
 
+// hammerGetRemove runs ops rounds of GetOrCreate + release, periodically Removing the key, for the
+// concurrent churn stress test. Extracted into a helper so the test body stays under the
+// cognitive-complexity gate.
+func hammerGetRemove(t *testing.T, p *Pool[*fakeResource], tr *closeTracker, ops int) {
+	t.Helper()
+	ctx := context.Background()
+	for j := 0; j < ops; j++ {
+		key := fmt.Sprintf("key-%d", j%6)
+		_, rel, err := p.GetOrCreate(ctx, key, keyedCreate(key))
+		if err != nil {
+			// Only the bounded-retry churn error is tolerated here.
+			assert.Contains(t, err.Error(), "pool churn", "unexpected GetOrCreate error")
+			continue
+		}
+		rel()
+		if j%8 == 0 {
+			if v, shouldClose := p.Remove(key); shouldClose {
+				_ = tr.closer(v)
+			}
+		}
+	}
+}
+
 // TestPoolConcurrentGetRacesRemove stress-tests concurrent GetOrCreate + Remove under -race.
 // The bounded acquire retry can, under this pathological churn, exhaust its attempts when a
 // peeked entry is removed before it can be claimed — a legitimate, documented outcome (mirrors
@@ -822,32 +853,14 @@ func TestPoolConcurrentGetRacesRemove(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(0, 0, tr.closer)
 	defer p.Close()
-	ctx := context.Background()
 
 	const workers = 16
-	const ops = 40
 	var wg sync.WaitGroup
 	wg.Add(workers)
 	for w := 0; w < workers; w++ {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < ops; j++ {
-				key := fmt.Sprintf("key-%d", j%6)
-				_, rel, err := p.GetOrCreate(ctx, key, func(c context.Context) (*fakeResource, error) {
-					return keyedConnector()(c, key)
-				})
-				if err != nil {
-					// Only the bounded-retry churn error is tolerated here.
-					assert.Contains(t, err.Error(), "pool churn", "unexpected GetOrCreate error")
-					continue
-				}
-				rel()
-				if j%8 == 0 {
-					if v, shouldClose := p.Remove(key); shouldClose {
-						_ = tr.closer(v)
-					}
-				}
-			}
+			hammerGetRemove(t, p, tr, 40)
 		}()
 	}
 	wg.Wait()
