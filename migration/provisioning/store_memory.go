@@ -2,6 +2,7 @@ package provisioning
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -52,7 +53,9 @@ func (m *MemoryStore) Get(_ context.Context, jobID string) (*Job, error) {
 // Upsert inserts job at StatePending if no record exists, or returns the
 // existing record unchanged. The CreatedAt and UpdatedAt fields on the
 // returned record are populated by the store. Rejects nil jobs and jobs
-// missing ID or TenantID via ErrInvalidJob.
+// missing ID or TenantID via ErrInvalidJob. Returns ErrTenantBusy if another
+// non-terminal job already exists for job.TenantID (mirrors the partial
+// unique index enforced by PostgresStore).
 func (m *MemoryStore) Upsert(_ context.Context, job *Job) (*Job, error) {
 	if err := validateJobForUpsert(job); err != nil {
 		return nil, err
@@ -61,6 +64,11 @@ func (m *MemoryStore) Upsert(_ context.Context, job *Job) (*Job, error) {
 	defer m.mu.Unlock()
 	if existing, ok := m.jobs[job.ID]; ok {
 		return cloneJob(existing), nil
+	}
+	for _, existing := range m.jobs {
+		if existing.TenantID == job.TenantID && !existing.State.IsTerminal() {
+			return nil, fmt.Errorf("%w: tenant %s", ErrTenantBusy, job.TenantID)
+		}
 	}
 	now := m.timestamp()
 	stored := cloneJob(job)

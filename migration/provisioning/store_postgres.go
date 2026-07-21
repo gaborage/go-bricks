@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/internal/sqlid"
 )
 
@@ -40,10 +41,22 @@ const PostgresStateTableDDL = `CREATE TABLE IF NOT EXISTS %s (
 // PostgresStateTableIndexes are the supporting indexes for tenant- and
 // state-scoped lookups. The dispatcher (out of scope for #379) will scan
 // rows by (state) to find work; ad-hoc operator queries usually filter by
-// tenant. Both are idempotent.
+// tenant. All are idempotent.
+//
+// The third index enforces per-tenant mutual exclusion: at most one
+// non-terminal job per tenant_id. Without it, a retry job for tenant X can
+// run concurrently with a still-in-flight cleanup job for X — the retry's
+// CREATE SCHEMA IF NOT EXISTS no-ops over the still-present schema and
+// advances to ready, then the cleanup's DROP SCHEMA ... CASCADE completes,
+// leaving a ready tenant with a dropped schema. Terminal states (ready,
+// failed) are excluded so re-provisioning after completion is allowed.
+// The ('ready','failed') predicate MUST stay in sync with State.IsTerminal()
+// (which MemoryStore.Upsert uses for the same exclusion); adding a terminal
+// state means updating both, or the two stores diverge.
 var PostgresStateTableIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS idx_%[2]s_tenant ON %[1]s (tenant_id)`,
 	`CREATE INDEX IF NOT EXISTS idx_%[2]s_state  ON %[1]s (state)`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_%[2]s_active ON %[1]s (tenant_id) WHERE state NOT IN ('ready','failed')`,
 }
 
 // maxPGTableSegment caps the per-segment length of a provisioning table
@@ -203,6 +216,9 @@ func (s *PostgresStore) Upsert(ctx context.Context, job *Job) (*Job, error) {
 	if _, err := s.db.ExecContext(ctx, insert, // NOSONAR S2077: insert built from validated-identifier template; all 7 values via $N
 		job.ID, job.TenantID, string(StatePending), 0, "", metadataJSON, now,
 	); err != nil {
+		if database.IsUniqueViolation(err) { // 23505 on idx_..._active — another active job exists for this tenant
+			return nil, fmt.Errorf("%w: tenant %s", ErrTenantBusy, job.TenantID)
+		}
 		return nil, fmt.Errorf("provisioning postgres: upsert insert: %w", err)
 	}
 	return s.Get(ctx, job.ID)

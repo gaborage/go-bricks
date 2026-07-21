@@ -119,11 +119,10 @@ func TestPGRoleProvisioningSQLContainsExpectedStatements(t *testing.T) {
 
 	all := strings.Join(stmts, "\n;\n")
 
-	// Role creation in a DO block (idempotent).
+	// Role creation in a DO block (idempotent, race-safe via EXCEPTION).
 	assert.Contains(t, all, `CREATE ROLE "migrator"`)
 	assert.Contains(t, all, `CREATE ROLE "tenant_a_app"`)
-	assert.Contains(t, all, `pg_catalog.pg_roles WHERE rolname = 'migrator'`)
-	assert.Contains(t, all, `pg_catalog.pg_roles WHERE rolname = 'tenant_a_app'`)
+	assert.Contains(t, all, "EXCEPTION WHEN duplicate_object")
 
 	// Attribute lockdown on both roles.
 	assert.Contains(t, all, `ALTER ROLE "migrator" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`)
@@ -180,6 +179,20 @@ func TestPGRoleProvisioningSQLOmitsEmptyPasswordALTERs(t *testing.T) {
 	all := strings.Join(stmts, "\n;\n")
 	assert.NotContains(t, all, "PASSWORD '",
 		"empty passwords must not emit ALTER ROLE ... PASSWORD statements")
+}
+
+// TestBuildRoleCreateAndLockdownSwallowsDuplicate pins the race-safe
+// CREATE ROLE form: an EXCEPTION handler that swallows both duplicate_object
+// (42710, role already committed) and unique_violation (23505, the loser of a
+// concurrent race colliding on pg_authid's rolname index) instead of a
+// check-then-create pg_roles lookup, which races when two provisioners create
+// the same role concurrently.
+func TestBuildRoleCreateAndLockdownSwallowsDuplicate(t *testing.T) {
+	stmts := buildRoleCreateAndLockdown(`"tenant_a_app"`)
+	all := strings.Join(stmts, "\n;\n")
+
+	assert.Contains(t, all, "EXCEPTION WHEN duplicate_object OR unique_violation")
+	assert.NotContains(t, all, "IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles")
 }
 
 func TestQuotePGIdent(t *testing.T) {
