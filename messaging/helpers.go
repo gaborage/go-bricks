@@ -192,7 +192,14 @@ func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *Que
 		Args:    make(map[string]any),
 	})
 	d.RegisterQueue(NewQueue(parking))
-	d.RegisterBinding(NewBinding(parking, dlx, ""))
+	// Register the parking binding once per DLX. Exchange/queue registration is
+	// map-backed (idempotent by name), but Bindings is a slice: several primary
+	// queues sharing one DLX (via DeadLetterSpec.Exchange/ParkingQueue) would
+	// otherwise append duplicate parking->dlx bindings, making Hash() depend on
+	// the queue count and issuing redundant BindQueue calls.
+	if !d.hasParkingBinding(parking, dlx) {
+		d.RegisterBinding(NewBinding(parking, dlx, ""))
+	}
 
 	queue := NewQueue(name)
 	queue.Args["x-dead-letter-exchange"] = dlx
@@ -201,6 +208,18 @@ func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *Que
 	}
 	d.RegisterQueue(queue)
 	return queue
+}
+
+// hasParkingBinding reports whether a parking->dlx binding (routing key "") is
+// already registered, so DeclareQueueWithDLQ does not append a duplicate when
+// several primary queues share one dead-letter exchange.
+func (d *Declarations) hasParkingBinding(parking, dlx string) bool {
+	for _, b := range d.Bindings {
+		if b.Queue == parking && b.Exchange == dlx && b.RoutingKey == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // DeclarePublisher creates and registers a publisher in one step.

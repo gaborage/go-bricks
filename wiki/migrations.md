@@ -673,7 +673,8 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - ref: #716
 
 ### [C52.4] DeclareQueueWithDLQ declarative dead-letter opt-in · additive-optional
-- note: `decls.DeclareQueueWithDLQ(name, spec)` declares the fanout DLX + parking queue + binding and sets `x-dead-letter-exchange` (and optionally `x-dead-letter-routing-key`) on the primary queue in one call — failed deliveries park in `<queue>.dlq` instead of dropping. Raw `Args["x-dead-letter-exchange"]` (see "Dead-Lettering" in wiki/messaging.md) remains valid for custom topologies. Purely additive; existing hand-rolled DLX declarations are untouched.
+
+- note: `decls.DeclareQueueWithDLQ(name, spec)` declares the fanout DLX + parking queue + binding and sets `x-dead-letter-exchange` (and optionally `x-dead-letter-routing-key`) on the primary queue in one call — failed deliveries park in the default `<queue>.dlq` (or the configured parking queue) instead of dropping. Raw `Args["x-dead-letter-exchange"]` (see "Dead-Lettering" in wiki/messaging.md) remains valid for custom topologies. Purely additive; existing hand-rolled DLX declarations are untouched.
 - ref: #721 · messaging/helpers.go
 
 ---

@@ -651,6 +651,27 @@ func TestDeclareQueueWithDLQArgsSurviveRegistration(t *testing.T) {
 	assert.False(t, injected, "keys added to the returned declaration after registration must not leak into the registered copy")
 }
 
+func TestDeclareQueueWithDLQSharedDLXSingleBinding(t *testing.T) {
+	decls := NewDeclarations()
+	spec := &DeadLetterSpec{Exchange: "shared.dlx", ParkingQueue: "shared.dlq"}
+
+	decls.DeclareQueueWithDLQ("orders.queue", spec)
+	decls.DeclareQueueWithDLQ("payments.queue", spec)
+
+	// Two primary queues share one DLX/parking queue: the parking binding must
+	// be registered exactly once, not once per primary queue.
+	parkingBindings := 0
+	for _, b := range decls.Bindings {
+		if b.Queue == "shared.dlq" && b.Exchange == "shared.dlx" {
+			parkingBindings++
+		}
+	}
+	assert.Equal(t, 1, parkingBindings, "sharing a DLX across queues must not append duplicate parking bindings")
+
+	assert.Equal(t, "shared.dlx", decls.Queues["orders.queue"].Args["x-dead-letter-exchange"])
+	assert.Equal(t, "shared.dlx", decls.Queues["payments.queue"].Args["x-dead-letter-exchange"])
+}
+
 // Integration tests
 
 func TestHelpersIntegrationWorkflow(t *testing.T) {
