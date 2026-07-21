@@ -2,6 +2,8 @@
 package commands
 
 import (
+	"time"
+
 	"github.com/spf13/cobra"
 
 	"github.com/gaborage/go-bricks/migration"
@@ -39,6 +41,7 @@ type CommonFlags struct {
 	Tenant          string
 	JSON            bool
 	Verbose         bool
+	Timeout         time.Duration
 }
 
 // NewRootCommand constructs the cobra root with shared flags wired up.
@@ -99,6 +102,8 @@ func addCommonFlags(cmd *cobra.Command) *CommonFlags {
 	cmd.Flags().StringVar(&flags.Tenant, "tenant", "", "Run for a single tenant ID instead of listing all")
 	cmd.Flags().BoolVar(&flags.JSON, "json", false, "Emit NDJSON progress records (for CI/CD parsing)")
 	cmd.Flags().BoolVarP(&flags.Verbose, "verbose", "v", false, "Verbose logging")
+	cmd.Flags().DurationVar(&flags.Timeout, "timeout", 0,
+		"Per-tenant Flyway timeout (e.g. 30m); 0 or a negative value uses the vendor default (5m). Raise for large index builds/backfills.")
 
 	return flags
 }
