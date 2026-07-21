@@ -2,7 +2,10 @@ package messaging
 
 import "runtime"
 
-const exchangeTypeTopic = "topic"
+const (
+	exchangeTypeTopic  = "topic"
+	exchangeTypeFanout = "fanout"
+)
 
 // NewTopicExchange creates a topic exchange with production-safe defaults.
 // Topic exchanges route messages based on routing key patterns (e.g., "order.*", "user.#").
@@ -141,6 +144,82 @@ func (d *Declarations) DeclareBinding(queue, exchange, routingKey string) *Bindi
 	binding := NewBinding(queue, exchange, routingKey)
 	d.RegisterBinding(binding)
 	return binding
+}
+
+// DeadLetterSpec configures the declarative dead-letter opt-in for a queue.
+// Zero-value fields get derived defaults; see DeclareQueueWithDLQ.
+type DeadLetterSpec struct {
+	// Exchange is the dead-letter exchange name. Empty derives "<queue>.dlx".
+	// The exchange is declared as a durable fanout so the parking queue
+	// receives every dead-lettered message regardless of routing key.
+	Exchange string
+
+	// ParkingQueue is the queue that collects dead-lettered messages.
+	// Empty derives "<queue>.dlq". Declared with the production defaults of
+	// NewQueue (durable, non-exclusive).
+	ParkingQueue string
+
+	// RoutingKey, when non-empty, is set as x-dead-letter-routing-key so
+	// dead-lettered messages are re-published with it instead of their
+	// original routing key. Rarely needed with the fanout DLX default.
+	RoutingKey string
+}
+
+// DeclareQueueWithDLQ declares a queue whose failed deliveries are parked
+// instead of dropped: the framework's nack-without-requeue on handler error
+// (see wiki/messaging.md) dead-letters into the spec's exchange, and the
+// parking queue bound to it retains the message with the x-death header.
+// Lowers to ordinary exchange/queue/binding declarations plus queue Args, so
+// per-tenant replay, validation, and topology hashing behave as if declared
+// by hand. Returns the primary queue declaration.
+func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *QueueDeclaration {
+	if dl == nil {
+		dl = &DeadLetterSpec{}
+	}
+	dlx := dl.Exchange
+	if dlx == "" {
+		dlx = name + ".dlx"
+	}
+	parking := dl.ParkingQueue
+	if parking == "" {
+		parking = name + ".dlq"
+	}
+
+	d.RegisterExchange(&ExchangeDeclaration{
+		Name:    dlx,
+		Type:    exchangeTypeFanout,
+		Durable: true,
+		Args:    make(map[string]any),
+	})
+	d.RegisterQueue(NewQueue(parking))
+	// Register the parking binding once per DLX. Exchange/queue registration is
+	// map-backed (idempotent by name), but Bindings is a slice: several primary
+	// queues sharing one DLX (via DeadLetterSpec.Exchange/ParkingQueue) would
+	// otherwise append duplicate parking->dlx bindings, making Hash() depend on
+	// the queue count and issuing redundant BindQueue calls.
+	if !d.hasParkingBinding(parking, dlx) {
+		d.RegisterBinding(NewBinding(parking, dlx, ""))
+	}
+
+	queue := NewQueue(name)
+	queue.Args["x-dead-letter-exchange"] = dlx
+	if dl.RoutingKey != "" {
+		queue.Args["x-dead-letter-routing-key"] = dl.RoutingKey
+	}
+	d.RegisterQueue(queue)
+	return queue
+}
+
+// hasParkingBinding reports whether a parking->dlx binding (routing key "") is
+// already registered, so DeclareQueueWithDLQ does not append a duplicate when
+// several primary queues share one dead-letter exchange.
+func (d *Declarations) hasParkingBinding(parking, dlx string) bool {
+	for _, b := range d.Bindings {
+		if b.Queue == parking && b.Exchange == dlx && b.RoutingKey == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // DeclarePublisher creates and registers a publisher in one step.

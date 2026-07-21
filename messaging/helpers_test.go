@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // Test constructor functions
@@ -549,6 +550,126 @@ func TestDeclarationsConsumer(t *testing.T) {
 		assert.NotNil(t, c2)
 		assert.Len(t, decls.Consumers(), 2)
 	})
+}
+
+func TestDeclareQueueWithDLQDefaults(t *testing.T) {
+	decls := NewDeclarations()
+
+	queue := decls.DeclareQueueWithDLQ("orders.queue", nil)
+
+	assert.NotNil(t, queue)
+
+	dlx, ok := decls.Exchanges["orders.queue.dlx"]
+	assert.True(t, ok)
+	assert.Equal(t, exchangeTypeFanout, dlx.Type)
+	assert.True(t, dlx.Durable)
+
+	dlq, ok := decls.Queues["orders.queue.dlq"]
+	assert.True(t, ok)
+	assert.True(t, dlq.Durable)
+
+	require.Len(t, decls.Bindings, 1)
+	binding := decls.Bindings[0]
+	assert.Equal(t, "orders.queue.dlq", binding.Queue)
+	assert.Equal(t, "orders.queue.dlx", binding.Exchange)
+	assert.Equal(t, "", binding.RoutingKey)
+
+	primary, ok := decls.Queues["orders.queue"]
+	assert.True(t, ok)
+	assert.Equal(t, "orders.queue.dlx", primary.Args["x-dead-letter-exchange"])
+	_, hasRoutingKey := primary.Args["x-dead-letter-routing-key"]
+	assert.False(t, hasRoutingKey)
+}
+
+func TestDeclareQueueWithDLQExplicitNames(t *testing.T) {
+	decls := NewDeclarations()
+
+	decls.DeclareQueueWithDLQ("orders.queue", &DeadLetterSpec{
+		Exchange:     "custom.dlx",
+		ParkingQueue: "custom.parking",
+		RoutingKey:   "dead",
+	})
+
+	_, ok := decls.Exchanges["custom.dlx"]
+	assert.True(t, ok)
+	_, ok = decls.Queues["custom.parking"]
+	assert.True(t, ok)
+
+	require.Len(t, decls.Bindings, 1)
+	binding := decls.Bindings[0]
+	assert.Equal(t, "custom.parking", binding.Queue)
+	assert.Equal(t, "custom.dlx", binding.Exchange)
+
+	primary := decls.Queues["orders.queue"]
+	assert.Equal(t, "custom.dlx", primary.Args["x-dead-letter-exchange"])
+	assert.Equal(t, "dead", primary.Args["x-dead-letter-routing-key"])
+}
+
+func TestDeclareQueueWithDLQValidatesAndHashes(t *testing.T) {
+	build := func() *Declarations {
+		decls := NewDeclarations()
+		queue := decls.DeclareQueueWithDLQ("orders.queue", nil)
+		decls.DeclareConsumer(&ConsumerOptions{
+			Queue:    queue.Name,
+			Consumer: testConsumer,
+			Handler:  &mockHandler{},
+		}, nil)
+		return decls
+	}
+
+	decls1 := build()
+	decls2 := build()
+
+	assert.NoError(t, decls1.Validate())
+	assert.Equal(t, decls1.Hash(), decls2.Hash())
+
+	withoutDLQ := NewDeclarations()
+	withoutDLQ.DeclareConsumer(&ConsumerOptions{
+		Queue:    withoutDLQ.DeclareQueue("orders.queue").Name,
+		Consumer: testConsumer,
+		Handler:  &mockHandler{},
+	}, nil)
+	assert.NotEqual(t, decls1.Hash(), withoutDLQ.Hash())
+}
+
+func TestDeclareQueueWithDLQArgsSurviveRegistration(t *testing.T) {
+	decls := NewDeclarations()
+
+	returned := decls.DeclareQueueWithDLQ("orders.queue", nil)
+
+	// RegisterQueue deep-copies Args at registration, so mutating the returned
+	// declaration afterwards must NOT reach the registered copy. This is why the
+	// helper sets Args before RegisterQueue rather than on the returned pointer.
+	returned.Args["x-dead-letter-exchange"] = "tampered"
+	returned.Args["injected"] = "value"
+
+	registered := decls.Queues["orders.queue"]
+	require.NotNil(t, registered)
+	assert.Equal(t, "orders.queue.dlx", registered.Args["x-dead-letter-exchange"],
+		"registered copy must be isolated from post-registration mutation of the returned declaration")
+	_, injected := registered.Args["injected"]
+	assert.False(t, injected, "keys added to the returned declaration after registration must not leak into the registered copy")
+}
+
+func TestDeclareQueueWithDLQSharedDLXSingleBinding(t *testing.T) {
+	decls := NewDeclarations()
+	spec := &DeadLetterSpec{Exchange: "shared.dlx", ParkingQueue: "shared.dlq"}
+
+	decls.DeclareQueueWithDLQ("orders.queue", spec)
+	decls.DeclareQueueWithDLQ("payments.queue", spec)
+
+	// Two primary queues share one DLX/parking queue: the parking binding must
+	// be registered exactly once, not once per primary queue.
+	parkingBindings := 0
+	for _, b := range decls.Bindings {
+		if b.Queue == "shared.dlq" && b.Exchange == "shared.dlx" {
+			parkingBindings++
+		}
+	}
+	assert.Equal(t, 1, parkingBindings, "sharing a DLX across queues must not append duplicate parking bindings")
+
+	assert.Equal(t, "shared.dlx", decls.Queues["orders.queue"].Args["x-dead-letter-exchange"])
+	assert.Equal(t, "shared.dlx", decls.Queues["payments.queue"].Args["x-dead-letter-exchange"])
 }
 
 // Integration tests

@@ -4,11 +4,14 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
@@ -265,6 +268,78 @@ func TestAMQPClientDeclareQueueArgsDeadLetter(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for dead-lettered message in DLQ — Args did not reach the broker or topology is wrong")
 	}
+}
+
+// TestDeclarativeDLQParksFailedDelivery is the declarative-helper sibling of
+// TestAMQPClientDeclareQueueArgsDeadLetter above: instead of hand-declaring
+// the DLX/DLQ/binding and setting Args manually, it exercises
+// DeclareQueueWithDLQ's lowered topology end-to-end through a real Registry
+// (ReplayToRegistry -> DeclareInfrastructure -> StartConsumers) against a
+// real broker. A consumer handler that always errors triggers the same
+// nack-without-requeue path the framework's registry sends on handler
+// failure; the message must be parked in the derived "<queue>.dlq" with an
+// x-death header, not dropped.
+func TestDeclarativeDLQParksFailedDelivery(t *testing.T) {
+	brokerURL := setupTestBroker(t)
+	log := logger.New("disabled", true)
+
+	client := NewAMQPClient(brokerURL, log)
+	defer client.Close()
+
+	require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
+
+	ctx := t.Context()
+
+	decls := NewDeclarations()
+	exchange := decls.DeclareTopicExchange(uniqueName(t, "dlqtest-exchange"))
+	workQueueName := uniqueName(t, "dlqtest-queue")
+	queue := decls.DeclareQueueWithDLQ(workQueueName, nil)
+	decls.DeclareBinding(queue.Name, exchange.Name, "dlqtest.route")
+
+	failingHandler := &mockHandler{}
+	failingHandler.On("Handle", mock.Anything, mock.Anything).Return(errors.New("simulated handler failure"))
+
+	decls.DeclareConsumer(&ConsumerOptions{
+		Queue:     queue.Name,
+		Consumer:  uniqueName(t, "dlqtest-consumer"),
+		EventType: "DLQTest",
+		Handler:   failingHandler,
+		Workers:   1,
+	}, nil)
+
+	require.NoError(t, decls.Validate())
+
+	reg := NewRegistry(client, log)
+	require.NoError(t, decls.ReplayToRegistry(reg))
+	require.NoError(t, reg.DeclareInfrastructure(ctx))
+	require.NoError(t, reg.StartConsumers(ctx))
+	defer reg.StopConsumers()
+
+	dlqName := workQueueName + ".dlq"
+	dlqDeliveries, err := client.Consume(ctx, dlqName)
+	require.NoError(t, err)
+
+	testMsg := []byte("declarative dead-letter")
+	require.NoError(t, client.PublishToExchange(ctx, PublishOptions{
+		Exchange:   exchange.Name,
+		RoutingKey: "dlqtest.route",
+	}, testMsg))
+
+	select {
+	case delivery := <-dlqDeliveries:
+		assert.Equal(t, testMsg, delivery.Body, "parked message must retain its original body")
+		xDeath, ok := delivery.Headers["x-death"].([]any)
+		require.True(t, ok, "x-death header must be present on the parked message")
+		require.NotEmpty(t, xDeath)
+		firstEntry, ok := xDeath[0].(amqp.Table)
+		require.True(t, ok, "x-death entry must decode to an amqp.Table")
+		assert.Equal(t, workQueueName, firstEntry["queue"], "x-death must record the primary queue")
+		require.NoError(t, delivery.Ack(false))
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timeout waiting for parked message in DLQ — DeclareQueueWithDLQ topology did not park the failed delivery")
+	}
+
+	failingHandler.AssertExpectations(t)
 }
 
 // TestAMQPClientDeclareQueueArgsQuorum pins the "cannot attach to

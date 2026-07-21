@@ -109,14 +109,37 @@ func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 
 **Breaking Change (v2.X):** Previous behavior auto-requeued errors (infinite retry risk). New behavior drops failed messages with rich logging. Review handler error handling and set up monitoring.
 
-### User-Managed Dead-Lettering
+### Dead-Lettering
 
 Handler errors and panics nack without requeue. Without a dead-letter exchange
 configured on the queue, that message is dropped (logged, but gone). Setting
-`Args["x-dead-letter-exchange"]` on the queue tells RabbitMQ to park the
-message on that exchange instead — the framework does not auto-provision any
-DLX/DLQ infrastructure; you declare and bind it yourself, same as any other
-exchange/queue.
+`x-dead-letter-exchange` on the queue tells RabbitMQ to park the message on
+that exchange instead of dropping it.
+
+**`DeclareQueueWithDLQ` — the one-call form:**
+
+```go
+queue := decls.DeclareQueueWithDLQ("orders.queue", nil)
+```
+
+This declares a durable fanout exchange (`orders.queue.dlx`), a parking queue
+(`orders.queue.dlq`) bound to it, and sets `x-dead-letter-exchange` on
+`orders.queue` — the full route in one call. A fanout DLX is used
+deliberately: a dead-lettered message keeps its original routing key, and a
+direct/topic DLX whose binding key doesn't happen to match that routing key
+silently drops the message on the floor instead of parking it. Fanout ignores
+routing keys entirely, so the parking queue always receives it. Override the
+derived names or set `x-dead-letter-routing-key` via `&messaging.DeadLetterSpec{
+Exchange: "...", ParkingQueue: "...", RoutingKey: "..."}` as the second
+argument. Inspect a parked message's `x-death` header (queue, exchange,
+reason, count) for triage.
+
+**Custom topology — the raw `Args` escape hatch:**
+
+For DLX topology `DeclareQueueWithDLQ` doesn't fit (shared DLX across queues,
+non-fanout exchange with a deliberately matching binding key, ...), set
+`Args["x-dead-letter-exchange"]` directly and declare/bind the DLX and parking
+queue yourself:
 
 `Declarations.RegisterQueue` deep-copies `Args` at registration — and
 `decls.DeclareQueue(name)` registers immediately — so `Args` must be set on the
@@ -134,9 +157,11 @@ For a queue already registered elsewhere, mutate the stored copy instead:
 Args participate in RabbitMQ's declare-equivalence check: redeclaring an
 existing queue with different args fails the channel with 406
 PRECONDITION_FAILED. Values must be amqp091-supported types (string,
-int/int64, bool, float64, nested `amqp.Table`, ...). Framework-managed DLQ
-provisioning (auto-declaring DLX/parking queues, retry policies) remains
-future work — this is the enabling primitive only.
+int/int64, bool, float64, nested `amqp.Table`, ...).
+
+Both forms only shape topology (Tier 1). Bounded redelivery — capping retries
+via `x-death` count before parking permanently — remains future work; see
+[#721](https://github.com/gaborage/go-bricks/issues/721).
 
 ## Consumer Concurrency (v0.17+)
 
