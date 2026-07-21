@@ -125,6 +125,58 @@ func TestMemoryStoreCreateTableIsNoOp(t *testing.T) {
 	assert.NoError(t, NewMemoryStore().CreateTable(context.Background()))
 }
 
+// TestMemoryStoreUpsertRejectsSecondActiveJobForTenant pins the per-tenant
+// mutual exclusion mirrored from PostgresStore's partial unique index: a
+// second (different job ID) Upsert for a tenant with an existing non-terminal
+// job must fail with ErrTenantBusy rather than silently succeed and race
+// against the in-flight job.
+func TestMemoryStoreUpsertRejectsSecondActiveJobForTenant(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+
+	_, err := s.Upsert(ctx, &Job{ID: "job-1", TenantID: "tenant-x"})
+	require.NoError(t, err)
+
+	_, err = s.Upsert(ctx, &Job{ID: "job-2", TenantID: "tenant-x"})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrTenantBusy), "want wrapped ErrTenantBusy, got %v", err)
+}
+
+// TestMemoryStoreUpsertAllowsReprovisionAfterTerminal verifies the exclusion
+// only blocks concurrent NON-terminal jobs: once the first job reaches a
+// terminal state (ready or failed), re-provisioning the same tenant under a
+// new job ID must succeed.
+func TestMemoryStoreUpsertAllowsReprovisionAfterTerminal(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+
+	_, err := s.Upsert(ctx, &Job{ID: "job-1", TenantID: "tenant-x"})
+	require.NoError(t, err)
+	require.NoError(t, s.Transition(ctx, "job-1", StatePending, StateSchemaCreated, nil, ""))
+	require.NoError(t, s.Transition(ctx, "job-1", StateSchemaCreated, StateCleanup, nil, "boom"))
+	require.NoError(t, s.Transition(ctx, "job-1", StateCleanup, StateFailed, nil, "boom"))
+
+	got, err := s.Upsert(ctx, &Job{ID: "job-2", TenantID: "tenant-x"})
+	require.NoError(t, err)
+	assert.Equal(t, StatePending, got.State)
+}
+
+// TestMemoryStoreUpsertSameIDIsNotBusy verifies the existing "re-upsert same
+// ID returns unchanged" behavior takes priority over the busy check — it is
+// checked first, so idempotent retries of the same job never see ErrTenantBusy.
+func TestMemoryStoreUpsertSameIDIsNotBusy(t *testing.T) {
+	s := NewMemoryStore()
+	ctx := context.Background()
+
+	first, err := s.Upsert(ctx, &Job{ID: "job-1", TenantID: "tenant-x"})
+	require.NoError(t, err)
+
+	again, err := s.Upsert(ctx, &Job{ID: "job-1", TenantID: "tenant-x"})
+	require.NoError(t, err)
+	assert.Equal(t, first.State, again.State)
+	assert.False(t, errors.Is(err, ErrTenantBusy))
+}
+
 func TestMemoryStoreUpsertRejectsInvalidJob(t *testing.T) {
 	s := NewMemoryStore()
 	tests := []struct {

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -318,4 +319,50 @@ func TestProvisioningRerunSameJobIDIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StateReady, got.State,
 		"Upsert on an existing job ID must preserve the persisted state")
+}
+
+// TestProvisioningPartialUniqueIndexBlocksConcurrentActiveJobs verifies the
+// per-tenant mutual exclusion enforced by idx_..._active (a partial unique
+// index on tenant_id WHERE state NOT IN ('ready','failed')): two concurrent
+// Upserts for the same tenant under different job IDs must have exactly one
+// winner, with the loser observing ErrTenantBusy — never both succeeding.
+func TestProvisioningPartialUniqueIndexBlocksConcurrentActiveJobs(t *testing.T) {
+	env := newPGEnv(t)
+	store := env.newStore(t, "active_index")
+
+	ctx, cancel := testCtx(t)
+	defer cancel()
+
+	const tenantID = "tenant-concurrent"
+	var (
+		wg           sync.WaitGroup
+		mu           sync.Mutex
+		successCount int
+		busyCount    int
+		otherErrs    []error
+	)
+
+	for i := range 2 {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			job := &Job{ID: fmt.Sprintf("job-concurrent-%d", n), TenantID: tenantID}
+			_, err := store.Upsert(ctx, job)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				successCount++
+			case errors.Is(err, ErrTenantBusy):
+				busyCount++
+			default:
+				otherErrs = append(otherErrs, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	require.Empty(t, otherErrs, "unexpected errors: %v", otherErrs)
+	assert.Equal(t, 1, successCount, "exactly one concurrent Upsert for the same tenant must succeed")
+	assert.Equal(t, 1, busyCount, "exactly one concurrent Upsert for the same tenant must observe ErrTenantBusy")
 }

@@ -71,6 +71,11 @@ var (
 	// ErrInvalidJob is returned by Upsert when the supplied Job is nil
 	// or has an empty ID/TenantID. Wrapped with the failing field name.
 	ErrInvalidJob = errors.New("provisioning: invalid job")
+
+	// ErrTenantBusy means another provisioning job for the same tenant is
+	// still in a non-terminal state. Retryable and non-destructive — callers
+	// must NOT treat it as a provisioning failure or trigger cleanup.
+	ErrTenantBusy = errors.New("provisioning: tenant already has an active provisioning job")
 )
 
 // validateJobForUpsert rejects nil jobs and jobs missing ID or TenantID

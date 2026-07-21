@@ -173,17 +173,16 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 
 	roles := []struct {
 		quotedIdent string
-		rolname     string
 		password    string
 	}{
-		{migrator, spec.MigratorRole, spec.MigratorPassword},
-		{runtime, spec.RuntimeRole, spec.RuntimePassword},
+		{migrator, spec.MigratorPassword},
+		{runtime, spec.RuntimePassword},
 	}
 
 	// Pre-size for the worst case: 2 roles × (create + lockdown + password) + 8 schema/grant/search_path statements.
 	stmts := make([]string, 0, 2*3+8)
 	for _, r := range roles {
-		stmts = append(stmts, buildRoleCreateAndLockdown(r.rolname, r.quotedIdent)...)
+		stmts = append(stmts, buildRoleCreateAndLockdown(r.quotedIdent)...)
 		if r.password != "" {
 			stmts = append(stmts, fmt.Sprintf(
 				`ALTER ROLE %s PASSWORD %s`,
@@ -219,18 +218,26 @@ func buildPGRoleStatements(spec *PGRoleSpec) []string {
 // locked-down baseline. Used for both the migrator and runtime roles since
 // both share the same NO* attribute requirements.
 //
-// The CREATE wrapped in DO-block is the canonical idempotent pattern because
-// PostgreSQL has no CREATE ROLE IF NOT EXISTS syntax; the unconditional
-// ALTER on the next statement re-applies the attribute floor on every run
-// so manual drift (e.g. someone ran ALTER ROLE ... SUPERUSER) snaps back.
-func buildRoleCreateAndLockdown(rolname, quotedIdent string) []string {
+// The CREATE is wrapped in a nested BEGIN/EXCEPTION block that swallows both
+// duplicate_object (42710) and unique_violation (23505) rather than checking
+// pg_roles first: the check-then-create form races when two provisioners run
+// concurrently for the same role name. If the role is already committed the
+// CREATE raises duplicate_object; if two sessions both pass CREATE ROLE's
+// internal existence check and then collide on the pg_authid rolname unique
+// index, the loser raises unique_violation instead — so both must be swallowed
+// for the concurrent path to be safe. The unconditional ALTER on the next
+// statement re-applies the attribute floor on every run so manual drift
+// (e.g. someone ran ALTER ROLE ... SUPERUSER) snaps back.
+func buildRoleCreateAndLockdown(quotedIdent string) []string {
 	const lockdownAttrs = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
 	return []string{
 		fmt.Sprintf(`DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s) THEN
+  BEGIN
     CREATE ROLE %s LOGIN %s;
-  END IF;
-END $$`, quotePGStringLiteral(rolname), quotedIdent, lockdownAttrs),
+  EXCEPTION WHEN duplicate_object OR unique_violation THEN
+    NULL; -- another provisioner created it concurrently; not an error
+  END;
+END $$`, quotedIdent, lockdownAttrs),
 		fmt.Sprintf(`ALTER ROLE %s %s`, quotedIdent, lockdownAttrs),
 	}
 }
