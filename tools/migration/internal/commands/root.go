@@ -103,7 +103,7 @@ func addCommonFlags(cmd *cobra.Command) *CommonFlags {
 	cmd.Flags().BoolVar(&flags.JSON, "json", false, "Emit NDJSON progress records (for CI/CD parsing)")
 	cmd.Flags().BoolVarP(&flags.Verbose, "verbose", "v", false, "Verbose logging")
 	cmd.Flags().DurationVar(&flags.Timeout, "timeout", 0,
-		"Per-tenant Flyway timeout (e.g. 30m); 0 uses the vendor default (5m). Raise for large index builds/backfills.")
+		"Per-tenant Flyway timeout (e.g. 30m); 0 or a negative value uses the vendor default (5m). Raise for large index builds/backfills.")
 
 	return flags
 }
