@@ -404,20 +404,99 @@ func (rh *responseHandler) handleResponse(c *echo.Context, response any, apiErr 
 	return formatSuccessResponse(c, response)
 }
 
+// bindSource identifies which tag-driven source a boundField reads from.
+type bindSource int
+
+const (
+	bindSourceParam bindSource = iota
+	bindSourceQuery
+	bindSourceHeader
+)
+
+// boundField is one precomputed tag-binding instruction for a request struct field.
+// Built once per route (buildBindingPlan); replayed per request without re-parsing
+// struct tags. isSlice is only meaningful for query/header sources and mirrors
+// isStringSliceField, computed here from the static field type instead of a runtime
+// reflect.Value.
+type boundField struct {
+	index   int
+	source  bindSource
+	name    string
+	isSlice bool
+}
+
+// buildBindingPlan walks a request struct type once at route-registration time and
+// captures, per exported field, which of the param/query/header tags are present and
+// what each needs at bind time. Fields are visited in declaration order and, within a
+// field, instructions are appended param, then query, then header — matching
+// bindFieldFromTags's precedence so replay order is unchanged. Unexported fields are
+// skipped (equivalent to today's per-request CanSet skip). Anonymous/embedded fields
+// are treated as a single field, same as today — no recursion.
+//
+// Non-struct t is a no-op (nil plan): NumField() on a non-struct type panics (known
+// gap, F26), and that panic must stay at request time, not move here to registration
+// time. See bindRequest's isStruct-gated fallback in requestProcessor.process.
+func buildBindingPlan(t reflect.Type) []boundField {
+	if t.Kind() != reflect.Struct {
+		return nil
+	}
+
+	var plan []boundField
+	for i := range t.NumField() {
+		field := t.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		if paramName := field.Tag.Get("param"); paramName != "" {
+			plan = append(plan, boundField{index: i, source: bindSourceParam, name: paramName})
+		}
+		if queryName := field.Tag.Get("query"); queryName != "" {
+			plan = append(plan, boundField{
+				index: i, source: bindSourceQuery, name: queryName, isSlice: isStringSliceType(field.Type),
+			})
+		}
+		if headerName := field.Tag.Get("header"); headerName != "" {
+			plan = append(plan, boundField{
+				index: i, source: bindSourceHeader, name: headerName, isSlice: isStringSliceType(field.Type),
+			})
+		}
+	}
+	return plan
+}
+
 // requestProcessor orchestrates the complete request processing pipeline:
 // allocation, binding, nil validation, and request validation.
 type requestProcessor[T any] struct {
 	allocator *requestAllocator[T]
 	binder    *RequestBinder
 	cfg       *config.Config
+	plan      []boundField
+	isStruct  bool
 }
 
-// newRequestProcessor creates a new request processor for type T.
+// newRequestProcessor creates a new request processor for type T. The tag-binding plan
+// is computed once here (not per request) from T's underlying struct type, reusing the
+// allocator's elemType/pointer-unwrap logic so pointer-typed T gets the struct's plan.
 func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requestProcessor[T] {
+	allocator := newRequestAllocator[T]()
+
+	structType := allocator.elemType
+	if structType.Kind() == reflect.Pointer {
+		structType = structType.Elem()
+	}
+	isStruct := structType.Kind() == reflect.Struct
+
+	var plan []boundField
+	if isStruct {
+		plan = buildBindingPlan(structType)
+	}
+
 	return &requestProcessor[T]{
-		allocator: newRequestAllocator[T](),
+		allocator: allocator,
 		binder:    binder,
 		cfg:       cfg,
+		plan:      plan,
+		isStruct:  isStruct,
 	}
 }
 
@@ -429,9 +508,18 @@ func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 	// Allocate request instance
 	request, requestPtr := rp.allocator.allocate()
 
-	// Bind request data from multiple sources (JSON, query, params, headers)
-	if err := rp.binder.bindRequest(c, requestPtr); err != nil {
-		return empty, NewBadRequestError("Invalid request data").WithDetails("error", err.Error())
+	// Bind request data from multiple sources (JSON, query, params, headers).
+	// Struct T takes the precomputed-plan fast path; non-struct T (F26, untested
+	// backlog gap) falls back to the legacy reflect-per-request path so its
+	// request-time NumField() panic stays exactly where it is today.
+	var bindErr error
+	if rp.isStruct {
+		bindErr = rp.binder.bindRequestPlanned(c, requestPtr, rp.plan)
+	} else {
+		bindErr = rp.binder.bindRequest(c, requestPtr)
+	}
+	if bindErr != nil {
+		return empty, NewBadRequestError("Invalid request data").WithDetails("error", bindErr.Error())
 	}
 
 	// For value types, we need to get the bound value back from the pointer
@@ -651,7 +739,11 @@ func wrapHandlerWithJOSE[T any, R any](
 	return wrapper.wrap(handlerFunc)
 }
 
-// bindRequest binds request data from various sources to the target struct.
+// bindRequest binds request data from various sources to the target struct. It is the
+// legacy per-request-reflecting path, kept alive as requestProcessor.process's fallback
+// for non-struct T (F26): bindStructFields's NumField() call panics at request time for
+// non-struct types, and that panic must stay exactly there. Struct T never reaches this
+// path — it uses bindRequestPlanned instead.
 func (rb *RequestBinder) bindRequest(c *echo.Context, target any) error {
 	targetValue := reflect.ValueOf(target).Elem()
 	targetType := targetValue.Type()
@@ -663,6 +755,38 @@ func (rb *RequestBinder) bindRequest(c *echo.Context, target any) error {
 
 	// Bind struct field tags (param, query, header)
 	return rb.bindStructFields(c, targetType, targetValue)
+}
+
+// bindRequestPlanned binds request data using a precomputed binding plan (buildBindingPlan),
+// avoiding per-request struct-tag reflection. When plan is empty — the common case, e.g. a
+// JSON-body-only struct — only bindJSONBody runs.
+func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []boundField) error {
+	if err := rb.bindJSONBody(c, target); err != nil {
+		return err
+	}
+	if len(plan) == 0 {
+		return nil
+	}
+
+	targetValue := reflect.ValueOf(target).Elem()
+	for i := range plan {
+		bf := &plan[i]
+		fieldValue := targetValue.Field(bf.index)
+
+		var err error
+		switch bf.source {
+		case bindSourceParam:
+			err = rb.bindParamValue(c, bf.name, fieldValue)
+		case bindSourceQuery:
+			err = rb.bindQueryValue(c, bf.name, bf.isSlice, fieldValue)
+		case bindSourceHeader:
+			err = rb.bindHeaderValue(c, bf.name, bf.isSlice, fieldValue)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bindJSONBody binds JSON request body if Content-Type indicates JSON
@@ -718,7 +842,12 @@ func (rb *RequestBinder) bindParamTag(c *echo.Context, field *reflect.StructFiel
 	if paramName == "" {
 		return nil
 	}
+	return rb.bindParamValue(c, paramName, fieldValue)
+}
 
+// bindParamValue is the value-setting core shared by bindParamTag (legacy, tag-parsing)
+// and bindRequestPlanned (precomputed name from buildBindingPlan).
+func (rb *RequestBinder) bindParamValue(c *echo.Context, paramName string, fieldValue reflect.Value) error {
 	value := c.Param(paramName)
 	if value != "" {
 		if err := setFieldValue(fieldValue, value); err != nil {
@@ -734,9 +863,14 @@ func (rb *RequestBinder) bindQueryTag(c *echo.Context, field *reflect.StructFiel
 	if queryName == "" {
 		return nil
 	}
+	return rb.bindQueryValue(c, queryName, rb.isStringSliceField(fieldValue), fieldValue)
+}
 
+// bindQueryValue is the value-setting core shared by bindQueryTag (legacy, tag-parsing)
+// and bindRequestPlanned (precomputed name/isSlice from buildBindingPlan).
+func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSlice bool, fieldValue reflect.Value) error {
 	// Support []string binding from repeated query parameters
-	if rb.isStringSliceField(fieldValue) {
+	if isSlice {
 		return rb.bindQueryStringSlice(c, queryName, fieldValue)
 	}
 
@@ -768,14 +902,19 @@ func (rb *RequestBinder) bindHeaderTag(c *echo.Context, field *reflect.StructFie
 	if headerName == "" {
 		return nil
 	}
+	return rb.bindHeaderValue(c, headerName, rb.isStringSliceField(fieldValue), fieldValue)
+}
 
+// bindHeaderValue is the value-setting core shared by bindHeaderTag (legacy, tag-parsing)
+// and bindRequestPlanned (precomputed name/isSlice from buildBindingPlan).
+func (rb *RequestBinder) bindHeaderValue(c *echo.Context, headerName string, isSlice bool, fieldValue reflect.Value) error {
 	values := c.Request().Header.Values(headerName)
 	if len(values) == 0 {
 		return nil
 	}
 
 	// Support comma-separated list for []string headers
-	if rb.isStringSliceField(fieldValue) {
+	if isSlice {
 		return rb.bindHeaderStringSlice(values, fieldValue)
 	}
 
@@ -802,7 +941,13 @@ func (rb *RequestBinder) bindHeaderStringSlice(values []string, fieldValue refle
 
 // isStringSliceField checks if a field is a []string slice
 func (rb *RequestBinder) isStringSliceField(fieldValue reflect.Value) bool {
-	return fieldValue.Kind() == reflect.Slice && fieldValue.Type().Elem().Kind() == reflect.String
+	return isStringSliceType(fieldValue.Type())
+}
+
+// isStringSliceType is isStringSliceField's build-time twin: same check, driven by the
+// static field type (buildBindingPlan) instead of a runtime reflect.Value.
+func isStringSliceType(t reflect.Type) bool {
+	return t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.String
 }
 
 type valueSetter func(reflect.Value, string) error

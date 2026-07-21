@@ -190,285 +190,6 @@ func TestMessagingManagerInjectsTenantHeader(t *testing.T) {
 	assert.Equal(t, tenantID, client.lastPublish.Headers[tenantHeader])
 }
 
-func TestMessagingManagerSingleflightPublishers(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
-
-	var mu sync.Mutex
-	calls := 0
-	factory := func(string, logger.Logger) AMQPClient {
-		mu.Lock()
-		calls++
-		mu.Unlock()
-		return &stubAMQPClient{}
-	}
-
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, _, err := manager.Publisher(ctx, tenantID)
-			require.NoError(t, err)
-		}()
-	}
-	wg.Wait()
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, 1, calls)
-}
-
-func TestMessagingManagerCleanupEvictsIdlePublishers(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
-
-	var mu sync.Mutex
-	closed := 0
-	// Slow Close on the idle publisher proves idle cleanup detaches bookkeeping
-	// under the lock and closes OUTSIDE it.
-	releaseClose := make(chan struct{})
-	factory := func(string, logger.Logger) AMQPClient {
-		return &stubAMQPClient{
-			closeHook: func() { <-releaseClose },
-			closeCallback: func() {
-				mu.Lock()
-				defer mu.Unlock()
-				closed++
-			},
-		}
-	}
-
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"idle": amqpURLIdle}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond}, factory)
-	_, relIdle, err := manager.Publisher(ctx, "idle")
-	require.NoError(t, err)
-	// Release the lease so cleanup may actually close it (deferred-until-release, ADR-032).
-	relIdle()
-
-	time.Sleep(20 * time.Millisecond)
-
-	// Run cleanup in the background: the idle publisher's Close blocks until
-	// releaseClose. With close-under-lock this would stall every Publisher()/Stats().
-	done := make(chan struct{})
-	go func() {
-		manager.cleanupIdlePublishers()
-		close(done)
-	}()
-
-	// Bookkeeping is detached under the lock, so the publisher count drops to 0 even
-	// while its Close is still blocked.
-	assert.Eventually(t, func() bool {
-		manager.pubMu.RLock()
-		defer manager.pubMu.RUnlock()
-		return len(manager.publishers) == 0
-	}, time.Second, 5*time.Millisecond)
-
-	// Release the slow Close and let cleanup finish.
-	close(releaseClose)
-	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, 1, closed)
-}
-
-func TestMessagingManagerEvictsLRU(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
-
-	var mu sync.Mutex
-	evicted := []string{}
-	// The LRU victim "a" (amqpURLA) uses a slow Close to assert eviction detaches
-	// bookkeeping under the lock and closes OUTSIDE it.
-	releaseClose := make(chan struct{})
-	factory := func(url string, _ logger.Logger) AMQPClient {
-		client := &stubAMQPClient{closeCallback: func() {
-			mu.Lock()
-			defer mu.Unlock()
-			evicted = append(evicted, url)
-		}}
-		if url == amqpURLA {
-			client.closeHook = func() { <-releaseClose }
-		}
-		return client
-	}
-
-	source := &stubMessagingSource{urls: map[string]string{
-		"a": amqpURLA,
-		"b": amqpURLB,
-		"c": amqpURLC,
-	}}
-
-	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute}, factory)
-	_, relA, err := manager.Publisher(ctx, "a")
-	require.NoError(t, err)
-	_, _, err = manager.Publisher(ctx, "b")
-	require.NoError(t, err)
-	// Release "a"'s lease so eviction may actually close it — a leased publisher's close
-	// is deferred until its last lease is released (ADR-032).
-	relA()
-
-	// Publisher("c") evicts "a"; its Close blocks until releaseClose, so run it in the
-	// background. With close-under-lock this would hold m.pubMu and stall every Publisher.
-	done := make(chan struct{})
-	go func() {
-		_, _, gErr := manager.Publisher(ctx, "c")
-		assert.NoError(t, gErr)
-		close(done)
-	}()
-
-	// Bookkeeping is detached under the lock, so the publisher count stays at 2 even
-	// though the victim's Close is still blocked.
-	assert.Eventually(t, func() bool {
-		manager.pubMu.RLock()
-		defer manager.pubMu.RUnlock()
-		_, aStillCached := manager.publishers["a"]
-		return len(manager.publishers) == 2 && !aStillCached
-	}, time.Second, 5*time.Millisecond)
-
-	// Release the slow Close and let the eviction finish.
-	close(releaseClose)
-	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Contains(t, evicted, amqpURLA)
-}
-
-// TestMessagingManagerEvictionWithSlowCloseDoesNotBlockConcurrentPublisher guards the
-// M3 audit finding: evictPublisherIfNeeded must NOT hold the publisher mutex while
-// closing the evicted client. A slow Close() on an evicted tenant's publisher must not
-// block a concurrent Publisher() that targets a different, still-cached tenant
-// (head-of-line blocking). Mirrors the collect-then-close pattern in cache/manager.go.
-func TestMessagingManagerEvictionWithSlowCloseDoesNotBlockConcurrentPublisher(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
-
-	const slowClose = 200 * time.Millisecond
-	closeStarted := make(chan struct{})
-
-	factory := func(url string, _ logger.Logger) AMQPClient {
-		client := &stubAMQPClient{}
-		if url == amqpURLA {
-			// Tenant "a" is the LRU victim. Its Close blocks for slowClose to simulate
-			// a stuck connection teardown. Signal once so the test can race a Publisher.
-			var once sync.Once
-			client.closeHook = func() {
-				once.Do(func() { close(closeStarted) })
-				time.Sleep(slowClose)
-			}
-		}
-		return client
-	}
-
-	source := &stubMessagingSource{urls: map[string]string{
-		"a": amqpURLA,
-		"b": amqpURLB,
-		"c": amqpURLC,
-	}}
-
-	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 2, IdleTTL: time.Minute}, factory)
-
-	_, relA, err := manager.Publisher(ctx, "a")
-	require.NoError(t, err)
-	_, _, err = manager.Publisher(ctx, "b")
-	require.NoError(t, err)
-	// Release "a"'s lease so the eviction can close it (deferred-until-release, ADR-032).
-	relA()
-
-	// Creating "c" evicts the LRU victim "a", whose Close blocks for slowClose.
-	go func() {
-		_, _, _ = manager.Publisher(ctx, "c")
-	}()
-
-	// Wait until the slow Close has actually begun before measuring.
-	select {
-	case <-closeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("eviction Close never started")
-	}
-
-	// "b" is still cached: this Publisher only needs getExistingPublisher's lock. If
-	// eviction holds the publisher mutex across Close (the M3 bug), this blocks ~slowClose.
-	start := time.Now()
-	_, _, err = manager.Publisher(ctx, "b")
-	require.NoError(t, err)
-	elapsed := time.Since(start)
-
-	assert.Less(t, elapsed, slowClose/2,
-		"Publisher on a cached tenant must not block on another tenant's slow eviction Close (close-under-lock)")
-}
-
-// TestMessagingManagerCreatePublisherReturnsExistingOnDoubleCreate guards the
-// concurrent double-create branch in createPublisher: when another goroutine
-// populated the cache while this caller was building its client, createPublisher
-// must return the already-cached publisher and close the freshly-created client
-// outside the lock. Mirrors database's
-// TestCreateConnectionReturnsExistingInstanceWhenAlreadyCached.
-func TestMessagingManagerCreatePublisherReturnsExistingOnDoubleCreate(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
-
-	// The freshly-created client that createPublisher builds; it must be closed
-	// once the cache is found already populated.
-	fresh := &stubAMQPClient{}
-	factory := func(string, logger.Logger) AMQPClient { return fresh }
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
-
-	// Pre-seed the cache to simulate another goroutine winning the race.
-	existing := newTenantAwarePublisher(&stubAMQPClient{}, tenantID)
-	manager.pubMu.Lock()
-	element := manager.pubLru.PushFront(tenantID)
-	manager.publishers[tenantID] = &publisherEntry{client: existing, element: element, lastUsed: time.Now(), key: tenantID}
-	manager.pubMu.Unlock()
-
-	got, err := manager.createPublisher(ctx, tenantID)
-	require.NoError(t, err)
-	assert.Same(t, existing, got.client, "createPublisher must return the already-cached publisher")
-
-	fresh.closedMu.Lock()
-	closed := fresh.closed
-	fresh.closedMu.Unlock()
-	assert.True(t, closed, "the redundant freshly-created client must be closed on the double-create branch")
-}
-
-// TestMessagingManagerCleanupIdlePublishersLogsCloseError drives the close-error
-// branch of closeEvictedPublisher through the idle-cleanup path: the idle entry
-// is detached from bookkeeping and Close() is still attempted even when it returns
-// an error. Mirrors database's TestCleanupIdleConnectionsLogsCloseError.
-func TestMessagingManagerCleanupIdlePublishersLogsCloseError(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
-
-	failing := &stubAMQPClient{closeErr: errors.New("broker fault on close")}
-	factory := func(string, logger.Logger) AMQPClient { return failing }
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{"idle": amqpURLIdle}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
-	defer func() { _ = manager.Close() }()
-
-	_, relIdle, err := manager.Publisher(ctx, "idle")
-	require.NoError(t, err)
-	// Release the lease so cleanup may close it (deferred-until-release, ADR-032).
-	relIdle()
-
-	// Backdate lastUsed so the cleanup pass sees the entry as idle.
-	manager.pubMu.Lock()
-	manager.publishers["idle"].lastUsed = time.Now().Add(-2 * time.Hour)
-	manager.pubMu.Unlock()
-
-	manager.cleanupIdlePublishers()
-
-	manager.pubMu.RLock()
-	n := len(manager.publishers)
-	manager.pubMu.RUnlock()
-	assert.Equal(t, 0, n, "idle publisher removed from cache despite Close() error")
-
-	failing.closedMu.Lock()
-	closed := failing.closed
-	failing.closedMu.Unlock()
-	assert.True(t, closed, "Close was attempted even though it returned an error")
-}
-
 func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
 	ctx := context.Background()
 	log := logger.New("error", false)
@@ -737,94 +458,9 @@ func TestMessagingManagerHashBasedIdempotency(t *testing.T) {
 	})
 }
 
-// TestMessagingManagerStartCleanupZeroIntervalDefaults verifies StartCleanup
-// substitutes the default 2-minute interval when given a non-positive value.
-// We can't assert the exact ticker period without timing flakiness, but we can
-// confirm StartCleanup wires up the loop (cleanupCh non-nil) and StopCleanup
-// then tears it down cleanly.
-func TestMessagingManagerStartCleanupZeroIntervalDefaults(t *testing.T) {
-	log := logger.New("error", false)
-	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
-	manager := NewMessagingManager(&stubMessagingSource{}, log, ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, factory)
-
-	manager.StartCleanup(0)
-	manager.cleanupMu.Lock()
-	assert.NotNil(t, manager.cleanupCh, "StartCleanup should arm the cleanup loop even with interval=0 (defaults applied)")
-	manager.cleanupMu.Unlock()
-
-	manager.StopCleanup()
-}
-
-func TestMessagingManagerStartCleanupIdempotent(t *testing.T) {
-	log := logger.New("error", false)
-	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
-	manager := NewMessagingManager(&stubMessagingSource{}, log, ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, factory)
-
-	manager.StartCleanup(50 * time.Millisecond)
-	manager.cleanupMu.Lock()
-	first := manager.cleanupCh
-	manager.cleanupMu.Unlock()
-	require.NotNil(t, first)
-
-	manager.StartCleanup(50 * time.Millisecond)
-	manager.cleanupMu.Lock()
-	second := manager.cleanupCh
-	manager.cleanupMu.Unlock()
-	assert.True(t, first == second, "second StartCleanup must be a no-op while a loop is already running (cleanupCh unchanged)")
-
-	manager.StopCleanup()
-}
-
-func TestMessagingManagerStopCleanupBeforeStartIsNoOp(t *testing.T) {
-	log := logger.New("error", false)
-	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
-	manager := NewMessagingManager(&stubMessagingSource{}, log, ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, factory)
-
-	manager.StopCleanup()
-	manager.cleanupMu.Lock()
-	assert.Nil(t, manager.cleanupCh)
-	manager.cleanupMu.Unlock()
-}
-
-// TestMessagingManagerCleanupLoopEvictsOnTick exercises the cleanupLoop goroutine
-// end-to-end: arm a short interval, seed an idle publisher, wait for at least
-// one tick, then verify the entry was cleaned up.
-func TestMessagingManagerCleanupLoopEvictsOnTick(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
-
-	var closed int
-	var mu sync.Mutex
-	factory := func(string, logger.Logger) AMQPClient {
-		return &stubAMQPClient{closeCallback: func() {
-			mu.Lock()
-			defer mu.Unlock()
-			closed++
-		}}
-	}
-
-	manager := NewMessagingManager(
-		&stubMessagingSource{urls: map[string]string{"idle": amqpURLIdle}},
-		log,
-		ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond},
-		factory,
-	)
-	_, relIdle, err := manager.Publisher(ctx, "idle")
-	require.NoError(t, err)
-	// Release the lease so the cleanup loop may close it (deferred-until-release, ADR-032).
-	relIdle()
-
-	manager.StartCleanup(20 * time.Millisecond)
-	t.Cleanup(manager.StopCleanup)
-
-	// Wait long enough for IdleTTL (10ms) + at least one cleanup tick (20ms).
-	require.Eventually(t, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return closed >= 1
-	}, time.Second, 10*time.Millisecond, "cleanup loop should evict the idle publisher within a few ticks")
-}
-
+// TestMessagingManagerCloseClosesPublishersAndConsumers drives Close through the public
+// surface and pins that it spans BOTH sides: every cached publisher AND every consumer
+// client is closed, the publisher pool is drained, and the consumer map is reset.
 func TestMessagingManagerCloseClosesPublishersAndConsumers(t *testing.T) {
 	ctx := context.Background()
 	log := logger.New("error", false)
@@ -861,31 +497,28 @@ func TestMessagingManagerCloseClosesPublishersAndConsumers(t *testing.T) {
 	require.NoError(t, manager.Close())
 
 	mu.Lock()
-	defer mu.Unlock()
-	assert.GreaterOrEqual(t, closedCount, 2, "Close should close at least the publisher clients")
+	got := closedCount
+	mu.Unlock()
+	// Two publisher clients + one consumer client.
+	assert.GreaterOrEqual(t, got, 3, "Close must close both publisher clients AND the consumer client")
 
-	// Cleanup loop should be stopped after Close.
-	manager.cleanupMu.Lock()
-	assert.Nil(t, manager.cleanupCh, "Close must stop the cleanup loop")
-	manager.cleanupMu.Unlock()
-
-	// Internal maps are reset.
-	manager.pubMu.RLock()
-	assert.Empty(t, manager.publishers)
-	manager.pubMu.RUnlock()
+	// Publisher pool drained and consumer map reset (Close stops the cleanup loop too — no panic).
+	assert.Equal(t, 0, manager.Stats()["active_publishers"], "Close must drain the publisher pool")
 	manager.consMu.RLock()
-	assert.Empty(t, manager.consumers)
+	assert.Empty(t, manager.consumers, "Close must reset the consumer map")
 	manager.consMu.RUnlock()
 }
 
 // TestMessagingManagerCloseSurfacesClientErrors checks the aggregated-error path
-// when a publisher Close() returns an error.
+// when a publisher Close() returns an error: it surfaces under the historical
+// "errors closing messaging clients" prefix, wrapping the underlying cause.
 func TestMessagingManagerCloseSurfacesClientErrors(t *testing.T) {
 	ctx := context.Background()
 	log := logger.New("error", false)
 
+	wantErr := errors.New("client close failed")
 	factory := func(string, logger.Logger) AMQPClient {
-		return &stubAMQPClient{closeCallback: func() {}}
+		return &stubAMQPClient{closeErr: wantErr}
 	}
 
 	manager := NewMessagingManager(
@@ -897,19 +530,39 @@ func TestMessagingManagerCloseSurfacesClientErrors(t *testing.T) {
 	_, _, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
 
-	// Swap in a failing client behind the cache so Close() surfaces an aggregated error.
-	wantErr := errors.New("client close failed")
-	manager.pubMu.Lock()
-	for key, entry := range manager.publishers {
-		entry.client = &stubAMQPClient{closeErr: wantErr}
-		manager.publishers[key] = entry
-	}
-	manager.pubMu.Unlock()
-
 	err = manager.Close()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "errors closing messaging clients")
 	assert.Contains(t, err.Error(), wantErr.Error(), "aggregated error should include the underlying client-close message")
+	assert.ErrorIs(t, err, wantErr, "the wrapped cause must remain matchable with errors.Is")
+}
+
+// TestMessagingManagerCloseAggregatesErrors pins the aggregate Close contract: when MULTIPLE
+// cached publishers fail to close, Close surfaces EVERY failure (not just the first), under the
+// historical "errors closing messaging clients" prefix. Black-box via Publisher + Close.
+func TestMessagingManagerCloseAggregatesErrors(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	// Distinct per-broker close errors so we can assert BOTH surface.
+	factory := func(url string, _ logger.Logger) AMQPClient {
+		return &stubAMQPClient{closeErr: errors.New("close failure " + url)}
+	}
+	source := &stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1, tenant2ID: amqpURLTenant2}}
+	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+
+	_, relA, err := manager.Publisher(ctx, tenant1ID)
+	require.NoError(t, err)
+	relA()
+	_, relB, err := manager.Publisher(ctx, tenant2ID)
+	require.NoError(t, err)
+	relB()
+
+	err = manager.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "errors closing messaging clients")
+	assert.Contains(t, err.Error(), "close failure "+amqpURLTenant1)
+	assert.Contains(t, err.Error(), "close failure "+amqpURLTenant2, "Close must surface ALL publisher close errors, not just the first")
 }
 
 // TestMessagingManagerCloseClientOnRollback verifies the load-bearing
@@ -932,7 +585,7 @@ func TestMessagingManagerCloseClientOnRollback(t *testing.T) {
 	t.Run("close errors are logged not propagated", func(t *testing.T) {
 		client := &stubAMQPClient{closeErr: errors.New("rollback close failed")}
 		// No panic, no return — failure observable via logger only.
-		manager.closeClientOnRollback(client, tenant1ID, "publisher_double_create_race")
+		manager.closeClientOnRollback(client, tenant1ID, "declare_infrastructure")
 
 		client.closedMu.Lock()
 		defer client.closedMu.Unlock()
@@ -940,6 +593,10 @@ func TestMessagingManagerCloseClientOnRollback(t *testing.T) {
 	})
 }
 
+// TestMessagingManagerStats drives Stats() through the public surface and pins every key,
+// including active_consumers (from the consumer map) and the evictions counter (surfaced from
+// the pool after an LRU eviction). The per-pool counter semantics are exercised directly in
+// internal/resourcepool; this pins the manager's map-key mapping.
 func TestMessagingManagerStats(t *testing.T) {
 	ctx := context.Background()
 	log := logger.New("error", false)
@@ -948,26 +605,68 @@ func TestMessagingManagerStats(t *testing.T) {
 	manager := NewMessagingManager(
 		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1, tenant2ID: amqpURLTenant2}},
 		log,
-		ManagerOptions{MaxPublishers: 7, IdleTTL: 90 * time.Second},
+		ManagerOptions{MaxPublishers: 1, IdleTTL: 90 * time.Second},
 		factory,
 	)
+	defer func() { _ = manager.Close() }()
 
+	// Empty manager: full key set, publisher counters zero, config max/idle_ttl surfaced.
 	stats := manager.Stats()
 	assert.Equal(t, 0, stats["active_publishers"])
-	assert.Equal(t, 7, stats["max_publishers"])
+	assert.Equal(t, 1, stats["max_publishers"])
 	assert.Equal(t, 0, stats["active_consumers"])
 	assert.Equal(t, 90, stats["idle_ttl_seconds"])
+	assert.Equal(t, 0, stats["evictions"])
+	assert.Equal(t, 0, stats["idle_cleanups"])
 
-	_, _, err := manager.Publisher(ctx, tenant1ID)
+	// One live publisher.
+	_, rel1, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
-	_, _, err = manager.Publisher(ctx, tenant2ID)
-	require.NoError(t, err)
+	rel1()
+	assert.Equal(t, 1, manager.Stats()["active_publishers"])
 
+	// MaxPublishers=1 forces the second key to evict the first: the evictions counter surfaces.
+	_, rel2, err := manager.Publisher(ctx, tenant2ID)
+	require.NoError(t, err)
+	rel2()
 	stats = manager.Stats()
-	assert.Equal(t, 2, stats["active_publishers"])
+	assert.Equal(t, 1, stats["active_publishers"], "eviction keeps the pool at its cap")
+	assert.Equal(t, 1, stats["evictions"], "LRU eviction increments the evictions counter surfaced by Stats")
+	assert.Equal(t, 0, stats["idle_cleanups"], "LRU eviction must not bump idle_cleanups")
+}
+
+// TestMessagingManagerStatsTracksIdleCleanups pins that Stats() surfaces the pool's idle-cleanup
+// counter under the "idle_cleanups" key with a NON-zero value — the sibling of the "evictions" pin
+// above. A released publisher left idle past the TTL is reaped by the pool's cleanup loop, and that
+// count must reach the manager's map (guarding against a mismapping to an always-zero field).
+func TestMessagingManagerStatsTracksIdleCleanups(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	_, rel, err := manager.Publisher(ctx, tenant1ID)
+	require.NoError(t, err)
+	rel() // release so the idle publisher becomes eligible for cleanup
+
+	manager.StartCleanup(10 * time.Millisecond)
+	defer manager.StopCleanup()
+
+	assert.Eventually(t, func() bool {
+		count, _ := manager.Stats()["idle_cleanups"].(int)
+		return count >= 1
+	}, 2*time.Second, 20*time.Millisecond, "Stats must surface the pool's idle-cleanup count under idle_cleanups")
 }
 
 // --- Lease/refcount: eviction-while-in-use race (issue #606, ADR-032) ---
+// The lease/evict/close protocol itself is exercised directly in internal/resourcepool;
+// these black-box helpers drive the manager's public Publisher/Close surface.
 
 // leasedClosableFactory builds publisher clients that record each Close() in the shared
 // `closed` map (keyed by broker URL) under `mu`.
@@ -1005,173 +704,83 @@ func TestMessagingManagerPublisherReturnsNonNilReleaseFunc(t *testing.T) {
 	assert.False(t, wasClosed, "releasing a lease on a live cached publisher must not close it")
 }
 
-func TestMessagingManagerEvictionWhileLeasedDefersCloseUntilRelease(t *testing.T) {
+// TestMessagingManagerPublisherAfterCloseReturnsError pins the F22 fix: once Close() has run,
+// Publisher() fails closed (returning the manager's closed error) instead of resurrecting a
+// publisher on a shut-down manager. The resourcepool closed guard supplies this; before the
+// rewire, Publisher would silently create and leak a fresh publisher.
+func TestMessagingManagerPublisherAfterCloseReturnsError(t *testing.T) {
 	ctx := context.Background()
 	var mu sync.Mutex
 	closed := map[string]bool{}
 	m := NewMessagingManager(twoPublisherSource(), logger.New("error", false),
-		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, leasedClosableFactory(&mu, closed))
-	defer func() { _ = m.Close() }()
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, leasedClosableFactory(&mu, closed))
+	require.NoError(t, m.Close())
 
-	_, releaseA, err := m.Publisher(ctx, "a")
-	require.NoError(t, err)
-
-	_, releaseB, err := m.Publisher(ctx, "b") // evicts "a", which is still leased
-	require.NoError(t, err)
-	defer releaseB()
-
-	mu.Lock()
-	closedWhileLeased := closed[amqpURLA]
-	mu.Unlock()
-	assert.False(t, closedWhileLeased,
-		"an evicted-but-leased publisher must not be closed while a lease is held (the #606 race)")
-
-	releaseA()
-	mu.Lock()
-	closedAfterRelease := closed[amqpURLA]
-	mu.Unlock()
-	assert.True(t, closedAfterRelease,
-		"an evicted publisher must be closed once its last lease is released")
+	pub, release, err := m.Publisher(ctx, "a")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
+	assert.Nil(t, pub)
+	assert.Nil(t, release)
 }
 
-func TestMessagingManagerTwoLeasesKeepPublisherAliveUntilBothReleased(t *testing.T) {
-	ctx := context.Background()
-	var mu sync.Mutex
-	closed := map[string]bool{}
-	m := NewMessagingManager(twoPublisherSource(), logger.New("error", false),
-		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, leasedClosableFactory(&mu, closed))
-	defer func() { _ = m.Close() }()
+// TestMessagingManagerZeroValueMethodsAreSafe pins that a zero-value Manager (never built via
+// NewMessagingManager — the lightweight stand-in the debug/health endpoint uses) does not panic
+// on any of Stats/Publisher/StartCleanup/StopCleanup/Close, matching the pre-resourcepool
+// nil-map-safe behavior (Publisher is guarded to fail closed rather than panic).
+func TestMessagingManagerZeroValueMethodsAreSafe(t *testing.T) {
+	m := &Manager{}
 
-	_, release1, err := m.Publisher(ctx, "a")
-	require.NoError(t, err)
-	_, release2, err := m.Publisher(ctx, "a") // same key, second borrower → refcount 2
-	require.NoError(t, err)
-
-	_, releaseB, err := m.Publisher(ctx, "b") // evict "a"
-	require.NoError(t, err)
-	defer releaseB()
-
-	release1()
-	mu.Lock()
-	closedAfterFirst := closed[amqpURLA]
-	mu.Unlock()
-	assert.False(t, closedAfterFirst, "publisher must stay open while a second lease is outstanding")
-
-	release2()
-	mu.Lock()
-	closedAfterSecond := closed[amqpURLA]
-	mu.Unlock()
-	assert.True(t, closedAfterSecond, "publisher must close when the final lease is released")
-}
-
-func TestMessagingManagerPublisherReleaseIsIdempotent(t *testing.T) {
-	ctx := context.Background()
-	var mu sync.Mutex
-	closed := map[string]bool{}
-	m := NewMessagingManager(twoPublisherSource(), logger.New("error", false),
-		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Minute}, leasedClosableFactory(&mu, closed))
-	defer func() { _ = m.Close() }()
-
-	_, releaseA, err := m.Publisher(ctx, "a")
-	require.NoError(t, err)
-	_, releaseB, err := m.Publisher(ctx, "b") // evict "a"
-	require.NoError(t, err)
-	defer releaseB()
-
-	assert.NotPanics(t, func() {
-		releaseA()
-		releaseA() // double release must be a safe no-op
-	})
-}
-
-// TestMessagingManagerColdRecreateAfterIdleEviction reproduces the issue #655
-// timeline: a once-daily publisher goes idle past IdleTTL, gets evicted, and
-// the NEXT Publisher() call must hand back a freshly created (cold) client
-// rather than reusing the evicted one. This is not a fail-on-main regression
-// test (stubAMQPClient has no not-ready state to model the readiness bug
-// itself — see Task 1.1's client-level tests for that); it documents and
-// locks in the eviction → cold-recreate sequence that triggers the bug.
-func TestMessagingManagerColdRecreateAfterIdleEviction(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
-
-	var mu sync.Mutex
-	created := make([]*stubAMQPClient, 0, 2)
-	factory := func(string, logger.Logger) AMQPClient {
-		c := &stubAMQPClient{}
-		mu.Lock()
-		created = append(created, c)
-		mu.Unlock()
-		return c
-	}
-
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
-	defer func() { _ = manager.Close() }()
-
-	first, relFirst, err := manager.Publisher(ctx, tenantID)
-	require.NoError(t, err)
-	relFirst()
-
-	// Backdate lastUsed so the cleanup pass sees the entry as idle, mirroring
-	// TestMessagingManagerCleanupIdlePublishersLogsCloseError's idiom.
-	manager.pubMu.Lock()
-	manager.publishers[tenantID].lastUsed = time.Now().Add(-2 * time.Hour)
-	manager.pubMu.Unlock()
-
-	manager.cleanupIdlePublishers()
-
-	second, relSecond, err := manager.Publisher(ctx, tenantID)
-	require.NoError(t, err)
-	defer relSecond()
-
-	mu.Lock()
-	defer mu.Unlock()
-	require.Len(t, created, 2, "idle eviction must force a fresh client on the next Publisher() call")
-	assert.NotSame(t, first, second, "publisher after idle eviction must be a newly created (cold) client")
-}
-
-// TestMessagingManagerStatsTracksEvictionsAndIdleCleanups mirrors
-// cache.ManagerStats' Evictions/IdleCleanups counters (cache/manager.go),
-// exposed here as additional keys on messaging's existing map[string]any
-// Stats() (changing its return type would be a breaking API change).
-func TestMessagingManagerStatsTracksEvictionsAndIdleCleanups(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
-
-	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
-	manager := NewMessagingManager(
-		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1, tenant2ID: amqpURLTenant2}},
-		log,
-		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour},
-		factory,
-	)
-	defer func() { _ = manager.Close() }()
-
-	stats := manager.Stats()
+	stats := m.Stats()
+	assert.Equal(t, 0, stats["active_publishers"])
+	assert.Equal(t, 0, stats["max_publishers"])
+	assert.Equal(t, 0, stats["active_consumers"])
+	assert.Equal(t, 0, stats["idle_ttl_seconds"])
 	assert.Equal(t, 0, stats["evictions"])
 	assert.Equal(t, 0, stats["idle_cleanups"])
 
-	// LRU eviction: MaxPublishers=1 forces the second Publisher() call to evict the first.
-	_, rel1, err := manager.Publisher(ctx, tenant1ID)
-	require.NoError(t, err)
-	rel1()
-	_, rel2, err := manager.Publisher(ctx, tenant2ID)
-	require.NoError(t, err)
-	rel2()
+	pub, release, err := m.Publisher(context.Background(), "any")
+	assert.ErrorIs(t, err, errManagerClosed, "zero-value Publisher must fail closed, not panic")
+	assert.Nil(t, pub)
+	assert.Nil(t, release)
 
-	stats = manager.Stats()
-	assert.Equal(t, 1, stats["evictions"])
-	assert.Equal(t, 0, stats["idle_cleanups"], "LRU eviction must not bump idle_cleanups")
+	assert.NotPanics(t, func() {
+		m.StartCleanup(time.Minute)
+		m.StopCleanup()
+	}, "zero-value StartCleanup/StopCleanup must be no-ops, not panic")
 
-	// Idle cleanup: backdate the survivor's lastUsed and run cleanup directly.
-	manager.pubMu.Lock()
-	manager.publishers[tenant2ID].lastUsed = time.Now().Add(-2 * time.Hour)
-	manager.pubMu.Unlock()
-	manager.cleanupIdlePublishers()
+	assert.NoError(t, m.Close(), "closing a never-initialized manager is a no-op")
+}
 
-	stats = manager.Stats()
-	assert.Equal(t, 1, stats["idle_cleanups"])
-	assert.Equal(t, 1, stats["evictions"], "idle cleanup must not bump evictions")
+// TestMessagingManagerStartCleanupIsIdempotent pins that a second StartCleanup observes the
+// already-running pool cleanup loop and short-circuits, and StopCleanup is a safe no-op when
+// called again. The manager's StartCleanup is a thin passthrough to the pool.
+func TestMessagingManagerStartCleanupIsIdempotent(t *testing.T) {
+	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false),
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour}, factory)
+	defer func() { _ = m.Close() }()
+
+	m.StartCleanup(10 * time.Second)
+	require.NotPanics(t, func() { m.StartCleanup(10 * time.Second) })
+
+	m.StopCleanup()
+	require.NotPanics(t, func() { m.StopCleanup() })
+}
+
+// TestMessagingManagerStartCleanupAppliesDefaultForNonPositive pins the manager-specific
+// default-interval substitution (2 minutes) for a non-positive interval. We can't inspect the
+// ticker directly, so the contract is "no panic + clean stop".
+func TestMessagingManagerStartCleanupAppliesDefaultForNonPositive(t *testing.T) {
+	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false),
+		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour}, factory)
+	defer func() { _ = m.Close() }()
+
+	require.NotPanics(t, func() { m.StartCleanup(0) })
+	m.StopCleanup()
+
+	require.NotPanics(t, func() { m.StartCleanup(-5 * time.Second) })
+	m.StopCleanup()
 }
 
 // TestNewMessagingManagerDefaultFactoryForwardsReconnectOptions pins that the

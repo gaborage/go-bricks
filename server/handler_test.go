@@ -2802,3 +2802,268 @@ func TestBindJSONBodyTrailingContent(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code, "a trailing newline is whitespace and must still bind")
 	})
 }
+
+// wideJSONOnlyRequest is a 12-field JSON-body-only struct: no param/query/header tags,
+// so the tag-binding plan (buildBindingPlan) is empty. It models the common REST case
+// where pre-refactor code still paid 3*NumField() StructTag.Get parses per request to
+// conclude nothing binds.
+type wideJSONOnlyRequest struct {
+	F1  string  `json:"f1"`
+	F2  string  `json:"f2"`
+	F3  string  `json:"f3"`
+	F4  string  `json:"f4"`
+	F5  string  `json:"f5"`
+	F6  int     `json:"f6"`
+	F7  int     `json:"f7"`
+	F8  int     `json:"f8"`
+	F9  bool    `json:"f9"`
+	F10 bool    `json:"f10"`
+	F11 float64 `json:"f11"`
+	F12 float64 `json:"f12"`
+}
+
+const wideJSONOnlyRequestBody = `{"f1":"a","f2":"b","f3":"c","f4":"d","f5":"e","f6":1,"f7":2,"f8":3,"f9":true,"f10":false,"f11":1.5,"f12":2.5}`
+
+// BenchmarkBindRequestJSONOnlyWideStruct drives a typed-handler POST request end-to-end
+// through the addEcho seam (mirrors BenchmarkTypedHandlerPath's harness) with a wide
+// JSON-only request struct. It measures the whole request lifecycle (routing, allocation,
+// JSON decode, validation, response marshaling), so the binding-plan win is only a small
+// fraction of the number — BenchmarkBindRequestPlannedVsLegacy isolates that win directly.
+func BenchmarkBindRequestJSONOnlyWideStruct(b *testing.B) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	hr := NewHandlerRegistry(cfg)
+	rg := newRouteGroup(e.Group(""), "", cfg)
+	POST(hr, rg, "/bench", func(_ wideJSONOnlyRequest, _ HandlerContext) (helloResp, IAPIError) {
+		return helloResp{Message: "ok"}, nil
+	})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/bench", strings.NewReader(wideJSONOnlyRequestBody))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+	}
+}
+
+// planBindingPinReq exercises all three tag sources (including a []string query and a
+// []string header), plus a tagged-but-unexported field and a fully untagged field, for
+// TestBindingPlanMatchesLegacyBehavior.
+type planBindingPinReq struct {
+	ID          int      `param:"id"`
+	Search      string   `query:"search"`
+	Tags        []string `query:"tags"`
+	Accept      string   `header:"X-Accept"`
+	AcceptMulti []string `header:"X-Accept-Multi"`
+	unexported  string   `query:"shouldNeverBind"`
+	Untagged    string
+}
+
+// TestBindingPlanMatchesLegacyBehavior pins buildBindingPlan's shape (unexported and
+// untagged fields excluded; tagged fields appear once per tag, in declaration order,
+// param before query before header) and bindRequestPlanned's bound values against the
+// same expectations TestRequestBinderAdvancedBinding establishes for the legacy path
+// (param binding, query scalar/slice binding, header scalar/slice binding with
+// comma-split + trim, missing/empty values left at zero).
+func TestBindingPlanMatchesLegacyBehavior(t *testing.T) {
+	reqType := reflect.TypeOf(planBindingPinReq{})
+	plan := buildBindingPlan(reqType)
+
+	require.Equal(t, []boundField{
+		{index: 0, source: bindSourceParam, name: "id"},
+		{index: 1, source: bindSourceQuery, name: "search"},
+		{index: 2, source: bindSourceQuery, name: "tags", isSlice: true},
+		{index: 3, source: bindSourceHeader, name: "X-Accept"},
+		{index: 4, source: bindSourceHeader, name: "X-Accept-Multi", isSlice: true},
+	}, plan, "unexported and untagged fields must be excluded from the plan")
+
+	tests := []struct {
+		name   string
+		setup  func(req *http.Request)
+		assert func(t *testing.T, got planBindingPinReq)
+	}{
+		{
+			name: "all_sources_bound",
+			setup: func(req *http.Request) {
+				q := req.URL.Query()
+				q.Set("search", "widgets")
+				q.Add("tags", "a")
+				q.Add("tags", "b")
+				req.URL.RawQuery = q.Encode()
+				req.Header.Set("X-Accept", "json")
+				req.Header.Set("X-Accept-Multi", "a, b , c")
+			},
+			assert: func(t *testing.T, got planBindingPinReq) {
+				t.Helper()
+				assert.Equal(t, 9, got.ID)
+				assert.Equal(t, "widgets", got.Search)
+				assert.Equal(t, []string{"a", "b"}, got.Tags)
+				assert.Equal(t, "json", got.Accept)
+				assert.Equal(t, []string{"a", "b", "c"}, got.AcceptMulti)
+				assert.Empty(t, got.unexported, "unexported field must never be touched despite carrying a query tag")
+				assert.Empty(t, got.Untagged, "untagged field must stay zero value")
+			},
+		},
+		{
+			name:  "missing_and_empty_values_left_at_zero",
+			setup: func(_ *http.Request) {},
+			assert: func(t *testing.T, got planBindingPinReq) {
+				t.Helper()
+				assert.Equal(t, 9, got.ID, "path param is always present")
+				assert.Empty(t, got.Search)
+				assert.Empty(t, got.Tags)
+				assert.Empty(t, got.Accept)
+				assert.Empty(t, got.AcceptMulti)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := echo.New()
+			binder := NewRequestBinder()
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/items/9", http.NoBody)
+			tc.setup(req)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.SetPathValues(echo.PathValues{{Name: "id", Value: "9"}})
+
+			var got planBindingPinReq
+			err := binder.bindRequestPlanned(c, &got, plan)
+			require.NoError(t, err)
+			tc.assert(t, got)
+		})
+	}
+}
+
+// dualTagRequest carries more than one binding tag on a single field: Val has param+query,
+// Triple has all three. It exists to pin buildBindingPlan's WITHIN-field append order —
+// the exact ordering the plan's maintenance note flags as a silent-break risk if reordered.
+type dualTagRequest struct {
+	Val    string `param:"v" query:"v"`
+	Triple string `param:"t" query:"t" header:"X-T"`
+}
+
+// TestBuildBindingPlanWithinFieldOrderAndLastWriteWins pins that a field carrying multiple
+// tags produces one plan entry per tag in param->query->header order, and that
+// bindRequestPlanned replays them so the last-applied source wins (header > query > param).
+// It also asserts the legacy path produces byte-identical results — a differential oracle
+// guarding against the two paths drifting apart.
+func TestBuildBindingPlanWithinFieldOrderAndLastWriteWins(t *testing.T) {
+	plan := buildBindingPlan(reflect.TypeOf(dualTagRequest{}))
+	require.Equal(t, []boundField{
+		{index: 0, source: bindSourceParam, name: "v"},
+		{index: 0, source: bindSourceQuery, name: "v"},
+		{index: 1, source: bindSourceParam, name: "t"},
+		{index: 1, source: bindSourceQuery, name: "t"},
+		{index: 1, source: bindSourceHeader, name: "X-T"},
+	}, plan, "each tag on a field appends one entry, param before query before header")
+
+	newCtx := func() *echo.Context {
+		e := echo.New()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x?v=Q&t=Q", http.NoBody)
+		req.Header.Set("X-T", "H")
+		c := e.NewContext(req, httptest.NewRecorder())
+		c.SetPathValues(echo.PathValues{{Name: "v", Value: "P"}, {Name: "t", Value: "P"}})
+		return c
+	}
+
+	binder := NewRequestBinder()
+
+	var planned dualTagRequest
+	require.NoError(t, binder.bindRequestPlanned(newCtx(), &planned, plan))
+	assert.Equal(t, "Q", planned.Val, "query is applied after param, so it wins")
+	assert.Equal(t, "H", planned.Triple, "header is applied last, so it wins")
+
+	var legacy dualTagRequest
+	require.NoError(t, binder.bindRequest(newCtx(), &legacy))
+	assert.Equal(t, planned, legacy, "legacy and planned binding must be byte-identical")
+}
+
+// TestLegacyBindPathMatchesPlanned is the differential oracle for the full tag surface:
+// it binds the same request through the legacy reflect-per-request path (bindRequest) and
+// the precomputed-plan path (bindRequestPlanned) and asserts identical results. This keeps
+// the retained legacy chain covered and pins that it can never silently diverge from the
+// planned path.
+func TestLegacyBindPathMatchesPlanned(t *testing.T) {
+	plan := buildBindingPlan(reflect.TypeOf(planBindingPinReq{}))
+	binder := NewRequestBinder()
+
+	newCtx := func() *echo.Context {
+		e := echo.New()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/items/9", http.NoBody)
+		q := req.URL.Query()
+		q.Set("search", "widgets")
+		q.Add("tags", "a")
+		q.Add("tags", "b")
+		req.URL.RawQuery = q.Encode()
+		req.Header.Set("X-Accept", "json")
+		req.Header.Set("X-Accept-Multi", "a, b , c")
+		c := e.NewContext(req, httptest.NewRecorder())
+		c.SetPathValues(echo.PathValues{{Name: "id", Value: "9"}})
+		return c
+	}
+
+	var planned planBindingPinReq
+	require.NoError(t, binder.bindRequestPlanned(newCtx(), &planned, plan))
+
+	var legacy planBindingPinReq
+	require.NoError(t, binder.bindRequest(newCtx(), &legacy))
+
+	assert.Equal(t, planned, legacy, "legacy and planned binding must agree across all three sources")
+}
+
+// TestNonStructRequestTypePreservesF26Panic pins the F26 fallback contract: building the
+// processor for a non-struct request type must NOT panic (the plan build no-ops rather
+// than moving the panic to registration time), and the bind still panics at request time
+// via the legacy path's NumField call — byte-identical to pre-refactor behavior.
+func TestNonStructRequestTypePreservesF26Panic(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	binder := NewRequestBinder()
+
+	var rp *requestProcessor[string]
+	require.NotPanics(t, func() { rp = newRequestProcessor[string](binder, cfg) },
+		"plan build must no-op for non-struct T, not panic at registration time")
+	assert.False(t, rp.isStruct, "non-struct T routes to the legacy fallback")
+	assert.Nil(t, rp.plan, "non-struct T has no binding plan")
+
+	e := echo.New()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
+	c := e.NewContext(req, httptest.NewRecorder())
+	assert.Panics(t, func() { _ = binder.bindRequest(c, new(string)) },
+		"non-struct T still panics at request time (F26 remains open by design)")
+}
+
+// BenchmarkBindRequestPlannedVsLegacy isolates the refactor's win: the planned path (empty
+// plan -> zero per-request tag reflection) vs the legacy path (NumField loop + 3*StructTag.Get
+// per field) on the same wide JSON-only struct, with routing/validation/response marshaling
+// excluded from the measurement. Both sub-benchmarks pay the identical JSON decode, so the
+// delta is attributable to the binding step alone.
+func BenchmarkBindRequestPlannedVsLegacy(b *testing.B) {
+	binder := NewRequestBinder()
+	plan := buildBindingPlan(reflect.TypeOf(wideJSONOnlyRequest{}))
+	require.Empty(b, plan, "wide JSON-only struct carries no binding tags")
+
+	e := echo.New()
+	run := func(b *testing.B, bind func(*echo.Context, *wideJSONOnlyRequest) error) {
+		b.ReportAllocs()
+		for range b.N {
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader(wideJSONOnlyRequestBody))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			c := e.NewContext(req, httptest.NewRecorder())
+			var dst wideJSONOnlyRequest
+			_ = bind(c, &dst)
+		}
+	}
+
+	b.Run("planned", func(b *testing.B) {
+		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error { return binder.bindRequestPlanned(c, d, plan) })
+	})
+	b.Run("legacy", func(b *testing.B) {
+		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error { return binder.bindRequest(c, d) })
+	})
+}
