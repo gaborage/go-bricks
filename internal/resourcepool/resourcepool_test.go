@@ -597,38 +597,40 @@ func TestPoolReleaseCloseErrorCounted(t *testing.T) {
 
 // TestPoolCloseClosesAllAndReturnsFirstError verifies Close closes every entry, counts close
 // failures, and returns the first error.
-func TestPoolCloseClosesAllAndReturnsFirstError(t *testing.T) {
+func TestPoolCloseClosesAllAndJoinsErrors(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(5, 0, tr.closer)
 	ctx := context.Background()
 
-	closeErr := errors.New("close failed")
-	// key-2 fails to close; the others succeed.
-	makeCreate := func(key string, fail bool) func(context.Context) (*fakeResource, error) {
+	errTwo := errors.New("close key-2 failed")
+	errThree := errors.New("close key-3 failed")
+	// key-2 and key-3 both fail to close with distinct errors; key-1 succeeds.
+	makeCreate := func(key string, closeErr error) func(context.Context) (*fakeResource, error) {
 		return func(context.Context) (*fakeResource, error) {
 			r := newFakeResource(key)
-			if fail {
-				r.closeErr = closeErr
-			}
+			r.closeErr = closeErr
 			return r, nil
 		}
 	}
 	for _, kv := range []struct {
-		key  string
-		fail bool
-	}{{keyOne, false}, {keyTwo, true}, {keyThree, false}} {
-		_, rel, err := p.GetOrCreate(ctx, kv.key, makeCreate(kv.key, kv.fail))
+		key      string
+		closeErr error
+	}{{keyOne, nil}, {keyTwo, errTwo}, {keyThree, errThree}} {
+		_, rel, err := p.GetOrCreate(ctx, kv.key, makeCreate(kv.key, kv.closeErr))
 		require.NoError(t, err)
 		rel()
 	}
 
 	err := p.Close()
-	assert.ErrorIs(t, err, closeErr, "Close returns the first close error")
+	// Close joins EVERY close failure via errors.Join — errors.Is matches each individual one,
+	// so a consumer aggregating them (DbManager) surfaces all, not just the first.
+	assert.ErrorIs(t, err, errTwo, "Close surfaces the key-2 close error")
+	assert.ErrorIs(t, err, errThree, "Close surfaces the key-3 close error")
 	assert.True(t, tr.wasClosed(keyOne))
 	assert.True(t, tr.wasClosed(keyTwo))
 	assert.True(t, tr.wasClosed(keyThree))
 	assert.Equal(t, 0, p.Size())
-	assert.Equal(t, 1, p.Stats().Errors)
+	assert.Equal(t, 2, p.Stats().Errors, "each close failure counts once")
 }
 
 // TestPoolCloseIsIdempotent verifies Close can be called repeatedly.
@@ -739,6 +741,47 @@ func TestPoolStatsSnapshot(t *testing.T) {
 	assert.Equal(t, 2, st.Size)
 	assert.Equal(t, 3, st.TotalCreated)
 	assert.Equal(t, 1, st.Evictions)
+}
+
+// TestPoolSnapshotReportsLiveEntries pins the observability-only Snapshot accessor: one
+// EntrySnapshot per live entry (key + non-zero LastUsed), shrinking as entries are removed or
+// the pool is closed. It takes no lease and does not touch LRU.
+func TestPoolSnapshotReportsLiveEntries(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(5, 0, tr.closer)
+	ctx := context.Background()
+
+	// Empty pool → empty snapshot.
+	assert.Empty(t, p.Snapshot())
+
+	_, relA, err := p.GetOrCreate(ctx, keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	_, relB, err := p.GetOrCreate(ctx, keyTwo, keyedCreate(keyTwo))
+	require.NoError(t, err)
+
+	snap := p.Snapshot()
+	require.Len(t, snap, 2, "one snapshot entry per live key")
+	byKey := make(map[string]EntrySnapshot, len(snap))
+	for _, e := range snap {
+		byKey[e.Key] = e
+		assert.False(t, e.LastUsed.IsZero(), "LastUsed must be populated")
+	}
+	require.Contains(t, byKey, keyOne)
+	require.Contains(t, byKey, keyTwo)
+
+	// Remove one (release its lease first so Remove closes it) → snapshot shrinks.
+	relA()
+	if v, shouldClose := p.Remove(keyOne); shouldClose {
+		_ = tr.closer(v)
+	}
+	snap = p.Snapshot()
+	require.Len(t, snap, 1)
+	assert.Equal(t, keyTwo, snap[0].Key)
+
+	// Close → snapshot empties.
+	relB()
+	require.NoError(t, p.Close())
+	assert.Empty(t, p.Snapshot(), "closed pool reports no live entries")
 }
 
 // TestPoolClosedAccessor verifies Closed tracks shutdown state.
