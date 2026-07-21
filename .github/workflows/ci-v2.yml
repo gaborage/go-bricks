@@ -231,13 +231,14 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
     env:
-      # Pinned to match the JSON-output fixture captures in
-      # migration/testdata/flyway. Flyway 12.x ships only from Redgate's own
-      # distribution server (Maven Central stopped publishing the
-      # self-contained platform CLI tarballs mid-11.x; see the Install step).
+      # Provides the real Flyway binary the integration test runs against; the
+      # migration/testdata/flyway files are captured JSON-output samples used by
+      # the parser unit tests. Flyway 12.x and later ship only from Redgate's own
+      # distribution server (Maven Central stopped publishing the self-contained
+      # platform CLI tarballs mid-11.x; see the Install step).
       # renovate: datasource=github-releases depName=flyway/flyway
-      FLYWAY_VERSION: 12.8.1
-      FLYWAY_SHA256: 706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
+      FLYWAY_VERSION: 13.0.0
+      FLYWAY_SHA256: f199356e0a1ed15e94268a39f97e9bd4307a467b712ee745ceb4d7e7565690d9
 
     steps:
       - uses: actions/checkout@v7
@@ -275,9 +276,10 @@ jobs:
         if: steps.cache-flyway.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          # Flyway 12.x is distributed only from Redgate's server — Maven Central
-          # stopped publishing the self-contained -linux-x64.tar.gz mid-11.x (last
-          # one is 11.8.2). The SHA256 check below keeps this host integrity-pinned.
+          # Flyway 12.x and later are distributed only from Redgate's server —
+          # Maven Central stopped publishing the self-contained -linux-x64.tar.gz
+          # mid-11.x (last one is 11.8.2). The SHA256 check below keeps this host
+          # integrity-pinned.
           url="https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz"
           curl -fsSL "$url" -o /tmp/flyway.tar.gz
           actual="$(sha256sum /tmp/flyway.tar.gz | awk '{print $1}')"
