@@ -4,8 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strings"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,12 +60,11 @@ func (s *stubTx) Commit(_ context.Context) error   { return nil }
 func (s *stubTx) Rollback(_ context.Context) error { return nil }
 
 type stubDB struct {
-	key       string
-	closedMu  sync.Mutex
-	closed    bool
-	closeErr  error
-	onClosed  func(string)
-	closeHook func() // optional: invoked at the start of Close (e.g. to simulate a slow close)
+	key      string
+	closedMu sync.Mutex
+	closed   bool
+	closeErr error
+	onClosed func(string)
 }
 
 func (s *stubDB) Query(_ context.Context, _ string, _ ...any) (*sql.Rows, error) { return nil, nil }
@@ -78,12 +78,6 @@ func (s *stubDB) BeginTx(_ context.Context, _ *sql.TxOptions) (Tx, error) { retu
 func (s *stubDB) Health(_ context.Context) error                          { return nil }
 func (s *stubDB) Stats() (map[string]any, error)                          { return map[string]any{"key": s.key}, nil }
 func (s *stubDB) Close() error {
-	s.closedMu.Lock()
-	hook := s.closeHook
-	s.closedMu.Unlock()
-	if hook != nil {
-		hook()
-	}
 	s.closedMu.Lock()
 	s.closed = true
 	callback := s.onClosed
@@ -117,144 +111,6 @@ func TestDbManagerReturnsSameInstanceForSameKey(t *testing.T) {
 	assert.Same(t, first, second)
 	assert.Equal(t, 1, connectorCalls)
 	assert.Equal(t, 1, manager.Size())
-}
-
-func TestDbManagerSingleflight(t *testing.T) {
-	ctx := context.Background()
-	log := newErrorTestLogger()
-
-	var mu sync.Mutex
-	connectorCalls := 0
-	manager := NewDbManager(&stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"tenant-b": {Type: "postgresql"},
-	}}, log, DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
-		mu.Lock()
-		connectorCalls++
-		mu.Unlock()
-		return &stubDB{key: cfg.Database}, nil
-	})
-
-	var wg sync.WaitGroup
-	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, _, err := manager.Get(ctx, "tenant-b")
-			require.NoError(t, err)
-		}()
-	}
-	wg.Wait()
-	assert.Equal(t, 1, connectorCalls)
-}
-
-func TestDbManagerEvictsLRU(t *testing.T) {
-	ctx := context.Background()
-	log := newErrorTestLogger()
-
-	var mu sync.Mutex
-	evicted := []string{}
-	// The LRU victim "a" uses a slow Close to assert eviction detaches bookkeeping
-	// under the lock and closes OUTSIDE it: a concurrent Get must not block on it.
-	releaseClose := make(chan struct{})
-	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
-		db := &stubDB{key: cfg.Database, onClosed: func(key string) {
-			mu.Lock()
-			defer mu.Unlock()
-			evicted = append(evicted, key)
-		}}
-		if cfg.Database == "a" {
-			db.closeHook = func() { <-releaseClose }
-		}
-		return db, nil
-	}
-
-	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"a": {Type: "postgresql", Database: "a"},
-		"b": {Type: "postgresql", Database: "b"},
-		"c": {Type: "postgresql", Database: "c"},
-	}}
-
-	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 2, IdleTTL: time.Minute}, connector)
-
-	_, relA, err := manager.Get(ctx, "a")
-	require.NoError(t, err)
-	_, _, err = manager.Get(ctx, "b")
-	require.NoError(t, err)
-	// Release "a"'s lease so eviction may actually close it — a leased connection's
-	// close is deferred until its last lease is released (ADR-032).
-	relA()
-
-	// Get("c") evicts "a"; its Close blocks until releaseClose, so run it in the
-	// background. With close-under-lock this would hold m.mu and stall every Get.
-	done := make(chan struct{})
-	go func() {
-		_, _, gErr := manager.Get(ctx, "c")
-		assert.NoError(t, gErr)
-		close(done)
-	}()
-
-	// Bookkeeping is detached under the lock, so Size drops to 2 even though the
-	// victim's Close is still blocked. This would deadlock under close-under-lock.
-	assert.Eventually(t, func() bool { return manager.Size() == 2 }, time.Second, 5*time.Millisecond)
-
-	// Release the slow Close and let the eviction finish.
-	close(releaseClose)
-	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Contains(t, evicted, "a")
-}
-
-func TestDbManagerCleanupRemovesIdleConnections(t *testing.T) {
-	ctx := context.Background()
-	log := newErrorTestLogger()
-
-	var mu sync.Mutex
-	evicted := []string{}
-	// Slow Close on the idle connection proves idle cleanup detaches bookkeeping
-	// under the lock and closes OUTSIDE it.
-	releaseClose := make(chan struct{})
-	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
-		return &stubDB{key: cfg.Database, closeHook: func() { <-releaseClose }, onClosed: func(key string) {
-			mu.Lock()
-			defer mu.Unlock()
-			evicted = append(evicted, key)
-		}}, nil
-	}
-
-	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"idle": {Type: "postgresql", Database: "idle"},
-	}}
-
-	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 2, IdleTTL: 10 * time.Millisecond}, connector)
-	_, relIdle, err := manager.Get(ctx, "idle")
-	require.NoError(t, err)
-	// Release the lease so idle cleanup may actually close it (deferred-until-release, ADR-032).
-	relIdle()
-
-	time.Sleep(20 * time.Millisecond)
-
-	// Run cleanup in the background: the idle connection's Close blocks until
-	// releaseClose. With close-under-lock this would stall every Size()/Get().
-	done := make(chan struct{})
-	go func() {
-		manager.cleanupIdleConnections()
-		close(done)
-	}()
-
-	// Bookkeeping is detached under the lock, so Size drops to 0 even while the
-	// idle connection's Close is still blocked.
-	assert.Eventually(t, func() bool { return manager.Size() == 0 }, time.Second, 5*time.Millisecond)
-
-	// Release the slow Close and let cleanup finish.
-	close(releaseClose)
-	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Contains(t, evicted, "idle")
-	assert.Equal(t, 0, manager.Size())
 }
 
 func TestDbManagerCloseClosesAllConnections(t *testing.T) {
@@ -291,16 +147,20 @@ func TestDbManagerCloseClosesAllConnections(t *testing.T) {
 	assert.ElementsMatch(t, []string{"x", "y"}, evicted)
 }
 
+// TestCreateConnectionReturnsErrorWhenConfigFails proves a config-resolution failure in the
+// create callback surfaces through the public Get surface as a wrapped error.
 func TestCreateConnectionReturnsErrorWhenConfigFails(t *testing.T) {
 	ctx := context.Background()
 	configErr := errors.New("config failure")
 	manager := NewDbManager(&failingResourceSource{err: configErr}, newErrorTestLogger(), DbManagerOptions{}, nil)
 
-	_, err := manager.createConnection(ctx, "tenant")
+	_, _, err := manager.Get(ctx, "tenant")
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "failed to get database config"))
+	assert.ErrorContains(t, err, "failed to get database config")
 }
 
+// TestCreateConnectionPropagatesConnectorError proves a connector failure surfaces through
+// the public Get surface as a wrapped error.
 func TestCreateConnectionPropagatesConnectorError(t *testing.T) {
 	ctx := context.Background()
 	authErr := errors.New("connector failure")
@@ -310,69 +170,87 @@ func TestCreateConnectionPropagatesConnectorError(t *testing.T) {
 	}
 	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, connector)
 
-	_, err := manager.createConnection(ctx, "tenant")
+	_, _, err := manager.Get(ctx, "tenant")
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "failed to create database connection"))
+	assert.ErrorContains(t, err, "failed to create database connection")
 }
 
-func TestCreateConnectionReturnsExistingInstanceWhenAlreadyCached(t *testing.T) {
+// TestDbManagerGetAfterCloseReturnsError pins the F22 fix: once Close() has run, Get()
+// fails closed (returning the manager's closed error) instead of resurrecting a
+// connection on a shut-down manager. The resourcepool closed guard supplies this; before
+// the rewire, DbManager.Get would silently create and leak a fresh connection.
+func TestDbManagerGetAfterCloseReturnsError(t *testing.T) {
 	ctx := context.Background()
-	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"tenant": {Type: "postgresql"}}}
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
+		DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, newClosableDB(&mu, closed))
+	require.NoError(t, m.Close())
 
-	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
-		return &stubDB{key: cfg.Database}, nil
-	}
-	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, connector)
-
-	existing := &stubDB{key: "existing"}
-	manager.mu.Lock()
-	element := manager.lru.PushFront("tenant")
-	manager.conns["tenant"] = &dbEntry{conn: existing, element: element, lastUsed: time.Now(), key: "tenant"}
-	manager.mu.Unlock()
-
-	entry, err := manager.createConnection(ctx, "tenant")
-	require.NoError(t, err)
-	assert.Same(t, existing, entry.conn)
-}
-
-func TestStartCleanupDoesNotCreateMultipleRoutines(t *testing.T) {
-	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"tenant": {Type: "postgresql"}}}
-	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
-		return &stubDB{}, nil
-	})
-
-	manager.StartCleanup(5 * time.Millisecond)
-	manager.cleanupMu.Lock()
-	first := manager.cleanupCh
-	manager.cleanupMu.Unlock()
-
-	manager.StartCleanup(5 * time.Millisecond)
-	manager.cleanupMu.Lock()
-	second := manager.cleanupCh
-	manager.cleanupMu.Unlock()
-
-	assert.Equal(t, first, second)
-	manager.StopCleanup()
-}
-
-func TestCloseAggregatesErrors(t *testing.T) {
-	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{}}
-	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, nil)
-
-	errA := errors.New("close a")
-	errB := errors.New("close b")
-
-	manager.mu.Lock()
-	elementA := manager.lru.PushFront("a")
-	manager.conns["a"] = &dbEntry{conn: &stubDB{key: "a", closeErr: errA}, element: elementA, lastUsed: time.Now(), key: "a"}
-	elementB := manager.lru.PushFront("b")
-	manager.conns["b"] = &dbEntry{conn: &stubDB{key: "b", closeErr: errB}, element: elementB, lastUsed: time.Now(), key: "b"}
-	manager.mu.Unlock()
-
-	err := manager.Close()
+	conn, release, err := m.Get(ctx, "a")
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "close b"))
-	assert.True(t, strings.Contains(err.Error(), "close a"))
+	assert.ErrorIs(t, err, errManagerClosed, "Get after Close must fail closed, not resurrect a connection (F22)")
+	assert.Nil(t, conn)
+	assert.Nil(t, release)
+	assert.Equal(t, 0, m.Size(), "no connection may be created on a closed manager")
+}
+
+// TestDbManagerCloseAggregatesErrors pins the aggregate Close contract: when MULTIPLE cached
+// connections fail to close, Close surfaces EVERY failure (not just the first), under the
+// historical "errors closing database connections" prefix. Black-box via Get + Close.
+func TestDbManagerCloseAggregatesErrors(t *testing.T) {
+	var n atomic.Int32
+	connector := func(_ *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		id := n.Add(1)
+		return &stubDB{key: fmt.Sprintf("k%d", id), closeErr: fmt.Errorf("close failure %d", id)}, nil
+	}
+	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		"a": {Type: "postgresql"},
+		"b": {Type: "postgresql"},
+	}}
+	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, connector)
+
+	ctx := context.Background()
+	_, relA, err := m.Get(ctx, "a")
+	require.NoError(t, err)
+	relA()
+	_, relB, err := m.Get(ctx, "b")
+	require.NoError(t, err)
+	relB()
+
+	err = m.Close()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "errors closing database connections")
+	assert.Contains(t, err.Error(), "close failure 1")
+	assert.Contains(t, err.Error(), "close failure 2", "Close must surface ALL connection close errors, not just the first")
+}
+
+// TestDbManagerZeroValueMethodsAreSafe pins that a zero-value DbManager (never built via
+// NewDbManager — the lightweight stand-in the debug/health endpoint and prewarm paths use) does
+// not panic on any of Stats/Close/Get/Size, matching the pre-resourcepool field-based behavior
+// (Stats/Size/Close were nil-map-safe; Get is guarded to fail closed rather than panic).
+func TestDbManagerZeroValueMethodsAreSafe(t *testing.T) {
+	m := &DbManager{}
+
+	stats := m.Stats()
+	assert.Equal(t, 0, stats["active_connections"])
+	assert.Equal(t, 0, stats["max_connections"])
+	assert.Equal(t, 0, stats["idle_ttl_seconds"])
+	assert.Empty(t, stats["connections"])
+
+	assert.Equal(t, 0, m.Size(), "zero-value Size must be 0, not panic")
+
+	conn, release, err := m.Get(context.Background(), "any")
+	assert.ErrorIs(t, err, errManagerClosed, "zero-value Get must fail closed, not panic")
+	assert.Nil(t, conn)
+	assert.Nil(t, release)
+
+	assert.NotPanics(t, func() {
+		m.StartCleanup(time.Minute)
+		m.StopCleanup()
+	}, "zero-value StartCleanup/StopCleanup must be no-ops, not panic")
+
+	assert.NoError(t, m.Close(), "closing a never-initialized manager is a no-op")
 }
 
 func TestDbManagerStatsEmptyManager(t *testing.T) {
@@ -390,6 +268,10 @@ func TestDbManagerStatsEmptyManager(t *testing.T) {
 	assert.Empty(t, conns, "empty manager has no connection entries")
 }
 
+// TestDbManagerStatsPopulatedManager drives Stats() through the public Get surface and pins
+// the per-connection detail array: one entry per live connection, each with its key, an
+// RFC3339 last_used string, and an int idle_duration. This shape feeds the debug/health
+// endpoint, so it must be preserved exactly.
 func TestDbManagerStatsPopulatedManager(t *testing.T) {
 	stubA := &stubDB{key: "a"}
 	stubB := &stubDB{key: "b"}
@@ -408,22 +290,29 @@ func TestDbManagerStatsPopulatedManager(t *testing.T) {
 	defer func() { _ = m.Close() }()
 
 	ctx := context.Background()
-	_, _, err := m.Get(ctx, "a")
+	_, relA, err := m.Get(ctx, "a")
 	require.NoError(t, err)
-	_, _, err = m.Get(ctx, "b")
+	defer relA()
+	_, relB, err := m.Get(ctx, "b")
 	require.NoError(t, err)
+	defer relB()
 
 	stats := m.Stats()
 	assert.Equal(t, 2, stats["active_connections"])
-	conns, ok := stats["connections"].([]map[string]any)
-	require.True(t, ok)
-	require.Len(t, conns, 2)
+	assert.Equal(t, 5, stats["max_connections"])
+	assert.Equal(t, int(time.Hour.Seconds()), stats["idle_ttl_seconds"])
 
+	conns, ok := stats["connections"].([]map[string]any)
+	require.True(t, ok, "connections key must be []map[string]any")
+	require.Len(t, conns, 2, "per-connection detail must be surfaced for each live connection")
+
+	keys := make([]any, 0, len(conns))
 	for _, c := range conns {
-		assert.Contains(t, []any{"a", "b"}, c["key"])
-		assert.IsType(t, "", c["last_used"])
-		assert.IsType(t, 0, c["idle_duration"])
+		keys = append(keys, c["key"])
+		assert.IsType(t, "", c["last_used"], "last_used must be an RFC3339 string")
+		assert.IsType(t, 0, c["idle_duration"], "idle_duration must be an int seconds count")
 	}
+	assert.ElementsMatch(t, []any{"a", "b"}, keys)
 }
 
 func TestStartCleanupIsIdempotent(t *testing.T) {
@@ -434,14 +323,14 @@ func TestStartCleanupIsIdempotent(t *testing.T) {
 	defer func() { _ = m.Close() }()
 
 	m.StartCleanup(10 * time.Second)
-	// Second call must observe cleanupCh != nil and short-circuit rather
+	// Second call must observe an already-running cleanup loop and short-circuit rather
 	// than spawning a duplicate goroutine.
 	require.NotPanics(t, func() {
 		m.StartCleanup(10 * time.Second)
 	})
 
 	m.StopCleanup()
-	// Second StopCleanup hits the early-return path (cleanupCh == nil).
+	// Second StopCleanup hits the early-return path (no loop running).
 	require.NotPanics(t, func() {
 		m.StopCleanup()
 	})
@@ -463,103 +352,8 @@ func TestStartCleanupAppliesDefaultIntervalForNonPositive(t *testing.T) {
 	m.StopCleanup()
 }
 
-// TestDbManagerEvictionWithSlowCloseDoesNotBlockConcurrentGet guards the M3 audit
-// finding: evictIfNeeded must NOT hold the manager mutex while closing the evicted
-// connection. A slow Close() on an evicted tenant's connection must not block a
-// concurrent Get() that targets a different, still-cached tenant (head-of-line
-// blocking). Mirrors the safe collect-then-close pattern in cache/manager.go.
-func TestDbManagerEvictionWithSlowCloseDoesNotBlockConcurrentGet(t *testing.T) {
-	ctx := context.Background()
-	log := newErrorTestLogger()
-
-	const slowClose = 200 * time.Millisecond
-	closeStarted := make(chan struct{})
-
-	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
-		db := &stubDB{key: cfg.Database}
-		if cfg.Database == "a" {
-			// Tenant "a" is the LRU victim. Its Close blocks for slowClose to simulate
-			// a stuck connection teardown. Signal once so the test can race a Get.
-			var once sync.Once
-			db.closeHook = func() {
-				once.Do(func() { close(closeStarted) })
-				time.Sleep(slowClose)
-			}
-		}
-		return db, nil
-	}
-
-	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"a": {Type: "postgresql", Database: "a"},
-		"b": {Type: "postgresql", Database: "b"},
-		"c": {Type: "postgresql", Database: "c"},
-	}}
-
-	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 2, IdleTTL: time.Minute}, connector)
-
-	_, relA, err := manager.Get(ctx, "a")
-	require.NoError(t, err)
-	_, _, err = manager.Get(ctx, "b")
-	require.NoError(t, err)
-	// Release "a"'s lease so the eviction can close it (deferred-until-release, ADR-032).
-	relA()
-
-	// Creating "c" evicts the LRU victim "a", whose Close blocks for slowClose.
-	go func() {
-		_, _, _ = manager.Get(ctx, "c")
-	}()
-
-	// Wait until the slow Close has actually begun before measuring.
-	select {
-	case <-closeStarted:
-	case <-time.After(time.Second):
-		t.Fatal("eviction Close never started")
-	}
-
-	// "b" is still cached: this Get only needs getExisting's lock. If eviction holds
-	// the manager mutex across Close (the M3 bug), this blocks for ~slowClose.
-	start := time.Now()
-	_, _, err = manager.Get(ctx, "b")
-	require.NoError(t, err)
-	elapsed := time.Since(start)
-
-	assert.Less(t, elapsed, slowClose/2,
-		"Get on a cached tenant must not block on another tenant's slow eviction Close (close-under-lock)")
-}
-
-func TestCleanupIdleConnectionsLogsCloseError(t *testing.T) {
-	failingStub := &stubDB{key: "x", closeErr: errors.New("driver fault on close")}
-	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return failingStub, nil }
-
-	m := NewDbManager(&stubResourceSource{}, newTestLogger(), DbManagerOptions{
-		MaxSize: 5,
-		IdleTTL: time.Hour,
-	}, connector)
-	defer func() { _ = m.Close() }()
-
-	ctx := context.Background()
-	_, relX, err := m.Get(ctx, "x")
-	require.NoError(t, err)
-	// Release the lease so idle cleanup may close it (deferred-until-release, ADR-032).
-	relX()
-
-	// Backdate lastUsed so the cleanup pass sees the entry as idle. Direct
-	// field access under m.mu matches the pattern in
-	// TestCloseAggregatesErrors above.
-	m.mu.Lock()
-	m.conns["x"].lastUsed = time.Now().Add(-2 * time.Hour)
-	m.mu.Unlock()
-
-	m.cleanupIdleConnections()
-
-	assert.Equal(t, 0, m.Size(), "idle connection removed from cache despite Close() error")
-	failingStub.closedMu.Lock()
-	closed := failingStub.closed
-	failingStub.closedMu.Unlock()
-	assert.True(t, closed, "Close was attempted even though it returned an error")
-}
-
-// --- Lease/refcount: eviction-while-in-use race (issue #606, ADR-032) ---
+// --- Black-box helpers for the manager's public Get/Close surface (ADR-032 lease semantics
+// are exercised directly in internal/resourcepool). ---
 
 // newClosableDB returns a connector that records each connection's Close() in the
 // shared `closed` map under `mu`, keyed by the connection's config Database value.
@@ -602,120 +396,11 @@ func TestDbManagerGetReturnsNonNilReleaseFunc(t *testing.T) {
 	assert.Equal(t, 1, m.Size())
 }
 
-func TestDbManagerEvictionWhileLeasedDefersCloseUntilRelease(t *testing.T) {
-	ctx := context.Background()
-	var mu sync.Mutex
-	closed := map[string]bool{}
-	// MaxSize 1 → getting a second key evicts the first.
-	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
-		DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, newClosableDB(&mu, closed))
-	defer func() { _ = m.Close() }()
-
-	_, releaseA, err := m.Get(ctx, "a")
-	require.NoError(t, err)
-
-	// Borrowing "b" evicts "a" from the LRU. "a" is still leased, so it must NOT close.
-	_, releaseB, err := m.Get(ctx, "b")
-	require.NoError(t, err)
-	defer releaseB()
-
-	mu.Lock()
-	closedWhileLeased := closed["a"]
-	mu.Unlock()
-	assert.False(t, closedWhileLeased,
-		"an evicted-but-leased connection must not be closed while a lease is held (the #606 race)")
-
-	// Releasing the last lease closes the evicted connection now.
-	releaseA()
-	mu.Lock()
-	closedAfterRelease := closed["a"]
-	mu.Unlock()
-	assert.True(t, closedAfterRelease,
-		"an evicted connection must be closed once its last lease is released")
-}
-
-func TestDbManagerTwoLeasesKeepConnectionAliveUntilBothReleased(t *testing.T) {
-	ctx := context.Background()
-	var mu sync.Mutex
-	closed := map[string]bool{}
-	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
-		DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, newClosableDB(&mu, closed))
-	defer func() { _ = m.Close() }()
-
-	_, release1, err := m.Get(ctx, "a")
-	require.NoError(t, err)
-	_, release2, err := m.Get(ctx, "a") // same key, second borrower → refcount 2
-	require.NoError(t, err)
-
-	// Evict "a".
-	_, releaseB, err := m.Get(ctx, "b")
-	require.NoError(t, err)
-	defer releaseB()
-
-	release1()
-	mu.Lock()
-	closedAfterFirst := closed["a"]
-	mu.Unlock()
-	assert.False(t, closedAfterFirst, "connection must stay open while a second lease is outstanding")
-
-	release2()
-	mu.Lock()
-	closedAfterSecond := closed["a"]
-	mu.Unlock()
-	assert.True(t, closedAfterSecond, "connection must close when the final lease is released")
-}
-
-func TestDbManagerIdleCleanupWhileLeasedDefersClose(t *testing.T) {
-	ctx := context.Background()
-	var mu sync.Mutex
-	closed := map[string]bool{}
-	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
-		DbManagerOptions{MaxSize: 5, IdleTTL: time.Nanosecond}, newClosableDB(&mu, closed))
-	defer func() { _ = m.Close() }()
-
-	_, releaseA, err := m.Get(ctx, "a")
-	require.NoError(t, err)
-
-	time.Sleep(time.Millisecond) // ensure idle threshold passed
-	m.cleanupIdleConnections()   // detaches "a" (idle) but it is still leased
-
-	mu.Lock()
-	closedWhileLeased := closed["a"]
-	mu.Unlock()
-	assert.False(t, closedWhileLeased, "idle cleanup must not close a leased connection")
-
-	releaseA()
-	mu.Lock()
-	closedAfterRelease := closed["a"]
-	mu.Unlock()
-	assert.True(t, closedAfterRelease, "idle-cleaned connection closes when its last lease is released")
-}
-
-func TestDbManagerReleaseIsIdempotent(t *testing.T) {
-	ctx := context.Background()
-	var mu sync.Mutex
-	closed := map[string]bool{}
-	m := NewDbManager(twoTenantSource(), newErrorTestLogger(),
-		DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, newClosableDB(&mu, closed))
-	defer func() { _ = m.Close() }()
-
-	_, releaseA, err := m.Get(ctx, "a")
-	require.NoError(t, err)
-	_, releaseB, err := m.Get(ctx, "b") // evict "a"
-	require.NoError(t, err)
-	defer releaseB()
-
-	assert.NotPanics(t, func() {
-		releaseA()
-		releaseA() // double release must be a safe no-op (no double close, no negative refcount)
-	})
-}
-
 // TestDbManagerDynamicConfigGetsPoolDefaults proves a dynamic DBConfigProvider
 // (source.type=dynamic) that returns a zero-value Pool no longer reaches the
-// connector unnormalized: DbManager.createConnection must apply the same pool
-// defaults config.Validate applies to static config, so the PostgreSQL/Oracle
-// connectors never call SetMaxOpenConns(0) (unlimited connections).
+// connector unnormalized: the create callback applies the same pool defaults
+// config.Validate applies to static config, so the PostgreSQL/Oracle connectors
+// never call SetMaxOpenConns(0) (unlimited connections).
 func TestDbManagerDynamicConfigGetsPoolDefaults(t *testing.T) {
 	ctx := context.Background()
 	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
@@ -728,9 +413,11 @@ func TestDbManagerDynamicConfigGetsPoolDefaults(t *testing.T) {
 		return &stubDB{}, nil
 	}
 	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, connector)
+	defer func() { _ = manager.Close() }()
 
-	_, err := manager.createConnection(ctx, "tenant")
+	_, release, err := manager.Get(ctx, "tenant")
 	require.NoError(t, err)
+	release()
 	require.NotNil(t, captured)
 
 	assert.Equal(t, int32(25), captured.Pool.Max.Connections, "max connections defaults to 25")
@@ -771,9 +458,11 @@ func TestDbManagerDynamicConfigExplicitPoolPreserved(t *testing.T) {
 		return &stubDB{}, nil
 	}
 	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, connector)
+	defer func() { _ = manager.Close() }()
 
-	_, err := manager.createConnection(ctx, "tenant")
+	_, release, err := manager.Get(ctx, "tenant")
 	require.NoError(t, err)
+	release()
 	require.NotNil(t, captured)
 
 	assert.Equal(t, int32(40), captured.Pool.Max.Connections, "explicit max connections preserved")
@@ -781,7 +470,8 @@ func TestDbManagerDynamicConfigExplicitPoolPreserved(t *testing.T) {
 }
 
 // TestDbManagerDynamicConfigInvalidPoolRejected proves an invalid dynamic pool
-// config fails createConnection before the connector is ever invoked.
+// config fails the create callback before the connector is ever invoked, surfacing
+// through Get.
 func TestDbManagerDynamicConfigInvalidPoolRejected(t *testing.T) {
 	ctx := context.Background()
 	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
@@ -801,7 +491,7 @@ func TestDbManagerDynamicConfigInvalidPoolRejected(t *testing.T) {
 	}
 	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, connector)
 
-	_, err := manager.createConnection(ctx, "tenant")
+	_, _, err := manager.Get(ctx, "tenant")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "failed to apply pool defaults for key")
 	var cfgErr *config.ConfigError
@@ -810,29 +500,38 @@ func TestDbManagerDynamicConfigInvalidPoolRejected(t *testing.T) {
 	assert.False(t, connectorCalled, "connector must not run with an invalid pool config")
 }
 
-// TestDbManagerDynamicConfigConcurrentCreateSharedConfig guards the clone in
-// createConnection: concurrent creates against a shared provider config must
-// not race (make check runs -race).
+// TestDbManagerDynamicConfigConcurrentCreateSharedConfig guards the clone in the create
+// callback: every key resolves to the SAME shared provider config pointer, so concurrent
+// creates for distinct keys each shallow-clone that one struct simultaneously. Under -race
+// this proves the clone never races the shared config, expressed through the public Get
+// surface (singleflight would collapse same-key creates, so distinct keys are used).
 func TestDbManagerDynamicConfigConcurrentCreateSharedConfig(t *testing.T) {
 	ctx := context.Background()
-	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"tenant": {Type: "postgresql", Host: "localhost"},
-	}}
+	shared := &config.DatabaseConfig{Type: "postgresql", Host: "localhost"}
+	const goroutines = 8
+	configs := make(map[string]*config.DatabaseConfig, goroutines)
+	for i := range goroutines {
+		configs[fmt.Sprintf("tenant-%d", i)] = shared
+	}
+	resource := &stubResourceSource{configs: configs}
 	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
 		return &stubDB{}, nil
 	}
-	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Minute}, connector)
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{MaxSize: 20, IdleTTL: time.Minute}, connector)
+	defer func() { _ = manager.Close() }()
 
-	const goroutines = 8
 	errs := make(chan error, goroutines)
 	var wg sync.WaitGroup
-	for range goroutines {
+	for i := range goroutines {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			_, err := manager.createConnection(ctx, "tenant")
+			_, release, err := manager.Get(ctx, fmt.Sprintf("tenant-%d", i))
+			if release != nil {
+				release()
+			}
 			errs <- err
-		}()
+		}(i)
 	}
 	wg.Wait()
 	close(errs)

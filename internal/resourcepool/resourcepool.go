@@ -60,6 +60,13 @@ type PoolStats struct {
 	IdleTTL      time.Duration // Idle timeout duration
 }
 
+// EntrySnapshot is a point-in-time view of one pooled entry's identity and idle age, for
+// managers that surface per-resource detail in Stats (e.g. DbManager's "connections" array).
+type EntrySnapshot struct {
+	Key      string
+	LastUsed time.Time
+}
+
 // entry represents a pooled resource in the LRU.
 // refs, seedHeld, detached, and closed are guarded by Pool.mu.
 type entry[V any] struct {
@@ -439,11 +446,13 @@ func (p *Pool[V]) cleanupIdle() {
 	}
 }
 
-// Close shuts down all pooled resources and stops the cleanup loop. After Close returns,
-// GetOrCreate returns ErrPoolClosed. It is idempotent and returns the first close error
-// encountered (if any); all close errors are counted.
+// Close shuts down all pooled resources, stops the cleanup loop, and makes subsequent
+// GetOrCreate calls return ErrPoolClosed. It is idempotent and returns EVERY close error joined
+// via errors.Join (nil if none) — so consumers whose Close contract aggregates all failures
+// (e.g. DbManager) can surface them all, while errors.Is still matches any individual error.
+// Every close failure is also counted.
 func (p *Pool[V]) Close() error {
-	var first error
+	var closeErrs []error
 
 	p.closeOnce.Do(func() {
 		// Flip closed BEFORE any teardown so concurrent GetOrCreate callers immediately see
@@ -466,14 +475,12 @@ func (p *Pool[V]) Close() error {
 		for _, e := range toClose {
 			if err := p.closer(e.value); err != nil {
 				p.incErrors()
-				if first == nil {
-					first = err
-				}
+				closeErrs = append(closeErrs, err)
 			}
 		}
 	})
 
-	return first
+	return errors.Join(closeErrs...)
 }
 
 // Closed reports whether Close has been called.
@@ -501,6 +508,18 @@ func (p *Pool[V]) Stats() PoolStats {
 		Errors:       p.errors,
 		IdleTTL:      p.idleTTL,
 	}
+}
+
+// Snapshot returns a point-in-time snapshot of every live entry (key + last-used), in
+// unspecified order. Observability/Stats surfaces only — it takes no lease and does not touch LRU.
+func (p *Pool[V]) Snapshot() []EntrySnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]EntrySnapshot, 0, len(p.entries))
+	for key, e := range p.entries {
+		out = append(out, EntrySnapshot{Key: key, LastUsed: e.lastUsed})
+	}
+	return out
 }
 
 // incErrors bumps the error counter. Must be called without mu held.
