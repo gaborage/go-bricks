@@ -289,6 +289,14 @@ func TestRegisterDebugEndpointsAccessControlWarn(t *testing.T) {
 	}{
 		{name: "no_access_control_warns", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: true, wantExposed: "build info"},
 		{name: "lists_only_enabled_endpoints", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{Goroutines: true, Info: true}, wantWarn: true, wantExposed: "goroutine dumps, build info"},
+		{
+			name:        "all_endpoints_listed",
+			allowedIPs:  nil,
+			bearerToken: "",
+			endpoints:   config.DebugEndpointsConfig{Goroutines: true, GC: true, Health: true, Info: true},
+			wantWarn:    true,
+			wantExposed: "goroutine dumps, GC endpoints, enhanced health, build info",
+		},
 		{name: "allowlist_set_no_warn", allowedIPs: []string{"127.0.0.1"}, bearerToken: "", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: false},
 		{name: "token_set_no_warn", allowedIPs: nil, bearerToken: "x", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: false},
 		{name: "no_endpoints_no_warn", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{}, wantWarn: false},

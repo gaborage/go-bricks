@@ -121,7 +121,7 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) {
 		exposed = append(exposed, "goroutine dumps")
 	}
 	if d.config.Endpoints.GC {
-		exposed = append(exposed, "forced GC")
+		exposed = append(exposed, "GC endpoints")
 	}
 	if d.config.Endpoints.Health {
 		exposed = append(exposed, "enhanced health")
