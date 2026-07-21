@@ -155,10 +155,17 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 			if e := p.peek(key); e != nil {
 				return e, nil
 			}
-			return p.createEntry(ctx, key, create)
+			e, cerr := p.createEntry(ctx, key, create)
+			if cerr != nil {
+				// Count the failure once, HERE in the singleflight leader. sf.Do hands the same
+				// error to every collapsed waiter, so incrementing after Do would over-count a
+				// single create failure by the number of blocked callers.
+				p.incErrors()
+				return nil, cerr
+			}
+			return e, nil
 		})
 		if err != nil {
-			p.incErrors()
 			return zero, nil, err
 		}
 

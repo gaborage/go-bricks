@@ -93,6 +93,17 @@ func uniqueConnector(created *atomic.Int32) func(context.Context) (*fakeResource
 	}
 }
 
+// failingConnector returns a create function that always fails with err after a delay, tallying
+// call count. The delay widens the singleflight window so concurrent callers collapse onto one
+// failing create.
+func failingConnector(calls *atomic.Int32, err error, delay time.Duration) func(context.Context) (*fakeResource, error) {
+	return func(context.Context) (*fakeResource, error) {
+		calls.Add(1)
+		time.Sleep(delay)
+		return nil, err
+	}
+}
+
 // TestPoolGetOrCreateCreatesOnceAndReuses pins lazy creation and reuse of a single entry.
 func TestPoolGetOrCreateCreatesOnceAndReuses(t *testing.T) {
 	tr := newCloseTracker()
@@ -323,6 +334,37 @@ func TestPoolCreateErrorPropagatesAndCounts(t *testing.T) {
 	assert.Equal(t, 0, st.Size)
 	assert.Equal(t, 1, st.Errors)
 	assert.Equal(t, 0, st.TotalCreated)
+}
+
+// TestPoolConcurrentCreateFailureCountsErrorOnce pins that a create failure collapsed across N
+// concurrent GetOrCreate callers (singleflight hands the same error to every waiter) increments
+// Errors exactly ONCE — in the leader — not once per blocked caller. Every caller still receives
+// the shared error.
+func TestPoolConcurrentCreateFailureCountsErrorOnce(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	wantErr := errors.New("boom")
+	var calls atomic.Int32
+	create := failingConnector(&calls, wantErr, 20*time.Millisecond)
+
+	const workers = 8
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			v, rel, err := p.GetOrCreate(context.Background(), keyOne, create)
+			assert.ErrorIs(t, err, wantErr)
+			assert.Nil(t, v)
+			assert.Nil(t, rel)
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(1), calls.Load(), "singleflight must collapse the failing create to one call")
+	assert.Equal(t, 1, p.Stats().Errors, "a single collapsed create failure counts once, not once per waiter")
 }
 
 // TestPoolRemoveClosesUnleased verifies Remove hands back an unleased resource for the caller
