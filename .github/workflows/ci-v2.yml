@@ -237,7 +237,7 @@ jobs:
       # self-contained platform CLI tarballs mid-11.x; see the Install step).
       # renovate: datasource=github-releases depName=flyway/flyway
       FLYWAY_VERSION: 13.0.0
-      FLYWAY_SHA256: 706a8838f5bea158af3f738c428102aa9f895da0d8ba4ccd0c0c1cbf6141ad9f
+      FLYWAY_SHA256: f199356e0a1ed15e94268a39f97e9bd4307a467b712ee745ceb4d7e7565690d9
 
     steps:
       - uses: actions/checkout@v7
