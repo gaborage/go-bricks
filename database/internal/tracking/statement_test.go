@@ -140,8 +140,8 @@ func TestStatementExecPropagatesErrors(t *testing.T) {
 	if events[0].Level != "error" {
 		t.Fatalf("expected error level, got %s", events[0].Level)
 	}
-	if events[0].Err == nil {
-		t.Fatalf("expected error to be recorded")
+	if events[0].Fields["error_type"] != dbErrorClass(underlying.execErr) {
+		t.Fatalf("expected error_type field to hold the driver error's Go type, got %v", events[0].Fields["error_type"])
 	}
 }
 
