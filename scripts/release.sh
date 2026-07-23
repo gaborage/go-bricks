@@ -39,6 +39,16 @@ git fetch --quiet --prune --tags origin
 LOCAL_SHA="$(git rev-parse HEAD)"
 [ "$LOCAL_SHA" = "$(git rev-parse origin/main)" ] || die "local main not in sync with origin/main; git pull"
 
+# 5b. HEAD must BE the release commit (the release-please merge is the last commit
+#     touching the manifest). If main has moved past it, tagging HEAD would ship commits
+#     the CHANGELOG doesn't document — and hide them from the NEXT release's notes.
+#     Recover per RELEASING.md 'Recovering a missed tag': sign the release commit itself.
+RELEASE_COMMIT="$(git log -1 --format=%H -- .release-please-manifest.json)"
+[ "$LOCAL_SHA" = "$RELEASE_COMMIT" ] \
+  || die "HEAD is not the release commit: .release-please-manifest.json was last bumped in
+$RELEASE_COMMIT ($(git log -1 --format=%s "$RELEASE_COMMIT")), but main has moved on.
+Tag that commit instead — see RELEASING.md 'Recovering a missed tag'."
+
 # 6. tag absent + strictly greater than latest
 git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null 2>&1 && die "tag $VERSION already exists locally"
 git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1 && die "tag $VERSION already exists on origin"
@@ -78,22 +88,30 @@ make sec
 make -C tools/migration check
 make -C tools/migration vuln
 make -C tools/migration sec
+# 'make check' runs 'fmt' (both modules); if it rewrote tracked files the commit isn't
+# actually fmt/lint-clean, yet the tag would still point at the un-rewritten commit.
+# Fail loudly rather than release a commit the gate silently "fixed" locally.
+[ -z "$(git status --porcelain)" ] \
+  || die "the release gate (make check → fmt) modified tracked files; the commit is not fmt-clean. Fix on main and re-merge the release PR."
 
 # 9. signing probe BEFORE mutating refs (cleans up even if interrupted)
 PROBE="_release-sign-probe-$$"
 trap 'git tag -d "$PROBE" >/dev/null 2>&1 || true' EXIT INT TERM
 git tag -s -m "signing probe" "$PROBE" HEAD \
   || die "signing failed — unlock 1Password / start the SSH agent and retry. NEVER use --no-sign."
-git tag -d "$PROBE" >/dev/null 2>&1
+# '|| true' so a delete hiccup can't abort the script diagnostic-free under set -e;
+# the still-armed EXIT trap provides the real cleanup.
+git tag -d "$PROBE" >/dev/null 2>&1 || true
 trap - EXIT
 
 # 10. signed annotated tag on HEAD (the merged release-please commit). -s is MANDATORY.
 git tag -s "$VERSION" -m "Release $VERSION"
 
-# 11. BLOCKING local signature verify (always; fall back to the committed allowlist)
-SIGNERS="$(git config --get gpg.ssh.allowedSignersFile || echo .github/allowed_signers)"
-git -c gpg.ssh.allowedSignersFile="$SIGNERS" tag -v "$VERSION" \
-  || { git tag -d "$VERSION"; die "tag signature failed local verify (key/principal mismatch?) — tag deleted"; }
+# 11. BLOCKING local signature verify against the REPO allowlist — the same trust root
+#     CI uses (.github/allowed_signers), NOT the maintainer's personal Git config, so a
+#     stale or broader personal allowlist can't pass a tag that CI's gate would reject.
+git -c gpg.ssh.allowedSignersFile=.github/allowed_signers tag -v "$VERSION" \
+  || { git tag -d "$VERSION"; die "tag signature failed local verify against .github/allowed_signers (key/principal mismatch?) — tag deleted"; }
 
 # 12. push the tag (fires release.yml). main is already at HEAD (release-please PR merge).
 git push origin "$VERSION" || { git tag -d "$VERSION"; die "tag push failed; local tag removed — re-run: make release VERSION=$VERSION"; }

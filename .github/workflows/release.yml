@@ -144,7 +144,12 @@ jobs:
           prs="$(gh pr list --state merged --label 'autorelease: pending' --json number --jq '.[].number')"
           if [ -z "$prs" ]; then echo "No merged autorelease:pending PR found (ok)"; fi
           for pr in $prs; do
-            gh pr edit "$pr" --remove-label 'autorelease: pending'
+            # The label list can come from a stale search index (observed: PRs reported
+            # pending days after being cleared) — don't let a phantom entry fail a real
+            # release. A genuinely stuck label is surfaced by release-please.yml's
+            # deadlock check, not lost.
+            gh pr edit "$pr" --remove-label 'autorelease: pending' \
+              || echo "note: could not remove pending label on PR #$pr (already absent, or a transient API error) — continuing"
             gh pr edit "$pr" --add-label 'autorelease: tagged' 2>/dev/null \
               || echo "note: 'autorelease: tagged' label missing on PR #$pr (non-fatal)"
             echo "Cleared autorelease:pending on PR #$pr"

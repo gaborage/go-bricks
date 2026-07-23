@@ -30,7 +30,8 @@ Release PR and cut a **signed** tag locally; CI re-verifies and publishes.
 
 ## 1. release-please keeps a standing Release PR
 
-On every push to `main`, `release-please` opens/updates a `chore(main): release vX.Y.Z` PR
+On every push to `main` (and on demand via *Actions → release-please → Run workflow*),
+`release-please` opens/updates a `chore(main): release vX.Y.Z` PR
 that computes the next version from Conventional-Commit PR titles and writes the
 `CHANGELOG.md` section + bumps `.release-please-manifest.json`. It does **not** tag or publish.
 
@@ -55,6 +56,28 @@ for the `tools/migration` module — probes signing, creates a **signed annotate
 > **Rule (release-please #1561):** never merge a Release PR you are not ready to `make release`
 > immediately. A merged-but-untagged Release PR keeps its `autorelease: pending` label and
 > **deadlocks all future Release PRs**. `release.yml` clears that label after publishing.
+
+### Recovering a missed tag (the #1561 deadlock)
+
+If a Release PR was merged but `make release` never ran, every later `release-please`
+run fails red with "merged but not tagged" (and opens no new Release PR) until the
+missed version is tagged. `make release` refuses to help once `main` has moved past the
+release commit — tagging HEAD would ship undocumented commits — so sign the release
+commit itself:
+
+```bash
+git checkout main && git pull
+REL_COMMIT="$(git log -1 --format=%H -- .release-please-manifest.json)"   # the merged Release PR squash
+git log -1 --oneline "$REL_COMMIT"                                        # sanity: 'chore(main): release X.Y.Z'
+git tag -s vX.Y.Z -m "Release vX.Y.Z" "$REL_COMMIT"
+git -c gpg.ssh.allowedSignersFile=.github/allowed_signers tag -v vX.Y.Z
+git push origin vX.Y.Z
+```
+
+`release.yml` re-verifies the tagged commit, publishes the GitHub Release, and clears
+the `autorelease: pending` label; the next push to `main` (or a manual `release-please`
+run via *Actions → release-please → Run workflow*) then opens the Release PR for
+everything merged since.
 
 ## 3. What `release.yml` does (on tag push)
 
