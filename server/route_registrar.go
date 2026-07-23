@@ -8,9 +8,10 @@ import (
 )
 
 type routeGroup struct {
-	group  *echo.Group
-	prefix string
-	cfg    *config.Config // populates HandlerContext.Config in the go-bricks↔echo adapters
+	group   *echo.Group
+	prefix  string
+	cfg     *config.Config // populates HandlerContext.Config in the go-bricks↔echo adapters
+	tracker *routeConflictTracker
 }
 
 func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) RouteRegistrar {
@@ -21,11 +22,22 @@ func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) RouteRe
 	}
 }
 
+// newTrackedRouteGroup is newRouteGroup plus a shared conflict tracker: Server's group
+// factories use it so every routeGroup they hand out (including nested Group() children)
+// records into the same per-Server tracker.
+func newTrackedRouteGroup(group *echo.Group, prefix string, cfg *config.Config, tracker *routeConflictTracker) RouteRegistrar {
+	rg := newRouteGroup(group, prefix, cfg).(*routeGroup)
+	rg.tracker = tracker
+	return rg
+}
+
 // addEcho implements the unexported echoAdder seam: it registers a pre-built
 // echo.HandlerFunc directly, so the framework's typed-handler hot path pays no
 // per-request adapter cost (ADR-026).
-func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc) {
-	rg.group.Add(method, rg.relativePath(path), h)
+func (rg *routeGroup) addEcho(method, path string, h echo.HandlerFunc, reg RouteRegistrant) {
+	relative := rg.relativePath(path)
+	rg.group.Add(method, relative, h)
+	rg.tracker.record(method, rg.fullPathFromRelative(relative), reg)
 }
 
 // Add registers an echo-free Handler with optional flat middleware. The go-bricks→echo
@@ -43,12 +55,17 @@ func (rg *routeGroup) Add(method, path string, handler Handler, middleware ...Mi
 	rg.group.Add(method, relative, adaptHandler(handler, rg.cfg), rg.adaptAll(middleware)...)
 
 	fullPath := rg.fullPathFromRelative(relative)
+	handlerName := extractHandlerName(handler)
+	pkg := getCallerPackage(2) // getCallerPackage → Add → module (best-effort, as typed routes)
+
+	rg.tracker.record(method, fullPath, RouteRegistrant{HandlerName: handlerName, Package: pkg})
+
 	DefaultRouteRegistry.Register(&RouteDescriptor{
 		Method:      method,
 		Path:        fullPath,
 		HandlerID:   formatHandlerID(method, fullPath),
-		HandlerName: extractHandlerName(handler),
-		Package:     getCallerPackage(2), // getCallerPackage → Add → module (best-effort, as typed routes)
+		HandlerName: handlerName,
+		Package:     pkg,
 	})
 }
 
@@ -57,9 +74,10 @@ func (rg *routeGroup) Group(prefix string, middleware ...MiddlewareFunc) RouteRe
 	newGroup := rg.group.Group(normalized, rg.adaptAll(middleware)...)
 
 	return &routeGroup{
-		group:  newGroup,
-		prefix: rg.combinePrefix(normalized),
-		cfg:    rg.cfg,
+		group:   newGroup,
+		prefix:  rg.combinePrefix(normalized),
+		cfg:     rg.cfg,
+		tracker: rg.tracker,
 	}
 }
 

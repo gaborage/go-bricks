@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -476,4 +477,80 @@ func TestStartMaintenanceLoopsWarnsOnLateCleanupInterval(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return manager.Stats()["active_publishers"] == 0
 	}, time.Second, 10*time.Millisecond, "cleanup loop must still run despite the late-cleanupinterval WARN")
+}
+
+// TestCheckRouteConflictsAggregatesAndSkips drives checkRouteConflicts directly against a
+// real server.Server (white-box field access — the mock server used elsewhere in this file
+// has no-op registrars and never implements RouteConflicts(), so positive cases can only be
+// exercised against a real server), covering report, aggregate, and skip-path behaviors.
+func TestCheckRouteConflictsAggregatesAndSkips(t *testing.T) {
+	log := logger.New("error", false)
+	noop := func(c server.HandlerContext) error { return c.String(http.StatusOK, "") }
+
+	tests := []struct {
+		name         string
+		buildApp     func() *App
+		wantErr      bool
+		wantContains []string
+	}{
+		{
+			name: "one_conflict",
+			buildApp: func() *App {
+				srv := server.New(&config.Config{}, log)
+				mg := srv.ModuleGroup()
+				mg.Add(http.MethodGet, "/dup", noop)
+				mg.Add(http.MethodGet, "/dup", noop)
+				return &App{server: srv}
+			},
+			wantErr:      true,
+			wantContains: []string{"duplicate route registration (1 conflict(s))", "GET /dup"},
+		},
+		{
+			name: "two_conflicts",
+			buildApp: func() *App {
+				srv := server.New(&config.Config{}, log)
+				mg := srv.ModuleGroup()
+				mg.Add(http.MethodGet, "/one", noop)
+				mg.Add(http.MethodGet, "/one", noop)
+				mg.Add(http.MethodPost, "/two", noop)
+				mg.Add(http.MethodPost, "/two", noop)
+				return &App{server: srv}
+			},
+			wantErr:      true,
+			wantContains: []string{"(2 conflict(s))", "GET /one", "POST /two"},
+		},
+		{
+			name: "no_conflicts",
+			buildApp: func() *App {
+				srv := server.New(&config.Config{}, log)
+				mg := srv.ModuleGroup()
+				mg.Add(http.MethodGet, "/one", noop)
+				mg.Add(http.MethodPost, "/two", noop)
+				return &App{server: srv}
+			},
+			wantErr: false,
+		},
+		{
+			name: "fake_server_skipped",
+			buildApp: func() *App {
+				return &App{server: newMockServer()}
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := tc.buildApp()
+			err := a.checkRouteConflicts()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			for _, want := range tc.wantContains {
+				assert.Contains(t, err.Error(), want)
+			}
+		})
+	}
 }

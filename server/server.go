@@ -32,6 +32,7 @@ type Server struct {
 	readyRoute   string
 	readyMu      sync.RWMutex
 	readyHandler echo.HandlerFunc
+	conflicts    *routeConflictTracker
 }
 
 // normalizeBasePath cannot use pathutil.NormalizePrefix because that helper
@@ -117,6 +118,7 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 		healthRoute:  healthRoute,
 		readyRoute:   readyRoute,
 		readyHandler: nil,
+		conflicts:    newRouteConflictTracker(),
 	}
 
 	// Compute full paths for probe endpoints before middleware setup
@@ -134,6 +136,16 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	e.GET(readyPath, s.dispatchReady)
 	e.HEAD(readyPath, s.dispatchReady)
 
+	// The probes register directly on the engine (not through a routeGroup), so record
+	// them explicitly: a module claiming the health/ready path must fail startup like
+	// any other collision.
+	probe := RouteRegistrant{HandlerName: "healthCheck", Package: serverPackagePath}
+	s.conflicts.record(http.MethodGet, healthPath, probe)
+	s.conflicts.record(http.MethodHead, healthPath, probe)
+	probe.HandlerName = "dispatchReady"
+	s.conflicts.record(http.MethodGet, readyPath, probe)
+	s.conflicts.record(http.MethodHead, readyPath, probe)
+
 	log.Debug().
 		Str("base_path", basePath).
 		Str("health_path", healthPath).
@@ -147,9 +159,9 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 // registration. If no base path is configured, it returns a registrar with empty prefix.
 func (s *Server) ModuleGroup() RouteRegistrar {
 	if s.basePath == "" || s.basePath == "/" {
-		return newRouteGroup(s.echo.Group(""), "", s.cfg)
+		return newTrackedRouteGroup(s.echo.Group(""), "", s.cfg, s.conflicts)
 	}
-	return newRouteGroup(s.echo.Group(s.basePath), s.basePath, s.cfg)
+	return newTrackedRouteGroup(s.echo.Group(s.basePath), s.basePath, s.cfg, s.conflicts)
 }
 
 // RootGroup returns a route registrar rooted at the engine with NO base path applied. It
@@ -157,7 +169,13 @@ func (s *Server) ModuleGroup() RouteRegistrar {
 // root regardless of server.path.base — e.g. the debug/system endpoints. It replaces the
 // former Echo() accessor for that internal need without exposing the engine.
 func (s *Server) RootGroup() RouteRegistrar {
-	return newRouteGroup(s.echo.Group(""), "", s.cfg)
+	return newTrackedRouteGroup(s.echo.Group(""), "", s.cfg, s.conflicts)
+}
+
+// RouteConflicts returns every duplicate method+path registration observed on
+// this server's registrars, in registration order. Empty when there are none.
+func (s *Server) RouteConflicts() []RouteConflict {
+	return s.conflicts.snapshot()
 }
 
 // RegisterReadyHandler overrides the readiness endpoint handler with a go-bricks Handler.
