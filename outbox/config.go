@@ -28,6 +28,10 @@ func validateConfig(c *config.OutboxConfig) error {
 	if c.PublishTimeout < 0 {
 		return fmt.Errorf("outbox: publishtimeout must not be negative, got %s", c.PublishTimeout)
 	}
+	if c.Tenancy != config.TenancyPerTenant && c.Tenancy != config.TenancyShared {
+		return fmt.Errorf("outbox: tenancy must be %q or %q, got %q",
+			config.TenancyPerTenant, config.TenancyShared, c.Tenancy)
+	}
 	return nil
 }
 
@@ -52,5 +56,8 @@ func applyDefaults(c *config.OutboxConfig) {
 	}
 	if c.PublishTimeout == 0 {
 		c.PublishTimeout = 60 * time.Second
+	}
+	if c.Tenancy == "" {
+		c.Tenancy = config.TenancyPerTenant
 	}
 }

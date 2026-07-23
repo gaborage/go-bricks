@@ -47,3 +47,15 @@ type TenantStore interface {
 type declarationSetter interface {
 	SetDeclarations(*messaging.Declarations)
 }
+
+// sharedResolverSetter is an internal interface implemented by ledger modules
+// (outbox, inbox) that can run against the shared ("" key) control-plane
+// resources when configured with tenancy=shared. The resolvers are injected at
+// registration so they are available regardless of when Init runs; modules use
+// them only when their tenancy config says so.
+type sharedResolverSetter interface {
+	SetSharedResolvers(
+		db func(context.Context) (database.Interface, error),
+		msg func(context.Context) (messaging.AMQPClient, error),
+	)
+}

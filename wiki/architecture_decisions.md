@@ -604,6 +604,33 @@ broker state agree again since `Args` now reaches both.
 
 ---
 
+### [ADR-041: Shared (Control-Plane) Ledger Tenancy for Outbox/Inbox](adr_041_shared_ledger_tenancy.md)
+
+**Date:** 2026-07-23 | **Status:** Accepted
+
+Adds `outbox.tenancy` / `inbox.tenancy` (`"per-tenant"` default, unchanged; or `"shared"`) so a
+**pool-model** deployment (one shared database, `multitenant.enabled: true` only for HTTP tenant
+resolution) can use the outbox/inbox with one control-plane ledger, relayed in a single pass,
+instead of the per-tenant fan-out the #581 guards otherwise require enumerable tenants for. Shared
+mode resolves resources via the empty key (`""`) — the same key the built-in store already maps to
+the root `database:`/`messaging:` blocks, unreachable from HTTP tenant resolution. No new public
+`ModuleDeps` resource accessors: the two ledger modules receive the shared resolvers via an
+unexported duck-typed setter (`sharedResolverSetter`, mirroring the existing `declarationSetter`
+precedent), injected by `App.RegisterModule` before `Init` runs. Shared-mode outbox publishes
+**require** a framework-originated transaction (`RunInSharedTx` + an opaque `sharedTx` marker type,
+exposed to applications via `app.SharedTxRunner`) — `dbtypes.Tx` cannot otherwise be verified to
+target the control-plane database, so a docs-only contract would reintroduce the exact silent-loss
+class the #581 guards exist to prevent. Consumers on the shared broker are explicitly out of scope
+(publisher-only). Additive-only; default tenancy behavior is byte-for-byte unchanged.
+
+**Key Benefits:** Unblocks a legitimate topology (#758) that previously had no supported mode short
+of disabling the outbox or a decorative static-tenant config lie — which was itself
+attacker-reachable via a guessable `X-Tenant-ID`; `RunInSharedTx`'s marker enforcement makes
+ledger/business co-location a build-time-adjacent guarantee instead of an operator-trust
+convention; zero behavior change for every existing per-tenant/single-tenant deployment.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -613,7 +640,7 @@ broker state agree again since `Args` now reaches both.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-040) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-041) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

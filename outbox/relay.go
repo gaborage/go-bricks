@@ -33,9 +33,10 @@ type Relay struct {
 	getDB        func(context.Context) (dbtypes.Interface, error)
 	getMessaging func(context.Context) (messaging.AMQPClient, error)
 	// tenants lists the tenant keys to relay each cycle. Always non-empty: a single
-	// "" entry for single-tenant mode (multitenant.SetTenant with "" is a no-op), or
-	// the configured static multitenant tenant IDs. Dynamic multi-tenant sources are
-	// rejected at module Init (their tenant set is not enumerable at registration time).
+	// "" entry for single-tenant mode (multitenant.SetTenant with "" is a no-op) and
+	// for shared (control-plane) tenancy, or the configured static multitenant tenant
+	// IDs. In per-tenant tenancy, dynamic multi-tenant sources are rejected at module
+	// Init (their tenant set is not enumerable at registration time).
 	tenants []string
 }
 
@@ -205,6 +206,9 @@ func (r *Relay) logCycle(log logger.Logger, tenantID string, published, unrecord
 		Int("total", total)
 	if tenantID != "" {
 		event = event.Str("tenant", tenantID)
+	}
+	if r.config.Tenancy == config.TenancyShared {
+		event = event.Str("tenancy", "shared")
 	}
 	event.Msg("Outbox relay cycle completed")
 }

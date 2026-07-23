@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/config"
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 	"github.com/stretchr/testify/assert"
@@ -427,6 +429,76 @@ func TestMapHeaderAccessorNilMap(t *testing.T) {
 
 	a.Set("k", "v") // must lazily allocate the map
 	assert.Equal(t, "v", a.Get("k"), "Set must initialize the map and store the value")
+}
+
+// TestSharedModePublishRejectsForeignTx guards the RunInSharedTx marker
+// enforcement: a shared-tenancy module must reject Publish calls on any
+// transaction that did not originate from RunInSharedTx, since dbtypes.Tx is
+// opaque and the framework cannot otherwise verify the tx targets the
+// control-plane database the relay polls.
+func TestSharedModePublishRejectsForeignTx(t *testing.T) {
+	m := &Module{
+		cfg: config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared, TableName: "gobricks_outbox"},
+	}
+	pub := &lazyPublisher{module: m}
+
+	event := &app.OutboxEvent{
+		EventType:   eventTypeTest,
+		AggregateID: aggregateTest,
+		Payload:     []byte("{}"),
+	}
+
+	_, err := pub.Publish(context.Background(), &mockTx{}, event)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "RunInSharedTx")
+}
+
+// TestRunInSharedTxPublishSucceeds verifies the happy path: RunInSharedTx
+// begins a transaction on the shared DB, wraps it in the sharedTx marker, and
+// Publish accepts it (the marker check passes) and inserts the outbox row.
+func TestRunInSharedTxPublishSucceeds(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectTransaction().
+		ExpectExec(`INSERT INTO gobricks_outbox`).
+		WillReturnRowsAffected(1)
+
+	m := &Module{
+		cfg:   config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared, TableName: "gobricks_outbox", DefaultExchange: "ex"},
+		getDB: func(context.Context) (dbtypes.Interface, error) { return db, nil },
+	}
+	pub := &lazyPublisher{module: m}
+
+	event := &app.OutboxEvent{
+		EventType:   eventTypeTest,
+		AggregateID: aggregateTest,
+		Payload:     []byte("{}"),
+		Exchange:    "ex",
+	}
+
+	var eventID string
+	err := pub.RunInSharedTx(context.Background(), func(ctx context.Context, tx dbtypes.Tx) error {
+		id, pubErr := pub.Publish(ctx, tx, event)
+		eventID = id
+		return pubErr
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, eventID)
+}
+
+// TestRunInSharedTxErrorsInPerTenantMode guards the mode gate: RunInSharedTx
+// is only meaningful under tenancy=shared, so the default per-tenant tenancy
+// must reject it rather than silently begin a transaction nobody expects.
+func TestRunInSharedTxErrorsInPerTenantMode(t *testing.T) {
+	m := &Module{
+		cfg: config.OutboxConfig{Enabled: true, Tenancy: config.TenancyPerTenant},
+	}
+	pub := &lazyPublisher{module: m}
+
+	err := pub.RunInSharedTx(context.Background(), func(context.Context, dbtypes.Tx) error {
+		return nil
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires outbox.tenancy=shared")
 }
 
 func TestMarshalPayloadStruct(t *testing.T) {

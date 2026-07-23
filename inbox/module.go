@@ -10,6 +10,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
 )
 
 // Module implements the GoBricks Module interface for the consumer-side inbox.
@@ -33,6 +34,10 @@ type Module struct {
 	config *config.Config
 	getDB  func(context.Context) (dbtypes.Interface, error)
 
+	// sharedDB is the control-plane ("" key) database resolver injected by
+	// app.RegisterModule. Used only when inbox.tenancy=shared.
+	sharedDB func(context.Context) (dbtypes.Interface, error)
+
 	processor app.InboxProcessor
 	cfg       config.InboxConfig
 
@@ -48,6 +53,21 @@ func NewModule() *Module {
 func (m *Module) Name() string {
 	return "inbox"
 }
+
+// SetSharedResolvers injects the control-plane ("" key) resolvers. Called by
+// app.RegisterModule; used only when inbox.tenancy=shared. The messaging
+// resolver is ignored — the inbox has no broker of its own (ProcessOnce only
+// touches the database).
+func (m *Module) SetSharedResolvers(
+	db func(context.Context) (dbtypes.Interface, error),
+	_ func(context.Context) (messaging.AMQPClient, error),
+) {
+	m.sharedDB = db
+}
+
+// sharedLedger reports whether the inbox is configured for shared
+// (control-plane) tenancy rather than the default per-tenant fan-out.
+func (m *Module) sharedLedger() bool { return m.cfg.Tenancy == config.TenancyShared }
 
 // Init implements app.Module.
 func (m *Module) Init(deps *app.ModuleDeps) error {
@@ -73,11 +93,27 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return fmt.Errorf("inbox: database resolver (deps.DB) is required when inbox is enabled")
 	}
 
+	// Shared (control-plane) ledger tenancy: require the framework-injected resolver
+	// (set by app.RegisterModule via the sharedResolverSetter duck-type) and swap it
+	// in. Runs unconditionally for tenancy=shared (even with multitenant disabled) —
+	// shared+MT-disabled resolves the same "" key single-tenant mode already uses, so
+	// this is a no-op in effect, but the resolver must still have been injected.
+	if m.sharedLedger() {
+		if m.sharedDB == nil {
+			return tenantstore.SharedResolversRequired("inbox")
+		}
+		m.getDB = m.sharedDB
+		if err := tenantstore.RejectSharedWithStaticTenants("inbox", m.config); err != nil {
+			return err
+		}
+	}
+
 	m.processor = &Inbox{module: m}
 
 	m.logger.Info().
 		Str("table", m.cfg.TableName).
 		Dur("retentionPeriod", m.cfg.RetentionPeriod).
+		Str("tenancy", m.cfg.Tenancy).
 		Msg("Inbox module initialized")
 	return nil
 }
@@ -96,6 +132,7 @@ func (m *Module) ensureStoreInitialized(ctx context.Context) (Store, error) {
 		NewPostgres:     NewPostgresStore,
 		NewOracle:       NewOracleStore,
 		WarnMsg:         "Inbox table creation failed (may already exist)",
+		SingleKey:       m.sharedLedger(),
 	})
 }
 
@@ -116,25 +153,33 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 	// it does not silently never prune any tenant's ledger. ProcessOnce itself is
 	// unaffected (it resolves the tenant from the request context), which is why this
 	// guard lives here — failing only when the cleanup job would actually be registered —
-	// rather than in Init, so ProcessOnce-only deployments (no scheduler) still work:
+	// rather than in Init, so ProcessOnce-only deployments (no scheduler) still work.
+	// Shared tenancy takes the single control-plane pass instead, so it is exempt:
 	//   - dynamic sources: the tenant set is not enumerable at registration time;
 	//   - static sources with no tenants: there is nothing to fan out to.
-	if m.config != nil && m.config.Multitenant.Enabled {
+	if m.config != nil && m.config.Multitenant.Enabled && !m.sharedLedger() {
 		switch {
 		case m.config.Source.Type == config.SourceTypeDynamic:
 			return fmt.Errorf("inbox: retention cleanup is not supported with dynamic multi-tenant sources " +
-				"(source.type=dynamic); use static multitenant.tenants config, or run without the scheduler to use ProcessOnce only")
+				"(source.type=dynamic); use static multitenant.tenants config, set inbox.tenancy=shared to " +
+				"prune a single control-plane ledger, or run without the scheduler to use ProcessOnce only")
 		case len(m.config.Multitenant.Tenants) == 0:
 			return fmt.Errorf("inbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
-				"the cleanup job would prune nothing. Configure multitenant.tenants, or run without the scheduler to use ProcessOnce only")
+				"the cleanup job would prune nothing. Configure multitenant.tenants, set inbox.tenancy=shared to " +
+				"prune a single control-plane ledger, or run without the scheduler to use ProcessOnce only")
 		}
+	}
+
+	tenants := m.config.PerTenantJobKeys()
+	if m.sharedLedger() {
+		tenants = []string{""}
 	}
 
 	cleanup := &Cleanup{
 		store:           &lazyStore{module: m},
 		retentionPeriod: m.cfg.RetentionPeriod,
 		getDB:           m.getDB,
-		tenants:         m.config.PerTenantJobKeys(),
+		tenants:         tenants,
 	}
 
 	// DailyAt uses only the time-of-day (04:00) and applies the scheduler's
@@ -187,10 +232,20 @@ func (s *lazyStore) CreateTable(ctx context.Context, db dbtypes.Interface) error
 }
 
 // Compile-time guards.
+//
+// The SetSharedResolvers guard pins its exact signature: the app-side duck-type
+// (app.sharedResolverSetter) matches structurally, so an accidental local signature
+// edit would otherwise silently stop injection instead of failing to compile.
 var (
 	_ app.Module         = (*Module)(nil)
 	_ app.InboxProvider  = (*Module)(nil)
 	_ app.JobProvider    = (*Module)(nil)
 	_ app.InboxProcessor = (*Inbox)(nil)
 	_ Store              = (*lazyStore)(nil)
+	_ interface {
+		SetSharedResolvers(
+			func(context.Context) (dbtypes.Interface, error),
+			func(context.Context) (messaging.AMQPClient, error),
+		)
+	} = (*Module)(nil)
 )

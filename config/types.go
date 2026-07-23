@@ -563,6 +563,12 @@ const (
 	SourceTypeDynamic = "dynamic"
 )
 
+// Ledger tenancy constants (outbox.tenancy / inbox.tenancy)
+const (
+	TenancyPerTenant = "per-tenant"
+	TenancyShared    = "shared"
+)
+
 // Tenant resolver type constants
 const (
 	ResolverTypeHeader    = "header"
@@ -652,6 +658,16 @@ type OutboxConfig struct {
 	// because a shorter value truncates every legitimate confirmation into a false failure
 	// and re-publishes the (already-delivered) event every cycle. Default: 60s.
 	PublishTimeout time.Duration `koanf:"publishtimeout" json:"publishtimeout" yaml:"publishtimeout" toml:"publishtimeout" mapstructure:"publishtimeout"`
+
+	// Tenancy selects where the ledger lives when multitenant.enabled is true:
+	//   - "per-tenant" (default): one ledger per tenant DB; relay/cleanup fan out
+	//     across static multitenant.tenants.
+	//   - "shared": one control-plane ledger resolved via the empty ("") key —
+	//     the root database:/messaging: blocks for the built-in store, or
+	//     whatever a custom resource source returns for "". Relay/cleanup run a
+	//     single pass. See wiki/outbox.md and ADR-041.
+	// In single-tenant mode both values behave identically.
+	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
 }
 
 // InboxConfig holds consumer-side idempotency (inbox) settings.
@@ -682,6 +698,17 @@ type InboxConfig struct {
 	// could be reprocessed. A zero value is treated as unset and replaced by the
 	// default; increase it to retain longer. Default: 168h (7 days).
 	RetentionPeriod time.Duration `koanf:"retentionperiod" json:"retentionperiod" yaml:"retentionperiod" toml:"retentionperiod" mapstructure:"retentionperiod"`
+
+	// Tenancy selects where the ledger lives when multitenant.enabled is true:
+	//   - "per-tenant" (default): one dedup ledger per tenant DB; the retention
+	//     cleanup job fans out across static multitenant.tenants.
+	//   - "shared": one control-plane ledger resolved via the empty ("") key —
+	//     the root database: block for the built-in store, or whatever a custom
+	//     resource source returns for "". The cleanup job runs a single pass and
+	//     ProcessOnce records/dedups against the shared ledger. See
+	//     wiki/outbox.md and ADR-041.
+	// In single-tenant mode both values behave identically.
+	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
 }
 
 // SchedulerConfig holds job scheduler settings.
