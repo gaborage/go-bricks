@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec release
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec release release-cli
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
@@ -99,3 +99,7 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 release: ## Cut a signed release tag (usage: make release VERSION=v0.38.0). Run AFTER merging the release-please PR. Requires 1Password unlocked.
 	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.38.0'"; exit 1; }
 	@VERSION=$(VERSION) ./scripts/release.sh
+
+release-cli: ## Cut a signed go-bricks-migrate CLI tag (usage: make release-cli VERSION=v0.53.0). Run AFTER the framework tag is on the module proxy. Requires 1Password unlocked.
+	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release-cli VERSION=v0.53.0'"; exit 1; }
+	@VERSION="$(VERSION)" ./scripts/release-cli.sh
