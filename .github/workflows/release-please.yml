@@ -2,6 +2,9 @@ name: release-please
 on:
   push:
     branches: [main]
+  # Manual re-run: refresh the standing Release PR without waiting for a push
+  # (e.g. right after breaking a #1561 deadlock by tagging the missed release).
+  workflow_dispatch: {}
 concurrency:
   group: release-please-${{ github.ref }}
   cancel-in-progress: true
@@ -17,3 +20,32 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      # release-please aborts SILENTLY (green job, no Release PR) while any merged
+      # Release PR still wears 'autorelease: pending' (googleapis/release-please#1561)
+      # — the deadlock RELEASING.md's "tag immediately" rule exists to prevent. Turn
+      # that silent abort into a red run that names the missed step. The transient
+      # tagged-but-label-still-pending window (release.yml publishing right now, or
+      # its label-clear step failed — that failure is red in release.yml's own run)
+      # only warns, so this step never races the publish pipeline.
+      - name: Fail if a merged Release PR is untagged (release-please #1561)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Plain command substitution (NOT process substitution feeding the loop):
+          # a gh failure must abort the step under set -e, not hand the loop empty
+          # input and let the check pass vacuously.
+          pr_list="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --label 'autorelease: pending' --json number,title --jq '.[] | "\(.number)\t\(.title)"')"
+          deadlocked=0
+          while IFS=$'\t' read -r num title; do
+            [ -n "$num" ] || continue
+            ver="$(printf '%s' "$title" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+            if [ -n "$ver" ] && gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$ver" >/dev/null 2>&1; then
+              echo "::warning::Release PR #$num (v$ver) is tagged but still labeled 'autorelease: pending' — release.yml clears it after publishing; check that run if this persists."
+            else
+              echo "::error::Release PR #$num ('$title') is merged but v${ver:-X.Y.Z} is not tagged — release-please is deadlocked and will not open new Release PRs until it is. Cut the release: make release VERSION=v${ver:-X.Y.Z} (see RELEASING.md, or its 'Recovering a missed tag' section if main has moved on)."
+              deadlocked=1
+            fi
+          done <<< "$pr_list"
+          exit "$deadlocked"
