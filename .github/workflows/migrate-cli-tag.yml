@@ -1,0 +1,55 @@
+name: Migrate CLI Tag
+on:
+  push:
+    tags:
+      - 'tools/migration/v*'
+permissions:
+  contents: read
+concurrency:
+  group: migrate-cli-tag-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  close-drift-issue:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # needed to search for and close the drift-tracking issue once the CLI tag is fresh
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Close the CLI-tag drift issue once the CLI tag is fresh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --quiet
+          cli_ver="${TAG#tools/migration/}"
+          latest_fw="$(git tag --list 'v*' --sort=-v:refname | head -1 || true)"
+          if [ -z "$latest_fw" ]; then
+            echo "no framework tag to compare against — nothing to do"; exit 0
+          fi
+          # Fresh iff the just-pushed CLI version >= the latest framework release.
+          # (Same sort -V idiom as release.yml's freshness check.)
+          if [ "$(printf '%s\n%s\n' "$latest_fw" "$cli_ver" | sort -V | head -1)" != "$latest_fw" ]; then
+            echo "CLI $cli_ver still trails framework $latest_fw — leaving any drift issue open"; exit 0
+          fi
+          echo "CLI $cli_ver is fresh vs framework $latest_fw — closing any open drift issue"
+          nums="$(gh issue list --state open --search 'chore(migrate): cut the tools/migration CLI tag in:title' --json number --jq '.[].number')"
+          if [ -z "$nums" ]; then
+            echo "no open drift issue (ok)"; exit 0
+          fi
+          close_failed=0
+          for n in $nums; do
+            if ! gh issue close "$n" \
+              --comment "Resolved by \`$TAG\`: the go-bricks-migrate CLI is now at $cli_ver, matching framework release $latest_fw. Auto-closed by migrate-cli-tag.yml."
+            then
+              echo "could not close #$n"
+              close_failed=1
+            fi
+          done
+          exit "$close_failed"

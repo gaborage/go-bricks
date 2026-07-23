@@ -110,19 +110,26 @@ retract v0.38.0 // <reason>; use v0.38.1+
 
 ## 6. The go-bricks-migrate CLI
 
-Released manually at the same number as the framework, **after** the framework tag is on the
-module proxy:
+Released manually at the same number as the framework, **after** the framework
+tag is on the module proxy and `tools/migration/go.mod` pins that framework
+version on `main` (Renovate usually lands the pin automatically):
 
 ```bash
-go list -m github.com/gaborage/go-bricks@v0.38.0          # wait until this resolves
-GOWORK=off go -C tools/migration get github.com/gaborage/go-bricks@v0.38.0
-GOWORK=off go -C tools/migration mod tidy
-git commit -S -am "chore(migrate): pin go-bricks v0.38.0"
-git tag -s tools/migration/v0.38.0 -m "go-bricks-migrate v0.38.0"
-git push origin tools/migration/v0.38.0
+go list -m github.com/gaborage/go-bricks@v0.53.0   # wait until this resolves
+make release-cli VERSION=v0.53.0                    # requires 1Password unlocked
 ```
 
-The release workflow's `publish` job checks this obligation on every framework tag: if the newest `tools/migration/v*` tag trails the *previous* framework release, it emits a workflow warning and opens/updates a `chore(migrate): cut the tools/migration CLI tag` issue. The tag cut itself stays manual and signed — CI never creates tags.
+`make release-cli` is **read-and-verify-then-sign-and-push**: it asserts
+`VERSION == the go-bricks version pinned in tools/migration/go.mod`, that the
+framework tag resolves on the proxy, that `go mod tidy` is a no-op (the pin is
+already committed), and that the CLI tag is absent + strictly greater than the
+latest; runs the full `GOWORK=off make -C tools/migration check` + `sec` gate
+against the *released* framework; probes signing; creates a **signed annotated**
+tag `tools/migration/vX.Y.Z`; verifies the signature against
+`.github/allowed_signers`; and pushes. It does **not** create a GitHub Release
+(the CLI tag is a plain signed tag; no workflow publishes it).
+
+The release workflow's `publish` job checks this obligation on every framework tag: if the newest `tools/migration/v*` tag trails the *previous* framework release, it emits a workflow warning and opens/updates a `chore(migrate): cut the tools/migration CLI tag` issue. The tag cut itself stays manual and signed — CI never creates tags. Once a fresh `tools/migration/v*` tag is pushed, `migrate-cli-tag.yml` auto-closes that issue.
 
 ## 7. Security properties NOT yet provided (Phase 2)
 
