@@ -67,3 +67,22 @@ Route registered  module=events method=POST path=/v1/events
 It is a **tri-state** flag: an explicit `server.logroutes` value always wins; when the key is absent it defaults to `app.env` being development (on in `dev`/`development`/`local`, off in `prod`/`staging` per ADR-022). So routes are visible at first `go run` while production stays silent — an N-route service pays **zero** extra boot lines in prod unless an operator opts in. Turn it on in production for a smoke-check with `server.logroutes: true`; silence a dev boot with `server.logroutes: false`.
 
 Attribution is by **registration order** (`module.Name()`), covering both typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes — `RouteDescriptor.ModuleName` is empty for every route, so the module is derived from the registration span, not the descriptor field. Routes registered before the module loop (debug / `_sys`) are attributed to `framework`. Note: `health`/`ready` are registered directly on the HTTP engine (not the route registry) and are therefore **not** included.
+
+## Duplicate Route Detection
+
+Startup fails when two registrations claim the same **exact method + full path**. The echo engine is constructed with `AllowOverwritingRoute: true`, so without this check the second registration silently wins and the first module's handler is dead on arrival — no error, no warning, unless the shadowed route happens to be exercised. This closes that gap at the framework's own registration seam (`server.RouteRegistrar`), covering both typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes, plus anything registered through nested `Group()`s.
+
+**Coverage notes:**
+- `health`/`ready` probes register directly on the HTTP engine (not through `RouteRegistrar` — same seam note as route logging above), but `server.New` records their method+path pairs in the conflict tracker explicitly, so a module claiming `GET /health` (or the configured probe paths) fails startup like any other collision.
+- Param-name-differing route templates (e.g. `/users/:id` vs `/users/:uid`) are **excluded** — these are distinct strings and are not detected as duplicates, even though they collide in echo's radix tree at request time; echo's own behavior governs there.
+
+**Error shape:** startup aborts with one aggregate error naming every collision and both registrants (`HandlerName` + caller `Package`; module name is not available — see the route-logging note above on why `RouteDescriptor.ModuleName` stays empty):
+
+```text
+duplicate route registration (1 conflict(s))
+GET /v1/events — first: createEvent (github.com/example/events), duplicate: legacyCreateEvent (github.com/example/legacy)
+```
+
+The error is built with `errors.Join`, so the individual collisions can be traversed structurally (each child is a plain formatted error — there is no sentinel or typed error to match with `errors.Is`/`errors.As`).
+
+There is no disable knob — a colliding route is always a startup-blocking bug, never a warning. Fix by removing or renaming the colliding route.

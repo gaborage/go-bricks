@@ -1432,7 +1432,7 @@ type RouteRegistrar interface {
 // ADR-026), while consumers use the echo-free RouteRegistrar.Add. It is an optional
 // interface upgrade in the style of io.ReaderFrom.
 type echoAdder interface {
-	addEcho(method, path string, h echo.HandlerFunc)
+	addEcho(method, path string, h echo.HandlerFunc, reg RouteRegistrant)
 }
 
 // HandlerRegistry manages enhanced handlers and provides registration utilities.
@@ -1521,7 +1521,10 @@ func RegisterHandler[T any, R any](
 	// non-routeGroup registrars (test fakes); it round-trips through the unexported escape
 	// hatch and never executes on the framework's real registrar.
 	if er, ok := r.(echoAdder); ok {
-		er.addEcho(method, path, wrappedHandler)
+		er.addEcho(method, path, wrappedHandler, RouteRegistrant{
+			HandlerName: descriptor.HandlerName,
+			Package:     descriptor.Package,
+		})
 	} else {
 		r.Add(method, path, func(c HandlerContext) error {
 			ec := c.echoContext()
