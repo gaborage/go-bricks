@@ -2668,18 +2668,21 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 }
 ```
 
-Dead-letter failed messages (handler errors/panics nack without requeue) with the
-declarative helper `DeclareQueueWithDLQ` (v0.53.0) — it auto-derives a
-`<queue>.dlx` fanout exchange, a `<queue>.dlq` parking queue, and the binding, and
-is idempotent across queues sharing a DLX:
+Dead-letter failed messages (handler errors/panics nack without requeue) by declaring
+the queue with `DeclareQueueWithDLQ` **instead of** `DeclareQueue` (v0.53.0) — it
+auto-derives a `<queue>.dlx` fanout exchange, a `<queue>.dlq` parking queue, and the
+binding, and is idempotent across queues sharing a DLX. Declare each queue exactly once:
 
 ```go
-decls.DeclareQueueWithDLQ("orders.processing", &messaging.DeadLetterSpec{})
+// In DeclareMessaging above, swap `decls.DeclareQueue("orders.processing")` for this —
+// DeclareQueueWithDLQ registers the queue itself, so don't also call DeclareQueue for it:
+queue := decls.DeclareQueueWithDLQ("orders.processing", &messaging.DeadLetterSpec{})
 ```
 
-For custom DLX/parking-queue names or bespoke topology, set `Args` BEFORE
-registering — `DeclareQueue` snapshots a deep copy, so mutating the returned
-pointer's `Args` afterward is silently dropped:
+For custom DLX/parking-queue names or bespoke topology, declare a plain queue (again
+*instead of* the `DeclareQueue` above) and set `Args` BEFORE registering — `DeclareQueue`
+snapshots a deep copy, so mutating the returned pointer's `Args` afterward is silently
+dropped:
 
 ```go
 q := messaging.NewQueue("orders.processing")
