@@ -77,6 +77,7 @@ go test -run TestName   # Run specific test
 - **Named databases** for accessing multiple databases (including mixed vendors) in single-tenant mode
 - **Redis cache integration** with type-safe serialization, multi-tenant isolation, and automatic lifecycle management
 - **Transactional outbox** for reliable at-least-once event publishing (dual-write problem solved)
+- **Consumer-side inbox** for exactly-once *transactional* event processing (dedup ledger written atomically with the handler's DB writes via `InboxProcessor.ProcessOnce`)
 - **Job scheduler** with gocron, overlapping prevention, panic recovery, and system APIs
 - **Named RSA key pair and symmetric secret management** from DER/raw files or base64 environment variables
 - **JOSE middleware** for nested JWE-of-JWS protection on HTTP request/response bodies (Visa-style integrations)
@@ -281,6 +282,12 @@ type RouteRegisterer interface {
 type MessagingDeclarer interface {
     DeclareMessaging(decls *messaging.Declarations)
 }
+
+// Optional — implement to contribute app-wide middleware that runs once per
+// request (after tenant resolution, before handlers; no per-route opt-out)
+type GlobalMiddlewareRegisterer interface {
+    GlobalMiddleware() []server.MiddlewareFunc
+}
 ```
 
 `ModuleDeps` injects shared services into every module:
@@ -380,9 +387,12 @@ Unified interface supporting PostgreSQL and Oracle with vendor-specific optimiza
 
 ### Type-Safe Filter API
 
-GoBricks provides a composable Filter API that works across SELECT, UPDATE, DELETE, and JOIN operations:
+GoBricks provides a composable Filter API that works across SELECT, UPDATE, DELETE, and JOIN operations. The query-builder snippets below are fragments: they assume `db` is the request's `database.Interface`, obtained via `db, err := deps.DB(ctx)`.
 
 ```go
+// qb is a *database.QueryBuilder instance (there is no "qb" package):
+qb := database.NewQueryBuilder(db.DatabaseType()) // db from deps.DB(ctx)
+
 // Build reusable filters
 f := qb.Filter()
 
@@ -430,6 +440,7 @@ type User struct {
     Level int    `db:"level"` // Oracle reserved word — auto-quoted
 }
 
+qb := database.NewQueryBuilder(db.DatabaseType()) // db from deps.DB(ctx)
 cols := qb.Columns(&User{})
 f := qb.Filter()
 
@@ -599,7 +610,7 @@ func TestMyService(t *testing.T) {
 }
 ```
 
-**Features:** Fluent configuration API, operation tracking, 20+ assertion helpers, TTL expiration testing, multi-tenant support.
+**Features:** Fluent configuration API, operation tracking, 17 assertion helpers, TTL expiration testing, multi-tenant support.
 
 **See also:** [database/testing](https://pkg.go.dev/github.com/gaborage/go-bricks/database/testing) for similar patterns.
 
@@ -659,6 +670,8 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 ```
 
 The relay job polls for pending events every `pollinterval` (default 5s), publishes them to AMQP with an `x-outbox-event-id` header for deduplication, and a cleanup job removes published events after `retentionperiod` (default 72h). See [CLAUDE.md](CLAUDE.md) for full configuration options.
+
+**Inbox (consumer side):** the `inbox` package is the outbox's mirror — `deps.Inbox.ProcessOnce(ctx, eventID, fn)` records the event id in a ledger atomically with the handler's writes, giving exactly-once processing of the handler's transactional work on top of the broker's at-least-once delivery. Effects outside that DB transaction (HTTP calls, emails, broker publishes) can still repeat on redelivery — keep them idempotent. Register `inbox.NewModule()`; use the `x-outbox-event-id` header as the dedup key. See [CLAUDE.md](CLAUDE.md) and [wiki/outbox.md](wiki/outbox.md).
 
 ---
 
@@ -736,7 +749,7 @@ Wire it by registering `keystore.NewModule()` **before** any module that declare
 Complete resource isolation with per-tenant database and messaging connections.
 
 ### Key Features
-- **Tenant Resolution**: Headers, subdomains, or custom strategies with validation
+- **Tenant Resolution**: Header, subdomain, path-segment, or composite (first-match chain) resolvers — plus custom strategies — all validated
 - **Resource Isolation**: Separate database/messaging connections per tenant
 - **Context Propagation**: Tenant ID flows automatically through all operations
 - **Declaration Replay**: Messaging infrastructure validated once, replayed per-tenant

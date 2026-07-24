@@ -4,9 +4,9 @@ Enterprise Go microservice toolkit (Go 1.26+). Provides multi-database access, t
 
 ## Version & Compatibility
 
-- Reflects **go-bricks v0.49.0** (messaging defaults now applied in *every* deployment mode with mode-aware pool sizing — publisher `maxcached`, `database.manager.maxsize`, and cache `maxsize` scale to the tenant limit in multi-tenant; new `database.manager.*` keys; `messaging.reconnect` delay/backoff keys wired live; duration config must be unit-suffixed strings — write `"300s"`, not `300`; publisher lifecycle hardening: cold-publish readiness wait + 1h single-tenant publisher IdleTTL). Requires **Go 1.26+**.
+- Reflects **go-bricks v0.53.0**. The v0.49.0 line applied messaging defaults in *every* deployment mode with mode-aware pool sizing (publisher `maxcached`, `database.manager.maxsize`, cache `maxsize` scale to the tenant limit in multi-tenant), added `database.manager.*` keys, wired `messaging.reconnect` delay/backoff keys live, required unit-suffixed durations (write `"300s"`, not `300`), and hardened the publisher lifecycle (cold-publish readiness wait + 1h single-tenant publisher IdleTTL). Since then: v0.50.0 made dev CORS wildcard opt-in (`CORS_DEV_WILDCARD`, ADR-038) and `multitenant.resolver.order` REQUIRED for `type: composite` (ADR-039); v0.51.0 made `server.bodylimit` configurable (echo v5.3.0 bump); v0.52.0 made messaging declaration `Args` reach the broker via a breaking `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change (ADR-040); v0.53.0 added `DeclareQueueWithDLQ` declarative dead-lettering. Unreleased on `main` (shipping in the release after v0.53.0): the `outbox.tenancy`/`inbox.tenancy: shared` control-plane ledger (ADR-041) and duplicate-route-registration fail-fast. Requires **Go 1.26+**.
 - Authoritative sources: `CHANGELOG.md` (release log) and `wiki/migrations.md` — the **per-hop migration runbook** (detect → apply → verify atoms, one hop per release, chainable across any version range). This file carries the ladder + agent protocol; the runbook holds the full atoms.
-- Upgrading an existing app? Read that section first. Across v0.40 → v0.45 **most breaks fail silently** — a renamed config key stops binding, a default flips — with no compile error. The compiler-caught API breaks are concentrated in v0.41.0 (CORS / LogEvent / SetupMiddlewares), v0.43.0 (per-tenant `ReleaseFunc`, `PoolKeepAliveConfig.Enabled`), and v0.45.0 (echo-free boundary types, the `outbox.Store` interface); everything else fails silently.
+- Upgrading an existing app? Read that section first. Across v0.40 → v0.45 **most breaks fail silently** — a renamed config key stops binding, a default flips — with no compile error. The compiler-caught API breaks are concentrated in v0.41.0 (CORS / LogEvent / SetupMiddlewares), v0.43.0 (per-tenant `ReleaseFunc`, `PoolKeepAliveConfig.Enabled`), v0.45.0 (echo-free boundary types, the `outbox.Store` interface), and v0.52.0 (the `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change, ADR-040). Not everything is silent: v0.50.0's required `multitenant.resolver.order` for `type: composite` (ADR-039) fails **fast** at startup with a config-validation error.
 
 ## Quick Start
 - `go get github.com/gaborage/go-bricks`
@@ -353,7 +353,7 @@ database:
   connectionstring: ${DATABASE_URL}      # e.g. postgres://user:pass@host:5432/dbname?sslmode=require
 ```
 
-Per ADR-003, at least one of `host` *or* `connectionstring` must be set, otherwise startup fails fast. Pool defaults are production-safe — override only when you have a measured reason (see CLAUDE.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
+Per ADR-003, at least one of `host` *or* `connectionstring` must be set, otherwise startup fails fast. Pool defaults are production-safe — override only when you have a measured reason (see wiki/database.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
 
 ### Step 2: Access the Connection from a Module
 
@@ -2668,9 +2668,18 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 }
 ```
 
-Dead-letter failed messages (handler errors/panics nack without requeue) by
-setting Args BEFORE registering — `DeclareQueue` snapshots a deep copy, so
-mutating the returned pointer's Args afterward is silently dropped:
+Dead-letter failed messages (handler errors/panics nack without requeue) with the
+declarative helper `DeclareQueueWithDLQ` (v0.53.0) — it auto-derives a
+`<queue>.dlx` fanout exchange, a `<queue>.dlq` parking queue, and the binding, and
+is idempotent across queues sharing a DLX:
+
+```go
+decls.DeclareQueueWithDLQ("orders.processing", &messaging.DeadLetterSpec{})
+```
+
+For custom DLX/parking-queue names or bespoke topology, set `Args` BEFORE
+registering — `DeclareQueue` snapshots a deep copy, so mutating the returned
+pointer's `Args` afterward is silently dropped:
 
 ```go
 q := messaging.NewQueue("orders.processing")
@@ -2997,6 +3006,7 @@ outbox:
   batchsize: 100                   # Events per cycle
   maxretries: 5                    # Before giving up
   retentionperiod: 72h             # Cleanup threshold
+  publishtimeout: 60s              # Per-record relay publish bound
 ```
 
 ### Testing
@@ -3454,7 +3464,26 @@ When `deps.MeterProvider`, `deps.Tracer`, and `deps.Logger` are wired (default w
 
 ### Outbound HTTP JOSE (calling a partner from your service)
 
-The httpclient JOSE wrapper for outbound calls (sign-then-encrypt the request body to a partner, decrypt-then-verify their response) is **planned for a follow-up release**. The current scope is server-side in/out only. Until then, services initiating outbound JOSE calls must hand-roll the seal/open step using the `jose` package primitives or the `go-jose/v4` library directly, sourcing keys from `deps.KeyStore`.
+The httpclient signs+encrypts outbound request bodies and decrypts+verifies
+`application/jose` responses via `Builder.WithJOSE` (an `http.RoundTripper` that
+sits below the retry loop, so each retry re-seals — useful when a partner requires
+unique `iat`/`jti` per attempt). Non-`application/jose` responses pass through
+untouched.
+
+```go
+client := httpclient.NewBuilder(log).
+    WithJOSE(httpclient.JOSEConfig{
+        Outbound: outboundPolicy, // *jose.Policy — required (sign+encrypt requests)
+        Inbound:  inboundPolicy,  // *jose.Policy — optional (decrypt+verify responses); nil = plaintext responses
+        Resolver: resolver,       // jose.KeyResolver — supplies keys for both directions
+    }).
+    Build()
+
+resp, err := client.Post(ctx, &httpclient.Request{URL: partnerURL, Body: body})
+```
+
+See [wiki/jose.md](wiki/jose.md) ("Outbound httpclient JOSE wrapping") and
+`httpclient/jose_transport_test.go` for full examples.
 
 ## Multi-Tenancy
 - Enable with `multitenant.enabled=true`.
@@ -3976,6 +4005,13 @@ go-bricks-migrate migrate --source-url ... --aws-region us-east-1 --json
 ```
 
 Default behavior is **sequential, fail-fast**. `--continue-on-error` keeps iterating after a per-tenant failure. `--parallel <N>` (max 32) processes tenants concurrently while preserving fail-fast: on the first per-tenant error, siblings still queued exit immediately and in-flight Flyway processes are cancelled before `MigrateAll` returns. Combine with `--continue-on-error` to keep iterating instead.
+
+`--timeout <dur>` overrides the per-tenant Flyway timeout (v0.53.0). A separate
+`go-bricks-migrate quiesce {set,clear,status}` command family manages the
+deployment **quiesce flag** in the control-plane database — pausing worker pickup
+and tenant fan-out so a deployment-time migration can drain in-flight work without
+interrupting it (PostgreSQL-only in v1). See
+[wiki/migration_quiesce.md](wiki/migration_quiesce.md).
 
 ### Library usage (back-office calls MigrateAll directly)
 
@@ -5265,15 +5301,15 @@ Same domain errors, different boundary handling:
 - **Configuration injection**: `deps.Config.InjectInto(&cfgStruct)` honors defaults and env overrides.
 - **Testing**: `obtest.NewTestTraceProvider()` captures spans, `obtest.NewTestMeterProvider()` captures metrics; mock `database.Interface` and `messaging.Client` directly.
 
-## Upgrade & Breaking Changes (v0.39 → v0.49)
+## Upgrade & Breaking Changes (v0.39 → v0.52)
 
-The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.49), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
+The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.52), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
 
 Ladder:
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0
 ```
-> v0.46.0–v0.48.0 shipped additive-only (adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
+> v0.46.0–v0.48.0 shipped additive-only (adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0. v0.53.0 shipped additive-only (DeclareQueueWithDLQ #741; the ADR-041 shared-ledger tenancy on main ships after v0.53.0) — adopt-only, no migration atom, so this ladder ends at v0.52.0 (the last hop with an atom).
 
 | edge | hop | worst risk | compiler-caught | preflight |
 |------|-----|-----------|-----------------|-----------|
@@ -5284,7 +5320,10 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E43  | v0.42.0 → v0.43.0 | compile-break | 2 | bare section-named env vars |
 | E44  | v0.43.0 → v0.44.0 | noop | none | none |
 | E45  | v0.44.0 → v0.45.0 | compile-break | 6 | outbox re-delivery count |
-| E49  | v0.45.0 → v0.49.0 (unreleased) | silent-config | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool |
+| E49  | v0.45.0 → v0.49.0 | silent-config | none | multi-tenant outbox timeout guards / stale `messaging.*` + `database.manager.*` values / reconnect delay keys go live / mode-aware cache pool |
+| E50  | v0.49.0 → v0.50.0 | config-break | none | dev CORS wildcard now opt-in (CORS_DEV_WILDCARD, ADR-038); `multitenant.resolver.order` REQUIRED for `type: composite` (ADR-039); non-empty DB password < 8 bytes rejected; Flyway surfaces failure output as an error |
+| E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | none | none |
+| E52  | v0.51.0 → v0.52.0 | compile-break | 1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading (ADR-040) |
 
 Agent protocol (condensed — full version in the runbook):
 1. Detect CURRENT: `go list -m -f '{{.Version}}{{if .Replace}} =>{{.Replace.Path}}{{end}}' github.com/gaborage/go-bricks` (a local `replace` → resolve the checkout's tag).

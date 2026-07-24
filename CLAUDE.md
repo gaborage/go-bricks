@@ -512,6 +512,8 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **MongoDB removed (ADR-012):** Only PostgreSQL and Oracle supported.
 - **Env policy (ADR-022):** `app.env` is no longer enum-validated to `{development, staging, production}`; consumer projects may use any conforming string (`local`, `tst`, `stg`, `prd`, `production-eu`, …). Behavior switches go through `config.IsDevelopment()` / `config.IsProduction()` predicates with documented alias sets (`{development, dev, local}` / `{production, prod, prd}`). `APP_ENV=prd`/`prod` now triggers production-strict CORS; `APP_ENV=dev`/`local` now enable framework dev conveniences and auto-migrate.
 - **CORS dev wildcard opt-in (ADR-038):** the dev-permissive reflect-any-origin + `AllowCredentials` CORS posture now requires `CORS_DEV_WILDCARD=true` in addition to a development-alias (or koanf-defaulted) `APP_ENV`; without the flag, dev fails closed like every other env. `CORS_ORIGINS` strict allowlisting is unchanged. The flag is inert outside development aliases.
+- **Composite resolver order required (ADR-039):** `resolver.order` is mandatory for `multitenant.resolver.type: composite` — no default; a composite deployment fails at startup until it declares one.
+- **Declaration Args reach the broker (ADR-040):** `messaging.AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` now take `(ctx context.Context, *…Declaration)` and forward `Args` to RabbitMQ — may surface `406 PRECONDITION_FAILED` against ops-provisioned queues whose args differ.
 
 ## File Organization
 
