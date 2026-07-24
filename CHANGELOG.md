@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.54.0](https://github.com/gaborage/go-bricks/compare/v0.53.0...v0.54.0) (2026-07-24)
+
+
+### Added
+
+* **outbox,inbox:** shared control-plane ledger tenancy for dynamic multi-tenant deployments ([#763](https://github.com/gaborage/go-bricks/issues/763)) ([d21ac0f](https://github.com/gaborage/go-bricks/commit/d21ac0f2650c4a01d45d83eacfc31abd594e48cc))
+* **server:** fail fast on duplicate route registration ([#761](https://github.com/gaborage/go-bricks/issues/761)) ([7dbc7e0](https://github.com/gaborage/go-bricks/commit/7dbc7e0f19b3088e3a5cd3681e2599e54ade024b))
+
+
+### Fixed
+
+* **deps:** update aws-sdk-go-v2 monorepo ([#754](https://github.com/gaborage/go-bricks/issues/754)) ([7fe3c4d](https://github.com/gaborage/go-bricks/commit/7fe3c4d08d8e745077c745dc000ea445f716f606))
+* **deps:** update module github.com/gaborage/go-bricks to v0.53.0 ([#755](https://github.com/gaborage/go-bricks/issues/755)) ([ca56b08](https://github.com/gaborage/go-bricks/commit/ca56b08aa4edf266fee27b89d030b5d347856da2))
+* **deps:** update module github.com/labstack/echo/v5 to v5.3.1 ([#753](https://github.com/gaborage/go-bricks/issues/753)) ([fc1eb0d](https://github.com/gaborage/go-bricks/commit/fc1eb0d04ffa67eabd7b81a3b887ec045c875c85))
+
 ## [0.53.0](https://github.com/gaborage/go-bricks/compare/v0.52.0...v0.53.0) (2026-07-21)
 
 
