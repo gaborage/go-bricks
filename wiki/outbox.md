@@ -190,9 +190,100 @@ outbox:
 
 ## Multi-Tenant
 
-In multi-tenant mode the relay and cleanup jobs **fan out across the configured static tenants** (`multitenant.tenants`): each poll cycle resolves every tenant's database independently (via `multitenant.SetTenant` + `deps.DB`), relays that tenant's pending events, and prunes its published rows. A failure for one tenant is logged and does not block the others.
+In multi-tenant mode the outbox/inbox support two tenancy modes, set via `outbox.tenancy` /
+`inbox.tenancy` (`"per-tenant"` default, or `"shared"`):
 
-**Dynamic tenant sources are not supported** for the relay/cleanup: because the tenant set is not enumerable at job-registration time, the framework fails fast rather than silently never relaying. With `multitenant.enabled` and `source.type: dynamic`, enabling the outbox is rejected at module `Init` (and the inbox cleanup job at `RegisterJobs`). Use static `multitenant.tenants` config for outbox/inbox relay and cleanup.
+### Per-tenant fan-out (default)
+
+The relay and cleanup jobs **fan out across the configured static tenants** (`multitenant.tenants`): each poll cycle resolves every tenant's database independently (via `multitenant.SetTenant` + `deps.DB`), relays that tenant's pending events, and prunes its published rows. A failure for one tenant is logged and does not block the others.
+
+**Dynamic tenant sources are not supported** for per-tenant fan-out: because the tenant set is not enumerable at job-registration time, the framework fails fast rather than silently never relaying. With `multitenant.enabled` and `source.type: dynamic`, enabling the outbox is rejected at module `Init` (and the inbox cleanup job at `RegisterJobs`) — unless `tenancy: shared` is set (see below).
+
+### Shared (control-plane) ledger
+
+For a **pool-model** deployment — one shared database, tenant identity carried as a data column
+rather than a separate schema/instance — `multitenant.enabled: true` is often needed only for HTTP
+tenant resolution, not for the outbox/inbox. `tenancy: shared` runs the relay/cleanup as a **single
+pass** against the control-plane database and broker, resolved via the empty key (`""`) — the same
+key the built-in resource store already maps to the root `database:`/`messaging:` blocks, and which
+HTTP tenant resolution can never produce. This is what unblocks `source.type: dynamic` for the
+outbox/inbox: shared mode does not need an enumerable tenant set at all.
+
+```yaml
+multitenant:
+  enabled: true
+source:
+  type: dynamic          # or static — shared mode works with either
+database:                 # root block: the control-plane database
+  host: control-plane-db
+  # ...
+messaging:                 # root block: the control-plane broker
+  broker:
+    url: amqp://control-plane-broker/
+outbox:
+  enabled: true
+  tenancy: shared
+inbox:
+  enabled: true
+  tenancy: shared
+```
+
+**Enabling shared tenancy, step by step:**
+
+1. Keep (or add) the root `database:`/`messaging:` blocks — shared mode resolves them via key `""`,
+   exactly like single-tenant mode does. A custom `app.Options.ResourceSource` must resolve
+   `DBConfig`/`BrokerURL` for `""` to these control-plane resources if you're not using the
+   built-in store.
+2. Set `outbox.tenancy: shared` and/or `inbox.tenancy: shared`.
+3. **Shared-mode outbox publishes must originate from `RunInSharedTx`.** Because `dbtypes.Tx` is
+   opaque (no vendor/connection identity), the framework cannot verify a caller's transaction
+   targets the control-plane database any other way — a foreign transaction's events would be
+   silently lost, since the relay only ever polls the control-plane ledger. `Publish` rejects any
+   transaction that didn't originate from `RunInSharedTx`:
+
+   ```go
+   r, ok := deps.Outbox.(app.SharedTxRunner)
+   if !ok {
+       // Fail loudly: a custom OutboxPublisher (e.g. a test mock) doesn't support
+       // shared tenancy — silently skipping the write would lose the event.
+       return fmt.Errorf("outbox: deps.Outbox does not implement app.SharedTxRunner")
+   }
+   err := r.RunInSharedTx(ctx, func(ctx context.Context, tx dbtypes.Tx) error {
+       if _, err := tx.Exec(ctx, "INSERT INTO orders ..."); err != nil {
+           return err
+       }
+       _, err := deps.Outbox.Publish(ctx, tx, &app.OutboxEvent{
+           EventType: "order.created", AggregateID: "order-123",
+           Payload: payload, Exchange: "order.events",
+       })
+       return err
+   })
+   ```
+
+4. The inbox needs no code change — `deps.Inbox.ProcessOnce` already originates its own
+   transaction and simply runs against the shared database once `inbox.tenancy: shared` swaps the
+   resolver in.
+
+**Caveats:**
+
+- **Pool-model only.** Shared tenancy is for "one database, tenant as data," not for silo-model
+  dynamic deployments that still want automatic per-tenant fan-out (that use case is deferred —
+  see ADR-041).
+- **Consumers on the shared broker are out of scope.** Shared tenancy is publisher-only:
+  `DeclareMessaging` consumers still start per-tenant. Do not declare a consumer intended to drain
+  the shared ledger's exchange without a separate bootstrap plan.
+- **Tenant identity travels in the event, not the ledger schema.** The outbox/inbox table schemas
+  are unchanged; if downstream consumers need to know which tenant an event belongs to, carry that
+  in the event headers/payload (the inbox's `Record` already persists `TenantID` from ctx,
+  regardless of tenancy mode).
+- **First relay cycle after cold start may log one broker-outage cycle.** The connection pre-warmer
+  is single-tenant-only, so a shared-tenancy deployment (which requires `multitenant.enabled: true`)
+  isn't pre-warmed; this is a one-time, self-resolving startup artifact.
+- **Shared + `multitenant.enabled: false` is a no-op by design** — both resolve via the same `""`
+  key, so the same YAML works unchanged across single-tenant dev and multi-tenant prod.
+
+See [ADR-041](adr_041_shared_ledger_tenancy.md) for the full design rationale, alternatives
+considered, and the `""`-key resource-source contract.
 
 ## Oracle: Default (Empty) Exchange
 

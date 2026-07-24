@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -27,6 +28,9 @@ type Deps[S TableCreator] struct {
 	NewPostgres     func(tableName string) (S, error)
 	NewOracle       func(tableName string) (S, error)
 	WarnMsg         string // e.g. "Inbox table creation failed (may already exist)"
+	// SingleKey caches under the empty key regardless of ctx tenant — used by
+	// shared-ledger tenancy so the dialect is resolved once against the shared DB.
+	SingleKey bool
 }
 
 // Cache lazily builds and caches one store per tenant ("" = single-tenant).
@@ -44,6 +48,9 @@ type Cache[S TableCreator] struct {
 func (c *Cache[S]) Get(ctx context.Context, d *Deps[S]) (S, error) {
 	var zero S
 	tenantID, _ := multitenant.GetTenant(ctx)
+	if d.SingleKey {
+		tenantID = ""
+	}
 
 	if store, ok := c.Cached(tenantID); ok {
 		return store, nil
@@ -102,4 +109,28 @@ func (c *Cache[S]) Cached(tenantID string) (S, bool) {
 	defer c.mu.RUnlock()
 	store, ok := c.stores[tenantID]
 	return store, ok
+}
+
+// SharedResolversRequired builds the module-prefixed error for tenancy=shared
+// without the framework-injected shared resolvers (set by app.RegisterModule via
+// its setter duck-type). Shared by the outbox and inbox modules so the operator
+// guidance cannot drift between them.
+func SharedResolversRequired(module string) error {
+	return fmt.Errorf("%s: tenancy=shared requires framework-injected shared resolvers; "+
+		"register the module via app.RegisterModule (direct construction must call SetSharedResolvers)", module)
+}
+
+// RejectSharedWithStaticTenants fails tenancy=shared combined with static
+// multitenant.tenants: the shared "" key resolves the root database:/messaging:
+// blocks, but static tenant mode forbids those root blocks (config/validation.go's
+// validateNoSingleTenantConflict). Returns nil when there is no conflict. Shared by
+// the outbox and inbox modules so the predicate and message cannot drift.
+func RejectSharedWithStaticTenants(module string, cfg *config.Config) error {
+	if cfg != nil && cfg.Multitenant.Enabled &&
+		cfg.Source.Type != config.SourceTypeDynamic && len(cfg.Multitenant.Tenants) > 0 {
+		return fmt.Errorf("%s: tenancy=shared cannot be combined with static multitenant.tenants "+
+			"(static tenant mode forbids the root database/messaging blocks the shared \"\" key resolves); "+
+			"use the default per-tenant tenancy, or a dynamic source", module)
+	}
+	return nil
 }

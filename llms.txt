@@ -76,6 +76,7 @@ outbox:
   batchsize: 100
   maxretries: 5
   retentionperiod: 72h
+  # tenancy: shared   # single control-plane ledger (pool model, dynamic tenant source); ships in the first release AFTER v0.53.0 — see wiki/outbox.md
 observability:
   enabled: true
   service:

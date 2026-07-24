@@ -22,6 +22,7 @@ import (
 type fakeRegistrar struct {
 	FixedRateCalls []struct {
 		JobID    string
+		Job      any
 		Interval time.Duration
 	}
 	DailyAtCalls []struct {
@@ -32,11 +33,12 @@ type fakeRegistrar struct {
 	DailyAtErr   error
 }
 
-func (r *fakeRegistrar) FixedRate(jobID string, _ any, interval time.Duration) error {
+func (r *fakeRegistrar) FixedRate(jobID string, job any, interval time.Duration) error {
 	r.FixedRateCalls = append(r.FixedRateCalls, struct {
 		JobID    string
+		Job      any
 		Interval time.Duration
-	}{jobID, interval})
+	}{jobID, job, interval})
 	return r.FixedRateErr
 }
 
@@ -399,6 +401,8 @@ func TestModuleInitFailsFastForDynamicMultitenant(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "dynamic multi-tenant",
 		"the relay cannot enumerate dynamic tenants, so Init must fail fast rather than silently never relaying")
+	assert.Contains(t, err.Error(), "outbox.tenancy=shared",
+		"the error must hint at the shared-tenancy escape hatch")
 }
 
 func TestModuleInitFailsFastForEmptyStaticMultitenant(t *testing.T) {
@@ -419,6 +423,109 @@ func TestModuleInitFailsFastForEmptyStaticMultitenant(t *testing.T) {
 	err := m.Init(deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no static multitenant.tenants")
+	assert.Contains(t, err.Error(), "set outbox.tenancy=shared",
+		"the error must hint at the shared-tenancy escape hatch")
+}
+
+// stubSharedDB / stubSharedMsg are minimal non-nil resolvers for shared-mode
+// Init tests. The resolver-presence guard (Step 4.2a) runs before any other
+// tenancy logic, so it must be satisfied via SetSharedResolvers even when the
+// test targets a later guard.
+func stubSharedDB(_ context.Context) (dbtypes.Interface, error) { return nil, nil }
+func stubSharedMsg(_ context.Context) (messaging.AMQPClient, error) {
+	return nil, nil
+}
+
+// sharedTenancyDeps builds the ModuleDeps used by the shared-tenancy tests;
+// only Config varies between them.
+func sharedTenancyDeps(cfg *config.Config) *app.ModuleDeps {
+	return &app.ModuleDeps{
+		Logger:    logger.New("disabled", true),
+		Config:    cfg,
+		DB:        stubSharedDB,
+		Messaging: stubSharedMsg,
+	}
+}
+
+func TestModuleInitSharedTenancyDynamicMultitenantSucceeds(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(stubSharedDB, stubSharedMsg)
+	deps := sharedTenancyDeps(&config.Config{
+		Outbox:      config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
+	})
+
+	err := m.Init(deps)
+	require.NoError(t, err)
+	assert.NotNil(t, m.publisher, "publisher must be initialized for shared tenancy with a dynamic source")
+}
+
+func TestModuleInitSharedTenancyRequiresInjectedResolvers(t *testing.T) {
+	m := NewModule()
+	// SetSharedResolvers deliberately NOT called.
+	deps := sharedTenancyDeps(&config.Config{
+		Outbox:      config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
+	})
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "app.RegisterModule",
+		"a module constructed without SetSharedResolvers must be told how to fix it")
+}
+
+func TestModuleInitSharedTenancyRejectsStaticTenants(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(stubSharedDB, stubSharedMsg)
+	deps := sharedTenancyDeps(&config.Config{
+		Outbox:      config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+		Multitenant: config.MultitenantConfig{Enabled: true, Tenants: map[string]config.TenantEntry{"tenant-a": {}}},
+		Source:      config.SourceConfig{Type: config.SourceTypeStatic},
+	})
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be combined with static",
+		"shared tenancy resolves the root \"\" key, which static tenant mode forbids")
+}
+
+func TestModuleInitSharedTenancyStaticSourceRequiresRootMessaging(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(stubSharedDB, stubSharedMsg)
+	deps := sharedTenancyDeps(&config.Config{
+		Outbox: config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+		// Multitenant intentionally disabled — a static source is the default in
+		// single-tenant mode, and the root messaging.broker.url is still empty.
+	})
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "root",
+		"shared tenancy with a static source must require the root messaging.broker.url")
+}
+
+func TestRegisterJobsSharedTenancySinglePass(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(stubSharedDB, stubSharedMsg)
+	deps := sharedTenancyDeps(&config.Config{
+		Outbox:      config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
+	})
+	require.NoError(t, m.Init(deps))
+
+	reg := &fakeRegistrar{}
+	require.NoError(t, m.RegisterJobs(reg))
+	require.Len(t, reg.FixedRateCalls, 1, "relay registered exactly once")
+	assert.Equal(t, "outbox-relay", reg.FixedRateCalls[0].JobID)
+	require.NotNil(t, reg.FixedRateCalls[0].Job, "the registrar fake must capture the constructed relay")
+	relay, ok := reg.FixedRateCalls[0].Job.(*Relay)
+	require.True(t, ok, "the registered job must be a *Relay")
+	assert.Equal(t, []string{""}, relay.tenants, "shared tenancy runs a single control-plane pass, not a fan-out")
+	assert.Equal(t, config.TenancyShared, relay.config.Tenancy,
+		"logCycle derives the tenancy stamp from the relay's config copy")
 }
 
 // initEnabledModule returns an outbox Module that has gone through Init

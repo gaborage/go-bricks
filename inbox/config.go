@@ -24,6 +24,9 @@ func applyDefaults(c *config.InboxConfig) {
 	if c.RetentionPeriod == 0 {
 		c.RetentionPeriod = DefaultRetentionPeriod
 	}
+	if c.Tenancy == "" {
+		c.Tenancy = config.TenancyPerTenant
+	}
 }
 
 // validateConfig checks that config values are within valid ranges.
@@ -34,6 +37,10 @@ func validateConfig(c *config.InboxConfig) error {
 	}
 	if err := validateTableName(c.TableName); err != nil {
 		return err
+	}
+	if c.Tenancy != config.TenancyPerTenant && c.Tenancy != config.TenancyShared {
+		return fmt.Errorf("inbox: tenancy must be %q or %q, got %q",
+			config.TenancyPerTenant, config.TenancyShared, c.Tenancy)
 	}
 	return nil
 }

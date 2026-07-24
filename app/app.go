@@ -232,7 +232,47 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, logger.Logger, erro
 // RegisterModule registers a new module with the application.
 // It adds the module to the registry for initialization and route registration.
 func (a *App) RegisterModule(module Module) error {
+	if setter, ok := module.(sharedResolverSetter); ok {
+		setter.SetSharedResolvers(a.sharedDBResolver(), a.sharedMessagingResolver())
+	}
 	return a.registry.Register(module)
+}
+
+// sharedDBResolver returns a resolver for the control-plane ("" key) database,
+// used by ledger modules in shared tenancy. Key "" maps to the root database:
+// block for the built-in store, or whatever a custom resource source returns.
+func (a *App) sharedDBResolver() func(context.Context) (database.Interface, error) {
+	return func(ctx context.Context) (database.Interface, error) {
+		if a.dbManager == nil {
+			return nil, &config.ConfigError{
+				Category: notConfiguredStatus,
+				Field:    componentDatabase,
+				Message:  "(shared-ledger tenancy requires a database)",
+				Action:   "set the root database: block (or have the custom resource source resolve the \"\" key)",
+			}
+		}
+		conn, release, err := a.dbManager.Get(ctx, "")
+		return acquireLease(ctx, conn, release, err)
+	}
+}
+
+// sharedMessagingResolver returns a resolver for the control-plane ("" key)
+// messaging publisher, used by ledger modules in shared tenancy. Publisher-only:
+// unlike SingleTenantResourceProvider.Messaging, it never calls EnsureConsumers —
+// shared-broker consumer bootstrap is explicitly out of scope (see ADR-041).
+func (a *App) sharedMessagingResolver() func(context.Context) (messaging.AMQPClient, error) {
+	return func(ctx context.Context) (messaging.AMQPClient, error) {
+		if a.messagingManager == nil {
+			return nil, &config.ConfigError{
+				Category: notConfiguredStatus,
+				Field:    componentMessaging,
+				Message:  "(shared-ledger tenancy requires messaging)",
+				Action:   "set the root messaging.broker.url (or have the custom resource source resolve the \"\" key)",
+			}
+		}
+		client, release, err := a.messagingManager.Publisher(ctx, "")
+		return acquireLease(ctx, client, release, err)
+	}
 }
 
 func (a *App) registerCloser(name string, closer interface{ Close() error }) {

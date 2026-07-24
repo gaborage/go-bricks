@@ -85,6 +85,17 @@ type OutboxPublisher interface {
 	Publish(ctx context.Context, tx dbtypes.Tx, event *OutboxEvent) (string, error)
 }
 
+// SharedTxRunner is implemented by the outbox publisher when the deployment
+// can use shared-ledger tenancy. In outbox.tenancy=shared, obtain the
+// business+ledger transaction from it:
+//
+//	if r, ok := deps.Outbox.(app.SharedTxRunner); ok {
+//	    err = r.RunInSharedTx(ctx, func(ctx context.Context, tx dbtypes.Tx) error { ... })
+//	}
+type SharedTxRunner interface {
+	RunInSharedTx(ctx context.Context, fn func(ctx context.Context, tx dbtypes.Tx) error) error
+}
+
 // OutboxEvent represents a domain event to be reliably published via the outbox pattern.
 // This type is defined here to avoid circular imports. The outbox package provides
 // additional utilities for working with events.

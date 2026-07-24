@@ -624,6 +624,63 @@ func TestRegisterModuleDifferentNames(t *testing.T) {
 	module2.AssertExpectations(t)
 }
 
+// sharedResolverModule implements Module + sharedResolverSetter, recording the
+// injected resolvers so tests can assert RegisterModule wired them.
+type sharedResolverModule struct {
+	name    string
+	initErr error
+	db      func(context.Context) (database.Interface, error)
+	msg     func(context.Context) (messaging.AMQPClient, error)
+	// injectedBeforeInit records, from INSIDE Init, whether the resolvers were
+	// already set — pinning that RegisterModule injects before registry.Register
+	// runs Init (a post-Register assertion alone could not tell the difference).
+	injectedBeforeInit bool
+}
+
+func (m *sharedResolverModule) Name() string { return m.name }
+func (m *sharedResolverModule) Init(*ModuleDeps) error {
+	m.injectedBeforeInit = m.db != nil && m.msg != nil
+	return m.initErr
+}
+func (m *sharedResolverModule) Shutdown() error { return nil }
+func (m *sharedResolverModule) SetSharedResolvers(
+	db func(context.Context) (database.Interface, error),
+	msg func(context.Context) (messaging.AMQPClient, error),
+) {
+	m.db = db
+	m.msg = msg
+}
+
+var _ Module = (*sharedResolverModule)(nil)
+var _ sharedResolverSetter = (*sharedResolverModule)(nil)
+
+// TestRegisterModuleInjectsSharedResolvers pins the Step-3 wiring: RegisterModule
+// must inject non-nil shared ("" key) DB/messaging resolvers into any module
+// implementing sharedResolverSetter, BEFORE registry.Register runs Init — so a
+// module's shared-mode Init check always sees them.
+func TestRegisterModuleInjectsSharedResolvers(t *testing.T) {
+	fixture := newTestAppFixture(t)
+	module := &sharedResolverModule{name: "shared-ledger-module"}
+
+	err := fixture.app.RegisterModule(module)
+	require.NoError(t, err)
+
+	require.True(t, module.injectedBeforeInit,
+		"resolvers must already be set when Init runs (RegisterModule injects before registry.Register)")
+	require.NotNil(t, module.db, "shared DB resolver must be injected")
+	require.NotNil(t, module.msg, "shared messaging resolver must be injected")
+
+	// The injected resolvers must be usable (resolve the "" key against the
+	// fixture's real managers), not just non-nil closures.
+	db, err := module.db(context.Background())
+	require.NoError(t, err)
+	assert.NotNil(t, db)
+
+	client, err := module.msg(context.Background())
+	require.NoError(t, err)
+	assert.NotNil(t, client)
+}
+
 type stubTenantResource struct {
 	dbCalls    int
 	msgCalls   int

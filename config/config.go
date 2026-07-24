@@ -206,7 +206,8 @@ func mergeSkippingScalarOverMap(src, dest map[string]any) {
 // The result is empty ONLY for a degenerate static multi-tenant config with no tenants
 // (multitenant.enabled=true but multitenant.tenants omitted) — callers must reject that,
 // because a per-tenant job would otherwise silently iterate nothing. Dynamic multi-tenant
-// sources are not enumerable here; callers reject them before relying on this.
+// sources are not enumerable here; callers reject them (or run in shared tenancy, which
+// does not fan out) before relying on this.
 func (c *Config) PerTenantJobKeys() []string {
 	if c == nil || !c.Multitenant.Enabled {
 		return []string{""}

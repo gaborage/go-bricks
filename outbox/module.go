@@ -7,6 +7,7 @@ import (
 
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
@@ -35,6 +36,11 @@ type Module struct {
 	getDB  func(context.Context) (dbtypes.Interface, error)
 	getMsg func(context.Context) (messaging.AMQPClient, error)
 
+	// sharedDB/sharedMsg are the control-plane ("" key) resolvers injected by
+	// app.RegisterModule. Used only when outbox.tenancy=shared.
+	sharedDB  func(context.Context) (dbtypes.Interface, error)
+	sharedMsg func(context.Context) (messaging.AMQPClient, error)
+
 	publisher app.OutboxPublisher
 	cfg       config.OutboxConfig
 
@@ -50,6 +56,20 @@ func NewModule() *Module {
 func (m *Module) Name() string {
 	return "outbox"
 }
+
+// SetSharedResolvers injects the control-plane ("" key) resolvers. Called by
+// app.RegisterModule; used only when outbox.tenancy=shared.
+func (m *Module) SetSharedResolvers(
+	db func(context.Context) (dbtypes.Interface, error),
+	msg func(context.Context) (messaging.AMQPClient, error),
+) {
+	m.sharedDB = db
+	m.sharedMsg = msg
+}
+
+// sharedLedger reports whether the outbox is configured for shared
+// (control-plane) tenancy rather than the default per-tenant fan-out.
+func (m *Module) sharedLedger() bool { return m.cfg.Tenancy == config.TenancyShared }
 
 // Init implements app.Module.
 // Stores dependencies and initializes the publisher; the vendor-specific store is
@@ -84,30 +104,14 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return fmt.Errorf("outbox: messaging resolver (deps.Messaging) is required when outbox is enabled")
 	}
 
-	// Fail fast: in single-tenant mode the broker URL must be set at startup,
-	// otherwise the relay treats the broker as permanently unreachable and advances
-	// every pending event's retry_count on every poll without ever delivering (issue #366).
-	// Multi-tenant resolves messaging per-tenant via the resource source, so a static
-	// check would yield false positives — skip it there.
-	if m.config != nil && !m.config.Multitenant.Enabled && !config.IsMessagingConfigured(&m.config.Messaging) {
-		return fmt.Errorf("outbox: messaging is not configured but outbox.enabled=true; " +
-			"set messaging.broker.url (or env MESSAGING_BROKER_URL) or set outbox.enabled=false")
+	// Tenancy guard-order: resolver-presence/swap → shared+static-tenants conflict →
+	// messaging-static → per-tenant fan-out guard. Split into two helpers (mirroring
+	// validatePublishTimeout below) to keep Init's cyclomatic complexity within budget.
+	if err := m.applySharedTenancy(); err != nil {
+		return err
 	}
-
-	// Fail fast on multi-tenant configurations the relay cannot fan out across, rather
-	// than silently never relaying events (the prior behavior: the relay's tenant-less
-	// context could not resolve any tenant's database):
-	//   - dynamic sources: the tenant set is not enumerable at job-registration time;
-	//   - static sources with no tenants: there is nothing to fan out to.
-	if m.config != nil && m.config.Multitenant.Enabled {
-		switch {
-		case m.config.Source.Type == config.SourceTypeDynamic:
-			return fmt.Errorf("outbox: relay is not supported with dynamic multi-tenant sources " +
-				"(source.type=dynamic); use static multitenant.tenants config, or set outbox.enabled=false")
-		case len(m.config.Multitenant.Tenants) == 0:
-			return fmt.Errorf("outbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
-				"the relay would never deliver any events. Configure multitenant.tenants, or set outbox.enabled=false")
-		}
+	if err := m.checkTenancyFanOutGuards(); err != nil {
+		return err
 	}
 
 	// Timeout-tuning validation runs AFTER the root-cause checks above: when messaging
@@ -127,8 +131,73 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		Str("table", m.cfg.TableName).
 		Dur("pollInterval", m.cfg.PollInterval).
 		Int("batchSize", m.cfg.BatchSize).
+		Str("tenancy", m.cfg.Tenancy).
 		Msg("Outbox module initialized")
 
+	return nil
+}
+
+// applySharedTenancy requires the framework-injected shared resolvers (set by
+// app.RegisterModule via the sharedResolverSetter duck-type) and swaps them in when
+// outbox.tenancy=shared, then rejects combining shared tenancy with static
+// multitenant.tenants. Runs unconditionally for tenancy=shared (even with multitenant
+// disabled) — shared+MT-disabled resolves the same "" key single-tenant mode already
+// uses, so this is a no-op in effect, but the resolvers must still have been injected.
+// Split out of Init to keep its cyclomatic complexity within budget (gocyclo).
+func (m *Module) applySharedTenancy() error {
+	if !m.sharedLedger() {
+		return nil
+	}
+	if m.sharedDB == nil || m.sharedMsg == nil {
+		return tenantstore.SharedResolversRequired("outbox")
+	}
+	m.getDB = m.sharedDB
+	m.getMsg = m.sharedMsg
+	return tenantstore.RejectSharedWithStaticTenants("outbox", m.config)
+}
+
+// checkTenancyFanOutGuards fails fast on configurations the relay cannot deliver
+// against, given the resolved tenancy mode: the single-tenant/shared-static-source
+// broker check (issue #366) and the per-tenant fan-out enumerability check. Split out
+// of Init to keep its cyclomatic complexity within budget (gocyclo).
+func (m *Module) checkTenancyFanOutGuards() error {
+	// Fail fast: in single-tenant mode (and shared tenancy with a static source) the
+	// broker URL must be set at startup, otherwise the relay treats the broker as
+	// permanently unreachable and advances every pending event's retry_count on every
+	// poll without ever delivering (issue #366). Multi-tenant per-tenant mode resolves
+	// messaging per-tenant via the resource source, so a static check would yield false
+	// positives — skip it there. Shared tenancy with a dynamic source resolves "" at
+	// runtime too, so it is skipped here as well (relay outage errors stay visible).
+	if m.config != nil && !config.IsMessagingConfigured(&m.config.Messaging) {
+		switch {
+		case !m.config.Multitenant.Enabled && !m.sharedLedger():
+			return fmt.Errorf("outbox: messaging is not configured but outbox.enabled=true; " +
+				"set messaging.broker.url (or env MESSAGING_BROKER_URL) or set outbox.enabled=false")
+		case m.sharedLedger() && m.config.Source.Type != config.SourceTypeDynamic:
+			return fmt.Errorf("outbox: tenancy=shared with a static source requires the root " +
+				"messaging.broker.url (the shared relay publishes on the control-plane broker); " +
+				"set messaging.broker.url or use a dynamic source that resolves the \"\" key")
+		}
+	}
+
+	// Fail fast on multi-tenant configurations the relay cannot fan out across, rather
+	// than silently never relaying events (the prior behavior: the relay's tenant-less
+	// context could not resolve any tenant's database). Shared tenancy takes the single
+	// control-plane pass instead, so it is exempt from this per-tenant fan-out guard:
+	//   - dynamic sources: the tenant set is not enumerable at job-registration time;
+	//   - static sources with no tenants: there is nothing to fan out to.
+	if m.config != nil && m.config.Multitenant.Enabled && !m.sharedLedger() {
+		switch {
+		case m.config.Source.Type == config.SourceTypeDynamic:
+			return fmt.Errorf("outbox: relay is not supported with dynamic multi-tenant sources " +
+				"(source.type=dynamic); use static multitenant.tenants config, set outbox.tenancy=shared " +
+				"to relay a single control-plane ledger, or set outbox.enabled=false")
+		case len(m.config.Multitenant.Tenants) == 0:
+			return fmt.Errorf("outbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
+				"the relay would never deliver any events. Configure multitenant.tenants, set outbox.tenancy=shared, " +
+				"or set outbox.enabled=false")
+		}
+	}
 	return nil
 }
 
@@ -189,6 +258,7 @@ func (m *Module) ensureStoreInitialized(ctx context.Context) (Store, error) {
 		NewPostgres:     NewPostgresStore,
 		NewOracle:       NewOracleStore,
 		WarnMsg:         "Outbox table creation failed (may already exist)",
+		SingleKey:       m.sharedLedger(),
 	})
 }
 
@@ -205,6 +275,9 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 	}
 
 	tenants := m.config.PerTenantJobKeys()
+	if m.sharedLedger() {
+		tenants = []string{""} // single control-plane pass; no fan-out
+	}
 
 	// Register relay job
 	relay := &Relay{
@@ -256,7 +329,39 @@ type lazyPublisher struct {
 	module *Module
 }
 
+// sharedTx marks a transaction as originated by RunInSharedTx, i.e. begun on
+// the same control-plane DB the relay polls. Publish requires it in shared
+// tenancy so ledger rows can never land in a database the relay does not read.
+type sharedTx struct {
+	dbtypes.Tx
+}
+
+// RunInSharedTx begins a transaction on the shared (control-plane) database,
+// runs fn with it, and commits/rolls back (database.WithTx semantics). In
+// shared tenancy ALL business+outbox writes must go through it; it errors in
+// per-tenant tenancy. Exposed to applications via the app.SharedTxRunner
+// assertion on deps.Outbox.
+func (p *lazyPublisher) RunInSharedTx(ctx context.Context, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
+	if !p.module.sharedLedger() {
+		return fmt.Errorf("outbox: RunInSharedTx requires outbox.tenancy=shared")
+	}
+	db, err := p.module.getDB(ctx)
+	if err != nil {
+		return fmt.Errorf("outbox: shared database unavailable: %w", err)
+	}
+	return database.WithTx(ctx, db, func(ctx context.Context, tx dbtypes.Tx) error {
+		return fn(ctx, &sharedTx{Tx: tx})
+	})
+}
+
 func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.OutboxEvent) (string, error) {
+	if p.module.sharedLedger() {
+		if _, ok := tx.(*sharedTx); !ok {
+			return "", fmt.Errorf("outbox: tenancy=shared requires the transaction to originate from " +
+				"RunInSharedTx (deps.Outbox); a foreign transaction may target a database the relay never polls, " +
+				"and its events would be silently lost")
+		}
+	}
 	store, err := p.module.ensureStoreInitialized(ctx)
 	if err != nil {
 		return "", err
@@ -325,3 +430,20 @@ func (s *lazyStore) CreateTable(ctx context.Context, db dbtypes.Interface) error
 	}
 	return store.CreateTable(ctx, db)
 }
+
+// Compile-time guards.
+//
+// The SetSharedResolvers guard pins its exact signature: the app-side duck-type
+// (app.sharedResolverSetter) matches structurally, so an accidental local signature
+// edit would otherwise silently stop injection instead of failing to compile.
+// dbtypes.Interface and database.Interface are the same type via the
+// database/interface.go alias, so this guard matches app's assertion exactly.
+var (
+	_ interface {
+		SetSharedResolvers(
+			func(context.Context) (dbtypes.Interface, error),
+			func(context.Context) (messaging.AMQPClient, error),
+		)
+	} = (*Module)(nil)
+	_ app.SharedTxRunner = (*lazyPublisher)(nil)
+)
