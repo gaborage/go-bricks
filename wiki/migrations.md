@@ -17,10 +17,12 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
+>
+> v0.52.0–v0.54.0 shipped additive-only changes (shared control-plane ledger tenancy for outbox/inbox — opt-in, `tenancy` defaults to `per-tenant`; clearer duplicate-route startup diagnostics — the echo router already rejected duplicate method+path registrations), so E55 is the next hop after v0.52.0 and applies when crossing from any of v0.52.0–v0.54.0 to v0.55.0.
 
 | edge | hop | worst risk | atoms | compiler-caught | preflight (run BEFORE the bump) |
 |------|-----|-----------|-------|-----------------|---------------------------------|
@@ -35,6 +37,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E50  | v0.49.0 → v0.50.0 | config-break | 4 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate; dev CORS wildcard opt-in; `multitenant.resolver.order` now REQUIRED for `type: composite` (no default — composite deployments fail to start until they declare one) |
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
+| E55  | v0.52.0 → v0.55.0 | additive (safe) | 1 | none | none |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -676,6 +679,41 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 - note: `decls.DeclareQueueWithDLQ(name, spec)` declares the fanout DLX + parking queue + binding and sets `x-dead-letter-exchange` (and optionally `x-dead-letter-routing-key`) on the primary queue in one call — failed deliveries park in the default `<queue>.dlq` (or the configured parking queue) instead of dropping. Raw `Args["x-dead-letter-exchange"]` (see "Dead-Lettering" in wiki/messaging.md) remains valid for custom topologies. Purely additive; existing hand-rolled DLX declarations are untouched.
 - ref: #721 · messaging/helpers.go
+
+## E55 · v0.52.0 → v0.55.0 — database Execute* query/exec helpers
+
+- gist: Adds `database.ExecuteQuerySingle` / `ExecuteQueryMany` / `ExecuteUpdate` / `ExecuteUpdateOne` / `ExecuteInsert`, a 2-method `database.Executor` interface (satisfied by both `database.Interface` and `database.Tx`), and `database.Raw(sql, args...)` for hand-written SQL — collapsing the repeated `ToSQL()` → `Query`/`Exec` → scan/`RowsAffected` → error-wrap glue every SQL repository re-implements. No exported go-bricks symbol changes outside this new surface; purely additive.
+- build-caught: none
+- preflight: none
+- exit: `go get github.com/gaborage/go-bricks@v0.55.0 && go mod tidy && go build ./... && go test ./...`
+
+### [C55.1] database Execute* helpers (Executor + Raw + typed errors) · additive-optional
+
+- note: `database.ExecuteQuerySingle/ExecuteQueryMany/ExecuteUpdate/ExecuteUpdateOne/ExecuteInsert`
+  run builder output or `database.Raw(sql, args...)` against either a connection
+  or a `Tx` (both satisfy the new 2-method `database.Executor`), replacing
+  hand-rolled ToSQL→Query/Exec→scan/RowsAffected glue. `ExecuteUpdate` returns
+  the raw affected-row count and does not interpret it at all (any count,
+  including zero, is legitimate for bulk or idempotent writes); `ExecuteUpdateOne`
+  wraps it and enforces an exactly-one-row contract — zero rows maps to
+  `ErrNoRows`, and **more than one** row affected is rejected as `*ExecError` at
+  `StageRowsAffected` instead of silently reported as success (a
+  broader-than-intended `WHERE` predicate updating several rows is a
+  data-integrity failure, not a "found it" outcome). Errors: `errors.Is(err,
+  database.ErrNoRows)` for zero-row outcomes (wraps `sql.ErrNoRows`, so
+  `IsNotFound` matches too); `var execErr *database.ExecError;
+  errors.As(err, &execErr)` for build/exec/scan/iterate/close/rows_affected
+  infrastructure failures (`Stage` is `database.ExecStage`) — `close` covers a
+  `Rows.Close` failure surfaced after a successful `ExecuteQuerySingle` scan;
+  `rows_affected` also covers `ExecuteUpdateOne`'s multi-row rejection.
+  `ExecuteQueryMany` also rejects a nil `scan` callback at `StageBuild` before
+  dispatching the query. Purely additive; existing repository code is untouched.
+- security: every `database.Raw(sql, args...)` call site requires an adjacent
+  `// SECURITY: Manual SQL review completed - <what was verified>` comment, exactly as
+  `f.Raw()`/`jf.Raw()` do — `Raw` replaces the whole statement and so bypasses the
+  builder's identifier validation. Enforced by `.claude/hooks/check-raw-sql.sh`; audit
+  grep `git grep -E 'f\.Raw\(|jf\.Raw\(|database\.Raw\('`.
+- ref: #772 · database/execute.go
 
 ---
 
