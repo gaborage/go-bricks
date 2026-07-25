@@ -52,8 +52,11 @@ func IsForeignKeyViolation(err error) bool {
 	return false
 }
 
-// IsNotFound reports whether err is a no-rows result (sql.ErrNoRows). This is a
-// scan-path signal; Exec does not produce it.
+// IsNotFound reports whether err is a no-rows result (sql.ErrNoRows). Scan
+// paths produce it natively; on the write path, ExecuteUpdateOne surfaces it
+// via ErrNoRows (which wraps sql.ErrNoRows) when an UPDATE/DELETE expected to
+// match exactly one row matches none, so IsNotFound matches that too.
+// ExecuteUpdate does not produce it — zero rows affected is (0, nil) there.
 func IsNotFound(err error) bool {
 	return err != nil && errors.Is(err, sql.ErrNoRows)
 }
