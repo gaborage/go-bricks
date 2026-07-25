@@ -4,7 +4,7 @@ Enterprise Go microservice toolkit (Go 1.26+). Provides multi-database access, t
 
 ## Version & Compatibility
 
-- Reflects **go-bricks v0.53.0**. The v0.49.0 line applied messaging defaults in *every* deployment mode with mode-aware pool sizing (publisher `maxcached`, `database.manager.maxsize`, cache `maxsize` scale to the tenant limit in multi-tenant), added `database.manager.*` keys, wired `messaging.reconnect` delay/backoff keys live, required unit-suffixed durations (write `"300s"`, not `300`), and hardened the publisher lifecycle (cold-publish readiness wait + 1h single-tenant publisher IdleTTL). Since then: v0.50.0 made dev CORS wildcard opt-in (`CORS_DEV_WILDCARD`, ADR-038) and `multitenant.resolver.order` REQUIRED for `type: composite` (ADR-039); v0.51.0 made `server.bodylimit` configurable (echo v5.3.0 bump); v0.52.0 made messaging declaration `Args` reach the broker via a breaking `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change (ADR-040); v0.53.0 added `DeclareQueueWithDLQ` declarative dead-lettering. Unreleased on `main` (shipping in the release after v0.53.0): the `outbox.tenancy`/`inbox.tenancy: shared` control-plane ledger (ADR-041) and duplicate-route-registration fail-fast. Requires **Go 1.26+**.
+- Reflects **go-bricks v0.54.0**. The v0.49.0 line applied messaging defaults in *every* deployment mode with mode-aware pool sizing (publisher `maxcached`, `database.manager.maxsize`, cache `maxsize` scale to the tenant limit in multi-tenant), added `database.manager.*` keys, wired `messaging.reconnect` delay/backoff keys live, required unit-suffixed durations (write `"300s"`, not `300`), and hardened the publisher lifecycle (cold-publish readiness wait + 1h single-tenant publisher IdleTTL). Since then: v0.50.0 made dev CORS wildcard opt-in (`CORS_DEV_WILDCARD`, ADR-038) and `multitenant.resolver.order` REQUIRED for `type: composite` (ADR-039); v0.51.0 made `server.bodylimit` configurable (echo v5.3.0 bump); v0.52.0 made messaging declaration `Args` reach the broker via a breaking `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change (ADR-040); v0.53.0 added `DeclareQueueWithDLQ` declarative dead-lettering; v0.54.0 shipped the `outbox.tenancy`/`inbox.tenancy: shared` control-plane ledger (ADR-041) and duplicate-route-registration fail-fast. Unreleased on `main` (shipping in v0.55.0): the `database.Execute*` query/exec helpers with `database.Raw` and typed errors (hop E55), and deterministic httpclient transport-wrapper layering at `Build()`. Requires **Go 1.26+**.
 - Authoritative sources: `CHANGELOG.md` (release log) and `wiki/migrations.md` — the **per-hop migration runbook** (detect → apply → verify atoms, one hop per release, chainable across any version range). This file carries the ladder + agent protocol; the runbook holds the full atoms.
 - Upgrading an existing app? Read that section first. Across v0.40 → v0.45 **most breaks fail silently** — a renamed config key stops binding, a default flips — with no compile error. The compiler-caught API breaks are concentrated in v0.41.0 (CORS / LogEvent / SetupMiddlewares), v0.43.0 (per-tenant `ReleaseFunc`, `PoolKeepAliveConfig.Enabled`), v0.45.0 (echo-free boundary types, the `outbox.Store` interface), and v0.52.0 (the `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change, ADR-040). Not everything is silent: v0.50.0's required `multitenant.resolver.order` for `type: composite` (ADR-039) fails **fast** at startup with a config-validation error.
 
@@ -76,7 +76,7 @@ outbox:
   batchsize: 100
   maxretries: 5
   retentionperiod: 72h
-  # tenancy: shared   # single control-plane ledger (pool model, dynamic tenant source); ships in the first release AFTER v0.53.0 — see wiki/outbox.md
+  # tenancy: shared   # single control-plane ledger (pool model, dynamic tenant source; v0.54.0) — see wiki/outbox.md
 observability:
   enabled: true
   service:
@@ -5411,15 +5411,15 @@ Same domain errors, different boundary handling:
 - **Configuration injection**: `deps.Config.InjectInto(&cfgStruct)` honors defaults and env overrides.
 - **Testing**: `obtest.NewTestTraceProvider()` captures spans, `obtest.NewTestMeterProvider()` captures metrics; mock `database.Interface` and `messaging.Client` directly.
 
-## Upgrade & Breaking Changes (v0.39 → v0.52)
+## Upgrade & Breaking Changes (v0.39 → v0.55)
 
-The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.52), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
+The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.55), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
 
 Ladder:
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0
 ```
-> v0.46.0–v0.48.0 shipped additive-only (adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0. v0.53.0 shipped additive-only (DeclareQueueWithDLQ #741; the ADR-041 shared-ledger tenancy on main ships after v0.53.0) — adopt-only, no migration atom, so this ladder ends at v0.52.0 (the last hop with an atom).
+> v0.46.0–v0.48.0 shipped additive-only (adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0. Likewise v0.53.0–v0.54.0 shipped additive-only (DeclareQueueWithDLQ #741; ADR-041 shared-ledger tenancy — opt-in, `tenancy` defaults to `per-tenant`; clearer duplicate-route startup diagnostics — the echo router already rejected duplicate method+path registrations, so no app that started on v0.53.0 fails on v0.54.0), so E55 is the next hop after v0.52.0 and applies when crossing from any of v0.52.0–v0.54.0 to v0.55.0.
 
 | edge | hop | worst risk | compiler-caught | preflight |
 |------|-----|-----------|-----------------|-----------|
@@ -5434,6 +5434,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E50  | v0.49.0 → v0.50.0 | config-break | none | dev CORS wildcard now opt-in (CORS_DEV_WILDCARD, ADR-038); `multitenant.resolver.order` REQUIRED for `type: composite` (ADR-039); non-empty DB password < 8 bytes rejected; Flyway surfaces failure output as an error |
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading (ADR-040) |
+| E55  | v0.52.0 → v0.55.0 | additive (safe) | none | none |
 
 Agent protocol (condensed — full version in the runbook):
 1. Detect CURRENT: `go list -m -f '{{.Version}}{{if .Replace}} =>{{.Replace.Path}}{{end}}' github.com/gaborage/go-bricks` (a local `replace` → resolve the checkout's tag).
