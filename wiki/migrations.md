@@ -37,7 +37,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E50  | v0.49.0 → v0.50.0 | config-break | 4 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate; dev CORS wildcard opt-in; `multitenant.resolver.order` now REQUIRED for `type: composite` (no default — composite deployments fail to start until they declare one) |
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
-| E55  | v0.52.0 → v0.55.0 | additive (safe) | 1 | none | none |
+| E55  | v0.52.0 → v0.55.0 | additive (safe) | 2 | none | none |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -680,9 +680,9 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - note: `decls.DeclareQueueWithDLQ(name, spec)` declares the fanout DLX + parking queue + binding and sets `x-dead-letter-exchange` (and optionally `x-dead-letter-routing-key`) on the primary queue in one call — failed deliveries park in the default `<queue>.dlq` (or the configured parking queue) instead of dropping. Raw `Args["x-dead-letter-exchange"]` (see "Dead-Lettering" in wiki/messaging.md) remains valid for custom topologies. Purely additive; existing hand-rolled DLX declarations are untouched.
 - ref: #721 · messaging/helpers.go
 
-## E55 · v0.52.0 → v0.55.0 — database Execute* query/exec helpers
+## E55 · v0.52.0 → v0.55.0 — database Execute* query/exec helpers + httpclient client TLS
 
-- gist: Adds `database.ExecuteQuerySingle` / `ExecuteQueryMany` / `ExecuteUpdate` / `ExecuteUpdateOne` / `ExecuteInsert`, a 2-method `database.Executor` interface (satisfied by both `database.Interface` and `database.Tx`), and `database.Raw(sql, args...)` for hand-written SQL — collapsing the repeated `ToSQL()` → `Query`/`Exec` → scan/`RowsAffected` → error-wrap glue every SQL repository re-implements. No exported go-bricks symbol changes outside this new surface; purely additive.
+- gist: Adds `database.ExecuteQuerySingle` / `ExecuteQueryMany` / `ExecuteUpdate` / `ExecuteUpdateOne` / `ExecuteInsert`, a 2-method `database.Executor` interface (satisfied by both `database.Interface` and `database.Tx`), and `database.Raw(sql, args...)` for hand-written SQL — collapsing the repeated `ToSQL()` → `Query`/`Exec` → scan/`RowsAffected` → error-wrap glue every SQL repository re-implements. Also adds `httpclient.NewClientTLSConfig` and `httpclient.Builder.WithTLSConfig` for config-driven client certificates / mutual TLS. No exported go-bricks symbol changes outside these new surfaces; purely additive.
 - build-caught: none
 - preflight: none
 - exit: `go get github.com/gaborage/go-bricks@v0.55.0 && go mod tidy && go build ./... && go test ./...`
@@ -714,6 +714,29 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
   builder's identifier validation. Enforced by `.claude/hooks/check-raw-sql.sh`; audit
   grep `git grep -E 'f\.Raw\(|jf\.Raw\(|database\.Raw\('`.
 - ref: #772 · database/execute.go
+
+### [C55.2] httpclient client TLS / client certificates · additive-optional
+
+- note: `httpclient.NewClientTLSConfig(*httpclient.ClientTLSConfig)` loads client
+  certificate, key and CA material — each from a PEM file path (`CertFile`/`KeyFile`/
+  `CAFile`) or a base64-encoded PEM value (`CertValue`/`KeyValue`/`CAValue`) — into a
+  `*tls.Config` with a TLS 1.2 floor (`MinVersion: "1.3"` opts up), and the new
+  `Builder.WithTLSConfig(*tls.Config)` installs it as the client's base transport —
+  a clone of `http.DefaultTransport`, or an equivalently-configured transport when
+  that global has been replaced. It shares the base-transport slot with
+  `WithTransport` — last call wins — and wrapper layers such as `WithJOSE` still
+  stack on top regardless of call order. Purely additive; no existing signature or
+  default changes, so mTLS toward partners no longer needs a hand-built
+  `http.Transport` per consumer.
+- security: the loader never sets `InsecureSkipVerify`; the escape hatch is an
+  explicit hand-built `*tls.Config` passed to `WithTLSConfig`. Two silent-weakening
+  shapes to check when adopting: a configured CA **replaces** the system roots (a
+  client pinned to a private partner CA can no longer verify public-CA endpoints —
+  build your own pool from `x509.SystemCertPool()` if you need both), and a CA-only
+  config authenticates the **server** only, presenting no client certificate — set
+  `RequireClientCert: true` so a missing cert/key pair fails at load instead of
+  silently downgrading intended mTLS to one-way TLS.
+- ref: #767 · httpclient/tls.go
 
 ---
 
