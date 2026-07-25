@@ -13,9 +13,10 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 ## Workflow Rules
 
 - Always run `make check` before committing and pushing. Never commit or push without a passing build.
-- When fixing lint/build errors, run `make check` after each fix cycle rather than assuming the fix is correct. Common issues: import ordering, trailing newlines, type narrowing errors.
-- **Before pushing code, run the three pre-push gates IN ORDER: `/simplify` → `/security-audit` → `/code-review` (CodeRabbit).** **This is mandatory** — the cost (a few minutes of agent time) is negligible compared to the cost of missing a finding (review-cycle ping-pong on top of a real bug). The order is load-bearing: `/simplify` applies reuse/simplification/efficiency cleanups first (it *mutates* the diff, so it must run before anything that judges the diff); `/security-audit` then audits the refactored result (credential leaks, boundary-validation gaps, panic/race classes on shutdown paths, and other threat-model issues that style-focused bots don't reason about); `/code-review` (CodeRabbit) renders the final independent verdict on the end state. Any gate that changes code requires `make check` again before the next gate; if findings are applied after CodeRabbit's pass, re-run `/code-review` until it reports 0 findings — CodeRabbit must always see the final diff. The trivial-fixes exception is **narrowly** defined: single-line typo fixes, comment/doc-only changes, and dependency bumps. Multi-file changes, new functionality (even tests-only), and config additions beyond a single value all need all three gates. When in doubt, run them.
-- After completing code changes, commit and push automatically (if build passes) without waiting for the user to ask.
+- When fixing lint/build errors, run `make check` after each fix cycle. Common issues: import ordering, trailing newlines, type narrowing errors.
+- **Before pushing code, run the three pre-push gates IN ORDER: `/simplify` → `/security-audit` → `/code-review` (CodeRabbit).** **This is mandatory** — the cost (a few minutes of agent time) is negligible compared to the cost of missing a finding (review-cycle ping-pong on top of a real bug). The order is load-bearing: `/simplify` applies reuse/simplification/efficiency cleanups first (it *mutates* the diff, so it must run before anything that judges the diff); `/security-audit` then audits the refactored result (credential leaks, boundary-validation gaps, panic/race classes on shutdown paths, and other threat-model issues that style-focused bots don't reason about); `/code-review` (CodeRabbit) renders the final independent verdict on the end state. Any gate that changes code requires `make check` again before the next gate; if findings are applied after CodeRabbit's pass, re-run `/code-review` — CodeRabbit must always see the final diff; if a third pass still returns findings, push and note the open ones in the PR body. The trivial-fixes exception is **narrowly** defined: single-line typo fixes, comment/doc-only changes, and dependency bumps. Multi-file changes, new functionality (even tests-only), and config additions beyond a single value all need all three gates. When in doubt, run them.
+- Once `make check` and the pre-push gates pass, commit and push to the feature branch automatically — no need to wait for the user to ask.
+- Keep responses and Claude-authored artifacts (plans, reports, summaries) proportional to the task: cover the substance, and skip filler sections, redundant summaries, and boilerplate.
 
 ## Git Rules
 
@@ -23,7 +24,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 ## PR Review Workflow
 
-- For PR review fix sessions: read ALL review comments first, implement all fixes, run `make check`, then push once — not incrementally.
+- For PR review fix sessions: read every review comment first, implement all fixes, run `make check` plus the pre-push gates, then push once — one coherent diff instead of a CI cycle per comment.
 - **Address findings from every automated reviewer, not just CodeRabbit.** SonarCloud's "Quality Gate passed" banner hides the per-PR NEW-issue list — run `/sonar-pr <N>` (`.claude/skills/sonar-pr`) to fetch and triage it; same all-or-nothing standard as CodeRabbit nitpicks: fix or document the skip in the commit message.
 
 ## Quick Reference
@@ -54,7 +55,7 @@ go test -bench=.        # Run benchmarks
 - [SonarCloud](https://sonarcloud.io/project/overview?id=gaborage_go-bricks) — Code quality metrics
 - [GitHub Issues](https://github.com/gaborage/go-bricks/issues?q=is%3Aopen%20label%3Akind%2Ffeature) — Technical backlog. Titles use `<area>: <description>` (lowercase); labels combine `area/<package>` with `kind/<type>` or top-level `bug`/`documentation`.
 
-## Developer Manifesto (MANDATORY)
+## Developer Manifesto
 
 ### Framework Philosophy
 GoBricks is a **production-grade framework for building MVPs fast**. It provides enterprise-quality tooling (validation, observability, tracing, type safety) while enabling rapid development velocity. The framework itself maintains high quality standards so applications built with it can move quickly with confidence.
@@ -104,7 +105,6 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 
 ## Code Quality
 
-- Linting: `.golangci.yml` with staticcheck, gosec, gocritic.
 - Linting: `.golangci.yml` with staticcheck, gosec, gocritic.
 - SonarCloud: Project `gaborage_go-bricks`, 80% coverage target.
 - CI/CD: Multi-platform (Ubuntu, Windows) × Go 1.26.
@@ -444,7 +444,7 @@ For the full deep dive (when to shorten, when to detach, common pitfalls, why co
 
 ### Test Naming Conventions (MANDATORY)
 
-**Use camelCase for ALL test function names.** Snake_case in test function names is forbidden. The codebase has 100% compliance across >800 test functions.
+**Use camelCase for ALL test function names.** The codebase has 100% compliance across >800 test functions.
 
 ```go
 // CORRECT
