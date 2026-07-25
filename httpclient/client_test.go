@@ -1823,3 +1823,171 @@ func TestClientDoTransportErrorSpan(t *testing.T) {
 	}
 	assert.True(t, foundErrType, "transport error should set error.type on the attempt span")
 }
+
+// Builder must stay a comparable type: apidiff reports a comparable-to-not-comparable
+// change on an exported type as INCOMPATIBLE, which would gate the PR behind an ADR.
+func TestBuilderTransportChainKeepsBuilderComparable(_ *testing.T) {
+	var a, b Builder
+	_ = a == b
+}
+
+func TestBuilderTransportChainOrderIndependence(t *testing.T) {
+	log := createTestLogger()
+
+	cases := []struct {
+		name  string
+		build func(base nethttp.RoundTripper) Client
+	}{
+		{
+			// Regression: WithTransport after WithJOSE used to discard the JOSE layer.
+			name: "jose_then_transport",
+			build: func(base nethttp.RoundTripper) Client {
+				return NewBuilder(log).WithJOSE(JOSEConfig{}).WithTransport(base).Build()
+			},
+		},
+		{
+			name: "transport_then_jose",
+			build: func(base nethttp.RoundTripper) Client {
+				return NewBuilder(log).WithTransport(base).WithJOSE(JOSEConfig{}).Build()
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := &stubRoundTripper{name: "base"}
+			built := tc.build(base)
+
+			clientImpl, ok := built.(*client)
+			require.True(t, ok)
+			joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
+			require.True(t, ok, "JOSE layer must survive regardless of builder call order")
+			assert.Same(t, base, joseTransport.Inner)
+		})
+	}
+}
+
+func TestBuilderTransportChainLayerOrdering(t *testing.T) {
+	log := createTestLogger()
+
+	assertNesting := func(t *testing.T, built Client, base *stubRoundTripper) {
+		t.Helper()
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
+		require.True(t, ok, "body-transform layer must be outermost")
+		signer, ok := joseTransport.Inner.(*wrappingTransport)
+		require.True(t, ok, "signer layer must sit between JOSE and the base")
+		assert.Same(t, base, signer.inner)
+	}
+
+	wrapSigner := func(inner nethttp.RoundTripper) nethttp.RoundTripper {
+		return &wrappingTransport{inner: inner}
+	}
+
+	t.Run("signer_registered_first", func(t *testing.T) {
+		base := &stubRoundTripper{name: "base"}
+		b := NewBuilder(log).WithTransport(base)
+		b.addTransportWrapper(layerSigner, wrapSigner)
+		b.WithJOSE(JOSEConfig{})
+		assertNesting(t, b.Build(), base)
+	})
+
+	t.Run("signer_registered_second", func(t *testing.T) {
+		base := &stubRoundTripper{name: "base"}
+		b := NewBuilder(log).WithTransport(base).WithJOSE(JOSEConfig{})
+		b.addTransportWrapper(layerSigner, wrapSigner)
+		assertNesting(t, b.Build(), base)
+	})
+}
+
+func TestBuilderTransportChainDiscardsClientTransport(t *testing.T) {
+	log := createTestLogger()
+	base := &stubRoundTripper{name: "base"}
+	withClient := func() *nethttp.Client { return &nethttp.Client{Transport: base} }
+
+	cases := []struct {
+		name    string
+		want    bool
+		builder func() *Builder
+	}{
+		{
+			// The hazard: no WithTransport base, so the caller's own Transport is replaced.
+			name:    "wrapper_over_client_transport_without_base",
+			want:    true,
+			builder: func() *Builder { return NewBuilder(log).WithHTTPClient(withClient()).WithJOSE(JOSEConfig{}) },
+		},
+		{
+			name: "wrapper_with_explicit_base",
+			want: false,
+			builder: func() *Builder {
+				return NewBuilder(log).WithHTTPClient(withClient()).WithTransport(base).WithJOSE(JOSEConfig{})
+			},
+		},
+		{
+			name:    "no_wrapper_leaves_client_transport_alone",
+			want:    false,
+			builder: func() *Builder { return NewBuilder(log).WithHTTPClient(withClient()) },
+		},
+		{
+			name:    "wrapper_without_caller_client",
+			want:    false,
+			builder: func() *Builder { return NewBuilder(log).WithJOSE(JOSEConfig{}) },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.builder().discardsClientTransport())
+		})
+	}
+
+	t.Run("warned_case_really_replaces_the_transport", func(t *testing.T) {
+		built := NewBuilder(log).WithHTTPClient(withClient()).WithJOSE(JOSEConfig{}).Build()
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		assert.NotSame(t, base, clientImpl.httpClient.Transport, "caller's transport is replaced, not wrapped")
+		joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
+		require.True(t, ok)
+		assert.Nil(t, joseTransport.Inner, "no base: RoundTrip falls back to net/http.DefaultTransport")
+	})
+
+	t.Run("hazard_emits_the_warning", func(t *testing.T) {
+		spy := &warnSpy{}
+		NewBuilder(spy).WithHTTPClient(withClient()).WithJOSE(JOSEConfig{}).Build()
+		assert.Contains(t, spy.msg, "net/http.DefaultTransport")
+	})
+
+	t.Run("explicit_base_emits_no_warning", func(t *testing.T) {
+		spy := &warnSpy{}
+		NewBuilder(spy).WithHTTPClient(withClient()).WithTransport(base).WithJOSE(JOSEConfig{}).Build()
+		assert.Empty(t, spy.msg)
+	})
+}
+
+// warnSpy captures the message Build passes to Warn().Msg. Embedding the interfaces
+// keeps the double to the two methods Build actually calls; any other method would
+// nil-panic, which is the intent.
+type warnSpy struct {
+	logger.Logger
+	msg string
+}
+
+func (s *warnSpy) Warn() logger.LogEvent { return &warnSpyEvent{spy: s} }
+
+type warnSpyEvent struct {
+	logger.LogEvent
+	spy *warnSpy
+}
+
+func (e *warnSpyEvent) Msg(msg string) { e.spy.msg = msg }
+
+// wrappingTransport stands in for a signer-layer wrapper; it exposes the
+// RoundTripper it wraps so tests can assert nesting depth.
+type wrappingTransport struct {
+	inner nethttp.RoundTripper
+}
+
+func (r *wrappingTransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	return r.inner.RoundTrip(req)
+}
