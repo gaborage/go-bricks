@@ -29,6 +29,38 @@ resp, err := client.Get(ctx, &httpclient.Request{
 
 **Interface:** `Get`, `Post`, `Put`, `Patch`, `Delete` accept `context.Context` and `*Request`; `Do` additionally takes a `method string` (`Do(ctx, method, req)`). All return `*Response` and `error`.
 
+### Transport composition
+
+`RoundTripper` wrappers (e.g. `WithJOSE`) are applied at `Build()` time in a fixed
+layer order, not in the order the `With*` options were called: the base transport
+from `WithTransport` sits innermost, request signers sit next, and body transforms
+such as JOSE sit outermost. This means calling `WithTransport` before or after
+`WithJOSE` produces the same client — the JOSE layer can no longer be silently
+discarded by a later `WithTransport` call:
+
+```go
+// Equivalent — layer order beats call order.
+httpclient.NewBuilder(logger).WithJOSE(cfg).WithTransport(mTLSTransport).Build()
+httpclient.NewBuilder(logger).WithTransport(mTLSTransport).WithJOSE(cfg).Build()
+```
+
+A `Transport` set directly on the `*http.Client` passed to `WithHTTPClient` is
+**replaced, not wrapped**, as soon as any wrapper option is used: the chain then has
+no base transport and dials via `net/http.DefaultTransport` — silently losing your
+client certificate, pinned `RootCAs`, `MinVersion` and proxy settings. `Build()` logs
+a WARN when it detects this. Always supply the base RoundTripper through
+`WithTransport`:
+
+```go
+// WRONG — mTLS transport is replaced; requests dial via net/http.DefaultTransport.
+httpclient.NewBuilder(logger).
+    WithHTTPClient(&http.Client{Transport: mTLSTransport}).
+    WithJOSE(cfg).Build()
+
+// RIGHT — mTLS sits innermost, beneath the JOSE layer.
+httpclient.NewBuilder(logger).WithTransport(mTLSTransport).WithJOSE(cfg).Build()
+```
+
 ## Metrics
 
 ### Overview

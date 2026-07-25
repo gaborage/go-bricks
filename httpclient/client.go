@@ -63,6 +63,31 @@ type Builder struct {
 	logger     logger.Logger
 	httpClient *nethttp.Client
 	transport  nethttp.RoundTripper
+	chain      *transportChain
+}
+
+// transportLayer orders RoundTripper wrappers independently of the order the
+// caller happened to invoke the builder's With* options. Lower layers sit
+// closer to the network.
+type transportLayer int
+
+const (
+	// layerSigner runs after body transforms, so a signature covers the bytes
+	// actually placed on the wire.
+	layerSigner transportLayer = iota
+	// layerBodyTransform is outermost: it rewrites the body before anything signs it.
+	layerBodyTransform
+	// layerCount must stay last: it sizes the chain, so a layer declared above it
+	// is applied in iota order without any second edit elsewhere.
+	layerCount
+)
+
+// transportChain buckets wrappers by layer, making the array index the apply
+// order. Builder holds it behind a pointer so Builder stays a comparable type:
+// apidiff reports a comparable-to-not-comparable change on an exported type as
+// INCOMPATIBLE.
+type transportChain struct {
+	byLayer [layerCount][]func(nethttp.RoundTripper) nethttp.RoundTripper
 }
 
 // NewBuilder creates a new client builder
@@ -186,6 +211,8 @@ func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
 }
 
 // WithTransport sets a custom RoundTripper while still letting the builder manage other client settings.
+// It supplies the innermost transport: wrappers registered by other options (WithJOSE, for
+// example) are layered above it at Build time regardless of call order.
 func (b *Builder) WithTransport(transport nethttp.RoundTripper) *Builder {
 	b.transport = transport
 	return b
@@ -210,26 +237,70 @@ type JOSEConfig struct {
 // and decrypts+verifies application/jose response bodies. Pass cfg.Inbound = nil when
 // the counterparty does not return JOSE-wrapped responses.
 //
-// Composition: WithJOSE wraps whatever transport was set via an earlier WithTransport
-// call — so that transport customization remains in the chain below the JOSE layer.
-// A Transport configured directly on the *http.Client passed to WithHTTPClient is NOT
-// threaded through: Build() sets the transport on the built client's copied *http.Client
-// whenever WithTransport or WithJOSE set b.transport (the client passed to WithHTTPClient
-// is never modified), so use WithTransport if a custom RoundTripper needs to
-// survive beneath WithJOSE. Calling WithTransport AFTER WithJOSE replaces the JOSE
-// transport entirely.
+// Composition: transport layers are applied at Build time in a fixed order —
+// the base transport from WithTransport is innermost, request signers next, and
+// body transforms such as JOSE outermost — so the result does not depend on the
+// order these options were called. A Transport configured directly on the
+// *http.Client passed to WithHTTPClient is REPLACED, not wrapped: the chain then has
+// no base and dials via nethttp.DefaultTransport, losing client certificates, pinned
+// roots and proxy settings (Build logs a WARN). Always pass a base RoundTripper to
+// WithTransport.
 //
 // Per-attempt freshness: because httpclient retries by re-running the request build
 // loop, each retry produces a freshly-sealed payload — useful for protocols that
 // require unique iat/jti claims per attempt.
 func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
-	b.transport = &JOSETransport{
-		Inner:    b.transport,
-		Outbound: cfg.Outbound,
-		Inbound:  cfg.Inbound,
-		Resolver: cfg.Resolver,
-	}
+	b.addTransportWrapper(layerBodyTransform, func(inner nethttp.RoundTripper) nethttp.RoundTripper {
+		return &JOSETransport{
+			Inner:    inner,
+			Outbound: cfg.Outbound,
+			Inbound:  cfg.Inbound,
+			Resolver: cfg.Resolver,
+		}
+	})
 	return b
+}
+
+// addTransportWrapper registers a RoundTripper layer applied at Build time.
+// A wrapper that rewrites the body registers at layerBodyTransform; one that only
+// reads the body to sign it registers at layerSigner, so the signature covers the
+// rewritten bytes. Two obligations on every wrapper: the inner RoundTripper it
+// receives may be nil (no WithTransport base) and must then fall back to
+// nethttp.DefaultTransport rather than dereference, and a layer that reads the body
+// owes the layer below a re-readable body plus a matching GetBody — as
+// JOSETransport.wrapRequest does — or redirect and HTTP/2 replay paths resend an
+// empty payload under a signature computed over the real one.
+func (b *Builder) addTransportWrapper(layer transportLayer, wrap func(nethttp.RoundTripper) nethttp.RoundTripper) {
+	if b.chain == nil {
+		b.chain = &transportChain{}
+	}
+	b.chain.byLayer[layer] = append(b.chain.byLayer[layer], wrap)
+}
+
+// resolveTransport applies registered wrappers to the base transport innermost
+// first; within a layer the first registered wrapper ends up innermost. Returns nil
+// when there is neither a base transport nor a wrapper, so Build leaves the
+// http.Client's own Transport untouched.
+func (b *Builder) resolveTransport() nethttp.RoundTripper {
+	rt := b.transport
+	if b.chain == nil {
+		return rt
+	}
+	for _, wrappers := range b.chain.byLayer {
+		for _, wrap := range wrappers {
+			rt = wrap(rt)
+		}
+	}
+	return rt
+}
+
+// discardsClientTransport reports the one composition that silently downgrades TLS:
+// a registered wrapper with no WithTransport base replaces the WithHTTPClient
+// client's own Transport, so requests dial via nethttp.DefaultTransport. Build only
+// warns — it has no error return, and failing closed here is tracked with the mTLS
+// work.
+func (b *Builder) discardsClientTransport() bool {
+	return b.transport == nil && b.chain != nil && b.httpClient != nil && b.httpClient.Transport != nil
 }
 
 // WithRequestInterceptor adds a request interceptor
@@ -264,8 +335,14 @@ func (b *Builder) Build() Client {
 		httpClient = &c
 	}
 
-	if b.transport != nil {
-		httpClient.Transport = b.transport
+	if rt := b.resolveTransport(); rt != nil {
+		if b.discardsClientTransport() {
+			b.logger.Warn().Msg("httpclient: transport wrapper registered without WithTransport — " +
+				"the *http.Client passed to WithHTTPClient has its own Transport replaced and requests " +
+				"dial via net/http.DefaultTransport, losing client certificates, pinned roots and proxy " +
+				"settings; pass the base RoundTripper to WithTransport instead")
+		}
+		httpClient.Transport = rt
 	}
 
 	return &client{
