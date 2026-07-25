@@ -3033,20 +3033,20 @@ if err != nil {
 }
 defer tx.Rollback(ctx)
 
-tx.Exec(ctx, "INSERT INTO orders ...", args...)
-tx.Exec(ctx, "UPDATE inventory SET stock = stock - $1 WHERE product_id = $2", qty, productID)
+if _, err := tx.Exec(ctx, "INSERT INTO orders ...", args...); err != nil { return err }
+if _, err := tx.Exec(ctx, "UPDATE inventory SET stock = stock - $1 WHERE product_id = $2", qty, productID); err != nil { return err }
 
 // Multiple events — all atomic with the business writes
-s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+if _, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
     EventType: "order.created", AggregateID: orderID, Payload: orderPayload,
     Exchange: "order.events",
-})
-s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+}); err != nil { return err }
+if _, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
     EventType: "inventory.reserved", AggregateID: productID, Payload: inventoryPayload,
     Exchange: "inventory.events",
-})
+}); err != nil { return err }
 
-return tx.Commit(ctx) // Both events guaranteed to be published
+return tx.Commit(ctx) // Both events committed to the outbox for relay
 ```
 
 ### Consumer Idempotency (Required)
