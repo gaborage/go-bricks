@@ -1944,7 +1944,10 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 // Use injected config in service methods
 func (m *Module) CacheUser(ctx context.Context, user *User) error {
-    c, _ := m.getCache(ctx)
+    c, err := m.getCache(ctx)
+    if err != nil {
+        return fmt.Errorf("cache not available: %w", err)
+    }
 
     key := fmt.Sprintf("%s:user:%d", m.keyPrefix, user.ID)  // Uses prefix
     data, _ := cache.Marshal(user)
@@ -3024,7 +3027,10 @@ _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
 ### Multiple Events in One Transaction
 
 ```go
-tx, _ := db.Begin(ctx)
+tx, err := db.Begin(ctx)
+if err != nil {
+    return err
+}
 defer tx.Rollback(ctx)
 
 tx.Exec(ctx, "INSERT INTO orders ...", args...)
@@ -3040,7 +3046,7 @@ s.outbox.Publish(ctx, tx, &app.OutboxEvent{
     Exchange: "inventory.events",
 })
 
-tx.Commit(ctx) // Both events guaranteed to be published
+return tx.Commit(ctx) // Both events guaranteed to be published
 ```
 
 ### Consumer Idempotency (Required)
@@ -3837,7 +3843,10 @@ func (s *UserService) Create(ctx context.Context, email, name string) (*User, er
         return nil, errors.New("tenant context required")
     }
 
-    db, _ := s.getDB(ctx)
+    db, err := s.getDB(ctx)
+    if err != nil {
+        return nil, err
+    }
     qb := database.NewQueryBuilder(db.DatabaseType())
     cols := qb.Columns(&User{})
 
@@ -4395,7 +4404,8 @@ observability:
 For rotating tokens or secrets fetched from a manager (Vault, AWS Secrets Manager), override programmatically before `app.Run()`:
 
 ```go
-cfg, _ := config.Load()
+cfg, err := config.Load()
+if err != nil { log.Fatal(err) }
 if apiKey := os.Getenv("OTEL_API_KEY"); apiKey != "" {
     headers := map[string]string{"api-key": apiKey}
     cfg.Observability.Trace.Headers = headers
