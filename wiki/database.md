@@ -337,6 +337,64 @@ instrumentation.
 (a method or function name). Because it becomes a metric attribute, interpolating
 per-request data such as IDs or emails would explode metric cardinality.
 
+## Execute Helpers
+
+`database.ExecuteQuerySingle` / `ExecuteQueryMany` / `ExecuteUpdate` / `ExecuteUpdateOne` / `ExecuteInsert` collapse the repeated `ToSQL()` → `Query`/`Exec` → `Scan`/`RowsAffected` → error-wrap glue that every SQL repository re-implements. Each helper takes a `database.Executor` (a 2-method `Query`/`Exec` interface satisfied by both `database.Interface` and `database.Tx`, so the same call works inside or outside a transaction) and a `database.SQLProvider` (implemented by every query-builder result, or by `database.Raw(sql, args...)` for hand-written SQL). An `op string` label identifies the call site in errors — it labels errors only and does not feed metrics or tracing; use `database.WithRepositoryMethod(ctx, ...)` for attribution.
+
+| Outcome | Error shape |
+|---|---|
+| Zero-row `SELECT` (`ExecuteQuerySingle`) or an `UPDATE`/`DELETE` that matched no rows when exactly one was expected (`ExecuteUpdateOne`) | `fmt.Errorf("%s: %w", op, database.ErrNoRows)` — `ErrNoRows` wraps `sql.ErrNoRows`, so both `errors.Is(err, database.ErrNoRows)` and `database.IsNotFound(err)` match |
+| Build/exec/scan/iterate/close/rows-affected infrastructure failure | `*database.ExecError{Op, Stage, Err}` — `Stage` (type `database.ExecStage`) is one of `StageBuild`, `StageExec`, `StageScan`, `StageIterate`, `StageClose`, `StageRowsAffected`; `errors.As(err, &execErr)` and `errors.Unwrap` reach the underlying driver error. `StageClose` is specific to `ExecuteQuerySingle`: after a successful scan it closes the rows explicitly (mirroring `sql.Row.Scan`) so a driver error surfacing only at `Close` — a truncated result, a connection fault mid-statement — is reported instead of swallowed; `Close` is idempotent, so the helper's deferred `Close` remains a safe early-return net. `StageRowsAffected` covers two distinct failures: the driver's `RowsAffected()` call itself erroring (any helper that inspects it), or — `ExecuteUpdateOne` only — `RowsAffected()` succeeding with a count greater than one, rejected instead of silently reported as success |
+
+Builder input runs unmodified:
+
+```go
+q := qb.Select(cols.Cols("ID", "Name")).From("users").Where(f.Eq(cols.Col("ID"), id))
+err := database.ExecuteQuerySingle(ctx, tx, q, "user_lookup", &row.ID, &row.Name)
+```
+
+A `types.Filter`/`types.JoinFilter` WHERE fragment (e.g. `f.Eq(...)` on its own) also satisfies `SQLProvider` structurally — both embed `squirrel.Sqlizer`, which declares the same-shaped `ToSql()` alongside `ToSQL()` — but it is not a complete statement. Passing one directly to any `Execute*` helper is rejected at `StageBuild` with a clear error, instead of shipping the bare fragment to the driver as if it were a full statement.
+
+**`ExecuteUpdate` vs `ExecuteUpdateOne`:** `ExecuteUpdate` returns the raw affected-row count and does not interpret it at all — any count, including zero, is `(n, nil)` — use it whenever a non-singular match is legitimate (a bulk statement, or an idempotent state transition like `UPDATE sessions SET expired = true WHERE expires_at < now()`, where "matched nothing" isn't an error). `ExecuteUpdateOne` wraps it and enforces an exactly-one-row contract: zero rows affected maps to the same op-labeled `ErrNoRows` as `ExecuteQuerySingle`; **more than one** row affected is rejected as `*ExecError` at `StageRowsAffected` instead of silently reported as success — a broader-than-intended `WHERE` predicate that updates several rows is a data-integrity failure, not a "found it" outcome. Use it for the common case of an UPDATE/DELETE expected to match exactly one row (e.g. `UPDATE users SET active = true WHERE id = $1`). Both policies ship explicitly because only the caller can tell "absent" from "already in the target state" — for example, `UPDATE payments SET status='captured' WHERE id=$1 AND status='authorized'` returning zero rows could mean either a missing payment (404) or an idempotent replay (already captured, not an error); `ExecuteUpdate` leaves that call to the caller instead of guessing:
+
+```go
+expire := qb.Update("sessions").
+    Set(cols.Col("Expired"), true).
+    Where(f.Lt(cols.Col("ExpiresAt"), time.Now()))
+n, err := database.ExecuteUpdate(ctx, tx, expire, "expire_sessions") // 0 rows is not an error
+if err != nil {
+    return fmt.Errorf("expire sessions: %w", err)
+}
+
+activate := qb.Update("users").
+    Set(cols.Col("Active"), true).
+    Where(f.Eq(cols.Col("ID"), id))
+err = database.ExecuteUpdateOne(ctx, tx, activate, "activate_user") // 0 rows -> ErrNoRows
+if errors.Is(err, database.ErrNoRows) {
+    return domain.ErrUserNotFound
+}
+```
+
+`database.Raw(sql string, args ...any)` adapts hand-written SQL to the same helpers — it is an escape hatch on par with `Filter.Raw`/`JoinFilter.Raw`, and broader (the SQL string replaces the whole statement, bypassing the builder's identifier validation entirely). **Every** call site requires the same review annotation `f.Raw()`/`jf.Raw()` do:
+
+```go
+// SECURITY: Manual SQL review completed - static SQL, no user input concatenated, values parameterized via args
+q := database.Raw("SELECT id, name FROM users WHERE tier = $1 FOR UPDATE", tier)
+err := database.ExecuteQuerySingle(ctx, tx, q, "tier_lookup", &row.ID, &row.Name)
+```
+
+Typical app-side mapping distinguishes the "not found" business outcome from an infrastructure failure:
+
+```go
+err := database.ExecuteQuerySingle(ctx, tx, q, "ownership", &row.ID, &row.Name)
+switch {
+case errors.Is(err, database.ErrNoRows):
+    return domain.ErrResourceNotFound // business 404
+case err != nil:
+    return fmt.Errorf("load ownership: %w", err) // infra 500
+}
+```
+
 ## Session Timezone (Breaking Change — ADR-016)
 
 | Setting | Default | Purpose |

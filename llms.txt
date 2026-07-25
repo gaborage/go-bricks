@@ -360,6 +360,7 @@ Per ADR-003, at least one of `host` *or* `connectionstring` must be set, otherwi
 ```go
 import (
 	"context"
+	"database/sql" // needed for the *sql.Rows callback parameter in Step 3(c) / Step 4's ExecuteQueryMany
 	"fmt"
 
 	"github.com/gaborage/go-bricks/app"
@@ -436,31 +437,96 @@ func (m *UserModule) FindActiveUsersBuilder(ctx context.Context) ([]User, error)
 	all := cols.All()
 	allAny := make([]any, len(all))
 	for i, c := range all { allAny[i] = c }
-	sql, args, err := qb.Select(allAny...).
-		From("users").
-		Where(f.Eq(cols.Col("Status"), "active")).
-		ToSQL()
-	if err != nil {
-		return nil, fmt.Errorf("build query: %w", err)
-	}
+	q := qb.Select(allAny...).From("users").Where(f.Eq(cols.Col("Status"), "active"))
 	// PostgreSQL: SELECT id, name, email, status FROM users WHERE status = $1
 	// Oracle:     SELECT id, name, email, status FROM users WHERE status = :1
-
-	rows, err := db.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query failed: %w", err)
-	}
-	defer rows.Close()
+	// The builder result is a database.SQLProvider — pass it straight in, no .ToSQL() call
 
 	var users []User
-	for rows.Next() {
+	err = database.ExecuteQueryMany(ctx, db, q, "find_active_users", func(rows *sql.Rows) error {
 		var u User
 		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Status); err != nil {
-			return nil, fmt.Errorf("scan failed: %w", err)
+			return err
 		}
 		users = append(users, u)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("find active users: %w", err)
 	}
-	return users, rows.Err()
+	return users, nil
+}
+```
+
+### Step 4: Execute Helpers — skip the ToSQL→Query→Scan boilerplate
+
+The `(b)` loop above (`db.Query` → `defer rows.Close()` → iterate via `rows.Next()` → `Scan` → check `rows.Err()`) is the single most-repeated pattern across SQL repositories. `database.Execute*` collapses it into one call and works identically against a `database.Interface` connection or an in-flight `database.Tx` — both satisfy the 2-method `database.Executor` seam, so the same repository method runs standalone or inside a transaction unchanged.
+
+| Helper | Signature | Use for |
+|---|---|---|
+| `ExecuteQuerySingle` | `(ctx, exec, q, op string, dest ...any) error` | Exactly one row expected; `ErrNoRows` if none matched |
+| `ExecuteQueryMany` | `(ctx, exec, q, op string, scan func(*sql.Rows) error) error` | Zero-or-more rows; `scan` runs once per row — zero rows is NOT an error |
+| `ExecuteUpdate` | `(ctx, exec, q, op string) (int64, error)` | UPDATE/DELETE — returns the raw affected-row count and does **not** treat zero as an error (bulk writes, idempotent state transitions) |
+| `ExecuteUpdateOne` | `(ctx, exec, q, op string) error` | UPDATE/DELETE expected to match exactly one row — zero rows affected becomes `ErrNoRows` (same as `ExecuteQuerySingle`); **more than one** row affected is rejected as `*ExecError` at `StageRowsAffected`, not silently reported as success |
+| `ExecuteInsert` | `(ctx, exec, q, op string) error` | INSERT — success is success; doesn't inspect `RowsAffected` |
+
+`q` is anything satisfying `database.SQLProvider` (`ToSQL() (string, []any, error)`) — every builder result (`qb.Select/Insert/Update/Delete(...)`) already does; use `database.Raw(sql, args...)` for hand-written SQL. **Never** pass a bare `qb.Filter()`/`qb.JoinFilter()` result — a WHERE fragment is not a complete statement and is rejected with a clear error instead of reaching the driver.
+
+**Before** — the loop in Step 3(b) above; **after** (`ExecuteQueryMany`, same behavior):
+
+```go
+// SECURITY: Manual SQL review completed - static SQL, no user input concatenated, value parameterized via arg
+q := database.Raw("SELECT id, name, email, status FROM users WHERE status = $1 ORDER BY id", "active")
+
+var users []User
+err := database.ExecuteQueryMany(ctx, db, q, "list_active_users", func(rows *sql.Rows) error {
+	var u User
+	if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Status); err != nil {
+		return err
+	}
+	users = append(users, u)
+	return nil
+})
+if err != nil {
+	return nil, fmt.Errorf("list active users: %w", err)
+}
+return users, nil
+```
+
+A type-safe builder result passes straight through — no `.ToSQL()` call needed: `q := qb.Select(allAny...).From("users").Where(f.Eq(cols.Col("Status"), "active"))`.
+
+**Error contract** — every helper reports failures the same way:
+
+```go
+var execErr *database.ExecError
+switch {
+case errors.Is(err, database.ErrNoRows):
+	return domain.ErrUserNotFound // business 404 — ExecuteQuerySingle / ExecuteUpdateOne, zero rows
+case errors.As(err, &execErr):
+	// infrastructure failure — execErr.Stage (database.ExecStage) is one of:
+	//   StageBuild (bad SQL / rejected WHERE fragment), StageExec (driver/connection),
+	//   StageScan, StageIterate, StageClose (ExecuteQuerySingle only), StageRowsAffected
+	return fmt.Errorf("%s failed at %s: %w", execErr.Op, execErr.Stage, execErr.Err)
+case err != nil:
+	return err
+}
+```
+
+**`ExecuteUpdate` vs `ExecuteUpdateOne`** — pick based on whether zero matched rows is expected:
+
+```go
+// Bulk/idempotent write — zero rows affected is a legitimate outcome, not an error.
+// SECURITY: Manual SQL review completed - static SQL, no user input concatenated
+n, err := database.ExecuteUpdate(ctx, db,
+	database.Raw("UPDATE sessions SET expired = true WHERE expires_at < now()"),
+	"expire_sessions")
+
+// Single-row write — zero rows affected means "not found".
+err = database.ExecuteUpdateOne(ctx, tx,
+	qb.Update("users").Set(cols.Col("Active"), true).Where(f.Eq(cols.Col("ID"), userID)),
+	"activate_user")
+if errors.Is(err, database.ErrNoRows) {
+	return domain.ErrUserNotFound
 }
 ```
 
@@ -515,12 +581,13 @@ func (m *UserModule) PingDB(ctx context.Context) error {
 ```
 
 **Key points:**
-- Connection is config-driven — never call `sql.Open` or import `pgx`/`go-ora` directly; the framework manages pooling, keep-alive, timezone, and lifecycle
+- Connection is config-driven — never call `sql.Open` or import `pgx`/`go-ora` directly; the framework manages pooling, keep-alive, timezone, and lifecycle. This forbids the vendor driver packages, not the standard library: `ExecuteQueryMany`'s scan callback takes `*sql.Rows`, so importing stdlib `database/sql` for that type is expected and fine
 - `deps.DB` is a **function**, not an instance — call `getDB(ctx)` each time so multi-tenant resolution works
-- Use raw SQL (`db.QueryRow`, `db.Query`, `db.Exec`) for simple, vendor-pinned queries
+- **Default to a helper** — `database.Execute*` (Step 4) owns the build→exec→scan→error-wrap glue and the zero-rows decision; reach past it only when you have a specific reason to
+- Builder + a helper by default for queries; `database.Raw(...)` + a helper (with the mandatory `// SECURITY: Manual SQL review completed - ...` annotation) for vendor-pinned SQL; bare `db.QueryRow`/`db.Query`/`db.Exec` only when you genuinely need the raw primitive (no `op` label, no typed error contract)
 - Use `database.NewQueryBuilder(db.DatabaseType())` for type-safe, vendor-agnostic queries (auto-handles placeholders and Oracle reserved-word quoting)
-- Always `defer rows.Close()` after `db.Query` and check `rows.Err()` after the loop
-- For atomicity: `db.Begin(ctx)` → `defer tx.Rollback(ctx)` → `tx.Commit(ctx)` at the end
+- Always `defer rows.Close()` and check `rows.Err()` after the loop — when you hold `*sql.Rows` yourself via `db.Query`; `ExecuteQueryMany`/`ExecuteQuerySingle` own `Close` and `rows.Err()` for you
+- For atomicity: `db.Begin(ctx)` → `defer tx.Rollback(ctx)` → work via `database.Execute*(ctx, tx, q, "op")` (both `Interface` and `Tx` satisfy `database.Executor`) → `tx.Commit(ctx)` at the end
 
 ## Typed HTTP Handlers
 
@@ -1115,9 +1182,10 @@ func PromoteID(c server.HandlerContext, next func() error) error {
 ```go
 // Define entity with db tags
 type User struct {
-    ID     int64  `db:"id"`
-    Email  string `db:"email"`
-    Status string `db:"status"`
+    ID       int64     `db:"id"`
+    Email    string    `db:"email"`
+    Status   string    `db:"status"`
+    LastSeen time.Time `db:"last_seen"`
 }
 
 // Obtain db from getDB(ctx) — see "Database Connection & Queries" above
@@ -1133,58 +1201,66 @@ cols := qb.Columns(&User{})
 selected := cols.Cols("ID", "Email")
 selectedAny := make([]any, len(selected))
 for i, c := range selected { selectedAny[i] = c }
-sql, args, err := qb.Select(selectedAny...).
+q := qb.Select(selectedAny...).
 	From("users").
 	Where(f.And(
 		f.Eq(cols.Col("Status"), "active"),
 		f.Like(cols.Col("Email"), "%@example.com"),
-	)).
-	ToSQL()
-if err != nil {
-	return nil, fmt.Errorf("build query: %w", err)
-}
+	))
+// q is a database.SQLProvider — pass it straight to Execute*, no .ToSQL() call needed
 
-rows, err := db.Query(ctx, sql, args...)
+var users []User
+err = database.ExecuteQueryMany(ctx, db, q, "list_active_users_by_email", func(rows *sql.Rows) error {
+	var u User
+	if err := rows.Scan(&u.ID, &u.Email); err != nil {
+		return err
+	}
+	users = append(users, u)
+	return nil
+})
+if err != nil {
+	return nil, fmt.Errorf("list users: %w", err)
+}
+return users, nil
 ```
 
 | Need                | Builder call / API usage                                               |
 |---------------------|------------------------------------------------------------------------|
-| Filtering           | `f.Eq`, `f.And`, `f.Or`, `f.In`, `f.Between`                           |
+| Filtering           | `f.Eq`, `f.And`, `f.Or`, `f.In`, `f.Between`, `f.Lt`/`f.Lte`/`f.Gt`/`f.Gte` (inequalities — no need to reach for raw SQL) |
 | Pattern matching    | `f.Like` (case-insensitive), `f.Regex`/`f.RegexI`/`f.NotRegex`/`f.NotRegexI` (POSIX regex; PG `~`/`~*`/`!~`/`!~*`, Oracle `REGEXP_LIKE` with `'i'` flag) |
 | JSON containment    | `f.JSONContains(col, value)` — PostgreSQL `@>` on `jsonb`; pass struct/map/slice (auto JSON-marshalled) or pre-encoded `string`/`[]byte`/`json.RawMessage`. Oracle is not yet supported. |
 | Sorting / grouping  | `qb.Select(...).From("...").OrderBy(qb.MustExpr("created_at DESC")).GroupBy("tenant_id")` |
-| Mutations           | `qb.Insert`, `qb.Update`, `qb.Delete`, then `db.Exec`                  |
+| Mutations           | `qb.Insert/Update/Delete` → `database.ExecuteInsert` / `ExecuteUpdate` (raw count, zero legal) / `ExecuteUpdateOne` (zero → `ErrNoRows`). Pass the builder directly — no `.ToSQL()` |
 | Joins               | `qb.JoinOn` with `qb.JoinFilter()`                                     |
 | Subqueries          | Compose another builder clause then `f.Exists(subQuery)`               |
-| Raw escape hatch    | `f.Raw(cond, args...)` / `jf.Raw(cond, args...)` — REQUIRES `// SECURITY: Manual SQL review completed - <rationale>` comment at every call site (manual identifier quoting + parameterized values; never concatenate user input) |
-| Transactions        | `tx, err := db.Begin(ctx); if err != nil { return err }; defer tx.Rollback(ctx); /* work */; if err := tx.Commit(ctx); err != nil { return err }` |
+| Raw escape hatch    | `f.Raw(cond, args...)` / `jf.Raw(cond, args...)` produce a WHERE/JOIN **fragment**; `database.Raw(sql, args...)` replaces the **whole statement** (broader — it bypasses the builder's identifier validation entirely). All three REQUIRE a `// SECURITY: Manual SQL review completed - <rationale>` comment at every call site (manual identifier quoting + parameterized values; never concatenate user input) |
+| Transactions        | `tx, err := db.Begin(ctx); if err != nil { return err }; defer tx.Rollback(ctx); /* work: database.Execute*(ctx, tx, q, "op") — both Interface and Tx satisfy database.Executor */; if err := tx.Commit(ctx); err != nil { return err }` |
 
 **Mutation Examples (INSERT/UPDATE/DELETE):**
 
 ```go
 // INSERT
-sql, args, err := qb.Insert("users").
-    Columns(cols.Col("Name"), cols.Col("Email")).
-    Values("Alice", "alice@example.com").
-    ToSQL()
-if err != nil { return err }
-result, err := db.Exec(ctx, sql, args...)
+if err := database.ExecuteInsert(ctx, db,
+    qb.Insert("users").Columns(cols.Col("Email"), cols.Col("Status")).Values("alice@example.com", "active"),
+    "create_user"); err != nil {
+    return err
+}
 
-// UPDATE
-sql, args, err = qb.Update("users").
-    Set(cols.Col("Name"), "Bob").
-    Set(cols.Col("Email"), "bob@example.com").
-    Where(f.Eq(cols.Col("ID"), 123)).
-    ToSQL()
-if err != nil { return err }
-result, err = db.Exec(ctx, sql, args...)
+// UPDATE — exactly one row expected; zero means "not found"
+err := database.ExecuteUpdateOne(ctx, db,
+    qb.Update("users").Set(cols.Col("Status"), "inactive").Where(f.Eq(cols.Col("ID"), 123)),
+    "deactivate_user")
+if errors.Is(err, database.ErrNoRows) {
+    return ErrUserNotFound
+}
 
-// DELETE
-sql, args, err = qb.Delete("users").
-    Where(f.Eq(cols.Col("ID"), 123)).
-    ToSQL()
-if err != nil { return err }
-result, err = db.Exec(ctx, sql, args...)
+// DELETE — bulk/idempotent; zero rows is a legitimate outcome
+cutoff := time.Now().AddDate(0, 0, -90) // 90 days of inactivity
+if _, err := database.ExecuteUpdate(ctx, db,
+    qb.Delete("users").Where(f.Lt(cols.Col("LastSeen"), cutoff)),
+    "purge_stale_users"); err != nil {
+    return fmt.Errorf("purge stale users: %w", err)
+}
 ```
 
 Access to vendor quirks (Oracle quoting) routes through the same interface; switching drivers requires config only.
@@ -5179,6 +5255,7 @@ package orders
 import (
     "errors"
 
+    "github.com/gaborage/go-bricks/database"
     "github.com/gaborage/go-bricks/server"
 )
 
@@ -5193,11 +5270,30 @@ func mapOrderError(err error) server.IAPIError {
             WithDetails("suggestion", "reduce quantity or wait for restock")
     }
 
+    // Repository "not found" — only the single-row helpers (ExecuteQuerySingle,
+    // ExecuteUpdateOne) ever produce ErrNoRows; a matching call that found no
+    // row collapses to the same 404 as the domain-level sentinel above (mirror
+    // this the way cache.ErrNotFound is checked at the cache boundary): the
+    // repository should translate this into ErrOrderNotFound before it
+    // reaches the handler, but mapping it here too means an untranslated
+    // ErrNoRows never falls through to the generic 500 below.
+    if errors.Is(err, database.ErrNoRows) {
+        return server.NewNotFoundError("Order")
+    }
+
     // Struct-based errors — errors.As()
     var dupErr *DuplicateOrderError
     if errors.As(err, &dupErr) {
         return server.NewConflictError(dupErr.Error()).
             WithDetails("existing_order_id", dupErr.ExistingID)
+    }
+
+    // Infrastructure failure from a database.Execute* helper (build/exec/scan/
+    // iterate/close/rows_affected) — never a 404; "not found" was already
+    // ruled out above.
+    var execErr *database.ExecError
+    if errors.As(err, &execErr) {
+        return server.NewInternalServerError("An internal error occurred")
     }
 
     // Unknown errors — safe fallback (details hidden in production)
@@ -5246,6 +5342,7 @@ import (
 
     amqp "github.com/rabbitmq/amqp091-go"
 
+    "github.com/gaborage/go-bricks/database"
     "github.com/gaborage/go-bricks/logger"
 )
 
@@ -5262,6 +5359,14 @@ func (h *OrderConsumer) Handle(ctx context.Context, delivery *amqp.Delivery) err
 
     err := h.svc.Create(ctx, req.ProductID, req.Quantity)
     if err != nil {
+        // "Not found": retrying won't make a missing order appear, so this is a
+        // skip, not a retry-worthy failure — covers both the translated domain
+        // sentinel and an untranslated repository ErrNoRows reaching this far.
+        if errors.Is(err, ErrOrderNotFound) || errors.Is(err, database.ErrNoRows) {
+            h.logger.Warn().Int64("product_id", req.ProductID).Msg("Order not found, skipping")
+            return nil // ACK — not found is not a transient condition
+        }
+
         // Business-rule violations: log and ACK (skip, don't retry)
         if errors.Is(err, ErrInsufficientStock) {
             h.logger.Warn().Int64("product_id", req.ProductID).Int("quantity", req.Quantity).
@@ -5292,8 +5397,10 @@ Same domain errors, different boundary handling:
 | Domain Error | HTTP Handler (IAPIError) | AMQP Consumer |
 |-------------|--------------------------|---------------|
 | `ErrOrderNotFound` | `NewNotFoundError("Order")` → 404 | Log WARN + ACK (skip) |
+| `database.ErrNoRows` (untranslated repository "not found") | `NewNotFoundError("Order")` → 404 | Log WARN + ACK (skip) |
 | `ErrInsufficientStock` | `NewBusinessLogicError("INSUFFICIENT_STOCK", ...)` → 422 | Log WARN + ACK (skip) |
 | `*DuplicateOrderError` | `NewConflictError(...)` → 409 with details | Log WARN + ACK (idempotent) |
+| `*database.ExecError` (infrastructure failure) | `NewInternalServerError(...)` → 500 | Return error → nack + drop |
 | Unexpected error | `NewInternalServerError(...)` → 500 | Return error → nack + drop |
 
 **Key principle:** Domain errors are defined once in the module. Each boundary (HTTP, AMQP) decides how to translate them — HTTP maps to status codes, AMQP maps to ACK/nack decisions with logging.

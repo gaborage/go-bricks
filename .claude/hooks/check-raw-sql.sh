@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # PreToolUse guard for GoBricks.
 #
-# Blocks any Edit/Write/MultiEdit that introduces an f.Raw() or jf.Raw()
-# raw-SQL escape hatch WITHOUT the mandatory inline SECURITY annotation
-# required by CLAUDE.md ("Security Guidelines" / Developer Manifesto).
+# Blocks any Edit/Write/MultiEdit that introduces an f.Raw(), jf.Raw(), or
+# database.Raw() raw-SQL escape hatch WITHOUT the mandatory inline SECURITY
+# annotation required by CLAUDE.md ("Security Guidelines" / Developer
+# Manifesto).
 #
 # Rationale: the annotation is a forcing function for manual SQL review and
 # keeps every call site grep-discoverable. A pre-edit block is strictly
 # better than relying on a human remembering to grep later.
 #
 # Scope note: detection mirrors the canonical discovery grep in CLAUDE.md
-# (git grep -E 'f\.Raw\(|jf\.Raw\(') on purpose — it is tied to the documented
-# convention, not a general static analyzer. Receivers not named f/jf are out
-# of scope by design (the same as the CLAUDE.md grep).
+# (git grep -E 'f\.Raw\(|jf\.Raw\(|database\.Raw\(') on purpose — it is tied
+# to the documented convention, not a general static analyzer. Receivers not
+# named f/jf, and packages not named database, are out of scope by design
+# (the same as the CLAUDE.md grep).
 #
 # Fails CLOSED: a missing dependency or unparseable input blocks rather than
 # silently allowing an unguarded edit.
@@ -37,7 +39,7 @@ block_unparseable() {
 # silently break the fail-closed contract this guard advertises.)
 jq -e . >/dev/null 2>&1 <<<"$input" || block_unparseable
 
-# Cheapest guard first: only Go source files can contain f.Raw()/jf.Raw().
+# Cheapest guard first: only Go source files can contain f.Raw()/jf.Raw()/database.Raw().
 # Extracting just the path keeps the common non-Go edit on a single jq fork.
 file="$(jq -er '.tool_input.file_path // empty' <<<"$input" 2>/dev/null)" || block_unparseable
 case "$file" in
@@ -56,7 +58,7 @@ added="$(jq -er '
   // ""' <<<"$input" 2>/dev/null)" || block_unparseable
 
 # Does this edit introduce a raw-SQL escape hatch?
-if ! grep -Eq '(^|[^A-Za-z0-9_])(f|jf)\.Raw\(' <<<"$added"; then
+if ! grep -Eq '(^|[^A-Za-z0-9_])(f|jf|database)\.Raw\(' <<<"$added"; then
   exit 0
 fi
 
@@ -73,10 +75,15 @@ fi
 # several Raw calls. A pre-edit hook only sees a string fragment, so strict
 # per-call adjacency would false-block that sanctioned pattern. Semantic
 # adjacency review remains the job of /security-audit + human review.
+#
+# The marker must sit in a // comment AND carry a non-empty rationale after the
+# '-'. A marker inside a plain string literal no longer satisfies it. Residual by
+# design: a string that itself contains '//' before the marker still passes — this
+# is a forcing function for review, not a parser.
 if awk '
-  /SECURITY: Manual SQL review completed/ { seen = 1 }
-  /(^|[^A-Za-z0-9_])(f|jf)\.Raw\(/      { if (!seen) { missing = 1 } }
-  END                                    { exit (missing ? 1 : 0) }
+  /\/\/[^"]*SECURITY: Manual SQL review completed[[:space:]]*-[[:space:]]*[^[:space:]]/ { seen = 1 }
+  /(^|[^A-Za-z0-9_])(f|jf|database)\.Raw\(/      { if (!seen) { missing = 1 } }
+  END                                            { exit (missing ? 1 : 0) }
 ' <<<"$added"; then
   exit 0
 fi
@@ -84,7 +91,8 @@ fi
 cat >&2 <<'EOF'
 BLOCKED — raw-SQL escape hatch added without its mandatory SECURITY annotation.
 
-CLAUDE.md requires, at EVERY f.Raw()/jf.Raw() call site, an adjacent comment:
+CLAUDE.md requires, at EVERY f.Raw()/jf.Raw()/database.Raw() call site, an
+adjacent comment:
 
     // SECURITY: Manual SQL review completed - <what was verified>
 
