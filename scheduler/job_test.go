@@ -201,8 +201,8 @@ func TestJobContextContextBehavior(t *testing.T) {
 			nil, nilDBResolver, nilMessagingResolver, nil,
 		)
 
-		// Wait for timeout
-		time.Sleep(20 * time.Millisecond)
+		// Wait deterministically for the deadline rather than sleeping past it.
+		<-parentCtx.Done()
 
 		// Should be canceled
 		assert.Error(t, ctx.Err())
