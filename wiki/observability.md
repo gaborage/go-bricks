@@ -221,14 +221,14 @@ See [llms.txt](../llms.txt) Custom Metrics section for complete code examples in
 
 ## Observability Headers & Authentication
 
-The OTLP exporter reads headers from `observability.trace.headers` (and the equivalent `metrics.headers` / `logs.headers`) in YAML — there is no built-in support for separate `OBSERVABILITY_*_HEADERS_*` env vars. **The header structure goes in YAML; the secret values come from environment variables via Koanf substitution** (the same pattern used elsewhere in `config.example.yaml`). Hardcoding API keys or bearer tokens directly in committed YAML is forbidden.
+The OTLP exporter reads headers from `observability.trace.headers` (and the equivalent `metrics.headers` / `logs.headers`) in YAML — there is no built-in support for separate `OBSERVABILITY_*_HEADERS_*` env vars. **The header structure goes in YAML; the secret value is rendered into the runtime file before startup** — GoBricks has no `${VAR}` interpolation inside YAML values, so an un-rendered placeholder would be sent to the vendor as-is. Hardcoding API keys or bearer tokens directly in committed YAML is forbidden.
 
 ```yaml
-# config.production.yaml — SAFE: header structure in YAML, value from env
+# config.production.yaml.tmpl — committed template; rendered to config.production.yaml (gitignored) before startup
 observability:
   trace:
     headers:
-      api-key: ${NEW_RELIC_API_KEY}   # resolved at startup from environment
+      api-key: ${NEW_RELIC_API_KEY}   # placeholder — rendered before startup, see observability_headers_auth.md
 
 # UNSAFE — never commit:
 #   api-key: "nrak-ABC123..."         # hardcoded secret

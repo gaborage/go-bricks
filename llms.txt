@@ -4363,7 +4363,7 @@ observability:
     insecure: false                   # TLS required for vendor endpoints
     compression: gzip
     headers:
-      api-key: ${OTEL_API_KEY}        # From env var — never commit
+      api-key: ${OTEL_API_KEY}        # rendered before startup — see Secrets Hygiene below
 ```
 
 ### Endpoint Format Rules (CRITICAL)
@@ -4391,28 +4391,18 @@ The framework attaches the following resource attributes to every signal: `servi
 
 ### Secrets Hygiene
 
-Never hardcode OTLP auth headers in committed YAML. The framework declares header *structure* in YAML, but GoBricks has **no `${VAR}` interpolation** inside YAML values — a literal `${NEW_RELIC_API_KEY}` string would be sent as-is. Render the file before `config.Load()` runs (see wiki/observability_headers_auth.md) or inject the value through the environment-variable override path.
+Never hardcode OTLP auth headers in committed YAML. The framework declares header *structure* in YAML, but GoBricks has **no `${VAR}` interpolation** inside YAML values — a literal `${NEW_RELIC_API_KEY}` string would be sent as-is. Env vars can't carry the value either: header names like `api-key` contain dashes that the `OBSERVABILITY_*` env-to-key mapping cannot express.
 
 ```yaml
-# config.production.yaml — checked into git
+# config.production.yaml.tmpl — committed template; render to
+# config.production.yaml (gitignored) before startup, so the real value never lands in a tracked file
 observability:
   trace:
     headers:
-      api-key: ""    # value rendered into the file before startup, never committed
+      api-key: ${NEW_RELIC_API_KEY}
 ```
 
-For rotating tokens or secrets fetched from a manager (Vault, AWS Secrets Manager), override programmatically before `app.Run()`:
-
-```go
-cfg, err := config.Load()
-if err != nil { log.Fatal(err) }
-if apiKey := os.Getenv("OTEL_API_KEY"); apiKey != "" {
-    headers := map[string]string{"api-key": apiKey}
-    cfg.Observability.Trace.Headers = headers
-    cfg.Observability.Metrics.Headers = headers
-    cfg.Observability.Logs.Headers = headers
-}
-```
+There is no override hook for `observability.*` — `config.Config` has no observability section — so the placeholder must already be a literal when `config.Load()` runs. Render it before startup either programmatically in your own `main()` (fetch the secret, render the template, write the file — see "Programmatic secret injection" in wiki/observability_headers_auth.md) or with an infra-level step: `envsubst`, a Vault Agent template, Helm/Kustomize, or an init container.
 
 ## Structured Logging with Custom Fields
 
@@ -4795,7 +4785,7 @@ observability:
     insecure: false
     compression: gzip
     headers:
-      api-key: ${NEW_RELIC_API_KEY}    # SAFE: resolved from env at startup
+      api-key: ${NEW_RELIC_API_KEY}    # rendered before startup — see Secrets Hygiene
 ```
 
 ```yaml

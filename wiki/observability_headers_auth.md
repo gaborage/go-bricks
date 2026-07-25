@@ -9,7 +9,8 @@
 Reference env vars from YAML using `${VAR_NAME}` placeholders — **but render them before GoBricks reads the file; GoBricks itself does not.** `config.Load()` (backed by Koanf) loads the YAML file verbatim via `file.Provider` and layers env vars onto the config tree only by matching variable *names* onto config key paths — it never scans an already-loaded string value for a `${...}` token. Left un-rendered, `api-key: ${NEW_RELIC_API_KEY}` is read back as the literal string `${NEW_RELIC_API_KEY}`, not the secret. Resolve the placeholder with an external render step — `envsubst`, a Vault Agent template, Helm/Kustomize, or an init container — that writes the real value into the file *before* the process starts.
 
 ```yaml
-# config.production.yaml — checked into git
+# config.production.yaml.tmpl — committed template (placeholders only);
+# rendered to config.production.yaml (gitignored) before startup
 observability:
   enabled: true
   service:
@@ -53,7 +54,7 @@ The actual secret lives in the deployment environment (Kubernetes Secret, AWS Se
 
 2. **Separate config files per environment** (no secrets in any of them):
    - `config.yaml` — Base config (committed)
-   - `config.production.yaml` — Production overrides (committed; references `${VAR}`)
+   - `config.production.yaml.tmpl` — Production overrides template (committed; references `${VAR}`); rendered to `config.production.yaml` (gitignored) before startup
    - `config.development.yaml` — Dev settings (committed; references `${VAR}` or default literals for local-only test keys)
 
 3. **Programmatic secret injection** (when a sidecar or secret manager provides the value at process start — e.g., rotating tokens): render the YAML file itself before calling `config.Load()` / `app.Run()`. GoBricks has no `${VAR}` interpolation step and no override hook for `observability.*` values, so the placeholder must already be a literal by the time the file is read.
@@ -62,9 +63,15 @@ The actual secret lives in the deployment environment (Kubernetes Secret, AWS Se
    // In main.go, before app.Run()
    apiKey, err := vault.GetSecret(ctx, "otel/api-key")
    if err != nil { return err }
+   tmpl, err := os.ReadFile("config.production.yaml.tmpl")
+   if err != nil { return err }
    // strconv.Quote yields a valid YAML double-quoted scalar, so secrets containing
    // quotes, ':', '#', or newlines cannot corrupt the rendered document.
-   rendered := strings.ReplaceAll(string(configTemplate), "${NEW_RELIC_API_KEY}", strconv.Quote(apiKey))
+   rendered := strings.ReplaceAll(string(tmpl), "${NEW_RELIC_API_KEY}", strconv.Quote(apiKey))
+   // The rendered target is gitignored — the real value never lands in a tracked file.
+   // os.WriteFile applies 0o600 only when it CREATES the file; remove any stale
+   // rendered copy first so a pre-existing looser-permissioned file can't expose the secret.
+   _ = os.Remove("config.production.yaml")
    if err := os.WriteFile("config.production.yaml", []byte(rendered), 0o600); err != nil { return err }
    // GoBricks reads the rendered file when config.Load() runs inside app.Run() —
    // no ${VAR} placeholder left to resolve.
