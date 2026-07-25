@@ -179,7 +179,10 @@ GoBricks uses Koanf for configuration management with layered loading: defaults 
 
 ### Access Patterns
 ```go
-cfg, _ := config.Load()
+cfg, err := config.Load()
+if err != nil {
+    log.Fatal(err)
+}
 
 // Simple values with defaults
 host := cfg.String("server.host", "0.0.0.0")
@@ -643,12 +646,14 @@ Solves the dual-write problem: events are written to an outbox table in the **sa
 
 ```go
 func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) error {
-    db, _ := s.getDB(ctx)
-    tx, _ := db.Begin(ctx)
+    db, err := s.getDB(ctx)
+    if err != nil { return err }
+    tx, err := db.Begin(ctx)
+    if err != nil { return err }
     defer tx.Rollback(ctx)
 
     // 1. Write business data
-    _, err := tx.Exec(ctx, "INSERT INTO orders (id, customer_id) VALUES ($1, $2)",
+    _, err = tx.Exec(ctx, "INSERT INTO orders (id, customer_id) VALUES ($1, $2)",
         req.ID, req.CustomerID)
     if err != nil { return err }
 
