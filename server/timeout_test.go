@@ -204,8 +204,9 @@ func TestTimeoutDuringValidation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
 
-	// Wait for context to expire
-	time.Sleep(5 * time.Millisecond)
+	// Wait deterministically for the deadline. A fixed sleep margin loses the race
+	// when the runtime timer goroutine is starved on a loaded CI runner.
+	<-ctx.Done()
 
 	// Explicitly verify context is canceled (defensive test assertion)
 	require.Error(t, ctx.Err(), "Context should be canceled after timeout")
