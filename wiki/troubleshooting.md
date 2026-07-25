@@ -165,7 +165,7 @@ observability:
     insecure: false  # TLS required
     compression: gzip
     headers:
-      api-key: your-license-key
+      api-key: ${NEW_RELIC_API_KEY}  # rendered before startup — see observability_headers_auth.md
 ```
 
 **HTTP endpoint format:**

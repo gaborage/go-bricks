@@ -2,10 +2,12 @@
 
 GoBricks supports all New Relic OTLP optimizations for bandwidth reduction and performance.
 
+`${NEW_RELIC_API_KEY}` below is a placeholder, not interpolated by GoBricks — render it into the runtime file before startup; see [Headers & Authentication](observability_headers_auth.md).
+
 ## Complete New Relic Configuration (gRPC - Recommended)
 
 ```yaml
-# config.production.yaml
+# config.production.yaml.tmpl — committed template; rendered to config.production.yaml (gitignored) before startup
 observability:
   enabled: true
   service:
@@ -20,7 +22,7 @@ observability:
     insecure: false  # TLS required for New Relic
     compression: gzip  # ~70% bandwidth reduction
     headers:
-      api-key: your-new-relic-license-key-here
+      api-key: ${NEW_RELIC_API_KEY}
 
   # Metrics with New Relic optimizations
   metrics:
@@ -31,7 +33,7 @@ observability:
     temporality: delta  # New Relic recommendation (lower memory, better performance)
     histogramaggregation: exponential  # Better precision, ~10x lower memory
     headers:
-      api-key: your-new-relic-license-key-here
+      api-key: ${NEW_RELIC_API_KEY}
 
   # Logs with gRPC
   logs:
@@ -41,7 +43,7 @@ observability:
     compression: gzip
     samplingrate: 0.1  # Export 10% of INFO/DEBUG logs (ERROR/WARN always exported)
     headers:
-      api-key: your-new-relic-license-key-here
+      api-key: ${NEW_RELIC_API_KEY}
 ```
 
 ## New Relic HTTP Alternative (Port 4318)
@@ -59,7 +61,7 @@ observability:
     protocol: http
     compression: gzip
     headers:
-      api-key: your-license-key
+      api-key: ${NEW_RELIC_API_KEY}
 
   metrics:
     enabled: true
@@ -69,7 +71,7 @@ observability:
     temporality: delta
     histogramaggregation: exponential
     headers:
-      api-key: your-license-key
+      api-key: ${NEW_RELIC_API_KEY}
 
   logs:
     enabled: true
@@ -77,7 +79,7 @@ observability:
     protocol: http
     compression: gzip
     headers:
-      api-key: your-license-key
+      api-key: ${NEW_RELIC_API_KEY}
 ```
 
 ## New Relic Port 443 Alternative

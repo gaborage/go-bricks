@@ -4394,11 +4394,12 @@ The framework attaches the following resource attributes to every signal: `servi
 Never hardcode OTLP auth headers in committed YAML. The framework declares header *structure* in YAML, but GoBricks has **no `${VAR}` interpolation** inside YAML values — a literal `${NEW_RELIC_API_KEY}` string would be sent as-is. Env vars can't carry the value either: header names like `api-key` contain dashes that the `OBSERVABILITY_*` env-to-key mapping cannot express.
 
 ```yaml
-# config.production.yaml — checked into git
+# config.production.yaml.tmpl — committed template; render to
+# config.production.yaml (gitignored) before startup, so the real value never lands in a tracked file
 observability:
   trace:
     headers:
-      api-key: ${NEW_RELIC_API_KEY}  # rendered into the file before startup, never committed
+      api-key: ${NEW_RELIC_API_KEY}
 ```
 
 There is no override hook for `observability.*` — `config.Config` has no observability section — so the placeholder must already be a literal when `config.Load()` runs. Render it before startup either programmatically in your own `main()` (fetch the secret, render the template, write the file — see "Programmatic secret injection" in wiki/observability_headers_auth.md) or with an infra-level step: `envsubst`, a Vault Agent template, Helm/Kustomize, or an init container.
@@ -4784,7 +4785,7 @@ observability:
     insecure: false
     compression: gzip
     headers:
-      api-key: ${NEW_RELIC_API_KEY}    # SAFE: resolved from env at startup
+      api-key: ${NEW_RELIC_API_KEY}    # rendered before startup — see Secrets Hygiene
 ```
 
 ```yaml
