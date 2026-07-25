@@ -14,6 +14,7 @@ import (
 	"net"
 	nethttp "net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -45,14 +46,15 @@ const (
 // client implements the Client interface
 type client struct {
 	httpClient           *nethttp.Client
-	logger               logger.Logger
+	logger               logger.Logger // non-nil: rejected at construction (NewBuilder/Build)
 	config               *Config
 	requestInterceptors  []RequestInterceptor
 	responseInterceptors []ResponseInterceptor
 	callCount            int64
 }
 
-// NewClient creates a new REST client with default configuration
+// NewClient creates a new REST client with default configuration. It forwards
+// log to NewBuilder unchanged, so it panics on a nil logger too.
 func NewClient(log logger.Logger) Client {
 	return NewBuilder(log).Build()
 }
@@ -90,8 +92,38 @@ type transportChain struct {
 	byLayer [layerCount][]func(nethttp.RoundTripper) nethttp.RoundTripper
 }
 
-// NewBuilder creates a new client builder
+// isNilLogger reports whether log is unusable: a nil interface, or a non-nil
+// interface holding a nil pointer (or other nil-able kind). Callers that store
+// a *ZeroLogger in a struct field and forget to assign it produce the second
+// case, which would otherwise panic on the first request instead of at
+// construction.
+func isNilLogger(log logger.Logger) bool {
+	if log == nil {
+		return true
+	}
+	v := reflect.ValueOf(log)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.UnsafePointer:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+// NewBuilder creates a new client builder.
+//
+// Panics if log is nil, or is a non-nil interface holding a nil pointer.
+// Every built client's request/response logging path dereferences the logger
+// unguarded, so a nil logger is a wiring error that would otherwise surface as
+// a panic on the first request — in production, and on the AMQP consumer path
+// as a nack-without-requeue — dead-lettered when the queue was declared with a
+// DLQ, dropped otherwise. The remaining boundary: a non-nil logger that panics
+// internally (e.g. a partially implemented double) is still the caller's
+// contract to keep.
 func NewBuilder(log logger.Logger) *Builder {
+	if isNilLogger(log) {
+		panic("httpclient: NewBuilder requires a non-nil logger (pass deps.Logger)") // NOSONAR: Fail-fast on invalid initialization (manifesto: configuration errors crash at startup)
+	}
 	return &Builder{
 		config: &Config{
 			Timeout:              DefaultTimeout,
@@ -317,6 +349,10 @@ func (b *Builder) WithResponseInterceptor(interceptor ResponseInterceptor) *Buil
 
 // Build creates the REST client with the configured options
 func (b *Builder) Build() Client {
+	if b == nil || b.config == nil || isNilLogger(b.logger) {
+		panic("httpclient: Build requires a Builder created by NewBuilder") // NOSONAR: Fail-fast on invalid initialization (manifesto: configuration errors crash at startup)
+	}
+
 	// Deep-copy the builder config to avoid sharing mutable state
 	cfg := deepCopyConfig(b.config)
 

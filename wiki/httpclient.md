@@ -13,6 +13,8 @@ The `httpclient` package provides a production-ready HTTP client with built-in o
 - **Interceptors**: Request/response interceptor chains for cross-cutting concerns
 - **Structured logging**: Info-level metadata (no PII), optional debug payload logging
 
+The logger is required: `NewBuilder`/`NewClient` panic on a nil logger at construction time rather than on the first request, since the built client's logging path dereferences it unguarded. The check covers both a nil interface and a non-nil interface holding a nil pointer (e.g. an unassigned `*logger.ZeroLogger` field); a non-nil logger that panics internally remains the caller's contract to keep.
+
 ```go
 // Builder pattern with trace propagation
 client := httpclient.NewBuilder(logger).

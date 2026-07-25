@@ -1991,3 +1991,46 @@ type wrappingTransport struct {
 func (r *wrappingTransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
 	return r.inner.RoundTrip(req)
 }
+
+func TestNewBuilderAndBuildRejectNilLogger(t *testing.T) {
+	const builderMsg = "httpclient: NewBuilder requires a non-nil logger (pass deps.Logger)"
+	const buildMsg = "httpclient: Build requires a Builder created by NewBuilder"
+
+	t.Run("new_builder", func(t *testing.T) {
+		assert.PanicsWithValue(t, builderMsg, func() { NewBuilder(nil) })
+	})
+
+	t.Run("new_client_forwards_its_argument", func(t *testing.T) {
+		assert.PanicsWithValue(t, builderMsg, func() { NewClient(nil) })
+	})
+
+	t.Run("zero_value_builder_has_no_config", func(t *testing.T) {
+		assert.PanicsWithValue(t, buildMsg, func() { (&Builder{}).Build() })
+	})
+
+	t.Run("builder_literal_has_no_logger", func(t *testing.T) {
+		assert.PanicsWithValue(t, buildMsg, func() {
+			(&Builder{config: &Config{Timeout: time.Second}}).Build()
+		})
+	})
+
+	t.Run("typed_nil_logger", func(t *testing.T) {
+		assert.PanicsWithValue(t, builderMsg, func() {
+			var zl *logger.ZeroLogger
+			NewBuilder(zl)
+		})
+	})
+
+	t.Run("typed_nil_logger_in_build", func(t *testing.T) {
+		assert.PanicsWithValue(t, buildMsg, func() {
+			(&Builder{config: &Config{Timeout: time.Second}, logger: (*logger.ZeroLogger)(nil)}).Build()
+		})
+	})
+
+	t.Run("nil_builder_receiver", func(t *testing.T) {
+		assert.PanicsWithValue(t, buildMsg, func() {
+			var b *Builder
+			b.Build()
+		})
+	})
+}

@@ -1,0 +1,31 @@
+# Issue templates inject needs-triage at creation, but API- and CLI-filed
+# issues bypass template label injection and arrive with zero labels — and a
+# later label edit can strip the last label off. Catch both so
+# `is:open label:needs-triage` stays a complete triage queue.
+name: issue-triage
+on:
+  issues:
+    types: [opened, reopened, unlabeled]
+jobs:
+  autolabel:
+    runs-on: ubuntu-latest
+    # Payload pre-filter: skip runner provisioning for the common case (labels
+    # already present). The in-job re-fetch below stays authoritative.
+    if: github.event.issue.state == 'open' && github.event.issue.labels[0] == null
+    permissions:
+      issues: write
+    steps:
+      - name: Apply needs-triage when the issue has no labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # Re-fetch rather than trust the event payload: a label swap fires
+          # `unlabeled` with an empty labels snapshot while the replacement
+          # label is already back on by the time this runs.
+          count="$(gh issue view "$ISSUE" --json labels --jq '.labels | length')"
+          if [ "$count" -eq 0 ]; then
+            gh issue edit "$ISSUE" --add-label needs-triage
+          fi
