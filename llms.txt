@@ -1182,9 +1182,10 @@ func PromoteID(c server.HandlerContext, next func() error) error {
 ```go
 // Define entity with db tags
 type User struct {
-    ID     int64  `db:"id"`
-    Email  string `db:"email"`
-    Status string `db:"status"`
+    ID       int64     `db:"id"`
+    Email    string    `db:"email"`
+    Status   string    `db:"status"`
+    LastSeen time.Time `db:"last_seen"`
 }
 
 // Obtain db from getDB(ctx) — see "Database Connection & Queries" above
@@ -1240,23 +1241,26 @@ return users, nil
 ```go
 // INSERT
 if err := database.ExecuteInsert(ctx, db,
-    qb.Insert("users").Columns(cols.Col("Name"), cols.Col("Email")).Values("Alice", "alice@example.com"),
+    qb.Insert("users").Columns(cols.Col("Email"), cols.Col("Status")).Values("alice@example.com", "active"),
     "create_user"); err != nil {
     return err
 }
 
 // UPDATE — exactly one row expected; zero means "not found"
 err := database.ExecuteUpdateOne(ctx, db,
-    qb.Update("users").Set(cols.Col("Name"), "Bob").Where(f.Eq(cols.Col("ID"), 123)),
-    "rename_user")
+    qb.Update("users").Set(cols.Col("Status"), "inactive").Where(f.Eq(cols.Col("ID"), 123)),
+    "deactivate_user")
 if errors.Is(err, database.ErrNoRows) {
     return ErrUserNotFound
 }
 
 // DELETE — bulk/idempotent; zero rows is a legitimate outcome
-n, err := database.ExecuteUpdate(ctx, db,
+cutoff := time.Now().AddDate(0, 0, -90) // 90 days of inactivity
+if _, err := database.ExecuteUpdate(ctx, db,
     qb.Delete("users").Where(f.Lt(cols.Col("LastSeen"), cutoff)),
-    "purge_stale_users")
+    "purge_stale_users"); err != nil {
+    return fmt.Errorf("purge stale users: %w", err)
+}
 ```
 
 Access to vendor quirks (Oracle quoting) routes through the same interface; switching drivers requires config only.

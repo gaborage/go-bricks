@@ -39,7 +39,7 @@ block_unparseable() {
 # silently break the fail-closed contract this guard advertises.)
 jq -e . >/dev/null 2>&1 <<<"$input" || block_unparseable
 
-# Cheapest guard first: only Go source files can contain f.Raw()/jf.Raw().
+# Cheapest guard first: only Go source files can contain f.Raw()/jf.Raw()/database.Raw().
 # Extracting just the path keeps the common non-Go edit on a single jq fork.
 file="$(jq -er '.tool_input.file_path // empty' <<<"$input" 2>/dev/null)" || block_unparseable
 case "$file" in
