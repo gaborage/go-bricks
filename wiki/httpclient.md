@@ -63,6 +63,87 @@ httpclient.NewBuilder(logger).
 httpclient.NewBuilder(logger).WithTransport(mTLSTransport).WithJOSE(cfg).Build()
 ```
 
+### Mutual TLS (client certificates)
+
+`NewClientTLSConfig` turns declarative certificate material into a hardened
+`*tls.Config` (TLS 1.2 floor, `InsecureSkipVerify` never set), and `WithTLSConfig`
+installs it on the client:
+
+```go
+tlsCfg, err := httpclient.NewClientTLSConfig(&httpclient.ClientTLSConfig{
+    CertFile:          os.Getenv("PARTNER_CLIENT_CERT"), // PEM path
+    KeyFile:           os.Getenv("PARTNER_CLIENT_KEY"),
+    CAFile:            os.Getenv("PARTNER_CA"),
+    RequireClientCert: true,
+})
+if err != nil {
+    return err
+}
+client := httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).Build()
+```
+
+**Sourcing.** Each piece — cert, key, CA — comes from either a PEM file path
+(`CertFile`/`KeyFile`/`CAFile`) or a **base64-encoded PEM** string
+(`CertValue`/`KeyValue`/`CAValue`, for env vars and secret managers). Setting both
+sources for the same piece is an error. `Cert*` and `Key*` must be provided
+together. `MinVersion` accepts `""`/`"1.2"` (default) or `"1.3"`; `ServerName`
+overrides SNI/hostname verification.
+
+**A `CA*` value REPLACES the system roots.** Setting it pins server verification to
+that CA alone, so a client configured for a private partner CA can no longer verify
+any public-CA endpoint. If you need both, build the pool yourself and hand the
+resulting `*tls.Config` to `WithTLSConfig` — and set `MinVersion` explicitly, since
+a hand-built config does not get the loader's TLS 1.2 floor:
+
+```go
+pool, err := x509.SystemCertPool()
+if err != nil {
+    return err
+}
+if !pool.AppendCertsFromPEM(partnerCAPEM) {
+    return errors.New("partner CA: no certificate appended")
+}
+cfg := &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+```
+
+Note `AppendCertsFromPEM` returns `true` when *any* block parsed, so it accepts a
+partially-corrupt bundle and pins fewer roots than you intended — the failure
+`NewClientTLSConfig` rejects outright. Check the count yourself if the bundle
+carries more than one root.
+
+**A CA-only config authenticates the SERVER, not the client.** It is valid (root
+pinning) and `NewClientTLSConfig` accepts it, but no client certificate is
+presented — so a deployment that omitted `Cert*`/`Key*` gets one-way TLS while
+believing it configured mTLS. Set `RequireClientCert: true` whenever mutual TLS is
+intended: the loader then fails loudly instead of silently degrading.
+
+**No `InsecureSkipVerify`.** The loader never produces a config that skips
+verification. The escape hatch is explicit and greppable: build a `*tls.Config` by
+hand and pass it to `WithTLSConfig`.
+
+**Base-transport slot.** `WithTLSConfig` fills the same base-transport slot as
+`WithTransport` — last call wins — and satisfies the requirement described above
+for `WithJOSE` and the `Build()` composition WARN. Its base is a clone of
+`http.DefaultTransport`, or an equivalently-configured transport (same proxy,
+HTTP/2 and pool settings) when that global has been replaced, so the pitfall above
+does not apply to it. Wrapper layers always stack on top of it:
+
+```go
+// mTLS base, JOSE on top — call order is irrelevant.
+httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).WithJOSE(joseCfg).Build()
+```
+
+The passed `*tls.Config` is cloned, so one loaded config can be shared across
+clients safely. The copy is **shallow**, so treat the config and everything it
+references as immutable once `WithTLSConfig` has seen it: every reference-typed
+field — the `Certificates` slice, the `RootCAs`/`ClientCAs` pools, `NextProtos`,
+`CipherSuites`, `CurvePreferences`, `NameToCertificate` — still points at the
+caller's storage, and writing through one is a data race against every in-flight
+handshake (`tlsCfg.Certificates[0] = newPair` is the tempting one). Reassigning a
+whole field on the original config is inert rather than racy, but only for clients
+already built. Rotate certificates through `GetClientCertificate`, which the clone
+preserves; for anything else, build a fresh config.
+
 ## Metrics
 
 ### Overview

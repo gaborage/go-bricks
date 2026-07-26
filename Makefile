@@ -81,7 +81,11 @@ clean: ## Clean build cache and test artifacts
 	rm -f coverage.out coverage-integration.out coverage.html coverage.func
 	rm -f *.test
 
-check: fmt lint test test-alloc vuln ## Run fmt, lint, test, alloc guards, and vuln scan (pre-commit checks)
+# `sec` is not redundant with `lint`: golangci-lint's gosec runs under the
+# common-false-positives preset, so classes like G304 are suppressed there and
+# reported only by the standalone scanner CI runs. Leaving it out of `check` meant
+# a clean local run could still fail the security-framework job.
+check: fmt lint test test-alloc vuln sec ## Run fmt, lint, test, alloc guards, vuln scan, and gosec (pre-commit checks; mirrors CI)
 
 vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...

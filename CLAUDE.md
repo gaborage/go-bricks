@@ -31,7 +31,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 **Most Common Commands:**
 ```bash
-make check              # Pre-commit: fmt + lint + test + alloc guards + vuln scan
+make check              # Pre-commit: fmt + lint + test + alloc guards + vuln scan + gosec (mirrors CI)
 make test               # Unit tests with race detection
 make test-integration   # Integration tests (Docker required)
 go test -run TestName   # Run specific test
