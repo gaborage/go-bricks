@@ -62,6 +62,7 @@ import (
 	"os"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/secretfile"
 )
 
 // errKeyNotFoundFmt is the fmt.Errorf format used by every accessor when a
@@ -204,9 +205,15 @@ func loadKeyBytes(src config.KeySourceConfig, keyName, keyType string) ([]byte, 
 	}
 
 	if hasFile {
+		if secretfile.LooksLikeKeyMaterial(src.File) {
+			return nil, fmt.Errorf("keystore: key %q %s: file looks like key material, not a path (use the value field for inline material)", keyName, keyType)
+		}
+		// #nosec G304 -- the path is deployment configuration, not request input:
+		// reading an operator-named file IS this function. Inline material is
+		// rejected above.
 		data, err := os.ReadFile(src.File)
 		if err != nil {
-			return nil, fmt.Errorf("keystore: key %q %s: read file %q: %w", keyName, keyType, src.File, err)
+			return nil, fmt.Errorf("keystore: key %q %s: %w", keyName, keyType, secretfile.ReadError(src.File, err))
 		}
 		return data, nil
 	}

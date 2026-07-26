@@ -5,11 +5,16 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/secretfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -285,6 +290,76 @@ func TestLoadKeyBytesNeitherSet(t *testing.T) {
 	data, err := loadKeyBytes(config.KeySourceConfig{}, "test", "public")
 	require.NoError(t, err)
 	assert.Nil(t, data)
+}
+
+func TestLoadKeyBytesRejectsMaterialInFileField(t *testing.T) {
+	privKey, pubKey := generateTestKeys(t)
+
+	materialTests := []struct {
+		name    string
+		keyType string
+		encoded string
+	}{
+		{
+			name:    "base64_pkcs8_rsa_private_der_in_file",
+			keyType: "private",
+			encoded: base64.StdEncoding.EncodeToString(marshalPrivateKeyDER(t, privKey)),
+		},
+		{
+			name:    "base64_pkix_rsa_public_der_in_file",
+			keyType: "public",
+			encoded: base64.StdEncoding.EncodeToString(marshalPublicKeyDER(t, pubKey)),
+		},
+	}
+
+	for _, tt := range materialTests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := loadKeyBytes(config.KeySourceConfig{File: tt.encoded}, "test", tt.keyType)
+			require.Error(t, err)
+			assert.Nil(t, data)
+			assert.ErrorContains(t, err, "looks like key material")
+			assert.NotContains(t, err.Error(), tt.encoded, "the error must not echo the key material")
+		})
+	}
+
+	t.Run("legitimate_path_still_loads", func(t *testing.T) {
+		dir := t.TempDir()
+		expected := []byte("test-der-content")
+		path := writeDERFile(t, dir, "test.der", expected)
+
+		data, err := loadKeyBytes(config.KeySourceConfig{File: path}, "test", "public")
+		require.NoError(t, err)
+		assert.Equal(t, expected, data)
+	})
+
+	t.Run("missing_plausible_path", func(t *testing.T) {
+		missing := filepath.Join(t.TempDir(), "absent.der")
+
+		data, err := loadKeyBytes(config.KeySourceConfig{File: missing}, "test", "public")
+		require.Error(t, err)
+		assert.Nil(t, data)
+		assert.ErrorContains(t, err, "read file")
+		// %q-quoted, so on Windows the separators arrive escaped — comparing
+		// against the raw path fails there for a reason unrelated to the code.
+		assert.Contains(t, err.Error(), fmt.Sprintf("%q", missing))
+		assert.True(t, errors.Is(err, fs.ErrNotExist), "Errno must not break errors.Is matching")
+	})
+
+	// The quadrant SafeRef alone cannot cover: an over-long value that is not key
+	// material (so it reaches os.ReadFile) and fails to read. SafeRef elides it in
+	// its own %s slot, but the raw *os.PathError also carries the full value in its
+	// own Error() string — without Errno stripping that wrapper, %w re-embeds it in
+	// full and defeats the elision.
+	t.Run("over_long_value_read_failure_is_not_echoed", func(t *testing.T) {
+		junk := strings.Repeat("s3cr3t", 100)
+		require.Greater(t, len(junk), secretfile.MaxPathEcho, "the point of this case is that eliding cannot save us otherwise")
+
+		data, err := loadKeyBytes(config.KeySourceConfig{File: junk}, "test", "public")
+		require.Error(t, err)
+		assert.Nil(t, data)
+		assert.NotContains(t, err.Error(), junk, "an over-long value must not be echoed")
+		assert.Contains(t, err.Error(), "char value elided")
+	})
 }
 
 // =============================================================================

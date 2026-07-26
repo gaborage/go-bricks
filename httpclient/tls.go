@@ -11,24 +11,17 @@ import (
 	"net"
 	nethttp "net/http"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/gaborage/go-bricks/internal/secretfile"
 )
 
 const pemTypeCertificate = "CERTIFICATE"
 
-// pemHeaderPrefix opens every PEM block, so a *File value containing it is PEM
-// content pasted into the wrong field rather than a path.
+// pemHeaderPrefix opens every PEM block, so counting it gives the number of
+// blocks a CA bundle declares — what certPoolFromPEM checks against the number
+// that actually parsed.
 const pemHeaderPrefix = "-----BEGIN"
-
-// maxPathEcho bounds what a read error quotes back. A *File value longer than
-// this is elided: over-long values are the shape mis-filed material takes, and
-// this error reaches startup logs.
-const maxPathEcho = 256
-
-// minDERKeyBytes is the smallest real case this guard must still catch: an
-// Ed25519 PKCS#8 private key marshals to exactly 48 bytes.
-const minDERKeyBytes = 48
 
 // ClientTLSConfig describes client-side TLS material declaratively. Each piece
 // comes from a PEM file path (File) or a base64-encoded PEM string (Value) —
@@ -187,16 +180,15 @@ func loadPEM(file, value, what string) ([]byte, error) {
 	case file != "":
 		// Never let mis-filed material reach os.ReadFile: both our wrap and the
 		// *os.PathError it wraps would echo it into a startup error.
-		if looksLikeKeyMaterial(file) {
+		if secretfile.LooksLikeKeyMaterial(file) {
 			return nil, fmt.Errorf("httpclient: tls: %s: file looks like key material, not a path (use the value field for inline PEM)", what)
 		}
 		// #nosec G304 -- the path is deployment configuration, not request input:
 		// reading an operator-named file IS this function. Inline material is
-		// rejected above. Same shape as keystore.go's loadKeyBytes, which gosec
-		// leaves alone only because it reads a struct field rather than a parameter.
+		// rejected above.
 		data, err := os.ReadFile(file)
 		if err != nil {
-			return nil, fmt.Errorf("httpclient: tls: %s: read file %s: %w", what, safeFileRef(file), errnoOf(err))
+			return nil, fmt.Errorf("httpclient: tls: %s: %w", what, secretfile.ReadError(file, err))
 		}
 		return data, nil
 	case value != "":
@@ -208,68 +200,6 @@ func loadPEM(file, value, what string) ([]byte, error) {
 	default:
 		return nil, nil
 	}
-}
-
-// looksLikeKeyMaterial reports whether a *File value is inline key material
-// rather than a path. It covers a raw PEM body, its base64 form (what a secret
-// manager hands you, and so the likelier mix-up), and base64 of raw DER — which
-// carries no PEM header at any level and, for EC and Ed25519 keys, is short
-// enough to slip maxPathEcho too. Decoding unpadded accepts both base64 forms:
-// whether a value arrives padded otherwise depends on len(input)%3.
-func looksLikeKeyMaterial(file string) bool {
-	if strings.Contains(file, pemHeaderPrefix) {
-		return true
-	}
-	decoded, err := base64.RawStdEncoding.DecodeString(strings.TrimRight(file, "="))
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(decoded), pemHeaderPrefix) || looksLikeDER(decoded)
-}
-
-// looksLikeDER reports whether b opens with an ASN.1 SEQUENCE — tag 0x30,
-// which PKCS#8, SEC1, PKCS#12 and X.509 all start with — whose declared length
-// matches the payload. A bare 0x30 first byte is not enough: short
-// base64-alphabet paths such as "MAIN" decode to three bytes starting 0x30.
-// Canonical-length encoding is deliberately not enforced: this is a guard, so a
-// false negative echoes key material while a false positive only rejects a path.
-func looksLikeDER(b []byte) bool {
-	if len(b) < minDERKeyBytes || b[0] != 0x30 {
-		return false
-	}
-	n := int(b[1])
-	if n < 0x80 {
-		return 2+n == len(b)
-	}
-	count := n & 0x7f
-	if count == 0 || count > 4 || len(b) < 2+count {
-		return false
-	}
-	length := 0
-	for _, c := range b[2 : 2+count] {
-		length = length<<8 | int(c)
-	}
-	return 2+count+length == len(b)
-}
-
-// safeFileRef renders a *File value for an error message, eliding anything too
-// long to be a plausible path.
-func safeFileRef(file string) string {
-	if len(file) > maxPathEcho {
-		return fmt.Sprintf("<%d-char value elided>", len(file))
-	}
-	return fmt.Sprintf("%q", file)
-}
-
-// errnoOf strips the *os.PathError wrapper, which carries its own copy of the
-// path and would re-echo a value safeFileRef elided. errors.Is is unaffected:
-// the bare errno still matches fs.ErrNotExist and friends.
-func errnoOf(err error) error {
-	var pathErr *os.PathError
-	if errors.As(err, &pathErr) {
-		return pathErr.Err
-	}
-	return err
 }
 
 // certPoolFromPEM refuses to pin fewer roots than the bundle asks for, which
@@ -320,6 +250,6 @@ func parseTLSMinVersion(v string) (uint16, error) {
 	case "1.3":
 		return tls.VersionTLS13, nil
 	default:
-		return 0, fmt.Errorf("httpclient: tls: minversion %s: accepted values are \"1.2\" and \"1.3\"", safeFileRef(v))
+		return 0, fmt.Errorf("httpclient: tls: minversion %s: accepted values are \"1.2\" and \"1.3\"", secretfile.SafeRef(v))
 	}
 }
