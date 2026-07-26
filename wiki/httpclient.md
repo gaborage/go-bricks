@@ -144,6 +144,41 @@ whole field on the original config is inert rather than racy, but only for clien
 already built. Rotate certificates through `GetClientCertificate`, which the clone
 preserves; for anything else, build a fresh config.
 
+### OAuth 1.0a request signing
+
+Use `WithOAuth1` for Mastercard-style partner APIs that authenticate with
+OAuth 1.0a request signing (RSA-SHA256 by default, plus the `oauth_body_hash`
+extension) rather than OAuth2/JWT. It registers an `OAuth1Transport` at the
+transport chain's signer layer, so signing happens automatically on every
+outbound request:
+
+```go
+client := httpclient.NewBuilder(logger).
+    WithOAuth1(httpclient.OAuth1Config{
+        ConsumerKey: "your-consumer-key",
+        KeyName:     "mastercard-signing",
+        Keys:        deps.KeyStore, // app.KeyStore satisfies PrivateKeyResolver directly
+    }).
+    Build()
+```
+
+**Layer ordering.** The signer layer sits beneath body-transform layers such
+as `WithJOSE` (`### Transport composition` above), so composing the two signs
+the bytes actually placed on the wire: `oauth_body_hash` covers the sealed
+JOSE ciphertext, not the plaintext, regardless of which `With*` option was
+called first.
+
+**Per-retry freshness.** Because httpclient retries by rebuilding the request
+per attempt, `OAuth1Transport.RoundTrip` runs again on every attempt — each
+retry gets a fresh `oauth_nonce`/`oauth_timestamp` and a re-computed
+signature, not a replay of the first attempt's.
+
+**Key resolution.** The signing key is resolved per request by name through
+the one-method `httpclient.PrivateKeyResolver` interface, so key rotation
+(swapping the key material behind `KeyName`) applies without rebuilding the
+client. `app.KeyStore` and `jose.KeyResolver` both satisfy it structurally —
+pass `deps.KeyStore` directly, no adapter required.
+
 ## Metrics
 
 ### Overview
