@@ -26,6 +26,10 @@ const pemHeaderPrefix = "-----BEGIN"
 // this error reaches startup logs.
 const maxPathEcho = 256
 
+// minDERKeyBytes is the smallest real case this guard must still catch: an
+// Ed25519 PKCS#8 private key marshals to exactly 48 bytes.
+const minDERKeyBytes = 48
+
 // ClientTLSConfig describes client-side TLS material declaratively. Each piece
 // comes from a PEM file path (File) or a base64-encoded PEM string (Value) —
 // set exactly one source per provided piece. Cert and Key must be provided
@@ -220,8 +224,32 @@ func looksLikeKeyMaterial(file string) bool {
 	if err != nil {
 		return false
 	}
-	// 0x30 is the ASN.1 SEQUENCE tag that opens PKCS#8, SEC1, PKCS#12 and X.509.
-	return strings.Contains(string(decoded), pemHeaderPrefix) || (len(decoded) > 0 && decoded[0] == 0x30)
+	return strings.Contains(string(decoded), pemHeaderPrefix) || looksLikeDER(decoded)
+}
+
+// looksLikeDER reports whether b opens with an ASN.1 SEQUENCE — tag 0x30,
+// which PKCS#8, SEC1, PKCS#12 and X.509 all start with — whose declared length
+// matches the payload. A bare 0x30 first byte is not enough: short
+// base64-alphabet paths such as "MAIN" decode to three bytes starting 0x30.
+// Canonical-length encoding is deliberately not enforced: this is a guard, so a
+// false negative echoes key material while a false positive only rejects a path.
+func looksLikeDER(b []byte) bool {
+	if len(b) < minDERKeyBytes || b[0] != 0x30 {
+		return false
+	}
+	n := int(b[1])
+	if n < 0x80 {
+		return 2+n == len(b)
+	}
+	count := n & 0x7f
+	if count == 0 || count > 4 || len(b) < 2+count {
+		return false
+	}
+	length := 0
+	for _, c := range b[2 : 2+count] {
+		length = length<<8 | int(c)
+	}
+	return 2+count+length == len(b)
 }
 
 // safeFileRef renders a *File value for an error message, eliding anything too
