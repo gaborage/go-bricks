@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io/fs"
 	"math/big"
 	"net"
@@ -346,7 +347,10 @@ func TestNewClientTLSConfigRejectsPEMContentInFileField(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, cfg)
 		assert.Contains(t, err.Error(), "tls: ca: read file")
-		assert.Contains(t, err.Error(), missing, "a plausible path stays in the message for diagnosability")
+		// %q-quoted, so on Windows the separators arrive escaped — comparing against
+		// the raw path fails there for a reason that has nothing to do with the code.
+		assert.Contains(t, err.Error(), fmt.Sprintf("%q", missing),
+			"a plausible path stays in the message for diagnosability")
 		assert.ErrorIs(t, err, fs.ErrNotExist, "unwrapping the PathError must not break errors.Is")
 	})
 }

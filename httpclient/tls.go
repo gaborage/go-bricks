@@ -186,6 +186,10 @@ func loadPEM(file, value, what string) ([]byte, error) {
 		if looksLikeKeyMaterial(file) {
 			return nil, fmt.Errorf("httpclient: tls: %s: file looks like key material, not a path (use the value field for inline PEM)", what)
 		}
+		// #nosec G304 -- the path is deployment configuration, not request input:
+		// reading an operator-named file IS this function. Inline material is
+		// rejected above. Same shape as keystore.go's loadKeyBytes, which gosec
+		// leaves alone only because it reads a struct field rather than a parameter.
 		data, err := os.ReadFile(file)
 		if err != nil {
 			return nil, fmt.Errorf("httpclient: tls: %s: read file %s: %w", what, safeFileRef(file), errnoOf(err))
