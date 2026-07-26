@@ -18,6 +18,20 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+// closeTrackingBody is a bytes.Reader-backed io.ReadCloser that records whether
+// Close was called, so tests can observe a RoundTripper's close-on-error obligation.
+type closeTrackingBody struct {
+	r      *bytes.Reader
+	closed bool
+}
+
+func newCloseTrackingBody(s string) *closeTrackingBody {
+	return &closeTrackingBody{r: bytes.NewReader([]byte(s))}
+}
+
+func (b *closeTrackingBody) Read(p []byte) (int, error) { return b.r.Read(p) }
+func (b *closeTrackingBody) Close() error               { b.closed = true; return nil }
+
 // joseEchoServer simulates a JOSE-aware partner: it decrypts the request, echoes the
 // plaintext back inside an encrypted response.
 //
@@ -238,9 +252,24 @@ func TestJOSETransportRespectsMaxResponseBytes(t *testing.T) {
 func TestJOSETransportOutboundRequiresResolver(t *testing.T) {
 	f := jositest.NewBidirectionalFixture(t)
 	transport := &httpclient.JOSETransport{Outbound: f.ClientOutbound, Resolver: nil}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.invalid", bytes.NewReader([]byte(`{}`)))
+	body := newCloseTrackingBody(`{}`)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://example.invalid", body)
 	require.NoError(t, err)
 
+	_, err = transport.RoundTrip(req) //nolint:bodyclose // RoundTrip returns the configuration error before any HTTP exchange; no body to close
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "KeyResolver")
+	assert.True(t, body.closed, "RoundTrip must close req.Body even when it fails before reading it")
+}
+
+func TestJOSETransportOutboundRequiresResolverNilBody(t *testing.T) {
+	f := jositest.NewBidirectionalFixture(t)
+	transport := &httpclient.JOSETransport{Outbound: f.ClientOutbound, Resolver: nil}
+	//nolint:gocritic // literal nil, not http.NoBody, keeps req.Body nil to hit the guarded path
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.invalid", nil)
+	require.NoError(t, err)
+
+	// A nil req.Body (e.g. a GET) must reach the error return without a close attempt.
 	_, err = transport.RoundTrip(req) //nolint:bodyclose // RoundTrip returns the configuration error before any HTTP exchange; no body to close
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "KeyResolver")

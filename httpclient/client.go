@@ -296,12 +296,18 @@ func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
 // addTransportWrapper registers a RoundTripper layer applied at Build time.
 // A wrapper that rewrites the body registers at layerBodyTransform; one that only
 // reads the body to sign it registers at layerSigner, so the signature covers the
-// rewritten bytes. Two obligations on every wrapper: the inner RoundTripper it
-// receives may be nil (no WithTransport base) and must then fall back to
-// nethttp.DefaultTransport rather than dereference, and a layer that reads the body
-// owes the layer below a re-readable body plus a matching GetBody — as
-// JOSETransport.wrapRequest does — or redirect and HTTP/2 replay paths resend an
-// empty payload under a signature computed over the real one.
+// rewritten bytes. Every wrapper has three obligations:
+//
+//  1. The inner RoundTripper it receives may be nil (no WithTransport base) and
+//     must then fall back to nethttp.DefaultTransport rather than dereference.
+//  2. A layer that reads the body owes the layer below a re-readable body plus a
+//     matching GetBody — as JOSETransport.wrapRequest does — or redirect and
+//     HTTP/2 replay paths resend an empty payload under a signature computed
+//     over the real one.
+//  3. RoundTrip must close req.Body before any error return that precedes
+//     draining it. On a transport error http.Client.do sets reqBodyClosed and
+//     skips its own fallback close, on the stated assumption that the transport
+//     already closed it — so a caller's *os.File or io.Pipe body leaks.
 func (b *Builder) addTransportWrapper(layer transportLayer, wrap func(nethttp.RoundTripper) nethttp.RoundTripper) {
 	if b.chain == nil {
 		b.chain = &transportChain{}

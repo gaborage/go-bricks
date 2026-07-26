@@ -98,6 +98,9 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 		return req, nil
 	}
 	if t.Resolver == nil {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
 		return nil, fmt.Errorf("httpclient: JOSETransport requires a KeyResolver when Outbound is set")
 	}
 
