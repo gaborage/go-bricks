@@ -213,7 +213,7 @@ func TestBuilder(t *testing.T) {
 		require.True(t, ok)
 		joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
 		require.True(t, ok, "built client must carry the JOSE transport")
-		assert.Nil(t, joseTransport.Inner)
+		assert.IsType(t, defaultTransportShim{}, joseTransport.Inner, "no explicit base: chain seeds the DefaultTransport shim, never nil")
 	})
 
 	t.Run("with custom transport", func(t *testing.T) {
@@ -1901,6 +1901,72 @@ func TestBuilderTransportChainLayerOrdering(t *testing.T) {
 	})
 }
 
+func TestBuilderTransportChainNeverPassesNilInner(t *testing.T) {
+	log := createTestLogger()
+	var gotInner nethttp.RoundTripper
+	applied := false
+	b := NewBuilder(log)
+	b.addTransportWrapper(layerSigner, func(inner nethttp.RoundTripper) nethttp.RoundTripper {
+		gotInner, applied = inner, true
+		return &wrappingTransport{inner: inner}
+	})
+	b.Build()
+	require.True(t, applied, "wrapper must have been applied")
+	assert.IsType(t, defaultTransportShim{}, gotInner, "chain must seed the DefaultTransport shim, never a nil inner")
+}
+
+func TestBuilderTransportChainResolvesDefaultTransportPerRequest(t *testing.T) {
+	log := createTestLogger()
+	var captured nethttp.RoundTripper
+	b := NewBuilder(log)
+	b.addTransportWrapper(layerSigner, func(inner nethttp.RoundTripper) nethttp.RoundTripper {
+		captured = inner
+		return inner
+	})
+	b.Build() // Build happens BEFORE the global is swapped — that is the point.
+	require.NotNil(t, captured)
+
+	// Non-parallel on purpose: the package has no t.Parallel() calls, so swapping
+	// the global here cannot race another test.
+	orig := nethttp.DefaultTransport
+	t.Cleanup(func() { nethttp.DefaultTransport = orig })
+	stub := &recordingRoundTripper{}
+	nethttp.DefaultTransport = stub
+
+	//nolint:gocritic // literal nil, not http.NoBody, matches a real GET's nil req.Body
+	req, err := nethttp.NewRequestWithContext(context.Background(), nethttp.MethodGet, "http://example.invalid", nil)
+	require.NoError(t, err)
+	_, _ = captured.RoundTrip(req) //nolint:bodyclose // recordingRoundTripper returns no body
+
+	assert.True(t, stub.called, "chain must resolve DefaultTransport per request, not capture it at Build")
+}
+
+func TestBuilderTransportChainErrorsWhenDefaultTransportIsNil(t *testing.T) {
+	log := createTestLogger()
+	var captured nethttp.RoundTripper
+	b := NewBuilder(log)
+	b.addTransportWrapper(layerSigner, func(inner nethttp.RoundTripper) nethttp.RoundTripper {
+		captured = inner
+		return inner
+	})
+	b.Build()
+	require.NotNil(t, captured)
+
+	// Non-parallel on purpose: the package has no t.Parallel() calls, so swapping
+	// the global here cannot race another test.
+	orig := nethttp.DefaultTransport
+	t.Cleanup(func() { nethttp.DefaultTransport = orig })
+	nethttp.DefaultTransport = nil
+
+	//nolint:gocritic // literal nil, not http.NoBody, matches a real GET's nil req.Body
+	req, err := nethttp.NewRequestWithContext(context.Background(), nethttp.MethodGet, "http://example.invalid", nil)
+	require.NoError(t, err)
+	_, err = captured.RoundTrip(req) //nolint:bodyclose // shim errors before returning a response; no body to close
+
+	require.Error(t, err, "shim must error, not panic, when net/http.DefaultTransport is nil")
+	assert.Contains(t, err.Error(), "DefaultTransport")
+}
+
 func TestBuilderTransportChainDiscardsClientTransport(t *testing.T) {
 	log := createTestLogger()
 	base := &stubRoundTripper{name: "base"}
@@ -1949,7 +2015,7 @@ func TestBuilderTransportChainDiscardsClientTransport(t *testing.T) {
 		assert.NotSame(t, base, clientImpl.httpClient.Transport, "caller's transport is replaced, not wrapped")
 		joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
 		require.True(t, ok)
-		assert.Nil(t, joseTransport.Inner, "no base: RoundTrip falls back to net/http.DefaultTransport")
+		assert.IsType(t, defaultTransportShim{}, joseTransport.Inner, "no base: chain seeds the shim, which resolves net/http.DefaultTransport per request")
 	})
 
 	t.Run("hazard_emits_the_warning", func(t *testing.T) {
@@ -1990,6 +2056,17 @@ type wrappingTransport struct {
 
 func (r *wrappingTransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
 	return r.inner.RoundTrip(req)
+}
+
+// recordingRoundTripper records whether RoundTrip was invoked, so a test that swaps
+// nethttp.DefaultTransport can observe late binding rather than capture-at-Build.
+type recordingRoundTripper struct {
+	called bool
+}
+
+func (r *recordingRoundTripper) RoundTrip(_ *nethttp.Request) (*nethttp.Response, error) {
+	r.called = true
+	return nil, errors.New("recordingRoundTripper: no response configured")
 }
 
 func TestNewBuilderAndBuildRejectNilLogger(t *testing.T) {

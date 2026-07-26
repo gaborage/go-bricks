@@ -38,7 +38,8 @@ const DefaultMaxJOSEBodyBytes int64 = 10 << 20 // 10 MiB
 // attempt to decrypt those.
 type JOSETransport struct {
 	// Inner is the underlying RoundTripper that performs the actual HTTP exchange.
-	// Nil defaults to nethttp.DefaultTransport.
+	// Nil defaults to nethttp.DefaultTransport — relevant only when JOSETransport is
+	// hand-constructed, since httpclient.Builder-produced clients always seed a non-nil Inner.
 	Inner nethttp.RoundTripper
 
 	// Outbound is required: the policy used to sign+encrypt every outbound request body.
@@ -98,6 +99,9 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 		return req, nil
 	}
 	if t.Resolver == nil {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
 		return nil, fmt.Errorf("httpclient: JOSETransport requires a KeyResolver when Outbound is set")
 	}
 

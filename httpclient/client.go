@@ -296,17 +296,34 @@ func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
 // addTransportWrapper registers a RoundTripper layer applied at Build time.
 // A wrapper that rewrites the body registers at layerBodyTransform; one that only
 // reads the body to sign it registers at layerSigner, so the signature covers the
-// rewritten bytes. Two obligations on every wrapper: the inner RoundTripper it
-// receives may be nil (no WithTransport base) and must then fall back to
-// nethttp.DefaultTransport rather than dereference, and a layer that reads the body
-// owes the layer below a re-readable body plus a matching GetBody — as
-// JOSETransport.wrapRequest does — or redirect and HTTP/2 replay paths resend an
-// empty payload under a signature computed over the real one.
+// rewritten bytes. Two obligations the type system cannot express:
+//
+//  1. A layer that reads the body owes the layer below a re-readable body plus a
+//     matching GetBody — as JOSETransport.wrapRequest does — or redirect and
+//     HTTP/2 replay paths resend an empty payload under a signature computed
+//     over the real one.
+//  2. RoundTrip must close req.Body before any error return that precedes
+//     draining it; after a failed send, http.Client.do sets reqBodyClosed and
+//     skips its own close, so the caller's body leaks.
 func (b *Builder) addTransportWrapper(layer transportLayer, wrap func(nethttp.RoundTripper) nethttp.RoundTripper) {
 	if b.chain == nil {
 		b.chain = &transportChain{}
 	}
 	b.chain.byLayer[layer] = append(b.chain.byLayer[layer], wrap)
+}
+
+// defaultTransportShim stands in for a missing WithTransport base so chain wrappers
+// never receive a nil inner. It resolves nethttp.DefaultTransport per request rather
+// than capturing it at Build, because consumers replace that global after a client is
+// built (gock, httpmock, APM agents) — the same constraint WithTLSConfig documents.
+type defaultTransportShim struct{}
+
+func (defaultTransportShim) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	rt := nethttp.DefaultTransport
+	if rt == nil {
+		return nil, errors.New("httpclient: net/http.DefaultTransport is nil, so the transport chain has no base")
+	}
+	return rt.RoundTrip(req)
 }
 
 // resolveTransport applies registered wrappers to the base transport innermost
@@ -317,6 +334,9 @@ func (b *Builder) resolveTransport() nethttp.RoundTripper {
 	rt := b.transport
 	if b.chain == nil {
 		return rt
+	}
+	if rt == nil {
+		rt = defaultTransportShim{}
 	}
 	for _, wrappers := range b.chain.byLayer {
 		for _, wrap := range wrappers {
