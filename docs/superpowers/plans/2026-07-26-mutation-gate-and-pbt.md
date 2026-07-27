@@ -626,7 +626,7 @@ git log -1
 
 - [ ] **Step 1: Write the workflow**
 
-Adjust the two `jq` field names (`test_efficacy`, `mutations_coverage`) and the per-file selectors to the real schema captured in Task 1 if they differ.
+Field names below match the Task 1 spike capture (`test_efficacy`, `mutations_coverage`, spaced statuses `"NOT COVERED"`).
 
 ```yaml
 name: Mutation Baseline
@@ -671,7 +671,7 @@ jobs:
             jq -r '.files[]
               | [.file_name,
                  ([.mutations[] | select(.status=="LIVED")] | length),
-                 ([.mutations[] | select(.status=="NOT_COVERED")] | length)]
+                 ([.mutations[] | select(.status=="NOT COVERED")] | length)]
               | select(.[1] > 0 or .[2] > 0)
               | "| \(.[0]) | \(.[1]) | \(.[2]) |"' gremlins-report.json | head -50
           } >> "$GITHUB_STEP_SUMMARY"
