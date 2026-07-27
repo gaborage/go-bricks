@@ -62,20 +62,42 @@ func TestResolversNeverPanicOrReturnEmptyProperty(t *testing.T) {
 	})
 }
 
+// buildStubChain returns n stub resolvers where every stub before winner
+// fails with the sentinel and the rest succeed with "tenant-x".
+func buildStubChain(n, winner int) ([]*stubResolver, []TenantResolver) {
+	stubs := make([]*stubResolver, n)
+	chain := make([]TenantResolver, n)
+	for i := range stubs {
+		if i < winner {
+			stubs[i] = &stubResolver{err: ErrTenantResolutionFailed}
+		} else {
+			stubs[i] = &stubResolver{tenant: "tenant-x"}
+		}
+		chain[i] = stubs[i]
+	}
+	return stubs, chain
+}
+
+// assertConsultationOrder pins first-match semantics: every resolver up to
+// and including the winner was consulted, none after it.
+func assertConsultationOrder(rt *rapid.T, stubs []*stubResolver, winner int) {
+	for i := 0; i <= winner; i++ {
+		if !stubs[i].called {
+			rt.Fatalf("resolver %d skipped before winner %d", i, winner)
+		}
+	}
+	for i := winner + 1; i < len(stubs); i++ {
+		if stubs[i].called {
+			rt.Fatalf("resolver %d consulted after winner %d", i, winner)
+		}
+	}
+}
+
 func TestCompositeFirstMatchProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		n := rapid.IntRange(1, 5).Draw(rt, "n")
 		winner := rapid.IntRange(0, n-1).Draw(rt, "winner")
-		stubs := make([]*stubResolver, n)
-		chain := make([]TenantResolver, n)
-		for i := range stubs {
-			if i < winner {
-				stubs[i] = &stubResolver{err: ErrTenantResolutionFailed}
-			} else {
-				stubs[i] = &stubResolver{tenant: "tenant-x"}
-			}
-			chain[i] = stubs[i]
-		}
+		stubs, chain := buildStubChain(n, winner)
 		req := newReq("http://example.com/")
 		got, err := (&CompositeResolver{Resolvers: chain}).ResolveTenant(context.Background(), req)
 		if err != nil {
@@ -84,16 +106,7 @@ func TestCompositeFirstMatchProperty(t *testing.T) {
 		if got != "tenant-x" {
 			rt.Fatalf("got %q want tenant-x", got)
 		}
-		for i := 0; i <= winner; i++ {
-			if !stubs[i].called {
-				rt.Fatalf("resolver %d skipped before winner %d", i, winner)
-			}
-		}
-		for i := winner + 1; i < n; i++ {
-			if stubs[i].called {
-				rt.Fatalf("resolver %d consulted after winner %d", i, winner)
-			}
-		}
+		assertConsultationOrder(rt, stubs, winner)
 	})
 }
 
