@@ -24,6 +24,10 @@ func main() {
 }
 
 func run(engine, baseRef string, out io.Writer) int {
+	engineArgs := strings.Fields(engine)
+	if len(engineArgs) == 0 {
+		return fail("engine command is blank")
+	}
 	mergeBase, err := gitOutput("merge-base", "HEAD", baseRef)
 	if err != nil {
 		return fail("%v", err)
@@ -33,7 +37,10 @@ func run(engine, baseRef string, out io.Writer) int {
 		return fail("%v", err)
 	}
 	changed := mutationScope(parseUnifiedDiff(diff))
-	if status, statusErr := gitOutput("status", "--porcelain", "--", "*.go"); statusErr == nil && status != "" {
+	switch status, statusErr := gitOutput("status", "--porcelain", "--", "*.go"); {
+	case statusErr != nil:
+		fmt.Fprintf(out, "WARN: could not check the working tree for uncommitted changes: %v\n", statusErr)
+	case status != "":
 		fmt.Fprintln(out, "WARN: uncommitted .go changes detected — the gate judges committed state only (diff vs merge-base..HEAD)")
 	}
 	if len(changed) == 0 {
@@ -45,7 +52,6 @@ func run(engine, baseRef string, out io.Writer) int {
 		return fail("%v", err)
 	}
 	defer os.RemoveAll(reportDir)
-	engineArgs := strings.Fields(engine)
 	var failures, warnings []mutantVerdict
 	for _, pkg := range packagesOf(changed) {
 		fmt.Fprintf(out, "mutatediff: mutating %s\n", pkg)

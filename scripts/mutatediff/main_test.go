@@ -15,3 +15,10 @@ func TestRunNoOpDiffExitsCleanWithoutEngine(t *testing.T) {
 		t.Fatalf("missing no-op message, got: %s", buf.String())
 	}
 }
+
+func TestRunBlankEngineFailsFast(t *testing.T) {
+	var buf bytes.Buffer
+	if got := run("   ", "HEAD", &buf); got != 2 {
+		t.Fatalf("run = %d, want 2 for whitespace-only engine", got)
+	}
+}

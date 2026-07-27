@@ -315,7 +315,7 @@ git log -1
 - Consumes: `lineRange` from Task 2.
 - Produces (consumed by Task 4):
   - `type mutantVerdict struct { File string; Line int; Operator, Status string }`
-  - `func judge(reportJSON []byte, changed map[string][]lineRange) (failures, warnings []mutantVerdict, err error)`
+  - `func judge(reportJSON []byte, pkgDir string, changed map[string][]lineRange) (failures, warnings []mutantVerdict, err error)`
 
 - [ ] **Step 1: Write the failing tests**
 

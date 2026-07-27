@@ -338,8 +338,9 @@ workflow runs the full repo in advisory mode and publishes a per-file score
 table to the job summary plus a JSON artifact.
 
 Operational notes: a real `make mutate` run may leave `go.work.sum` modified
-(gremlins' own module graph); discard that churn (`git checkout -- go.work.sum`)
-rather than committing it. `scripts/` is excluded from the gate's scope in
+(gremlins' own module graph); if the file was clean before the run, restore it
+(`git checkout -- go.work.sum`) rather than committing the churn — if it already
+carried changes you made, unpick only the run's additions. `scripts/` is excluded from the gate's scope in
 code: gremlins v0.5.0 misreports some mutants in the wrapper's nested
 `package main` as KILLED (validated during rollout), so a green verdict there
 would be untrustworthy — the wrapper's own unit tests are its safety net.

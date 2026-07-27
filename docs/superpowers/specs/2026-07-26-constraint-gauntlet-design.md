@@ -54,7 +54,8 @@ wrapper's diff-scoping and verdict logic are engine-agnostic by construction.
 
 `.github/workflows/mutation-nightly.yml`: cron schedule, ubuntu-latest only,
 full-repo gremlins run (coverage-guided). Advisory — never blocks anything. Outputs:
-JSON report artifact + GitHub step-summary table with per-package mutation score.
+JSON report artifact + GitHub step-summary table of per-file LIVED / NOT COVERED
+counts (gremlins reports file-level results; the JSON artifact is the full record).
 Job timeout 4h. Action pinning follows repo policy (tag-pin first-party, SHA-pin
 third-party, `persist-credentials: false` on read-only jobs).
 
@@ -99,5 +100,5 @@ These serve as the pattern library for future property tests; no CI presence che
 1. `make mutate` on a branch with a deliberately weakened test fails, naming the
    surviving mutant at file:line.
 2. `make mutate` on a no-op diff exits clean in seconds.
-3. Nightly workflow publishes a per-package score table.
+3. Nightly workflow publishes a per-file score table plus the JSON report artifact.
 4. Four property suites run green under `-race` in normal `make test`.
