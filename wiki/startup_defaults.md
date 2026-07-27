@@ -63,6 +63,17 @@ server:
 
 Bad or unreadable material fails `Start()` fast — it never silently falls back to plaintext. Staging cert/key material ahead of a flip (`server.tls.enabled: false` with material already set) is fail-open but not silent: startup emits one WARN naming `server.tls.enabled`. See [server_tls.md](server_tls.md) for the full config reference and deployment guidance (ALB-terminated partner mTLS vs. app-terminated mTLS).
 
+## ALB Forwarded-Client-Cert Identity Middleware
+
+`server.forwardedclientcert.*` (ADR-043) parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers. The default posture is **disabled** — the middleware is not wired into the request path at all:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `server.forwardedclientcert.enabled` | `false` | Wire the middleware; parse and expose the identity |
+| `server.forwardedclientcert.require` | `false` | Reject (401) requests missing both `-Subject` and `-Serial-Number` (a malformed `-Leaf` alone never rejects); requires `enabled: true` |
+
+Health/ready probes always skip this middleware regardless of `require`. See [forwarded_client_cert.md](forwarded_client_cert.md) for the config reference, the trust model (including the AWS doc-silence finding on header spoofing), and an authorization recipe.
+
 ## Messaging Pre-Warm Readiness Wait
 
 In single-tenant mode, startup pre-warms the messaging publisher and then waits for it to report `IsReady()`, bounded by `messaging.reconnect.readytimeout` (default 5s — the same key and budget as the per-publish readiness pre-flight; see [context_deadlines.md](context_deadlines.md)). A publisher that isn't ready in time logs a WARN and startup continues — the wait never fails startup; the publish-time pre-flight still absorbs a slow first publish. The wait (`ConnectionPreWarmer.awaitPublisherReady`) is context-aware and reports a distinct cancellation outcome when its `ctx` is canceled, rather than mislabeling it as a readiness timeout — but that path only fires for callers that pass a cancelable context. On the framework's own boot path (`app/lifecycle.go`'s `prepareRuntime`), pre-warm runs with `context.Background()` and the OS signal handler is installed later (`waitForShutdownOrServerError`, after `prepareRuntime` returns), so a shutdown signal received during pre-warm does **not** abort the wait — it runs to ready-or-`readytimeout` regardless.

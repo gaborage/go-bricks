@@ -44,8 +44,11 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// would still build and discard span/metric attributes on every request.
 	// Gate it on observabilityEnabled (RequestID/RequestEnrich below stay
 	// unconditional so W3C trace propagation works regardless).
+	// Shared probe skipper: health/ready requests bypass the observability and
+	// identity-establishing middlewares below.
+	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
+
 	if observabilityEnabled {
-		probeSkipper := CreateProbeSkipper(healthPath, readyPath)
 		e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
 			ServerName:     cfg.App.Name,
 			TracerProvider: otel.GetTracerProvider(),
@@ -98,17 +101,7 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		e.Use(ipPreGuardEcho(cfg.App.Rate.IPPreGuard.Threshold, log))
 	}
 
-	// Multi-tenant tenant resolver middleware (if enabled)
-	if cfg.Multitenant.Enabled {
-		resolver := buildTenantResolver(cfg)
-		if resolver != nil {
-			// Use skipper-aware middleware to bypass tenant resolution for health probes
-			skipper := CreateProbeSkipper(healthPath, readyPath)
-			e.Use(tenantMiddlewareEcho(resolver, skipper, log))
-		} else {
-			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
-		}
-	}
+	setupIdentityMiddlewares(e, log, cfg, probeSkipper)
 
 	// Logger middleware with zerolog
 	e.Use(loggerWithConfigEcho(log, LoggerConfig{
@@ -159,6 +152,32 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// server.responsetime.enabled for local debugging or consumer compatibility.
 	if cfg.Server.ResponseTime.Enabled {
 		e.Use(timingEcho())
+	}
+}
+
+// setupIdentityMiddlewares registers the identity-establishing middlewares
+// (tenant resolution, ALB forwarded-client-cert). Both run before the access
+// logger so their rejection paths can leave their own WARN trail, and both
+// honor the shared probe skipper.
+func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, probeSkipper SkipperFunc) {
+	// Multi-tenant tenant resolver middleware (if enabled)
+	if cfg.Multitenant.Enabled {
+		resolver := buildTenantResolver(cfg)
+		if resolver != nil {
+			// Use skipper-aware middleware to bypass tenant resolution for health probes
+			e.Use(tenantMiddlewareEcho(resolver, probeSkipper, log))
+		} else {
+			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
+		}
+	}
+
+	// ALB forwarded-client-cert identity middleware (if enabled) — registered
+	// before the access logger for the same reason as tenant resolution (a
+	// rejected request must leave a WARN trail; see
+	// logForwardedClientCertRejection). Skips health/ready probes: ALB health
+	// checks present no client certificate.
+	if cfg.Server.ForwardedClientCert.Enabled {
+		e.Use(forwardedClientCertMiddlewareEcho(cfg.Server.ForwardedClientCert, probeSkipper, log))
 	}
 }
 

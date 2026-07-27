@@ -334,6 +334,17 @@ func TestValidateServerSuccess(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "forwardedcert_enabled_valid",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				ForwardedClientCert: ForwardedClientCertConfig{
+					Enabled: true,
+					Require: true,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -535,6 +546,18 @@ func TestValidateServerFailures(t *testing.T) {
 				},
 			},
 			expectedError: "server.tls.minversion",
+		},
+		{
+			name: "forwardedcert_require_without_enabled",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				ForwardedClientCert: ForwardedClientCertConfig{
+					Enabled: false,
+					Require: true,
+				},
+			},
+			expectedError: "server.forwardedclientcert.require",
 		},
 	}
 
