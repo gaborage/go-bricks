@@ -9,11 +9,17 @@ import (
 	"pgregory.net/rapid"
 )
 
+var (
+	printableGen  = rapid.StringMatching(`[!-~]{1,64}`)
+	sliceElemsGen = rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,8}`), 1, 5)
+	yamlValGen    = rapid.StringMatching(`[a-zA-Z0-9]{1,32}`)
+)
+
 func TestInjectIntoEnvStringRoundTripProperty(t *testing.T) {
 	clearEnvironmentVariables()
 	defer clearEnvironmentVariables()
 	rapid.Check(t, func(rt *rapid.T) {
-		val := rapid.StringMatching(`[!-~]{1,64}`).Draw(rt, "val") // printable ASCII, no spaces
+		val := printableGen.Draw(rt, "val") // printable ASCII, no spaces
 		os.Setenv("CUSTOM_PROP_VALUE", val)
 		defer os.Unsetenv("CUSTOM_PROP_VALUE")
 
@@ -81,7 +87,7 @@ func TestInjectIntoStringSliceRoundTripProperty(t *testing.T) {
 	clearEnvironmentVariables()
 	defer clearEnvironmentVariables()
 	rapid.Check(t, func(rt *rapid.T) {
-		elems := rapid.SliceOfN(rapid.StringMatching(`[a-z]{1,8}`), 1, 5).Draw(rt, "elems")
+		elems := sliceElemsGen.Draw(rt, "elems")
 		os.Setenv("CUSTOM_PROP_TAGS", strings.Join(elems, ","))
 		defer os.Unsetenv("CUSTOM_PROP_TAGS")
 
@@ -144,8 +150,8 @@ func TestInjectIntoEnvBeatsYamlProperty(t *testing.T) {
 	clearEnvironmentVariables()
 	defer clearEnvironmentVariables()
 	rapid.Check(t, func(rt *rapid.T) {
-		yamlVal := rapid.StringMatching(`[a-zA-Z0-9]{1,32}`).Draw(rt, "yamlVal")
-		envVal := rapid.StringMatching(`[!-~]{1,64}`).Draw(rt, "envVal")
+		yamlVal := yamlValGen.Draw(rt, "yamlVal")
+		envVal := printableGen.Draw(rt, "envVal")
 		if yamlVal == envVal {
 			return // degenerate draw: no observable precedence signal
 		}

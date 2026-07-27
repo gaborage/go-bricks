@@ -9,6 +9,17 @@ import (
 	"pgregory.net/rapid"
 )
 
+var (
+	hostGen   = rapid.StringMatching(`[a-z0-9.-]{1,40}`)
+	pathGen   = rapid.StringMatching(`[a-zA-Z0-9/._-]{0,60}`)
+	hdrGen    = rapid.StringMatching(`[ -~]{0,40}`)
+	tenantGen = rapid.StringMatching(`[a-z0-9]{1,20}`)
+)
+
+func newReq(url string) *http.Request {
+	return httptest.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
+}
+
 type stubResolver struct {
 	tenant string
 	err    error
@@ -24,11 +35,11 @@ func (s *stubResolver) ResolveTenant(_ context.Context, _ *http.Request) (string
 // ("", nil). rapid surfaces any panic as a failure with a reproducing seed.
 func TestResolversNeverPanicOrReturnEmptyProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
-		host := rapid.StringMatching(`[a-z0-9.-]{1,40}`).Draw(rt, "host")
-		path := "/" + rapid.StringMatching(`[a-zA-Z0-9/._-]{0,60}`).Draw(rt, "path")
-		hdr := rapid.StringMatching(`[ -~]{0,40}`).Draw(rt, "hdr")
+		host := hostGen.Draw(rt, "host")
+		path := "/" + pathGen.Draw(rt, "path")
+		hdr := hdrGen.Draw(rt, "hdr")
 
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "http://placeholder/", http.NoBody)
+		req := newReq("http://placeholder/")
 		req.Host = host
 		req.URL.Path = path
 		req.Header.Set(tenantIDHeader, hdr)
@@ -65,7 +76,7 @@ func TestCompositeFirstMatchProperty(t *testing.T) {
 			}
 			chain[i] = stubs[i]
 		}
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "http://example.com/", http.NoBody)
+		req := newReq("http://example.com/")
 		got, err := (&CompositeResolver{Resolvers: chain}).ResolveTenant(context.Background(), req)
 		if err != nil {
 			rt.Fatalf("composite failed with a succeeding resolver at %d: %v", winner, err)
@@ -99,54 +110,40 @@ func TestCompositeFirstMatchProperty(t *testing.T) {
 // this construction.
 func TestResolversResolveWellFormedInputsProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
-		tenant := rapid.StringMatching(`[a-z0-9]{1,20}`).Draw(rt, "tenant")
+		tenant := tenantGen.Draw(rt, "tenant")
 
-		headerReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+		assertResolves := func(name string, r TenantResolver, req *http.Request, want string) {
+			got, err := r.ResolveTenant(context.Background(), req)
+			if err != nil {
+				rt.Fatalf("%s: unexpected error: %v", name, err)
+			}
+			if got != want {
+				rt.Fatalf("%s: got %q want %q", name, got, want)
+			}
+		}
+
+		headerReq := newReq("/")
 		headerReq.Header.Set(tenantIDHeader, tenant)
-		got, err := (&HeaderResolver{HeaderName: tenantIDHeader}).ResolveTenant(context.Background(), headerReq)
-		if err != nil {
-			rt.Fatalf("HeaderResolver: unexpected error: %v", err)
-		}
-		if got != tenant {
-			rt.Fatalf("HeaderResolver: got %q want %q", got, tenant)
-		}
+		assertResolves("HeaderResolver", &HeaderResolver{HeaderName: tenantIDHeader}, headerReq, tenant)
 
-		subReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+		subReq := newReq("/")
 		subReq.Host = tenant + ".example.com"
-		got, err = (&SubdomainResolver{RootDomain: "example.com"}).ResolveTenant(context.Background(), subReq)
-		if err != nil {
-			rt.Fatalf("SubdomainResolver: unexpected error: %v", err)
-		}
-		if got != tenant {
-			rt.Fatalf("SubdomainResolver: got %q want %q", got, tenant)
-		}
+		assertResolves("SubdomainResolver", &SubdomainResolver{RootDomain: "example.com"}, subReq, tenant)
 
-		pathReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/itsp/"+tenant, http.NoBody)
-		got, err = (&PathResolver{Segment: 2, Prefix: "itsp"}).ResolveTenant(context.Background(), pathReq)
-		if err != nil {
-			rt.Fatalf("PathResolver: unexpected error: %v", err)
-		}
-		if got != tenant {
-			rt.Fatalf("PathResolver: got %q want %q", got, tenant)
-		}
+		pathReq := newReq("/itsp/" + tenant)
+		assertResolves("PathResolver", &PathResolver{Segment: 2, Prefix: "itsp"}, pathReq, tenant)
 
-		tenant2 := rapid.StringMatching(`[a-z0-9]{1,20}`).Draw(rt, "tenant2")
+		tenant2 := tenantGen.Draw(rt, "tenant2")
 		if tenant2 == tenant {
 			return // degenerate draw: no observable first-match signal
 		}
-		compReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+		compReq := newReq("/")
 		compReq.Host = tenant + ".example.com"
 		compReq.Header.Set(tenantIDHeader, tenant2)
 		composite := &CompositeResolver{Resolvers: []TenantResolver{
 			&SubdomainResolver{RootDomain: "example.com"},
 			&HeaderResolver{HeaderName: tenantIDHeader},
 		}}
-		got, err = composite.ResolveTenant(context.Background(), compReq)
-		if err != nil {
-			rt.Fatalf("CompositeResolver: unexpected error: %v", err)
-		}
-		if got != tenant {
-			rt.Fatalf("CompositeResolver: got %q want %q (subdomain must win over header)", got, tenant)
-		}
+		assertResolves("CompositeResolver (subdomain must win over header)", composite, compReq, tenant)
 	})
 }

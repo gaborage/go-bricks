@@ -8,9 +8,14 @@ import (
 	"testing"
 
 	"pgregory.net/rapid"
+
+	"github.com/gaborage/go-bricks/database/types"
 )
 
-var identGen = rapid.StringMatching(`[a-z][a-z0-9_]{0,29}`)
+var (
+	identGen  = rapid.StringMatching(`[a-z][a-z0-9_]{0,29}`)
+	vendorGen = rapid.SampledFrom([]string{PostgreSQL, Oracle})
+)
 
 var (
 	pgPlaceholderRe     = regexp.MustCompile(`\$(\d+)`)
@@ -18,17 +23,18 @@ var (
 )
 
 func buildEqChain(t *rapid.T, qb *QueryBuilder, n int) (sql string, args []any, err error) {
-	f := qb.Filter()
-	filter := f.Eq(identGen.Draw(t, "col0"), rapid.Int().Draw(t, "val0"))
-	for i := 1; i < n; i++ {
-		filter = f.And(filter, f.Eq(identGen.Draw(t, fmt.Sprintf("col%d", i)), rapid.Int().Draw(t, fmt.Sprintf("val%d", i))))
+	cols := make([]string, n)
+	vals := make([]int, n)
+	for i := range cols {
+		cols[i] = identGen.Draw(t, fmt.Sprintf("col%d", i))
+		vals[i] = rapid.Int().Draw(t, fmt.Sprintf("val%d", i))
 	}
-	return qb.Select("id").From("users").Where(filter).ToSQL()
+	return buildFromDraws(qb, cols, vals)
 }
 
 func TestQueryBuilderPlaceholderArityProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
-		vendor := rapid.SampledFrom([]string{PostgreSQL, Oracle}).Draw(rt, "vendor")
+		vendor := vendorGen.Draw(rt, "vendor")
 		n := rapid.IntRange(1, 8).Draw(rt, "conds")
 		sql, args, err := buildEqChain(rt, NewQueryBuilder(vendor), n)
 		if err != nil {
@@ -59,21 +65,25 @@ func TestQueryBuilderPostgresPlaceholdersSequentialProperty(t *testing.T) {
 	})
 }
 
-// buildFromDraws chains f.Eq/f.And over pre-drawn column/value slices — the
-// same shape as buildEqChain, but parameterized so a caller can build from the
-// same draws more than once instead of drawing fresh values per build.
+// buildFromDraws builds an n-condition equality query from pre-drawn
+// column/value slices, so a caller can build from the same draws more than
+// once instead of drawing fresh values per build.
 func buildFromDraws(qb *QueryBuilder, cols []string, vals []int) (sql string, args []any, err error) {
 	f := qb.Filter()
-	filter := f.Eq(cols[0], vals[0])
-	for i := 1; i < len(cols); i++ {
-		filter = f.And(filter, f.Eq(cols[i], vals[i]))
+	eqs := make([]types.Filter, len(cols))
+	for i := range cols {
+		eqs[i] = f.Eq(cols[i], vals[i])
+	}
+	filter := eqs[0]
+	if len(eqs) > 1 {
+		filter = f.And(eqs...)
 	}
 	return qb.Select("id").From("users").Where(filter).ToSQL()
 }
 
 func TestQueryBuilderDeterministicOutputProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
-		vendor := rapid.SampledFrom([]string{PostgreSQL, Oracle}).Draw(rt, "vendor")
+		vendor := vendorGen.Draw(rt, "vendor")
 		n := rapid.IntRange(2, 6).Draw(rt, "conds")
 		cols := make([]string, n)
 		vals := make([]int, n)

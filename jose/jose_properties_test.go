@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
 	"github.com/gaborage/go-bricks/jose"
@@ -35,8 +34,7 @@ func TestSealOpenRoundTripProperty(t *testing.T) {
 func TestOpenTamperNeverAltersPayloadProperty(t *testing.T) {
 	fx := josetest.NewBidirectionalFixture(t)
 	payload := []byte(`{"amount":"100.00","currency":"USD"}`)
-	sealed, err := jose.Seal(payload, fx.ClientOutbound, fx.Resolver)
-	require.NoError(t, err)
+	sealed := josetest.SealForTest(t, payload, fx.ClientOutbound, fx.Resolver)
 
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	rapid.Check(t, func(rt *rapid.T) {
