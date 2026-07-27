@@ -150,6 +150,14 @@ const (
 	errInvalidField       = "invalid value: %v"
 	databasesFieldPrefix  = "databases.%s"
 	defaultHost           = "localhost"
+
+	fieldServerTLSCertFile   = "server.tls.certfile"
+	fieldServerTLSCertValue  = "server.tls.certvalue"
+	fieldServerTLSKeyFile    = "server.tls.keyfile"
+	fieldServerTLSKeyValue   = "server.tls.keyvalue"
+	fieldServerTLSMinVersion = "server.tls.minversion"
+	tlsVersion12             = "1.2"
+	tlsVersion13             = "1.3"
 )
 
 func Validate(cfg *Config) error {
@@ -318,7 +326,46 @@ func validateServer(cfg *ServerConfig) error {
 		return NewValidationError("server.bodylimit", errMustBeNonNegative)
 	}
 
-	return nil
+	return validateServerTLS(&cfg.TLS)
+}
+
+// validateServerTLS checks structural TLS material configuration (presence
+// and mutual exclusivity of file/value sources, min-version enum). It does
+// NOT touch the filesystem — reading and parsing PEM material happens at
+// Start() time (see server/tls.go), so a bad path here still fails fast, just
+// one hop later.
+func validateServerTLS(cfg *ServerTLSConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+
+	if err := validateServerTLSMaterial(fieldServerTLSCertFile, fieldServerTLSCertValue, cfg.CertFile, cfg.CertValue); err != nil {
+		return err
+	}
+
+	if err := validateServerTLSMaterial(fieldServerTLSKeyFile, fieldServerTLSKeyValue, cfg.KeyFile, cfg.KeyValue); err != nil {
+		return err
+	}
+
+	switch cfg.MinVersion {
+	case "", tlsVersion12, tlsVersion13:
+		return nil
+	default:
+		return NewInvalidFieldError(fieldServerTLSMinVersion, fmt.Sprintf(errInvalidField, cfg.MinVersion), []string{tlsVersion12, tlsVersion13})
+	}
+}
+
+// validateServerTLSMaterial enforces exactly one of a file/value pair is set
+// for a single PEM piece (cert or key).
+func validateServerTLSMaterial(fileField, valueField, file, value string) error {
+	switch {
+	case file == "" && value == "":
+		return NewValidationError(fileField, "exactly one of "+fileField+" or "+valueField+" is required when server.tls.enabled is true")
+	case file != "" && value != "":
+		return NewValidationError(fileField, fileField+" and "+valueField+" are mutually exclusive (exactly one)")
+	default:
+		return nil
+	}
 }
 
 // IsDatabaseConfigured determines if database is intentionally configured.

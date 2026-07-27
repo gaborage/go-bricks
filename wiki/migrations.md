@@ -37,7 +37,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E50  | v0.49.0 → v0.50.0 | config-break | 4 | none | Flyway migrate surfaces unparseable/failure output as an error; non-empty DB passwords < 8 bytes rejected at config validation + migrate; dev CORS wildcard opt-in; `multitenant.resolver.order` now REQUIRED for `type: composite` (no default — composite deployments fail to start until they declare one) |
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
-| E55  | v0.52.0 → v0.55.0 | additive (safe) | 2 | none | none |
+| E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -680,9 +680,9 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - note: `decls.DeclareQueueWithDLQ(name, spec)` declares the fanout DLX + parking queue + binding and sets `x-dead-letter-exchange` (and optionally `x-dead-letter-routing-key`) on the primary queue in one call — failed deliveries park in the default `<queue>.dlq` (or the configured parking queue) instead of dropping. Raw `Args["x-dead-letter-exchange"]` (see "Dead-Lettering" in wiki/messaging.md) remains valid for custom topologies. Purely additive; existing hand-rolled DLX declarations are untouched.
 - ref: #721 · messaging/helpers.go
 
-## E55 · v0.52.0 → v0.55.0 — database Execute* query/exec helpers + httpclient client TLS
+## E55 · v0.52.0 → v0.55.0 — database Execute* query/exec helpers + httpclient client TLS + server TLS listener
 
-- gist: Adds `database.ExecuteQuerySingle` / `ExecuteQueryMany` / `ExecuteUpdate` / `ExecuteUpdateOne` / `ExecuteInsert`, a 2-method `database.Executor` interface (satisfied by both `database.Interface` and `database.Tx`), and `database.Raw(sql, args...)` for hand-written SQL — collapsing the repeated `ToSQL()` → `Query`/`Exec` → scan/`RowsAffected` → error-wrap glue every SQL repository re-implements. Also adds `httpclient.NewClientTLSConfig` and `httpclient.Builder.WithTLSConfig` for config-driven client certificates / mutual TLS. No exported go-bricks symbol changes outside these new surfaces; purely additive.
+- gist: Adds `database.ExecuteQuerySingle` / `ExecuteQueryMany` / `ExecuteUpdate` / `ExecuteUpdateOne` / `ExecuteInsert`, a 2-method `database.Executor` interface (satisfied by both `database.Interface` and `database.Tx`), and `database.Raw(sql, args...)` for hand-written SQL — collapsing the repeated `ToSQL()` → `Query`/`Exec` → scan/`RowsAffected` → error-wrap glue every SQL repository re-implements. Also adds `httpclient.NewClientTLSConfig` and `httpclient.Builder.WithTLSConfig` for config-driven client certificates / mutual TLS, and `server.tls.*` for a config-driven HTTPS listener (ADR-042; client-certificate verification deferred). No exported go-bricks symbol changes outside these new surfaces; purely additive.
 - build-caught: none
 - preflight: none
 - exit: `go get github.com/gaborage/go-bricks@v0.55.0 && go mod tidy && go build ./... && go test ./...`
@@ -737,6 +737,24 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
   `RequireClientCert: true` so a missing cert/key pair fails at load instead of
   silently downgrading intended mTLS to one-way TLS.
 - ref: #767 · httpclient/tls.go
+
+### [C55.3] server TLS listener (HTTPS) · additive-optional
+
+- note: `server.tls.*` (`enabled`, `certfile`/`certvalue`, `keyfile`/`keyvalue`,
+  `minversion`) enables HTTPS on the go-bricks HTTP listener via Echo's
+  `StartConfig.TLSConfig`. Cert and key each come from a file path or a
+  base64-encoded value — exactly one source per piece — loaded through the
+  same `internal/secretfile` guards the httpclient TLS loader (C55.2) uses.
+  `minversion` floors at TLS 1.2 (`""`/`"1.2"`); `"1.3"` opts up. The all-zero
+  default leaves the listener plaintext, byte-for-byte unchanged from prior
+  behavior. Client-certificate verification is a separate, gated follow-up
+  (ADR-042) — not part of this atom.
+- security: bad or unreadable material fails `Start()` fast rather than
+  silently falling back to plaintext; staged-but-disabled material (fields
+  set while `server.tls.enabled` is false) emits one WARN naming
+  `server.tls.enabled` so a mistyped flag is never silent. HTTP/1.1-only —
+  `NextProtos` is deliberately left unset (see ADR-042).
+- ref: #767 · ADR-042 · server/tls.go
 
 ---
 

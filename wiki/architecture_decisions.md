@@ -631,6 +631,30 @@ convention; zero behavior change for every existing per-tenant/single-tenant dep
 
 ---
 
+### [ADR-042: Server TLS Listener (Client Verification Deferred)](adr_042_server_tls.md)
+
+**Date:** 2026-07-27 | **Status:** Accepted
+
+Adds `server.tls.*` (`enabled`, `certfile`/`certvalue`, `keyfile`/`keyvalue`, `minversion`) so
+`server.Start()` can serve HTTPS via Echo's `StartConfig.TLSConfig`, which go-bricks never
+populated. PEM material loads through the same `internal/secretfile` guards the httpclient TLS
+loader uses; TLS 1.2 is the floor; bad or unreadable material fails `Start()` fast rather than
+degrading to plaintext. HTTP/1.1-only by design — advertising `h2` without the h2 server wired
+(echo's `StartTLS`, which go-bricks does not use) would break handshakes. Client-certificate
+verification was split out to a gated follow-up: an infrastructure review found every named
+deployment sits behind an ALB that already terminates partner mTLS at the edge, so app-side
+verification activates only once a deployment terminates partner TLS at the app itself
+(NLB/static-IP ingress) — no such deployment exists yet. No raw `*tls.Config` escape hatch; the
+framework owns the listener's posture. Additive-only; the zero value leaves every deployment on
+plaintext, unchanged.
+
+**Key Benefits:** Closes the config-surface gap ADR-034's engine seal created (a consumer could no
+longer add TLS from outside); covers the ALB→target encryption-in-transit hop and any deployment
+without an edge proxy; keeps the deferred mTLS half gated on a real deployment need instead of
+shipped speculatively.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -640,7 +664,7 @@ convention; zero behavior change for every existing per-tenant/single-tenant dep
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-041) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-042) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

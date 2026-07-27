@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -141,6 +142,108 @@ func TestReadErrorDoesNotEchoOverLongValues(t *testing.T) {
 		assert.Contains(t, err.Error(), fmt.Sprintf("%q", path))
 		assert.True(t, errors.Is(err, fs.ErrNotExist))
 	})
+}
+
+// TestLoadPEM pins the shared file/value resolver httpclient's and the server
+// TLS listener's loadPEM wrappers both delegate to.
+func TestLoadPEM(t *testing.T) {
+	t.Run("both_set_errors", func(t *testing.T) {
+		_, err := LoadPEM("test: prefix:", "some/path.pem", "c29tZXZhbHVl", "cert")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "set file or value, not both")
+	})
+
+	t.Run("file_path_reads", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "material.pem")
+		want := []byte("-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----\n")
+		require.NoError(t, os.WriteFile(path, want, 0o600))
+
+		got, err := LoadPEM("test: prefix:", path, "", "cert")
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+	})
+
+	t.Run("key_material_path_rejected", func(t *testing.T) {
+		// A raw PEM header hits LooksLikeKeyMaterial's cheapest branch
+		// (strings.Contains) — no crypto needed to prove LoadPEM's file
+		// branch calls the guard and propagates its rejection. Exhaustive
+		// DER/key-shape detection is already pinned by
+		// TestLooksLikeKeyMaterialDetection and
+		// TestLooksLikeKeyMaterialDetectsKeysNotPaths.
+		asFile := "-----BEGIN PRIVATE KEY-----\nZm9v\n-----END PRIVATE KEY-----\n"
+
+		_, err := LoadPEM("test: prefix:", asFile, "", "key")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "looks like key material")
+	})
+
+	t.Run("base64_value_decodes", func(t *testing.T) {
+		want := []byte("hello world")
+		encoded := base64.StdEncoding.EncodeToString(want)
+
+		got, err := LoadPEM("test: prefix:", "", encoded, "cert")
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+	})
+
+	// bad_base64_never_echoes_value pins that a base64-decode failure never
+	// echoes the value, at any length — not just via SafeRef's elision
+	// bound. A raw (non-base64) PEM string pasted into the value field fails
+	// decode here, and for a short key type (Ed25519) SafeRef's %q-length
+	// bound would not trip, so echoing anything derived from value would
+	// leak the material itself.
+	t.Run("bad_base64_never_echoes_value", func(t *testing.T) {
+		tests := []struct {
+			name string
+			v    string
+		}{
+			{name: "short_invalid", v: "!!!not-base64!!!"},
+			{name: "long_invalid", v: strings.Repeat("!not-base64!", 30)},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := LoadPEM("test: prefix:", "", tt.v, "cert")
+				require.Error(t, err)
+				assert.NotContains(t, err.Error(), tt.v)
+			})
+		}
+	})
+
+	t.Run("neither_set_nil_nil", func(t *testing.T) {
+		got, err := LoadPEM("test: prefix:", "", "", "cert")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+}
+
+// TestParseTLSMinVersion pins the shared min-version enum parser httpclient's
+// and the server TLS listener's wrappers both delegate to.
+func TestParseTLSMinVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		v       string
+		want    uint16
+		wantErr bool
+	}{
+		{name: "empty_floors_to_12", v: "", want: tls.VersionTLS12},
+		{name: "explicit_13", v: "1.3", want: tls.VersionTLS13},
+		{name: "rejected_11", v: "1.1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseTLSMinVersion("test: prefix:", tt.v)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "minversion")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 // Pins both directions of the detector: real key material in every encoding it
