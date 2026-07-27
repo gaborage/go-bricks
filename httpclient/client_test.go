@@ -9,6 +9,7 @@ import (
 	nethttp "net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -816,6 +817,62 @@ func TestClientRetries(t *testing.T) {
 		assert.True(t, IsErrorType(err, TimeoutError))
 		assert.Equal(t, int32(2), calls.Load()) // initial + one retry
 	})
+}
+
+// TestRequestInterceptorRunsPerAttempt pins that buildRequest re-runs request
+// interceptors on every retry attempt rather than replaying a stale request.
+// Consumers that sign requests through WithRequestInterceptor (e.g. OAuth 1.0a,
+// whose nonces are single-use per RFC 5849) depend on getting a fresh request
+// object per attempt; hoisting interceptor execution out of the per-attempt
+// path would break them with every other test still green.
+func TestRequestInterceptorRunsPerAttempt(t *testing.T) {
+	const headerInterceptorSeq = "X-Interceptor-Seq"
+	log := createTestLogger()
+
+	var serverHits atomic.Int32
+	var mu sync.Mutex
+	var seenValues []string
+
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		n := serverHits.Add(1)
+		mu.Lock()
+		seenValues = append(seenValues, r.Header.Get(headerInterceptorSeq))
+		mu.Unlock()
+		if n <= 2 {
+			w.WriteHeader(nethttp.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(nethttp.StatusOK)
+	}))
+	defer server.Close()
+
+	var interceptorCalls atomic.Int32
+	reqInterceptor := func(_ context.Context, req *nethttp.Request) error {
+		n := interceptorCalls.Add(1)
+		req.Header.Set(headerInterceptorSeq, fmt.Sprintf("attempt-%d", n))
+		return nil
+	}
+
+	client := NewBuilder(log).
+		WithRetries(3, 5*time.Millisecond).
+		WithRequestInterceptor(reqInterceptor).
+		Build()
+
+	req := &Request{URL: server.URL}
+	resp, err := client.Get(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
+
+	assert.Equal(t, int32(3), serverHits.Load())
+	assert.Equal(t, serverHits.Load(), interceptorCalls.Load())
+
+	mu.Lock()
+	defer mu.Unlock()
+	seen := make(map[string]bool, len(seenValues))
+	for _, v := range seenValues {
+		assert.False(t, seen[v], "duplicate interceptor value observed: %s", v)
+		seen[v] = true
+	}
 }
 
 func TestTraceIDPropagation(t *testing.T) {
