@@ -1059,8 +1059,6 @@ func TestInjectIntoStringSliceRoundTripProperty(t *testing.T) {
 }
 ```
 
-In `TestInjectIntoDefaultAppliesWhenEnvAbsentProperty`, the drawn `def` value is intentionally unused for the tag itself (struct tags are compile-time); the property's value is that Load+Inject under a clean env repeatedly yields the tag default. Simplify to a fixed default and delete the `def` draw and its comment — final form asserts `svc.Value == "placeholder"` with no rapid draw except the iteration itself, or drop rapid and keep it as a plain regression test. Prefer the latter: convert to a plain `func TestInjectIntoDefaultAppliesWhenEnvAbsent(t *testing.T)` without rapid.
-
 - [ ] **Step 2: Run**
 
 Run: `go test -race -run 'InjectInto' ./config/`

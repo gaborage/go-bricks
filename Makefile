@@ -14,6 +14,7 @@ GOSEC_VERSION := v2.28.0
 GOLANGCI_LINT_VERSION := v2.12.2
 # renovate: datasource=go depName=github.com/go-gremlins/gremlins
 GREMLINS_VERSION := v0.5.0
+GREMLINS_CMD := go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -103,10 +104,10 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
 
 mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
-	go run ./scripts/mutatediff -engine "go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)"
+	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)"
 
 mutate-baseline: ## Full-repo mutation baseline (advisory; consumed by the nightly workflow)
-	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash --output gremlins-report.json
+	$(GREMLINS_CMD) unleash --output gremlins-report.json
 
 release: ## Cut a signed release tag (usage: make release VERSION=v0.38.0). Run AFTER merging the release-please PR. Requires 1Password unlocked.
 	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.38.0'"; exit 1; }

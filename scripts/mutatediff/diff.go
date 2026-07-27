@@ -62,7 +62,9 @@ func mutationScope(changes map[string][]lineRange) map[string][]lineRange {
 		if !strings.HasSuffix(file, ".go") || strings.HasSuffix(file, "_test.go") {
 			continue
 		}
-		if strings.HasPrefix(file, "tools/") || strings.Contains(file, "testdata/") {
+		// scripts/ is excluded because gremlins v0.5.0 misverdicts this nested
+		// package main (wiki/testing.md#mutation-gate); its own unit tests are its net.
+		if strings.HasPrefix(file, "tools/") || strings.HasPrefix(file, "scripts/") || strings.Contains(file, "testdata/") {
 			continue
 		}
 		scoped[file] = ranges

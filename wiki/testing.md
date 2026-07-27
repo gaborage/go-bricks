@@ -330,18 +330,20 @@ and applies this policy to mutants that land on changed lines:
 | `TIMED OUT` | pass | The mutant hung the code and the test timeout noticed |
 | `KILLED` | pass | |
 
-Excluded from scope: `_test.go` files, `testdata/`, and `tools/` (separate Go
-module). Engine version is pinned via `GREMLINS_VERSION` in the Makefile;
+Excluded from scope: `_test.go` files, `testdata/`, `tools/` (separate Go
+module), and `scripts/` (the wrapper itself — see the operational notes).
+Engine version is pinned via `GREMLINS_VERSION` in the Makefile;
 runtime knobs live in `.gremlins.yaml`. The nightly `Mutation Baseline`
 workflow runs the full repo in advisory mode and publishes a per-file score
 table to the job summary plus a JSON artifact.
 
 Operational notes: a real `make mutate` run may leave `go.work.sum` modified
 (gremlins' own module graph); discard that churn (`git checkout -- go.work.sum`)
-rather than committing it. Do not judge the engine by mutating
-`scripts/mutatediff` itself — gremlins v0.5.0 misreports some mutants in this
-nested `package main` as KILLED (validated during rollout); library packages,
-which the gate actually polices, verdict correctly.
+rather than committing it. `scripts/` is excluded from the gate's scope in
+code: gremlins v0.5.0 misreports some mutants in the wrapper's nested
+`package main` as KILLED (validated during rollout), so a green verdict there
+would be untrustworthy — the wrapper's own unit tests are its safety net.
+Library packages, which the gate actually polices, verdict correctly.
 
 When the gate fails, strengthen the test so the listed mutant dies (assert the
 boundary, the sign, the branch the operator flipped) — never respond by

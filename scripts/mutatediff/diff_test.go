@@ -61,8 +61,7 @@ func TestMutationScopeFiltersNonTargets(t *testing.T) {
 	}
 	got := mutationScope(in)
 	want := map[string][]lineRange{
-		"config/injection.go":        {{Start: 1, End: 2}},
-		"scripts/mutatediff/diff.go": {{Start: 1, End: 2}},
+		"config/injection.go": {{Start: 1, End: 2}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("mutationScope = %#v, want %#v", got, want)

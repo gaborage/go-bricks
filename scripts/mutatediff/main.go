@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -25,13 +26,11 @@ func main() {
 func run(engine, baseRef string, out io.Writer) int {
 	mergeBase, err := gitOutput("merge-base", "HEAD", baseRef)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mutatediff: %v\n", err)
-		return 2
+		return fail("%v", err)
 	}
 	diff, err := gitOutput("diff", "-U0", "--no-color", mergeBase, "HEAD", "--", "*.go")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mutatediff: %v\n", err)
-		return 2
+		return fail("%v", err)
 	}
 	changed := mutationScope(parseUnifiedDiff(diff))
 	if status, statusErr := gitOutput("status", "--porcelain", "--", "*.go"); statusErr == nil && status != "" {
@@ -43,33 +42,29 @@ func run(engine, baseRef string, out io.Writer) int {
 	}
 	reportDir, err := os.MkdirTemp("", "mutatediff-*")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mutatediff: %v\n", err)
-		return 2
+		return fail("%v", err)
 	}
 	defer os.RemoveAll(reportDir)
+	engineArgs := strings.Fields(engine)
 	var failures, warnings []mutantVerdict
 	for _, pkg := range packagesOf(changed) {
 		fmt.Fprintf(out, "mutatediff: mutating %s\n", pkg)
 		reportName := "gremlins-" + strings.ReplaceAll(strings.TrimPrefix(pkg, "./"), "/", "-") + ".json"
 		reportPath := filepath.Join(reportDir, reportName)
-		args := append(strings.Fields(engine), "unleash", "--output", reportPath, pkg)
+		args := slices.Concat(engineArgs, []string{"unleash", "--output", reportPath, pkg})
 		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...) // #nosec G204 -- dev tool; engine comes from the Makefile pin, not user input
 		cmd.Stdout = out
 		cmd.Stderr = os.Stderr
-		runErr := cmd.Run()
-		if runErr != nil {
-			fmt.Fprintf(os.Stderr, "mutatediff: engine failed for %s: %v\n", pkg, runErr)
-			return 2
+		if runErr := cmd.Run(); runErr != nil {
+			return fail("engine failed for %s: %v", pkg, runErr)
 		}
 		reportJSON, readErr := os.ReadFile(reportPath) // #nosec G304 -- path built from a per-run os.MkdirTemp dir + package-derived name, not user input
 		if readErr != nil {
-			fmt.Fprintf(os.Stderr, "mutatediff: no report for %s: %v\n", pkg, readErr)
-			return 2
+			return fail("no report for %s: %v", pkg, readErr)
 		}
 		f, w, jerr := judge(reportJSON, pkg, changed)
 		if jerr != nil {
-			fmt.Fprintf(os.Stderr, "mutatediff: parse report for %s: %v\n", pkg, jerr)
-			return 2
+			return fail("parse report for %s: %v", pkg, jerr)
 		}
 		failures = append(failures, f...)
 		warnings = append(warnings, w...)
@@ -86,6 +81,11 @@ func run(engine, baseRef string, out io.Writer) int {
 	}
 	fmt.Fprintln(out, "mutatediff: all mutants on changed lines killed")
 	return 0
+}
+
+func fail(format string, a ...any) int {
+	fmt.Fprintf(os.Stderr, "mutatediff: "+format+"\n", a...)
+	return 2
 }
 
 func gitOutput(args ...string) (string, error) {
