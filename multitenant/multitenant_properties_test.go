@@ -80,3 +80,73 @@ func TestCompositeFirstMatchProperty(t *testing.T) {
 		}
 	})
 }
+
+// Contract-completion: TestResolversNeverPanicOrReturnEmptyProperty draws
+// hosts/paths uninformed by any resolver's success shape, so its never-empty
+// half is vacuous for SubdomainResolver and PathResolver — a random
+// `[a-z0-9.-]{1,40}` host essentially never ends in ".example.com", and a
+// random path essentially never starts with "itsp". This property
+// complements it by constructing guaranteed-success inputs per resolver and
+// pinning the exact resolved tenant, so the success path is actually
+// exercised rather than only reachable in principle.
+//
+// PathResolver's Segment is 1-indexed over ALL path parts split from the
+// full, unmodified req.URL.Path — resolver.go never strips Prefix before
+// splitting; Prefix is purely a gate (via pathutil.StripPathPrefix) on which
+// paths are attempted at all. So for Prefix "itsp" and path "/itsp/<tenant>",
+// parts is ["itsp", "<tenant>"], and Segment 2 resolves parts[1], the
+// tenant — verified by reading resolver.go's ResolveTenant before writing
+// this construction.
+func TestResolversResolveWellFormedInputsProperty(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		tenant := rapid.StringMatching(`[a-z0-9]{1,20}`).Draw(rt, "tenant")
+
+		headerReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+		headerReq.Header.Set(tenantIDHeader, tenant)
+		got, err := (&HeaderResolver{HeaderName: tenantIDHeader}).ResolveTenant(context.Background(), headerReq)
+		if err != nil {
+			rt.Fatalf("HeaderResolver: unexpected error: %v", err)
+		}
+		if got != tenant {
+			rt.Fatalf("HeaderResolver: got %q want %q", got, tenant)
+		}
+
+		subReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+		subReq.Host = tenant + ".example.com"
+		got, err = (&SubdomainResolver{RootDomain: "example.com"}).ResolveTenant(context.Background(), subReq)
+		if err != nil {
+			rt.Fatalf("SubdomainResolver: unexpected error: %v", err)
+		}
+		if got != tenant {
+			rt.Fatalf("SubdomainResolver: got %q want %q", got, tenant)
+		}
+
+		pathReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/itsp/"+tenant, http.NoBody)
+		got, err = (&PathResolver{Segment: 2, Prefix: "itsp"}).ResolveTenant(context.Background(), pathReq)
+		if err != nil {
+			rt.Fatalf("PathResolver: unexpected error: %v", err)
+		}
+		if got != tenant {
+			rt.Fatalf("PathResolver: got %q want %q", got, tenant)
+		}
+
+		tenant2 := rapid.StringMatching(`[a-z0-9]{1,20}`).Draw(rt, "tenant2")
+		if tenant2 == tenant {
+			return // degenerate draw: no observable first-match signal
+		}
+		compReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+		compReq.Host = tenant + ".example.com"
+		compReq.Header.Set(tenantIDHeader, tenant2)
+		composite := &CompositeResolver{Resolvers: []TenantResolver{
+			&SubdomainResolver{RootDomain: "example.com"},
+			&HeaderResolver{HeaderName: tenantIDHeader},
+		}}
+		got, err = composite.ResolveTenant(context.Background(), compReq)
+		if err != nil {
+			rt.Fatalf("CompositeResolver: unexpected error: %v", err)
+		}
+		if got != tenant {
+			rt.Fatalf("CompositeResolver: got %q want %q (subdomain must win over header)", got, tenant)
+		}
+	})
+}
