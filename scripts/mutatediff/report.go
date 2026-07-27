@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"path"
-	"strings"
 )
 
 // gremlinsReport mirrors the JSON written by `gremlins unleash --output`.
@@ -28,6 +27,10 @@ type mutantVerdict struct {
 	Status   string
 }
 
+// statusLived is gremlins' "mutant survived" verdict — a constant because
+// judge and its tests both key off the literal often enough to trip goconst.
+const statusLived = "LIVED"
+
 // judge buckets report mutants that land on changed lines: LIVED fails the
 // gate, NOT COVERED warns (SonarCloud owns coverage), anything else passes.
 // pkgDir is the package the report was generated for — gremlins emits
@@ -38,7 +41,7 @@ func judge(reportJSON []byte, pkgDir string, changed map[string][]lineRange) (fa
 		return nil, nil, err
 	}
 	for _, f := range rep.Files {
-		name := path.Join(strings.TrimPrefix(pkgDir, "./"), f.FileName)
+		name := path.Join(pkgDir, f.FileName)
 		ranges, ok := changed[name]
 		if !ok {
 			continue
@@ -49,7 +52,7 @@ func judge(reportJSON []byte, pkgDir string, changed map[string][]lineRange) (fa
 			}
 			v := mutantVerdict{File: name, Line: m.Line, Operator: m.Type, Status: m.Status}
 			switch m.Status {
-			case "LIVED":
+			case statusLived:
 				failures = append(failures, v)
 			case "NOT COVERED":
 				warnings = append(warnings, v)
