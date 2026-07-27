@@ -49,7 +49,7 @@ The listener is **HTTP/1.1-only** — `NextProtos` is deliberately left unset. C
 AWS ALB can terminate partner mTLS at the edge (trust store + CRL support), verifying the partner's client certificate before the request ever reaches your service. In this topology, `server.tls` covers the **ALB→target** hop:
 
 - The ALB **does not validate target certificates** by default — the ALB→target leg is encryption in transit, not peer authentication. A self-signed or internally-issued certificate is fine here; the ALB is not checking it against a trust store.
-- Partner identity data, when your application needs it, arrives via ALB-injected headers (`X-Amzn-Mtls-Clientcert-*` and related). Trust these values **only** when the ALB strips any client-supplied copies of the same headers (so a caller cannot forge them) and the network path between the ALB and your service is closed to anything else. Parsing/validating these headers is a separate follow-up — this ADR does not implement it.
+- Partner identity data, when your application needs it, arrives via ALB-injected headers (`X-Amzn-Mtls-Clientcert-*` and related). AWS does not publicly document that the ALB strips client-supplied copies of these headers, so trust them only under the deployment posture defined in [wiki/forwarded_client_cert.md](forwarded_client_cert.md#trust-model) (ADR-043): mTLS-verify listener, closed security groups, and a single ingress path to the target group. go-bricks parses these headers via `server.forwardedclientcert.*`.
 - This is the recommended default for any deployment already fronted by an ALB doing partner mTLS.
 
 ### (b) App-terminated mTLS (NLB / static-IP ingress) — requires the deferred client-verification feature

@@ -40,6 +40,11 @@ server:
   #   keyfile: /etc/tls/server.key    # Server private key: file path OR keyvalue (exactly one)
   #   keyvalue: ""
   #   minversion: "1.2"     # "" or "1.2" (floor, default); "1.3" opts up
+  # server.forwardedclientcert.* parses ALB verify-mode X-Amzn-Mtls-Clientcert-* headers
+  # into a typed identity (ADR-043); see wiki/forwarded_client_cert.md for the trust model.
+  # forwardedclientcert:
+  #   enabled: false        # Wire the middleware; parse and expose the identity. Default false.
+  #   require: false        # Reject (401) requests missing both -Subject and -Serial-Number. Requires enabled: true.
 
 database:
   type: postgresql

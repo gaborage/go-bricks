@@ -96,6 +96,8 @@ type ServerConfig struct {
 
 	TLS ServerTLSConfig `koanf:"tls" json:"tls" yaml:"tls" toml:"tls" mapstructure:"tls"`
 
+	ForwardedClientCert ForwardedClientCertConfig `koanf:"forwardedclientcert" json:"forwardedclientcert" yaml:"forwardedclientcert" toml:"forwardedclientcert" mapstructure:"forwardedclientcert"`
+
 	// BodyLimit is the maximum request body size in bytes. A value of 0 resolves
 	// to the framework default (10 MB) at wire-up; a negative value is rejected by
 	// config validation.
@@ -313,6 +315,22 @@ type ServerTLSConfig struct {
 
 	// MinVersion: "" or "1.2" (default floor) | "1.3".
 	MinVersion string `koanf:"minversion" json:"minversion" yaml:"minversion" toml:"minversion" mapstructure:"minversion"`
+}
+
+// ForwardedClientCertConfig consumes the client-certificate identity an AWS
+// ALB forwards after terminating mutual TLS (X-Amzn-Mtls-Clientcert-*
+// headers, verify mode). Enabling it is an explicit operator assertion that
+// an mTLS-verify ALB listener fronts this service, direct target access is
+// closed (security groups), and the target group is reachable only through
+// that listener — the headers are trusted on that deployment posture alone.
+// AWS does not document sanitization of client-supplied copies of these
+// headers; see wiki/forwarded_client_cert.md for the trust model.
+type ForwardedClientCertConfig struct {
+	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+	// Require rejects (401) any non-probe request whose identity headers are
+	// absent (neither -Subject nor -Serial-Number present); a malformed -Leaf
+	// alone never rejects. False = parse-and-expose only.
+	Require bool `koanf:"require" json:"require" yaml:"require" toml:"require" mapstructure:"require"`
 }
 
 // PostgreSQLConfig holds PostgreSQL-specific database settings.
