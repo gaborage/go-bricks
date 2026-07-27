@@ -116,8 +116,9 @@ Generate DER fixture keys with openssl (one pair per role — matches the DER fo
 
 ```sh
 # Caller signing pair — its PUBLIC half is what the endpoint's verify= entry
-# holds in the server keystore
+# holds in the server keystore (sign.pub.der is what you configure there)
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out sign.der
+openssl pkey -inform DER -in sign.der -pubout -outform DER -out sign.pub.der
 
 # Encryption public key — the SERVER's public key, whose private half the
 # endpoint's decrypt= entry names; extract the PKIX DER public half
@@ -139,4 +140,4 @@ curl -X POST https://api.example.com/v1/tokens \
 
 **Kid rule**: `-sign-kid` must equal the target endpoint's `verify=` tag name, and `-encrypt-kid` must equal its `decrypt=` tag name — the server binds kid headers to the policy's configured kids, and a mismatch fails with `JOSE_KID_UNKNOWN`.
 
-The response comes back sealed too — decrypting it is out of the CLI's scope (v1 only produces outbound tokens); use `jose.Open` or `jose/testing.OpenForTest` in a Go program to unwrap it. For the Go-test-side equivalent of sealing a payload, see `jose/testing.SealForTest` above.
+The response comes back sealed too — decrypting it is out of the CLI's scope (v1 only produces outbound tokens); standalone Go programs unwrap it with `jose.Open`; `jose/testing.OpenForTest` is for Go test code only (it requires a `testing.TB`). For the Go-test-side equivalent of sealing a payload, see `jose/testing.SealForTest` above.

@@ -791,7 +791,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 ### [C56.2] seal-payload CLI · additive-optional
 
 - note: New installable `cmd/seal-payload` CLI (`go install
-  github.com/gaborage/go-bricks/cmd/seal-payload@latest`) seals a JSON
+  github.com/gaborage/go-bricks/cmd/seal-payload@v0.56.0`) seals a JSON
   payload as a compact JWE-of-JWS token via the production `jose.Seal` path,
   for curl-testing jose-tagged endpoints. No config keys, no framework API
   change — `package main` contributes no importable symbols and is inert
