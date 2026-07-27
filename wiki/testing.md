@@ -350,3 +350,29 @@ Library packages, which the gate actually polices, verdict correctly.
 When the gate fails, strengthen the test so the listed mutant dies (assert the
 boundary, the sign, the branch the operator flipped) — never respond by
 excluding the file.
+
+## Property-Based Tests
+
+Invariant-heavy packages carry a `<pkg>_properties_test.go` suite built on
+[`pgregory.net/rapid`](https://pkg.go.dev/pgregory.net/rapid) — a documented
+exception to the source-to-test 1:1 naming rule, alongside `testhelpers_test.go`.
+Current exemplars: `database` (placeholder arity, Oracle reserved-word quoting,
+determinism), `config` (InjectInto round-trips, never-panic, env-beats-yaml
+precedence), `jose` (seal/open integrity), `multitenant` (resolver contracts,
+composite first-match, constructive success paths).
+
+Pattern rules:
+
+- One `rapid.Check` per invariant; name it `Test<Subject><Invariant>Property`.
+- Expensive setup (key generation) lives OUTSIDE `rapid.Check`; iterations reuse it.
+- State the invariant precisely. Example: tamper-resistance is not "any tamper
+  errors" (base64 trailing bits can decode identically) but "Open never succeeds
+  with altered plaintext".
+- A failing property prints a reproducing seed (`-rapid.seed`); a genuine
+  violation is a framework bug — fix the code, never the generator.
+- Random generators alone can leave success paths vacuously untested (a random
+  host virtually never ends in `.example.com`) — pair them with constructive
+  draws that build guaranteed-success inputs.
+
+Property suites are ordinary `go test` tests: they run in `make test`, under
+`-race`, and count toward coverage.
