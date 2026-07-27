@@ -259,8 +259,9 @@ func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
 
 // fillBaseSlot records that actor is taking the single base-transport slot. A
 // different incumbent loses its material; a source retaking the slot clears its
-// own earlier loss. A nil rt vacates the slot without counting as a displacement
-// — an option un-setting its own material is not a collision.
+// own earlier loss. A nil rt vacates the slot rather than claiming it: un-setting
+// your own material is not a collision, but a nil call that evicts the other
+// option's material still records the displacement — the material is gone either way.
 func (b *Builder) fillBaseSlot(rt nethttp.RoundTripper, actor baseSource) {
 	if b.baseSlot != baseNone && b.baseSlot != actor {
 		b.displacedBase = b.baseSlot
