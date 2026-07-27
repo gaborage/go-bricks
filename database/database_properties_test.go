@@ -54,7 +54,7 @@ func TestQueryBuilderPlaceholdersSequentialProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
 		vendor := vendorGen.Draw(rt, "vendor")
 		n := rapid.IntRange(1, 8).Draw(rt, "conds")
-		sql, _, err := buildEqChain(rt, NewQueryBuilder(vendor), n)
+		sql, args, err := buildEqChain(rt, NewQueryBuilder(vendor), n)
 		if err != nil {
 			rt.Fatalf("ToSQL: %v", err)
 		}
@@ -62,7 +62,11 @@ func TestQueryBuilderPlaceholdersSequentialProperty(t *testing.T) {
 		if vendor == Oracle {
 			re = oraclePlaceholderRe
 		}
-		for i, m := range re.FindAllStringSubmatch(sql, -1) {
+		matches := re.FindAllStringSubmatch(sql, -1)
+		if len(matches) != n || len(args) != n {
+			rt.Fatalf("expected %d placeholders/args, got %d/%d in %q", n, len(matches), len(args), sql)
+		}
+		for i, m := range matches {
 			if m[1] != strconv.Itoa(i+1) {
 				rt.Fatalf("placeholder %d is %s in %q", i+1, m[0], sql)
 			}
