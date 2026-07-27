@@ -38,7 +38,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
-| E56  | v0.55.0 → v0.56.0 | additive (safe) | 1 | none | none |
+| E56  | v0.55.0 → v0.56.0 | additive (safe) | 2 | none | none |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -757,9 +757,9 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
   `NextProtos` is deliberately left unset (see ADR-042).
 - ref: #767 · ADR-042 · server/tls.go
 
-## E56 · v0.55.0 → v0.56.0 — ALB forwarded-client-cert identity middleware
+## E56 · v0.55.0 → v0.56.0 — ALB forwarded-client-cert identity middleware + seal-payload CLI
 
-- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). No exported go-bricks symbol changes outside this new surface; purely additive.
+- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). Also adds the installable `cmd/seal-payload` CLI for curl-testing jose-tagged endpoints. No exported go-bricks symbol changes outside this new surface; purely additive.
 - build-caught: none
 - preflight: none
 - exit: `go get github.com/gaborage/go-bricks@v0.56.0 && go mod tidy && go build ./... && go test ./...`
@@ -787,6 +787,16 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
   only where the trust store scopes a single partner CA. No in-app source-IP
   or `X-Forwarded-For` trust (F23 precedent).
 - ref: ADR-043 · server/forwardedcert.go · wiki/forwarded_client_cert.md
+
+### [C56.2] seal-payload CLI · additive-optional
+
+- note: New installable `cmd/seal-payload` CLI (`go install
+  github.com/gaborage/go-bricks/cmd/seal-payload@v0.56.0`) seals a JSON
+  payload as a compact JWE-of-JWS token via the production `jose.Seal` path,
+  for curl-testing jose-tagged endpoints. No config keys, no framework API
+  change — `package main` contributes no importable symbols and is inert
+  unless separately installed and invoked.
+- ref: #776 · cmd/seal-payload/main.go · wiki/jose.md#sealing-test-payloads-with-curl-seal-payload-cli
 
 ---
 

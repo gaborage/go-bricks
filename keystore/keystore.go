@@ -56,13 +56,10 @@ package keystore
 import (
 	"bytes"
 	"crypto/rsa"
-	"crypto/x509"
-	"encoding/base64"
 	"fmt"
-	"os"
 
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/internal/secretfile"
+	"github.com/gaborage/go-bricks/internal/keymaterial"
 )
 
 // errKeyNotFoundFmt is the fmt.Errorf format used by every accessor when a
@@ -196,63 +193,30 @@ func loadRSAEntry(name string, cfg *config.KeyPairConfig) (*keyEntry, error) {
 
 // loadKeyBytes resolves a KeySourceConfig to raw bytes — DER for RSA keys,
 // raw key material for secrets. Returns nil if neither file nor value is set.
+// Delegates the file/value resolution mechanism to internal/keymaterial (also
+// consumed by cmd/seal-payload) and adds the keystore error-namespace prefix.
 func loadKeyBytes(src config.KeySourceConfig, keyName, keyType string) ([]byte, error) {
-	hasFile := src.File != ""
-	hasValue := src.Value != ""
-
-	if !hasFile && !hasValue {
-		return nil, nil
-	}
-
-	if hasFile {
-		if secretfile.LooksLikeKeyMaterial(src.File) {
-			return nil, fmt.Errorf("keystore: key %q %s: file looks like key material, not a path (use the value field for inline material)", keyName, keyType)
-		}
-		// #nosec G304 -- the path is deployment configuration, not request input:
-		// reading an operator-named file IS this function. Inline material is
-		// rejected above.
-		data, err := os.ReadFile(src.File)
-		if err != nil {
-			return nil, fmt.Errorf("keystore: key %q %s: %w", keyName, keyType, secretfile.ReadError(src.File, err))
-		}
-		return data, nil
-	}
-
-	// Base64-encoded value (typically from env var)
-	data, err := base64.StdEncoding.DecodeString(src.Value)
+	data, err := keymaterial.LoadBytes(src.File, src.Value)
 	if err != nil {
-		return nil, fmt.Errorf("keystore: key %q %s: base64 decode: %w", keyName, keyType, err)
+		return nil, fmt.Errorf("keystore: key %q %s: %w", keyName, keyType, err)
 	}
 	return data, nil
 }
 
 // parsePublicKey parses DER-encoded public key (PKIX format) into an RSA public key.
 func parsePublicKey(der []byte, keyName string) (*rsa.PublicKey, error) {
-	pub, err := x509.ParsePKIXPublicKey(der)
+	rsaPub, err := keymaterial.ParseRSAPublicKey(der)
 	if err != nil {
-		return nil, fmt.Errorf("keystore: key %q public: ParsePKIXPublicKey: %w", keyName, err)
-	}
-	rsaPub, ok := pub.(*rsa.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("keystore: key %q public: expected *rsa.PublicKey, got %T", keyName, pub)
+		return nil, fmt.Errorf("keystore: key %q public: %w", keyName, err)
 	}
 	return rsaPub, nil
 }
 
 // parsePrivateKey parses DER-encoded private key with PKCS8 first, PKCS1 fallback.
 func parsePrivateKey(der []byte, keyName string) (*rsa.PrivateKey, error) {
-	key, err := x509.ParsePKCS8PrivateKey(der)
-	if err == nil {
-		rsaKey, ok := key.(*rsa.PrivateKey)
-		if !ok {
-			return nil, fmt.Errorf("keystore: key %q private: PKCS8 parsed but not RSA (got %T)", keyName, key)
-		}
-		return rsaKey, nil
-	}
-
-	rsaKey, err2 := x509.ParsePKCS1PrivateKey(der)
-	if err2 != nil {
-		return nil, fmt.Errorf("keystore: key %q private: PKCS8 failed (%w), PKCS1 fallback also failed: %w", keyName, err, err2)
+	rsaKey, err := keymaterial.ParseRSAPrivateKey(der)
+	if err != nil {
+		return nil, fmt.Errorf("keystore: key %q private: %w", keyName, err)
 	}
 	return rsaKey, nil
 }

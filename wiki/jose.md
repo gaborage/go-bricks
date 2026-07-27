@@ -101,3 +101,43 @@ Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed 
 **For complete examples**, see [llms.txt](../llms.txt) JOSE section.
 
 **Outbound httpclient JOSE wrapping** (calls TO Visa): `httpclient.JOSETransport` is an `http.RoundTripper` (`httpclient/jose_transport.go`) that signs+encrypts outbound request bodies via `jose.Seal` and decrypts+verifies inbound response bodies via `jose.Open`. It sits below the httpclient retry loop so each retry attempt produces a freshly-sealed request (important for protocols requiring unique `iat`/`jti` claims per attempt). Configure via `Inner` (delegate transport), `Outbound`/`Inbound` (`*jose.Policy`), `Resolver` (`jose.KeyResolver`), and `MaxResponseBytes` (caps the inbound response read; defaults to `DefaultMaxJOSEBodyBytes`, 10 MiB). Only `application/jose` responses are unwrapped — other Content-Types pass through untouched, mirroring the server's hybrid error envelope. See `httpclient/jose_transport_test.go` for usage examples.
+
+## Sealing test payloads with curl (seal-payload CLI)
+
+Exercising a jose-tagged endpoint with `curl` requires a valid nested `JWE(JWS(payload))` body — hand-writing one is impractical outside Go. `cmd/seal-payload` is a small CLI that seals a JSON payload with fixture keys using `jose.Seal` and the keystore's own DER-loading semantics (via `internal/keymaterial`), so a sealed payload is one the middleware will accept by construction.
+
+Install:
+
+```sh
+go install github.com/gaborage/go-bricks/cmd/seal-payload@latest
+```
+
+Generate DER fixture keys with openssl (one pair per role — matches the DER formats keystore accepts):
+
+```sh
+# Caller signing pair — its PUBLIC half is what the endpoint's verify= entry
+# holds in the server keystore (sign.pub.der is what you configure there)
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out sign.der
+openssl pkey -inform DER -in sign.der -pubout -outform DER -out sign.pub.der
+
+# Encryption public key — the SERVER's public key, whose private half the
+# endpoint's decrypt= entry names; extract the PKIX DER public half
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -outform DER -out enc.der
+openssl pkey -inform DER -in enc.der -pubout -outform DER -out enc.pub.der
+```
+
+Seal a payload and POST it:
+
+```sh
+echo '{"pan":"4111111111111111"}' | seal-payload \
+  -sign-key-file sign.der -encrypt-key-file enc.pub.der \
+  -sign-kid visa-vts-verify -encrypt-kid our-signing > sealed.txt
+
+curl -X POST https://api.example.com/v1/tokens \
+  -H "Content-Type: application/jose" \
+  --data-binary @sealed.txt
+```
+
+**Kid rule**: `-sign-kid` must equal the target endpoint's `verify=` tag name, and `-encrypt-kid` must equal its `decrypt=` tag name — the server binds kid headers to the policy's configured kids, and a mismatch fails with `JOSE_KID_UNKNOWN`.
+
+The response comes back sealed too — decrypting it is out of the CLI's scope (v1 only produces outbound tokens); standalone Go programs unwrap it with `jose.Open`; `jose/testing.OpenForTest` is for Go test code only (it requires a `testing.TB`). For the Go-test-side equivalent of sealing a payload, see `jose/testing.SealForTest` above.

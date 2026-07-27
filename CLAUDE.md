@@ -528,6 +528,7 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **observability/testing/** — Test utilities for spans and metrics.
 - **outbox/testing/** — Outbox-specific testing (MockOutbox, assertion helpers).
 - **keystore/testing/** — KeyStore-specific testing (MockKeyStore, assertion helpers).
+- **cmd/seal-payload/** — installable CLI sealing JSON into compact JWE-of-JWS for curl-testing jose endpoints (#776).
 - **tools/** — Development tooling (`migration` CLI / `go-bricks-migrate`).
 - **wiki/** — Architecture documentation and ADRs.
 - **.claude/tasks/** — Development task planning.
