@@ -17,7 +17,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -38,6 +38,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
+| E56  | v0.55.0 → v0.56.0 | additive (safe) | 1 | none | none |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -755,6 +756,37 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
   `server.tls.enabled` so a mistyped flag is never silent. HTTP/1.1-only —
   `NextProtos` is deliberately left unset (see ADR-042).
 - ref: #767 · ADR-042 · server/tls.go
+
+## E56 · v0.55.0 → v0.56.0 — ALB forwarded-client-cert identity middleware
+
+- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). No exported go-bricks symbol changes outside this new surface; purely additive.
+- build-caught: none
+- preflight: none
+- exit: `go get github.com/gaborage/go-bricks@v0.56.0 && go mod tidy && go build ./... && go test ./...`
+
+### [C56.1] ALB forwarded-client-cert identity middleware · additive-optional
+
+- note: `server.forwardedclientcert.*` (`enabled`, `require`) wires a config-gated
+  middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` headers
+  (`-Subject`, `-Issuer`, `-Serial-Number`, `-Leaf`) into a typed
+  `server.ForwardedClientCert`, retrievable via
+  `server.ForwardedClientCertFromContext`. Identification only, not
+  authorization (ADR-039's stance). `require: true` rejects (401) only when
+  both `-Subject` and `-Serial-Number` are absent; a present Subject whose
+  `-Leaf` fails to decode still passes (`Leaf == nil` + WARN). Health/ready
+  probes are always exempt. The all-zero default leaves the middleware
+  unwired, byte-for-byte unchanged from prior behavior.
+- security: `-Leaf` is percent-encoded by AWS with `+=/` left literal, so
+  `url.PathUnescape` (not `url.QueryUnescape`, which corrupts a literal `+`
+  into a space) is the decoder; the encoded value is capped at 64 KiB before
+  any decode attempt. AWS does not publicly document that the ALB strips or
+  overwrites client-supplied copies of these headers (verified 2026-07-27) —
+  trust rests entirely on the deployment posture (mTLS-verify listener +
+  closed security groups + single ingress path), never on an AWS
+  sanitization guarantee; per-subject authorization on these headers is safe
+  only where the trust store scopes a single partner CA. No in-app source-IP
+  or `X-Forwarded-For` trust (F23 precedent).
+- ref: ADR-043 · server/forwardedcert.go · wiki/forwarded_client_cert.md
 
 ---
 

@@ -655,6 +655,34 @@ shipped speculatively.
 
 ---
 
+### [ADR-043: ALB Forwarded-Client-Cert Identity Middleware (`X-Amzn-Mtls-*`)](adr_043_forwarded_client_cert.md)
+
+**Date:** 2026-07-27 | **Status:** Accepted
+
+Adds `server.forwardedclientcert.*` (`enabled`, `require`) so a config-gated middleware can
+parse ALB verify-mode `X-Amzn-Mtls-Clientcert-*` headers (`-Subject`, `-Issuer`,
+`-Serial-Number`, `-Leaf`) and expose a typed `ForwardedClientCert` identity via
+`ForwardedClientCertFromContext` — identification, not authorization (ADR-039's stance).
+`-Leaf` is percent-encoded with `+=/` left literal per AWS's docs, so `url.PathUnescape` is
+the correct decoder (`url.QueryUnescape` would corrupt a literal `+` into a space).
+`Require` rejects (401) only when both `-Subject` and `-Serial-Number` are absent; a
+present Subject whose `-Leaf` fails to decode still passes (`Leaf == nil` + WARN). Health/
+ready probes are exempt. AWS does not publicly document that the ALB strips or overwrites
+client-supplied copies of these headers — verified across four ALB documentation pages and
+the mTLS launch blogs — so the trust model rests entirely on the deployment posture (an
+mTLS-verify listener, closed security groups, single ingress path to the target group), and
+per-subject authorization is safe only where the trust store scopes a single partner CA. No
+in-app IP/proxy trust (F23 precedent). Additive-only; the zero value leaves every
+deployment unchanged.
+
+**Key Benefits:** Replaces per-service hand-rolled header parsing (and its URL-decoding
+trap) with one audited implementation; corrects the ALB-stripping assumption ADR-042's
+Consequences section had carried forward, replacing it with a documented-silence finding;
+keeps the identification/authorization boundary explicit so a deployment can't mistake "the
+ALB let it through" for application-level authorization.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -664,7 +692,7 @@ shipped speculatively.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-042) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-043) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

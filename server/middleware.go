@@ -44,8 +44,11 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 	// would still build and discard span/metric attributes on every request.
 	// Gate it on observabilityEnabled (RequestID/RequestEnrich below stay
 	// unconditional so W3C trace propagation works regardless).
+	// Shared probe skipper: health/ready requests bypass the observability and
+	// identity-establishing middlewares below.
+	probeSkipper := CreateProbeSkipper(healthPath, readyPath)
+
 	if observabilityEnabled {
-		probeSkipper := CreateProbeSkipper(healthPath, readyPath)
 		e.Use(echootel.NewMiddlewareWithConfig(echootel.Config{
 			ServerName:     cfg.App.Name,
 			TracerProvider: otel.GetTracerProvider(),
@@ -103,11 +106,19 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		resolver := buildTenantResolver(cfg)
 		if resolver != nil {
 			// Use skipper-aware middleware to bypass tenant resolution for health probes
-			skipper := CreateProbeSkipper(healthPath, readyPath)
-			e.Use(tenantMiddlewareEcho(resolver, skipper, log))
+			e.Use(tenantMiddlewareEcho(resolver, probeSkipper, log))
 		} else {
 			log.Warn().Msg("Tenant resolver could not be constructed; skipping tenant middleware")
 		}
+	}
+
+	// ALB forwarded-client-cert identity middleware (if enabled). Another
+	// identity-establishing middleware, alongside tenant resolution above —
+	// registered before the access logger for the same reason (a rejected
+	// request must leave a WARN trail; see logForwardedClientCertRejection).
+	// Skips health/ready probes: ALB health checks present no client certificate.
+	if cfg.Server.ForwardedClientCert.Enabled {
+		e.Use(forwardedClientCertMiddlewareEcho(cfg.Server.ForwardedClientCert, probeSkipper, log))
 	}
 
 	// Logger middleware with zerolog

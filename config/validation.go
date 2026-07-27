@@ -158,6 +158,8 @@ const (
 	fieldServerTLSMinVersion = "server.tls.minversion"
 	tlsVersion12             = "1.2"
 	tlsVersion13             = "1.3"
+
+	fieldServerForwardedClientCertRequire = "server.forwardedclientcert.require"
 )
 
 func Validate(cfg *Config) error {
@@ -326,7 +328,24 @@ func validateServer(cfg *ServerConfig) error {
 		return NewValidationError("server.bodylimit", errMustBeNonNegative)
 	}
 
-	return validateServerTLS(&cfg.TLS)
+	if err := validateServerTLS(&cfg.TLS); err != nil {
+		return err
+	}
+
+	return validateServerForwardedClientCert(&cfg.ForwardedClientCert)
+}
+
+// validateServerForwardedClientCert rejects a Require-without-Enabled
+// configuration: rejecting requests on an identity source that is never
+// parsed would be a silent no-op (every request would be treated as missing
+// an identity, since ForwardedClientCert.Enabled gates whether the
+// middleware ever runs at all).
+func validateServerForwardedClientCert(cfg *ForwardedClientCertConfig) error {
+	if cfg.Require && !cfg.Enabled {
+		return NewValidationError(fieldServerForwardedClientCertRequire, "requires server.forwardedclientcert.enabled")
+	}
+
+	return nil
 }
 
 // validateServerTLS checks structural TLS material configuration (presence
