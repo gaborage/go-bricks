@@ -370,7 +370,8 @@ Pattern rules:
   errors" (base64 trailing bits can decode identically) but "Open never succeeds
   with altered plaintext".
 - A failing property prints a reproducing seed (`-rapid.seed`); a genuine
-  violation is a framework bug — fix the code, never the generator.
+  violation is a bug in the code under test — fix that code, never the
+  generator or the property.
 - Random generators alone can leave success paths vacuously untested (a random
   host virtually never ends in `.example.com`) — pair them with constructive
   draws that build guaranteed-success inputs.

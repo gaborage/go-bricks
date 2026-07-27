@@ -84,6 +84,11 @@ func TestCompositeFirstMatchProperty(t *testing.T) {
 		if got != "tenant-x" {
 			rt.Fatalf("got %q want tenant-x", got)
 		}
+		for i := 0; i <= winner; i++ {
+			if !stubs[i].called {
+				rt.Fatalf("resolver %d skipped before winner %d", i, winner)
+			}
+		}
 		for i := winner + 1; i < n; i++ {
 			if stubs[i].called {
 				rt.Fatalf("resolver %d consulted after winner %d", i, winner)
