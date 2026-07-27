@@ -144,6 +144,80 @@ whole field on the original config is inert rather than racy, but only for clien
 already built. Rotate certificates through `GetClientCertificate`, which the clone
 preserves; for anything else, build a fresh config.
 
+### OAuth 1.0a request signing (partner APIs)
+
+Some partner gateways (e.g. Mastercard APIs) authenticate outbound requests with
+OAuth 1.0a request signing — RSA-SHA256 over a signature base string plus an
+`oauth_body_hash` parameter — rather than OAuth2/JWT.
+
+go-bricks does not ship an OAuth 1.0a signer. The framework provides the
+composition seam (`WithRequestInterceptor`); the partner's own published signing
+library provides the protocol. This mirrors how `jose/` delegates JWE/JWS to
+`github.com/go-jose/go-jose/v4` rather than implementing the spec itself.
+
+```go
+import "github.com/mastercard/oauth1-signer-go" // package name is oauth, not oauth1
+
+func oauth1Signer(consumerKey, keyName string, keys app.KeyStore) httpclient.RequestInterceptor {
+    return func(_ context.Context, req *http.Request) error {
+        key, err := keys.PrivateKey(keyName)
+        if err != nil {
+            return fmt.Errorf("oauth1: resolve signing key %q: %w", keyName, err)
+        }
+        signer := &oauth.Signer{ConsumerKey: consumerKey, SigningKey: key}
+        if err := signer.Sign(req); err != nil {
+            return err
+        }
+        // The signer swaps req.Body for a plain NopCloser and never updates
+        // ContentLength, so an empty body stops being http.NoBody and net/http
+        // sends it chunked. Restore the framing.
+        if req.ContentLength == 0 {
+            req.Body = http.NoBody
+            req.GetBody = func() (io.ReadCloser, error) { return http.NoBody, nil }
+        }
+        return nil
+    }
+}
+
+client := httpclient.NewBuilder(deps.Logger).
+    WithPeerName("partner-api").
+    WithRetries(3, 500*time.Millisecond).
+    WithTLSConfig(tlsCfg).
+    WithRequestInterceptor(oauth1Signer(cfg.ConsumerKey, "partner-signing", deps.KeyStore)).
+    Build()
+```
+
+**Per-attempt re-signing is automatic.** Interceptors run inside `buildRequest`,
+which the retry loop calls fresh per attempt, so every retry carries a new
+nonce, timestamp and signature.
+
+**The empty-body guard is required.** The signer replaces an `http.NoBody` body
+with a plain `NopCloser` without touching `ContentLength`, which makes an empty
+POST/PUT/PATCH go out chunked with no Content-Length — and partner edges and
+WAFs answer that with 411, 400, or 501, which reads like an auth failure.
+
+**Client TLS still composes.** Unlike a hand-rolled `WithTransport` signer,
+which fills the same base-transport slot as `WithTLSConfig` (last call wins),
+the interceptor path leaves `WithTLSConfig` intact.
+
+**Do not let a signed request follow redirects.** go-bricks sets no
+`CheckRedirect`, so the stdlib default follows redirects below `buildRequest`
+without re-running interceptors, which either forwards a signature computed
+over the wrong URL (same-host redirect) or drops `Authorization` entirely
+(cross-host redirect) — install a `CheckRedirect` returning
+`http.ErrUseLastResponse` on your own client, or ensure the partner endpoint
+does not redirect.
+
+**Limitation: signing does not cover body transforms.** Interceptors run
+*before* the transport chain, so the signature covers the body as
+`buildRequest` produced it. If you also install a body-transforming layer such
+as `WithJOSE`, the signature will NOT cover the transformed bytes. A framework
+hook for that case is deferred until the field-level-encryption work
+([#765](https://github.com/gaborage/go-bricks/issues/765), untriaged) creates a
+consumer for it; today the workaround is a custom `RoundTripper` passed to
+`WithTransport` (which does sit beneath body transforms), at the cost of
+building the base transport yourself.
+
 ## Metrics
 
 ### Overview
