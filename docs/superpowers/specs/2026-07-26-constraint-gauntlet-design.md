@@ -33,10 +33,13 @@ A small Go program at `scripts/mutatediff/main.go` (root module, stdlib-only, so
 new go.work module and no go.sum churn beyond rapid):
 
 1. Compute `git merge-base HEAD origin/main`; collect changed non-test `.go` files
-   and their changed line ranges (exclude `_test.go`, `testdata/`, `wiki/`).
+   and their changed line ranges (exclude `_test.go`, `testdata/`, `tools/` — a
+   separate Go module — and `scripts/`, the wrapper itself, which gremlins v0.5.0
+   cannot verdict reliably as a nested `package main`).
 2. Map changed files to packages; run gremlins per changed package with JSON output.
-   Config lives in `.gremlins.yaml`: operator set, timeout coefficient, workers,
-   integration build tags excluded.
+   Runtime knobs live in `.gremlins.yaml` (workers, timeout coefficient); the
+   default operator set is used, and integration tests stay excluded because
+   gremlins never enables `-tags=integration`.
 3. Filter reported mutants to those whose position intersects a changed line range.
 4. Verdict policy: **LIVED = fail** (exit non-zero, list survivors with file:line and
    operator), **NOT_COVERED = warn** (SonarCloud owns coverage; no double gate),
