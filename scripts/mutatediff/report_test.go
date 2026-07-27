@@ -110,3 +110,11 @@ func TestJudgePkgDirFormsEquivalent(t *testing.T) {
 		t.Errorf("failures(.) = %#v, want %#v", failuresRoot, wantRootFail)
 	}
 }
+
+func TestJudgeFailsClosedOnUnknownStatus(t *testing.T) {
+	const rep = `{"files":[{"file_name":"injection.go","mutations":[{"line":27,"type":"CONDITIONALS_NEGATION","status":"SOMETHING NEW"}]}]}`
+	changed := map[string][]lineRange{"config/injection.go": {{Start: 26, End: 29}}}
+	if _, _, err := judge([]byte(rep), "./config", changed); err == nil {
+		t.Error("expected error for unrecognized mutant status")
+	}
+}

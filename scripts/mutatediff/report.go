@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"path"
 )
 
@@ -56,6 +57,10 @@ func judge(reportJSON []byte, pkgDir string, changed map[string][]lineRange) (fa
 				failures = append(failures, v)
 			case "NOT COVERED":
 				warnings = append(warnings, v)
+			case "KILLED", "TIMED OUT", "NOT VIABLE", "RUNNABLE":
+				// pass: died, hung (test timeout noticed), didn't compile, or dry-run marker
+			default:
+				return nil, nil, fmt.Errorf("unrecognized mutant status %q at %s:%d — failing closed", m.Status, name, m.Line)
 			}
 		}
 	}

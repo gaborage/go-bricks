@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Historical record:** this document is the pre-execution blueprint plus
+> mid-execution patches. Its code blocks show what was planned at dispatch
+> time; the review gates (/simplify, /security-audit, CodeRabbit) refined the
+> implementation further after each task landed. The authoritative code lives
+> in the repo (`scripts/mutatediff/`, `Makefile`, `.github/workflows/`,
+> `wiki/testing.md`) — do not review, copy, or "fix" code from these blocks.
+
 **Goal:** Add a diff-scoped mutation testing gate (`make mutate`) with a nightly full-repo baseline, plus four property-based exemplar test suites, per `docs/superpowers/specs/2026-07-26-constraint-gauntlet-design.md`.
 
 **Architecture:** A small Go wrapper (`scripts/mutatediff`, root module, package main) computes changed line ranges vs merge-base with origin/main, shells out to gremlins per changed package, and applies the verdict policy (LIVED = fail, NOT_COVERED = warn, TIMED_OUT = killed). The nightly workflow reuses a Makefile target. Property suites use `pgregory.net/rapid` and live one file per package.
