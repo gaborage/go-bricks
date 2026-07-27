@@ -145,7 +145,7 @@ func (b *Builder) WithTLSConfig(tlsCfg *tls.Config) *Builder {
 	base.DialTLS = nil
 	base.DialTLSContext = nil
 	base.TLSClientConfig = tlsCfg.Clone()
-	b.transport = base
+	b.fillBaseSlot(base, baseTLS)
 	return b
 }
 

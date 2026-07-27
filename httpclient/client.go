@@ -59,13 +59,28 @@ func NewClient(log logger.Logger) Client {
 	return NewBuilder(log).Build()
 }
 
+// baseSource identifies which option last filled the single base-transport slot.
+type baseSource uint8
+
+const (
+	baseNone baseSource = iota
+	baseTransport
+	baseTLS
+)
+
 // Builder provides a fluent interface for configuring the REST client
 type Builder struct {
 	config     *Config
 	logger     logger.Logger
 	httpClient *nethttp.Client
-	transport  nethttp.RoundTripper
+	transport  nethttp.RoundTripper // written only via fillBaseSlot, which maintains baseSlot/displacedBase
 	chain      *transportChain
+	// baseSlot records which option currently holds the base-transport slot;
+	// displacedBase the option whose material a later call overwrote and never
+	// restored. Build warns for the displaced one — last-call-wins is intended,
+	// silently losing a client certificate or a caller's RoundTripper is not.
+	baseSlot      baseSource
+	displacedBase baseSource
 }
 
 // transportLayer orders RoundTripper wrappers independently of the order the
@@ -242,11 +257,36 @@ func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
 	return b
 }
 
+// fillBaseSlot records that actor is taking the single base-transport slot. A
+// different incumbent loses its material; a source retaking the slot clears its
+// own earlier loss. A nil rt vacates the slot rather than claiming it: un-setting
+// your own material is not a collision, but a nil call that evicts the other
+// option's material still records the displacement — the material is gone either way.
+func (b *Builder) fillBaseSlot(rt nethttp.RoundTripper, actor baseSource) {
+	if b.baseSlot != baseNone && b.baseSlot != actor {
+		b.displacedBase = b.baseSlot
+	}
+	// Only reachable when the slot was vacated: a source reloading into an empty
+	// slot must clear its own earlier loss, or Build reports material that is
+	// back in place.
+	if b.displacedBase == actor {
+		b.displacedBase = baseNone
+	}
+	b.transport = rt
+	if rt == nil {
+		b.baseSlot = baseNone
+		return
+	}
+	b.baseSlot = actor
+}
+
 // WithTransport sets a custom RoundTripper while still letting the builder manage other client settings.
 // It supplies the innermost transport: wrappers registered by other options (WithJOSE, for
-// example) are layered above it at Build time regardless of call order.
+// example) are layered above it at Build time regardless of call order. Passing nil vacates
+// the base-transport slot; if WithTLSConfig had filled it, Build warns that the loaded TLS
+// material is discarded.
 func (b *Builder) WithTransport(transport nethttp.RoundTripper) *Builder {
-	b.transport = transport
+	b.fillBaseSlot(transport, baseTransport)
 	return b
 }
 
@@ -270,13 +310,14 @@ type JOSEConfig struct {
 // the counterparty does not return JOSE-wrapped responses.
 //
 // Composition: transport layers are applied at Build time in a fixed order —
-// the base transport from WithTransport is innermost, request signers next, and
-// body transforms such as JOSE outermost — so the result does not depend on the
-// order these options were called. A Transport configured directly on the
-// *http.Client passed to WithHTTPClient is REPLACED, not wrapped: the chain then has
-// no base and dials via nethttp.DefaultTransport, losing client certificates, pinned
-// roots and proxy settings (Build logs a WARN). Always pass a base RoundTripper to
-// WithTransport.
+// the base transport from WithTransport or WithTLSConfig is innermost, request
+// signers next, and body transforms such as JOSE outermost — so the result does
+// not depend on the order these options were called. A Transport configured
+// directly on the *http.Client passed to WithHTTPClient is REPLACED, not
+// wrapped: the chain then has no base and dials via nethttp.DefaultTransport,
+// losing client certificates, pinned roots and proxy settings (Build logs a
+// WARN). Always fill the base slot — with WithTransport, or with WithTLSConfig
+// when the base is a TLS config.
 //
 // Per-attempt freshness: because httpclient retries by re-running the request build
 // loop, each retry produces a freshly-sealed payload — useful for protocols that
@@ -346,14 +387,25 @@ func (b *Builder) resolveTransport() nethttp.RoundTripper {
 	return rt
 }
 
-// discardsClientTransport reports the one composition that silently downgrades TLS:
-// a registered wrapper with no WithTransport base replaces the WithHTTPClient
-// client's own Transport, so requests dial via nethttp.DefaultTransport. Build only
-// warns — it has no error return, and failing closed here is tracked with the mTLS
-// work.
+// discardsClientTransport reports one of the three compositions that silently
+// drop the previous occupant of the base-transport slot: a registered wrapper
+// with no WithTransport base replaces the WithHTTPClient client's own
+// Transport, so requests dial via nethttp.DefaultTransport. See
+// discardsTLSConfig and discardsProvidedTransport for the others. Build only
+// warns — it has no error return.
 func (b *Builder) discardsClientTransport() bool {
 	return b.transport == nil && b.chain != nil && b.httpClient != nil && b.httpClient.Transport != nil
 }
+
+// discardsTLSConfig reports that WithTLSConfig loaded a client certificate and
+// pinned roots into the base slot and a later WithTransport took it over.
+func (b *Builder) discardsTLSConfig() bool { return b.displacedBase == baseTLS }
+
+// discardsProvidedTransport reports the mirror case: WithTransport supplied the
+// base RoundTripper and a later WithTLSConfig replaced it with a fresh base, a
+// clone of nethttp.DefaultTransport or an equivalently-configured transport
+// when that global has been replaced.
+func (b *Builder) discardsProvidedTransport() bool { return b.displacedBase == baseTransport }
 
 // WithRequestInterceptor adds a request interceptor
 func (b *Builder) WithRequestInterceptor(interceptor RequestInterceptor) *Builder {
@@ -389,6 +441,25 @@ func (b *Builder) Build() Client {
 			c.Timeout = cfg.Timeout
 		}
 		httpClient = &c
+	}
+
+	if b.discardsTLSConfig() {
+		b.logger.Warn().Msg("httpclient: WithTransport was called after WithTLSConfig — " +
+			"both fill the same base-transport slot and the last call wins, so the *tls.Config " +
+			"installed by WithTLSConfig is discarded with whatever it carried (client certificate, " +
+			"pinned roots, version floor), and TLS now depends entirely on the RoundTripper passed " +
+			"to WithTransport; set TLSClientConfig on that transport yourself, or drop the " +
+			"WithTransport call if WithTLSConfig alone is enough")
+	}
+
+	if b.discardsProvidedTransport() {
+		b.logger.Warn().Msg("httpclient: WithTLSConfig was called after WithTransport — " +
+			"both fill the same base-transport slot and the last call wins, so the RoundTripper " +
+			"passed to WithTransport is discarded along with any proxy, dialer or TLS settings it " +
+			"carried; WithTLSConfig replaces it with a fresh base, a clone of net/http.DefaultTransport " +
+			"or an equivalently-configured transport when that global has been replaced. Fold TLS " +
+			"settings into the *tls.Config; to keep proxy or dialer settings, drop WithTLSConfig and " +
+			"set TLSClientConfig on your own transport instead")
 	}
 
 	if rt := b.resolveTransport(); rt != nil {
