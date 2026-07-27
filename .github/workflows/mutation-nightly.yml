@@ -1,0 +1,54 @@
+name: Mutation Baseline
+
+on:
+  schedule:
+    - cron: '43 3 * * *'   # daily 03:43 UTC — advisory full-repo mutation score
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  mutation-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run full-repo mutation baseline
+        run: make mutate-baseline || echo "::warning::gremlins exited non-zero (advisory job)"
+
+      - name: Publish score summary
+        if: always()
+        run: |
+          if [ ! -f gremlins-report.json ]; then
+            echo "no report produced" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Mutation baseline"
+            jq -r '"efficacy: \(.test_efficacy)% · mutant coverage: \(.mutations_coverage)%"' gremlins-report.json
+            echo ""
+            echo "| file | lived | not_covered |"
+            echo "|---|---|---|"
+            jq -r '.files[]
+              | [.file_name,
+                 ([.mutations[] | select(.status=="LIVED")] | length),
+                 ([.mutations[] | select(.status=="NOT COVERED")] | length)]
+              | select(.[1] > 0 or .[2] > 0)
+              | "| \(.[0]) | \(.[1]) | \(.[2]) |"' gremlins-report.json | head -50
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gremlins-report
+          path: gremlins-report.json
+          retention-days: 30
