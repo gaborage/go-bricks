@@ -2078,32 +2078,190 @@ func TestBuilderTransportChainDiscardsClientTransport(t *testing.T) {
 	t.Run("hazard_emits_the_warning", func(t *testing.T) {
 		spy := &warnSpy{}
 		NewBuilder(spy).WithHTTPClient(withClient()).WithJOSE(JOSEConfig{}).Build()
-		assert.Contains(t, spy.msg, "net/http.DefaultTransport")
+		assert.Contains(t, spy.joined(), "net/http.DefaultTransport")
 	})
 
 	t.Run("explicit_base_emits_no_warning", func(t *testing.T) {
 		spy := &warnSpy{}
 		NewBuilder(spy).WithHTTPClient(withClient()).WithTransport(base).WithJOSE(JOSEConfig{}).Build()
-		assert.Empty(t, spy.msg)
+		assert.Empty(t, spy.msgs)
 	})
 }
 
-// warnSpy captures the message Build passes to Warn().Msg. Embedding the interfaces
+// warnSpy captures every message Build passes to Warn().Msg. Embedding the interfaces
 // keeps the double to the two methods Build actually calls; any other method would
 // nil-panic, which is the intent.
 type warnSpy struct {
 	logger.Logger
-	msg string
+	msgs []string
 }
 
 func (s *warnSpy) Warn() logger.LogEvent { return &warnSpyEvent{spy: s} }
+
+// joined flattens all recorded warnings for substring assertions.
+func (s *warnSpy) joined() string { return strings.Join(s.msgs, "\n") }
 
 type warnSpyEvent struct {
 	logger.LogEvent
 	spy *warnSpy
 }
 
-func (e *warnSpyEvent) Msg(msg string) { e.spy.msg = msg }
+func (e *warnSpyEvent) Msg(msg string) { e.spy.msgs = append(e.spy.msgs, msg) }
+
+func TestBuilderBaseSlotDiscards(t *testing.T) {
+	log := createTestLogger()
+	stub := &stubRoundTripper{name: "stub"}
+	caPEM, _, _ := newTestCA(t, "discards-tls-config-ca")
+	newCfg := func() *tls.Config {
+		cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+		require.NoError(t, err)
+		return cfg
+	}
+
+	cases := []struct {
+		name          string
+		wantTLS       bool
+		wantTransport bool
+		builder       func() *Builder
+	}{
+		{
+			name:          "tls_then_transport_discards_tls",
+			wantTLS:       true,
+			wantTransport: false,
+			builder:       func() *Builder { return NewBuilder(log).WithTLSConfig(newCfg()).WithTransport(stub) },
+		},
+		{
+			name:          "transport_then_tls_discards_transport",
+			wantTLS:       false,
+			wantTransport: true,
+			builder:       func() *Builder { return NewBuilder(log).WithTransport(stub).WithTLSConfig(newCfg()) },
+		},
+		{
+			name:          "tls_only_discards_nothing",
+			wantTLS:       false,
+			wantTransport: false,
+			builder:       func() *Builder { return NewBuilder(log).WithTLSConfig(newCfg()) },
+		},
+		{
+			name:          "transport_only_discards_nothing",
+			wantTLS:       false,
+			wantTransport: false,
+			builder:       func() *Builder { return NewBuilder(log).WithTransport(stub) },
+		},
+		{
+			name:          "tls_retaken_clears_tls_but_discards_transport",
+			wantTLS:       false,
+			wantTransport: true,
+			builder: func() *Builder {
+				return NewBuilder(log).WithTLSConfig(newCfg()).WithTransport(stub).WithTLSConfig(newCfg())
+			},
+		},
+		{
+			name:          "transport_retaken_clears_transport_but_discards_tls",
+			wantTLS:       true,
+			wantTransport: false,
+			builder: func() *Builder {
+				return NewBuilder(log).WithTransport(stub).WithTLSConfig(newCfg()).WithTransport(stub)
+			},
+		},
+		{
+			name:          "repeated_transport_discards_nothing",
+			wantTLS:       false,
+			wantTransport: false,
+			builder:       func() *Builder { return NewBuilder(log).WithTransport(stub).WithTransport(stub) },
+		},
+		{
+			name:          "repeated_tls_discards_nothing",
+			wantTLS:       false,
+			wantTransport: false,
+			builder:       func() *Builder { return NewBuilder(log).WithTLSConfig(newCfg()).WithTLSConfig(newCfg()) },
+		},
+		{
+			name:          "nil_tls_config_is_inert",
+			wantTLS:       false,
+			wantTransport: false,
+			builder:       func() *Builder { return NewBuilder(log).WithTransport(stub).WithTLSConfig(nil) },
+		},
+		{
+			name:          "nil_transport_after_tls_still_discards_tls",
+			wantTLS:       true,
+			wantTransport: false,
+			builder:       func() *Builder { return NewBuilder(log).WithTLSConfig(newCfg()).WithTransport(nil) },
+		},
+		{
+			name:          "nil_transport_then_tls_discards_nothing",
+			wantTLS:       false,
+			wantTransport: false,
+			builder:       func() *Builder { return NewBuilder(log).WithTransport(nil).WithTLSConfig(newCfg()) },
+		},
+		{
+			name:          "transport_then_nil_transport_discards_nothing",
+			wantTLS:       false,
+			wantTransport: false,
+			builder:       func() *Builder { return NewBuilder(log).WithTransport(stub).WithTransport(nil) },
+		},
+		{
+			name:          "tls_vacated_then_transport_refill_still_discards_tls",
+			wantTLS:       true,
+			wantTransport: false,
+			builder: func() *Builder {
+				return NewBuilder(log).WithTLSConfig(newCfg()).WithTransport(nil).WithTransport(stub)
+			},
+		},
+		{
+			name:          "tls_reloaded_after_vacating_clears_the_loss",
+			wantTLS:       false,
+			wantTransport: false,
+			builder: func() *Builder {
+				return NewBuilder(log).WithTLSConfig(newCfg()).WithTransport(nil).WithTLSConfig(newCfg())
+			},
+		},
+		{
+			name:          "transport_reloaded_after_vacating_discards_nothing",
+			wantTLS:       false,
+			wantTransport: false,
+			builder: func() *Builder {
+				return NewBuilder(log).WithTransport(stub).WithTransport(nil).WithTransport(stub)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := tc.builder()
+			assert.Equal(t, tc.wantTLS, b.discardsTLSConfig())
+			assert.Equal(t, tc.wantTransport, b.discardsProvidedTransport())
+		})
+	}
+
+	t.Run("hazard_emits_the_warning", func(t *testing.T) {
+		spy := &warnSpy{}
+		NewBuilder(spy).WithTLSConfig(newCfg()).WithTransport(stub).Build()
+		assert.Contains(t, spy.joined(), "WithTransport was called after WithTLSConfig")
+	})
+
+	t.Run("mirror_hazard_emits_the_warning", func(t *testing.T) {
+		spy := &warnSpy{}
+		NewBuilder(spy).WithTransport(stub).WithTLSConfig(newCfg()).Build()
+		assert.Contains(t, spy.joined(), "WithTLSConfig was called after WithTransport")
+	})
+
+	t.Run("no_collision_emits_no_warning", func(t *testing.T) {
+		spy := &warnSpy{}
+		NewBuilder(spy).WithTLSConfig(newCfg()).Build()
+		assert.Empty(t, spy.msgs)
+	})
+
+	t.Run("both_hazards_emit_both_warnings", func(t *testing.T) {
+		spy := &warnSpy{}
+		withClient := func() *nethttp.Client { return &nethttp.Client{Transport: stub} }
+		NewBuilder(spy).WithTLSConfig(newCfg()).WithHTTPClient(withClient()).WithTransport(nil).WithJOSE(JOSEConfig{}).Build()
+		require.Len(t, spy.msgs, 2)
+		joined := spy.joined()
+		assert.Contains(t, joined, "WithTransport was called after WithTLSConfig")
+		assert.Contains(t, joined, "net/http.DefaultTransport")
+	})
+}
 
 // wrappingTransport stands in for a signer-layer wrapper; it exposes the
 // RoundTripper it wraps so tests can assert nesting depth.

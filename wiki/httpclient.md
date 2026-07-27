@@ -126,7 +126,11 @@ hand and pass it to `WithTLSConfig`.
 for `WithJOSE` and the `Build()` composition WARN. Its base is a clone of
 `http.DefaultTransport`, or an equivalently-configured transport (same proxy,
 HTTP/2 and pool settings) when that global has been replaced, so the pitfall above
-does not apply to it. Wrapper layers always stack on top of it:
+does not apply to it. `Build()` warns in both directions: calling
+`WithTransport` after `WithTLSConfig` discards the loaded client certificate and
+pinned roots, and calling `WithTLSConfig` after `WithTransport` discards the
+supplied `RoundTripper` along with any proxy, dialer or TLS settings it carried.
+Wrapper layers always stack on top of it:
 
 ```go
 // mTLS base, JOSE on top — call order is irrelevant.
