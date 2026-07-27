@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: mutation-baseline
+  cancel-in-progress: false
+
 jobs:
   mutation-baseline:
     runs-on: ubuntu-latest
@@ -35,14 +39,17 @@ jobs:
             echo "## Mutation baseline"
             jq -r '"efficacy: \(.test_efficacy)% · mutant coverage: \(.mutations_coverage)%"' gremlins-report.json
             echo ""
+            echo "Files with findings, first 50 rows — the JSON artifact is the full record."
+            echo ""
             echo "| file | lived | not_covered |"
             echo "|---|---|---|"
-            jq -r '.files[]
+            jq -r '[.files[]
               | [.file_name,
                  ([.mutations[] | select(.status=="LIVED")] | length),
                  ([.mutations[] | select(.status=="NOT COVERED")] | length)]
-              | select(.[1] > 0 or .[2] > 0)
-              | "| \(.[0]) | \(.[1]) | \(.[2]) |"' gremlins-report.json | head -50
+              | select(.[1] > 0 or .[2] > 0)]
+              | .[:50][]
+              | "| \(.[0]) | \(.[1]) | \(.[2]) |"' gremlins-report.json
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload report artifact

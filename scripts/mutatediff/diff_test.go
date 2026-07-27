@@ -33,7 +33,10 @@ new file mode 100644
 `
 
 func TestParseUnifiedDiffExtractsNewFileRanges(t *testing.T) {
-	got := parseUnifiedDiff(sampleDiff)
+	got, err := parseUnifiedDiff(sampleDiff)
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff: %v", err)
+	}
 	want := map[string][]lineRange{
 		"config/injection.go": {{Start: 26, End: 29}, {Start: 44, End: 45}},
 		"config/new_file.go":  {{Start: 1, End: 3}},
@@ -45,7 +48,11 @@ func TestParseUnifiedDiffExtractsNewFileRanges(t *testing.T) {
 
 func TestParseUnifiedDiffSkipsPureDeletionHunks(t *testing.T) {
 	diff := "--- a/f.go\n+++ b/f.go\n@@ -10,2 +9,0 @@\n-x\n-y\n"
-	if got := parseUnifiedDiff(diff); len(got["f.go"]) != 0 {
+	got, err := parseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatalf("parseUnifiedDiff: %v", err)
+	}
+	if len(got["f.go"]) != 0 {
 		t.Errorf("pure deletion produced ranges: %#v", got)
 	}
 }
@@ -81,11 +88,8 @@ func TestPackagesOfDedupesAndSorts(t *testing.T) {
 	}
 }
 
-func TestParseUnifiedDiffPanicsOnScanError(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("parseUnifiedDiff did not panic on an oversized diff line")
-		}
-	}()
-	parseUnifiedDiff(strings.Repeat("x", 2<<20))
+func TestParseUnifiedDiffErrorsOnScanFailure(t *testing.T) {
+	if _, err := parseUnifiedDiff(strings.Repeat("x", 2<<20)); err == nil {
+		t.Error("expected error for an oversized diff line")
+	}
 }

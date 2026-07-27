@@ -69,7 +69,7 @@ unleash:
 
 `.gitignore` — add directly below the `!.golangci.yml`-style tool-config allowlist entries (keep neighbors alphabetical if they are):
 
-```
+```text
 !.gremlins.yaml
 ```
 
@@ -598,6 +598,11 @@ Expected: `mutatediff: no mutatable changes vs merge-base`, exit 0, engine never
 
 - [ ] **Step 4: Live verification — real run on this branch (dogfood)**
 
+> Superseded during execution: gremlins v0.5.0 misverdicts this nested `package main`,
+> so `/simplify` later excluded `scripts/` from the gate's scope entirely (see
+> wiki/testing.md#mutation-gate). The dogfood run below was performed and passed
+> before that exclusion; the fail-path proof moved to a `config`-package canary.
+
 Run: `make mutate`
 The branch's own changed code is `scripts/mutatediff/*.go`, so the gate mutates the wrapper using the wrapper's tests. If survivors appear in `scripts/mutatediff`, strengthen `diff_test.go`/`report_test.go` until `make mutate` passes — do not weaken the policy.
 
@@ -709,7 +714,7 @@ The cron cannot be exercised pre-merge; `workflow_dispatch` exists so it can be 
 
 In the "Most Common Commands" fenced block, after the `make test-integration` line, add:
 
-```
+```make
 make mutate             # Diff-scoped mutation gate: mutants on changed lines vs origin/main must die
 ```
 
@@ -717,7 +722,7 @@ make mutate             # Diff-scoped mutation gate: mutants on changed lines vs
 
 In the Workflow Rules bullet describing the pre-push gates, append one sentence after "The order is load-bearing: …CodeRabbit renders the final independent verdict on the end state.":
 
-```
+```text
 After the agent gates settle, run `make mutate` once as the final machine gate before pushing (surviving mutants on changed lines block the push; see wiki/testing.md#mutation-gate).
 ```
 

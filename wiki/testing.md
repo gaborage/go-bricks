@@ -334,8 +334,9 @@ Excluded from scope: `_test.go` files, `testdata/`, `tools/` (separate Go
 module), and `scripts/` (the wrapper itself — see the operational notes).
 Engine version is pinned via `GREMLINS_VERSION` in the Makefile;
 runtime knobs live in `.gremlins.yaml`. The nightly `Mutation Baseline`
-workflow runs the full repo in advisory mode and publishes a per-file score
-table to the job summary plus a JSON artifact.
+workflow runs the full repo in advisory mode and publishes overall efficacy
+plus a table of files with LIVED / NOT COVERED findings (first 50 rows) to the
+job summary; the JSON artifact is the complete record.
 
 Operational notes: a real `make mutate` run may leave `go.work.sum` modified
 (gremlins' own module graph); if the file was clean before the run, restore it

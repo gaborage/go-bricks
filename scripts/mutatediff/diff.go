@@ -19,7 +19,7 @@ type lineRange struct {
 
 var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
-func parseUnifiedDiff(diff string) map[string][]lineRange {
+func parseUnifiedDiff(diff string) (map[string][]lineRange, error) {
 	changes := map[string][]lineRange{}
 	var current string
 	sc := bufio.NewScanner(strings.NewReader(diff))
@@ -51,9 +51,9 @@ func parseUnifiedDiff(diff string) map[string][]lineRange {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		panic(fmt.Sprintf("mutatediff: diff scan aborted: %v", err))
+		return nil, fmt.Errorf("diff scan aborted: %w", err)
 	}
-	return changes
+	return changes, nil
 }
 
 func mutationScope(changes map[string][]lineRange) map[string][]lineRange {
