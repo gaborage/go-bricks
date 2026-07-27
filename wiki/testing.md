@@ -354,8 +354,9 @@ excluding the file.
 ## Property-Based Tests
 
 Invariant-heavy packages carry a `<pkg>_properties_test.go` suite built on
-[`pgregory.net/rapid`](https://pkg.go.dev/pgregory.net/rapid) — a documented
-exception to the source-to-test 1:1 naming rule, alongside `testhelpers_test.go`.
+[`pgregory.net/rapid`](https://pkg.go.dev/pgregory.net/rapid) — an intentional
+exception to the one-`_test.go`-per-source-file convention, alongside
+`testhelpers_test.go`.
 Current exemplars: `database` (placeholder arity, Oracle reserved-word quoting,
 determinism), `config` (InjectInto round-trips, never-panic, env-beats-yaml
 precedence), `jose` (seal/open integrity), `multitenant` (resolver contracts,

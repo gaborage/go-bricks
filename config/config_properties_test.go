@@ -153,7 +153,7 @@ func TestInjectIntoEnvBeatsYamlProperty(t *testing.T) {
 		dir := t.TempDir()
 		t.Chdir(dir)
 		yamlContent := "custom:\n  prop:\n    value: \"" + yamlVal + "\"\n"
-		if err := os.WriteFile("config.yaml", []byte(yamlContent), 0o600); err != nil {
+		if err := os.WriteFile(testConfigFileYAML, []byte(yamlContent), 0o600); err != nil {
 			rt.Fatalf("write config.yaml: %v", err)
 		}
 
