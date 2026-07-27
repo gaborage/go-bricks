@@ -4,8 +4,10 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	goerrors "errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -33,6 +35,7 @@ type Server struct {
 	readyMu      sync.RWMutex
 	readyHandler echo.HandlerFunc
 	conflicts    *routeConflictTracker
+	boundAddr    atomic.Pointer[net.Addr] // set via ListenerAddrFunc once Start's listener is bound; nil until then
 }
 
 // normalizeBasePath cannot use pathutil.NormalizePrefix because that helper
@@ -203,18 +206,41 @@ func (s *Server) dispatchReady(c *echo.Context) error {
 func (s *Server) Start() error {
 	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
 
+	var tlsCfg *tls.Config
+	if s.cfg.Server.TLS.Enabled {
+		var err error
+		tlsCfg, err = buildServerTLSConfig(&s.cfg.Server.TLS)
+		if err != nil {
+			return err
+		}
+	} else if hasStagedServerTLSMaterial(&s.cfg.Server.TLS) {
+		// Fail-open is deliberate — staging material ahead of a flip is a
+		// legitimate rollout step — but a mistyped SERVER_TLS_ENABLED that
+		// leaves full material configured and serves plaintext must never be
+		// silent.
+		s.logger.Warn().
+			Str("field", "server.tls.enabled").
+			Msg("server.tls material is configured but server.tls.enabled is false; serving plaintext")
+	}
+
 	s.logger.Info().
 		Str("service", s.cfg.App.Name).
 		Str("version", s.cfg.App.Version).
 		Str("env", s.cfg.App.Env).
 		Str("port", fmt.Sprint(s.cfg.Server.Port)).
 		Str("address", addr).
+		Bool("tls", s.cfg.Server.TLS.Enabled).
 		Msg("Starting server...")
 
 	sc := echo.StartConfig{
 		Address:    addr,
 		HideBanner: true,
 		HidePort:   true,
+		TLSConfig:  tlsCfg,
+		ListenerAddrFunc: func(addr net.Addr) {
+			a := addr
+			s.boundAddr.Store(&a)
+		},
 		BeforeServeFunc: func(srv *http.Server) error {
 			// Configure timeouts on the http.Server (StartConfig doesn't expose these)
 			srv.ReadTimeout = s.cfg.Server.Timeout.Read

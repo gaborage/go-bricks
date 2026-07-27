@@ -50,6 +50,19 @@ server:
   bodylimit: 26214400   # 25 MB — allow larger uploads
 ```
 
+## Server TLS Listener
+
+`server.tls.*` enables HTTPS on the HTTP server listener (ADR-042). The default posture is **disabled** — every field defaults to its zero value, which leaves the listener plaintext, byte-for-byte unchanged from prior behavior:
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `server.tls.enabled` | `false` | Enable the HTTPS listener |
+| `server.tls.certfile` / `server.tls.certvalue` | `""` | Server certificate: file path or base64-encoded PEM (exactly one) |
+| `server.tls.keyfile` / `server.tls.keyvalue` | `""` | Server private key: file path or base64-encoded PEM (exactly one) |
+| `server.tls.minversion` | `""` (resolves to a TLS 1.2 floor) | TLS floor; `""` and `"1.2"` are equivalent, `"1.3"` opts up |
+
+Bad or unreadable material fails `Start()` fast — it never silently falls back to plaintext. Staging cert/key material ahead of a flip (`server.tls.enabled: false` with material already set) is fail-open but not silent: startup emits one WARN naming `server.tls.enabled`. See [server_tls.md](server_tls.md) for the full config reference and deployment guidance (ALB-terminated partner mTLS vs. app-terminated mTLS).
+
 ## Messaging Pre-Warm Readiness Wait
 
 In single-tenant mode, startup pre-warms the messaging publisher and then waits for it to report `IsReady()`, bounded by `messaging.reconnect.readytimeout` (default 5s — the same key and budget as the per-publish readiness pre-flight; see [context_deadlines.md](context_deadlines.md)). A publisher that isn't ready in time logs a WARN and startup continues — the wait never fails startup; the publish-time pre-flight still absorbs a slow first publish. The wait (`ConnectionPreWarmer.awaitPublisherReady`) is context-aware and reports a distinct cancellation outcome when its `ctx` is canceled, rather than mislabeling it as a readiness timeout — but that path only fires for callers that pass a cancelable context. On the framework's own boot path (`app/lifecycle.go`'s `prepareRuntime`), pre-warm runs with `context.Background()` and the OS signal handler is installed later (`waitForShutdownOrServerError`, after `prepareRuntime` returns), so a shutdown signal received during pre-warm does **not** abort the wait — it runs to ready-or-`readytimeout` regardless.
