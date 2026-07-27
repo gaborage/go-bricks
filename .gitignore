@@ -74,3 +74,4 @@
 
 # Explicit ignores (override !*/ above)
 .claude/worktrees/
+.agents/
