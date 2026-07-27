@@ -14,6 +14,8 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -96,6 +98,22 @@ func TestBuildServerTLSConfigMaterial(t *testing.T) {
 		cfg := &config.ServerTLSConfig{
 			CertValue: base64.StdEncoding.EncodeToString(certPEM),
 			KeyValue:  base64.StdEncoding.EncodeToString(keyPEM),
+		}
+		tlsCfg, err := buildServerTLSConfig(cfg)
+		require.NoError(t, err)
+		require.Len(t, tlsCfg.Certificates, 1)
+	})
+
+	t.Run("file_sourced_round_trip", func(t *testing.T) {
+		dir := t.TempDir()
+		certPath := filepath.Join(dir, "server.crt")
+		keyPath := filepath.Join(dir, "server.key")
+		require.NoError(t, os.WriteFile(certPath, certPEM, 0o600))
+		require.NoError(t, os.WriteFile(keyPath, keyPEM, 0o600))
+
+		cfg := &config.ServerTLSConfig{
+			CertFile: certPath,
+			KeyFile:  keyPath,
 		}
 		tlsCfg, err := buildServerTLSConfig(cfg)
 		require.NoError(t, err)

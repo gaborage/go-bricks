@@ -2,9 +2,7 @@ package server
 
 import (
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
-	"os"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/secretfile"
@@ -43,37 +41,19 @@ func buildServerTLSConfig(cfg *config.ServerTLSConfig) (*tls.Config, error) {
 }
 
 // loadPEM reads one piece of PEM material from a file path or a
-// base64-encoded value. Mirrors httpclient's loader (httpclient/tls.go)
-// exactly for the file path's guards; the server always requires both cert
-// and key, so — unlike the client's optional-CA case — neither source set is
-// an error here rather than a valid (nil, nil) state.
+// base64-encoded value, delegating to secretfile.LoadPEM (shared with
+// httpclient's loader, httpclient/tls.go). The server always requires both
+// cert and key, so — unlike the client's optional-CA case — neither source
+// set is an error here rather than a valid nil state.
 func loadPEM(file, value, what string) ([]byte, error) {
-	switch {
-	case file != "" && value != "":
-		return nil, fmt.Errorf("server: tls: %s: set file or value, not both", what)
-	case file != "":
-		// Never let mis-filed material reach os.ReadFile: both our wrap and the
-		// *os.PathError it wraps would echo it into a startup error.
-		if secretfile.LooksLikeKeyMaterial(file) {
-			return nil, fmt.Errorf("server: tls: %s: file looks like key material, not a path (use the value field for inline PEM)", what)
-		}
-		// #nosec G304 -- the path is deployment configuration, not request input:
-		// reading an operator-named file IS this function. Inline material is
-		// rejected above.
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return nil, fmt.Errorf("server: tls: %s: %w", what, secretfile.ReadError(file, err))
-		}
-		return data, nil
-	case value != "":
-		data, err := base64.StdEncoding.DecodeString(value)
-		if err != nil {
-			return nil, fmt.Errorf("server: tls: %s: base64 decode %s: %w", what, secretfile.SafeRef(value), err)
-		}
-		return data, nil
-	default:
+	data, err := secretfile.LoadPEM("server: tls:", file, value, what)
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
 		return nil, fmt.Errorf("server: tls: %s: no material provided", what)
 	}
+	return data, nil
 }
 
 // hasStagedServerTLSMaterial reports whether any TLS material field is set

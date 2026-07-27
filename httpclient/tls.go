@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
 	nethttp "net/http"
-	"os"
 	"time"
 
 	"github.com/gaborage/go-bricks/internal/secretfile"
@@ -172,34 +170,12 @@ func loadClientKeyPair(cfg *ClientTLSConfig) (certPEM, keyPEM []byte, err error)
 }
 
 // loadPEM reads one piece of PEM material from a file path or a base64-encoded
-// value, returning (nil, nil) when neither source is set.
+// value, returning (nil, nil) when neither source is set. Delegates to
+// secretfile.LoadPEM, which httpclient shares with the server TLS listener
+// (server/tls.go) — the two loaders were maintained as parallel copies until
+// this extraction.
 func loadPEM(file, value, what string) ([]byte, error) {
-	switch {
-	case file != "" && value != "":
-		return nil, fmt.Errorf("httpclient: tls: %s: set file or value, not both", what)
-	case file != "":
-		// Never let mis-filed material reach os.ReadFile: both our wrap and the
-		// *os.PathError it wraps would echo it into a startup error.
-		if secretfile.LooksLikeKeyMaterial(file) {
-			return nil, fmt.Errorf("httpclient: tls: %s: file looks like key material, not a path (use the value field for inline PEM)", what)
-		}
-		// #nosec G304 -- the path is deployment configuration, not request input:
-		// reading an operator-named file IS this function. Inline material is
-		// rejected above.
-		data, err := os.ReadFile(file)
-		if err != nil {
-			return nil, fmt.Errorf("httpclient: tls: %s: %w", what, secretfile.ReadError(file, err))
-		}
-		return data, nil
-	case value != "":
-		data, err := base64.StdEncoding.DecodeString(value)
-		if err != nil {
-			return nil, fmt.Errorf("httpclient: tls: %s: base64 decode: %w", what, err)
-		}
-		return data, nil
-	default:
-		return nil, nil
-	}
+	return secretfile.LoadPEM("httpclient: tls:", file, value, what)
 }
 
 // certPoolFromPEM refuses to pin fewer roots than the bundle asks for, which
