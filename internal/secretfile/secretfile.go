@@ -1,0 +1,119 @@
+// Package secretfile hosts the error-hygiene guards shared by every code path
+// that reads key material from an operator-named file. Both consumers —
+// httpclient's TLS loader and the keystore — have sibling File/Value config
+// fields, so a transposition puts inline material where a path belongs; without
+// these guards it reaches a fatal startup log, which the logger's
+// SensitiveDataFilter cannot mask because that filter matches field names, not
+// error strings. ReadError is the shape both consumers should use at the read
+// site; SafeRef is also useful on its own for any operator-supplied config
+// string that must not be echoed unbounded.
+//
+// LooksLikeKeyMaterial catches PEM, base64 PEM, and base64 DER. It cannot catch
+// raw symmetric secrets, which have no ASN.1 structure and may be short enough
+// to slip MaxPathEcho — Errno still prevents the second copy, but the first is
+// echoed. Widening the check to "any decodable base64" is not the fix: real
+// paths such as /run/secrets/signingkey decode cleanly.
+package secretfile
+
+import (
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+)
+
+// pemHeaderPrefix opens every PEM block, so a *File value containing it is PEM
+// content pasted into the wrong field rather than a path.
+const pemHeaderPrefix = "-----BEGIN"
+
+// MaxPathEcho bounds what a read error quotes back. A *File value longer than
+// this is elided: over-long values are the shape mis-filed material takes, and
+// this error reaches startup logs.
+const MaxPathEcho = 256
+
+// minDERKeyBytes is the smallest real case this guard must still catch: an
+// Ed25519 PKCS#8 private key marshals to exactly 48 bytes.
+const minDERKeyBytes = 48
+
+// LooksLikeKeyMaterial reports whether a *File value is inline key material
+// rather than a path. It covers a raw PEM body, its base64 form (what a secret
+// manager hands you, and so the likelier mix-up), and base64 of raw DER — which
+// carries no PEM header at any level and, for EC and Ed25519 keys, is short
+// enough to slip MaxPathEcho too. Decoding unpadded accepts both base64 forms:
+// whether a value arrives padded otherwise depends on len(input)%3.
+func LooksLikeKeyMaterial(file string) bool {
+	if strings.Contains(file, pemHeaderPrefix) {
+		return true
+	}
+	decoded, err := base64.RawStdEncoding.DecodeString(strings.TrimRight(file, "="))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(decoded), pemHeaderPrefix) || looksLikeDER(decoded)
+}
+
+// looksLikeDER reports whether b opens with an ASN.1 SEQUENCE — tag 0x30,
+// which PKCS#8, SEC1, PKCS#12 and X.509 all start with — whose declared length
+// matches the payload. A bare 0x30 first byte is not enough: short
+// base64-alphabet paths such as "MAIN" decode to three bytes starting 0x30.
+// Canonical-length encoding is deliberately not enforced: this is a guard, so a
+// false negative echoes key material while a false positive only rejects a path.
+func looksLikeDER(b []byte) bool {
+	if len(b) < minDERKeyBytes || b[0] != 0x30 {
+		return false
+	}
+	n := int(b[1])
+	if n < 0x80 {
+		return 2+n == len(b)
+	}
+	count := n & 0x7f
+	if count == 0 || count > 4 || len(b) < 2+count {
+		return false
+	}
+	length := 0
+	for _, c := range b[2 : 2+count] {
+		length = length<<8 | int(c)
+		// Bail before the shift can overflow int on a 32-bit build: a declared
+		// length past the payload can only grow, and an overflow would wrap to a
+		// false negative — the direction that echoes key material.
+		if length > len(b) {
+			return false
+		}
+	}
+	return 2+count+length == len(b)
+}
+
+// SafeRef renders an operator-supplied config value for an error message,
+// eliding anything too long to be a plausible path.
+// The bound applies to the %q-rendered form, not the raw value: escaping can
+// expand a value well past MaxPathEcho, and the rendered form is what reaches
+// the log.
+func SafeRef(value string) string {
+	quoted := fmt.Sprintf("%q", value)
+	if len(quoted) > MaxPathEcho {
+		return fmt.Sprintf("<%d-char value elided>", len(value))
+	}
+	return quoted
+}
+
+// ReadError shapes the error from a failed read of an operator-named file so a
+// mis-filed value cannot reach a startup log: SafeRef bounds what is quoted and
+// errno drops the *os.PathError that would otherwise re-echo it in full. The
+// message has no package prefix; callers wrap it with their own (e.g.
+// fmt.Errorf("keystore: key %q: %w", name, err)). errors.Is still matches
+// fs.ErrNotExist and friends through the wrap.
+func ReadError(path string, err error) error {
+	return fmt.Errorf("read file %s: %w", SafeRef(path), errno(err))
+}
+
+// errno strips the *os.PathError wrapper, which carries its own copy of the
+// path and would re-echo a value SafeRef elided. errors.Is is unaffected:
+// the bare errno still matches fs.ErrNotExist and friends.
+func errno(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	return err
+}

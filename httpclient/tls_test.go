@@ -3,9 +3,7 @@ package httpclient
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -27,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gaborage/go-bricks/internal/secretfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -93,7 +92,7 @@ func b64PEM(material []byte) string {
 }
 
 // ed25519KeyPEM returns a PKCS#8 Ed25519 key: the compact shape whose DER is short
-// enough to slip maxPathEcho and whose PEM length is not a multiple of 3.
+// enough to slip secretfile.MaxPathEcho and whose PEM length is not a multiple of 3.
 func ed25519KeyPEM(t *testing.T) []byte {
 	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
@@ -308,7 +307,7 @@ func TestNewClientTLSConfigRejectsPEMContentInFileField(t *testing.T) {
 		der, derErr := x509.MarshalPKCS8PrivateKey(edKey)
 		require.NoError(t, derErr)
 		encoded := base64.StdEncoding.EncodeToString(der)
-		require.Less(t, len(encoded), maxPathEcho, "the point of this case is that eliding cannot save us")
+		require.Less(t, len(encoded), secretfile.MaxPathEcho, "the point of this case is that eliding cannot save us")
 
 		cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAFile: encoded})
 		require.Error(t, err)
@@ -355,59 +354,6 @@ func TestNewClientTLSConfigRejectsPEMContentInFileField(t *testing.T) {
 			"a plausible path stays in the message for diagnosability")
 		assert.ErrorIs(t, err, fs.ErrNotExist, "unwrapping the PathError must not break errors.Is")
 	})
-}
-
-// Pins both directions of the detector: real key material in every encoding it
-// must catch, and ordinary paths — including the base64-alphabet ones that used
-// to trip the bare 0x30-tag check — that it must let through.
-func TestLooksLikeKeyMaterialDetectsKeysNotPaths(t *testing.T) {
-	_, edKey, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	edPKCS8, err := x509.MarshalPKCS8PrivateKey(edKey)
-	require.NoError(t, err)
-	edPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: edPKCS8})
-
-	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	ecSEC1, err := x509.MarshalECPrivateKey(ecKey)
-	require.NoError(t, err)
-	ecPKCS8, err := x509.MarshalPKCS8PrivateKey(ecKey)
-	require.NoError(t, err)
-
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-	rsaPKCS1 := x509.MarshalPKCS1PrivateKey(rsaKey)
-	rsaPKCS8, err := x509.MarshalPKCS8PrivateKey(rsaKey)
-	require.NoError(t, err)
-
-	tests := []struct {
-		name  string
-		value string
-		want  bool
-	}{
-		{name: "ed25519_pkcs8", value: base64.StdEncoding.EncodeToString(edPKCS8), want: true},
-		{name: "ecdsa_p256_sec1", value: base64.StdEncoding.EncodeToString(ecSEC1), want: true},
-		{name: "ecdsa_p256_pkcs8", value: base64.StdEncoding.EncodeToString(ecPKCS8), want: true},
-		{name: "rsa2048_pkcs1", value: base64.StdEncoding.EncodeToString(rsaPKCS1), want: true},
-		{name: "rsa2048_pkcs8", value: base64.StdEncoding.EncodeToString(rsaPKCS8), want: true},
-		{name: "raw_pem_body", value: string(edPEM), want: true},
-		{name: "path_main", value: "MAIN", want: false},
-		{name: "path_mdkeys", value: "MDkeys", want: false},
-		{name: "path_mikeys", value: "MIkeys", want: false},
-		{name: "path_misckey", value: "MIsckey", want: false},
-		{name: "path_mfkeys", value: "MFkeys", want: false},
-		{name: "path_mockkeys", value: "MOCKkeys", want: false},
-		{name: "path_certs", value: "certs", want: false},
-		{name: "path_mycert", value: "MyCert", want: false},
-		{name: "path_tls_server_pem", value: "tls/server.pem", want: false},
-		{name: "path_absolute_cert_pem", value: "/etc/ssl/cert.pem", want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, looksLikeKeyMaterial(tt.value))
-		})
-	}
 }
 
 // A bundle whose second root is mangled at the PEM layer must not load: pem.Decode
