@@ -47,12 +47,18 @@ func run(engine, baseRef string, out io.Writer) int {
 		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...) // #nosec G204 -- dev tool; engine comes from the Makefile pin, not user input
 		cmd.Stdout = out
 		cmd.Stderr = os.Stderr
+		_ = os.Remove(reportPath)
 		runErr := cmd.Run()
+		if runErr != nil {
+			fmt.Fprintf(os.Stderr, "mutatediff: engine failed for %s: %v\n", pkg, runErr)
+			return 2
+		}
 		reportJSON, readErr := os.ReadFile(reportPath) // #nosec G304 -- path built from os.TempDir + package dir
 		if readErr != nil {
 			fmt.Fprintf(os.Stderr, "mutatediff: no report for %s (read: %v, run: %v)\n", pkg, readErr, runErr)
 			return 2
 		}
+		_ = os.Remove(reportPath)
 		f, w, jerr := judge(reportJSON, pkg, changed)
 		if jerr != nil {
 			fmt.Fprintf(os.Stderr, "mutatediff: parse report for %s: %v\n", pkg, jerr)
