@@ -50,16 +50,21 @@ func TestQueryBuilderPlaceholderArityProperty(t *testing.T) {
 	})
 }
 
-func TestQueryBuilderPostgresPlaceholdersSequentialProperty(t *testing.T) {
+func TestQueryBuilderPlaceholdersSequentialProperty(t *testing.T) {
 	rapid.Check(t, func(rt *rapid.T) {
+		vendor := vendorGen.Draw(rt, "vendor")
 		n := rapid.IntRange(1, 8).Draw(rt, "conds")
-		sql, _, err := buildEqChain(rt, NewQueryBuilder(PostgreSQL), n)
+		sql, _, err := buildEqChain(rt, NewQueryBuilder(vendor), n)
 		if err != nil {
 			rt.Fatalf("ToSQL: %v", err)
 		}
-		for i, m := range pgPlaceholderRe.FindAllStringSubmatch(sql, -1) {
+		re := pgPlaceholderRe
+		if vendor == Oracle {
+			re = oraclePlaceholderRe
+		}
+		for i, m := range re.FindAllStringSubmatch(sql, -1) {
 			if m[1] != strconv.Itoa(i+1) {
-				rt.Fatalf("placeholder %d is $%s in %q", i+1, m[1], sql)
+				rt.Fatalf("placeholder %d is %s in %q", i+1, m[0], sql)
 			}
 		}
 	})
