@@ -34,31 +34,38 @@ func run(engine, baseRef string, out io.Writer) int {
 		return 2
 	}
 	changed := mutationScope(parseUnifiedDiff(diff))
+	if status, statusErr := gitOutput("status", "--porcelain", "--", "*.go"); statusErr == nil && status != "" {
+		fmt.Fprintln(out, "WARN: uncommitted .go changes detected — the gate judges committed state only (diff vs merge-base..HEAD)")
+	}
 	if len(changed) == 0 {
 		fmt.Fprintln(out, "mutatediff: no mutatable changes vs merge-base")
 		return 0
 	}
+	reportDir, err := os.MkdirTemp("", "mutatediff-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mutatediff: %v\n", err)
+		return 2
+	}
+	defer os.RemoveAll(reportDir)
 	var failures, warnings []mutantVerdict
 	for _, pkg := range packagesOf(changed) {
 		fmt.Fprintf(out, "mutatediff: mutating %s\n", pkg)
 		reportName := "gremlins-" + strings.ReplaceAll(strings.TrimPrefix(pkg, "./"), "/", "-") + ".json"
-		reportPath := filepath.Join(os.TempDir(), reportName)
+		reportPath := filepath.Join(reportDir, reportName)
 		args := append(strings.Fields(engine), "unleash", "--output", reportPath, pkg)
 		cmd := exec.CommandContext(context.Background(), args[0], args[1:]...) // #nosec G204 -- dev tool; engine comes from the Makefile pin, not user input
 		cmd.Stdout = out
 		cmd.Stderr = os.Stderr
-		_ = os.Remove(reportPath)
 		runErr := cmd.Run()
 		if runErr != nil {
 			fmt.Fprintf(os.Stderr, "mutatediff: engine failed for %s: %v\n", pkg, runErr)
 			return 2
 		}
-		reportJSON, readErr := os.ReadFile(reportPath) // #nosec G304 -- path built from os.TempDir + package dir
+		reportJSON, readErr := os.ReadFile(reportPath) // #nosec G304 -- path built from a per-run os.MkdirTemp dir + package-derived name, not user input
 		if readErr != nil {
-			fmt.Fprintf(os.Stderr, "mutatediff: no report for %s (read: %v, run: %v)\n", pkg, readErr, runErr)
+			fmt.Fprintf(os.Stderr, "mutatediff: no report for %s: %v\n", pkg, readErr)
 			return 2
 		}
-		_ = os.Remove(reportPath)
 		f, w, jerr := judge(reportJSON, pkg, changed)
 		if jerr != nil {
 			fmt.Fprintf(os.Stderr, "mutatediff: parse report for %s: %v\n", pkg, jerr)

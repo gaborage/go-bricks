@@ -15,6 +15,7 @@ const fixtureReport = `{
       "mutations": [
         {"line": 27, "type": "CONDITIONALS_NEGATION", "status": "LIVED"},
         {"line": 27, "type": "ARITHMETIC_BASE", "status": "KILLED"},
+        {"line": 29, "type": "CONDITIONALS_BOUNDARY", "status": "LIVED"},
         {"line": 44, "type": "CONDITIONALS_BOUNDARY", "status": "NOT COVERED"},
         {"line": 200, "type": "INCREMENT_DECREMENT", "status": "LIVED"},
         {"line": 28, "type": "INVERT_NEGATIVES", "status": "TIMED OUT"}
