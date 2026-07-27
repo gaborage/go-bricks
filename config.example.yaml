@@ -44,7 +44,7 @@ server:
   # into a typed identity (ADR-043); see wiki/forwarded_client_cert.md for the trust model.
   # forwardedclientcert:
   #   enabled: false        # Wire the middleware; parse and expose the identity. Default false.
-  #   require: false        # Reject (401) requests lacking a parseable identity. Requires enabled: true.
+  #   require: false        # Reject (401) requests missing both -Subject and -Serial-Number. Requires enabled: true.
 
 database:
   type: postgresql

@@ -70,7 +70,7 @@ Bad or unreadable material fails `Start()` fast — it never silently falls back
 | Setting | Default | Purpose |
 |---------|---------|---------|
 | `server.forwardedclientcert.enabled` | `false` | Wire the middleware; parse and expose the identity |
-| `server.forwardedclientcert.require` | `false` | Reject (401) requests lacking a parseable identity; requires `enabled: true` |
+| `server.forwardedclientcert.require` | `false` | Reject (401) requests missing both `-Subject` and `-Serial-Number` (a malformed `-Leaf` alone never rejects); requires `enabled: true` |
 
 Health/ready probes always skip this middleware regardless of `require`. See [forwarded_client_cert.md](forwarded_client_cert.md) for the config reference, the trust model (including the AWS doc-silence finding on header spoofing), and an authorization recipe.
 
