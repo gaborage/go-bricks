@@ -316,3 +316,33 @@ The `database/oracle` integration suite provisions exactly one Oracle container 
 Tests that need a *different* `DatabaseConfig` (pool sizing, keep-alive, timezone, connection-string format variants) call `packageOracleContainer().NewSchema(t)` directly and build their own `cfg` from the returned `*containers.OracleSchema` credentials — still on the shared container, just with custom wiring.
 
 **CI/CD:** Integration tests run only on Ubuntu (Docker requirement), unit tests on all platforms
+
+## Mutation Gate
+
+`make mutate` runs mutation testing on the diff only: it computes changed line
+ranges vs `git merge-base HEAD origin/main`, runs gremlins per changed package,
+and applies this policy to mutants that land on changed lines:
+
+| Status | Verdict | Rationale |
+|---|---|---|
+| `LIVED` | **fail** (exit 1) | A mutant on a line you wrote survived your tests |
+| `NOT COVERED` | warn | Coverage is SonarCloud's gate; no double-gating |
+| `TIMED OUT` | pass | The mutant hung the code and the test timeout noticed |
+| `KILLED` | pass | |
+
+Excluded from scope: `_test.go` files, `testdata/`, and `tools/` (separate Go
+module). Engine version is pinned via `GREMLINS_VERSION` in the Makefile;
+runtime knobs live in `.gremlins.yaml`. The nightly `Mutation Baseline`
+workflow runs the full repo in advisory mode and publishes a per-file score
+table to the job summary plus a JSON artifact.
+
+Operational notes: a real `make mutate` run may leave `go.work.sum` modified
+(gremlins' own module graph); discard that churn (`git checkout -- go.work.sum`)
+rather than committing it. Do not judge the engine by mutating
+`scripts/mutatediff` itself — gremlins v0.5.0 misreports some mutants in this
+nested `package main` as KILLED (validated during rollout); library packages,
+which the gate actually polices, verdict correctly.
+
+When the gate fails, strengthen the test so the listed mutant dies (assert the
+boundary, the sign, the branch the operator flipped) — never respond by
+excluding the file.
