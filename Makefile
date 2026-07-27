@@ -102,6 +102,12 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	# non-issues, so gating them only here would diverge from the repo's gosec policy.
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
 
+mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
+	go run ./scripts/mutatediff -engine "go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)"
+
+mutate-baseline: ## Full-repo mutation baseline (advisory; consumed by the nightly workflow)
+	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash --output gremlins-report.json
+
 release: ## Cut a signed release tag (usage: make release VERSION=v0.38.0). Run AFTER merging the release-please PR. Requires 1Password unlocked.
 	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.38.0'"; exit 1; }
 	@VERSION=$(VERSION) ./scripts/release.sh
