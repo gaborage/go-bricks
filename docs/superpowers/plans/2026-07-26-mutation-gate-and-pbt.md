@@ -319,7 +319,7 @@ git log -1
 
 - [ ] **Step 1: Write the failing tests**
 
-The fixture below MUST be replaced with a trimmed excerpt of the real `/tmp/gremlins-config.json` captured in Task 1 (keep 1–2 files, 4–5 mutations, edit statuses/lines to cover the cases; keep the real field names). The shape shown is the expected gremlins v0.5.x schema — if the real report differs, adjust BOTH this fixture and the struct tags in Step 3 together.
+The fixture below reflects the REAL schema captured in the Task 1 spike (`.superpowers/sdd/2026-07-26-mutation-gate-and-pbt/gremlins-config-sample.json`): statuses are spelled with SPACES (`"NOT COVERED"`, `"TIMED OUT"`), and `file_name` is basename-only — gremlins does not prefix the package dir. Because of that, `judge` takes the package dir and joins it with the basename to match the changed-file map. Cross-check the fixture against the captured sample before writing it; if anything still differs, adjust BOTH fixture and struct together.
 
 `scripts/mutatediff/report_test.go`:
 
@@ -337,19 +337,19 @@ const fixtureReport = `{
   "mutations_coverage": 90,
   "files": [
     {
-      "file_name": "config/injection.go",
+      "file_name": "injection.go",
       "mutations": [
-        {"line": 27, "column": 5, "type": "CONDITIONALS_NEGATION", "status": "LIVED"},
-        {"line": 27, "column": 9, "type": "ARITHMETIC_BASE", "status": "KILLED"},
-        {"line": 44, "column": 2, "type": "CONDITIONALS_BOUNDARY", "status": "NOT_COVERED"},
-        {"line": 200, "column": 1, "type": "INCREMENT_DECREMENT", "status": "LIVED"},
-        {"line": 28, "column": 3, "type": "INVERT_NEGATIVES", "status": "TIMED_OUT"}
+        {"line": 27, "type": "CONDITIONALS_NEGATION", "status": "LIVED"},
+        {"line": 27, "type": "ARITHMETIC_BASE", "status": "KILLED"},
+        {"line": 44, "type": "CONDITIONALS_BOUNDARY", "status": "NOT COVERED"},
+        {"line": 200, "type": "INCREMENT_DECREMENT", "status": "LIVED"},
+        {"line": 28, "type": "INVERT_NEGATIVES", "status": "TIMED OUT"}
       ]
     },
     {
-      "file_name": "config/other.go",
+      "file_name": "other.go",
       "mutations": [
-        {"line": 5, "column": 1, "type": "CONDITIONALS_NEGATION", "status": "LIVED"}
+        {"line": 5, "type": "CONDITIONALS_NEGATION", "status": "LIVED"}
       ]
     }
   ]
@@ -359,7 +359,7 @@ func TestJudgeAppliesVerdictPolicyOnChangedLines(t *testing.T) {
 	changed := map[string][]lineRange{
 		"config/injection.go": {{Start: 26, End: 29}, {Start: 44, End: 45}},
 	}
-	failures, warnings, err := judge([]byte(fixtureReport), changed)
+	failures, warnings, err := judge([]byte(fixtureReport), "./config", changed)
 	if err != nil {
 		t.Fatalf("judge: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestJudgeAppliesVerdictPolicyOnChangedLines(t *testing.T) {
 		{File: "config/injection.go", Line: 27, Operator: "CONDITIONALS_NEGATION", Status: "LIVED"},
 	}
 	wantWarn := []mutantVerdict{
-		{File: "config/injection.go", Line: 44, Operator: "CONDITIONALS_BOUNDARY", Status: "NOT_COVERED"},
+		{File: "config/injection.go", Line: 44, Operator: "CONDITIONALS_BOUNDARY", Status: "NOT COVERED"},
 	}
 	if !reflect.DeepEqual(failures, wantFail) {
 		t.Errorf("failures = %#v, want %#v", failures, wantFail)
@@ -378,7 +378,7 @@ func TestJudgeAppliesVerdictPolicyOnChangedLines(t *testing.T) {
 }
 
 func TestJudgeRejectsMalformedJSON(t *testing.T) {
-	if _, _, err := judge([]byte("{nope"), nil); err == nil {
+	if _, _, err := judge([]byte("{nope"), "./config", nil); err == nil {
 		t.Error("expected error for malformed JSON")
 	}
 }
@@ -396,11 +396,16 @@ Expected: FAIL — `undefined: judge`
 ```go
 package main
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"path"
+	"strings"
+)
 
 // gremlinsReport mirrors the JSON written by `gremlins unleash --output`.
-// Validated against a real report in the Task 1 spike — keep in sync with
-// the fixture in report_test.go.
+// Spike-verified truths (Task 1): file_name is basename-only, statuses are
+// spelled with spaces ("NOT COVERED", "TIMED OUT"). Keep in sync with the
+// fixture in report_test.go.
 type gremlinsReport struct {
 	Files []struct {
 		FileName  string `json:"file_name"`
@@ -420,14 +425,16 @@ type mutantVerdict struct {
 }
 
 // judge buckets report mutants that land on changed lines: LIVED fails the
-// gate, NOT_COVERED warns (SonarCloud owns coverage), anything else passes.
-func judge(reportJSON []byte, changed map[string][]lineRange) (failures, warnings []mutantVerdict, err error) {
+// gate, NOT COVERED warns (SonarCloud owns coverage), anything else passes.
+// pkgDir is the package the report was generated for — gremlins emits
+// basenames, so the repo-relative path is pkgDir + file_name.
+func judge(reportJSON []byte, pkgDir string, changed map[string][]lineRange) (failures, warnings []mutantVerdict, err error) {
 	var rep gremlinsReport
 	if err := json.Unmarshal(reportJSON, &rep); err != nil {
 		return nil, nil, err
 	}
 	for _, f := range rep.Files {
-		name := strings.TrimPrefix(f.FileName, "./")
+		name := path.Join(strings.TrimPrefix(pkgDir, "./"), f.FileName)
 		ranges, ok := changed[name]
 		if !ok {
 			continue
@@ -440,7 +447,7 @@ func judge(reportJSON []byte, changed map[string][]lineRange) (failures, warning
 			switch m.Status {
 			case "LIVED":
 				failures = append(failures, v)
-			case "NOT_COVERED":
+			case "NOT COVERED":
 				warnings = append(warnings, v)
 			}
 		}
@@ -457,8 +464,6 @@ func inRanges(line int, ranges []lineRange) bool {
 	return false
 }
 ```
-
-(Add `"strings"` to the imports.)
 
 - [ ] **Step 4: Run tests, verify pass**
 
@@ -543,7 +548,7 @@ func run(engine, baseRef string, out io.Writer) int {
 			fmt.Fprintf(os.Stderr, "mutatediff: no report for %s (read: %v, run: %v)\n", pkg, readErr, runErr)
 			return 2
 		}
-		f, w, jerr := judge(reportJSON, changed)
+		f, w, jerr := judge(reportJSON, pkg, changed)
 		if jerr != nil {
 			fmt.Fprintf(os.Stderr, "mutatediff: parse report for %s: %v\n", pkg, jerr)
 			return 2
@@ -730,8 +735,8 @@ and applies this policy to mutants that land on changed lines:
 | Status | Verdict | Rationale |
 |---|---|---|
 | `LIVED` | **fail** (exit 1) | A mutant on a line you wrote survived your tests |
-| `NOT_COVERED` | warn | Coverage is SonarCloud's gate; no double-gating |
-| `TIMED_OUT` | pass | The mutant hung the code and the test timeout noticed |
+| `NOT COVERED` | warn | Coverage is SonarCloud's gate; no double-gating |
+| `TIMED OUT` | pass | The mutant hung the code and the test timeout noticed |
 | `KILLED` | pass | |
 
 Excluded from scope: `_test.go` files, `testdata/`, and `tools/` (separate Go
