@@ -3305,6 +3305,8 @@ Content-Type: application/jose
 eyJhbGciOiJSU0EtT0FFUC0yNTYi...
 ```
 
+Generate a compact token like the one above with the `seal-payload` CLI: `go install github.com/gaborage/go-bricks/cmd/seal-payload@latest` — see [wiki/jose.md](wiki/jose.md#sealing-test-payloads-with-curl-seal-payload-cli).
+
 > **Pre-trust failures** (decrypt failed, signature invalid, malformed JWE) emit a *plaintext* minimal envelope — never JOSE — so an unauthenticated peer cannot harvest decryption oracles. **Post-trust failures** (handler errors after a successful decrypt+verify) emit a JOSE-encrypted standard `APIResponse`. The security invariant: `Content-Type: application/jose` on a failure response is a regression, and integration tests should tamper one ciphertext byte and assert plaintext on the response.
 
 ### Algorithm Allowlist (strict, enforced at parser level)
