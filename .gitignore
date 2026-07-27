@@ -45,6 +45,7 @@
 !.github/ISSUE_TEMPLATE/*.yml
 
 !sonar-project.properties
+!.gremlins.yaml
 
 !CHANGELOG.md
 !RELEASING.md
