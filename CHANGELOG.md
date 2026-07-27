@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.55.0](https://github.com/gaborage/go-bricks/compare/v0.54.0...v0.55.0) (2026-07-27)
+
+
+### Added
+
+* **database:** add Execute query/exec helpers with typed errors ([#772](https://github.com/gaborage/go-bricks/issues/772)) ([#774](https://github.com/gaborage/go-bricks/issues/774)) ([aeb1363](https://github.com/gaborage/go-bricks/commit/aeb13633fa9da28c222c5a9038a9e16b11b7af01))
+* **httpclient:** config-driven client TLS and client certificates ([#790](https://github.com/gaborage/go-bricks/issues/790)) ([78dcb62](https://github.com/gaborage/go-bricks/commit/78dcb62d58a091b54ff12fa4a0deac3cc8b02d54))
+* **server,config:** first-class TLS listener for the HTTP server ([#798](https://github.com/gaborage/go-bricks/issues/798)) ([826fc55](https://github.com/gaborage/go-bricks/commit/826fc55b075ca23036c64e3d0829524db70ea2ea))
+
+
+### Fixed
+
+* **deps:** update module github.com/gaborage/go-bricks to v0.54.0 ([#770](https://github.com/gaborage/go-bricks/issues/770)) ([9a46cfa](https://github.com/gaborage/go-bricks/commit/9a46cfab8b4c359a50b692c6fc8572f183be550e))
+* **httpclient:** apply transport wrappers in layer order at Build ([#773](https://github.com/gaborage/go-bricks/issues/773)) ([c196d76](https://github.com/gaborage/go-bricks/commit/c196d76b0b1e39a8202e6f1b5eb8d1c425d7d699))
+* **httpclient:** close req.Body on JOSETransport's pre-read error return ([#792](https://github.com/gaborage/go-bricks/issues/792)) ([3c44db1](https://github.com/gaborage/go-bricks/commit/3c44db193f87f34d6635f5fadf7b691f3155f7fb))
+* **httpclient:** reject a nil logger at the construction seam ([#775](https://github.com/gaborage/go-bricks/issues/775)) ([c7e44de](https://github.com/gaborage/go-bricks/commit/c7e44de074ea957b9880eec5a15f17ec49b2b0ab))
+* **httpclient:** require DER shape before rejecting a path as key material ([#793](https://github.com/gaborage/go-bricks/issues/793)) ([343faf9](https://github.com/gaborage/go-bricks/commit/343faf95d3960dbb48cb5111548a424bb04da06e))
+* **httpclient:** warn when filling the base slot discards its holder ([#797](https://github.com/gaborage/go-bricks/issues/797)) ([9bd1b42](https://github.com/gaborage/go-bricks/commit/9bd1b4270c203db252bffea3ee2aba29aa7ce5a5))
+* **keystore:** stop echoing mis-filed key material into startup errors ([#794](https://github.com/gaborage/go-bricks/issues/794)) ([bce1a50](https://github.com/gaborage/go-bricks/commit/bce1a5097c063ab1970375458702ec1d5f46228d))
+
 ## [0.54.0](https://github.com/gaborage/go-bricks/compare/v0.53.0...v0.54.0) (2026-07-24)
 
 
