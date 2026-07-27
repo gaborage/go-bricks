@@ -29,7 +29,7 @@ func buildServerTLSConfig(cfg *config.ServerTLSConfig) (*tls.Config, error) {
 		return nil, fmt.Errorf("server: tls: cert/key: %w", err)
 	}
 
-	minVersion, err := serverTLSMinVersion(cfg.MinVersion)
+	minVersion, err := secretfile.ParseTLSMinVersion("server: tls:", cfg.MinVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -62,18 +62,4 @@ func loadPEM(file, value, what string) ([]byte, error) {
 // decide whether to WARN.
 func hasStagedServerTLSMaterial(cfg *config.ServerTLSConfig) bool {
 	return cfg.CertFile != "" || cfg.CertValue != "" || cfg.KeyFile != "" || cfg.KeyValue != ""
-}
-
-// serverTLSMinVersion maps the config enum to a tls.Config version constant.
-// The default (empty string) and "1.2" share a floor; "1.3" raises it.
-// Anything else is defense in depth — config validation already rejects it.
-func serverTLSMinVersion(v string) (uint16, error) {
-	switch v {
-	case "", "1.2":
-		return tls.VersionTLS12, nil
-	case "1.3":
-		return tls.VersionTLS13, nil
-	default:
-		return 0, fmt.Errorf("server: tls: minversion %s: accepted values are \"1.2\" and \"1.3\"", secretfile.SafeRef(v))
-	}
 }

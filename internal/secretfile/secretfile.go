@@ -5,10 +5,11 @@
 // where a path belongs; without these guards it reaches a fatal startup log,
 // which the logger's SensitiveDataFilter cannot mask because that filter
 // matches field names, not error strings. LoadPEM is the shared file/value
-// resolver httpclient and the server TLS listener both call; ReadError is the
-// shape any other read site should use directly; SafeRef is also useful on
-// its own for any operator-supplied config string that must not be echoed
-// unbounded.
+// resolver httpclient and the server TLS listener both call; ParseTLSMinVersion
+// is the shared min-version enum parser the same two callers share; ReadError
+// is the shape any other read site should use directly; SafeRef is also
+// useful on its own for any operator-supplied config string that must not be
+// echoed unbounded.
 //
 // LooksLikeKeyMaterial catches PEM, base64 PEM, and base64 DER. It cannot catch
 // raw symmetric secrets, which have no ASN.1 structure and may be short enough
@@ -18,6 +19,7 @@
 package secretfile
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -133,6 +135,21 @@ func LoadPEM(prefix, file, value, what string) ([]byte, error) {
 		return data, nil
 	default:
 		return nil, nil
+	}
+}
+
+// ParseTLSMinVersion maps the shared config enum to a tls.Config version
+// constant: "" and "1.2" share the 1.2 floor, "1.3" raises it. prefix names
+// the consumer's error namespace, as in LoadPEM. It lives here because both
+// TLS material loaders already share this package.
+func ParseTLSMinVersion(prefix, v string) (uint16, error) {
+	switch v {
+	case "", "1.2":
+		return tls.VersionTLS12, nil
+	case "1.3":
+		return tls.VersionTLS13, nil
+	default:
+		return 0, fmt.Errorf("%s minversion %s: accepted values are \"1.2\" and \"1.3\"", prefix, SafeRef(v))
 	}
 }
 

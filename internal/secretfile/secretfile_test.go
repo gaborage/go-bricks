@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -215,6 +216,34 @@ func TestLoadPEM(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, got)
 	})
+}
+
+// TestParseTLSMinVersion pins the shared min-version enum parser httpclient's
+// and the server TLS listener's wrappers both delegate to.
+func TestParseTLSMinVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		v       string
+		want    uint16
+		wantErr bool
+	}{
+		{name: "empty_floors_to_12", v: "", want: tls.VersionTLS12},
+		{name: "explicit_13", v: "1.3", want: tls.VersionTLS13},
+		{name: "rejected_11", v: "1.1", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseTLSMinVersion("test: prefix:", tt.v)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "minversion")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 // Pins both directions of the detector: real key material in every encoding it

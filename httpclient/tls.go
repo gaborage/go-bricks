@@ -71,7 +71,7 @@ func NewClientTLSConfig(cfg *ClientTLSConfig) (*tls.Config, error) {
 	if certPEM == nil && caPEM == nil {
 		return nil, errors.New("httpclient: tls: no material provided: set cert and key, ca, or both")
 	}
-	minVersion, err := parseTLSMinVersion(cfg.MinVersion)
+	minVersion, err := secretfile.ParseTLSMinVersion("httpclient: tls:", cfg.MinVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -217,15 +217,4 @@ func certPoolFromPEM(caPEM []byte) (*x509.CertPool, error) {
 		return nil, fmt.Errorf("httpclient: tls: ca: no %s block found", pemTypeCertificate)
 	}
 	return pool, nil
-}
-
-func parseTLSMinVersion(v string) (uint16, error) {
-	switch v {
-	case "", "1.2":
-		return tls.VersionTLS12, nil
-	case "1.3":
-		return tls.VersionTLS13, nil
-	default:
-		return 0, fmt.Errorf("httpclient: tls: minversion %s: accepted values are \"1.2\" and \"1.3\"", secretfile.SafeRef(v))
-	}
 }
