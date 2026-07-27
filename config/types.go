@@ -94,6 +94,8 @@ type ServerConfig struct {
 	Path    PathConfig    `koanf:"path" json:"path" yaml:"path" toml:"path" mapstructure:"path"`
 	Gzip    GzipConfig    `koanf:"gzip" json:"gzip" yaml:"gzip" toml:"gzip" mapstructure:"gzip"`
 
+	TLS ServerTLSConfig `koanf:"tls" json:"tls" yaml:"tls" toml:"tls" mapstructure:"tls"`
+
 	// BodyLimit is the maximum request body size in bytes. A value of 0 resolves
 	// to the framework default (10 MB) at wire-up; a negative value is rejected by
 	// config validation.
@@ -294,6 +296,23 @@ type TLSConfig struct {
 	CertFile string `koanf:"cert" json:"cert" yaml:"cert" toml:"cert" mapstructure:"cert"`
 	KeyFile  string `koanf:"key" json:"key" yaml:"key" toml:"key" mapstructure:"key"`
 	CAFile   string `koanf:"ca" json:"ca" yaml:"ca" toml:"ca" mapstructure:"ca"`
+}
+
+// ServerTLSConfig enables HTTPS on the HTTP server listener. Each PEM piece
+// comes from a file path (*File) or a base64-encoded PEM string (*Value) —
+// exactly one source per piece. Zero value = TLS disabled (plaintext
+// listener, today's behavior). Client-certificate verification is not part
+// of this struct yet (deferred; see ADR-042).
+type ServerTLSConfig struct {
+	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+
+	CertFile  string `koanf:"certfile" json:"certfile" yaml:"certfile" toml:"certfile" mapstructure:"certfile"`
+	CertValue string `koanf:"certvalue" json:"certvalue" yaml:"certvalue" toml:"certvalue" mapstructure:"certvalue"`
+	KeyFile   string `koanf:"keyfile" json:"keyfile" yaml:"keyfile" toml:"keyfile" mapstructure:"keyfile"`
+	KeyValue  string `koanf:"keyvalue" json:"keyvalue" yaml:"keyvalue" toml:"keyvalue" mapstructure:"keyvalue"`
+
+	// MinVersion: "" or "1.2" (default floor) | "1.3".
+	MinVersion string `koanf:"minversion" json:"minversion" yaml:"minversion" toml:"minversion" mapstructure:"minversion"`
 }
 
 // PostgreSQLConfig holds PostgreSQL-specific database settings.

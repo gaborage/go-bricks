@@ -308,6 +308,32 @@ func TestValidateServerSuccess(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "tls_disabled_ignores_material",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:    false,
+					CertFile:   "/staged/cert.pem",
+					CertValue:  "staged-cert-value",
+					MinVersion: "bogus",
+				},
+			},
+		},
+		{
+			name: "tls_enabled_valid",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:    true,
+					CertFile:   "/etc/tls/cert.pem",
+					KeyFile:    "/etc/tls/key.pem",
+					MinVersion: "1.3",
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -315,6 +341,15 @@ func TestValidateServerSuccess(t *testing.T) {
 			err := validateServer(&tt.cfg)
 			assert.NoError(t, err)
 		})
+	}
+}
+
+func standardServerTimeout() TimeoutConfig {
+	return TimeoutConfig{
+		Read:       15 * time.Second,
+		Write:      30 * time.Second,
+		Middleware: 5 * time.Second,
+		Shutdown:   10 * time.Second,
 	}
 }
 
@@ -460,6 +495,46 @@ func TestValidateServerFailures(t *testing.T) {
 				BodyLimit: -1,
 			},
 			expectedError: "server.bodylimit",
+		},
+		{
+			name: "tls_enabled_missing_key",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:  true,
+					CertFile: "/etc/tls/cert.pem",
+				},
+			},
+			expectedError: "server.tls.key",
+		},
+		{
+			name: "tls_cert_file_and_value_both_set",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:   true,
+					CertFile:  "/etc/tls/cert.pem",
+					CertValue: "aGVsbG8=",
+					KeyFile:   "/etc/tls/key.pem",
+				},
+			},
+			expectedError: "server.tls.cert",
+		},
+		{
+			name: "tls_bad_minversion",
+			cfg: ServerConfig{
+				Port:    8080,
+				Timeout: standardServerTimeout(),
+				TLS: ServerTLSConfig{
+					Enabled:    true,
+					CertFile:   "/etc/tls/cert.pem",
+					KeyFile:    "/etc/tls/key.pem",
+					MinVersion: "1.1",
+				},
+			},
+			expectedError: "server.tls.minversion",
 		},
 	}
 
