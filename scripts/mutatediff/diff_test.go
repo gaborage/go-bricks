@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -73,9 +74,19 @@ func TestPackagesOfDedupesAndSorts(t *testing.T) {
 		"database/query_builder.go": nil,
 		"database/factory.go":       nil,
 		"config/injection.go":       nil,
+		"main.go":                   nil,
 	})
-	want := []string{"./config", "./database"}
+	want := []string{".", "./config", "./database"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("packagesOf = %#v, want %#v", got, want)
 	}
+}
+
+func TestParseUnifiedDiffPanicsOnScanError(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("parseUnifiedDiff did not panic on an oversized diff line")
+		}
+	}()
+	parseUnifiedDiff(strings.Repeat("x", 2<<20))
 }

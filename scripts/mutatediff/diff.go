@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -48,6 +49,9 @@ func parseUnifiedDiff(diff string) map[string][]lineRange {
 			}
 			changes[current] = append(changes[current], lineRange{Start: start, End: start + count})
 		}
+	}
+	if err := sc.Err(); err != nil {
+		panic(fmt.Sprintf("mutatediff: diff scan aborted: %v", err))
 	}
 	return changes
 }
