@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec release release-cli
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec mutate mutate-baseline release release-cli
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
@@ -12,6 +12,9 @@ GOSEC_VERSION := v2.28.0
 # Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION := v2.12.2
+# renovate: datasource=go depName=github.com/go-gremlins/gremlins
+GREMLINS_VERSION := v0.5.0
+GREMLINS_CMD := go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -99,6 +102,12 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	# common-false-positives + std-error-handling presets already treat both classes as
 	# non-issues, so gating them only here would diverge from the repo's gosec policy.
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
+
+mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
+	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)"
+
+mutate-baseline: ## Full-repo mutation baseline (advisory; consumed by the nightly workflow)
+	$(GREMLINS_CMD) unleash --output gremlins-report.json
 
 release: ## Cut a signed release tag (usage: make release VERSION=v0.38.0). Run AFTER merging the release-please PR. Requires 1Password unlocked.
 	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.38.0'"; exit 1; }
