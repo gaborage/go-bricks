@@ -335,7 +335,9 @@ module), and `scripts/` (the wrapper itself — see the operational notes).
 Engine version is pinned via `GREMLINS_VERSION` in the Makefile;
 runtime knobs live in `.gremlins.yaml`. The nightly `Mutation Baseline`
 workflow runs the full repo in advisory mode (one engine process per package,
-so a runner eviction only loses the in-flight package) and publishes overall efficacy
+so a crashed engine process only loses that package's shard — though the JSON
+artifact uploads only after the final merge, so a full runner eviction still
+loses the run) and publishes overall efficacy
 plus a table of files with LIVED / NOT COVERED findings (first 50 rows) to the
 job summary; the JSON artifact is the complete record.
 

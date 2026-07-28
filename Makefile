@@ -116,7 +116,7 @@ mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main mu
 # misverdicts that nested package main (wiki/testing.md#mutation-gate).
 mutate-baseline: ## Full-repo mutation baseline, one engine process per package (advisory; consumed by the nightly workflow)
 	@rm -rf .gremlins-reports gremlins-report.json && mkdir -p .gremlins-reports
-	@i=0; for dir in $$(go list -f '{{.Dir}}' ./... | sed "s|^$$(pwd)/||" | grep -v '^scripts/' | sort -u); do \
+	@i=0; for dir in $$(go list -f '{{.Dir}}' ./... | sed -e "s|^$$(pwd)/||" -e "s|^$$(pwd)$$|.|" | grep -v '^scripts/' | sort -u); do \
 		i=$$((i+1)); \
 		echo "== mutating ./$$dir"; \
 		out=".gremlins-reports/$$i-$$(echo "$$dir" | tr / -).json"; \
