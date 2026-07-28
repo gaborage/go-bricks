@@ -55,9 +55,12 @@ func readShard(p string, out io.Writer) (shardReport, bool) {
 		return s, false
 	}
 	// Checked subtraction instead of summing — a sum of near-MaxInt counters
-	// wraps negative and would sneak past a plain comparison.
+	// wraps negative and would sneak past a plain comparison. NOT COVERED is
+	// deliberately absent: gremlins counts it OUTSIDE mutants_total (real
+	// capture: total=356 with killed=330, lived=26, not_covered=42) — including
+	// it here silently rejected 49 of 54 shards in the first production merge.
 	remaining := *s.MutantsTotal
-	for _, c := range []int{s.MutantsKilled, s.MutantsLived, s.MutantsNotCovered} {
+	for _, c := range []int{s.MutantsKilled, s.MutantsLived} {
 		if c > remaining {
 			fmt.Fprintf(out, "WARN: skipping %s: counters violate gremlins invariants\n", p)
 			return s, false
@@ -84,13 +87,14 @@ func mergeShards(dir, outPath string, out io.Writer) int {
 
 	var merged mergedReport
 	merged.Files = []json.RawMessage{}
-	readable := 0
+	readable, skipped := 0, 0
 	for _, p := range paths {
 		if abs, absErr := filepath.Abs(p); absErr == nil && abs == absOut {
 			continue // never slurp our own output on a re-run
 		}
 		s, ok := readShard(p, out)
 		if !ok {
+			skipped++
 			continue
 		}
 		if merged.MutantsKilled > math.MaxInt-s.MutantsKilled ||
@@ -122,7 +126,7 @@ func mergeShards(dir, outPath string, out io.Writer) int {
 	if err := os.WriteFile(outPath, encoded, 0o600); err != nil {
 		return fail("%v", err)
 	}
-	fmt.Fprintf(out, "baseline: killed=%d lived=%d not_covered=%d efficacy=%.0f%% (from %d shards)\n",
-		merged.MutantsKilled, merged.MutantsLived, merged.MutantsNotCovered, math.Floor(merged.TestEfficacy), readable)
+	fmt.Fprintf(out, "baseline: killed=%d lived=%d not_covered=%d efficacy=%.0f%% (from %d shards, %d skipped)\n",
+		merged.MutantsKilled, merged.MutantsLived, merged.MutantsNotCovered, math.Floor(merged.TestEfficacy), readable, skipped)
 	return 0
 }

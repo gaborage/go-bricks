@@ -77,7 +77,10 @@ func TestMergeShardsNeverSlurpsItsOwnOutputOnRerun(t *testing.T) {
 	if code := mergeShards(dir, outPath, &buf); code != 0 {
 		t.Fatalf("second merge = %d; output: %s", code, buf.String())
 	}
-	data, _ := os.ReadFile(outPath)
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read merged report: %v", err)
+	}
 	if !strings.Contains(string(data), `"mutants_killed":10`) {
 		t.Fatalf("re-run compounded its own output: %s", data)
 	}
@@ -117,7 +120,10 @@ func TestMergeShardsSkipsUnparsableShardWithWarning(t *testing.T) {
 	if !strings.Contains(buf.String(), "skipping unparsable shard") {
 		t.Fatalf("missing WARN for broken shard: %s", buf.String())
 	}
-	data, _ := os.ReadFile(outPath)
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read merged report: %v", err)
+	}
 	if !strings.Contains(string(data), `"mutants_killed":3`) {
 		t.Fatalf("good shard not merged: %s", data)
 	}
@@ -184,5 +190,31 @@ func TestMergeShardsFailsClosedOnAggregateOverflow(t *testing.T) {
 	}
 	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
 		t.Fatalf("corrupt report must not be written; stat err = %v", err)
+	}
+}
+
+// Regression: gremlins counts NOT COVERED OUTSIDE mutants_total. This fixture
+// mirrors the real Task-1 capture (total=356, killed=330, lived=26,
+// not_covered=42; 330+26+42 > 356) — the first production merge rejected 49 of
+// 54 shards because the invariant wrongly included not_covered.
+func TestMergeShardsAcceptsRealCaptureShapedShard(t *testing.T) {
+	dir := t.TempDir()
+	writeShard(t, dir, "1-config.json",
+		`{"mutants_total":356,"mutants_killed":330,"mutants_lived":26,"mutants_not_covered":42,"files":[]}`)
+
+	outPath := filepath.Join(t.TempDir(), "merged.json")
+	var buf bytes.Buffer
+	if code := mergeShards(dir, outPath, &buf); code != 0 {
+		t.Fatalf("mergeShards = %d; output: %s", code, buf.String())
+	}
+	if !strings.Contains(buf.String(), "from 1 shards, 0 skipped") {
+		t.Fatalf("real-capture-shaped shard must be accepted: %s", buf.String())
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read merged report: %v", err)
+	}
+	if !strings.Contains(string(data), `"mutants_not_covered":42`) {
+		t.Fatalf("not_covered lost in merge: %s", data)
 	}
 }
