@@ -102,6 +102,8 @@ func (s *Service) Digest(payload []byte) ([]byte, error) {
 }
 ```
 
+For a complete worked HMAC-over-a-request example, see [Visa x-pay-token](httpclient.md#visa-x-pay-token-api-key--shared-secret).
+
 Register `keystore.NewModule()` **before** any module that needs key material
 (JOSE-tagged routes, services using `deps.KeyStore`). The framework wires the
 store into `deps.KeyStore` via the `app.KeyStoreProvider` interface; a second
