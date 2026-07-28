@@ -222,6 +222,131 @@ consumer for it; today the workaround is a custom `RoundTripper` passed to
 `WithTransport` (which does sit beneath body transforms), at the cost of
 building the base transport yourself.
 
+### Visa x-pay-token (API key + shared secret)
+
+Some Visa Developer APIs authenticate outbound calls with a per-request HMAC token in an
+`x-pay-token` header instead of, or alongside, mutual TLS. The token is a lowercase-hex
+HMAC-SHA256 over a concatenation of the timestamp, the resource path, the query string and
+the request body, with a short validity window.
+
+go-bricks does not ship an x-pay-token helper. The concatenation is a handful of stdlib
+calls; the part that is genuinely easy to get wrong is **which resource path Visa expects**,
+and that is per-product data published by Visa — some products use the entire path, others
+strip a context path such as `/vdp/`, `/cybersource/`, `/wallet-services-web/` or `/one/`.
+**Take the byte order and the path rule from Visa's own current documentation for the
+product you are calling**, not from this page; the framework provides the composition seam
+(`WithRequestInterceptor`) and the secret storage (`app.KeyStore.Secret`).
+
+```go
+import (
+    "context"
+    "crypto/hmac"
+    "crypto/sha256"
+    "encoding/hex"
+    "fmt"
+    "io"
+    nethttp "net/http"
+    "net/url"
+    "strconv"
+    "strings"
+    "time"
+)
+
+// resourcePath maps the request URL to the path string the partner includes in the
+// token. This is product-specific — consult the partner's documentation. Passing the
+// wrong one produces a valid-looking token that the gateway rejects with a bare 401.
+func xPayToken(keys app.KeyStore, secretName string, resourcePath func(*url.URL) string) httpclient.RequestInterceptor {
+    return func(_ context.Context, req *nethttp.Request) error {
+        body, err := bodyForSigning(req)
+        if err != nil {
+            return fmt.Errorf("x-pay-token: read body: %w", err)
+        }
+
+        secret, err := keys.Secret(secretName)
+        if err != nil {
+            return fmt.Errorf("x-pay-token: resolve secret %q: %w", secretName, err)
+        }
+        defer func() { clear(secret) }() // caller owns the copy — zeroize after use
+
+        ts := strconv.FormatInt(time.Now().Unix(), 10)
+
+        mac := hmac.New(sha256.New, secret)
+        mac.Write([]byte(ts))
+        mac.Write([]byte(resourcePath(req.URL)))
+        mac.Write([]byte(req.URL.RawQuery))
+        mac.Write(body)
+
+        req.Header.Set("x-pay-token", "xv2:"+ts+":"+hex.EncodeToString(mac.Sum(nil)))
+        return nil
+    }
+}
+
+// bodyForSigning returns the request body WITHOUT consuming req.Body.
+func bodyForSigning(req *nethttp.Request) ([]byte, error) {
+    if req.GetBody == nil { // no body on this request
+        return nil, nil
+    }
+    rc, err := req.GetBody()
+    if err != nil {
+        return nil, err
+    }
+    defer rc.Close()
+    return io.ReadAll(rc)
+}
+
+client := httpclient.NewBuilder(deps.Logger).
+    WithPeerName("visa-vts").
+    WithRetries(3, 500*time.Millisecond).
+    WithRequestInterceptor(xPayToken(deps.KeyStore, "visa-shared-secret",
+        func(u *url.URL) string { return strings.TrimPrefix(u.Path, "/") })).
+    Build()
+```
+
+**Build the query string yourself, sorted.** The token covers `req.URL.RawQuery` exactly as
+it will be sent, so the URL you hand `httpclient.Request` must already carry every required
+parameter (the API key among them) in the order the partner expects.
+`url.Values.Encode()` sorts by key, which is usually what you want. The interceptor must
+never reorder the query — that would sign a string the wire does not carry.
+
+**Per-attempt freshness is automatic.** Interceptors run inside `buildRequest`, which
+`executeAttempt` calls fresh on every retry, so each attempt carries a new timestamp and a
+new token. This matters more here than for OAuth 1.0a: the token has a short validity
+window, so a retry that reused the first attempt's timestamp would start failing as soon as
+the backoff exceeded it.
+
+**Read the body through `GetBody`, and never replace `req.Body`.** `buildRequest` builds the
+body from a `*bytes.Reader`, so net/http populates both `ContentLength` and `GetBody` —
+calling `GetBody()` hands you a fresh reader without draining the one that will be sent.
+Nil-check it: a request with no body has neither. Draining `req.Body` and re-wrapping it
+instead leaves `ContentLength` and `GetBody` stale, and `buildRequest` does **not**
+re-normalize framing after interceptors run.
+
+**Do not let a signed request follow redirects.** go-bricks sets no `CheckRedirect`, so the
+stdlib default follows redirects below `buildRequest` without re-running any interceptor.
+On a same-host redirect the token covers the wrong path. On a **cross-host** redirect the
+consequence is worse than for OAuth 1.0a: net/http strips only `Authorization`,
+`Www-Authenticate`, `Cookie`, `Cookie2`, `Proxy-Authorization` and `Proxy-Authenticate` when
+crossing origins — a custom `x-pay-token` header is **not** on that list and is forwarded
+verbatim to the redirect target. Install a `CheckRedirect` returning
+`http.ErrUseLastResponse` on your own client, or confirm the partner endpoint does not
+redirect.
+
+**Client TLS still composes.** The interceptor path leaves `WithTLSConfig` intact, whereas a
+hand-rolled `WithTransport` signer fills the same base-transport slot (last call wins).
+Visa presents mutual TLS and x-pay-token as *alternative* authentication methods rather than
+requiring both, but some deployments run mTLS at the egress boundary as well — if yours
+does, use the interceptor, not a custom transport.
+
+**Limitation: the token does not cover body transforms.** Interceptors run *before* the
+transport chain, so the HMAC covers the body as `buildRequest` produced it. If you also
+install a body-transforming layer such as `WithJOSE`, the token will NOT cover the
+transformed bytes and the partner will reject the request. This combination is realistic for
+Visa Token Services, which is both a JOSE and an x-pay-token product. A framework hook that
+runs inside the transport chain is deferred to the field-level-encryption work
+([#765](https://github.com/gaborage/go-bricks/issues/765)); today the workaround is a custom
+`RoundTripper` passed to `WithTransport`, which does sit beneath body transforms, at the
+cost of building the base transport yourself.
+
 ## Metrics
 
 ### Overview
