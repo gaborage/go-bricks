@@ -15,6 +15,8 @@ GOLANGCI_LINT_VERSION := v2.12.2
 # renovate: datasource=go depName=github.com/go-gremlins/gremlins
 GREMLINS_VERSION := v0.5.1
 GREMLINS_CMD := go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
+# Hosted runners are 4-vCPU/16GB; 2 workers halves peak memory vs the local default.
+MUTATE_BASELINE_WORKERS ?= 2
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -106,8 +108,41 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
 	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)"
 
-mutate-baseline: ## Full-repo mutation baseline (advisory; consumed by the nightly workflow)
-	$(GREMLINS_CMD) unleash --output gremlins-report.json
+# One gremlins process per package: a single full-repo process with 4 workers
+# exhausted a 4-vCPU/16GB hosted runner ~25 min in (runner shutdown signal).
+# Per-package processes bound memory, let partial results survive an eviction,
+# and the merge prefixes file_name with the package dir (gremlins emits
+# basenames, which are ambiguous repo-wide). scripts/ excluded: gremlins
+# misverdicts that nested package main (wiki/testing.md#mutation-gate).
+mutate-baseline: ## Full-repo mutation baseline, one engine process per package (advisory; consumed by the nightly workflow)
+	@rm -rf .gremlins-reports gremlins-report.json && mkdir -p .gremlins-reports
+	@i=0; for dir in $$(go list -f '{{.Dir}}' ./... | sed "s|^$$(pwd)/||" | grep -v '^scripts/' | sort -u); do \
+		i=$$((i+1)); \
+		echo "== mutating ./$$dir"; \
+		out=".gremlins-reports/$$i-$$(echo "$$dir" | tr / -).json"; \
+		$(GREMLINS_CMD) unleash --workers $(MUTATE_BASELINE_WORKERS) --output "$$out" "./$$dir" \
+			|| echo "WARN: gremlins exited non-zero for ./$$dir (advisory)"; \
+		if [ -f "$$out" ]; then \
+			jq --arg d "$$dir" '.files = ((.files // []) | map(.file_name = ($$d + "/" + .file_name)))' "$$out" > "$$out.tmp" && mv "$$out.tmp" "$$out" \
+				|| { echo "WARN: ./$$dir produced an unparsable report, dropped (advisory)"; rm -f "$$out" "$$out.tmp"; }; \
+		fi; \
+	done
+	@if ls .gremlins-reports/*.json >/dev/null 2>&1; then \
+		jq -s '(map(.mutants_killed // 0) | add) as $$k \
+			| (map(.mutants_lived // 0) | add) as $$l \
+			| (map(.mutants_not_covered // 0) | add) as $$n \
+			| { \
+				mutants_killed: $$k, \
+				mutants_lived: $$l, \
+				mutants_not_covered: $$n, \
+				test_efficacy: (if ($$k + $$l) > 0 then ($$k * 100 / ($$k + $$l)) else 0 end), \
+				mutations_coverage: (if ($$k + $$l + $$n) > 0 then (($$k + $$l) * 100 / ($$k + $$l + $$n)) else 0 end), \
+				files: (map(.files // []) | add) \
+			}' .gremlins-reports/*.json > gremlins-report.json; \
+		jq -r '"baseline: killed=\(.mutants_killed) lived=\(.mutants_lived) not_covered=\(.mutants_not_covered) efficacy=\(.test_efficacy | floor)%"' gremlins-report.json; \
+	else \
+		echo "WARN: no package reports produced — skipping merge (advisory)"; \
+	fi
 
 release: ## Cut a signed release tag (usage: make release VERSION=v0.38.0). Run AFTER merging the release-please PR. Requires 1Password unlocked.
 	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.38.0'"; exit 1; }

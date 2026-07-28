@@ -334,7 +334,8 @@ Excluded from scope: `_test.go` files, `testdata/`, `tools/` (separate Go
 module), and `scripts/` (the wrapper itself — see the operational notes).
 Engine version is pinned via `GREMLINS_VERSION` in the Makefile;
 runtime knobs live in `.gremlins.yaml`. The nightly `Mutation Baseline`
-workflow runs the full repo in advisory mode and publishes overall efficacy
+workflow runs the full repo in advisory mode (one engine process per package,
+so a runner eviction only loses the in-flight package) and publishes overall efficacy
 plus a table of files with LIVED / NOT COVERED findings (first 50 rows) to the
 job summary; the JSON artifact is the complete record.
 
