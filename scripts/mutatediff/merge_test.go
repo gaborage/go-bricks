@@ -136,3 +136,22 @@ func TestMergeShardsFailsClosedOnZeroReadableShards(t *testing.T) {
 		t.Fatalf("empty merged report must not be written; stat err = %v", err)
 	}
 }
+
+func TestMergeShardsSkipsInvariantViolatingCounters(t *testing.T) {
+	dir := t.TempDir()
+	writeShard(t, dir, "1-good.json", `{"mutants_total":5,"mutants_killed":5,"mutants_lived":0,"files":[]}`)
+	writeShard(t, dir, "2-negative.json", `{"mutants_total":3,"mutants_killed":-1,"mutants_lived":0,"files":[]}`)
+	writeShard(t, dir, "3-overtotal.json", `{"mutants_total":1,"mutants_killed":2,"mutants_lived":1,"files":[]}`)
+
+	outPath := filepath.Join(t.TempDir(), "merged.json")
+	var buf bytes.Buffer
+	if code := mergeShards(dir, outPath, &buf); code != 0 {
+		t.Fatalf("mergeShards = %d; output: %s", code, buf.String())
+	}
+	if got := strings.Count(buf.String(), "counters violate gremlins invariants"); got != 2 {
+		t.Fatalf("want 2 invariant WARNs, got %d: %s", got, buf.String())
+	}
+	if !strings.Contains(buf.String(), "from 1 shards") {
+		t.Fatalf("only the sane shard may count: %s", buf.String())
+	}
+}

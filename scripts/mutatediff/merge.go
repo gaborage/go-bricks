@@ -29,6 +29,35 @@ type mergedReport struct {
 	Files             []json.RawMessage `json:"files"`
 }
 
+// readShard loads and validates one shard; ok=false means skip (already
+// warned). Identity keys on mutants_total — the baseline loop's jq rewrite
+// normalizes files to [] on any parseable JSON, so files proves nothing.
+// Counter sanity: non-negative, and the verdicted counters cannot exceed the
+// total (killed+lived+not_covered < total is legitimate — the remainder is
+// TIMED OUT / NOT VIABLE, which gremlins reports separately).
+func readShard(p string, out io.Writer) (shardReport, bool) {
+	var s shardReport
+	data, err := os.ReadFile(p) // #nosec G304 -- paths come from a glob over the loop's own report dir
+	if err != nil {
+		fmt.Fprintf(out, "WARN: skipping unreadable shard %s: %v\n", p, err)
+		return s, false
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		fmt.Fprintf(out, "WARN: skipping unparsable shard %s: %v\n", p, err)
+		return s, false
+	}
+	if s.MutantsTotal == nil {
+		fmt.Fprintf(out, "WARN: skipping %s: JSON but not a gremlins report\n", p)
+		return s, false
+	}
+	if *s.MutantsTotal < 0 || s.MutantsKilled < 0 || s.MutantsLived < 0 || s.MutantsNotCovered < 0 ||
+		s.MutantsKilled+s.MutantsLived+s.MutantsNotCovered > *s.MutantsTotal {
+		fmt.Fprintf(out, "WARN: skipping %s: counters violate gremlins invariants\n", p)
+		return s, false
+	}
+	return s, true
+}
+
 // mergeShards aggregates every *.json shard in dir into a single report at
 // outPath. An unparsable shard is skipped with a WARN (the baseline is
 // advisory; one bad shard must not erase the rest). Zero readable shards is
@@ -51,21 +80,8 @@ func mergeShards(dir, outPath string, out io.Writer) int {
 		if abs, absErr := filepath.Abs(p); absErr == nil && abs == absOut {
 			continue // never slurp our own output on a re-run
 		}
-		data, readErr := os.ReadFile(p) // #nosec G304 -- paths come from a glob over the loop's own report dir
-		if readErr != nil {
-			fmt.Fprintf(out, "WARN: skipping unreadable shard %s: %v\n", p, readErr)
-			continue
-		}
-		var s shardReport
-		if jsonErr := json.Unmarshal(data, &s); jsonErr != nil {
-			fmt.Fprintf(out, "WARN: skipping unparsable shard %s: %v\n", p, jsonErr)
-			continue
-		}
-		// Identity check must not lean on files: the baseline loop's jq rewrite
-		// normalizes files to [] on any parseable JSON. mutants_total is the
-		// gremlins-specific marker.
-		if s.MutantsTotal == nil {
-			fmt.Fprintf(out, "WARN: skipping %s: JSON but not a gremlins report\n", p)
+		s, ok := readShard(p, out)
+		if !ok {
 			continue
 		}
 		readable++
