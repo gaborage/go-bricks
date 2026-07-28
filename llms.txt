@@ -3378,15 +3378,25 @@ for _, m := range []app.Module{
 package secureapi
 
 import (
+    "context"
+
     "github.com/gaborage/go-bricks/app"
+    "github.com/gaborage/go-bricks/cache"
     "github.com/gaborage/go-bricks/server"
 )
 
-type Module struct{}
+type Module struct {
+    getCache func(context.Context) (cache.Cache, error)
+}
 
-func (m *Module) Name() string                 { return "secureapi" }
-func (m *Module) Init(_ *app.ModuleDeps) error { return nil }
-func (m *Module) Shutdown() error              { return nil }
+func (m *Module) Name() string { return "secureapi" }
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    m.getCache = deps.Cache // tenant-aware resolution
+    return nil
+}
+
+func (m *Module) Shutdown() error { return nil }
 
 // Both types declare matching jose tags. Asymmetric declaration (only one tagged)
 // panics at startup.
@@ -3418,6 +3428,7 @@ The framework verifies the JWS signature and exposes the verified claim set via 
 
 ```go
 import (
+    "errors"
     "time"
     "github.com/gaborage/go-bricks/jose"
 )
@@ -3427,12 +3438,9 @@ const (
     maxClaimAge  = 5 * time.Minute   // hard upper bound on iat freshness
 )
 
-// jtiCache is any deduplication store you trust (Redis SETNX, in-memory LRU, DB row).
-// The framework deliberately does NOT ship a JTI cache — distribution semantics
-// depend on your deployment (single-replica vs. fleet vs. multi-region).
-type jtiCache interface {
-    Seen(ctx context.Context, jti string, ttl time.Duration) (bool, error)
-}
+// The framework ships jose.CheckJTIReplay for the jti half: it needs any
+// SET-NX store (jose.ReplayRecorder) — cache.Cache from deps.Cache satisfies it
+// and is already tenant-scoped, so a jti seen on tenant A never blocks tenant B.
 
 func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (ExchangeResponse, server.IAPIError) {
     reqCtx := ctx.RequestContext()
@@ -3463,15 +3471,28 @@ func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (Excha
         return ExchangeResponse{}, server.NewUnauthorizedError("payload not yet valid")
     }
 
-    // 3. jti replay — reject if we've seen this token recently
-    if claims.JTI != "" {
-        seen, err := m.jtiCache.Seen(reqCtx, claims.JTI, maxClaimAge)
-        if err != nil {
-            return ExchangeResponse{}, server.NewInternalServerError("jti check failed")
-        }
-        if seen {
-            return ExchangeResponse{}, server.NewUnauthorizedError("replayed jti")
-        }
+    // 3. jti replay — reject if we've seen this token recently.
+    if claims.JTI == "" {
+        // No jti means no replay check is possible: reject rather than accept
+        // an unprotected payload. Checked here so a cache outage cannot mask a
+        // 401 behind a 500.
+        return ExchangeResponse{}, server.NewUnauthorizedError("missing jti")
+    }
+    c, err := m.getCache(reqCtx)
+    if err != nil {
+        return ExchangeResponse{}, server.NewInternalServerError("cache unavailable")
+    }
+    fresh, err := jose.CheckJTIReplay(reqCtx, c, claims, maxClaimAge)
+    switch {
+    case errors.Is(err, jose.ErrJTIMissing):
+        // Defensive: unreachable given the check above, kept so the mapping is
+        // documented if that check is ever moved.
+        return ExchangeResponse{}, server.NewUnauthorizedError("missing jti")
+    case err != nil:
+        // Fail CLOSED: a replay check that could not run is not a pass.
+        return ExchangeResponse{}, server.NewInternalServerError("jti check failed")
+    case !fresh:
+        return ExchangeResponse{}, server.NewUnauthorizedError("replayed jti")
     }
 
     // 4. Partner-specific extensions live in claims.Raw
