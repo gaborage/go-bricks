@@ -77,7 +77,10 @@ func TestMergeShardsNeverSlurpsItsOwnOutputOnRerun(t *testing.T) {
 	if code := mergeShards(dir, outPath, &buf); code != 0 {
 		t.Fatalf("second merge = %d; output: %s", code, buf.String())
 	}
-	data, _ := os.ReadFile(outPath)
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read merged report: %v", err)
+	}
 	if !strings.Contains(string(data), `"mutants_killed":10`) {
 		t.Fatalf("re-run compounded its own output: %s", data)
 	}
@@ -117,7 +120,10 @@ func TestMergeShardsSkipsUnparsableShardWithWarning(t *testing.T) {
 	if !strings.Contains(buf.String(), "skipping unparsable shard") {
 		t.Fatalf("missing WARN for broken shard: %s", buf.String())
 	}
-	data, _ := os.ReadFile(outPath)
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read merged report: %v", err)
+	}
 	if !strings.Contains(string(data), `"mutants_killed":3`) {
 		t.Fatalf("good shard not merged: %s", data)
 	}
@@ -204,7 +210,10 @@ func TestMergeShardsAcceptsRealCaptureShapedShard(t *testing.T) {
 	if !strings.Contains(buf.String(), "from 1 shards, 0 skipped") {
 		t.Fatalf("real-capture-shaped shard must be accepted: %s", buf.String())
 	}
-	data, _ := os.ReadFile(outPath)
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read merged report: %v", err)
+	}
 	if !strings.Contains(string(data), `"mutants_not_covered":42`) {
 		t.Fatalf("not_covered lost in merge: %s", data)
 	}
