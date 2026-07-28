@@ -11,6 +11,7 @@
 
 # But not these files...
 !/.gitignore
+!/.gitattributes
 
 !*.go
 !go.sum

@@ -182,6 +182,30 @@ observability:
 # Coverage below 80%
 # → Run: make test-coverage
 # → Check SonarCloud quality gate requirements
+
+# CodeQL job "Analyze (javascript-typescript)" fails: exit 32,
+# "CodeQL detected code written in JavaScript/TypeScript but could not process any of it"
+# → The only .js files in this repo are Claude Code workflow scripts
+#   (.claude/workflows/*.js) in the Workflow-tool dialect — NOT valid
+#   standalone JavaScript (top-level return) and never will be.
+#   See .claude/workflows/README.md for the June 2026 incident record.
+# → Fix lives in TWO places:
+#   1. GitHub settings: CodeQL default setup analyzes an explicit language
+#      list ["actions","go"] (set 2026-07-20). Inspect (read-only):
+#      gh api repos/gaborage/go-bricks/code-scanning/default-setup
+#   2. In-repo: .gitattributes marks the scripts linguist-detectable=false,
+#      intended to keep language detection from re-classifying the repo as
+#      containing JavaScript after a default-setup reset.
+# → Do NOT re-add javascript-typescript as a remedy for THIS failure, and do
+#   NOT edit the workflow scripts' syntax to appease the scanner. Re-enabling
+#   it is only sensible once real, parseable JS/TS actually enters the repo
+#   — see .claude/workflows/README.md for that case.
+
+# Repo language bar / Languages API still shows "JavaScript"
+# → Expected for a while after the .gitattributes change lands; GitHub
+#   recomputes language stats asynchronously, so it may take one or more
+#   pushes to the default branch to clear.
+#   Check: gh api repos/gaborage/go-bricks/languages   # JavaScript key drops out
 ```
 
 ## Multi-Tenant Issues
