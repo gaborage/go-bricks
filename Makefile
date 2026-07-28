@@ -128,22 +128,11 @@ mutate-baseline: ## Full-repo mutation baseline, one engine process per package 
 				|| { echo "WARN: ./$$dir produced an unparsable report, dropped (advisory)"; rm -f "$$out" "$$out.tmp"; }; \
 		fi; \
 	done
-	@if ls .gremlins-reports/*.json >/dev/null 2>&1; then \
-		jq -s '(map(.mutants_killed // 0) | add) as $$k \
-			| (map(.mutants_lived // 0) | add) as $$l \
-			| (map(.mutants_not_covered // 0) | add) as $$n \
-			| { \
-				mutants_killed: $$k, \
-				mutants_lived: $$l, \
-				mutants_not_covered: $$n, \
-				test_efficacy: (if ($$k + $$l) > 0 then ($$k * 100 / ($$k + $$l)) else 0 end), \
-				mutations_coverage: (if ($$k + $$l + $$n) > 0 then (($$k + $$l) * 100 / ($$k + $$l + $$n)) else 0 end), \
-				files: (map(.files // []) | add) \
-			}' .gremlins-reports/*.json > gremlins-report.json; \
-		jq -r '"baseline: killed=\(.mutants_killed) lived=\(.mutants_lived) not_covered=\(.mutants_not_covered) efficacy=\(.test_efficacy | floor)%"' gremlins-report.json; \
-	else \
-		echo "WARN: no package reports produced — skipping merge (advisory)"; \
-	fi
+# The merge lives in Go (scripts/mutatediff -merge), not inline jq: make's
+# backslash continuations land literal backslashes inside a single-quoted jq
+# program, which cost the first sharded run its entire report (jq compile
+# error swallowed by the advisory guard, 0-byte artifact uploaded).
+	@go run ./scripts/mutatediff -merge .gremlins-reports -out gremlins-report.json
 
 release: ## Cut a signed release tag (usage: make release VERSION=v0.38.0). Run AFTER merging the release-please PR. Requires 1Password unlocked.
 	@test -n "$(VERSION)" || { echo "Error: VERSION is required, e.g. 'make release VERSION=v0.38.0'"; exit 1; }

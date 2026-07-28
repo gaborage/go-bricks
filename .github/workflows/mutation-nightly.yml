@@ -31,7 +31,7 @@ jobs:
       - name: Publish score summary
         if: always()
         run: |
-          if [ ! -f gremlins-report.json ]; then
+          if [ ! -s gremlins-report.json ]; then
             echo "no report produced" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -57,5 +57,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: gremlins-report
-          path: gremlins-report.json
+          path: |
+            gremlins-report.json
+            .gremlins-reports/
+          # dot-dirs are excluded by default since upload-artifact v4 — without
+          # this the shard reports silently vanish from the artifact
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 30

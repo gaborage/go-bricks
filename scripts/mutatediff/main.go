@@ -15,7 +15,12 @@ import (
 func main() {
 	engine := flag.String("engine", "", "mutation engine command prefix, e.g. 'go run github.com/go-gremlins/gremlins/cmd/gremlins@v0.5.0'")
 	base := flag.String("base", "origin/main", "ref to compute merge-base against")
+	mergeDir := flag.String("merge", "", "merge mode: directory of per-package shard reports to aggregate (skips the diff gate)")
+	mergeOut := flag.String("out", "gremlins-report.json", "merge mode: output path for the aggregated report")
 	flag.Parse()
+	if *mergeDir != "" {
+		os.Exit(mergeShards(*mergeDir, *mergeOut, os.Stdout))
+	}
 	if *engine == "" {
 		fmt.Fprintln(os.Stderr, "mutatediff: -engine is required")
 		os.Exit(2)
