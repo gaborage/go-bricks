@@ -155,3 +155,34 @@ func TestMergeShardsSkipsInvariantViolatingCounters(t *testing.T) {
 		t.Fatalf("only the sane shard may count: %s", buf.String())
 	}
 }
+
+func TestMergeShardsRejectsWrappingCounterSums(t *testing.T) {
+	dir := t.TempDir()
+	writeShard(t, dir, "1-good.json", `{"mutants_total":1,"mutants_killed":1,"files":[]}`)
+	writeShard(t, dir, "2-wrap.json",
+		`{"mutants_total":9223372036854775807,"mutants_killed":9223372036854775807,"mutants_lived":1,"files":[]}`)
+
+	outPath := filepath.Join(t.TempDir(), "merged.json")
+	var buf bytes.Buffer
+	if code := mergeShards(dir, outPath, &buf); code != 0 {
+		t.Fatalf("mergeShards = %d; output: %s", code, buf.String())
+	}
+	if !strings.Contains(buf.String(), "from 1 shards") {
+		t.Fatalf("wrapping shard must be skipped: %s", buf.String())
+	}
+}
+
+func TestMergeShardsFailsClosedOnAggregateOverflow(t *testing.T) {
+	dir := t.TempDir()
+	writeShard(t, dir, "1-max.json", `{"mutants_total":9223372036854775807,"mutants_killed":9223372036854775807,"files":[]}`)
+	writeShard(t, dir, "2-max.json", `{"mutants_total":9223372036854775807,"mutants_killed":9223372036854775807,"files":[]}`)
+
+	outPath := filepath.Join(t.TempDir(), "merged.json")
+	var buf bytes.Buffer
+	if code := mergeShards(dir, outPath, &buf); code != 2 {
+		t.Fatalf("mergeShards = %d, want 2 on aggregate overflow", code)
+	}
+	if _, err := os.Stat(outPath); !os.IsNotExist(err) {
+		t.Fatalf("corrupt report must not be written; stat err = %v", err)
+	}
+}

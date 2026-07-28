@@ -50,10 +50,19 @@ func readShard(p string, out io.Writer) (shardReport, bool) {
 		fmt.Fprintf(out, "WARN: skipping %s: JSON but not a gremlins report\n", p)
 		return s, false
 	}
-	if *s.MutantsTotal < 0 || s.MutantsKilled < 0 || s.MutantsLived < 0 || s.MutantsNotCovered < 0 ||
-		s.MutantsKilled+s.MutantsLived+s.MutantsNotCovered > *s.MutantsTotal {
+	if *s.MutantsTotal < 0 || s.MutantsKilled < 0 || s.MutantsLived < 0 || s.MutantsNotCovered < 0 {
 		fmt.Fprintf(out, "WARN: skipping %s: counters violate gremlins invariants\n", p)
 		return s, false
+	}
+	// Checked subtraction instead of summing — a sum of near-MaxInt counters
+	// wraps negative and would sneak past a plain comparison.
+	remaining := *s.MutantsTotal
+	for _, c := range []int{s.MutantsKilled, s.MutantsLived, s.MutantsNotCovered} {
+		if c > remaining {
+			fmt.Fprintf(out, "WARN: skipping %s: counters violate gremlins invariants\n", p)
+			return s, false
+		}
+		remaining -= c
 	}
 	return s, true
 }
@@ -83,6 +92,11 @@ func mergeShards(dir, outPath string, out io.Writer) int {
 		s, ok := readShard(p, out)
 		if !ok {
 			continue
+		}
+		if merged.MutantsKilled > math.MaxInt-s.MutantsKilled ||
+			merged.MutantsLived > math.MaxInt-s.MutantsLived ||
+			merged.MutantsNotCovered > math.MaxInt-s.MutantsNotCovered {
+			return fail("aggregate counters would overflow at %s — refusing to write a corrupt report", p)
 		}
 		readable++
 		merged.MutantsKilled += s.MutantsKilled
