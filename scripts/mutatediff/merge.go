@@ -61,7 +61,10 @@ func mergeShards(dir, outPath string, out io.Writer) int {
 			fmt.Fprintf(out, "WARN: skipping unparsable shard %s: %v\n", p, jsonErr)
 			continue
 		}
-		if s.MutantsTotal == nil && s.Files == nil {
+		// Identity check must not lean on files: the baseline loop's jq rewrite
+		// normalizes files to [] on any parseable JSON. mutants_total is the
+		// gremlins-specific marker.
+		if s.MutantsTotal == nil {
 			fmt.Fprintf(out, "WARN: skipping %s: JSON but not a gremlins report\n", p)
 			continue
 		}

@@ -19,9 +19,9 @@ func writeShard(t *testing.T, dir, name, content string) {
 func TestMergeShardsAggregatesAndPrefixedFilesPassThrough(t *testing.T) {
 	dir := t.TempDir()
 	writeShard(t, dir, "1-config.json",
-		`{"mutants_killed":51,"mutants_lived":7,"mutants_not_covered":2,"files":[{"file_name":"config/injection.go","mutations":[{"line":1,"type":"X","status":"LIVED"}]}]}`)
+		`{"mutants_total":60,"mutants_killed":51,"mutants_lived":7,"mutants_not_covered":2,"files":[{"file_name":"config/injection.go","mutations":[{"line":1,"type":"X","status":"LIVED"}]}]}`)
 	writeShard(t, dir, "2-multitenant.json",
-		`{"mutants_killed":7,"mutants_lived":0,"mutants_not_covered":0,"files":[]}`)
+		`{"mutants_total":7,"mutants_killed":7,"mutants_lived":0,"mutants_not_covered":0,"files":[]}`)
 
 	outPath := filepath.Join(dir, "merged.json")
 	var buf bytes.Buffer
@@ -66,7 +66,7 @@ func TestMergeShardsAggregatesAndPrefixedFilesPassThrough(t *testing.T) {
 
 func TestMergeShardsNeverSlurpsItsOwnOutputOnRerun(t *testing.T) {
 	dir := t.TempDir()
-	writeShard(t, dir, "1-config.json", `{"mutants_killed":10,"mutants_lived":0,"files":[]}`)
+	writeShard(t, dir, "1-config.json", `{"mutants_total":10,"mutants_killed":10,"mutants_lived":0,"files":[]}`)
 
 	outPath := filepath.Join(dir, "merged.json") // output INSIDE the shard dir
 	var buf bytes.Buffer
@@ -88,8 +88,8 @@ func TestMergeShardsNeverSlurpsItsOwnOutputOnRerun(t *testing.T) {
 
 func TestMergeShardsSkipsJSONThatIsNotAReport(t *testing.T) {
 	dir := t.TempDir()
-	writeShard(t, dir, "1-good.json", `{"mutants_killed":2,"mutants_lived":0,"files":[]}`)
-	writeShard(t, dir, "2-notareport.json", `{"hello":"world"}`)
+	writeShard(t, dir, "1-good.json", `{"mutants_total":2,"mutants_killed":2,"mutants_lived":0,"files":[]}`)
+	writeShard(t, dir, "2-notareport.json", `{"hello":"world","files":[]}`)
 
 	outPath := filepath.Join(t.TempDir(), "merged.json")
 	var buf bytes.Buffer
@@ -106,7 +106,7 @@ func TestMergeShardsSkipsJSONThatIsNotAReport(t *testing.T) {
 
 func TestMergeShardsSkipsUnparsableShardWithWarning(t *testing.T) {
 	dir := t.TempDir()
-	writeShard(t, dir, "1-good.json", `{"mutants_killed":3,"mutants_lived":1,"files":[]}`)
+	writeShard(t, dir, "1-good.json", `{"mutants_total":4,"mutants_killed":3,"mutants_lived":1,"files":[]}`)
 	writeShard(t, dir, "2-broken.json", `{truncated`)
 
 	var buf bytes.Buffer
