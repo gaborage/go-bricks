@@ -2168,34 +2168,45 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
     return s.queryDatabase(ctx, id)
 }
 
-// Timeout handling with context
-cacheCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-defer cancel()
+// Timeout handling and error-type checking
+func (s *UserService) getUserCached(ctx context.Context, id int64) (*User, error) {
+    key := fmt.Sprintf("user:%d", id)
 
-c, err := s.getCache(cacheCtx)
-if err != nil {
-    // Cache unavailable - degrade to the database, don't fail the request.
-    // Note the fallback takes ctx, not cacheCtx: the 100ms budget is the
-    // cache's, and leaking it into the database call would cap that too.
-    return s.queryDatabase(ctx, id)
-}
+    cacheCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+    defer cancel()
 
-data, err := c.Get(cacheCtx, key)
-if errors.Is(err, context.DeadlineExceeded) {
-    // Cache too slow - fallback to database
-    s.logger.Warn().Str("key", key).Msg("Cache timeout exceeded")
-}
+    c, err := s.getCache(cacheCtx)
+    if err != nil {
+        // Cache unavailable - degrade to the database, don't fail the request.
+        // Note the fallback takes ctx, not cacheCtx: the 100ms budget is the
+        // cache's, and leaking it into the database call would cap that too.
+        return s.queryDatabase(ctx, id)
+    }
 
-// Error type checking
-if errors.Is(err, cache.ErrNotFound) {
-    // Key expired or never set - query database, repopulate cache
-} else if errors.Is(err, cache.ErrClosed) {
-    // Cache closed during shutdown - skip cache, continue request
-} else if errors.Is(err, cache.ErrInvalidTTL) {
-    // Developer error - negative or zero TTL provided
-} else if opErr, ok := err.(*cache.OperationError); ok {
-    // Network/Redis error - includes operation, key, underlying error
-    s.logger.Error().Str("operation", opErr.Op).Str("key", opErr.Key).Err(opErr.Err).Msg("Cache operation failed")
+    data, err := c.Get(cacheCtx, key)
+    if errors.Is(err, context.DeadlineExceeded) {
+        // Cache too slow - fallback to database
+        s.logger.Warn().Str("key", key).Msg("Cache timeout exceeded")
+    }
+
+    // Error type checking
+    var opErr *cache.OperationError
+    switch {
+    case errors.Is(err, cache.ErrNotFound):
+        // Key expired or never set - query database, repopulate cache
+    case errors.Is(err, cache.ErrClosed):
+        // Cache closed during shutdown - skip cache, continue request
+    case errors.Is(err, cache.ErrInvalidTTL):
+        // Developer error - negative or zero TTL provided
+    case errors.As(err, &opErr):
+        // Network/Redis error - includes operation, key, underlying error
+        s.logger.Error().Str("operation", opErr.Op).Str("key", opErr.Key).Err(opErr.Err).Msg("Cache operation failed")
+    }
+
+    if err != nil {
+        return s.queryDatabase(ctx, id)
+    }
+    return cache.Unmarshal[*User](data)
 }
 ```
 
@@ -2213,41 +2224,38 @@ if errors.Is(err, cache.ErrNotFound) {
 **Health Checks & Monitoring:**
 
 ```go
-// Cache health check
-c, err := s.getCache(ctx)
-if err != nil {
-    return err
-}
-if err := c.Health(ctx); err != nil {
-    // Redis: PING command failed
-    // Cache unhealthy - alert operations team
+func (s *UserService) reportCacheHealth(ctx context.Context) error {
+    // Cache health check
+    c, err := s.getCache(ctx)
+    if err != nil {
+        return err
+    }
+    if err := c.Health(ctx); err != nil {
+        // Redis: PING command failed
+        // Cache unhealthy - alert operations team
+    }
+
+    // Cache instance stats (Redis-specific)
+    stats, err := c.Stats()
+    if err != nil {
+        return err
+    }
+    s.logger.Info().Interface("cache_stats", stats).Msg("Cache stats")
+    // stats shape:
+    // {
+    //   "redis_info": {...},          // Redis SERVER INFO
+    //   "pool_hits": 12500,           // Connection pool hits
+    //   "pool_misses": 45,            // Connection pool misses
+    //   "pool_timeouts": 0,           // Pool timeout errors
+    //   "pool_total_conns": 10,       // Total connections
+    //   "pool_idle_conns": 7,         // Idle connections
+    //   "pool_stale_conns": 0         // Stale connections
+    // }
+    return nil
 }
 
-// GET /health is a liveness-only probe with no component breakdown:
-// {"status": "ok"}
-//
-// GET /ready reports per-component status (database, messaging). A cache
-// health probe is registered internally when cache is enabled, but its
-// status is not yet surfaced as a top-level key in the /ready response.
-
-// Cache instance stats (Redis-specific)
-stats, err := c.Stats()
-if err != nil {
-    return err
-}
-s.logger.Info().Interface("cache_stats", stats).Msg("Cache stats")
-// stats shape:
-// {
-//   "redis_info": {...},          // Redis SERVER INFO
-//   "pool_hits": 12500,           // Connection pool hits
-//   "pool_misses": 45,            // Connection pool misses
-//   "pool_timeouts": 0,           // Pool timeout errors
-//   "pool_total_conns": 10,       // Total connections
-//   "pool_idle_conns": 7,         // Idle connections
-//   "pool_stale_conns": 0         // Stale connections
-// }
-
-// CacheManager stats (multi-tenant lifecycle)
+// CacheManager stats (multi-tenant lifecycle) — cacheManager is the framework's
+// manager, reached from app wiring rather than a per-service accessor.
 managerStats := cacheManager.Stats()
 // ManagerStats{
 //   ActiveCaches: 45,      // Current tenant caches
@@ -2257,6 +2265,11 @@ managerStats := cacheManager.Stats()
 //   Errors:       0        // Creation/close errors
 // }
 ```
+
+`GET /health` is a liveness-only probe with no component breakdown (`{"status": "ok"}`).
+`GET /ready` reports per-component status (database, messaging); a cache health probe is
+registered internally when cache is enabled, but its status is not yet surfaced as a
+top-level key in the `/ready` response.
 
 **Observability Integration:**
 
