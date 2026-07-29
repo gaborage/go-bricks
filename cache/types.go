@@ -74,6 +74,12 @@ type Cache interface {
 	//	    return ErrLockHeld
 	//	}
 	//	defer cache.Delete(ctx, lockKey)
+	//
+	// Delete releases unconditionally: if the work outruns the TTL, the lock expires,
+	// another holder acquires it, and this Delete clears theirs. There is no
+	// compare-and-delete on this interface, so keep the TTL above worst-case work
+	// duration and make the guarded work idempotent — this is contention reduction,
+	// not guaranteed mutual exclusion.
 	CompareAndSet(ctx context.Context, key string, expectedValue, newValue []byte, ttl time.Duration) (success bool, err error)
 
 	// Health checks the health of the cache connection.

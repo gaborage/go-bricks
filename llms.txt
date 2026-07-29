@@ -2081,8 +2081,15 @@ if !success {
     return errors.New("lock already held by another worker")
 }
 
-// Lock acquired - perform work. Release is best-effort: the lock carries a 30s TTL,
-// so a failed Delete self-heals rather than deadlocking the job.
+// Lock acquired - perform work.
+//
+// CAUTION: Delete releases unconditionally. If processJob outruns the 30s TTL, the
+// lock expires, another worker acquires it, and this Delete clears THEIR lock. The
+// cache surface has no compare-and-delete, so a token-verified release is not
+// expressible here (CompareAndSet only ever SETs, and acquisition requires the key
+// to be absent). Until then: set the TTL above worst-case job duration, and keep
+// processJob idempotent — treat the lock as contention reduction, not mutual
+// exclusion.
 defer func() { _ = c.Delete(ctx, lockKey) }()
 
 return processJob(ctx)

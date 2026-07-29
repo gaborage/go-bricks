@@ -55,18 +55,20 @@ cache:
 **Module Setup Pattern:**
 ```go
 type Module struct {
-    getCache func(context.Context) (cache.Cache, error)  // Store function, NOT instance
+    svc *Service
 }
 
-func (m *Module) Init(deps *app.ModuleDeps) error {
-    m.getCache = deps.Cache  // Tenant-aware resolution
-    return nil
-}
-
-// The service carries the same accessor, handed over during Init.
+// The service holds the accessor function, never a resolved cache instance.
 type Service struct {
     getCache func(context.Context) (cache.Cache, error)
     logger   logger.Logger
+}
+
+func (m *Module) Init(deps *app.ModuleDeps) error {
+    // Hand both dependencies over here; a Service built any other way has a nil
+    // getCache and panics on first use.
+    m.svc = &Service{getCache: deps.Cache, logger: deps.Logger}
+    return nil
 }
 
 func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {

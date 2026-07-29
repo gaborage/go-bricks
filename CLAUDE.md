@@ -259,16 +259,16 @@ Redis-based caching with type-safe CBOR serialization, multi-tenant isolation, a
 
 ```go
 type Module struct {
+    svc *Service
+}
+
+type Service struct {
     getCache func(context.Context) (cache.Cache, error)  // Store the function, NOT instance
 }
 
 func (m *Module) Init(deps *app.ModuleDeps) error {
-    m.getCache = deps.Cache  // Tenant-aware resolution
+    m.svc = &Service{getCache: deps.Cache}  // Tenant-aware resolution
     return nil
-}
-
-type Service struct {
-    getCache func(context.Context) (cache.Cache, error)  // handed over during Init
 }
 
 func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
