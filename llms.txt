@@ -2194,7 +2194,7 @@ func (s *UserService) getUserCached(ctx context.Context, id int64) (*User, error
     var opErr *cache.OperationError
     switch {
     case errors.Is(err, cache.ErrNotFound):
-        // Key expired or never set - query database, repopulate cache
+        // Key expired or never set - query database, repopulate below
     case errors.Is(err, cache.ErrClosed):
         // Cache closed during shutdown - skip cache, continue request
     case errors.As(err, &opErr):
@@ -2203,15 +2203,40 @@ func (s *UserService) getUserCached(ctx context.Context, id int64) (*User, error
     }
 
     if err != nil {
+        // Repopulate only after a clean miss. On a timeout, a closed cache, or a
+        // transport error the write-back would almost certainly fail too, so those
+        // paths just read through.
+        if errors.Is(err, cache.ErrNotFound) {
+            return s.fetchAndCache(ctx, c, id, key)
+        }
         return s.queryDatabase(ctx, id)
     }
 
     user, err := cache.Unmarshal[*User](data)
     if err != nil {
-        // Corrupt or stale payload - degrade rather than failing the request
-        // until the entry expires.
-        s.logger.Warn().Err(err).Str("key", key).Msg("Cached value is invalid, falling back to database")
-        return s.queryDatabase(ctx, id)
+        // Corrupt payload - overwrite it rather than serving errors until it expires
+        s.logger.Warn().Err(err).Str("key", key).Msg("Cached value is invalid, refreshing from database")
+        return s.fetchAndCache(ctx, c, id, key)
+    }
+    return user, nil
+}
+
+// fetchAndCache reads through to the database and repopulates the cache. A
+// write-back failure is logged, never returned — the caller already has the value,
+// so a sick cache must not turn a successful read into a failed request.
+func (s *UserService) fetchAndCache(ctx context.Context, c cache.Cache, id int64, key string) (*User, error) {
+    user, err := s.queryDatabase(ctx, id)
+    if err != nil {
+        return nil, err
+    }
+
+    data, err := cache.Marshal(user)
+    if err != nil {
+        s.logger.Warn().Err(err).Str("key", key).Msg("Cache marshal failed, value not cached")
+        return user, nil
+    }
+    if err := c.Set(ctx, key, data, 5*time.Minute); err != nil {
+        s.logger.Warn().Err(err).Str("key", key).Msg("Cache write-back failed")
     }
     return user, nil
 }
