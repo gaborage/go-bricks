@@ -4389,7 +4389,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Path | Returns | Probes |
 |---|---|---|
 | `GET /health` | `200` `{"status":"ok"}` always (liveness only — no component probes) | none |
-| `GET /ready` | `200` if all probes pass; `503` otherwise | DB `Health(ctx)`, AMQP `IsReady()`, Redis `PING` (if configured) |
+| `GET /ready` | `200` with per-component status (`database`, `messaging`, + stats); `503` only when the **database** probe fails — it is the only critical probe | DB: lease a connection, then `conn.Health(ctx)` (critical). Messaging: lease a publisher. Cache: lease an instance — no Redis `PING`. Both are non-critical, so their failures never yield `503` |
 
 ### Configuration — Layered by Environment
 
