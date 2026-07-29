@@ -31,8 +31,9 @@ github.com/gaborage/go-bricks/testing/
 │   ├── statement.go     # Statement interface mocks
 │   ├── transaction.go   # Transaction interface mocks
 │   ├── messaging.go     # Messaging client mocks
-│   ├── amqp.go         # AMQP client mocks
-│   └── registry.go     # Registry interface mocks
+│   ├── amqp.go          # AMQP client mocks
+│   ├── registry.go      # Registry interface mocks
+│   └── query_builder.go # Query builder interface mocks
 └── fixtures/        # Helper functions and pre-configured mocks
     ├── database.go      # Database fixtures and builders
     └── messaging.go     # Messaging fixtures and builders
@@ -196,8 +197,13 @@ func TestEventService_ConsumeEvents(t *testing.T) {
 func TestModule_RegisterInfrastructure(t *testing.T) {
     mockRegistry := fixtures.NewWorkingRegistry()
 
+    // DeclareMessaging only populates a *messaging.Declarations value; replay
+    // it into the registry mock to exercise the same path the framework uses
+    // per tenant at startup.
     module := &UserModule{}
-    module.DeclareMessaging(mockDeclarations)
+    decls := messaging.NewDeclarations()
+    module.DeclareMessaging(decls)
+    require.NoError(t, decls.ReplayToRegistry(mockRegistry))
 
     // Verify infrastructure was registered
     exchanges := mockRegistry.Exchanges()
@@ -205,10 +211,13 @@ func TestModule_RegisterInfrastructure(t *testing.T) {
 
     queues := mockRegistry.Queues()
     assert.Contains(t, queues, "user.notifications")
-
-    mockRegistry.AssertExpectations(t)
 }
 ```
+
+`fixtures.NewWorkingRegistry()` pre-expects all five declaration kinds (exchange,
+queue, binding, publisher, consumer), so don't add `AssertExpectations` to a module
+that declares only some of them — the accessor assertions above are the real check.
+Use `mocks.NewMockRegistry()` when you want to set expectations yourself.
 
 ### Testing Message Handlers
 
@@ -291,8 +300,10 @@ func TestUserModule_Integration(t *testing.T) {
     hr := server.NewHandlerRegistry(mockConfig)
     module.RegisterRoutes(hr, srv.ModuleGroup())
 
-    // Test messaging registration
-    module.DeclareMessaging(mockDeclarations)
+    // Test messaging registration (replay pattern as above).
+    decls := messaging.NewDeclarations()
+    module.DeclareMessaging(decls)
+    require.NoError(t, decls.ReplayToRegistry(mockRegistry))
 
     // Verify registrations
     exchanges := mockRegistry.Exchanges()
@@ -302,10 +313,9 @@ func TestUserModule_Integration(t *testing.T) {
     err = module.Shutdown()
     assert.NoError(t, err)
 
-    // Assert all expectations
+    // Assert all expectations (see the registry caveat above)
     mockDB.AssertExpectations(t)
     mockMessaging.AssertExpectations(t)
-    mockRegistry.AssertExpectations(t)
 }
 ```
 
@@ -324,8 +334,9 @@ func TestUserHandlerGetUser(t *testing.T) {
 
     // Create test request. NewHandlerContextForTest builds a server.HandlerContext
     // backed by a real (server-internal) echo context — tests never touch echo.
-    // Path params are populated by routing, so drive an isolated handler test
-    // through the request itself (query/body/headers), read via c.Query/c.RequestHeader.
+    // Nothing is routed here, so this example drives the handler through the query
+    // string; for a handler that reads path params, inject them with
+    // ctx.SetPathParams([]server.PathParam{{Name: "id", Value: "1"}}).
     req := httptest.NewRequest(http.MethodGet, "/users?id=1", nil)
     rec := httptest.NewRecorder()
     ctx := server.NewHandlerContextForTest(rec, req, cfg)

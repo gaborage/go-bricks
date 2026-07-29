@@ -28,7 +28,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
    ```bash
    make check
    ```
-   This runs formatting, linting, tests, alloc-stability guards, and a vulnerability scan.
+   This runs formatting, linting, tests, alloc-stability guards, a vulnerability scan, and gosec.
 
 ### Code Quality Standards
 
@@ -130,8 +130,13 @@ make lint          # Run golangci-lint
 make fmt           # Format Go code
 make update        # Update deps and tidy modules
 make clean         # Clean build cache
-make check         # Run fmt, lint, test, alloc guards, and vuln scan
+make check         # Run fmt, lint, test, alloc guards, vuln scan, and gosec
+make test-integration # Integration tests (Docker required)
+make mutate        # Diff-scoped mutation gate: mutants on changed lines must die
 ```
+
+`make check` and `make mutate` are both required before pushing — surviving mutants
+on changed lines block the push. See [wiki/testing.md](wiki/testing.md#mutation-gate).
 
 ## Module Development
 

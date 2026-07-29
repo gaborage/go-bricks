@@ -1839,11 +1839,13 @@ stats := cacheManager.Stats()  // From app internals
 ```go
 import (
     "context"
+    "errors"
     "fmt"
     "time"
 
     "github.com/gaborage/go-bricks/app"
     "github.com/gaborage/go-bricks/cache"
+    "github.com/gaborage/go-bricks/logger"
 )
 
 // IMPORTANT: Store Cache function, NOT cache instance
@@ -1861,6 +1863,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 // Service method using tenant context
 type UserService struct {
     getCache func(context.Context) (cache.Cache, error)
+    logger   logger.Logger
 }
 
 func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
@@ -1895,17 +1898,31 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 **Basic Cache Operations:**
 
 ```go
-// Set with TTL
-err := cache.Set(ctx, "user:123", []byte("data"), 5*time.Minute)
+func (s *UserService) cacheRoundTrip(ctx context.Context) error {
+    c, err := s.getCache(ctx)  // stored accessor, not a cached instance
+    if err != nil {
+        return err
+    }
 
-// Get
-data, err := cache.Get(ctx, "user:123")
-if errors.Is(err, cache.ErrNotFound) {
-    // Key doesn't exist - fetch from database
+    // Set with TTL
+    if err := c.Set(ctx, "user:123", []byte("data"), 5*time.Minute); err != nil {
+        return err
+    }
+
+    // Get - cache.ErrNotFound distinguishes a miss from a real failure
+    data, err := c.Get(ctx, "user:123")
+    switch {
+    case errors.Is(err, cache.ErrNotFound):
+        s.logger.Debug().Msg("Cache miss - fetch from database")
+    case err != nil:
+        return err
+    default:
+        s.logger.Debug().Int("bytes", len(data)).Msg("Cache hit")
+    }
+
+    // Delete
+    return c.Delete(ctx, "user:123")
 }
-
-// Delete
-err := cache.Delete(ctx, "user:123")
 ```
 
 **Custom Cache Configuration Injection:**
@@ -2152,10 +2169,18 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 }
 
 // Timeout handling with context
-ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+cacheCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 defer cancel()
 
-data, err := cache.Get(ctx, key)
+c, err := s.getCache(cacheCtx)
+if err != nil {
+    // Cache unavailable - degrade to the database, don't fail the request.
+    // Note the fallback takes ctx, not cacheCtx: the 100ms budget is the
+    // cache's, and leaking it into the database call would cap that too.
+    return s.queryDatabase(ctx, id)
+}
+
+data, err := c.Get(cacheCtx, key)
 if errors.Is(err, context.DeadlineExceeded) {
     // Cache too slow - fallback to database
     s.logger.Warn().Str("key", key).Msg("Cache timeout exceeded")
@@ -2188,9 +2213,12 @@ if errors.Is(err, cache.ErrNotFound) {
 **Health Checks & Monitoring:**
 
 ```go
-// Cache health check (called by framework /health endpoint)
-err := cache.Health(ctx)
+// Cache health check
+c, err := s.getCache(ctx)
 if err != nil {
+    return err
+}
+if err := c.Health(ctx); err != nil {
     // Redis: PING command failed
     // Cache unhealthy - alert operations team
 }
@@ -2203,7 +2231,12 @@ if err != nil {
 // status is not yet surfaced as a top-level key in the /ready response.
 
 // Cache instance stats (Redis-specific)
-stats, err := cache.Stats()
+stats, err := c.Stats()
+if err != nil {
+    return err
+}
+s.logger.Info().Interface("cache_stats", stats).Msg("Cache stats")
+// stats shape:
 // {
 //   "redis_info": {...},          // Redis SERVER INFO
 //   "pool_hits": 12500,           // Connection pool hits
@@ -4408,7 +4441,7 @@ observability:
 
 The framework attaches the following resource attributes to every signal: `service.name`, `service.version`, `service.instance.id`, plus auto-detected `process.*` and `host.*` per OTel semantic conventions. Override `service.name`/`service.version` via `observability.service.{name,version}`.
 
-**Export timeout** is environment-aware: 10s when `endpoint: stdout`, 60s for production endpoints (accommodates TLS + cross-region latency). Override globally with `observability.trace.export.timeout: 90s` (applies to traces, metrics, and logs).
+**Export timeout** is environment-aware: 10s when `endpoint: stdout`, 60s for production endpoints (accommodates TLS + cross-region latency). Each signal has its own key — set `observability.trace.export.timeout`, `observability.metrics.export.timeout`, and `observability.logs.export.timeout` independently; there is no global override.
 
 **Batch behavior:** spans/metrics/logs are buffered and flushed on a schedule (~500ms in dev, ~5s in prod). Graceful shutdown (`fw.Run()` returning) flushes pending batches before exit. Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics (provider init, exporter setup, batch flushes) during local runs.
 
@@ -5434,13 +5467,13 @@ Same domain errors, different boundary handling:
 - **Configuration injection**: `deps.Config.InjectInto(&cfgStruct)` honors defaults and env overrides.
 - **Testing**: `obtest.NewTestTraceProvider()` captures spans, `obtest.NewTestMeterProvider()` captures metrics; mock `database.Interface` and `messaging.Client` directly.
 
-## Upgrade & Breaking Changes (v0.39 → v0.55)
+## Upgrade & Breaking Changes (v0.39 → v0.56)
 
-The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.55), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
+The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.56), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
 
 Ladder:
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0
 ```
 > v0.46.0–v0.48.0 shipped additive-only (adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0. Likewise v0.53.0–v0.54.0 shipped additive-only (DeclareQueueWithDLQ #741; ADR-041 shared-ledger tenancy — opt-in, `tenancy` defaults to `per-tenant`; clearer duplicate-route startup diagnostics — the echo router already rejected duplicate method+path registrations, so no app that started on v0.53.0 fails on v0.54.0), so E55 is the next hop after v0.52.0 and applies when crossing from any of v0.52.0–v0.54.0 to v0.55.0.
 
@@ -5458,6 +5491,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading (ADR-040) |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | none | none |
+| E56  | v0.55.0 → v0.56.0 | additive (safe) | none | none |
 
 Agent protocol (condensed — full version in the runbook):
 1. Detect CURRENT: `go list -m -f '{{.Version}}{{if .Replace}} =>{{.Replace.Path}}{{end}}' github.com/gaborage/go-bricks` (a local `replace` → resolve the checkout's tag).

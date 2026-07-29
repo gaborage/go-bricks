@@ -20,7 +20,7 @@ Every operation that crosses an external boundary already has a configured timeo
 | AMQP publish confirmation | `messaging.reconnect.connectiontimeout` | 30s | Per-publish wait for broker ACK/NACK. Connection dial uses `amqp091-go`'s `amqp.Dial` (its own ~30s TCP+handshake timeout), not this key |
 | Scheduler — slow job warning | `scheduler.timeout.slowjob` | 25s | Logs WARN if a job exceeds this; does not cancel |
 | Scheduler — graceful shutdown | `scheduler.timeout.shutdown` | 30s | Wait for in-flight jobs on shutdown |
-| Observability export | `observability.trace.export.timeout` | 10s (dev) / 60s (prod) | OTLP export RPC |
+| Observability export | `observability.trace.export.timeout`, `observability.metrics.export.timeout`, `observability.logs.export.timeout` | 10s (dev) / 60s (prod) | OTLP export RPC; one key per signal, no global override |
 
 **Boundary maintenance / pool hygiene timeouts** — connection lifetime caps, idle eviction TTLs, and reconnect backoff caps don't propagate as deadlines on a request `ctx`. They live in the per-component reference docs: see [database.md](database.md) (`pool.idle.time`, `pool.lifetime.max`, `pool.keepalive.interval`), [cache.md](cache.md) (`manager.idlettl`), [messaging.md](messaging.md) (`reconnect.maxdelay`, `publisher.idlettl`), [outbox.md](outbox.md), and [startup_defaults.md](startup_defaults.md).
 
