@@ -375,6 +375,7 @@
 
 ## [0.38.0](https://github.com/gaborage/go-bricks/compare/v0.37.0...v0.38.0) (2026-06-02)
 
+> **Note:** The `openapi` entries below never shipped in a tagged release — the tool was removed in #504 (2026-05-31), before v0.38.0 was cut, and now lives in [`gaborage/go-bricks-openapi`](https://github.com/gaborage/go-bricks-openapi).
 
 ### ⚠ BREAKING CHANGES
 

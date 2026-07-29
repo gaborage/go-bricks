@@ -60,10 +60,14 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 
 **Quick Commands:**
 ```bash
-make check              # Pre-commit: fmt + lint + test
+make check              # Pre-commit: fmt + lint + test + alloc guards + vuln scan + gosec
+make mutate             # Diff-scoped mutation gate (required before pushing)
 make test-integration   # Integration tests (requires Docker)
 go test -run TestName   # Run specific test
 ```
+
+`make check` and `make mutate` are both required before pushing — see
+[CONTRIBUTING.md](CONTRIBUTING.md#build-commands).
 
 ---
 
@@ -229,9 +233,9 @@ func (m *Module) Init(deps *ModuleDeps) error {
 ### Environment Variables
 Environment variables use uppercase with underscores and automatically map to dot notation:
 ```bash
-DATABASE_HOST=prod-db.company.com   # maps to database.host
-DATABASE_SERVICE_NAME=FREEPDB1      # maps to database.service.name
-CUSTOM_API_TIMEOUT=30s              # maps to custom.api.timeout
+DATABASE_HOST=prod-db.company.com          # maps to database.host
+DATABASE_ORACLE_SERVICE_NAME=FREEPDB1      # maps to database.oracle.service.name
+CUSTOM_API_TIMEOUT=30s                     # maps to custom.api.timeout
 ```
 
 See the [config-injection example](https://github.com/gaborage/go-bricks-demo-project/tree/main/config-injection) for advanced patterns.
@@ -916,7 +920,7 @@ Issues and pull requests are welcome!
 **Quick Setup:**
 ```bash
 go test ./...              # Run unit tests
-make check                 # Pre-commit checks (fmt, lint, test)
+make check                 # Pre-commit checks (fmt, lint, test, alloc guards, vuln scan, gosec)
 make test-integration      # Integration tests (Docker required)
 ```
 
