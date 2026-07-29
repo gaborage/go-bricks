@@ -509,6 +509,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 ```go
 import (
     "context"
+    "fmt"
     "time"
 
     "github.com/gaborage/go-bricks/cache"
@@ -539,9 +540,11 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
         return nil, err
     }
 
-    // Store in cache with TTL
-    data, _ = cache.Marshal(user)
-    c.Set(ctx, cacheKey, data, 5*time.Minute)
+    // Store in cache with TTL. Best-effort: never cache a failed marshal, and a
+    // write-back failure must not fail a request that already has the value.
+    if serialized, mErr := cache.Marshal(user); mErr == nil {
+        _ = c.Set(ctx, cacheKey, serialized, 5*time.Minute)
+    }
 
     return user, nil
 }
@@ -553,7 +556,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 - **Lifecycle Management**: Lazy initialization, LRU eviction (max 100 tenants), idle cleanup (15m default)
 - **Atomic Operations**: `GetOrSet` for deduplication, `CompareAndSet` for distributed locking
 - **Performance**: <1ms latency for Get/Set, 100k ops/sec throughput
-- **Observability**: OpenTelemetry spans, metrics, and health checks
+- **Observability**: OpenTelemetry metrics and health checks (no distributed-tracing spans today)
 
 ### Configuration
 

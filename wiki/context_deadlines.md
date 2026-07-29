@@ -35,7 +35,9 @@ func (h *Handler) getOrder(req GetOrderReq, ctx server.HandlerContext) (server.R
     reqCtx := ctx.RequestContext()  // inherits the 5s deadline
 
     // Each call below observes the inherited deadline — no manual wrapping needed:
-    _, _ = h.cache.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))  // Redis dial/read/write
+    if c, cErr := h.getCache(reqCtx); cErr == nil {              // Redis dial/read/write
+        _, _ = c.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))
+    }
     order, err := h.svc.FindByID(reqCtx, req.ID)                 // DB query
     if err != nil {
         return server.Result[Order]{}, server.NewInternalServerError(err.Error())
@@ -58,8 +60,10 @@ func (s *UserService) Get(ctx context.Context, id int64) (*User, error) {
     cacheCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
     defer cancel()
 
-    if data, err := s.cache.Get(cacheCtx, fmt.Sprintf("user:%d", id)); err == nil {
-        return cache.Unmarshal[*User](data)
+    if c, err := s.getCache(cacheCtx); err == nil {
+        if data, err := c.Get(cacheCtx, fmt.Sprintf("user:%d", id)); err == nil {
+            return cache.Unmarshal[*User](data)
+        }
     }
 
     // DB query keeps the rest of the request budget (~4.8s).

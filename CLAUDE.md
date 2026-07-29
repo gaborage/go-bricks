@@ -267,6 +267,10 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
     return nil
 }
 
+type Service struct {
+    getCache func(context.Context) (cache.Cache, error)  // handed over during Init
+}
+
 func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
     c, err := s.getCache(ctx)
     if err != nil { return nil, err }

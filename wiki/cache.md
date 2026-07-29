@@ -63,6 +63,12 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
     return nil
 }
 
+// The service carries the same accessor, handed over during Init.
+type Service struct {
+    getCache func(context.Context) (cache.Cache, error)
+    logger   logger.Logger
+}
+
 func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
     c, err := s.getCache(ctx)  // Resolves tenant from context
     if err != nil {
@@ -75,12 +81,24 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
         return cache.Unmarshal[*User](data)
     }
 
-    // Cache miss - query database
+    // Cache miss - query database. Check this error: without it a DB failure
+    // returns (nil, nil) and then caches a CBOR null, so every later Get is a
+    // hit that decodes to nil for the whole TTL.
     user, err := s.queryDatabase(ctx, id)
+    if err != nil {
+        return nil, err
+    }
 
-    // Store in cache with TTL
-    data, _ = cache.Marshal(user)
-    c.Set(ctx, fmt.Sprintf("user:%d", id), data, 5*time.Minute)
+    // Store in cache with TTL. Write-back failures are logged, not returned —
+    // the caller already has the value.
+    serialized, err := cache.Marshal(user)
+    if err != nil {
+        s.logger.Warn().Err(err).Int64("id", id).Msg("Cache marshal failed, value not cached")
+        return user, nil
+    }
+    if err := c.Set(ctx, fmt.Sprintf("user:%d", id), serialized, 5*time.Minute); err != nil {
+        s.logger.Warn().Err(err).Int64("id", id).Msg("Cache write-back failed")
+    }
 
     return user, nil
 }
