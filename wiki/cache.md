@@ -104,7 +104,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 **Observability Integration:**
 When `observability.enabled: true`, cache operations automatically emit:
 - **Metrics**: `db.client.operation.duration` (histogram, tagged with `error.type` on failure), `cache.hit`/`cache.miss` (counters), `cache.manager.active_caches`, `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` — no distributed-tracing spans are emitted today
-- **Health**: Registered internally in the `/ready` probe set when cache is enabled (Redis PING); the probe's status is not yet surfaced as a top-level key in the `/ready` response
+- **Health**: A **non-critical** probe registered in the `/ready` probe set when cache is enabled. It verifies only that an instance can be leased from the manager (`cacheManager.Get(ctx, "")`) — the Redis `PING` happens when an instance is created, not per probe, so a warm pool answers from memory and a Redis outage is invisible to it. Its status is not surfaced as a top-level key in the `/ready` response, and being non-critical it never fails `/ready`. Alert on Redis separately
 
 ## Cache Manager Defaults
 

@@ -20,7 +20,9 @@ Every operation that crosses an external boundary already has a configured timeo
 | AMQP publish confirmation | `messaging.reconnect.connectiontimeout` | 30s | Per-publish wait for broker ACK/NACK. Connection dial uses `amqp091-go`'s `amqp.Dial` (its own ~30s TCP+handshake timeout), not this key |
 | Scheduler — slow job warning | `scheduler.timeout.slowjob` | 25s | Logs WARN if a job exceeds this; does not cancel |
 | Scheduler — graceful shutdown | `scheduler.timeout.shutdown` | 30s | Wait for in-flight jobs on shutdown |
-| Observability export | `observability.trace.export.timeout`, `observability.metrics.export.timeout`, `observability.logs.export.timeout` | 10s (dev or stdout) / 60s (other prod) | OTLP export RPC; one key per signal, no global override |
+| Observability export | `observability.trace.export.timeout`, `observability.metrics.export.timeout`, `observability.logs.export.timeout` | 10s / 60s (see note) | OTLP export RPC; one key per signal, no global override |
+
+> **The export-timeout default is gated on `observability.environment`, not `app.env`.** It is a separate key that defaults to `development` and is never derived from the application environment, so a deployment running `app.env: production` against a remote OTLP collector still gets the 10s default unless it sets `observability.environment` explicitly. The default is 10s when `observability.environment` is `development` **or** the signal's endpoint is `stdout`, and 60s otherwise (`observability/config.go:166,182,236,308,324`).
 
 **Boundary maintenance / pool hygiene timeouts** — connection lifetime caps, idle eviction TTLs, and reconnect backoff caps don't propagate as deadlines on a request `ctx`. They live in the per-component reference docs: see [database.md](database.md) (`pool.idle.time`, `pool.lifetime.max`, `pool.keepalive.interval`), [cache.md](cache.md) (`manager.idlettl`), [messaging.md](messaging.md) (`reconnect.maxdelay`, `publisher.idlettl`), [outbox.md](outbox.md), and [startup_defaults.md](startup_defaults.md).
 

@@ -34,9 +34,15 @@ github.com/gaborage/go-bricks/testing/
 │   ├── amqp.go          # AMQP client mocks
 │   ├── registry.go      # Registry interface mocks
 │   └── query_builder.go # Query builder interface mocks
-└── fixtures/        # Helper functions and pre-configured mocks
-    ├── database.go      # Database fixtures and builders
-    └── messaging.go     # Messaging fixtures and builders
+├── fixtures/        # Helper functions and pre-configured mocks
+│   ├── database.go      # Database fixtures and builders
+│   └── messaging.go     # Messaging fixtures and builders
+└── containers/      # Testcontainers helpers (integration tests)
+    ├── docker.go        # Docker availability detection
+    ├── postgresql.go    # PostgreSQL container
+    ├── oracle.go        # Oracle container
+    ├── rabbitmq.go      # RabbitMQ container
+    └── redis.go         # Redis container
 ```
 
 ## Database Testing
@@ -214,10 +220,14 @@ func TestModule_RegisterInfrastructure(t *testing.T) {
 }
 ```
 
-`fixtures.NewWorkingRegistry()` pre-expects all five declaration kinds (exchange,
-queue, binding, publisher, consumer), so don't add `AssertExpectations` to a module
-that declares only some of them — the accessor assertions above are the real check.
-Use `mocks.NewMockRegistry()` when you want to set expectations yourself.
+**Don't call `AssertExpectations` on the pre-configured fixtures.** Each registers its
+whole working surface with no `.Maybe()`, so testify fails every expectation your test
+doesn't happen to exercise: `NewWorkingRegistry` expects all five declaration kinds
+(exchange, queue, binding, publisher, consumer), `NewHealthyDatabase` expects
+Health/DatabaseType/Stats, and `NewWorkingMessagingClient` expects
+IsReady/Publish/Consume/Close. Assert on observed state — `mockRegistry.Exchanges()`,
+`mockRegistry.Queues()` — or build a bare `mocks.NewMockRegistry()` and set the
+expectations you actually want to verify.
 
 ### Testing Message Handlers
 
@@ -313,9 +323,12 @@ func TestUserModule_Integration(t *testing.T) {
     err = module.Shutdown()
     assert.NoError(t, err)
 
-    // Assert all expectations (see the registry caveat above)
-    mockDB.AssertExpectations(t)
-    mockMessaging.AssertExpectations(t)
+    // No AssertExpectations here. All three fixtures pre-register their whole
+    // working surface with no .Maybe() — NewHealthyDatabase expects
+    // Health/DatabaseType/Stats, NewWorkingMessagingClient expects
+    // IsReady/Publish/Consume/Close, NewWorkingRegistry expects all five
+    // declaration kinds — so asserting them fails for every call this example
+    // does not make. Assert on observed state instead, as above.
 }
 ```
 

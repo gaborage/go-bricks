@@ -4,7 +4,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 
 ## Observability
 
-**Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, environment-aware batching (500ms dev, 5s prod), environment-aware export timeouts (10s dev, 60s prod)
+**Key Features:** W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, batching and export timeouts gated on `observability.environment` (500ms/10s for `development`, 5s/60s otherwise — see "Export Timeout Configuration" below)
 
 **Per-Subsystem Instrumented Meters:** The framework ships three automatically-instrumented meters alongside the Go runtime meter. `go-bricks/database` records query durations and pool utilisation. `go-bricks/messaging` records AMQP publish and consume durations. `go-bricks/httpclient` records five outbound HTTP instruments: `http.client.request.duration`, `http.client.active_requests`, `http.client.request.body.size`, `http.client.response.body.size`, and `http.client.retries.total`. When `observability.enabled` is false no metrics are emitted; the `database` meter additionally short-circuits before building any attributes (true zero overhead), while `messaging`/`httpclient` route into the global no-op provider (data discarded, attribute construction not yet skipped — a tracked follow-up). See [httpclient.md#metrics](httpclient.md#metrics) for the full attribute reference.
 
@@ -14,9 +14,10 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 
 **Go Runtime Metrics:** Auto-exports memory, goroutines, CPU, scheduler latency, GC config when `observability.enabled: true`. Follows [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/runtime/go-metrics/)
 
-**Export Timeout Configuration:** GoBricks uses environment-aware export timeouts to balance fail-fast feedback (development) with network resilience (production):
-- **Development/stdout:** 10s (quick failure detection for debugging)
-- **Production:** 60s (accommodates network latency, TLS handshake, batch transmission)
+**Export Timeout Configuration:** GoBricks gates export timeouts on `observability.environment` and the signal's endpoint, balancing fail-fast feedback against network resilience:
+- **`observability.environment: development` (the default) or `endpoint: stdout`:** 10s (quick failure detection for debugging)
+- **Any other environment with a network endpoint:** 60s (accommodates network latency, TLS handshake, batch transmission)
+- **⚠️ `observability.environment` is not derived from `app.env`.** It is an independent key defaulting to `development`, so a service running `app.env: production` against a remote OTLP collector keeps the 10s default until you set `observability.environment` explicitly.
 - **Override via YAML:** `observability.trace.export.timeout: "90s"` (trace only); use `observability.metrics.export.timeout` and `observability.logs.export.timeout` for the other subsystems
 - **Why 60s?** Real-world production scenarios involve cross-region latency, TLS negotiation, and 512-span batch transmission to remote OTLP endpoints
 

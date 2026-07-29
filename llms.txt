@@ -2299,9 +2299,11 @@ managerStats := cacheManager.Stats()
 ```
 
 `GET /health` is a liveness-only probe with no component breakdown (`{"status": "ok"}`).
-`GET /ready` reports per-component status (database, messaging); a cache health probe is
-registered internally when cache is enabled, but its status is not yet surfaced as a
-top-level key in the `/ready` response.
+`GET /ready` reports per-component status (database, messaging). A cache probe is
+registered internally when cache is enabled, but it is **non-critical** and only checks
+that an instance can be leased from the manager — it never calls `Cache.Health`, so a
+Redis outage neither fails `/ready` nor appears in its response. Alert on Redis
+separately.
 
 **Observability Integration:**
 
@@ -4486,7 +4488,7 @@ observability:
 
 The framework attaches the following resource attributes to every signal: `service.name`, `service.version`, `service.instance.id`, plus auto-detected `process.*` and `host.*` per OTel semantic conventions. Override `service.name`/`service.version` via `observability.service.{name,version}`.
 
-**Export timeout** is environment-aware: 10s when `endpoint: stdout`, 60s for production endpoints (accommodates TLS + cross-region latency). Each signal has its own key — set `observability.trace.export.timeout`, `observability.metrics.export.timeout`, and `observability.logs.export.timeout` independently; there is no global override.
+**Export timeout** defaults to 10s when `observability.environment` is `development` (its value when the key is unset) **or** the signal's endpoint is `stdout`, and 60s otherwise (accommodates TLS + cross-region latency). `observability.environment` is a separate key and is never derived from `app.env`, so `app.env: production` against a remote collector still gets 10s unless you set it. Each signal has its own key — set `observability.trace.export.timeout`, `observability.metrics.export.timeout`, and `observability.logs.export.timeout` independently; there is no global override.
 
 **Batch behavior:** spans/metrics/logs are buffered and flushed on a schedule (~500ms in dev, ~5s in prod). Graceful shutdown (`fw.Run()` returning) flushes pending batches before exit. Set `GOBRICKS_DEBUG=true` to emit `[OBSERVABILITY]` diagnostics (provider init, exporter setup, batch flushes) during local runs.
 
