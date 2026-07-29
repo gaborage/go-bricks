@@ -2189,15 +2189,14 @@ func (s *UserService) getUserCached(ctx context.Context, id int64) (*User, error
         s.logger.Warn().Str("key", key).Msg("Cache timeout exceeded")
     }
 
-    // Error type checking
+    // Error type checking. ErrInvalidTTL is not listed: Get takes no TTL, so it
+    // can only surface from Set/GetOrSet/CompareAndSet.
     var opErr *cache.OperationError
     switch {
     case errors.Is(err, cache.ErrNotFound):
         // Key expired or never set - query database, repopulate cache
     case errors.Is(err, cache.ErrClosed):
         // Cache closed during shutdown - skip cache, continue request
-    case errors.Is(err, cache.ErrInvalidTTL):
-        // Developer error - negative or zero TTL provided
     case errors.As(err, &opErr):
         // Network/Redis error - includes operation, key, underlying error
         s.logger.Error().Str("operation", opErr.Op).Str("key", opErr.Key).Err(opErr.Err).Msg("Cache operation failed")
@@ -2206,7 +2205,15 @@ func (s *UserService) getUserCached(ctx context.Context, id int64) (*User, error
     if err != nil {
         return s.queryDatabase(ctx, id)
     }
-    return cache.Unmarshal[*User](data)
+
+    user, err := cache.Unmarshal[*User](data)
+    if err != nil {
+        // Corrupt or stale payload - degrade rather than failing the request
+        // until the entry expires.
+        s.logger.Warn().Err(err).Str("key", key).Msg("Cached value is invalid, falling back to database")
+        return s.queryDatabase(ctx, id)
+    }
+    return user, nil
 }
 ```
 
@@ -2231,8 +2238,8 @@ func (s *UserService) reportCacheHealth(ctx context.Context) error {
         return err
     }
     if err := c.Health(ctx); err != nil {
-        // Redis: PING command failed
-        // Cache unhealthy - alert operations team
+        // Redis PING failed - surface it so callers don't report unhealthy as healthy
+        return fmt.Errorf("cache health check failed: %w", err)
     }
 
     // Cache instance stats (Redis-specific)
