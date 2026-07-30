@@ -61,8 +61,11 @@ Every log line emitted via the framework logger passes through a `logger.Sensiti
 | Auth headers | `auth`, `authorization` |
 | Generic | `credential`, `credentials` |
 | Connection strings | `broker_url`, `database_url`, `db_url` |
+| Card data (PCI) & PII | `cardholder`, `card_number`, `cardnumber`, `primary_account_number`, `cvv`, `cvc`, `track1`, `track2`, `track_data`, `iban`, `otp` |
 
-URLs in masked fields keep host/path but strip the password: `https://user:pwd@host/path?token=x` → `https://user:***@host/path?token=x`. The default mask value is `***`.
+A URL value on the sensitive path is masked in full, never structure-preserved — query strings and fragments routinely carry the secret itself. The default mask value is `***`.
+
+Bare `pan`, `card`, `pin`, and `track` are deliberately absent: substring matching would mask `span_id`, `discard_reason`, `pinned_at`, and `tracking_id`, so differently-named PAN fields still need a per-service entry via `log.sensitivefields`. `otp` does over-mask camelCase `…otP…` names (e.g. `snapshotPath`) and that trade is intentional — masking a debugging detail costs less than leaking an OTP. An explicitly empty `SensitiveFields` now logs a WARN at startup (suppressed at `log.level: error` and above).
 
 ### Extending the filter (two seams)
 
@@ -76,10 +79,8 @@ log:
   sensitivefields:                     # NEW: appended to DefaultFilterConfig
     - pan                               # masks "pan", "PAN", "card_pan"
     - primary_account_number            # masks the long-form variant too
-    - cvv
     - cvv2
     - cvc2
-    - otp
     - one_time_password
     - ssn
     - tax_id

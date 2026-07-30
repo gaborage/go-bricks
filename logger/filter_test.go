@@ -849,3 +849,56 @@ func TestFilterStructFieldThatCannotInterface(t *testing.T) {
 		t.Error("Expected password to be masked")
 	}
 }
+
+func TestIsSensitiveFieldCardDataAndPII(t *testing.T) {
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	fieldNames := []string{
+		"cardholder", "card_number", "CardNumber", "primary_account_number",
+		"cvv2", "cvc2", "track2_data", "track_data", "iban", "otp_code",
+	}
+
+	for _, fieldName := range fieldNames {
+		if !filter.isSensitiveField(fieldName) {
+			t.Errorf("Expected field %q to be masked as card-data/PII", fieldName)
+		}
+	}
+}
+
+// TestIsSensitiveFieldNoOverMaskingRegression pins the collision decisions
+// documented in DefaultFilterConfig: bare "pan"/"card"/"pin"/"track" are
+// deliberately absent from the default list because substring matching would
+// otherwise mask these benign field names. Any failure here is an
+// over-masking regression, not a missing feature.
+func TestIsSensitiveFieldNoOverMaskingRegression(t *testing.T) {
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	fieldNames := []string{
+		"span_id", "company", "expand", "pinned_at",
+		"discard_reason", "tracking_id", "card_type", "expiry_date",
+	}
+
+	for _, fieldName := range fieldNames {
+		if filter.isSensitiveField(fieldName) {
+			t.Errorf("Expected field %q to NOT be masked (over-masking regression)", fieldName)
+		}
+	}
+}
+
+func TestIsSensitiveFieldOTPAcceptedCollision(t *testing.T) {
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	// snapshotPath contains "otP" as a substring — a known, accepted over-mask
+	// of the "otp" default, not a bug. See DefaultFilterConfig's comment.
+	if !filter.isSensitiveField("snapshotPath") {
+		t.Error("Expected snapshotPath to be masked via the accepted otp substring collision")
+	}
+}
+
+func TestNewSensitiveDataFilterEmptySensitiveFieldsDisablesMasking(t *testing.T) {
+	filter := NewSensitiveDataFilter(&FilterConfig{MaskValue: "X"})
+
+	if filter.isSensitiveField("password") {
+		t.Error("Expected an explicitly empty SensitiveFields to disable masking entirely")
+	}
+}

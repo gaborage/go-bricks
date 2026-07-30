@@ -115,11 +115,12 @@ func TestNewWithFilter(t *testing.T) {
 	originalStdout := os.Stdout
 
 	tests := []struct {
-		name          string
-		level         string
-		pretty        bool
-		filterConfig  *FilterConfig
-		expectedLevel zerolog.Level
+		name               string
+		level              string
+		pretty             bool
+		filterConfig       *FilterConfig
+		expectedLevel      zerolog.Level
+		expectWarnInOutput bool
 	}{
 		{
 			name:   "custom_filter_config",
@@ -147,6 +148,34 @@ func TestNewWithFilter(t *testing.T) {
 				MaskValue:       "", // This should be defaulted
 			},
 			expectedLevel: zerolog.WarnLevel,
+		},
+		{
+			name:               "empty_sensitive_fields_warns",
+			level:              "warn",
+			pretty:             false,
+			filterConfig:       &FilterConfig{MaskValue: "X"},
+			expectedLevel:      zerolog.WarnLevel,
+			expectWarnInOutput: true,
+		},
+		{
+			name:               "nil_config_does_not_warn",
+			level:              "info",
+			pretty:             false,
+			filterConfig:       nil,
+			expectedLevel:      zerolog.InfoLevel,
+			expectWarnInOutput: false,
+		},
+		{
+			// Documents the WARN's known limitation: it is emitted through the
+			// logger's own configured level, so a service running log.level:
+			// error will never see it. Same filterConfig as
+			// empty_sensitive_fields_warns — only the level differs.
+			name:               "warn_suppressed_above_warn_level",
+			level:              "error",
+			pretty:             false,
+			filterConfig:       &FilterConfig{MaskValue: "X"},
+			expectedLevel:      zerolog.ErrorLevel,
+			expectWarnInOutput: false,
 		},
 	}
 
@@ -204,6 +233,13 @@ func TestNewWithFilter(t *testing.T) {
 				for _, field := range tt.filterConfig.SensitiveFields {
 					assert.Contains(t, logger.filter.config.SensitiveFields, field)
 				}
+			}
+
+			// Verify the empty-SensitiveFields WARN (and its level-gated suppression)
+			if tt.expectWarnInOutput {
+				assert.Contains(t, buf.String(), "masking is DISABLED")
+			} else {
+				assert.NotContains(t, buf.String(), "masking is DISABLED")
 			}
 
 			// Test that the logger implements the interface
