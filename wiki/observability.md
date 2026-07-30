@@ -69,7 +69,7 @@ Bare `pan`, `card`, `pin`, and `track` are deliberately absent: substring matchi
 
 ### Extending the filter (two seams)
 
-For regulated payloads — PCI-DSS (bare PAN field names), PII (SSN, tax ID) — extend the list at bootstrap. Both seams are additive-only changes; existing apps see no behavior difference until they opt in.
+For regulated payloads — PCI-DSS (bare PAN field names), PII (SSN, tax ID) — extend the list at bootstrap. Both seams are opt-in — no existing app's behavior changes until it adopts one — but they don't combine with the defaults the same way: YAML merges, `LoggerFilterConfig` replaces, as Seam 2 spells out below.
 
 **Seam 1 — YAML config (recommended for static lists):**
 
