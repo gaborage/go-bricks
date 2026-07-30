@@ -109,13 +109,13 @@ func timeoutCoefficient(t suiteTiming, floor time.Duration) int {
 }
 
 // suiteMeasurer times pkg's suite both ways; see suiteTiming.
-type suiteMeasurer func(pkg string) (suiteTiming, error)
+type suiteMeasurer func(ctx context.Context, pkg string) (suiteTiming, error)
 
 // coefficientFor measures pkg and converts the result into a coefficient,
 // reporting both timings so a surprising ceiling is visible in the log rather
 // than buried in the engine's behavior.
-func coefficientFor(pkg string, measure suiteMeasurer, floor time.Duration, out io.Writer) int {
-	t, err := measure(pkg)
+func coefficientFor(ctx context.Context, pkg string, measure suiteMeasurer, floor time.Duration, out io.Writer) int {
+	t, err := measure(ctx, pkg)
 	if err != nil {
 		fmt.Fprintf(out, "WARN: could not time %s's tests (%v) — using the maximum timeout coefficient %d\n",
 			pkg, err, maxTimeoutCoefficient)
@@ -159,7 +159,7 @@ func coverageArgs(profile, pkg string, forceRun bool) []string {
 // so passes 2 and 3 simply cost the same as 1 — and the exit status is
 // deliberately ignored. This errors only when the toolchain cannot start at all,
 // a state in which gremlins could not run either.
-func measureSuite(pkg string) (suiteTiming, error) {
+func measureSuite(ctx context.Context, pkg string) (suiteTiming, error) {
 	profile, err := os.CreateTemp("", "mutatediff-cover-*")
 	if err != nil {
 		return suiteTiming{}, fmt.Errorf("coverage scratch file for %s: %w", pkg, err)
@@ -172,7 +172,7 @@ func measureSuite(pkg string) (suiteTiming, error) {
 		args := coverageArgs(profile.Name(), pkg, forceRun)
 		start := time.Now()
 		// #nosec G204 -- pkg comes from `git diff` paths resolved to package dirs, not user input
-		runErr := exec.CommandContext(context.Background(), "go", args...).Run()
+		runErr := exec.CommandContext(ctx, "go", args...).Run()
 		if runErr != nil && !errors.As(runErr, &exitErr) {
 			return 0, fmt.Errorf("%s %s: %w", stage, pkg, runErr)
 		}
@@ -196,8 +196,8 @@ func measureSuite(pkg string) (suiteTiming, error) {
 // baseline loop scales the ceiling through this same code path instead of
 // reimplementing the arithmetic in shell. The number goes to stdout alone;
 // diagnostics go to stderr.
-func printCoefficient(pkg string, measure suiteMeasurer, floor time.Duration, stdout, stderr io.Writer) int {
-	fmt.Fprintln(stdout, coefficientFor(pkg, measure, floor, stderr))
+func printCoefficient(ctx context.Context, pkg string, measure suiteMeasurer, floor time.Duration, stdout, stderr io.Writer) int {
+	fmt.Fprintln(stdout, coefficientFor(ctx, pkg, measure, floor, stderr))
 	return 0
 }
 

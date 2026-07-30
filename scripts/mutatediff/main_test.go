@@ -8,7 +8,7 @@ import (
 
 func TestRunNoOpDiffExitsCleanWithoutEngine(t *testing.T) {
 	var buf bytes.Buffer
-	if got := run("false", "HEAD", 0, &buf); got != 0 {
+	if got := run(t.Context(), "false", "HEAD", 0, &buf); got != 0 {
 		t.Fatalf("run = %d, want 0; output: %s", got, buf.String())
 	}
 	if !strings.Contains(buf.String(), "no mutatable changes") {
@@ -74,7 +74,7 @@ func TestReportVerdictCleanSweepOnlyWhenFullyJudged(t *testing.T) {
 
 func TestRunBlankEngineFailsFast(t *testing.T) {
 	var buf bytes.Buffer
-	if got := run("   ", "HEAD", 0, &buf); got != 2 {
+	if got := run(t.Context(), "   ", "HEAD", 0, &buf); got != 2 {
 		t.Fatalf("run = %d, want 2 for whitespace-only engine", got)
 	}
 }

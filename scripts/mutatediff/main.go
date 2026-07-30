@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 func main() {
@@ -20,29 +22,39 @@ func main() {
 	coeffPkg := flag.String("coefficient", "", "coefficient mode: print the engine timeout-coefficient that holds this package's per-mutant ceiling at the floor")
 	workers := flag.Int("workers", 0, "engine workers; each is a concurrent `go test`. 0 inherits .gremlins.yaml")
 	flag.Parse()
-	if *mergeDir != "" {
-		os.Exit(mergeShards(*mergeDir, *mergeOut, os.Stdout))
-	}
-	if *coeffPkg != "" {
-		os.Exit(printCoefficient(*coeffPkg, measureSuite, ceilingFloor(), os.Stdout, os.Stderr))
-	}
-	if *engine == "" {
+
+	// Signal-derived so Ctrl-C or a CI cancel reaches the long-running git,
+	// go test, and gremlins subprocesses instead of leaving orphaned trees.
+	// No defer: os.Exit below skips deferred calls, so stop is invoked
+	// explicitly on every path instead.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	var code int
+	switch {
+	case *mergeDir != "":
+		code = mergeShards(*mergeDir, *mergeOut, os.Stdout)
+	case *coeffPkg != "":
+		code = printCoefficient(ctx, *coeffPkg, measureSuite, ceilingFloor(), os.Stdout, os.Stderr)
+	case *engine == "":
 		fmt.Fprintln(os.Stderr, "mutatediff: -engine is required")
-		os.Exit(2)
+		code = 2
+	default:
+		code = run(ctx, *engine, *base, *workers, os.Stdout)
 	}
-	os.Exit(run(*engine, *base, *workers, os.Stdout))
+	stop()
+	os.Exit(code)
 }
 
-func run(engine, baseRef string, workers int, out io.Writer) int {
+func run(ctx context.Context, engine, baseRef string, workers int, out io.Writer) int {
 	engineArgs := strings.Fields(engine)
 	if len(engineArgs) == 0 {
 		return fail("engine command is blank")
 	}
-	mergeBase, err := gitOutput("merge-base", "HEAD", baseRef)
+	mergeBase, err := gitOutput(ctx, "merge-base", "HEAD", baseRef)
 	if err != nil {
 		return fail("%v", err)
 	}
-	diff, err := gitOutput("diff", "-U0", "--no-color", mergeBase, "HEAD", "--", "*.go")
+	diff, err := gitOutput(ctx, "diff", "-U0", "--no-color", mergeBase, "HEAD", "--", "*.go")
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -51,7 +63,7 @@ func run(engine, baseRef string, workers int, out io.Writer) int {
 		return fail("%v", perr)
 	}
 	changed := mutationScope(parsed)
-	switch status, statusErr := gitOutput("status", "--porcelain"); {
+	switch status, statusErr := gitOutput(ctx, "status", "--porcelain"); {
 	case statusErr != nil:
 		fmt.Fprintf(out, "WARN: could not check the working tree for uncommitted changes: %v\n", statusErr)
 	case status != "":
@@ -68,7 +80,7 @@ func run(engine, baseRef string, workers int, out io.Writer) int {
 	defer os.RemoveAll(reportDir)
 	var failures, warnings, unjudged []mutantVerdict
 	for _, pkg := range packagesOf(changed) {
-		f, w, mErr := mutatePackage(engineArgs, pkg, reportDir, changed, workers, out)
+		f, w, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, workers, out)
 		if mErr != nil {
 			return fail("%v", mErr)
 		}
@@ -148,9 +160,9 @@ func reportPathFor(pkg, reportDir string) string {
 
 // runEngine invokes gremlins for pkg and returns the report it wrote. extra
 // carries mode-specific flags (--dry-run, the coefficient, the worker count).
-func runEngine(engineArgs []string, pkg, reportPath string, extra []string, out io.Writer) ([]byte, error) {
+func runEngine(ctx context.Context, engineArgs []string, pkg, reportPath string, extra []string, out io.Writer) ([]byte, error) {
 	args := slices.Concat(engineArgs, []string{"unleash"}, extra, []string{"--output", reportPath, pkg})
-	cmd := exec.CommandContext(context.Background(), args[0], args[1:]...) // #nosec G204 -- dev tool; engine comes from the Makefile pin, not user input
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...) // #nosec G204 -- dev tool; engine comes from the Makefile pin, not user input
 	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 	if runErr := cmd.Run(); runErr != nil {
@@ -163,7 +175,7 @@ func runEngine(engineArgs []string, pkg, reportPath string, extra []string, out 
 	return reportJSON, nil
 }
 
-func mutatePackage(engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, workers int, out io.Writer) (failures, warnings []mutantVerdict, err error) {
+func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, workers int, out io.Writer) (failures, warnings []mutantVerdict, err error) {
 	// A dry run enumerates mutants without executing any, so it costs one coverage
 	// pass instead of mutants x (build + suite). gremlins mutates the whole subtree
 	// it is pointed at while the gate only judges changed lines, so most
@@ -173,7 +185,7 @@ func mutatePackage(engineArgs []string, pkg, reportDir string, changed map[strin
 	// coverage pass warms the test cache measureSuite reads next.
 	// One worker: a dry run executes no tests, so extra workers only multiply
 	// copies of the module tree.
-	dryJSON, err := runEngine(engineArgs, pkg, reportPathFor(pkg, reportDir)+".dry",
+	dryJSON, err := runEngine(ctx, engineArgs, pkg, reportPathFor(pkg, reportDir)+".dry",
 		[]string{"--dry-run", workersFlag, "1"}, out)
 	if err != nil {
 		return nil, nil, err
@@ -188,8 +200,8 @@ func mutatePackage(engineArgs []string, pkg, reportDir string, changed map[strin
 	}
 
 	fmt.Fprintf(out, "mutatediff: mutating %s (%d mutants on changed lines)\n", pkg, onChanged)
-	coefficient := coefficientFor(pkg, measureSuite, ceilingFloor(), out)
-	reportJSON, err := runEngine(engineArgs, pkg, reportPathFor(pkg, reportDir),
+	coefficient := coefficientFor(ctx, pkg, measureSuite, ceilingFloor(), out)
+	reportJSON, err := runEngine(ctx, engineArgs, pkg, reportPathFor(pkg, reportDir),
 		slices.Concat(gremlinsTimeoutArgs(coefficient), workerArgs(workers)), out)
 	if err != nil {
 		return nil, nil, err
@@ -206,8 +218,8 @@ func fail(format string, a ...any) int {
 	return 2
 }
 
-func gitOutput(args ...string) (string, error) {
-	out, err := exec.CommandContext(context.Background(), "git", args...).Output() // #nosec G204 -- call-site literals plus the -base flag value, not user input
+func gitOutput(ctx context.Context, args ...string) (string, error) {
+	out, err := exec.CommandContext(ctx, "git", args...).Output() // #nosec G204 -- call-site literals plus the -base flag value, not user input
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}

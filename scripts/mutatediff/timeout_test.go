@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -76,8 +77,10 @@ func TestTimeoutCoefficientClampsPathologicalValues(t *testing.T) {
 
 func TestCoefficientForFallsBackGenerouslyWhenMeasurementFails(t *testing.T) {
 	var buf bytes.Buffer
-	measure := func(string) (suiteTiming, error) { return suiteTiming{}, errors.New("go test unavailable") }
-	got := coefficientFor("./observability", measure, 30*time.Second, &buf)
+	measure := func(context.Context, string) (suiteTiming, error) {
+		return suiteTiming{}, errors.New("go test unavailable")
+	}
+	got := coefficientFor(t.Context(), "./observability", measure, 30*time.Second, &buf)
 	if got != maxTimeoutCoefficient {
 		t.Errorf("coefficientFor with failed measurement = %d, want %d", got, maxTimeoutCoefficient)
 	}
@@ -88,11 +91,11 @@ func TestCoefficientForFallsBackGenerouslyWhenMeasurementFails(t *testing.T) {
 
 func TestCoefficientForReportsBothTimings(t *testing.T) {
 	var buf bytes.Buffer
-	measure := func(string) (suiteTiming, error) {
+	measure := func(context.Context, string) (suiteTiming, error) {
 		return suiteTiming{Uncached: 25 * time.Second, Baseline: 100 * time.Millisecond}, nil
 	}
 	// target = 25s + 20s budget = 45s; 45/0.1 = 450.
-	if got := coefficientFor("./observability", measure, 30*time.Second, &buf); got != 450 {
+	if got := coefficientFor(t.Context(), "./observability", measure, 30*time.Second, &buf); got != 450 {
 		t.Errorf("coefficientFor = %d, want 450", got)
 	}
 	for _, want := range []string{"suite 25s", "engine baseline 100ms", "coefficient 450"} {
@@ -107,10 +110,10 @@ func TestCoefficientForReportsBothTimings(t *testing.T) {
 // so `coeff=$(mutatediff -coefficient ./pkg)` captures an integer.
 func TestPrintCoefficientKeepsStdoutParseable(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	measure := func(string) (suiteTiming, error) {
+	measure := func(context.Context, string) (suiteTiming, error) {
 		return suiteTiming{Uncached: 10 * time.Second, Baseline: 100 * time.Millisecond}, nil
 	}
-	if code := printCoefficient("./observability", measure, 30*time.Second, &stdout, &stderr); code != 0 {
+	if code := printCoefficient(t.Context(), "./observability", measure, 30*time.Second, &stdout, &stderr); code != 0 {
 		t.Fatalf("printCoefficient = %d, want 0", code)
 	}
 	// target = max(30s, 10s+20s) = 30s; 30/0.1 = 300.
