@@ -107,6 +107,11 @@ type Pool[V any] struct {
 	idleCleanups int
 	errors       int
 
+	// cleanupErrs retains close failures from the idle-cleanup path (guarded by mu) so Close can
+	// surface them through its errors.Join contract. They are only recoverable because StopCleanup
+	// joins the loop: by the time Close drains this, the cleanup goroutine has finished recording.
+	cleanupErrs []error
+
 	// closed flips to true the moment Close begins. Read on the hot path of
 	// GetOrCreate so callers immediately see ErrPoolClosed instead of receiving a
 	// handle to a resource that is about to be torn down. Atomic so the hot path
@@ -210,6 +215,16 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 // that eviction, idle cleanup, and Close can close. Without it the seed would pin refs >= 1
 // forever and a later eviction would detach the resource with its close deferred to a release that
 // never comes, leaking it. Runs on its own goroutine, bounded by the create's own completion.
+//
+// These goroutines are deliberately NOT joined by Close, unlike the cleanup loop. Joining them
+// would make Close wait on an in-flight CREATE, and creation currently carries no bound of its own
+// (see createEntry) — a driver dial can outlast the whole shutdown budget, trading a narrow missed
+// close for a shutdown that may never return. What remains is narrow: an entry installed here and
+// then evicted while its seed was still unclaimed is detached but not closed, so a concurrent Close
+// (which can no longer see it) may return while this goroutine's releaseEntry runs the Closer. It
+// cannot double-close or resurrect the pool — createEntry re-checks closed under mu, and Close
+// marks every entry it drains closed. Bounding creation is the prerequisite for joining these
+// safely, so both belong to the deferred create-timeout work.
 func (p *Pool[V]) releaseAbandoned(ch <-chan singleflight.Result) {
 	res := <-ch
 	if res.Err != nil {
@@ -432,20 +447,24 @@ func (p *Pool[V]) StartCleanup(interval time.Duration) {
 // Close's errors.Join contract. It is idempotent: calling it when no loop is running is a no-op.
 func (p *Pool[V]) StopCleanup() {
 	p.cleanupMu.Lock()
-	if p.cleanupStop == nil {
-		p.cleanupMu.Unlock()
-		return
-	}
-	close(p.cleanupStop)
+	// Capture done BEFORE clearing cleanupStop, and leave it in place: StopCleanup is public and
+	// re-exported by the database and messaging managers, so a second concurrent caller must join
+	// the same loop rather than see a nil cleanupStop and return while a close is still in flight.
+	// StartCleanup overwrites cleanupDone when it starts the next loop, so a caller can only ever
+	// wait on the loop that was running when it took this lock.
 	done := p.cleanupDone
-	p.cleanupStop = nil
-	p.cleanupDone = nil
+	if p.cleanupStop != nil {
+		close(p.cleanupStop)
+		p.cleanupStop = nil
+	}
 	p.cleanupMu.Unlock()
 
+	if done == nil {
+		return // no loop has ever run
+	}
+
 	// Join OUTSIDE cleanupMu. cleanupLoop never takes cleanupMu, so waiting under it would not
-	// deadlock today, but a future closer that touches the cleanup lifecycle would deadlock. The
-	// done channel is captured per loop, so a concurrent StartCleanup cannot make us wait on a
-	// loop we did not stop.
+	// deadlock today, but a future closer that touches the cleanup lifecycle would deadlock.
 	<-done
 }
 
@@ -495,16 +514,27 @@ func (p *Pool[V]) cleanupIdle() {
 
 	for _, e := range toClose {
 		if err := p.closer(e.value); err != nil {
-			p.incErrors()
+			p.noteCleanupCloseErr(err)
 		}
 	}
+}
+
+// noteCleanupCloseErr counts an idle-cleanup close failure AND retains it for Close. The cleanup
+// goroutine has no caller to return an error to, so without this the failure only ever showed up as
+// a statistic. Must be called without mu held.
+func (p *Pool[V]) noteCleanupCloseErr(err error) {
+	p.mu.Lock()
+	p.errors++
+	p.cleanupErrs = append(p.cleanupErrs, err)
+	p.mu.Unlock()
 }
 
 // Close shuts down all pooled resources, stops the cleanup loop, and makes subsequent
 // GetOrCreate calls return ErrPoolClosed. It is idempotent and returns EVERY close error joined
 // via errors.Join (nil if none) — so consumers whose Close contract aggregates all failures
 // (e.g. DbManager) can surface them all, while errors.Is still matches any individual error.
-// Every close failure is also counted.
+// Every close failure is also counted. Failures from the idle-cleanup path are included: stopping
+// the cleanup loop joins it, so the errors it recorded are complete by the time Close drains them.
 func (p *Pool[V]) Close() error {
 	var closeErrs []error
 
@@ -515,8 +545,12 @@ func (p *Pool[V]) Close() error {
 		p.StopCleanup() // joins the loop: no cleanup-path p.closer is in flight past this point
 
 		// Collect all entries under the lock, marking each closed so a concurrent lease release
-		// cannot also close it (avoids a double Closer call).
+		// cannot also close it (avoids a double Closer call). StopCleanup joined the cleanup loop
+		// above, so every idle-cleanup close failure is already recorded — drain them into the same
+		// set Close joins.
 		p.mu.Lock()
+		closeErrs = append(closeErrs, p.cleanupErrs...)
+		p.cleanupErrs = nil
 		var toClose []*entry[V]
 		for key := range p.entries {
 			if e := p.removeEntryLocked(key); e != nil {

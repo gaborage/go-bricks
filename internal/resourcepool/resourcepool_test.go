@@ -385,6 +385,98 @@ func TestPoolStopCleanupJoins(t *testing.T) {
 	assert.Equal(t, int32(1), closes.Load(), "the idle entry was closed by the cleanup path, exactly once")
 }
 
+// TestPoolConcurrentStopCleanupBothJoin pins that EVERY StopCleanup caller joins the loop, not just
+// the one that closed the stop channel. StopCleanup is public and re-exported by the database and
+// messaging managers, so an app stopping cleanup concurrently with shutdown would otherwise make
+// Close's own StopCleanup a no-op while a cleanup-path close was still running.
+func TestPoolConcurrentStopCleanupBothJoin(t *testing.T) {
+	closeStarted := make(chan struct{})
+	var startedOnce sync.Once
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) } // idempotent: safe from any path
+
+	closer := func(*fakeResource) error {
+		startedOnce.Do(func() { close(closeStarted) })
+		<-release
+		return nil
+	}
+	p := New(5, time.Millisecond, closer)
+
+	_, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	rel() // unleased → the cleanup loop detaches and closes it
+
+	p.StartCleanup(2 * time.Millisecond)
+	select {
+	case <-closeStarted:
+	case <-time.After(2 * time.Second):
+		unblock()
+		t.Fatal("timed out waiting for idle cleanup to start closing the entry")
+	}
+
+	const stoppers = 2
+	stopped := make(chan struct{}, stoppers)
+	for i := 0; i < stoppers; i++ {
+		go func() {
+			p.StopCleanup()
+			stopped <- struct{}{}
+		}()
+	}
+
+	// Negative bound: NEITHER caller may return while the cleanup-path close is still running. Load
+	// can only make this more true, so it cannot flake — a caller skipping the join is the defect.
+	select {
+	case <-stopped:
+		unblock()
+		t.Fatal("a concurrent StopCleanup returned without joining the cleanup goroutine")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	unblock()
+	for i := 0; i < stoppers; i++ {
+		select {
+		case <-stopped:
+		case <-time.After(2 * time.Second):
+			t.Fatal("StopCleanup did not return after the cleanup-path close completed")
+		}
+	}
+	require.NoError(t, p.Close())
+}
+
+// TestPoolCloseSurfacesCleanupCloseError pins that a close failure on the idle-cleanup path reaches
+// Close's errors.Join. The cleanup goroutine has no caller to return an error to, so the failure
+// used to exist only as a statistic — invisible to consumers (e.g. DbManager) whose Close contract
+// aggregates every failure.
+func TestPoolCloseSurfacesCleanupCloseError(t *testing.T) {
+	wantErr := errors.New("idle close failed")
+	closeStarted := make(chan struct{})
+	var startedOnce sync.Once
+
+	closer := func(*fakeResource) error {
+		startedOnce.Do(func() { close(closeStarted) })
+		return wantErr
+	}
+	p := New(5, time.Millisecond, closer)
+
+	_, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	rel()
+
+	p.StartCleanup(2 * time.Millisecond)
+	select {
+	case <-closeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for idle cleanup to close the entry")
+	}
+
+	// Close joins the cleanup loop first, so the recorded failure is complete before it drains.
+	assert.ErrorIs(t, p.Close(), wantErr, "an idle-cleanup close failure must reach Close's errors.Join")
+	st := p.Stats()
+	assert.GreaterOrEqual(t, st.IdleCleanups, 1, "the failure came from the cleanup path, not Close's own drain")
+	assert.Equal(t, 1, st.Errors, "the failure is still counted exactly once")
+}
+
 // TestPoolEvictWhileLeasedDefersClose pins invariant 2 and is the mutation-check target for the
 // defer-close-if-leased branch in evictIfNeeded.
 func TestPoolEvictWhileLeasedDefersClose(t *testing.T) {
