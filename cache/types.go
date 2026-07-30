@@ -63,6 +63,8 @@ type Cache interface {
 	// CompareAndSet performs an atomic compare-and-set operation.
 	// Sets the key to newValue only if the current value equals expectedValue.
 	// Pass nil for expectedValue to set only if the key doesn't exist (SET NX semantics).
+	// Any non-nil expectedValue — including an empty slice — is a real comparison, so an
+	// absent key returns false rather than being acquired.
 	// Returns true if the value was set, false otherwise.
 	//
 	// This is useful for distributed locking and optimistic concurrency control.

@@ -588,3 +588,54 @@ func TestDistributedLockRaceCondition(t *testing.T) {
 	// Only ONE worker should have successfully acquired the lock
 	assert.Equal(t, 1, successCount, "expected exactly one worker to acquire lock")
 }
+
+// TestCompareAndSetEmptyExpectedMissingKey pins that a non-nil empty expected value is a
+// real compare, not an NX acquire: an absent key must not be granted.
+func TestCompareAndSetEmptyExpectedMissingKey(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	ctx := context.Background()
+	success, err := client.CompareAndSet(ctx, testKey1, []byte{}, []byte(testNewValue), 5*time.Minute)
+	require.NoError(t, err)
+	assert.False(t, success, "empty expected value must not grant an absent key")
+	assert.False(t, mr.Exists(testKey1))
+}
+
+// TestCompareAndSetEmptyExpectedEmptyStored verifies compare-against-empty succeeds when
+// the stored value really is empty.
+func TestCompareAndSetEmptyExpectedEmptyStored(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	ctx := context.Background()
+	require.NoError(t, client.Set(ctx, testKey1, []byte{}, 5*time.Minute))
+
+	success, err := client.CompareAndSet(ctx, testKey1, []byte{}, []byte(testNewValue), 5*time.Minute)
+	require.NoError(t, err)
+	assert.True(t, success)
+
+	stored, err := mr.Get(testKey1)
+	require.NoError(t, err)
+	assert.Equal(t, testNewValue, stored)
+}
+
+// TestCompareAndSetNilExpectedStillNX pins the preserved acquire-if-absent path.
+func TestCompareAndSetNilExpectedStillNX(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	ctx := context.Background()
+
+	success, err := client.CompareAndSet(ctx, testKey1, nil, []byte(testWorker), 5*time.Minute)
+	require.NoError(t, err)
+	assert.True(t, success, "nil expected must acquire an absent key")
+
+	success, err = client.CompareAndSet(ctx, testKey1, nil, []byte("worker-2"), 5*time.Minute)
+	require.NoError(t, err)
+	assert.False(t, success, "nil expected must not acquire a held key")
+
+	stored, err := mr.Get(testKey1)
+	require.NoError(t, err)
+	assert.Equal(t, testWorker, stored)
+}
