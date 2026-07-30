@@ -1,4 +1,8 @@
 .PHONY: help build test lint fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec verify-mod
+# verify-mod mutates go.mod/go.sum via `go mod tidy` — under `make -j check`
+# that would race lint/test reading the same module files. Force check's
+# prerequisites to run serially regardless of -j.
+.NOTPARALLEL: check
 
 BINARY_NAME := go-bricks-migrate
 VERSION := $(shell git describe --tags --match "tools/migration/v*" --always --dirty 2>/dev/null | sed "s|^tools/migration/||" | grep . || echo "dev")

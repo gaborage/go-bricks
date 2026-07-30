@@ -28,7 +28,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
    ```bash
    make check
    ```
-   This runs formatting, linting, tests, alloc-stability guards, a vulnerability scan, gosec, and a go.mod/go.sum tidiness check.
+   This runs formatting, linting, tests, alloc-stability guards, a vulnerability scan, gosec, and a go.mod/go.sum/go.work.sum tidiness check.
 
 ### Code Quality Standards
 

@@ -1,4 +1,8 @@
 .PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
+# verify-mod mutates go.mod/go.sum/go.work.sum via `go mod tidy` — under `make
+# -j check` that would race lint/test reading the same module files. Force
+# check's prerequisites to run serially regardless of -j.
+.NOTPARALLEL: check
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
