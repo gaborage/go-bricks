@@ -3,6 +3,9 @@ package redis
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -50,6 +53,34 @@ end
 return 0
 `
 
+// readServerInfo is a seam: tests override it to drive the version floor.
+var readServerInfo = func(ctx context.Context, c *redis.Client) (string, error) {
+	return c.Info(ctx, "server").Result()
+}
+
+// redisVersionTooOld reports whether info advertises a Redis older than 7.0, along with the
+// version string it found. An absent or unparseable redis_version: line reports false — the
+// floor check is best-effort.
+func redisVersionTooOld(info string) (tooOld bool, version string) {
+	for _, line := range strings.Split(info, "\n") {
+		rest, found := strings.CutPrefix(strings.TrimSpace(line), "redis_version:")
+		if !found {
+			continue
+		}
+
+		version = strings.TrimSpace(rest)
+		major, _, _ := strings.Cut(version, ".")
+		parsed, err := strconv.Atoi(major)
+		if err != nil {
+			return false, version
+		}
+
+		return parsed < 7, version
+	}
+
+	return false, ""
+}
+
 // Client implements the cache.Cache interface using Redis as the backend.
 type Client struct {
 	client *redis.Client
@@ -94,6 +125,14 @@ func NewClient(cfg *Config) (*Client, error) {
 	if err := client.Ping(ctx).Err(); err != nil {
 		client.Close()
 		return nil, cache.NewConnectionError("ping", cfg.Address(), err)
+	}
+
+	if info, infoErr := readServerInfo(ctx, client); infoErr == nil {
+		if tooOld, version := redisVersionTooOld(info); tooOld {
+			client.Close()
+			return nil, cache.NewConnectionError("version", cfg.Address(),
+				fmt.Errorf("redis 7.0+ required (GetOrSet uses SET NX GET); server reports %s", version))
+		}
 	}
 
 	return &Client{
@@ -186,7 +225,7 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 //   - wasSet=false: Value already existed (duplicate detected)
 //   - storedValue: Always returns the value in cache (current or newly set)
 //
-// Uses Redis SET NX GET for atomicity.
+// Uses Redis SET NX GET for atomicity, which requires Redis 7.0+.
 func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl time.Duration) (storedValue []byte, wasSet bool, err error) {
 	if c.closed.Load() {
 		return nil, false, cache.ErrClosed

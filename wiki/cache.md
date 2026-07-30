@@ -4,6 +4,8 @@ This document covers the GoBricks Redis-based cache subsystem in depth: lifecycl
 
 GoBricks provides Redis-based caching with type-safe serialization, multi-tenant isolation, and automatic lifecycle management.
 
+**Requires Redis 7.0+** because `GetOrSet` uses `SET … NX GET`, which Redis rejected as a syntax error before 7.0.0. The client fails construction when the server advertises an older version; because `CacheManager` builds clients lazily per tenant, a too-old server surfaces on the first request that touches the cache rather than at startup. The check is best-effort — it fails open when `INFO` is unavailable (ACL-restricted or redacted by a managed provider).
+
 **Core Components:**
 - **Redis Client**: Atomic operations (Get/Set/GetOrSet/CompareAndSet), connection pooling, health monitoring
 - **CacheManager**: Per-tenant cache lifecycle with lazy initialization, LRU eviction, idle cleanup, singleflight

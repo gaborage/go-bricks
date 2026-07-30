@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -20,20 +21,23 @@ const (
 	testWorker        = "worker-1"
 )
 
+// testConfig returns a valid Config pointing at the given miniredis server.
+func testConfig(mr *miniredis.Miniredis) *Config {
+	return &Config{
+		Host:     mr.Host(),
+		Port:     mr.Server().Addr().Port,
+		Database: 0,
+		PoolSize: 10,
+	}
+}
+
 // setupTestRedis creates a miniredis server and client for testing.
 func setupTestRedis(t *testing.T) (*Client, *miniredis.Miniredis) {
 	t.Helper()
 
 	mr := miniredis.RunT(t)
 
-	cfg := &Config{
-		Host:     mr.Host(),
-		Port:     mr.Server().Addr().Port,
-		Database: 0,
-		PoolSize: 10,
-	}
-
-	client, err := NewClient(cfg)
+	client, err := NewClient(testConfig(mr))
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
@@ -638,4 +642,69 @@ func TestCompareAndSetNilExpectedStillNX(t *testing.T) {
 	stored, err := mr.Get(testKey1)
 	require.NoError(t, err)
 	assert.Equal(t, testWorker, stored)
+}
+
+func TestRedisVersionTooOld(t *testing.T) {
+	// An INFO body carrying sections but no version line must fail open.
+	const noVersionLine = "# Clients\r\nconnected_clients:1\r\n\r\n# Stats\r\ntotal_connections_received:1\r\n"
+
+	tests := []struct {
+		name    string
+		info    string
+		tooOld  bool
+		version string
+	}{
+		{name: "redis_6_2_is_too_old", info: "redis_version:6.2.14\r\n", tooOld: true, version: "6.2.14"},
+		{name: "redis_7_0_is_the_floor", info: "redis_version:7.0.0", tooOld: false, version: "7.0.0"},
+		{name: "redis_7_2_is_accepted", info: "redis_version:7.2.4", tooOld: false, version: "7.2.4"},
+		{name: "double_digit_major_is_accepted", info: "redis_version:10.0.1", tooOld: false, version: "10.0.1"},
+		{name: "version_line_among_other_fields", info: "# Server\r\nredis_version:6.0.20\r\nos:Linux\r\n", tooOld: true, version: "6.0.20"},
+		{name: "unparseable_major_fails_open", info: "redis_version:unknown\r\n", tooOld: false, version: "unknown"},
+		{name: "empty_info_fails_open", info: "", tooOld: false, version: ""},
+		{name: "garbage_fails_open", info: "garbage", tooOld: false, version: ""},
+		{name: "no_version_line_fails_open", info: noVersionLine, tooOld: false, version: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tooOld, version := redisVersionTooOld(tt.info)
+			assert.Equal(t, tt.tooOld, tooOld)
+			assert.Equal(t, tt.version, version)
+		})
+	}
+}
+
+// TestNewClientRejectsOldRedis drives the version floor through the readServerInfo seam.
+// miniredis answers INFO server with "section (server) is not supported", so the seam is the
+// only way to reach the too-old branch. This test mutates package state, so neither it nor
+// its subtests may call t.Parallel().
+func TestNewClientRejectsOldRedis(t *testing.T) {
+	t.Run("too_old_fails_construction", func(t *testing.T) {
+		original := readServerInfo
+		t.Cleanup(func() { readServerInfo = original })
+		readServerInfo = func(_ context.Context, _ *redis.Client) (string, error) {
+			return "redis_version:6.2.14\r\n", nil
+		}
+
+		client, err := NewClient(testConfig(miniredis.RunT(t)))
+
+		require.Error(t, err)
+		assert.Nil(t, client)
+		assert.Contains(t, err.Error(), "7.0")
+		assert.Contains(t, err.Error(), "6.2.14")
+	})
+
+	t.Run("info_error_fails_open", func(t *testing.T) {
+		original := readServerInfo
+		t.Cleanup(func() { readServerInfo = original })
+		readServerInfo = func(_ context.Context, _ *redis.Client) (string, error) {
+			return "", errors.New("NOPERM this user has no permissions to run the 'info' command")
+		}
+
+		client, err := NewClient(testConfig(miniredis.RunT(t)))
+
+		require.NoError(t, err)
+		require.NotNil(t, client)
+		defer client.Close()
+	})
 }
