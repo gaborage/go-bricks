@@ -1,0 +1,150 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestTimeoutCoefficientCoversTheRealMutantCost is the regression this whole
+// file exists for. ./observability's suite takes ~25s but its engine baseline is
+// a cached replay of ~0.34s. Scaling a fixed 30s floor by the baseline alone
+// yields a ceiling that does not cover one real run of the suite, which is how
+// the first nightly baseline produced 241 timeouts and zero verdicts there.
+func TestTimeoutCoefficientCoversTheRealMutantCost(t *testing.T) {
+	obs := suiteTiming{Uncached: 25 * time.Second, Baseline: 340 * time.Millisecond}
+	got := timeoutCoefficient(obs, 30*time.Second)
+	ceiling := obs.Baseline * time.Duration(got)
+	if ceiling < obs.Uncached {
+		t.Fatalf("coefficient %d gives a %s ceiling, under the %s the suite really needs",
+			got, ceiling, obs.Uncached)
+	}
+	// Naively dividing the floor by the cached baseline would have been enough;
+	// dividing it by the SUITE is what collapsed to the engine default of 3.
+	if naive := timeoutCoefficient(
+		suiteTiming{Uncached: 25 * time.Second, Baseline: 25 * time.Second},
+		30*time.Second); naive > minTimeoutCoefficient+1 {
+		t.Errorf("sanity: conflating the two timings should collapse the coefficient, got %d", naive)
+	}
+}
+
+func TestTimeoutCoefficientFloorsFastSuites(t *testing.T) {
+	// A trivial suite: the floor, not the suite time, sets the ceiling.
+	fast := suiteTiming{Uncached: 50 * time.Millisecond, Baseline: 100 * time.Millisecond}
+	if got := timeoutCoefficient(fast, 30*time.Second); got != 300 {
+		t.Errorf("timeoutCoefficient(fast, 30s floor) = %d, want 300 (ceil(30/0.1))", got)
+	}
+}
+
+func TestTimeoutCoefficientRoundsUpToClearTheTarget(t *testing.T) {
+	// target 30s, baseline 7s: 30/7 = 4.28, and truncating to 4 leaves 28s.
+	tim := suiteTiming{Uncached: time.Second, Baseline: 7 * time.Second}
+	got := timeoutCoefficient(tim, 30*time.Second)
+	if got != 5 {
+		t.Fatalf("timeoutCoefficient = %d, want 5", got)
+	}
+	if ceiling := tim.Baseline * time.Duration(got); ceiling < 30*time.Second {
+		t.Errorf("ceiling %s is below the 30s target", ceiling)
+	}
+}
+
+func TestTimeoutCoefficientKeepsEngineDefaultWhenBaselineIsAlreadyAmple(t *testing.T) {
+	// A failing suite is never cached, so baseline == uncached. 3x the real cost
+	// is ample, and inflating it only lengthens a genuinely hanging mutant.
+	tim := suiteTiming{Uncached: 40 * time.Second, Baseline: 40 * time.Second}
+	if got := timeoutCoefficient(tim, 30*time.Second); got != minTimeoutCoefficient {
+		t.Errorf("timeoutCoefficient = %d, want %d", got, minTimeoutCoefficient)
+	}
+}
+
+func TestTimeoutCoefficientClampsPathologicalValues(t *testing.T) {
+	tiny := suiteTiming{Uncached: time.Second, Baseline: time.Microsecond}
+	if got := timeoutCoefficient(tiny, 30*time.Second); got != maxTimeoutCoefficient {
+		t.Errorf("timeoutCoefficient(1µs baseline) = %d, want %d", got, maxTimeoutCoefficient)
+	}
+	for _, baseline := range []time.Duration{0, -time.Second} {
+		tim := suiteTiming{Uncached: time.Second, Baseline: baseline}
+		if got := timeoutCoefficient(tim, 30*time.Second); got != maxTimeoutCoefficient {
+			t.Errorf("timeoutCoefficient(baseline %s) = %d, want %d (unmeasurable must fail generous)",
+				baseline, got, maxTimeoutCoefficient)
+		}
+	}
+}
+
+func TestCoefficientForFallsBackGenerouslyWhenMeasurementFails(t *testing.T) {
+	var buf bytes.Buffer
+	measure := func(string) (suiteTiming, error) { return suiteTiming{}, errors.New("go test unavailable") }
+	got := coefficientFor("./observability", measure, 30*time.Second, &buf)
+	if got != maxTimeoutCoefficient {
+		t.Errorf("coefficientFor with failed measurement = %d, want %d", got, maxTimeoutCoefficient)
+	}
+	if !strings.Contains(buf.String(), "WARN") {
+		t.Errorf("a failed measurement must be visible, got: %q", buf.String())
+	}
+}
+
+func TestCoefficientForReportsBothTimings(t *testing.T) {
+	var buf bytes.Buffer
+	measure := func(string) (suiteTiming, error) {
+		return suiteTiming{Uncached: 25 * time.Second, Baseline: 100 * time.Millisecond}, nil
+	}
+	// target = 25s + 20s budget = 45s; 45/0.1 = 450.
+	if got := coefficientFor("./observability", measure, 30*time.Second, &buf); got != 450 {
+		t.Errorf("coefficientFor = %d, want 450", got)
+	}
+	for _, want := range []string{"suite 25s", "engine baseline 100ms", "coefficient 450"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("log %q missing %q", buf.String(), want)
+		}
+	}
+}
+
+// TestPrintCoefficientKeepsStdoutParseable pins the contract the Makefile's
+// baseline loop relies on: the number alone on stdout, diagnostics on stderr,
+// so `coeff=$(mutatediff -coefficient ./pkg)` captures an integer.
+func TestPrintCoefficientKeepsStdoutParseable(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	measure := func(string) (suiteTiming, error) {
+		return suiteTiming{Uncached: 10 * time.Second, Baseline: 100 * time.Millisecond}, nil
+	}
+	if code := printCoefficient("./observability", measure, 30*time.Second, &stdout, &stderr); code != 0 {
+		t.Fatalf("printCoefficient = %d, want 0", code)
+	}
+	// target = max(30s, 10s+20s) = 30s; 30/0.1 = 300.
+	if got := strings.TrimSpace(stdout.String()); got != "300" {
+		t.Errorf("stdout = %q, want %q", got, "300")
+	}
+	if !strings.Contains(stderr.String(), "timeout coefficient") {
+		t.Errorf("stderr = %q, want the diagnostic line", stderr.String())
+	}
+}
+
+// TestGremlinsTimeoutArgsUsesTheFlag pins the lever; see coefficientFlag for why
+// the env var gremlins documents cannot be used. Verified on v0.5.1 against
+// ./internal/sqlid: env var gave 6 TIMED OUT and no verdicts, the flag gave
+// 5 KILLED and 1 LIVED.
+func TestGremlinsTimeoutArgsUsesTheFlag(t *testing.T) {
+	got := gremlinsTimeoutArgs(212)
+	want := []string{"--timeout-coefficient", "212"}
+	if !slices.Equal(got, want) {
+		t.Errorf("gremlinsTimeoutArgs(212) = %v, want %v", got, want)
+	}
+}
+
+func TestCeilingFloorReadsOverrideFromEnv(t *testing.T) {
+	t.Setenv(ceilingFloorEnv, "45s")
+	if got := ceilingFloor(); got != 45*time.Second {
+		t.Errorf("ceilingFloor() = %s, want 45s", got)
+	}
+	t.Setenv(ceilingFloorEnv, "not-a-duration")
+	if got := ceilingFloor(); got != defaultCeilingFloor {
+		t.Errorf("ceilingFloor() on unparsable override = %s, want the %s default", got, defaultCeilingFloor)
+	}
+	t.Setenv(ceilingFloorEnv, "")
+	if got := ceilingFloor(); got != defaultCeilingFloor {
+		t.Errorf("ceilingFloor() unset = %s, want %s", got, defaultCeilingFloor)
+	}
+}

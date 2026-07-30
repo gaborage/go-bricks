@@ -17,9 +17,13 @@ func main() {
 	base := flag.String("base", "origin/main", "ref to compute merge-base against")
 	mergeDir := flag.String("merge", "", "merge mode: directory of per-package shard reports to aggregate (skips the diff gate)")
 	mergeOut := flag.String("out", "gremlins-report.json", "merge mode: output path for the aggregated report")
+	coeffPkg := flag.String("coefficient", "", "coefficient mode: print the engine timeout-coefficient that holds this package's per-mutant ceiling at the floor")
 	flag.Parse()
 	if *mergeDir != "" {
 		os.Exit(mergeShards(*mergeDir, *mergeOut, os.Stdout))
+	}
+	if *coeffPkg != "" {
+		os.Exit(printCoefficient(*coeffPkg, measureSuite, ceilingFloor(), os.Stdout, os.Stderr))
 	}
 	if *engine == "" {
 		fmt.Fprintln(os.Stderr, "mutatediff: -engine is required")
@@ -61,7 +65,7 @@ func run(engine, baseRef string, out io.Writer) int {
 		return fail("%v", err)
 	}
 	defer os.RemoveAll(reportDir)
-	var failures, warnings []mutantVerdict
+	var failures, warnings, unjudged []mutantVerdict
 	for _, pkg := range packagesOf(changed) {
 		f, w, mErr := mutatePackage(engineArgs, pkg, reportDir, changed, out)
 		if mErr != nil {
@@ -69,9 +73,25 @@ func run(engine, baseRef string, out io.Writer) int {
 		}
 		failures = append(failures, f...)
 		warnings = append(warnings, w...)
+		if vacuousPkg(pkg, reportDir, out) {
+			unjudged = append(unjudged, mutantVerdict{File: pkg})
+		}
 	}
-	for _, w := range warnings {
-		fmt.Fprintf(out, "WARN not covered: %s:%d %s\n", w.File, w.Line, w.Operator)
+	return reportVerdict(failures, warnings, unjudged, out)
+}
+
+// reportVerdict prints every result and returns the process exit code. Vacuous
+// packages are checked before surviving mutants: if the engine judged nothing,
+// an empty failure list means nothing, and saying so is the point.
+func reportVerdict(failures, warnings, unjudged []mutantVerdict, out io.Writer) int {
+	timedOut := reportWarnings(warnings, out)
+	if len(unjudged) > 0 {
+		fmt.Fprintln(out, "FAIL the engine returned no verdict for these packages — every mutant timed out, so nothing was tested:")
+		for _, p := range unjudged {
+			fmt.Fprintf(out, "  %s\n", p.File)
+		}
+		fmt.Fprintf(out, "raise %s (currently %s) and re-run\n", ceilingFloorEnv, ceilingFloor())
+		return 1
 	}
 	if len(failures) > 0 {
 		fmt.Fprintln(out, "FAIL surviving mutants on changed lines:")
@@ -80,15 +100,56 @@ func run(engine, baseRef string, out io.Writer) int {
 		}
 		return 1
 	}
+	// Never claim a clean sweep while indeterminate mutants are outstanding.
+	if timedOut > 0 {
+		fmt.Fprintf(out, "mutatediff: no surviving mutants on changed lines, but %d timed out without a verdict\n", timedOut)
+		return 0
+	}
 	fmt.Fprintln(out, "mutatediff: all mutants on changed lines killed")
 	return 0
 }
 
+// reportWarnings prints every non-blocking verdict and returns how many were
+// indeterminate, which the caller needs in order not to claim a clean sweep.
+func reportWarnings(warnings []mutantVerdict, out io.Writer) (timedOut int) {
+	for _, w := range warnings {
+		if w.Status == statusTimedOut {
+			timedOut++
+			fmt.Fprintf(out, "WARN timed out (indeterminate — the mutant may hang the code, or the ceiling was too tight): %s:%d %s\n",
+				w.File, w.Line, w.Operator)
+			continue
+		}
+		fmt.Fprintf(out, "WARN not covered: %s:%d %s\n", w.File, w.Line, w.Operator)
+	}
+	return timedOut
+}
+
+// vacuousPkg re-reads pkg's report to check whether the engine returned any
+// verdict at all. A read or parse failure here is not fatal: mutatePackage has
+// already judged the same file, so this only ever adds a signal.
+func vacuousPkg(pkg, reportDir string, out io.Writer) bool {
+	reportJSON, err := os.ReadFile(reportPathFor(pkg, reportDir)) // #nosec G304 -- per-run os.MkdirTemp dir + package-derived name
+	if err != nil {
+		return false
+	}
+	timedOut, isVacuous, err := vacuous(reportJSON)
+	if err != nil || !isVacuous {
+		return false
+	}
+	fmt.Fprintf(out, "mutatediff: %s produced %d timeouts and zero verdicts\n", pkg, timedOut)
+	return true
+}
+
+func reportPathFor(pkg, reportDir string) string {
+	name := "gremlins-" + strings.ReplaceAll(strings.TrimPrefix(pkg, "./"), "/", "-") + ".json"
+	return filepath.Join(reportDir, name)
+}
+
 func mutatePackage(engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, out io.Writer) (failures, warnings []mutantVerdict, err error) {
 	fmt.Fprintf(out, "mutatediff: mutating %s\n", pkg)
-	reportName := "gremlins-" + strings.ReplaceAll(strings.TrimPrefix(pkg, "./"), "/", "-") + ".json"
-	reportPath := filepath.Join(reportDir, reportName)
-	args := slices.Concat(engineArgs, []string{"unleash", "--output", reportPath, pkg})
+	coefficient := coefficientFor(pkg, measureSuite, ceilingFloor(), out)
+	reportPath := reportPathFor(pkg, reportDir)
+	args := slices.Concat(engineArgs, []string{"unleash"}, gremlinsTimeoutArgs(coefficient), []string{"--output", reportPath, pkg})
 	cmd := exec.CommandContext(context.Background(), args[0], args[1:]...) // #nosec G204 -- dev tool; engine comes from the Makefile pin, not user input
 	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
