@@ -203,7 +203,7 @@ func assertForwardedCertVector(t *testing.T, tt *forwardedCertVectorCase, cert F
 	if tt.wantDuplicate {
 		require.ErrorIs(t, err, errDuplicateForwardedHeader)
 		require.NotErrorIs(t, err, errNoForwardedCert, "a duplicate must never be confused with absence")
-		assert.Empty(t, cert.Subject)
+		assert.Equal(t, ForwardedClientCert{}, cert, "a duplicate must return the zero value — no Subject, Issuer, SerialNumber, or Leaf leaks")
 		if tt.wantErrContains != "" {
 			assert.ErrorContains(t, err, tt.wantErrContains)
 		}

@@ -14,7 +14,7 @@ it to handlers and other middleware via `server.ForwardedClientCertFromContext`.
 | Key | Env var | Type | Notes |
 |---|---|---|---|
 | `server.forwardedclientcert.enabled` | `SERVER_FORWARDEDCLIENTCERT_ENABLED` | bool | Default `false` — middleware not wired |
-| `server.forwardedclientcert.require` | `SERVER_FORWARDEDCLIENTCERT_REQUIRE` | bool | Default `false` — parse-and-expose only. `true` rejects (401) only when **both** `-Subject` and `-Serial-Number` are absent; a missing or malformed `-Leaf` never rejects when either identity field is present. Requires `enabled: true` (config validation error otherwise). |
+| `server.forwardedclientcert.require` | `SERVER_FORWARDEDCLIENTCERT_REQUIRE` | bool | Default `false` — parse-and-expose only. `true` rejects (401) when **either**: both `-Subject` and `-Serial-Number` are absent, **or** any of the four headers carries more than one value (the duplicate check runs first, so a duplicated `-Issuer` alone rejects even with a valid Subject/Serial-Number). A missing or malformed `-Leaf` never rejects when either identity field is present. Requires `enabled: true` (config validation error otherwise). |
 
 ```yaml
 server:
@@ -111,9 +111,12 @@ the trust model re-widened accordingly.
 
 **Duplicated headers.** A request carrying more than one value for any single
 `X-Amzn-Mtls-Clientcert-*` header is treated as absent identity and logged (fail closed
-under `Require`, fail open without it — never first-value-wins). In the documented posture
-the ALB sets each header exactly once, so a duplicate means a client-supplied copy got
-through and the deployment posture above needs attention.
+under `Require`, fail open without it — never first-value-wins). This check runs *before*
+the `-Subject`/`-Serial-Number` absence check, so under `Require` a duplicated header alone
+rejects the request even when Subject and Serial-Number are both present and valid — e.g. a
+duplicated `-Issuer` with an otherwise-clean identity still returns 401. In the documented
+posture the ALB sets each header exactly once, so a duplicate means a client-supplied copy
+got through and the deployment posture above needs attention.
 
 ## Probe exemption
 
