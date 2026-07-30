@@ -157,8 +157,8 @@ log:
   # wiki/observability.md#sensitive-data-filtering.
   sensitivefields:
     - pan
-    - primary_account_number
-    - cvv2
+    - ssn
+    - tax_id
 
 # Messaging configuration (OPTIONAL - only required if using AMQP/RabbitMQ)
 # If not using messaging, you can omit this entire section or leave broker.url empty

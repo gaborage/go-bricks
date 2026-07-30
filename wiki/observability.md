@@ -69,7 +69,7 @@ Bare `pan`, `card`, `pin`, and `track` are deliberately absent: substring matchi
 
 ### Extending the filter (two seams)
 
-For regulated payloads — PCI-DSS (PAN, CVV2), PII (SSN, account numbers), one-time passwords — extend the list at bootstrap. Both seams are additive-only changes; existing apps see no behavior difference until they opt in.
+For regulated payloads — PCI-DSS (bare PAN field names), PII (SSN, tax ID) — extend the list at bootstrap. Both seams are additive-only changes; existing apps see no behavior difference until they opt in.
 
 **Seam 1 — YAML config (recommended for static lists):**
 
@@ -78,10 +78,6 @@ log:
   level: info
   sensitivefields:                     # NEW: appended to DefaultFilterConfig
     - pan                               # masks "pan", "PAN", "card_pan"
-    - primary_account_number            # masks the long-form variant too
-    - cvv2
-    - cvc2
-    - one_time_password
     - ssn
     - tax_id
 ```
@@ -105,7 +101,7 @@ import (
 // Common pattern: extend defaults + override mask value.
 base := logger.DefaultFilterConfig()
 base.SensitiveFields = append(base.SensitiveFields,
-    "pan", "primary_account_number", "cvv", "cvv2", "otp",
+    "pan", "ssn", "tax_id",
 )
 base.MaskValue = "[REDACTED]"
 
