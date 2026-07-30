@@ -142,6 +142,16 @@ func TestCheckJTIReplayRejectsInvalidInput(t *testing.T) {
 		assert.Equal(t, 0, store.calls)
 	})
 
+	t.Run("empty_issuer", func(t *testing.T) {
+		store := &recordingStore{}
+		claims := &Claims{JTI: "abc", Issuer: ""}
+
+		_, err := CheckJTIReplay(context.Background(), store, claims, 5*time.Minute)
+
+		require.ErrorIs(t, err, ErrIssuerMissing)
+		assert.Equal(t, 0, store.calls)
+	})
+
 	t.Run("zero_window", func(t *testing.T) {
 		store := &recordingStore{}
 		claims := &Claims{JTI: "abc", Issuer: "visa"}
@@ -200,4 +210,134 @@ func TestCheckJTIReplayNamespacesByIssuer(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEqual(t, storeC.key, storeD.key)
+}
+
+func TestCheckJTIReplayInNamespaceFirstUseIsFresh(t *testing.T) {
+	store := &recordingStore{}
+	claims := &Claims{JTI: "abc"}
+
+	fresh, err := CheckJTIReplayInNamespace(context.Background(), store, "visa-vts-verify", claims, 5*time.Minute)
+
+	require.NoError(t, err)
+	assert.True(t, fresh)
+	assert.Equal(t, 1, store.calls)
+	assert.Equal(t, "jose:jti:15:visa-vts-verify:abc", store.key)
+}
+
+func TestCheckJTIReplayInNamespaceDuplicateIsNotFresh(t *testing.T) {
+	store := &recordingStore{}
+	claims := &Claims{JTI: "abc"}
+
+	first, err := CheckJTIReplayInNamespace(context.Background(), store, "visa-vts-verify", claims, 5*time.Minute)
+	require.NoError(t, err)
+	assert.True(t, first)
+
+	// Simulate the key now being present, as a real cache backend would report
+	// on a second GetOrSet for the same namespace+jti.
+	store.existing = true
+	second, err := CheckJTIReplayInNamespace(context.Background(), store, "visa-vts-verify", claims, 5*time.Minute)
+	require.NoError(t, err)
+	assert.False(t, second)
+}
+
+func TestCheckJTIReplayInNamespaceSeparatesNamespaces(t *testing.T) {
+	storeA := &recordingStore{}
+	storeB := &recordingStore{}
+	claims := &Claims{JTI: "abc"}
+
+	freshA, err := CheckJTIReplayInNamespace(context.Background(), storeA, "a", claims, 5*time.Minute)
+	require.NoError(t, err)
+	freshB, err := CheckJTIReplayInNamespace(context.Background(), storeB, "b", claims, 5*time.Minute)
+	require.NoError(t, err)
+
+	assert.True(t, freshA)
+	assert.True(t, freshB)
+	assert.NotEqual(t, storeA.key, storeB.key)
+}
+
+// TestCheckJTIReplayInNamespaceKeyAliasing extends the aliasing pin from
+// TestCheckJTIReplayNamespacesByIssuer to the namespace variant: without the
+// length prefix, namespace "a:" + jti "b" and namespace "a" + jti ":b" would
+// both concatenate to "a:b" and collide.
+func TestCheckJTIReplayInNamespaceKeyAliasing(t *testing.T) {
+	storeA := &recordingStore{}
+	storeB := &recordingStore{}
+
+	_, err := CheckJTIReplayInNamespace(context.Background(), storeA, "a:", &Claims{JTI: "b"}, 5*time.Minute)
+	require.NoError(t, err)
+	_, err = CheckJTIReplayInNamespace(context.Background(), storeB, "a", &Claims{JTI: ":b"}, 5*time.Minute)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, storeA.key, storeB.key)
+}
+
+func TestCheckJTIReplayInNamespaceRejectsInvalidInput(t *testing.T) {
+	t.Run("nil_claims", func(t *testing.T) {
+		store := &recordingStore{}
+
+		_, err := CheckJTIReplayInNamespace(context.Background(), store, "visa-vts-verify", nil, 5*time.Minute)
+
+		require.ErrorIs(t, err, ErrClaimsMissing)
+		assert.Equal(t, 0, store.calls)
+	})
+
+	t.Run("nil_recorder", func(t *testing.T) {
+		claims := &Claims{JTI: "abc"}
+
+		_, err := CheckJTIReplayInNamespace(context.Background(), nil, "visa-vts-verify", claims, 5*time.Minute)
+
+		require.ErrorIs(t, err, ErrReplayRecorderMissing)
+	})
+
+	t.Run("empty_jti", func(t *testing.T) {
+		store := &recordingStore{}
+		claims := &Claims{JTI: ""}
+
+		_, err := CheckJTIReplayInNamespace(context.Background(), store, "visa-vts-verify", claims, 5*time.Minute)
+
+		require.ErrorIs(t, err, ErrJTIMissing)
+		assert.Equal(t, 0, store.calls)
+	})
+
+	t.Run("empty_namespace", func(t *testing.T) {
+		store := &recordingStore{}
+		claims := &Claims{JTI: "abc"}
+
+		_, err := CheckJTIReplayInNamespace(context.Background(), store, "", claims, 5*time.Minute)
+
+		require.ErrorIs(t, err, ErrIssuerMissing)
+		assert.Equal(t, 0, store.calls)
+	})
+
+	t.Run("zero_window", func(t *testing.T) {
+		store := &recordingStore{}
+		claims := &Claims{JTI: "abc"}
+
+		_, err := CheckJTIReplayInNamespace(context.Background(), store, "visa-vts-verify", claims, 0)
+
+		require.ErrorIs(t, err, ErrReplayWindowInvalid)
+		assert.Equal(t, 0, store.calls)
+	})
+
+	t.Run("negative_window", func(t *testing.T) {
+		store := &recordingStore{}
+		claims := &Claims{JTI: "abc"}
+
+		_, err := CheckJTIReplayInNamespace(context.Background(), store, "visa-vts-verify", claims, -time.Minute)
+
+		require.ErrorIs(t, err, ErrReplayWindowInvalid)
+		assert.Equal(t, 0, store.calls)
+	})
+}
+
+func TestCheckJTIReplayInNamespaceWrapsStoreError(t *testing.T) {
+	boom := errors.New("boom")
+	store := &recordingStore{err: boom}
+	claims := &Claims{JTI: "abc"}
+
+	fresh, err := CheckJTIReplayInNamespace(context.Background(), store, "visa-vts-verify", claims, 5*time.Minute)
+
+	assert.False(t, fresh)
+	require.ErrorIs(t, err, boom)
+	assert.Contains(t, err.Error(), "jose: replay recorder:")
 }
