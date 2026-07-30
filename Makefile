@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec mutate mutate-baseline release release-cli
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
@@ -90,7 +90,11 @@ clean: ## Clean build cache and test artifacts
 # common-false-positives preset, so classes like G304 are suppressed there and
 # reported only by the standalone scanner CI runs. Leaving it out of `check` meant
 # a clean local run could still fail the security-framework job.
-check: fmt lint test test-alloc vuln sec ## Run fmt, lint, test, alloc guards, vuln scan, and gosec (pre-commit checks; mirrors CI)
+check: fmt lint test test-alloc vuln sec verify-mod ## Run fmt, lint, test, alloc guards, vuln scan, gosec, and mod-tidy verification (pre-commit checks; mirrors CI)
+
+verify-mod: ## Verify go.mod/go.sum are tidy and go.work.sum is settled (mirrors CI)
+	go mod tidy
+	git diff --exit-code go.mod go.sum go.work.sum
 
 vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...

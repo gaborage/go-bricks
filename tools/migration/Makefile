@@ -1,4 +1,4 @@
-.PHONY: help build test lint fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec
+.PHONY: help build test lint fmt update clean install check test-coverage validate-cli dev-deps release-dry-run vuln sec verify-mod
 
 BINARY_NAME := go-bricks-migrate
 VERSION := $(shell git describe --tags --match "tools/migration/v*" --always --dirty 2>/dev/null | sed "s|^tools/migration/||" | grep . || echo "dev")
@@ -48,7 +48,11 @@ validate-cli: build ## Validate CLI commands work correctly
 	./$(BINARY_NAME) --help
 	@echo "✓ CLI validation passed"
 
-check: fmt lint test validate-cli vuln ## Run fmt, lint, test, CLI validation, and vuln scan (pre-commit checks)
+check: fmt lint test validate-cli vuln sec verify-mod ## Run fmt, lint, test, CLI validation, vuln scan, gosec, and mod-tidy verification (pre-commit checks)
+
+verify-mod: ## Verify go.mod/go.sum are tidy (mirrors CI)
+	go mod tidy
+	git diff --exit-code go.mod go.sum
 
 dev-deps: ## Install development dependencies
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
