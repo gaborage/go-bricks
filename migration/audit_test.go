@@ -297,6 +297,63 @@ func TestEmitterCloseDrainsQueue(t *testing.T) {
 	assert.Len(t, sink.snapshot(), 5)
 }
 
+// TestEmitterEmitSnapshotsEventBeforeCallerMutation pins the Emit contract:
+// the sink receives an isolated snapshot taken at Emit time, so a caller that
+// reuses one AuditEvent across a loop (mutating it right after Emit returns)
+// cannot corrupt an already-delivered record.
+func TestEmitterEmitSnapshotsEventBeforeCallerMutation(t *testing.T) {
+	setupTestTracer(t)
+	sink := newRecordingSink()
+	emitter := newAuditEmitter(disabledLogger(), sink)
+
+	ev := baseEvent()
+	wantType := ev.Type
+	wantTarget := ev.Target
+	wantPrincipal := ev.AppliedByPrincipal
+	wantOutcome := ev.Outcome
+	wantAttr := ev.Attributes["migration.vendor"]
+
+	emitter.Emit(context.Background(), ev)
+
+	ev.Type = AuditEventTypeStateTransitioned
+	ev.Target = "mutated-target"
+	ev.AppliedByPrincipal = "mutated-principal"
+	ev.Outcome = AuditOutcomeFailed
+	ev.Attributes["migration.vendor"] = "mutated-vendor"
+
+	require.NoError(t, emitter.Close(context.Background()))
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+	got := events[0]
+	assert.Equal(t, wantType, got.Type)
+	assert.Equal(t, wantTarget, got.Target)
+	assert.Equal(t, wantPrincipal, got.AppliedByPrincipal)
+	assert.Equal(t, wantOutcome, got.Outcome)
+	assert.Equal(t, wantAttr, got.Attributes["migration.vendor"])
+}
+
+// TestEmitterEmitDoesNotMutateCallerPrincipal pins the other half of the
+// snapshot contract: the PrincipalUnspecified normalization must land on the
+// emitter's copy only, never write back into the caller's struct.
+func TestEmitterEmitDoesNotMutateCallerPrincipal(t *testing.T) {
+	setupTestTracer(t)
+	sink := newRecordingSink()
+	emitter := newAuditEmitter(disabledLogger(), sink)
+
+	ev := baseEvent()
+	ev.AppliedByPrincipal = ""
+
+	emitter.Emit(context.Background(), ev)
+
+	assert.Equal(t, "", ev.AppliedByPrincipal,
+		"Emit must not write PrincipalUnspecified back into the caller's struct")
+
+	require.NoError(t, emitter.Close(context.Background()))
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+	assert.Equal(t, PrincipalUnspecified, events[0].AppliedByPrincipal)
+}
+
 func TestMigrateForEmitsAuditEventOnSuccess(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script stub not supported on windows CI")
