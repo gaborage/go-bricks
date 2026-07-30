@@ -213,6 +213,178 @@ func TestPoolConcurrentGetOrCreateSingleflight(t *testing.T) {
 	assert.Equal(t, int32(1), creations.Load())
 }
 
+// leaseResult carries a GetOrCreate outcome across a goroutine boundary.
+type leaseResult struct {
+	v   *fakeResource
+	rel ReleaseFunc
+	err error
+}
+
+// getOrCreateBounded runs GetOrCreate on its own goroutine and waits a generous bound for the
+// outcome, so a regression that makes a collapsed wait uncancelable again surfaces as a clear
+// failure instead of hanging the package until the test timeout. The bound is one-directional: the
+// callers below hand it an already-dead context, which a correct implementation answers
+// immediately, so machine load cannot flake it. unblock lets the in-flight create drain if we do
+// give up.
+func getOrCreateBounded(ctx context.Context, t *testing.T, p *Pool[*fakeResource], key string,
+	create func(context.Context) (*fakeResource, error), unblock func()) leaseResult {
+	t.Helper()
+	out := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(ctx, key, create)
+		out <- leaseResult{v, rel, err}
+	}()
+	select {
+	case got := <-out:
+		return got
+	case <-time.After(2 * time.Second):
+		unblock() // let the blocked create finish so the goroutines drain
+		t.Fatal("GetOrCreate never returned — the collapsed wait ignored the caller's dead context")
+		return leaseResult{}
+	}
+}
+
+// TestPoolGetOrCreateWaiterHonorsOwnContext pins that a caller collapsed onto someone else's
+// in-flight create waits on ITS OWN context: with sf.Do the wait was uncancelable, so a caller
+// whose context was already dead still sat through the full dial. The abandoning caller must not
+// cancel the create — it completes and installs the resource for everyone else.
+func TestPoolGetOrCreateWaiterHonorsOwnContext(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	createStarted := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) } // idempotent: safe from any path
+	// A driver that honors the context it is handed. The leader's context stays live throughout, so
+	// the create must still succeed after the second caller walks away.
+	create := func(ctx context.Context) (*fakeResource, error) {
+		close(createStarted)
+		<-release
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("create ran on a dead context: %w", err)
+		}
+		return newFakeResource("shared"), nil
+	}
+
+	leader := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, create)
+		leader <- leaseResult{v, rel, err}
+	}()
+	<-createStarted // the create is in flight, so the next caller is a collapsed waiter
+
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	abandoned := getOrCreateBounded(dead, t, p, keyOne, create, unblock)
+	assert.ErrorIs(t, abandoned.err, context.Canceled,
+		"a waiter must fail on its OWN context, not block on the leader's create")
+	assert.Nil(t, abandoned.v)
+	assert.Nil(t, abandoned.rel)
+
+	unblock()
+	got := <-leader
+	require.NoError(t, got.err, "the abandoning waiter must not cancel the in-flight create")
+	require.NotNil(t, got.rel)
+	defer got.rel()
+	assert.Equal(t, 1, p.Size(), "the create still installed its entry")
+	assert.False(t, tr.wasClosed(got.v.id))
+}
+
+// TestPoolAbandonedCreateReleasesSeedLease pins the counterpart of the abandon path: a create whose
+// caller gave up still installs the entry, and that entry's seed lease — which no caller is left to
+// claim — must be handed back. Otherwise refs stays >= 1 forever, eviction can only detach the
+// resource, and its close is deferred to a release that never comes: a leaked connection.
+func TestPoolAbandonedCreateReleasesSeedLease(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(1, 0, tr.closer) // capacity 1: the next key evicts the abandoned entry
+	defer p.Close()
+
+	createStarted := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) } // idempotent: safe from any path
+	// A driver that hands back a live resource even though the caller's context died mid-dial — the
+	// realistic shape, since drivers only observe cancellation at their own checkpoints.
+	create := func(context.Context) (*fakeResource, error) {
+		close(createStarted)
+		<-release
+		return newFakeResource("abandoned"), nil
+	}
+
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+	abandoned := getOrCreateBounded(dead, t, p, keyOne, create, unblock)
+	require.ErrorIs(t, abandoned.err, context.Canceled)
+	require.Nil(t, abandoned.rel)
+
+	<-createStarted
+	unblock()
+	require.Eventually(t, func() bool { return p.Size() == 1 }, 2*time.Second, 5*time.Millisecond,
+		"the abandoned create must still install its entry")
+
+	// Evict it. The resource must actually close — deferred is fine, never is not.
+	_, rel2, err := p.GetOrCreate(context.Background(), keyTwo, keyedCreate(keyTwo))
+	require.NoError(t, err)
+	defer rel2()
+	require.Eventually(t, func() bool { return tr.wasClosed("abandoned") }, 2*time.Second, 5*time.Millisecond,
+		"an abandoned create's resource must remain closable — its unclaimed seed lease was never handed back")
+	assert.Equal(t, 1, tr.count("abandoned"), "exactly one close")
+}
+
+// TestPoolStopCleanupJoins pins that StopCleanup WAITS for the cleanup goroutine: it used to close
+// the stop channel and return, so Close could report shutdown complete while cleanupIdle was still
+// inside p.closer — shutdown accounting lied and that close's error was invisible to Close.
+func TestPoolStopCleanupJoins(t *testing.T) {
+	closeStarted := make(chan struct{})
+	var startedOnce sync.Once
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) } // idempotent: safe from any path
+	var closes atomic.Int32
+
+	closer := func(*fakeResource) error {
+		closes.Add(1)
+		startedOnce.Do(func() { close(closeStarted) })
+		<-release // hold the cleanup path's close open until the test releases it
+		return nil
+	}
+	p := New(5, time.Millisecond, closer)
+
+	_, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	rel() // unleased → the cleanup loop detaches and closes it
+
+	p.StartCleanup(2 * time.Millisecond)
+	select {
+	case <-closeStarted:
+	case <-time.After(2 * time.Second):
+		unblock()
+		t.Fatal("timed out waiting for idle cleanup to start closing the entry")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		p.StopCleanup()
+		close(stopped)
+	}()
+
+	// Negative bound: StopCleanup must still be blocked while the closer is. Extra machine load can
+	// only make this MORE true, so it cannot flake — an early return is the actual defect.
+	select {
+	case <-stopped:
+		unblock()
+		t.Fatal("StopCleanup returned while a cleanup-path close was still in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	unblock()
+	<-stopped // joins now that the closer returned
+	require.NoError(t, p.Close())
+	assert.Equal(t, int32(1), closes.Load(), "the idle entry was closed by the cleanup path, exactly once")
+}
+
 // TestPoolEvictWhileLeasedDefersClose pins invariant 2 and is the mutation-check target for the
 // defer-close-if-leased branch in evictIfNeeded.
 func TestPoolEvictWhileLeasedDefersClose(t *testing.T) {

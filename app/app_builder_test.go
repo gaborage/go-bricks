@@ -634,6 +634,38 @@ func TestPerformPreInitializationUsesPerComponentTimeouts(t *testing.T) {
 		"cache pre-init must use app.startup.cache, not the global timeout")
 }
 
+// TestPerformPreInitializationZeroBudgetUsesParentContext pins that a component budget resolving to
+// zero — a Config built by hand rather than loaded through config.applyStartupDefaults — means "no
+// explicit budget" and not "already expired". context.WithTimeout(parent, 0) hands the component a
+// context that is dead on arrival, which aborts every pool-backed pre-init before its connector runs.
+func TestPerformPreInitializationZeroBudgetUsesParentContext(t *testing.T) {
+	cfg := defaultTestConfig() // App.Startup left zero-valued, as a hand-built config arrives
+
+	resource := &deadlineCapturingResource{}
+	opts := &Options{
+		ResourceSource: resource,
+		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return &testmocks.MockDatabase{}, nil
+		},
+		MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+		CacheConnector: func(ctx context.Context, _ string) (cache.Cache, error) {
+			resource.captureCacheDeadline(ctx)
+			return cachetesting.NewMockCache(), nil
+		},
+	}
+
+	_, _, err := NewWithConfig(cfg, opts)
+	require.NoError(t, err, "a zero startup budget must not expire pre-initialization instantly")
+
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+	assert.False(t, resource.dbHadDL, "a zero database budget must install no deadline")
+	assert.False(t, resource.msgHadDL, "a zero messaging budget must install no deadline")
+	assert.False(t, resource.cacheHadDL, "a zero cache budget must install no deadline")
+}
+
 // TestPreInitCacheFailureIsNonFatal verifies that a cache pre-initialization
 // failure does not abort startup. Both error shapes are exercised:
 //   - a non-NotConfigured error hits the WARN ("non-fatal") branch
