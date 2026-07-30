@@ -3,6 +3,10 @@ package testing
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -400,4 +404,145 @@ func TestMockCacheChainedConfiguration(t *testing.T) {
 	assert.Equal(t, "chained", mock.ID())
 	assert.Equal(t, 10*time.Millisecond, mock.delay)
 	assert.Equal(t, customErr, mock.getError)
+}
+
+// concurrencyRounds is the number of independent races each single-winner test runs; one
+// round is not reliably enough to catch a check-then-act window.
+const concurrencyRounds = 200
+
+// seedExpired stores an entry that is already past its expiration, bypassing Set so the
+// test does not depend on platform clock granularity.
+func seedExpired(mock *MockCache, key string, value []byte) {
+	mock.data.Store(key, &cacheEntry{value: value, expiration: time.Now().Add(-time.Minute)})
+}
+
+// countConcurrentWinners releases op on every CPU at once through a yield barrier, so the
+// callers are already running when they enter the mock rather than being woken one at a time,
+// and reports how many succeeded. One CPU is left to the coordinator's wait loops.
+func countConcurrentWinners(op func() (bool, error)) (winners int, firstErr error) {
+	goroutines := runtime.GOMAXPROCS(0) - 1
+	if goroutines < 4 {
+		goroutines = 4
+	}
+
+	var ready, done atomic.Int64
+	var release atomic.Bool
+	var mu sync.Mutex
+
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			ready.Add(1)
+			for !release.Load() {
+				runtime.Gosched()
+			}
+			won, err := op()
+
+			mu.Lock()
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+			if won {
+				winners++
+			}
+			mu.Unlock()
+			done.Add(1)
+		}()
+	}
+
+	for ready.Load() < int64(goroutines) {
+		runtime.Gosched()
+	}
+	release.Store(true)
+
+	for done.Load() < int64(goroutines) {
+		runtime.Gosched()
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	return winners, firstErr
+}
+
+// TestMockCacheGetOrSetExpiredConcurrentSingleWinner pins that replacing an expired entry
+// grants exactly one caller — jose replay detection relies on wasSet being a real winner flag.
+func TestMockCacheGetOrSetExpiredConcurrentSingleWinner(t *testing.T) {
+	const key = "expired-key"
+
+	for round := 0; round < concurrencyRounds; round++ {
+		mock := NewMockCache()
+		seedExpired(mock, key, []byte("stale"))
+
+		winners, err := countConcurrentWinners(func() (bool, error) {
+			_, wasSet, opErr := mock.GetOrSet(context.Background(), key, []byte("fresh"), time.Minute)
+			return wasSet, opErr
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, 1, winners, "round %d: exactly one caller may observe wasSet on an expired key", round)
+	}
+}
+
+// TestMockCacheCompareAndSetConcurrentSingleWinner pins that the compare path is a real CAS,
+// not check-then-act.
+func TestMockCacheCompareAndSetConcurrentSingleWinner(t *testing.T) {
+	ctx := context.Background()
+	const key = "cas-key"
+	seeded := []byte("seeded")
+
+	for round := 0; round < concurrencyRounds; round++ {
+		mock := NewMockCache()
+		require.NoError(t, mock.Set(ctx, key, seeded, time.Minute))
+
+		var next atomic.Int64
+		winners, err := countConcurrentWinners(func() (bool, error) {
+			newValue := []byte(fmt.Sprintf("replacement-%d", next.Add(1)))
+			return mock.CompareAndSet(ctx, key, seeded, newValue, time.Minute)
+		})
+
+		require.NoError(t, err)
+		require.Equal(t, 1, winners, "round %d: exactly one caller may win the compare-and-swap", round)
+	}
+}
+
+// TestMockCacheCompareAndSetEmptyVsNilMatchesRedis pins the mock against the Redis client's
+// nil-vs-empty semantics; a failure here means one of the two drifted.
+func TestMockCacheCompareAndSetEmptyVsNilMatchesRedis(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("empty_expected_missing_key", func(t *testing.T) {
+		mock := NewMockCache()
+		swapped, err := mock.CompareAndSet(ctx, "key", []byte{}, []byte("new"), time.Minute)
+		require.NoError(t, err)
+		assert.False(t, swapped, "empty expected value must not grant an absent key")
+		assert.False(t, mock.Has("key"))
+	})
+
+	t.Run("empty_expected_empty_stored", func(t *testing.T) {
+		mock := NewMockCache()
+		require.NoError(t, mock.Set(ctx, "key", []byte{}, time.Minute))
+
+		swapped, err := mock.CompareAndSet(ctx, "key", []byte{}, []byte("new"), time.Minute)
+		require.NoError(t, err)
+		assert.True(t, swapped)
+
+		stored, err := mock.Get(ctx, "key")
+		require.NoError(t, err)
+		assert.Equal(t, []byte("new"), stored)
+	})
+
+	t.Run("nil_expected_still_nx", func(t *testing.T) {
+		mock := NewMockCache()
+
+		swapped, err := mock.CompareAndSet(ctx, "key", nil, []byte("worker-1"), time.Minute)
+		require.NoError(t, err)
+		assert.True(t, swapped)
+
+		swapped, err = mock.CompareAndSet(ctx, "key", nil, []byte("worker-2"), time.Minute)
+		require.NoError(t, err)
+		assert.False(t, swapped)
+
+		stored, err := mock.Get(ctx, "key")
+		require.NoError(t, err)
+		assert.Equal(t, []byte("worker-1"), stored)
+	})
 }

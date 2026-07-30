@@ -25,6 +25,9 @@ type MockCache struct {
 	id string
 
 	// Storage
+	// mu serializes mutators so CompareAndSet and GetOrSet are real atomics rather than
+	// check-then-act sequences over data.
+	mu     sync.Mutex
 	data   sync.Map // key: string, value: *cacheEntry
 	closed atomic.Bool
 
@@ -160,6 +163,9 @@ func (m *MockCache) Get(ctx context.Context, key string) ([]byte, error) {
 		return nil, m.getError
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	val, ok := m.data.Load(key)
 	if !ok {
 		return nil, cache.ErrNotFound
@@ -199,6 +205,9 @@ func (m *MockCache) Set(ctx context.Context, key string, value []byte, ttl time.
 		return cache.ErrInvalidTTL
 	}
 
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	// Handle TTL=0 as "no expiration" (100 years)
 	expiration := time.Now().Add(ttl)
 	if ttl == 0 {
@@ -237,6 +246,9 @@ func (m *MockCache) GetOrSet(ctx context.Context, key string, value []byte, ttl 
 	if ttl < 0 {
 		return nil, false, cache.ErrInvalidTTL
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// Handle TTL=0 as "no expiration" (100 years)
 	expiration := time.Now().Add(ttl)
@@ -289,6 +301,9 @@ func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue
 	if ttl < 0 {
 		return false, cache.ErrInvalidTTL
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// Handle TTL=0 as "no expiration" (100 years)
 	expiration := time.Now().Add(ttl)
@@ -350,6 +365,9 @@ func (m *MockCache) Delete(ctx context.Context, key string) error {
 	if m.deleteError != nil {
 		return m.deleteError
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	m.data.Delete(key)
 	return nil
@@ -477,6 +495,9 @@ func (m *MockCache) Has(key string) bool {
 // Clear removes all entries from the cache.
 // Useful for resetting state between test cases.
 func (m *MockCache) Clear() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.data.Range(func(key, _ any) bool {
 		m.data.Delete(key)
 		return true
