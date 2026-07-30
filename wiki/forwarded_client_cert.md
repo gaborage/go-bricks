@@ -109,6 +109,12 @@ If AWS ever publishes a sanitization guarantee for `X-Amzn-Mtls-*`, this section
 [ADR-043](adr_043_forwarded_client_cert.md)'s Consequences should be updated to cite it and
 the trust model re-widened accordingly.
 
+**Duplicated headers.** A request carrying more than one value for any single
+`X-Amzn-Mtls-Clientcert-*` header is treated as absent identity and logged (fail closed
+under `Require`, fail open without it — never first-value-wins). In the documented posture
+the ALB sets each header exactly once, so a duplicate means a client-supplied copy got
+through and the deployment posture above needs attention.
+
 ## Probe exemption
 
 Health and ready probe paths (the same `healthPath`/`readyPath` passed into
