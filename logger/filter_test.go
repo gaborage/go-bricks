@@ -902,3 +902,26 @@ func TestNewSensitiveDataFilterEmptySensitiveFieldsDisablesMasking(t *testing.T)
 		t.Error("Expected an explicitly empty SensitiveFields to disable masking entirely")
 	}
 }
+
+// TestNewSensitiveDataFilterSnapshotsSensitiveFields pins the snapshot
+// semantics documented on SensitiveDataFilter.needles: the lowered needle
+// list is captured once at construction, so mutating the caller's
+// FilterConfig.SensitiveFields afterward — by appending or by replacing it
+// outright — has no effect on matching.
+func TestNewSensitiveDataFilterSnapshotsSensitiveFields(t *testing.T) {
+	config := &FilterConfig{SensitiveFields: []string{"original_term"}}
+	filter := NewSensitiveDataFilter(config)
+
+	config.SensitiveFields = append(config.SensitiveFields, "appended_after_construction")
+	config.SensitiveFields = []string{"replaced_entirely"}
+
+	if !filter.isSensitiveField("original_term") {
+		t.Error("Expected original_term to still be masked via the snapshot taken at construction")
+	}
+	if filter.isSensitiveField("appended_after_construction") {
+		t.Error("Expected appended_after_construction to NOT be masked — it was added after the snapshot")
+	}
+	if filter.isSensitiveField("replaced_entirely") {
+		t.Error("Expected replaced_entirely to NOT be masked — config.SensitiveFields was replaced, not the snapshot")
+	}
+}

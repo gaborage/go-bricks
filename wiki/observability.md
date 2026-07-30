@@ -65,7 +65,7 @@ Every log line emitted via the framework logger passes through a `logger.Sensiti
 
 A URL value on the sensitive path is masked in full, never structure-preserved — query strings and fragments routinely carry the secret itself. The default mask value is `***`.
 
-Bare `pan`, `card`, `pin`, and `track` are deliberately absent: substring matching would mask `span_id`, `discard_reason`, `pinned_at`, and `tracking_id`, so differently-named PAN fields still need a per-service entry via `log.sensitivefields`. `otp` does over-mask camelCase `…otP…` names (e.g. `snapshotPath`) and that trade is intentional — masking a debugging detail costs less than leaking an OTP. An explicitly empty `SensitiveFields` now logs a WARN at startup (suppressed at `log.level: error` and above).
+Bare `pan`, `card`, `pin`, and `track` are deliberately absent: substring matching would mask `span_id`, `discard_reason`, `pinned_at`, and `tracking_id`, so differently-named PAN fields still need a per-service entry via `log.sensitivefields`. `otp` does over-mask camelCase `…otP…` names (e.g. `snapshotPath`) and that trade is intentional — masking a debugging detail costs less than leaking an OTP. Setting `app.Options.LoggerFilterConfig` (or calling `logger.NewWithFilter` directly) with an explicitly empty `SensitiveFields` now logs a WARN at startup (suppressed at `log.level: error` and above) — an empty YAML `log.sensitivefields` list is not this case: it resolves to `nil` and falls back to the defaults, so it neither disables masking nor warns.
 
 ### Extending the filter (two seams)
 
@@ -130,7 +130,7 @@ fw, _, err = app.NewWithOptions(&app.Options{
 - **Field names**, not field values. The filter never scans string contents for PAN-shaped digit sequences or Luhn-valid numbers. Value scanning is a defense-in-depth concern that belongs in application code (see *Defense in depth*, below).
 - **Case-insensitive substring**. `pan` matches `pan`, `PAN`, `Pan`, `card_pan`, `primary_account_number`. This is intentional — it survives typos, naming-convention drift, and underscored-vs-camelCase variants in different modules.
 - **Recursive into structures**. All log-event methods are covered — `Str`, `Int`, `Int64`, `Uint64`, `Dur`, `Bytes`, and `Interface(...)` — as well as nested `map[string]any`, `map[string]string`, `http.Header` (`map[string][]string`), struct fields (using `json` tags when present), and slice/array elements. Recursion is bounded (`logger.DefaultMaxDepth = 8`) and cycle-safe (visited pointer set). Depth exhaustion fails **closed** — values past the depth limit are replaced with the mask rather than logged verbatim.
-- **URLs as a special case**. If a masked field's value is an HTTP/AMQP URL with `user:password@host`, only the password component is replaced — the rest of the URL stays readable. This keeps `database_url` and `broker_url` actionable in error logs.
+- **URLs are masked in full, not partially**. A masked field whose value is an HTTP/AMQP URL (e.g. `database_url`, `broker_url`) is replaced with the default mask value (`***`) in its entirety — host, path, query string, and fragment included, not just the `user:password@host` component. Query strings and fragments routinely carry the secret itself, so partial masking would leave it exposed.
 
 ### What this does *not* do
 
