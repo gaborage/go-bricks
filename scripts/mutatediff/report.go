@@ -36,19 +36,20 @@ const (
 	statusTimedOut   = "TIMED OUT"
 )
 
-// judge buckets report mutants that land on changed lines: LIVED fails the
-// gate; NOT COVERED warns (SonarCloud owns coverage) and so does TIMED OUT,
-// which is indeterminate rather than clean — see timeout.go for why the
-// engine reports it for reasons that have nothing to do with the mutant.
-// pkgDir is the package the report was generated for — gremlins emits paths
-// relative to it (a bare basename for the package's own files, a slashed path
-// for files in subpackages, which it also mutates), so the repo-relative path
-// is pkgDir + file_name.
-func judge(reportJSON []byte, pkgDir string, changed map[string][]lineRange) (failures, warnings []mutantVerdict, err error) {
+// changedMutants is the single selector for "mutants that land on changed
+// lines". judge classifies its output and the dry-run pre-check counts it, so the
+// pre-check cannot select a different set than the verdict does — the property
+// the skip's soundness rests on holds by construction rather than by two walks
+// agreeing. pkgDir is the package the report was generated for: gremlins emits
+// paths relative to it (a bare basename for the package's own files, a slashed
+// path for subpackages, which it also mutates), so the repo-relative path is
+// pkgDir + file_name.
+func changedMutants(reportJSON []byte, pkgDir string, changed map[string][]lineRange) ([]mutantVerdict, error) {
 	var rep gremlinsReport
 	if err := json.Unmarshal(reportJSON, &rep); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	var out []mutantVerdict
 	for _, f := range rep.Files {
 		name := path.Join(pkgDir, f.FileName)
 		ranges, ok := changed[name]
@@ -56,20 +57,47 @@ func judge(reportJSON []byte, pkgDir string, changed map[string][]lineRange) (fa
 			continue
 		}
 		for _, m := range f.Mutations {
-			if !inRanges(m.Line, ranges) {
-				continue
+			if inRanges(m.Line, ranges) {
+				out = append(out, mutantVerdict{File: name, Line: m.Line, Operator: m.Type, Status: m.Status})
 			}
-			v := mutantVerdict{File: name, Line: m.Line, Operator: m.Type, Status: m.Status}
-			switch m.Status {
-			case statusLived:
-				failures = append(failures, v)
-			case statusNotCovered, statusTimedOut:
-				warnings = append(warnings, v)
-			case "KILLED", "NOT VIABLE", "RUNNABLE":
-				// pass: died, didn't compile, or dry-run marker
-			default:
-				return nil, nil, fmt.Errorf("unrecognized mutant status %q at %s:%d — failing closed", m.Status, name, m.Line)
-			}
+		}
+	}
+	return out, nil
+}
+
+// countOnChangedLines answers "is the expensive pass worth starting?" from a
+// --dry-run report. Mutants of any status count: gremlins recomputes coverage on
+// the real run, so a dry NOT COVERED can come back RUNNABLE, and skipping on a
+// RUNNABLE-only count would drop verdicts.
+func countOnChangedLines(reportJSON []byte, pkgDir string, changed map[string][]lineRange) (int, error) {
+	ms, err := changedMutants(reportJSON, pkgDir, changed)
+	return len(ms), err
+}
+
+// SKIPPED is deliberately absent from every branch below, so it reaches the
+// fail-closed default. gremlins emits it for mutants its own `--diff <ref>` mode
+// filtered out, and that mode is unusable here: it marks *everything* SKIPPED on
+// this repo. Passing it would empty the gate; leave it failing closed.
+//
+// judge buckets the selected mutants: LIVED fails the gate; NOT COVERED warns
+// (SonarCloud owns coverage) and so does TIMED OUT, which is indeterminate rather
+// than clean — see timeout.go for why the engine reports it for reasons that have
+// nothing to do with the mutant.
+func judge(reportJSON []byte, pkgDir string, changed map[string][]lineRange) (failures, warnings []mutantVerdict, err error) {
+	ms, err := changedMutants(reportJSON, pkgDir, changed)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, v := range ms {
+		switch v.Status {
+		case statusLived:
+			failures = append(failures, v)
+		case statusNotCovered, statusTimedOut:
+			warnings = append(warnings, v)
+		case "KILLED", "NOT VIABLE", "RUNNABLE":
+			// pass: died, didn't compile, or dry-run marker
+		default:
+			return nil, nil, fmt.Errorf("unrecognized mutant status %q at %s:%d — failing closed", v.Status, v.File, v.Line)
 		}
 	}
 	return failures, warnings, nil

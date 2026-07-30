@@ -15,12 +15,18 @@ GOLANGCI_LINT_VERSION := v2.12.2
 # renovate: datasource=go depName=github.com/go-gremlins/gremlins
 GREMLINS_VERSION := v0.5.1
 GREMLINS_CMD := go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
-# Hosted runners are 4-vCPU/16GB; 2 workers halves peak memory vs the local default.
+# Hosted runners are 4-vCPU/16GB; 2 workers bounds peak memory (each worker keeps its
+# own copy of the module tree).
 MUTATE_BASELINE_WORKERS ?= 2
 # Used only when the per-package coefficient cannot be computed. Generous on
 # purpose: too small silently reports every mutant as TIMED OUT, which the
 # advisory baseline would publish as a clean score (wiki/testing.md#timeout-ceiling).
 MUTATE_FALLBACK_COEFFICIENT ?= 600
+# `make mutate` runs on a developer's machine, where every worker is a concurrent
+# `go test`. Now that mutants run to completion instead of dying at a too-tight
+# ceiling, that is sustained load, so the local gate is deliberately gentler than
+# .gremlins.yaml's 4: raise it for a faster gate, drop it to 1 to keep a laptop cool.
+MUTATE_WORKERS ?= 2
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -110,7 +116,7 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
 
 mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
-	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)"
+	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)" -workers $(MUTATE_WORKERS)
 
 # One gremlins process per package: a single full-repo process with 4 workers
 # exhausted a 4-vCPU/16GB hosted runner ~25 min in (runner shutdown signal).

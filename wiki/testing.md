@@ -334,6 +334,24 @@ Additionally, a package for which the engine returns **timeouts and not one
 `KILLED` or `LIVED`** fails the gate outright. That state means nothing was
 tested, and it is what the ceiling arithmetic below exists to prevent.
 
+Each package is dry-run first (mutants enumerated, none executed). If no mutant
+lands on a changed line the package is **skipped and the gate passes** — an
+intended pass-without-running, not a vacuous one. gremlins mutates the whole
+subtree it is pointed at while the gate judges only changed lines, so a one-line
+edit in `./database` would otherwise run 616 mutants to rule on a handful; a
+comment-only edit there costs 3.7s instead. The skip is sound because `judge` and
+the pre-check share one selector (`changedMutants`), so the set skipped is exactly
+the set that would have been discarded.
+
+Knobs (all `?=`, so the environment overrides):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MUTATE_WORKERS` | 2 | Concurrent `go test` processes for `make mutate`. Each is sustained CPU load; drop to 1 to keep a laptop cool. |
+| `MUTATE_BASELINE_WORKERS` | 2 | Same, for the nightly baseline; also bounds peak memory. |
+| `MUTATE_CEILING_FLOOR` | 30s | Minimum per-mutant ceiling (any `time.ParseDuration` string). |
+| `MUTATE_FALLBACK_COEFFICIENT` | 600 | Used only when a package's coefficient cannot be computed. |
+
 ### Timeout ceiling
 
 gremlins derives each mutant's wall-clock ceiling as
@@ -377,6 +395,13 @@ Two further notes for anyone touching it:
   yields 0 — which the engine reads as unset and replaces with 3. Values in
   `.gremlins.yaml` are parsed as ints and *do* work; the flag is used because it
   can vary per package.
+- **Keep the cached measurement passes argv-identical to the engine's.**
+  `-timeout` participates in `go test`'s cache key, so adding it to those passes
+  warms an entry gremlins never reads — leaving its own coverage run a cache miss
+  whose elapsed is the real suite, and multiplying the coefficient by the suite
+  instead of the replay (a 60-minute ceiling on `observability`). `vacuous` cannot
+  catch that, because it only sees ceilings that are too *tight*. The flag goes on
+  the `-count=1` pass only, where caching is already off.
 - **Mutation now costs real time.** Those 90 advisory minutes were cheap because
   nothing ran. A package's mutation cost is roughly
   `mutants × (build + suite)`, so a slow suite dominates — `observability`'s

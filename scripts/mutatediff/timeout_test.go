@@ -148,3 +148,37 @@ func TestCeilingFloorReadsOverrideFromEnv(t *testing.T) {
 		t.Errorf("ceilingFloor() unset = %s, want %s", got, defaultCeilingFloor)
 	}
 }
+
+func TestWorkerArgsOnlyOverridesWhenAsked(t *testing.T) {
+	if got := workerArgs(2); !slices.Equal(got, []string{workersFlag, "2"}) {
+		t.Errorf("workerArgs(2) = %v, want [--workers 2]", got)
+	}
+	for _, n := range []int{0, -1} {
+		if got := workerArgs(n); got != nil {
+			t.Errorf("workerArgs(%d) = %v, want nil so .gremlins.yaml stays in charge", n, got)
+		}
+	}
+}
+
+// TestCoverageArgsMatchTheEngineWhenCached pins the invariant a regression already
+// broke once: the cached passes must be argv-identical to gremlins' own coverage
+// command, because -timeout participates in go test's cache key. Warming a
+// different argv leaves gremlins' run a cache miss, so its Elapsed becomes the
+// real suite and the coefficient multiplies the suite instead of the replay —
+// verified on go1.26.5: after `go clean -testcache` and warming only the
+// -timeout variant, the engine's command took the full 24.5s.
+func TestCoverageArgsMatchTheEngineWhenCached(t *testing.T) {
+	// gremlins: `go test -cover -coverprofile <file> ./pkg/...` and nothing else.
+	want := []string{"test", "-cover", "-coverprofile", "/tmp/p", "./observability/..."}
+	if got := coverageArgs("/tmp/p", "./observability", false); !slices.Equal(got, want) {
+		t.Errorf("coverageArgs(cached) = %v, want exactly %v", got, want)
+	}
+	forced := coverageArgs("/tmp/p", "./observability", true)
+	if !slices.Contains(forced, "-count=1") || !slices.Contains(forced, measureTimeout) {
+		t.Errorf("coverageArgs(forceRun) = %v, want -count=1 and -timeout %s", forced, measureTimeout)
+	}
+	// -count=1 disables caching, so the extra flag is free only on that pass.
+	if slices.Contains(coverageArgs("/tmp/p", "./x", false), "-timeout") {
+		t.Error("the cached pass must not carry -timeout — it splits the cache key")
+	}
+}

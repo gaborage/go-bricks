@@ -33,6 +33,16 @@ const (
 	buildBudget = 20 * time.Second
 	// ceilingFloorEnv lets an operator retune the floor without a code change.
 	ceilingFloorEnv = "MUTATE_CEILING_FLOOR"
+	// measureTimeout bounds the forced Uncached pass, above go test's 10m default
+	// so a genuinely slow (not hung) suite is measured rather than truncated. It is
+	// applied ONLY to that pass: -timeout participates in go test's cache key, so
+	// adding it to the cached passes would warm an entry gremlins never reads,
+	// leaving its own coverage run a cache miss whose Elapsed is the real suite.
+	// The coefficient is then multiplied by the suite instead of the replay —
+	// 148 x 24.7s is a 60-minute ceiling on ./observability, and `vacuous` cannot
+	// see it because it only catches ceilings that are too tight. -count=1 already
+	// disables caching, so the flag is free exactly where it is needed.
+	measureTimeout = "20m"
 	// coefficientFlag is the lever. gremlins also documents
 	// GREMLINS_UNLEASH_TIMEOUT_COEFFICIENT, but that is silently ignored: its
 	// configuration.Get[T] does an unchecked `viper.Get(k).(T)`, and viper hands
@@ -40,6 +50,9 @@ const (
 	// yields 0 — which the engine reads as "unset" and replaces with its default
 	// 3. Values in .gremlins.yaml are parsed as ints and do work.
 	coefficientFlag = "--timeout-coefficient"
+	// workersFlag caps concurrent `go test` processes; each also keeps its own copy
+	// of the module tree.
+	workersFlag = "--workers"
 )
 
 // ceilingFloor is the minimum per-mutant ceiling the gate will accept,
@@ -115,6 +128,19 @@ func coefficientFor(pkg string, measure suiteMeasurer, floor time.Duration, out 
 	return coefficient
 }
 
+// coverageArgs builds the `go test` argv for a measurement pass. With forceRun
+// false it MUST stay byte-identical to gremlins' own coverage command
+// (internal/coverage/coverage.go), because that is the cache entry gremlins will
+// read and the coefficient divides by. Any extra flag here splits the cache key
+// and silently un-measures the thing being measured — see measureTimeout.
+func coverageArgs(profile, pkg string, forceRun bool) []string {
+	args := []string{"test"}
+	if forceRun {
+		args = append(args, "-count=1", "-timeout", measureTimeout)
+	}
+	return append(args, "-cover", "-coverprofile", profile, strings.TrimSuffix(pkg, "/")+"/...")
+}
+
 // measureSuite times pkg's tests using gremlins' own baseline command
 // (internal/coverage/coverage.go: `go test -cover -coverprofile <file>
 // ./pkg/...`, recursive) in three passes:
@@ -142,12 +168,8 @@ func measureSuite(pkg string) (suiteTiming, error) {
 	defer func() { _ = os.Remove(profile.Name()) }()
 
 	var exitErr *exec.ExitError
-	run := func(stage string, countOne bool) (time.Duration, error) {
-		args := []string{"test", "-cover", "-coverprofile", profile.Name()}
-		if countOne {
-			args = append(args, "-count=1")
-		}
-		args = append(args, strings.TrimSuffix(pkg, "/")+"/...")
+	run := func(stage string, forceRun bool) (time.Duration, error) {
+		args := coverageArgs(profile.Name(), pkg, forceRun)
 		start := time.Now()
 		// #nosec G204 -- pkg comes from `git diff` paths resolved to package dirs, not user input
 		runErr := exec.CommandContext(context.Background(), "go", args...).Run()
@@ -183,4 +205,14 @@ func printCoefficient(pkg string, measure suiteMeasurer, floor time.Duration, st
 // coefficient. See coefficientFlag for why this is a flag and not an env var.
 func gremlinsTimeoutArgs(coefficient int) []string {
 	return []string{coefficientFlag, strconv.Itoa(coefficient)}
+}
+
+// workerArgs returns the engine's worker flag, or nothing when workers is 0 so
+// .gremlins.yaml stays in charge. Each worker is a concurrent `go test`, which is
+// the knob that matters on a laptop now that mutants run to completion.
+func workerArgs(workers int) []string {
+	if workers <= 0 {
+		return nil
+	}
+	return []string{workersFlag, strconv.Itoa(workers)}
 }

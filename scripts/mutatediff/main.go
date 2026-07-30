@@ -18,6 +18,7 @@ func main() {
 	mergeDir := flag.String("merge", "", "merge mode: directory of per-package shard reports to aggregate (skips the diff gate)")
 	mergeOut := flag.String("out", "gremlins-report.json", "merge mode: output path for the aggregated report")
 	coeffPkg := flag.String("coefficient", "", "coefficient mode: print the engine timeout-coefficient that holds this package's per-mutant ceiling at the floor")
+	workers := flag.Int("workers", 0, "engine workers; each is a concurrent `go test`. 0 inherits .gremlins.yaml")
 	flag.Parse()
 	if *mergeDir != "" {
 		os.Exit(mergeShards(*mergeDir, *mergeOut, os.Stdout))
@@ -29,10 +30,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mutatediff: -engine is required")
 		os.Exit(2)
 	}
-	os.Exit(run(*engine, *base, os.Stdout))
+	os.Exit(run(*engine, *base, *workers, os.Stdout))
 }
 
-func run(engine, baseRef string, out io.Writer) int {
+func run(engine, baseRef string, workers int, out io.Writer) int {
 	engineArgs := strings.Fields(engine)
 	if len(engineArgs) == 0 {
 		return fail("engine command is blank")
@@ -67,7 +68,7 @@ func run(engine, baseRef string, out io.Writer) int {
 	defer os.RemoveAll(reportDir)
 	var failures, warnings, unjudged []mutantVerdict
 	for _, pkg := range packagesOf(changed) {
-		f, w, mErr := mutatePackage(engineArgs, pkg, reportDir, changed, out)
+		f, w, mErr := mutatePackage(engineArgs, pkg, reportDir, changed, workers, out)
 		if mErr != nil {
 			return fail("%v", mErr)
 		}
@@ -145,20 +146,53 @@ func reportPathFor(pkg, reportDir string) string {
 	return filepath.Join(reportDir, name)
 }
 
-func mutatePackage(engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, out io.Writer) (failures, warnings []mutantVerdict, err error) {
-	fmt.Fprintf(out, "mutatediff: mutating %s\n", pkg)
-	coefficient := coefficientFor(pkg, measureSuite, ceilingFloor(), out)
-	reportPath := reportPathFor(pkg, reportDir)
-	args := slices.Concat(engineArgs, []string{"unleash"}, gremlinsTimeoutArgs(coefficient), []string{"--output", reportPath, pkg})
+// runEngine invokes gremlins for pkg and returns the report it wrote. extra
+// carries mode-specific flags (--dry-run, the coefficient, the worker count).
+func runEngine(engineArgs []string, pkg, reportPath string, extra []string, out io.Writer) ([]byte, error) {
+	args := slices.Concat(engineArgs, []string{"unleash"}, extra, []string{"--output", reportPath, pkg})
 	cmd := exec.CommandContext(context.Background(), args[0], args[1:]...) // #nosec G204 -- dev tool; engine comes from the Makefile pin, not user input
 	cmd.Stdout = out
 	cmd.Stderr = os.Stderr
 	if runErr := cmd.Run(); runErr != nil {
-		return nil, nil, fmt.Errorf("engine failed for %s: %w", pkg, runErr)
+		return nil, fmt.Errorf("engine failed for %s: %w", pkg, runErr)
 	}
 	reportJSON, readErr := os.ReadFile(reportPath) // #nosec G304 -- path built from a per-run os.MkdirTemp dir + package-derived name, not user input
 	if readErr != nil {
-		return nil, nil, fmt.Errorf("no report for %s: %w", pkg, readErr)
+		return nil, fmt.Errorf("no report for %s: %w", pkg, readErr)
+	}
+	return reportJSON, nil
+}
+
+func mutatePackage(engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, workers int, out io.Writer) (failures, warnings []mutantVerdict, err error) {
+	// A dry run enumerates mutants without executing any, so it costs one coverage
+	// pass instead of mutants x (build + suite). gremlins mutates the whole subtree
+	// it is pointed at while the gate only judges changed lines, so most
+	// invocations would otherwise pay for hundreds of mutants to rule on a handful
+	// — a one-line edit in ./database enumerates 616 runnable mutants. Skipping
+	// cannot change the verdict, since judge discards those mutants anyway, and the
+	// coverage pass warms the test cache measureSuite reads next.
+	// One worker: a dry run executes no tests, so extra workers only multiply
+	// copies of the module tree.
+	dryJSON, err := runEngine(engineArgs, pkg, reportPathFor(pkg, reportDir)+".dry",
+		[]string{"--dry-run", workersFlag, "1"}, out)
+	if err != nil {
+		return nil, nil, err
+	}
+	onChanged, cErr := countOnChangedLines(dryJSON, pkg, changed)
+	if cErr != nil {
+		return nil, nil, fmt.Errorf("parse dry-run report for %s: %w", pkg, cErr)
+	}
+	if onChanged == 0 {
+		fmt.Fprintf(out, "mutatediff: %s has no mutants on changed lines, skipping\n", pkg)
+		return nil, nil, nil
+	}
+
+	fmt.Fprintf(out, "mutatediff: mutating %s (%d mutants on changed lines)\n", pkg, onChanged)
+	coefficient := coefficientFor(pkg, measureSuite, ceilingFloor(), out)
+	reportJSON, err := runEngine(engineArgs, pkg, reportPathFor(pkg, reportDir),
+		slices.Concat(gremlinsTimeoutArgs(coefficient), workerArgs(workers)), out)
+	if err != nil {
+		return nil, nil, err
 	}
 	f, w, jerr := judge(reportJSON, pkg, changed)
 	if jerr != nil {

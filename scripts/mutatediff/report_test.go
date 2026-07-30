@@ -183,6 +183,47 @@ func TestJudgePkgDirFormsEquivalent(t *testing.T) {
 	}
 }
 
+// TestJudgeFailsClosedOnSkipped guards a live footgun. gremlins' --diff mode
+// marks filtered-out mutants SKIPPED, and on this repo it marks EVERY mutant
+// SKIPPED because it matches git paths against the engine's temp workdir
+// (v0.5.1: --diff HEAD~1 over a committed one-line change in ./database skipped
+// all 747). If SKIPPED ever becomes a pass, adding that flag silently empties the
+// gate. It must stay an error.
+func TestJudgeFailsClosedOnSkipped(t *testing.T) {
+	const rep = `{"files":[{"file_name":"injection.go","mutations":[{"line":27,"type":"CONDITIONALS_NEGATION","status":"SKIPPED"}]}]}`
+	changed := map[string][]lineRange{"config/injection.go": {{Start: 26, End: 29}}}
+	if _, _, err := judge([]byte(rep), "./config", changed); err == nil {
+		t.Error("SKIPPED must fail closed, not pass — see the comment on judge")
+	}
+}
+
+// TestCountOnChangedLinesGatesTheExpensivePass backs the dry-run pre-check: only
+// mutants inside a changed range justify paying mutants x (build + suite).
+func TestCountOnChangedLinesGatesTheExpensivePass(t *testing.T) {
+	const dry = `{"files":[
+		{"file_name":"injection.go","mutations":[
+			{"line":27,"type":"CONDITIONALS_NEGATION","status":"RUNNABLE"},
+			{"line":44,"type":"CONDITIONALS_BOUNDARY","status":"NOT COVERED"},
+			{"line":900,"type":"ARITHMETIC_BASE","status":"RUNNABLE"}]},
+		{"file_name":"untouched.go","mutations":[
+			{"line":5,"type":"CONDITIONALS_NEGATION","status":"RUNNABLE"}]}]}`
+	changed := map[string][]lineRange{"config/injection.go": {{Start: 26, End: 29}, {Start: 44, End: 45}}}
+	got, err := countOnChangedLines([]byte(dry), "./config", changed)
+	if err != nil {
+		t.Fatalf("countOnChangedLines: %v", err)
+	}
+	// Lines 27 and 44 count; line 900 and the untouched file do not.
+	if got != 2 {
+		t.Errorf("countOnChangedLines = %d, want 2", got)
+	}
+	none, err := countOnChangedLines([]byte(dry), "./config", map[string][]lineRange{
+		"config/injection.go": {{Start: 100, End: 200}},
+	})
+	if err != nil || none != 0 {
+		t.Errorf("countOnChangedLines = (%d, %v), want (0, nil) so the package is skipped", none, err)
+	}
+}
+
 func TestJudgeFailsClosedOnUnknownStatus(t *testing.T) {
 	const rep = `{"files":[{"file_name":"injection.go","mutations":[{"line":27,"type":"CONDITIONALS_NEGATION","status":"SOMETHING NEW"}]}]}`
 	changed := map[string][]lineRange{"config/injection.go": {{Start: 26, End: 29}}}
