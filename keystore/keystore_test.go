@@ -1,6 +1,7 @@
 package keystore
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -447,6 +448,25 @@ func TestSecretOnRSAEntryRejected(t *testing.T) {
 
 	_, err = s.Secret("signing")
 	assert.ErrorContains(t, err, "has no symmetric secret configured")
+}
+
+// TestNewStoreMisFiledSecretNeverEchoed pins the end-to-end regression: a
+// base64 32-byte raw symmetric secret filed under secret.file (a transposed
+// secret.file/secret.value) is below LooksLikeKeyMaterial's 48-byte DER
+// floor, so it reaches os.ReadFile and fails to read. The resulting keystore
+// construction error must not contain the fixture value.
+func TestNewStoreMisFiledSecretNeverEchoed(t *testing.T) {
+	syntheticSecret := bytes.Repeat([]byte{0xAB}, 32)
+	misFiled := base64.StdEncoding.EncodeToString(syntheticSecret)
+	require.Less(t, len(syntheticSecret), 48, "fixture must decode to fewer than minDERKeyBytes to exercise the regression")
+
+	_, err := newStore(map[string]config.KeyPairConfig{
+		"mac": {Secret: config.KeySourceConfig{File: misFiled}},
+	}, 32)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), misFiled, "the fixture value must not be echoed")
+	assert.Contains(t, err.Error(), "elided")
 }
 
 func TestPublicKeyOnSecretEntryRejected(t *testing.T) {
