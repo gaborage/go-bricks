@@ -95,6 +95,41 @@ func (s *panickingSink) Record(ctx context.Context, event *AuditEvent) error {
 	return s.recordingSink.Record(ctx, event)
 }
 
+// gatedSink is a test AuditRecorder whose Record call signals entry and then
+// blocks until released, before touching the event. This lets a test force a
+// caller-side mutation to land strictly between Emit's handoff and the sink's
+// read — the exact window an aliasing bug would need to be caught in.
+type gatedSink struct {
+	mu      sync.Mutex
+	events  []AuditEvent
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newGatedSink() *gatedSink {
+	return &gatedSink{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (s *gatedSink) Record(_ context.Context, event *AuditEvent) error {
+	close(s.entered)
+	<-s.release
+	s.mu.Lock()
+	s.events = append(s.events, *event)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *gatedSink) snapshot() []AuditEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]AuditEvent, len(s.events))
+	copy(out, s.events)
+	return out
+}
+
 // setupTestTracer installs an in-memory tracer provider for the duration of
 // the test and returns the exporter so callers can inspect emitted spans.
 func setupTestTracer(t *testing.T) *tracetest.InMemoryExporter {
@@ -300,10 +335,13 @@ func TestEmitterCloseDrainsQueue(t *testing.T) {
 // TestEmitterEmitSnapshotsEventBeforeCallerMutation pins the Emit contract:
 // the sink receives an isolated snapshot taken at Emit time, so a caller that
 // reuses one AuditEvent across a loop (mutating it right after Emit returns)
-// cannot corrupt an already-delivered record.
+// cannot corrupt an already-delivered record. The sink gate forces the
+// mutation to land strictly between Emit's handoff and the sink's read —
+// without it, the sink could read the event before the mutation and the
+// assertions below would pass even against an aliasing implementation.
 func TestEmitterEmitSnapshotsEventBeforeCallerMutation(t *testing.T) {
 	setupTestTracer(t)
-	sink := newRecordingSink()
+	sink := newGatedSink()
 	emitter := newAuditEmitter(disabledLogger(), sink)
 
 	ev := baseEvent()
@@ -315,11 +353,19 @@ func TestEmitterEmitSnapshotsEventBeforeCallerMutation(t *testing.T) {
 
 	emitter.Emit(context.Background(), ev)
 
+	select {
+	case <-sink.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sink Record was not entered in time")
+	}
+
 	ev.Type = AuditEventTypeStateTransitioned
 	ev.Target = "mutated-target"
 	ev.AppliedByPrincipal = "mutated-principal"
 	ev.Outcome = AuditOutcomeFailed
 	ev.Attributes["migration.vendor"] = "mutated-vendor"
+
+	close(sink.release)
 
 	require.NoError(t, emitter.Close(context.Background()))
 	events := sink.snapshot()
