@@ -52,15 +52,21 @@ func DefaultFilterConfig() *FilterConfig {
 	}
 }
 
+// loweredNeedles holds the precomputed lowered needle list behind a pointer so
+// SensitiveDataFilter itself stays comparable (a []string field would not be).
+type loweredNeedles struct {
+	fields []string
+}
+
 // SensitiveDataFilter filters sensitive data from logs. Filtering is enforced by the
 // adapter layer (LogEventAdapter) — never add a Zerolog() accessor to ZeroLogger as
 // that would create a bypass path around this filter boundary.
 type SensitiveDataFilter struct {
 	config *FilterConfig
-	// loweredFields is config.SensitiveFields lowercased once at construction.
-	// The list is a snapshot: mutating the caller's FilterConfig.SensitiveFields
+	// needles is config.SensitiveFields lowercased once at construction. The
+	// list is a snapshot: mutating the caller's FilterConfig.SensitiveFields
 	// after NewSensitiveDataFilter returns has no effect.
-	loweredFields []string
+	needles *loweredNeedles
 }
 
 // NewSensitiveDataFilter creates a new filter with the given configuration
@@ -75,7 +81,7 @@ func NewSensitiveDataFilter(config *FilterConfig) *SensitiveDataFilter {
 	for i, f := range config.SensitiveFields {
 		lowered[i] = strings.ToLower(f)
 	}
-	return &SensitiveDataFilter{config: config, loweredFields: lowered}
+	return &SensitiveDataFilter{config: config, needles: &loweredNeedles{fields: lowered}}
 }
 
 // FilterString filters sensitive data from string values
@@ -230,8 +236,11 @@ func (f *SensitiveDataFilter) FilterFields(fields map[string]any) map[string]any
 
 // isSensitiveField checks if a field name is considered sensitive
 func (f *SensitiveDataFilter) isSensitiveField(fieldName string) bool {
+	if f.needles == nil {
+		return false
+	}
 	lowerFieldName := strings.ToLower(fieldName)
-	for _, sensitiveField := range f.loweredFields {
+	for _, sensitiveField := range f.needles.fields {
 		if strings.Contains(lowerFieldName, sensitiveField) {
 			return true
 		}
