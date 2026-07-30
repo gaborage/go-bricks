@@ -60,20 +60,25 @@ const (
 var testForwardedCertLeafCorrupted = strings.Replace(testForwardedCertLeaf,
 	"YJKoZIhvcNAQEL%0ABQA", strings.Repeat("Z", len("YJKoZIhvcNAQEL%0ABQA")), 1)
 
+// forwardedCertVectorCase is a single TestParseForwardedClientCertVectors
+// table row. Named (rather than anonymous) so assertForwardedCertVector can
+// take it as a parameter.
+type forwardedCertVectorCase struct {
+	name            string
+	headers         map[string][]string
+	wantSubject     string // expected cert.Subject in every non-error case (may be empty)
+	wantSerial      string // expected cert.SerialNumber in every non-error case (may be empty)
+	wantNoIdent     bool   // errNoForwardedCert: neither Subject nor Serial-Number present
+	wantLeafOK      bool   // Leaf decoded and parsed cleanly
+	wantLeafFail    bool   // identity present, Leaf failed to decode (err != nil, not errNoForwardedCert)
+	wantDuplicate   bool   // errDuplicateForwardedHeader: some header carried more than one value
+	wantErrContains string // when set, asserted against err's message (distinguishes cap-rejection from ordinary parse failure)
+}
+
 // TestParseForwardedClientCertVectors pins parseForwardedClientCert's pure
 // (non-HTTP) parsing rules against a header-getter fixture.
 func TestParseForwardedClientCertVectors(t *testing.T) {
-	tests := []struct {
-		name            string
-		headers         map[string][]string
-		wantSubject     string // expected cert.Subject in every non-error case (may be empty)
-		wantSerial      string // expected cert.SerialNumber in every non-error case (may be empty)
-		wantNoIdent     bool   // errNoForwardedCert: neither Subject nor Serial-Number present
-		wantLeafOK      bool   // Leaf decoded and parsed cleanly
-		wantLeafFail    bool   // identity present, Leaf failed to decode (err != nil, not errNoForwardedCert)
-		wantDuplicate   bool   // errDuplicateForwardedHeader: some header carried more than one value
-		wantErrContains string // when set, asserted against err's message (distinguishes cap-rejection from ordinary parse failure)
-	}{
+	tests := []forwardedCertVectorCase{
 		{
 			name: "full_verify_mode_set_with_plus_in_leaf",
 			headers: map[string][]string{
@@ -183,43 +188,52 @@ func TestParseForwardedClientCertVectors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			getter := func(name string) []string { return tt.headers[name] }
 			cert, err := parseForwardedClientCert(getter)
-
-			if tt.wantDuplicate {
-				require.ErrorIs(t, err, errDuplicateForwardedHeader)
-				require.NotErrorIs(t, err, errNoForwardedCert, "a duplicate must never be confused with absence")
-				assert.Empty(t, cert.Subject)
-				if tt.wantErrContains != "" {
-					assert.ErrorContains(t, err, tt.wantErrContains)
-				}
-				return
-			}
-
-			if tt.wantNoIdent {
-				require.ErrorIs(t, err, errNoForwardedCert)
-				assert.Empty(t, cert.Subject)
-				return
-			}
-
-			assert.Equal(t, tt.wantSubject, cert.Subject)
-			assert.Equal(t, tt.wantSerial, cert.SerialNumber)
-
-			switch {
-			case tt.wantLeafOK:
-				require.NoError(t, err)
-				require.NotNil(t, cert.Leaf)
-				assert.Equal(t, testForwardedCertSubject, cert.Leaf.Subject.String())
-			case tt.wantLeafFail:
-				require.Error(t, err)
-				require.NotErrorIs(t, err, errNoForwardedCert, "a Leaf-only failure must never be confused with absence")
-				assert.Nil(t, cert.Leaf)
-				if tt.wantErrContains != "" {
-					assert.ErrorContains(t, err, tt.wantErrContains)
-				}
-			default:
-				require.NoError(t, err)
-				assert.Nil(t, cert.Leaf)
-			}
+			assertForwardedCertVector(t, &tt, cert, err)
 		})
+	}
+}
+
+// assertForwardedCertVector asserts a single forwardedCertVectorCase's
+// expectations against parseForwardedClientCert's result. Extracted from
+// TestParseForwardedClientCertVectors so the table-driven loop itself stays
+// flat (SonarCloud go:S3776) — semantics are unchanged from the inline form.
+func assertForwardedCertVector(t *testing.T, tt *forwardedCertVectorCase, cert ForwardedClientCert, err error) {
+	t.Helper()
+
+	if tt.wantDuplicate {
+		require.ErrorIs(t, err, errDuplicateForwardedHeader)
+		require.NotErrorIs(t, err, errNoForwardedCert, "a duplicate must never be confused with absence")
+		assert.Empty(t, cert.Subject)
+		if tt.wantErrContains != "" {
+			assert.ErrorContains(t, err, tt.wantErrContains)
+		}
+		return
+	}
+
+	if tt.wantNoIdent {
+		require.ErrorIs(t, err, errNoForwardedCert)
+		assert.Empty(t, cert.Subject)
+		return
+	}
+
+	assert.Equal(t, tt.wantSubject, cert.Subject)
+	assert.Equal(t, tt.wantSerial, cert.SerialNumber)
+
+	switch {
+	case tt.wantLeafOK:
+		require.NoError(t, err)
+		require.NotNil(t, cert.Leaf)
+		assert.Equal(t, testForwardedCertSubject, cert.Leaf.Subject.String())
+	case tt.wantLeafFail:
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errNoForwardedCert, "a Leaf-only failure must never be confused with absence")
+		assert.Nil(t, cert.Leaf)
+		if tt.wantErrContains != "" {
+			assert.ErrorContains(t, err, tt.wantErrContains)
+		}
+	default:
+		require.NoError(t, err)
+		assert.Nil(t, cert.Leaf)
 	}
 }
 
