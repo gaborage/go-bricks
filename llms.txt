@@ -893,7 +893,9 @@ func (h *Handler) getOrder(req GetOrderReq, ctx server.HandlerContext) (server.R
     reqCtx := ctx.RequestContext()  // already has the 5s deadline
 
     // No wrapping needed — every call below observes the inherited deadline:
-    _, _ = h.cache.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))
+    if c, cErr := h.getCache(reqCtx); cErr == nil {
+        _, _ = c.Get(reqCtx, fmt.Sprintf("order:%d", req.ID))
+    }
     order, err := h.svc.FindByID(reqCtx, req.ID)
     if err != nil {
         return server.Result[Order]{}, server.NewInternalServerError(err.Error())
@@ -908,8 +910,10 @@ func (s *UserService) Get(ctx context.Context, id int64) (*User, error) {
     // Cap cache lookup at 200ms; fall through to DB on miss/timeout.
     cacheCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
     defer cancel()
-    if data, err := s.cache.Get(cacheCtx, fmt.Sprintf("user:%d", id)); err == nil {
-        return cache.Unmarshal[*User](data)
+    if c, err := s.getCache(cacheCtx); err == nil {
+        if data, err := c.Get(cacheCtx, fmt.Sprintf("user:%d", id)); err == nil {
+            return cache.Unmarshal[*User](data)
+        }
     }
     return s.queryDatabase(ctx, id) // keeps remaining ~4.8s of inherited budget
 }
@@ -1887,9 +1891,16 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
         return nil, err
     }
 
-    // Store in cache
-    serialized, _ := cache.Marshal(user)
-    c.Set(ctx, cacheKey, serialized, 5*time.Minute)
+    // Store in cache. A write-back failure must not fail a request that already
+    // has the value, so log it rather than returning it.
+    serialized, err := cache.Marshal(user)
+    if err != nil {
+        s.logger.Warn().Err(err).Str("key", cacheKey).Msg("Cache marshal failed, value not cached")
+        return user, nil
+    }
+    if err := c.Set(ctx, cacheKey, serialized, 5*time.Minute); err != nil {
+        s.logger.Warn().Err(err).Str("key", cacheKey).Msg("Cache write-back failed")
+    }
 
     return user, nil
 }
@@ -1967,7 +1978,10 @@ func (m *Module) CacheUser(ctx context.Context, user *User) error {
     }
 
     key := fmt.Sprintf("%s:user:%d", m.keyPrefix, user.ID)  // Uses prefix
-    data, _ := cache.Marshal(user)
+    data, err := cache.Marshal(user)
+    if err != nil {
+        return fmt.Errorf("marshal user: %w", err)  // Never cache a failed marshal
+    }
 
     return c.Set(ctx, key, data, m.defaultTTL)  // Uses default TTL
 }
@@ -1993,47 +2007,32 @@ type User struct {
     Email string `cbor:"3,keyasint"`
 }
 
-// Serialize and cache
-user := User{ID: 123, Name: "Alice", Email: "alice@example.com"}
-data, err := cache.Marshal(user)
-if err != nil {
-    return err
-}
-err = m.cache.Set(ctx, "user:123", data, 5*time.Minute)
-
-// Retrieve and deserialize
-data, err := m.cache.Get(ctx, "user:123")
-if err != nil {
-    return err
-}
-user, err := cache.Unmarshal[User](data)
-```
-
-**Query Result Caching Pattern:**
-
-```go
-func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
-    cacheKey := fmt.Sprintf("user:%d", id)
-
-    // Try cache first
-    data, err := s.cache.Get(ctx, cacheKey)
-    if err == nil {
-        return cache.Unmarshal[*User](data)
-    }
-
-    // Cache miss - query database
-    user, err := s.queryDatabase(ctx, id)
+func (m *Module) roundTripUser(ctx context.Context) (User, error) {
+    c, err := m.getCache(ctx)
     if err != nil {
-        return nil, err
+        return User{}, err
     }
 
-    // Store in cache for future requests
-    data, _ = cache.Marshal(user)
-    s.cache.Set(ctx, cacheKey, data, 5*time.Minute)
+    // Serialize and cache
+    user := User{ID: 123, Name: "Alice", Email: "alice@example.com"}
+    data, err := cache.Marshal(user)
+    if err != nil {
+        return User{}, err
+    }
+    if err := c.Set(ctx, "user:123", data, 5*time.Minute); err != nil {
+        return User{}, err
+    }
 
-    return user, nil
+    // Retrieve and deserialize
+    raw, err := c.Get(ctx, "user:123")
+    if err != nil {
+        return User{}, err
+    }
+    return cache.Unmarshal[User](raw)
 }
 ```
+
+**Query Result Caching Pattern:** see `UserService.GetUser` above.
 
 **Deduplication with GetOrSet:**
 
@@ -2042,7 +2041,12 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 idempotencyKey := "process:batch:abc-123"
 taskData := []byte("task-payload")
 
-storedValue, wasSet, err := m.cache.GetOrSet(ctx, idempotencyKey, taskData, 10*time.Minute)
+c, err := m.getCache(ctx)
+if err != nil {
+    return err
+}
+
+storedValue, wasSet, err := c.GetOrSet(ctx, idempotencyKey, taskData, 10*time.Minute)
 if err != nil {
     return err
 }
@@ -2063,7 +2067,12 @@ return getCachedResult(storedValue)
 lockKey := "lock:job:456"
 workerID := []byte("worker-1")
 
-success, err := m.cache.CompareAndSet(ctx, lockKey, nil, workerID, 30*time.Second)
+c, err := m.getCache(ctx)
+if err != nil {
+    return err
+}
+
+success, err := c.CompareAndSet(ctx, lockKey, nil, workerID, 30*time.Second)
 if err != nil {
     return err
 }
@@ -2072,8 +2081,16 @@ if !success {
     return errors.New("lock already held by another worker")
 }
 
-// Lock acquired - perform work
-defer m.cache.Delete(ctx, lockKey) // Release lock
+// Lock acquired - perform work.
+//
+// CAUTION: Delete releases unconditionally. If processJob outruns the 30s TTL, the
+// lock expires, another worker acquires it, and this Delete clears THEIR lock. The
+// cache surface has no compare-and-delete, so a token-verified release is not
+// expressible here (CompareAndSet only ever SETs, and acquisition requires the key
+// to be absent). Until then: set the TTL above worst-case job duration, and keep
+// processJob idempotent — treat the lock as contention reduction, not mutual
+// exclusion.
+defer func() { _ = c.Delete(ctx, lockKey) }()
 
 return processJob(ctx)
 ```
@@ -2142,7 +2159,7 @@ func TestMultiTenantCacheIsolation(t *testing.T) {
 
 ```go
 // Graceful degradation - cache failure doesn't break request
-func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
+func (s *UserService) getUserWithDegradation(ctx context.Context, id int64) (*User, error) {
     cacheKey := fmt.Sprintf("user:%d", id)
 
     // Try cache first with timeout
@@ -2151,15 +2168,17 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 
     if c, err := s.getCache(cacheCtx); err == nil {
         data, err := c.Get(cacheCtx, cacheKey)
-        if err == nil {
-            user, err := cache.Unmarshal[*User](data)
-            if err == nil {
-                return user, nil  // Cache hit - return immediately
+        switch {
+        case err == nil:
+            // decodeErr keeps the decode failure distinguishable from the Get error
+            user, decodeErr := cache.Unmarshal[*User](data)
+            if decodeErr == nil {
+                return user, nil // Cache hit - return immediately
             }
-        }
-
-        // Log cache errors but don't fail the request
-        if !errors.Is(err, cache.ErrNotFound) {
+            s.logger.Warn().Err(decodeErr).Str("key", cacheKey).Msg("Cached value is invalid, falling back to database")
+        case errors.Is(err, cache.ErrNotFound):
+            // Plain miss - expected, not worth logging
+        default:
             s.logger.Warn().Err(err).Str("key", cacheKey).Msg("Cache operation failed, falling back to database")
         }
     }
@@ -2248,7 +2267,7 @@ func (s *UserService) fetchAndCache(ctx context.Context, c cache.Cache, id int64
 |-------|-------|---------------------|
 | `cache.ErrNotFound` | Key expired or never set | Query database, repopulate cache |
 | `cache.ErrClosed` | Cache closed during shutdown | Skip cache, query database directly |
-| `cache.ErrInvalidTTL` | Zero or negative TTL provided | Fix code - TTL must be positive |
+| `cache.ErrInvalidTTL` | Negative TTL provided (zero is valid — it means no expiration) | Fix code - TTL must be non-negative |
 | `cache.OperationError` | Network/Redis error | Log error, fallback to database |
 | `context.DeadlineExceeded` | Operation timeout | Skip cache, continue with database |
 | `config.ConfigError` (category `not_configured`, check with `config.IsNotConfigured(err)`) | Cache not enabled | Disable cache features gracefully |
