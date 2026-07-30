@@ -425,12 +425,15 @@ func countConcurrentWinners(op func() (bool, error)) (winners int, firstErr erro
 		goroutines = 4
 	}
 
-	var ready, done atomic.Int64
+	var ready atomic.Int64
 	var release atomic.Bool
 	var mu sync.Mutex
+	var wg sync.WaitGroup
 
+	wg.Add(goroutines)
 	for i := 0; i < goroutines; i++ {
 		go func() {
+			defer wg.Done()
 			ready.Add(1)
 			for !release.Load() {
 				runtime.Gosched()
@@ -445,7 +448,6 @@ func countConcurrentWinners(op func() (bool, error)) (winners int, firstErr erro
 				winners++
 			}
 			mu.Unlock()
-			done.Add(1)
 		}()
 	}
 
@@ -454,9 +456,7 @@ func countConcurrentWinners(op func() (bool, error)) (winners int, firstErr erro
 	}
 	release.Store(true)
 
-	for done.Load() < int64(goroutines) {
-		runtime.Gosched()
-	}
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
