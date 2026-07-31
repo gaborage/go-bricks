@@ -79,6 +79,10 @@ jobs:
           # Makefile do NOT match the nested tools/migration copies — PLUS
           # sonar-project.properties and the go.work/go.work.sum workspace files.
           # Keep it free of `!` negations (see the NOTE above) so docs still skip.
+          #
+          # `**/testdata/**` is listed in framework/migrate_tool/code alike: any
+          # file a test reads is a code input, so a golden-fixture-only PR must
+          # still run the tests, coverage, Sonar, and apidiff jobs it feeds.
           filters: |
             framework:
               - '**/*.go'
@@ -87,12 +91,14 @@ jobs:
               - 'Makefile'
               - '.golangci.yml'
               - '.github/workflows/ci-v2.yml'
+              - '**/testdata/**'
             migrate_tool:
               - 'tools/migration/**/*.go'
               - 'tools/migration/go.mod'
               - 'tools/migration/go.sum'
               - 'tools/migration/Makefile'
               - '.github/workflows/ci-v2.yml'
+              - 'tools/migration/**/testdata/**'
             code:
               - '**/*.go'
               - 'go.mod'
@@ -106,6 +112,7 @@ jobs:
               - 'tools/migration/go.mod'
               - 'tools/migration/go.sum'
               - 'tools/migration/Makefile'
+              - '**/testdata/**'
 
   # ============================================================================
   # Framework CI Jobs (conditional on framework changes)
@@ -237,8 +244,8 @@ jobs:
       # distribution server (Maven Central stopped publishing the self-contained
       # platform CLI tarballs mid-11.x; see the Install step).
       # renovate: datasource=github-releases depName=flyway/flyway
-      FLYWAY_VERSION: 13.0.0
-      FLYWAY_SHA256: f199356e0a1ed15e94268a39f97e9bd4307a467b712ee745ceb4d7e7565690d9
+      FLYWAY_VERSION: 13.1.0
+      FLYWAY_SHA256: 221779d6b6c29b2cd774d2bf7c760a2727d4d2348342e14259fa175cb188b685
 
     steps:
       - uses: actions/checkout@v7
@@ -544,9 +551,7 @@ jobs:
 
       - name: Verify go mod (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
+        run: make verify-mod
 
   # ============================================================================
   # Migration Tool CI Jobs (conditional on tools/migration changes)
@@ -666,9 +671,7 @@ jobs:
 
       - name: Verify go mod (Ubuntu only)
         if: matrix.os == 'ubuntu-latest'
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
+        run: make verify-mod
 
   lint-migrate-tool:
     permissions:
