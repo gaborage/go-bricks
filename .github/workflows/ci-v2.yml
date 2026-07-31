@@ -926,7 +926,7 @@ jobs:
         # annotation lets Renovate bump this 'go install …@version' literal,
         # which its gomod manager cannot see (see renovate.json customManagers).
         # renovate: datasource=go depName=golang.org/x/exp
-        run: go install golang.org/x/exp/cmd/apidiff@v0.0.0-20260718201538-764159d718ef
+        run: go install golang.org/x/exp/cmd/apidiff@v0.0.0-20260727155853-b88d891fe743
 
       - name: Resolve latest release tag (baseline)
         id: baseline
