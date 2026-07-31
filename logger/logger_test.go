@@ -110,17 +110,72 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestNewWithFilter(t *testing.T) {
-	// Capture original stdout to restore later
-	originalStdout := os.Stdout
+// newWithFilterCase is the table type for TestNewWithFilter, extracted so
+// the per-case assertion helpers below can take it by value.
+type newWithFilterCase struct {
+	name               string
+	level              string
+	pretty             bool
+	filterConfig       *FilterConfig
+	expectedLevel      zerolog.Level
+	expectWarnInOutput bool
+}
 
-	tests := []struct {
-		name          string
-		level         string
-		pretty        bool
-		filterConfig  *FilterConfig
-		expectedLevel zerolog.Level
-	}{
+// captureStdout redirects os.Stdout for the duration of fn and returns
+// everything written to it. Restores the original os.Stdout before returning.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+
+	fn()
+
+	w.Close()
+	os.Stdout = original
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+	return buf.String()
+}
+
+// assertFilterConfigMerged pins the three ways NewWithFilter resolves a
+// filter config: nil falls back to defaults, an empty MaskValue gets
+// defaulted while keeping custom fields, and a fully custom config is used
+// verbatim.
+func assertFilterConfigMerged(t *testing.T, tc newWithFilterCase, got *ZeroLogger, cfgToPass *FilterConfig, originalMask string) {
+	t.Helper()
+	switch {
+	case tc.filterConfig == nil:
+		assert.Equal(t, DefaultMaskValue, got.filter.config.MaskValue)
+		assert.Contains(t, got.filter.config.SensitiveFields, "password")
+	case originalMask == "":
+		assert.Equal(t, DefaultMaskValue, got.filter.config.MaskValue)
+		assert.Equal(t, DefaultMaskValue, cfgToPass.MaskValue)
+		assert.Contains(t, got.filter.config.SensitiveFields, "test_field")
+	default:
+		assert.Equal(t, tc.filterConfig.MaskValue, got.filter.config.MaskValue)
+		for _, field := range tc.filterConfig.SensitiveFields {
+			assert.Contains(t, got.filter.config.SensitiveFields, field)
+		}
+	}
+}
+
+// assertWarnInOutput checks the empty-SensitiveFields WARN's presence or
+// absence in captured stdout, including its level-gated suppression.
+func assertWarnInOutput(t *testing.T, output string, expectWarn bool) {
+	t.Helper()
+	if expectWarn {
+		assert.Contains(t, output, "masking is DISABLED")
+	} else {
+		assert.NotContains(t, output, "masking is DISABLED")
+	}
+}
+
+func TestNewWithFilter(t *testing.T) {
+	tests := []newWithFilterCase{
 		{
 			name:   "custom_filter_config",
 			level:  "debug",
@@ -148,18 +203,38 @@ func TestNewWithFilter(t *testing.T) {
 			},
 			expectedLevel: zerolog.WarnLevel,
 		},
+		{
+			name:               "empty_sensitive_fields_warns",
+			level:              "warn",
+			pretty:             false,
+			filterConfig:       &FilterConfig{MaskValue: "X"},
+			expectedLevel:      zerolog.WarnLevel,
+			expectWarnInOutput: true,
+		},
+		{
+			name:               "nil_config_does_not_warn",
+			level:              "info",
+			pretty:             false,
+			filterConfig:       nil,
+			expectedLevel:      zerolog.InfoLevel,
+			expectWarnInOutput: false,
+		},
+		{
+			// Documents the WARN's known limitation: it is emitted through the
+			// logger's own configured level, so a service running log.level:
+			// error will never see it. Same filterConfig as
+			// empty_sensitive_fields_warns — only the level differs.
+			name:               "warn_suppressed_above_warn_level",
+			level:              "error",
+			pretty:             false,
+			filterConfig:       &FilterConfig{MaskValue: "X"},
+			expectedLevel:      zerolog.ErrorLevel,
+			expectWarnInOutput: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a buffer to capture output
-			var buf bytes.Buffer
-
-			// Temporarily redirect stdout
-			r, w, err := os.Pipe()
-			require.NoError(t, err)
-			os.Stdout = w
-
 			// Copy the filter config so assertions can inspect the original values
 			var cfgToPass *FilterConfig
 			var originalMask string
@@ -169,45 +244,21 @@ func TestNewWithFilter(t *testing.T) {
 				originalMask = tt.filterConfig.MaskValue
 			}
 
-			logger := NewWithFilter(tt.level, tt.pretty, cfgToPass)
+			var result *ZeroLogger
+			output := captureStdout(t, func() {
+				result = NewWithFilter(tt.level, tt.pretty, cfgToPass)
+			})
 
-			// Restore stdout
-			w.Close()
-			os.Stdout = originalStdout
+			require.NotNil(t, result)
+			require.NotNil(t, result.zlog)
+			require.NotNil(t, result.filter)
 
-			// Read captured output
-			_, err = io.Copy(&buf, r)
-			require.NoError(t, err)
-
-			// Verify logger is created
-			require.NotNil(t, logger)
-			require.NotNil(t, logger.zlog)
-			require.NotNil(t, logger.filter)
-
-			// Verify level is set correctly
-			assert.Equal(t, tt.expectedLevel, logger.zlog.GetLevel())
-
-			// Verify filter configuration
-			if tt.filterConfig == nil {
-				// Should use default config
-				assert.Equal(t, DefaultMaskValue, logger.filter.config.MaskValue)
-				assert.Contains(t, logger.filter.config.SensitiveFields, "password")
-			} else if originalMask == "" {
-				// Should default empty mask value but keep custom fields
-				assert.Equal(t, DefaultMaskValue, logger.filter.config.MaskValue)
-				assert.Equal(t, DefaultMaskValue, cfgToPass.MaskValue)
-				assert.Contains(t, logger.filter.config.SensitiveFields, "test_field")
-			} else {
-				// Should use custom config
-				assert.Equal(t, tt.filterConfig.MaskValue, logger.filter.config.MaskValue)
-				// Check for the actual fields from the test config
-				for _, field := range tt.filterConfig.SensitiveFields {
-					assert.Contains(t, logger.filter.config.SensitiveFields, field)
-				}
-			}
+			assert.Equal(t, tt.expectedLevel, result.zlog.GetLevel())
+			assertFilterConfigMerged(t, tt, result, cfgToPass, originalMask)
+			assertWarnInOutput(t, output, tt.expectWarnInOutput)
 
 			// Test that the logger implements the interface
-			var _ Logger = logger
+			var _ Logger = result
 		})
 	}
 }

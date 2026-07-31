@@ -39,9 +39,23 @@ func DefaultFilterConfig() *FilterConfig {
 			"auth", "authorization",
 			"credential", "credentials",
 			"broker_url", "database_url", "db_url",
+			// Card data (PCI) and adjacent PII. Matching is case-insensitive
+			// substring, so bare "pan"/"card"/"pin"/"track" are deliberately
+			// absent — they would mask span_id, discard_reason, pinned_at,
+			// tracking_id. Consumers with differently-named PAN fields add them
+			// via log.sensitivefields (see wiki/observability.md).
+			"cardholder", "card_number", "cardnumber", "primary_account_number",
+			"cvv", "cvc", "track1", "track2", "track_data",
+			"iban", "otp",
 		},
 		MaskValue: DefaultMaskValue,
 	}
+}
+
+// loweredNeedles holds the precomputed lowered needle list behind a pointer so
+// SensitiveDataFilter itself stays comparable (a []string field would not be).
+type loweredNeedles struct {
+	fields []string
 }
 
 // SensitiveDataFilter filters sensitive data from logs. Filtering is enforced by the
@@ -49,6 +63,10 @@ func DefaultFilterConfig() *FilterConfig {
 // that would create a bypass path around this filter boundary.
 type SensitiveDataFilter struct {
 	config *FilterConfig
+	// needles is config.SensitiveFields lowercased once at construction. The
+	// list is a snapshot: mutating the caller's FilterConfig.SensitiveFields
+	// after NewSensitiveDataFilter returns has no effect.
+	needles *loweredNeedles
 }
 
 // NewSensitiveDataFilter creates a new filter with the given configuration
@@ -59,7 +77,11 @@ func NewSensitiveDataFilter(config *FilterConfig) *SensitiveDataFilter {
 	if config.MaskValue == "" {
 		config.MaskValue = DefaultMaskValue
 	}
-	return &SensitiveDataFilter{config: config}
+	lowered := make([]string, len(config.SensitiveFields))
+	for i, f := range config.SensitiveFields {
+		lowered[i] = strings.ToLower(f)
+	}
+	return &SensitiveDataFilter{config: config, needles: &loweredNeedles{fields: lowered}}
 }
 
 // FilterString filters sensitive data from string values
@@ -214,9 +236,12 @@ func (f *SensitiveDataFilter) FilterFields(fields map[string]any) map[string]any
 
 // isSensitiveField checks if a field name is considered sensitive
 func (f *SensitiveDataFilter) isSensitiveField(fieldName string) bool {
+	if f.needles == nil {
+		return false
+	}
 	lowerFieldName := strings.ToLower(fieldName)
-	for _, sensitiveField := range f.config.SensitiveFields {
-		if strings.Contains(lowerFieldName, strings.ToLower(sensitiveField)) {
+	for _, sensitiveField := range f.needles.fields {
+		if strings.Contains(lowerFieldName, sensitiveField) {
 			return true
 		}
 	}
