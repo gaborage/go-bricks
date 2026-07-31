@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"fmt"
+	"maps"
 	"runtime/debug"
 	"sync"
 
@@ -196,17 +197,22 @@ func (e *auditEmitter) Emit(ctx context.Context, ev *AuditEvent) {
 		return
 	}
 
-	if ev.AppliedByPrincipal == "" {
-		e.logger.Warn().
-			Str("audit_type", string(ev.Type)).
-			Str("target", ev.Target).
-			Msg("audit event missing AppliedByPrincipal — operators MUST pass an explicit principal")
-		ev.AppliedByPrincipal = PrincipalUnspecified
+	cp := *ev
+	if ev.Attributes != nil {
+		cp.Attributes = maps.Clone(ev.Attributes)
 	}
 
-	e.emitSpan(ctx, ev)
-	e.emitLog(ev)
-	e.enqueueForSink(ctx, ev)
+	if cp.AppliedByPrincipal == "" {
+		e.logger.Warn().
+			Str("audit_type", string(cp.Type)).
+			Str("target", cp.Target).
+			Msg("audit event missing AppliedByPrincipal — operators MUST pass an explicit principal")
+		cp.AppliedByPrincipal = PrincipalUnspecified
+	}
+
+	e.emitSpan(ctx, &cp)
+	e.emitLog(&cp)
+	e.enqueueForSink(ctx, &cp)
 }
 
 func (e *auditEmitter) emitSpan(ctx context.Context, ev *AuditEvent) {

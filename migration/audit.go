@@ -79,6 +79,10 @@ const PrincipalUnspecified = "<unspecified>"
 //
 // Target is an opaque schema/database identifier (tenant ID or schema name)
 // and MUST NOT be a DSN — credentials never appear in audit events.
+//
+// auditEmitter.Emit snapshots this struct with a shallow copy; a future field
+// of reference type (map/slice/pointer) MUST be added to Emit's clone step too,
+// or the snapshot will still alias the caller's value.
 type AuditEvent struct {
 	Type               AuditEventType
 	Target             string
@@ -116,8 +120,10 @@ type AuditEvent struct {
 //
 // Record receives a non-nil *AuditEvent — the pointer matches the framework
 // convention for medium-sized event payloads (see outbox.OutboxPublisher).
-// Implementations SHOULD treat the event as read-only; the framework does
-// not synchronize concurrent reads if a sink decides to mutate.
+// The event is an isolated snapshot taken at Emit time (a shallow copy plus
+// a deep clone of Attributes): caller-side reuse or mutation of the original
+// event after Emit cannot affect delivered records, and the sink is free to
+// mutate its own copy without synchronization.
 //
 // The framework calls Record with a fresh background context that may be
 // canceled by FlywayMigrator.Close. Implementations SHOULD respect
