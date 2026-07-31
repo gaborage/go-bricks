@@ -771,9 +771,13 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
   (`-Subject`, `-Issuer`, `-Serial-Number`, `-Leaf`) into a typed
   `server.ForwardedClientCert`, retrievable via
   `server.ForwardedClientCertFromContext`. Identification only, not
-  authorization (ADR-039's stance). `require: true` rejects (401) only when
-  both `-Subject` and `-Serial-Number` are absent; a present Subject whose
-  `-Leaf` fails to decode still passes (`Leaf == nil` + WARN). Health/ready
+  authorization (ADR-039's stance). `require: true` rejects (401) when both
+  `-Subject` and `-Serial-Number` are absent, and when any one of the four
+  headers carries more than one value (that check runs first, so a duplicated
+  `-Issuer` rejects even with a valid Subject and Serial-Number); a present
+  Subject whose `-Leaf` fails to decode still passes (`Leaf == nil` + WARN).
+  A duplicate is treated as absent identity without `require` too — fail open,
+  never first-value-wins. Health/ready
   probes are always exempt. The all-zero default leaves the middleware
   unwired, byte-for-byte unchanged from prior behavior.
 - security: `-Leaf` is percent-encoded by AWS with `+=/` left literal, so

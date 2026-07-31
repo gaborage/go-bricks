@@ -665,8 +665,10 @@ parse ALB verify-mode `X-Amzn-Mtls-Clientcert-*` headers (`-Subject`, `-Issuer`,
 `ForwardedClientCertFromContext` — identification, not authorization (ADR-039's stance).
 `-Leaf` is percent-encoded with `+=/` left literal per AWS's docs, so `url.PathUnescape` is
 the correct decoder (`url.QueryUnescape` would corrupt a literal `+` into a space).
-`Require` rejects (401) only when both `-Subject` and `-Serial-Number` are absent; a
-present Subject whose `-Leaf` fails to decode still passes (`Leaf == nil` + WARN). Health/
+`Require` rejects (401) when both `-Subject` and `-Serial-Number` are absent, or when any
+one of the four headers carries more than one value (duplicate check first, so a duplicated
+`-Issuer` rejects even with a valid Subject); a present Subject whose `-Leaf` fails to
+decode still passes (`Leaf == nil` + WARN). Health/
 ready probes are exempt. AWS does not publicly document that the ALB strips or overwrites
 client-supplied copies of these headers — verified across four ALB documentation pages and
 the mTLS launch blogs — so the trust model rests entirely on the deployment posture (an
