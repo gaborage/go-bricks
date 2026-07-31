@@ -143,12 +143,29 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 // EnsureConsumers creates and starts consumers for the given key using the provided declarations.
 // This should be called once per key to set up long-lived consumers.
 // Subsequent calls for the same key are idempotent.
+//
+// Concurrent calls for the same key collapse onto one setup pass, but each caller waits on ITS OWN
+// context. DoChan (not Do) is what makes that possible: Do blocks uncancelably, so a caller whose
+// budget was already spent still sat through the full setup — bounded by infraSetupTimeout (45s)
+// while the realistic caller is a lazy first-touch request carrying a ~5s deadline. Giving up does
+// NOT cancel the setup: ensureConsumersInternal runs on a WithoutCancel budget, so it completes and
+// installs the consumers for whoever asks next.
 func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declarations) error {
-	// Use singleflight to prevent concurrent consumer setup for the same key
-	_, err, _ := m.sfg.Do("consumer:"+key, func() (any, error) {
+	// Singleflight prevents concurrent consumer setup for the same key.
+	ch := m.sfg.DoChan("consumer:"+key, func() (any, error) {
 		return nil, m.ensureConsumersInternal(ctx, key, decls)
 	})
-	return err
+
+	select {
+	case res := <-ch:
+		return res.Err
+	case <-ctx.Done():
+		// Nothing to settle on the way out: unlike resourcepool.GetOrCreate a collapsed caller here
+		// holds no lease and receives no handle, so there is no seed to hand back (no
+		// releaseAbandoned analog), and singleflight's result channel is buffered (capacity 1) so
+		// the abandoned send never blocks.
+		return fmt.Errorf("messaging: caller context ended while consumer setup for key %q was in flight (setup continues): %w", key, ctx.Err())
+	}
 }
 
 // ensureConsumersInternal performs the actual consumer setup
