@@ -107,6 +107,11 @@ type Pool[V any] struct {
 	idleCleanups int
 	errors       int
 
+	// cleanupErrs retains close failures from the idle-cleanup path (guarded by mu) so Close can
+	// surface them through its errors.Join contract. They are only recoverable because StopCleanup
+	// joins the loop: by the time Close drains this, the cleanup goroutine has finished recording.
+	cleanupErrs []error
+
 	// closed flips to true the moment Close begins. Read on the hot path of
 	// GetOrCreate so callers immediately see ErrPoolClosed instead of receiving a
 	// handle to a resource that is about to be torn down. Atomic so the hot path
@@ -116,6 +121,7 @@ type Pool[V any] struct {
 	// Cleanup-goroutine lifecycle (guarded by cleanupMu, independent of mu).
 	cleanupMu   sync.Mutex
 	cleanupStop chan struct{} // non-nil while a cleanup loop is running
+	cleanupDone chan struct{} // closed by that same loop on exit; paired with cleanupStop
 	closeOnce   sync.Once
 }
 
@@ -158,25 +164,40 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 		// returns the shared entry (freshly created with a seed lease, or an existing one);
 		// every caller then takes its own lease on that pointer via claimOrAcquire — the first
 		// claims the seed, the rest increment — so each concurrent borrower is counted.
-		v, err, _ := p.sf.Do(key, func() (any, error) {
+		// DoChan (not Do) so every collapsed caller waits on ITS OWN context: Do blocks
+		// uncancelably, so a caller whose budget was already spent still sat through the whole
+		// dial before being handed an error that was not its own.
+		ch := p.sf.DoChan(key, func() (any, error) {
 			if e := p.peek(key); e != nil {
 				return e, nil
 			}
 			e, cerr := p.createEntry(ctx, key, create)
 			if cerr != nil {
-				// Count the failure once, HERE in the singleflight leader. sf.Do hands the same
-				// error to every collapsed waiter, so incrementing after Do would over-count a
-				// single create failure by the number of blocked callers.
+				// Count the failure once, HERE in the singleflight leader. Every collapsed caller
+				// receives the same error, so incrementing per caller would over-count a single
+				// create failure by the number of blocked callers.
 				p.incErrors()
 				return nil, cerr
 			}
 			return e, nil
 		})
-		if err != nil {
-			return zero, nil, err
+
+		var res singleflight.Result
+		select {
+		case res = <-ch:
+		case <-ctx.Done():
+			// This caller gives up on its own budget; the create is deliberately NOT canceled, so
+			// it still installs the resource for future callers. singleflight's result channel is
+			// buffered (capacity 1), so the abandoned send never blocks — but a fresh entry's seed
+			// lease would go unclaimed, so releaseAbandoned settles it off this goroutine.
+			go p.releaseAbandoned(ch)
+			return zero, nil, ctx.Err()
+		}
+		if res.Err != nil {
+			return zero, nil, res.Err
 		}
 
-		e := v.(*entry[V])
+		e := res.Val.(*entry[V])
 		if p.claimOrAcquire(e) {
 			return e.value, p.makeRelease(e), nil
 		}
@@ -186,6 +207,33 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 	}
 
 	return zero, nil, fmt.Errorf("resourcepool: failed to acquire %q after %d attempts (pool churn)", key, maxAcquireAttempts)
+}
+
+// releaseAbandoned settles a collapsed create whose caller returned early on its own context. The
+// create ran to completion, and a freshly created entry carries an unclaimed seed lease — taking
+// and immediately releasing a lease hands that seed back, leaving a normal unleased cached entry
+// that eviction, idle cleanup, and Close can close. Without it the seed would pin refs >= 1
+// forever and a later eviction would detach the resource with its close deferred to a release that
+// never comes, leaking it. Runs on its own goroutine, bounded by the create's own completion.
+//
+// These goroutines are deliberately NOT joined by Close, unlike the cleanup loop. Joining them
+// would make Close wait on an in-flight CREATE, and creation currently carries no bound of its own
+// (see createEntry) — a driver dial can outlast the whole shutdown budget, trading a narrow missed
+// close for a shutdown that may never return. What remains is narrow: an entry installed here and
+// then evicted while its seed was still unclaimed is detached but not closed, so a concurrent Close
+// (which can no longer see it) may return while this goroutine's releaseEntry runs the Closer. It
+// cannot double-close or resurrect the pool — createEntry re-checks closed under mu, and Close
+// marks every entry it drains closed. Bounding creation is the prerequisite for joining these
+// safely, so both belong to the deferred create-timeout work.
+func (p *Pool[V]) releaseAbandoned(ch <-chan singleflight.Result) {
+	res := <-ch
+	if res.Err != nil {
+		return
+	}
+	e := res.Val.(*entry[V])
+	if p.claimOrAcquire(e) {
+		p.releaseEntry(e)
+	}
 }
 
 // claimOrAcquire takes one lease on e, operating on the shared pointer so it can never "miss"
@@ -263,8 +311,24 @@ func (p *Pool[V]) releaseEntry(e *entry[V]) {
 // claims it via claimOrAcquire, so a concurrent evict/Remove can only detach it. If Close ran
 // between the caller's closed check and here, the just-created resource is closed and
 // ErrPoolClosed is returned rather than resurrecting the cleared map.
+//
+// create runs on a context DERIVED from the initiating caller's: values and any deadline carry
+// over, but cancellation is severed, so one collapsed caller's early cancel cannot fail the SHARED
+// create for every waiter (or for the future callers an installed entry is meant to serve). The
+// stock connectors never read this context — each self-bounds its dial — so the carried deadline
+// matters to the ctx-aware consumer seams (a dynamic ResourceSource, a custom cache Connector),
+// where it is the only bound a create has: a caller without a deadline yields a create nothing
+// in-framework can cancel. The derived context is call-scoped — a create must not retain it.
+// Whether creation should instead carry its own bound (a per-pool CreateTimeout, leaving the
+// startup budgets a separate seam) is deliberately deferred.
 func (p *Pool[V]) createEntry(ctx context.Context, key string, create func(context.Context) (V, error)) (*entry[V], error) {
-	value, err := create(ctx)
+	createCtx := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		createCtx, cancel = context.WithDeadline(createCtx, deadline)
+		defer cancel()
+	}
+	value, err := create(createCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -382,24 +446,44 @@ func (p *Pool[V]) StartCleanup(interval time.Duration) {
 		return // already running
 	}
 	stop := make(chan struct{})
+	done := make(chan struct{})
 	p.cleanupStop = stop
-	go p.cleanupLoop(interval, stop)
+	p.cleanupDone = done
+	go p.cleanupLoop(interval, stop, done)
 }
 
-// StopCleanup stops a running idle-cleanup loop. It is idempotent: calling it when no loop is
-// running is a no-op.
+// StopCleanup stops a running idle-cleanup loop and JOINS it: once it returns, no cleanupIdle
+// close can still be in flight. Close relies on that — otherwise it could report shutdown complete
+// while p.closer was still running on the cleanup goroutine, hiding that close's error from
+// Close's errors.Join contract. It is idempotent: calling it when no loop is running is a no-op.
 func (p *Pool[V]) StopCleanup() {
 	p.cleanupMu.Lock()
-	defer p.cleanupMu.Unlock()
-	if p.cleanupStop == nil {
-		return
+	// Capture done BEFORE clearing cleanupStop, and leave it in place: StopCleanup is public and
+	// re-exported by the database and messaging managers, so a second concurrent caller must join
+	// the same loop rather than see a nil cleanupStop and return while a close is still in flight.
+	// StartCleanup overwrites cleanupDone when it starts the next loop, so a caller can only ever
+	// wait on the loop that was running when it took this lock.
+	done := p.cleanupDone
+	if p.cleanupStop != nil {
+		close(p.cleanupStop)
+		p.cleanupStop = nil
 	}
-	close(p.cleanupStop)
-	p.cleanupStop = nil
+	p.cleanupMu.Unlock()
+
+	if done == nil {
+		return // no loop has ever run
+	}
+
+	// Join OUTSIDE cleanupMu. cleanupLoop never takes cleanupMu, so waiting under it would not
+	// deadlock today, but a future closer that touches the cleanup lifecycle would deadlock.
+	<-done
 }
 
-// cleanupLoop periodically removes idle entries until stopped.
-func (p *Pool[V]) cleanupLoop(interval time.Duration, stop <-chan struct{}) {
+// cleanupLoop periodically removes idle entries until stopped, closing done on exit so StopCleanup
+// can join it.
+func (p *Pool[V]) cleanupLoop(interval time.Duration, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -441,16 +525,27 @@ func (p *Pool[V]) cleanupIdle() {
 
 	for _, e := range toClose {
 		if err := p.closer(e.value); err != nil {
-			p.incErrors()
+			p.noteCleanupCloseErr(err)
 		}
 	}
+}
+
+// noteCleanupCloseErr counts an idle-cleanup close failure AND retains it for Close. The cleanup
+// goroutine has no caller to return an error to, so without this the failure only ever showed up as
+// a statistic. Must be called without mu held.
+func (p *Pool[V]) noteCleanupCloseErr(err error) {
+	p.mu.Lock()
+	p.errors++
+	p.cleanupErrs = append(p.cleanupErrs, err)
+	p.mu.Unlock()
 }
 
 // Close shuts down all pooled resources, stops the cleanup loop, and makes subsequent
 // GetOrCreate calls return ErrPoolClosed. It is idempotent and returns EVERY close error joined
 // via errors.Join (nil if none) — so consumers whose Close contract aggregates all failures
 // (e.g. DbManager) can surface them all, while errors.Is still matches any individual error.
-// Every close failure is also counted.
+// Every close failure is also counted. Failures from the idle-cleanup path are included: stopping
+// the cleanup loop joins it, so the errors it recorded are complete by the time Close drains them.
 func (p *Pool[V]) Close() error {
 	var closeErrs []error
 
@@ -458,11 +553,15 @@ func (p *Pool[V]) Close() error {
 		// Flip closed BEFORE any teardown so concurrent GetOrCreate callers immediately see
 		// ErrPoolClosed rather than racing against half-torn-down state.
 		p.closed.Store(true)
-		p.StopCleanup()
+		p.StopCleanup() // joins the loop: no cleanup-path p.closer is in flight past this point
 
 		// Collect all entries under the lock, marking each closed so a concurrent lease release
-		// cannot also close it (avoids a double Closer call).
+		// cannot also close it (avoids a double Closer call). StopCleanup joined the cleanup loop
+		// above, so every idle-cleanup close failure is already recorded — drain them into the same
+		// set Close joins.
 		p.mu.Lock()
+		closeErrs = append(closeErrs, p.cleanupErrs...)
+		p.cleanupErrs = nil
 		var toClose []*entry[V]
 		for key := range p.entries {
 			if e := p.removeEntryLocked(key); e != nil {

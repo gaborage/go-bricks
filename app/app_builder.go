@@ -319,6 +319,17 @@ func (b *Builder) preInitMessaging(parent context.Context, timeout time.Duration
 	)
 }
 
+// startupContext derives one component's pre-init context from parent. A non-positive budget means
+// "no explicit budget", NOT "already expired": config.applyStartupDefaults resolves the three-level
+// fallback for loaded configs, but a hand-built Config reaches NewWithConfig with zero values, and
+// context.WithTimeout(parent, 0) would hand every component a context that is dead on arrival.
+func startupContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
 // preInitFatalComponent pre-initializes a startup-fatal component (database or
 // messaging) under its own per-component budget derived from the supplied parent.
 // The component is skipped when not configured; a connection failure is fatal
@@ -335,7 +346,7 @@ func (b *Builder) preInitFatalComponent(
 		return true
 	}
 
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	ctx, cancel := startupContext(parent, timeout)
 	defer cancel()
 
 	if err := connect(ctx); err != nil {
@@ -355,7 +366,7 @@ func (b *Builder) preInitCache(parent context.Context, timeout time.Duration) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(parent, timeout)
+	ctx, cancel := startupContext(parent, timeout)
 	defer cancel()
 
 	_, release, err := b.bundle.cacheManager.Get(ctx, "")
