@@ -871,6 +871,17 @@ func newConsumerSetupHarness(t *testing.T) *consumerSetupHarness {
 	}
 }
 
+// awaitStarted blocks until the setup pass has entered the client factory, failing fast rather
+// than hanging the package if it never does.
+func (h *consumerSetupHarness) awaitStarted(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the setup pass never entered the client factory")
+	}
+}
+
 // TestEnsureConsumersExpiredCallerReturnsWhileSetupCompletes pins both halves of the collapse
 // contract for a caller whose budget is already spent: it must return on ITS OWN context rather
 // than sit through the shared setup's 45s infraSetupTimeout, and the setup it walked away from
@@ -891,6 +902,8 @@ func TestEnsureConsumersExpiredCallerReturnsWhileSetupCompletes(t *testing.T) {
 	case err := <-returned:
 		require.ErrorIs(t, err, context.Canceled,
 			"an over-budget caller must fail on its OWN context, not block on the shared setup")
+		require.ErrorContains(t, err, `consumer setup for key "test-tenant"`,
+			"the wrap must name the operation and key, not just surface the bare context error")
 	case <-time.After(2 * time.Second):
 		t.Fatal("EnsureConsumers blocked on the shared setup instead of honoring its dead context")
 	}
@@ -914,7 +927,7 @@ func TestEnsureConsumersCollapsedWaiterHonorsOwnContext(t *testing.T) {
 
 	leader := make(chan error, 1)
 	go func() { leader <- h.manager.EnsureConsumers(context.Background(), testTenantID, h.decls) }()
-	<-h.started // the setup pass is in flight, so the next caller is a collapsed waiter
+	h.awaitStarted(t) // the setup pass is in flight, so the next caller is a collapsed waiter
 
 	dead, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -934,4 +947,82 @@ func TestEnsureConsumersCollapsedWaiterHonorsOwnContext(t *testing.T) {
 	require.NoError(t, <-leader, "the abandoning waiter must not cancel the leader's setup")
 	assert.Equal(t, 1, h.calls(), "singleflight must still collapse the two callers into one setup")
 	assert.Equal(t, 1, h.client.consumerCount())
+}
+
+// TestEnsureConsumersRecoversPanicFromSetup pins that a panic in the setup path becomes an error
+// instead of killing the process. x/sync re-panics on a NEW goroutine once any caller used DoChan
+// (`go panic(e)` in doCall), which no recover — not even Echo's middleware.Recover — can catch, so
+// without the closure's own recover one tenant's bad broker config would crash-loop the service.
+// The setup path runs consumer-supplied code (ClientFactory, BrokerURLProvider, handlers), so this
+// is reachable from a project's own mistake.
+func TestEnsureConsumersRecoversPanicFromSetup(t *testing.T) {
+	log := logger.New("error", false)
+	factory := func(string, logger.Logger) AMQPClient { panic("bad broker config") }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	decls := NewDeclarations()
+	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
+
+	err := manager.EnsureConsumers(context.Background(), testTenantID, decls)
+	require.Error(t, err, "a panicking setup must surface as an error, not escape the process")
+	require.ErrorContains(t, err, "panic during consumer setup")
+
+	// A failed pass must not install anything, so the next caller retries and fails the same way
+	// rather than inheriting a stale success.
+	require.ErrorContains(t, manager.EnsureConsumers(context.Background(), testTenantID, decls),
+		"panic during consumer setup",
+		"a recovered panic must not leave a warm entry behind")
+}
+
+// TestEnsureConsumersWarmKeySkipsSetupOnDeadContext pins the pre-singleflight fast path: once a key
+// is replayed, EnsureConsumers is a no-op and must not consult the caller's context at all. Without
+// it a warm resolution still enters the select, where an already-closed ctx.Done() deterministically
+// beats a not-yet-scheduled goroutine — so every request on a warm tenant with a spent budget would
+// fail on work that had nothing left to do. SingleTenantResourceProvider.Messaging takes this path
+// on every request.
+func TestEnsureConsumersWarmKeySkipsSetupOnDeadContext(t *testing.T) {
+	log := logger.New("error", false)
+	client := &stubAMQPClient{}
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return client
+	}
+	callCount := func() int { mu.Lock(); defer mu.Unlock(); return calls }
+
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	decls := NewDeclarations()
+	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
+
+	require.NoError(t, manager.EnsureConsumers(context.Background(), testTenantID, decls))
+	warmCalls := callCount()
+
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, manager.EnsureConsumers(dead, testTenantID, decls),
+		"a warm key must short-circuit before the select, so a spent caller budget is irrelevant")
+	assert.Equal(t, warmCalls, callCount(), "the warm path must not run another setup pass")
 }
