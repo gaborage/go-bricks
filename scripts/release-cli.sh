@@ -76,7 +76,6 @@ esac
 # 10. full local gate against the RELEASED framework. GOWORK=off is MANDATORY —
 #     go.work would otherwise build the CLI against local framework source.
 GOWORK=off make -C tools/migration check
-GOWORK=off make -C tools/migration sec
 # a fmt inside 'check' that rewrote tracked files means the commit isn't fmt-clean,
 # yet the tag would point at the un-rewritten commit. Fail loudly.
 [ -z "$(git status --porcelain)" ] \

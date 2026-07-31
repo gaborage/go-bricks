@@ -68,7 +68,12 @@ func NewWithFilter(level string, pretty bool, filterConfig *FilterConfig) *ZeroL
 	// Initialize the sensitive data filter with provided configuration
 	filter := NewSensitiveDataFilter(filterConfig)
 
-	return &ZeroLogger{zlog: &l, filter: filter, pretty: pretty}
+	zl := &ZeroLogger{zlog: &l, filter: filter, pretty: pretty}
+	if filterConfig != nil && len(filterConfig.SensitiveFields) == 0 {
+		l.Warn().Msg("sensitive-data masking is DISABLED: FilterConfig.SensitiveFields is empty — " +
+			"if you meant to change only MaskValue, start from logger.DefaultFilterConfig()")
+	}
+	return zl
 }
 
 // WithContext returns a logger with context information attached.

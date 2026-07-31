@@ -19,6 +19,12 @@ var (
 	// the deployment requires, which is a peer error, not a server fault.
 	ErrJTIMissing = errors.New("jose: verified claims carry no jti")
 
+	// ErrIssuerMissing is returned when CheckJTIReplay is handed claims with no
+	// iss, and also when CheckJTIReplayInNamespace is handed an empty
+	// namespace. iss is optional per RFC 7519, and every iss-less token would
+	// otherwise share one replay namespace, letting two partners' jtis collide.
+	ErrIssuerMissing = errors.New("jose: claims carry no iss — use CheckJTIReplayInNamespace with an explicit namespace")
+
 	// ErrReplayRecorderMissing is returned when CheckJTIReplay is handed a nil
 	// recorder. Map it to 500 — like ErrClaimsMissing it is a wiring error, not
 	// anything the peer did.
@@ -63,6 +69,12 @@ var replayMarker = []byte{1}
 // are partner-specific and remain the application's. Callers should run their
 // timing checks first and only reach here with a token they otherwise accept.
 //
+// claims.Issuer must be non-empty: iss is optional per RFC 7519, and every
+// iss-less token would otherwise land in the same "unknown issuer" replay
+// namespace, letting two partners' jtis (short counters, per-day ordinals)
+// collide and reject each other's valid requests. Token profiles that omit
+// iss must use CheckJTIReplayInNamespace with an explicit namespace instead.
+//
 // Atomicity is the recorder's: with a SET-NX backend, exactly one of N
 // concurrent requests carrying the same jti observes fresh=true.
 func CheckJTIReplay(ctx context.Context, recorder ReplayRecorder, claims *Claims, window time.Duration) (fresh bool, err error) {
@@ -75,25 +87,57 @@ func CheckJTIReplay(ctx context.Context, recorder ReplayRecorder, claims *Claims
 	if claims.JTI == "" {
 		return false, ErrJTIMissing
 	}
+	if claims.Issuer == "" {
+		return false, ErrIssuerMissing
+	}
 	if window <= 0 {
 		return false, ErrReplayWindowInvalid
 	}
 
-	_, wasSet, err := recorder.GetOrSet(ctx, replayKey(claims), replayMarker, window)
+	_, wasSet, err := recorder.GetOrSet(ctx, replayKeyIn(claims.Issuer, claims.JTI), replayMarker, window)
 	if err != nil {
 		return false, fmt.Errorf("jose: replay recorder: %w", err)
 	}
 	return wasSet, nil
 }
 
-// replayKey namespaces the jti by issuer. Two partners can legitimately mint
-// the same jti value, and a collision would reject a valid request. The length
-// prefix keeps the issuer boundary unambiguous, so no issuer string can alias
-// another issuer's namespace by embedding the separator.
+// CheckJTIReplayInNamespace is CheckJTIReplay for token profiles that omit
+// iss. namespace names the trust domain the caller has authenticated by
+// other means — the policy's VerifyKid is the natural choice, since the
+// middleware bound the signature to it. Empty namespaces are rejected.
+func CheckJTIReplayInNamespace(ctx context.Context, recorder ReplayRecorder, namespace string, claims *Claims, window time.Duration) (fresh bool, err error) {
+	if claims == nil {
+		return false, ErrClaimsMissing
+	}
+	if recorder == nil {
+		return false, ErrReplayRecorderMissing
+	}
+	if claims.JTI == "" {
+		return false, ErrJTIMissing
+	}
+	if namespace == "" {
+		return false, ErrIssuerMissing
+	}
+	if window <= 0 {
+		return false, ErrReplayWindowInvalid
+	}
+
+	_, wasSet, err := recorder.GetOrSet(ctx, replayKeyIn(namespace, claims.JTI), replayMarker, window)
+	if err != nil {
+		return false, fmt.Errorf("jose: replay recorder: %w", err)
+	}
+	return wasSet, nil
+}
+
+// replayKeyIn namespaces the jti by ns (the issuer, or an explicit namespace
+// for iss-less token profiles). Two partners can legitimately mint the same
+// jti value, and a collision would reject a valid request. The length prefix
+// keeps the namespace boundary unambiguous, so no namespace string can alias
+// another namespace by embedding the separator.
 //
-// Per-tenant separation is already free: deps.Cache(ctx) resolves a
-// tenant-scoped cache instance, so a jti seen on tenant A does not block
-// tenant B.
-func replayKey(c *Claims) string {
-	return "jose:jti:" + strconv.Itoa(len(c.Issuer)) + ":" + c.Issuer + ":" + c.JTI
+// Per-tenant separation holds only when each tenant's CacheConfig resolves a
+// distinct Redis instance or logical DB — the Redis client does no key
+// prefixing, so tenants sharing one address+DB share this keyspace too.
+func replayKeyIn(ns, jti string) string {
+	return "jose:jti:" + strconv.Itoa(len(ns)) + ":" + ns + ":" + jti
 }

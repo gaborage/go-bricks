@@ -29,7 +29,8 @@ type Options struct {
 	// Use this when you need code-level control beyond a field-name list, e.g.
 	// a custom MaskValue, opting out of every default field, or composing
 	// values from a secret manager at startup. To opt out entirely, set
-	// &logger.FilterConfig{SensitiveFields: nil}.
+	// &logger.FilterConfig{SensitiveFields: nil}. Doing so now emits a WARN at
+	// logger construction (suppressed when log.level is above warn).
 	//
 	// To extend the defaults from code, call logger.DefaultFilterConfig()
 	// and append your custom names to SensitiveFields.

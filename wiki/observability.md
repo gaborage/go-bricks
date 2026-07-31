@@ -61,12 +61,15 @@ Every log line emitted via the framework logger passes through a `logger.Sensiti
 | Auth headers | `auth`, `authorization` |
 | Generic | `credential`, `credentials` |
 | Connection strings | `broker_url`, `database_url`, `db_url` |
+| Card data (PCI) & PII | `cardholder`, `card_number`, `cardnumber`, `primary_account_number`, `cvv`, `cvc`, `track1`, `track2`, `track_data`, `iban`, `otp` |
 
-URLs in masked fields keep host/path but strip the password: `https://user:pwd@host/path?token=x` → `https://user:***@host/path?token=x`. The default mask value is `***`.
+A URL value on the sensitive path is masked in full, never structure-preserved — query strings and fragments routinely carry the secret itself. The default mask value is `***`.
+
+Bare `pan`, `card`, `pin`, and `track` are deliberately absent: substring matching would mask `span_id`, `discard_reason`, `pinned_at`, and `tracking_id`, so differently-named PAN fields still need a per-service entry via `log.sensitivefields`. `otp` does over-mask camelCase `…otP…` names (e.g. `snapshotPath`) and that trade is intentional — masking a debugging detail costs less than leaking an OTP. Setting `app.Options.LoggerFilterConfig` (or calling `logger.NewWithFilter` directly) with an explicitly empty `SensitiveFields` now logs a WARN at startup (suppressed at `log.level: error` and above) — an empty YAML `log.sensitivefields` list is not this case: it resolves to `nil` and falls back to the defaults, so it neither disables masking nor warns.
 
 ### Extending the filter (two seams)
 
-For regulated payloads — PCI-DSS (PAN, CVV2), PII (SSN, account numbers), one-time passwords — extend the list at bootstrap. Both seams are additive-only changes; existing apps see no behavior difference until they opt in.
+For regulated payloads — PCI-DSS (bare PAN field names), PII (SSN, tax ID) — extend the list at bootstrap. The two seams differ in how they combine with the defaults: YAML merges into them, `LoggerFilterConfig` replaces them wholesale (Seam 2 below). Adopting a seam is opt-in; the default list itself is not — this release widened it, so every app that leaves the defaults in place, YAML extenders included, picks up the new card-data masking with no config change. A non-nil `app.Options.LoggerFilterConfig` is the one configuration that doesn't (see [Migration notes](#migration-notes)).
 
 **Seam 1 — YAML config (recommended for static lists):**
 
@@ -75,12 +78,6 @@ log:
   level: info
   sensitivefields:                     # NEW: appended to DefaultFilterConfig
     - pan                               # masks "pan", "PAN", "card_pan"
-    - primary_account_number            # masks the long-form variant too
-    - cvv
-    - cvv2
-    - cvc2
-    - otp
-    - one_time_password
     - ssn
     - tax_id
 ```
@@ -104,7 +101,7 @@ import (
 // Common pattern: extend defaults + override mask value.
 base := logger.DefaultFilterConfig()
 base.SensitiveFields = append(base.SensitiveFields,
-    "pan", "primary_account_number", "cvv", "cvv2", "otp",
+    "pan", "ssn", "tax_id",
 )
 base.MaskValue = "[REDACTED]"
 
@@ -129,7 +126,7 @@ fw, _, err = app.NewWithOptions(&app.Options{
 - **Field names**, not field values. The filter never scans string contents for PAN-shaped digit sequences or Luhn-valid numbers. Value scanning is a defense-in-depth concern that belongs in application code (see *Defense in depth*, below).
 - **Case-insensitive substring**. `pan` matches `pan`, `PAN`, `Pan`, `card_pan`, `primary_account_number`. This is intentional — it survives typos, naming-convention drift, and underscored-vs-camelCase variants in different modules.
 - **Recursive into structures**. All log-event methods are covered — `Str`, `Int`, `Int64`, `Uint64`, `Dur`, `Bytes`, and `Interface(...)` — as well as nested `map[string]any`, `map[string]string`, `http.Header` (`map[string][]string`), struct fields (using `json` tags when present), and slice/array elements. Recursion is bounded (`logger.DefaultMaxDepth = 8`) and cycle-safe (visited pointer set). Depth exhaustion fails **closed** — values past the depth limit are replaced with the mask rather than logged verbatim.
-- **URLs as a special case**. If a masked field's value is an HTTP/AMQP URL with `user:password@host`, only the password component is replaced — the rest of the URL stays readable. This keeps `database_url` and `broker_url` actionable in error logs.
+- **URLs are masked in full, not partially**. A masked field whose value is an HTTP/AMQP URL (e.g. `database_url`, `broker_url`) is replaced with the default mask value (`***`) in its entirety — host, path, query string, and fragment included, not just the `user:password@host` component. Query strings and fragments routinely carry the secret itself, so partial masking would leave it exposed.
 
 ### What this does *not* do
 
@@ -149,9 +146,9 @@ Field-name masking is *one* layer. A complete PCI-DSS 3.3/3.4/3.5 posture combin
 
 ### Migration notes
 
-- **Existing apps see no change** until they set either seam. The framework's logger continues to call `NewSensitiveDataFilter(DefaultFilterConfig())` internally when both `Options.LoggerFilterConfig` and `cfg.Log.SensitiveFields` are absent.
+- **Apps on the defaults pick up the widened list automatically.** This release added the card-data and PII names in the table above (`cardholder`, `card_number`, `cardnumber`, `primary_account_number`, `cvv`, `cvc`, `track1`, `track2`, `track_data`, `iban`, `otp`) to `DefaultFilterConfig()`. Any deployment that leaves `Options.LoggerFilterConfig` unset gets them: with `cfg.Log.SensitiveFields` also absent the logger calls `NewSensitiveDataFilter(DefaultFilterConfig())` directly, and with it set the custom names are merged *into* the widened defaults (`resolveLoggerFilterConfig`, [`app/app_builder.go`](../app/app_builder.go)). A field that logged a value before now logs `***`, so check log-driven alerts, dashboards, and any test asserting on those field values before upgrading. **A non-nil `Options.LoggerFilterConfig` is unaffected** — it replaces the list, so those deployments keep masking exactly what they enumerated; re-derive the list from `logger.DefaultFilterConfig()` to take the new names.
 - **Removing the in-module wrapper anti-pattern**: if your codebase previously wrapped `deps.Logger` per-module to apply a filter, you can delete that wrapper after migrating to YAML or `Options.LoggerFilterConfig`. The bootstrap-level filter covers every framework subsystem; the per-module wrapper covered only your code.
-- **Upgrading from v0.30.0**: the only behavioral change is the constructor (`logger.New` → `logger.NewWithFilter` inside `Builder.CreateLogger`). When called with a `nil` filter config, `NewWithFilter` is byte-for-byte equivalent to the legacy `New`. No flag, no environment variable, no migration step.
+- **Upgrading from v0.30.0**: the wiring change is the constructor (`logger.New` → `logger.NewWithFilter` inside `Builder.CreateLogger`). When called with a `nil` filter config, `NewWithFilter` is byte-for-byte equivalent to the legacy `New` — both resolve to `DefaultFilterConfig()`. No flag, no environment variable, no migration step; the observable difference is the widened default list above.
 
 ## Custom Metrics
 

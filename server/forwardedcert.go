@@ -36,10 +36,18 @@ const maxForwardedLeafBytes = 64 * 1024
 
 // errNoForwardedCert indicates the request carried neither the -Subject nor
 // the -Serial-Number verify-mode header — i.e. no ALB-verified identity at
-// all. This is the only condition server.forwardedclientcert.require rejects
-// on; a present Subject whose -Leaf failed to decode is NOT this error (see
-// parseForwardedClientCert).
+// all. With errDuplicateForwardedHeader below, it is one of the two conditions
+// server.forwardedclientcert.require rejects on; a present Subject whose -Leaf
+// failed to decode is NOT this error (see parseForwardedClientCert).
 var errNoForwardedCert = errors.New("forwarded client certificate not present")
+
+// errDuplicateForwardedHeader indicates a request carried more than one value
+// for a single X-Amzn-Mtls-Clientcert-* header. In the documented posture
+// (wiki/forwarded_client_cert.md) the ALB sets each header at most once, so a
+// duplicate means either the ALB posture changed or a client-supplied copy
+// got through — it is never trusted, not even via first-value-wins (see
+// forwardedClientCertMiddlewareEcho).
+var errDuplicateForwardedHeader = errors.New("duplicated X-Amzn-Mtls header")
 
 // ForwardedClientCert is the partner identity an mTLS-verify-terminating ALB
 // verified and forwarded via X-Amzn-Mtls-Clientcert-* headers. Subject,
@@ -84,29 +92,38 @@ func ForwardedClientCertFromContext(ctx context.Context) (cert ForwardedClientCe
 	return cert, ok
 }
 
-// parseForwardedClientCert extracts a ForwardedClientCert from a header
-// getter (net/http's Header.Get, or any equivalent), so parsing unit-tests
-// without a real HTTP request.
+// parseForwardedClientCert extracts a ForwardedClientCert from a
+// multi-valued header getter (net/http's Header.Values, or any equivalent),
+// so parsing unit-tests without a real HTTP request.
 //
-// Returns errNoForwardedCert when both -Subject and -Serial-Number are
+// Any of the four headers present more than once returns
+// errDuplicateForwardedHeader wrapping the header name, before any value is
+// used — a duplicate is never trusted, not even first-value-wins. Otherwise,
+// returns errNoForwardedCert when both -Subject and -Serial-Number are
 // absent. Otherwise the identity is present; a -Leaf header that fails to
 // decode returns the identity (Leaf == nil) alongside a non-nil, wrapped
 // error describing the parse failure — callers must not treat that as
 // absence.
-func parseForwardedClientCert(h func(string) string) (ForwardedClientCert, error) {
-	subject := h(headerClientCertSubject)
-	serial := h(headerClientCertSerialNumber)
+func parseForwardedClientCert(h func(string) []string) (ForwardedClientCert, error) {
+	for _, name := range []string{headerClientCertSubject, headerClientCertSerialNumber, headerClientCertIssuer, headerClientCertLeaf} {
+		if len(h(name)) > 1 {
+			return ForwardedClientCert{}, fmt.Errorf("%w: %s", errDuplicateForwardedHeader, name)
+		}
+	}
+
+	subject := firstHeaderValue(h(headerClientCertSubject))
+	serial := firstHeaderValue(h(headerClientCertSerialNumber))
 	if subject == "" && serial == "" {
 		return ForwardedClientCert{}, errNoForwardedCert
 	}
 
 	cert := ForwardedClientCert{
 		Subject:      subject,
-		Issuer:       h(headerClientCertIssuer),
+		Issuer:       firstHeaderValue(h(headerClientCertIssuer)),
 		SerialNumber: serial,
 	}
 
-	encodedLeaf := h(headerClientCertLeaf)
+	encodedLeaf := firstHeaderValue(h(headerClientCertLeaf))
 	if encodedLeaf == "" {
 		return cert, nil
 	}
@@ -117,6 +134,16 @@ func parseForwardedClientCert(h func(string) string) (ForwardedClientCert, error
 	}
 	cert.Leaf = leaf
 	return cert, nil
+}
+
+// firstHeaderValue returns the sole value of a possibly-multi-valued header,
+// or "" when absent. Callers must reject len(values) > 1 before calling this
+// — see parseForwardedClientCert.
+func firstHeaderValue(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 // parseForwardedLeaf decodes and parses the X-Amzn-Mtls-Clientcert-Leaf
@@ -161,11 +188,22 @@ func forwardedClientCertMiddlewareEcho(cfg config.ForwardedClientCertConfig, ski
 			}
 
 			req := c.Request()
-			identity, err := parseForwardedClientCert(req.Header.Get)
+			identity, err := parseForwardedClientCert(req.Header.Values)
 
 			switch {
 			case err == nil:
 				c.SetRequest(req.WithContext(withForwardedClientCert(req.Context(), identity)))
+			case errors.Is(err, errDuplicateForwardedHeader):
+				// A duplicated header is never trusted — same shape as absence
+				// (fail closed under Require, fail open without it), never
+				// first-value-wins. The WARN always fires, since it is the
+				// primary signal that either the ALB posture changed or a
+				// client-supplied copy of the header got through.
+				logForwardedClientCertDuplicateWarning(l, c, err)
+				if cfg.Require {
+					return NewUnauthorizedError("Client certificate identity required")
+				}
+				// !Require: proceed with no identity attached.
 			case errors.Is(err, errNoForwardedCert):
 				if cfg.Require {
 					logForwardedClientCertRejection(l, c)
@@ -179,7 +217,7 @@ func forwardedClientCertMiddlewareEcho(cfg config.ForwardedClientCertConfig, ski
 				// the lost enrichment: an identical parse failure must not have
 				// flag-dependent observability.
 				c.SetRequest(req.WithContext(withForwardedClientCert(req.Context(), identity)))
-				logForwardedClientCertLeafWarning(l, c, err, req.Header.Get(headerClientCertLeaf))
+				logForwardedClientCertLeafWarning(l, c, err, firstHeaderValue(req.Header.Values(headerClientCertLeaf)))
 			}
 
 			return next(c)
@@ -197,6 +235,18 @@ func logForwardedClientCertRejection(l logger.Logger, c *echo.Context) {
 	req := c.Request()
 	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] request rejected: missing identity method=%s path=%s client=%s status=%d reason=%q",
 		req.Method, req.URL.Path, req.RemoteAddr, http.StatusUnauthorized, "forwarded_client_cert_missing"))
+}
+
+// logForwardedClientCertDuplicateWarning emits one WARN whenever a request
+// carries more than one value for a single X-Amzn-Mtls-Clientcert-* header.
+// It fires regardless of Require, since a duplicated header is always
+// treated as absent identity (fail closed under Require, fail open without
+// it) — an identical condition must not have flag-dependent observability.
+// dupErr's message names only the offending header, never a header value.
+func logForwardedClientCertDuplicateWarning(l logger.Logger, c *echo.Context, dupErr error) {
+	req := c.Request()
+	warnWithFallback(l, fmt.Sprintf("[server.forwardedclientcert] duplicated header detected method=%s path=%s client=%s reason=%q detail=%q",
+		req.Method, req.URL.Path, req.RemoteAddr, "forwarded_client_cert_duplicate", dupErr.Error()))
 }
 
 // logForwardedClientCertLeafWarning emits a WARN whenever the -Leaf header
