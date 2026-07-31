@@ -38,7 +38,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
-| E56  | v0.55.0 → v0.56.0 | additive (safe) | 2 | none | none |
+| E56  | v0.55.0 → v0.56.0 | silent-behavior | 3 | none | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -757,9 +757,9 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
   `NextProtos` is deliberately left unset (see ADR-042).
 - ref: #767 · ADR-042 · server/tls.go
 
-## E56 · v0.55.0 → v0.56.0 — ALB forwarded-client-cert identity middleware + seal-payload CLI
+## E56 · v0.55.0 → v0.56.0 — ALB forwarded-client-cert identity middleware + seal-payload CLI + widened logger mask list
 
-- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). Also adds the installable `cmd/seal-payload` CLI for curl-testing jose-tagged endpoints. No exported go-bricks symbol changes outside this new surface; purely additive.
+- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). Also adds the installable `cmd/seal-payload` CLI for curl-testing jose-tagged endpoints. No exported go-bricks symbol changes outside this new surface — but `logger.DefaultFilterConfig()` gains eleven card-data/PII field names, which silently changes log output for anyone on the defaults (C56.3).
 - build-caught: none
 - preflight: none
 - exit: `go get github.com/gaborage/go-bricks@v0.56.0 && go mod tidy && go build ./... && go test ./...`
@@ -797,6 +797,14 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
   change — `package main` contributes no importable symbols and is inert
   unless separately installed and invoked.
 - ref: #776 · cmd/seal-payload/main.go · wiki/jose.md#sealing-test-payloads-with-curl-seal-payload-cli
+
+### [C56.3] `logger.DefaultFilterConfig()` gains card-data + PII names — matching log values now emit `***` · silent-behavior · when: match
+
+- detect: eleven needles are new — `cardholder`, `card_number`, `cardnumber`, `primary_account_number`, `cvv`, `cvc`, `track1`, `track2`, `track_data`, `iban`, `otp`. Find affected log fields with `git grep -nEi '"[^"]*(cardholder|card_?number|primary_account_number|cvv|cvc|track1|track2|track_data|iban|otp)[^"]*"' -- '*.go'`, then the same names in log-driven alerts, dashboard queries, and test assertions. Matching is case-insensitive substring, so `otp` also hits camelCase `…otP…`: `git grep -nE '"[A-Za-z]*[oO]t[pP][A-Za-z]*"' -- '*.go'` surfaces `snapshotPath`-style false positives.
+- gate: match = you log a field whose name contains one of the needles AND you leave `app.Options.LoggerFilterConfig` unset — including YAML `log.sensitivefields` extenders, which merge *into* the widened defaults (`resolveLoggerFilterConfig`, `app/app_builder.go`). Those values now render as `***` with no compile error and no startup signal. no-match = you set a non-nil `Options.LoggerFilterConfig`; it replaces the list wholesale, so your masking is byte-identical and you do **not** pick up the new names.
+- apply: nothing for the masking itself — that is the intended PCI posture. Repoint the downstream consumers of the old plaintext: alerts, dashboards, and tests that assert on those values. Rename any field caught as a false positive (`snapshotPath` under `otp`). If you replace the config via `Options.LoggerFilterConfig` and want the new coverage, build from `logger.DefaultFilterConfig()` and append rather than enumerating fields by hand — a bare `&logger.FilterConfig{SensitiveFields: ...}` also drops `password`, `token`, and every other default.
+- verify: emit one log line per affected field in staging and confirm `***`; re-run the alert and dashboard queries against the new stream and confirm they still match what they are meant to match.
+- ref: #827 · `logger/filter.go` (`DefaultFilterConfig`) · `app/app_builder.go` (`resolveLoggerFilterConfig`) · wiki/observability.md#sensitive-data-filtering
 
 ---
 

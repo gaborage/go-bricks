@@ -404,7 +404,9 @@ type LogConfig struct {
 
 	// SensitiveFields extends logger.DefaultFilterConfig with extra field
 	// names whose values must be masked in log output. Matching is
-	// case-insensitive substring, so "pan" also masks "primary_account_number".
+	// case-insensitive substring on the field name, so "pan" masks "pan",
+	// "card_pan", and "panHash" — not the reverse; "primary_account_number"
+	// is its own default needle.
 	// Use this for PAN variants and service-specific PII (SSN, tax ID, etc.) without writing
 	// Go code. For full control over the FilterConfig (e.g., custom MaskValue
 	// or opting out of defaults), set app.Options.LoggerFilterConfig instead;
