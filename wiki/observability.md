@@ -69,7 +69,7 @@ Bare `pan`, `card`, `pin`, and `track` are deliberately absent: substring matchi
 
 ### Extending the filter (two seams)
 
-For regulated payloads — PCI-DSS (bare PAN field names), PII (SSN, tax ID) — extend the list at bootstrap. Both seams are opt-in — no existing app's behavior changes until it adopts one — but they don't combine with the defaults the same way: YAML merges, `LoggerFilterConfig` replaces, as Seam 2 spells out below.
+For regulated payloads — PCI-DSS (bare PAN field names), PII (SSN, tax ID) — extend the list at bootstrap. Adopting a seam is opt-in; the default list itself is not — this release widened it, so every app picks up the new card-data masking with no config change (see [Migration notes](#migration-notes)). The two seams also don't combine with the defaults the same way: YAML merges, `LoggerFilterConfig` replaces, as Seam 2 spells out below.
 
 **Seam 1 — YAML config (recommended for static lists):**
 
@@ -146,9 +146,9 @@ Field-name masking is *one* layer. A complete PCI-DSS 3.3/3.4/3.5 posture combin
 
 ### Migration notes
 
-- **Existing apps see no change** until they set either seam. The framework's logger continues to call `NewSensitiveDataFilter(DefaultFilterConfig())` internally when both `Options.LoggerFilterConfig` and `cfg.Log.SensitiveFields` are absent.
+- **Existing apps pick up the widened default list automatically.** This release added the card-data and PII names in the table above (`cardholder`, `card_number`, `cardnumber`, `primary_account_number`, `cvv`, `cvc`, `track1`, `track2`, `track_data`, `iban`, `otp`) to `DefaultFilterConfig()`. The framework's logger calls `NewSensitiveDataFilter(DefaultFilterConfig())` internally when both `Options.LoggerFilterConfig` and `cfg.Log.SensitiveFields` are absent, so a field that logged a value before now logs `***` with no config change. Only the two *extension* seams are opt-in. Check log-driven alerts, dashboards, and any test asserting on those field values before upgrading.
 - **Removing the in-module wrapper anti-pattern**: if your codebase previously wrapped `deps.Logger` per-module to apply a filter, you can delete that wrapper after migrating to YAML or `Options.LoggerFilterConfig`. The bootstrap-level filter covers every framework subsystem; the per-module wrapper covered only your code.
-- **Upgrading from v0.30.0**: the only behavioral change is the constructor (`logger.New` → `logger.NewWithFilter` inside `Builder.CreateLogger`). When called with a `nil` filter config, `NewWithFilter` is byte-for-byte equivalent to the legacy `New`. No flag, no environment variable, no migration step.
+- **Upgrading from v0.30.0**: the wiring change is the constructor (`logger.New` → `logger.NewWithFilter` inside `Builder.CreateLogger`). When called with a `nil` filter config, `NewWithFilter` is byte-for-byte equivalent to the legacy `New` — both resolve to `DefaultFilterConfig()`. No flag, no environment variable, no migration step; the observable difference is the widened default list above.
 
 ## Custom Metrics
 
