@@ -312,12 +312,23 @@ func (p *Pool[V]) releaseEntry(e *entry[V]) {
 // between the caller's closed check and here, the just-created resource is closed and
 // ErrPoolClosed is returned rather than resurrecting the cleared map.
 //
-// create still runs on the initiating caller's context. That context is what delivers the
-// app.startup.{database,messaging,cache} budgets to the connectors during pre-initialization, so it
-// cannot simply be severed; whether a SHARED resource's creation should instead carry its own bound
-// (a per-pool CreateTimeout, leaving the startup budgets a separate seam) is deliberately deferred.
+// create runs on a context DERIVED from the initiating caller's: values and any deadline carry
+// over, but cancellation is severed, so one collapsed caller's early cancel cannot fail the SHARED
+// create for every waiter (or for the future callers an installed entry is meant to serve). The
+// stock connectors never read this context — each self-bounds its dial — so the carried deadline
+// matters to the ctx-aware consumer seams (a dynamic ResourceSource, a custom cache Connector),
+// where it is the only bound a create has: a caller without a deadline yields a create nothing
+// in-framework can cancel. The derived context is call-scoped — a create must not retain it.
+// Whether creation should instead carry its own bound (a per-pool CreateTimeout, leaving the
+// startup budgets a separate seam) is deliberately deferred.
 func (p *Pool[V]) createEntry(ctx context.Context, key string, create func(context.Context) (V, error)) (*entry[V], error) {
-	value, err := create(ctx)
+	createCtx := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		createCtx, cancel = context.WithDeadline(createCtx, deadline)
+		defer cancel()
+	}
+	value, err := create(createCtx)
 	if err != nil {
 		return nil, err
 	}

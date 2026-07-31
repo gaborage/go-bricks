@@ -292,6 +292,98 @@ func TestPoolGetOrCreateWaiterHonorsOwnContext(t *testing.T) {
 	assert.False(t, tr.wasClosed(got.v.id))
 }
 
+// runLeaderCancelPoisonScenario drives the other quadrant of the collapse contract: the LEADER's
+// context dies while a healthy waiter is collapsed onto its create. The create runs on a context
+// derived from the leader's, so without severing cancellation a context-aware connector aborts the
+// shared dial and every waiter inherits an error that was never its own.
+func runLeaderCancelPoisonScenario(leaderCtx context.Context, t *testing.T, leaderCancel context.CancelFunc) {
+	t.Helper()
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	createStarted := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) } // idempotent: safe from any path
+	// sawDeadCtx flags a canceled context observed inside create. It closes the timing hole where
+	// a late waiter misses the collapse and runs a fresh, healthy create: the waiter-side assertion
+	// alone would pass, but the leader's poisoned create still flagged its dead context here.
+	var sawDeadCtx atomic.Bool
+	create := func(ctx context.Context) (*fakeResource, error) {
+		startedOnce.Do(func() { close(createStarted) })
+		<-release
+		if err := ctx.Err(); err != nil {
+			sawDeadCtx.Store(true)
+			return nil, fmt.Errorf("create ran on a dead context: %w", err)
+		}
+		return newFakeResource("shared"), nil
+	}
+
+	leader := make(chan leaseResult, 1)
+	go func() {
+		v, rel, err := p.GetOrCreate(leaderCtx, keyOne, create)
+		leader <- leaseResult{v, rel, err}
+	}()
+	<-createStarted // the create is in flight and captured the leader's context
+
+	leaderCancel()
+	got := <-leader
+	require.ErrorIs(t, got.err, context.Canceled, "the leader gives up on its own budget")
+
+	// The waiter joins the still-blocked create, then a helper lets it drain. If the waiter loses
+	// that race the entry (or its absence) still betrays the bug via sawDeadCtx below.
+	go func() { time.Sleep(50 * time.Millisecond); unblock() }()
+	waiter := getOrCreateBounded(context.Background(), t, p, keyOne, create, unblock)
+	require.NoError(t, waiter.err, "a healthy waiter must not inherit the leader's cancellation")
+	require.NotNil(t, waiter.rel)
+	defer waiter.rel()
+	assert.False(t, sawDeadCtx.Load(), "the shared create must never observe the leader's dead context")
+	assert.Equal(t, 1, p.Size(), "the create installed its entry despite the leader's cancel")
+}
+
+// TestPoolLeaderCancelDoesNotPoisonSharedCreate exercises the deadline-less derivation branch:
+// context.WithoutCancel alone carries the create.
+func TestPoolLeaderCancelDoesNotPoisonSharedCreate(t *testing.T) {
+	leaderCtx, leaderCancel := context.WithCancel(context.Background())
+	runLeaderCancelPoisonScenario(leaderCtx, t, leaderCancel)
+}
+
+// TestPoolLeaderDeadlineCancelDoesNotPoisonSharedCreate exercises the deadline branch — the path
+// every HTTP request takes (server.timeout.middleware puts a deadline on each request context).
+// It pins that the carried-over deadline is rebound onto the DERIVED context: rebinding it onto the
+// original caller's context re-couples cancellation, a regression the deadline-less variant above
+// can never see because it skips this branch entirely.
+func TestPoolLeaderDeadlineCancelDoesNotPoisonSharedCreate(t *testing.T) {
+	leaderCtx, leaderCancel := context.WithTimeout(context.Background(), time.Hour)
+	runLeaderCancelPoisonScenario(leaderCtx, t, leaderCancel)
+}
+
+// TestPoolCreateInheritsCallerDeadline pins the budget half of the derived create context: severing
+// cancellation must NOT drop the caller's deadline — for a context-aware create (a dynamic tenant
+// store, a consumer-supplied cache connector) that carried deadline is the only bound the create
+// has.
+func TestPoolCreateInheritsCallerDeadline(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	deadline := time.Now().Add(time.Hour)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	var gotDeadline time.Time
+	var hadDeadline bool
+	_, rel, err := p.GetOrCreate(ctx, keyOne, func(cctx context.Context) (*fakeResource, error) {
+		gotDeadline, hadDeadline = cctx.Deadline()
+		return newFakeResource(keyOne), nil
+	})
+	require.NoError(t, err)
+	defer rel()
+	require.True(t, hadDeadline, "the create context must carry the caller's deadline")
+	assert.True(t, gotDeadline.Equal(deadline), "the caller's budget must arrive unshortened: got %v want %v", gotDeadline, deadline)
+}
+
 // TestPoolAbandonedCreateReleasesSeedLease pins the counterpart of the abandon path: a create whose
 // caller gave up still installs the entry, and that entry's seed lease — which no caller is left to
 // claim — must be handed back. Otherwise refs stays >= 1 forever, eviction can only detach the
