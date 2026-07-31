@@ -1,4 +1,8 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec mutate mutate-baseline release release-cli
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
+# verify-mod mutates go.mod/go.sum/go.work.sum via `go mod tidy` — under `make
+# -j check` that would race lint/test reading the same module files. Force
+# check's prerequisites to run serially regardless of -j.
+.NOTPARALLEL: check
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
@@ -15,8 +19,18 @@ GOLANGCI_LINT_VERSION := v2.12.2
 # renovate: datasource=go depName=github.com/go-gremlins/gremlins
 GREMLINS_VERSION := v0.5.1
 GREMLINS_CMD := go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
-# Hosted runners are 4-vCPU/16GB; 2 workers halves peak memory vs the local default.
+# Hosted runners are 4-vCPU/16GB; 2 workers bounds peak memory (each worker keeps its
+# own copy of the module tree).
 MUTATE_BASELINE_WORKERS ?= 2
+# Used only when the per-package coefficient cannot be computed. Generous on
+# purpose: too small silently reports every mutant as TIMED OUT, which the
+# advisory baseline would publish as a clean score (wiki/testing.md#timeout-ceiling).
+MUTATE_FALLBACK_COEFFICIENT ?= 600
+# `make mutate` runs on a developer's machine, where every worker is a concurrent
+# `go test`. Now that mutants run to completion instead of dying at a too-tight
+# ceiling, that is sustained load, so the local gate is deliberately gentler than
+# .gremlins.yaml's 4: raise it for a faster gate, drop it to 1 to keep a laptop cool.
+MUTATE_WORKERS ?= 2
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -90,7 +104,11 @@ clean: ## Clean build cache and test artifacts
 # common-false-positives preset, so classes like G304 are suppressed there and
 # reported only by the standalone scanner CI runs. Leaving it out of `check` meant
 # a clean local run could still fail the security-framework job.
-check: fmt lint test test-alloc vuln sec ## Run fmt, lint, test, alloc guards, vuln scan, and gosec (pre-commit checks; mirrors CI)
+check: fmt lint test test-alloc vuln sec verify-mod ## Run fmt, lint, test, alloc guards, vuln scan, gosec, and mod-tidy verification (pre-commit checks; mirrors CI)
+
+verify-mod: ## Verify go.mod/go.sum are tidy and go.work.sum is settled (mirrors CI)
+	go mod tidy
+	git diff --exit-code go.mod go.sum go.work.sum
 
 vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
@@ -106,14 +124,21 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
 
 mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
-	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)"
+	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)" -workers $(MUTATE_WORKERS)
 
 # One gremlins process per package: a single full-repo process with 4 workers
 # exhausted a 4-vCPU/16GB hosted runner ~25 min in (runner shutdown signal).
 # Per-package processes bound memory, let partial results survive an eviction,
-# and the merge prefixes file_name with the package dir (gremlins emits
-# basenames, which are ambiguous repo-wide). scripts/ excluded: gremlins
-# misverdicts that nested package main (wiki/testing.md#mutation-gate).
+# and the merge prefixes file_name with the package dir (gremlins emits paths
+# relative to the package it was pointed at, which are ambiguous repo-wide).
+# scripts/ excluded: gremlins misverdicts that nested package main
+# (wiki/testing.md#mutation-gate).
+#
+# The per-package timeout coefficient is not optional: gremlins derives each
+# mutant's ceiling from a CACHE-SERVED replay of the package's tests, while every
+# mutant run is a cache miss that pays the real suite. Left at the default the
+# ceiling lands under what one mutant costs and every mutant reports TIMED OUT —
+# which this job would publish as a clean score. See scripts/mutatediff/timeout.go.
 mutate-baseline: ## Full-repo mutation baseline, one engine process per package (advisory; consumed by the nightly workflow)
 	@rm -rf .gremlins-reports gremlins-report.json && mkdir -p .gremlins-reports
 	@go list ./... > /dev/null   # fail fast on a broken tree — inside the loop pipeline a go list failure would vanish into sort's exit status
@@ -121,7 +146,10 @@ mutate-baseline: ## Full-repo mutation baseline, one engine process per package 
 		i=$$((i+1)); \
 		echo "== mutating ./$$dir"; \
 		out=".gremlins-reports/$$i-$$(echo "$$dir" | tr / -).json"; \
-		$(GREMLINS_CMD) unleash --workers $(MUTATE_BASELINE_WORKERS) --output "$$out" "./$$dir" \
+		coeff=$$(go run ./scripts/mutatediff -coefficient "./$$dir") \
+			|| { echo "ERROR: coefficient measurement for ./$$dir was canceled or could not run — stopping the baseline"; exit 1; }; \
+		case "$$coeff" in ''|*[!0-9]*) echo "WARN: no coefficient for ./$$dir, falling back to $(MUTATE_FALLBACK_COEFFICIENT)"; coeff=$(MUTATE_FALLBACK_COEFFICIENT);; esac; \
+		$(GREMLINS_CMD) unleash --workers $(MUTATE_BASELINE_WORKERS) --timeout-coefficient "$$coeff" --output "$$out" "./$$dir" \
 			|| echo "WARN: gremlins exited non-zero for ./$$dir (advisory)"; \
 		if [ -f "$$out" ]; then \
 			jq --arg d "$$dir" '.files = ((.files // []) | map(.file_name = ($$d + "/" + .file_name)))' "$$out" > "$$out.tmp" && mv "$$out.tmp" "$$out" \

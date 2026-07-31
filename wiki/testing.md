@@ -327,8 +327,100 @@ and applies this policy to mutants that land on changed lines:
 |---|---|---|
 | `LIVED` | **fail** (exit 1) | A mutant on a line you wrote survived your tests |
 | `NOT COVERED` | warn | Coverage is SonarCloud's gate; no double-gating |
-| `TIMED OUT` | pass | The mutant hung the code and the test timeout noticed |
+| `TIMED OUT` | warn | Indeterminate — see the timeout ceiling below |
 | `KILLED` | pass | |
+
+Additionally, a package for which the engine returns **timeouts and not one
+`KILLED` or `LIVED`** fails the gate outright. That state means nothing was
+tested, and it is what the ceiling arithmetic below exists to prevent.
+
+Each package is dry-run first (mutants enumerated, none executed). If no mutant
+lands on a changed line the package is **skipped and the gate passes** — an
+intended pass-without-running, not a vacuous one. gremlins mutates the whole
+subtree it is pointed at while the gate judges only changed lines, so a one-line
+edit in `./database` would otherwise run 616 mutants to rule on a handful; a
+comment-only edit there costs 3.7s instead. The skip is sound because `judge` and
+the pre-check share one selector (`changedMutants`), so the set skipped is exactly
+the set that would have been discarded.
+
+Knobs (all `?=`, so the environment overrides):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MUTATE_WORKERS` | 2 | Concurrent `go test` processes for `make mutate`. Each is sustained CPU load; drop to 1 to keep a laptop cool. |
+| `MUTATE_BASELINE_WORKERS` | 2 | Same, for the nightly baseline; also bounds peak memory. |
+| `MUTATE_CEILING_FLOOR` | 30s | Minimum per-mutant ceiling (any `time.ParseDuration` string). |
+| `MUTATE_FALLBACK_COEFFICIENT` | 600 | Used only when a package's coefficient cannot be computed. |
+
+### Timeout ceiling
+
+gremlins derives each mutant's wall-clock ceiling as
+`baseline_elapsed × unleash.timeout-coefficient` and enforces it with a hard
+deadline that must cover the mutant's whole `go test` invocation — **compiling
+and linking the mutated binary, then running the suite**. With the engine's
+default coefficient of 3 that ceiling routinely lands below what a single mutant
+costs, and every mutant reports `TIMED OUT` without ever being evaluated.
+
+That status is excluded from both of gremlins' published metrics
+(`efficacy = KILLED/(KILLED+LIVED)`, `coverage = (KILLED+LIVED)/(KILLED+LIVED+NOT COVERED)`),
+so the failure is invisible in the score. The first nightly baseline
+(run `30423362023`) hit it in roughly half the repo's packages —
+`observability` produced 241 timeouts and zero verdicts, `messaging` 219 — and
+published a clean 86.2% efficacy over a run in which 38% of mutants never
+produced a verdict. Because the gate treated `TIMED OUT` as a pass, changes to
+those packages went through it vacuously.
+
+Both entry points therefore compute the coefficient per package and pass
+`--timeout-coefficient`. The arithmetic lives in
+`scripts/mutatediff/timeout.go`; `mutatediff -coefficient <pkg>` prints the
+value so the baseline loop shares one implementation. Retune the minimum with
+`MUTATE_CEILING_FLOOR` (any `time.ParseDuration` string).
+
+**Two timings, not one — this is the whole subtlety.** gremlins' baseline
+command omits `-count=1`, so what it measures is a *cache-served replay* of the
+suite. A mutant edits the source, so its own run is always a cache miss and pays
+the *real* suite. On `./observability` those differ by 70×: 302ms replay versus a
+24.7s suite. The coefficient is therefore
+`ceil((real_suite + build_budget) / cached_replay)` — 148 for that package,
+giving a ~45s ceiling. Scaling a fixed floor by the *suite* instead collapses to
+the engine's default 3 (a 1.03s ceiling) for exactly the packages that need it
+most, which is the trap the first attempt at this fell into.
+
+Further notes for anyone touching it:
+
+- **Use the flag, not the environment variable.** gremlins documents
+  `GREMLINS_UNLEASH_TIMEOUT_COEFFICIENT`, but it is silently ignored:
+  `configuration.Get[T]` does an unchecked `viper.Get(k).(T)`, and viper returns
+  environment values as **strings**, so the assertion for an `int` fails and
+  yields 0 — which the engine reads as unset and replaces with 3. Values in
+  `.gremlins.yaml` are parsed as ints and *do* work; the flag is used because it
+  can vary per package.
+- **Keep the cached measurement passes argv-identical to the engine's.**
+  `-timeout` participates in `go test`'s cache key, so adding it to those passes
+  warms an entry gremlins never reads — leaving its own coverage run a cache miss
+  whose elapsed is the real suite, and multiplying the coefficient by the suite
+  instead of the replay (a 60-minute ceiling on `observability`). `vacuous` cannot
+  catch that, because it only sees ceilings that are too *tight*. The flag goes on
+  the `-count=1` pass only, where caching is already off.
+- **A canceled measurement must not become a number.** `CommandContext` kills the
+  child on Ctrl-C, and a killed process surfaces as `*exec.ExitError` — the same
+  error a red suite produces, which the measurement deliberately tolerates (a red
+  suite is never cached, so its three passes still time correctly). Only
+  `ctx.Err()` separates the two, so `mutatediff -coefficient` consults it, emits
+  nothing, and exits nonzero; otherwise the generous fallback of 600 would reach
+  stdout, pass the loop's numeric guard, and make an interrupted run
+  indistinguishable from a completed one.
+- **Mutation now costs real time.** Those 90 advisory minutes were cheap because
+  nothing ran. A package's mutation cost is roughly
+  `mutants × (build + suite)`, so a slow suite dominates — `observability`'s
+  single 20s `TestNewProviderEnvironmentAwareBatchTimeout` sets the price for all
+  268 of its mutants. Speeding up the slowest tests is the lever, not raising the
+  ceiling.
+
+A `TIMED OUT` mutant warns rather than passing silently: a mutant that hangs the
+code really is caught by the suite, so it should not block a push, but it carries
+no verdict and must stay visible. A run with outstanding timeouts does not report
+"all mutants killed".
 
 Excluded from scope: `_test.go` files, `testdata/`, `tools/` (separate Go
 module), and `scripts/` (the wrapper itself — see the operational notes).

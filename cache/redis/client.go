@@ -3,6 +3,9 @@ package redis
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -20,11 +23,12 @@ local key = KEYS[1]
 local expected = ARGV[1]
 local new_value = ARGV[2]
 local ttl_ms = tonumber(ARGV[3])
+local mode = ARGV[4]
 
 local current = redis.call('GET', key)
 
--- If expected is empty string, only set if key doesn't exist (SET NX semantics)
-if expected == "" then
+-- Acquire-if-absent mode: only set if key doesn't exist (SET NX semantics)
+if mode == "nx" then
 	if current == false then
 		if ttl_ms == 0 then
 			redis.call('SET', key, new_value)
@@ -48,6 +52,34 @@ end
 
 return 0
 `
+
+// readServerInfo is a seam: tests override it to drive the version floor.
+var readServerInfo = func(ctx context.Context, c *redis.Client) (string, error) {
+	return c.Info(ctx, "server").Result()
+}
+
+// redisVersionTooOld reports whether info advertises a Redis older than 7.0, along with the
+// version string it found. An absent or unparseable redis_version: line reports false — the
+// floor check is best-effort.
+func redisVersionTooOld(info string) (tooOld bool, version string) {
+	for _, line := range strings.Split(info, "\n") {
+		rest, found := strings.CutPrefix(strings.TrimSpace(line), "redis_version:")
+		if !found {
+			continue
+		}
+
+		version = strings.TrimSpace(rest)
+		major, _, _ := strings.Cut(version, ".")
+		parsed, err := strconv.Atoi(major)
+		if err != nil {
+			return false, version
+		}
+
+		return parsed < 7, version
+	}
+
+	return false, ""
+}
 
 // Client implements the cache.Cache interface using Redis as the backend.
 type Client struct {
@@ -93,6 +125,14 @@ func NewClient(cfg *Config) (*Client, error) {
 	if err := client.Ping(ctx).Err(); err != nil {
 		client.Close()
 		return nil, cache.NewConnectionError("ping", cfg.Address(), err)
+	}
+
+	if info, infoErr := readServerInfo(ctx, client); infoErr == nil {
+		if tooOld, version := redisVersionTooOld(info); tooOld {
+			client.Close()
+			return nil, cache.NewConnectionError("version", cfg.Address(),
+				fmt.Errorf("redis 7.0+ required (GetOrSet uses SET NX GET); server reports %s", version))
+		}
 	}
 
 	return &Client{
@@ -185,7 +225,7 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 //   - wasSet=false: Value already existed (duplicate detected)
 //   - storedValue: Always returns the value in cache (current or newly set)
 //
-// Uses Redis SET NX GET for atomicity.
+// Uses Redis SET NX GET for atomicity, which requires Redis 7.0+.
 func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl time.Duration) (storedValue []byte, wasSet bool, err error) {
 	if c.closed.Load() {
 		return nil, false, cache.ErrClosed
@@ -228,7 +268,9 @@ func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl tim
 //   - success=true: Value was updated (comparison matched)
 //   - success=false: Value was NOT updated (comparison failed)
 //
-// Special case: expectedValue=nil means "set only if key doesn't exist" (acquire lock).
+// expectedValue=nil means "set only if key doesn't exist" (acquire lock). Any non-nil
+// expectedValue — including an empty slice — is a real compare-and-swap, so an absent key
+// fails the comparison.
 // Uses Lua script for atomicity.
 func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, newValue []byte, ttl time.Duration) (bool, error) {
 	if c.closed.Load() {
@@ -239,16 +281,20 @@ func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, n
 		return false, cache.ErrInvalidTTL
 	}
 
-	// Convert nil expectedValue to empty string for Lua script
+	// nil means "acquire if absent"; any non-nil value (including empty) is a real compare —
+	// the two cannot be distinguished once expected is a string.
+	mode := "cas"
 	expected := ""
-	if expectedValue != nil {
+	if expectedValue == nil {
+		mode = "nx"
+	} else {
 		expected = string(expectedValue)
 	}
 
 	start := time.Now()
 
 	// Execute Lua script
-	result, err := c.client.Eval(ctx, casScript, []string{key}, expected, newValue, ttl.Milliseconds()).Int()
+	result, err := c.client.Eval(ctx, casScript, []string{key}, expected, newValue, ttl.Milliseconds(), mode).Int()
 
 	duration := time.Since(start)
 	tracking.RecordCacheOperation(ctx, tracking.OpCompareAndSet, duration, false, err, c.namespace(ctx))

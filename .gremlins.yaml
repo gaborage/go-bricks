@@ -1,3 +1,10 @@
 unleash:
   workers: 4
+  # Fallback for a bare `gremlins unleash`. Both `make mutate` and
+  # `make mutate-baseline` override this per package with
+  # --timeout-coefficient, because a fixed coefficient multiplies a per-package
+  # baseline: 3 leaves any package whose coverage run takes under ~1.3s with a
+  # mutant ceiling below its own build cost, and every mutant then reports
+  # TIMED OUT. See scripts/mutatediff/timeout.go and
+  # wiki/testing.md#mutation-gate.
   timeout-coefficient: 3

@@ -8,7 +8,7 @@ import (
 
 func TestRunNoOpDiffExitsCleanWithoutEngine(t *testing.T) {
 	var buf bytes.Buffer
-	if got := run("false", "HEAD", &buf); got != 0 {
+	if got := run(t.Context(), "false", "HEAD", 0, &buf); got != 0 {
 		t.Fatalf("run = %d, want 0; output: %s", got, buf.String())
 	}
 	if !strings.Contains(buf.String(), "no mutatable changes") {
@@ -16,9 +16,65 @@ func TestRunNoOpDiffExitsCleanWithoutEngine(t *testing.T) {
 	}
 }
 
+func TestReportWarningsDistinguishesTimeoutsFromUncovered(t *testing.T) {
+	var buf bytes.Buffer
+	got := reportWarnings([]mutantVerdict{
+		{File: "observability/logs.go", Line: 27, Operator: "CONDITIONALS_NEGATION", Status: statusTimedOut},
+		{File: "observability/logs.go", Line: 33, Operator: "ARITHMETIC_BASE", Status: statusNotCovered},
+		{File: "messaging/client.go", Line: 91, Operator: "CONDITIONALS_BOUNDARY", Status: statusTimedOut},
+	}, &buf)
+	if got != 2 {
+		t.Errorf("timedOut = %d, want 2", got)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "WARN timed out") || !strings.Contains(out, "indeterminate") {
+		t.Errorf("timeouts must read as indeterminate, got: %s", out)
+	}
+	if !strings.Contains(out, "WARN not covered: observability/logs.go:33") {
+		t.Errorf("uncovered mutant lost its own message, got: %s", out)
+	}
+}
+
+// TestReportVerdictFailsVacuousBeforeSurvivors pins the ordering: with nothing
+// judged, an empty failure list carries no information, so the vacuous packages
+// must be what the operator is told about.
+func TestReportVerdictFailsVacuousBeforeSurvivors(t *testing.T) {
+	var buf bytes.Buffer
+	code := reportVerdict(nil,
+		[]mutantVerdict{{File: "observability/logs.go", Line: 27, Status: statusTimedOut}},
+		[]mutantVerdict{{File: "./observability"}}, &buf)
+	if code != 1 {
+		t.Errorf("reportVerdict = %d, want 1 for a vacuous package", code)
+	}
+	if !strings.Contains(buf.String(), "no verdict for these packages") {
+		t.Errorf("output must name the vacuous packages, got: %s", buf.String())
+	}
+	if strings.Contains(buf.String(), "all mutants on changed lines killed") {
+		t.Error("must not claim a clean sweep")
+	}
+}
+
+func TestReportVerdictCleanSweepOnlyWhenFullyJudged(t *testing.T) {
+	var clean, withTimeout bytes.Buffer
+	if code := reportVerdict(nil, nil, nil, &clean); code != 0 {
+		t.Errorf("reportVerdict = %d, want 0", code)
+	}
+	if !strings.Contains(clean.String(), "all mutants on changed lines killed") {
+		t.Errorf("want the clean-sweep line, got: %s", clean.String())
+	}
+	// A timeout without a vacuous package still passes, but not as a clean sweep.
+	code := reportVerdict(nil, []mutantVerdict{{File: "a.go", Line: 1, Status: statusTimedOut}}, nil, &withTimeout)
+	if code != 0 {
+		t.Errorf("reportVerdict = %d, want 0 (a timeout alone must not block)", code)
+	}
+	if strings.Contains(withTimeout.String(), "all mutants on changed lines killed") {
+		t.Errorf("must not claim a clean sweep with a timeout outstanding, got: %s", withTimeout.String())
+	}
+}
+
 func TestRunBlankEngineFailsFast(t *testing.T) {
 	var buf bytes.Buffer
-	if got := run("   ", "HEAD", &buf); got != 2 {
+	if got := run(t.Context(), "   ", "HEAD", 0, &buf); got != 2 {
 		t.Fatalf("run = %d, want 2 for whitespace-only engine", got)
 	}
 }

@@ -43,9 +43,13 @@ unconditionally-trusted XFF) is the anti-pattern this middleware does not repeat
 never derived from source IP or `X-Forwarded-For` inside this middleware — see Consequences
 for what it rests on instead.
 
-**`Require` semantics.** `Require=true` rejects (401, `NewUnauthorizedError`) only when
-*both* `-Subject` and `-Serial-Number` are absent (`errNoForwardedCert`) — the sole
-rejecting condition. A present, ALB-verified Subject whose `-Leaf` failed to decode is
+**`Require` semantics.** `Require=true` rejects (401, `NewUnauthorizedError`) on two
+conditions: *both* `-Subject` and `-Serial-Number` absent (`errNoForwardedCert`), or any
+single `X-Amzn-Mtls-Clientcert-*` header carrying more than one value
+(`errDuplicateForwardedHeader`). The duplicate check runs first, so a duplicated `-Issuer`
+rejects even alongside a valid Subject and Serial-Number — a header the ALB sets exactly
+once arriving twice means a client-supplied copy got through, and first-value-wins would
+let the attacker pick. A present, ALB-verified Subject whose `-Leaf` failed to decode is
 **not** absence: the request passes with `Leaf == nil` plus a WARN naming the parse failure
 and the encoded Leaf's byte length (never header content). `Require` without `Enabled` is a
 config-validation error (`server.forwardedclientcert.require`) — rejecting on an identity
