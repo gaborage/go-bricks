@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -102,6 +104,57 @@ func TestCoefficientForReportsBothTimings(t *testing.T) {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("log %q missing %q", buf.String(), want)
 		}
+	}
+}
+
+// TestMeasurementFailureSeparatesCancellationFromRedTests pins a distinction the
+// error type cannot make on its own: CommandContext kills the child on cancel,
+// and a killed process surfaces as *exec.ExitError — exactly what a red suite
+// produces, which measureSuite deliberately tolerates. Tolerating the kill too
+// would time a process shot partway through and pass that off as the suite.
+func TestMeasurementFailureSeparatesCancellationFromRedTests(t *testing.T) {
+	killed := &exec.ExitError{ProcessState: &os.ProcessState{}}
+	if err := measurementFailure(nil, killed); err != nil {
+		t.Errorf("a red suite must still yield a timing, got %v", err)
+	}
+	if err := measurementFailure(context.Canceled, killed); !errors.Is(err, context.Canceled) {
+		t.Errorf("measurementFailure(canceled, ExitError) = %v, want context.Canceled", err)
+	}
+	// Cancellation racing a clean exit is still cancellation.
+	if err := measurementFailure(context.Canceled, nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("measurementFailure(canceled, nil) = %v, want context.Canceled", err)
+	}
+	if err := measurementFailure(nil, nil); err != nil {
+		t.Errorf("measurementFailure(nil, nil) = %v, want nil", err)
+	}
+	notStarted := errors.New(`exec: "go": executable file not found in $PATH`)
+	if err := measurementFailure(nil, notStarted); !errors.Is(err, notStarted) {
+		t.Errorf("a toolchain that cannot start must propagate, got %v", err)
+	}
+}
+
+// TestPrintCoefficientEmitsNothingWhenCanceled pins the other half. coefficientFor
+// falls back to the maximum on any measurement failure, which is right for a
+// genuine one and wrong for Ctrl-C: 600 is numeric, so the Makefile's guard would
+// accept it and an interrupted measurement would be indistinguishable from a
+// package that legitimately needs a 600x ceiling.
+func TestPrintCoefficientEmitsNothingWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var stdout, stderr bytes.Buffer
+	measure := func(ctx context.Context, _ string) (suiteTiming, error) {
+		return suiteTiming{}, ctx.Err()
+	}
+	if code := printCoefficient(ctx, "./observability", measure, 30*time.Second, &stdout, &stderr); code == 0 {
+		t.Errorf("printCoefficient = 0 on a canceled run, want nonzero")
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "" {
+		t.Errorf("stdout = %q, want empty — the Makefile's numeric guard would accept that as a real coefficient", got)
+	}
+	// Not just "canceled": coefficientFor's fallback WARN already carries that
+	// word, so matching it would pass even with the guard removed.
+	if !strings.Contains(stderr.String(), "no coefficient emitted") {
+		t.Errorf("stderr = %q, want the cancellation diagnostic", stderr.String())
 	}
 }
 

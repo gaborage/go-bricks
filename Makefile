@@ -138,7 +138,8 @@ mutate-baseline: ## Full-repo mutation baseline, one engine process per package 
 		i=$$((i+1)); \
 		echo "== mutating ./$$dir"; \
 		out=".gremlins-reports/$$i-$$(echo "$$dir" | tr / -).json"; \
-		coeff=$$(go run ./scripts/mutatediff -coefficient "./$$dir"); \
+		coeff=$$(go run ./scripts/mutatediff -coefficient "./$$dir") \
+			|| { echo "ERROR: coefficient measurement for ./$$dir was canceled or could not run — stopping the baseline"; exit 1; }; \
 		case "$$coeff" in ''|*[!0-9]*) echo "WARN: no coefficient for ./$$dir, falling back to $(MUTATE_FALLBACK_COEFFICIENT)"; coeff=$(MUTATE_FALLBACK_COEFFICIENT);; esac; \
 		$(GREMLINS_CMD) unleash --workers $(MUTATE_BASELINE_WORKERS) --timeout-coefficient "$$coeff" --output "$$out" "./$$dir" \
 			|| echo "WARN: gremlins exited non-zero for ./$$dir (advisory)"; \

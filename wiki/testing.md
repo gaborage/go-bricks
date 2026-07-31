@@ -386,7 +386,7 @@ giving a ~45s ceiling. Scaling a fixed floor by the *suite* instead collapses to
 the engine's default 3 (a 1.03s ceiling) for exactly the packages that need it
 most, which is the trap the first attempt at this fell into.
 
-Two further notes for anyone touching it:
+Further notes for anyone touching it:
 
 - **Use the flag, not the environment variable.** gremlins documents
   `GREMLINS_UNLEASH_TIMEOUT_COEFFICIENT`, but it is silently ignored:
@@ -402,6 +402,14 @@ Two further notes for anyone touching it:
   instead of the replay (a 60-minute ceiling on `observability`). `vacuous` cannot
   catch that, because it only sees ceilings that are too *tight*. The flag goes on
   the `-count=1` pass only, where caching is already off.
+- **A canceled measurement must not become a number.** `CommandContext` kills the
+  child on Ctrl-C, and a killed process surfaces as `*exec.ExitError` — the same
+  error a red suite produces, which the measurement deliberately tolerates (a red
+  suite is never cached, so its three passes still time correctly). Only
+  `ctx.Err()` separates the two, so `mutatediff -coefficient` consults it, emits
+  nothing, and exits nonzero; otherwise the generous fallback of 600 would reach
+  stdout, pass the loop's numeric guard, and make an interrupted run
+  indistinguishable from a completed one.
 - **Mutation now costs real time.** Those 90 advisory minutes were cheap because
   nothing ran. A package's mutation cost is roughly
   `mutants × (build + suite)`, so a slow suite dominates — `observability`'s

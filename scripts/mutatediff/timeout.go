@@ -141,6 +141,27 @@ func coverageArgs(profile, pkg string, forceRun bool) []string {
 	return append(args, "-cover", "-coverprofile", profile, strings.TrimSuffix(pkg, "/")+"/...")
 }
 
+// measurementFailure decides whether a measurement pass produced a usable
+// timing. A failing suite does: a red test is never cached, so passes 2 and 3
+// simply cost the same as pass 1, and refusing to measure a package whose tests
+// are broken would only replace a scaled ceiling with the vacuous pass this
+// mechanism exists to prevent.
+//
+// Cancellation does not. CommandContext kills the child on cancel, and a killed
+// process surfaces as *exec.ExitError too — the same type a red suite produces,
+// so ctxErr is the only thing that separates them. Accepting it would time a
+// process that was shot partway through and pass that fraction off as the suite.
+func measurementFailure(ctxErr, runErr error) error {
+	if ctxErr != nil {
+		return ctxErr
+	}
+	var exitErr *exec.ExitError
+	if runErr != nil && !errors.As(runErr, &exitErr) {
+		return runErr
+	}
+	return nil
+}
+
 // measureSuite times pkg's tests using gremlins' own baseline command
 // (internal/coverage/coverage.go: `go test -cover -coverprofile <file>
 // ./pkg/...`, recursive) in three passes:
@@ -167,14 +188,13 @@ func measureSuite(ctx context.Context, pkg string) (suiteTiming, error) {
 	_ = profile.Close()
 	defer func() { _ = os.Remove(profile.Name()) }()
 
-	var exitErr *exec.ExitError
 	run := func(stage string, forceRun bool) (time.Duration, error) {
 		args := coverageArgs(profile.Name(), pkg, forceRun)
 		start := time.Now()
 		// #nosec G204 -- pkg comes from `git diff` paths resolved to package dirs, not user input
 		runErr := exec.CommandContext(ctx, "go", args...).Run()
-		if runErr != nil && !errors.As(runErr, &exitErr) {
-			return 0, fmt.Errorf("%s %s: %w", stage, pkg, runErr)
+		if failErr := measurementFailure(ctx.Err(), runErr); failErr != nil {
+			return 0, fmt.Errorf("%s %s: %w", stage, pkg, failErr)
 		}
 		return time.Since(start), nil
 	}
@@ -196,8 +216,19 @@ func measureSuite(ctx context.Context, pkg string) (suiteTiming, error) {
 // baseline loop scales the ceiling through this same code path instead of
 // reimplementing the arithmetic in shell. The number goes to stdout alone;
 // diagnostics go to stderr.
+//
+// A canceled run emits nothing and exits nonzero. coefficientFor falls back to
+// the maximum whenever measurement fails, which is right for a genuine failure
+// and wrong for Ctrl-C: printing it would hand the caller a fabricated number
+// that its numeric guard accepts, making an interrupted measurement
+// indistinguishable from a completed one.
 func printCoefficient(ctx context.Context, pkg string, measure suiteMeasurer, floor time.Duration, stdout, stderr io.Writer) int {
-	fmt.Fprintln(stdout, coefficientFor(ctx, pkg, measure, floor, stderr))
+	coefficient := coefficientFor(ctx, pkg, measure, floor, stderr)
+	if err := ctx.Err(); err != nil {
+		fmt.Fprintf(stderr, "mutatediff: %s measurement canceled (%v) — no coefficient emitted\n", pkg, err)
+		return 1
+	}
+	fmt.Fprintln(stdout, coefficient)
 	return 0
 }
 
