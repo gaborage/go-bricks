@@ -50,6 +50,39 @@ func LoadBytes(file, value string) ([]byte, error) {
 	return data, nil
 }
 
+// LoadSecretBytes is LoadBytes for raw symmetric secrets. Secret material has
+// no detectable shape (no PEM/DER structure), so a mis-filed value cannot be
+// caught by LooksLikeKeyMaterial — instead, NO error on this path ever echoes
+// the configured file value or the underlying path.
+// SECURITY: a transposed secret.file/secret.value must not put key material
+// into a fatal startup log line; strip the path from wrapped OS errors.
+func LoadSecretBytes(file, value string) ([]byte, error) {
+	hasFile := file != ""
+	hasValue := value != ""
+	if !hasFile && !hasValue {
+		return nil, nil
+	}
+	if hasFile {
+		if secretfile.LooksLikeKeyMaterial(file) {
+			return nil, errors.New("file looks like key material, not a path (pass inline material via the value source instead)")
+		}
+		data, err := os.ReadFile(file) // #nosec G304 -- deployment configuration, as in LoadBytes
+		if err != nil {
+			var pe *os.PathError
+			if errors.As(err, &pe) {
+				err = pe.Err // strip the embedded path — it may BE the secret
+			}
+			return nil, fmt.Errorf("secret file unreadable (source elided): %w", err)
+		}
+		return data, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, errors.New("secret value is not valid base64 (value elided)")
+	}
+	return data, nil
+}
+
 // ParseRSAPublicKey parses PKIX DER into an *rsa.PublicKey.
 func ParseRSAPublicKey(der []byte) (*rsa.PublicKey, error) {
 	pub, err := x509.ParsePKIXPublicKey(der)
