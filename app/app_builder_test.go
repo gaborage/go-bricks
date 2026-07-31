@@ -158,7 +158,7 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		// Additive: every default field is preserved AND custom fields appended.
 		got := resolveLoggerFilterConfig(
 			nil,
-			&config.LogConfig{SensitiveFields: []string{"pan", "cvv2", "otp"}},
+			&config.LogConfig{SensitiveFields: []string{"pan", "cvv2", "ssn"}},
 		)
 		require.NotNil(t, got)
 
@@ -170,7 +170,7 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		// Custom fields are appended.
 		assert.Contains(t, got.SensitiveFields, "pan")
 		assert.Contains(t, got.SensitiveFields, "cvv2")
-		assert.Contains(t, got.SensitiveFields, "otp")
+		assert.Contains(t, got.SensitiveFields, "ssn")
 		// Length sanity check.
 		assert.Equal(t, len(defaults)+3, len(got.SensitiveFields))
 	})
@@ -221,12 +221,12 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		// the failure mode the filter is supposed to prevent.
 		got := resolveLoggerFilterConfig(
 			nil,
-			&config.LogConfig{SensitiveFields: []string{"  cvv  ", "\tpan\n"}},
+			&config.LogConfig{SensitiveFields: []string{"  ssn  ", "\tpan\n"}},
 		)
 		require.NotNil(t, got)
-		assert.Contains(t, got.SensitiveFields, "cvv")
+		assert.Contains(t, got.SensitiveFields, "ssn")
 		assert.Contains(t, got.SensitiveFields, "pan")
-		assert.NotContains(t, got.SensitiveFields, "  cvv  ")
+		assert.NotContains(t, got.SensitiveFields, "  ssn  ")
 		assert.NotContains(t, got.SensitiveFields, "\tpan\n")
 	})
 

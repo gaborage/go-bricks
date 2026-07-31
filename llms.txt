@@ -3540,6 +3540,8 @@ const (
 // The framework ships jose.CheckJTIReplay for the jti half: it needs any
 // SET-NX store (jose.ReplayRecorder) — cache.Cache from deps.Cache satisfies it
 // and is already tenant-scoped, so a jti seen on tenant A never blocks tenant B.
+// CheckJTIReplay requires a non-empty claims.Issuer; iss-less token profiles
+// must call jose.CheckJTIReplayInNamespace(reqCtx, c, policy.VerifyKid, claims, maxClaimAge) instead.
 
 func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (ExchangeResponse, server.IAPIError) {
     reqCtx := ctx.RequestContext()

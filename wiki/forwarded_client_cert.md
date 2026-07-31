@@ -14,7 +14,7 @@ it to handlers and other middleware via `server.ForwardedClientCertFromContext`.
 | Key | Env var | Type | Notes |
 |---|---|---|---|
 | `server.forwardedclientcert.enabled` | `SERVER_FORWARDEDCLIENTCERT_ENABLED` | bool | Default `false` — middleware not wired |
-| `server.forwardedclientcert.require` | `SERVER_FORWARDEDCLIENTCERT_REQUIRE` | bool | Default `false` — parse-and-expose only. `true` rejects (401) only when **both** `-Subject` and `-Serial-Number` are absent; a missing or malformed `-Leaf` never rejects when either identity field is present. Requires `enabled: true` (config validation error otherwise). |
+| `server.forwardedclientcert.require` | `SERVER_FORWARDEDCLIENTCERT_REQUIRE` | bool | Default `false` — parse-and-expose only. `true` rejects (401) when **either**: both `-Subject` and `-Serial-Number` are absent, **or** any of the four headers carries more than one value (the duplicate check runs first, so a duplicated `-Issuer` alone rejects even with a valid Subject/Serial-Number). A missing or malformed `-Leaf` never rejects when either identity field is present. Requires `enabled: true` (config validation error otherwise). |
 
 ```yaml
 server:
@@ -40,8 +40,11 @@ error):
 `Leaf` can be `nil` even when the rest of the identity is present — **always nil-check
 before dereferencing it.** A `-Leaf` header that fails to decode (corrupt, oversized, or
 malformed PEM/DER) is never treated as an absent identity: the ALB already verified the
-`Subject` against its trust store, so the request still passes (with `Leaf == nil`); only
-a request missing *both* `-Subject` and `-Serial-Number` is rejected under `Require`.
+`Subject` against its trust store, so the request still passes (with `Leaf == nil`).
+`Require` rejects on exactly two conditions: *both* `-Subject` and `-Serial-Number`
+missing, or any of the four headers carrying more than one value — see **Duplicated
+headers** under [Trust model](#trust-model) for why a duplicate is never trusted and why
+that check runs first.
 
 ### The encoding trap
 
@@ -108,6 +111,15 @@ adding one would be v2 scope creep, not a v1 gap.
 If AWS ever publishes a sanitization guarantee for `X-Amzn-Mtls-*`, this section and
 [ADR-043](adr_043_forwarded_client_cert.md)'s Consequences should be updated to cite it and
 the trust model re-widened accordingly.
+
+**Duplicated headers.** A request carrying more than one value for any single
+`X-Amzn-Mtls-Clientcert-*` header is treated as absent identity and logged (fail closed
+under `Require`, fail open without it — never first-value-wins). This check runs *before*
+the `-Subject`/`-Serial-Number` absence check, so under `Require` a duplicated header alone
+rejects the request even when Subject and Serial-Number are both present and valid — e.g. a
+duplicated `-Issuer` with an otherwise-clean identity still returns 401. In the documented
+posture the ALB sets each header exactly once, so a duplicate means a client-supplied copy
+got through and the deployment posture above needs attention.
 
 ## Probe exemption
 
