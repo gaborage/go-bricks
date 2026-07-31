@@ -40,8 +40,11 @@ error):
 `Leaf` can be `nil` even when the rest of the identity is present — **always nil-check
 before dereferencing it.** A `-Leaf` header that fails to decode (corrupt, oversized, or
 malformed PEM/DER) is never treated as an absent identity: the ALB already verified the
-`Subject` against its trust store, so the request still passes (with `Leaf == nil`); only
-a request missing *both* `-Subject` and `-Serial-Number` is rejected under `Require`.
+`Subject` against its trust store, so the request still passes (with `Leaf == nil`).
+`Require` rejects on exactly two conditions: *both* `-Subject` and `-Serial-Number`
+missing, or any of the four headers carrying more than one value — see **Duplicated
+headers** under [Trust model](#trust-model) for why a duplicate is never trusted and why
+that check runs first.
 
 ### The encoding trap
 

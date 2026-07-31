@@ -36,9 +36,9 @@ const maxForwardedLeafBytes = 64 * 1024
 
 // errNoForwardedCert indicates the request carried neither the -Subject nor
 // the -Serial-Number verify-mode header — i.e. no ALB-verified identity at
-// all. This is the only condition server.forwardedclientcert.require rejects
-// on; a present Subject whose -Leaf failed to decode is NOT this error (see
-// parseForwardedClientCert).
+// all. With errDuplicateForwardedHeader below, it is one of the two conditions
+// server.forwardedclientcert.require rejects on; a present Subject whose -Leaf
+// failed to decode is NOT this error (see parseForwardedClientCert).
 var errNoForwardedCert = errors.New("forwarded client certificate not present")
 
 // errDuplicateForwardedHeader indicates a request carried more than one value
