@@ -145,7 +145,7 @@ func TestPrintCoefficientEmitsNothingWhenCanceled(t *testing.T) {
 	measure := func(ctx context.Context, _ string) (suiteTiming, error) {
 		return suiteTiming{}, ctx.Err()
 	}
-	if code := printCoefficient(ctx, "./observability", measure, 30*time.Second, &stdout, &stderr); code == 0 {
+	if printCoefficient(ctx, "./observability", measure, 30*time.Second, &stdout, &stderr) == 0 {
 		t.Errorf("printCoefficient = 0 on a canceled run, want nonzero")
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "" {
