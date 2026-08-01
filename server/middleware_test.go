@@ -731,6 +731,15 @@ func TestForwardedClientCertRequireWithoutEnabledFailsClosed(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, code, "health probes must stay exempt when require implies registration")
 	})
+
+	t.Run("ready_probe_still_bypasses", func(t *testing.T) {
+		e := newTenantTestEcho()
+		SetupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath)
+
+		code, _ := forwardedCertProbe(e, testReadyPath, false)
+
+		assert.Equal(t, http.StatusOK, code, "ready probes must stay exempt when require implies registration")
+	})
 }
 
 // TestForwardedClientCertDisabledStaysDisabled pins the all-zero posture: the
