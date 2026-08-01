@@ -155,11 +155,19 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 // shared call, so a test double that calls t.Fatal or require.* inside the setup path hangs
 // every waiter. Use t.Errorf and return, as the repo's httptest handlers do.
 func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declarations) error {
+	// Nil declarations would nil-deref in Hash() below — on the caller's goroutine, outside the
+	// closure's recover. app/messaging_setup.go passes its argument through unguarded, so reject
+	// it here rather than relying on every caller to check.
+	if decls == nil {
+		return fmt.Errorf("messaging: nil declarations for key %q", key)
+	}
+	declHash := decls.Hash()
+
 	// Fast path: an already-replayed key needs no setup pass, so it must not depend on the
 	// caller's context at all. Mirrors resourcepool.GetOrCreate's getExisting-before-DoChan.
 	// Without it every warm messaging resolution allocates a channel and spawns a goroutine,
 	// and a caller whose budget is already spent fails on work that would have been a no-op.
-	if m.consumersReplayed(key, decls.Hash()) {
+	if m.consumersReplayed(key, declHash) {
 		return nil
 	}
 
@@ -175,7 +183,7 @@ func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declar
 				err = fmt.Errorf("messaging: panic during consumer setup for key %q: %v", key, r)
 			}
 		}()
-		return nil, m.ensureConsumersInternal(ctx, key, decls)
+		return nil, m.ensureConsumersInternal(ctx, key, decls, declHash)
 	})
 
 	select {
@@ -190,13 +198,12 @@ func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declar
 	}
 }
 
-// ensureConsumersInternal performs the actual consumer setup
-func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls *Declarations) error {
+// ensureConsumersInternal performs the actual consumer setup. declHash is computed once by
+// EnsureConsumers and threaded through, so the fast path and this path provably compare the
+// same value and the declarations are walked once per setup rather than twice.
+func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls *Declarations, declHash uint64) error {
 	m.consMu.Lock()
 	defer m.consMu.Unlock()
-
-	// Compute hash of incoming declarations for idempotency check
-	declHash := decls.Hash()
 
 	// Check if we've already replayed these exact declarations
 	if existingHash, exists := m.replayedHashs[key]; exists {

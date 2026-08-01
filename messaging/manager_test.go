@@ -812,6 +812,17 @@ func TestNewMessagingManagerDefaultFactoryForwardsReconnectOptions(t *testing.T)
 	assert.Equal(t, 11*time.Second, client.resendDelay)
 }
 
+// newSetupDeclarations builds the exchange/queue/binding/consumer set the consumer-setup tests
+// share, so a fixture change lands in one place instead of three.
+func newSetupDeclarations() *Declarations {
+	decls := NewDeclarations()
+	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
+	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
+	decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testQueue})
+	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
+	return decls
+}
+
 // consumerSetupHarness holds one consumer-setup pass in flight so a test can observe how another
 // caller behaves while the shared pass is blocked. The client factory parks until unblock is
 // called; started closes on the first factory call, so a test can be sure the NEXT caller is a
@@ -855,16 +866,10 @@ func newConsumerSetupHarness(t *testing.T) *consumerSetupHarness {
 	// Unblock BEFORE Close: a blocked setup pass holds consMu, and Close takes it.
 	t.Cleanup(func() { unblock(); _ = manager.Close() })
 
-	decls := NewDeclarations()
-	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
-	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
-	decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testQueue})
-	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
-
 	return &consumerSetupHarness{
 		manager: manager,
 		client:  client,
-		decls:   decls,
+		decls:   newSetupDeclarations(),
 		started: started,
 		unblock: unblock,
 		calls:   func() int { mu.Lock(); defer mu.Unlock(); return calls },
@@ -966,11 +971,7 @@ func TestEnsureConsumersRecoversPanicFromSetup(t *testing.T) {
 	)
 	defer func() { _ = manager.Close() }()
 
-	decls := NewDeclarations()
-	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
-	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
-	decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testQueue})
-	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
+	decls := newSetupDeclarations()
 
 	err := manager.EnsureConsumers(context.Background(), testTenantID, decls)
 	require.Error(t, err, "a panicking setup must surface as an error, not escape the process")
@@ -1010,11 +1011,7 @@ func TestEnsureConsumersWarmKeySkipsSetupOnDeadContext(t *testing.T) {
 	)
 	defer func() { _ = manager.Close() }()
 
-	decls := NewDeclarations()
-	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
-	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
-	decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testQueue})
-	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
+	decls := newSetupDeclarations()
 
 	require.NoError(t, manager.EnsureConsumers(context.Background(), testTenantID, decls))
 	warmCalls := callCount()
@@ -1025,4 +1022,35 @@ func TestEnsureConsumersWarmKeySkipsSetupOnDeadContext(t *testing.T) {
 	require.NoError(t, manager.EnsureConsumers(dead, testTenantID, decls),
 		"a warm key must short-circuit before the select, so a spent caller budget is irrelevant")
 	assert.Equal(t, warmCalls, callCount(), "the warm path must not run another setup pass")
+}
+
+// TestEnsureConsumersRejectsNilDeclarations pins the nil guard at the boundary. The hash is
+// computed on the caller's goroutine, before and outside the closure's recover, so a nil
+// Declarations would nil-deref the caller rather than surface as an error — and
+// app/messaging_setup.go passes its argument through unguarded.
+func TestEnsureConsumersRejectsNilDeclarations(t *testing.T) {
+	log := logger.New("error", false)
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return &stubAMQPClient{}
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	err := manager.EnsureConsumers(context.Background(), testTenantID, nil)
+	require.Error(t, err, "nil declarations must be rejected, not panic on the caller's goroutine")
+	require.ErrorContains(t, err, "nil declarations")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 0, calls, "a rejected call must not reach the client factory")
 }
