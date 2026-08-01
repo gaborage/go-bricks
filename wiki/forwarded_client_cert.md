@@ -23,6 +23,12 @@ server:
     require: true
 ```
 
+`require: true` registers the middleware even if `enabled` was left `false`, emitting a
+startup WARN that names both keys — otherwise a config assembled in Go and passed to
+`app.NewWithConfig` (which skips `config.Validate`) would serve every request
+unauthenticated while asserting the opposite. On the YAML path `config.Validate` still
+rejects the combination outright, so the WARN only ever appears for programmatic configs.
+
 ## What gets parsed
 
 AWS ALB verify mode forwards these headers (passthrough mode's single

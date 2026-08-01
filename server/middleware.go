@@ -176,8 +176,19 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 	// rejected request must leave a WARN trail; see
 	// logForwardedClientCertRejection). Skips health/ready probes: ALB health
 	// checks present no client certificate.
-	if cfg.Server.ForwardedClientCert.Enabled {
-		e.Use(forwardedClientCertMiddlewareEcho(cfg.Server.ForwardedClientCert, probeSkipper, log))
+	//
+	// Require implies registration: honoring Enabled alone would turn
+	// require=true into a silent no-op on config paths that skip
+	// config.Validate (app.NewWithConfig), serving every request unauthenticated
+	// while the config asserts the opposite.
+	fcc := cfg.Server.ForwardedClientCert
+	if fcc.Enabled || fcc.Require {
+		if fcc.Require && !fcc.Enabled {
+			log.Warn().Msg("server: forwardedclientcert.require=true with enabled=false — " +
+				"require implies the middleware; enabling it (config.Validate rejects this combination, " +
+				"but this config path bypassed validation). Set enabled=true explicitly.")
+		}
+		e.Use(forwardedClientCertMiddlewareEcho(fcc, probeSkipper, log))
 	}
 }
 

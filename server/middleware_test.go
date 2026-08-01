@@ -669,4 +669,137 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+// forwardedCertRequireWarnNeedle is the distinguishing fragment of the startup
+// WARN that setupIdentityMiddlewares emits when require implies registration.
+const forwardedCertRequireWarnNeedle = "forwardedclientcert.require=true with enabled=false"
+
+// newForwardedCertCfg builds a minimal SetupMiddlewares config carrying the
+// given forwarded-client-cert posture.
+func newForwardedCertCfg(enabled, requireIdentity bool) *config.Config {
+	return &config.Config{
+		App: config.AppConfig{Rate: config.RateConfig{Limit: 100}},
+		Server: config.ServerConfig{
+			Timeout:             config.TimeoutConfig{Middleware: 30 * time.Second},
+			ForwardedClientCert: config.ForwardedClientCertConfig{Enabled: enabled, Require: requireIdentity},
+		},
+	}
+}
+
+// forwardedCertProbe drives one request through e and reports the status code
+// plus whether the middleware exposed an identity on the request context.
+func forwardedCertProbe(e *echo.Echo, path string, withCertHeaders bool) (code int, sawIdentity bool) {
+	e.GET(path, func(c *echo.Context) error {
+		_, sawIdentity = ForwardedClientCertFromContext(c.Request().Context())
+		return c.String(http.StatusOK, "ok")
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, http.NoBody)
+	if withCertHeaders {
+		req.Header.Set(headerClientCertSubject, testForwardedCertSubject)
+		req.Header.Set(headerClientCertSerialNumber, testForwardedCertSerial)
+	}
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+	return rec.Code, sawIdentity
+}
+
+// TestForwardedClientCertRequireWithoutEnabledFailsClosed is the regression pin
+// for the app.NewWithConfig bypass: that path never calls config.Validate, so a
+// programmatic config with Require set and Enabled left false used to register
+// no middleware at all and serve every request unauthenticated. Require now
+// implies registration, so the request is rejected.
+func TestForwardedClientCertRequireWithoutEnabledFailsClosed(t *testing.T) {
+	t.Run("unauthenticated_request_is_rejected", func(t *testing.T) {
+		e := newTenantTestEcho()
+		SetupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath)
+
+		code, sawIdentity := forwardedCertProbe(e, "/check", false)
+
+		assert.Equal(t, http.StatusUnauthorized, code,
+			"require=true must fail closed even though enabled was left false")
+		assert.False(t, sawIdentity, "the handler must never run for a rejected request")
+	})
+
+	// The probe skipper is passed through unchanged in the require-implied case:
+	// ALB health checks present no client certificate, so requiring identity must
+	// never take the target group down.
+	t.Run("health_probe_still_bypasses", func(t *testing.T) {
+		e := newTenantTestEcho()
+		SetupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath)
+
+		code, _ := forwardedCertProbe(e, testHealthPath, false)
+
+		assert.Equal(t, http.StatusOK, code, "health probes must stay exempt when require implies registration")
+	})
+
+	t.Run("ready_probe_still_bypasses", func(t *testing.T) {
+		e := newTenantTestEcho()
+		SetupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(false, true), true, testHealthPath, testReadyPath)
+
+		code, _ := forwardedCertProbe(e, testReadyPath, false)
+
+		assert.Equal(t, http.StatusOK, code, "ready probes must stay exempt when require implies registration")
+	})
+}
+
+// TestForwardedClientCertDisabledStaysDisabled pins the all-zero posture: the
+// middleware must remain unwired, so the accessor reports absent even when a
+// caller sends the headers.
+func TestForwardedClientCertDisabledStaysDisabled(t *testing.T) {
+	capturer := &capturingLogger{}
+	e := newTenantTestEcho()
+	SetupMiddlewares(e, capturer, newForwardedCertCfg(false, false), true, testHealthPath, testReadyPath)
+	assert.NotContains(t, strings.Join(capturer.warns, "\n"), forwardedCertRequireWarnNeedle,
+		"the all-zero posture must not warn")
+
+	code, sawIdentity := forwardedCertProbe(e, "/check", true)
+
+	assert.Equal(t, http.StatusOK, code)
+	assert.False(t, sawIdentity, "neither flag set — the middleware must never be registered")
+}
+
+// TestForwardedClientCertEnabledWithoutRequireStillRegisters guards the widened
+// condition against collapsing to require-only: enabled alone must keep wiring
+// the parse-and-expose middleware.
+func TestForwardedClientCertEnabledWithoutRequireStillRegisters(t *testing.T) {
+	e := newTenantTestEcho()
+	SetupMiddlewares(e, &capturingLogger{}, newForwardedCertCfg(true, false), true, testHealthPath, testReadyPath)
+
+	code, sawIdentity := forwardedCertProbe(e, "/check", true)
+
+	assert.Equal(t, http.StatusOK, code, "require=false never rejects")
+	assert.True(t, sawIdentity, "enabled=true alone must still register the middleware")
+}
+
+// TestForwardedClientCertRequireImpliedWarn pins the startup WARN to exactly the
+// incoherent combination — a coherent require+enabled config must stay silent.
+func TestForwardedClientCertRequireImpliedWarn(t *testing.T) {
+	tests := []struct {
+		name     string
+		enabled  bool
+		wantWarn bool
+	}{
+		{name: "require_without_enabled_warns", enabled: false, wantWarn: true},
+		{name: "require_with_enabled_is_silent", enabled: true, wantWarn: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			capturer := &capturingLogger{}
+			SetupMiddlewares(newTenantTestEcho(), capturer, newForwardedCertCfg(tc.enabled, true),
+				true, testHealthPath, testReadyPath)
+
+			joined := strings.Join(capturer.warns, "\n")
+			if tc.wantWarn {
+				assert.Contains(t, joined, forwardedCertRequireWarnNeedle)
+				assert.Contains(t, joined, "Set enabled=true explicitly.",
+					"the WARN must name the remedy, not just the symptom")
+			} else {
+				assert.NotContains(t, joined, forwardedCertRequireWarnNeedle,
+					"a coherent require+enabled config must not warn")
+			}
+		})
+	}
+}
+
 // testHeaderResolver validates header resolver properties
