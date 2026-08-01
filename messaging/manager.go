@@ -143,21 +143,67 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 // EnsureConsumers creates and starts consumers for the given key using the provided declarations.
 // This should be called once per key to set up long-lived consumers.
 // Subsequent calls for the same key are idempotent.
+//
+// Concurrent calls for the same key collapse onto one setup pass, but each caller waits on ITS OWN
+// context. DoChan (not Do) is what makes that possible: Do blocks uncancelably, so a caller whose
+// budget was already spent still sat through the full setup — bounded by infraSetupTimeout (45s)
+// while the realistic caller is a lazy first-touch request carrying a ~5s deadline. Giving up does
+// NOT cancel the setup: ensureConsumersInternal runs on a WithoutCancel budget, so it completes and
+// installs the consumers for whoever asks next.
+//
+// One testing caveat: singleflight neither recovers nor forwards a runtime.Goexit from the
+// shared call, so a test double that calls t.Fatal or require.* inside the setup path hangs
+// every waiter. Use t.Errorf and return, as the repo's httptest handlers do.
 func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declarations) error {
-	// Use singleflight to prevent concurrent consumer setup for the same key
-	_, err, _ := m.sfg.Do("consumer:"+key, func() (any, error) {
-		return nil, m.ensureConsumersInternal(ctx, key, decls)
+	// Nil declarations would nil-deref in Hash() below — on the caller's goroutine, outside the
+	// closure's recover. app/messaging_setup.go passes its argument through unguarded, so reject
+	// it here rather than relying on every caller to check.
+	if decls == nil {
+		return fmt.Errorf("messaging: nil declarations for key %q", key)
+	}
+	declHash := decls.Hash()
+
+	// Fast path: an already-replayed key needs no setup pass, so it must not depend on the
+	// caller's context at all. Mirrors resourcepool.GetOrCreate's getExisting-before-DoChan.
+	// Without it every warm messaging resolution allocates a channel and spawns a goroutine,
+	// and a caller whose budget is already spent fails on work that would have been a no-op.
+	if m.consumersReplayed(key, declHash) {
+		return nil
+	}
+
+	// Singleflight prevents concurrent consumer setup for the same key.
+	ch := m.sfg.DoChan("consumer:"+key, func() (v any, err error) {
+		// A panic must not escape through DoChan: x/sync re-panics on a NEW goroutine once any
+		// caller used DoChan (`go panic(e)` in doCall), which no recover — including Echo's
+		// middleware.Recover — can catch, so one tenant's bad broker config would kill the
+		// process instead of failing one request. Converting it here restores the pre-DoChan
+		// blast radius and improves on it: collapsed callers get an error, not a re-raised panic.
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("messaging: panic during consumer setup for key %q: %v", key, r)
+			}
+		}()
+		return nil, m.ensureConsumersInternal(ctx, key, decls, declHash)
 	})
-	return err
+
+	select {
+	case res := <-ch:
+		return res.Err
+	case <-ctx.Done():
+		// Nothing to settle on the way out: unlike resourcepool.GetOrCreate a collapsed caller here
+		// holds no lease and receives no handle, so there is no seed to hand back (no
+		// releaseAbandoned analog), and singleflight's result channel is buffered (capacity 1) so
+		// the abandoned send never blocks.
+		return fmt.Errorf("messaging: caller context ended while consumer setup for key %q was in flight (setup is not canceled): %w", key, ctx.Err())
+	}
 }
 
-// ensureConsumersInternal performs the actual consumer setup
-func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls *Declarations) error {
+// ensureConsumersInternal performs the actual consumer setup. declHash is computed once by
+// EnsureConsumers and threaded through, so the fast path and this path provably compare the
+// same value and the declarations are walked once per setup rather than twice.
+func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls *Declarations, declHash uint64) error {
 	m.consMu.Lock()
 	defer m.consMu.Unlock()
-
-	// Compute hash of incoming declarations for idempotency check
-	declHash := decls.Hash()
 
 	// Check if we've already replayed these exact declarations
 	if existingHash, exists := m.replayedHashs[key]; exists {
@@ -241,6 +287,25 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		Msg("Consumers started for key")
 
 	return nil
+}
+
+// consumersReplayed reports whether key's consumers were already set up from exactly these
+// declarations — i.e. whether ensureConsumersInternal would return nil without doing any work.
+//
+// TryRLock, not RLock: ensureConsumersInternal holds consMu in WRITE mode for its whole pass,
+// including the broker dial, and consMu is manager-wide rather than per-key. A blocking RLock here
+// would therefore park any caller — even one for an unrelated key — behind an in-flight setup,
+// before the select that is supposed to honor its context, reinstating the very uncancelable wait
+// this path exists to remove and widening it across tenants. Failing to acquire only costs the
+// fast path: the caller falls through to DoChan, where ensureConsumersInternal re-checks
+// idempotency under the real lock, so the answer is never wrong — just not free.
+func (m *Manager) consumersReplayed(key string, declHash uint64) bool {
+	if !m.consMu.TryRLock() {
+		return false
+	}
+	defer m.consMu.RUnlock()
+	existing, ok := m.replayedHashs[key]
+	return ok && existing == declHash
 }
 
 // Publisher returns a publisher client for the given key plus a ReleaseFunc the caller must

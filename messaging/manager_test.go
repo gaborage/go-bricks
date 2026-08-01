@@ -812,30 +812,245 @@ func TestNewMessagingManagerDefaultFactoryForwardsReconnectOptions(t *testing.T)
 	assert.Equal(t, 11*time.Second, client.resendDelay)
 }
 
-// TestEnsureConsumersSucceedsWithExpiredCallerContext pins that lazy consumer
-// setup runs on its own bounded budget, detached from the caller's deadline:
-// an already-expired caller context (e.g. an HTTP request whose ~5s deadline
-// passed before the first tenant touch) must not abort the declare loop.
-func TestEnsureConsumersSucceedsWithExpiredCallerContext(t *testing.T) {
-	log := logger.New("error", false)
-	client := &stubAMQPClient{}
-	factory := func(string, logger.Logger) AMQPClient { return client }
-	manager := NewMessagingManager(&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}}, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
-	defer func() { _ = manager.Close() }()
-
+// newSetupDeclarations builds the exchange/queue/binding/consumer set the consumer-setup tests
+// share, so a fixture change lands in one place instead of three.
+func newSetupDeclarations() *Declarations {
 	decls := NewDeclarations()
 	decls.RegisterExchange(&ExchangeDeclaration{Name: testExchange, Type: exchangeTypeTopic})
 	decls.RegisterQueue(&QueueDeclaration{Name: testQueue})
 	decls.RegisterBinding(&BindingDeclaration{Queue: testQueue, Exchange: testExchange, RoutingKey: testQueue})
 	decls.RegisterConsumer(&ConsumerDeclaration{Queue: testQueue, Consumer: testConsumer, Handler: &mockMessageHandler{}})
+	return decls
+}
 
-	// Caller context is already expired BEFORE EnsureConsumers is even called —
-	// simulates a lazy-start request whose ~5s deadline passed mid-setup.
+// consumerSetupHarness holds one consumer-setup pass in flight so a test can observe how another
+// caller behaves while the shared pass is blocked. The client factory parks until unblock is
+// called; started closes on the first factory call, so a test can be sure the NEXT caller is a
+// collapsed waiter and not a fresh leader. Without that hold, a select whose ctx.Done() and result
+// channel are both ready picks either one at random and the test flakes.
+type consumerSetupHarness struct {
+	manager *Manager
+	client  *stubAMQPClient
+	decls   *Declarations
+	started <-chan struct{} // closed once the blocked setup pass has entered the factory
+	unblock func()          // idempotent: safe from any path, including a t.Fatal or cleanup
+	calls   func() int      // factory invocations observed so far
+}
+
+func newConsumerSetupHarness(t *testing.T) *consumerSetupHarness {
+	t.Helper()
+
+	client := &stubAMQPClient{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		startedOnce.Do(func() { close(started) })
+		<-release
+		return client
+	}
+
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	// Unblock BEFORE Close: a blocked setup pass holds consMu, and Close takes it.
+	t.Cleanup(func() { unblock(); _ = manager.Close() })
+
+	return &consumerSetupHarness{
+		manager: manager,
+		client:  client,
+		decls:   newSetupDeclarations(),
+		started: started,
+		unblock: unblock,
+		calls:   func() int { mu.Lock(); defer mu.Unlock(); return calls },
+	}
+}
+
+// awaitStarted blocks until the setup pass has entered the client factory, failing fast rather
+// than hanging the package if it never does.
+func (h *consumerSetupHarness) awaitStarted(t *testing.T) {
+	t.Helper()
+	select {
+	case <-h.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the setup pass never entered the client factory")
+	}
+}
+
+// TestEnsureConsumersExpiredCallerReturnsWhileSetupCompletes pins both halves of the collapse
+// contract for a caller whose budget is already spent: it must return on ITS OWN context rather
+// than sit through the shared setup's 45s infraSetupTimeout, and the setup it walked away from
+// must still run to completion so the consumers exist for the next caller. Before the DoChan
+// rewrite the first half was impossible — sfg.Do blocked uncancelably.
+func TestEnsureConsumersExpiredCallerReturnsWhileSetupCompletes(t *testing.T) {
+	h := newConsumerSetupHarness(t)
+
+	// Caller context is already expired BEFORE EnsureConsumers is even called — simulates a
+	// lazy-start request whose ~5s deadline passed before the first tenant touch.
 	callerCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.NoError(t, manager.EnsureConsumers(callerCtx, testTenantID, decls))
+	returned := make(chan error, 1)
+	go func() { returned <- h.manager.EnsureConsumers(callerCtx, testTenantID, h.decls) }()
 
-	assert.Contains(t, client.declaredQueueNames(), testQueue)
-	assert.Equal(t, 1, client.consumerCount())
+	select {
+	case err := <-returned:
+		require.ErrorIs(t, err, context.Canceled,
+			"an over-budget caller must fail on its OWN context, not block on the shared setup")
+		require.ErrorContains(t, err, `consumer setup for key "test-tenant"`,
+			"the wrap must name the operation and key, not just surface the bare context error")
+	case <-time.After(2 * time.Second):
+		t.Fatal("EnsureConsumers blocked on the shared setup instead of honoring its dead context")
+	}
+
+	// The abandoned setup must still finish and install the consumers.
+	h.unblock()
+	require.Eventually(t, func() bool { return h.client.consumerCount() == 1 },
+		2*time.Second, 5*time.Millisecond,
+		"the abandoned setup must still start its consumer")
+	assert.Contains(t, h.client.declaredQueueNames(), testQueue,
+		"the abandoned setup must still declare its infrastructure")
+}
+
+// TestEnsureConsumersCollapsedWaiterHonorsOwnContext is the scenario issue #835 reports: a caller
+// that arrives while someone else's setup pass is in flight is collapsed onto it, and with sfg.Do
+// that wait was uncancelable — an over-budget follower blocked up to infraSetupTimeout (45s) on a
+// leader's work. The follower must fail on its own context WITHOUT canceling the leader's setup.
+// Mirrors TestPoolGetOrCreateWaiterHonorsOwnContext in internal/resourcepool.
+func TestEnsureConsumersCollapsedWaiterHonorsOwnContext(t *testing.T) {
+	h := newConsumerSetupHarness(t)
+
+	leader := make(chan error, 1)
+	go func() { leader <- h.manager.EnsureConsumers(context.Background(), testTenantID, h.decls) }()
+	h.awaitStarted(t) // the setup pass is in flight, so the next caller is a collapsed waiter
+
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	follower := make(chan error, 1)
+	go func() { follower <- h.manager.EnsureConsumers(dead, testTenantID, h.decls) }()
+
+	select {
+	case err := <-follower:
+		require.ErrorIs(t, err, context.Canceled,
+			"a collapsed waiter must fail on its OWN context, not on the leader's budget")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the collapsed waiter blocked on the leader's setup instead of its own dead context")
+	}
+
+	h.unblock()
+	require.NoError(t, <-leader, "the abandoning waiter must not cancel the leader's setup")
+	assert.Equal(t, 1, h.calls(), "singleflight must still collapse the two callers into one setup")
+	assert.Equal(t, 1, h.client.consumerCount())
+}
+
+// TestEnsureConsumersRecoversPanicFromSetup pins that a panic in the setup path becomes an error
+// instead of killing the process. x/sync re-panics on a NEW goroutine once any caller used DoChan
+// (`go panic(e)` in doCall), which no recover — not even Echo's middleware.Recover — can catch, so
+// without the closure's own recover one tenant's bad broker config would crash-loop the service.
+// The setup path runs consumer-supplied code (ClientFactory, BrokerURLProvider, handlers), so this
+// is reachable from a project's own mistake.
+func TestEnsureConsumersRecoversPanicFromSetup(t *testing.T) {
+	log := logger.New("error", false)
+	factory := func(string, logger.Logger) AMQPClient { panic("bad broker config") }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	decls := newSetupDeclarations()
+
+	err := manager.EnsureConsumers(context.Background(), testTenantID, decls)
+	require.Error(t, err, "a panicking setup must surface as an error, not escape the process")
+	require.ErrorContains(t, err, "panic during consumer setup")
+
+	// A failed pass must not install anything, so the next caller retries and fails the same way
+	// rather than inheriting a stale success.
+	require.ErrorContains(t, manager.EnsureConsumers(context.Background(), testTenantID, decls),
+		"panic during consumer setup",
+		"a recovered panic must not leave a warm entry behind")
+}
+
+// TestEnsureConsumersWarmKeySkipsSetupOnDeadContext pins the pre-singleflight fast path: once a key
+// is replayed, EnsureConsumers is a no-op and must not consult the caller's context at all. Without
+// it a warm resolution still enters the select, where an already-closed ctx.Done() deterministically
+// beats a not-yet-scheduled goroutine — so every request on a warm tenant with a spent budget would
+// fail on work that had nothing left to do. SingleTenantResourceProvider.Messaging takes this path
+// on every request.
+func TestEnsureConsumersWarmKeySkipsSetupOnDeadContext(t *testing.T) {
+	log := logger.New("error", false)
+	client := &stubAMQPClient{}
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return client
+	}
+	callCount := func() int { mu.Lock(); defer mu.Unlock(); return calls }
+
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	decls := newSetupDeclarations()
+
+	require.NoError(t, manager.EnsureConsumers(context.Background(), testTenantID, decls))
+	warmCalls := callCount()
+
+	dead, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, manager.EnsureConsumers(dead, testTenantID, decls),
+		"a warm key must short-circuit before the select, so a spent caller budget is irrelevant")
+	assert.Equal(t, warmCalls, callCount(), "the warm path must not run another setup pass")
+}
+
+// TestEnsureConsumersRejectsNilDeclarations pins the nil guard at the boundary. The hash is
+// computed on the caller's goroutine, before and outside the closure's recover, so a nil
+// Declarations would nil-deref the caller rather than surface as an error — and
+// app/messaging_setup.go passes its argument through unguarded.
+func TestEnsureConsumersRejectsNilDeclarations(t *testing.T) {
+	log := logger.New("error", false)
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return &stubAMQPClient{}
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	err := manager.EnsureConsumers(context.Background(), testTenantID, nil)
+	require.Error(t, err, "nil declarations must be rejected, not panic on the caller's goroutine")
+	require.ErrorContains(t, err, "nil declarations")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 0, calls, "a rejected call must not reach the client factory")
 }
