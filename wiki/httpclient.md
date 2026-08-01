@@ -148,6 +148,36 @@ whole field on the original config is inert rather than racy, but only for clien
 already built. Rotate certificates through `GetClientCertificate`, which the clone
 preserves; for anything else, build a fresh config.
 
+### Fail-closed builds (`BuildStrict`)
+
+The three base-transport-slot displacements above — `WithTransport` after
+`WithTLSConfig`, `WithTLSConfig` after `WithTransport`, and a wrapper (e.g.
+`WithJOSE`) replacing a `WithHTTPClient` client's own Transport — are only a
+`Build()` WARN: against a peer that doesn't enforce mTLS, the resulting client
+still works, just without the client certificate or pinned roots it should
+carry. `BuildStrict()` is the fail-closed alternative — same client `Build()` would
+return, but an error instead whenever one of those three compositions
+triggered:
+
+```go
+client, err := httpclient.NewBuilder(logger).
+    WithHTTPClient(mtlsClient). // has its own Transport
+    WithJOSE(cfg).
+    BuildStrict()
+if err != nil {
+    return err // caught at startup, not silently downgraded at runtime
+}
+```
+
+`BuildStrict` rejects exactly those three displacement compositions — no more.
+Calling `WithTransport` or `WithTLSConfig` *after* `WithHTTPClient` also
+replaces that client's own Transport, but is treated as a deliberate override
+and is NOT rejected: an explicit base-transport call wins on purpose. If the
+client certificate lives on the `WithHTTPClient` client, pass its base
+RoundTripper to `WithTransport` instead of relying on `BuildStrict` to catch the
+override. `Build()` is unchanged and still compiles, so existing call sites
+are unaffected.
+
 ### OAuth 1.0a request signing (partner APIs)
 
 Some partner gateways (e.g. Mastercard APIs) authenticate outbound requests with

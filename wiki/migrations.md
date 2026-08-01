@@ -38,7 +38,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
-| E56  | v0.55.0 → v0.56.0 | silent-behavior | 5 | none | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5) |
+| E56  | v0.55.0 → v0.56.0 | silent-behavior | 6 | none | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -759,7 +759,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 ## E56 · v0.55.0 → v0.56.0 — ALB forwarded-client-cert identity middleware + seal-payload CLI + widened logger mask list
 
-- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). Also adds the installable `cmd/seal-payload` CLI for curl-testing jose-tagged endpoints. No exported go-bricks symbol changes outside this new surface — but `logger.DefaultFilterConfig()` gains eleven card-data/PII field names, which silently changes log output for anyone on the defaults (C56.3). Multi-tenant lazy consumer setup also stops blocking over-budget callers: `messaging.Manager.EnsureConsumers` now returns as soon as the caller's own context ends, while the setup itself still completes (C56.4). And `server.forwardedclientcert.require: true` now registers the middleware even when `enabled` was left false, so a programmatically-assembled config that skipped `config.Validate` stops serving unauthenticated traffic and starts returning 401 (C56.5).
+- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). Also adds the installable `cmd/seal-payload` CLI for curl-testing jose-tagged endpoints. No exported go-bricks symbol changes outside this new surface — but `logger.DefaultFilterConfig()` gains eleven card-data/PII field names, which silently changes log output for anyone on the defaults (C56.3). Multi-tenant lazy consumer setup also stops blocking over-budget callers: `messaging.Manager.EnsureConsumers` now returns as soon as the caller's own context ends, while the setup itself still completes (C56.4). And `server.forwardedclientcert.require: true` now registers the middleware even when `enabled` was left false, so a programmatically-assembled config that skipped `config.Validate` stops serving unauthenticated traffic and starts returning 401 (C56.5). Also adds `httpclient.Builder.BuildStrict`, a fail-closed alternative to `Build` for compositions that would otherwise silently discard TLS material or a provided transport (C56.6).
 - build-caught: none
 - preflight: none
 - exit: `go get github.com/gaborage/go-bricks@v0.56.0 && go mod tidy && go build ./... && go test ./...`
@@ -825,6 +825,29 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 - apply: set `enabled: true` explicitly (`Enabled: true` in the Go literal) — your service was accepting unauthenticated requests and will now reject them with 401, which is the fix. The framework registers the middleware regardless and emits one startup WARN naming both keys, so the flip is never silent; setting `Enabled` clears the WARN. If you did **not** intend to require client-certificate identity, drop `Require: true` instead.
 - verify: start the service and check startup output — the WARN is present only while `enabled` is still false. Then issue one request carrying no `X-Amzn-Mtls-Clientcert-*` headers and confirm 401 (before this bump it returned the handler's normal response). Health/ready probes stay exempt: confirm they still return 200, because ALB health checks present no client certificate.
 - ref: ADR-043 · `server/middleware.go` (`setupIdentityMiddlewares`) · `config/validation.go` (`validateServerForwardedClientCert`) · wiki/forwarded_client_cert.md
+
+### [C56.6] `Builder.BuildStrict` — fail-closed transport-composition errors · additive-optional
+
+- note: New `(*httpclient.Builder).BuildStrict() (Client, error)` is `Build` with
+  fail-closed composition checking: the three base-transport-slot
+  displacements `Build` only warns about — `WithTransport` called after
+  `WithTLSConfig`, `WithTLSConfig` called after `WithTransport`, and a
+  registered wrapper (e.g. `WithJOSE`) replacing a `WithHTTPClient` client's
+  own Transport with `net/http.DefaultTransport` — now return an error
+  instead of a client. Affects any call site with `WithTransport` called
+  after `WithTLSConfig`, `WithTLSConfig` called after `WithTransport`, or a
+  registered wrapper (e.g. `WithJOSE`) paired with a `WithHTTPClient` client
+  that carries its own `Transport`; switch that composition from `Build()`
+  to `BuildStrict()` and handle the error. `WithTLSConfig` combined with a
+  wrapper is the correct composition and is never rejected — it fills the
+  base-transport slot itself, so no material is displaced; no change needed.
+  `Build()` is unchanged and still compiles, so nothing breaks if you do not
+  adopt it.
+- security: mTLS/pinned-root deployments should prefer `BuildStrict` — the
+  discarding compositions above are the same ones that already silently drop
+  a client certificate or pinned CA at runtime (C55.2); `Build` only logs a
+  WARN, so the downgrade is easy to miss outside startup logs.
+- ref: httpclient/client.go (`BuildStrict`) · wiki/httpclient.md
 
 ---
 

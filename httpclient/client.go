@@ -419,8 +419,16 @@ func (b *Builder) WithResponseInterceptor(interceptor ResponseInterceptor) *Buil
 	return b
 }
 
-// Build creates the REST client with the configured options
-func (b *Builder) Build() Client {
+// warnPrefix is prepended to each composition-issue message when Build logs it as a
+// WARN; BuildStrict wraps the same unprefixed issues with its own error prefix instead.
+const warnPrefix = "httpclient: "
+
+// build constructs the client and reports the base-transport-slot
+// displacements that Build only warns about. One issue per triggered
+// predicate, in Build's historical warn order (TLS, provided transport,
+// client transport). Issues carry no "httpclient: " prefix — Build adds it
+// when logging, BuildStrict adds its own when wrapping.
+func (b *Builder) build() (built Client, issues []string) {
 	if b == nil || b.config == nil || isNilLogger(b.logger) {
 		panic("httpclient: Build requires a Builder created by NewBuilder") // NOSONAR: Fail-fast on invalid initialization (manifesto: configuration errors crash at startup)
 	}
@@ -444,41 +452,72 @@ func (b *Builder) Build() Client {
 	}
 
 	if b.discardsTLSConfig() {
-		b.logger.Warn().Msg("httpclient: WithTransport was called after WithTLSConfig — " +
-			"both fill the same base-transport slot and the last call wins, so the *tls.Config " +
-			"installed by WithTLSConfig is discarded with whatever it carried (client certificate, " +
-			"pinned roots, version floor), and TLS now depends entirely on the RoundTripper passed " +
-			"to WithTransport; set TLSClientConfig on that transport yourself, or drop the " +
+		issues = append(issues, "WithTransport was called after WithTLSConfig — "+
+			"both fill the same base-transport slot and the last call wins, so the *tls.Config "+
+			"installed by WithTLSConfig is discarded with whatever it carried (client certificate, "+
+			"pinned roots, version floor), and TLS now depends entirely on the RoundTripper passed "+
+			"to WithTransport; set TLSClientConfig on that transport yourself, or drop the "+
 			"WithTransport call if WithTLSConfig alone is enough")
 	}
 
 	if b.discardsProvidedTransport() {
-		b.logger.Warn().Msg("httpclient: WithTLSConfig was called after WithTransport — " +
-			"both fill the same base-transport slot and the last call wins, so the RoundTripper " +
-			"passed to WithTransport is discarded along with any proxy, dialer or TLS settings it " +
-			"carried; WithTLSConfig replaces it with a fresh base, a clone of net/http.DefaultTransport " +
-			"or an equivalently-configured transport when that global has been replaced. Fold TLS " +
-			"settings into the *tls.Config; to keep proxy or dialer settings, drop WithTLSConfig and " +
+		issues = append(issues, "WithTLSConfig was called after WithTransport — "+
+			"both fill the same base-transport slot and the last call wins, so the RoundTripper "+
+			"passed to WithTransport is discarded along with any proxy, dialer or TLS settings it "+
+			"carried; WithTLSConfig replaces it with a fresh base, a clone of net/http.DefaultTransport "+
+			"or an equivalently-configured transport when that global has been replaced. Fold TLS "+
+			"settings into the *tls.Config; to keep proxy or dialer settings, drop WithTLSConfig and "+
 			"set TLSClientConfig on your own transport instead")
 	}
 
 	if rt := b.resolveTransport(); rt != nil {
 		if b.discardsClientTransport() {
-			b.logger.Warn().Msg("httpclient: transport wrapper registered without WithTransport — " +
-				"the *http.Client passed to WithHTTPClient has its own Transport replaced and requests " +
-				"dial via net/http.DefaultTransport, losing client certificates, pinned roots and proxy " +
+			issues = append(issues, "transport wrapper registered without WithTransport — "+
+				"the *http.Client passed to WithHTTPClient has its own Transport replaced and requests "+
+				"dial via net/http.DefaultTransport, losing client certificates, pinned roots and proxy "+
 				"settings; pass the base RoundTripper to WithTransport instead")
 		}
 		httpClient.Transport = rt
 	}
 
-	return &client{
+	built = &client{
 		httpClient:           httpClient,
 		logger:               b.logger,
 		config:               cfg,
 		requestInterceptors:  cfg.RequestInterceptors,
 		responseInterceptors: cfg.ResponseInterceptors,
 	}
+	return built, issues
+}
+
+// Build creates the REST client with the configured options. Compositions that
+// would silently discard TLS material or a provided transport are logged as
+// WARNs, not rejected — see BuildStrict for a fail-closed variant.
+func (b *Builder) Build() Client {
+	c, issues := b.build()
+	for _, msg := range issues {
+		b.logger.Warn().Msg(warnPrefix + msg)
+	}
+	return c
+}
+
+// BuildStrict is Build with fail-closed transport-composition checking: it returns an
+// error instead of a client when a builder call silently discarded the *tls.Config or
+// base transport an earlier call installed.
+//
+// Deployments relying on client certificates or pinned roots should prefer BuildStrict,
+// so a displaced *tls.Config is a startup failure rather than a silent runtime downgrade
+// to net/http.DefaultTransport.
+//
+// WithTransport or WithTLSConfig called after WithHTTPClient also replaces that client's
+// own Transport, but is treated as a deliberate override and is not one of the three
+// rejected compositions. The nil-logger/nil-config panic behavior is identical to Build.
+func (b *Builder) BuildStrict() (Client, error) {
+	c, issues := b.build()
+	if len(issues) > 0 {
+		return nil, fmt.Errorf("httpclient: unsafe transport composition: %s", strings.Join(issues, "; "))
+	}
+	return c, nil
 }
 
 // deepCopyConfig creates a deep copy of the provided Config to ensure

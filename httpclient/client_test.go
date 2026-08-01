@@ -2325,4 +2325,161 @@ func TestNewBuilderAndBuildRejectNilLogger(t *testing.T) {
 			b.Build()
 		})
 	})
+
+	t.Run("nil_builder_receiver_buildstrict", func(t *testing.T) {
+		assert.PanicsWithValue(t, buildMsg, func() {
+			var b *Builder
+			_, _ = b.BuildStrict()
+		})
+	})
+}
+
+// TestBuildStrictErrorsOnDiscardedClientTransport is the mtls-composition pin: the
+// natural NewBuilder(log).WithHTTPClient(mtlsClient).WithJOSE(cfg).Build() call
+// silently drops the client's own Transport (and any client certificate or
+// pinned roots it carried). BuildStrict must reject it instead.
+func TestBuildStrictErrorsOnDiscardedClientTransport(t *testing.T) {
+	log := createTestLogger()
+	base := &stubRoundTripper{name: "mtls-base"}
+	withClient := func() *nethttp.Client { return &nethttp.Client{Transport: base} }
+
+	built, err := NewBuilder(log).WithHTTPClient(withClient()).WithJOSE(JOSEConfig{}).BuildStrict()
+
+	require.Error(t, err)
+	assert.Nil(t, built)
+	assert.Contains(t, err.Error(), "transport wrapper registered without WithTransport")
+	assert.True(t, strings.HasPrefix(err.Error(), "httpclient: unsafe transport composition: transport wrapper"),
+		"error must carry exactly one httpclient prefix, got: %s", err.Error())
+}
+
+func TestBuildStrictErrorsOnDiscardedTLSConfig(t *testing.T) {
+	log := createTestLogger()
+	stub := &stubRoundTripper{name: "stub"}
+	caPEM, _, _ := newTestCA(t, "buildstrict-discards-tls-config-ca")
+	tlsCfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+	require.NoError(t, err)
+
+	built, err := NewBuilder(log).WithTLSConfig(tlsCfg).WithTransport(stub).BuildStrict()
+
+	require.Error(t, err)
+	assert.Nil(t, built)
+	assert.Contains(t, err.Error(), "WithTransport was called after WithTLSConfig")
+}
+
+func TestBuildStrictErrorsOnDiscardedProvidedTransport(t *testing.T) {
+	log := createTestLogger()
+	stub := &stubRoundTripper{name: "stub"}
+	caPEM, _, _ := newTestCA(t, "buildstrict-discards-transport-ca")
+	tlsCfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+	require.NoError(t, err)
+
+	built, err := NewBuilder(log).WithTransport(stub).WithTLSConfig(tlsCfg).BuildStrict()
+
+	require.Error(t, err)
+	assert.Nil(t, built)
+	assert.Contains(t, err.Error(), "WithTLSConfig was called after WithTransport")
+}
+
+func TestBuildStrictHappyPath(t *testing.T) {
+	log := createTestLogger()
+
+	server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		w.WriteHeader(nethttp.StatusOK)
+		if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	built, err := NewBuilder(log).WithTimeout(5 * time.Second).BuildStrict()
+	require.NoError(t, err)
+	require.NotNil(t, built)
+
+	resp, err := built.Get(context.Background(), &Request{URL: server.URL})
+	require.NoError(t, err)
+	assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
+	assert.Equal(t, `{"status": "ok"}`, string(resp.Body))
+}
+
+// TestBuildStillWarnsOnly pins compatibility: Build must keep constructing a
+// usable client from a discarding composition, never fail it — only BuildStrict does.
+// WithTransport(nil) vacates the base slot rather than installing a blocking
+// stub, so the request below still resolves through the real network to the
+// local httptest server while the TLS material is discarded (and warned about).
+func TestBuildStillWarnsOnly(t *testing.T) {
+	caPEM, _, _ := newTestCA(t, "build-still-warns-only-ca")
+	tlsCfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+	require.NoError(t, err)
+
+	t.Run("warn_line_carries_the_httpclient_prefix", func(t *testing.T) {
+		// Build-only, no request: warnSpy implements only Warn(), so a real
+		// request (which also calls Info()/Debug()) would nil-panic on it.
+		spy := &warnSpy{}
+		NewBuilder(spy).WithTLSConfig(tlsCfg).WithTransport(nil).Build()
+		require.Len(t, spy.msgs, 1)
+		assert.True(t, strings.HasPrefix(spy.msgs[0], "httpclient: WithTransport was called after WithTLSConfig"),
+			"Build's emitted WARN must stay byte-identical, prefix included; got: %s", spy.msgs[0])
+	})
+
+	t.Run("client_still_works", func(t *testing.T) {
+		log := createTestLogger()
+		server := newIPv4TestServer(t, nethttp.HandlerFunc(func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+			w.WriteHeader(nethttp.StatusOK)
+			if _, err := w.Write([]byte(`{"status": "ok"}`)); err != nil {
+				t.Errorf("write response: %v", err)
+			}
+		}))
+		defer server.Close()
+
+		built := NewBuilder(log).WithTLSConfig(tlsCfg).WithTransport(nil).Build()
+		require.NotNil(t, built)
+
+		resp, err := built.Get(context.Background(), &Request{URL: server.URL})
+		require.NoError(t, err)
+		assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
+	})
+}
+
+// TestBuildStrictAllowsExplicitTransportOverride pins deliberate-override semantics:
+// WithHTTPClient never participates in the base-transport slot, so a later
+// WithTransport/WithTLSConfig call replaces that client's own Transport without
+// tripping any of the three compositions BuildStrict rejects.
+func TestBuildStrictAllowsExplicitTransportOverride(t *testing.T) {
+	log := createTestLogger()
+
+	t.Run("explicit_transport_after_http_client", func(t *testing.T) {
+		mtls := &stubRoundTripper{name: "mtls"}
+		withClient := func() *nethttp.Client { return &nethttp.Client{Transport: mtls} }
+		override := &stubRoundTripper{name: "override"}
+
+		built, err := NewBuilder(log).WithHTTPClient(withClient()).WithTransport(override).BuildStrict()
+
+		require.NoError(t, err)
+		require.NotNil(t, built)
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		assert.Same(t, override, clientImpl.httpClient.Transport)
+		assert.NotSame(t, mtls, clientImpl.httpClient.Transport, "WithTransport after WithHTTPClient must win — this is a deliberate override, not a rejected composition")
+	})
+
+	t.Run("explicit_tls_config_after_http_client", func(t *testing.T) {
+		mtls := &stubRoundTripper{name: "mtls"}
+		withClient := func() *nethttp.Client { return &nethttp.Client{Transport: mtls} }
+		caPEM, _, _ := newTestCA(t, "buildstrict-allows-override-ca")
+		tlsCfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+		require.NoError(t, err)
+
+		built, err := NewBuilder(log).WithHTTPClient(withClient()).WithTLSConfig(tlsCfg).BuildStrict()
+
+		require.NoError(t, err)
+		require.NotNil(t, built)
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		assert.NotSame(t, mtls, clientImpl.httpClient.Transport, "WithTLSConfig after WithHTTPClient must win — this is a deliberate override, not a rejected composition")
+
+		transportImpl, ok := clientImpl.httpClient.Transport.(*nethttp.Transport)
+		require.True(t, ok, "WithTLSConfig's base is a *http.Transport")
+		require.NotNil(t, transportImpl.TLSClientConfig)
+		assert.Same(t, tlsCfg.RootCAs, transportImpl.TLSClientConfig.RootCAs, "replacement transport must carry the CA pool WithTLSConfig installed, not just any different transport")
+	})
 }
