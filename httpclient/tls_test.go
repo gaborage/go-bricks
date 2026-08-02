@@ -495,6 +495,15 @@ func TestWithTLSConfigDefaultTransportReplaced(t *testing.T) {
 		assert.Equal(t, time.Second, transport.ExpectContinueTimeout)
 	})
 
+	// The fallback transport's DialContext is a bound method value on a *net.Dialer,
+	// which cannot be introspected once built — so the dialer's own Timeout/KeepAlive
+	// are pinned directly against the factory the fallback transport actually uses.
+	t.Run("fallback_dialer_has_the_documented_timeouts", func(t *testing.T) {
+		dialer := fallbackDialer()
+		assert.Equal(t, 30*time.Second, dialer.Timeout)
+		assert.Equal(t, 30*time.Second, dialer.KeepAlive)
+	})
+
 	// net/http consults TLSClientConfig only when no TLS dialer is set, so a dialer
 	// cloned from a replaced global would silently void pinning, the version floor
 	// and the client certificate.
