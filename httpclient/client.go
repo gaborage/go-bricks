@@ -54,7 +54,7 @@ type client struct {
 }
 
 // NewClient forwards log to NewBuilder unchanged (panics on a nil logger).
-// Build's error is unreachable for a bare chain, so it is safe to discard.
+// NewClient creates a client with the default configuration and the provided logger.
 func NewClient(log logger.Logger) Client {
 	c, _ := NewBuilder(log).Build()
 	return c

@@ -54,7 +54,9 @@ type ClientTLSConfig struct {
 
 // NewClientTLSConfig loads the declared material into a *tls.Config with a TLS
 // 1.2 floor. It never disables certificate verification; the explicit escape
-// hatch for local testing is passing a hand-built *tls.Config to WithTLSConfig.
+// NewClientTLSConfig creates a TLS configuration from client certificate, private key,
+// and CA material, using TLS 1.2 when no minimum version is specified. It returns an
+// error when the configuration or supplied certificate material is invalid or empty.
 func NewClientTLSConfig(cfg *ClientTLSConfig) (*tls.Config, error) {
 	if cfg == nil {
 		return nil, errors.New("httpclient: tls: config is nil")
@@ -123,7 +125,8 @@ func (b *Builder) WithTLSConfig(tlsCfg *tls.Config) *Builder {
 
 // tlsConfigCarriesMaterial is not a nil check: Clone() mutates its receiver
 // with an ALPN-only default, so nilness alone is unreliable. Errs toward
-// inclusion — add new tls.Config fields here when in doubt.
+// tlsConfigCarriesMaterial reports whether cfg contains meaningful TLS configuration.
+// It returns false for a nil configuration or one containing only default settings.
 func tlsConfigCarriesMaterial(cfg *tls.Config) bool {
 	if cfg == nil {
 		return false
@@ -173,7 +176,7 @@ func (b *Builder) baseTransportForTLS() (base *nethttp.Transport, losslessOrNoMa
 }
 
 // fallbackDialer is factored out so its Timeout/KeepAlive — otherwise opaque
-// once bound into a DialContext closure — are directly assertable in a test.
+// fallbackDialer returns a network dialer with 30-second connection timeout and keep-alive settings.
 func fallbackDialer() *net.Dialer {
 	return &net.Dialer{
 		Timeout:   30 * time.Second,
@@ -182,7 +185,8 @@ func fallbackDialer() *net.Dialer {
 }
 
 // loadClientKeyPair resolves the client certificate material and enforces the
-// cert/key pairing rules.
+// loadClientKeyPair loads the configured client certificate and private key PEM data.
+// It requires the certificate and key to be provided together and requires both when client authentication is mandatory.
 func loadClientKeyPair(cfg *ClientTLSConfig) (certPEM, keyPEM []byte, err error) {
 	certPEM, err = loadPEM(cfg.CertFile, cfg.CertValue, "cert")
 	if err != nil {
