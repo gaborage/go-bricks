@@ -289,9 +289,10 @@ func TestBuilderWithJOSEWiresTransport(t *testing.T) {
 	defer server.Close()
 
 	log := logger.New("info", false)
-	client := httpclient.NewBuilder(log).
+	client, err := httpclient.NewBuilder(log).
 		WithJOSE(httpclient.JOSEConfig{Outbound: f.ClientOutbound, Inbound: f.ClientInbound, Resolver: f.Resolver}).
 		Build()
+	require.NoError(t, err)
 
 	resp, err := client.Post(context.Background(), &httpclient.Request{
 		URL:  server.URL,

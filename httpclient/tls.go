@@ -97,54 +97,88 @@ func NewClientTLSConfig(cfg *ClientTLSConfig) (*tls.Config, error) {
 	return out, nil
 }
 
-// WithTLSConfig installs tlsCfg on a fresh base transport: a clone of
-// http.DefaultTransport, or an equivalently-configured transport when that
-// global has been replaced. It fills the same base-transport slot as
-// WithTransport: whichever of the two is called last wins. Wrapper layers
-// (WithJOSE, for example) always apply on top of this base regardless of call
-// order. A nil tlsCfg is a no-op.
-//
-// The config is cloned, so one loaded config can be shared across clients. The
-// clone is required, not defensive style: net/http appends ALPN protocols to
-// TLSClientConfig.NextProtos in place on a transport's first request, so two
-// clients sharing one config race. The copy is shallow: reference fields such
-// as Certificates and RootCAs stay shared with the caller and must not be
-// mutated in place — rotate certificates through GetClientCertificate, which
-// Clone preserves.
+// WithTLSConfig fills the base-transport slot: it clones an incumbent
+// *nethttp.Transport when present (or DefaultTransport otherwise) and
+// replaces — never merges — its TLSClientConfig with tlsCfg. Last call
+// between this and WithTransport wins. A nil tlsCfg is a no-op.
+// The clone is shallow: don't mutate tlsCfg's Certificates/RootCAs in
+// place — rotate via GetClientCertificate.
 func (b *Builder) WithTLSConfig(tlsCfg *tls.Config) *Builder {
 	if tlsCfg == nil {
 		return b
 	}
-	var base *nethttp.Transport
-	// Consumers replace nethttp.DefaultTransport (gock, httpmock, APM agents), so
-	// a bare type assertion would panic mid-chain. A replaced global cannot be
-	// recovered, so the fallback mirrors the stdlib http.DefaultTransport values
-	// instead of dropping proxy support and HTTP/2.
-	if dt, ok := nethttp.DefaultTransport.(*nethttp.Transport); ok {
-		base = dt.Clone()
-	} else {
-		base = &nethttp.Transport{
-			Proxy: nethttp.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		}
-	}
-	// net/http skips its own handshake entirely when a TLS dialer is set, so a
-	// cloned one from a replaced global would discard tlsCfg wholesale — pinning,
-	// version floor and client certificate included.
+	base, losslessOrNoMaterial := b.baseTransportForTLS()
+	// A TLS dialer makes net/http skip its own handshake, silently bypassing tlsCfg.
 	//nolint:staticcheck // SA1019: DialTLS is deprecated but still honored when DialTLSContext is nil, so Clone can carry a live TLS bypass in it — clearing it is the point.
 	base.DialTLS = nil
 	base.DialTLSContext = nil
 	base.TLSClientConfig = tlsCfg.Clone()
 	b.fillBaseSlot(base, baseTLS)
+	if losslessOrNoMaterial {
+		// No material lost, so this is composition, not a reportable displacement.
+		b.displacedBase = baseNone
+	}
 	return b
+}
+
+// tlsConfigCarriesMaterial is not a nil check: Clone() mutates its receiver
+// with an ALPN-only default, so nilness alone is unreliable. Errs toward
+// inclusion — add new tls.Config fields here when in doubt.
+func tlsConfigCarriesMaterial(cfg *tls.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return len(cfg.Certificates) > 0 ||
+		cfg.GetClientCertificate != nil ||
+		cfg.RootCAs != nil ||
+		cfg.InsecureSkipVerify ||
+		cfg.MinVersion != 0 ||
+		cfg.MaxVersion != 0 ||
+		cfg.ServerName != "" ||
+		len(cfg.CipherSuites) > 0 ||
+		len(cfg.CurvePreferences) > 0 ||
+		cfg.Renegotiation != tls.RenegotiateNever ||
+		cfg.VerifyPeerCertificate != nil ||
+		cfg.VerifyConnection != nil
+}
+
+// baseTransportForTLS clones an incumbent *nethttp.Transport as the compose
+// base when possible; anything WithTLSConfig clears or overwrites below is
+// material — keep both lists in sync.
+func (b *Builder) baseTransportForTLS() (base *nethttp.Transport, losslessOrNoMaterial bool) {
+	if incumbent, ok := b.transport.(*nethttp.Transport); ok {
+		// Must run before Clone(): Clone's onceSetNextProtoDefaults mutates the
+		// receiver, populating an ALPN-only TLSClientConfig (see tlsConfigCarriesMaterial).
+		//nolint:staticcheck // SA1019: DialTLS is deprecated but still honored when DialTLSContext is nil, so a caller-set DialTLS is real security material we must not silently drop.
+		hadNoTLSMaterial := !tlsConfigCarriesMaterial(incumbent.TLSClientConfig) &&
+			incumbent.DialTLS == nil && incumbent.DialTLSContext == nil
+		return incumbent.Clone(), hadNoTLSMaterial
+	}
+	// Consumers replace nethttp.DefaultTransport (gock, httpmock, APM agents), so
+	// a bare type assertion would panic mid-chain. A replaced global cannot be
+	// recovered, so the fallback mirrors the stdlib http.DefaultTransport values
+	// instead of dropping proxy support and HTTP/2.
+	if dt, ok := nethttp.DefaultTransport.(*nethttp.Transport); ok {
+		return dt.Clone(), false
+	}
+	return &nethttp.Transport{
+		Proxy:                 nethttp.ProxyFromEnvironment,
+		DialContext:           fallbackDialer().DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}, false
+}
+
+// fallbackDialer is factored out so its Timeout/KeepAlive — otherwise opaque
+// once bound into a DialContext closure — are directly assertable in a test.
+func fallbackDialer() *net.Dialer {
+	return &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
 }
 
 // loadClientKeyPair resolves the client certificate material and enforces the

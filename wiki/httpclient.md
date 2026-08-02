@@ -7,7 +7,7 @@ The `httpclient` package provides a production-ready outbound HTTP client built 
 The `httpclient` package provides a production-ready HTTP client with built-in observability and resilience.
 
 **Key Features:**
-- **Builder pattern**: Fluent configuration via `NewBuilder(logger).WithTimeout(...).Build()`
+- **Builder pattern**: Fluent configuration via `NewBuilder(logger).WithTimeout(...).Build()`, which returns `(Client, error)` — `Build` fails construction rather than silently building a client with a discarded transport (see [Transport composition](#transport-composition))
 - **W3C trace propagation**: Automatic `traceparent`/`tracestate` header injection
 - **Retry with backoff**: Exponential backoff with full jitter, configurable max retries
 - **Interceptors**: Request/response interceptor chains for cross-cutting concerns
@@ -17,12 +17,15 @@ The logger is required: `NewBuilder`/`NewClient` panic on a nil logger at constr
 
 ```go
 // Builder pattern with trace propagation
-client := httpclient.NewBuilder(logger).
+client, err := httpclient.NewBuilder(logger).
     WithTimeout(10 * time.Second).
     WithRetries(3, 500 * time.Millisecond).
     WithDefaultHeader("Accept", "application/json").
     WithW3CTrace(true).
     Build()
+if err != nil {
+    return err
+}
 
 resp, err := client.Get(ctx, &httpclient.Request{
     URL: "https://api.example.com/users",
@@ -41,26 +44,48 @@ such as JOSE sit outermost. This means calling `WithTransport` before or after
 discarded by a later `WithTransport` call:
 
 ```go
-// Equivalent — layer order beats call order.
-httpclient.NewBuilder(logger).WithJOSE(cfg).WithTransport(mTLSTransport).Build()
-httpclient.NewBuilder(logger).WithTransport(mTLSTransport).WithJOSE(cfg).Build()
+// JOSE registered before the transport...
+client, err := httpclient.NewBuilder(logger).WithJOSE(cfg).WithTransport(mTLSTransport).Build()
+if err != nil {
+    return err
+}
+```
+
+```go
+// ...or after — equivalent either way, because layer order beats call order.
+client, err := httpclient.NewBuilder(logger).WithTransport(mTLSTransport).WithJOSE(cfg).Build()
+if err != nil {
+    return err
+}
 ```
 
 A `Transport` set directly on the `*http.Client` passed to `WithHTTPClient` is
 **replaced, not wrapped**, as soon as any wrapper option is used: the chain then has
 no base transport and dials via `net/http.DefaultTransport` — silently losing your
-client certificate, pinned `RootCAs`, `MinVersion` and proxy settings. `Build()` logs
-a WARN when it detects this. Always supply the base RoundTripper through
-`WithTransport`:
+client certificate, pinned `RootCAs`, `MinVersion` and proxy settings. `Build()`
+returns `(nil, error)` when it detects this instead of building a client whose TLS
+posture silently doesn't match its configuration. Always supply the base
+RoundTripper through `WithTransport`:
 
 ```go
-// WRONG — mTLS transport is replaced; requests dial via net/http.DefaultTransport.
-httpclient.NewBuilder(logger).
+// WRONG — mTLS transport would be replaced; Build fails construction instead of
+// building a client that dials via net/http.DefaultTransport.
+_, err := httpclient.NewBuilder(logger).
     WithHTTPClient(&http.Client{Transport: mTLSTransport}).
     WithJOSE(cfg).Build()
+if err != nil {
+    // err: "httpclient: unsafe transport composition: transport wrapper registered
+    // without WithTransport — ..."
+    return err
+}
+```
 
+```go
 // RIGHT — mTLS sits innermost, beneath the JOSE layer.
-httpclient.NewBuilder(logger).WithTransport(mTLSTransport).WithJOSE(cfg).Build()
+client, err := httpclient.NewBuilder(logger).WithTransport(mTLSTransport).WithJOSE(cfg).Build()
+if err != nil {
+    return err
+}
 ```
 
 ### Mutual TLS (client certificates)
@@ -79,7 +104,10 @@ tlsCfg, err := httpclient.NewClientTLSConfig(&httpclient.ClientTLSConfig{
 if err != nil {
     return err
 }
-client := httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).Build()
+client, err := httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).Build()
+if err != nil {
+    return err
+}
 ```
 
 **Sourcing.** Each piece — cert, key, CA — comes from either a PEM file path
@@ -122,19 +150,97 @@ verification. The escape hatch is explicit and greppable: build a `*tls.Config` 
 hand and pass it to `WithTLSConfig`.
 
 **Base-transport slot.** `WithTLSConfig` fills the same base-transport slot as
-`WithTransport` — last call wins — and satisfies the requirement described above
-for `WithJOSE` and the `Build()` composition WARN. Its base is a clone of
-`http.DefaultTransport`, or an equivalently-configured transport (same proxy,
-HTTP/2 and pool settings) when that global has been replaced, so the pitfall above
-does not apply to it. `Build()` warns in both directions: calling
-`WithTransport` after `WithTLSConfig` discards the loaded client certificate and
-pinned roots, and calling `WithTLSConfig` after `WithTransport` discards the
-supplied `RoundTripper` along with any proxy, dialer or TLS settings it carried.
-Wrapper layers always stack on top of it:
+`WithTransport`. When the slot already holds a `*http.Transport` — i.e.
+`WithTransport` was called with one first — `WithTLSConfig` **clones and reuses
+it** as the new base: your proxy, dialer and connection-pool settings survive.
+The TLS material is always **overwritten, not merged**: `TLSClientConfig` on
+the clone becomes exactly the config you pass to `WithTLSConfig`, and the
+incumbent's `TLSClientConfig` — including any non-security fields on it such
+as `NextProtos` — is discarded wholesale; copy anything you need from it into
+`tlsCfg` yourself before calling `WithTLSConfig`. The clone also clears
+`DialTLS`/`DialTLSContext` unconditionally (net/http skips its own TLS
+handshake — and so ignores `tlsCfg` entirely — whenever a TLS dialer is set).
+The rule for whether any of this is reported as a loss keys on whether the
+incumbent carried **meaningful security material** of its own — in
+`TLSClientConfig`: certificates, `RootCAs`, `InsecureSkipVerify`, a version
+floor/ceiling, cipher suites, curve preferences, a non-default renegotiation
+policy, `ServerName`, or a verification hook; or a non-nil `DialTLS`/
+`DialTLSContext` (a custom TLS dialer is material of the same class — it can
+implement certificate pinning or a TLS tunnel) — not on whether
+`TLSClientConfig` is merely non-nil. (`*http.Transport.Clone()` itself can
+leave a transport with a non-nil but ALPN-only `TLSClientConfig`, so a plain
+nil check would produce false positives.) If the incumbent carries none of
+that material, the replacement loses nothing a caller would miss, and no
+meaningful security material is lost by the composition. If it DOES carry its
+own client certificate, pinned roots, or TLS dialer, that material is still
+discarded by this replacement, exactly as before this composition existed;
+only the tuning fields (proxy, dialer, pool limits) are new — and `Build()`
+reports this case as an error (see below) rather than silently discarding it.
+"Reuses" also never means warm connections: `Transport.Clone()` copies
+exported fields only, never the idle-connection map, so a client built this
+way still starts with a cold connection pool. When the slot is empty, the
+base is a clone of `http.DefaultTransport`, or an equivalently-configured
+transport (same proxy, HTTP/2 and pool settings) when that global has been
+replaced. When the slot holds an opaque (non-`*http.Transport`) `RoundTripper`
+instead, composition is not possible at all — see the opaque-incumbent case
+below. Wrapper layers always stack on top of whichever base results:
 
 ```go
 // mTLS base, JOSE on top — call order is irrelevant.
-httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).WithJOSE(joseCfg).Build()
+client, err := httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).WithJOSE(joseCfg).Build()
+if err != nil {
+    return err
+}
+```
+
+```go
+// WithTransport supplies a *http.Transport; WithTLSConfig clones it and installs
+// tlsCfg — proxy/dialer/pool settings from customTransport survive.
+client, err := httpclient.NewBuilder(logger).WithTransport(customTransport).WithTLSConfig(tlsCfg).Build()
+if err != nil {
+    return err
+}
+```
+
+**When composition would lose material, `Build()` returns `(nil, error)`**
+instead of silently building a client whose TLS posture doesn't match its
+configuration. Within `WithTransport`/`WithTLSConfig` base-transport-slot
+composition specifically, this fires in three cases: calling `WithTransport`
+with an **opaque** (non-`*http.Transport`) `RoundTripper` after `WithTLSConfig`
+discards the loaded client certificate and pinned roots wholesale; calling
+`WithTLSConfig` after `WithTransport` with an **opaque** incumbent discards the
+supplied `RoundTripper` along with any proxy, dialer or TLS settings it carried;
+and calling `WithTLSConfig` after `WithTransport` with a `*http.Transport`
+incumbent whose own `TLSClientConfig` carries **meaningful security material**,
+or whose `DialTLS`/`DialTLSContext` is set — its tuning fields do compose into
+the new base, but that `TLSClientConfig` (client certificate, pinned roots,
+version floor) or TLS dialer is still replaced/cleared, so the discard is real
+even though the clone itself succeeds. A fourth, separate case — a wrapper
+option registered with no `WithTransport` base, replacing a `WithHTTPClient`
+client's own `Transport` — is covered above under
+[Transport composition](#transport-composition). The returned error wraps
+`httpclient.ErrUnsafeTransportComposition`; classify it with `errors.Is` in your
+own `Init()` error handling rather than matching on message text.
+
+**One deliberate carve-out:** if the `RoundTripper` passed to `WithTransport`
+*after* `WithTLSConfig` is itself a `*http.Transport` whose own `TLSClientConfig`
+carries meaningful material, `Build()` does not report a discard. Be clear about
+what this means for precedence, though: it is **not** that both configs survive.
+The replacement's own `TLSClientConfig` is what takes effect on the built
+client; the earlier `tlsCfg` passed to `WithTLSConfig` is entirely ignored —
+last-call-wins still governs which TLS material actually reaches the wire, this
+carve-out just means that outcome isn't a *surprise* to the caller, since they
+configured `myTLSConfig` on `replacement` themselves:
+
+```go
+// Succeeds: replacement carries its own TLSClientConfig, so Build reports no
+// discard — but myTLSConfig on replacement is what the client actually uses;
+// tlsCfg (passed to WithTLSConfig above) is discarded, not merged with it.
+replacement := &http.Transport{TLSClientConfig: myTLSConfig}
+client, err := httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).WithTransport(replacement).Build()
+if err != nil {
+    return err
+}
 ```
 
 The passed `*tls.Config` is cloned, so one loaded config can be shared across
@@ -183,12 +289,15 @@ func oauth1Signer(consumerKey, keyName string, keys app.KeyStore) httpclient.Req
     }
 }
 
-client := httpclient.NewBuilder(deps.Logger).
+client, err := httpclient.NewBuilder(deps.Logger).
     WithPeerName("partner-api").
     WithRetries(3, 500*time.Millisecond).
     WithTLSConfig(tlsCfg).
     WithRequestInterceptor(oauth1Signer(cfg.ConsumerKey, "partner-signing", deps.KeyStore)).
     Build()
+if err != nil {
+    return err
+}
 ```
 
 **Per-attempt re-signing is automatic.** Interceptors run inside `buildRequest`,
@@ -200,9 +309,15 @@ with a plain `NopCloser` without touching `ContentLength`, which makes an empty
 POST/PUT/PATCH go out chunked with no Content-Length — and partner edges and
 WAFs answer that with 411, 400, or 501, which reads like an auth failure.
 
-**Client TLS still composes.** Unlike a hand-rolled `WithTransport` signer,
-which fills the same base-transport slot as `WithTLSConfig` (last call wins),
-the interceptor path leaves `WithTLSConfig` intact.
+**Client TLS still composes.** A hand-rolled `WithTransport` signer builds fine
+entirely on its own — the base-transport slot only becomes a problem once
+`WithTLSConfig` also joins the chain. When it does, the two fill the same
+slot: if the signer's `RoundTripper` is a `*http.Transport` carrying no
+meaningful TLS material of its own, the two compose; if it carries its own
+client certificate or pinned roots, that combination now fails `Build()`
+outright instead of silently discarding one side. The interceptor path sidesteps
+all of this — it leaves `WithTLSConfig` intact regardless, because interceptors
+never touch the base-transport slot.
 
 **Do not let a signed request follow redirects.** go-bricks sets no
 `CheckRedirect`, so the stdlib default follows redirects below `buildRequest`
@@ -294,12 +409,15 @@ func bodyForSigning(req *nethttp.Request) ([]byte, error) {
     return io.ReadAll(rc)
 }
 
-client := httpclient.NewBuilder(deps.Logger).
+client, err := httpclient.NewBuilder(deps.Logger).
     WithPeerName("visa-vts").
     WithRetries(3, 500*time.Millisecond).
     WithRequestInterceptor(xPayToken(deps.KeyStore, "visa-shared-secret",
         func(u *url.URL) string { return strings.TrimPrefix(u.Path, "/") })).
     Build()
+if err != nil {
+    return err
+}
 ```
 
 **Build the query string yourself, sorted.** The token covers `req.URL.RawQuery` exactly as
@@ -331,8 +449,12 @@ verbatim to the redirect target. Install a `CheckRedirect` returning
 `http.ErrUseLastResponse` on your own client, or confirm the partner endpoint does not
 redirect.
 
-**Client TLS still composes.** The interceptor path leaves `WithTLSConfig` intact, whereas a
-hand-rolled `WithTransport` signer fills the same base-transport slot (last call wins).
+**Client TLS still composes.** The interceptor path leaves `WithTLSConfig` intact regardless,
+because interceptors never touch the base-transport slot. A hand-rolled `WithTransport` signer
+builds fine entirely on its own; the slot only becomes a problem once `WithTLSConfig` also
+joins the chain — and then only if the signer's `RoundTripper` is a `*http.Transport` carrying
+its own meaningful client certificate or pinned roots, in which case that combination now
+fails `Build()` outright instead of silently discarding one side.
 Visa presents mutual TLS and x-pay-token as *alternative* authentication methods rather than
 requiring both, but some deployments run mTLS at the egress boundary as well — if yours
 does, use the interceptor, not a custom transport.
@@ -421,10 +543,13 @@ The `httpclient` package emits five OpenTelemetry instruments under the meter na
 Set a low-cardinality logical service name at client construction time. It populates the `peer.service` attribute on all five instruments and is the recommended primary dimension for SLO dashboards.
 
 ```go
-client := httpclient.NewBuilder(log).
+client, err := httpclient.NewBuilder(log).
     WithTimeout(10 * time.Second).
     WithPeerName("visa-vts").
     Build()
+if err != nil {
+    return err
+}
 ```
 
 ### Cardinality Guidance
@@ -584,10 +709,13 @@ func TestModuleEmitsHTTPSpans(t *testing.T) {
 By default the client logs only request/response metadata (method, URL, status, elapsed, body size). Debug-level payload logging can be enabled via the builder:
 
 ```go
-client := httpclient.NewBuilder(logger).
+client, err := httpclient.NewBuilder(logger).
     WithLogPayloads(true).
     WithMaxPayloadLogBytes(2048). // default 1024; values ≤ 0 are ignored and the default applies
     Build()
+if err != nil {
+    return err
+}
 ```
 
 **Content-type-aware logging:** Request and response bodies are handled differently depending on the `Content-Type` header:

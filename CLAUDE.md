@@ -290,12 +290,15 @@ For lifecycle defaults, performance benchmarks, configuration, and multi-tenant 
 Production-ready HTTP client with builder pattern, W3C trace propagation, retries with backoff, and interceptors:
 
 ```go
-client := httpclient.NewBuilder(logger).
+client, err := httpclient.NewBuilder(logger).
     WithTimeout(10 * time.Second).
     WithRetries(3, 500 * time.Millisecond).
     WithW3CTrace(true).
     WithPeerName("downstream-service").
     Build()
+if err != nil {
+    return err
+}
 
 resp, err := client.Get(ctx, &httpclient.Request{URL: "https://api.example.com/users"})
 ```
@@ -519,6 +522,7 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **CORS dev wildcard opt-in (ADR-038):** the dev-permissive reflect-any-origin + `AllowCredentials` CORS posture now requires `CORS_DEV_WILDCARD=true` in addition to a development-alias (or koanf-defaulted) `APP_ENV`; without the flag, dev fails closed like every other env. `CORS_ORIGINS` strict allowlisting is unchanged. The flag is inert outside development aliases.
 - **Composite resolver order required (ADR-039):** `resolver.order` is mandatory for `multitenant.resolver.type: composite` — no default; a composite deployment fails at startup until it declares one.
 - **Declaration Args reach the broker (ADR-040):** `messaging.AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` now take `(ctx context.Context, *…Declaration)` and forward `Args` to RabbitMQ — may surface `406 PRECONDITION_FAILED` against ops-provisioned queues whose args differ.
+- **httpclient Build fail-closed (ADR-044):** `httpclient.Builder.Build()` now returns `(Client, error)` instead of `Client` — it fails construction (rather than warning) when a `WithTransport`/`WithTLSConfig`/`WithHTTPClient` composition would silently discard a client certificate, pinned roots, or a caller's `RoundTripper`. `WithTLSConfig` composes onto an incumbent transport only when it is a concrete `*http.Transport` carrying no security material of its own — an opaque `RoundTripper` still errors. `NewClient`'s signature is unchanged.
 
 ## File Organization
 
