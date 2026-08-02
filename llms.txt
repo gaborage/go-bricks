@@ -307,6 +307,34 @@ implement to declare scheduled jobs in an order-independent phase —
 peer to `RouteRegisterer` / `MessagingDeclarer` from the Module
 skeleton above.
 
+**Scheduled-job example.** Jobs implement `scheduler.Executor`; a module
+declares them via the optional `JobProvider` callback:
+
+```go
+type CleanupJob struct {
+	logger logger.Logger
+}
+
+// Execute runs on schedule. JobContext gives JobID, TriggerType,
+// Logger, DB, Messaging, and Config.
+func (j *CleanupJob) Execute(ctx scheduler.JobContext) error {
+	ctx.Logger().Info().Str("job", ctx.JobID()).Msg("cleanup started")
+	// ... do the work, honoring ctx deadlines ...
+	return nil
+}
+
+// RegisterJobs implements app.JobProvider — called after every
+// module's Init(), so declaration order between modules never matters.
+func (m *Module) RegisterJobs(reg app.JobRegistrar) error {
+	return reg.DailyAt("cleanup-job", &CleanupJob{logger: m.logger}, scheduler.ParseTime("03:00"))
+}
+```
+
+Schedule methods: `FixedRate(duration)`, `DailyAt(time)`,
+`WeeklyAt(weekday, time)`, `HourlyAt(minute)`,
+`MonthlyAt(dayOfMonth, time)`. Jobs run in UTC by default
+(`scheduler.timezone` overrides; `-` = host-local).
+
 **Always depend on interfaces** (`UserService`), not concrete types
 (`*users.Service`). Each module stays independently testable: swap the
 real `users.Module` for a mock `UserService` in unit tests of `orders`.
