@@ -311,9 +311,7 @@ skeleton above.
 declares them via the optional `JobProvider` callback:
 
 ```go
-type CleanupJob struct {
-	logger logger.Logger
-}
+type CleanupJob struct{}
 
 // Execute runs on schedule. JobContext gives JobID, TriggerType,
 // Logger, DB, Messaging, and Config.
@@ -326,7 +324,7 @@ func (j *CleanupJob) Execute(ctx scheduler.JobContext) error {
 // RegisterJobs implements app.JobProvider — called after every
 // module's Init(), so declaration order between modules never matters.
 func (m *Module) RegisterJobs(reg app.JobRegistrar) error {
-	return reg.DailyAt("cleanup-job", &CleanupJob{logger: m.logger}, scheduler.ParseTime("03:00"))
+	return reg.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
 }
 ```
 
