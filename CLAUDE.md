@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 GoBricks is an enterprise-grade Go framework for building microservices with modular, reusable components. It provides a complete foundation for production-ready applications with HTTP servers, AMQP messaging, multi-database connectivity (PostgreSQL/Oracle), and clean architecture patterns.
 
 **Requirements:**
+
 - Go 1.26 required
 - Docker Desktop or Docker Engine (integration tests only)
 
@@ -16,6 +17,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 - When fixing lint/build errors, run `make check` after each fix cycle. Common issues: import ordering, trailing newlines, type narrowing errors.
 - **Before pushing code, run the three pre-push gates IN ORDER: `/simplify` → `/security-audit` → `/code-review` (CodeRabbit).** **This is mandatory** — the cost (a few minutes of agent time) is negligible compared to the cost of missing a finding (review-cycle ping-pong on top of a real bug). The order is load-bearing: `/simplify` applies reuse/simplification/efficiency cleanups first (it *mutates* the diff, so it must run before anything that judges the diff); `/security-audit` then audits the refactored result (credential leaks, boundary-validation gaps, panic/race classes on shutdown paths, and other threat-model issues that style-focused bots don't reason about); `/code-review` (CodeRabbit) renders the final independent verdict on the end state. After the agent gates settle, run `make mutate` once as the final machine gate before pushing (surviving mutants on changed lines block the push; see wiki/testing.md#mutation-gate); if any later fix changes code after it ran, re-run it — the same rule as `make check`. Any gate that changes code requires `make check` again before the next gate; if findings are applied after CodeRabbit's pass, re-run `/code-review` — CodeRabbit must always see the final diff; if a third pass still returns findings, push and note the open ones in the PR body. The trivial-fixes exception is **narrowly** defined: single-line typo fixes, comment/doc-only changes, and dependency bumps. Multi-file changes, new functionality (even tests-only), and config additions beyond a single value all need all three gates. When in doubt, run them.
 - Once `make check` and the pre-push gates pass, commit and push to the feature branch automatically — no need to wait for the user to ask.
+- **Stacked PRs for large features (mandatory above ~400 LoC):** any feature whose total diff would exceed ~400 changed LoC ships as a stack of dependent PRs via the `/gh-stack` skill — never one big PR. Decompose by dependency + logical unit (e.g. core API → integrations → docs/wiring); each PR in the stack must be self-contained: builds, passes `make check`, the pre-push gates, and `make mutate` on its own, and is reviewable without reading later PRs. The base PR targets `main`; each successor targets its predecessor. Merging is bottom-up by the maintainer (merge is admin-gated — never self-merge); after each merge, re-sync the remaining stack with `/gh-stack`. Changes that are independent of each other are NOT a stack — give them separate branches off `main`.
 - Keep responses and Claude-authored artifacts (plans, reports, summaries) proportional to the task: cover the substance, and skip filler sections, redundant summaries, and boilerplate.
 
 ## Git Rules
@@ -30,6 +32,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 ## Quick Reference
 
 **Most Common Commands:**
+
 ```bash
 make check              # Pre-commit: fmt + lint + test + alloc guards + vuln scan + gosec (mirrors CI)
 make test               # Unit tests with race detection
@@ -40,11 +43,13 @@ go test -bench=.        # Run benchmarks
 ```
 
 **Key Files:**
+
 - [CLAUDE.md](CLAUDE.md) — This development guide
 - [llms.txt](llms.txt) — Quick code examples for LLMs
 - [.golangci.yml](.golangci.yml) — Linting configuration
 
 **Wiki (deep dives — read on demand):**
+
 - Architecture: [database.md](wiki/database.md) · [cache.md](wiki/cache.md) · [messaging.md](wiki/messaging.md) · [outbox.md](wiki/outbox.md) · [scheduler.md](wiki/scheduler.md) · [httpclient.md](wiki/httpclient.md) · [jose.md](wiki/jose.md) · [keystore.md](wiki/keystore.md) · [observability.md](wiki/observability.md) · [multi_tenant_resolvers.md](wiki/multi_tenant_resolvers.md)
 - Patterns: [handler_patterns.md](wiki/handler_patterns.md) · [context_deadlines.md](wiki/context_deadlines.md) · [global_middleware.md](wiki/global_middleware.md) · [testing.md](wiki/testing.md)
 - Reference: [troubleshooting.md](wiki/troubleshooting.md) · [migrations.md](wiki/migrations.md) (breaking changes) · [startup_defaults.md](wiki/startup_defaults.md)
@@ -52,6 +57,7 @@ go test -bench=.        # Run benchmarks
 - Vendor docs: [observability_headers_auth.md](wiki/observability_headers_auth.md) · [new_relic_otlp.md](wiki/new_relic_otlp.md) · [otel_collector.md](wiki/otel_collector.md)
 
 **External Resources:**
+
 - [Demo Project](https://github.com/gaborage/go-bricks-demo-project) — Complete examples
 - [SonarCloud](https://sonarcloud.io/project/overview?id=gaborage_go-bricks) — Code quality metrics
 - [GitHub Issues](https://github.com/gaborage/go-bricks/issues?q=is%3Aopen%20label%3Akind%2Ffeature) — Technical backlog. Titles use `<area>: <description>` (lowercase); labels combine `area/<package>` with `kind/<type>` or top-level `bug`/`documentation`.
@@ -59,9 +65,11 @@ go test -bench=.        # Run benchmarks
 ## Developer Manifesto
 
 ### Framework Philosophy
+
 GoBricks is a **production-grade framework for building MVPs fast**. It provides enterprise-quality tooling (validation, observability, tracing, type safety) while enabling rapid development velocity. The framework itself maintains high quality standards so applications built with it can move quickly with confidence.
 
 ### Core Principles
+
 - **Explicit > Implicit** → Code must be clear. No hidden defaults, no magic configuration.
 - **Type Safety > Dynamic Hacks** → Refactor-friendly code. Breaking changes prioritized for compile-time safety.
 - **Deterministic > Dynamic Flow** → Predictable, testable logic. Same inputs always produce same outputs.
@@ -72,15 +80,18 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - **Context-First Design** → Always pass `context.Context` as first parameter for tracing, cancellation, deadlines. See [wiki/context_deadlines.md](wiki/context_deadlines.md).
 - **Interface Segregation** → Small, focused interfaces for testability (e.g., `Client` vs `AMQPClient`).
 - **Vendor Agnosticism** → Abstract high-cost dependencies (databases), embrace low-cost ones (HTTP frameworks).
+- **Backward Compatibility** → Do not preserve it in GoBricks' own API surface: remove obsolete paths instead of adding compatibility layers, fallbacks, or in-code migration shims. Breaking is fine — document it (ADR + [wiki/migrations.md](wiki/migrations.md)), don't shim it. Consumer-facing migration aids (e.g. Raw Response Mode for Strangler Fig migrations of *consumer* legacy APIs) are bounded product features, not compat shims.
 
 ### Security Guidelines
+
 - Input validation is **mandatory** at all boundaries (HTTP, messaging, database).
-- Raw-SQL escape hatches (`f.Raw()`, `jf.Raw()`, and `database.Raw()`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site. The annotation is a forcing function for review and makes call sites grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\(|database\.Raw\('`). The rationale should name the specific property checked: identifier quoting for vendor reserved words, parameterization of value sides, absence of user-input concatenation, etc.
+- Raw-SQL escape hatches (`f.Raw()`, `jf.Raw()`, and `database.Raw()`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site. The annotation is a forcing function for review and makes call sites grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\(|database\.Raw\('`). The rationale should name the specific property checked: identifier quoting for vendor reserved words, value-side parameterization, absence of user-input concatenation, etc.
 - Secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault).
 - No hardcoded credentials, no secrets in logs or error messages. The framework's logger applies a `SensitiveDataFilter` to every log line; for PII not already covered by defaults (PAN variants, SSN, tax ID) extend the list via `log.sensitivefields` in YAML — additive, merged into the defaults — or in code via `app.Options.LoggerFilterConfig`, which REPLACES the whole config: start from `logger.DefaultFilterConfig()` and append, don't hand it a bare struct literal — see [wiki/observability.md#sensitive-data-filtering](wiki/observability.md#sensitive-data-filtering) for the field list, two-seam injection, matching semantics, and defense-in-depth guidance.
 - Audit logging for sensitive operations (access control, data modifications).
 
 ### Practices & Patterns
+
 - **SOLID** → Apply when it simplifies, don't force it.
 - **Fail Fast** → Module `Init()` errors are fatal. Validation errors crash at startup, never degrade silently.
 - **DRY** → Don't repeat yourself (but avoid premature abstractions).
@@ -95,6 +106,7 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 **Applications Built with GoBricks:** 60-70% coverage on core business logic, focus on happy paths + critical errors, always test database/HTTP/messaging, defer exotic edge cases, iterate on requirements.
 
 ### Engineering Principles
+
 - **Observability:** OpenTelemetry standards, W3C traceparent propagation across HTTP/messaging.
 - **12-Factor App:** Environment variables for config, stateless design, explicit dependencies.
 - **Error Handling:** Idiomatic Go errors (`fmt.Errorf`, `errors.Is/As`), structured errors at API boundaries.
@@ -114,6 +126,7 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 ## Architecture
 
 ### Core Components
+
 - **app/** — Application framework and module system
 - **config/** — Configuration management (Koanf: YAML + env vars)
 - **database/** — Multi-database interface with query builder
@@ -171,24 +184,7 @@ type ModuleDeps struct {
 
 ### Configuration Injection
 
-Service-specific configuration with automatic validation:
-
-```go
-type ServiceConfig struct {
-    APIKey   string        `config:"custom.api.key" required:"true"`
-    Timeout  time.Duration `config:"custom.api.timeout" default:"30s"`
-    Retries  int           `config:"custom.api.retries" default:"3"`
-}
-
-func (m *Module) Init(deps *ModuleDeps) error {
-    var cfg ServiceConfig
-    if err := deps.Config.InjectInto(&cfg); err != nil {
-        return err
-    }
-    m.service = NewService(cfg)
-    return nil
-}
-```
+Service-specific configuration with automatic validation: declare a struct with `config:` tags and call `deps.Config.InjectInto(&cfg)` in `Init` (full example in [llms.txt](llms.txt)).
 
 **Struct Tags:** `config:"key.path"` (required), `required:"true"`, `default:"value"`.
 **Supported Types:** string, int, int64, float64, bool, time.Duration, `[]string` (comma-separated via env/`default`, native sequence via YAML).
@@ -196,23 +192,7 @@ func (m *Module) Init(deps *ModuleDeps) error {
 
 ### Enhanced Handler Pattern
 
-Type-safe handlers eliminate boilerplate:
-
-```go
-func (h *Handler) createUser(req CreateReq, ctx server.HandlerContext) (server.Result[User], server.IAPIError) {
-    user := h.svc.Create(req)
-    return server.Created(user), nil
-}
-
-type CreateReq struct {
-    Name  string `json:"name" validate:"required"`
-    Email string `json:"email" validate:"email"`
-}
-
-server.POST(handlerRegistry, r, "/users", h.createUser)
-```
-
-Benefits: automatic binding/validation, standardized response envelopes, type safety.
+Type-safe handlers eliminate boilerplate: `func(req T, ctx server.HandlerContext) (server.Result[R], server.IAPIError)`, registered via `server.POST(handlerRegistry, r, "/users", h.createUser)`; request structs carry `json` + `validate` tags (full example in [llms.txt](llms.txt)). Benefits: automatic binding/validation, standardized response envelopes, type safety.
 
 Use `server.ResultWithMeta[R]` when a handler needs to contribute extra entries to the response envelope's `meta` map (pagination `total`/`limit`/`offset`/`hasMore`, deprecation notices, rate-limit headroom). Framework keys `timestamp` and `traceId` remain authoritative — handler values for those keys are dropped with a structured WARN.
 
@@ -220,12 +200,7 @@ For pointer-vs-value request/response trade-offs (file uploads, bulk exports), *
 
 ### Database Architecture
 
-Unified `database.Interface` supporting PostgreSQL and Oracle with vendor-specific SQL generation, type-safe WHERE clauses, performance tracking, and connection pooling.
-
-| Database | Placeholders | Notes |
-|----------|--------------|-------|
-| **Oracle** | `:1`, `:2` | Auto reserved word quoting, SEQUENCE built-in, UDT registration for custom types |
-| **PostgreSQL** | `$1`, `$2` | pgx driver with optimized connection pooling |
+Unified `database.Interface` supporting PostgreSQL (pgx, `$1` placeholders) and Oracle (`:1` placeholders, SEQUENCE built-in, UDT registration) with vendor-specific SQL generation, type-safe WHERE clauses, performance tracking, and connection pooling.
 
 **Type-Safe Query Building (use this pattern by default):**
 
@@ -255,31 +230,7 @@ For named databases (multi-DB single-tenant), table aliases, mixed JOIN conditio
 
 ### Cache Architecture
 
-Redis-based caching with type-safe CBOR serialization, multi-tenant isolation, and automatic lifecycle management.
-
-```go
-type Module struct {
-    svc *Service
-}
-
-type Service struct {
-    getCache func(context.Context) (cache.Cache, error)  // Store the function, NOT instance
-}
-
-func (m *Module) Init(deps *app.ModuleDeps) error {
-    m.svc = &Service{getCache: deps.Cache}  // Tenant-aware resolution
-    return nil
-}
-
-func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
-    c, err := s.getCache(ctx)
-    if err != nil { return nil, err }
-    if data, err := c.Get(ctx, fmt.Sprintf("user:%d", id)); err == nil {
-        return cache.Unmarshal[*User](data)
-    }
-    // Cache miss — fall through to DB, then Set with TTL.
-}
-```
+Redis-based caching with type-safe CBOR serialization, multi-tenant isolation, and automatic lifecycle management. Store the accessor function (`deps.Cache`), NOT a resolved instance — resolution is tenant-aware per call (full example in [llms.txt](llms.txt)).
 
 **Operations:** `Get`, `Set`, `GetOrSet` (atomic SET NX), `CompareAndSet` (Lua CAS), `Marshal`/`Unmarshal` (CBOR). Per-tenant cache instances managed automatically (LRU eviction, idle cleanup, singleflight).
 
@@ -287,35 +238,14 @@ For lifecycle defaults, performance benchmarks, configuration, and multi-tenant 
 
 ### HTTP Client
 
-Production-ready HTTP client with builder pattern, W3C trace propagation, retries with backoff, and interceptors:
-
-```go
-client := httpclient.NewBuilder(logger).
-    WithTimeout(10 * time.Second).
-    WithRetries(3, 500 * time.Millisecond).
-    WithW3CTrace(true).
-    WithPeerName("downstream-service").
-    Build()
-
-resp, err := client.Get(ctx, &httpclient.Request{URL: "https://api.example.com/users"})
-```
-
-For full options and interceptor patterns, see [wiki/httpclient.md](wiki/httpclient.md).
+Production-ready HTTP client: `httpclient.NewBuilder(logger)` fluent chain (`WithTimeout`, `WithRetries`, `WithW3CTrace`, `WithPeerName`) then `Build()` (full example in [llms.txt](llms.txt)). For full options and interceptor patterns, see [wiki/httpclient.md](wiki/httpclient.md).
 
 ### Scheduler
 
 gocron-based job scheduling integrated with the module system. Lazy initialization, overlapping prevention, panic recovery, system APIs at `GET /_sys/job` and `POST /_sys/job/:jobId` (CIDR-restricted), OpenTelemetry instrumentation per job.
 Jobs run in **UTC** by default; set `scheduler.timezone` (IANA name; `-` = host-local) to change the zone for all wall-clock schedules.
 
-```go
-type Executor interface {
-    Execute(ctx JobContext) error  // JobContext gives JobID, TriggerType, Logger, DB, Messaging, Config
-}
-
-func (m *Module) RegisterJobs(s app.JobRegistrar) error {
-    return s.DailyAt("cleanup-job", &CleanupJob{}, scheduler.ParseTime("03:00"))
-}
-```
+Jobs implement `Executor` (`Execute(ctx JobContext) error` — JobContext gives JobID, TriggerType, Logger, DB, Messaging, Config) and register in `RegisterJobs(s app.JobRegistrar)` (full example in [llms.txt](llms.txt)).
 
 **Schedule Methods:** `FixedRate(duration)`, `DailyAt(time)`, `WeeklyAt(weekday, time)`, `HourlyAt(minute)`, `MonthlyAt(dayOfMonth, time)`. See [wiki/scheduler.md](wiki/scheduler.md).
 
@@ -323,26 +253,10 @@ func (m *Module) RegisterJobs(s app.JobRegistrar) error {
 
 AMQP-based messaging with **validate-once, replay-many** pattern. Declarations validated upfront, replayed per-tenant for isolation. Automatic reconnection with exponential backoff. Context propagation for tenant IDs and tracing.
 
-**Concise declaration pattern (use the helpers, not raw structs):**
-```go
-func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
-    exchange := decls.DeclareTopicExchange("issuance.events")
-    queue := decls.DeclareQueue("issuance.events.queue")
-    decls.DeclareBinding(queue.Name, exchange.Name, "issuance.*")
-
-    decls.DeclarePublisher(&messaging.PublisherOptions{
-        Exchange: exchange.Name, RoutingKey: "issuance.created",
-        EventType: "CreateBatchIssuanceRequest",
-    }, nil)
-
-    decls.DeclareConsumer(&messaging.ConsumerOptions{
-        Queue: queue.Name, EventType: "CreateBatchIssuanceRequest",
-        Handler: amqp.NewHandler(m.logger),
-    }, nil)
-}
-```
+**Concise declaration pattern (use the helpers, not raw structs):** in `DeclareMessaging`, use `decls.DeclareTopicExchange` / `DeclareQueue` / `DeclareBinding` / `DeclarePublisher` / `DeclareConsumer` (full example in [llms.txt](llms.txt)).
 
 **Critical Rules:**
+
 - Each `queue + consumer_tag + event_type` triple must be registered exactly **once** — duplicates panic at startup.
 - Handler errors and panics → message nacked WITHOUT requeue (no infinite retry loops). Make handlers thread-safe and idempotent; use `DeclareQueueWithDLQ` to park failures in a dead-letter queue instead of dropping them (raw `Args["x-dead-letter-exchange"]` remains the custom-topology escape hatch — set Args before registration; see [wiki/messaging.md](wiki/messaging.md)).
 - Default consumer concurrency is `runtime.NumCPU() * 4` workers (v0.17+ breaking change). Set `Workers: 1` explicitly when message ordering matters.
@@ -353,33 +267,7 @@ For helper API, error handling deep dive, panic recovery, concurrency tuning, an
 
 Transactional outbox for reliable event publishing. Solves the dual-write problem: events written to an outbox table in the **same database transaction** as business data, then delivered to the broker by a background relay job.
 
-```go
-for _, m := range []app.Module{
-    scheduler.NewModule(), // Required: relay runs as a scheduled job
-    outbox.NewModule(),    // Outbox module — register BEFORE consumers
-    &myapp.OrderModule{},
-} {
-    if err := fw.RegisterModule(m); err != nil {
-        return err
-    }
-}
-
-func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) error {
-    tx, err := db.Begin(ctx)
-    if err != nil { return err }
-    defer tx.Rollback(ctx)
-
-    if _, err = tx.Exec(ctx, "INSERT INTO orders ..."); err != nil { return err }
-
-    payload, _ := json.Marshal(OrderCreatedEvent{OrderID: req.ID})
-    if _, err = s.outbox.Publish(ctx, tx, &app.OutboxEvent{
-        EventType: "order.created", AggregateID: fmt.Sprintf("order-%d", req.ID),
-        Payload: payload, Exchange: "order.events",
-    }); err != nil { return err }
-
-    return tx.Commit(ctx)
-}
-```
+Registration order matters: `scheduler.NewModule()` is required (the relay runs as a scheduled job) and `outbox.NewModule()` must register BEFORE consumer modules. Publish inside the business transaction: `s.outbox.Publish(ctx, tx, &app.OutboxEvent{...})` before `tx.Commit` (full example in [llms.txt](llms.txt)).
 
 **Delivery Guarantee:** At-least-once. Consumers MUST be idempotent; use the `x-outbox-event-id` header for deduplication.
 
@@ -409,16 +297,7 @@ Register `keystore.NewModule()` BEFORE any module declaring jose-tagged routes. 
 
 W3C traceparent propagation, OpenTelemetry metrics (database/HTTP/AMQP/Go runtime), health endpoints (`/health`, `/ready`), dual-mode logging with conditional sampling, export timeouts gated on `observability.environment` (independent of `app.env`, defaults to `development`) and the signal endpoint — 10s for `development`/`stdout`, 60s otherwise.
 
-**Custom metrics via `deps.MeterProvider`:**
-```go
-func (m *OrderModule) Init(deps *app.ModuleDeps) error {
-    if deps.MeterProvider != nil {
-        meter := deps.MeterProvider.Meter("orders")
-        m.orderCounter, _ = observability.CreateCounter(meter, "orders.created.total", "Total orders created")
-    }
-    return nil
-}
-```
+**Custom metrics via `deps.MeterProvider`:** nil-check it in `Init`, get a `Meter`, create instruments (full example in [llms.txt](llms.txt)).
 
 **Helper Functions:** `CreateCounter`, `CreateHistogram`, `CreateUpDownCounter` in `observability/metrics.go`. When `observability.enabled: false`, a no-op provider is used (zero overhead, nil-safe).
 
@@ -430,16 +309,18 @@ For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authe
 
 > **Mental model:** GoBricks treats `context.Context` as the primary carrier of deadlines and cancellation. The framework configures timeouts at every external boundary — HTTP server, HTTP client, database pool, AMQP, Redis, observability exporter, startup — and lets those deadlines propagate. Inside business logic, **the default is to use the inherited deadline**: do not introduce new timeouts unless you have a specific reason to *shorten* what's already in flight.
 
-| Boundary | Config key | Default |
-|---|---|---|
-| HTTP request handler (deadline on `c.Request().Context()`) | `server.timeout.middleware` | **5s** |
-| HTTP server read / write / idle / shutdown | `server.timeout.{read,write,idle,shutdown}` | 15s / 30s / 60s / 10s |
-| Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s |
-| Cache (Redis) dial / read / write | `cache.redis.{dialtimeout,readtimeout,writetimeout}` | 5s / 3s / 3s |
-| AMQP publish readiness pre-flight (cold/reconnecting client); also bounds the startup publisher pre-warm wait (WARN-only, never fails startup) | `messaging.reconnect.readytimeout` | 5s |
-| AMQP publish confirmation | `messaging.reconnect.connectiontimeout` | 30s |
-| Scheduler slow-job WARN / shutdown | `scheduler.timeout.{slowjob,shutdown}` | 25s / 30s |
-| Observability export | `observability.trace.export.timeout`, `observability.metrics.export.timeout`, `observability.logs.export.timeout` | 10s when `observability.environment` is `development` (its default — **not** derived from `app.env`) or the signal's endpoint is `stdout`; 60s otherwise |
+
+| Boundary                                                                                                                                       | Config key                                                                                                        | Default                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP request handler (deadline on `c.Request().Context()`)                                                                                     | `server.timeout.middleware`                                                                                       | **5s**                                                                                                                                                   |
+| HTTP server read / write / idle / shutdown                                                                                                     | `server.timeout.read`, `server.timeout.write`, `server.timeout.idle`, `server.timeout.shutdown`                   | 15s / 30s / 60s / 10s                                                                                                                                    |
+| Outbound HTTP client                                                                                                                           | `httpclient.NewBuilder(...).WithTimeout(d)`                                                                       | 30s                                                                                                                                                      |
+| Cache (Redis) dial / read / write                                                                                                              | `cache.redis.dialtimeout`, `cache.redis.readtimeout`, `cache.redis.writetimeout`                                  | 5s / 3s / 3s                                                                                                                                             |
+| AMQP publish readiness pre-flight (cold/reconnecting client); also bounds the startup publisher pre-warm wait (WARN-only, never fails startup) | `messaging.reconnect.readytimeout`                                                                                | 5s                                                                                                                                                       |
+| AMQP publish confirmation                                                                                                                      | `messaging.reconnect.connectiontimeout`                                                                           | 30s                                                                                                                                                      |
+| Scheduler slow-job WARN / shutdown                                                                                                             | `scheduler.timeout.slowjob`, `scheduler.timeout.shutdown`                                                         | 25s / 30s                                                                                                                                                |
+| Observability export                                                                                                                           | `observability.trace.export.timeout`, `observability.metrics.export.timeout`, `observability.logs.export.timeout` | 10s when `observability.environment` is `development` (its default — **not** derived from `app.env`) or the signal's endpoint is `stdout`; 60s otherwise |
+
 
 **The default pattern is to do nothing** — the request context already carries a 5s deadline, and every framework call propagates it. Shorten only when one sub-operation should fail fast (e.g., cap a cache lookup at 200–500ms so Redis hiccups don't burn the whole request budget). For fire-and-forget background work that must outlive the request, use `context.WithoutCancel(ctx)` to inherit values (trace ID, tenant ID) while severing cancellation — never `context.Background()`.
 
@@ -462,6 +343,7 @@ func Test_CacheManager_GetOrCreateCache(t *testing.T) { }
 ```
 
 **Exception:** Test case descriptions inside table-driven tests use **snake_case** for readability:
+
 ```go
 tests := []struct{ name string }{
     {name: "simple_equality"},
@@ -470,6 +352,7 @@ tests := []struct{ name string }{
 ```
 
 ### Testing Strategy
+
 - **Unit tests:** testify, `database/testing` (DB mocking), `cache/testing` (cache mocking), `outbox/testing` (outbox mocking), httptest (server), fake adapters (messaging).
 - **Integration tests:** testcontainers, `-tags=integration` flag.
 - **Race detection:** All tests run with `-race` in CI.
@@ -480,28 +363,22 @@ For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache co
 ## Development Workflow
 
 ### Branch Model
+
 - Main branch: `main` (stable releases).
 - Feature branches: `feature/*`.
 
 ### CI/CD Pipeline
+
 - **Unified CI (`ci-v2.yml`):** Single workflow with intelligent path-based job execution via `dorny/paths-filter`.
 - Framework jobs run on Go and build-file changes (the `framework` filter's `**/*.go` intentionally also matches `tools/**/*.go`, so tool changes re-run the framework matrix); the `tools/migration` CLI additionally has its own path-gated jobs.
 - **Test Matrix:** Ubuntu/Windows × Go 1.26.
 - **Coverage:** Merged unit + integration coverage → SonarCloud.
 
-### Tool Selection
-| Tool | Primary Use Case |
-|------|------------------|
-| `make check` | Daily development, pre-commit (fast feedback) |
-| `make test-integration` | Testing database/messaging vendor differences (requires Docker) |
-| `go test -run TestName` | Debugging specific failing tests |
-| SonarCloud | Coverage metrics (80% target), quality gate validation |
-
 For Windows-specific test patterns, CI workflow internals, and operational issues, see [wiki/troubleshooting.md](wiki/troubleshooting.md).
 
 ## OpenAPI Tool
 
-The OpenAPI generator now lives in its own repository: **[gaborage/go-bricks-openapi](https://github.com/gaborage/go-bricks-openapi)** — static-analysis spec generation, automatic route discovery, typed request/response models. Install with `go install github.com/gaborage/go-bricks-openapi/cmd/go-bricks-openapi@latest`.
+The OpenAPI generator now lives in its own repository: [**gaborage/go-bricks-openapi**](https://github.com/gaborage/go-bricks-openapi) — static-analysis spec generation, automatic route discovery, typed request/response models. Install with `go install github.com/gaborage/go-bricks-openapi/cmd/go-bricks-openapi@latest`.
 
 ## Breaking Changes
 
@@ -539,45 +416,4 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **llms.txt** — Quick reference examples for LLM code generation.
 - Tests alongside source files (`*_test.go`).
 
-## Key Interfaces
 
-```go
-// Database — see wiki/database.md for full surface
-type Interface interface {
-    Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-    Exec(ctx context.Context, query string, args ...any) (sql.Result, error)
-    Begin(ctx context.Context) (types.Tx, error)
-    Health(ctx context.Context) error
-    DatabaseType() string
-}
-
-// Messaging
-type Client interface {
-    Publish(ctx context.Context, destination string, data []byte) error
-    Consume(ctx context.Context, destination string) (<-chan amqp.Delivery, error)
-    Close() error
-    IsReady() bool
-}
-
-// Observability
-type Provider interface {
-    TracerProvider() trace.TracerProvider
-    MeterProvider() metric.MeterProvider
-    LoggerProvider() *sdklog.LoggerProvider
-    ShouldDisableStdout() bool
-    Shutdown(ctx context.Context) error
-    ForceFlush(ctx context.Context) error
-}
-
-// Outbox
-type OutboxPublisher interface {
-    Publish(ctx context.Context, tx dbtypes.Tx, event *OutboxEvent) (string, error)
-}
-
-// KeyStore (used by JOSE middleware)
-type KeyStore interface {
-    PublicKey(name string) (*rsa.PublicKey, error)
-    PrivateKey(name string) (*rsa.PrivateKey, error)
-    Secret(name string) ([]byte, error) // raw symmetric key material (defensive copy)
-}
-```
