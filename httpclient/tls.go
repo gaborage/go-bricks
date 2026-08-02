@@ -56,7 +56,10 @@ type ClientTLSConfig struct {
 // 1.2 floor. It never disables certificate verification; the explicit escape
 // NewClientTLSConfig creates a TLS configuration from client certificate, private key,
 // and CA material, using TLS 1.2 when no minimum version is specified. It returns an
-// error when the configuration or supplied certificate material is invalid or empty.
+// NewClientTLSConfig builds a TLS configuration from client certificate, private key,
+// and CA bundle settings. It returns an error when the configuration is nil, no
+// certificate or CA material is supplied, the minimum TLS version is invalid, or
+// the supplied certificate material cannot be parsed.
 func NewClientTLSConfig(cfg *ClientTLSConfig) (*tls.Config, error) {
 	if cfg == nil {
 		return nil, errors.New("httpclient: tls: config is nil")
@@ -126,7 +129,7 @@ func (b *Builder) WithTLSConfig(tlsCfg *tls.Config) *Builder {
 // tlsConfigCarriesMaterial is not a nil check: Clone() mutates its receiver
 // with an ALPN-only default, so nilness alone is unreliable. Errs toward
 // tlsConfigCarriesMaterial reports whether cfg contains meaningful TLS configuration.
-// It returns false for a nil configuration or one containing only default settings.
+// tlsConfigCarriesMaterial reports whether cfg contains certificates or non-default TLS settings.
 func tlsConfigCarriesMaterial(cfg *tls.Config) bool {
 	if cfg == nil {
 		return false
@@ -185,6 +188,7 @@ func fallbackDialer() *net.Dialer {
 }
 
 // loadClientKeyPair resolves the client certificate material and enforces the
+// loadClientKeyPair loads the configured client certificate and private key PEM data.
 // loadClientKeyPair loads the configured client certificate and private key PEM data.
 // It requires the certificate and key to be provided together and requires both when client authentication is mandatory.
 func loadClientKeyPair(cfg *ClientTLSConfig) (certPEM, keyPEM []byte, err error) {
