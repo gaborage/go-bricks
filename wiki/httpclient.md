@@ -159,11 +159,12 @@ replaced. When the slot holds an opaque (non-`*http.Transport`) `RoundTripper`
 instead, composition is not possible at all: the `RoundTripper` is discarded
 wholesale along with any proxy, dialer or TLS settings it carried, and
 `Build()` WARNs. The mirror direction WARNs too — calling `WithTransport`
-after `WithTLSConfig` discards the loaded client certificate and pinned roots.
-**None of this applies to `WithTLSConfig(nil)`**, which returns immediately: the
-slot keeps whatever it held, nothing is cloned, replaced or cleared, and no
-displacement is recorded. Wrapper layers always stack on top of whichever base
-results:
+after `WithTLSConfig` discards the loaded client certificate and pinned roots,
+unless the replacement carries meaningful TLS material of its own (see the
+carve-out below). **None of this applies to `WithTLSConfig(nil)`**, which returns
+immediately: the slot keeps whatever it held, nothing is cloned, replaced or
+cleared, and no displacement is recorded. Wrapper layers always stack on top of
+whichever base results:
 
 ```go
 // mTLS base, JOSE on top — call order is irrelevant.
@@ -175,6 +176,32 @@ httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).WithJOSE(joseCfg).Build()
 // tlsCfg — proxy/dialer/pool settings from customTransport survive.
 httpclient.NewBuilder(logger).WithTransport(customTransport).WithTLSConfig(tlsCfg).Build()
 ```
+
+**One deliberate carve-out:** if the `RoundTripper` passed to `WithTransport`
+*after* `WithTLSConfig` is itself a `*http.Transport` that decides its own TLS —
+a `TLSClientConfig` carrying meaningful material, or a `DialTLS`/`DialTLSContext`
+— `Build()` does not report a discard. This is the same "does it carry TLS
+material" question the compose direction asks, so both call orders answer it
+identically. Be clear about what the carve-out means for precedence, though: it
+is **not** that both configs survive. The replacement is what takes effect on the
+built client; the earlier `tlsCfg` passed to `WithTLSConfig` is entirely ignored
+— last-call-wins still governs which TLS material actually reaches the wire, the
+carve-out just means that outcome isn't a *surprise* to the caller, since they
+configured the replacement themselves:
+
+```go
+// No WARN: replacement carries its own TLSClientConfig — but myTLSConfig on
+// replacement is what the client actually uses; tlsCfg (passed to WithTLSConfig
+// above) is discarded, not merged with it.
+replacement := &http.Transport{TLSClientConfig: myTLSConfig}
+httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).WithTransport(replacement).Build()
+```
+
+A replacement setting `DialTLSContext` (or the deprecated `DialTLS`) is silent
+for the same reason, and there the precedence is net/http's rather than this
+builder's: for a non-proxied HTTPS request the custom TLS dialer performs the
+handshake, so `TLSClientConfig` is ignored whether it came from `WithTLSConfig`
+or from the replacement itself.
 
 The passed `*tls.Config` is cloned, so one loaded config can be shared across
 clients safely. The copy is **shallow**, so treat the config and everything it

@@ -286,7 +286,9 @@ func (b *Builder) fillBaseSlot(rt nethttp.RoundTripper, actor baseSource) {
 // It supplies the innermost transport: wrappers registered by other options (WithJOSE, for
 // example) are layered above it at Build time regardless of call order. Passing nil vacates
 // the base-transport slot; if WithTLSConfig had filled it, Build warns that the loaded TLS
-// material is discarded.
+// material is discarded — unless the transport passed here is itself a *nethttp.Transport
+// deciding its own TLS (transportCarriesTLSMaterial). The replacement still wins either
+// way; the two configs are never merged, so that case is silent, not composed.
 func (b *Builder) WithTransport(transport nethttp.RoundTripper) *Builder {
 	b.fillBaseSlot(transport, baseTransport)
 	return b
@@ -399,9 +401,16 @@ func (b *Builder) discardsClientTransport() bool {
 	return b.transport == nil && b.chain != nil && b.httpClient != nil && b.httpClient.Transport != nil
 }
 
-// discardsTLSConfig reports that WithTLSConfig loaded a client certificate and
-// pinned roots into the base slot and a later WithTransport took it over.
-func (b *Builder) discardsTLSConfig() bool { return b.displacedBase == baseTLS }
+// discardsTLSConfig reports WithTLSConfig's material displaced by a later
+// WithTransport, unless the replacement decides its own TLS — the same
+// predicate the compose direction uses, so neither call order can drift.
+func (b *Builder) discardsTLSConfig() bool {
+	if b.displacedBase != baseTLS {
+		return false
+	}
+	replacement, ok := b.transport.(*nethttp.Transport)
+	return !ok || !transportCarriesTLSMaterial(replacement)
+}
 
 // discardsProvidedTransport is the mirror of discardsTLSConfig: WithTransport's
 // RoundTripper was displaced by a later WithTLSConfig. Cleared by WithTLSConfig
