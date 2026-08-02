@@ -358,12 +358,15 @@ Override with environment variables: `SERVER_PATH_BASE`, `SERVER_PATH_HEALTH`, `
 Production-ready HTTP client with built-in observability and resilience.
 
 ```go
-client := httpclient.NewBuilder(logger).
+client, err := httpclient.NewBuilder(logger).
     WithTimeout(10 * time.Second).
     WithRetries(3, 500 * time.Millisecond).
     WithDefaultHeader("Accept", "application/json").
     WithW3CTrace(true).
     Build()
+if err != nil {
+    return err
+}
 
 resp, err := client.Get(ctx, &httpclient.Request{
     URL: "https://api.example.com/users",

@@ -685,6 +685,44 @@ ALB let it through" for application-level authorization.
 
 ---
 
+### [ADR-044: `httpclient.Builder.Build` Fails Closed on Unsafe Transport Composition](adr_044_httpclient_build_fail_closed.md)
+
+**Date:** 2026-08-01 | **Status:** Accepted
+
+`Builder.Build()` changes from `Client` to `(Client, error)`: it now fails construction,
+instead of logging an easily-missed WARN, when a `WithTransport`/`WithTLSConfig`/
+`WithHTTPClient` composition would silently discard a client certificate, pinned roots, or a
+caller-supplied transport. Two fixes precede the hard failure so it is neither unfixable nor
+overly aggressive: `WithTLSConfig` now clones and composes onto an incumbent
+`*http.Transport` in the base-transport slot instead of always displacing it with a fresh
+`DefaultTransport` clone (so `WithTransport(custom).WithTLSConfig(cfg)` keeps `custom`'s
+proxy/dialer settings *and* gets `cfg`'s TLS material — provided `custom` decides no TLS of
+its own, meaning no meaningful `TLSClientConfig` and no `DialTLS`/`DialTLSContext`, both of
+which `WithTLSConfig` replaces or clears), and the case-1 discard predicate is
+suppressed when the displacing transport is itself a `*http.Transport` deciding its own TLS
+(`transportCarriesTLSMaterial`, not a bare non-nil check —
+an ALPN-only or nil config still reports) — the caller followed the old WARN's advice
+literally, so the fix now actually works. An earlier draft (PR #839) shipped a separate `BuildStrict` entrypoint
+instead; this ADR collapses to one `Build` rather than two doors into the same hazard. Error,
+not panic, because the predicates are data-dependent on runtime config values, so a panic
+would be green in staging and crash-looping in production from identical source. Validates
+base-transport-slot displacement only — not `WithHTTPClient`'s deliberate override,
+`InsecureSkipVerify`, a hand-built `tls.Config` missing `MinVersion`, `WithTLSConfig(nil)`
+from a swallowed loader error, or a replaced `net/http.DefaultTransport`. `NewClient`'s
+signature is unchanged. Landed within days of `WithTLSConfig`'s v0.55.0 release, before any
+fleet accumulated call sites depending on the WARN-only behavior.
+
+**Key Benefits:** Turns a silently-degraded TLS/transport posture into a compile-time
+call-site error — for every site that captures the result by single-value assignment;
+four other call shapes still compile and drop the error, so they need manual review
+(see [migrations.md](migrations.md) `[C56.6]`, the authoritative list) — and, where the
+builder runs at startup, a startup-time construction error instead of a runtime surprise;
+fixes two real compositions (proxy+TLS, and the case-1 remedy) that were previously
+either impossible or non-functional; keeps one builder entrypoint instead of a
+`Build`/`BuildStrict` split.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -694,7 +732,7 @@ ALB let it through" for application-level authorization.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-043) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-044) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

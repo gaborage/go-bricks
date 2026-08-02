@@ -4,7 +4,7 @@ Enterprise Go microservice toolkit (Go 1.26+). Provides multi-database access, t
 
 ## Version & Compatibility
 
-- Reflects **go-bricks v0.55.0**. The v0.49.0 line applied messaging defaults in *every* deployment mode with mode-aware pool sizing (publisher `maxcached`, `database.manager.maxsize`, cache `maxsize` scale to the tenant limit in multi-tenant), added `database.manager.*` keys, wired `messaging.reconnect` delay/backoff keys live, required unit-suffixed durations (write `"300s"`, not `300`), and hardened the publisher lifecycle (cold-publish readiness wait + 1h single-tenant publisher IdleTTL). Since then: v0.50.0 made dev CORS wildcard opt-in (`CORS_DEV_WILDCARD`, ADR-038) and `multitenant.resolver.order` REQUIRED for `type: composite` (ADR-039); v0.51.0 made `server.bodylimit` configurable (echo v5.3.0 bump); v0.52.0 made messaging declaration `Args` reach the broker via a breaking `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change (ADR-040); v0.53.0 added `DeclareQueueWithDLQ` declarative dead-lettering; v0.54.0 shipped the `outbox.tenancy`/`inbox.tenancy: shared` control-plane ledger (ADR-041) and duplicate-route-registration fail-fast; v0.55.0 shipped the `database.Execute*` query/exec helpers with `database.Raw` and typed errors (hop E55), deterministic httpclient transport-wrapper layering at `Build()`, config-driven httpclient client TLS, and the `server.tls.*` HTTPS listener (ADR-042). Unreleased on `main` (shipping in v0.56.0): the ALB forwarded-client-cert identity middleware (`server.forwardedclientcert.*`, ADR-043) and the `seal-payload` CLI (#776). Requires **Go 1.26+**.
+- Reflects **go-bricks v0.55.0**. The v0.49.0 line applied messaging defaults in *every* deployment mode with mode-aware pool sizing (publisher `maxcached`, `database.manager.maxsize`, cache `maxsize` scale to the tenant limit in multi-tenant), added `database.manager.*` keys, wired `messaging.reconnect` delay/backoff keys live, required unit-suffixed durations (write `"300s"`, not `300`), and hardened the publisher lifecycle (cold-publish readiness wait + 1h single-tenant publisher IdleTTL). Since then: v0.50.0 made dev CORS wildcard opt-in (`CORS_DEV_WILDCARD`, ADR-038) and `multitenant.resolver.order` REQUIRED for `type: composite` (ADR-039); v0.51.0 made `server.bodylimit` configurable (echo v5.3.0 bump); v0.52.0 made messaging declaration `Args` reach the broker via a breaking `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change (ADR-040); v0.53.0 added `DeclareQueueWithDLQ` declarative dead-lettering; v0.54.0 shipped the `outbox.tenancy`/`inbox.tenancy: shared` control-plane ledger (ADR-041) and duplicate-route-registration fail-fast; v0.55.0 shipped the `database.Execute*` query/exec helpers with `database.Raw` and typed errors (hop E55), deterministic httpclient transport-wrapper layering at `Build()`, config-driven httpclient client TLS, and the `server.tls.*` HTTPS listener (ADR-042). Unreleased on `main` (shipping in v0.56.0): the ALB forwarded-client-cert identity middleware (`server.forwardedclientcert.*`, ADR-043), the `seal-payload` CLI (#776), and a breaking `httpclient.Builder.Build() (Client, error)` signature change — `Build` now fails construction on an unsafe base-transport-slot displacement instead of warning and returning a silently-degraded client (ADR-044). Requires **Go 1.26+**.
 - Authoritative sources: `CHANGELOG.md` (release log) and `wiki/migrations.md` — the **per-hop migration runbook** (detect → apply → verify atoms, one hop per release, chainable across any version range). This file carries the ladder + agent protocol; the runbook holds the full atoms.
 - Upgrading an existing app? Read that section first. Across v0.40 → v0.45 **most breaks fail silently** — a renamed config key stops binding, a default flips — with no compile error. The compiler-caught API breaks are concentrated in v0.41.0 (CORS / LogEvent / SetupMiddlewares), v0.43.0 (per-tenant `ReleaseFunc`, `PoolKeepAliveConfig.Enabled`), v0.45.0 (echo-free boundary types, the `outbox.Store` interface), and v0.52.0 (the `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change, ADR-040). Not everything is silent: v0.50.0's required `multitenant.resolver.order` for `type: composite` (ADR-039) fails **fast** at startup with a config-validation error.
 
@@ -3706,13 +3706,16 @@ unique `iat`/`jti` per attempt). Non-`application/jose` responses pass through
 untouched.
 
 ```go
-client := httpclient.NewBuilder(log).
+client, err := httpclient.NewBuilder(log).
     WithJOSE(httpclient.JOSEConfig{
         Outbound: outboundPolicy, // *jose.Policy — required (sign+encrypt requests)
         Inbound:  inboundPolicy,  // *jose.Policy — optional (decrypt+verify responses); nil = plaintext responses
         Resolver: resolver,       // jose.KeyResolver — supplies keys for both directions
     }).
     Build()
+if err != nil {
+    return err
+}
 
 resp, err := client.Post(ctx, &httpclient.Request{URL: partnerURL, Body: body})
 ```
@@ -4369,10 +4372,13 @@ Full guide: [wiki/migration_audit.md](wiki/migration_audit.md). Decision rationa
 
 ```go
 // Outbound HTTP client with OpenTelemetry metrics (SLO attribution via peer.service)
-client := httpclient.NewBuilder(log).
+client, err := httpclient.NewBuilder(log).
     WithTimeout(10 * time.Second).
     WithPeerName("stripe").
     Build()
+if err != nil {
+    return err
+}
 
 resp, err := client.Get(ctx, &httpclient.Request{URL: "https://api.stripe.com/v1/charges"})
 ```
@@ -5585,7 +5591,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading (ADR-040) |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | none | none |
-| E56  | v0.55.0 → v0.56.0 | additive (safe) | none | none |
+| E56  | v0.55.0 → v0.56.0 | compile-break | 1 | `httpclient.Builder.Build()` returns `(Client, error)` (C56.6, ADR-044) — the compiler catches only single-value captures; a bare `Build()` statement, `client, _ := Build()`, `defer` and `go` all still compile and silently drop the error, so audit those by hand |
 
 Agent protocol (condensed — full version in the runbook):
 1. Detect CURRENT: `go list -m -f '{{.Version}}{{if .Replace}} =>{{.Replace.Path}}{{end}}' github.com/gaborage/go-bricks` (a local `replace` → resolve the checkout's tag).

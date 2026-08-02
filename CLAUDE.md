@@ -238,7 +238,7 @@ For lifecycle defaults, performance benchmarks, configuration, and multi-tenant 
 
 ### HTTP Client
 
-Production-ready HTTP client: `httpclient.NewBuilder(logger)` fluent chain (`WithTimeout`, `WithRetries`, `WithW3CTrace`, `WithPeerName`) then `Build()` (full example in [llms.txt](llms.txt)). For full options and interceptor patterns, see [wiki/httpclient.md](wiki/httpclient.md).
+Production-ready HTTP client: `httpclient.NewBuilder(logger)` fluent chain (`WithTimeout`, `WithRetries`, `WithW3CTrace`, `WithPeerName`) then `Build()`, which returns `(Client, error)` and fails construction when a `WithTransport`/`WithTLSConfig`/`WithHTTPClient` composition would silently discard TLS material or a caller-supplied `RoundTripper` (ADR-044; full example in [llms.txt](llms.txt)). For full options and interceptor patterns, see [wiki/httpclient.md](wiki/httpclient.md).
 
 ### Scheduler
 
@@ -396,6 +396,7 @@ GoBricks has shipped several breaking changes for idiomatic Go conventions. Gree
 - **CORS dev wildcard opt-in (ADR-038):** the dev-permissive reflect-any-origin + `AllowCredentials` CORS posture now requires `CORS_DEV_WILDCARD=true` in addition to a development-alias (or koanf-defaulted) `APP_ENV`; without the flag, dev fails closed like every other env. `CORS_ORIGINS` strict allowlisting is unchanged. The flag is inert outside development aliases.
 - **Composite resolver order required (ADR-039):** `resolver.order` is mandatory for `multitenant.resolver.type: composite` — no default; a composite deployment fails at startup until it declares one.
 - **Declaration Args reach the broker (ADR-040):** `messaging.AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` now take `(ctx context.Context, *…Declaration)` and forward `Args` to RabbitMQ — may surface `406 PRECONDITION_FAILED` against ops-provisioned queues whose args differ.
+- **httpclient Build fail-closed (ADR-044):** `httpclient.Builder.Build()` now returns `(Client, error)` instead of `Client` — it fails construction (rather than warning) when a `WithTransport`/`WithTLSConfig`/`WithHTTPClient` composition would silently discard a client certificate, pinned roots, or a caller's `RoundTripper`. `WithTLSConfig` composes onto an incumbent transport only when it is a concrete `*http.Transport` that decides no TLS of its own — no meaningful `TLSClientConfig` and no `DialTLS`/`DialTLSContext`, both of which it replaces or clears; an opaque `RoundTripper` still errors. Only single-value `Build()` captures fail to compile: a bare statement, `client, _ :=`, `defer` and `go` all still compile and drop the error. `NewClient`'s signature is unchanged.
 
 ## File Organization
 

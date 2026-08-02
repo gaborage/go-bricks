@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -516,9 +517,10 @@ func TestLoggingIntegration(t *testing.T) {
 		fakeLog := &fakeLogger{}
 
 		// Create client with logging configuration
-		builtClient := NewBuilder(fakeLog).
+		builtClient, buildErr := NewBuilder(fakeLog).
 			WithTimeout(5 * time.Second).
 			Build()
+		require.NoError(t, buildErr)
 
 		// Access internal client to test logging methods
 		clientImpl := builtClient.(*client)
@@ -580,28 +582,31 @@ func TestLoggingIntegration(t *testing.T) {
 func TestBuilderPayloadLoggingSetters(t *testing.T) {
 	t.Run("WithLogPayloads enables payload logging", func(t *testing.T) {
 		fakeLog := &fakeLogger{}
-		builtClient := NewBuilder(fakeLog).
+		builtClient, err := NewBuilder(fakeLog).
 			WithLogPayloads(true).
 			Build()
+		require.NoError(t, err)
 		c := builtClient.(*client)
 		assert.True(t, c.config.LogPayloads)
 	})
 
 	t.Run("WithLogPayloads false disables payload logging", func(t *testing.T) {
 		fakeLog := &fakeLogger{}
-		builtClient := NewBuilder(fakeLog).
+		builtClient, err := NewBuilder(fakeLog).
 			WithLogPayloads(false).
 			Build()
+		require.NoError(t, err)
 		c := builtClient.(*client)
 		assert.False(t, c.config.LogPayloads)
 	})
 
 	t.Run("WithMaxPayloadLogBytes sets limit", func(t *testing.T) {
 		fakeLog := &fakeLogger{}
-		builtClient := NewBuilder(fakeLog).
+		builtClient, err := NewBuilder(fakeLog).
 			WithLogPayloads(true).
 			WithMaxPayloadLogBytes(2048).
 			Build()
+		require.NoError(t, err)
 		c := builtClient.(*client)
 		assert.True(t, c.config.LogPayloads)
 		assert.Equal(t, 2048, c.config.MaxPayloadLogBytes)
@@ -609,9 +614,10 @@ func TestBuilderPayloadLoggingSetters(t *testing.T) {
 
 	t.Run("WithMaxPayloadLogBytes ignores zero or negative", func(t *testing.T) {
 		fakeLog := &fakeLogger{}
-		builtClient := NewBuilder(fakeLog).
+		builtClient, err := NewBuilder(fakeLog).
 			WithMaxPayloadLogBytes(0).
 			Build()
+		require.NoError(t, err)
 		c := builtClient.(*client)
 		// Should retain the default (1024), not override with zero
 		assert.Equal(t, 1024, c.config.MaxPayloadLogBytes)
