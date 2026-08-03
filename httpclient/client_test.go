@@ -79,41 +79,53 @@ func TestNewClient(t *testing.T) {
 	assert.NotNil(t, client)
 }
 
+// TestBuilderBareBuildNeverErrors pins that a bare NewBuilder(log).Build()
+// chain never errors — NewClient relies on this to discard the error unchecked.
+func TestBuilderBareBuildNeverErrors(t *testing.T) {
+	_, err := NewBuilder(createTestLogger()).Build()
+	require.NoError(t, err)
+}
+
 func TestBuilder(t *testing.T) {
 	log := createTestLogger()
 
 	t.Run("default configuration", func(t *testing.T) {
-		client := NewBuilder(log).Build()
+		client, err := NewBuilder(log).Build()
+		require.NoError(t, err)
 		assert.NotNil(t, client)
 	})
 
 	t.Run("with timeout", func(t *testing.T) {
 		timeout := 10 * time.Second
-		client := NewBuilder(log).
+		client, err := NewBuilder(log).
 			WithTimeout(timeout).
 			Build()
+		require.NoError(t, err)
 		assert.NotNil(t, client)
 	})
 
 	t.Run("with retries", func(t *testing.T) {
-		client := NewBuilder(log).
+		client, err := NewBuilder(log).
 			WithRetries(3, 2*time.Second).
 			Build()
+		require.NoError(t, err)
 		assert.NotNil(t, client)
 	})
 
 	t.Run("with basic auth", func(t *testing.T) {
-		client := NewBuilder(log).
+		client, err := NewBuilder(log).
 			WithBasicAuth("user", "pass").
 			Build()
+		require.NoError(t, err)
 		assert.NotNil(t, client)
 	})
 
 	t.Run("with default headers", func(t *testing.T) {
-		client := NewBuilder(log).
+		client, err := NewBuilder(log).
 			WithDefaultHeader(testAPIKey, testAPIValue).
 			WithDefaultHeader(testUserAgent, testAgentValue).
 			Build()
+		require.NoError(t, err)
 		assert.NotNil(t, client)
 	})
 
@@ -128,20 +140,22 @@ func TestBuilder(t *testing.T) {
 			return nil
 		}
 
-		client := NewBuilder(log).
+		client, err := NewBuilder(log).
 			WithRequestInterceptor(reqInterceptor).
 			WithResponseInterceptor(respInterceptor).
 			Build()
+		require.NoError(t, err)
 		assert.NotNil(t, client)
 	})
 
 	t.Run("with custom http client", func(t *testing.T) {
 		customTransport := &stubRoundTripper{name: "custom"}
 		custom := &nethttp.Client{Timeout: 123 * time.Millisecond, Transport: customTransport}
-		built := NewBuilder(log).
+		built, err := NewBuilder(log).
 			WithHTTPClient(custom).
 			WithTimeout(5 * time.Second).
 			Build()
+		require.NoError(t, err)
 
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
@@ -152,10 +166,11 @@ func TestBuilder(t *testing.T) {
 
 	t.Run("with custom http client zero timeout uses builder timeout", func(t *testing.T) {
 		custom := &nethttp.Client{}
-		built := NewBuilder(log).
+		built, err := NewBuilder(log).
 			WithHTTPClient(custom).
 			WithTimeout(2 * time.Second).
 			Build()
+		require.NoError(t, err)
 
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
@@ -168,10 +183,11 @@ func TestBuilder(t *testing.T) {
 		tuned := &nethttp.Client{Timeout: 5 * time.Second, Transport: sentinel}
 		override := &stubRoundTripper{name: "override"}
 
-		built := NewBuilder(log).
+		built, err := NewBuilder(log).
 			WithHTTPClient(tuned).
 			WithTransport(override).
 			Build()
+		require.NoError(t, err)
 
 		assert.Same(t, sentinel, tuned.Transport, "caller's client transport must be untouched by Build")
 
@@ -186,8 +202,10 @@ func TestBuilder(t *testing.T) {
 		transportA := &stubRoundTripper{name: "a"}
 		transportB := &stubRoundTripper{name: "b"}
 
-		builtA := NewBuilder(log).WithHTTPClient(tuned).WithTransport(transportA).Build()
-		builtB := NewBuilder(log).WithHTTPClient(tuned).WithTransport(transportB).Build()
+		builtA, errA := NewBuilder(log).WithHTTPClient(tuned).WithTransport(transportA).Build()
+		require.NoError(t, errA)
+		builtB, errB := NewBuilder(log).WithHTTPClient(tuned).WithTransport(transportB).Build()
+		require.NoError(t, errB)
 
 		clientImplA, ok := builtA.(*client)
 		require.True(t, ok)
@@ -203,10 +221,13 @@ func TestBuilder(t *testing.T) {
 		sentinel := &stubRoundTripper{name: "sentinel"}
 		tuned := &nethttp.Client{Timeout: 5 * time.Second, Transport: sentinel}
 
-		built := NewBuilder(log).
+		// WithTransport(sentinel) avoids the "wrapper without WithTransport" hazard.
+		built, err := NewBuilder(log).
 			WithHTTPClient(tuned).
+			WithTransport(sentinel).
 			WithJOSE(JOSEConfig{}).
 			Build()
+		require.NoError(t, err)
 
 		assert.Same(t, sentinel, tuned.Transport, "caller's client must be untouched by WithJOSE+Build")
 
@@ -214,14 +235,15 @@ func TestBuilder(t *testing.T) {
 		require.True(t, ok)
 		joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
 		require.True(t, ok, "built client must carry the JOSE transport")
-		assert.IsType(t, defaultTransportShim{}, joseTransport.Inner, "no explicit base: chain seeds the DefaultTransport shim, never nil")
+		assert.Same(t, sentinel, joseTransport.Inner, "explicit base must survive under JOSE wrapping")
 	})
 
 	t.Run("with custom transport", func(t *testing.T) {
 		transport := &stubRoundTripper{name: "stub"}
-		built := NewBuilder(log).
+		built, err := NewBuilder(log).
 			WithTransport(transport).
 			Build()
+		require.NoError(t, err)
 
 		clientImpl := built.(*client)
 		assert.Equal(t, transport, clientImpl.httpClient.Transport)
@@ -229,9 +251,10 @@ func TestBuilder(t *testing.T) {
 
 	t.Run("with trace ID header", func(t *testing.T) {
 		customHeader := "X-Custom-Trace-ID"
-		builtClient := NewBuilder(log).
+		builtClient, err := NewBuilder(log).
 			WithTraceIDHeader(customHeader).
 			Build()
+		require.NoError(t, err)
 
 		// Assert against the client's config since tests are in the same package
 		clientImpl := builtClient.(*client)
@@ -239,9 +262,10 @@ func TestBuilder(t *testing.T) {
 	})
 
 	t.Run("with trace ID header empty string", func(t *testing.T) {
-		builtClient := NewBuilder(log).
+		builtClient, err := NewBuilder(log).
 			WithTraceIDHeader("").
 			Build()
+		require.NoError(t, err)
 
 		// Empty string should not change the default
 		clientImpl := builtClient.(*client)
@@ -255,9 +279,10 @@ func TestBuilder(t *testing.T) {
 			return testCustomTrace
 		}
 
-		builtClient := NewBuilder(log).
+		builtClient, err := NewBuilder(log).
 			WithTraceIDGenerator(customGenerator).
 			Build()
+		require.NoError(t, err)
 
 		clientImpl := builtClient.(*client)
 		assert.NotNil(t, clientImpl.config.NewTraceID)
@@ -269,9 +294,10 @@ func TestBuilder(t *testing.T) {
 	})
 
 	t.Run("with nil trace ID generator", func(t *testing.T) {
-		builtClient := NewBuilder(log).
+		builtClient, err := NewBuilder(log).
 			WithTraceIDGenerator(nil).
 			Build()
+		require.NoError(t, err)
 
 		// nil generator should not change the default
 		clientImpl := builtClient.(*client)
@@ -289,9 +315,10 @@ func TestBuilder(t *testing.T) {
 			return "", false
 		}
 
-		builtClient := NewBuilder(log).
+		builtClient, err := NewBuilder(log).
 			WithTraceIDExtractor(customExtractor).
 			Build()
+		require.NoError(t, err)
 
 		clientImpl := builtClient.(*client)
 		assert.NotNil(t, clientImpl.config.TraceIDExtractor)
@@ -309,9 +336,10 @@ func TestBuilder(t *testing.T) {
 	})
 
 	t.Run("with nil trace ID extractor", func(t *testing.T) {
-		builtClient := NewBuilder(log).
+		builtClient, err := NewBuilder(log).
 			WithTraceIDExtractor(nil).
 			Build()
+		require.NoError(t, err)
 
 		// nil extractor should not change the default
 		clientImpl := builtClient.(*client)
@@ -319,18 +347,20 @@ func TestBuilder(t *testing.T) {
 	})
 
 	t.Run("with W3C trace enabled", func(t *testing.T) {
-		builtClient := NewBuilder(log).
+		builtClient, err := NewBuilder(log).
 			WithW3CTrace(true).
 			Build()
+		require.NoError(t, err)
 
 		clientImpl := builtClient.(*client)
 		assert.True(t, clientImpl.config.EnableW3CTrace)
 	})
 
 	t.Run("with W3C trace disabled", func(t *testing.T) {
-		builtClient := NewBuilder(log).
+		builtClient, err := NewBuilder(log).
 			WithW3CTrace(false).
 			Build()
+		require.NoError(t, err)
 
 		clientImpl := builtClient.(*client)
 		assert.False(t, clientImpl.config.EnableW3CTrace)
@@ -347,12 +377,13 @@ func TestBuilder(t *testing.T) {
 			return "extracted-from-ctx", true
 		}
 
-		builtClient := NewBuilder(log).
+		builtClient, err := NewBuilder(log).
 			WithTraceIDHeader("X-My-Trace").
 			WithTraceIDGenerator(customGenerator).
 			WithTraceIDExtractor(customExtractor).
 			WithW3CTrace(false).
 			Build()
+		require.NoError(t, err)
 
 		clientImpl := builtClient.(*client)
 		assert.Equal(t, "X-My-Trace", clientImpl.config.TraceIDHeader)
@@ -478,10 +509,11 @@ func TestClientHeaders(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithDefaultHeader(testUserAgent, testAgentValue).
 			WithDefaultHeader(testAPIKey, testAPIValue).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 
@@ -496,9 +528,10 @@ func TestClientHeaders(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithDefaultHeader(testUserAgent, "default-agent").
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{
 			URL: server.URL,
@@ -525,9 +558,10 @@ func TestClientBasicAuth(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithBasicAuth("user", "pass").
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 
@@ -545,9 +579,10 @@ func TestClientBasicAuth(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithBasicAuth("client-user", "client-pass").
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{
 			URL: server.URL,
@@ -597,9 +632,10 @@ func TestClientInterceptors(t *testing.T) {
 			return nil
 		}
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithRequestInterceptor(reqInterceptor).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 
@@ -619,9 +655,10 @@ func TestClientInterceptors(t *testing.T) {
 			return nil
 		}
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithResponseInterceptor(respInterceptor).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 
@@ -644,9 +681,10 @@ func TestInterceptorErrors(t *testing.T) {
 			return fmt.Errorf("boom")
 		}
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithRequestInterceptor(reqInterceptor).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 		_, err := client.Get(context.Background(), req)
@@ -664,9 +702,10 @@ func TestInterceptorErrors(t *testing.T) {
 			return fmt.Errorf("boom resp")
 		}
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithResponseInterceptor(respInterceptor).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 		_, err := client.Get(context.Background(), req)
@@ -714,9 +753,10 @@ func TestClientErrorHandling(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithTimeout(10 * time.Millisecond).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 
@@ -767,9 +807,10 @@ func TestClientRetries(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithRetries(2, 5*time.Millisecond).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 		resp, err := client.Get(context.Background(), req)
@@ -787,9 +828,10 @@ func TestClientRetries(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithRetries(3, 5*time.Millisecond).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 		_, err := client.Get(context.Background(), req)
@@ -806,10 +848,11 @@ func TestClientRetries(t *testing.T) {
 		}))
 		defer server.Close()
 
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithTimeout(10*time.Millisecond).
 			WithRetries(1, 5*time.Millisecond).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 		_, err := client.Get(context.Background(), req)
@@ -853,10 +896,11 @@ func TestRequestInterceptorRunsPerAttempt(t *testing.T) {
 		return nil
 	}
 
-	client := NewBuilder(log).
+	client, buildErr := NewBuilder(log).
 		WithRetries(3, 5*time.Millisecond).
 		WithRequestInterceptor(reqInterceptor).
 		Build()
+	require.NoError(t, buildErr)
 
 	req := &Request{URL: server.URL}
 	resp, err := client.Get(context.Background(), req)
@@ -983,9 +1027,10 @@ func TestTraceIDPropagation(t *testing.T) {
 		defer server.Close()
 
 		// Create client with trace ID interceptor
-		client := NewBuilder(log).
+		client, buildErr := NewBuilder(log).
 			WithRequestInterceptor(NewTraceIDInterceptor()).
 			Build()
+		require.NoError(t, buildErr)
 
 		req := &Request{URL: server.URL}
 		ctx := WithTraceID(context.Background(), expectedTraceID)
@@ -1134,9 +1179,10 @@ func TestHTTPClientMetricsSuccessPath(t *testing.T) {
 	defer server.Close()
 
 	log := createTestLogger()
-	c := NewBuilder(log).
+	c, err := NewBuilder(log).
 		WithPeerName("test-peer").
 		Build()
+	require.NoError(t, err)
 
 	resp, err := c.Get(context.Background(), &Request{URL: server.URL})
 	require.NoError(t, err)
@@ -1197,10 +1243,11 @@ func TestHTTPClientMetricsRetryOn503(t *testing.T) {
 	defer server.Close()
 
 	log := createTestLogger()
-	c := NewBuilder(log).
+	c, err := NewBuilder(log).
 		WithPeerName("retry-peer").
 		WithRetries(2, 1*time.Millisecond).
 		Build()
+	require.NoError(t, err)
 
 	resp, err := c.Get(context.Background(), &Request{URL: server.URL})
 	require.NoError(t, err)
@@ -1252,10 +1299,11 @@ func TestHTTPClientMetricsTimeoutClassification(t *testing.T) {
 	defer server.Close()
 
 	log := createTestLogger()
-	c := NewBuilder(log).
+	c, buildErr := NewBuilder(log).
 		WithPeerName("timeout-peer").
 		WithTimeout(10 * time.Millisecond).
 		Build()
+	require.NoError(t, buildErr)
 
 	_, err := c.Get(context.Background(), &Request{URL: server.URL})
 	require.Error(t, err)
@@ -1304,10 +1352,11 @@ func TestHTTPClientMetricsBuildResponseFailureRecorded(t *testing.T) {
 	}
 
 	log := createTestLogger()
-	c := NewBuilder(log).
+	c, buildErr := NewBuilder(log).
 		WithPeerName("interceptor-fail-peer").
 		WithResponseInterceptor(respInterceptor).
 		Build()
+	require.NoError(t, buildErr)
 
 	_, err := c.Get(context.Background(), &Request{URL: server.URL})
 	require.Error(t, err)
@@ -1604,7 +1653,8 @@ func TestClientDoEmitsParentAndChildSpansOnSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewBuilder(createTestLogger()).WithPeerName("test-peer").Build()
+	c, err := NewBuilder(createTestLogger()).WithPeerName("test-peer").Build()
+	require.NoError(t, err)
 	resp, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
 	require.NoError(t, err)
 	require.Equal(t, nethttp.StatusOK, resp.StatusCode)
@@ -1631,7 +1681,8 @@ func TestClientDoEmitsParentAndChildSpansWithoutPeer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewBuilder(createTestLogger()).Build()
+	c, buildErr := NewBuilder(createTestLogger()).Build()
+	require.NoError(t, buildErr)
 	_, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
 	require.NoError(t, err)
 
@@ -1652,7 +1703,8 @@ func TestClientDoInjectsRealTraceparentWhenSpanActive(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
+	c, buildErr := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
+	require.NoError(t, buildErr)
 	_, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
 	require.NoError(t, err)
 
@@ -1692,7 +1744,8 @@ func TestClientDoSyntheticTraceparentWhenNoTracerActive(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
+	c, buildErr := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
+	require.NoError(t, buildErr)
 	_, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
 	require.NoError(t, err)
 	require.NotEmpty(t, receivedTP,
@@ -1722,7 +1775,8 @@ func TestClientDoPreservesCallerSuppliedTraceparent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
+	c, buildErr := NewBuilder(createTestLogger()).WithW3CTrace(true).Build()
+	require.NoError(t, buildErr)
 	_, err := c.Get(context.Background(), &Request{
 		URL:     server.URL + "/foo",
 		Headers: map[string]string{"traceparent": pinned},
@@ -1748,10 +1802,11 @@ func TestClientDoRetrySequenceEmitsParentPlusChildrenWithResendCounts(t *testing
 	}))
 	defer server.Close()
 
-	c := NewBuilder(createTestLogger()).
+	c, err := NewBuilder(createTestLogger()).
 		WithRetries(2, time.Millisecond).
 		WithPeerName("flaky-svc").
 		Build()
+	require.NoError(t, err)
 	resp, err := c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
 	require.NoError(t, err)
 	require.Equal(t, nethttp.StatusOK, resp.StatusCode)
@@ -1824,11 +1879,12 @@ func TestClientDoPanicInResponseInterceptorEndsBothSpansWithErrorType(t *testing
 	}))
 	defer server.Close()
 
-	c := NewBuilder(createTestLogger()).
+	c, buildErr := NewBuilder(createTestLogger()).
 		WithResponseInterceptor(func(_ context.Context, _ *nethttp.Request, _ *nethttp.Response) error {
 			panic("user-supplied response interceptor panicked")
 		}).
 		Build()
+	require.NoError(t, buildErr)
 
 	require.Panics(t, func() {
 		_, _ = c.Get(context.Background(), &Request{URL: server.URL + "/foo"})
@@ -1850,7 +1906,8 @@ func TestClientDoTransportErrorSpan(t *testing.T) {
 	defer cleanup()
 
 	// Address that should fail to connect: closed loopback port.
-	c := NewBuilder(createTestLogger()).WithPeerName("dead-svc").Build()
+	c, buildErr := NewBuilder(createTestLogger()).WithPeerName("dead-svc").Build()
+	require.NoError(t, buildErr)
 	_, err := c.Get(context.Background(), &Request{URL: "http://127.0.0.1:1/foo"})
 	require.Error(t, err)
 
@@ -1893,19 +1950,23 @@ func TestBuilderTransportChainOrderIndependence(t *testing.T) {
 
 	cases := []struct {
 		name  string
-		build func(base nethttp.RoundTripper) Client
+		build func(t *testing.T, base nethttp.RoundTripper) Client
 	}{
 		{
 			// Regression: WithTransport after WithJOSE used to discard the JOSE layer.
 			name: "jose_then_transport",
-			build: func(base nethttp.RoundTripper) Client {
-				return NewBuilder(log).WithJOSE(JOSEConfig{}).WithTransport(base).Build()
+			build: func(t *testing.T, base nethttp.RoundTripper) Client {
+				built, err := NewBuilder(log).WithJOSE(JOSEConfig{}).WithTransport(base).Build()
+				require.NoError(t, err)
+				return built
 			},
 		},
 		{
 			name: "transport_then_jose",
-			build: func(base nethttp.RoundTripper) Client {
-				return NewBuilder(log).WithTransport(base).WithJOSE(JOSEConfig{}).Build()
+			build: func(t *testing.T, base nethttp.RoundTripper) Client {
+				built, err := NewBuilder(log).WithTransport(base).WithJOSE(JOSEConfig{}).Build()
+				require.NoError(t, err)
+				return built
 			},
 		},
 	}
@@ -1913,7 +1974,7 @@ func TestBuilderTransportChainOrderIndependence(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			base := &stubRoundTripper{name: "base"}
-			built := tc.build(base)
+			built := tc.build(t, base)
 
 			clientImpl, ok := built.(*client)
 			require.True(t, ok)
@@ -1947,14 +2008,18 @@ func TestBuilderTransportChainLayerOrdering(t *testing.T) {
 		b := NewBuilder(log).WithTransport(base)
 		b.addTransportWrapper(layerSigner, wrapSigner)
 		b.WithJOSE(JOSEConfig{})
-		assertNesting(t, b.Build(), base)
+		built, err := b.Build()
+		require.NoError(t, err)
+		assertNesting(t, built, base)
 	})
 
 	t.Run("signer_registered_second", func(t *testing.T) {
 		base := &stubRoundTripper{name: "base"}
 		b := NewBuilder(log).WithTransport(base).WithJOSE(JOSEConfig{})
 		b.addTransportWrapper(layerSigner, wrapSigner)
-		assertNesting(t, b.Build(), base)
+		built, err := b.Build()
+		require.NoError(t, err)
+		assertNesting(t, built, base)
 	})
 }
 
@@ -1967,7 +2032,8 @@ func TestBuilderTransportChainNeverPassesNilInner(t *testing.T) {
 		gotInner, applied = inner, true
 		return &wrappingTransport{inner: inner}
 	})
-	b.Build()
+	_, err := b.Build()
+	require.NoError(t, err)
 	require.True(t, applied, "wrapper must have been applied")
 	assert.IsType(t, defaultTransportShim{}, gotInner, "chain must seed the DefaultTransport shim, never a nil inner")
 }
@@ -1980,7 +2046,8 @@ func TestBuilderTransportChainResolvesDefaultTransportPerRequest(t *testing.T) {
 		captured = inner
 		return inner
 	})
-	b.Build() // Build happens BEFORE the global is swapped — that is the point.
+	_, buildErr := b.Build() // Build happens BEFORE the global is swapped — that is the point.
+	require.NoError(t, buildErr)
 	require.NotNil(t, captured)
 
 	// Non-parallel on purpose: the package has no t.Parallel() calls, so swapping
@@ -2006,7 +2073,8 @@ func TestBuilderTransportChainErrorsWhenDefaultTransportIsNil(t *testing.T) {
 		captured = inner
 		return inner
 	})
-	b.Build()
+	_, buildErr := b.Build()
+	require.NoError(t, buildErr)
 	require.NotNil(t, captured)
 
 	// Non-parallel on purpose: the package has no t.Parallel() calls, so swapping
@@ -2065,48 +2133,22 @@ func TestBuilderTransportChainDiscardsClientTransport(t *testing.T) {
 		})
 	}
 
-	t.Run("warned_case_really_replaces_the_transport", func(t *testing.T) {
-		built := NewBuilder(log).WithHTTPClient(withClient()).WithJOSE(JOSEConfig{}).Build()
+	t.Run("hazard_fails_build", func(t *testing.T) {
+		_, err := NewBuilder(log).WithHTTPClient(withClient()).WithJOSE(JOSEConfig{}).Build()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "net/http.DefaultTransport")
+	})
+
+	t.Run("explicit_base_builds_successfully", func(t *testing.T) {
+		built, err := NewBuilder(log).WithHTTPClient(withClient()).WithTransport(base).WithJOSE(JOSEConfig{}).Build()
+		require.NoError(t, err)
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
-		assert.NotSame(t, base, clientImpl.httpClient.Transport, "caller's transport is replaced, not wrapped")
 		joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
-		require.True(t, ok)
-		assert.IsType(t, defaultTransportShim{}, joseTransport.Inner, "no base: chain seeds the shim, which resolves net/http.DefaultTransport per request")
-	})
-
-	t.Run("hazard_emits_the_warning", func(t *testing.T) {
-		spy := &warnSpy{}
-		NewBuilder(spy).WithHTTPClient(withClient()).WithJOSE(JOSEConfig{}).Build()
-		assert.Contains(t, spy.joined(), "net/http.DefaultTransport")
-	})
-
-	t.Run("explicit_base_emits_no_warning", func(t *testing.T) {
-		spy := &warnSpy{}
-		NewBuilder(spy).WithHTTPClient(withClient()).WithTransport(base).WithJOSE(JOSEConfig{}).Build()
-		assert.Empty(t, spy.msgs)
+		require.True(t, ok, "JOSE wrapper must still apply on top of the explicit base")
+		assert.Same(t, base, joseTransport.Inner, "explicit WithTransport base must survive, not be replaced by the DefaultTransport shim")
 	})
 }
-
-// warnSpy captures every message Build passes to Warn().Msg. Embedding the interfaces
-// keeps the double to the two methods Build actually calls; any other method would
-// nil-panic, which is the intent.
-type warnSpy struct {
-	logger.Logger
-	msgs []string
-}
-
-func (s *warnSpy) Warn() logger.LogEvent { return &warnSpyEvent{spy: s} }
-
-// joined flattens all recorded warnings for substring assertions.
-func (s *warnSpy) joined() string { return strings.Join(s.msgs, "\n") }
-
-type warnSpyEvent struct {
-	logger.LogEvent
-	spy *warnSpy
-}
-
-func (e *warnSpyEvent) Msg(msg string) { e.spy.msgs = append(e.spy.msgs, msg) }
 
 func TestBuilderBaseSlotDiscards(t *testing.T) {
 	log := createTestLogger()
@@ -2234,32 +2276,29 @@ func TestBuilderBaseSlotDiscards(t *testing.T) {
 		})
 	}
 
-	t.Run("hazard_emits_the_warning", func(t *testing.T) {
-		spy := &warnSpy{}
-		NewBuilder(spy).WithTLSConfig(newCfg()).WithTransport(stub).Build()
-		assert.Contains(t, spy.joined(), "WithTransport was called after WithTLSConfig")
+	t.Run("hazard_fails_build", func(t *testing.T) {
+		_, err := NewBuilder(log).WithTLSConfig(newCfg()).WithTransport(stub).Build()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "WithTransport was called after WithTLSConfig")
 	})
 
-	t.Run("mirror_hazard_emits_the_warning", func(t *testing.T) {
-		spy := &warnSpy{}
-		NewBuilder(spy).WithTransport(stub).WithTLSConfig(newCfg()).Build()
-		assert.Contains(t, spy.joined(), "WithTLSConfig was called after WithTransport")
+	t.Run("mirror_hazard_fails_build", func(t *testing.T) {
+		_, err := NewBuilder(log).WithTransport(stub).WithTLSConfig(newCfg()).Build()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "WithTLSConfig was called after WithTransport")
 	})
 
-	t.Run("no_collision_emits_no_warning", func(t *testing.T) {
-		spy := &warnSpy{}
-		NewBuilder(spy).WithTLSConfig(newCfg()).Build()
-		assert.Empty(t, spy.msgs)
+	t.Run("no_collision_builds_successfully", func(t *testing.T) {
+		_, err := NewBuilder(log).WithTLSConfig(newCfg()).Build()
+		require.NoError(t, err)
 	})
 
-	t.Run("both_hazards_emit_both_warnings", func(t *testing.T) {
-		spy := &warnSpy{}
+	t.Run("both_hazards_reported_together", func(t *testing.T) {
 		withClient := func() *nethttp.Client { return &nethttp.Client{Transport: stub} }
-		NewBuilder(spy).WithTLSConfig(newCfg()).WithHTTPClient(withClient()).WithTransport(nil).WithJOSE(JOSEConfig{}).Build()
-		require.Len(t, spy.msgs, 2)
-		joined := spy.joined()
-		assert.Contains(t, joined, "WithTransport was called after WithTLSConfig")
-		assert.Contains(t, joined, "net/http.DefaultTransport")
+		_, err := NewBuilder(log).WithTLSConfig(newCfg()).WithHTTPClient(withClient()).WithTransport(nil).WithJOSE(JOSEConfig{}).Build()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "WithTransport was called after WithTLSConfig")
+		assert.Contains(t, err.Error(), "net/http.DefaultTransport")
 	})
 }
 
@@ -2267,15 +2306,15 @@ func TestBuilderBaseSlotDiscards(t *testing.T) {
 // composes onto an incumbent *nethttp.Transport rather than colliding with
 // it; an opaque incumbent can't be cloned and remains a genuine discard.
 func TestBuilderTLSConfigComposesWithIncumbentTransport(t *testing.T) {
+	log := createTestLogger()
 	caPEM, _, _ := newTestCA(t, "compose-ca")
 	cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
 	require.NoError(t, err)
 
 	t.Run("nethttp_transport_incumbent_composes", func(t *testing.T) {
-		spy := &warnSpy{}
 		custom := &nethttp.Transport{MaxIdleConns: 7}
-		built := NewBuilder(spy).WithTransport(custom).WithTLSConfig(cfg).Build()
-		assert.Empty(t, spy.msgs, "composing onto a *http.Transport with no TLS material of its own loses nothing, so it must not warn")
+		built, buildErr := NewBuilder(log).WithTransport(custom).WithTLSConfig(cfg).Build()
+		require.NoError(t, buildErr)
 
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
@@ -2291,10 +2330,9 @@ func TestBuilderTLSConfigComposesWithIncumbentTransport(t *testing.T) {
 	// typed-nil *nethttp.Transport fills the slot with a value that satisfies the
 	// type assertion and panics on Clone(). It must take the empty-slot path.
 	t.Run("typed_nil_incumbent_does_not_panic", func(t *testing.T) {
-		spy := &warnSpy{}
 		var typedNil *nethttp.Transport
-		built := NewBuilder(spy).WithTransport(typedNil).WithTLSConfig(cfg).Build()
-		assert.Empty(t, spy.msgs, "a typed nil carries no material, so there is nothing to report")
+		built, buildErr := NewBuilder(log).WithTransport(typedNil).WithTLSConfig(cfg).Build()
+		require.NoError(t, buildErr, "a typed nil carries no material, so there is nothing to report")
 
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
@@ -2304,12 +2342,11 @@ func TestBuilderTLSConfigComposesWithIncumbentTransport(t *testing.T) {
 		assert.Same(t, cfg.RootCAs, transport.TLSClientConfig.RootCAs)
 	})
 
-	t.Run("opaque_incumbent_still_warns", func(t *testing.T) {
-		spy := &warnSpy{}
+	t.Run("opaque_incumbent_still_errors", func(t *testing.T) {
 		stub := &stubRoundTripper{name: "opaque"}
-		NewBuilder(spy).WithTransport(stub).WithTLSConfig(cfg).Build()
-		assert.Contains(t, spy.joined(), "WithTLSConfig was called after WithTransport",
-			"an opaque RoundTripper cannot be cloned, so this is still a discard")
+		_, buildErr := NewBuilder(log).WithTransport(stub).WithTLSConfig(cfg).Build()
+		require.Error(t, buildErr, "an opaque RoundTripper cannot be cloned, so this is still a discard")
+		assert.Contains(t, buildErr.Error(), "WithTLSConfig was called after WithTransport")
 	})
 }
 
@@ -2317,64 +2354,61 @@ func TestBuilderTLSConfigComposesWithIncumbentTransport(t *testing.T) {
 // composition never silently drops the incumbent's own TLS material
 // (certificate, pinned roots, or TLS dialer) and stays deterministic
 // regardless of ALPN-only Clone() side effects or how many builders have
-// already cloned a shared incumbent.
+// already cloned a shared incumbent. See ADR-044.
 func TestBuilderTLSConfigCompositionNeverDropsIncumbentTLSMaterial(t *testing.T) {
+	log := createTestLogger()
 	caPEM, _, _ := newTestCA(t, "no-drop-ca")
 	cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
 	require.NoError(t, err)
 
 	t.Run("incumbent_with_client_cert_is_not_silently_replaced", func(t *testing.T) {
-		spy := &warnSpy{}
 		incumbent := &nethttp.Transport{
 			MaxIdleConns: 55,
 			TLSClientConfig: &tls.Config{
 				Certificates: []tls.Certificate{{Certificate: [][]byte{[]byte("fake-client-cert")}}},
 			},
 		}
-		NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
-		joined := spy.joined()
-		assert.Contains(t, joined, "TLSClientConfig",
-			"the warning must name the TLS-material replacement, not just the generic call-order collision")
-		assert.Contains(t, joined, "client certificate")
+		_, buildErr := NewBuilder(log).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		require.Error(t, buildErr, "an incumbent carrying its own client certificate must not be silently replaced by a CA-only config")
+		assert.Contains(t, buildErr.Error(), "TLSClientConfig", "the error must name the TLS-material replacement, not just the generic call-order collision")
+		assert.Contains(t, buildErr.Error(), "client certificate")
 	})
 
 	// A custom TLS dialer is material of the same class as TLSClientConfig
 	// (pinning, a TLS tunnel) and must not be silently cleared.
 	t.Run("incumbent_with_tls_dialer_is_not_silently_cleared", func(t *testing.T) {
-		spy := &warnSpy{}
 		pinnedDialContext := func(context.Context, string, string) (net.Conn, error) {
 			return nil, errors.New("must never be dialed by this test")
 		}
 		incumbent := &nethttp.Transport{MaxIdleConns: 55, DialTLSContext: pinnedDialContext}
-		NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
-		joined := spy.joined()
-		assert.Contains(t, joined, "WithTLSConfig was called after WithTransport",
-			"an incumbent carrying its own TLS dialer must not be silently cleared by a CA-only config")
-		assert.Contains(t, joined, "DialTLSContext",
-			"the message must name the field that actually triggered it, or a dialer-only caller reads advice about TLSClientConfig they never set")
+		_, buildErr := NewBuilder(log).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		require.Error(t, buildErr, "an incumbent carrying its own TLS dialer must not be silently cleared by a CA-only config")
+		assert.Contains(t, buildErr.Error(), "WithTLSConfig was called after WithTransport")
+		// The message is static and does not identify which field fired; what this
+		// pins is that it mentions the dialer at all, so a dialer-only caller is not
+		// left reading advice about a TLSClientConfig they never set.
+		assert.Contains(t, buildErr.Error(), "DialTLSContext",
+			"the error must mention the TLS-dialer class, not only TLSClientConfig")
 	})
 
 	t.Run("incumbent_with_deprecated_dial_tls_is_not_silently_cleared", func(t *testing.T) {
-		spy := &warnSpy{}
 		pinnedDialTLS := func(string, string) (net.Conn, error) {
 			return nil, errors.New("must never be dialed by this test")
 		}
 		incumbent := &nethttp.Transport{MaxIdleConns: 55}
 		//nolint:staticcheck // SA1019: DialTLS is deprecated but still honored when DialTLSContext is nil; this test exercises exactly that fallback field.
 		incumbent.DialTLS = pinnedDialTLS
-		NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
-		joined := spy.joined()
-		assert.Contains(t, joined, "WithTLSConfig was called after WithTransport",
-			"an incumbent carrying its own deprecated DialTLS dialer must not be silently cleared by a CA-only config")
-		assert.Contains(t, joined, "DialTLS",
-			"the message must name the field that actually triggered it")
+		_, buildErr := NewBuilder(log).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		require.Error(t, buildErr, "an incumbent carrying its own deprecated DialTLS dialer must not be silently cleared by a CA-only config")
+		assert.Contains(t, buildErr.Error(), "WithTLSConfig was called after WithTransport")
+		assert.Contains(t, buildErr.Error(), "DialTLS",
+			"the error must mention the TLS-dialer class; it is one static message, so this does not distinguish which field fired")
 	})
 
 	t.Run("incumbent_without_tls_config_composes_cleanly", func(t *testing.T) {
-		spy := &warnSpy{}
 		incumbent := &nethttp.Transport{MaxIdleConns: 55}
-		built := NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
-		assert.Empty(t, spy.msgs)
+		built, buildErr := NewBuilder(log).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		require.NoError(t, buildErr)
 
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
@@ -2390,13 +2424,11 @@ func TestBuilderTLSConfigCompositionNeverDropsIncumbentTLSMaterial(t *testing.T)
 	t.Run("same_incumbent_across_two_builders_is_deterministic", func(t *testing.T) {
 		shared := &nethttp.Transport{MaxIdleConns: 66}
 
-		spyA := &warnSpy{}
-		NewBuilder(spyA).WithTransport(shared).WithTLSConfig(cfg).Build()
-		require.Empty(t, spyA.msgs, "first builder must compose cleanly")
+		_, errA := NewBuilder(log).WithTransport(shared).WithTLSConfig(cfg).Build()
+		require.NoError(t, errA, "first builder must compose cleanly")
 
-		spyB := &warnSpy{}
-		builtB := NewBuilder(spyB).WithTransport(shared).WithTLSConfig(cfg).Build()
-		require.Empty(t, spyB.msgs, "a second builder cloning the SAME shared incumbent must see the identical result — composition must not depend on construction order")
+		builtB, errB := NewBuilder(log).WithTransport(shared).WithTLSConfig(cfg).Build()
+		require.NoError(t, errB, "a second builder cloning the SAME shared incumbent must see the identical result — composition must not depend on construction order")
 
 		clientImplB, ok := builtB.(*client)
 		require.True(t, ok)
@@ -2407,13 +2439,12 @@ func TestBuilderTLSConfigCompositionNeverDropsIncumbentTLSMaterial(t *testing.T)
 
 	// ALPN-only defaults from a forced Clone() must not be treated as material.
 	t.Run("incumbent_carrying_only_alpn_defaults_still_composes", func(t *testing.T) {
-		spy := &warnSpy{}
 		incumbent := &nethttp.Transport{MaxIdleConns: 77}
 		_ = incumbent.Clone() // forces onceSetNextProtoDefaults to populate an ALPN-only TLSClientConfig
 		require.NotNil(t, incumbent.TLSClientConfig, "the forced Clone must have populated TLSClientConfig, or this test proves nothing")
 
-		built := NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
-		assert.Empty(t, spy.msgs, "ALPN-only defaults are not security material and must not block composition")
+		built, buildErr := NewBuilder(log).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		require.NoError(t, buildErr, "ALPN-only defaults are not security material and must not block composition")
 
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
@@ -2427,66 +2458,63 @@ func TestBuilderTLSConfigCompositionNeverDropsIncumbentTLSMaterial(t *testing.T)
 // discardsTLSConfig is suppressed only when the replacement transport carries
 // real TLS material of its own, not merely a non-nil TLSClientConfig.
 func TestBuilderTLSConfigDiscardSuppressedByExplicitTLSClientConfig(t *testing.T) {
+	log := createTestLogger()
 	caPEM, _, _ := newTestCA(t, "suppress-ca")
 	cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
 	require.NoError(t, err)
 
-	t.Run("replacement_with_tls_client_config_is_not_reported", func(t *testing.T) {
-		spy := &warnSpy{}
+	t.Run("replacement_with_tls_client_config_succeeds", func(t *testing.T) {
 		replacement := &nethttp.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-		built := NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
-		assert.Empty(t, spy.msgs)
+		built, buildErr := NewBuilder(log).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		require.NoError(t, buildErr)
 		clientImpl, ok := built.(*client)
 		require.True(t, ok)
 		assert.Same(t, replacement, clientImpl.httpClient.Transport)
 	})
 
-	t.Run("replacement_without_tls_client_config_still_warns", func(t *testing.T) {
-		spy := &warnSpy{}
+	t.Run("replacement_without_tls_client_config_still_errors", func(t *testing.T) {
 		replacement := &nethttp.Transport{}
-		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
-		assert.Contains(t, spy.joined(), "WithTransport was called after WithTLSConfig")
+		_, buildErr := NewBuilder(log).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		require.Error(t, buildErr)
+		assert.Contains(t, buildErr.Error(), "WithTransport was called after WithTLSConfig")
 	})
 
 	// A TLS dialer makes net/http ignore TLSClientConfig outright, so a
 	// replacement carrying only one still decides its own TLS — the compose
 	// direction already treats it as material and both must agree.
-	t.Run("replacement_with_only_a_tls_dialer_is_not_reported", func(t *testing.T) {
-		spy := &warnSpy{}
+	t.Run("replacement_with_only_a_tls_dialer_succeeds", func(t *testing.T) {
 		replacement := &nethttp.Transport{
 			DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
 				return nil, errors.New("must never be dialed by this test")
 			},
 		}
-		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
-		assert.Empty(t, spy.msgs, "a replacement that performs its own TLS handshake is not an accidental discard")
+		_, buildErr := NewBuilder(log).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		require.NoError(t, buildErr, "a replacement that performs its own TLS handshake is not an accidental discard")
 	})
 
 	// The deprecated field is a separate branch of transportCarriesTLSMaterial and
 	// net/http still honors it when DialTLSContext is nil, so it needs its own case:
 	// gremlins does not mutate ||, so the mutation gate cannot cover this one.
-	t.Run("replacement_with_only_deprecated_dial_tls_is_not_reported", func(t *testing.T) {
-		spy := &warnSpy{}
+	t.Run("replacement_with_only_deprecated_dial_tls_succeeds", func(t *testing.T) {
 		replacement := &nethttp.Transport{}
 		//nolint:staticcheck // SA1019: DialTLS is deprecated but still honored when DialTLSContext is nil; this test exercises exactly that fallback field.
 		replacement.DialTLS = func(string, string) (net.Conn, error) {
 			return nil, errors.New("must never be dialed by this test")
 		}
-		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
-		assert.Empty(t, spy.msgs, "a replacement carrying only the deprecated dialer still performs its own handshake")
+		_, buildErr := NewBuilder(log).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		require.NoError(t, buildErr, "a replacement carrying only the deprecated dialer still performs its own handshake")
 	})
 
 	// Mirror of incumbent_carrying_only_alpn_defaults_still_composes: an
 	// ALPN-only TLSClientConfig must not suppress the discard either.
-	t.Run("replacement_with_alpn_only_tls_config_still_warns", func(t *testing.T) {
-		spy := &warnSpy{}
+	t.Run("replacement_with_alpn_only_tls_config_still_errors", func(t *testing.T) {
 		replacement := &nethttp.Transport{}
 		_ = replacement.Clone() // forces onceSetNextProtoDefaults to populate an ALPN-only TLSClientConfig
 		require.NotNil(t, replacement.TLSClientConfig, "the forced Clone must have populated TLSClientConfig, or this test proves nothing")
 
-		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
-		assert.Contains(t, spy.joined(), "WithTransport was called after WithTLSConfig",
-			"an ALPN-only TLSClientConfig carries no security material and must not suppress the discard")
+		_, buildErr := NewBuilder(log).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		require.Error(t, buildErr, "an ALPN-only TLSClientConfig carries no security material and must not suppress the discard")
+		assert.Contains(t, buildErr.Error(), "WithTransport was called after WithTLSConfig")
 	})
 }
 
@@ -2495,26 +2523,88 @@ func TestBuilderTLSConfigDiscardSuppressedByExplicitTLSClientConfig(t *testing.T
 // decided eagerly when a displacing WithTransport call happens — an eager
 // version would miss a later retake that drops the TLS material again.
 func TestBuilderTLSSuppressionDoesNotSurviveRetake(t *testing.T) {
+	log := createTestLogger()
 	caPEM, _, _ := newTestCA(t, "retake-ca")
 	cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
 	require.NoError(t, err)
 
 	t.Run("suppressed_when_replacement_carries_tls", func(t *testing.T) {
-		spy := &warnSpy{}
 		transportWithTLSClientConfig := &nethttp.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(transportWithTLSClientConfig).Build()
-		assert.Empty(t, spy.msgs)
+		_, buildErr := NewBuilder(log).WithTLSConfig(cfg).WithTransport(transportWithTLSClientConfig).Build()
+		require.NoError(t, buildErr)
 	})
 
 	t.Run("not_suppressed_when_a_later_retake_drops_tls", func(t *testing.T) {
-		spy := &warnSpy{}
 		transportWithTLSClientConfig := &nethttp.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-		NewBuilder(spy).
+		_, buildErr := NewBuilder(log).
 			WithTLSConfig(cfg).
 			WithTransport(transportWithTLSClientConfig).
 			WithTransport(&nethttp.Transport{}).
 			Build()
-		assert.Contains(t, spy.joined(), "WithTransport was called after WithTLSConfig")
+		require.Error(t, buildErr)
+		assert.Contains(t, buildErr.Error(), "WithTransport was called after WithTLSConfig")
+	})
+}
+
+// TestBuildAllowsExplicitTransportOverride pins the deliberate override
+// carve-out ADR-044 documents: WithTransport/WithTLSConfig after
+// WithHTTPClient always wins, even over a cert-carrying WithHTTPClient client.
+func TestBuildAllowsExplicitTransportOverride(t *testing.T) {
+	log := createTestLogger()
+
+	t.Run("explicit_transport_after_http_client", func(t *testing.T) {
+		certCarrier := &stubRoundTripper{name: "carries-client-cert"}
+		clientCarryingCert := &nethttp.Client{Transport: certCarrier}
+		override := &stubRoundTripper{name: "override"}
+
+		built, err := NewBuilder(log).WithHTTPClient(clientCarryingCert).WithTransport(override).Build()
+		require.NoError(t, err)
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		assert.Same(t, override, clientImpl.httpClient.Transport, "explicit WithTransport must win over WithHTTPClient's own transport")
+		assert.NotSame(t, certCarrier, clientImpl.httpClient.Transport, "the caller's original (cert-carrying) transport must not survive an explicit override")
+	})
+
+	t.Run("explicit_tls_config_after_http_client", func(t *testing.T) {
+		certCarrier := &stubRoundTripper{name: "carries-client-cert"}
+		clientCarryingCert := &nethttp.Client{Transport: certCarrier}
+
+		caPEM, _, _ := newTestCA(t, "override-ca")
+		cfg, cfgErr := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+		require.NoError(t, cfgErr)
+
+		built, err := NewBuilder(log).WithHTTPClient(clientCarryingCert).WithTLSConfig(cfg).Build()
+		require.NoError(t, err)
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		transport, ok := clientImpl.httpClient.Transport.(*nethttp.Transport)
+		require.True(t, ok, "WithTLSConfig must install its own *http.Transport in place of the caller's original")
+		require.NotNil(t, transport.TLSClientConfig)
+		assert.Same(t, cfg.RootCAs, transport.TLSClientConfig.RootCAs, "the transport must carry cfg's own RootCAs (Clone is shallow), not merely a non-nil pool")
+	})
+}
+
+// TestBuildErrorIsUnsafeTransportComposition pins that Build's error stays
+// classifiable with errors.Is after an Init()-style wrap, not just as text.
+func TestBuildErrorIsUnsafeTransportComposition(t *testing.T) {
+	log := createTestLogger()
+
+	t.Run("discarding_composition_is_classifiable", func(t *testing.T) {
+		stub := &stubRoundTripper{name: "opaque"}
+		_, err := NewBuilder(log).WithHTTPClient(&nethttp.Client{Transport: stub}).WithJOSE(JOSEConfig{}).Build()
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrUnsafeTransportComposition))
+
+		// The sentinel still classifies after an Init()-style wrap.
+		wrapped := fmt.Errorf("module init: %w", err)
+		assert.True(t, errors.Is(wrapped, ErrUnsafeTransportComposition))
+	})
+
+	t.Run("successful_build_returns_nil_error", func(t *testing.T) {
+		_, err := NewBuilder(log).Build()
+		require.NoError(t, err)
 	})
 }
 
@@ -2552,12 +2642,12 @@ func TestNewBuilderAndBuildRejectNilLogger(t *testing.T) {
 	})
 
 	t.Run("zero_value_builder_has_no_config", func(t *testing.T) {
-		assert.PanicsWithValue(t, buildMsg, func() { (&Builder{}).Build() })
+		assert.PanicsWithValue(t, buildMsg, func() { _, _ = (&Builder{}).Build() })
 	})
 
 	t.Run("builder_literal_has_no_logger", func(t *testing.T) {
 		assert.PanicsWithValue(t, buildMsg, func() {
-			(&Builder{config: &Config{Timeout: time.Second}}).Build()
+			_, _ = (&Builder{config: &Config{Timeout: time.Second}}).Build()
 		})
 	})
 
@@ -2570,14 +2660,14 @@ func TestNewBuilderAndBuildRejectNilLogger(t *testing.T) {
 
 	t.Run("typed_nil_logger_in_build", func(t *testing.T) {
 		assert.PanicsWithValue(t, buildMsg, func() {
-			(&Builder{config: &Config{Timeout: time.Second}, logger: (*logger.ZeroLogger)(nil)}).Build()
+			_, _ = (&Builder{config: &Config{Timeout: time.Second}, logger: (*logger.ZeroLogger)(nil)}).Build()
 		})
 	})
 
 	t.Run("nil_builder_receiver", func(t *testing.T) {
 		assert.PanicsWithValue(t, buildMsg, func() {
 			var b *Builder
-			b.Build()
+			_, _ = b.Build()
 		})
 	})
 }

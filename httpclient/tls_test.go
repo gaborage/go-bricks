@@ -404,7 +404,8 @@ func TestWithTLSConfigSetsBaseTransport(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	built := NewBuilder(createTestLogger()).WithTLSConfig(cfg).Build()
+	built, err := NewBuilder(createTestLogger()).WithTLSConfig(cfg).Build()
+	require.NoError(t, err)
 	impl, ok := built.(*client)
 	require.True(t, ok)
 	transport, isTransport := impl.httpClient.Transport.(*nethttp.Transport)
@@ -570,7 +571,8 @@ func TestClientTLSMutualAuthentication(t *testing.T) {
 
 	get := func(t *testing.T, cfg *tls.Config) (*Response, error) {
 		t.Helper()
-		c := NewBuilder(createTestLogger()).WithTLSConfig(cfg).Build()
+		c, err := NewBuilder(createTestLogger()).WithTLSConfig(cfg).Build()
+		require.NoError(t, err)
 		return c.Get(context.Background(), &Request{URL: srv.URL})
 	}
 
