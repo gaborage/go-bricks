@@ -2263,6 +2263,166 @@ func TestBuilderBaseSlotDiscards(t *testing.T) {
 	})
 }
 
+// TestBuilderTLSConfigComposesWithIncumbentTransport pins that WithTLSConfig
+// composes onto an incumbent *nethttp.Transport rather than colliding with
+// it; an opaque incumbent can't be cloned and remains a genuine discard.
+func TestBuilderTLSConfigComposesWithIncumbentTransport(t *testing.T) {
+	caPEM, _, _ := newTestCA(t, "compose-ca")
+	cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+	require.NoError(t, err)
+
+	t.Run("nethttp_transport_incumbent_composes", func(t *testing.T) {
+		spy := &warnSpy{}
+		custom := &nethttp.Transport{MaxIdleConns: 7}
+		built := NewBuilder(spy).WithTransport(custom).WithTLSConfig(cfg).Build()
+		assert.Empty(t, spy.msgs, "composing onto a *http.Transport with no TLS material of its own loses nothing, so it must not warn")
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		transport, ok := clientImpl.httpClient.Transport.(*nethttp.Transport)
+		require.True(t, ok)
+		assert.NotSame(t, custom, transport, "the base must be a clone, not the caller's live transport")
+		assert.Equal(t, 7, transport.MaxIdleConns, "the incumbent's distinguishing field must survive the clone")
+		require.NotNil(t, transport.TLSClientConfig)
+		assert.Same(t, cfg.RootCAs, transport.TLSClientConfig.RootCAs, "the transport must carry cfg's own RootCAs (Clone is shallow), not merely a non-nil pool")
+	})
+
+	// fillBaseSlot's nil check is an interface check, so WithTransport with a
+	// typed-nil *nethttp.Transport fills the slot with a value that satisfies the
+	// type assertion and panics on Clone(). It must take the empty-slot path.
+	t.Run("typed_nil_incumbent_does_not_panic", func(t *testing.T) {
+		spy := &warnSpy{}
+		var typedNil *nethttp.Transport
+		built := NewBuilder(spy).WithTransport(typedNil).WithTLSConfig(cfg).Build()
+		assert.Empty(t, spy.msgs, "a typed nil carries no material, so there is nothing to report")
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		transport, ok := clientImpl.httpClient.Transport.(*nethttp.Transport)
+		require.True(t, ok, "the typed nil must be replaced by a real base, not installed as the transport")
+		require.NotNil(t, transport)
+		assert.Same(t, cfg.RootCAs, transport.TLSClientConfig.RootCAs)
+	})
+
+	t.Run("opaque_incumbent_still_warns", func(t *testing.T) {
+		spy := &warnSpy{}
+		stub := &stubRoundTripper{name: "opaque"}
+		NewBuilder(spy).WithTransport(stub).WithTLSConfig(cfg).Build()
+		assert.Contains(t, spy.joined(), "WithTLSConfig was called after WithTransport",
+			"an opaque RoundTripper cannot be cloned, so this is still a discard")
+	})
+}
+
+// TestBuilderTLSConfigCompositionNeverDropsIncumbentTLSMaterial pins that
+// composition never silently drops the incumbent's own TLS material
+// (certificate, pinned roots, or TLS dialer) and stays deterministic
+// regardless of ALPN-only Clone() side effects or how many builders have
+// already cloned a shared incumbent.
+func TestBuilderTLSConfigCompositionNeverDropsIncumbentTLSMaterial(t *testing.T) {
+	caPEM, _, _ := newTestCA(t, "no-drop-ca")
+	cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+	require.NoError(t, err)
+
+	t.Run("incumbent_with_client_cert_is_not_silently_replaced", func(t *testing.T) {
+		spy := &warnSpy{}
+		incumbent := &nethttp.Transport{
+			MaxIdleConns: 55,
+			TLSClientConfig: &tls.Config{
+				Certificates: []tls.Certificate{{Certificate: [][]byte{[]byte("fake-client-cert")}}},
+			},
+		}
+		NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		joined := spy.joined()
+		assert.Contains(t, joined, "TLSClientConfig",
+			"the warning must name the TLS-material replacement, not just the generic call-order collision")
+		assert.Contains(t, joined, "client certificate")
+	})
+
+	// A custom TLS dialer is material of the same class as TLSClientConfig
+	// (pinning, a TLS tunnel) and must not be silently cleared.
+	t.Run("incumbent_with_tls_dialer_is_not_silently_cleared", func(t *testing.T) {
+		spy := &warnSpy{}
+		pinnedDialContext := func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("must never be dialed by this test")
+		}
+		incumbent := &nethttp.Transport{MaxIdleConns: 55, DialTLSContext: pinnedDialContext}
+		NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		joined := spy.joined()
+		assert.Contains(t, joined, "WithTLSConfig was called after WithTransport",
+			"an incumbent carrying its own TLS dialer must not be silently cleared by a CA-only config")
+		assert.Contains(t, joined, "DialTLSContext",
+			"the message must name the field that actually triggered it, or a dialer-only caller reads advice about TLSClientConfig they never set")
+	})
+
+	t.Run("incumbent_with_deprecated_dial_tls_is_not_silently_cleared", func(t *testing.T) {
+		spy := &warnSpy{}
+		pinnedDialTLS := func(string, string) (net.Conn, error) {
+			return nil, errors.New("must never be dialed by this test")
+		}
+		incumbent := &nethttp.Transport{MaxIdleConns: 55}
+		//nolint:staticcheck // SA1019: DialTLS is deprecated but still honored when DialTLSContext is nil; this test exercises exactly that fallback field.
+		incumbent.DialTLS = pinnedDialTLS
+		NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		joined := spy.joined()
+		assert.Contains(t, joined, "WithTLSConfig was called after WithTransport",
+			"an incumbent carrying its own deprecated DialTLS dialer must not be silently cleared by a CA-only config")
+		assert.Contains(t, joined, "DialTLS",
+			"the message must name the field that actually triggered it")
+	})
+
+	t.Run("incumbent_without_tls_config_composes_cleanly", func(t *testing.T) {
+		spy := &warnSpy{}
+		incumbent := &nethttp.Transport{MaxIdleConns: 55}
+		built := NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		assert.Empty(t, spy.msgs)
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		transport, ok := clientImpl.httpClient.Transport.(*nethttp.Transport)
+		require.True(t, ok)
+		assert.Equal(t, 55, transport.MaxIdleConns, "the incumbent's tuning must survive the clone")
+		require.NotNil(t, transport.TLSClientConfig)
+		assert.Same(t, cfg.RootCAs, transport.TLSClientConfig.RootCAs, "the transport must carry cfg's own RootCAs")
+	})
+
+	// Composing from a shared incumbent must be deterministic regardless of
+	// how many builders have already cloned it.
+	t.Run("same_incumbent_across_two_builders_is_deterministic", func(t *testing.T) {
+		shared := &nethttp.Transport{MaxIdleConns: 66}
+
+		spyA := &warnSpy{}
+		NewBuilder(spyA).WithTransport(shared).WithTLSConfig(cfg).Build()
+		require.Empty(t, spyA.msgs, "first builder must compose cleanly")
+
+		spyB := &warnSpy{}
+		builtB := NewBuilder(spyB).WithTransport(shared).WithTLSConfig(cfg).Build()
+		require.Empty(t, spyB.msgs, "a second builder cloning the SAME shared incumbent must see the identical result — composition must not depend on construction order")
+
+		clientImplB, ok := builtB.(*client)
+		require.True(t, ok)
+		transportB, ok := clientImplB.httpClient.Transport.(*nethttp.Transport)
+		require.True(t, ok)
+		assert.Equal(t, 66, transportB.MaxIdleConns, "the incumbent's tuning must still survive on the second build")
+	})
+
+	// ALPN-only defaults from a forced Clone() must not be treated as material.
+	t.Run("incumbent_carrying_only_alpn_defaults_still_composes", func(t *testing.T) {
+		spy := &warnSpy{}
+		incumbent := &nethttp.Transport{MaxIdleConns: 77}
+		_ = incumbent.Clone() // forces onceSetNextProtoDefaults to populate an ALPN-only TLSClientConfig
+		require.NotNil(t, incumbent.TLSClientConfig, "the forced Clone must have populated TLSClientConfig, or this test proves nothing")
+
+		built := NewBuilder(spy).WithTransport(incumbent).WithTLSConfig(cfg).Build()
+		assert.Empty(t, spy.msgs, "ALPN-only defaults are not security material and must not block composition")
+
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		transport, ok := clientImpl.httpClient.Transport.(*nethttp.Transport)
+		require.True(t, ok)
+		assert.Equal(t, 77, transport.MaxIdleConns)
+	})
+}
+
 // wrappingTransport stands in for a signer-layer wrapper; it exposes the
 // RoundTripper it wraps so tests can assert nesting depth.
 type wrappingTransport struct {

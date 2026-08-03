@@ -122,19 +122,58 @@ verification. The escape hatch is explicit and greppable: build a `*tls.Config` 
 hand and pass it to `WithTLSConfig`.
 
 **Base-transport slot.** `WithTLSConfig` fills the same base-transport slot as
-`WithTransport` — last call wins — and satisfies the requirement described above
-for `WithJOSE` and the `Build()` composition WARN. Its base is a clone of
-`http.DefaultTransport`, or an equivalently-configured transport (same proxy,
-HTTP/2 and pool settings) when that global has been replaced, so the pitfall above
-does not apply to it. `Build()` warns in both directions: calling
-`WithTransport` after `WithTLSConfig` discards the loaded client certificate and
-pinned roots, and calling `WithTLSConfig` after `WithTransport` discards the
-supplied `RoundTripper` along with any proxy, dialer or TLS settings it carried.
-Wrapper layers always stack on top of it:
+`WithTransport`. When the slot already holds a `*http.Transport` — i.e.
+`WithTransport` was called with one first — `WithTLSConfig` **clones and reuses
+it** as the new base: your proxy, dialer and connection-pool settings survive.
+The TLS material is always **overwritten, not merged**: `TLSClientConfig` on
+the clone becomes exactly the config you pass to `WithTLSConfig`, and the
+incumbent's `TLSClientConfig` — including any non-security fields on it such
+as `NextProtos` — is discarded wholesale; copy anything you need from it into
+`tlsCfg` yourself before calling `WithTLSConfig`. The clone also clears
+`DialTLS`/`DialTLSContext` unconditionally (net/http skips its own TLS
+handshake — and so ignores `tlsCfg` entirely — whenever a TLS dialer is set).
+The rule for whether any of this is reported as a loss keys on whether the
+incumbent carried **meaningful security material** of its own — in
+`TLSClientConfig`: certificates, `RootCAs`, `InsecureSkipVerify`, a version
+floor/ceiling, cipher suites, curve preferences, a non-default renegotiation
+policy, `ServerName`, or a verification hook; or a non-nil `DialTLS`/
+`DialTLSContext` (a custom TLS dialer is material of the same class — it can
+implement certificate pinning or a TLS tunnel) — not on whether
+`TLSClientConfig` is merely non-nil. (`*http.Transport.Clone()` itself can
+leave a transport with a non-nil but ALPN-only `TLSClientConfig`, so a plain
+nil check would produce false positives.) If the incumbent carries none of
+that material, the composition is silent — but silent means *unreported*, not
+lossless: the incumbent's `TLSClientConfig` is replaced whatever it held,
+`NextProtos` and any other non-security fields on it included. Only meaningful
+security material is what the report keys on. If it DOES carry its own client
+certificate, pinned roots, or TLS dialer, that material is still discarded by
+this replacement,
+exactly as before this composition existed; only the tuning fields (proxy,
+dialer, pool limits) are new — and `Build()` still WARNs for that case.
+"Reuses" also never means warm connections: `Transport.Clone()` copies
+exported fields only, never the idle-connection map, so a client built this
+way still starts with a cold connection pool. When the slot is empty, the
+base is a clone of `http.DefaultTransport`, or an equivalently-configured
+transport (same proxy, HTTP/2 and pool settings) when that global has been
+replaced. When the slot holds an opaque (non-`*http.Transport`) `RoundTripper`
+instead, composition is not possible at all: the `RoundTripper` is discarded
+wholesale along with any proxy, dialer or TLS settings it carried, and
+`Build()` WARNs. The mirror direction WARNs too — calling `WithTransport`
+after `WithTLSConfig` discards the loaded client certificate and pinned roots.
+**None of this applies to `WithTLSConfig(nil)`**, which returns immediately: the
+slot keeps whatever it held, nothing is cloned, replaced or cleared, and no
+displacement is recorded. Wrapper layers always stack on top of whichever base
+results:
 
 ```go
 // mTLS base, JOSE on top — call order is irrelevant.
 httpclient.NewBuilder(logger).WithTLSConfig(tlsCfg).WithJOSE(joseCfg).Build()
+```
+
+```go
+// WithTransport supplies a *http.Transport; WithTLSConfig clones it and installs
+// tlsCfg — proxy/dialer/pool settings from customTransport survive.
+httpclient.NewBuilder(logger).WithTransport(customTransport).WithTLSConfig(tlsCfg).Build()
 ```
 
 The passed `*tls.Config` is cloned, so one loaded config can be shared across
@@ -200,9 +239,18 @@ with a plain `NopCloser` without touching `ContentLength`, which makes an empty
 POST/PUT/PATCH go out chunked with no Content-Length — and partner edges and
 WAFs answer that with 411, 400, or 501, which reads like an auth failure.
 
-**Client TLS still composes.** Unlike a hand-rolled `WithTransport` signer,
-which fills the same base-transport slot as `WithTLSConfig` (last call wins),
-the interceptor path leaves `WithTLSConfig` intact.
+**Client TLS still composes.** A hand-rolled `WithTransport` signer builds fine
+entirely on its own — the base-transport slot only becomes a problem once
+`WithTLSConfig` also joins the chain. When it does, the two fill the same slot,
+and what happens depends on what the signer supplied. A raw `*http.Transport`
+always composes — its proxy, dialer and pool settings survive into the new base
+— and *lossless* composition needs it to carry no meaningful TLS material of its
+own; if it carries a client certificate, pinned roots or a TLS dialer, that
+material is still replaced and `Build()` WARNs. A signer that wraps another
+`RoundTripper` is opaque, cannot be cloned, and so is discarded wholesale —
+also a WARN. The interceptor path sidesteps all of this — it leaves
+`WithTLSConfig` intact regardless, because interceptors never touch the
+base-transport slot.
 
 **Do not let a signed request follow redirects.** go-bricks sets no
 `CheckRedirect`, so the stdlib default follows redirects below `buildRequest`
@@ -331,8 +379,14 @@ verbatim to the redirect target. Install a `CheckRedirect` returning
 `http.ErrUseLastResponse` on your own client, or confirm the partner endpoint does not
 redirect.
 
-**Client TLS still composes.** The interceptor path leaves `WithTLSConfig` intact, whereas a
-hand-rolled `WithTransport` signer fills the same base-transport slot (last call wins).
+**Client TLS still composes.** The interceptor path leaves `WithTLSConfig` intact regardless,
+because interceptors never touch the base-transport slot. A hand-rolled `WithTransport` signer
+builds fine entirely on its own; the slot only becomes a problem once `WithTLSConfig` also
+joins the chain. A raw `*http.Transport` signer always composes — proxy, dialer and pool
+settings survive — and composes *losslessly* only when it carries no meaningful TLS material
+of its own; carrying a client certificate, pinned roots or a TLS dialer means that material is
+replaced and `Build()` WARNs. A signer wrapping another `RoundTripper` is opaque, cannot be
+cloned, and is discarded wholesale — also a WARN.
 Visa presents mutual TLS and x-pay-token as *alternative* authentication methods rather than
 requiring both, but some deployments run mTLS at the egress boundary as well — if yours
 does, use the interceptor, not a custom transport.

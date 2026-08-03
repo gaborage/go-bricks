@@ -73,8 +73,10 @@ type Builder struct {
 	config     *Config
 	logger     logger.Logger
 	httpClient *nethttp.Client
-	transport  nethttp.RoundTripper // written only via fillBaseSlot, which maintains baseSlot/displacedBase
-	chain      *transportChain
+	// transport/baseSlot are written only via fillBaseSlot; displacedBase is also
+	// cleared directly by WithTLSConfig (tls.go) when it composed onto the incumbent.
+	transport nethttp.RoundTripper
+	chain     *transportChain
 	// baseSlot records which option currently holds the base-transport slot;
 	// displacedBase the option whose material a later call overwrote and never
 	// restored. Build warns for the displaced one — last-call-wins is intended,
@@ -401,10 +403,9 @@ func (b *Builder) discardsClientTransport() bool {
 // pinned roots into the base slot and a later WithTransport took it over.
 func (b *Builder) discardsTLSConfig() bool { return b.displacedBase == baseTLS }
 
-// discardsProvidedTransport reports the mirror case: WithTransport supplied the
-// base RoundTripper and a later WithTLSConfig replaced it with a fresh base, a
-// clone of nethttp.DefaultTransport or an equivalently-configured transport
-// when that global has been replaced.
+// discardsProvidedTransport is the mirror of discardsTLSConfig: WithTransport's
+// RoundTripper was displaced by a later WithTLSConfig. Cleared by WithTLSConfig
+// when baseTransportForTLS reports the incumbent carried no TLS material to lose.
 func (b *Builder) discardsProvidedTransport() bool { return b.displacedBase == baseTransport }
 
 // WithRequestInterceptor adds a request interceptor
@@ -454,12 +455,17 @@ func (b *Builder) Build() Client {
 
 	if b.discardsProvidedTransport() {
 		b.logger.Warn().Msg("httpclient: WithTLSConfig was called after WithTransport — " +
-			"both fill the same base-transport slot and the last call wins, so the RoundTripper " +
-			"passed to WithTransport is discarded along with any proxy, dialer or TLS settings it " +
-			"carried; WithTLSConfig replaces it with a fresh base, a clone of net/http.DefaultTransport " +
-			"or an equivalently-configured transport when that global has been replaced. Fold TLS " +
-			"settings into the *tls.Config; to keep proxy or dialer settings, drop WithTLSConfig and " +
-			"set TLSClientConfig on your own transport instead")
+			"both fill the same base-transport slot and the last call wins. If the RoundTripper " +
+			"passed to WithTransport is not itself a *http.Transport, it is discarded wholesale: " +
+			"proxy, dialer and any TLS settings it carried are all lost, and WithTLSConfig installs " +
+			"a fresh base instead. If it IS a *http.Transport, its proxy, dialer and connection-pool " +
+			"settings are preserved into the new base, but its TLS material is not: a TLSClientConfig " +
+			"it carried (client certificate, pinned roots, version floor) is replaced by the " +
+			"*tls.Config passed to WithTLSConfig, and a DialTLS or DialTLSContext it carried is " +
+			"cleared outright — net/http skips its own handshake, and so ignores the *tls.Config, " +
+			"whenever a TLS dialer is set. Fold any client certificate or pinned roots into that " +
+			"*tls.Config; to keep the original TLSClientConfig or TLS dialer instead, drop " +
+			"WithTLSConfig and set them directly on your own transport")
 	}
 
 	if rt := b.resolveTransport(); rt != nil {
