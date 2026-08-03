@@ -32,6 +32,7 @@ const (
 	exchangeTypeDirect = "direct"
 
 	// Map keys (commonly used in Args/Headers)
+	dlxArgKey     = "x-dead-letter-exchange"
 	mapKeyTTL     = "ttl"
 	mapKeyBinding = "binding"
 	mapKeyVersion = "version"
