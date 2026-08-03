@@ -2,11 +2,14 @@ package messaging
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // Mock message handler for testing
@@ -842,4 +845,316 @@ func TestDeclarationsHashCoversAllArgTypes(t *testing.T) {
 	// neutralized by the sorted-keys logic inside writeMapArgs.
 	second := d.Hash()
 	assert.Equal(t, first, second, "Hash must be deterministic across calls regardless of map iteration order")
+}
+
+// --- Queue re-declaration merge semantics ---
+
+const (
+	mergeQueue  = "orders.events.queue"
+	mergeQueueB = "payments.events.queue"
+	mergeQueueC = "shipping.events.queue"
+
+	// Chosen so sorted Args iteration order is a-key < b-key < z-key.
+	argKeyA = "a-key"
+	argKeyB = "b-key"
+	argKeyZ = "z-key"
+)
+
+// TestRegisterQueueMergePreservesDLQArgs pins the regression: before the merge,
+// whichever of the two declarations ran last replaced the other outright, so one
+// ordering silently reverted dead-lettering to "drop on handler error".
+func TestRegisterQueueMergePreservesDLQArgs(t *testing.T) {
+	t.Run("dlq_first_then_plain", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclareQueueWithDLQ(mergeQueue, nil)
+		d.DeclareQueue(mergeQueue)
+
+		require.NoError(t, d.Validate())
+		assert.Len(t, d.Queues, 2, "primary queue plus its parking queue")
+		assert.Equal(t, mergeQueue+".dlx", d.Queues[mergeQueue].Args[dlxArgKey])
+	})
+
+	t.Run("plain_first_then_dlq", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclareQueue(mergeQueue)
+		d.DeclareQueueWithDLQ(mergeQueue, nil)
+
+		require.NoError(t, d.Validate())
+		assert.Equal(t, mergeQueue+".dlx", d.Queues[mergeQueue].Args[dlxArgKey])
+	})
+
+	// The cross-module shape: one module declares the queue with its own broker
+	// args, another adds dead-lettering. Neither call site can see the other, and
+	// before the merge the later one wiped the earlier one's args wholesale.
+	t.Run("custom_args_survive_a_later_dlq_declaration", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterQueue(&QueueDeclaration{
+			Name:    mergeQueue,
+			Durable: true,
+			Args:    map[string]any{mapKeyTTL: ttlValue3600},
+		})
+		d.DeclareQueueWithDLQ(mergeQueue, nil)
+
+		require.NoError(t, d.Validate())
+		stored := d.Queues[mergeQueue]
+		assert.Equal(t, ttlValue3600, stored.Args[mapKeyTTL], "incumbent's own args must survive")
+		assert.Equal(t, mergeQueue+".dlx", stored.Args[dlxArgKey])
+	})
+}
+
+func TestRegisterQueueIdenticalIsIdempotent(t *testing.T) {
+	d := NewDeclarations()
+	q := &QueueDeclaration{Name: testQueue, Durable: true, Args: map[string]any{mapKeyTTL: ttlValue3600}}
+
+	d.RegisterQueue(q)
+	d.RegisterQueue(q)
+
+	require.NoError(t, d.Validate())
+	assert.Len(t, d.Queues, 1)
+	assert.Equal(t, ttlValue3600, d.Queues[testQueue].Args[mapKeyTTL])
+}
+
+func TestRegisterQueueConflictingArgsRecorded(t *testing.T) {
+	t.Run("single_contested_key", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Durable: true, Args: map[string]any{dlxArgKey: "orders.dlx"}})
+		d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Durable: true, Args: map[string]any{dlxArgKey: "other.dlx"}})
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), mergeQueue)
+		assert.Contains(t, err.Error(), `Args["`+dlxArgKey+`"] kept "orders.dlx" vs rejected "other.dlx"`)
+	})
+
+	// Two keys disagree at once — the only shape that can distinguish sorted
+	// iteration from bare map order, which would report either key at random.
+	t.Run("lexicographically_first_contested_key_is_reported", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Args: map[string]any{
+			argKeyA: "a-incumbent",
+			argKeyZ: "z-incumbent",
+		}})
+		d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Args: map[string]any{
+			argKeyA: "a-rejected",
+			argKeyZ: "z-rejected",
+		}})
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `Args["`+argKeyA+`"] kept "a-incumbent" vs rejected "a-rejected"`)
+		assert.NotContains(t, err.Error(), argKeyZ)
+		assert.NotContains(t, err.Error(), "z-incumbent")
+	})
+}
+
+func TestRegisterQueueConflictingFlagsRecorded(t *testing.T) {
+	// want is asserted verbatim: the kept/rejected labels are what tell an
+	// operator which of the two call sites is in effect, so their order in the
+	// message is part of the contract (and is reproduced in wiki/messaging.md).
+	tests := []struct {
+		name  string
+		first *QueueDeclaration
+		next  *QueueDeclaration
+		want  string
+	}{
+		{
+			name:  "durable_mismatch",
+			first: &QueueDeclaration{Name: testQueue, Durable: true},
+			next:  &QueueDeclaration{Name: testQueue, Durable: false},
+			want:  `Durable kept "true" vs rejected "false"`,
+		},
+		{
+			name:  "autodelete_mismatch",
+			first: &QueueDeclaration{Name: testQueue, AutoDelete: false},
+			next:  &QueueDeclaration{Name: testQueue, AutoDelete: true},
+			want:  `AutoDelete kept "false" vs rejected "true"`,
+		},
+		{
+			name:  "exclusive_mismatch",
+			first: &QueueDeclaration{Name: testQueue, Exclusive: false},
+			next:  &QueueDeclaration{Name: testQueue, Exclusive: true},
+			want:  `Exclusive kept "false" vs rejected "true"`,
+		},
+		{
+			name:  "nowait_mismatch",
+			first: &QueueDeclaration{Name: testQueue, NoWait: false},
+			next:  &QueueDeclaration{Name: testQueue, NoWait: true},
+			want:  `NoWait kept "false" vs rejected "true"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			d.RegisterQueue(tt.first)
+			d.RegisterQueue(tt.next)
+
+			err := d.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), testQueue)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+// TestRegisterQueueDeduplicatesIdenticalConflicts keeps the aggregate error an
+// enumeration of distinct problems: repeating one disagreement must not inflate
+// the count, which would also make the count depend on declaration order.
+func TestRegisterQueueDeduplicatesIdenticalConflicts(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Durable: true})
+	for range 3 {
+		d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Durable: false})
+	}
+
+	require.Len(t, d.queueConflicts, 1)
+
+	err := d.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), fmt.Sprintf("(%d conflict(s))", len(d.queueConflicts)))
+	assert.Equal(t, 1, strings.Count(err.Error(), `Durable kept "true" vs rejected "false"`),
+		"one detail line per distinct conflict")
+}
+
+// TestRegisterQueueConflictKeepsIncumbent proves first-wins: a rejected
+// re-declaration must not land even partially.
+func TestRegisterQueueConflictKeepsIncumbent(t *testing.T) {
+	t.Run("flag_conflict", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterQueue(&QueueDeclaration{
+			Name:    mergeQueue,
+			Durable: true,
+			Args:    map[string]any{dlxArgKey: "orders.dlx"},
+		})
+		d.RegisterQueue(&QueueDeclaration{
+			Name:    mergeQueue,
+			Durable: false,
+			Args:    map[string]any{dlxArgKey: "other.dlx", mapKeyTTL: ttlValue7200},
+		})
+
+		stored := d.Queues[mergeQueue]
+		assert.True(t, stored.Durable, "incumbent flag must survive")
+		assert.Equal(t, "orders.dlx", stored.Args[dlxArgKey])
+		assert.NotContains(t, stored.Args, mapKeyTTL, "no partial merge from a rejected declaration")
+	})
+
+	// The flags agree here, so the rejection comes from the Args scan itself.
+	// That is the only shape in which a scan that merged as it went could leak
+	// the rejected declaration's other keys: argKeyA sorts before the contested
+	// argKeyB, so it is visited while the scan still believes the merge is on.
+	t.Run("args_conflict_leaks_no_sibling_key", func(t *testing.T) {
+		d := NewDeclarations()
+		d.RegisterQueue(&QueueDeclaration{
+			Name: mergeQueue,
+			Args: map[string]any{argKeyB: "b-incumbent"},
+		})
+		d.RegisterQueue(&QueueDeclaration{
+			Name: mergeQueue,
+			Args: map[string]any{argKeyA: "a-rejected", argKeyB: "b-rejected"},
+		})
+
+		require.Error(t, d.Validate())
+		stored := d.Queues[mergeQueue]
+		assert.Equal(t, "b-incumbent", stored.Args[argKeyB], "the contested key keeps the incumbent value")
+		assert.NotContains(t, stored.Args, argKeyA, "a key new to the incumbent must not land from a rejected declaration")
+	})
+}
+
+func TestValidateAggregatesMultipleQueueConflicts(t *testing.T) {
+	d := NewDeclarations()
+	d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Durable: true})
+	d.RegisterQueue(&QueueDeclaration{Name: mergeQueue, Durable: false})
+	d.RegisterQueue(&QueueDeclaration{Name: mergeQueueB, Durable: true, Args: map[string]any{dlxArgKey: "payments.dlx"}})
+	d.RegisterQueue(&QueueDeclaration{Name: mergeQueueB, Durable: true, Args: map[string]any{dlxArgKey: ""}})
+
+	err := d.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicting queue declarations (2 conflict(s))")
+	assert.Contains(t, err.Error(), mergeQueue)
+	assert.Contains(t, err.Error(), mergeQueueB)
+}
+
+// TestRegisterQueueMergeHashIsOrderIndependent guards Manager.EnsureConsumers,
+// which compares declHash across its singleflight boundary: an order-dependent
+// merge would make two orderings of one declaration set replay as different
+// topologies.
+func TestRegisterQueueMergeHashIsOrderIndependent(t *testing.T) {
+	dlqFirst := NewDeclarations()
+	dlqFirst.DeclareQueueWithDLQ(mergeQueue, nil)
+	dlqFirst.DeclareQueue(mergeQueue)
+
+	plainFirst := NewDeclarations()
+	plainFirst.DeclareQueue(mergeQueue)
+	plainFirst.DeclareQueueWithDLQ(mergeQueue, nil)
+
+	assert.Equal(t, dlqFirst.Hash(), plainFirst.Hash())
+}
+
+func TestCloneCopiesQueueConflicts(t *testing.T) {
+	const cloneOnlyQueue = "clone.only.queue"
+	const sourceOnlyQueue = "source.only.queue"
+
+	conflict := func(d *Declarations, name string) {
+		d.RegisterQueue(&QueueDeclaration{Name: name, Durable: true})
+		d.RegisterQueue(&QueueDeclaration{Name: name, Durable: false})
+	}
+
+	d := NewDeclarations()
+	for _, name := range []string{mergeQueue, mergeQueueB, mergeQueueC} {
+		conflict(d, name)
+	}
+	require.Error(t, d.Validate())
+	// Spare capacity is what makes the rest of this test discriminating: without
+	// it every later append reallocates, and a clone that merely aliased the
+	// source's slice would behave identically to a real copy.
+	require.Greater(t, cap(d.queueConflicts), len(d.queueConflicts))
+
+	clone := d.Clone()
+	require.Error(t, clone.Validate(), "a clone must not pass a validation its source failed")
+
+	// Both sides now record one more conflict. A shared backing array would let
+	// the source's append overwrite the clone's at the same index.
+	conflict(clone, cloneOnlyQueue)
+	conflict(d, sourceOnlyQueue)
+
+	assert.Contains(t, clone.Validate().Error(), cloneOnlyQueue)
+	assert.NotContains(t, clone.Validate().Error(), sourceOnlyQueue)
+	assert.Contains(t, d.Validate().Error(), sourceOnlyQueue)
+	assert.NotContains(t, d.Validate().Error(), cloneOnlyQueue)
+}
+
+// TestRegisterQueueUncomparableArgsValues pins reflect.DeepEqual over ==:
+// broker args routinely hold slices and tables, and == on those dynamic types
+// panics at runtime, turning a declaration-time diagnostic into a boot panic.
+func TestRegisterQueueUncomparableArgsValues(t *testing.T) {
+	t.Run("equal_uncomparable_values_merge", func(t *testing.T) {
+		d := NewDeclarations()
+		require.NotPanics(t, func() {
+			d.RegisterQueue(&QueueDeclaration{Name: testQueue, Args: map[string]any{
+				testKey: []string{"a"},
+				testArg: amqp.Table{"nested": "v"},
+			}})
+			d.RegisterQueue(&QueueDeclaration{Name: testQueue, Args: map[string]any{
+				testKey: []string{"a"},
+				testArg: amqp.Table{"nested": "v"},
+			}})
+		})
+
+		assert.NoError(t, d.Validate())
+		assert.Equal(t, []string{"a"}, d.Queues[testQueue].Args[testKey])
+	})
+
+	t.Run("differing_uncomparable_values_conflict", func(t *testing.T) {
+		d := NewDeclarations()
+		require.NotPanics(t, func() {
+			d.RegisterQueue(&QueueDeclaration{Name: testQueue, Args: map[string]any{testKey: []string{"a"}}})
+			d.RegisterQueue(&QueueDeclaration{Name: testQueue, Args: map[string]any{testKey: []string{"b"}}})
+		})
+
+		err := d.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `Args["`+testKey+`"]`)
+		assert.Contains(t, err.Error(), "[a]")
+		assert.Contains(t, err.Error(), "[b]")
+	})
 }

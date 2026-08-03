@@ -245,18 +245,17 @@ func (d *Declarations) DeclarePublisher(opts *PublisherOptions, exchange *Exchan
 
 // DeclareConsumer creates and registers a consumer in one step.
 //
-// If queue is non-nil and not already registered, it will be automatically registered.
-// This hybrid approach allows consumers to optionally declare their dependencies.
+// A non-nil queue is registered, merging with any existing declaration of the
+// same name; an incompatible shape keeps the incumbent and becomes a startup
+// conflict (see RegisterQueue). This hybrid approach allows consumers to
+// optionally declare their dependencies.
 //
 // Usage:
 //   - Pass nil if queue is already registered separately
 //   - Pass queue declaration to auto-register (convenience for simple cases)
 func (d *Declarations) DeclareConsumer(opts *ConsumerOptions, queue *QueueDeclaration) *ConsumerDeclaration {
-	// Auto-register queue if provided and not already registered
 	if queue != nil {
-		if _, exists := d.Queues[queue.Name]; !exists {
-			d.RegisterQueue(queue)
-		}
+		d.RegisterQueue(queue)
 	}
 
 	// Apply smart defaults for concurrency (v0.17+)

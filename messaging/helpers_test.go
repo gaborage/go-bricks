@@ -307,22 +307,21 @@ func TestDeclarationsQueue(t *testing.T) {
 		assert.Equal(t, "test.queue", registered.Name)
 	})
 
-	t.Run("overwrites existing queue with same name", func(t *testing.T) {
+	t.Run("merges compatible re-declaration of same name", func(t *testing.T) {
 		decls := NewDeclarations()
 
 		q1 := decls.DeclareQueue("test.queue")
 		// Modify registered copy directly
 		decls.Queues["test.queue"].Args["first"] = "value1"
 
-		// Declare again with same name - this creates a new queue and overwrites
+		// Declare again with same name - identical shape, so the two merge
 		q2 := decls.DeclareQueue("test.queue")
 
 		assert.Len(t, decls.Queues, 1)
 		registered := decls.Queues["test.queue"]
-		// Second declaration overwrites, so "first" is lost
-		assert.Nil(t, registered.Args["first"])
-		// New queue has empty args by default
-		assert.Empty(t, registered.Args)
+		// The incumbent's args survive the second declaration
+		assert.Equal(t, "value1", registered.Args["first"])
+		assert.NoError(t, decls.Validate())
 		assert.NotNil(t, q1)
 		assert.NotNil(t, q2)
 	})
@@ -512,14 +511,14 @@ func TestDeclarationsConsumer(t *testing.T) {
 		assert.Equal(t, "auto.queue", decls.Queues["auto.queue"].Name)
 	})
 
-	t.Run("does not re-register already registered queue", func(t *testing.T) {
+	t.Run("merges auto-registered queue into an existing declaration", func(t *testing.T) {
 		decls := NewDeclarations()
 
 		// Pre-register queue with custom args (modify registered copy)
 		decls.DeclareQueue("existing.queue")
 		decls.Queues["existing.queue"].Args["custom"] = "value"
 
-		// Try to auto-register same queue - should skip because already exists
+		// Same name, same shape - the two declarations merge
 		newQueue := NewQueue("existing.queue")
 		opts := &ConsumerOptions{
 			Queue:    "existing.queue",
@@ -532,9 +531,43 @@ func TestDeclarationsConsumer(t *testing.T) {
 		assert.NotNil(t, consumer)
 		assert.Len(t, decls.Queues, 1)
 
-		// Original queue should be preserved (not overwritten)
+		// The incumbent's args must not be lost to the auto-registration
 		registered := decls.Queues["existing.queue"]
 		assert.Equal(t, "value", registered.Args["custom"])
+		assert.NoError(t, decls.Validate())
+	})
+
+	// DeclareConsumer used to skip RegisterQueue entirely once a name existed, so
+	// a second declaration's shape was silently dropped without even a conflict.
+	t.Run("auto-registered queue contributes its own args", func(t *testing.T) {
+		decls := NewDeclarations()
+		decls.DeclareQueue("shared.queue")
+
+		queue := NewQueue("shared.queue")
+		queue.Args[dlxArgKey] = "shared.dlx"
+		opts := &ConsumerOptions{Queue: "shared.queue", Consumer: testConsumer, Handler: mockHandler}
+
+		decls.DeclareConsumer(opts, queue)
+
+		require.NoError(t, decls.Validate())
+		assert.Equal(t, "shared.dlx", decls.Queues["shared.queue"].Args[dlxArgKey])
+	})
+
+	t.Run("auto-registered queue with an incompatible shape fails validation", func(t *testing.T) {
+		decls := NewDeclarations()
+		decls.DeclareQueue("shared.queue") // NewQueue defaults: Durable true
+
+		queue := NewQueue("shared.queue")
+		queue.Durable = false
+		opts := &ConsumerOptions{Queue: "shared.queue", Consumer: testConsumer, Handler: mockHandler}
+
+		decls.DeclareConsumer(opts, queue)
+
+		err := decls.Validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "shared.queue")
+		assert.Contains(t, err.Error(), `Durable kept "true" vs rejected "false"`)
+		assert.True(t, decls.Queues["shared.queue"].Durable, "incumbent survives")
 	})
 
 	t.Run("allows multiple consumers", func(t *testing.T) {

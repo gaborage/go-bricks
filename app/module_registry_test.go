@@ -11,6 +11,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -200,4 +201,36 @@ func TestCollectRouteLogEntriesDefensiveOutOfRange(t *testing.T) {
 		got := collectRouteLogEntries(spans, routes)
 		assert.Len(t, got, 1) // only the valid framework span resolves
 	})
+}
+
+// queueConflictModule declares one queue name twice with shapes that cannot
+// merge — the cross-module collision reduced to a single module.
+type queueConflictModule struct {
+	name  string
+	queue string
+}
+
+func (m *queueConflictModule) Name() string             { return m.name }
+func (m *queueConflictModule) Init(_ *ModuleDeps) error { return nil }
+func (m *queueConflictModule) Shutdown() error          { return nil }
+func (m *queueConflictModule) DeclareMessaging(decls *messaging.Declarations) {
+	decls.RegisterQueue(&messaging.QueueDeclaration{Name: m.queue, Durable: true})
+	decls.RegisterQueue(&messaging.QueueDeclaration{Name: m.queue, Durable: false})
+}
+
+// TestDeclareMessagingFailsOnConflictingQueueDeclarations pins that a queue
+// conflict reaches the fatal startup path rather than being silently merged or
+// dropped: DeclareMessaging is what app.buildMessagingDeclarations calls.
+func TestDeclareMessagingFailsOnConflictingQueueDeclarations(t *testing.T) {
+	const queue = "orders.events.queue"
+	reg := NewModuleRegistry(&ModuleDeps{Logger: &recLogger{}, Config: &config.Config{}})
+	require.NoError(t, reg.Register(&queueConflictModule{name: "orders", queue: queue}))
+
+	err := reg.DeclareMessaging(messaging.NewDeclarations())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "declaration validation failed")
+	assert.Contains(t, err.Error(), "conflicting queue declarations (1 conflict(s))")
+	assert.Contains(t, err.Error(), queue)
+	assert.Contains(t, err.Error(), "Durable")
 }

@@ -2,11 +2,13 @@ package messaging
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/fnv"
 	"maps"
 	"math"
+	"reflect"
 	"slices"
 )
 
@@ -18,16 +20,25 @@ type consumerKey struct {
 	EventType string
 }
 
+// queueConflict records a queue name declared twice with shapes that cannot merge.
+type queueConflict struct {
+	Queue    string
+	Field    string // flag name, or `Args["<key>"]`
+	Kept     string // the incumbent's value, which stays in effect
+	Rejected string
+}
+
 // Declarations stores messaging infrastructure declarations made by modules at startup.
 // This is a pure data structure (no client dependencies) that can be validated once
 // and replayed to multiple per-tenant registries.
 type Declarations struct {
-	Exchanges     map[string]*ExchangeDeclaration
-	Queues        map[string]*QueueDeclaration
-	Bindings      []*BindingDeclaration
-	Publishers    []*PublisherDeclaration
-	consumerIndex map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
-	consumerOrder []consumerKey                        // Deterministic iteration order
+	Exchanges      map[string]*ExchangeDeclaration
+	Queues         map[string]*QueueDeclaration
+	Bindings       []*BindingDeclaration
+	Publishers     []*PublisherDeclaration
+	consumerIndex  map[consumerKey]*ConsumerDeclaration // Deduplication + O(1) lookup
+	consumerOrder  []consumerKey                        // Deterministic iteration order
+	queueConflicts []queueConflict                      // Incompatible queue re-declarations, reported by Validate
 }
 
 // NewDeclarations creates a new empty declarations store.
@@ -43,6 +54,11 @@ func NewDeclarations() *Declarations {
 }
 
 // RegisterExchange adds an exchange declaration to the store.
+//
+// Re-declaring a name keeps the last declaration, unlike RegisterQueue: no
+// framework helper builds a divergent exchange shape for a name a caller would
+// also declare by hand. The one to watch is DeclareQueueWithDLQ's fanout DLX,
+// which several primary queues may share — today every repeat is identical.
 func (d *Declarations) RegisterExchange(e *ExchangeDeclaration) {
 	if e == nil {
 		return
@@ -68,8 +84,28 @@ func (d *Declarations) RegisterExchange(e *ExchangeDeclaration) {
 }
 
 // RegisterQueue adds a queue declaration to the store.
+//
+// Re-declaring a name merges when the shapes are compatible, so
+// DeclareQueueWithDLQ and DeclareQueue on one name compose instead of whichever
+// ran last silently dropping the other's dead-letter args. An incompatible
+// re-declaration keeps the incumbent and records a conflict that Validate
+// reports, because declaration order across modules is invisible at any single
+// call site. That report prints the contested Args values verbatim into a
+// startup error, which the logger's key-based filter cannot mask — queue Args
+// are broker topology and must not carry secrets.
 func (d *Declarations) RegisterQueue(q *QueueDeclaration) {
 	if q == nil {
+		return
+	}
+
+	if incumbent, exists := d.Queues[q.Name]; exists {
+		if conflict, incompatible := queueMergeConflict(incumbent, q); incompatible {
+			d.recordQueueConflict(conflict)
+			return
+		}
+		// The incumbent is already our own deep copy, so merging in place
+		// cannot reach a caller's map.
+		maps.Copy(incumbent.Args, q.Args)
 		return
 	}
 
@@ -89,6 +125,55 @@ func (d *Declarations) RegisterQueue(q *QueueDeclaration) {
 	}
 
 	d.Queues[q.Name] = decl
+}
+
+// queueMergeConflict reports the first difference that blocks merging two
+// declarations of one queue name: any differing flag, or one Args key carrying
+// two values. Args keys are visited in sorted order so the recorded conflict —
+// and therefore the startup error — is identical across runs.
+func queueMergeConflict(incumbent, next *QueueDeclaration) (conflict queueConflict, incompatible bool) {
+	switch {
+	case incumbent.Durable != next.Durable:
+		return newQueueConflict(incumbent.Name, "Durable", incumbent.Durable, next.Durable), true
+	case incumbent.AutoDelete != next.AutoDelete:
+		return newQueueConflict(incumbent.Name, "AutoDelete", incumbent.AutoDelete, next.AutoDelete), true
+	case incumbent.Exclusive != next.Exclusive:
+		return newQueueConflict(incumbent.Name, "Exclusive", incumbent.Exclusive, next.Exclusive), true
+	case incumbent.NoWait != next.NoWait:
+		return newQueueConflict(incumbent.Name, "NoWait", incumbent.NoWait, next.NoWait), true
+	}
+
+	for _, key := range slices.Sorted(maps.Keys(next.Args)) {
+		kept, shared := incumbent.Args[key]
+		rejected := next.Args[key]
+		// reflect.DeepEqual, not ==: Args values are `any`, and == panics on an
+		// uncomparable dynamic type such as a slice or an amqp.Table.
+		if !shared || reflect.DeepEqual(kept, rejected) {
+			continue
+		}
+		return newQueueConflict(incumbent.Name, fmt.Sprintf("Args[%q]", key), kept, rejected), true
+	}
+
+	return queueConflict{}, false
+}
+
+func newQueueConflict(queue, field string, kept, rejected any) queueConflict {
+	return queueConflict{
+		Queue:    queue,
+		Field:    field,
+		Kept:     fmt.Sprintf("%v", kept),
+		Rejected: fmt.Sprintf("%v", rejected),
+	}
+}
+
+// recordQueueConflict drops repeats of a disagreement already recorded, so the
+// aggregate error counts distinct problems rather than rejected declarations.
+// queueConflict is all-string, hence comparable.
+func (d *Declarations) recordQueueConflict(c queueConflict) {
+	if slices.Contains(d.queueConflicts, c) {
+		return
+	}
+	d.queueConflicts = append(d.queueConflicts, c)
 }
 
 // RegisterBinding adds a binding declaration to the store.
@@ -198,6 +283,10 @@ func (d *Declarations) Consumers() []*ConsumerDeclaration {
 // Validate checks the integrity of all declarations.
 // It ensures that references between declarations are valid.
 func (d *Declarations) Validate() error {
+	if err := d.validateQueueConflicts(); err != nil {
+		return err
+	}
+
 	// Check that all binding queues and exchanges exist
 	for _, binding := range d.Bindings {
 		if _, exists := d.Queues[binding.Queue]; !exists {
@@ -223,6 +312,22 @@ func (d *Declarations) Validate() error {
 	}
 
 	return nil
+}
+
+// validateQueueConflicts aggregates every incompatible queue re-declaration into
+// one error, so an app with several conflicts sees them all in a single boot.
+func (d *Declarations) validateQueueConflicts() error {
+	if len(d.queueConflicts) == 0 {
+		return nil
+	}
+
+	errs := []error{fmt.Errorf(
+		"conflicting queue declarations (%d conflict(s)) — declarations merge only when compatible; align the call sites (DeclareQueueWithDLQ and DeclareQueue on one name must agree)",
+		len(d.queueConflicts))}
+	for _, c := range d.queueConflicts {
+		errs = append(errs, fmt.Errorf("queue %q: %s kept %q vs rejected %q", c.Queue, c.Field, c.Kept, c.Rejected))
+	}
+	return errors.Join(errs...)
 }
 
 // ReplayToRegistry applies all declarations to a runtime registry.
@@ -322,6 +427,9 @@ func (d *Declarations) Clone() *Declarations {
 			maps.Copy(clone.Queues[name].Args, queue.Args)
 		}
 	}
+
+	// A clone that passed a validation its source failed would be a trap.
+	clone.queueConflicts = slices.Clone(d.queueConflicts)
 
 	// Clone bindings
 	for _, binding := range d.Bindings {
