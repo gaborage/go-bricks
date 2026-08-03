@@ -1,18 +1,16 @@
-// Package server provides request validation functionality.
-// It wraps go-playground/validator with custom validation logic and error formatting.
+// Formats go-playground/validator errors into the framework's structured
+// field-error shape. The validator instance itself, with the framework's custom
+// rules already registered, is constructed in internal/validation.
 package server
 
 import (
 	"errors"
 	"fmt"
-	"regexp"
 
 	"github.com/go-playground/validator/v10"
-)
 
-// mccCodeRegex is pre-compiled for efficiency and to avoid error handling on each validation call.
-// MCC codes are exactly 4 digits (e.g., "5411" for grocery stores).
-var mccCodeRegex = regexp.MustCompile(`^\d{4}$`)
+	"github.com/gaborage/go-bricks/internal/validation"
+)
 
 // Validator wraps go-playground/validator with custom validation logic.
 // It provides request validation functionality with custom validators.
@@ -20,17 +18,12 @@ type Validator struct {
 	validate *validator.Validate
 }
 
-// NewValidator creates a new Validator instance with custom validation rules registered.
+// NewValidator creates a new Validator instance with custom validation rules
+// registered. It never returns nil: the shared constructor in internal/validation
+// panics if a rule fails to register rather than yielding a partly-configured
+// instance.
 func NewValidator() *Validator {
-	v := validator.New()
-
-	// Register custom validators
-	err := v.RegisterValidation("mcc_code", validateMCCCode)
-	if err != nil {
-		return nil
-	}
-
-	return &Validator{validate: v}
+	return &Validator{validate: validation.New()}
 }
 
 // Validator returns the underlying validator instance.
@@ -111,20 +104,10 @@ func getErrorMessage(fe validator.FieldError) string {
 		return fmt.Sprintf("%s must be exactly %s characters", fe.Field(), fe.Param())
 	case "url":
 		return fmt.Sprintf("%s must be a valid URL", fe.Field())
+	// mcc_code is registered in internal/validation.New, not here.
 	case "mcc_code":
 		return fmt.Sprintf("%s must be a valid 4-digit MCC code", fe.Field())
 	default:
 		return fmt.Sprintf("%s failed validation", fe.Field())
 	}
-}
-
-// Custom validator for MCC codes
-func validateMCCCode(fl validator.FieldLevel) bool {
-	mccCode := fl.Field().String()
-	if len(mccCode) != 4 {
-		return false
-	}
-
-	// Check if all characters are digits using pre-compiled regex
-	return mccCodeRegex.MatchString(mccCode)
 }
