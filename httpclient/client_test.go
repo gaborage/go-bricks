@@ -2423,6 +2423,101 @@ func TestBuilderTLSConfigCompositionNeverDropsIncumbentTLSMaterial(t *testing.T)
 	})
 }
 
+// TestBuilderTLSConfigDiscardSuppressedByExplicitTLSClientConfig pins that
+// discardsTLSConfig is suppressed only when the replacement transport carries
+// real TLS material of its own, not merely a non-nil TLSClientConfig.
+func TestBuilderTLSConfigDiscardSuppressedByExplicitTLSClientConfig(t *testing.T) {
+	caPEM, _, _ := newTestCA(t, "suppress-ca")
+	cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+	require.NoError(t, err)
+
+	t.Run("replacement_with_tls_client_config_is_not_reported", func(t *testing.T) {
+		spy := &warnSpy{}
+		replacement := &nethttp.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+		built := NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		assert.Empty(t, spy.msgs)
+		clientImpl, ok := built.(*client)
+		require.True(t, ok)
+		assert.Same(t, replacement, clientImpl.httpClient.Transport)
+	})
+
+	t.Run("replacement_without_tls_client_config_still_warns", func(t *testing.T) {
+		spy := &warnSpy{}
+		replacement := &nethttp.Transport{}
+		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		assert.Contains(t, spy.joined(), "WithTransport was called after WithTLSConfig")
+	})
+
+	// A TLS dialer makes net/http ignore TLSClientConfig outright, so a
+	// replacement carrying only one still decides its own TLS — the compose
+	// direction already treats it as material and both must agree.
+	t.Run("replacement_with_only_a_tls_dialer_is_not_reported", func(t *testing.T) {
+		spy := &warnSpy{}
+		replacement := &nethttp.Transport{
+			DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("must never be dialed by this test")
+			},
+		}
+		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		assert.Empty(t, spy.msgs, "a replacement that performs its own TLS handshake is not an accidental discard")
+	})
+
+	// The deprecated field is a separate branch of transportCarriesTLSMaterial and
+	// net/http still honors it when DialTLSContext is nil, so it needs its own case:
+	// gremlins does not mutate ||, so the mutation gate cannot cover this one.
+	t.Run("replacement_with_only_deprecated_dial_tls_is_not_reported", func(t *testing.T) {
+		spy := &warnSpy{}
+		replacement := &nethttp.Transport{}
+		//nolint:staticcheck // SA1019: DialTLS is deprecated but still honored when DialTLSContext is nil; this test exercises exactly that fallback field.
+		replacement.DialTLS = func(string, string) (net.Conn, error) {
+			return nil, errors.New("must never be dialed by this test")
+		}
+		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		assert.Empty(t, spy.msgs, "a replacement carrying only the deprecated dialer still performs its own handshake")
+	})
+
+	// Mirror of incumbent_carrying_only_alpn_defaults_still_composes: an
+	// ALPN-only TLSClientConfig must not suppress the discard either.
+	t.Run("replacement_with_alpn_only_tls_config_still_warns", func(t *testing.T) {
+		spy := &warnSpy{}
+		replacement := &nethttp.Transport{}
+		_ = replacement.Clone() // forces onceSetNextProtoDefaults to populate an ALPN-only TLSClientConfig
+		require.NotNil(t, replacement.TLSClientConfig, "the forced Clone must have populated TLSClientConfig, or this test proves nothing")
+
+		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(replacement).Build()
+		assert.Contains(t, spy.joined(), "WithTransport was called after WithTLSConfig",
+			"an ALPN-only TLSClientConfig carries no security material and must not suppress the discard")
+	})
+}
+
+// TestBuilderTLSSuppressionDoesNotSurviveRetake pins that discardsTLSConfig
+// must stay evaluated at Build() time against the final slot occupant, not
+// decided eagerly when a displacing WithTransport call happens — an eager
+// version would miss a later retake that drops the TLS material again.
+func TestBuilderTLSSuppressionDoesNotSurviveRetake(t *testing.T) {
+	caPEM, _, _ := newTestCA(t, "retake-ca")
+	cfg, err := NewClientTLSConfig(&ClientTLSConfig{CAValue: b64PEM(caPEM)})
+	require.NoError(t, err)
+
+	t.Run("suppressed_when_replacement_carries_tls", func(t *testing.T) {
+		spy := &warnSpy{}
+		transportWithTLSClientConfig := &nethttp.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+		NewBuilder(spy).WithTLSConfig(cfg).WithTransport(transportWithTLSClientConfig).Build()
+		assert.Empty(t, spy.msgs)
+	})
+
+	t.Run("not_suppressed_when_a_later_retake_drops_tls", func(t *testing.T) {
+		spy := &warnSpy{}
+		transportWithTLSClientConfig := &nethttp.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+		NewBuilder(spy).
+			WithTLSConfig(cfg).
+			WithTransport(transportWithTLSClientConfig).
+			WithTransport(&nethttp.Transport{}).
+			Build()
+		assert.Contains(t, spy.joined(), "WithTransport was called after WithTLSConfig")
+	})
+}
+
 // wrappingTransport stands in for a signer-layer wrapper; it exposes the
 // RoundTripper it wraps so tests can assert nesting depth.
 type wrappingTransport struct {
