@@ -345,14 +345,27 @@ func TestTypedHandlerUsesFrameworkValidator(t *testing.T) {
 // the -race run here is the actual production shape. Assertions off the test
 // goroutine use t.Errorf: require.* calls runtime.Goexit, which is undefined
 // outside the test goroutine.
+// assertDelivery drives one delivery and reports mismatches with t.Errorf, never
+// require.*: FailNow calls runtime.Goexit, which is undefined off the test
+// goroutine. A want of nil expects success.
+func assertDelivery(ctx context.Context, t *testing.T, h MessageHandler, kind string, body []byte, want error) {
+	t.Helper()
+
+	err := h.Handle(ctx, &amqp.Delivery{Body: body})
+	switch {
+	case want == nil && err != nil:
+		t.Errorf("%s delivery failed: %v", kind, err)
+	case want != nil && !errors.Is(err, want):
+		t.Errorf("%s delivery: want %v, got %v", kind, want, err)
+	case err != nil && strings.Contains(err.Error(), payloadMarker):
+		t.Errorf("%s error leaked the payload marker: %v", kind, err)
+	}
+}
+
 func TestNewTypedHandlerConcurrentDeliveries(t *testing.T) {
 	const goroutines = 24
 
-	valid := validBody(t)
-	invalid := fmt.Appendf(nil, `{"reference":%q,"amount":1}`, payloadMarker)
-	garbage := []byte("not json " + payloadMarker)
-
-	var oks, decodeFails, validateFails atomic.Int64
+	var oks atomic.Int64
 	h := NewTypedHandler(orderEventType, func(_ context.Context, p orderPayload) error {
 		if p.Reference != "abc" || p.Amount != 7 {
 			t.Errorf("fn saw a torn payload: %+v", p)
@@ -361,43 +374,36 @@ func TestNewTypedHandlerConcurrentDeliveries(t *testing.T) {
 		return nil
 	})
 
+	kinds := []struct {
+		name string
+		body []byte
+		want error
+	}{
+		{name: "valid", body: validBody(t)},
+		{name: "garbage", body: []byte("not json " + payloadMarker), want: ErrPayloadUndecodable},
+		{name: "invalid", body: fmt.Appendf(nil, `{"reference":%q,"amount":1}`, payloadMarker), want: ErrPayloadInvalid},
+	}
+	var handled [3]atomic.Int64
+
 	ctx := t.Context()
 	var wg sync.WaitGroup
 	for i := range goroutines {
+		slot := i % len(kinds)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			switch i % 3 {
-			case 0:
-				if err := h.Handle(ctx, &amqp.Delivery{Body: valid}); err != nil {
-					t.Errorf("valid delivery failed: %v", err)
-				}
-			case 1:
-				err := h.Handle(ctx, &amqp.Delivery{Body: garbage})
-				if !errors.Is(err, ErrPayloadUndecodable) {
-					t.Errorf("garbage delivery: want ErrPayloadUndecodable, got %v", err)
-				}
-				if err != nil && strings.Contains(err.Error(), payloadMarker) {
-					t.Errorf("decode error leaked the payload marker: %v", err)
-				}
-				decodeFails.Add(1)
-			default:
-				err := h.Handle(ctx, &amqp.Delivery{Body: invalid})
-				if !errors.Is(err, ErrPayloadInvalid) {
-					t.Errorf("invalid delivery: want ErrPayloadInvalid, got %v", err)
-				}
-				if err != nil && strings.Contains(err.Error(), payloadMarker) {
-					t.Errorf("validation error leaked the payload marker: %v", err)
-				}
-				validateFails.Add(1)
-			}
+			assertDelivery(ctx, t, h, kinds[slot].name, kinds[slot].body, kinds[slot].want)
+			handled[slot].Add(1)
 		}()
 	}
 	wg.Wait()
 
-	assert.Equal(t, int64(goroutines/3), oks.Load())
-	assert.Equal(t, int64(goroutines/3), decodeFails.Load())
-	assert.Equal(t, int64(goroutines/3), validateFails.Load())
+	for i, k := range kinds {
+		assert.Equal(t, int64(goroutines/len(kinds)), handled[i].Load(), "%s deliveries handled", k.name)
+	}
+	// Counted inside fn, so it also proves fn ran for every successful delivery
+	// rather than the adapter short-circuiting.
+	assert.Equal(t, int64(goroutines/len(kinds)), oks.Load())
 }
 
 func TestDeclareTypedConsumerRegistersAdapter(t *testing.T) {
