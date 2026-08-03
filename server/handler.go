@@ -139,9 +139,7 @@ func NewHandlerContextForTestWithOptions(w http.ResponseWriter, r *http.Request,
 	e := echo.New()
 	// Register the framework validator so contexts built here drive the typed pipeline
 	// (which calls c.Validate) exactly as a live request would.
-	if v := NewValidator(); v != nil {
-		e.Validator = v
-	}
+	e.Validator = NewValidator()
 	c := newHandlerContext(e.NewContext(r, w), cfg)
 	for _, opt := range opts {
 		opt(&c)
