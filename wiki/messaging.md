@@ -40,7 +40,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 
 **Re-declaring one queue name is allowed when the shapes are compatible.** Two declarations of the same queue *merge*: the four flags (`Durable`, `AutoDelete`, `Exclusive`, `NoWait`) must be equal, and any `Args` key they share must carry the same value; the union of their `Args` is what reaches the broker. So `DeclareQueueWithDLQ("orders.events.queue", nil)` and `DeclareQueue("orders.events.queue")` from two different modules now compose, instead of whichever ran last silently dropping the other's dead-letter args — declaration order across modules is invisible at any single call site, and the pre-merge behavior could revert a queue to dropping failed deliveries with no error and no WARN. Incompatible shapes (a differing flag, or one `Args` key with two values) keep the first declaration and fail startup with a single aggregate error naming every conflict:
 
-```
+```text
 declaration validation failed: conflicting queue declarations (2 conflict(s)) — declarations merge only when compatible; align the call sites (DeclareQueueWithDLQ and DeclareQueue on one name must agree)
 queue "orders.events.queue": Args["x-dead-letter-exchange"] kept "orders.dlx" vs rejected ""
 queue "payments.events.queue": Durable kept "true" vs rejected "false"

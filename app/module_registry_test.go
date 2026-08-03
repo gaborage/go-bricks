@@ -232,5 +232,7 @@ func TestDeclareMessagingFailsOnConflictingQueueDeclarations(t *testing.T) {
 	assert.Contains(t, err.Error(), "declaration validation failed")
 	assert.Contains(t, err.Error(), "conflicting queue declarations (1 conflict(s))")
 	assert.Contains(t, err.Error(), queue)
-	assert.Contains(t, err.Error(), "Durable")
+	// The whole detail line, not just the field name: asserting "Durable" alone
+	// would pass if the values were dropped, or if kept and rejected were swapped.
+	assert.Contains(t, err.Error(), `Durable kept "true" vs rejected "false"`)
 }
