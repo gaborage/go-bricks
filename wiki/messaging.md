@@ -128,6 +128,8 @@ messaging: decode failed for event "OrderCreated": json: type mismatch at field 
 messaging: validate failed for event "OrderCreated" (fields: OrderCreated.Currency)
 ```
 
+**Delivery headers are not exposed (yet).** `fn` receives the decoded payload and nothing else, so a typed consumer cannot read `x-outbox-event-id` and wrap its body in `inbox.ProcessOnce`. Outbox delivery is at-least-once, so a consumer fed by the outbox relay still needs that dedup — use the untyped `DeclareConsumer` for those until [#852](https://github.com/gaborage/go-bricks/issues/852) lands.
+
 **Concurrency.** One adapter instance serves every worker of the consumer and every tenant replaying the declarations. It holds no mutable state and allocates a fresh payload per delivery, so the concurrency rules below apply unchanged: the default is `NumCPU * 4` workers, and `Workers: 1` still buys sequential processing when ordering matters. Your `fn` must be safe for concurrent use.
 
 **Non-struct `T`** (`[]int`, `map[string]int`, a bare scalar) fails closed on the first delivery with `ErrPayloadInvalid` and no field list — go-playground validates structs only, and skipping validation silently would be worse.
