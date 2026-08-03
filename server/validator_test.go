@@ -657,17 +657,17 @@ func TestValidatorEdgeCases(t *testing.T) {
 // internal/validation panics if a custom rule fails to register. The server and
 // test-context call sites therefore assign the result directly, with no nil check.
 func TestValidatorNeverNilAndFullyRegistered(t *testing.T) {
-	validator := NewValidator()
-	require.NotNil(t, validator)
-	require.NotNil(t, validator.validate)
+	v := NewValidator()
+	require.NotNil(t, v)
+	require.NotNil(t, v.validate)
 
 	// The custom rule must be live, not merely present: an unregistered tag would
 	// panic on Validate, and a registered-but-inert one would accept "54".
 	type mccOnly struct {
 		Code string `validate:"mcc_code"`
 	}
-	require.NoError(t, validator.Validate(mccOnly{Code: "5411"}))
-	require.Error(t, validator.Validate(mccOnly{Code: "54"}))
+	require.NoError(t, v.Validate(mccOnly{Code: "5411"}))
+	require.Error(t, v.Validate(mccOnly{Code: "54"}))
 
 	// Test behavior with a struct containing all validation rule types
 	allRulesStruct := struct {
@@ -688,6 +688,6 @@ func TestValidatorNeverNilAndFullyRegistered(t *testing.T) {
 		MCCCode:     "1234",
 	}
 
-	err := validator.Validate(allRulesStruct)
+	err := v.Validate(allRulesStruct)
 	assert.NoError(t, err)
 }
