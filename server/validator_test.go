@@ -365,7 +365,7 @@ func TestValidationErrorJSON(t *testing.T) {
 	assert.Equal(t, "invalid-email", result.Errors[1].Value)
 }
 
-func TestValidateMCCCode(t *testing.T) {
+func TestValidatorMCCCodeRule(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -653,12 +653,21 @@ func TestValidatorEdgeCases(t *testing.T) {
 	})
 }
 
-func TestValidatorNilValidation(t *testing.T) {
-	// Test what happens if validator creation fails (hypothetical scenario)
-	// Since we can't easily mock the RegisterValidation failure,
-	// we'll just test the current behavior
-	validator := NewValidator()
-	require.NotNil(t, validator)
+// NewValidator never returns nil and never returns a half-configured instance:
+// internal/validation panics if a custom rule fails to register. The server and
+// test-context call sites therefore assign the result directly, with no nil check.
+func TestValidatorNeverNilAndFullyRegistered(t *testing.T) {
+	v := NewValidator()
+	require.NotNil(t, v)
+	require.NotNil(t, v.validate)
+
+	// The custom rule must be live, not merely present: an unregistered tag would
+	// panic on Validate, and a registered-but-inert one would accept "54".
+	type mccOnly struct {
+		Code string `validate:"mcc_code"`
+	}
+	require.NoError(t, v.Validate(mccOnly{Code: "5411"}))
+	require.Error(t, v.Validate(mccOnly{Code: "54"}))
 
 	// Test behavior with a struct containing all validation rule types
 	allRulesStruct := struct {
@@ -679,6 +688,6 @@ func TestValidatorNilValidation(t *testing.T) {
 		MCCCode:     "1234",
 	}
 
-	err := validator.Validate(allRulesStruct)
+	err := v.Validate(allRulesStruct)
 	assert.NoError(t, err)
 }

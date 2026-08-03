@@ -102,11 +102,7 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 	// Without this, v5.1.0+ only returns request.RemoteAddr.
 	// Trusted-proxy-aware extractors are a follow-up item documented in ADR-015.
 	e.IPExtractor = echo.LegacyIPExtractor()
-	if v := NewValidator(); v != nil {
-		e.Validator = v
-	} else {
-		log.Fatal().Msg("failed to initialize request validator")
-	}
+	e.Validator = NewValidator()
 
 	// Initialize server with path configuration
 	basePath := normalizeBasePath(cfg.Server.Path.Base)
