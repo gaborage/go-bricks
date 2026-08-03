@@ -123,7 +123,7 @@ if errors.Is(err, messaging.ErrPayloadInvalid)     { /* decoded, failed validati
 
 **No payload bytes in the error — and where that guarantee ends.** AMQP bodies carry partner PII/PCI, so `PayloadError.Error()` is composed from schema facts only: the event type, the stage, and the failing field namespaces. `Fields()` redacts every bracketed span (`Limits[4111111111111111]` → `Limits[*]`), because go-playground interpolates map keys verbatim. Both are safe to log. `Unwrap()` is **not** — it returns the raw decoder or validator error, which may quote a rejected literal, an offending byte, an unknown key, or a map key. It is the deliberate escape hatch; logging it is opt-in and on you.
 
-```
+```text
 messaging: decode failed for event "OrderCreated": json: type mismatch at field "orderId" (want int64, offset 15)
 messaging: validate failed for event "OrderCreated" (fields: OrderCreated.Currency)
 ```
