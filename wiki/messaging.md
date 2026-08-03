@@ -48,6 +48,8 @@ queue "payments.events.queue": Durable kept "true" vs rejected "false"
 
 `kept` is the incumbent — the declaration still in effect — and `rejected` is the one that was refused, so the message says which of the two call sites won. Repeats of one disagreement collapse: the count enumerates distinct conflicts, not rejected declarations.
 
+Two caveats on `Args`. Values are compared with `reflect.DeepEqual`, which is **type-sensitive**: `int(1)` and `int64(1)` are a conflict, not a match, so give one `Args` key the same Go type at every call site. And the contested values are rendered into the startup error, which the framework logs — `Args` is broker topology, so never put credentials, tokens, or PII there.
+
 Exchanges and bindings are unaffected: `RegisterExchange` still keeps the last declaration of a name, and `RegisterBinding` still appends every declaration it is given (two identical bindings both reach the broker; neither replaces the other).
 
 **For verbose before/after comparison**, see [messaging/declarations.go](../messaging/declarations.go)
