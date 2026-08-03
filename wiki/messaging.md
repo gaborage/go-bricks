@@ -85,6 +85,53 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 
 See the Troubleshooting section in [CLAUDE.md](../CLAUDE.md) for diagnosing duplicate consumer/module errors.
 
+## Typed Consumers
+
+`DeclareTypedConsumer` is the consumer mirror of `server.POST(hr, r, path, handler)`: it binds the message body to a struct, validates it against the same `validate` tags HTTP handlers use, and calls your function — so `json.Unmarshal`, the validation call, and the two error branches stop being copy-pasted into every `Handle`.
+
+```go
+type OrderCreated struct {
+    OrderID  int64  `json:"orderId"  validate:"required"`
+    Currency string `json:"currency" validate:"required,len=3"`
+}
+
+func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
+    exchange := decls.DeclareTopicExchange("orders.events")
+    queue := decls.DeclareQueueWithDLQ("orders.events.queue", nil)
+    decls.DeclareBinding(queue.Name, exchange.Name, "orders.*")
+
+    messaging.DeclareTypedConsumer(decls, &messaging.ConsumerOptions{
+        Queue:     queue.Name,
+        Consumer:  "order-processor",
+        EventType: "OrderCreated",
+    }, m.svc.HandleOrderCreated) // func(context.Context, OrderCreated) error
+}
+```
+
+`T` is inferred from the function, so it is never spelled out. `ConsumerOptions.Handler` must be nil — the helper builds the handler and panics at declaration time if one is already set (use `DeclareConsumer` for a hand-written `MessageHandler`). The queue argument is deliberately absent: declare the queue yourself, exactly as an untyped `DeclareConsumer(opts, nil)` does. A consumer naming a queue nobody declared surfaces at `Declarations.Validate()` as `consumer references non-existent queue`, not at the call site.
+
+`messaging.NewTypedHandler[T](eventType, fn)` builds the same adapter without registering anything, for a hand-assembled `ConsumerOptions`.
+
+**Failure semantics.** Decode and validation failures return a `*messaging.PayloadError` before `fn` runs, and the worker loop nacks it WITHOUT requeue like any other handler error — which is right, since neither failure gets better on redelivery. Pair the queue with `DeclareQueueWithDLQ` so those messages park instead of being dropped. Discriminate the two with `errors.Is`:
+
+```go
+if errors.Is(err, messaging.ErrPayloadUndecodable) { /* malformed body */ }
+if errors.Is(err, messaging.ErrPayloadInvalid)     { /* decoded, failed validation */ }
+```
+
+`fn`'s own error is returned **unwrapped**, so `errors.Is(err, ErrAlreadyProcessed)` against your own sentinels keeps working and never collides with the two above.
+
+**No payload bytes in the error — and where that guarantee ends.** AMQP bodies carry partner PII/PCI, so `PayloadError.Error()` is composed from schema facts only: the event type, the stage, and the failing field namespaces. `Fields()` redacts every bracketed span (`Limits[4111111111111111]` → `Limits[*]`), because go-playground interpolates map keys verbatim. Both are safe to log. `Unwrap()` is **not** — it returns the raw decoder or validator error, which may quote a rejected literal, an offending byte, an unknown key, or a map key. It is the deliberate escape hatch; logging it is opt-in and on you.
+
+```
+messaging: decode failed for event "OrderCreated": json: type mismatch at field "orderId" (want int64, offset 15)
+messaging: validate failed for event "OrderCreated" (fields: OrderCreated.Currency)
+```
+
+**Concurrency.** One adapter instance serves every worker of the consumer and every tenant replaying the declarations. It holds no mutable state and allocates a fresh payload per delivery, so the concurrency rules below apply unchanged: the default is `NumCPU * 4` workers, and `Workers: 1` still buys sequential processing when ordering matters. Your `fn` must be safe for concurrent use.
+
+**Non-struct `T`** (`[]int`, `map[string]int`, a bare scalar) fails closed on the first delivery with `ErrPayloadInvalid` and no field list — go-playground validates structs only, and skipping validation silently would be worse.
+
 ## Message Error Handling
 
 **IMPORTANT:** GoBricks uses a **no-retry policy** for failed messages to prevent infinite retry loops.

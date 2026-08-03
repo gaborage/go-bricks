@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/go-playground/validator/v10"
@@ -95,7 +94,7 @@ func TestPayloadErrorIsRejectsUnknownStage(t *testing.T) {
 
 func TestPayloadErrorUnwrapReachesCause(t *testing.T) {
 	inner := errors.New("inner cause")
-	err := newPayloadDecodeError(orderEventType, inner)
+	err := newPayloadDecodeError(orderEventType, inner, "")
 
 	require.Same(t, inner, err.Unwrap())
 	assert.ErrorIs(t, err, inner)
@@ -128,7 +127,7 @@ func TestPayloadErrorMessageComposition(t *testing.T) {
 		`messaging: validate failed for event "OrderCreated" (fields: orderPayload.Reference, orderPayload.Amount)`,
 		validateErr.Error())
 
-	decodeErr := newPayloadDecodeError(orderEventType, errors.New("unexpected EOF"))
+	decodeErr := newPayloadDecodeError(orderEventType, errors.New("unexpected EOF"), "")
 	assert.Equal(t,
 		`messaging: decode failed for event "OrderCreated": cause withheld (unaudited decoder); use errors.Unwrap for the raw error`,
 		decodeErr.Error())
@@ -151,7 +150,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.Error(t, decodeErr)
 		require.Contains(t, decodeErr.Error(), numericMarker, "premise: the raw cause leaks the amount")
 
-		rendered := newPayloadDecodeError(orderEventType, decodeErr).Error()
+		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
 		require.Contains(t, rendered, "type mismatch at field", "premise: a decode summary was rendered")
 		assert.NotContains(t, rendered, numericMarker)
 	})
@@ -174,7 +173,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.ErrorAs(t, decodeErr, &typeErr, "premise: the body produced an UnmarshalTypeError")
 		assert.Equal(t, "limits", typeErr.Field, "Field must name the destination field only")
 
-		rendered := newPayloadDecodeError(orderEventType, decodeErr).Error()
+		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
 		require.Contains(t, rendered, "type mismatch at field", "premise: a decode summary was rendered")
 		assert.NotContains(t, rendered, payloadMarker)
 	})
@@ -194,7 +193,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.ErrorAs(t, decodeErr, &typeErr, "premise: the body produced an UnmarshalTypeError")
 		assert.Equal(t, "limits", typeErr.Field, "Field must name the destination field only")
 
-		rendered := newPayloadDecodeError(orderEventType, decodeErr).Error()
+		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
 		require.Contains(t, rendered, "type mismatch at field", "premise: a decode summary was rendered")
 		assert.NotContains(t, rendered, payloadMarker)
 	})
@@ -208,7 +207,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.ErrorAs(t, decodeErr, new(*json.SyntaxError), "premise: the body produced a SyntaxError")
 		require.Contains(t, decodeErr.Error(), syntaxMarker, "premise: the raw cause quotes the offending byte")
 
-		rendered := newPayloadDecodeError(orderEventType, decodeErr).Error()
+		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
 		require.Contains(t, rendered, "syntax error at offset", "premise: a decode summary was rendered")
 		assert.NotContains(t, rendered, syntaxMarker)
 	})
@@ -224,7 +223,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.Error(t, decodeErr)
 		require.Contains(t, decodeErr.Error(), payloadMarker, "premise: the raw cause leaks the key")
 
-		rendered := newPayloadDecodeError(orderEventType, decodeErr).Error()
+		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
 		require.Contains(t, rendered, "cause withheld", "premise: the generic fallback rendered")
 		assert.NotContains(t, rendered, payloadMarker)
 	})
@@ -342,7 +341,7 @@ func TestPayloadErrorFieldsRedactsOnRead(t *testing.T) {
 func TestPayloadErrorConstructorsPropagateEventType(t *testing.T) {
 	cause := errors.New("boom")
 
-	decodeErr := newPayloadDecodeError(shipmentEventType, cause)
+	decodeErr := newPayloadDecodeError(shipmentEventType, cause, "")
 	assert.Equal(t, shipmentEventType, decodeErr.EventType)
 	assert.Contains(t, decodeErr.Error(), shipmentEventType)
 
@@ -389,110 +388,6 @@ func TestSanitizeNamespace(t *testing.T) {
 			assert.Equal(t, tc.want, sanitizeNamespace(tc.input))
 		})
 	}
-}
-
-func TestDecodeSummary(t *testing.T) {
-	typeErr := &json.UnmarshalTypeError{
-		Value:  "number " + numericMarker,
-		Type:   reflect.TypeOf(int64(0)),
-		Offset: 18,
-		Struct: "orderPayload",
-		Field:  "amount",
-	}
-	syntaxOffset := int64(1)
-
-	tests := []struct {
-		name        string
-		err         error
-		want        string
-		notContains string
-	}{
-		{
-			name:        "unmarshal_type_error",
-			err:         typeErr,
-			want:        `json: type mismatch at field "amount" (want int64, offset 18)`,
-			notContains: numericMarker,
-		},
-		{
-			name:        "wrapped_unmarshal_type_error",
-			err:         fmt.Errorf("decode: %w", typeErr),
-			want:        `json: type mismatch at field "amount" (want int64, offset 18)`,
-			notContains: numericMarker,
-		},
-		{
-			name: "unmarshal_type_error_without_field",
-			err:  fieldlessTypeError(t),
-			want: "json: type mismatch (want messaging.orderPayload, offset 3)",
-		},
-		{
-			name: "unmarshal_type_error_without_type",
-			err:  &json.UnmarshalTypeError{Value: "object", Offset: 2},
-			want: "json: type mismatch (want unknown, offset 2)",
-		},
-		{
-			name: "syntax_error",
-			err:  syntaxError(t, syntaxOffset),
-			want: "json: syntax error at offset 1",
-		},
-		{
-			name: "wrapped_syntax_error",
-			err:  fmt.Errorf("decode: %w", syntaxError(t, syntaxOffset)),
-			want: "json: syntax error at offset 1",
-		},
-		{
-			name:        "unrelated_error_falls_back",
-			err:         errors.New("json: unknown field " + payloadMarker),
-			want:        unauditedDecoderSummary,
-			notContains: payloadMarker,
-		},
-		{
-			name: "nil_error_falls_back",
-			err:  nil,
-			want: unauditedDecoderSummary,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := decodeSummary(tc.err)
-			assert.Equal(t, tc.want, got)
-			if tc.notContains != "" {
-				assert.NotContains(t, got, tc.notContains)
-			}
-		})
-	}
-}
-
-// fieldlessTypeError produces a real *json.UnmarshalTypeError with an empty
-// Field: a bare scalar body never enters a struct field, so encoding/json has no
-// FieldStack to draw one from. Built from the decoder rather than by literal so
-// the Field == "" branch proves its own reachability.
-func fieldlessTypeError(t *testing.T) *json.UnmarshalTypeError {
-	t.Helper()
-
-	var payload orderPayload
-	err := json.Unmarshal([]byte("123"), &payload)
-
-	var typeErr *json.UnmarshalTypeError
-	require.ErrorAs(t, err, &typeErr)
-	require.Empty(t, typeErr.Field)
-
-	return typeErr
-}
-
-// syntaxError produces a real *json.SyntaxError; its msg field is unexported,
-// so it cannot be built by literal.
-func syntaxError(t *testing.T, wantOffset int64) *json.SyntaxError {
-	t.Helper()
-
-	var payload orderPayload
-	err := json.Unmarshal([]byte(`}`), &payload)
-
-	var syntaxErr *json.SyntaxError
-	require.ErrorAs(t, err, &syntaxErr)
-	require.Equal(t, wantOffset, syntaxErr.Offset)
-
-	return syntaxErr
 }
 
 func TestPayloadErrorNilAndZeroValueAreSafe(t *testing.T) {

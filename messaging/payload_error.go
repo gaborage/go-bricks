@@ -1,7 +1,6 @@
 package messaging
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,8 +50,10 @@ var (
 //   - validator namespaces interpolate map keys verbatim ("Limits[4111...]"),
 //     which is why the namespace list is unexported and redacted on read.
 //
-// A new codec (issue #346) inherits the generic fallback in decodeSummary — no
-// rendering at all — until its error shapes are audited and added there.
+// The rendering itself lives on the codec seam (codec.summarize), so a new codec
+// (issue #346) must supply its own audited phrasing; until it does, the
+// constructor substitutes the fail-closed phrase and the cause itself is never
+// rendered.
 type PayloadError struct {
 	// EventType is the declared consumer event type the body was routed to.
 	EventType string
@@ -68,15 +69,28 @@ type PayloadError struct {
 	// only safe read.
 	fields []string
 
+	// summary is the codec's payload-free rendering of a decode cause. It is what
+	// Error() prints; the cause itself is never rendered.
+	summary string
+
 	err error
 }
 
 // newPayloadDecodeError wraps a decode failure. The cause survives for Unwrap
-// only; Error() renders it through decodeSummary.
-func newPayloadDecodeError(eventType string, cause error) *PayloadError {
+// only; Error() prints summary instead, which the codec produced.
+//
+// SECURITY: an empty summary means the codec did not audit this error shape, so
+// the fail-closed phrase substitutes here rather than at the call site — no
+// caller can render an unaudited cause by forgetting the fallback.
+func newPayloadDecodeError(eventType string, cause error, summary string) *PayloadError {
+	if summary == "" {
+		summary = unauditedDecoderSummary
+	}
+
 	return &PayloadError{
 		EventType: eventType,
 		Stage:     PayloadStageDecode,
+		summary:   summary,
 		err:       cause,
 	}
 }
@@ -131,8 +145,8 @@ func (e *PayloadError) Error() string {
 	if fields := e.Fields(); len(fields) > 0 {
 		msg += fmt.Sprintf(" (fields: %s)", strings.Join(fields, ", "))
 	}
-	if e.Stage == PayloadStageDecode && e.err != nil {
-		msg += ": " + decodeSummary(e.err)
+	if e.Stage == PayloadStageDecode && e.summary != "" {
+		msg += ": " + e.summary
 	}
 
 	return msg
@@ -168,36 +182,6 @@ func (e *PayloadError) Is(target error) bool {
 	default:
 		return false
 	}
-}
-
-// decodeSummary renders a decode failure without any payload bytes.
-// json.UnmarshalTypeError.Value carries the raw literal ("number 1234.56") and
-// json.SyntaxError's message quotes the offending byte, so neither error's own
-// text may be rendered. Field, Type and Offset are destination-schema
-// facts: encoding/json builds Field from the matched destination field's json
-// tag and never from an input key (map keys never enter its FieldStack).
-// Anything else — including json.Decoder.DisallowUnknownFields, which names the
-// partner's key — falls through to a phrase that reveals nothing.
-func decodeSummary(err error) string {
-	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &typeErr) {
-		wantType := "unknown"
-		if typeErr.Type != nil {
-			wantType = typeErr.Type.String()
-		}
-		if typeErr.Field != "" {
-			return fmt.Sprintf("json: type mismatch at field %q (want %s, offset %d)", typeErr.Field, wantType, typeErr.Offset)
-		}
-
-		return fmt.Sprintf("json: type mismatch (want %s, offset %d)", wantType, typeErr.Offset)
-	}
-
-	var syntaxErr *json.SyntaxError
-	if errors.As(err, &syntaxErr) {
-		return fmt.Sprintf("json: syntax error at offset %d", syntaxErr.Offset)
-	}
-
-	return unauditedDecoderSummary
 }
 
 // sanitizeNamespace redacts everything from a namespace's first '[' to its last
