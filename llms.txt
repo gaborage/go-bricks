@@ -3734,7 +3734,9 @@ The httpclient signs+encrypts outbound request bodies and decrypts+verifies
 `application/jose` responses via `Builder.WithJOSE` (an `http.RoundTripper` that
 sits below the retry loop, so each retry re-seals — useful when a partner requires
 unique `iat`/`jti` per attempt). Non-`application/jose` responses pass through
-untouched.
+untouched. Only bodies are sealed: a request with no body goes out unsealed
+whatever the method, so give a payload-free `POST` an explicit `{}` body if the
+partner requires `application/jose` on every request.
 
 ```go
 client, err := httpclient.NewBuilder(log).
