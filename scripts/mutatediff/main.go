@@ -88,8 +88,9 @@ func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer
 	}
 	defer os.RemoveAll(reportDir)
 	var failures, warnings, unjudged []mutantVerdict
-	for _, pkg := range packagesOf(changed) {
-		f, w, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, th.workers, out)
+	pkgs := packagesOf(changed)
+	for i, pkg := range pkgs {
+		f, w, ran, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, th.workers, out)
 		if mErr != nil {
 			return fail("%v", mErr)
 		}
@@ -97,6 +98,9 @@ func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer
 		warnings = append(warnings, w...)
 		if vacuousPkg(pkg, reportDir, out) {
 			unjudged = append(unjudged, mutantVerdict{File: pkg})
+		}
+		if shouldCool(ran, i, len(pkgs)) {
+			th.coolDown(out)
 		}
 	}
 	return reportVerdict(failures, warnings, unjudged, out)
@@ -184,7 +188,7 @@ func runEngine(ctx context.Context, engineArgs []string, pkg, reportPath string,
 	return reportJSON, nil
 }
 
-func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, workers int, out io.Writer) (failures, warnings []mutantVerdict, err error) {
+func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, workers int, out io.Writer) (failures, warnings []mutantVerdict, ran bool, err error) {
 	// A dry run enumerates mutants without executing any, so it costs one coverage
 	// pass instead of mutants x (build + suite). gremlins mutates the whole subtree
 	// it is pointed at while the gate only judges changed lines, so most
@@ -197,15 +201,15 @@ func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir stri
 	dryJSON, err := runEngine(ctx, engineArgs, pkg, reportPathFor(pkg, reportDir)+".dry",
 		[]string{"--dry-run", workersFlag, "1"}, out)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	onChanged, cErr := countOnChangedLines(dryJSON, pkg, changed)
 	if cErr != nil {
-		return nil, nil, fmt.Errorf("parse dry-run report for %s: %w", pkg, cErr)
+		return nil, nil, false, fmt.Errorf("parse dry-run report for %s: %w", pkg, cErr)
 	}
 	if onChanged == 0 {
 		fmt.Fprintf(out, "mutatediff: %s has no mutants on changed lines, skipping\n", pkg)
-		return nil, nil, nil
+		return nil, nil, false, nil
 	}
 
 	fmt.Fprintf(out, "mutatediff: mutating %s (%d mutants on changed lines)\n", pkg, onChanged)
@@ -213,13 +217,13 @@ func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir stri
 	reportJSON, err := runEngine(ctx, engineArgs, pkg, reportPathFor(pkg, reportDir),
 		slices.Concat(gremlinsTimeoutArgs(coefficient), workerArgs(workers)), out)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	f, w, jerr := judge(reportJSON, pkg, changed)
 	if jerr != nil {
-		return nil, nil, fmt.Errorf("parse report for %s: %w", pkg, jerr)
+		return nil, nil, false, fmt.Errorf("parse report for %s: %w", pkg, jerr)
 	}
-	return f, w, nil
+	return f, w, true, nil
 }
 
 func fail(format string, a ...any) int {

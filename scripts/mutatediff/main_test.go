@@ -92,3 +92,20 @@ func TestRunNoOpDiffLeavesEnvironmentAlone(t *testing.T) {
 		t.Errorf("GOFLAGS = %q, want it untouched by a no-op run", got)
 	}
 }
+
+// TestMutatePackageReportsFailureAsNotRun pins the signal the cooldown depends
+// on: a package whose engine never executed mutants generated no load, so the
+// caller must be able to tell it apart from a package that ran.
+func TestMutatePackageReportsFailureAsNotRun(t *testing.T) {
+	var buf bytes.Buffer
+	// An engine that cannot run at all fails before any verdict; the point here is
+	// only that the arity carries a ran flag the caller can branch on.
+	_, _, ran, err := mutatePackage(t.Context(), []string{"false"}, "./scripts/mutatediff",
+		t.TempDir(), map[string][]lineRange{}, 1, &buf)
+	if err == nil {
+		t.Fatal("want an error from an engine that cannot produce a report")
+	}
+	if ran {
+		t.Error("ran = true, want false when the engine never executed mutants")
+	}
+}
