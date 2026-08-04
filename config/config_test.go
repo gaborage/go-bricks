@@ -380,6 +380,51 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 
 	// KeyStore symmetric-secret floor defaults to 32 bytes.
 	assert.Equal(t, 32, k.Int("keystore.secretminlength"))
+
+	// Cache readiness criticality is registered and opt-in.
+	assert.True(t, k.Exists("cache.critical"), "cache.critical must be a registered default")
+	assert.False(t, k.Bool("cache.critical"))
+}
+
+func TestLoadCacheCritical(t *testing.T) {
+	const yamlWithCritical = "cache:\n  critical: true\n"
+
+	tests := []struct {
+		name          string
+		yaml          string
+		env           string
+		expected      bool
+		expectEnabled bool
+	}{
+		// The sibling key proves the cache block actually parsed, so the case cannot pass on
+		// Go's zero value alone.
+		{name: "cache_block_without_critical_yields_false", yaml: "cache:\n  enabled: true\n", expectEnabled: true},
+		{name: "yaml_true_parses", yaml: yamlWithCritical, expected: true},
+		{name: "env_true_parses", env: "true", expected: true},
+		{name: "env_overrides_yaml", yaml: yamlWithCritical, env: "false", expected: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clearEnvironmentVariables()
+			defer clearEnvironmentVariables()
+
+			dir := t.TempDir()
+			if tc.yaml != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML), []byte(tc.yaml), 0o600))
+			}
+			t.Chdir(dir)
+
+			if tc.env != "" {
+				t.Setenv("CACHE_CRITICAL", tc.env)
+			}
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, cfg.Cache.Critical)
+			assert.Equal(t, tc.expectEnabled, cfg.Cache.Enabled)
+		})
+	}
 }
 
 func TestLoadEdgeCases(t *testing.T) {

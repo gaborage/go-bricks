@@ -1817,6 +1817,7 @@ See [database/testing](database/testing/) package for full API documentation.
 cache:
   enabled: true
   type: redis
+  critical: false # true = /ready returns 503 when the cache probe errors
   redis:
     host: localhost
     port: 6379
@@ -2344,11 +2345,13 @@ managerStats := cacheManager.Stats()
 ```
 
 `GET /health` is a liveness-only probe with no component breakdown (`{"status": "ok"}`).
-`GET /ready` reports per-component status (database, messaging). A cache probe is
-registered internally when cache is enabled, but it is **non-critical** and only checks
-that an instance can be leased from the manager — it never calls `Cache.Health`, so a
-Redis outage neither fails `/ready` nor appears in its response. Alert on Redis
-separately.
+`GET /ready` reports per-component status (database, messaging, cache) — the cache probe's
+result is always surfaced as the top-level `cache` and `cache_stats` keys. The probe leases
+an instance from the manager and calls `Cache.Health(ctx)` on it — a Redis `PING` per poll —
+so an outage that starts after the instance was built is reported on the next poll. It fails
+`/ready` with `503` only when `cache.critical: true` (default `false`). The probe leases key
+`""`, so it observes only the top-level `cache.*` connection and never per-tenant caches —
+alert on Redis separately either way.
 
 **Observability Integration:**
 
@@ -4475,7 +4478,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Path | Returns | Probes |
 |---|---|---|
 | `GET /health` | `200` `{"status":"ok"}` always (liveness only — no component probes) | none |
-| `GET /ready` | `200` with per-component status (`database`, `messaging`, + stats); `503` only when the **database** probe fails — it is the only critical probe | DB: lease a connection, then `conn.Health(ctx)` (critical). Messaging: lease a publisher. Cache: lease an instance — no Redis `PING`. Both are non-critical, so their failures never yield `503` |
+| `GET /ready` | `200` with per-component status (`database`, `messaging`, `cache`, + `db_stats` / `messaging_stats` / `cache_stats`); `503` when the **database** probe fails, or when the **cache** probe fails and `cache.critical: true` | DB: lease a connection, then `conn.Health(ctx)` (always critical). Messaging: lease a publisher (never critical). Cache: lease an instance, then `cache.Health(ctx)` (Redis `PING` per probe); critical only under `cache.critical: true` (default `false`) |
 
 ### Configuration — Layered by Environment
 

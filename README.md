@@ -559,7 +559,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 - **Lifecycle Management**: Lazy initialization, LRU eviction (max 100 tenants), idle cleanup (15m default)
 - **Atomic Operations**: `GetOrSet` for deduplication, `CompareAndSet` for distributed locking
 - **Performance**: <1ms latency for Get/Set, 100k ops/sec throughput
-- **Observability**: OpenTelemetry metrics, plus a non-critical `/ready` probe that leases a cache instance rather than pinging Redis — so a Redis outage does not fail readiness. No distributed-tracing spans today. See [wiki/cache.md](wiki/cache.md)
+- **Observability**: OpenTelemetry metrics, plus a `/ready` probe reported as the `cache` / `cache_stats` keys. It leases a cache instance and pings Redis via `Cache.Health` on every poll, and fails readiness with `503` only when `cache.critical: true` (default `false`). No distributed-tracing spans today. See [wiki/cache.md](wiki/cache.md)
 
 ### Configuration
 
@@ -567,6 +567,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 cache:
   enabled: true
   type: redis
+  critical: false             # true = /ready returns 503 when the cache probe errors
   manager:
     maxsize: 100              # Max tenant cache instances (LRU-evicted)
     idlettl: 15m              # Close caches idle longer than this
@@ -797,7 +798,7 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
 - **Structured logging** via Zerolog with OTLP export for action + trace streams.
 - **Tracing** propagates W3C `traceparent` headers.
 - **Metrics** capture HTTP/messaging/database timings plus custom application metrics via `deps.MeterProvider`.
-- **Health endpoints**: `/health` (liveness) and `/ready` (readiness with DB/messaging checks).
+- **Health endpoints**: `/health` (liveness) and `/ready` (readiness with DB/messaging/cache checks).
 - **Graceful shutdown** coordinates servers, consumers, and background workers.
 
 ### Configuring OpenTelemetry (Traces + Dual-Mode Logs)

@@ -53,9 +53,11 @@ const (
 
 	// Component names (componentDatabase, componentMessaging defined in app.go)
 	messagingStatsKey = "messaging_stats"
+	cacheStatsKey     = "cache_stats"
 
 	// Error scenarios
 	errorDBDown      = "db down"
+	errorRedisDown   = "Redis connection refused"
 	errorCloseFailed = "close failed"
 	failingResource  = "failing-resource"
 	testCloser       = "test-closer"
@@ -497,7 +499,7 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 }
 
 func (f *testAppFixture) rebuildClosersAndHealth() {
-	f.app.healthProbes = createHealthProbesForManagers(f.app.dbManager, f.app.messagingManager, f.app.cacheManager, f.app.logger)
+	f.app.healthProbes = f.app.createHealthProbes()
 	f.app.closers = nil
 	// Register closers with explicit nil checks to avoid typed nil interface issues
 	if f.app.dbManager != nil {
@@ -759,6 +761,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				msgStats, ok := body[messagingStatsKey].(map[string]any)
 				assert.True(t, ok)
 				assert.Contains(t, msgStats, "active_publishers")
+				assert.Equal(t, disabledStatus, body[componentCache])
 			},
 		},
 		{
@@ -789,6 +792,132 @@ func TestReadyCheckScenarios(t *testing.T) {
 				msgStats, ok := body[messagingStatsKey].(map[string]any)
 				assert.True(t, ok)
 				assert.Len(t, msgStats, 0)
+			},
+		},
+		{
+			name: "cache_healthy",
+			prepare: func(f *testAppFixture) {
+				f.db.On(methodHealth, mock.Anything).Return(nil)
+				f.messaging.SetReady(true)
+				f.app.cacheManager = createTestCacheManager(f.t)
+				f.rebuildClosersAndHealth()
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, statusReady, body[statusText])
+				assert.Equal(t, statusHealthy, body[componentCache])
+				cacheStats, ok := body[cacheStatsKey].(map[string]any)
+				require.True(t, ok, "cache_stats must be present in the ready body")
+				assert.Equal(t, statusHealthy, cacheStats[statusText])
+				assert.Contains(t, cacheStats, "active_caches")
+				assert.Contains(t, cacheStats, "total_created")
+			},
+		},
+		{
+			// #860: an unhealthy cache used to be invisible on /ready.
+			name: "cache_unhealthy_non_critical",
+			prepare: func(f *testAppFixture) {
+				f.db.On(methodHealth, mock.Anything).Return(nil)
+				f.messaging.SetReady(true)
+				f.app.cacheManager = createTestCacheManagerWithGetError(f.t, errors.New(errorRedisDown))
+				f.rebuildClosersAndHealth()
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, statusReady, body[statusText])
+				assert.Equal(t, unhealthyStatus, body[componentCache])
+				cacheStats, ok := body[cacheStatsKey].(map[string]any)
+				require.True(t, ok, "cache_stats must be present in the ready body")
+				assert.Equal(t, "connection_failed", cacheStats[statusText])
+				assert.NotContains(t, body, errorKey)
+			},
+		},
+		{
+			name: "cache_unhealthy_critical",
+			prepare: func(f *testAppFixture) {
+				f.db.On(methodHealth, mock.Anything).Return(nil)
+				f.messaging.SetReady(true)
+				f.app.cfg.Cache.Critical = true
+				f.app.cacheManager = createTestCacheManagerWithGetError(f.t, errors.New(errorRedisDown))
+				f.rebuildClosersAndHealth()
+			},
+			expectedStatus: http.StatusServiceUnavailable,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, "not ready", body[statusText])
+				assert.Equal(t, unhealthyStatus, body[componentCache])
+				errMsg, ok := body[errorKey].(string)
+				require.True(t, ok)
+				assert.Contains(t, errMsg, errorRedisDown)
+			},
+		},
+		{
+			// #860: the pooled instance survives the outage, so only a per-probe ping sees it.
+			name: "cache_warm_pool_outage_non_critical",
+			prepare: func(f *testAppFixture) {
+				f.db.On(methodHealth, mock.Anything).Return(nil)
+				f.messaging.SetReady(true)
+				f.app.cacheManager = createWarmCacheManagerWithOutage(f.t)
+				f.rebuildClosersAndHealth()
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, statusReady, body[statusText])
+				assert.Equal(t, unhealthyStatus, body[componentCache])
+				cacheStats, ok := body[cacheStatsKey].(map[string]any)
+				require.True(t, ok, "cache_stats must be present in the ready body")
+				assert.Equal(t, unhealthyStatus, cacheStats[statusText])
+				assert.NotContains(t, body, errorKey)
+			},
+		},
+		{
+			name: "cache_warm_pool_outage_critical",
+			prepare: func(f *testAppFixture) {
+				f.db.On(methodHealth, mock.Anything).Return(nil)
+				f.messaging.SetReady(true)
+				f.app.cfg.Cache.Critical = true
+				f.app.cacheManager = createWarmCacheManagerWithOutage(f.t)
+				f.rebuildClosersAndHealth()
+			},
+			expectedStatus: http.StatusServiceUnavailable,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, "not ready", body[statusText])
+				assert.Equal(t, unhealthyStatus, body[componentCache])
+				errMsg, ok := body[errorKey].(string)
+				require.True(t, ok)
+				assert.Contains(t, errMsg, errorRedisDown)
+			},
+		},
+		{
+			name: "cache_disabled_stays_ready_when_critical",
+			prepare: func(f *testAppFixture) {
+				f.db.On(methodHealth, mock.Anything).Return(nil)
+				f.messaging.SetReady(true)
+				f.app.cfg.Cache.Critical = true
+				f.rebuildClosersAndHealth()
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, statusReady, body[statusText])
+				assert.Equal(t, disabledStatus, body[componentCache])
+				cacheStats, ok := body[cacheStatsKey].(map[string]any)
+				require.True(t, ok, "cache_stats must be present in the ready body")
+				assert.Empty(t, cacheStats)
+			},
+		},
+		{
+			name: "cache_not_configured_stays_ready_when_critical",
+			prepare: func(f *testAppFixture) {
+				f.db.On(methodHealth, mock.Anything).Return(nil)
+				f.messaging.SetReady(true)
+				f.app.cfg.Cache.Critical = true
+				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
+					config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host"))
+				f.rebuildClosersAndHealth()
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, statusReady, body[statusText])
+				assert.Equal(t, notConfiguredStatus, body[componentCache])
 			},
 		},
 	}

@@ -447,6 +447,35 @@ func TestAppBuilderCreateHealthProbesErrors(t *testing.T) {
 	})
 }
 
+func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
+	tests := []struct {
+		name             string
+		cfg              *config.Config
+		expectedCritical bool
+	}{
+		{name: "critical_enabled", cfg: &config.Config{Cache: config.CacheConfig{Critical: true}}, expectedCritical: true},
+		{name: "critical_disabled", cfg: &config.Config{}, expectedCritical: false},
+		{name: "nil_config", cfg: nil, expectedCritical: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := &Builder{
+				logger: logger.New("error", false),
+				app:    &App{cfg: tc.cfg, cacheManager: createTestCacheManager(t)},
+			}
+
+			result := builder.CreateHealthProbes()
+
+			require.NoError(t, result.err)
+			require.Len(t, result.app.healthProbes, 1)
+			status := result.app.healthProbes[0].Run(context.Background())
+			assert.Equal(t, componentCache, status.Name)
+			assert.Equal(t, tc.expectedCritical, status.Critical)
+		})
+	}
+}
+
 func TestAppBuilderRegisterClosersErrors(t *testing.T) {
 	t.Run(missingAppInstanceErrorMsg, func(t *testing.T) {
 		builder := NewAppBuilder()

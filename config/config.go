@@ -342,6 +342,7 @@ func loadDefaults(k *koanf.Koanf) error {
 		// applyRedisDefaults) — keep the two in sync. koanf duration defaults are
 		// strings, so the time.Duration constants are rendered via .String().
 		"cache.enabled":               false,
+		"cache.critical":              false,
 		"cache.type":                  CacheTypeRedis,
 		"cache.redis.host":            defaultHost,
 		"cache.redis.port":            defaultRedisPort,

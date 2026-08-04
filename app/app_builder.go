@@ -393,12 +393,7 @@ func (b *Builder) CreateHealthProbes() *Builder {
 		return b
 	}
 
-	b.app.healthProbes = createHealthProbesForManagers(
-		b.app.dbManager,
-		b.app.messagingManager,
-		b.app.cacheManager,
-		b.logger,
-	)
+	b.app.healthProbes = b.app.createHealthProbes()
 
 	return b
 }

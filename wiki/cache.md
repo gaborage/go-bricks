@@ -42,6 +42,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 cache:
   enabled: true
   type: redis
+  critical: false         # true = /ready returns 503 when the cache probe errors
   manager:
     maxsize: 100          # Max tenant cache instances
     idlettl: 15m          # Idle timeout per cache
@@ -126,7 +127,83 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 **Observability Integration:**
 When `observability.enabled: true`, cache operations automatically emit:
 - **Metrics**: `db.client.operation.duration` (histogram, tagged with `error.type` on failure), `cache.hit`/`cache.miss` (counters), `cache.manager.active_caches`, `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` — no distributed-tracing spans are emitted today
-- **Health**: A **non-critical** probe registered in the `/ready` probe set when cache is enabled. It verifies only that an instance can be leased from the manager (`cacheManager.Get(ctx, "")`) — the Redis `PING` happens when an instance is created, not per probe, so a warm pool answers from memory and a Redis outage is invisible to it. Its status is not surfaced as a top-level key in the `/ready` response, and being non-critical it never fails `/ready`. Alert on Redis separately
+- **Health**: A probe registered in the `/ready` probe set whenever the cache manager exists. It leases an instance from the manager (`cacheManager.Get(ctx, "")`) and then calls `Cache.Health(ctx)` on it — a Redis `PING` on every poll. Its status is surfaced as the top-level `cache` and `cache_stats` keys in the `/ready` body, and it fails `/ready` with `503` only when `cache.critical: true`. See [Readiness](#readiness) below
+
+## Readiness
+
+`GET /ready` always reports the cache, whatever `cache.critical` is set to. The 200 body
+carries `cache` (a status string) alongside `cache_stats` (the manager counters), mirroring
+`database`/`db_stats` and `messaging`/`messaging_stats` (abridged below — the `database`,
+`messaging`, `time`, and `app` entries are omitted):
+
+```json
+{
+  "status": "ready",
+  "cache": "healthy",
+  "cache_stats": {
+    "active_caches": 3,
+    "total_created": 5,
+    "evictions": 1,
+    "idle_cleanups": 1,
+    "errors": 0,
+    "max_size": 100,
+    "idle_ttl": 900,
+    "status": "healthy"
+  }
+}
+```
+
+| `cache` value | When | Probe error | 503 with `critical: true`? |
+|---------------|------|-------------|----------------------------|
+| `healthy` | An instance was leased and its `Health(ctx)` `PING` succeeded; `cache_stats.status` is `healthy` | none | no |
+| `not_configured` | `cache.enabled: false` — the connector declines by design; `cache_stats.status` is `not_configured` | none | no |
+| `unhealthy` | The lease failed — the manager is closed, or a cold pool tried to build the instance and the construction-time `PING` failed; `cache_stats.status` is `connection_failed` | yes | **yes** |
+| `unhealthy` | The lease succeeded but the per-probe `Health(ctx)` `PING` failed or timed out — a live Redis outage against a warm pool; `cache_stats.status` is `unhealthy` | yes | **yes** |
+| `disabled` | No probe ran — the manager failed to construct at startup; `cache_stats` is `{}` | n/a | no — even with `critical: true` |
+
+**`cache.critical` (default `false`)**
+
+- `false` — a failing cache probe is reported in the body but never changes the status code.
+  Readiness stays green.
+- `true` — a failing cache probe short-circuits `/ready` with
+  `503 {"status": "not ready", "cache": "unhealthy", "error": "<probe error>"}` — no
+  `cache_stats`, and no other component's status. The `error` is the connector error verbatim
+  (the same passthrough the database probe already has), so it names the Redis host, port and
+  resolved IP on an endpoint that carries no IP allowlist: setting `true` changes what `/ready`
+  discloses, so keep it reachable only from inside the cluster. This holds for a hung Redis
+  (packets dropped rather than refused) too — `redis.Client.Health` wraps every ping failure,
+  `context deadline exceeded` included, in a `cache.ConnectionError` that always renders the
+  address. A custom `Options.CacheConnector` puts its own `Health` error string here verbatim.
+  The per-probe `PING` is capped at **500ms** independent of both `server.timeout.middleware`
+  and `cache.redis.readtimeout` (a shorter caller deadline still wins; neither budget can
+  extend it). That cap covers the warm poll only: a cold poll first builds the instance, whose
+  own construction-time `PING` carries a 5s budget racing the 5s default
+  `server.timeout.middleware`, and only then spends the 500ms — so a cold probe can run well
+  past 500ms and issue two `PING`s, not one.
+
+**Choosing a value.** `true` is right for a service that cannot serve correct results without
+the cache — a rate limiter, a session store, an idempotency ledger — because pulling the pod
+from the load-balancer rotation is preferable to serving wrong answers. `false` is right when
+the cache is an optimisation in front of a database that can absorb the miss: a Redis blip
+would otherwise drain every replica from rotation at the same moment, converting a latency
+regression into an outage. The default is `false`, so an existing deployment's readiness
+behaviour is unchanged until it opts in.
+
+Each poll costs one `PING` — `Cache.Health` is contracted fast (<100ms) and safe to call
+frequently — and emits one `db.client.operation.duration` sample from inside the Redis client,
+tagged `error.type` during an outage, so readiness traffic reaches cache dashboards and any
+"cache error rate > 0" alert; the HTTP-layer probe skipper that keeps `/ready` out of traces
+and HTTP metrics does not reach one layer down. The probe's lease also resets `manager.idlettl`
+and LRU position for the default (`""`) entry, so a continuously polled pod stays on the
+warm-pool path.
+
+`cache.critical` is process-global, and so is what the probe observes: it leases key `""`,
+which resolves to the top-level `cache.*` connection. A deployment whose caches live only
+under `multitenant.tenants.<id>.cache` gets nothing from the flag — with top-level
+`cache.enabled: false` the probe reports `not_configured` and no error, so `/ready` stays
+`200` however many tenant Redis instances are down. A value under
+`multitenant.tenants.<id>.cache.critical` parses (the per-tenant schema reuses `CacheConfig`)
+but is ignored for the same reason. Neither setting replaces a Redis-side alert.
 
 ## Cache Manager Defaults
 

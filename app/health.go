@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
@@ -9,6 +10,10 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 )
+
+// cacheProbePingTimeout caps the per-probe PING so a hung Redis reports unhealthy instead
+// of consuming the caller's whole readiness budget. Cache.Health is contracted at <100ms.
+const cacheProbePingTimeout = 500 * time.Millisecond
 
 // HealthStatus captures the outcome of a readiness probe.
 type HealthStatus struct {
@@ -106,6 +111,16 @@ func getStatsOrEmpty(stats map[string]any) map[string]any {
 	return stats
 }
 
+// componentReport resolves a component's status and stats for the /ready body,
+// reporting disabled when no probe is registered for it.
+func componentReport(all map[string]HealthStatus, name string) (status string, stats map[string]any) {
+	result := all[name]
+	if result.Status == "" {
+		result.Status = disabledStatus
+	}
+	return result.Status, getStatsOrEmpty(result.Details)
+}
+
 // messagingManagerHealthProbe creates a health probe for the messaging manager
 func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger) Prober {
 	if msgManager == nil {
@@ -154,8 +169,9 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 	}
 }
 
-// cacheManagerHealthProbe creates a health probe for the cache manager
-func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) Prober {
+// cacheManagerHealthProbe creates a health probe for the cache manager. A deployment
+// without a cache stays non-critical, so cache.critical cannot fail its readiness.
+func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger, critical bool) Prober {
 	if cacheManager == nil {
 		return healthProbeFunc{
 			name: componentCache,
@@ -166,12 +182,13 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) 
 	}
 
 	return healthProbeFunc{
-		name: componentCache,
+		name:     componentCache,
+		critical: critical,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			stats := convertCacheStatsToMap(cacheManager.Stats())
 
 			// Attempt to verify readiness by getting cache instance
-			_, release, err := cacheManager.Get(ctx, "")
+			instance, release, err := cacheManager.Get(ctx, "")
 			if err != nil {
 				// Check if cache is not configured (not a failure)
 				if config.IsNotConfigured(err) {
@@ -182,9 +199,16 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) 
 				stats[statusKey] = "connection_failed"
 				return unhealthyStatus, stats, err
 			}
-			release() // probe holds no scope; release the lease immediately
+			defer release() // probe holds no scope; release the lease when the check returns
 
-			// Cache manager is healthy if we can get an instance
+			// A pooled instance is returned without a round trip, so ping it explicitly
+			pingCtx, cancel := context.WithTimeout(ctx, cacheProbePingTimeout)
+			defer cancel()
+			if err := instance.Health(pingCtx); err != nil {
+				stats[statusKey] = unhealthyStatus
+				return unhealthyStatus, stats, err
+			}
+
 			stats[statusKey] = healthyStatus
 			return healthyStatus, stats, nil
 		},

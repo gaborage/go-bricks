@@ -94,6 +94,7 @@ database:
 cache:
   enabled: false                    # Enable/disable cache functionality
   type: redis                        # Cache backend type (currently only "redis" supported)
+  critical: false                    # true = /ready answers 503 when the cache probe errors (default false)
   redis:
     host: localhost                  # Redis server hostname
     port: 6379                       # Redis server port
