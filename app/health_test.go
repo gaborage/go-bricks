@@ -184,7 +184,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 	})
 
 	t.Run("connection failed", func(t *testing.T) {
-		connErr := errors.New("Redis connection refused")
+		connErr := errors.New(errorRedisDown)
 		cacheManager := createTestCacheManagerWithGetError(t, connErr)
 
 		probe := cacheManagerHealthProbe(cacheManager, mockLogger, false)
@@ -194,7 +194,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 		assert.Equal(t, unhealthyStatus, result.Status)
 		assert.Equal(t, "connection_failed", result.Details["status"])
 		// The error is wrapped by the cache manager, so check if it contains the original error
-		assert.ErrorContains(t, result.Err, "Redis connection refused")
+		assert.ErrorContains(t, result.Err, errorRedisDown)
 	})
 
 	t.Run("healthy cache", func(t *testing.T) {
@@ -239,7 +239,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 
 	// The readiness guarantee for a cache-less deployment is pinned by
 	// TestReadyCheckScenarios/cache_disabled_stays_ready_when_critical, which goes through
-	// createHealthProbesForManagers; this only pins the nil branch's own contract.
+	// createHealthProbes; this only pins the nil branch's own contract.
 	t.Run("nil_cache_manager_ignores_critical", func(t *testing.T) {
 		result := cacheManagerHealthProbe(nil, mockLogger, true).Run(context.Background())
 
@@ -301,7 +301,7 @@ func TestCacheProbeBoundsHungPing(t *testing.T) {
 	assert.Equal(t, unhealthyStatus, result.Status)
 	assert.ErrorIs(t, result.Err, context.DeadlineExceeded)
 	assert.Equal(t, unhealthyStatus, result.Details["status"])
-	assert.Less(t, elapsed, time.Second, "probe must cap the ping instead of burning the request budget")
+	assert.Less(t, elapsed, 2*cacheProbePingTimeout, "probe must cap the ping instead of burning the request budget")
 	assert.NoError(t, ctx.Err(), "the parent budget must survive the probe")
 }
 
@@ -600,20 +600,9 @@ func cacheManagerServing(t *testing.T, c cache.Cache) *cache.CacheManager {
 // createTestCacheManagerWithGetError creates a cache manager that returns an error on Get()
 func createTestCacheManagerWithGetError(t *testing.T, err error) *cache.CacheManager {
 	t.Helper()
-	connector := func(_ context.Context, _ string) (cache.Cache, error) {
+	return createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
 		return nil, err
-	}
-
-	manager, createErr := cache.NewCacheManager(
-		cache.ManagerConfig{
-			MaxSize:         10,
-			IdleTTL:         time.Hour,
-			CleanupInterval: 5 * time.Minute,
-		},
-		connector,
-	)
-	require.NoError(t, createErr)
-	return manager
+	})
 }
 
 // createWarmCacheManagerWithOutage returns a manager whose instance was already created and
@@ -627,7 +616,9 @@ func createWarmCacheManagerWithOutage(t *testing.T) *cache.CacheManager {
 	require.NoError(t, err)
 	release()
 
-	mc.WithHealthFailure(errors.New(errorRedisDown))
+	// The shape redis.Client.Health actually returns on a live outage — it names the address,
+	// which is what the sanitized /ready body must withhold.
+	mc.WithHealthFailure(cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 	return manager
 }
 

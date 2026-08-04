@@ -11,28 +11,42 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
-// cacheProbePingTimeout caps the per-probe PING so a hung Redis reports unhealthy instead
-// of consuming the caller's whole readiness budget. Cache.Health is contracted at <100ms.
+// cacheProbePingTimeout caps the warm-path PING so a hung Redis reports unhealthy instead
+// of consuming the caller's whole readiness budget. See wiki/cache.md#readiness for the
+// cold-poll caveat.
 const cacheProbePingTimeout = 500 * time.Millisecond
+
+// SECURITY: the cache probe's failure modes render the Redis host:port, the resolved
+// dial IP and (on the cold path) the tenant key. /ready carries no allowlist and no
+// auth, so the 503 body gets this fixed string instead; the full error still reaches
+// the application log (readyCheck logs it when the probe is critical) and the
+// IP-allowlisted /health-debug via HealthStatus.Err.
+const cacheUnavailableMessage = "cache unavailable"
 
 // HealthStatus captures the outcome of a readiness probe.
 type HealthStatus struct {
-	Name     string
-	Status   string
-	Details  map[string]any
-	Err      error
-	Critical bool
+	Name    string
+	Status  string
+	Details map[string]any
+	Err     error
+	// PublicErr is the error text safe to expose on the unauthenticated /ready body.
+	// Empty means Err renders verbatim.
+	PublicErr string
+	Critical  bool
 }
 
-// Prober exposes a uniform interface for readiness probes.
+// Prober exposes a uniform interface for readiness probes. SECURITY: an implementation
+// that returns an error from a critical probe must set HealthStatus.PublicErr — the /ready
+// body is unauthenticated, and an empty PublicErr renders Err verbatim.
 type Prober interface {
 	Run(ctx context.Context) HealthStatus
 }
 
 type healthProbeFunc struct {
-	name     string
-	critical bool
-	fn       func(ctx context.Context) (string, map[string]any, error)
+	name      string
+	critical  bool
+	publicErr string
+	fn        func(ctx context.Context) (string, map[string]any, error)
 }
 
 func (h healthProbeFunc) Run(ctx context.Context) HealthStatus {
@@ -41,11 +55,12 @@ func (h healthProbeFunc) Run(ctx context.Context) HealthStatus {
 		details = map[string]any{}
 	}
 	return HealthStatus{
-		Name:     h.name,
-		Status:   status,
-		Details:  details,
-		Err:      err,
-		Critical: h.critical,
+		Name:      h.name,
+		Status:    status,
+		Details:   details,
+		Err:       err,
+		PublicErr: h.publicErr,
+		Critical:  h.critical,
 	}
 }
 
@@ -182,8 +197,9 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger, 
 	}
 
 	return healthProbeFunc{
-		name:     componentCache,
-		critical: critical,
+		name:      componentCache,
+		critical:  critical,
+		publicErr: cacheUnavailableMessage,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			stats := convertCacheStatsToMap(cacheManager.Stats())
 

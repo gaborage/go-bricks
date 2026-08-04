@@ -2,12 +2,16 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
@@ -403,4 +407,49 @@ func (p *testHealthProbe) Run(_ context.Context) HealthStatus {
 		Critical: p.critical,
 		Details:  details,
 	}
+}
+
+// TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes pins both halves of the cache
+// error-routing contract from a single probe set: /ready (no allowlist, no auth) discloses
+// nothing about the backend, while the application log and the IP-allowlisted /health-debug
+// keep the address an operator needs. Sanitizing at the probe would pass the /ready half
+// alone, so the two are asserted together.
+func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
+	cacheManager := createTestCacheManagerWithGetError(t,
+		cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
+
+	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
+	require.Nil(t, cfg.Cache.Critical, "the strict default is what makes the /ready 503 reachable here")
+
+	log := &recLogger{}
+	app := &App{cfg: cfg, logger: log, cacheManager: cacheManager}
+	app.healthProbes = app.createHealthProbes()
+	require.Len(t, app.healthProbes, 1)
+
+	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
+	readyRec := httptest.NewRecorder()
+	require.NoError(t, app.readyCheck(server.NewHandlerContextForTest(readyRec, readyReq, cfg)))
+
+	debugHandlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, log)
+	debugReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
+	debugRec := httptest.NewRecorder()
+	require.NoError(t, debugHandlers.handleHealthDebug(server.NewHandlerContextForTest(debugRec, debugReq, cfg)))
+
+	var readyBody map[string]any
+	require.NoError(t, json.Unmarshal(readyRec.Body.Bytes(), &readyBody))
+	assert.Equal(t, http.StatusServiceUnavailable, readyRec.Code)
+	assertCacheErrorSanitized(t, readyBody)
+
+	assert.Equal(t, http.StatusOK, debugRec.Code)
+	assert.Contains(t, debugRec.Body.String(), redisProbeAddress,
+		"/health-debug must keep the address; sanitizing HealthStatus.Err itself would gut the diagnostic")
+	assert.Contains(t, debugRec.Body.String(), errorRedisDown)
+
+	logged, ok := loggedEvent(log, "Readiness check failed")
+	require.True(t, ok, "readyCheck must log the failure the 503 body no longer describes")
+	assert.Equal(t, "error", logged.level)
+	assert.Contains(t, logged.err, redisProbeAddress,
+		"readyCheck must log the full error so operators keep the diagnostic the 503 body drops")
+	assert.Equal(t, componentCache, logged.str["component"],
+		"the sanitized body no longer identifies the failure, so the log must name the component")
 }

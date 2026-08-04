@@ -521,6 +521,14 @@ func (a *App) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// publicProbeError picks the error text for the unauthenticated /ready body.
+func publicProbeError(result *HealthStatus) string {
+	if result.PublicErr != "" {
+		return result.PublicErr
+	}
+	return result.Err.Error()
+}
+
 // readyCheck handles the health check endpoint
 func (a *App) readyCheck(c server.HandlerContext) error {
 	ctx := c.RequestContext()
@@ -530,10 +538,20 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		result := probe.Run(ctx)
 		componentStatus[result.Name] = result
 		if result.Err != nil && result.Critical {
+			// /ready is unauthenticated and excluded from rate limiting, so an ERROR line per
+			// abandoned request would let any caller mint alert noise; a caller's own
+			// cancellation is not a readiness incident. The caller's context must actually be
+			// done: a probe that reports context.Canceled while the request is still live was
+			// canceled from inside, which is a genuine incident and stays ERROR.
+			event := a.logger.Error()
+			if errors.Is(ctx.Err(), context.Canceled) && errors.Is(result.Err, context.Canceled) {
+				event = a.logger.Warn()
+			}
+			event.Err(result.Err).Str("component", result.Name).Msg("Readiness check failed")
 			return c.JSON(http.StatusServiceUnavailable, map[string]any{
 				statusKey:   "not ready",
 				result.Name: result.Status,
-				errorKey:    result.Err.Error(),
+				errorKey:    publicProbeError(&result),
 			})
 		}
 	}

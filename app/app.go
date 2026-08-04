@@ -83,7 +83,7 @@ type App struct {
 }
 
 // createHealthProbes builds the readiness probe set from the configured managers.
-// Each probe reads its own criticality from config, so a new knob stays local to its probe.
+// Criticality is resolved from config here and passed per probe.
 func (a *App) createHealthProbes() []Prober {
 	var probes []Prober
 
@@ -96,7 +96,7 @@ func (a *App) createHealthProbes() []Prober {
 	}
 
 	if a.cacheManager != nil {
-		probes = append(probes, cacheManagerHealthProbe(a.cacheManager, a.logger, a.cfg != nil && a.cfg.Cache.Critical))
+		probes = append(probes, cacheManagerHealthProbe(a.cacheManager, a.logger, a.cfg.IsCacheCritical()))
 	}
 
 	return probes

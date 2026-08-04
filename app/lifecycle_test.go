@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -551,6 +554,55 @@ func TestCheckRouteConflictsAggregatesAndSkips(t *testing.T) {
 			for _, want := range tc.wantContains {
 				assert.Contains(t, err.Error(), want)
 			}
+		})
+	}
+}
+
+// TestReadyCheckDowngradesCallerCancellationLog pins that a probe failure caused by the
+// caller abandoning its own request cannot mint ERROR lines: /ready is unauthenticated and
+// exempt from rate limiting, and wiki/cache.md tells operators to alert on that line. The
+// discriminator is the caller's own request context, not the probe error: a context.Canceled
+// raised while the caller is still waiting is an internal fault and must stay ERROR.
+func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
+	tests := []struct {
+		name         string
+		probeErr     error
+		cancelCaller bool
+		wantLevel    string
+	}{
+		// The caller aborted its own GET, so its context is done before the probe reports.
+		{name: "caller_cancellation_is_warn", probeErr: context.Canceled, cancelCaller: true, wantLevel: "warn"},
+		// Same wrapped error, but the caller is still waiting: nobody walked away, so the
+		// cancellation came from inside the service and is a real incident.
+		{name: "internal_cancellation_stays_error", probeErr: fmt.Errorf("dial: %w", context.Canceled), wantLevel: "error"},
+		{name: "real_outage_stays_error", probeErr: errors.New(errorRedisDown), wantLevel: "error"},
+		// A probe timeout is the service's own budget expiring, not the caller walking away.
+		{name: "probe_timeout_stays_error", probeErr: fmt.Errorf("ping: %w", context.DeadlineExceeded), wantLevel: "error"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{App: config.AppConfig{Name: testApp}}
+			rec := &recLogger{}
+			app := &App{cfg: cfg, logger: rec, cacheManager: createTestCacheManagerWithGetError(t, tc.probeErr)}
+			app.healthProbes = app.createHealthProbes()
+			require.Len(t, app.healthProbes, 1)
+
+			reqCtx := context.Background()
+			if tc.cancelCaller {
+				canceled, cancel := context.WithCancel(reqCtx)
+				cancel()
+				reqCtx = canceled
+			}
+			req := httptest.NewRequestWithContext(reqCtx, http.MethodGet, readyEndpoint, http.NoBody)
+			w := httptest.NewRecorder()
+			require.NoError(t, app.readyCheck(server.NewHandlerContextForTest(w, req, cfg)))
+
+			assert.Equal(t, http.StatusServiceUnavailable, w.Code, "the log level must not change the response")
+			event, ok := loggedEvent(rec, "Readiness check failed")
+			require.True(t, ok)
+			assert.Equal(t, tc.wantLevel, event.level)
+			assert.Contains(t, event.err, tc.probeErr.Error(), "the full error must reach the log at either level")
 		})
 	}
 }

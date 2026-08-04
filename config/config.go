@@ -235,6 +235,16 @@ func (c *Config) ShouldLogRoutes() bool {
 	return c.App.IsDevelopment()
 }
 
+// IsCacheCritical reports whether a failing cache probe should fail /ready with 503.
+// Strict by default: only an explicit cache.critical=false opts out, so an absent key —
+// and a nil receiver, the most absent config there is — stays critical.
+func (c *Config) IsCacheCritical() bool {
+	if c == nil || c.Cache.Critical == nil {
+		return true
+	}
+	return *c.Cache.Critical
+}
+
 // tryLoadYAMLFile attempts to load a YAML configuration file with both .yaml and .yml extensions.
 // It tries .yaml first, then falls back to .yml if .yaml is not found.
 // Both extensions are optional - no error is returned if neither file exists.
@@ -342,7 +352,6 @@ func loadDefaults(k *koanf.Koanf) error {
 		// applyRedisDefaults) — keep the two in sync. koanf duration defaults are
 		// strings, so the time.Duration constants are rendered via .String().
 		"cache.enabled":               false,
-		"cache.critical":              false,
 		"cache.type":                  CacheTypeRedis,
 		"cache.redis.host":            defaultHost,
 		"cache.redis.port":            defaultRedisPort,
