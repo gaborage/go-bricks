@@ -48,6 +48,23 @@ type GlobalMiddlewareRegisterer interface {
 	GlobalMiddleware() []server.MiddlewareFunc
 }
 
+// DatabaseRequirer is an optional interface that modules can implement to declare
+// that they cannot function without a database. Registration fails — and startup
+// therefore aborts — when a module requires a database and none is configured.
+//
+// This exists because an empty database: block carries no intent: it is byte-identical
+// whether the service is deliberately database-free or its configuration failed to
+// reach the process (a dropped secret mount). No amount of config inspection separates
+// those, so the module supplies the missing fact. Deployments that resolve database
+// config at runtime are exempt — see rootDatabaseAbsent for that set.
+//
+// Implementing the interface is not itself the declaration: RequiresDatabase may
+// return false, so a module can gate the requirement on its own construction-time
+// config (e.g. a module that only touches the database when a feature is enabled).
+type DatabaseRequirer interface {
+	RequiresDatabase() bool
+}
+
 // JobRegistrar defines the interface for scheduling jobs.
 // This interface is defined here to avoid circular imports between app and scheduler packages.
 // The scheduler package implements this interface via its Module type.

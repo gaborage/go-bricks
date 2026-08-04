@@ -172,6 +172,15 @@ type GlobalMiddlewareRegisterer interface {
     GlobalMiddleware() []server.MiddlewareFunc
 }
 
+// Optional: declare that this module cannot function without a database.
+// Registration — and therefore startup — fails when no database is configured,
+// so a service whose database config never reached it aborts instead of booting
+// green. Deployments that resolve database config at runtime are exempt
+// (multi-tenant, dynamic config source, dynamic resource source).
+type DatabaseRequirer interface {
+    RequiresDatabase() bool
+}
+
 // Simplified — see app/module.go for the full struct (~12 fields including
 // Scheduler, Outbox, Tracer, MeterProvider, DBByName, etc.)
 type ModuleDeps struct {

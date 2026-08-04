@@ -83,6 +83,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundl
 
 	// Create managers using the factory
 	dbManager := factory.CreateDatabaseManager(resourceSource)
+	b.warnIfDatabaseAbsent()
 	messagingManager := factory.CreateMessagingManager(resourceSource)
 	cacheManager := factory.CreateCacheManager(resourceSource)
 
@@ -122,6 +123,38 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundl
 		provider:         provider,
 		observability:    obsProvider,
 	}
+}
+
+// rootDatabaseAbsent reports whether a deployment that expects a root database: block
+// has none. Three modes legitimately leave that block empty, because they resolve
+// database config per tenant at runtime instead: multi-tenant (config validation
+// rejects a root block outright), a dynamic config source, and a caller-supplied
+// dynamic resource source. Keep this set in step with ConfigureRuntimeHelpers'
+// skipPreInit, which enumerates the same three modes for the same reason.
+//
+// This is the single home for the exemption set — see DatabaseRequirer in module.go
+// for why absence needs interpreting at all.
+func rootDatabaseAbsent(cfg *config.Config, opts *Options) bool {
+	if cfg == nil || cfg.Multitenant.Enabled || cfg.Source.Type == config.SourceTypeDynamic {
+		return false
+	}
+	if opts != nil && opts.ResourceSource != nil && opts.ResourceSource.IsDynamic() {
+		return false
+	}
+	return !config.IsDatabaseConfigured(&cfg.Database)
+}
+
+// warnIfDatabaseAbsent emits one advisory startup WARN for a database-free service.
+// It is the backstop for modules that declare no DatabaseRequirer: without a
+// declaration this line is the only production-visible signal that distinguishes a
+// deliberately database-free service from one whose config never arrived.
+func (b *appBootstrap) warnIfDatabaseAbsent() {
+	if !rootDatabaseAbsent(b.cfg, b.opts) {
+		return
+	}
+
+	b.log.Warn().Msg("No database configured - database-backed features are unavailable; " +
+		"if this service expects a database, its configuration did not reach the process")
 }
 
 // initializeObservability creates and configures the observability provider.

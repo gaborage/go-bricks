@@ -246,3 +246,66 @@ func TestDeclareMessagingFailsOnConflictingQueueDeclarations(t *testing.T) {
 	// would pass if the values were dropped, or if kept and rejected were swapped.
 	assert.Contains(t, err.Error(), `Durable kept "true" vs rejected "false"`)
 }
+
+// fakeDBRequiringModule declares DatabaseRequirer with a configurable verdict and
+// records whether Init ran, so a test can assert the guard fires BEFORE Init rather
+// than merely alongside it.
+type fakeDBRequiringModule struct {
+	name     string
+	requires bool
+	inited   bool
+}
+
+func (m *fakeDBRequiringModule) Name() string             { return m.name }
+func (m *fakeDBRequiringModule) Init(_ *ModuleDeps) error { m.inited = true; return nil }
+func (m *fakeDBRequiringModule) Shutdown() error          { return nil }
+func (m *fakeDBRequiringModule) RequiresDatabase() bool   { return m.requires }
+
+func newDBRequirementRegistry(rootDBAbsent bool) *ModuleRegistry {
+	reg := NewModuleRegistry(&ModuleDeps{Logger: &recLogger{}, Config: &config.Config{}})
+	reg.rootDBAbsent = rootDBAbsent
+	return reg
+}
+
+func TestRegisterRejectsDatabaseRequirerWhenDatabaseAbsent(t *testing.T) {
+	mod := &fakeDBRequiringModule{name: "payments", requires: true}
+
+	err := newDBRequirementRegistry(true).Register(mod)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "payments", "the error must name the offending module")
+	// This fatal must NOT read as the framework's benign "intentionally absent" marker.
+	// A caller using the framework's own skip-and-degrade idiom
+	// (err != nil && !config.IsNotConfigured(err)) would otherwise swallow the abort and
+	// serve without the module's routes and global middleware.
+	assert.False(t, config.IsNotConfigured(err))
+	var cfgErr *config.ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "missing", cfgErr.Category)
+	// The guard's whole point is that the module never runs without the dependency it
+	// declared as mandatory — asserting only the error would pass if Init ran first.
+	assert.False(t, mod.inited, "Init must not run when the requirement is unmet")
+}
+
+func TestRegisterAcceptsModulesWhenDatabaseRequirementDoesNotApply(t *testing.T) {
+	tests := []struct {
+		name         string
+		module       Module
+		rootDBAbsent bool
+	}{
+		{name: "requirer_with_database_present", rootDBAbsent: false,
+			module: &fakeDBRequiringModule{name: "payments", requires: true}},
+		// A module may implement the interface and still decline, gating the
+		// requirement on its own construction-time config.
+		{name: "requirer_declines_requirement", rootDBAbsent: true,
+			module: &fakeDBRequiringModule{name: "payments", requires: false}},
+		{name: "module_never_declares_requirement", rootDBAbsent: true,
+			module: &minimalModule{name: "forwarder"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, newDBRequirementRegistry(tt.rootDBAbsent).Register(tt.module))
+		})
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -765,4 +766,108 @@ func TestNewManagerConfigBuilderFromConfig(t *testing.T) {
 	// Single-tenant: leftover tenants entries must not count (StaticTenantCount contract).
 	cfg.Multitenant.Enabled = false
 	assert.Zero(t, newManagerConfigBuilderFromConfig(cfg).staticTenantCount)
+}
+
+// dynamicResourceSource is a TenantStore whose IsDynamic verdict is settable; every
+// other resource-source fake in this package hardcodes false.
+type dynamicResourceSource struct {
+	stubTenantResource
+	dynamic bool
+}
+
+func (s *dynamicResourceSource) IsDynamic() bool { return s.dynamic }
+
+func TestRootDatabaseAbsent(t *testing.T) {
+	tests := []struct {
+		name   string
+		cfg    func() *config.Config
+		opts   *Options
+		absent bool
+	}{
+		{name: "no_database_configured", absent: true, cfg: func() *config.Config {
+			return &config.Config{}
+		}},
+		{name: "type_configured", absent: false, cfg: func() *config.Config {
+			cfg := &config.Config{}
+			cfg.Database.Type = "postgresql"
+			return cfg
+		}},
+		{name: "host_configured", absent: false, cfg: func() *config.Config {
+			cfg := &config.Config{}
+			cfg.Database.Host = "db.internal"
+			return cfg
+		}},
+		// The three exempt modes below resolve database config at runtime, so an empty
+		// root block is correct there and must not read as absence.
+		{name: "multi_tenant_exempt", absent: false, cfg: func() *config.Config {
+			cfg := &config.Config{}
+			cfg.Multitenant.Enabled = true
+			return cfg
+		}},
+		{name: "dynamic_config_source_exempt", absent: false, cfg: func() *config.Config {
+			cfg := &config.Config{}
+			cfg.Source.Type = config.SourceTypeDynamic
+			return cfg
+		}},
+		{
+			name:   "dynamic_resource_source_exempt",
+			absent: false,
+			cfg:    func() *config.Config { return &config.Config{} },
+			opts:   &Options{ResourceSource: &dynamicResourceSource{dynamic: true}},
+		},
+		// A supplied but static resource source is not an exemption.
+		{
+			name:   "static_resource_source_not_exempt",
+			absent: true,
+			cfg:    func() *config.Config { return &config.Config{} },
+			opts:   &Options{ResourceSource: &dynamicResourceSource{dynamic: false}},
+		},
+		{name: "nil_config_tolerated", absent: false, cfg: func() *config.Config { return nil }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.absent, rootDatabaseAbsent(tt.cfg(), tt.opts))
+		})
+	}
+}
+
+func TestWarnIfDatabaseAbsent(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      *config.Config
+		wantWarn bool
+	}{
+		{name: "absent_database_warns", cfg: &config.Config{}, wantWarn: true},
+		{name: "configured_database_stays_silent", wantWarn: false, cfg: func() *config.Config {
+			cfg := &config.Config{}
+			cfg.Database.Type = "postgresql"
+			return cfg
+		}()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &recLogger{}
+
+			(&appBootstrap{cfg: tt.cfg, log: rec}).warnIfDatabaseAbsent()
+
+			var got []recEvent
+			for _, e := range rec.events {
+				if strings.Contains(e.msg, "No database configured") {
+					got = append(got, e)
+				}
+			}
+
+			if !tt.wantWarn {
+				assert.Empty(t, got)
+				return
+			}
+			require.Len(t, got, 1, "the posture signal must be emitted exactly once")
+			// Level is the assertion that matters: a downgrade to Debug would keep any
+			// message-only check green while destroying the only production-visible
+			// signal that a database config failed to reach the process.
+			assert.Equal(t, "warn", got[0].level)
+		})
+	}
 }

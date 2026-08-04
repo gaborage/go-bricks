@@ -403,6 +403,40 @@ func TestAppBuilderInitializeRegistryErrors(t *testing.T) {
 	})
 }
 
+// TestAppBuilderInitializeRegistryWiresDatabaseVerdict pins the one wiring step that
+// arms ModuleRegistry's DatabaseRequirer gate. The gate's zero value is inert, so
+// dropping this assignment would silently disable it with no compile error — this test
+// is what notices.
+func TestAppBuilderInitializeRegistryWiresDatabaseVerdict(t *testing.T) {
+	tests := []struct {
+		name         string
+		mutate       func(cfg *config.Config)
+		wantDBAbsent bool
+	}{
+		{name: "absent_database_arms_the_gate", wantDBAbsent: true, mutate: func(*config.Config) {}},
+		{name: "configured_database_leaves_it_disarmed", wantDBAbsent: false, mutate: func(cfg *config.Config) {
+			cfg.Database.Type = "postgresql"
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			tt.mutate(cfg)
+			builder := &Builder{
+				cfg:    cfg,
+				app:    &App{},
+				bundle: &dependencyBundle{deps: &ModuleDeps{Config: cfg}},
+			}
+
+			result := builder.InitializeRegistry()
+
+			require.NoError(t, result.err)
+			assert.Equal(t, tt.wantDBAbsent, result.app.registry.rootDBAbsent)
+		})
+	}
+}
+
 func TestAppBuilderConfigureRuntimeHelpersErrors(t *testing.T) {
 	t.Run(missingAppInstanceErrorMsg, func(t *testing.T) {
 		builder := NewAppBuilder()
