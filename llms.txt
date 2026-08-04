@@ -404,6 +404,18 @@ func (m *UserModule) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 	return nil
 }
+
+// Optional: app.DatabaseRequirer. Implement it when the module cannot function
+// without a database. RegisterModule evaluates RequiresDatabase() BEFORE calling
+// Init, and returns a *config.ConfigError (category "missing") when no database is
+// configured — so startup aborts instead of the service booting green and failing
+// at first query. Returning false opts out, letting a module gate the requirement
+// on its own construction-time config.
+//
+// Exempt: deployments that resolve database config at runtime rather than from the
+// root block — multi-tenant, source.type: dynamic, and a caller-supplied
+// Options.ResourceSource reporting IsDynamic(). The check never fires there.
+func (m *UserModule) RequiresDatabase() bool { return true }
 ```
 
 ### Step 3: Execute a SELECT (raw SQL or type-safe builder)
