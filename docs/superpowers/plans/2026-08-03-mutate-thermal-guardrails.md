@@ -535,7 +535,7 @@ func TestMutatePackageReportsFailureAsNotRun(t *testing.T) {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `go test ./scripts/mutatediff/ -run TestMutatePackageReportsSkipAsNotRun -v`
+Run: `go test ./scripts/mutatediff/ -run TestMutatePackageReportsFailureAsNotRun -v`
 
 Expected: FAIL to build, with `assignment mismatch: 4 variables but mutatePackage returns 3 values`.
 
