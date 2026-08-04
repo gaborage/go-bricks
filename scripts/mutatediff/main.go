@@ -77,12 +77,11 @@ func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer
 	}
 	// After the no-op return: a gate with nothing to do must not leave the
 	// caller's GOFLAGS rewritten.
-	share, budgetErr := applyBudget(th.cpu, th.workers)
-	if budgetErr != nil {
+	b := computeBudget(th.cpu, th.workers)
+	if budgetErr := b.apply(); budgetErr != nil {
 		return fail("%v", budgetErr)
 	}
-	workers := effectiveWorkers(th.cpu, th.workers)
-	fmt.Fprintln(out, describeBudget(th, share, workers))
+	fmt.Fprintln(out, describeBudget(th.cooldown, b))
 	reportDir, err := os.MkdirTemp("", "mutatediff-*")
 	if err != nil {
 		return fail("%v", err)
@@ -91,7 +90,7 @@ func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer
 	var failures, warnings, unjudged []mutantVerdict
 	pkgs := packagesOf(changed)
 	for i, pkg := range pkgs {
-		f, w, ran, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, workers, out)
+		f, w, ran, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, b.workers, out)
 		if mErr != nil {
 			return fail("%v", mErr)
 		}

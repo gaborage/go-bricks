@@ -9,48 +9,48 @@ import (
 	"time"
 )
 
-func TestPerChildSplitsBudgetAcrossWorkers(t *testing.T) {
+func TestComputeBudgetSplitsAcrossWorkers(t *testing.T) {
 	tests := []struct {
 		name    string
 		cpu     int
 		workers int
-		want    int
+		want    budget
 	}{
-		{name: "budget_splits_evenly", cpu: 4, workers: 2, want: 2},
-		{name: "single_worker_gets_whole_budget", cpu: 4, workers: 1, want: 4},
-		{name: "share_never_drops_below_one", cpu: 1, workers: 2, want: 1},
-		{name: "integer_division_floors_then_clamps", cpu: 3, workers: 2, want: 1},
-		{name: "zero_budget_means_no_budget", cpu: 0, workers: 2, want: 0},
-		{name: "negative_budget_means_no_budget", cpu: -1, workers: 2, want: 0},
-		{name: "zero_workers_treated_as_one", cpu: 4, workers: 0, want: 4},
+		{name: "budget_splits_evenly", cpu: 4, workers: 2, want: budget{share: 2, workers: 2}},
+		{name: "single_worker_gets_whole_budget", cpu: 4, workers: 1, want: budget{share: 4, workers: 1}},
+		{name: "budget_cannot_afford_two_workers", cpu: 1, workers: 2, want: budget{share: 1, workers: 1}},
+		{name: "integer_division_floors_then_clamps", cpu: 3, workers: 2, want: budget{share: 1, workers: 2}},
+		{name: "budget_exactly_covers_the_workers", cpu: 2, workers: 2, want: budget{share: 1, workers: 2}},
+		{name: "zero_budget_means_no_budget", cpu: 0, workers: 2, want: budget{share: 0, workers: 2}},
+		{name: "negative_budget_means_no_budget", cpu: -1, workers: 8, want: budget{share: 0, workers: 8}},
+		{name: "budgeted_run_pins_an_unspecified_worker_count", cpu: 4, workers: 0, want: budget{share: 4, workers: 1}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := perChild(tc.cpu, tc.workers); got != tc.want {
-				t.Errorf("perChild(%d, %d) = %d, want %d", tc.cpu, tc.workers, got, tc.want)
+			if got := computeBudget(tc.cpu, tc.workers); got != tc.want {
+				t.Errorf("computeBudget(%d, %d) = %+v, want %+v", tc.cpu, tc.workers, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestEffectiveWorkersShrinksToTheBudget(t *testing.T) {
-	tests := []struct {
-		name    string
-		cpu     int
-		workers int
-		want    int
-	}{
-		{name: "budget_affords_every_worker", cpu: 4, workers: 2, want: 2},
-		{name: "budget_cannot_afford_two_workers", cpu: 1, workers: 2, want: 1},
-		{name: "budget_exactly_covers_the_workers", cpu: 2, workers: 2, want: 2},
-		{name: "no_budget_leaves_workers_alone", cpu: 0, workers: 8, want: 8},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := effectiveWorkers(tc.cpu, tc.workers); got != tc.want {
-				t.Errorf("effectiveWorkers(%d, %d) = %d, want %d", tc.cpu, tc.workers, got, tc.want)
+// TestComputeBudgetNeverExceedsTheCap pins the invariant the whole guardrail
+// sells: the run's real bound is workers x share, so no input may let that
+// product exceed the requested cpu. Checking it as a property rather than a
+// table is the point — a future edit to either term cannot satisfy this by
+// happening to agree with the other.
+func TestComputeBudgetNeverExceedsTheCap(t *testing.T) {
+	for cpu := 1; cpu <= 16; cpu++ {
+		for workers := 0; workers <= 16; workers++ {
+			b := computeBudget(cpu, workers)
+			if b.share < 1 || b.workers < 1 {
+				t.Fatalf("computeBudget(%d, %d) = %+v, want a usable share and worker count", cpu, workers, b)
 			}
-		})
+			if got := b.workers * b.share; got > cpu {
+				t.Errorf("computeBudget(%d, %d) = %+v, honors %d cores — over the %d requested",
+					cpu, workers, b, got, cpu)
+			}
+		}
 	}
 }
 
@@ -73,12 +73,8 @@ func TestApplyBudgetPinsChildEnvironment(t *testing.T) {
 	t.Setenv("GOMAXPROCS", "")
 	t.Setenv("GOFLAGS", "-mod=mod")
 
-	share, err := applyBudget(4, 2)
-	if err != nil {
-		t.Fatalf("applyBudget: %v", err)
-	}
-	if share != 2 {
-		t.Errorf("share = %d, want 2", share)
+	if err := (budget{share: 2, workers: 2}).apply(); err != nil {
+		t.Fatalf("apply: %v", err)
 	}
 	if got := os.Getenv("GOMAXPROCS"); got != "2" {
 		t.Errorf("GOMAXPROCS = %q, want %q", got, "2")
@@ -96,8 +92,8 @@ func TestApplyBudgetReachesAChildProcess(t *testing.T) {
 	t.Setenv("GOMAXPROCS", "")
 	t.Setenv("GOFLAGS", "")
 
-	if _, err := applyBudget(4, 2); err != nil {
-		t.Fatalf("applyBudget: %v", err)
+	if err := computeBudget(4, 2).apply(); err != nil {
+		t.Fatalf("apply: %v", err)
 	}
 	out, err := exec.CommandContext(t.Context(), "go", "env", "GOFLAGS").Output()
 	if err != nil {
@@ -112,12 +108,8 @@ func TestApplyBudgetLeavesEnvironmentAloneWhenDisabled(t *testing.T) {
 	t.Setenv("GOMAXPROCS", "keep-me")
 	t.Setenv("GOFLAGS", "-mod=mod")
 
-	share, err := applyBudget(0, 2)
-	if err != nil {
-		t.Fatalf("applyBudget: %v", err)
-	}
-	if share != 0 {
-		t.Errorf("share = %d, want 0", share)
+	if err := computeBudget(0, 2).apply(); err != nil {
+		t.Fatalf("apply: %v", err)
 	}
 	if got := os.Getenv("GOMAXPROCS"); got != "keep-me" {
 		t.Errorf("GOMAXPROCS = %q, want it untouched", got)
@@ -182,8 +174,7 @@ func TestCoolDownIsANoOpAtZero(t *testing.T) {
 }
 
 func TestDescribeBudgetNamesTheOptOut(t *testing.T) {
-	th := throttle{cpu: 4, workers: 2, cooldown: 30 * time.Second}
-	got := describeBudget(th, 2, 2)
+	got := describeBudget(30*time.Second, computeBudget(4, 2))
 	if !strings.Contains(got, "4 cores") || !strings.Contains(got, "2 workers x 2") {
 		t.Errorf("budget banner = %q, want the arithmetic spelled out", got)
 	}
@@ -191,7 +182,7 @@ func TestDescribeBudgetNamesTheOptOut(t *testing.T) {
 		t.Errorf("budget banner = %q, want the cooldown named", got)
 	}
 
-	off := describeBudget(throttle{}, 0, 0)
+	off := describeBudget(0, computeBudget(0, 2))
 	if !strings.Contains(off, "MUTATE_CPU=0") {
 		t.Errorf("disabled banner = %q, want it to name the knob that turned it off", off)
 	}
@@ -199,7 +190,7 @@ func TestDescribeBudgetNamesTheOptOut(t *testing.T) {
 	// The bound is workers x share, not the requested cpu: at cpu=3 the share
 	// floors to 1, so two workers really get 2 cores, and saying "3" would be a
 	// number the run does not honor.
-	uneven := describeBudget(throttle{cpu: 3, workers: 2, cooldown: 30 * time.Second}, 1, 2)
+	uneven := describeBudget(30*time.Second, computeBudget(3, 2))
 	if !strings.Contains(uneven, "2 cores") || strings.Contains(uneven, "3 cores") {
 		t.Errorf("budget banner = %q, want the honored bound (2 cores), not the requested 3", uneven)
 	}

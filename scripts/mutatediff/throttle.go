@@ -30,25 +30,28 @@ type throttle struct {
 	sleep func(time.Duration)
 }
 
-// perChild splits the whole-run budget across concurrent workers. It returns 0
-// for "no budget" and never a share below 1.
-func perChild(cpu, workers int) int {
+// budget is a throttle's derived form: the per-worker share, and the worker
+// count that share is affordable for. Both come out of one derivation so that
+// workers x share cannot exceed cpu — split across two functions the invariant
+// would hold only as long as they happened to agree.
+type budget struct {
+	share   int
+	workers int
+}
+
+// computeBudget splits a whole-run core budget across the workers sharing it. A
+// share of 0 means no budget, and leaves the worker count untouched.
+func computeBudget(cpu, workers int) budget {
 	if cpu <= 0 {
-		return 0
+		return budget{workers: workers}
 	}
+	// A budget with no worker count cannot hold: the engine would fall back to
+	// .gremlins.yaml's count, which this process never learns, and multiply the
+	// cap by it. Pinning one worker is what keeps the cap true.
 	if workers < 1 {
 		workers = 1
 	}
-	return max(1, cpu/workers)
-}
-
-// effectiveWorkers shrinks the worker count when the budget cannot afford one
-// core each, so the whole-run cap holds instead of being multiplied by workers.
-func effectiveWorkers(cpu, workers int) int {
-	if cpu <= 0 {
-		return workers
-	}
-	return min(workers, cpu)
+	return budget{share: max(1, cpu/workers), workers: min(workers, cpu)}
 }
 
 // appendGoflag adds one flag without discarding what is already in GOFLAGS. The
@@ -61,7 +64,7 @@ func appendGoflag(existing, flag string) string {
 	return existing + " " + flag
 }
 
-// applyBudget pins the share on this process's environment so every descendant
+// apply pins the share on this process's environment so every descendant
 // inherits it: `go run gremlins`, gremlins' own coverage pass, measureSuite's
 // timing passes, and every mutant's `go test`.
 //
@@ -72,19 +75,18 @@ func appendGoflag(existing, flag string) string {
 //
 // Setting GOMAXPROCS here does not change this process's own scheduler, which
 // read the variable at init — it reaches children only, which is the wanted scope.
-func applyBudget(cpu, workers int) (int, error) {
-	share := perChild(cpu, workers)
-	if share == 0 {
-		return 0, nil
+func (b budget) apply() error {
+	if b.share == 0 {
+		return nil
 	}
-	value := strconv.Itoa(share)
+	value := strconv.Itoa(b.share)
 	if err := os.Setenv(gomaxprocsEnv, value); err != nil {
-		return 0, fmt.Errorf("pin %s: %w", gomaxprocsEnv, err)
+		return fmt.Errorf("pin %s: %w", gomaxprocsEnv, err)
 	}
 	if err := os.Setenv(goflagsEnv, appendGoflag(os.Getenv(goflagsEnv), "-p="+value)); err != nil {
-		return 0, fmt.Errorf("pin %s: %w", goflagsEnv, err)
+		return fmt.Errorf("pin %s: %w", goflagsEnv, err)
 	}
-	return share, nil
+	return nil
 }
 
 // shouldCool reports whether a cooldown belongs after the package at index i of
@@ -109,12 +111,12 @@ func (th throttle) coolDown(out io.Writer) {
 
 // describeBudget is printed once per run so an overridden budget is visible in a
 // scrollback or a pasted transcript. The leading number is workers x share, the
-// bound the run actually honors, not the requested th.cpu — those two disagree
+// bound the run actually honors, not the requested cpu — those two disagree
 // whenever cpu does not divide evenly across workers.
-func describeBudget(th throttle, share, workers int) string {
-	if share == 0 {
+func describeBudget(cooldown time.Duration, b budget) string {
+	if b.share == 0 {
 		return "mutatediff: no CPU budget (MUTATE_CPU=0) — using the machine default"
 	}
 	return fmt.Sprintf("mutatediff: CPU budget %d cores (%d workers x %d), %s cooldown between packages",
-		workers*share, workers, share, th.cooldown)
+		b.workers*b.share, b.workers, b.share, cooldown)
 }

@@ -89,11 +89,15 @@ type suiteTiming struct {
 //
 // An unmeasurable Baseline fails generous rather than reinstating the vacuous
 // pass this whole mechanism exists to prevent.
+// mutantNeed is what one mutant run costs before any floor applies: the real
+// suite, plus headroom for compiling and linking the mutated binary. Both the
+// coefficient and the shortfall WARN start from it, so it is named once.
+func mutantNeed(t suiteTiming) time.Duration {
+	return t.Uncached + buildBudget
+}
+
 func timeoutCoefficient(t suiteTiming, floor time.Duration) int {
-	target := t.Uncached + buildBudget
-	if target < floor {
-		target = floor
-	}
+	target := max(mutantNeed(t), floor)
 	if t.Baseline <= 0 {
 		return maxTimeoutCoefficient
 	}
@@ -123,7 +127,7 @@ func coefficientFor(ctx context.Context, pkg string, measure suiteMeasurer, floo
 	}
 	coefficient := timeoutCoefficient(t, floor)
 	ceiling := t.Baseline * time.Duration(coefficient)
-	needed := t.Uncached + buildBudget
+	needed := mutantNeed(t)
 	fmt.Fprintf(out, "mutatediff: %s suite %s, engine baseline %s — timeout coefficient %d (ceiling ~%s)\n",
 		pkg, t.Uncached.Round(time.Millisecond), t.Baseline.Round(time.Millisecond),
 		coefficient, ceiling.Round(time.Second))
