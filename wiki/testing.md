@@ -347,10 +347,24 @@ Knobs (all `?=`, so the environment overrides):
 
 | Variable | Default | Effect |
 |---|---|---|
-| `MUTATE_WORKERS` | 2 | Concurrent `go test` processes for `make mutate`. Each is sustained CPU load; drop to 1 to keep a laptop cool. |
-| `MUTATE_BASELINE_WORKERS` | 2 | Same, for the nightly baseline; also bounds peak memory. |
+| `MUTATE_CPU` | 4 | Whole-run core budget for `make mutate`, divided across `MUTATE_WORKERS` and pinned as `GOMAXPROCS`/`GOFLAGS -p` on every child. `0` opts out. |
+| `MUTATE_WORKERS` | 2 | Concurrent gremlins workers for `make mutate`. **Not** a core count — each worker is a full `go test`, whose own parallelism `MUTATE_CPU` is what bounds. |
+| `MUTATE_COOLDOWN` | 30s | Pause after each mutated package so the machine sheds heat. Any `time.ParseDuration` string; `0` disables. Skipped after a skipped package and after the last one. |
+| `MUTATE_BASELINE_WORKERS` | 2 | Same as `MUTATE_WORKERS`, for the nightly baseline; also bounds peak memory. Unbudgeted — CI runs at full speed. |
 | `MUTATE_CEILING_FLOOR` | 30s | Minimum per-mutant ceiling (any `time.ParseDuration` string). |
 | `MUTATE_FALLBACK_COEFFICIENT` | 600 | Used only when a package's coefficient cannot be computed. |
+
+The budget is applied once, on `mutatediff`'s own environment, so gremlins, its
+coverage pass, `measureSuite`'s timing passes, and every mutant's `go test` all
+inherit the same share. That uniformity is load-bearing rather than tidy: the
+per-mutant ceiling divides the real suite by a cache-served replay, so measuring
+the two under different budgets would corrupt every ceiling. The `-coefficient`
+path is deliberately excluded, because it serves `make mutate-baseline`, whose
+mutants run unbudgeted.
+
+The cooldown gives no relief inside a single package — `mutatediff` drives
+gremlins once per package and cannot interrupt its internal mutant loop. For a
+package that dominates a run, speeding up its slowest tests remains the lever.
 
 ### Timeout ceiling
 
