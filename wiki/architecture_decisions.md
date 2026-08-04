@@ -723,6 +723,41 @@ either impossible or non-functional; keeps one builder entrypoint instead of a
 
 ---
 
+### [ADR-045: Resource Managers Expose No Producer-Side Interface](adr_045_no_producer_side_manager_interfaces.md)
+
+**Date:** 2026-08-04 | **Status:** Accepted
+
+Deletes the exported `cache.Manager` interface and establishes that per-tenant resource
+managers carry no consumer-facing interface. `cache.Manager` was implemented by nothing,
+consumed by nothing, and had silently drifted from `*cache.CacheManager`: the concrete `Stats()`
+returns `ManagerStats` where the interface demanded `map[string]any`, so
+`var _ cache.Manager = (*cache.CacheManager)(nil)` would not have compiled had anyone written
+it. Nobody did, and no consumer ever used the interface where the compiler would have checked
+the two against each other, which is why the drift stayed invisible.
+The two sibling managers, `database.DbManager` and `messaging.Manager`, are plain structs and
+were already the precedent. Interface seams in go-bricks sit on manager **inputs**
+(`Connector`, `ConfigProvider`), the **leaf resource** (`cache.Cache`, `database.Interface`,
+`messaging.AMQPClient`), and the **app boundary** (`app.ResourceProvider`) — never on a
+manager type. Interface Segregation does not apply: an interface with no client segregates
+nothing. Repairing the signature instead was rejected because `apidiff` rates it Incompatible
+too (identical `!` title, hop atom, and minor bump), every substitution need is already served
+by `Connector` and `MockCache`, and the repair means either re-weakening `Stats()` — breaking
+`app/health.go` — or making the interface a strict-subset shadow of the concrete method set.
+Consumers wanting a seam declare a narrow one on their own side, where the compiler checks the
+concrete manager's method set against it at every call that passes one as the other — the
+guarantee is method-set compatibility, not behavior, and it only holds for an interface that is
+actually used somewhere. Breaking despite zero in-repo implementations: a
+consumer's own adapter over `*CacheManager` can satisfy it (see
+[migrations.md](migrations.md) `[C56.9]`).
+
+**Key Benefits:** Eliminates the drift class at the root rather than guarding it; makes all
+three resource managers consistent; removes an exported symbol that cost documentation
+maintenance and delivered no abstraction. The `CacheManager` → `Manager` rename that deletion
+now permits is deliberately deferred — it is a separate exported-API break across five `app/`
+files and nine `CacheManager` type references.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -732,7 +767,7 @@ either impossible or non-functional; keeps one builder entrypoint instead of a
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-044) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-045) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

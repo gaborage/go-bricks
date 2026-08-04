@@ -117,6 +117,14 @@ type Cache interface {
 
 > **Note (2026-06-17):** `Get` now returns a `ReleaseFunc` alongside the handle, per the lease/refcount redesign in [ADR-032](adr_032_lease_refcount_tenant_handles.md). The signature below reflects the current interface.
 
+> **Note (2026-08-04):** The `Manager` interface below **no longer exists** — it was deleted in
+> [ADR-045](adr_045_no_producer_side_manager_interfaces.md). It was never implemented: the concrete
+> `*cache.CacheManager` returns a typed `ManagerStats` from `Stats()`, takes `key` rather than
+> `tenantID` in `Get`, and adds `Remove(key string) error`. Per-tenant managers now expose no
+> producer-side interface, matching `database.DbManager` and `messaging.Manager`. The block below
+> is retained as the historical record of the decision. Consumers: see
+> [migrations.md](migrations.md) `[C56.9]`.
+
 ```go
 type Manager interface {
     Get(ctx context.Context, tenantID string) (Cache, ReleaseFunc, error)
@@ -132,7 +140,7 @@ type Manager interface {
 - **Thread-Safe**: `sync.RWMutex` for concurrent access
 
 **Rationale:**
-- Follows proven `database.DbManager` pattern (interface is `cache.Manager`, implementation is `*manager`)
+- Follows proven `database.DbManager` pattern (as shipped, the type is the exported `*cache.CacheManager`; the `cache.Manager` interface named here was never implemented and was removed in [ADR-045](adr_045_no_producer_side_manager_interfaces.md))
 - Tenant isolation without manual key prefixing
 - Prevents connection pool exhaustion in high-cardinality tenant scenarios
 
@@ -311,7 +319,8 @@ defer c.Delete(ctx, lockKey)
 - **ADR-004**: Lazy Registry Creation (proves singleflight pattern for manager)
 - **ADR-006**: OTLP Log Export (demonstrates observability integration pattern)
 - **ADR-007**: Struct-Based Columns (shows reflection + caching performance pattern)
-- **ADR-032**: Lease/Refcount Per-Tenant Resource Handles (updates `Manager.Get` to return a `ReleaseFunc`)
+- **ADR-032**: Lease/Refcount Per-Tenant Resource Handles (updates `CacheManager.Get` to return a `ReleaseFunc`)
+- **ADR-045**: Resource Managers Expose No Producer-Side Interface (removes the `Manager` interface described above; `*CacheManager` never satisfied it)
 
 ---
 

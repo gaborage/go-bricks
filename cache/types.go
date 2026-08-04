@@ -97,39 +97,3 @@ type Cache interface {
 	// After calling Close, the cache instance should not be used.
 	Close() error
 }
-
-// Manager manages cache instances for multiple tenants.
-// It follows the same pattern as database.DbManager with LRU eviction,
-// singleflight for preventing stampedes, and idle connection cleanup.
-//
-// Example usage:
-//
-//	manager, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
-//	if err != nil {
-//	    return err
-//	}
-//	defer manager.Close()
-//
-//	// Get cache for tenant (auto-creates if needed); release the lease when done
-//	inst, release, err := manager.Get(ctx, tenantID)
-//	if err != nil {
-//	    return err
-//	}
-//	defer release()
-type Manager interface {
-	// Get returns a cache instance for the specified tenant plus a ReleaseFunc the caller
-	// must invoke when finished with it for the current unit of work (typically deferred).
-	// Creates a new connection if one doesn't exist (lazy initialization).
-	// Uses singleflight to prevent duplicate connections for the same tenant.
-	// Implements LRU eviction when max size is exceeded; the lease defers closing an
-	// evicted-but-in-use instance until its last lease is released (ADR-032).
-	Get(ctx context.Context, tenantID string) (Cache, ReleaseFunc, error)
-
-	// Stats returns aggregated statistics across all managed caches.
-	// Includes manager-specific metrics like total_connections, lru_evictions, etc.
-	Stats() map[string]any
-
-	// Close closes all managed cache connections and stops background cleanup.
-	// Should be called during application shutdown.
-	Close() error
-}
