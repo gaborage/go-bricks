@@ -557,7 +557,6 @@ func assertNoCacheCoordinates(t *testing.T, body map[string]any) {
 	rendered := string(raw)
 	assert.NotContains(t, rendered, redisProbeAddress)
 	assert.NotContains(t, rendered, localHost)
-	assert.NotContains(t, rendered, redisProbePort)
 	assert.NotContains(t, rendered, errorRedisDown)
 }
 

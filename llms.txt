@@ -2349,8 +2349,9 @@ managerStats := cacheManager.Stats()
 result is surfaced as the top-level `cache` and `cache_stats` keys in the `200` body (the
 `503` body carries only `status`/`cache`/`error`; a cache manager that failed to construct
 registers no probe at all and reports `cache: "disabled"` with empty `cache_stats`). The probe leases
-an instance from the manager and calls `Cache.Health(ctx)` on it — a Redis `PING` per poll —
-so an outage that starts after the instance was built is reported on the next poll. It fails
+an instance from the manager and calls `Cache.Health(ctx)` on it — a Redis `PING` per poll,
+capped at 500ms so a hung Redis reports unhealthy instead of consuming the `/ready` request
+budget — so an outage that starts after the instance was built is reported on the next poll. It fails
 `/ready` with `503` **by default**: `cache.critical` is unregistered, so an absent key means
 critical, and only an explicit `cache.critical: false` opts out — which emits a startup WARN on
 every boot. The `503` body's `error` is the fixed string `cache unavailable` (the connector
@@ -4484,7 +4485,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Path | Returns | Probes |
 |---|---|---|
 | `GET /health` | `200` `{"status":"ok"}` always (liveness only — no component probes) | none |
-| `GET /ready` | `200` with per-component status (`database`, `messaging`, `cache`, + `db_stats` / `messaging_stats` / `cache_stats`); `503` when the **database** probe fails, or when the **cache** probe fails unless `cache.critical: false`. The `503` `error` is the raw error for database/messaging, but the fixed `cache unavailable` for cache | DB: lease a connection, then `conn.Health(ctx)` (always critical). Messaging: lease a publisher (never critical). Cache: lease an instance, then `cache.Health(ctx)` (Redis `PING` per probe); critical by default — `cache.critical: false` opts out and WARNs at startup |
+| `GET /ready` | `200` with per-component status (`database`, `messaging`, `cache`, + `db_stats` / `messaging_stats` / `cache_stats`); `503` when the **database** probe fails, or when the **cache** probe fails unless `cache.critical: false`. The `503` `error` is the raw error for database (the only other critical probe; messaging is never critical, so it cannot 503), but the fixed `cache unavailable` for cache | DB: lease a connection, then `conn.Health(ctx)` (always critical). Messaging: lease a publisher (never critical). Cache: lease an instance, then `cache.Health(ctx)` (Redis `PING` per probe); critical by default — `cache.critical: false` opts out and WARNs at startup |
 
 ### Configuration — Layered by Environment
 
