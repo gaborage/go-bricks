@@ -40,9 +40,18 @@ type Connector func(ctx context.Context, key string) (Cache, error)
 // See ADR-032.
 type ReleaseFunc func()
 
-// CacheManager implements the Manager interface for multi-tenant cache instances. It is a thin
-// adapter over internal/resourcepool.Pool, which owns the ADR-032 lease/evict/close protocol
-// (seed leases, LRU eviction, idle cleanup, and the closed-pool guard).
+// CacheManager manages per-tenant cache instances. It is a thin adapter over
+// internal/resourcepool.Pool, which owns the ADR-032 lease/evict/close protocol (seed leases,
+// LRU eviction, idle cleanup, and the closed-pool guard).
+//
+// The zero value is safe to call but unusable: rather than dereferencing the nil pool, Get
+// and Remove return ErrManagerClosed, Close reports success (there is nothing to close), and
+// Stats returns empty statistics — matching database.DbManager and messaging.Manager. That is
+// a panic guard, not a test fixture: a zero-value manager serves nothing, so a test built on
+// one only ever exercises the caller's no-cache branch. Construct a real manager over
+// cache/testing's MockCache to exercise cache behavior. The guard covers a zero-value manager
+// only — a nil *CacheManager still panics, so a caller holding one from a failed construction
+// must nil-check it.
 //
 //nolint:revive // CacheManager is intentional - Manager is the interface name
 type CacheManager struct {
@@ -104,10 +113,16 @@ func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, err
 
 // Get retrieves or creates a cache instance for the given key, plus a ReleaseFunc the
 // caller must invoke when finished with it for the current unit of work (typically
-// deferred). Returns ErrManagerClosed if Close() has been called. The lease prevents a
-// cache instance evicted while in use from being closed under an active caller (the #606
-// race). On error the returned ReleaseFunc is nil — check err first.
+// deferred). Returns ErrManagerClosed if Close() has been called, or if the manager is a
+// zero value that was never built via NewCacheManager. The lease prevents a cache instance
+// evicted while in use from being closed under an active caller (the #606 race). On error
+// the returned ReleaseFunc is nil — check err first.
 func (m *CacheManager) Get(ctx context.Context, key string) (Cache, ReleaseFunc, error) {
+	if m.pool == nil {
+		// Zero-value manager (never built via NewCacheManager): unusable, fail closed rather
+		// than panic — consistent with the Remove()/Close()/Stats() zero-value guards.
+		return nil, nil, ErrManagerClosed
+	}
 	value, release, err := m.pool.GetOrCreate(ctx, key, func(ctx context.Context) (Cache, error) {
 		inst, cerr := m.connector(ctx, key)
 		if cerr != nil {
@@ -125,9 +140,12 @@ func (m *CacheManager) Get(ctx context.Context, key string) (Cache, ReleaseFunc,
 }
 
 // Remove explicitly removes a cache instance from the manager.
-// Returns ErrManagerClosed if Close() has been called.
+// Returns ErrManagerClosed if Close() has been called, or if the manager is a zero value
+// that was never built via NewCacheManager.
 func (m *CacheManager) Remove(key string) error {
-	if m.pool.Closed() {
+	// Unusable either way: never built via NewCacheManager, or already closed. The nil test
+	// must come first — Pool.Closed() takes the pool's mutex and would panic on a nil pool.
+	if m.pool == nil || m.pool.Closed() {
 		return ErrManagerClosed
 	}
 
@@ -147,12 +165,19 @@ func (m *CacheManager) Remove(key string) error {
 
 // Close shuts down all managed cache instances and stops the cleanup goroutine.
 // After Close() returns, subsequent calls to Get() and Remove() return ErrManagerClosed.
+// Closing a zero-value manager is a no-op.
 func (m *CacheManager) Close() error {
+	if m.pool == nil {
+		return nil // zero-value manager: nothing to close
+	}
 	return m.pool.Close()
 }
 
 // Stats returns current manager statistics.
 func (m *CacheManager) Stats() ManagerStats {
+	if m.pool == nil {
+		return ManagerStats{} // zero-value manager: empty stats
+	}
 	ps := m.pool.Stats()
 	return ManagerStats{
 		ActiveCaches: ps.Size,

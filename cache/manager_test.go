@@ -1167,3 +1167,21 @@ func TestCacheManagerCreateRacingCloseDoesNotResurrect(t *testing.T) {
 	assert.True(t, instanceClosed.Load(), "the just-created instance must be closed, not leaked")
 	assert.Equal(t, 0, mgr.Stats().ActiveCaches, "the map must not be resurrected with a new entry")
 }
+
+// TestCacheManagerZeroValueMethodsAreSafe pins that a zero-value CacheManager (never built via
+// NewCacheManager — the lightweight stand-in shape the DbManager/messaging.Manager siblings
+// already support) does not panic on any of Get/Remove/Stats/Close.
+func TestCacheManagerZeroValueMethodsAreSafe(t *testing.T) {
+	m := &cache.CacheManager{}
+
+	inst, release, getErr := m.Get(context.Background(), tenantOne)
+	assert.ErrorIs(t, getErr, cache.ErrManagerClosed, "zero-value Get must fail closed, not panic")
+	assert.Nil(t, inst)
+	assert.Nil(t, release)
+
+	assert.ErrorIs(t, m.Remove(tenantOne), cache.ErrManagerClosed, "zero-value Remove must fail closed, not panic")
+
+	assert.Equal(t, cache.ManagerStats{}, m.Stats(), "zero-value Stats must report empty stats, not panic")
+
+	assert.NoError(t, m.Close(), "closing a never-initialized manager is a no-op")
+}
