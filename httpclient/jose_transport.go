@@ -27,6 +27,12 @@ const DefaultMaxJOSEBodyBytes int64 = 10 << 20 // 10 MiB
 // (jose.Seal) and decrypts+verifies inbound response bodies (jose.Open) using a fixed
 // pair of policies and a single KeyResolver.
 //
+// Only bodies are protected: a request with no body is forwarded unsealed regardless of
+// method, and a response net/http guarantees is empty (1xx, 204, 304, any reply to HEAD) is
+// returned as-is even when it advertises application/jose. Every other response carrying that
+// content type is decrypted and verified, including shapes that are bodyless by RFC but not
+// by net/http — see unwrapResponse for why the guarantee, not the RFC, sets the boundary.
+//
 // Architectural placement: JOSETransport sits below the httpclient retry loop, so each
 // retry attempt produces a freshly-sealed request — important for protocols that
 // require unique iat/jti claims per attempt (Visa Token Services and similar).
@@ -80,7 +86,7 @@ func (t *JOSETransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, erro
 		return resp, err
 	}
 
-	if err := t.unwrapResponse(resp); err != nil {
+	if err := t.unwrapResponse(wrapped, resp); err != nil {
 		// Close body to prevent leak, then return the error so the caller sees the
 		// crypto failure instead of stale-but-readable ciphertext.
 		if resp.Body != nil {
@@ -93,7 +99,7 @@ func (t *JOSETransport) RoundTrip(req *nethttp.Request) (*nethttp.Response, erro
 
 // wrapRequest reads req.Body, seals it with the Outbound policy, and returns a clone
 // of req with the sealed body and updated Content-Type / Content-Length headers.
-// If Outbound is nil, returns req unchanged.
+// If Outbound is nil, or the request carries no body, returns req unchanged.
 func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, error) {
 	if t.Outbound == nil {
 		return req, nil
@@ -103,6 +109,14 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 			_ = req.Body.Close()
 		}
 		return nil, fmt.Errorf("httpclient: JOSETransport requires a KeyResolver when Outbound is set")
+	}
+
+	// Sealing a request that has no body would stamp a JWE body onto it: gateways, CDNs and
+	// ALBs drop or reject a GET carrying one, and a HEAD with Content-Length is a protocol
+	// violation. Keyed on body presence rather than a method allowlist, which also covers
+	// CONNECT and any future bodyless method for free.
+	if req.Body == nil || req.Body == nethttp.NoBody {
+		return req, nil
 	}
 
 	// Outbound body is from this application — trusted size — so no cap.
@@ -132,9 +146,30 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 
 // unwrapResponse decrypts+verifies resp.Body when Inbound is set AND the response's
 // Content-Type indicates JOSE. Plaintext responses (e.g., pre-trust error envelopes
-// from a JOSE-aware peer) pass through unmodified.
-func (t *JOSETransport) unwrapResponse(resp *nethttp.Response) error {
+// from a JOSE-aware peer) and responses that definitionally carry no body pass through
+// unmodified.
+func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Response) error {
 	if t.Inbound == nil || resp == nil || resp.Body == nil {
+		return nil
+	}
+	// Exactly the shapes net/http GUARANTEES arrive empty: bodyAllowedForStatus rejects 1xx,
+	// 204 and 304, and noResponseBodyExpected rejects every reply to HEAD, so fixLength pins
+	// their length at zero. Such a response advertises application/jose anyway (HEAD headers
+	// mirror the GET they describe) and jose.Open on the empty string fails as JOSE_MALFORMED.
+	//
+	// The guarantee is what makes skipping safe, so the set deliberately stops there. 205 and
+	// a 2xx answer to CONNECT are bodyless per RFC 9110 but NOT per net/http, which reads a
+	// body on both — skipping them would hand a peer's unverified bytes to the caller under a
+	// status code it chose. For the same reason the key is the response shape and not "the
+	// read came back empty": an empty read, and equally a nethttp.NoBody body, also describes
+	// a 200 whose ciphertext was stripped in transit, which must keep failing closed.
+	//
+	// 101 is the one 1xx a RoundTripper returns, and its Body wraps the live hijacked
+	// connection — reading that would hang, not error. The method comes from the request, not
+	// resp.Request: *http.Transport back-fills that field but the RoundTripper contract does
+	// not require an Inner to, so it can be nil.
+	if resp.StatusCode < nethttp.StatusOK || resp.StatusCode == nethttp.StatusNoContent ||
+		resp.StatusCode == nethttp.StatusNotModified || req.Method == nethttp.MethodHead {
 		return nil
 	}
 	if !jose.IsContentType(resp.Header.Get(headerContentType)) {

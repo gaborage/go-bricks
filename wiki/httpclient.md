@@ -585,6 +585,8 @@ Prefer `peer.service` over `server.address` when writing SLO queries and alerts.
 
 For clients constructed with `WithJOSE(...)`, the `http.client.request.body.size` and `http.client.response.body.size` histograms measure the plaintext (application-level) body before encryption and after decryption respectively — not the encrypted wire size. A JOSE-aware variant that also records wire sizes is a possible follow-up.
 
+Requests that carry no body are not sealed at all, whatever the method — see [jose.md](jose.md) for what that means for a payload-free `POST`.
+
 ### Test Utilities
 
 **External module tests (the common case):** Use the `observability/testing` helpers to install an in-memory meter provider, exercise code that calls httpclient, then assert instruments were recorded:
