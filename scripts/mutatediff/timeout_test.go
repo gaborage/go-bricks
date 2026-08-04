@@ -91,6 +91,38 @@ func TestCoefficientForFallsBackGenerouslyWhenMeasurementFails(t *testing.T) {
 	}
 }
 
+// TestCoefficientForWarnsWhenTheClampBindsTheCeiling covers the one state where
+// the gate's usual advice is wrong. Past maxTimeoutCoefficient the ceiling stops
+// tracking what a mutant needs, so raising MUTATE_CEILING_FLOOR cannot help and
+// the operator has to be told which lever actually can.
+func TestCoefficientForWarnsWhenTheClampBindsTheCeiling(t *testing.T) {
+	var clamped, healthy bytes.Buffer
+	// need = 120s + 20s budget = 140s, but 600 x 100ms caps the ceiling at 60s.
+	slow := func(context.Context, string) (suiteTiming, error) {
+		return suiteTiming{Uncached: 120 * time.Second, Baseline: 100 * time.Millisecond}, nil
+	}
+	if got := coefficientFor(t.Context(), "./observability", slow, 30*time.Second, &clamped); got != maxTimeoutCoefficient {
+		t.Fatalf("coefficientFor = %d, want the clamp at %d", got, maxTimeoutCoefficient)
+	}
+	for _, want := range []string{"clamped", "1m0s", "2m20s", "MUTATE_CPU=0"} {
+		if !strings.Contains(clamped.String(), want) {
+			t.Errorf("clamped log %q missing %q", clamped.String(), want)
+		}
+	}
+	if !strings.Contains(clamped.String(), "not "+ceilingFloorEnv) {
+		t.Errorf("clamped log %q must say the floor is not the lever", clamped.String())
+	}
+
+	// The same call must stay quiet when the ceiling genuinely covers the mutant.
+	fits := func(context.Context, string) (suiteTiming, error) {
+		return suiteTiming{Uncached: 25 * time.Second, Baseline: 100 * time.Millisecond}, nil
+	}
+	coefficientFor(t.Context(), "./observability", fits, 30*time.Second, &healthy)
+	if strings.Contains(healthy.String(), "clamped") {
+		t.Errorf("an unclamped ceiling must not warn, got: %q", healthy.String())
+	}
+}
+
 func TestCoefficientForReportsBothTimings(t *testing.T) {
 	var buf bytes.Buffer
 	measure := func(context.Context, string) (suiteTiming, error) {

@@ -2,13 +2,14 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
 
 func TestRunNoOpDiffExitsCleanWithoutEngine(t *testing.T) {
 	var buf bytes.Buffer
-	if got := run(t.Context(), "false", "HEAD", 0, &buf); got != 0 {
+	if got := run(t.Context(), "false", "HEAD", throttle{}, &buf); got != 0 {
 		t.Fatalf("run = %d, want 0; output: %s", got, buf.String())
 	}
 	if !strings.Contains(buf.String(), "no mutatable changes") {
@@ -74,7 +75,43 @@ func TestReportVerdictCleanSweepOnlyWhenFullyJudged(t *testing.T) {
 
 func TestRunBlankEngineFailsFast(t *testing.T) {
 	var buf bytes.Buffer
-	if got := run(t.Context(), "   ", "HEAD", 0, &buf); got != 2 {
+	if got := run(t.Context(), "   ", "HEAD", throttle{}, &buf); got != 2 {
 		t.Fatalf("run = %d, want 2 for whitespace-only engine", got)
+	}
+}
+
+// TestRunNoOpDiffLeavesEnvironmentAlone pins the ordering: the budget is applied
+// only once there is work, so a no-op gate does not mutate the caller's GOFLAGS.
+func TestRunNoOpDiffLeavesEnvironmentAlone(t *testing.T) {
+	t.Setenv("GOFLAGS", "-mod=mod")
+	t.Setenv("GOMAXPROCS", "sentinel")
+	var buf bytes.Buffer
+	if got := run(t.Context(), "false", "HEAD", throttle{cpu: 4, workers: 2}, &buf); got != 0 {
+		t.Fatalf("run = %d, want 0; output: %s", got, buf.String())
+	}
+	if got := os.Getenv("GOFLAGS"); got != "-mod=mod" {
+		t.Errorf("GOFLAGS = %q, want it untouched by a no-op run", got)
+	}
+	// Both, not just GOFLAGS: applyBudget writes two variables, so asserting one
+	// leaves a hoisted budget half-detectable.
+	if got := os.Getenv("GOMAXPROCS"); got != "sentinel" {
+		t.Errorf("GOMAXPROCS = %q, want it untouched by a no-op run", got)
+	}
+}
+
+// TestMutatePackageReportsFailureAsNotRun pins the signal the cooldown depends
+// on: a package whose engine never executed mutants generated no load, so the
+// caller must be able to tell it apart from a package that ran.
+func TestMutatePackageReportsFailureAsNotRun(t *testing.T) {
+	var buf bytes.Buffer
+	// An engine that cannot run at all fails before any verdict; the point here is
+	// only that the arity carries a ran flag the caller can branch on.
+	_, _, ran, err := mutatePackage(t.Context(), []string{"false"}, "./scripts/mutatediff",
+		t.TempDir(), map[string][]lineRange{}, 1, &buf)
+	if err == nil {
+		t.Fatal("want an error from an engine that cannot produce a report")
+	}
+	if ran {
+		t.Error("ran = true, want false when the engine never executed mutants")
 	}
 }

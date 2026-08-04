@@ -26,11 +26,26 @@ MUTATE_BASELINE_WORKERS ?= 2
 # purpose: too small silently reports every mutant as TIMED OUT, which the
 # advisory baseline would publish as a clean score (wiki/testing.md#timeout-ceiling).
 MUTATE_FALLBACK_COEFFICIENT ?= 600
-# `make mutate` runs on a developer's machine, where every worker is a concurrent
-# `go test`. Now that mutants run to completion instead of dying at a too-tight
-# ceiling, that is sustained load, so the local gate is deliberately gentler than
-# .gremlins.yaml's 4: raise it for a faster gate, drop it to 1 to keep a laptop cool.
+# `make mutate` runs on a developer's machine and holds the CPU busy for the whole
+# run, which is what heat-soaks a laptop. MUTATE_WORKERS alone never bounded that:
+# each worker shells out a `go test`, which compiles at `-p=GOMAXPROCS` and runs its
+# binary at GOMAXPROCS, both defaulting to the machine's core count — so 2 workers
+# admit far more than 2 cores' worth of work.
+#
+# MUTATE_CPU is the cap on test execution, which is where the sustained load is;
+# build phases are a best-effort target, not a hard bound. mutatediff divides it
+# by MUTATE_WORKERS and pins
+# GOMAXPROCS plus GOFLAGS -p on every child process, which bounds test execution
+# exactly and build fan-out approximately (compile processes nest one level, and
+# at the defaults the overshoot can reach roughly 2x the budget during build
+# phases, growing with MUTATE_CPU).
+# Set MUTATE_CPU=0 to opt out and run at full speed.
+MUTATE_CPU ?= 4
 MUTATE_WORKERS ?= 2
+# Pause after each mutated package so the chassis sheds heat before the next one.
+# Any time.ParseDuration string; 0 disables. It does nothing inside a single long
+# package — for those, speeding up the slowest tests is the lever.
+MUTATE_COOLDOWN ?= 30s
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -124,7 +139,7 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
 
 mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
-	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)" -workers $(MUTATE_WORKERS)
+	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)" -workers "$(MUTATE_WORKERS)" -cpu "$(MUTATE_CPU)" -cooldown "$(MUTATE_COOLDOWN)"
 
 # One gremlins process per package: a single full-repo process with 4 workers
 # exhausted a 4-vCPU/16GB hosted runner ~25 min in (runner shutdown signal).

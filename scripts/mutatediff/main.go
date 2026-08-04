@@ -21,7 +21,16 @@ func main() {
 	mergeOut := flag.String("out", "gremlins-report.json", "merge mode: output path for the aggregated report")
 	coeffPkg := flag.String("coefficient", "", "coefficient mode: print the engine timeout-coefficient that holds this package's per-mutant ceiling at the floor")
 	workers := flag.Int("workers", 0, "engine workers; each is a concurrent `go test`. 0 inherits .gremlins.yaml")
+	cpu := flag.Int("cpu", 0, "whole-run core budget divided across workers; 0 leaves the machine default")
+	cooldown := flag.Duration("cooldown", 0, "pause between packages so the machine sheds heat; 0 disables")
 	flag.Parse()
+
+	// 0 is the documented opt-out for both guardrails, so a negative value is a
+	// typo that would silently disable one rather than tighten it.
+	if *cpu < 0 || *cooldown < 0 {
+		fmt.Fprintln(os.Stderr, "mutatediff: -cpu and -cooldown must not be negative (0 disables the guardrail)")
+		os.Exit(2)
+	}
 
 	// Signal-derived so Ctrl-C or a CI cancel reaches the long-running git,
 	// go test, and gremlins subprocesses instead of leaving orphaned trees.
@@ -39,13 +48,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mutatediff: -engine is required")
 		code = 2
 	default:
-		code = run(ctx, *engine, *base, *workers, os.Stdout)
+		code = run(ctx, *engine, *base, throttle{cpu: *cpu, workers: *workers, cooldown: *cooldown}, os.Stdout)
 	}
 	stop()
 	os.Exit(code)
 }
 
-func run(ctx context.Context, engine, baseRef string, workers int, out io.Writer) int {
+func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer) int {
 	engineArgs := strings.Fields(engine)
 	if len(engineArgs) == 0 {
 		return fail("engine command is blank")
@@ -73,14 +82,22 @@ func run(ctx context.Context, engine, baseRef string, workers int, out io.Writer
 		fmt.Fprintln(out, "mutatediff: no mutatable changes vs merge-base")
 		return 0
 	}
+	// After the no-op return: a gate with nothing to do must not leave the
+	// caller's GOFLAGS rewritten.
+	b := computeBudget(th.cpu, th.workers)
+	if budgetErr := b.apply(); budgetErr != nil {
+		return fail("%v", budgetErr)
+	}
+	fmt.Fprintln(out, describeBudget(th.cooldown, b))
 	reportDir, err := os.MkdirTemp("", "mutatediff-*")
 	if err != nil {
 		return fail("%v", err)
 	}
 	defer os.RemoveAll(reportDir)
 	var failures, warnings, unjudged []mutantVerdict
-	for _, pkg := range packagesOf(changed) {
-		f, w, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, workers, out)
+	pkgs := packagesOf(changed)
+	for i, pkg := range pkgs {
+		f, w, ran, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, b.workers, out)
 		if mErr != nil {
 			return fail("%v", mErr)
 		}
@@ -88,6 +105,14 @@ func run(ctx context.Context, engine, baseRef string, workers int, out io.Writer
 		warnings = append(warnings, w...)
 		if vacuousPkg(pkg, reportDir, out) {
 			unjudged = append(unjudged, mutantVerdict{File: pkg})
+		}
+		if shouldCool(ran, i, len(pkgs)) {
+			// A cooldown cut short means the run was canceled, not that the next
+			// package is ready: reporting a verdict over packages that never ran
+			// would call an interrupted gate clean.
+			if coolErr := th.coolDown(ctx, out); coolErr != nil {
+				return fail("canceled during cooldown: %v", coolErr)
+			}
 		}
 	}
 	return reportVerdict(failures, warnings, unjudged, out)
@@ -103,7 +128,7 @@ func reportVerdict(failures, warnings, unjudged []mutantVerdict, out io.Writer) 
 		for _, p := range unjudged {
 			fmt.Fprintf(out, "  %s\n", p.File)
 		}
-		fmt.Fprintf(out, "raise %s (currently %s) and re-run\n", ceilingFloorEnv, ceilingFloor())
+		fmt.Fprintf(out, "raise %s (currently %s), or re-run with MUTATE_CPU=0 to lift the CPU budget\n", ceilingFloorEnv, ceilingFloor())
 		return 1
 	}
 	if len(failures) > 0 {
@@ -175,7 +200,7 @@ func runEngine(ctx context.Context, engineArgs []string, pkg, reportPath string,
 	return reportJSON, nil
 }
 
-func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, workers int, out io.Writer) (failures, warnings []mutantVerdict, err error) {
+func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, workers int, out io.Writer) (failures, warnings []mutantVerdict, ran bool, err error) {
 	// A dry run enumerates mutants without executing any, so it costs one coverage
 	// pass instead of mutants x (build + suite). gremlins mutates the whole subtree
 	// it is pointed at while the gate only judges changed lines, so most
@@ -188,15 +213,15 @@ func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir stri
 	dryJSON, err := runEngine(ctx, engineArgs, pkg, reportPathFor(pkg, reportDir)+".dry",
 		[]string{"--dry-run", workersFlag, "1"}, out)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	onChanged, cErr := countOnChangedLines(dryJSON, pkg, changed)
 	if cErr != nil {
-		return nil, nil, fmt.Errorf("parse dry-run report for %s: %w", pkg, cErr)
+		return nil, nil, false, fmt.Errorf("parse dry-run report for %s: %w", pkg, cErr)
 	}
 	if onChanged == 0 {
 		fmt.Fprintf(out, "mutatediff: %s has no mutants on changed lines, skipping\n", pkg)
-		return nil, nil, nil
+		return nil, nil, false, nil
 	}
 
 	fmt.Fprintf(out, "mutatediff: mutating %s (%d mutants on changed lines)\n", pkg, onChanged)
@@ -204,13 +229,13 @@ func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir stri
 	reportJSON, err := runEngine(ctx, engineArgs, pkg, reportPathFor(pkg, reportDir),
 		slices.Concat(gremlinsTimeoutArgs(coefficient), workerArgs(workers)), out)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	f, w, jerr := judge(reportJSON, pkg, changed)
 	if jerr != nil {
-		return nil, nil, fmt.Errorf("parse report for %s: %w", pkg, jerr)
+		return nil, nil, false, fmt.Errorf("parse report for %s: %w", pkg, jerr)
 	}
-	return f, w, nil
+	return f, w, true, nil
 }
 
 func fail(format string, a ...any) int {
