@@ -5,12 +5,16 @@ import (
 	"context"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -143,22 +147,13 @@ func TestJOSETamperedCiphertextReturnsPlaintextError(t *testing.T) {
 	// minimal error envelope. If this test ever observes Content-Type: application/jose
 	// on the failure path, it is a security regression.
 	f := newJOSEFixture(t)
-	e, h := newJOSETestServer(t, f, func(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
-		t.Fatal("handler must not be invoked when inbound decryption fails")
-		return joseTokenResp{}, nil
-	})
 
 	plainReq := []byte(`{"pan":"4111111111111111"}`)
 	compactReq := jositest.SealForTest(t, plainReq, f.peerOutbound(), f.resolver)
 	tampered := []byte(compactReq)
 	tampered[len(tampered)/2] ^= 0x01
 
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader(tampered))
-	req.Header.Set(echo.HeaderContentType, "application/jose")
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	require.NoError(t, h(c))
+	rec, body := driveJOSEInbound(t, f, jose.ContentType, bytes.NewReader(tampered), 0, nil)
 
 	// Security invariant assertion #1: response is plaintext JSON, not JOSE.
 	assert.NotEqual(t, "application/jose", rec.Header().Get(echo.HeaderContentType),
@@ -167,8 +162,6 @@ func TestJOSETamperedCiphertextReturnsPlaintextError(t *testing.T) {
 		"tampered request should produce application/json response, got %q", rec.Header().Get(echo.HeaderContentType))
 
 	// Security invariant assertion #2: minimal envelope (no traceId, timestamp, or framework metadata).
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Contains(t, body, "code")
 	assert.Contains(t, body, "message")
 	assert.NotContains(t, body, "data", "minimal envelope must not include data")
@@ -177,26 +170,6 @@ func TestJOSETamperedCiphertextReturnsPlaintextError(t *testing.T) {
 
 	// Status: 4xx (decrypt-failed = 401, malformed = 400 are both acceptable depending on which segment was tampered).
 	assert.Contains(t, []int{http.StatusBadRequest, http.StatusUnauthorized}, rec.Code)
-}
-
-func TestJOSEPlaintextRequestRejectedWith415(t *testing.T) {
-	f := newJOSEFixture(t)
-	e, h := newJOSETestServer(t, f, func(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
-		t.Fatal("handler must not be invoked when content-type is wrong")
-		return joseTokenResp{}, nil
-	})
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", bytes.NewReader([]byte(`{"pan":"4111111111111111"}`)))
-	req.Header.Set(echo.HeaderContentType, "application/json") // wrong on a JOSE route
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	require.NoError(t, h(c))
-	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "JOSE_PLAINTEXT_REJECTED", body["code"])
 }
 
 func TestJOSEPostTrustErrorIsEncrypted(t *testing.T) {
@@ -488,4 +461,148 @@ func TestNonJOSERouteUnaffectedByResolver(t *testing.T) {
 	require.NotPanics(t, func() {
 		RegisterHandler[plainReq, plainResp](hr, fakeRegistrar{}, http.MethodPost, "/greet", handler)
 	})
+}
+
+// driveJOSEInbound runs the JOSE inbound path with an arbitrary body reader, optionally
+// behind one middleware, and returns the recorder plus the decoded minimal error envelope.
+// A non-zero contentLength overrides whatever httptest infers from the reader, which is
+// how the declared-length rejection is reached without supplying a body that large.
+// Every caller exercises a pre-trust failure, so the handler must never run.
+func driveJOSEInbound(t *testing.T, f *joseFixture, contentType string, body io.Reader, contentLength int64, mw echo.MiddlewareFunc) (rec *httptest.ResponseRecorder, envelope map[string]any) {
+	t.Helper()
+	e, h := newJOSETestServer(t, f, func(_ joseTokenReq, _ HandlerContext) (joseTokenResp, IAPIError) {
+		t.Error("handler must not be invoked on a pre-trust failure")
+		return joseTokenResp{}, nil
+	})
+	if mw != nil {
+		h = mw(h)
+	}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/tokens", body)
+	req.Header.Set(echo.HeaderContentType, contentType)
+	if contentLength != 0 {
+		req.ContentLength = contentLength
+	}
+	rec = httptest.NewRecorder()
+	require.NoError(t, h(e.NewContext(req, rec)))
+
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	return rec, envelope
+}
+
+// unreadableBody fails the test if anything reads it, so the cases below observe "the body
+// was not touched" directly instead of inferring it from a swallowed read error.
+type unreadableBody struct{ t *testing.T }
+
+func (b unreadableBody) Read([]byte) (int, error) {
+	b.t.Error("request body must not be read on a header-only rejection path")
+	return 0, io.EOF
+}
+
+// TestJOSEInboundPreTrustFailures is the decision table wiki/jose.md documents: every
+// pre-trust rejection is a (Content-Type, body, middleware) -> (status, code) row. The
+// bodies are built per-subtest so the two 10 MiB buffers are never live at once.
+func TestJOSEInboundPreTrustFailures(t *testing.T) {
+	f := newJOSEFixture(t)
+
+	tests := []struct {
+		name        string
+		contentType string
+		body        func(t *testing.T) io.Reader
+		length      int64
+		mw          echo.MiddlewareFunc
+		wantStatus  int
+		wantCode    string
+	}{
+		{
+			name:        "plaintext_content_type",
+			contentType: echo.MIMEApplicationJSON,
+			body:        func(*testing.T) io.Reader { return bytes.NewReader([]byte(`{"pan":"4111111111111111"}`)) },
+			wantStatus:  http.StatusUnsupportedMediaType,
+			wantCode:    "JOSE_PLAINTEXT_REJECTED",
+		},
+		{
+			// Ordering pin: the reader fails the test on any Read, so the untouched body is
+			// observed rather than inferred from the status.
+			name:        "wrong_content_type_body_never_read",
+			contentType: echo.MIMEApplicationJSON,
+			body:        func(t *testing.T) io.Reader { return unreadableBody{t: t} },
+			wantStatus:  http.StatusUnsupportedMediaType,
+			wantCode:    "JOSE_PLAINTEXT_REJECTED",
+		},
+		{
+			// Both failure conditions at once: the Content-Type wins, so this is 415 rather
+			// than the 400 an empty body alone produces. This is the documented change.
+			name:        "wrong_content_type_with_empty_body",
+			contentType: echo.MIMEApplicationJSON,
+			body:        func(*testing.T) io.Reader { return bytes.NewReader(nil) },
+			wantStatus:  http.StatusUnsupportedMediaType,
+			wantCode:    "JOSE_PLAINTEXT_REJECTED",
+		},
+		{
+			name:        "body_read_error",
+			contentType: jose.ContentType,
+			body:        func(*testing.T) io.Reader { return io.NopCloser(iotest.ErrReader(errors.New("boom"))) },
+			wantStatus:  http.StatusBadRequest,
+			wantCode:    "JOSE_BODY_REQUIRED",
+		},
+		{
+			name:        "empty_body",
+			contentType: jose.ContentType,
+			body:        func(*testing.T) io.Reader { return bytes.NewReader(nil) },
+			wantStatus:  http.StatusBadRequest,
+			wantCode:    "JOSE_BODY_REQUIRED",
+		},
+		{
+			name:        "oversize_body",
+			contentType: jose.ContentType,
+			body: func(*testing.T) io.Reader {
+				return bytes.NewReader(bytes.Repeat([]byte("a"), maxJOSERequestBytes+1))
+			},
+			wantStatus: http.StatusRequestEntityTooLarge,
+			wantCode:   "JOSE_BODY_TOO_LARGE",
+		},
+		{
+			// Declared-length pin: over the cap by Content-Length alone, so it must be
+			// rejected before the reader is ever touched.
+			name:        "declared_length_over_cap_not_read",
+			contentType: jose.ContentType,
+			body:        func(t *testing.T) io.Reader { return unreadableBody{t: t} },
+			length:      maxJOSERequestBytes + 1,
+			wantStatus:  http.StatusRequestEntityTooLarge,
+			wantCode:    "JOSE_BODY_TOO_LARGE",
+		},
+		{
+			// A body-limit middleware errors mid-stream on an unknown-length body over
+			// server.bodylimit, reaching the JOSE path as a read error. Still 413, not the
+			// generic read-failure 400.
+			name:        "body_limit_middleware_overflow",
+			contentType: jose.ContentType,
+			body: func(*testing.T) io.Reader {
+				return io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("a"), 4096))) // NopCloser ⇒ ContentLength -1
+			},
+			mw:         middleware.BodyLimit(1024),
+			wantStatus: http.StatusRequestEntityTooLarge,
+			wantCode:   "JOSE_BODY_TOO_LARGE",
+		},
+		{
+			// Off-by-one pin: exactly the limit must reach jose.Open and fail there, not at 413.
+			name:        "body_at_size_limit_reaches_open",
+			contentType: jose.ContentType,
+			body: func(*testing.T) io.Reader {
+				return bytes.NewReader(bytes.Repeat([]byte("a"), maxJOSERequestBytes))
+			},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "JOSE_MALFORMED",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, envelope := driveJOSEInbound(t, f, tc.contentType, tc.body(t), tc.length, tc.mw)
+
+			assert.Equal(t, tc.wantStatus, rec.Code)
+			assert.Equal(t, tc.wantCode, envelope["code"])
+		})
+	}
 }
