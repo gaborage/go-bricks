@@ -70,11 +70,15 @@
 //	})
 //
 // If your own type takes a manager, declare the narrow interface it needs on
-// the consumer side rather than depending on the concrete type:
+// the consumer side rather than depending on the concrete type. Pin it with a
+// compile-time assertion so the pairing is checked even before a call site
+// passes a real manager (ADR-045):
 //
 //	type cacheGetter interface {
 //	    Get(ctx context.Context, key string) (cache.Cache, cache.ReleaseFunc, error)
 //	}
+//
+//	var _ cacheGetter = (*cache.CacheManager)(nil)
 //
 // For integration tests requiring actual Redis behavior, use testcontainers
 // with cache/redis package instead.
