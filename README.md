@@ -559,7 +559,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 - **Lifecycle Management**: Lazy initialization, LRU eviction (max 100 tenants), idle cleanup (15m default)
 - **Atomic Operations**: `GetOrSet` for deduplication, `CompareAndSet` for distributed locking
 - **Performance**: <1ms latency for Get/Set, 100k ops/sec throughput
-- **Observability**: OpenTelemetry metrics (no distributed-tracing spans today), plus a `/ready` probe that pings Redis and fails readiness with `503` by default. See [wiki/cache.md](wiki/cache.md#readiness)
+- **Observability**: OpenTelemetry metrics (no distributed-tracing spans today), plus a `/ready` probe that pings Redis — a **cache** probe failure answers `503` by default, and `cache.critical: false` opts that out (the database probe is critical regardless). See [wiki/cache.md](wiki/cache.md#readiness)
 
 ### Configuration
 

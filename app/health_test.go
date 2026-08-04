@@ -260,7 +260,7 @@ func TestCacheProbeReportsWarmPoolOutage(t *testing.T) {
 		connectorCalls.Add(1)
 		return mc, nil
 	})
-	t.Cleanup(func() { _ = cacheManager.Close() })
+	t.Cleanup(func() { assert.NoError(t, cacheManager.Close()) })
 
 	probe := cacheManagerHealthProbe(cacheManager, mockLogger, false)
 
@@ -593,7 +593,7 @@ func cacheManagerServing(t *testing.T, c cache.Cache) *cache.CacheManager {
 	manager := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
 		return c, nil
 	})
-	t.Cleanup(func() { _ = manager.Close() })
+	t.Cleanup(func() { assert.NoError(t, manager.Close()) })
 	return manager
 }
 
