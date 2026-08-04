@@ -3665,8 +3665,9 @@ func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (Excha
 
 | Failure | HTTP | Error code | Trust state | Response Content-Type |
 |---|---|---|---|---|
-| Body required / empty | 400 | `JOSE_BODY_REQUIRED` | pre-trust | `application/json` (plaintext envelope) |
-| Wrong Content-Type (not `application/jose`) | 415 | `JOSE_PLAINTEXT_REJECTED` | pre-trust | `application/json` |
+| Wrong Content-Type (not `application/jose`) | 415 | `JOSE_PLAINTEXT_REJECTED` | pre-trust | `application/json` (plaintext envelope) |
+| Body over the 10 MiB JOSE cap, or an unknown-length body overflowing a lower `server.bodylimit` mid-stream | 413 | `JOSE_BODY_TOO_LARGE` | pre-trust | `application/json` |
+| Body required / empty | 400 | `JOSE_BODY_REQUIRED` | pre-trust | `application/json` |
 | Compact JWE parse failure | 400 | `JOSE_MALFORMED` | pre-trust | `application/json` |
 | `enc`/`alg` not in allowlist | 400 | `JOSE_ALGORITHM_DISALLOWED` | pre-trust | `application/json` |
 | `alg=none` (downgrade) | 400 | `JOSE_ALGORITHM_DISALLOWED` | pre-trust | `application/json` |

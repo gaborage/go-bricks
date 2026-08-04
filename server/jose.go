@@ -22,6 +22,27 @@ import (
 	"github.com/labstack/echo/v5"
 )
 
+// maxJOSERequestBytes caps the inbound JOSE body read. It mirrors the value of
+// httpclient.DefaultMaxJOSEBodyBytes (httpclient/jose_transport.go) by convention only —
+// that one is per-transport overridable, this one is a hard ceiling — so if either moves,
+// move both. Peak cost per in-flight request is several times this — io.ReadAll's growth
+// churn plus the string copy jose.Open requires measured ~32 MiB at the cap, and more
+// again once a well-formed JWE is actually opened — and nothing bounds JOSE-route
+// concurrency, so size pods off that figure. Equal to config.DefaultBodyLimitBytes
+// today, which is why an oversize body yields this package's 413 only when its length is
+// unknown; a declared Content-Length over server.bodylimit is rejected upstream. The cap
+// still holds when an operator raises server.bodylimit for an upload route.
+const maxJOSERequestBytes = 10 << 20
+
+// Pre-trust rejection codes, emitted before any crypto runs. Constants so the wire
+// strings cannot drift between rejection sites; the tests assert the literals instead,
+// so changing a value fails there rather than silently agreeing with itself.
+const (
+	errCodeJOSEPlaintextRejected = "JOSE_PLAINTEXT_REJECTED"
+	errCodeJOSEBodyRequired      = "JOSE_BODY_REQUIRED"
+	errCodeJOSEBodyTooLarge      = "JOSE_BODY_TOO_LARGE"
+)
+
 // joseObservability bundles the optional logger / tracer / meter so they thread cleanly
 // through wrap() into joseDecodeRequestWithObs and joseHandleResponseWithObs without bloating
 // those signatures or the HandlerRegistry struct.
@@ -249,8 +270,9 @@ func panicJOSERegistration(d *RouteDescriptor, msg string, cause error) {
 	panic("server: jose registration failed for " + pathInfo + ": " + msg)
 }
 
-// joseDecodeRequestWithObs reads the raw HTTP body, validates its Content-Type, decrypts the
-// JWE, verifies the inner JWS, and replaces c.Request().Body with the verified plaintext.
+// joseDecodeRequestWithObs validates the request Content-Type, reads the raw HTTP body
+// (capped at maxJOSERequestBytes), decrypts the JWE, verifies the inner JWS, and replaces
+// c.Request().Body with the verified plaintext.
 // Wrapped in an OTEL span so operators can isolate JOSE inbound time from total request time.
 //
 // On success: marks the context inbound-verified and stashes the verified Claims.
@@ -277,16 +299,32 @@ func joseDecodeRequestWithObs(c *echo.Context, p *jose.Policy, r jose.KeyResolve
 // joseDecodeRequestInner is the span-free implementation, kept separate so the
 // span/timing wrapper above stays readable.
 func joseDecodeRequestInner(c *echo.Context, p *jose.Policy, r jose.KeyResolver) IAPIError {
-	body, err := io.ReadAll(c.Request().Body)
-	if err != nil {
-		return &joseAPIError{code: "JOSE_BODY_REQUIRED", message: "Failed to read request body", status: http.StatusBadRequest}
-	}
-	if len(bytes.TrimSpace(body)) == 0 {
-		return &joseAPIError{code: "JOSE_BODY_REQUIRED", message: "Request body required", status: http.StatusBadRequest}
+	// Header compare precedes the body read so rejecting an unauthenticated request on the
+	// wrong content type costs a short string compare instead of a full body read.
+	if !jose.IsContentType(c.Request().Header.Get(echo.HeaderContentType)) {
+		return &joseAPIError{code: errCodeJOSEPlaintextRejected, message: "Request must be application/jose", status: http.StatusUnsupportedMediaType}
 	}
 
-	if !jose.IsContentType(c.Request().Header.Get(echo.HeaderContentType)) {
-		return &joseAPIError{code: "JOSE_PLAINTEXT_REJECTED", message: "Request must be application/jose", status: http.StatusUnsupportedMediaType}
+	// A declared length over the cap is rejected without reading a byte, so the minimal
+	// pre-trust envelope is what an oversize peer sees whenever server.bodylimit has been
+	// raised above the cap. An unknown-length body has no length to check and is caught
+	// mid-read below instead.
+	if c.Request().ContentLength > maxJOSERequestBytes {
+		return &joseAPIError{code: errCodeJOSEBodyTooLarge, message: "Request body exceeds the JOSE size limit", status: http.StatusRequestEntityTooLarge}
+	}
+
+	// The nil ResponseWriter is deliberate: MaxBytesReader's connection-close signal is
+	// gated on an unexported net/http method that echo's Response wrapper cannot satisfy,
+	// so passing c.Response() would buy nothing. net/http still closes the connection.
+	body, err := io.ReadAll(http.MaxBytesReader(nil, c.Request().Body, maxJOSERequestBytes))
+	if err != nil {
+		if isRequestTooLarge(err) {
+			return &joseAPIError{code: errCodeJOSEBodyTooLarge, message: "Request body exceeds the JOSE size limit", status: http.StatusRequestEntityTooLarge}
+		}
+		return &joseAPIError{code: errCodeJOSEBodyRequired, message: "Failed to read request body", status: http.StatusBadRequest}
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return &joseAPIError{code: errCodeJOSEBodyRequired, message: "Request body required", status: http.StatusBadRequest}
 	}
 
 	plaintext, claims, _, err := jose.Open(string(body), p, r)
@@ -302,6 +340,17 @@ func joseDecodeRequestInner(c *echo.Context, p *jose.Policy, r jose.KeyResolver)
 	ctx = jose.WithClaims(ctx, claims)
 	c.SetRequest(c.Request().WithContext(ctx))
 	return nil
+}
+
+// isRequestTooLarge distinguishes a size-cap read failure from a genuine transport error.
+// Two caps can fire: maxJOSERequestBytes above (*http.MaxBytesError) and a body-limit
+// middleware, whose reader errors mid-stream once server.bodylimit is passed on an
+// unknown-length body. Both mean 413, not a bad request. The second arm matches on the
+// status echo reports rather than on echo's ErrStatusRequestEntityTooLarge sentinel, so a
+// replacement middleware returning any 413-coded echo error is classified the same way.
+func isRequestTooLarge(err error) bool {
+	var tooLarge *http.MaxBytesError
+	return errors.As(err, &tooLarge) || echo.StatusCode(err) == http.StatusRequestEntityTooLarge
 }
 
 // joseHandleResponseWithObs wraps joseHandleResponse with an OTEL span and records
