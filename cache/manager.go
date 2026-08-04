@@ -53,7 +53,32 @@ type ReleaseFunc func()
 // only — a nil *CacheManager still panics, so a caller holding one from a failed construction
 // must nil-check it.
 //
-//nolint:revive // CacheManager is intentional - Manager is the interface name
+// Example usage. The named result is load-bearing: the deferred closure reports a
+// Close failure through it, and with an unnamed result that assignment is lost.
+//
+//	func withCache(ctx context.Context, tenantID string, connector cache.Connector) (err error) {
+//	    manager, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+//	    if err != nil {
+//	        return err
+//	    }
+//	    defer func() {
+//	        if cerr := manager.Close(); cerr != nil && err == nil {
+//	            err = cerr
+//	        }
+//	    }()
+//
+//	    // Get cache for key (auto-creates if needed); release the lease when done
+//	    inst, release, err := manager.Get(ctx, tenantID)
+//	    if err != nil {
+//	        return err
+//	    }
+//	    defer release()
+//
+//	    _, err = inst.Get(ctx, "user:123")
+//	    return err
+//	}
+//
+//nolint:revive // CacheManager mirrors the database.DbManager / messaging.Manager naming
 type CacheManager struct {
 	pool      *resourcepool.Pool[Cache]
 	connector Connector

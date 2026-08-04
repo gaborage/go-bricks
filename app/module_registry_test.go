@@ -15,25 +15,30 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// recLogger is a recording logger.Logger that captures each event's Str fields
-// and terminal Msg, for asserting the route-registered emission.
+// recLogger is a recording logger.Logger that captures each event's level, Str
+// fields, Err text and terminal Msg, so tests can assert emissions without
+// swapping the process-global os.Stdout.
 type recLogger struct {
 	mu     sync.Mutex
 	events []recEvent
 }
 
 type recEvent struct {
-	l   *recLogger
-	str map[string]string
-	msg string
+	l     *recLogger
+	str   map[string]string
+	level string
+	err   string
+	msg   string
 }
 
-func (l *recLogger) event() logger.LogEvent                    { return &recEvent{l: l, str: map[string]string{}} }
-func (l *recLogger) Info() logger.LogEvent                     { return l.event() }
-func (l *recLogger) Error() logger.LogEvent                    { return l.event() }
-func (l *recLogger) Debug() logger.LogEvent                    { return l.event() }
-func (l *recLogger) Warn() logger.LogEvent                     { return l.event() }
-func (l *recLogger) Fatal() logger.LogEvent                    { return l.event() }
+func (l *recLogger) event(level string) logger.LogEvent {
+	return &recEvent{l: l, level: level, str: map[string]string{}}
+}
+func (l *recLogger) Info() logger.LogEvent                     { return l.event("info") }
+func (l *recLogger) Error() logger.LogEvent                    { return l.event("error") }
+func (l *recLogger) Debug() logger.LogEvent                    { return l.event("debug") }
+func (l *recLogger) Warn() logger.LogEvent                     { return l.event("warn") }
+func (l *recLogger) Fatal() logger.LogEvent                    { return l.event("fatal") }
 func (l *recLogger) WithContext(_ any) logger.Logger           { return l }
 func (l *recLogger) WithFields(_ map[string]any) logger.Logger { return l }
 
@@ -55,9 +60,14 @@ func (e *recEvent) Msg(msg string) {
 	e.l.events = append(e.l.events, *e)
 	e.l.mu.Unlock()
 }
-func (e *recEvent) Msgf(format string, args ...any)               { e.Msg(fmt.Sprintf(format, args...)) }
-func (e *recEvent) Str(k, v string) logger.LogEvent               { e.str[k] = v; return e }
-func (e *recEvent) Err(_ error) logger.LogEvent                   { return e }
+func (e *recEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
+func (e *recEvent) Str(k, v string) logger.LogEvent { e.str[k] = v; return e }
+func (e *recEvent) Err(err error) logger.LogEvent {
+	if err != nil {
+		e.err = err.Error()
+	}
+	return e
+}
 func (e *recEvent) Int(_ string, _ int) logger.LogEvent           { return e }
 func (e *recEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
 func (e *recEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }

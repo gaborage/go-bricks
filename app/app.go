@@ -82,20 +82,21 @@ type App struct {
 	healthProbes []Prober
 }
 
-// createHealthProbesForManagers creates health probes for the new managers
-func createHealthProbesForManagers(dbManager *database.DbManager, messagingManager *messaging.Manager, cacheManager *cache.CacheManager, log logger.Logger) []Prober {
+// createHealthProbes builds the readiness probe set from the configured managers.
+// Criticality is resolved from config here and passed per probe.
+func (a *App) createHealthProbes() []Prober {
 	var probes []Prober
 
-	if dbManager != nil {
-		probes = append(probes, databaseManagerHealthProbe(dbManager, log))
+	if a.dbManager != nil {
+		probes = append(probes, databaseManagerHealthProbe(a.dbManager, a.logger))
 	}
 
-	if messagingManager != nil {
-		probes = append(probes, messagingManagerHealthProbe(messagingManager, log))
+	if a.messagingManager != nil {
+		probes = append(probes, messagingManagerHealthProbe(a.messagingManager, a.logger))
 	}
 
-	if cacheManager != nil {
-		probes = append(probes, cacheManagerHealthProbe(cacheManager, log))
+	if a.cacheManager != nil {
+		probes = append(probes, cacheManagerHealthProbe(a.cacheManager, a.logger, a.cfg.IsCacheCritical()))
 	}
 
 	return probes

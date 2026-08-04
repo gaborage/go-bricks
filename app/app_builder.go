@@ -393,14 +393,34 @@ func (b *Builder) CreateHealthProbes() *Builder {
 		return b
 	}
 
-	b.app.healthProbes = createHealthProbesForManagers(
-		b.app.dbManager,
-		b.app.messagingManager,
-		b.app.cacheManager,
-		b.logger,
-	)
+	b.warnIfCacheCriticalityOptOut()
+	b.app.healthProbes = b.app.createHealthProbes()
 
 	return b
+}
+
+// warnIfCacheCriticalityOptOut WARNs (never fails) when a live cache probe explicitly sets
+// cache.critical=false, weakening readiness. No-op under the strict default (absent key)
+// and when no probe can ever report an error.
+func (b *Builder) warnIfCacheCriticalityOptOut() {
+	cfg := b.app.cfg
+	if cfg == nil || cfg.Cache.Critical == nil || *cfg.Cache.Critical {
+		return
+	}
+	if b.app.cacheManager == nil {
+		return
+	}
+	// The default Redis connector declines with a nil error when cache.enabled is false, so
+	// the flag is inert; a custom Options.CacheConnector never reads that key and is probed
+	// regardless.
+	if !cfg.Cache.Enabled && (b.opts == nil || b.opts.CacheConnector == nil) {
+		return
+	}
+	b.logger.Warn().
+		Str("resource", "cache").
+		Msg("cache.critical is explicitly false; readiness will not reflect cache health — " +
+			"/ready keeps answering 200 while the cache is down, so a dead cache still reports ready " +
+			"(remove cache.critical to restore the strict default)")
 }
 
 // RegisterClosers registers all components that need cleanup on shutdown.

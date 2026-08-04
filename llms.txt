@@ -1817,6 +1817,7 @@ See [database/testing](database/testing/) package for full API documentation.
 cache:
   enabled: true
   type: redis
+  # critical: false # opt-out only; unset = /ready returns 503 when the cache probe errors (WARNs when set false)
   redis:
     host: localhost
     port: 6379
@@ -2344,11 +2345,20 @@ managerStats := cacheManager.Stats()
 ```
 
 `GET /health` is a liveness-only probe with no component breakdown (`{"status": "ok"}`).
-`GET /ready` reports per-component status (database, messaging). A cache probe is
-registered internally when cache is enabled, but it is **non-critical** and only checks
-that an instance can be leased from the manager — it never calls `Cache.Health`, so a
-Redis outage neither fails `/ready` nor appears in its response. Alert on Redis
-separately.
+`GET /ready` reports per-component status (database, messaging, cache) — the cache probe's
+result is surfaced as the top-level `cache` and `cache_stats` keys in the `200` body (the
+`503` body carries only `status`/`cache`/`error`; a cache manager that failed to construct
+registers no probe at all and reports `cache: "disabled"` with empty `cache_stats`). The probe leases
+an instance from the manager and calls `Cache.Health(ctx)` on it — a Redis `PING` per poll,
+capped at 500ms so a hung Redis reports unhealthy instead of consuming the `/ready` request
+budget — so an outage that starts after the instance was built is reported on the next poll. It fails
+`/ready` with `503` **by default**: `cache.critical` is unregistered, so an absent key means
+critical, and only an explicit `cache.critical: false` opts out — which emits a startup WARN on
+every boot. The `503` body's `error` is the fixed string `cache unavailable` (the connector
+error names the Redis host, port and IP, and `/ready` is unauthenticated); the full error goes
+to the application log and the IP-allowlisted `/_sys/health-debug`. The probe leases key
+`""`, so it observes only the top-level `cache.*` connection and never per-tenant caches —
+alert on Redis separately either way.
 
 **Observability Integration:**
 
@@ -4475,7 +4485,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Path | Returns | Probes |
 |---|---|---|
 | `GET /health` | `200` `{"status":"ok"}` always (liveness only — no component probes) | none |
-| `GET /ready` | `200` with per-component status (`database`, `messaging`, + stats); `503` only when the **database** probe fails — it is the only critical probe | DB: lease a connection, then `conn.Health(ctx)` (critical). Messaging: lease a publisher. Cache: lease an instance — no Redis `PING`. Both are non-critical, so their failures never yield `503` |
+| `GET /ready` | `200` with per-component status (`database`, `messaging`, `cache`, + `db_stats` / `messaging_stats` / `cache_stats`); `503` when the **database** probe fails, or when the **cache** probe fails unless `cache.critical: false`. The `503` `error` is the raw error for database (the only other critical probe; messaging is never critical, so it cannot 503), but the fixed `cache unavailable` for cache | DB: lease a connection, then `conn.Health(ctx)` (always critical). Messaging: lease a publisher (never critical). Cache: lease an instance, then `cache.Health(ctx)` (Redis `PING` per probe); critical by default — `cache.critical: false` opts out and WARNs at startup |
 
 ### Configuration — Layered by Environment
 

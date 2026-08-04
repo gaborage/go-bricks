@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
@@ -10,24 +11,42 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
+// cacheProbePingTimeout caps the warm-path PING so a hung Redis reports unhealthy instead
+// of consuming the caller's whole readiness budget. See wiki/cache.md#readiness for the
+// cold-poll caveat.
+const cacheProbePingTimeout = 500 * time.Millisecond
+
+// SECURITY: the cache probe's failure modes render the Redis host:port, the resolved
+// dial IP and (on the cold path) the tenant key. /ready carries no allowlist and no
+// auth, so the 503 body gets this fixed string instead; the full error still reaches
+// the application log (readyCheck logs it when the probe is critical) and the
+// IP-allowlisted /health-debug via HealthStatus.Err.
+const cacheUnavailableMessage = "cache unavailable"
+
 // HealthStatus captures the outcome of a readiness probe.
 type HealthStatus struct {
-	Name     string
-	Status   string
-	Details  map[string]any
-	Err      error
-	Critical bool
+	Name    string
+	Status  string
+	Details map[string]any
+	Err     error
+	// PublicErr is the error text safe to expose on the unauthenticated /ready body.
+	// Empty means Err renders verbatim.
+	PublicErr string
+	Critical  bool
 }
 
-// Prober exposes a uniform interface for readiness probes.
+// Prober exposes a uniform interface for readiness probes. SECURITY: an implementation
+// that returns an error from a critical probe must set HealthStatus.PublicErr — the /ready
+// body is unauthenticated, and an empty PublicErr renders Err verbatim.
 type Prober interface {
 	Run(ctx context.Context) HealthStatus
 }
 
 type healthProbeFunc struct {
-	name     string
-	critical bool
-	fn       func(ctx context.Context) (string, map[string]any, error)
+	name      string
+	critical  bool
+	publicErr string
+	fn        func(ctx context.Context) (string, map[string]any, error)
 }
 
 func (h healthProbeFunc) Run(ctx context.Context) HealthStatus {
@@ -36,11 +55,12 @@ func (h healthProbeFunc) Run(ctx context.Context) HealthStatus {
 		details = map[string]any{}
 	}
 	return HealthStatus{
-		Name:     h.name,
-		Status:   status,
-		Details:  details,
-		Err:      err,
-		Critical: h.critical,
+		Name:      h.name,
+		Status:    status,
+		Details:   details,
+		Err:       err,
+		PublicErr: h.publicErr,
+		Critical:  h.critical,
 	}
 }
 
@@ -106,6 +126,16 @@ func getStatsOrEmpty(stats map[string]any) map[string]any {
 	return stats
 }
 
+// componentReport resolves a component's status and stats for the /ready body,
+// reporting disabled when no probe is registered for it.
+func componentReport(all map[string]HealthStatus, name string) (status string, stats map[string]any) {
+	result := all[name]
+	if result.Status == "" {
+		result.Status = disabledStatus
+	}
+	return result.Status, getStatsOrEmpty(result.Details)
+}
+
 // messagingManagerHealthProbe creates a health probe for the messaging manager
 func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger) Prober {
 	if msgManager == nil {
@@ -154,8 +184,9 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 	}
 }
 
-// cacheManagerHealthProbe creates a health probe for the cache manager
-func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) Prober {
+// cacheManagerHealthProbe creates a health probe for the cache manager. A deployment
+// without a cache stays non-critical, so cache.critical cannot fail its readiness.
+func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger, critical bool) Prober {
 	if cacheManager == nil {
 		return healthProbeFunc{
 			name: componentCache,
@@ -166,12 +197,14 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) 
 	}
 
 	return healthProbeFunc{
-		name: componentCache,
+		name:      componentCache,
+		critical:  critical,
+		publicErr: cacheUnavailableMessage,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			stats := convertCacheStatsToMap(cacheManager.Stats())
 
 			// Attempt to verify readiness by getting cache instance
-			_, release, err := cacheManager.Get(ctx, "")
+			instance, release, err := cacheManager.Get(ctx, "")
 			if err != nil {
 				// Check if cache is not configured (not a failure)
 				if config.IsNotConfigured(err) {
@@ -182,9 +215,16 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger) 
 				stats[statusKey] = "connection_failed"
 				return unhealthyStatus, stats, err
 			}
-			release() // probe holds no scope; release the lease immediately
+			defer release() // probe holds no scope; release the lease when the check returns
 
-			// Cache manager is healthy if we can get an instance
+			// A pooled instance is returned without a round trip, so ping it explicitly
+			pingCtx, cancel := context.WithTimeout(ctx, cacheProbePingTimeout)
+			defer cancel()
+			if err := instance.Health(pingCtx); err != nil {
+				stats[statusKey] = unhealthyStatus
+				return unhealthyStatus, stats, err
+			}
+
 			stats[statusKey] = healthyStatus
 			return healthyStatus, stats, nil
 		},

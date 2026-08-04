@@ -380,6 +380,72 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 
 	// KeyStore symmetric-secret floor defaults to 32 bytes.
 	assert.Equal(t, 32, k.Int("keystore.secretminlength"))
+
+	// Cache readiness criticality is strict by default, so the key must stay unregistered:
+	// a default would populate the pointer and erase the absent-vs-explicit-false distinction
+	// that Config.IsCacheCritical (and its startup opt-out WARN) depend on.
+	assert.False(t, k.Exists("cache.critical"), "cache.critical must NOT be a registered default")
+}
+
+// TestIsCacheCriticalTriState drives both the parsed pointer and the accessor through the
+// real koanf load path rather than a Go struct literal: a literal would prove nothing about
+// whether an absent YAML key still reaches IsCacheCritical as nil. The sibling
+// `cache.enabled` assertion proves the block actually parsed, so a case cannot pass on Go's
+// zero value alone.
+func TestIsCacheCriticalTriState(t *testing.T) {
+	const yamlEnabled = "cache:\n  enabled: true\n"
+
+	tests := []struct {
+		name          string
+		yaml          string
+		env           string
+		expectedPtr   *bool
+		expected      bool
+		expectEnabled bool
+	}{
+		{name: "key_absent_is_strict", yaml: yamlEnabled, expected: true, expectEnabled: true},
+		{name: "no_cache_block_at_all_is_strict", expected: true},
+		{name: "yaml_false_opts_out", yaml: yamlEnabled + "  critical: false\n", expectedPtr: new(false), expected: false, expectEnabled: true},
+		{name: "yaml_true_is_strict", yaml: yamlEnabled + "  critical: true\n", expectedPtr: new(true), expected: true, expectEnabled: true},
+		{name: "env_true_parses_without_yaml", env: "true", expectedPtr: new(true), expected: true},
+		{name: "env_false_overrides_yaml_true", yaml: yamlEnabled + "  critical: true\n", env: "false", expectedPtr: new(false), expected: false, expectEnabled: true},
+		{name: "env_true_overrides_yaml_false", yaml: yamlEnabled + "  critical: false\n", env: "true", expectedPtr: new(true), expected: true, expectEnabled: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clearEnvironmentVariables()
+			defer clearEnvironmentVariables()
+
+			dir := t.TempDir()
+			if tc.yaml != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML), []byte(tc.yaml), 0o600))
+			}
+			t.Chdir(dir)
+
+			if tc.env != "" {
+				t.Setenv("CACHE_CRITICAL", tc.env)
+			}
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			if tc.expectedPtr == nil {
+				assert.Nil(t, cfg.Cache.Critical, "absent key must stay nil so IsCacheCritical defaults strict")
+			} else {
+				require.NotNil(t, cfg.Cache.Critical)
+				assert.Equal(t, *tc.expectedPtr, *cfg.Cache.Critical)
+			}
+			assert.Equal(t, tc.expectEnabled, cfg.Cache.Enabled)
+			assert.Equal(t, tc.expected, cfg.IsCacheCritical())
+		})
+	}
+
+	t.Run("nil_receiver_is_strict", func(t *testing.T) {
+		var cfg *Config
+		assert.True(t, cfg.IsCacheCritical(),
+			"a nil config is the most absent config there is; returning false here would make "+
+				"the lenient posture reachable without anyone asking for it")
+	})
 }
 
 func TestLoadEdgeCases(t *testing.T) {
