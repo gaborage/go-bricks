@@ -59,12 +59,13 @@ for _, m := range []app.Module{
 }
 ```
 
-**Failure mode → IAPIError mapping (every code surfaces on the wire):**
+**Failure mode → IAPIError mapping (every code surfaces on the wire).** The rows are listed in evaluation order: the Content-Type is checked before the body is read, so a wrong-Content-Type request is rejected with 415 without its body being consumed. The cap on the read that follows is hard: it holds even when `server.bodylimit` is raised above it. A request whose `Content-Length` exceeds `server.bodylimit` is rejected by echo's `BodyLimit` middleware before the JOSE path runs, and that rejection carries the framework's **standard** error envelope rather than the minimal pre-trust one. The two limits are equal by default, so it is raising `server.bodylimit` above the JOSE cap that puts oversize rejections back on the minimal-envelope path.
 
 | Failure | Status | Code |
 |---|---|---|
-| Body required / empty | 400 | `JOSE_BODY_REQUIRED` |
 | Wrong Content-Type (not `application/jose`) | 415 | `JOSE_PLAINTEXT_REJECTED` |
+| Body over the 10 MiB JOSE cap, or an unknown-length body overflowing a lower `server.bodylimit` mid-stream | 413 | `JOSE_BODY_TOO_LARGE` |
+| Body required / empty | 400 | `JOSE_BODY_REQUIRED` |
 | Compact JWE parse failure | 400 | `JOSE_MALFORMED` |
 | `enc`/`alg` not allowed on the wire | 400 | `JOSE_MALFORMED` |
 | `alg=none` (downgrade attempt) | 400 | `JOSE_MALFORMED` (rejected by allowlist parse) |
@@ -100,7 +101,7 @@ Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed 
 
 **For complete examples**, see [llms.txt](../llms.txt) JOSE section.
 
-**Outbound httpclient JOSE wrapping** (calls TO Visa): `httpclient.JOSETransport` is an `http.RoundTripper` (`httpclient/jose_transport.go`) that signs+encrypts outbound request bodies via `jose.Seal` and decrypts+verifies inbound response bodies via `jose.Open`. It sits below the httpclient retry loop so each retry attempt produces a freshly-sealed request (important for protocols requiring unique `iat`/`jti` claims per attempt). Configure via `Inner` (delegate transport), `Outbound`/`Inbound` (`*jose.Policy`), `Resolver` (`jose.KeyResolver`), and `MaxResponseBytes` (caps the inbound response read; defaults to `DefaultMaxJOSEBodyBytes`, 10 MiB). Only `application/jose` responses are unwrapped — other Content-Types pass through untouched, mirroring the server's hybrid error envelope. See `httpclient/jose_transport_test.go` for usage examples.
+**Outbound httpclient JOSE wrapping** (calls TO Visa): `httpclient.JOSETransport` is an `http.RoundTripper` (`httpclient/jose_transport.go`) that signs+encrypts outbound request bodies via `jose.Seal` and decrypts+verifies inbound response bodies via `jose.Open`. It sits below the httpclient retry loop so each retry attempt produces a freshly-sealed request (important for protocols requiring unique `iat`/`jti` claims per attempt). Configure via `Inner` (delegate transport), `Outbound`/`Inbound` (`*jose.Policy`), `Resolver` (`jose.KeyResolver`), and `MaxResponseBytes` (caps the inbound response read; defaults to `DefaultMaxJOSEBodyBytes`, 10 MiB). Only `application/jose` responses are unwrapped — other Content-Types pass through untouched, mirroring the server's hybrid error envelope. Only bodies are protected. A request that carries no body is not sealed and goes out with its headers unchanged, whatever the method — so a payload-free `POST` is *not* signed either. A response that net/http guarantees is empty (`1xx`, `204`, `304`, and any reply to `HEAD`) is returned as-is even when it advertises `application/jose`; every other `application/jose` response is decrypted and verified as before. The boundary is deliberately net/http's guarantee rather than the RFC's bodyless set — `205` and a `2xx` answer to `CONNECT` carry no body per RFC 9110, but net/http reads one anyway, so skipping them would hand a peer's unverified bytes to the caller under a status code it chose. See `httpclient/jose_transport_test.go` for usage examples.
 
 ## Sealing test payloads with curl (seal-payload CLI)
 
