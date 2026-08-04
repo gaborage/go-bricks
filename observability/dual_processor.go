@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
@@ -141,9 +142,9 @@ func (p *DualModeLogProcessor) ForceFlush(ctx context.Context) error {
 func extractLogType(rec *sdklog.Record) string {
 	logType := logTypeTrace // Default to trace logs
 
-	rec.WalkAttributes(func(kv log.KeyValue) bool {
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
 		if kv.Key == "log.type" {
-			if kv.Value.Kind() == log.KindString {
+			if kv.Value.Type() == attribute.STRING {
 				logType = kv.Value.AsString()
 			}
 			return false // Stop iteration once found
@@ -207,20 +208,20 @@ type traceAttributeCollector struct {
 
 // collect extracts trace correlation attributes from a key-value pair.
 // Returns false to stop iteration when all required attributes are found.
-func (c *traceAttributeCollector) collect(kv log.KeyValue) bool {
+func (c *traceAttributeCollector) collect(kv attribute.KeyValue) bool {
 	switch kv.Key {
 	case "trace_id":
-		if kv.Value.Kind() == log.KindString {
+		if kv.Value.Type() == attribute.STRING {
 			c.traceIDStr = kv.Value.AsString()
 			c.foundTraceID = true
 		}
 	case "span_id":
-		if kv.Value.Kind() == log.KindString {
+		if kv.Value.Type() == attribute.STRING {
 			c.spanIDStr = kv.Value.AsString()
 			c.foundSpanID = true
 		}
 	case "trace_flags":
-		if kv.Value.Kind() == log.KindInt64 {
+		if kv.Value.Type() == attribute.INT64 {
 			flagsInt := kv.Value.AsInt64()
 			if flagsInt >= 0 && flagsInt <= 255 {
 				c.traceFlags = trace.TraceFlags(uint8(flagsInt))

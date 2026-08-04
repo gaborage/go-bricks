@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/log/logtest"
@@ -99,27 +100,27 @@ func TestDualModeLogProcessorForceFlush(t *testing.T) {
 func TestExtractLogType(t *testing.T) {
 	tests := []struct {
 		name       string
-		attributes []log.KeyValue
+		attributes []attribute.KeyValue
 		expected   string
 	}{
 		{
 			name:       "missing log.type defaults to trace",
-			attributes: []log.KeyValue{},
+			attributes: []attribute.KeyValue{},
 			expected:   "trace",
 		},
 		{
 			name:       "explicit action log type",
-			attributes: []log.KeyValue{log.String(logTypeAttr, "action")},
+			attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
 			expected:   "action",
 		},
 		{
 			name:       "unknown log type preserved",
-			attributes: []log.KeyValue{log.String(logTypeAttr, "custom")},
+			attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "custom")},
 			expected:   "custom",
 		},
 		{
 			name:       "non string log type defaults to trace",
-			attributes: []log.KeyValue{log.Int(logTypeAttr, 123)},
+			attributes: []attribute.KeyValue{attribute.Int(logTypeAttr, 123)},
 			expected:   "trace",
 		},
 	}
@@ -188,7 +189,7 @@ func TestDualModeLogProcessorRoutesActionLogs(t *testing.T) {
 
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "action")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
 	}
 	rec := factory.NewRecord()
 
@@ -206,7 +207,7 @@ func TestDualModeLogProcessorRoutesTraceWarn(t *testing.T) {
 
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityWarn,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -224,7 +225,7 @@ func TestDualModeLogProcessorDropsTraceInfoWithZeroRate(t *testing.T) {
 
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -377,7 +378,7 @@ func TestDualModeProcessorEnrichesTraceContext(t *testing.T) {
 	// Emit action log (routes to action processor)
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "action")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
 	}
 	rec := factory.NewRecord()
 
@@ -420,7 +421,7 @@ func (c *capturingProcessor) ForceFlush(_ context.Context) error {
 func TestEnrichFromAttributes(t *testing.T) {
 	tests := []struct {
 		name            string
-		attributes      []log.KeyValue
+		attributes      []attribute.KeyValue
 		expectTraceID   bool
 		expectedTraceID string
 		expectedSpanID  string
@@ -428,10 +429,10 @@ func TestEnrichFromAttributes(t *testing.T) {
 	}{
 		{
 			name: "valid trace attributes",
-			attributes: []log.KeyValue{
-				log.String("trace_id", "0123456789abcdef0123456789abcdef"),
-				log.String("span_id", "fedcba9876543210"),
-				log.Int64("trace_flags", 1),
+			attributes: []attribute.KeyValue{
+				attribute.String("trace_id", "0123456789abcdef0123456789abcdef"),
+				attribute.String("span_id", "fedcba9876543210"),
+				attribute.Int64("trace_flags", 1),
 			},
 			expectTraceID:   true,
 			expectedTraceID: "0123456789abcdef0123456789abcdef",
@@ -440,9 +441,9 @@ func TestEnrichFromAttributes(t *testing.T) {
 		},
 		{
 			name: "trace attributes without flags",
-			attributes: []log.KeyValue{
-				log.String("trace_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"),
-				log.String("span_id", "bbbbbbbbbbbbbb01"),
+			attributes: []attribute.KeyValue{
+				attribute.String("trace_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"),
+				attribute.String("span_id", "bbbbbbbbbbbbbb01"),
 			},
 			expectTraceID:   true,
 			expectedTraceID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
@@ -451,39 +452,39 @@ func TestEnrichFromAttributes(t *testing.T) {
 		},
 		{
 			name: "missing trace_id attribute",
-			attributes: []log.KeyValue{
-				log.String("span_id", "fedcba9876543210"),
+			attributes: []attribute.KeyValue{
+				attribute.String("span_id", "fedcba9876543210"),
 			},
 			expectTraceID: false,
 		},
 		{
 			name: "missing span_id attribute",
-			attributes: []log.KeyValue{
-				log.String("trace_id", "0123456789abcdef0123456789abcdef"),
+			attributes: []attribute.KeyValue{
+				attribute.String("trace_id", "0123456789abcdef0123456789abcdef"),
 			},
 			expectTraceID: false,
 		},
 		{
 			name: "invalid trace_id format",
-			attributes: []log.KeyValue{
-				log.String("trace_id", "invalid-hex"),
-				log.String("span_id", "fedcba9876543210"),
+			attributes: []attribute.KeyValue{
+				attribute.String("trace_id", "invalid-hex"),
+				attribute.String("span_id", "fedcba9876543210"),
 			},
 			expectTraceID: false,
 		},
 		{
 			name: "invalid span_id format",
-			attributes: []log.KeyValue{
-				log.String("trace_id", "0123456789abcdef0123456789abcdef"),
-				log.String("span_id", "invalid"),
+			attributes: []attribute.KeyValue{
+				attribute.String("trace_id", "0123456789abcdef0123456789abcdef"),
+				attribute.String("span_id", "invalid"),
 			},
 			expectTraceID: false,
 		},
 		{
 			name: "trace_id as non-string type",
-			attributes: []log.KeyValue{
-				log.Int64("trace_id", 123),
-				log.String("span_id", "fedcba9876543210"),
+			attributes: []attribute.KeyValue{
+				attribute.Int64("trace_id", 123),
+				attribute.String("span_id", "fedcba9876543210"),
 			},
 			expectTraceID: false,
 		},
@@ -535,10 +536,10 @@ func TestEnrichContextVsAttributes(t *testing.T) {
 	// Create record with different trace in attributes (attribute source)
 	factory := logtest.RecordFactory{
 		Severity: log.SeverityInfo,
-		Attributes: []log.KeyValue{
-			log.String("trace_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"),
-			log.String("span_id", "bbbbbbbbbbbbbb01"),
-			log.Int64("trace_flags", 0),
+		Attributes: []attribute.KeyValue{
+			attribute.String("trace_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"),
+			attribute.String("span_id", "bbbbbbbbbbbbbb01"),
+			attribute.Int64("trace_flags", 0),
 		},
 	}
 	rec := factory.NewRecord()
@@ -558,10 +559,10 @@ func TestEnrichAttributesFallback(t *testing.T) {
 
 	factory := logtest.RecordFactory{
 		Severity: log.SeverityInfo,
-		Attributes: []log.KeyValue{
-			log.String("trace_id", "dddddddddddddddddddddddddddddddd"),
-			log.String("span_id", "dddddddddddddddd"),
-			log.Int64("trace_flags", 1),
+		Attributes: []attribute.KeyValue{
+			attribute.String("trace_id", "dddddddddddddddddddddddddddddddd"),
+			attribute.String("span_id", "dddddddddddddddd"),
+			attribute.Int64("trace_flags", 1),
 		},
 	}
 	rec := factory.NewRecord()
@@ -583,7 +584,7 @@ func TestSamplingRateFullExport(t *testing.T) {
 	// Emit INFO trace log (should be exported with rate=1.0)
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -608,7 +609,7 @@ func TestSamplingRateDeterministic(t *testing.T) {
 	// First call with this trace
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
 		TraceID:    traceID,
 		SpanID:     spanID,
 	}
@@ -639,7 +640,7 @@ func TestSamplingWarnAlwaysExported(t *testing.T) {
 	// WARN should still be exported
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityWarn,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -657,7 +658,7 @@ func TestSamplingErrorAlwaysExported(t *testing.T) {
 	// ERROR should still be exported
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityError,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -675,7 +676,7 @@ func TestSamplingActionLogsUnaffected(t *testing.T) {
 	// Action INFO log should still be exported
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []log.KeyValue{log.String(logTypeAttr, "action")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
 	}
 	rec := factory.NewRecord()
 
@@ -727,7 +728,7 @@ func TestOnEmitErrorPropagation(t *testing.T) {
 
 		factory := logtest.RecordFactory{
 			Severity:   log.SeverityInfo,
-			Attributes: []log.KeyValue{log.String(logTypeAttr, "action")},
+			Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
 		}
 		rec := factory.NewRecord()
 
@@ -742,7 +743,7 @@ func TestOnEmitErrorPropagation(t *testing.T) {
 
 		factory := logtest.RecordFactory{
 			Severity:   log.SeverityInfo,
-			Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+			Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
 		}
 		rec := factory.NewRecord()
 
@@ -761,7 +762,7 @@ func TestShouldSampleEdgeCases(t *testing.T) {
 		// Use a negative timestamp to test the ts < 0 branch (line 109-111)
 		factory := logtest.RecordFactory{
 			Severity:   log.SeverityInfo,
-			Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+			Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
 			Timestamp:  time.Unix(-1, 0), // Negative timestamp
 		}
 		rec := factory.NewRecord()
@@ -777,7 +778,7 @@ func TestShouldSampleEdgeCases(t *testing.T) {
 
 		factory := logtest.RecordFactory{
 			Severity:   log.SeverityDebug, // DEBUG level subject to sampling
-			Attributes: []log.KeyValue{log.String(logTypeAttr, "trace")},
+			Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
 		}
 		rec := factory.NewRecord()
 

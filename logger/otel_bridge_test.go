@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
@@ -147,20 +148,20 @@ func TestBuildLogRecordAddsTraceAttributes(t *testing.T) {
 	var traceIDValue, spanIDValue string
 	var traceFlagsValue int64
 
-	rec.WalkAttributes(func(kv log.KeyValue) bool {
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
 		switch kv.Key {
 		case "trace_id":
-			if kv.Value.Kind() == log.KindString {
+			if kv.Value.Type() == attribute.STRING {
 				traceIDValue = kv.Value.AsString()
 				foundTraceID = true
 			}
 		case "span_id":
-			if kv.Value.Kind() == log.KindString {
+			if kv.Value.Type() == attribute.STRING {
 				spanIDValue = kv.Value.AsString()
 				foundSpanID = true
 			}
 		case "trace_flags":
-			if kv.Value.Kind() == log.KindInt64 {
+			if kv.Value.Type() == attribute.INT64 {
 				traceFlagsValue = kv.Value.AsInt64()
 				foundTraceFlags = true
 			}
@@ -191,7 +192,7 @@ func TestBuildLogRecordWithoutTraceContext(t *testing.T) {
 
 	// Verify no trace attributes are added
 	var foundTraceAttr bool
-	rec.WalkAttributes(func(kv log.KeyValue) bool {
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
 		if kv.Key == "trace_id" || kv.Key == "span_id" || kv.Key == "trace_flags" {
 			foundTraceAttr = true
 			return false // Stop iteration
