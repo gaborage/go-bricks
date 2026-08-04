@@ -48,6 +48,38 @@
 //	    },
 //	}
 //
+// # Testing Code That Holds a Cache Manager
+//
+// cache exposes no manager interface (ADR-045) — substitute at the manager's
+// input instead, by handing a real cache.CacheManager a Connector that returns
+// MockCache. This exercises the genuine lease, LRU, and idle-cleanup behavior.
+// Import this package under an alias here, since a test that names *testing.T
+// also needs the standard library's testing:
+//
+//	cachetesting "github.com/gaborage/go-bricks/cache/testing"
+//
+//	connector := func(ctx context.Context, key string) (cache.Cache, error) {
+//	    return cachetesting.NewMockCache(), nil
+//	}
+//	manager, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+//	require.NoError(t, err)
+//	t.Cleanup(func() { // stops the idle-cleanup goroutine
+//	    if err := manager.Close(); err != nil {
+//	        t.Errorf("closing cache manager: %v", err)
+//	    }
+//	})
+//
+// If your own type takes a manager, declare the narrow interface it needs on
+// the consumer side rather than depending on the concrete type. Pin it with a
+// compile-time assertion so the pairing is checked even before a call site
+// passes a real manager (ADR-045):
+//
+//	type cacheGetter interface {
+//	    Get(ctx context.Context, key string) (cache.Cache, cache.ReleaseFunc, error)
+//	}
+//
+//	var _ cacheGetter = (*cache.CacheManager)(nil)
+//
 // For integration tests requiring actual Redis behavior, use testcontainers
 // with cache/redis package instead.
 package testing

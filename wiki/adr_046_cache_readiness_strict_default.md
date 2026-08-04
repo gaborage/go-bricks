@@ -1,4 +1,4 @@
-# ADR-045: Cache Readiness Is Strict by Default, with a Visible Opt-Out
+# ADR-046: Cache Readiness Is Strict by Default, with a Visible Opt-Out
 
 **Status:** Accepted
 **Date:** 2026-08-04

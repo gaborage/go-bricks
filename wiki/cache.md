@@ -170,7 +170,7 @@ carries `cache` (a status string) alongside `cache_stats` (the manager counters)
   `503 {"status": "not ready", "cache": "unhealthy", "error": "cache unavailable"}` — no
   `cache_stats`, and no other component's status. The key is a pointer tri-state and is
   deliberately **not** registered as a koanf default, so "unset" is a state the framework can
-  tell apart from an explicit value: unset means critical (ADR-045).
+  tell apart from an explicit value: unset means critical (ADR-046).
 - `false` — a failing cache probe is reported in the body but never changes the status code.
   Readiness stays green while the cache is dead. Any deployment whose cache probe can
   actually fail — an enabled cache, or any custom `Options.CacheConnector` — emits a startup
@@ -215,7 +215,7 @@ probes](#wiring-kubernetes-probes)), which makes a transient blip cost three con
 failed polls instead of one; GoBricks does not add its own consecutive-failure counter on top
 of the orchestrator's. The opt-out is loud by design: every boot logs the WARN, so a lenient
 readiness posture stays visible in the same place an operator looks for everything else, and
-it is deliberately kept rather than banned (ADR-045).
+it is deliberately kept rather than banned (ADR-046).
 
 **Probe cost is conditional, not flat.** A `disabled` or `not_configured` deployment issues no
 Redis traffic at all — the first registers no probe, and the second fails the lease before any
