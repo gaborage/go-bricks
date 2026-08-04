@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,27 @@ func TestPerChildSplitsBudgetAcrossWorkers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := perChild(tc.cpu, tc.workers); got != tc.want {
 				t.Errorf("perChild(%d, %d) = %d, want %d", tc.cpu, tc.workers, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveWorkersShrinksToTheBudget(t *testing.T) {
+	tests := []struct {
+		name    string
+		cpu     int
+		workers int
+		want    int
+	}{
+		{name: "budget_affords_every_worker", cpu: 4, workers: 2, want: 2},
+		{name: "budget_cannot_afford_two_workers", cpu: 1, workers: 2, want: 1},
+		{name: "budget_exactly_covers_the_workers", cpu: 2, workers: 2, want: 2},
+		{name: "no_budget_leaves_workers_alone", cpu: 0, workers: 8, want: 8},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := effectiveWorkers(tc.cpu, tc.workers); got != tc.want {
+				t.Errorf("effectiveWorkers(%d, %d) = %d, want %d", tc.cpu, tc.workers, got, tc.want)
 			}
 		})
 	}
@@ -66,6 +88,26 @@ func TestApplyBudgetPinsChildEnvironment(t *testing.T) {
 	}
 }
 
+// TestApplyBudgetReachesAChildProcess pins the property the guardrail actually
+// rests on. Asserting os.Getenv after os.Setenv only restates the stdlib; what
+// matters is that a child sees the pinned values, which is what breaks if a
+// future exec site sets cmd.Env explicitly.
+func TestApplyBudgetReachesAChildProcess(t *testing.T) {
+	t.Setenv("GOMAXPROCS", "")
+	t.Setenv("GOFLAGS", "")
+
+	if _, err := applyBudget(4, 2); err != nil {
+		t.Fatalf("applyBudget: %v", err)
+	}
+	out, err := exec.CommandContext(t.Context(), "go", "env", "GOFLAGS").Output()
+	if err != nil {
+		t.Fatalf("go env GOFLAGS: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "-p=2" {
+		t.Errorf("child GOFLAGS = %q, want %q", got, "-p=2")
+	}
+}
+
 func TestApplyBudgetLeavesEnvironmentAloneWhenDisabled(t *testing.T) {
 	t.Setenv("GOMAXPROCS", "keep-me")
 	t.Setenv("GOFLAGS", "-mod=mod")
@@ -86,7 +128,7 @@ func TestApplyBudgetLeavesEnvironmentAloneWhenDisabled(t *testing.T) {
 }
 
 // TestShouldCoolOnlyAfterRealWork pins both suppressions: a skipped package
-// generated no load, and the last package has nothing after it to protect.
+// ran only a dry run, and the last package has nothing after it to protect.
 func TestShouldCoolOnlyAfterRealWork(t *testing.T) {
 	tests := []struct {
 		name string
@@ -97,7 +139,7 @@ func TestShouldCoolOnlyAfterRealWork(t *testing.T) {
 	}{
 		{name: "ran_with_a_package_still_to_come", ran: true, i: 0, n: 3, want: true},
 		{name: "ran_but_it_was_the_last_package", ran: true, i: 2, n: 3, want: false},
-		{name: "skipped_package_generated_no_load", ran: false, i: 0, n: 3, want: false},
+		{name: "skipped_package_ran_only_a_dry_run", ran: false, i: 0, n: 3, want: false},
 		{name: "only_package_in_the_run", ran: true, i: 0, n: 1, want: false},
 	}
 	for _, tc := range tests {
@@ -141,7 +183,7 @@ func TestCoolDownIsANoOpAtZero(t *testing.T) {
 
 func TestDescribeBudgetNamesTheOptOut(t *testing.T) {
 	th := throttle{cpu: 4, workers: 2, cooldown: 30 * time.Second}
-	got := describeBudget(th, 2)
+	got := describeBudget(th, 2, 2)
 	if !strings.Contains(got, "4 cores") || !strings.Contains(got, "2 workers x 2") {
 		t.Errorf("budget banner = %q, want the arithmetic spelled out", got)
 	}
@@ -149,8 +191,16 @@ func TestDescribeBudgetNamesTheOptOut(t *testing.T) {
 		t.Errorf("budget banner = %q, want the cooldown named", got)
 	}
 
-	off := describeBudget(throttle{}, 0)
+	off := describeBudget(throttle{}, 0, 0)
 	if !strings.Contains(off, "MUTATE_CPU=0") {
 		t.Errorf("disabled banner = %q, want it to name the knob that turned it off", off)
+	}
+
+	// The bound is workers x share, not the requested cpu: at cpu=3 the share
+	// floors to 1, so two workers really get 2 cores, and saying "3" would be a
+	// number the run does not honor.
+	uneven := describeBudget(throttle{cpu: 3, workers: 2, cooldown: 30 * time.Second}, 1, 2)
+	if !strings.Contains(uneven, "2 cores") || strings.Contains(uneven, "3 cores") {
+		t.Errorf("budget banner = %q, want the honored bound (2 cores), not the requested 3", uneven)
 	}
 }

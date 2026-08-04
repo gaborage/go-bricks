@@ -39,10 +39,16 @@ func perChild(cpu, workers int) int {
 	if workers < 1 {
 		workers = 1
 	}
-	if share := cpu / workers; share > 1 {
-		return share
+	return max(1, cpu/workers)
+}
+
+// effectiveWorkers shrinks the worker count when the budget cannot afford one
+// core each, so the whole-run cap holds instead of being multiplied by workers.
+func effectiveWorkers(cpu, workers int) int {
+	if cpu <= 0 {
+		return workers
 	}
-	return 1
+	return min(workers, cpu)
 }
 
 // appendGoflag adds one flag without discarding what is already in GOFLAGS. The
@@ -82,8 +88,8 @@ func applyBudget(cpu, workers int) (int, error) {
 }
 
 // shouldCool reports whether a cooldown belongs after the package at index i of
-// n: nothing to recover from when the package was skipped, nothing to protect
-// after the last one.
+// n: a skipped package paid only a dry-run coverage pass, not a mutant loop, so
+// there is nothing to recover from; nothing to protect after the last one either.
 func shouldCool(ran bool, i, n int) bool {
 	return ran && i < n-1
 }
@@ -102,11 +108,13 @@ func (th throttle) coolDown(out io.Writer) {
 }
 
 // describeBudget is printed once per run so an overridden budget is visible in a
-// scrollback or a pasted transcript.
-func describeBudget(th throttle, share int) string {
+// scrollback or a pasted transcript. The leading number is workers x share, the
+// bound the run actually honors, not the requested th.cpu — those two disagree
+// whenever cpu does not divide evenly across workers.
+func describeBudget(th throttle, share, workers int) string {
 	if share == 0 {
 		return "mutatediff: no CPU budget (MUTATE_CPU=0) — using the machine default"
 	}
 	return fmt.Sprintf("mutatediff: CPU budget %d cores (%d workers x %d), %s cooldown between packages",
-		th.cpu, max(th.workers, 1), share, th.cooldown)
+		workers*share, workers, share, th.cooldown)
 }

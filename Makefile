@@ -34,7 +34,9 @@ MUTATE_FALLBACK_COEFFICIENT ?= 600
 #
 # MUTATE_CPU is the actual cap. mutatediff divides it by MUTATE_WORKERS and pins
 # GOMAXPROCS plus GOFLAGS -p on every child process, which bounds test execution
-# exactly and build fan-out approximately (compile processes nest one level).
+# exactly and build fan-out approximately (compile processes nest one level, and
+# at the defaults the overshoot can reach roughly 2x the budget during build
+# phases, growing with MUTATE_CPU).
 # Set MUTATE_CPU=0 to opt out and run at full speed.
 MUTATE_CPU ?= 4
 MUTATE_WORKERS ?= 2

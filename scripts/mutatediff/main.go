@@ -81,7 +81,8 @@ func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer
 	if budgetErr != nil {
 		return fail("%v", budgetErr)
 	}
-	fmt.Fprintln(out, describeBudget(th, share))
+	workers := effectiveWorkers(th.cpu, th.workers)
+	fmt.Fprintln(out, describeBudget(th, share, workers))
 	reportDir, err := os.MkdirTemp("", "mutatediff-*")
 	if err != nil {
 		return fail("%v", err)
@@ -90,7 +91,7 @@ func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer
 	var failures, warnings, unjudged []mutantVerdict
 	pkgs := packagesOf(changed)
 	for i, pkg := range pkgs {
-		f, w, ran, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, th.workers, out)
+		f, w, ran, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, workers, out)
 		if mErr != nil {
 			return fail("%v", mErr)
 		}
@@ -116,7 +117,7 @@ func reportVerdict(failures, warnings, unjudged []mutantVerdict, out io.Writer) 
 		for _, p := range unjudged {
 			fmt.Fprintf(out, "  %s\n", p.File)
 		}
-		fmt.Fprintf(out, "raise %s (currently %s) and re-run\n", ceilingFloorEnv, ceilingFloor())
+		fmt.Fprintf(out, "raise %s (currently %s), or re-run with MUTATE_CPU=0 to lift the CPU budget\n", ceilingFloorEnv, ceilingFloor())
 		return 1
 	}
 	if len(failures) > 0 {

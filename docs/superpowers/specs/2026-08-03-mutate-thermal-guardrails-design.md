@@ -91,7 +91,8 @@ every ceiling CI computes. Gating the budget on `run()` keeps CI at full speed.
 After a package's engine run returns, `mutatediff` sleeps for
 `MUTATE_COOLDOWN`. The sleep is suppressed in two cases:
 
-- the package had no mutants on changed lines, so no load was generated;
+- the package had no mutants on changed lines, so it paid only a dry-run
+  coverage pass, not a mutant loop;
 - the package is the last one, so there is no subsequent work to protect.
 
 The sleep is injected as a function value so tests can assert its placement
@@ -109,7 +110,7 @@ stands — speeding up the slowest tests is the lever, not this guardrail.
 `make mutate` prints its effective budget once, before the first package:
 
 ```
-mutatediff: budget 4 cores (2 workers x 2), 30s cooldown between packages
+mutatediff: CPU budget 4 cores (2 workers x 2), 30s cooldown between packages
 ```
 
 This makes an overridden run self-documenting in a scrollback or a pasted
