@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
@@ -86,16 +87,16 @@ func buildLogRecord(entry map[string]any) (log.Record, context.Context) {
 	// - Int format (trace_flags) enables fallback enrichment of canonical fields
 	if hasTraceContext {
 		rec.AddAttributes(
-			log.String("trace_id", traceIDStr),
-			log.String("span_id", spanIDStr),
-			log.Int64("trace_flags", int64(traceFlags)),
+			attribute.String("trace_id", traceIDStr),
+			attribute.String("span_id", spanIDStr),
+			attribute.Int64("trace_flags", int64(traceFlags)),
 		)
 	}
 
 	// Default to trace logs unless caller explicitly sets log.type
 	// This ensures all application logs are categorized for dual-mode routing
 	if !hasLogTypeAttribute(&rec) {
-		rec.AddAttributes(log.String("log.type", "trace"))
+		rec.AddAttributes(attribute.String("log.type", "trace"))
 	}
 
 	return rec, ctx
@@ -122,24 +123,24 @@ func applySeverity(rec *log.Record, entry map[string]any) {
 
 func applyBody(rec *log.Record, entry map[string]any) {
 	if msg, ok := entry["message"].(string); ok {
-		rec.SetBody(log.StringValue(msg))
+		rec.SetBody(attribute.StringValue(msg))
 		return
 	}
 	if msg, ok := entry["msg"].(string); ok {
-		rec.SetBody(log.StringValue(msg))
+		rec.SetBody(attribute.StringValue(msg))
 	}
 }
 
 func applyAttributes(rec *log.Record, entry map[string]any) {
-	attrs := make([]log.KeyValue, 0, len(entry))
+	attrs := make([]attribute.KeyValue, 0, len(entry))
 	for k, v := range entry {
 		// Skip fields handled elsewhere
 		if k == "time" || k == fieldLevel || k == fieldMessage || k == "msg" {
 			continue
 		}
 
-		attrs = append(attrs, log.KeyValue{
-			Key:   k,
+		attrs = append(attrs, attribute.KeyValue{
+			Key:   attribute.Key(k),
 			Value: toLogValue(v),
 		})
 	}
@@ -283,43 +284,43 @@ func mapZerologLevelToOTel(level string) log.Severity {
 	}
 }
 
-// toLogValue converts a Go value to an OpenTelemetry log value.
-func toLogValue(v interface{}) log.Value {
+// toLogValue converts a Go value to an OpenTelemetry attribute value.
+func toLogValue(v interface{}) attribute.Value {
 	if v == nil {
-		return log.StringValue("")
+		return attribute.StringValue("")
 	}
 
 	switch val := v.(type) {
 	case string:
-		return log.StringValue(val)
+		return attribute.StringValue(val)
 	case int:
-		return log.Int64Value(int64(val))
+		return attribute.Int64Value(int64(val))
 	case int64:
-		return log.Int64Value(val)
+		return attribute.Int64Value(val)
 	case float64:
-		return log.Float64Value(val)
+		return attribute.Float64Value(val)
 	case bool:
-		return log.BoolValue(val)
+		return attribute.BoolValue(val)
 	case []interface{}:
-		// Convert array to slice of log values
-		slice := make([]log.Value, len(val))
+		// Convert array to slice of attribute values
+		slice := make([]attribute.Value, len(val))
 		for i, item := range val {
 			slice[i] = toLogValue(item)
 		}
-		return log.SliceValue(slice...)
+		return attribute.SliceValue(slice...)
 	case map[string]interface{}:
 		// Convert map to key-value pairs
-		kvs := make([]log.KeyValue, 0, len(val))
+		kvs := make([]attribute.KeyValue, 0, len(val))
 		for k, v := range val {
-			kvs = append(kvs, log.KeyValue{
-				Key:   k,
+			kvs = append(kvs, attribute.KeyValue{
+				Key:   attribute.Key(k),
 				Value: toLogValue(v),
 			})
 		}
-		return log.MapValue(kvs...)
+		return attribute.MapValue(kvs...)
 	default:
 		// For unknown types, convert to string
-		return log.StringValue(jsonStringify(val))
+		return attribute.StringValue(jsonStringify(val))
 	}
 }
 
@@ -336,7 +337,7 @@ func jsonStringify(v interface{}) string {
 // This prevents overwriting caller-specified log types (e.g., "action" from middleware).
 func hasLogTypeAttribute(rec *log.Record) bool {
 	found := false
-	rec.WalkAttributes(func(kv log.KeyValue) bool {
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
 		if kv.Key == "log.type" {
 			found = true
 			return false // Stop iteration
