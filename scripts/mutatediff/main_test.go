@@ -2,13 +2,14 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
 
 func TestRunNoOpDiffExitsCleanWithoutEngine(t *testing.T) {
 	var buf bytes.Buffer
-	if got := run(t.Context(), "false", "HEAD", 0, &buf); got != 0 {
+	if got := run(t.Context(), "false", "HEAD", throttle{}, &buf); got != 0 {
 		t.Fatalf("run = %d, want 0; output: %s", got, buf.String())
 	}
 	if !strings.Contains(buf.String(), "no mutatable changes") {
@@ -74,7 +75,20 @@ func TestReportVerdictCleanSweepOnlyWhenFullyJudged(t *testing.T) {
 
 func TestRunBlankEngineFailsFast(t *testing.T) {
 	var buf bytes.Buffer
-	if got := run(t.Context(), "   ", "HEAD", 0, &buf); got != 2 {
+	if got := run(t.Context(), "   ", "HEAD", throttle{}, &buf); got != 2 {
 		t.Fatalf("run = %d, want 2 for whitespace-only engine", got)
+	}
+}
+
+// TestRunNoOpDiffLeavesEnvironmentAlone pins the ordering: the budget is applied
+// only once there is work, so a no-op gate does not mutate the caller's GOFLAGS.
+func TestRunNoOpDiffLeavesEnvironmentAlone(t *testing.T) {
+	t.Setenv("GOFLAGS", "-mod=mod")
+	var buf bytes.Buffer
+	if got := run(t.Context(), "false", "HEAD", throttle{cpu: 4, workers: 2}, &buf); got != 0 {
+		t.Fatalf("run = %d, want 0; output: %s", got, buf.String())
+	}
+	if got := os.Getenv("GOFLAGS"); got != "-mod=mod" {
+		t.Errorf("GOFLAGS = %q, want it untouched by a no-op run", got)
 	}
 }

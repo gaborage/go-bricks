@@ -21,6 +21,8 @@ func main() {
 	mergeOut := flag.String("out", "gremlins-report.json", "merge mode: output path for the aggregated report")
 	coeffPkg := flag.String("coefficient", "", "coefficient mode: print the engine timeout-coefficient that holds this package's per-mutant ceiling at the floor")
 	workers := flag.Int("workers", 0, "engine workers; each is a concurrent `go test`. 0 inherits .gremlins.yaml")
+	cpu := flag.Int("cpu", 0, "whole-run core budget divided across workers; 0 leaves the machine default")
+	cooldown := flag.Duration("cooldown", 0, "pause between packages so the machine sheds heat; 0 disables")
 	flag.Parse()
 
 	// Signal-derived so Ctrl-C or a CI cancel reaches the long-running git,
@@ -39,13 +41,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mutatediff: -engine is required")
 		code = 2
 	default:
-		code = run(ctx, *engine, *base, *workers, os.Stdout)
+		code = run(ctx, *engine, *base, throttle{cpu: *cpu, workers: *workers, cooldown: *cooldown}, os.Stdout)
 	}
 	stop()
 	os.Exit(code)
 }
 
-func run(ctx context.Context, engine, baseRef string, workers int, out io.Writer) int {
+func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer) int {
 	engineArgs := strings.Fields(engine)
 	if len(engineArgs) == 0 {
 		return fail("engine command is blank")
@@ -73,6 +75,13 @@ func run(ctx context.Context, engine, baseRef string, workers int, out io.Writer
 		fmt.Fprintln(out, "mutatediff: no mutatable changes vs merge-base")
 		return 0
 	}
+	// After the no-op return: a gate with nothing to do must not leave the
+	// caller's GOFLAGS rewritten.
+	share, budgetErr := applyBudget(th.cpu, th.workers)
+	if budgetErr != nil {
+		return fail("%v", budgetErr)
+	}
+	fmt.Fprintln(out, describeBudget(th, share))
 	reportDir, err := os.MkdirTemp("", "mutatediff-*")
 	if err != nil {
 		return fail("%v", err)
@@ -80,7 +89,7 @@ func run(ctx context.Context, engine, baseRef string, workers int, out io.Writer
 	defer os.RemoveAll(reportDir)
 	var failures, warnings, unjudged []mutantVerdict
 	for _, pkg := range packagesOf(changed) {
-		f, w, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, workers, out)
+		f, w, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, th.workers, out)
 		if mErr != nil {
 			return fail("%v", mErr)
 		}
