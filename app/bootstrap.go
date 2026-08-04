@@ -128,7 +128,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundl
 // rootDatabaseAbsent reports whether a deployment that expects a root database: block
 // has none. Three modes legitimately leave that block empty, because they resolve
 // database config per tenant at runtime instead: multi-tenant (config validation
-// rejects a root block outright), a dynamic config source, and a caller-supplied
+// rejects a root block alongside static tenants), a dynamic config source, and a caller-supplied
 // dynamic resource source. Keep this set in step with ConfigureRuntimeHelpers'
 // skipPreInit, which enumerates the same three modes for the same reason.
 //

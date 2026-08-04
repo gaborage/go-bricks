@@ -387,16 +387,34 @@ func validateServerTLSMaterial(fileField, valueField, file, value string) error 
 	}
 }
 
-// IsDatabaseConfigured determines if database is intentionally configured.
-// This mirrors the logic used in app.isDatabaseEnabled() for consistency.
+// IsDatabaseConfigured reports whether a database is intentionally configured
+// (ADR-003, ADR-047).
+//
+// Any connection-identity field counts as intent. The strictness is the point: a
+// partially delivered database section must fail validation loudly rather than read
+// as an intentionally database-free service, because everything downstream treats
+// "no database at all" as a benign posture. Only a section with literally zero
+// identity fields is absence.
+//
+// Fields that applyDatabasePoolDefaults fills in (timezone, pool, query) are
+// deliberately excluded, so the verdict is identical before and after defaulting.
+//
+// Known limit: a field delivered as an EMPTY string is indistinguishable from an
+// unset one here (an empty secretKeyRef, envsubst over an unset variable). That shape
+// still reads as absence. TLS material is likewise excluded — it identifies no
+// database on its own.
 func IsDatabaseConfigured(cfg *DatabaseConfig) bool {
-	// Connection string indicates explicit database configuration
-	if cfg.ConnectionString != "" {
-		return true
-	}
-
-	// Mirror the logic from app.isDatabaseEnabled()
-	return cfg.Host != "" || cfg.Type != ""
+	return cfg.ConnectionString != "" ||
+		cfg.Type != "" ||
+		cfg.Host != "" ||
+		cfg.Port != 0 ||
+		cfg.Database != "" ||
+		cfg.Username != "" ||
+		cfg.Password != "" ||
+		// Oracle names its target with a service name or SID instead of a database
+		// name, so a split config delivering only those is still intent.
+		cfg.Oracle.Service.Name != "" ||
+		cfg.Oracle.Service.SID != ""
 }
 
 func validateDatabase(cfg *DatabaseConfig) error {

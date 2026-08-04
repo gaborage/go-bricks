@@ -453,3 +453,36 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 	assert.Equal(t, componentCache, logged.str["component"],
 		"the sanitized body no longer identifies the failure, so the log must name the component")
 }
+
+func TestCalculateHealthSummaryTreatsAbsenceAsHealthy(t *testing.T) {
+	debugHandlers := &DebugHandlers{logger: logger.New("info", false)}
+
+	t.Run("absence_statuses_are_healthy", func(t *testing.T) {
+		// /ready returns 200 for these, so the debug summary must agree — otherwise the
+		// same database-free service reads "ready" on one endpoint and "critical" on
+		// the other.
+		summary := debugHandlers.calculateHealthSummary(map[string]ComponentHealth{
+			"database":  {Status: notConfiguredStatus, Critical: true},
+			"messaging": {Status: disabledStatus},
+			"tenantdb":  {Status: perTenantStatus},
+		})
+
+		assert.Equal(t, 3, summary.HealthyCount)
+		assert.Zero(t, summary.CriticalCount)
+		assert.Equal(t, healthyStatus, summary.OverallStatus)
+	})
+
+	t.Run("a_genuinely_unhealthy_critical_component_still_counts", func(t *testing.T) {
+		// Guards the opposite direction: the case list above must not be widened until
+		// it swallows real failures.
+		summary := debugHandlers.calculateHealthSummary(map[string]ComponentHealth{
+			"database": {Status: notConfiguredStatus},
+			"cache":    {Status: unhealthyStatus, Critical: true, Error: "connection refused"},
+		})
+
+		assert.Equal(t, 1, summary.HealthyCount)
+		assert.Equal(t, 1, summary.CriticalCount)
+		assert.Equal(t, 1, summary.ErrorCount)
+		assert.NotEqual(t, healthyStatus, summary.OverallStatus)
+	})
+}

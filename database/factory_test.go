@@ -53,22 +53,22 @@ func TestValidateDatabaseTypeFailure(t *testing.T) {
 		{
 			name:          "unsupported_mysql",
 			dbType:        "mysql",
-			expectedError: errUnsupportedDatabaseType + ": mysql",
+			expectedError: errUnsupportedDatabaseType + `: "mysql"`,
 		},
 		{
 			name:          "unsupported_sqlite",
 			dbType:        "sqlite",
-			expectedError: errUnsupportedDatabaseType + ": sqlite",
+			expectedError: errUnsupportedDatabaseType + `: "sqlite"`,
 		},
 		{
 			name:          "empty_string",
 			dbType:        "",
-			expectedError: errUnsupportedDatabaseType + ":",
+			expectedError: errUnsupportedDatabaseType + `: ""`,
 		},
 		{
 			name:          "case_sensitive",
 			dbType:        "PostgreSQL",
-			expectedError: errUnsupportedDatabaseType + ": PostgreSQL",
+			expectedError: errUnsupportedDatabaseType + `: "PostgreSQL"`,
 		},
 	}
 
@@ -102,7 +102,7 @@ func TestNewConnectionUnsupportedType(t *testing.T) {
 	conn, err := NewConnection(cfg, log)
 	assert.Error(t, err)
 	assert.Nil(t, conn)
-	assert.Contains(t, err.Error(), errUnsupportedDatabaseType+": unsupported")
+	assert.Contains(t, err.Error(), errUnsupportedDatabaseType+`: "unsupported"`)
 }
 
 func TestNewConnectionPostgreSQLConfigValidation(t *testing.T) {

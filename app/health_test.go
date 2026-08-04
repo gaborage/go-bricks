@@ -83,7 +83,7 @@ func TestDatabaseManagerHealthProbe(t *testing.T) {
 	mockLogger := logger.New("info", false)
 
 	t.Run("nil database manager", func(t *testing.T) {
-		probe := databaseManagerHealthProbe(nil, mockLogger)
+		probe := databaseManagerHealthProbe(nil, false, mockLogger)
 		result := probe.Run(context.Background())
 
 		assert.Equal(t, "database", result.Name)
@@ -93,10 +93,8 @@ func TestDatabaseManagerHealthProbe(t *testing.T) {
 		assert.False(t, result.Critical)
 	})
 
-	// Note: Since databaseManagerHealthProbe requires *database.DbManager (concrete type),
-	// and creating real DbManager instances would require complex setup,
-	// we focus on testing the nil case and the internal healthProbeFunc logic.
-	// The healthProbeFunc is tested separately above.
+	// The configured cases live in the TestDatabaseManagerHealthProbe* functions below,
+	// which drive a real DbManager over the real connector via newRealConnectorDBManager.
 }
 
 func TestMessagingManagerHealthProbe(t *testing.T) {
@@ -359,7 +357,7 @@ func TestHandleDatabaseConnectionError(t *testing.T) {
 		notConfigErr := config.NewNotConfiguredError("database", "DATABASE_HOST", "database.host")
 		dbManager := createTestDbManagerWithError(t, notConfigErr)
 
-		status, stats, err := handleDatabaseConnectionError(notConfigErr, dbManager)
+		status, stats, err := handleDatabaseConnectionError(notConfigErr, dbManager, false)
 
 		assert.Equal(t, notConfiguredStatus, status)
 		assert.Contains(t, stats, "status")
@@ -371,7 +369,7 @@ func TestHandleDatabaseConnectionError(t *testing.T) {
 		connErr := errors.New(testutil.TestConnectionRefused)
 		dbManager := createTestDbManagerWithError(t, connErr)
 
-		status, stats, err := handleDatabaseConnectionError(connErr, dbManager)
+		status, stats, err := handleDatabaseConnectionError(connErr, dbManager, false)
 
 		assert.Equal(t, unhealthyStatus, status)
 		assert.Contains(t, stats, "status")
@@ -383,7 +381,7 @@ func TestHandleDatabaseConnectionError(t *testing.T) {
 		connErr := errors.New(testutil.TestError)
 		dbManager := createTestDbManagerWithNilStats(t)
 
-		status, stats, err := handleDatabaseConnectionError(connErr, dbManager)
+		status, stats, err := handleDatabaseConnectionError(connErr, dbManager, false)
 
 		assert.NotNil(t, stats)
 		assert.Equal(t, "no_active_connections", stats["status"])
@@ -629,4 +627,78 @@ type stubMessagingSourceWithError struct {
 
 func (s *stubMessagingSourceWithError) BrokerURL(_ context.Context, _ string) (string, error) {
 	return "", s.err
+}
+
+// newRealConnectorDBManager builds a DbManager over the REAL config.TenantStore and the
+// REAL database.NewConnection (nil connector). Every other app-level fixture injects a
+// stub connector, which is exactly how #872 shipped: the defect lived in the seam
+// between the config resolver and the connection factory, and a stub replaces that seam.
+func newRealConnectorDBManager(cfg *config.Config) *database.DbManager {
+	return database.NewDbManager(
+		config.NewTenantStore(cfg),
+		logger.New("info", false),
+		database.DbManagerOptions{},
+		nil,
+	)
+}
+
+func TestDatabaseManagerHealthProbeReportsNotConfigured(t *testing.T) {
+	log := logger.New("info", false)
+
+	result := databaseManagerHealthProbe(newRealConnectorDBManager(&config.Config{}), false, log).
+		Run(context.Background())
+
+	assert.Equal(t, notConfiguredStatus, result.Status)
+	assert.NoError(t, result.Err, "an absent database is not a readiness failure")
+	assert.Equal(t, notConfiguredStatus, result.Details[statusKey])
+	// Criticality is retained deliberately: a database that IS configured and down must
+	// still fail readiness. Absence is handled by the status, never by demoting the probe.
+	assert.True(t, result.Critical)
+}
+
+func TestDatabaseManagerHealthProbeStaysUnhealthyForUnsupportedType(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Database.Type = "mysql"
+	cfg.Database.Host = "db.internal"
+
+	result := databaseManagerHealthProbe(newRealConnectorDBManager(cfg), false, logger.New("info", false)).
+		Run(context.Background())
+
+	assert.Equal(t, unhealthyStatus, result.Status)
+	require.Error(t, result.Err)
+	// The other half of the fix: a type the operator actually asked for is a
+	// misconfiguration, and must never be softened into "intentionally absent".
+	assert.False(t, config.IsNotConfigured(result.Err))
+}
+
+func TestDatabaseManagerHealthProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Multitenant.Enabled = true // no root database block: tenants carry their own
+
+	result := databaseManagerHealthProbe(newRealConnectorDBManager(cfg), true, logger.New("info", false)).
+		Run(context.Background())
+
+	// not_configured would claim the service has no database — false when it has N
+	// tenant databases that this fixed-key probe simply never covered.
+	assert.Equal(t, perTenantStatus, result.Status)
+	assert.NoError(t, result.Err)
+}
+
+func TestDatabaseManagerHealthProbeStillProbesPerTenantControlPlaneDatabase(t *testing.T) {
+	// Multi-tenancy does NOT imply the "" key is unconfigured: a shared-ledger
+	// deployment (outbox.tenancy: shared, ADR-041) resolves a real control-plane
+	// database through exactly that key. Relabeling to per_tenant before resolving
+	// would leave that database unprobed while /ready reported 200 — this test is what
+	// catches that.
+	cfg := &config.Config{}
+	cfg.Multitenant.Enabled = true
+	cfg.Database.Type = "mysql" // resolves, then fails to connect
+	cfg.Database.Host = "control-plane.internal"
+
+	result := databaseManagerHealthProbe(newRealConnectorDBManager(cfg), true, logger.New("info", false)).
+		Run(context.Background())
+
+	assert.Equal(t, unhealthyStatus, result.Status, "a resolvable control-plane database must be probed, not relabeled")
+	require.Error(t, result.Err)
+	assert.True(t, result.Critical, "and it must still gate readiness")
 }

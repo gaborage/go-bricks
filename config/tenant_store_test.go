@@ -469,3 +469,56 @@ func TestTenantStoreEmptyNamedDatabases(t *testing.T) {
 		assert.False(t, store.HasNamedDatabase("anything"))
 	})
 }
+
+func TestTenantStoreDBConfigUnconfiguredDefaultIsNotConfigured(t *testing.T) {
+	// A service with no database section at all. Before ADR-047 this returned the
+	// zero-value config successfully, and the "unsupported database type" error from
+	// the connection factory was what reached the readiness probe.
+	store := NewTenantStore(&Config{})
+
+	cfg, err := store.DBConfig(context.Background(), "")
+
+	assert.Nil(t, cfg)
+	assert.True(t, IsNotConfigured(err), "absence must be machine-classifiable, not a driver error")
+}
+
+func TestTenantStoreDBConfigDefaultKeyResolvesWhenConfigured(t *testing.T) {
+	cfg := &Config{}
+	cfg.Database.Type = "postgresql"
+	cfg.Database.Host = "db.internal"
+	store := NewTenantStore(cfg)
+
+	got, err := store.DBConfig(context.Background(), "")
+
+	assert.NoError(t, err)
+	assert.Equal(t, &cfg.Database, got)
+}
+
+func TestTenantStoreDBConfigTenantAndNamedKeysStayLoud(t *testing.T) {
+	// The anti-regression test for the whole design: the not-configured verdict is
+	// scoped to the DEFAULT key. Only the root block may legitimately be empty — an
+	// empty tenant or named database is malformed, and must never be reported as an
+	// intentionally database-free service. This fails if the classification is ever
+	// moved down into database.NewConnection, which cannot see the key.
+	cfg := &Config{}
+	cfg.Database.Type = "postgresql"
+	cfg.Database.Host = "db.internal"
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Tenants = map[string]TenantEntry{tenantA: {}} // no database block
+	cfg.Databases = map[string]DatabaseConfig{"reporting": {}}
+	store := NewTenantStore(cfg)
+
+	for _, key := range []string{tenantA, NamedDatabasePrefix + "reporting"} {
+		t.Run(key, func(t *testing.T) {
+			got, err := store.DBConfig(context.Background(), key)
+
+			if err != nil {
+				assert.False(t, IsNotConfigured(err), "a malformed %s must not read as absent", key)
+				return
+			}
+			// Resolving is fine; what matters is that it did not claim absence. The
+			// empty type then fails loudly at the connection factory.
+			assert.Empty(t, got.Type)
+		})
+	}
+}

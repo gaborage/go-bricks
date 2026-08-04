@@ -822,6 +822,24 @@ func TestReadyCheckScenarios(t *testing.T) {
 			},
 		},
 		{
+			// The reported symptom of #872: a service with no database at all was
+			// permanently 503. The fixture's TenantStore holds &cfg.Database, so
+			// zeroing it here is what a DB-less deployment actually looks like. Note
+			// the stub connector is never reached — the verdict is now made one layer
+			// earlier, at config resolution.
+			name: "database not configured",
+			prepare: func(f *testAppFixture) {
+				f.app.cfg.Database = config.DatabaseConfig{}
+				f.messaging.SetReady(true)
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body map[string]any) {
+				assert.Equal(t, readyStatus, body[statusKey])
+				assert.Equal(t, notConfiguredStatus, body[componentDatabase])
+				assert.NotContains(t, body, "error")
+			},
+		},
+		{
 			// Scope guard for the cache-only sanitization: the database 503 body must stay
 			// byte-identical, so this asserts the RAW error, not a stable placeholder.
 			name: "database unhealthy",

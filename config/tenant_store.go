@@ -73,7 +73,15 @@ func NewTenantStore(cfg *Config) *TenantStore {
 func (s *TenantStore) DBConfig(_ context.Context, key string) (*DatabaseConfig, error) {
 	// Single-tenant default case
 	if key == "" {
-		if s.defaultDB == nil {
+		// Absence is decided on config CONTENT, not pointer nilness: defaultDB is
+		// &cfg.Database, the address of a value field, so it is never nil and the
+		// nil-only check could never fire. Mirrors the sibling resolvers, which test
+		// content too — BrokerURL tests Broker.URL == "", CacheConfig tests !Enabled.
+		//
+		// Scoped to the default key on purpose. A tenant or named database that
+		// resolves empty is malformed, not absent, and keeps falling through to the
+		// factory's loud error — only the root block may legitimately be empty.
+		if s.defaultDB == nil || !IsDatabaseConfigured(s.defaultDB) {
 			return nil, NewNotConfiguredError(fieldDatabase, "DATABASE_HOST", "database.host")
 		}
 		return s.defaultDB, nil

@@ -19,6 +19,12 @@ import (
 //
 // Errors are returned if cfg is nil, cfg.Type is not supported (supported: "postgresql", "oracle"),
 // or if the underlying driver initialization fails.
+//
+// Every unrecognized type is an error here, including the empty string. Classifying a
+// database as intentionally absent is a config-layer verdict, made by the resolver that
+// knows WHICH database it is resolving (config.TenantStore.DBConfig) — the factory sees
+// no key, so it cannot tell a deliberately database-free service from a half-provisioned
+// tenant, where absence is never legitimate. See ADR-047.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("database configuration is nil")
@@ -33,7 +39,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 	case Oracle:
 		conn, err = oracle.NewConnection(cfg, log)
 	default:
-		return nil, fmt.Errorf("unsupported database type: %s (supported: postgresql, oracle)", cfg.Type)
+		return nil, fmt.Errorf("unsupported database type: %q (supported: postgresql, oracle)", cfg.Type)
 	}
 
 	if err != nil {
@@ -62,7 +68,7 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, er
 func ValidateDatabaseType(dbType string) error {
 	supportedTypes := GetSupportedDatabaseTypes()
 	if !slices.Contains(supportedTypes, dbType) {
-		return fmt.Errorf("unsupported database type: %s (supported: %v)", dbType, supportedTypes)
+		return fmt.Errorf("unsupported database type: %q (supported: %v)", dbType, supportedTypes)
 	}
 	return nil
 }

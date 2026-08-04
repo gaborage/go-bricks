@@ -122,7 +122,11 @@ func (d *DebugHandlers) calculateHealthSummary(components map[string]ComponentHe
 
 	for _, component := range components {
 		switch component.Status {
-		case healthyStatus, readyStatus:
+		// not_configured / disabled / per_tenant are absence by design, not failure.
+		// /ready already treats them as ready, so the debug summary must agree — else
+		// the same database-free service reads "ready" on one endpoint and "critical"
+		// on the other.
+		case healthyStatus, readyStatus, notConfiguredStatus, disabledStatus, perTenantStatus:
 			summary.HealthyCount++
 		default:
 			if component.Critical {

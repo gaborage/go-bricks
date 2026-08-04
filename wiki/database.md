@@ -248,6 +248,41 @@ qb.Select("*").From("users").OrderBy(req.Query("sort"))          // REJECTED if 
 
 Valid identifiers on PostgreSQL are left **unquoted** (PG folds unquoted identifiers to lowercase; quoting would change which physical column is referenced). Complex or computed expressions must go through `qb.Expr()`/`Raw()`, which carry an explicit `// SECURITY:` annotation. Pass user **values** through the parameterized Filter API (`f.Eq`, etc.).
 
+## Database-Free Services and Readiness (ADR-047)
+
+The `database:` block is all-or-nothing. Omit it entirely and the service is
+database-free: `/ready` reports `database: "not_configured"` and returns **200**, and
+`deps.DB(ctx)` returns an error satisfying `config.IsNotConfigured`. Set *any* identity
+field — `type`, `host`, `port`, `database`, `username`, `password`, `connectionstring` —
+and the section counts as intended, so an incomplete one **fails startup** rather than
+loading and failing at first query.
+
+That strictness is the point: an empty section carries no intent, so a dropped secret
+mount looks identical to a deliberately database-free service. Making the predicate strict
+means only a *literally empty* section is absence.
+
+| Config | Startup | `/ready` |
+| --- | --- | --- |
+| No `database:` block | starts (one advisory WARN) | 200 · `not_configured` |
+| Complete and reachable | starts | 200 · `healthy` |
+| Complete but unreachable | starts | **503** — the probe stays `critical` |
+| Any identity field, incomplete | **fails** | n/a |
+| Multi-tenant | starts | 200 · `per_tenant` |
+
+Two consequences worth knowing:
+
+- **Multi-tenant `/ready` carries no database signal.** The probe
+  resolves the fixed `""` key. With static tenants, validation rejects a root block
+  outright, so that key cannot resolve and no tenant database has ever been probed —
+  `per_tenant` states that plainly rather than claiming the service has no database.
+  A multi-tenant deployment that *does* configure a root block (a shared-ledger
+  control plane, `outbox.tenancy: shared`) is still probed and still `critical`.
+  Where the key genuinely does not resolve, `/ready` carries no database signal at
+  all: no critical probe, no startup gate, and no WARN.
+- **A module that genuinely needs a database should say so.** Implement
+  `app.DatabaseRequirer`; registration then aborts startup when the database is absent,
+  instead of the service going green and serving errors.
+
 ## Connection Pool Defaults
 
 | Setting | Default | Purpose |

@@ -1104,6 +1104,49 @@ func TestIsDatabaseConfigured(t *testing.T) {
 			},
 			expected: true,
 		},
+		// A sole identity field is intent, not absence. Each of these was "not
+		// configured" before ADR-047, which let a half-delivered secret load silently
+		// and then fail at first query instead of at startup.
+		{
+			name:     "port_only_is_configured",
+			config:   DatabaseConfig{Port: 5432},
+			expected: true,
+		},
+		{
+			name:     "database_only_is_configured",
+			config:   DatabaseConfig{Database: "appdb"},
+			expected: true,
+		},
+		{
+			name:     "username_only_is_configured",
+			config:   DatabaseConfig{Username: "app"},
+			expected: true,
+		},
+		{
+			name:     "password_only_is_configured",
+			config:   DatabaseConfig{Password: "s3cret"},
+			expected: true,
+		},
+		// Oracle identifies its target by service name or SID rather than a database
+		// name, so a split config delivering only those is still intent.
+		{
+			name:     "oracle_service_name_only_is_configured",
+			config:   DatabaseConfig{Oracle: OracleConfig{Service: ServiceConfig{Name: "ORCLPDB1"}}},
+			expected: true,
+		},
+		{
+			name:     "oracle_sid_only_is_configured",
+			config:   DatabaseConfig{Oracle: OracleConfig{Service: ServiceConfig{SID: "ORCL"}}},
+			expected: true,
+		},
+		// Pool/query/timezone defaults must NOT read as intent: applyDatabasePoolDefaults
+		// fills them on every config, so counting them would make every service look
+		// database-configured.
+		{
+			name:     "defaulted_fields_alone_are_not_configured",
+			config:   DatabaseConfig{Timezone: "UTC", Pool: PoolConfig{Max: PoolMaxConfig{Connections: 25}}},
+			expected: false,
+		},
 		{
 			name: "connection_string_with_empty_host_type",
 			config: DatabaseConfig{
