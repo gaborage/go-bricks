@@ -756,6 +756,38 @@ maintenance and delivered no abstraction. The `CacheManager` → `Manager` renam
 now permits is deliberately deferred — it is a separate exported-API break across five `app/`
 files and nine `CacheManager` type references.
 
+### [ADR-046: Cache Readiness Is Strict by Default, with a Visible Opt-Out](adr_046_cache_readiness_strict_default.md)
+
+**Date:** 2026-08-04 | **Status:** Accepted
+
+Flips `cache.critical` from opt-in to strict: an absent key now means the cache probe is
+critical, so a cache-enabled service answers `/ready` with `503` while Redis is unreachable
+instead of reporting ready with a dead cache. An opt-in fix for a silent-failure bug
+protects only the operators who already suspected the problem. The escape hatch is kept
+rather than removed, because the framework does not own the probe wiring: banning
+`cache.critical: false` would push the lenient deployment into a `readinessProbe` →
+`/health` manifest rewrite that is invisible to the framework, unauditable by `git grep`,
+and silences the database probe too — a greppable one-line opt-out is the hardening
+feature, and it emits a startup WARN on every boot (ADR-038's precedent), never a
+validation error. `CacheConfig.Critical` is a `*bool` with no registered koanf default
+(the `ServerConfig.LogRoutes` precedent): with a strict default a bare `bool`'s zero value
+would mean the opposite of the shipped default, and any registered default would collapse
+absent and explicit-`false` into one state, destroying the signal the WARN is gated on —
+though `IsCacheCritical` deliberately returns `true` on a nil receiver where
+`ShouldLogRoutes` returns `false`. The `503` body is sanitized per-probe to the constant
+`cache unavailable` (the connector error names the Redis host, port and resolved IP on an
+unauthenticated endpoint); the full error still reaches the application log and the
+debug health endpoint (`<debug.pathprefix>/health-debug`, default `/_sys`), and the database/messaging bodies are byte-identical. The
+correlated-eviction risk — one Redis blip draining every replica at once — is accepted and
+mitigated by `readinessProbe.failureThreshold`, deliberately not reimplemented in-framework.
+
+**Key Benefits:** Makes the default safe for the services that most need it without
+inventing a `degraded` status or a fatal startup path; keeps the weakened posture visible,
+greppable, and scoped to one probe instead of pushed into an unauditable manifest; closes
+the Redis-topology disclosure on an unauthenticated endpoint before a strict default makes
+it default-on, while preserving the full diagnostic on the two channels operators actually
+own.
+
 ---
 
 ## ADR Lifecycle
@@ -767,7 +799,7 @@ files and nine `CacheManager` type references.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-045) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-046) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

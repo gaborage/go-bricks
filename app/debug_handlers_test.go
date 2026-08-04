@@ -248,30 +248,33 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 	}
 }
 
-// loggedMsgContains reports whether rec recorded any log line whose message
-// contains substr.
-func loggedMsgContains(rec *recLogger, substr string) bool {
+// loggedEvent returns the first recorded log event whose message contains substr.
+func loggedEvent(rec *recLogger, substr string) (recEvent, bool) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	for _, e := range rec.events {
 		if strings.Contains(e.msg, substr) {
-			return true
+			return e, true
 		}
 	}
-	return false
+	return recEvent{}, false
+}
+
+// loggedMsgContains reports whether rec recorded any log line whose message
+// contains substr.
+func loggedMsgContains(rec *recLogger, substr string) bool {
+	_, ok := loggedEvent(rec, substr)
+	return ok
 }
 
 // loggedStr returns the value of the given Str field on the first recorded log
 // event whose message contains substr, or "" if none.
 func loggedStr(rec *recLogger, substr, field string) string {
-	rec.mu.Lock()
-	defer rec.mu.Unlock()
-	for _, e := range rec.events {
-		if strings.Contains(e.msg, substr) {
-			return e.str[field]
-		}
+	e, ok := loggedEvent(rec, substr)
+	if !ok {
+		return ""
 	}
-	return ""
+	return e.str[field]
 }
 
 // TestRegisterDebugEndpointsAccessControlWarn verifies the no-access-control WARN fires only

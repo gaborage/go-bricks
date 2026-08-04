@@ -38,7 +38,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | 3 | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
-| E56  | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) | 9 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8) |
+| E56  | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 12 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -761,9 +761,9 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 ## E56 · v0.55.0 → v0.56.0 — ALB forwarded-client-cert identity middleware + seal-payload CLI + widened logger mask list + httpclient Build fail-closed
 
-- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). Also adds the installable `cmd/seal-payload` CLI for curl-testing jose-tagged endpoints. `logger.DefaultFilterConfig()` gains eleven card-data/PII field names, which silently changes log output for anyone on the defaults (C56.3). Multi-tenant lazy consumer setup also stops blocking over-budget callers: `messaging.Manager.EnsureConsumers` now returns as soon as the caller's own context ends, while the setup itself still completes (C56.4). `server.forwardedclientcert.require: true` now registers the middleware even when `enabled` was left false, so a programmatically-assembled config that skipped `config.Validate` stops serving unauthenticated traffic and starts returning 401 (C56.5). And `httpclient.Builder.Build()` now returns `(Client, error)` instead of `Client` — it fails construction, rather than warning, when a `WithTransport`/`WithTLSConfig`/`WithHTTPClient` composition would silently discard a client certificate, pinned roots, or a caller's transport (C56.6, ADR-044). Finally, re-declaring one queue name now merges compatible shapes instead of letting the last declaration overwrite the earlier one — so `DeclareQueueWithDLQ` and `DeclareQueue` on a single name compose rather than one silently dropping the other's dead-letter args — while incompatible shapes keep the first declaration and fail startup with one aggregate error naming every conflict (C56.7). Lastly, a JOSE-configured `httpclient` stops sealing requests that carry no body — it had been stamping a JWE over an empty payload plus `Content-Type: application/jose` onto every bodyless `GET`/`HEAD`/`DELETE`, which gateways drop — so a payload-free `POST`/`PUT`/`PATCH` now goes out unsealed too (C56.8). Separately, the never-implemented `cache.Manager` interface is deleted — nothing in go-bricks implemented or consumed it and `*CacheManager` never satisfied it, but a type in a consumer's own module could, so it is a compile-break for anyone who named the type (C56.9, ADR-045).
+- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). Also adds the installable `cmd/seal-payload` CLI for curl-testing jose-tagged endpoints. `logger.DefaultFilterConfig()` gains eleven card-data/PII field names, which silently changes log output for anyone on the defaults (C56.3). Multi-tenant lazy consumer setup also stops blocking over-budget callers: `messaging.Manager.EnsureConsumers` now returns as soon as the caller's own context ends, while the setup itself still completes (C56.4). `server.forwardedclientcert.require: true` now registers the middleware even when `enabled` was left false, so a programmatically-assembled config that skipped `config.Validate` stops serving unauthenticated traffic and starts returning 401 (C56.5). And `httpclient.Builder.Build()` now returns `(Client, error)` instead of `Client` — it fails construction, rather than warning, when a `WithTransport`/`WithTLSConfig`/`WithHTTPClient` composition would silently discard a client certificate, pinned roots, or a caller's transport (C56.6, ADR-044). Finally, re-declaring one queue name now merges compatible shapes instead of letting the last declaration overwrite the earlier one — so `DeclareQueueWithDLQ` and `DeclareQueue` on a single name compose rather than one silently dropping the other's dead-letter args — while incompatible shapes keep the first declaration and fail startup with one aggregate error naming every conflict (C56.7). Lastly, a JOSE-configured `httpclient` stops sealing requests that carry no body — it had been stamping a JWE over an empty payload plus `Content-Type: application/jose` onto every bodyless `GET`/`HEAD`/`DELETE`, which gateways drop — so a payload-free `POST`/`PUT`/`PATCH` now goes out unsealed too (C56.8). Separately, the never-implemented `cache.Manager` interface is deleted — nothing in go-bricks implemented or consumed it and `*CacheManager` never satisfied it, but a type in a consumer's own module could, so it is a compile-break for anyone who named the type (C56.9, ADR-045). And `GET /ready` stops discarding the cache probe's result: the 200 body now always carries `cache` and `cache_stats`, and the probe stops answering from the pool — it calls `Cache.Health(ctx)` on the leased instance, so a configured cache costs one Redis `PING` per poll and a live outage is finally visible (C56.10). That visibility is **strict by default**: the new `cache.critical` key (env `CACHE_CRITICAL`) is deliberately unregistered, so an absent key means the cache probe is critical and a cache-enabled service starts answering `503` on a Redis outage with no config change — `cache.critical: false` opts out and emits a startup WARN on every boot (C56.11, ADR-046). The cache `503`'s `error` field is sanitized to the fixed string `cache unavailable` rather than the connector error, which named the Redis host, port and resolved IP on an unauthenticated endpoint; the full error still reaches the app log and the debug health endpoint at `<debug.pathprefix>/health-debug` (default `/_sys`), and the database/messaging bodies are unchanged (C56.12).
 - build-caught: C56.6 C56.9
-- preflight: none
+- preflight: if a top-level cache is enabled **or** you pass an `app.Options.CacheConnector` — that connector never consults `cache.enabled`, so its probe is live and critical even with the cache disabled in config — and you have never set `cache.critical`, decide the readiness posture BEFORE the bump: keep the strict default and size `readinessProbe.failureThreshold`, or add `cache.critical: false` (C56.11)
 - exit: `go get github.com/gaborage/go-bricks@v0.56.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C56.1] ALB forwarded-client-cert identity middleware · additive-optional
@@ -885,6 +885,187 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   Exactly one difference made `*CacheManager` unable to satisfy the deleted interface: `Stats()` returns `cache.ManagerStats`, where the interface demanded `map[string]any`. So if you wrote your own narrow interface, do not copy the old `Stats()` signature. Two further differences do **not** affect satisfaction but are worth knowing when you write that interface: the concrete `Get`'s second parameter is named `key`, not `tenantID` (parameter names never participate in satisfaction — it is the cache key, which is the tenant ID only in multi-tenant deployments), and `*CacheManager` also offers `Remove(key string) error`, which the interface never declared (extra methods are always fine)
 - verify: `go build ./... && go test ./...`
 - ref: ADR-045 · `cache/types.go` · `cache/manager.go` (`CacheManager`) · #862
+
+### [C56.10] `/ready` reports cache health — two new body keys, and a Redis `PING` per poll where a cache is configured · silent-behavior · when: always
+
+- detect: `git grep -n '"/ready"' -- '*_test.go'` and `git grep -rn '/ready' --` across
+  dashboards, synthetic checks, and contract fixtures. You are looking for two things:
+  (a) anything that pins the *exact* key set of the 200 body rather than reading individual
+  keys — `assert.Len(body, N)`, a golden JSON file, a schema with
+  `additionalProperties: false`, or a dashboard widget that enumerates the response object;
+  (b) the poll period of every readiness probe definition (Kubernetes `readinessProbe`,
+  ALB/NLB target-group health checks, synthetic monitors), tight enough that one added
+  Redis round trip per poll is worth accounting for.
+- gate: always. The two new keys appear whether or not you set `cache.critical`, and
+  whether or not you configure a cache at all — with `cache.enabled: false` the body
+  reports `"cache": "not_configured"` and `cache_stats` still carries the manager
+  counters; `"cache": "disabled"` with `"cache_stats": {}` appears only when the cache
+  manager failed to construct at startup. Nothing here is opt-in. The added round trip
+  needs `cache.enabled: true`: a not-configured lease fails before any ping, so that
+  deployment sees no extra traffic and no status change.
+- apply: add `cache` and `cache_stats` to any pinned key set, then know what the probe now
+  means. `GET /ready` used to enumerate only `database` and `messaging`: the cache probe
+  ran, its result was stored, then discarded — so a dead cache still read `ready`, and only
+  the IP-allowlisted `GET /_sys/health-debug` endpoint surfaced the probe's result at all
+  (#860) — and only where `debug.enabled: true` (default `false`); the path follows
+  `debug.pathprefix`, default `/_sys`.
+  That probe only leased an instance from the manager, and the manager returns a pooled
+  instance without any network traffic, so a Redis outage that began after the instance was
+  built read `healthy` forever — `/health-debug` exposed a closed manager, never an outage.
+  The 200 body now carries `cache` (a status string) and `cache_stats` (the manager
+  counters) alongside the existing `database`/`db_stats` and `messaging`/`messaging_stats`
+  pairs, and the probe calls `Cache.Health(ctx)` on the leased instance, matching what the
+  database probe has always done — under the default Redis connector that is one `PING` per
+  `/ready` call, documented on the `Cache` interface as fast (<100ms) and safe to call
+  frequently. The cost is conditional, not flat: a `disabled` or `not_configured` deployment
+  pays none of it (the first registers no probe, the second fails the lease before any ping),
+  and a custom `Options.CacheConnector` supplies its own `Health`, so it need not issue a
+  Redis `PING` and need not emit the `db.client.operation.duration` sample below. That `PING`
+  runs under the
+  request's own deadline, capped at 500ms independent of `server.timeout.middleware` and
+  `cache.redis.readtimeout`, so a hung Redis is reported (a connection error wrapping
+  `context deadline exceeded`) rather than draining the request budget. The cap covers the
+  warm poll only: a cold poll — the first after boot, or after an idle eviction — first builds
+  the instance, paying that instance's own 5s construction `PING` plus an `INFO` version check
+  before spending the 500ms, so it can run several seconds and issue two `PING`s. Size
+  `initialDelaySeconds`/`timeoutSeconds` for that, not for 500ms. Status codes change too,
+  and by default: unless you set `cache.critical: false` (C56.11), that live outage answers
+  `503` rather than showing as `"cache": "unhealthy"` inside a `200`. Under the default
+  connector a warm poll also emits one
+  `db.client.operation.duration` sample from inside the Redis client (tagged `error.type`
+  during an outage), so warm-pool outages now reach cache dashboards — adjust those before the
+  bump. A failed lease emits no cache metric at all (the construction `PING` is untracked), so
+  do not build the boot-time alert on one; see [wiki/cache.md](cache.md#readiness).
+- verify: `curl -s localhost:8080/ready | jq 'keys'` and confirm `cache` and `cache_stats`
+  are present — on a `200`; a critical database failure short-circuits `/ready` before the
+  cache probe's result is rendered, so check this against a healthy database. Then re-run
+  whatever test or dashboard your `detect` surfaced. Then, with `cache.critical: false` set
+  (the C56.11 opt-out), stop Redis against a running pod (or block its port) and
+  `curl -s localhost:8080/ready | jq '.cache, .cache_stats.status'` — both read `unhealthy`
+  within one poll, where before the bump they stayed `healthy` for as long as the instance
+  stayed pooled. Under the strict default the same outage answers `503` with a
+  `{status, cache, error}` body that carries no `cache_stats`, so check `.cache` alone there.
+- ref: #860 · `app/health.go` (`cacheManagerHealthProbe`) · `app/lifecycle.go` (`readyCheck`) · `cache/redis/client.go` (`Health`) · [wiki/cache.md](cache.md#readiness)
+
+### [C56.11] a failing cache now fails `/ready` with `503` by default (`cache.critical`) · silent-behavior · when: no-match
+
+- detect: two questions, in order, both answered from the **top-level** `cache:` block —
+  print it once with `git grep -n -A10 '^cache:' -- '*.yaml' '*.yml'` and read the two keys
+  out of what it prints. The column-0 anchor is the whole point: a bare `enabled:`/`critical:`
+  grep also hits `server:`, `observability:` and the per-tenant
+  `multitenant.tenants.<id>.cache:` blocks, and only the top-level connection is what the
+  probe leases. (Use `[[:space:]]`, never `\s`, if you write your own pattern — `git grep -E`
+  is POSIX ERE and silently matches a literal `s` instead, so the command returns nothing
+  and a clean result is indistinguishable from a real one.) **(a) Is a top-level cache
+  enabled?** `enabled: true` in that block, plus `CACHE_ENABLED` across shell profiles,
+  `.env` files, compose files, and deployment manifests (`git grep -rn 'CACHE_ENABLED'` ;
+  `grep -rn 'CACHE_ENABLED' k8s/ deploy/ .env* 2>/dev/null`), plus any Go-assembled
+  `config.Config` setting `Cache.Enabled` (`git grep -n 'Cache\.Enabled' -- '*.go'`). A
+  custom `Options.CacheConnector` (`git grep -n 'CacheConnector' -- '*.go'`) is *also* a
+  match regardless of `cache.enabled` — it never consults that key, so its probe is live.
+  **(b) Is `cache.critical` explicitly set?** `critical:` in that same block,
+  `git grep -rn 'CACHE_CRITICAL'` across the same env sources, and `git grep -n
+  'Cache\.Critical' -- '*.go'`. The greps shortlist files, not the effective configuration:
+  environment variables override `config.<env>.yaml`, which overrides `config.yaml`, so
+  where the sources disagree the answer is the parsed config the service actually boots with.
+  **You are affected when (a) matches and (b) returns nothing.** Finding nothing in (b) is
+  the actionable result, not the all-clear.
+- gate: no-match on (b) = you are on the pre-bump behaviour, where the cache probe's result
+  never reached the response at all (C56.10), so a failing cache could not change the status
+  code. `cache.critical` does not exist in v0.55.0 — it arrives in this hop alongside the
+  probe change, which is why finding nothing in (b) is the actionable result rather than the
+  all-clear. The key is registered as no default at all: absent means **critical**, so a live
+  Redis outage answers `/ready` with `503 {"status":"not ready","cache":"unhealthy","error":"cache
+  unavailable"}` (no `cache_stats`, no other component's status — see C56.12 for the body)
+  instead of a `200` carrying `"cache": "unhealthy"`. Combined with C56.10 — the probe now
+  issues a real `PING` per poll rather than answering from the pool — this means an outage
+  that begins after boot is detected *and* acted on, where before the bump it was neither.
+  Every replica sharing one Redis fails readiness at the same moment, so a blip can drain
+  the whole Deployment from rotation and stall a rollout; size
+  `readinessProbe.failureThreshold` (see `apply`). Paths that report no error still never
+  `503` under either setting: with the default Redis connector `cache.enabled: false`
+  reports `not_configured` (the probe ran, the lease declined, the error is nil), and a
+  manager that failed to construct registers no probe at all and reports `disabled`. A
+  custom `Options.CacheConnector` ignores `cache.enabled` entirely, so it is probed — and
+  critical — even with the cache disabled in config. The flag remains process-global and observes
+  only the top-level `cache.*` connection, so it is inert for caches living under
+  `multitenant.tenants.<id>.cache`. Database criticality (always) and messaging criticality
+  (never, still no knob) are unchanged. A failing readiness probe never restarts a
+  container — only liveness does, and `/health` (the correct liveness target) is unchanged.
+- apply: **keep the strict default** if the service cannot serve correct results without the
+  cache — a rate limiter, session store, or idempotency ledger — and set
+  `readinessProbe.failureThreshold: 3` (with `periodSeconds: 10`) so a transient blip has to
+  persist across three polls before the pod leaves the Service endpoints. **Opt out** if the
+  cache is an optimisation in front of a database that can absorb the miss: add one line —
+
+  ```yaml
+  cache:
+    critical: false
+  ```
+
+  or `CACHE_CRITICAL=false` — and note that this is now **loud**: an enabled cache with an
+  explicit `false` emits a startup WARN on every boot naming the key, the consequence
+  (`/ready` keeps answering `200` while the cache is down, so a dead cache still reports
+  ready) and the remedy. That WARN is intentional and is not suppressible; it is the visible
+  marker of a deliberately weakened readiness posture. Do **not** work around the flip by
+  repointing `readinessProbe` at `/health` — `/health` checks no dependency at all, so that
+  silences the database probe too and hides the change from config review.
+- verify: boot with an enabled cache and no `cache.critical`, stop Redis (or block its
+  port), then `curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/ready` — it reads
+  `503` within one poll, and `curl -s localhost:8080/ready | jq '.status, .cache, .error'`
+  reads `"not ready"`, `"unhealthy"`, `"cache unavailable"`. Restart Redis and confirm it
+  returns to `200`. If you opted out, the same outage keeps answering `200` with
+  `.cache == "unhealthy"`, and startup logs the `cache.critical is explicitly false` WARN —
+  grep the boot log for it to confirm the opt-out was actually parsed (a typo'd key leaves
+  you on the strict default with no WARN). Check this against a healthy database either
+  way: a critical database failure short-circuits `/ready` before the cache probe runs.
+- ref: #860 · ADR-046 · `config/types.go` (`CacheConfig.Critical`) · `config/config.go`
+  (`Config.IsCacheCritical`) · `app/app_builder.go` (`warnIfCacheCriticalityOptOut`) ·
+  [wiki/cache.md](cache.md#readiness)
+
+### [C56.12] the cache `503` body no longer carries the connector error · silent-behavior · when: match
+
+- detect: `git grep -rn '/ready' --` across alert rules, runbooks, synthetic checks, log
+  pipelines, and contract tests, looking for anything that reads the `error` field of a
+  `503` response and expects a Redis address or a dial error in it — a regex
+  over the body, an alert annotation templating it, or a test asserting
+  `assert.Contains(body["error"], "<host>")`. Match = one of those consumers exists. Only
+  the **cache** probe's `503` is affected.
+- gate: match = your consumer now reads the fixed string `cache unavailable`. `/ready`
+  carries no IP allowlist and no authentication, and the cache probe's error renders the
+  Redis host and port and the resolved dial IP (no tenant identity: the probe leases the
+  empty top-level key). Since C56.11 makes the `503` path default-on for
+  every cache-enabled service, that disclosure would otherwise become shipped default
+  behavior, so the cache probe now declares a sanitized public string that `readyCheck`
+  emits in its place. The **database** and **messaging** `503` bodies are byte-identical to
+  before — the sanitization is per-probe, not a rewrite of the shared branch — so a
+  consumer reading the database error needs no change.
+- apply: repoint the consumer at one of the two channels that still carry the full error.
+  `readyCheck` logs it at ERROR on every `503` with a `component` field
+  (`Readiness check failed`), which is the channel to alert on. The debug health endpoint
+  still renders it verbatim in `data.components.cache.error` — but only where
+  `debug.enabled: true` (default `false`) and `debug.endpoints.health: true` (default
+  `true`), and it lives at `<debug.pathprefix>/health-debug` (`debug.pathprefix` defaults to
+  `/_sys`; the debug group registers at the URL root, so `server.path.base` does **not**
+  prefix it, unlike `/ready`). Reaching it means satisfying `debug.allowedips` — default
+  loopback (`127.0.0.1`, `::1`) — and sending `Authorization: Bearer <debug.bearertoken>`
+  when that key is set. Clearing `allowedips` turns the middleware into a pass-through,
+  which the framework WARNs about separately when no `debug.bearertoken` is set either. Do
+  not reconstruct the address by parsing the log line if the config already tells you which
+  Redis the service dials.
+- verify: with an enabled cache and Redis stopped, `curl -s localhost:8080/ready | jq -r
+  '.error'` prints exactly `cache unavailable` and contains no host, port, or IP. The
+  application log for the same request carries the full
+  `cache connection error: ping failed for <host>:<port>: …` string. For the debug channel,
+  build the URL from your own settings rather than assuming the defaults — with
+  `debug.enabled: true`, `debug.endpoints.health` left at `true`, the request coming from an
+  address inside `debug.allowedips`, and `PREFIX` set to `debug.pathprefix` (`/_sys` unless
+  you changed it):
+  `curl -s -H "Authorization: Bearer $DEBUG_TOKEN" "localhost:8080$PREFIX/health-debug" | jq
+  -r '.data.components.cache.error'` prints it too (drop the header when
+  `debug.bearertoken` is empty).
+- ref: #860 · ADR-046 · `app/health.go` (`cacheUnavailableMessage`, `HealthStatus.PublicErr`) ·
+  `app/lifecycle.go` (`publicProbeError`, `readyCheck`) · [wiki/cache.md](cache.md#readiness)
 
 ---
 
