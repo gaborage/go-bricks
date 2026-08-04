@@ -25,6 +25,13 @@ func main() {
 	cooldown := flag.Duration("cooldown", 0, "pause between packages so the machine sheds heat; 0 disables")
 	flag.Parse()
 
+	// 0 is the documented opt-out for both guardrails, so a negative value is a
+	// typo that would silently disable one rather than tighten it.
+	if *cpu < 0 || *cooldown < 0 {
+		fmt.Fprintln(os.Stderr, "mutatediff: -cpu and -cooldown must not be negative (0 disables the guardrail)")
+		os.Exit(2)
+	}
+
 	// Signal-derived so Ctrl-C or a CI cancel reaches the long-running git,
 	// go test, and gremlins subprocesses instead of leaving orphaned trees.
 	// No defer: os.Exit below skips deferred calls, so stop is invoked
@@ -100,7 +107,12 @@ func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer
 			unjudged = append(unjudged, mutantVerdict{File: pkg})
 		}
 		if shouldCool(ran, i, len(pkgs)) {
-			th.coolDown(out)
+			// A cooldown cut short means the run was canceled, not that the next
+			// package is ready: reporting a verdict over packages that never ran
+			// would call an interrupted gate clean.
+			if coolErr := th.coolDown(ctx, out); coolErr != nil {
+				return fail("canceled during cooldown: %v", coolErr)
+			}
 		}
 	}
 	return reportVerdict(failures, warnings, unjudged, out)

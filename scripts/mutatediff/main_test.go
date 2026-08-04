@@ -84,12 +84,18 @@ func TestRunBlankEngineFailsFast(t *testing.T) {
 // only once there is work, so a no-op gate does not mutate the caller's GOFLAGS.
 func TestRunNoOpDiffLeavesEnvironmentAlone(t *testing.T) {
 	t.Setenv("GOFLAGS", "-mod=mod")
+	t.Setenv("GOMAXPROCS", "sentinel")
 	var buf bytes.Buffer
 	if got := run(t.Context(), "false", "HEAD", throttle{cpu: 4, workers: 2}, &buf); got != 0 {
 		t.Fatalf("run = %d, want 0; output: %s", got, buf.String())
 	}
 	if got := os.Getenv("GOFLAGS"); got != "-mod=mod" {
 		t.Errorf("GOFLAGS = %q, want it untouched by a no-op run", got)
+	}
+	// Both, not just GOFLAGS: applyBudget writes two variables, so asserting one
+	// leaves a hoisted budget half-detectable.
+	if got := os.Getenv("GOMAXPROCS"); got != "sentinel" {
+		t.Errorf("GOMAXPROCS = %q, want it untouched by a no-op run", got)
 	}
 }
 

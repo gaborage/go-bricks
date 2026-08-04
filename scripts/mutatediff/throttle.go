@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -27,7 +28,7 @@ type throttle struct {
 	workers  int
 	cooldown time.Duration
 	// sleep is injected so tests assert the cooldown's placement without waiting.
-	sleep func(time.Duration)
+	sleep func(context.Context, time.Duration) error
 }
 
 // budget is a throttle's derived form: the per-worker share, and the worker
@@ -96,17 +97,26 @@ func shouldCool(ran bool, i, n int) bool {
 	return ran && i < n-1
 }
 
-// coolDown pauses so the machine sheds heat before the next package's mutants.
-func (th throttle) coolDown(out io.Writer) {
+// coolDown pauses so the machine sheds heat before the next package's mutants,
+// and reports whether it finished. A plain time.Sleep would swallow Ctrl-C for
+// the whole cooldown: the gate is a foreground dev tool whose other long waits
+// are all context-bound, so this one is too.
+func (th throttle) coolDown(ctx context.Context, out io.Writer) error {
 	if th.cooldown <= 0 {
-		return
+		return nil
 	}
 	fmt.Fprintf(out, "mutatediff: cooling down %s before the next package\n", th.cooldown)
 	if th.sleep != nil {
-		th.sleep(th.cooldown)
-		return
+		return th.sleep(ctx, th.cooldown)
 	}
-	time.Sleep(th.cooldown)
+	timer := time.NewTimer(th.cooldown)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // describeBudget is printed once per run so an overridden budget is visible in a

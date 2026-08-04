@@ -32,7 +32,9 @@ MUTATE_FALLBACK_COEFFICIENT ?= 600
 # binary at GOMAXPROCS, both defaulting to the machine's core count — so 2 workers
 # admit far more than 2 cores' worth of work.
 #
-# MUTATE_CPU is the actual cap. mutatediff divides it by MUTATE_WORKERS and pins
+# MUTATE_CPU is the cap on test execution, which is where the sustained load is;
+# build phases are a best-effort target, not a hard bound. mutatediff divides it
+# by MUTATE_WORKERS and pins
 # GOMAXPROCS plus GOFLAGS -p on every child process, which bounds test execution
 # exactly and build fan-out approximately (compile processes nest one level, and
 # at the defaults the overshoot can reach roughly 2x the budget during build
@@ -137,7 +139,7 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
 
 mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
-	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)" -workers $(MUTATE_WORKERS) -cpu $(MUTATE_CPU) -cooldown $(MUTATE_COOLDOWN)
+	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)" -workers "$(MUTATE_WORKERS)" -cpu "$(MUTATE_CPU)" -cooldown "$(MUTATE_COOLDOWN)"
 
 # One gremlins process per package: a single full-repo process with 4 workers
 # exhausted a 4-vCPU/16GB hosted runner ~25 min in (runner shutdown signal).

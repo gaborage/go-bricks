@@ -84,7 +84,9 @@ Budgeting that measurement while its mutants ran at full speed would inflate
 every ceiling CI computes. Gating the budget on `run()` keeps CI at full speed.
 `mergeShards` is likewise untouched.
 
-`GOFLAGS` is appended to, never replaced, so a caller-supplied value survives.
+`GOFLAGS` is appended to, never replaced: a caller's other flags survive, while a
+caller-supplied `-p` is deliberately overridden, since the go command applies the
+last value for a repeated flag.
 
 ### 3. Cooldown
 
@@ -109,7 +111,7 @@ stands — speeding up the slowest tests is the lever, not this guardrail.
 
 `make mutate` prints its effective budget once, before the first package:
 
-```
+```text
 mutatediff: CPU budget 4 cores (2 workers x 2), 30s cooldown between packages
 ```
 
@@ -141,6 +143,32 @@ No ADR: this is development tooling with no consumer-facing API surface.
 
 Both are unit tests in `scripts/mutatediff`, consistent with the package's
 existing `*_test.go` layout and the repo's camelCase test-naming rule.
+
+## As built
+
+Three things changed during implementation. The sections above describe the
+design as approved; this records where the shipped code differs, so the spec
+stays the authority on behavior. The plan file is a historical record of what was
+planned and is deliberately not rewritten.
+
+- **One derivation, not two.** `perChild` and `effectiveWorkers` collapsed into a
+  single `budget` value from `computeBudget`. The per-worker share and the
+  effective worker count come out together, so `workers x share` cannot exceed
+  `MUTATE_CPU`; a budget smaller than the worker count shrinks the workers rather
+  than handing each one a core. A property test walks every pair up to 16.
+- **A budgeted run pins its worker count.** With `-cpu` set and `-workers` left at
+  0, the share was computed against one worker while the engine fell back to
+  `.gremlins.yaml`'s count — multiplying the cap by a number this process never
+  learns. A budgeted run now pins one worker instead.
+- **The cooldown is cancelable.** `coolDown` takes the run's context and waits on
+  a timer it can abandon, so Ctrl-C during a 30s pause returns immediately
+  instead of being swallowed. A cut-short cooldown fails the run rather than
+  advancing to the next package, since a verdict over packages that never ran
+  would read as clean.
+
+Negative `-cpu` and `-cooldown` are rejected at startup: `0` is the documented
+opt-out, so a negative value is a typo that would otherwise silently disable a
+guardrail.
 
 ## Documentation
 

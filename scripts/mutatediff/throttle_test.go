@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -146,9 +148,14 @@ func TestShouldCoolOnlyAfterRealWork(t *testing.T) {
 func TestCoolDownWaitsAndAnnouncesItself(t *testing.T) {
 	var slept []time.Duration
 	var buf bytes.Buffer
-	th := throttle{cooldown: 30 * time.Second, sleep: func(d time.Duration) { slept = append(slept, d) }}
+	th := throttle{cooldown: 30 * time.Second, sleep: func(_ context.Context, d time.Duration) error {
+		slept = append(slept, d)
+		return nil
+	}}
 
-	th.coolDown(&buf)
+	if err := th.coolDown(t.Context(), &buf); err != nil {
+		t.Fatalf("coolDown: %v", err)
+	}
 
 	if len(slept) != 1 || slept[0] != 30*time.Second {
 		t.Fatalf("slept = %v, want one 30s pause", slept)
@@ -161,15 +168,42 @@ func TestCoolDownWaitsAndAnnouncesItself(t *testing.T) {
 func TestCoolDownIsANoOpAtZero(t *testing.T) {
 	var slept []time.Duration
 	var buf bytes.Buffer
-	th := throttle{cooldown: 0, sleep: func(d time.Duration) { slept = append(slept, d) }}
+	th := throttle{cooldown: 0, sleep: func(_ context.Context, d time.Duration) error {
+		slept = append(slept, d)
+		return nil
+	}}
 
-	th.coolDown(&buf)
+	if err := th.coolDown(t.Context(), &buf); err != nil {
+		t.Fatalf("coolDown: %v", err)
+	}
 
 	if len(slept) != 0 {
 		t.Errorf("slept = %v, want no pause at a zero cooldown", slept)
 	}
 	if buf.String() != "" {
 		t.Errorf("a disabled cooldown must stay silent, got: %s", buf.String())
+	}
+}
+
+// TestCoolDownGivesUpWhenCanceled uses the real timer, not the injected seam, so
+// it exercises the wait the operator actually sits through. An hour-long
+// cooldown against an already-canceled context returns at once or not at all —
+// a plain time.Sleep would hang the test rather than fail it.
+func TestCoolDownGivesUpWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	var buf bytes.Buffer
+	th := throttle{cooldown: time.Hour}
+
+	start := time.Now()
+	err := th.coolDown(ctx, &buf)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("coolDown = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("coolDown took %s, want an immediate return on a canceled context", elapsed)
 	}
 }
 
