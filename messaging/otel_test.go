@@ -54,15 +54,17 @@ func TestPublishCreatesSpan(t *testing.T) {
 	client, fakeConn, fakeCh := setupReadyClient(t)
 	defer func() { _ = client.Close() }()
 
-	ctx := context.Background()
+	// setupReadyClient leaves maxPublishAttempts at 0 (unbounded) and its 100ms
+	// confirmation timeout can be outrun by a loaded runner: the publish then
+	// abandons the wait and retries under a NEW tag, so a hardcoded tag-1
+	// confirmation matches nothing and a deadline-free publish waits forever.
+	// Ack whichever tag the publish actually used, under a deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	destination := testQueueOtel
 	data := []byte(testMessage)
 
-	// Trigger publish success
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		fakeCh.notifyConfirmCh <- amqp.Confirmation{DeliveryTag: 1, Ack: true}
-	}()
+	ackNextSuccessfulPublish(ctx, t, client, fakeCh)
 
 	err := client.Publish(ctx, destination, data)
 	require.NoError(t, err)
@@ -95,18 +97,16 @@ func TestPublishToExchangeCreatesSpanWithExchangeAttributes(t *testing.T) {
 	client, fakeConn, fakeCh := setupReadyClient(t)
 	defer func() { _ = client.Close() }()
 
-	ctx := context.Background()
+	// Same hardcoded-tag hazard as TestPublishCreatesSpan — see the note there.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	options := PublishOptions{
 		Exchange:   testExchange,
 		RoutingKey: testRoutingKey,
 	}
 	data := []byte("exchange message")
 
-	// Trigger publish success
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		fakeCh.notifyConfirmCh <- amqp.Confirmation{DeliveryTag: 1, Ack: true}
-	}()
+	ackNextSuccessfulPublish(ctx, t, client, fakeCh)
 
 	err := client.PublishToExchange(ctx, options, data)
 	require.NoError(t, err)

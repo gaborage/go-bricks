@@ -65,15 +65,17 @@ type fakeChannel struct {
 	gotBindingArgs   amqp.Table
 	// Signal channel for test coordination
 	publishAttemptSignal chan struct{}
-	// publishAttempts counts every call, unlike nextDeliveryTag: amqp091 rolls its
-	// publish counter back when the send fails (confirms.unpublish, channel.go),
-	// so a failed attempt consumes no tag. A retry test that wants "how many
-	// attempts happened" must read this, not the tag.
+	// publishAttempts counts every call, including the failed ones that consume no
+	// delivery tag. A retry test that wants "how many attempts happened" must read
+	// this, not nextDeliveryTag.
 	publishAttempts uint64
 	// publishFailuresRemaining fails exactly that many attempts before letting
 	// one through, so a retry test does not have to clear publishErr from a
-	// second goroutine and hope the clear lands before the next attempt. Zero
-	// (the default) leaves publishErr solely in charge.
+	// second goroutine and hope the clear lands before the next attempt. It
+	// overrides publishErr for those attempts, so set one or the other and never
+	// both — a leftover publishErr keeps failing after the count runs out, which
+	// newClientWithFakeChannel refuses rather than let a test wait on a success
+	// that can no longer happen.
 	publishFailuresRemaining int
 	// publishSucceeded carries the delivery tag of each successful publish, so a
 	// test confirms the tag the fake actually used instead of assuming which
@@ -103,11 +105,16 @@ func (f *fakeChannel) PublishWithContext(_ context.Context, exchange, key string
 		f.publishFailuresRemaining--
 		err = errFakePublishTransient
 	}
-	// Advance the sequence counter only when actually publishing — matches
-	// amqp091 broker semantic. Combined with the racy GetNextPublishSeqNo above,
-	// this makes our fake reproduce the production race that publishSerial
-	// must prevent.
-	tag := atomic.AddUint64(&f.nextDeliveryTag, 1)
+	// Advance the sequence counter only on a publish that actually reached the
+	// broker: amqp091 takes a tag with confirms.publish and hands it straight back
+	// with confirms.unpublish when the send fails (channel.go), so a failed attempt
+	// consumes no tag and the retry reuses it. Combined with GetNextPublishSeqNo's
+	// non-advancing read, this makes our fake reproduce the production race that
+	// publishSerial must prevent.
+	var tag uint64
+	if err == nil {
+		tag = atomic.AddUint64(&f.nextDeliveryTag, 1)
+	}
 
 	// Signal that a publish attempt occurred (non-blocking)
 	if f.publishAttemptSignal != nil {
@@ -146,10 +153,10 @@ func (f *fakeChannel) QueueBind(name, key, exchange string, _ bool, args amqp.Ta
 func (f *fakeChannel) NotifyClose(c chan *amqp.Error) chan *amqp.Error { f.notifyCloseCh = c; return c }
 
 // GetNextPublishSeqNo mimics amqp091.Channel.GetNextPublishSeqNo: returns
-// (currentCount + 1) WITHOUT advancing. The counter is advanced inside
-// PublishWithContext (matching the real broker semantic). This is the exact
-// race window that AMQPClientImpl.publishSerial closes — two concurrent
-// callers see the same "next" value here unless serialized externally.
+// (currentCount + 1) WITHOUT advancing. Only a publish that reaches the broker
+// advances the counter, inside PublishWithContext. This is the exact race window
+// that AMQPClientImpl.publishSerial closes — two concurrent callers see the same
+// "next" value here unless serialized externally.
 func (f *fakeChannel) GetNextPublishSeqNo() uint64 {
 	return atomic.LoadUint64(&f.nextDeliveryTag) + 1
 }
@@ -171,12 +178,24 @@ func (f *fakeChannel) Close() error { return f.closeErr }
 // Caller must NOT pre-set ch.publishAttemptSignal — this helper owns it. The
 // helper consumes len(confs) signals; tests must trigger that many publish
 // attempts or risk goroutine leak.
+//
+// Each Confirmation is paired with an ATTEMPT, which is the same thing as a
+// delivery tag only while every attempt reaches the broker: a failed publish
+// consumes no tag, so one failure shifts every later attempt's tag down by one
+// and the hardcoded tags here stop matching. Rather than let that surface as a
+// confirmation nobody claims — the hang this fake's tag model was corrected to
+// prevent — refuse the combination outright; use ackNextSuccessfulPublish, which
+// reads the tag off the fake instead of predicting it.
 func sendConfirmsAfterEachAttempt(t *testing.T, c *AMQPClientImpl, ch *fakeChannel, confs ...amqp.Confirmation) {
 	t.Helper()
 	ch.mu.Lock()
 	if ch.publishAttemptSignal != nil {
 		ch.mu.Unlock()
 		t.Fatalf("ch.publishAttemptSignal already set; use manual coordination instead")
+	}
+	if ch.publishErr != nil || ch.publishFailuresRemaining > 0 {
+		ch.mu.Unlock()
+		t.Fatalf("attempt-indexed confirmations cannot be paired with failing publishes; use ackNextSuccessfulPublish")
 	}
 	sig := make(chan struct{}, len(confs)+1)
 	ch.publishAttemptSignal = sig
@@ -189,6 +208,36 @@ func sendConfirmsAfterEachAttempt(t *testing.T, c *AMQPClientImpl, ch *fakeChann
 	}()
 }
 
+// ackNextSuccessfulPublish acks whichever DeliveryTag the fake's next successful
+// publish actually used, so a retry test never has to guess which attempt won or
+// how many tags the failures consumed. Both the receive and the send select on
+// ctx: a run whose publish never succeeds must not leave the goroutine blocked on
+// a send nobody reads. Give ctx a deadline, or a tag mismatch hangs until the
+// package timeout, which reports no useful location.
+//
+// Caller must NOT pre-set ch.publishSucceeded — this helper owns it.
+func ackNextSuccessfulPublish(ctx context.Context, t *testing.T, c *AMQPClientImpl, ch *fakeChannel) {
+	t.Helper()
+	ch.mu.Lock()
+	if ch.publishSucceeded != nil {
+		ch.mu.Unlock()
+		t.Fatalf("ch.publishSucceeded already set; use manual coordination instead")
+	}
+	succeeded := make(chan uint64, 1)
+	ch.publishSucceeded = succeeded
+	ch.mu.Unlock()
+	go func() {
+		select {
+		case tag := <-succeeded:
+			select {
+			case c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: tag}:
+			case <-ctx.Done():
+			}
+		case <-ctx.Done():
+		}
+	}()
+}
+
 // Helper to build a client with fake channel.
 // Uses changeChannel() so the production notify-wiring and confirm-dispatcher
 // goroutine are active — tests that need to drive ACKs send to ch.notifyConfirmCh
@@ -197,6 +246,9 @@ func sendConfirmsAfterEachAttempt(t *testing.T, c *AMQPClientImpl, ch *fakeChann
 // changeChannel doesn't leak across tests in the suite.
 func newClientWithFakeChannel(t *testing.T, ch amqpChannel) *AMQPClientImpl {
 	t.Helper()
+	if fake, ok := ch.(*fakeChannel); ok && fake.publishErr != nil && fake.publishFailuresRemaining > 0 {
+		t.Fatalf("publishErr and publishFailuresRemaining are mutually exclusive; publishErr keeps failing once the count runs out")
+	}
 	c := &AMQPClientImpl{
 		m:                 &sync.RWMutex{},
 		log:               &stubLogger{},
@@ -1151,38 +1203,52 @@ func TestPublishToExchangeRetryLogicWithUnsafePublishFailure(t *testing.T) {
 	}
 }
 
+// TestFakeChannelFailedPublishConsumesNoDeliveryTag owns the fake's delivery-tag
+// contract in one place, so the retry tests below can lean on it without each
+// re-asserting the fake's own bookkeeping. amqp091 takes a tag with
+// confirms.publish and hands it straight back with confirms.unpublish when the
+// send fails, so a failed attempt must leave the counter untouched and the next
+// attempt must be offered the same tag.
+func TestFakeChannelFailedPublishConsumesNoDeliveryTag(t *testing.T) {
+	ch := &fakeChannel{publishFailuresRemaining: 2}
+
+	for range 2 {
+		require.Error(t, ch.PublishWithContext(context.Background(), "ex", "rk", false, false, amqp.Publishing{}))
+		assert.Equal(t, uint64(0), atomic.LoadUint64(&ch.nextDeliveryTag), "a failed publish must consume no tag")
+		assert.Equal(t, uint64(1), ch.GetNextPublishSeqNo(), "the next attempt must be offered the same tag")
+	}
+
+	require.NoError(t, ch.PublishWithContext(context.Background(), "ex", "rk", false, false, amqp.Publishing{}))
+	assert.Equal(t, uint64(1), atomic.LoadUint64(&ch.nextDeliveryTag), "the first publish to land takes tag 1")
+	assert.Equal(t, uint64(3), atomic.LoadUint64(&ch.publishAttempts), "every attempt counts, landed or not")
+}
+
+// TestPublishToExchangeMultipleRetriesBeforeSuccess proves one transient publish
+// failure is retried and the retry's confirmation is honored.
+//
+// The previous version cleared publishErr from a second goroutine and acked a
+// hardcoded DeliveryTag 2. That encoded two assumptions, both false: that the
+// clear landed before the next 1ms retry, and that the failed attempt consumed
+// tag 1. The fake now counts the failure itself and reports the tag it published
+// on, so neither assumption is left to make.
 func TestPublishToExchangeMultipleRetriesBeforeSuccess(t *testing.T) {
-	ch := &fakeChannel{}
+	ch := &fakeChannel{publishFailuresRemaining: 1}
 	c := newClientWithFakeChannel(t, ch)
 	c.resendDelay = 1 * time.Millisecond
+	// The helper's default 15ms confirm timeout would let a scheduler stall abandon
+	// the confirmation wait and retry under a new tag. See the note in
+	// TestPublishToExchangeUnboundedWhenMaxAttemptsZero.
+	c.connectionTimeout = 5 * time.Second
 
-	// Fail first attempt, succeed on second
-	// Use signaling to coordinate retry behavior
-	publishAttempts := make(chan struct{}, 2)
-
-	// Set up the fakeChannel to fail initially
-	ch.mu.Lock()
-	ch.publishErr = errors.New("initial failure")
-	ch.publishAttemptSignal = publishAttempts // Signal on each publish attempt
-	ch.mu.Unlock()
-
-	go func() {
-		<-publishAttempts // Wait for first attempt (gets DeliveryTag=1, fails)
-		ch.mu.Lock()
-		ch.publishErr = nil // Success on retry
-		ch.mu.Unlock()
-		<-publishAttempts // Wait for retry attempt (gets DeliveryTag=2, succeeds)
-		// Send ack for tag 2 — the retry's tag, not the failed first attempt's.
-		c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: 2}
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	ackNextSuccessfulPublish(ctx, t, c, ch)
 
-	err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
-	if err != nil {
+	if err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
 	}
+	assert.Equal(t, uint64(2), atomic.LoadUint64(&ch.publishAttempts),
+		"the failure must have cost one attempt and the retry must have succeeded")
 }
 
 func TestPublishToExchangeCustomHeaders(t *testing.T) {
@@ -1371,28 +1437,9 @@ func TestPublishToExchangeUnboundedWhenMaxAttemptsZero(t *testing.T) {
 	// raises it.
 	c.connectionTimeout = 5 * time.Second
 
-	succeeded := make(chan uint64, 1)
-	ch.mu.Lock()
-	ch.publishSucceeded = succeeded
-	ch.mu.Unlock()
-
-	// A deadline so a tag mismatch fails here in seconds instead of hanging until
-	// the package timeout, which reports no useful location.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	// Both receives select on ctx: if the publish path never succeeds, the
-	// goroutine must not outlive the test blocked on a send nobody reads.
-	go func() {
-		select {
-		case tag := <-succeeded:
-			select {
-			case c.notifyConfirm <- amqp.Confirmation{Ack: true, DeliveryTag: tag}:
-			case <-ctx.Done():
-			}
-		case <-ctx.Done():
-		}
-	}()
+	ackNextSuccessfulPublish(ctx, t, c, ch)
 
 	if err := c.PublishToExchange(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg")); err != nil {
 		t.Fatalf("expected success with unbounded retries (field 0), got %v", err)
