@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.56.0](https://github.com/gaborage/go-bricks/compare/v0.55.0...v0.56.0) (2026-08-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** report an unconfigured database as not_configured ([#881](https://github.com/gaborage/go-bricks/issues/881))
+* **app:** report cache health on /ready, strict by default ([#870](https://github.com/gaborage/go-bricks/issues/870))
+* **cache:** remove the dead and drifted Manager interface ([#865](https://github.com/gaborage/go-bricks/issues/865))
+* **httpclient:** Build returns an error on unsafe transport composition ([#845](https://github.com/gaborage/go-bricks/issues/845))
+
+### Added
+
+* **app:** let modules declare a required database via DatabaseRequirer ([#878](https://github.com/gaborage/go-bricks/issues/878)) ([36f916f](https://github.com/gaborage/go-bricks/commit/36f916fc98a5802def7a28a16033c15702fcf741))
+* **cmd:** seal-payload CLI generating compact JWE-of-JWS for curl testing ([#807](https://github.com/gaborage/go-bricks/issues/807)) ([282f495](https://github.com/gaborage/go-bricks/commit/282f495a4a0ff29e23da9228c7fecacff161f98d))
+* **jose:** add CheckJTIReplay for cache-backed jti replay detection ([#811](https://github.com/gaborage/go-bricks/issues/811)) ([1b6de4e](https://github.com/gaborage/go-bricks/commit/1b6de4ebdc9a698e1089e813a61e890cd628c5f6))
+* **logger:** mask PCI card-data fields by default ([#827](https://github.com/gaborage/go-bricks/issues/827)) ([8a2bf60](https://github.com/gaborage/go-bricks/commit/8a2bf608e56f952d90c289d078559d545ad30b2e))
+* **messaging:** typed consumer payload binding ([#849](https://github.com/gaborage/go-bricks/issues/849)) ([20abee0](https://github.com/gaborage/go-bricks/commit/20abee03667b4a3679c635a773988ddb2c6efb0a))
+* **mutatediff:** bound the CPU make mutate consumes ([#866](https://github.com/gaborage/go-bricks/issues/866)) ([6c69b3d](https://github.com/gaborage/go-bricks/commit/6c69b3d1dce58eecd45ce87c0666eb2d450bf96e))
+* **server,config:** ALB forwarded-client-cert identity middleware ([#801](https://github.com/gaborage/go-bricks/issues/801)) ([07e33c4](https://github.com/gaborage/go-bricks/commit/07e33c490eff313f5e371550711dad521c73ca1c))
+
+
+### Fixed
+
+* **app:** report cache health on /ready, strict by default ([#870](https://github.com/gaborage/go-bricks/issues/870)) ([639d853](https://github.com/gaborage/go-bricks/commit/639d8538a3085e47f765db3795c21e4fa613679a))
+* **cache:** dispatch CAS vs NX on an explicit mode flag ([#830](https://github.com/gaborage/go-bricks/issues/830)) ([460bb0a](https://github.com/gaborage/go-bricks/commit/460bb0aa1ba22e7f284dda0b481ffc0ef5482f11))
+* **cache:** fail closed on zero-value CacheManager instead of panicking ([#859](https://github.com/gaborage/go-bricks/issues/859)) ([1760d5f](https://github.com/gaborage/go-bricks/commit/1760d5f6344ccd588c847571334dd0a5265ee332))
+* **cache:** remove the dead and drifted Manager interface ([#865](https://github.com/gaborage/go-bricks/issues/865)) ([27ad0e0](https://github.com/gaborage/go-bricks/commit/27ad0e06ba15298ca2e9fb61b378d932ede27763))
+* **config:** report an unconfigured database as not_configured ([#881](https://github.com/gaborage/go-bricks/issues/881)) ([917fa18](https://github.com/gaborage/go-bricks/commit/917fa186bc38d5f470bf7fe9e284748eb3f8d4f7))
+* **deps:** port to the OTel v1.45.0 attribute value model ([#871](https://github.com/gaborage/go-bricks/issues/871)) ([c77bec3](https://github.com/gaborage/go-bricks/commit/c77bec304dd8a0fdf194cf318337b57fd6ccbfa4))
+* **deps:** update aws-sdk-go-v2 monorepo ([#814](https://github.com/gaborage/go-bricks/issues/814)) ([1598492](https://github.com/gaborage/go-bricks/commit/15984926150597e01c6fb23c12057534f510047b))
+* **deps:** update aws-sdk-go-v2 monorepo ([#821](https://github.com/gaborage/go-bricks/issues/821)) ([c4880f2](https://github.com/gaborage/go-bricks/commit/c4880f21ccc398601450da5e640d82fb8274c07c))
+* **deps:** update aws-sdk-go-v2 monorepo ([#836](https://github.com/gaborage/go-bricks/issues/836)) ([af75184](https://github.com/gaborage/go-bricks/commit/af75184e829b829af7a8a962dc650698b315a4b8))
+* **deps:** update module github.com/gaborage/go-bricks to v0.55.0 ([#805](https://github.com/gaborage/go-bricks/issues/805)) ([b685255](https://github.com/gaborage/go-bricks/commit/b68525540c1dad605ca644d17d9c259ff3a83182))
+* **deps:** update module github.com/knadh/koanf/parsers/yaml to v1.1.1 ([#863](https://github.com/gaborage/go-bricks/issues/863)) ([2b67a85](https://github.com/gaborage/go-bricks/commit/2b67a852e2e40929cca3690cd4c322e3dde2b498))
+* **deps:** update module github.com/knadh/koanf/providers/rawbytes to v1.0.1 ([#868](https://github.com/gaborage/go-bricks/issues/868)) ([bb37fba](https://github.com/gaborage/go-bricks/commit/bb37fba8cfbb462871985a3c5eae601cce10ee46))
+* **deps:** update module github.com/redis/go-redis/v9 to v9.22.0 ([#853](https://github.com/gaborage/go-bricks/issues/853)) ([72bf22c](https://github.com/gaborage/go-bricks/commit/72bf22cabce057f3daebb4aa99aa2ea3e22a9817))
+* **deps:** update module google.golang.org/grpc to v1.83.0 ([#834](https://github.com/gaborage/go-bricks/issues/834)) ([0cf8c2f](https://github.com/gaborage/go-bricks/commit/0cf8c2faa01a77f17c6933e09139c5185d12a961))
+* **deps:** update tools/migration module dependencies ([#874](https://github.com/gaborage/go-bricks/issues/874)) ([e194f38](https://github.com/gaborage/go-bricks/commit/e194f385e45182a89991ec3c7e0d7186a87a6146))
+* **httpclient:** Build returns an error on unsafe transport composition ([#845](https://github.com/gaborage/go-bricks/issues/845)) ([3b887b6](https://github.com/gaborage/go-bricks/commit/3b887b65698ff3822b4115306064b8b03d5fd359))
+* **httpclient:** compose WithTLSConfig onto an incumbent transport ([#843](https://github.com/gaborage/go-bricks/issues/843)) ([d7b23a5](https://github.com/gaborage/go-bricks/commit/d7b23a5703bf13fb4cc3280cadb9249a854e51b0))
+* **httpclient:** do not seal a JOSE body onto bodyless requests ([#858](https://github.com/gaborage/go-bricks/issues/858)) ([fa8d331](https://github.com/gaborage/go-bricks/commit/fa8d3318f415cfd583b0f7c4b1d581b51ab24dc5))
+* **httpclient:** stop reporting a discard the replacement cannot cause ([#844](https://github.com/gaborage/go-bricks/issues/844)) ([2626206](https://github.com/gaborage/go-bricks/commit/26262069176b430a3c0b945ec3ecbc4ad671e5d5))
+* **jose:** require an issuer or explicit namespace for jti replay keys ([#826](https://github.com/gaborage/go-bricks/issues/826)) ([b234341](https://github.com/gaborage/go-bricks/commit/b234341dd257c0a7f068a890ccf92cbee5938e57))
+* **keystore:** never echo the configured secret source in startup errors ([#825](https://github.com/gaborage/go-bricks/issues/825)) ([47beb7d](https://github.com/gaborage/go-bricks/commit/47beb7d5ea5af708b3bec270e49f4e43e2baf9cd))
+* **messaging:** align the publish fake with amqp091 tag rollback ([#856](https://github.com/gaborage/go-bricks/issues/856)) ([4ad42b1](https://github.com/gaborage/go-bricks/commit/4ad42b1c66fc014c26c3258558fd62a26e67ec09))
+* **messaging:** honor the caller's context on collapsed setup ([#837](https://github.com/gaborage/go-bricks/issues/837)) ([c856333](https://github.com/gaborage/go-bricks/commit/c856333ec3235c3e58a2120c091703e6eb8faf51))
+* **messaging:** make the unbounded-publish retry test deterministic ([#851](https://github.com/gaborage/go-bricks/issues/851)) ([3fbf665](https://github.com/gaborage/go-bricks/commit/3fbf665ece6a526dec8b0236ac9d29fee704c4a1))
+* **messaging:** merge compatible queue re-declarations ([#847](https://github.com/gaborage/go-bricks/issues/847)) ([76377d9](https://github.com/gaborage/go-bricks/commit/76377d9c8551e3bc56dd5222c9eb57c8ea87d414))
+* **migration:** snapshot audit events instead of mutating the caller's struct ([#831](https://github.com/gaborage/go-bricks/issues/831)) ([759b223](https://github.com/gaborage/go-bricks/commit/759b223a739a60ba7ceff2cfdaa7e190ec2ffb67))
+* **mutatediff:** scale the mutant timeout to the real suite cost ([#824](https://github.com/gaborage/go-bricks/issues/824)) ([5c183ac](https://github.com/gaborage/go-bricks/commit/5c183ac7ab345166538d46d125ab4c10a642f7d3))
+* **mutate:** NOT COVERED sits outside mutants_total in gremlins ([#813](https://github.com/gaborage/go-bricks/issues/813)) ([ee5553e](https://github.com/gaborage/go-bricks/commit/ee5553efb614ebaba01852b1754f674020e47587))
+* **resourcepool:** honor waiter contexts and join cleanup on close ([#832](https://github.com/gaborage/go-bricks/issues/832)) ([508799a](https://github.com/gaborage/go-bricks/commit/508799a46451700d38887bcff1a034bb1afc7337))
+* **server:** check JOSE content type before reading the request body ([#857](https://github.com/gaborage/go-bricks/issues/857)) ([e264a3a](https://github.com/gaborage/go-bricks/commit/e264a3a9723ba172b987598a935607d9d69b0ec1))
+* **server:** honor forwardedclientcert.require when enabled is false ([#838](https://github.com/gaborage/go-bricks/issues/838)) ([35edd1e](https://github.com/gaborage/go-bricks/commit/35edd1e0089d9019d7f819076f541bccd218f9f3))
+* **server:** reject duplicated X-Amzn-Mtls headers as absent identity ([#828](https://github.com/gaborage/go-bricks/issues/828)) ([6e56e2d](https://github.com/gaborage/go-bricks/commit/6e56e2d468d52944d8d3f83e6d3b4835e3ea16aa))
+
+
+### Changed
+
+* **server:** share validator construction with messaging ([#848](https://github.com/gaborage/go-bricks/issues/848)) ([631ec41](https://github.com/gaborage/go-bricks/commit/631ec41578b1dbdc825254fb2bd4fcc9ac8ae91f))
+
 ## [0.55.0](https://github.com/gaborage/go-bricks/compare/v0.54.0...v0.55.0) (2026-07-27)
 
 
