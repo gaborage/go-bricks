@@ -95,7 +95,11 @@ strict-by-default flag, the off value is the one an operator has to ask for.
 **The `503` body is sanitized to `cache unavailable`; the full error keeps two other
 channels.** The cache probe declares a fixed public string
 (`cacheUnavailableMessage`, `app/health.go`) which `readyCheck` prefers over
-`result.Err.Error()` via `publicProbeError`. `/ready` is unauthenticated and
+`result.Err.Error()` via `publicProbeError`. (As of
+[ADR-048](adr_048_ready_sanitize_by_default.md) neither the constant nor that fallback
+exists: `publicProbeError` synthesizes `"<name> unavailable"` for any probe leaving
+`PublicErr` empty, which the cache probe now does. The string it emits is unchanged.)
+`/ready` is unauthenticated and
 allowlist-free, and under a strict default its `503` path is now reached by every
 cache-enabled service during any Redis outage, so shipping the connector error verbatim
 would make Redis topology disclosure the framework's default behavior rather than an
@@ -108,7 +112,10 @@ sanitization is **per-probe, not a blanket rewrite of the shared branch**: the d
 and messaging `503` bodies are byte-identical to before, because those probes leave
 `PublicErr` empty and `publicProbeError` falls back to the raw error. (Superseded for the
 database probe: it sets `PublicErr` to `database unavailable` as of `[C57.1]`, through this
-same seam. Messaging is still never critical, so no messaging error reaches a `503` body.)
+same seam. Messaging is still never critical, so no messaging error reaches a `503` body.
+Superseded again by [ADR-048](adr_048_ready_sanitize_by_default.md): the fallback to the
+raw error is gone — an empty `PublicErr` now synthesizes `"<name> unavailable"`, so the
+described per-probe scoping no longer holds for anything but the wording.)
 A single fixed
 string, rather than a per-shape classifier, covers every cache failure shape
 (`*cache.ConnectionError` — which already wraps the ping timeouts the 500ms cap produces —
@@ -161,6 +168,11 @@ narrow what an operator can see.
 probe (never critical, still no knob) are untouched in both criticality and `503` body.
 That narrowness did not hold: the database body carried the same class of disclosure and
 was sanitized to `database unavailable` in `[C57.1]`, reusing this ADR's seam unchanged.
+Nor did the per-probe *shape* hold — [ADR-048](adr_048_ready_sanitize_by_default.md)
+reversed it, making sanitization the shared branch's default (`"<name> unavailable"`) and
+`PublicErr` an override, on the ground that an opt-in safe path depends on every future
+probe author remembering it. The two constants this ADR and `[C57.1]` introduced are
+deleted there; the emitted strings are unchanged.
 `GET /health` is unchanged and still dependency-free, which is what makes it the wrong
 target for a readiness probe and the right one for liveness. No `degraded` status was
 introduced — `/ready` answers a binary question for a binary consumer, and a third status

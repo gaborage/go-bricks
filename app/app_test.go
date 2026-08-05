@@ -567,7 +567,7 @@ func assertCacheErrorSanitized(t *testing.T, body map[string]any) {
 
 	errMsg, ok := body[errorKey].(string)
 	require.True(t, ok, "the 503 body must carry an error string")
-	assert.Equal(t, cacheUnavailableMessage, errMsg)
+	assert.Equal(t, cacheUnavailableBody, errMsg)
 	assertNoCacheCoordinates(t, body)
 }
 
@@ -794,13 +794,14 @@ func TestCreateHealthProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 	}
 }
 
-// TestCreateHealthProbesCriticalProbesDeclarePublicError enforces the Prober contract over
+// TestCreateHealthProbesCriticalProbesRenderNoRawError enforces the Prober contract over
 // every probe the app actually wires, rather than probe by probe. SECURITY: readyCheck
-// renders a critical probe's error into the unauthenticated /ready 503 body, and an empty
-// PublicErr renders Err verbatim — so a critical probe without one leaks whatever its
-// driver put in the error. The per-constructor tests pin the probes that exist today; this
-// is the only guard that catches a critical probe added tomorrow.
-func TestCreateHealthProbesCriticalProbesDeclarePublicError(t *testing.T) {
+// renders a critical probe's failure into the unauthenticated /ready 503 body, so what
+// matters is the rendered string, not whether the probe remembered to declare one — the
+// assertion drives each probe's status through publicProbeError with an identity-bearing
+// error substituted in. The per-constructor tests pin the probes that exist today; this is
+// the only guard that catches a critical probe added tomorrow.
+func TestCreateHealthProbesCriticalProbesRenderNoRawError(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, cfg.IsCacheCritical(), "a zero-value config must leave the cache probe critical, or this test covers only the database probe")
 
@@ -822,8 +823,17 @@ func TestCreateHealthProbesCriticalProbesDeclarePublicError(t *testing.T) {
 			continue
 		}
 		criticalSeen++
-		assert.NotEmptyf(t, st.PublicErr,
-			"critical probe %q declares no PublicErr: its raw error would render into the unauthenticated /ready 503 body", st.Name)
+
+		// The inversion removed "the author forgot to sanitize"; the residual vector is an
+		// override that is itself leaky (a host, a DSN, a tenant key). No framework probe
+		// declares one today. This is meant to break when someone adds a legitimate
+		// override — the break is the prompt to review the string it introduces.
+		assert.Emptyf(t, st.PublicErr,
+			"framework probe %q declares an override; it must be a reviewed fixed string", st.Name)
+
+		st.Err = errors.New(pgconnIdentityError)
+		assert.Equalf(t, st.Name+" unavailable", publicProbeError(&st),
+			"critical probe %q must render its synthesized safe error", st.Name)
 	}
 
 	// Without this the test would pass by iterating nothing the day every probe is made
@@ -887,7 +897,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				assert.Equal(t, "not ready", body[statusKey])
 				assert.Equal(t, "unhealthy", body[componentDatabase])
-				assert.Equal(t, databaseUnavailableMessage, body["error"])
+				assert.Equal(t, databaseUnavailableBody, body["error"])
 			},
 		},
 		{

@@ -188,9 +188,12 @@ cold-pool poll renders `key ""`.) The full error still reaches
 the application log (`readyCheck` logs it at ERROR with a `component` field on every `503`) and
 the IP-allowlisted debug health endpoint at `<debug.pathprefix>/health-debug` (default
 `/_sys/health-debug`, gated on `debug.enabled` and `debug.endpoints.health`), where it renders
-verbatim in `data.components.cache.error`. The sanitization is per-probe: the `database` and `messaging` `503`
-bodies still carry their raw error. A custom `Options.CacheConnector`'s `Health` error is
-sanitized on `/ready` too, and reaches the same two channels.
+verbatim in `data.components.cache.error`. The sanitization is not specific to this probe: it is
+the shared default for every critical probe (ADR-048) — an empty `HealthStatus.PublicErr`
+renders `<component> unavailable`, so the `database` `503` reads `database unavailable`, and
+messaging is never critical, so it renders no `503` body at all. A custom
+`Options.CacheConnector`'s `Health` error is sanitized on `/ready` too, and reaches the same
+two channels.
 
 A hung Redis (packets dropped rather than refused) is reported the same way —
 `redis.Client.Health` wraps every ping failure, `context deadline exceeded` included, in a

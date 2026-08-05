@@ -16,36 +16,25 @@ import (
 // cold-poll caveat.
 const cacheProbePingTimeout = 500 * time.Millisecond
 
-// SECURITY: the cache probe's failure modes render the Redis host:port, the resolved
-// dial IP and (on the cold path) the tenant key. /ready carries no allowlist and no
-// auth, so the 503 body gets this fixed string instead; the full error still reaches
-// the application log (readyCheck logs it when the probe is critical) and the
-// IP-allowlisted /health-debug via HealthStatus.Err.
-const cacheUnavailableMessage = "cache unavailable"
-
-// SECURITY: a failed database connection renders the driver's identity string
-// (pgconn: `user=<username> database=<dbname>` plus the resolved host:port).
-// /ready carries no allowlist and no auth, so the 503 body gets this fixed
-// string instead; the full error still reaches the application log (readyCheck
-// logs it when the probe is critical) and the IP-allowlisted /health-debug via
-// HealthStatus.Err.
-const databaseUnavailableMessage = "database unavailable"
-
 // HealthStatus captures the outcome of a readiness probe.
 type HealthStatus struct {
+	// Name is interpolated into the unauthenticated /ready body by publicProbeError.
+	// Keep it a fixed component identifier — never a tenant, host, or database name.
 	Name    string
 	Status  string
 	Details map[string]any
 	Err     error
-	// PublicErr is the error text safe to expose on the unauthenticated /ready body.
-	// Empty means Err renders verbatim.
+	// PublicErr overrides the error text on the unauthenticated /ready body. Empty
+	// synthesizes "<Name> unavailable"; Err never reaches that body either way.
 	PublicErr string
 	Critical  bool
 }
 
-// Prober exposes a uniform interface for readiness probes. SECURITY: an implementation
-// that returns an error from a critical probe must set HealthStatus.PublicErr — the /ready
-// body is unauthenticated, and an empty PublicErr renders Err verbatim.
+// Prober exposes a uniform interface for readiness probes. SECURITY: the /ready body is
+// unauthenticated, so publicProbeError never renders HealthStatus.Err — an implementation
+// that wants wording other than the synthesized "<name> unavailable" sets
+// HealthStatus.PublicErr, which must be a fixed string and never derived from config. The
+// same constraint binds Name, which the synthesized default interpolates.
 type Prober interface {
 	Run(ctx context.Context) HealthStatus
 }
@@ -92,9 +81,8 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, perTenant bool, _
 	}
 
 	return healthProbeFunc{
-		name:      componentDatabase,
-		critical:  true,
-		publicErr: databaseUnavailableMessage,
+		name:     componentDatabase,
+		critical: true,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			return checkDatabaseHealth(ctx, dbManager, perTenant)
 		},
@@ -222,9 +210,8 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger, 
 	}
 
 	return healthProbeFunc{
-		name:      componentCache,
-		critical:  critical,
-		publicErr: cacheUnavailableMessage,
+		name:     componentCache,
+		critical: critical,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			stats := convertCacheStatsToMap(cacheManager.Stats())
 
