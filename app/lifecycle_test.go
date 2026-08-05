@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -605,4 +606,90 @@ func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 			assert.Contains(t, event.err, tc.probeErr.Error(), "the full error must reach the log at either level")
 		})
 	}
+}
+
+// TestPublicProbeError pins both branches of the /ready sanitization switch. A negated
+// condition here would either leak every probe's raw error or swallow every real one,
+// and neither shows up as a compile or type failure.
+func TestPublicProbeError(t *testing.T) {
+	t.Run("public_error_set_is_returned_verbatim", func(t *testing.T) {
+		result := HealthStatus{
+			PublicErr: databaseUnavailableMessage,
+			Err:       errors.New(pgconnIdentityError),
+		}
+
+		assert.Equal(t, databaseUnavailableMessage, publicProbeError(&result))
+	})
+
+	t.Run("public_error_empty_falls_back_to_raw_error", func(t *testing.T) {
+		result := HealthStatus{Err: errors.New(errorRedisDown)}
+
+		assert.Equal(t, errorRedisDown, publicProbeError(&result))
+	})
+}
+
+// TestReadyCheckWithholdsDatabaseIdentityFromBody is the end-to-end assertion for #879:
+// /ready is unauthenticated and carries no CIDR gate, so a database outage must not turn
+// its 503 body into a connection-identity oracle. The detail keeps living in the app log
+// and, through HealthStatus.Err, in the IP-allowlisted /_sys/health-debug.
+func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
+	t.Run("driver_identity_never_reaches_the_body", func(t *testing.T) {
+		cfg := &config.Config{App: config.AppConfig{Name: testApp}}
+		rec := &recLogger{}
+		app := &App{cfg: cfg, logger: rec}
+		app.healthProbes = []Prober{healthProbeFunc{
+			name:      componentDatabase,
+			critical:  true,
+			publicErr: databaseUnavailableMessage,
+			fn: func(context.Context) (string, map[string]any, error) {
+				return unhealthyStatus, nil, errors.New(pgconnIdentityError)
+			},
+		}}
+
+		body, code := runReadyCheck(t, app, cfg)
+
+		assert.Equal(t, http.StatusServiceUnavailable, code)
+		assert.Equal(t, databaseUnavailableMessage, body[errorKey])
+		assert.NotContains(t, body[errorKey], "user=")
+		assert.NotContains(t, body[errorKey], "10.0.0.5")
+
+		// The premise this test rests on: the raw error really does carry the identity,
+		// so the assertions above are withholding something rather than passing vacuously.
+		event, ok := loggedEvent(rec, "Readiness check failed")
+		require.True(t, ok)
+		assert.Contains(t, event.err, "user=app database=payments")
+		assert.Contains(t, event.err, "10.0.0.5:5432")
+	})
+
+	t.Run("probe_built_by_the_real_constructor_is_sanitized", func(t *testing.T) {
+		// Same path, but the public string comes from databaseManagerHealthProbe rather
+		// than a hand-built probe — dropping the constructor's publicErr fails here.
+		cfg := &config.Config{App: config.AppConfig{Name: testApp}}
+		cfg.Database.Type = "mysql" // resolves as intended, then fails to connect
+		cfg.Database.Host = "control-plane.internal"
+		rec := &recLogger{}
+		app := &App{cfg: cfg, logger: rec, dbManager: newRealConnectorDBManager(cfg)}
+		app.healthProbes = app.createHealthProbes()
+		require.Len(t, app.healthProbes, 1)
+
+		body, code := runReadyCheck(t, app, cfg)
+
+		assert.Equal(t, http.StatusServiceUnavailable, code)
+		assert.Equal(t, databaseUnavailableMessage, body[errorKey])
+		event, ok := loggedEvent(rec, "Readiness check failed")
+		require.True(t, ok)
+		assert.NotEmpty(t, event.err)
+		assert.NotEqual(t, event.err, body[errorKey], "the body must not simply echo the logged driver error")
+	})
+}
+
+// runReadyCheck drives readyCheck over httptest and decodes the JSON body.
+func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]any, code int) {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
+	w := httptest.NewRecorder()
+	require.NoError(t, app.readyCheck(server.NewHandlerContextForTest(w, req, cfg)))
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	return body, w.Code
 }

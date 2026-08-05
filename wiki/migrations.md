@@ -17,7 +17,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -39,6 +39,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56  | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
+| E57  | v0.56.0 → v0.57.0 | silent-behavior | 1 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `/_sys/health-debug` — the field is now the fixed string `database unavailable` (C57.1) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -761,7 +762,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 
 ## E56 · v0.55.0 → v0.56.0 — ALB forwarded-client-cert identity middleware + seal-payload CLI + widened logger mask list + httpclient Build fail-closed
 
-- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). Also adds the installable `cmd/seal-payload` CLI for curl-testing jose-tagged endpoints. `logger.DefaultFilterConfig()` gains eleven card-data/PII field names, which silently changes log output for anyone on the defaults (C56.3). Multi-tenant lazy consumer setup also stops blocking over-budget callers: `messaging.Manager.EnsureConsumers` now returns as soon as the caller's own context ends, while the setup itself still completes (C56.4). `server.forwardedclientcert.require: true` now registers the middleware even when `enabled` was left false, so a programmatically-assembled config that skipped `config.Validate` stops serving unauthenticated traffic and starts returning 401 (C56.5). And `httpclient.Builder.Build()` now returns `(Client, error)` instead of `Client` — it fails construction, rather than warning, when a `WithTransport`/`WithTLSConfig`/`WithHTTPClient` composition would silently discard a client certificate, pinned roots, or a caller's transport (C56.6, ADR-044). Finally, re-declaring one queue name now merges compatible shapes instead of letting the last declaration overwrite the earlier one — so `DeclareQueueWithDLQ` and `DeclareQueue` on a single name compose rather than one silently dropping the other's dead-letter args — while incompatible shapes keep the first declaration and fail startup with one aggregate error naming every conflict (C56.7). Lastly, a JOSE-configured `httpclient` stops sealing requests that carry no body — it had been stamping a JWE over an empty payload plus `Content-Type: application/jose` onto every bodyless `GET`/`HEAD`/`DELETE`, which gateways drop — so a payload-free `POST`/`PUT`/`PATCH` now goes out unsealed too (C56.8). Separately, the never-implemented `cache.Manager` interface is deleted — nothing in go-bricks implemented or consumed it and `*CacheManager` never satisfied it, but a type in a consumer's own module could, so it is a compile-break for anyone who named the type (C56.9, ADR-045). And `GET /ready` stops discarding the cache probe's result: the 200 body now always carries `cache` and `cache_stats`, and the probe stops answering from the pool — it calls `Cache.Health(ctx)` on the leased instance, so a configured cache costs one Redis `PING` per poll and a live outage is finally visible (C56.10). That visibility is **strict by default**: the new `cache.critical` key (env `CACHE_CRITICAL`) is deliberately unregistered, so an absent key means the cache probe is critical and a cache-enabled service starts answering `503` on a Redis outage with no config change — `cache.critical: false` opts out and emits a startup WARN on every boot (C56.11, ADR-046). The cache `503`'s `error` field is sanitized to the fixed string `cache unavailable` rather than the connector error, which named the Redis host, port and resolved IP on an unauthenticated endpoint; the full error still reaches the app log and the debug health endpoint at `<debug.pathprefix>/health-debug` (default `/_sys`), and the database/messaging bodies are unchanged (C56.12). Finally, a module that cannot work without a database can now say so by implementing `app.DatabaseRequirer`, which turns a required-but-absent database into a startup abort instead of a service that boots green — and a database-free service emits one advisory startup `WARN` as a backstop (C56.13). Lastly, the framework stops conflating an absent database with a misconfigured one: a partially delivered `database:` section now fails startup instead of loading silently and failing at first query (C56.14), while a genuinely database-free service — and every static multi-tenant deployment, which was also permanently 503 — reports `not_configured` / `per_tenant` and `/ready` returns 200 (C56.15, ADR-047).
+- gist: Adds `server.forwardedclientcert.*` (`enabled`, `require`) for a config-gated middleware that parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers into a typed `server.ForwardedClientCert` (ADR-043; identification, not authorization). Also adds the installable `cmd/seal-payload` CLI for curl-testing jose-tagged endpoints. `logger.DefaultFilterConfig()` gains eleven card-data/PII field names, which silently changes log output for anyone on the defaults (C56.3). Multi-tenant lazy consumer setup also stops blocking over-budget callers: `messaging.Manager.EnsureConsumers` now returns as soon as the caller's own context ends, while the setup itself still completes (C56.4). `server.forwardedclientcert.require: true` now registers the middleware even when `enabled` was left false, so a programmatically-assembled config that skipped `config.Validate` stops serving unauthenticated traffic and starts returning 401 (C56.5). And `httpclient.Builder.Build()` now returns `(Client, error)` instead of `Client` — it fails construction, rather than warning, when a `WithTransport`/`WithTLSConfig`/`WithHTTPClient` composition would silently discard a client certificate, pinned roots, or a caller's transport (C56.6, ADR-044). Finally, re-declaring one queue name now merges compatible shapes instead of letting the last declaration overwrite the earlier one — so `DeclareQueueWithDLQ` and `DeclareQueue` on a single name compose rather than one silently dropping the other's dead-letter args — while incompatible shapes keep the first declaration and fail startup with one aggregate error naming every conflict (C56.7). Lastly, a JOSE-configured `httpclient` stops sealing requests that carry no body — it had been stamping a JWE over an empty payload plus `Content-Type: application/jose` onto every bodyless `GET`/`HEAD`/`DELETE`, which gateways drop — so a payload-free `POST`/`PUT`/`PATCH` now goes out unsealed too (C56.8). Separately, the never-implemented `cache.Manager` interface is deleted — nothing in go-bricks implemented or consumed it and `*CacheManager` never satisfied it, but a type in a consumer's own module could, so it is a compile-break for anyone who named the type (C56.9, ADR-045). And `GET /ready` stops discarding the cache probe's result: the 200 body now always carries `cache` and `cache_stats`, and the probe stops answering from the pool — it calls `Cache.Health(ctx)` on the leased instance, so a configured cache costs one Redis `PING` per poll and a live outage is finally visible (C56.10). That visibility is **strict by default**: the new `cache.critical` key (env `CACHE_CRITICAL`) is deliberately unregistered, so an absent key means the cache probe is critical and a cache-enabled service starts answering `503` on a Redis outage with no config change — `cache.critical: false` opts out and emits a startup WARN on every boot (C56.11, ADR-046). The cache `503`'s `error` field is sanitized to the fixed string `cache unavailable` rather than the connector error, which named the Redis host, port and resolved IP on an unauthenticated endpoint; the full error still reaches the app log and the debug health endpoint at `<debug.pathprefix>/health-debug` (default `/_sys`); the database body was left alone in this hop and is sanitized in turn by C57.1 (C56.12). Finally, a module that cannot work without a database can now say so by implementing `app.DatabaseRequirer`, which turns a required-but-absent database into a startup abort instead of a service that boots green — and a database-free service emits one advisory startup `WARN` as a backstop (C56.13). Lastly, the framework stops conflating an absent database with a misconfigured one: a partially delivered `database:` section now fails startup instead of loading silently and failing at first query (C56.14), while a genuinely database-free service — and every static multi-tenant deployment, which was also permanently 503 — reports `not_configured` / `per_tenant` and `/ready` returns 200 (C56.15, ADR-047).
 - build-caught: C56.6 C56.9
 - preflight: if a top-level cache is enabled **or** you pass an `app.Options.CacheConnector` — that connector never consults `cache.enabled`, so its probe is live and critical even with the cache disabled in config — and you have never set `cache.critical`, decide the readiness posture BEFORE the bump: keep the strict default and size `readinessProbe.failureThreshold`, or add `cache.critical: false` (C56.11)
 - exit: `go get github.com/gaborage/go-bricks@v0.56.0 && go mod tidy && go build ./... && go test ./...`
@@ -1038,8 +1039,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   every cache-enabled service, that disclosure would otherwise become shipped default
   behavior, so the cache probe now declares a sanitized public string that `readyCheck`
   emits in its place. The **database** and **messaging** `503` bodies are byte-identical to
-  before — the sanitization is per-probe, not a rewrite of the shared branch — so a
-  consumer reading the database error needs no change.
+  before *in this hop* — the sanitization is per-probe, not a rewrite of the shared branch.
+  If you are landing on v0.57.0 or later, the database body changes too: see `[C57.1]`.
 - apply: repoint the consumer at one of the two channels that still carry the full error.
   `readyCheck` logs it at ERROR on every `503` with a `component` field
   (`Readiness check failed`), which is the channel to alert on. The debug health endpoint
@@ -1139,6 +1140,74 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   A rollout that was previously held back by a failing readiness gate will now proceed. If that 503 was load-bearing for you — i.e. the service genuinely needs a database — implement `app.DatabaseRequirer` (C56.13) so the absence aborts startup instead
 - verify: `curl -s -o /dev/null -w '%{http_code}' localhost:8080/ready`
 - ref: ADR-047 · `config/tenant_store.go` (`DBConfig`) · `app/health.go` · `app/debug_health.go` · #872
+
+## E57 · v0.56.0 → v0.57.0 — `/ready`'s database `503` body stops carrying the driver error
+
+- gist: The database readiness probe now declares a sanitized public string, so `/ready`'s
+  `503` body reports `database unavailable` instead of the driver's error. That error named
+  the connection identity — pgconn renders ``failed to connect to `user=<username>
+  database=<dbname>`: <host>:<port>`` and redacts only the password — on an endpoint that
+  is unauthenticated and carries no IP allowlist by design, so any caller who could reach
+  the port harvested it during any database outage. The full error is unchanged on both
+  channels operators own: the application log and — where debug is enabled and
+  access-controlled (see `apply:`, that endpoint's protection is conditional) —
+  `<debug.pathprefix>/health-debug`. This reuses the seam ADR-046 built for the cache probe
+  (`HealthStatus.PublicErr`, C56.12), so it requires no new configuration — but it is not
+  action-free: any alert, runbook, synthetic check, or contract test that reads that
+  `error` field must stop parsing the driver error and adopt the sanitized response
+  (C57.1).
+- build-caught: none
+- exit: `go get github.com/gaborage/go-bricks@v0.57.0 && go mod tidy && go build ./... && go test ./...`
+
+### [C57.1] the database `503` body no longer carries the driver error · silent-behavior · when: match
+
+- detect: `git grep -rn '/ready' --` across alert rules, runbooks, synthetic checks, log
+  pipelines, and contract tests, looking for anything that reads the `error` field of a
+  `503` response and expects driver text in it — a regex over the body, an alert annotation
+  templating it, or a test asserting `assert.Contains(body["error"], "<dbname>")`. Match =
+  one of those consumers exists. Only the **database** probe's `503` is affected; the cache
+  probe was already sanitized in C56.12, and the messaging probe is never critical, so its
+  errors never render into a `503` body at all.
+- gate: match = your consumer now reads the fixed string `database unavailable`. `/ready`
+  has no authentication and no IP allowlist — it must stay reachable by load balancers —
+  and the database probe's error carries the connection identity the driver puts in it.
+  For PostgreSQL that is pgconn's ``failed to connect to `user=<username>
+  database=<dbname>`: <host>:<port> (<resolved-ip>)`` prefix: the password is redacted,
+  the username, database name and resolved internal address are not. The probe now declares
+  a fixed public string that `readyCheck` emits in its place, exactly as the cache probe
+  has since C56.12. no-match = nothing parses that field; the change is invisible.
+- before:
+  ```json
+  {"status":"not ready","database":"unhealthy","error":"failed to connect to `user=app database=payments`: 10.0.0.5:5432 (10.0.0.5): dial error"}
+  ```
+- after:
+  ```json
+  {"status":"not ready","database":"unhealthy","error":"database unavailable"}
+  ```
+- apply: repoint the consumer at one of the two channels that still carry the full error.
+  `readyCheck` logs it on every `503` with a `component` field
+  (`Readiness check failed`) — that is the channel to alert on, and it is where the
+  identity still lives. The debug health endpoint renders it verbatim in
+  `data.components.database.error`, but only where `debug.enabled: true` (default `false`)
+  and `debug.endpoints.health: true` (default `true`), at `<debug.pathprefix>/health-debug`
+  (`debug.pathprefix` defaults to `/_sys`; the debug group registers at the URL root, so
+  `server.path.base` does **not** prefix it, unlike `/ready`). **That endpoint is
+  access-controlled only conditionally**: the IP check is a pass-through when
+  `debug.allowedips` is empty, and the bearer check is registered only when
+  `debug.bearertoken` is set — so a deployment that enables debug, clears the allowlist,
+  and sets no token serves the full driver error, the very string this atom removed from
+  `/ready`, to anyone who can reach the port. Before repointing a consumer here, confirm
+  `debug.allowedips` is non-empty (it defaults to loopback: `127.0.0.1`, `::1`) or
+  `debug.bearertoken` is set; prefer the application log, which needs neither. And do not
+  reconstruct the DSN by parsing the log line if your own config already names the database
+  the service dials.
+- verify: with a configured but unreachable database, `curl -s localhost:8080/ready | jq -r
+  '.error'` prints exactly `database unavailable` and contains no `user=`, database name,
+  host, port, or IP. The application log for the same request still carries the full driver
+  error under `component=database`.
+- ref: ADR-046 (the seam, reused unchanged) · `app/health.go`
+  (`databaseUnavailableMessage`) · `app/lifecycle.go` (`publicProbeError`) ·
+  `app/debug_health.go` · #879
 
 ---
 

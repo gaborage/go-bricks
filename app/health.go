@@ -23,6 +23,14 @@ const cacheProbePingTimeout = 500 * time.Millisecond
 // IP-allowlisted /health-debug via HealthStatus.Err.
 const cacheUnavailableMessage = "cache unavailable"
 
+// SECURITY: a failed database connection renders the driver's identity string
+// (pgconn: `user=<username> database=<dbname>` plus the resolved host:port).
+// /ready carries no allowlist and no auth, so the 503 body gets this fixed
+// string instead; the full error still reaches the application log (readyCheck
+// logs it when the probe is critical) and the IP-allowlisted /health-debug via
+// HealthStatus.Err.
+const databaseUnavailableMessage = "database unavailable"
+
 // HealthStatus captures the outcome of a readiness probe.
 type HealthStatus struct {
 	Name    string
@@ -84,8 +92,9 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, perTenant bool, _
 	}
 
 	return healthProbeFunc{
-		name:     componentDatabase,
-		critical: true,
+		name:      componentDatabase,
+		critical:  true,
+		publicErr: databaseUnavailableMessage,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			return checkDatabaseHealth(ctx, dbManager, perTenant)
 		},

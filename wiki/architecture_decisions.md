@@ -777,7 +777,7 @@ though `IsCacheCritical` deliberately returns `true` on a nil receiver where
 `ShouldLogRoutes` returns `false`. The `503` body is sanitized per-probe to the constant
 `cache unavailable` (the connector error names the Redis host, port and resolved IP on an
 unauthenticated endpoint); the full error still reaches the application log and the
-debug health endpoint (`<debug.pathprefix>/health-debug`, default `/_sys`), and the database/messaging bodies are byte-identical. The
+debug health endpoint (`<debug.pathprefix>/health-debug`, default `/_sys`). The database body was left byte-identical here and sanitized in turn by `[C57.1]` (fixed string `database unavailable`, same seam); messaging is never critical, so it never renders a `503` body. The
 correlated-eviction risk — one Redis blip draining every replica at once — is accepted and
 mitigated by `readinessProbe.failureThreshold`, deliberately not reimplemented in-framework.
 
