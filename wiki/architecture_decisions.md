@@ -801,12 +801,12 @@ to the default `""` key, in `TenantStore.DBConfig` — which had a structurally 
 `defaultDB == nil` check, since `defaultDB` is `&cfg.Database` and never nil, while its
 `BrokerURL`/`CacheConfig` siblings tested config *content*. Deliberately not placed in
 `database.NewConnection`, which is key-blind and would stamp "absent" on a half-provisioned
-tenant. `IsDatabaseConfigured` widens from three fields to all seven connection-identity
-fields, so a partially delivered config fails startup instead of reading as intentional
+tenant. `IsDatabaseConfigured` widens from three fields to every connection-identity field — the
+seven shared ones plus Oracle's two target identifiers (`oracle.service.name`, `oracle.service.sid`) — so a partially delivered config fails startup instead of reading as intentional
 absence; defaulted fields (timezone/pool/query) are excluded so the verdict is stable across
 defaulting. The database probe stays `critical: true`, and multi-tenant deployments report a
 distinct `per_tenant` status — a consequence worth stating plainly is that multi-tenant
-`/ready` then carries no critical *database* probe (a cache-enabled service still has the critical cache probe from ADR-046).
+the probe there stays `critical: true` but reports `per_tenant` with a nil error, so it never blocks readiness (a cache-enabled service still has the critical cache probe from ADR-046).
 
 **Key Benefits:** `/ready` returns 200 for a database-free service, which `app/health.go`
 always intended; every static multi-tenant deployment stops returning a permanent 503; a

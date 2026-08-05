@@ -253,9 +253,10 @@ Valid identifiers on PostgreSQL are left **unquoted** (PG folds unquoted identif
 The `database:` block is all-or-nothing. Omit it entirely and the service is
 database-free: `/ready` reports `database: "not_configured"` and returns **200**, and
 `deps.DB(ctx)` returns an error satisfying `config.IsNotConfigured`. Set *any* identity
-field — `type`, `host`, `port`, `database`, `username`, `password`, `connectionstring` —
-and the section counts as intended, so an incomplete one **fails startup** rather than
-loading and failing at first query.
+field — `type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`,
+`oracle.service.name`, `oracle.service.sid` — and the section counts as intended, so an incomplete one **fails startup** rather than
+loading and failing at first query. Complete means `type` + `host` + `port` + `username`
+plus a target (`database`, or for Oracle `oracle.service.name` / `oracle.service.sid`).
 
 That strictness is the point: an empty section carries no intent, so a dropped secret
 mount looks identical to a deliberately database-free service. Making the predicate strict

@@ -1100,9 +1100,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C56.14] A partially configured database now fails startup · breaking · when: match
 
-- detect: `git grep -nE 'DATABASE_(TYPE|HOST|PORT|DATABASE|USERNAME|PASSWORD|CONNECTIONSTRING|ORACLE_SERVICE_(NAME|SID))' -- '*.yaml' '*.yml' '*.env' 'Dockerfile*' 'deploy/'` and the equivalent for your deployment manifests, then check whether any environment that sets one of those ALSO sets `database.type` and `database.host` (or `database.connectionstring`). The explicit character class habit applies: **never write `\b` in a `git grep -E` pattern** — Git's POSIX-ERE engine strips the backslash and matches a literal `b`, so the detect silently reports "not affected"
+- detect: `git grep -nE 'DATABASE_(TYPE|HOST|PORT|DATABASE|USERNAME|PASSWORD|CONNECTIONSTRING|ORACLE_SERVICE_(NAME|SID))' -- '*.yaml' '*.yml' '*.env' 'Dockerfile*' 'deploy/'` and the equivalent for your deployment manifests, then check whether any environment that sets one of those carries a COMPLETE section. `type` + `host` is not enough: `validateDatabaseCoreFields` also requires `port` and `username`, plus a target — `database`, or for Oracle `oracle.service.name` / `oracle.service.sid`. A `connectionstring` still needs a `type` to dispatch on (#877). The explicit character class habit applies: **never write `\b` in a `git grep -E` pattern** — Git's POSIX-ERE engine strips the backslash and matches a literal `b`, so the detect silently reports "not affected"
 - scope: `config.IsDatabaseConfigured` widened from three fields (`connectionstring`, `host`, `type`) to every connection-identity field, adding `port`, `database`, `username`, `password`, and Oracle's `oracle.service.name` / `oracle.service.sid` (Oracle names its target with those rather than a database name). Any one of them now marks the section as intended, which routes it into `validateDatabase`. A config that set, say, `database.database` + `database.username` with no type or host used to load silently and then fail at first query; it now fails `config.Load` with `config_invalid: database.type '' is not supported`. Fields filled in by `applyDatabasePoolDefaults` (`timezone`, `pool.*`, `query.*`) are deliberately excluded, so the verdict is identical before and after defaulting — a defaulted config never reads as intent
-- gate: match = some environment sets a database identity field without completing the section. no-match = every environment either configures the database fully or sets no `database.*` identity field at all. Caveat: a field delivered as an *empty string* (an empty `secretKeyRef`, `envsubst` over an unset variable) still reads as absence — the predicate cannot distinguish it from an unset field
+- gate: match = some environment sets a database identity field without completing the section (see the detect for what complete means). no-match = every environment either configures the database fully or sets no `database.*` identity field at all. Caveat: a field delivered as an *empty string* (an empty `secretKeyRef`, `envsubst` over an unset variable) still reads as absence — the predicate cannot distinguish it from an unset field
 - before:
   ```yaml
   database:
@@ -1112,10 +1112,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - after:
   ```yaml
   database:
-    type: postgresql     # complete the section…
+    type: postgresql     # complete the section: type + host + port + username + target
     host: db.internal
     port: 5432
-    database: appdb
+    database: appdb      # Oracle instead: oracle.service.name or oracle.service.sid
     username: app
   ```
   …or remove the `database:` block entirely if the service genuinely has no database. Partial is the one thing that is no longer accepted

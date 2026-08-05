@@ -58,8 +58,10 @@ database, where absence is never legitimate. A tenant or named key that resolves
 empty keeps falling through to the factory's loud error.
 
 **2. Any connection-identity field means intent, and intent must be complete.**
-`IsDatabaseConfigured` widens from three fields to all seven
-(`connectionstring`, `type`, `host`, `port`, `database`, `username`, `password`).
+`IsDatabaseConfigured` widens from three fields to every connection-identity field
+(`connectionstring`, `type`, `host`, `port`, `database`, `username`, `password`, and
+Oracle's `oracle.service.name` / `oracle.service.sid`, since Oracle names its target
+with those rather than a database name).
 Fields that `applyDatabasePoolDefaults` fills in — timezone, pool, query — are
 excluded, so the verdict is identical before and after defaulting. Any partial
 section now routes into `validateDatabase` and **fails startup**. Only a section
@@ -93,12 +95,12 @@ the nil-`dbManager` alternative below. The probe therefore keeps `critical: true
 in every mode.
 
 **Consequence worth stating plainly: where the `""` key genuinely does not
-resolve, a multi-tenant deployment carries no database readiness signal at all —
-no critical database probe, and no startup gate or WARN either, since
-`rootDatabaseAbsent` exempts multi-tenant mode.** Whether `/ready` can still 503
-then depends on the *other* components: since ADR-046 a cache-enabled service has
-a critical cache probe by default, so such a deployment is not necessarily
-probe-free — but nothing there speaks for the databases. Per-tenant readiness is
+resolve, a multi-tenant deployment carries no database readiness *signal*.** The
+probe is still registered and still `critical: true` — it simply reports
+`per_tenant` with a nil error, so it can never block readiness — and there is no
+startup gate or WARN either, since `rootDatabaseAbsent` exempts multi-tenant mode.
+Whether `/ready` can still 503 then depends on the *other* components: since
+ADR-046 a cache-enabled service has a critical cache probe by default. Per-tenant readiness is
 not solved here; it needs its own design (which tenants, dynamic sources, partial
 failure semantics).
 
