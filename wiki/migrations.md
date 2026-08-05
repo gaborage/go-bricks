@@ -1177,13 +1177,17 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   a fixed public string that `readyCheck` emits in its place, exactly as the cache probe
   has since C56.12. no-match = nothing parses that field; the change is invisible.
 - before:
+
   ```json
   {"status":"not ready","database":"unhealthy","error":"failed to connect to `user=app database=payments`: 10.0.0.5:5432 (10.0.0.5): dial error"}
   ```
+
 - after:
+
   ```json
   {"status":"not ready","database":"unhealthy","error":"database unavailable"}
   ```
+
 - apply: repoint the consumer at one of the two channels that still carry the full error.
   `readyCheck` logs it on every `503` with a `component` field
   (`Readiness check failed`) — that is the channel to alert on, and it is where the
