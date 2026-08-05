@@ -1221,16 +1221,20 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 - detect: `git grep -rn 'app.Prober\|HealthStatus{' -- '*.go'` for your own readiness probe
   implementations, then check each one for `Critical: true` — and, among those, for a
-  `PublicErr` that is never set. Match = you implement a critical `Prober` that returns an
-  error and leaves `PublicErr` empty. **Expect no match at this version:** probe
-  registration is framework-internal (`App.healthProbes` is unexported, its only writer
-  `createHealthProbes` takes no argument, and `app.Options` carries no probe field), so
-  nothing consumer-written reaches `readyCheck` today. `Prober` is exported, so this atom
-  is written for the release where a registration API lands. The framework's own probes are
-  **not** a match either: the
+  `PublicErr` that is either never set or set from anything other than a fixed literal.
+  `git grep -n 'PublicErr' -- '*.go'` finds every assignment; flag one built from
+  `Err.Error()`, a `fmt.Sprintf(...)` call, a config field, or a host/DSN/tenant-identifier
+  variable — anything that isn't a bare quoted string. Match = you implement a critical
+  `Prober` that returns an error and either leaves `PublicErr` empty or assigns it from
+  dynamic data — per ADR-048, reviewing a `PublicErr` override is the only disclosure review
+  left once this atom lands. **Expect no match at this version:** probe registration is
+  framework-internal (`App.healthProbes` is unexported, its only writer `createHealthProbes`
+  takes no argument, and `app.Options` carries no probe field), so nothing consumer-written
+  reaches `readyCheck` today. `Prober` is exported, so this atom is written for the release
+  where a registration API lands. The framework's own probes are **not** a match either: the
   database and cache `503` bodies are byte-identical across this atom (`database
-  unavailable` / `cache unavailable`, exactly what they served in C57.1 and C56.12), and
-  messaging is never critical.
+  unavailable` / `cache unavailable`, exactly what they served in C57.1 and C56.12) — both
+  fixed literals — and messaging is never critical.
 - gate: match = your probe's `503` body stops carrying `Err` and now reads
   `<Name> unavailable`, synthesized from `HealthStatus.Name`. `publicProbeError` no longer
   falls back to the raw error for an empty `PublicErr` — `/ready` is unauthenticated and
@@ -1252,10 +1256,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 - apply: nothing, if the synthesized `"<Name> unavailable"` reads correctly for your probe —
   that is the intended outcome, and the detail your alerting needs is on the log line
-  `Readiness check failed` (with a `component` field) and on the debug health endpoint. To
-  choose different wording, set `HealthStatus.PublicErr` to a **fixed** string: a value
-  derived from config — a host, a DSN, a tenant key — reintroduces on an unauthenticated
-  endpoint exactly the disclosure this default removes.
+  `Readiness check failed` (with a `component` field) — prefer that channel, since it needs
+  no configuration — or on the debug health endpoint, which carries the full error only
+  where debug is enabled and access-controlled: configure `debug.allowedips` (non-empty) or
+  `debug.bearertoken` before pointing anything at `<debug.pathprefix>/health-debug` (see
+  `[C57.1]`'s `apply:`). To choose different wording, set `HealthStatus.PublicErr` to a
+  **fixed** string: a value derived from config — a host, a DSN, a tenant key —
+  reintroduces on an unauthenticated endpoint exactly the disclosure this default removes.
 - verify: with your dependency down, `curl -s localhost:8080/ready | jq -r '.error'` prints
   `<Name> unavailable` (using your probe's `Name`, or your `PublicErr` if you set one), and
   contains no host, port, IP, username, or database name. The same request's application

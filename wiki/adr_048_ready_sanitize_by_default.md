@@ -37,7 +37,9 @@ Nothing enforced it. The `Prober` doc comment stated the contract in prose. `[C5
 added `TestCreateHealthProbesCriticalProbesDeclarePublicError`, which asserted every
 critical probe declared a non-empty `PublicErr` — a test, not a constraint, and one that
 only covered the probes `createHealthProbes` wires. A consumer-implemented `Prober` was
-outside its reach entirely.
+outside its reach entirely (a future-facing gap, not a present one: probe registration is
+framework-internal today, so nothing consumer-written reaches `readyCheck` yet — `Prober`
+is exported, which is what makes the gap reachable once a registration API lands).
 
 ## Decision
 
