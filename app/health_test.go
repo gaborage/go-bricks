@@ -29,6 +29,11 @@ const (
 	// The shape pgconn actually returns on a failed dial: it redacts the password but
 	// not the username, the database name, or the resolved internal address.
 	pgconnIdentityError = "failed to connect to `user=app database=payments`: 10.0.0.5:5432 (10.0.0.5): dial error"
+
+	// The strings /ready actually serves. Spelled out here rather than imported from a
+	// production constant so the assertions pin the wire format instead of restating it.
+	databaseUnavailableBody = "database unavailable"
+	cacheUnavailableBody    = "cache unavailable"
 )
 
 func TestHealthProbeFuncRun(t *testing.T) {
@@ -81,6 +86,22 @@ func TestHealthProbeFuncRun(t *testing.T) {
 		assert.Equal(t, map[string]any{"error": "failed"}, result.Details)
 		assert.Equal(t, expectedError, result.Err)
 	})
+
+	t.Run("probe with a public error override", func(t *testing.T) {
+		probe := healthProbeFunc{
+			name:      testProbe,
+			critical:  true,
+			publicErr: "test-probe is degraded",
+			fn: func(_ context.Context) (string, map[string]any, error) {
+				return unhealthyStatus, nil, errors.New(pgconnIdentityError)
+			},
+		}
+
+		result := probe.Run(context.Background())
+		assert.Equal(t, "test-probe is degraded", result.PublicErr)
+		assert.Equal(t, "test-probe is degraded", publicProbeError(&result),
+			"an override must win over the synthesized default")
+	})
 }
 
 func TestDatabaseManagerHealthProbe(t *testing.T) {
@@ -96,11 +117,10 @@ func TestDatabaseManagerHealthProbe(t *testing.T) {
 		assert.NoError(t, result.Err)
 		assert.False(t, result.Critical)
 
-		// The nil-manager variant can never produce an error, so it needs no public
-		// string — and must not acquire one silently.
+		// The nil-manager variant can never produce an error and is not critical, so it
+		// never reaches the /ready render path at all.
 		probeFunc, ok := probe.(healthProbeFunc)
 		require.True(t, ok)
-		assert.Empty(t, probeFunc.publicErr)
 		assert.False(t, probeFunc.critical)
 	})
 
@@ -108,30 +128,30 @@ func TestDatabaseManagerHealthProbe(t *testing.T) {
 	// which drive a real DbManager over the real connector via newRealConnectorDBManager.
 }
 
-// TestDatabaseManagerHealthProbeCarriesPublicError pins the constructor-level wiring the
-// /ready sanitization depends on: the probe is critical, so readyCheck renders its error
-// into the unauthenticated 503 body, and PublicErr is what keeps the pgconn identity
-// string (`user=… database=…` plus the resolved host:port) out of it. There is no
-// compile-time enforcement that a critical probe sets publicErr — this assertion is it.
-func TestDatabaseManagerHealthProbeCarriesPublicError(t *testing.T) {
+// TestDatabaseManagerHealthProbeRendersFixedPublicError pins what the constructor's probe
+// contributes to the unauthenticated 503 body: it is critical, so readyCheck renders it,
+// and the rendered string is the synthesized default rather than the pgconn identity
+// string (`user=… database=…` plus the resolved host:port). The probe declares no
+// publicErr — that it is safe anyway is the whole point of the inverted default.
+func TestDatabaseManagerHealthProbeRendersFixedPublicError(t *testing.T) {
 	probe := databaseManagerHealthProbe(newRealConnectorDBManager(&config.Config{}), false, logger.New("info", false))
 
-	probeFunc, ok := probe.(healthProbeFunc)
-	require.True(t, ok, "the white-box assertions below depend on the concrete probe type")
-	assert.True(t, probeFunc.critical, "a non-critical probe would never reach the 503 render path")
-	assert.Equal(t, databaseUnavailableMessage, probeFunc.publicErr)
+	st := probe.Run(context.Background())
+	require.True(t, st.Critical, "a non-critical probe would never reach the 503 render path")
+
+	st.Err = errors.New(pgconnIdentityError)
+	assert.Equal(t, databaseUnavailableBody, publicProbeError(&st))
 }
 
-// TestDatabaseProbePublicErrorHidesConnectionIdentity pins the split Run performs: the
-// sanitized string is what the unauthenticated /ready body gets, while the full
-// identity-bearing driver error stays on HealthStatus.Err for the app log and the
-// IP-allowlisted /_sys/health-debug.
+// TestDatabaseProbePublicErrorHidesConnectionIdentity pins the split /ready performs: the
+// sanitized string is what the unauthenticated body gets, while the full identity-bearing
+// driver error stays on HealthStatus.Err for the app log and the IP-allowlisted
+// /_sys/health-debug.
 func TestDatabaseProbePublicErrorHidesConnectionIdentity(t *testing.T) {
 	driverErr := errors.New(pgconnIdentityError)
 	probe := healthProbeFunc{
-		name:      componentDatabase,
-		critical:  true,
-		publicErr: databaseUnavailableMessage,
+		name:     componentDatabase,
+		critical: true,
 		fn: func(context.Context) (string, map[string]any, error) {
 			return unhealthyStatus, map[string]any{statusKey: "no_active_connections"}, driverErr
 		},
@@ -139,7 +159,7 @@ func TestDatabaseProbePublicErrorHidesConnectionIdentity(t *testing.T) {
 
 	result := probe.Run(context.Background())
 
-	assert.Equal(t, databaseUnavailableMessage, result.PublicErr)
+	assert.Equal(t, databaseUnavailableBody, publicProbeError(&result))
 	// /_sys/health-debug renders Err verbatim and must keep the detail operators need.
 	require.ErrorIs(t, result.Err, driverErr)
 	assert.Contains(t, result.Err.Error(), "user=app")

@@ -777,7 +777,7 @@ though `IsCacheCritical` deliberately returns `true` on a nil receiver where
 `ShouldLogRoutes` returns `false`. The `503` body is sanitized per-probe to the constant
 `cache unavailable` (the connector error names the Redis host, port and resolved IP on an
 unauthenticated endpoint); the full error still reaches the application log and the
-debug health endpoint (`<debug.pathprefix>/health-debug`, default `/_sys`). The database body was left byte-identical here and sanitized in turn by `[C57.1]` (fixed string `database unavailable`, same seam); messaging is never critical, so it never renders a `503` body. The
+debug health endpoint (`<debug.pathprefix>/health-debug`, default `/_sys`). The database body was left byte-identical here and sanitized in turn by `[C57.1]` (fixed string `database unavailable`, same seam); messaging is never critical, so it never renders a `503` body. [ADR-048](adr_048_ready_sanitize_by_default.md) then reversed the per-probe shape itself: sanitization became the shared branch's default (`"<name> unavailable"`), the two constants were deleted, and `PublicErr` became an override — the emitted strings are unchanged. The
 correlated-eviction risk — one Redis blip draining every replica at once — is accepted and
 mitigated by `readinessProbe.failureThreshold`, deliberately not reimplemented in-framework.
 
@@ -817,6 +817,36 @@ half-injected secret now fails at startup rather than at first query. Fixes
 
 ---
 
+### [ADR-048: `/ready` Error Sanitization Is the Default, Not an Opt-In](adr_048_ready_sanitize_by_default.md)
+
+**Date:** 2026-08-05 | **Status:** Accepted | **Supersedes in part:** ADR-046
+
+Inverts the seam ADR-046 built: `publicProbeError` now synthesizes `"<name> unavailable"`
+when `HealthStatus.PublicErr` is empty instead of rendering `Err` verbatim, so a critical
+probe is safe by omission and `PublicErr` becomes an override for probes wanting different
+wording. Under the opt-in shape the safe path depended on memory — two probes each declared
+a constant, and a third critical probe added later leaked its raw error into an
+unauthenticated body by doing nothing, with only a prose contract and a test over
+`createHealthProbes` (blind to a consumer's own `Prober`) standing in the way. The flip
+emits byte-identical output today, because `componentDatabase` and `componentCache` are
+literally `"database"` and `"cache"`; the `cacheUnavailableMessage` and
+`databaseUnavailableMessage` constants are deleted, since two places agreeing on one string
+is the drift being removed. `Err` is untouched and still carries the driver detail to the
+app log and `<debug.pathprefix>/health-debug`, and `publicProbeError` no longer dereferences
+it at all, so no future caller can panic it on an unauthenticated path. Rejected: fusing
+`critical` and `PublicErr` into one field (conflates blocking readiness with disclosure, and
+would make operator-set `cache.critical: false` change what leaks), and a required
+constructor parameter (an in-package composite literal can always omit the field — a nudge,
+not a guard).
+
+**Key Benefits:** A critical probe added tomorrow needs no action to be safe; one function
+decides what the unauthenticated `503` discloses instead of every probe constructor; the
+invariant test now asserts the rendered string is safe rather than merely non-empty, which
+also holds for probes the framework never constructs. See [migrations.md](migrations.md)
+`[C57.2]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -826,7 +856,7 @@ half-injected secret now fails at startup rather than at first query. Fixes
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-047) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-048) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

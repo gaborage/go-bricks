@@ -522,11 +522,22 @@ func (a *App) Shutdown(ctx context.Context) error {
 }
 
 // publicProbeError picks the error text for the unauthenticated /ready body.
+//
+// SECURITY: probe errors carry connection identity — pgconn renders
+// `user=<username> database=<dbname>` plus the resolved host:port, and the cache probe's
+// connector names the Redis address, the dial IP and (on the cold path) the tenant key.
+// /ready has no authentication and no IP allowlist by design, so this never renders
+// result.Err: an empty PublicErr synthesizes "<name> unavailable", and PublicErr is only
+// an override for a probe that wants different fixed wording. The full error still reaches
+// the application log and, where debug is enabled and access-controlled, /_sys/health-debug
+// through HealthStatus.Err.
+// Err is deliberately not read here at all, so a nil one cannot panic this function
+// regardless of what a future caller does.
 func publicProbeError(result *HealthStatus) string {
 	if result.PublicErr != "" {
 		return result.PublicErr
 	}
-	return result.Err.Error()
+	return result.Name + " unavailable"
 }
 
 // readyCheck handles the health check endpoint

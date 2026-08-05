@@ -609,22 +609,29 @@ func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 }
 
 // TestPublicProbeError pins both branches of the /ready sanitization switch. A negated
-// condition here would either leak every probe's raw error or swallow every real one,
-// and neither shows up as a compile or type failure.
+// condition here would either leak every probe's raw error or force the default onto a
+// probe that declared its own wording, and neither shows up as a compile or type failure.
 func TestPublicProbeError(t *testing.T) {
-	t.Run("public_error_set_is_returned_verbatim", func(t *testing.T) {
+	t.Run("public_error_set_overrides_the_default", func(t *testing.T) {
 		result := HealthStatus{
-			PublicErr: databaseUnavailableMessage,
+			Name:      componentDatabase,
+			PublicErr: "database temporarily unavailable",
 			Err:       errors.New(pgconnIdentityError),
 		}
 
-		assert.Equal(t, databaseUnavailableMessage, publicProbeError(&result))
+		assert.Equal(t, "database temporarily unavailable", publicProbeError(&result))
 	})
 
-	t.Run("public_error_empty_falls_back_to_raw_error", func(t *testing.T) {
-		result := HealthStatus{Err: errors.New(errorRedisDown)}
+	t.Run("public_error_empty_synthesizes_a_safe_default", func(t *testing.T) {
+		result := HealthStatus{Name: componentDatabase, Err: errors.New(pgconnIdentityError)}
 
-		assert.Equal(t, errorRedisDown, publicProbeError(&result))
+		assert.Equal(t, databaseUnavailableBody, publicProbeError(&result))
+	})
+
+	t.Run("nil_error_renders_without_panicking", func(t *testing.T) {
+		result := HealthStatus{Name: componentCache}
+
+		assert.Equal(t, cacheUnavailableBody, publicProbeError(&result))
 	})
 }
 
@@ -638,9 +645,8 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		rec := &recLogger{}
 		app := &App{cfg: cfg, logger: rec}
 		app.healthProbes = []Prober{healthProbeFunc{
-			name:      componentDatabase,
-			critical:  true,
-			publicErr: databaseUnavailableMessage,
+			name:     componentDatabase,
+			critical: true,
 			fn: func(context.Context) (string, map[string]any, error) {
 				return unhealthyStatus, nil, errors.New(pgconnIdentityError)
 			},
@@ -649,12 +655,10 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		body, code := runReadyCheck(t, app, cfg)
 
 		assert.Equal(t, http.StatusServiceUnavailable, code)
-		assert.Equal(t, databaseUnavailableMessage, body[errorKey])
-		assert.NotContains(t, body[errorKey], "user=")
-		assert.NotContains(t, body[errorKey], "10.0.0.5")
+		assert.Equal(t, databaseUnavailableBody, body[errorKey])
 
 		// The premise this test rests on: the raw error really does carry the identity,
-		// so the assertions above are withholding something rather than passing vacuously.
+		// so the assertion above is withholding something rather than passing vacuously.
 		event, ok := loggedEvent(rec, "Readiness check failed")
 		require.True(t, ok)
 		assert.Contains(t, event.err, "user=app database=payments")
@@ -662,8 +666,8 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 	})
 
 	t.Run("probe_built_by_the_real_constructor_is_sanitized", func(t *testing.T) {
-		// Same path, but the public string comes from databaseManagerHealthProbe rather
-		// than a hand-built probe — dropping the constructor's publicErr fails here.
+		// Same path, but the probe comes from databaseManagerHealthProbe rather than a
+		// hand-built one, so it covers the constructor's own wiring reaching readyCheck.
 		cfg := &config.Config{App: config.AppConfig{Name: testApp}}
 		cfg.Database.Type = "mysql" // resolves as intended, then fails to connect
 		cfg.Database.Host = "control-plane.internal"
@@ -675,12 +679,42 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		body, code := runReadyCheck(t, app, cfg)
 
 		assert.Equal(t, http.StatusServiceUnavailable, code)
-		assert.Equal(t, databaseUnavailableMessage, body[errorKey])
+		assert.Equal(t, databaseUnavailableBody, body[errorKey])
 		event, ok := loggedEvent(rec, "Readiness check failed")
 		require.True(t, ok)
 		assert.NotEmpty(t, event.err)
 		assert.NotEqual(t, event.err, body[errorKey], "the body must not simply echo the logged driver error")
 	})
+}
+
+// TestReadyCheckSanitizesCriticalProbeWithoutPublicError is the assertion the inverted
+// default exists for. SECURITY: a critical probe that never declares a public string —
+// the omission the opt-in shape invited, and one no compiler catches — still cannot render
+// its raw error into the unauthenticated 503 body. The probe is deliberately not one of
+// the framework's own: it stands in for the probe someone adds next.
+func TestReadyCheckSanitizesCriticalProbeWithoutPublicError(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp}}
+	rec := &recLogger{}
+	app := &App{cfg: cfg, logger: rec}
+	app.healthProbes = []Prober{healthProbeFunc{
+		name:     "vault",
+		critical: true,
+		fn: func(context.Context) (string, map[string]any, error) {
+			return unhealthyStatus, nil, errors.New(pgconnIdentityError)
+		},
+	}}
+
+	body, code := runReadyCheck(t, app, cfg)
+
+	assert.Equal(t, http.StatusServiceUnavailable, code)
+	assert.Equal(t, "vault unavailable", body[errorKey])
+
+	// The premise the assertion above rests on: the raw error really does carry the
+	// identity, so it is withholding something rather than passing vacuously.
+	event, ok := loggedEvent(rec, "Readiness check failed")
+	require.True(t, ok)
+	assert.Contains(t, event.err, "user=app database=payments")
+	assert.Contains(t, event.err, "10.0.0.5:5432")
 }
 
 // runReadyCheck drives readyCheck over httptest and decodes the JSON body.

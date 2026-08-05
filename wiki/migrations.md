@@ -39,7 +39,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56  | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
-| E57  | v0.56.0 → v0.57.0 | silent-behavior | 1 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `/_sys/health-debug` — the field is now the fixed string `database unavailable` (C57.1) |
+| E57  | v0.56.0 → v0.57.0 | silent-behavior | 2 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `/_sys/health-debug` — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -1141,7 +1141,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - verify: `curl -s -o /dev/null -w '%{http_code}' localhost:8080/ready`
 - ref: ADR-047 · `config/tenant_store.go` (`DBConfig`) · `app/health.go` · `app/debug_health.go` · #872
 
-## E57 · v0.56.0 → v0.57.0 — `/ready`'s database `503` body stops carrying the driver error
+## E57 · v0.56.0 → v0.57.0 — `/ready` stops carrying probe errors in its `503` body
 
 - gist: The database readiness probe now declares a sanitized public string, so `/ready`'s
   `503` body reports `database unavailable` instead of the driver's error. That error named
@@ -1155,7 +1155,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   (`HealthStatus.PublicErr`, C56.12), so it requires no new configuration — but it is not
   action-free: any alert, runbook, synthetic check, or contract test that reads that
   `error` field must stop parsing the driver error and adopt the sanitized response
-  (C57.1).
+  (C57.1). The same hop then inverts the seam itself: sanitization is the default for
+  **every** critical probe rather than something each one opts into, so a critical
+  `Prober` you wrote yourself now serves `<Name> unavailable` instead of its raw error
+  (C57.2). For the framework's own probes that flip emits identical bytes.
 - build-caught: none
 - exit: `go get github.com/gaborage/go-bricks@v0.57.0 && go mod tidy && go build ./... && go test ./...`
 
@@ -1173,9 +1176,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   and the database probe's error carries the connection identity the driver puts in it.
   For PostgreSQL that is pgconn's ``failed to connect to `user=<username>
   database=<dbname>`: <host>:<port> (<resolved-ip>)`` prefix: the password is redacted,
-  the username, database name and resolved internal address are not. The probe now declares
-  a fixed public string that `readyCheck` emits in its place, exactly as the cache probe
-  has since C56.12. no-match = nothing parses that field; the change is invisible.
+  the username, database name and resolved internal address are not. A fixed public string
+  is emitted in its place, exactly as for the cache probe since C56.12 — as of C57.2, later
+  in this same hop, neither probe declares that string itself; `publicProbeError`
+  synthesizes it. no-match = nothing parses that field; the change is invisible.
 - before:
 
   ```json
@@ -1210,8 +1214,50 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   host, port, or IP. The application log for the same request still carries the full driver
   error under `component=database`.
 - ref: ADR-046 (the seam, reused unchanged) · `app/health.go`
-  (`databaseUnavailableMessage`) · `app/lifecycle.go` (`publicProbeError`) ·
+  (`databaseManagerHealthProbe`) · `app/lifecycle.go` (`publicProbeError`) ·
   `app/debug_health.go` · #879
+
+### [C57.2] every critical probe's `503` body is sanitized by default · silent-behavior · when: match
+
+- detect: `git grep -rn 'app.Prober\|HealthStatus{' -- '*.go'` for your own readiness probe
+  implementations, then check each one for `Critical: true` — and, among those, for a
+  `PublicErr` that is never set. Match = you implement a critical `Prober` that returns an
+  error and leaves `PublicErr` empty. **Expect no match at this version:** probe
+  registration is framework-internal (`App.healthProbes` is unexported, its only writer
+  `createHealthProbes` takes no argument, and `app.Options` carries no probe field), so
+  nothing consumer-written reaches `readyCheck` today. `Prober` is exported, so this atom
+  is written for the release where a registration API lands. The framework's own probes are
+  **not** a match either: the
+  database and cache `503` bodies are byte-identical across this atom (`database
+  unavailable` / `cache unavailable`, exactly what they served in C57.1 and C56.12), and
+  messaging is never critical.
+- gate: match = your probe's `503` body stops carrying `Err` and now reads
+  `<Name> unavailable`, synthesized from `HealthStatus.Name`. `publicProbeError` no longer
+  falls back to the raw error for an empty `PublicErr` — `/ready` is unauthenticated and
+  carries no IP allowlist, so the sanitized string is the default and `PublicErr` is the
+  override. `HealthStatus.Err` is unchanged: it still reaches the application log on every
+  critical `503` and `<debug.pathprefix>/health-debug`. no-match = nothing to do; this atom
+  emits no byte difference for a consumer running only framework probes.
+- before:
+  ```json
+  {"status":"not ready","vault":"unhealthy","error":"dial tcp 10.0.0.9:8200: connect: connection refused"}
+  ```
+- after:
+  ```json
+  {"status":"not ready","vault":"unhealthy","error":"vault unavailable"}
+  ```
+- apply: nothing, if the synthesized `"<Name> unavailable"` reads correctly for your probe —
+  that is the intended outcome, and the detail your alerting needs is on the log line
+  `Readiness check failed` (with a `component` field) and on the debug health endpoint. To
+  choose different wording, set `HealthStatus.PublicErr` to a **fixed** string: a value
+  derived from config — a host, a DSN, a tenant key — reintroduces on an unauthenticated
+  endpoint exactly the disclosure this default removes.
+- verify: with your dependency down, `curl -s localhost:8080/ready | jq -r '.error'` prints
+  your probe's `Name` followed by ` unavailable` (or your `PublicErr`), and contains no
+  host, port, IP, username, or database name. The same request's application log line still
+  carries the full error.
+- ref: ADR-048 · `app/lifecycle.go` (`publicProbeError`) · `app/health.go` (`Prober`,
+  `HealthStatus.PublicErr`)
 
 ---
 
