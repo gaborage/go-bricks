@@ -545,19 +545,27 @@ func defaultTestConfig() *config.Config {
 	}
 }
 
-// assertNoCacheCoordinates pins that no Redis coordinate and no raw probe text appears
-// ANYWHERE in a /ready body — not only under the error key, so a future field (cache_stats,
-// or one nobody has written yet) that reintroduces the address is caught too. It asserts
-// nothing about the error key, so it holds for the 200 body as well: a leak has no status code.
-func assertNoCacheCoordinates(t *testing.T, body map[string]any) {
+// assertReadyBodyOmits pins that none of the given strings appears ANYWHERE in a /ready
+// body — not only under the key it was expected on, so a future field (or one nobody has
+// written yet) that reintroduces the value elsewhere is caught too. It asserts nothing about
+// which status code produced the body: a leak has no status code.
+func assertReadyBodyOmits(t *testing.T, body map[string]any, forbidden ...string) {
 	t.Helper()
 
 	raw, err := json.Marshal(body)
 	require.NoError(t, err)
 	rendered := string(raw)
-	assert.NotContains(t, rendered, redisProbeAddress)
-	assert.NotContains(t, rendered, localHost)
-	assert.NotContains(t, rendered, errorRedisDown)
+	for _, s := range forbidden {
+		assert.NotContainsf(t, rendered, s, "/ready is unauthenticated; %q must not reach its body", s)
+	}
+}
+
+// assertNoCacheCoordinates applies the whole-body lens above to the Redis coordinates and the
+// raw probe text the cache probe's error carries.
+func assertNoCacheCoordinates(t *testing.T, body map[string]any) {
+	t.Helper()
+
+	assertReadyBodyOmits(t, body, redisProbeAddress, localHost, errorRedisDown)
 }
 
 // assertCacheErrorSanitized pins the /ready 503 body for a failing cache: the stable public
