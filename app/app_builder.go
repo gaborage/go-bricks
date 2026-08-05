@@ -197,6 +197,9 @@ func (b *Builder) InitializeRegistry() *Builder {
 	}
 
 	registry := NewModuleRegistry(b.bundle.deps)
+	// Set post-construction: NewModuleRegistry is shipped API and must keep its
+	// signature byte-identical (apidiff gate).
+	registry.rootDBAbsent = rootDatabaseAbsent(b.cfg, b.opts)
 	b.app.registry = registry
 	return b
 }

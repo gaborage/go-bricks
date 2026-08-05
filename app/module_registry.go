@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
@@ -17,6 +18,9 @@ type ModuleRegistry struct {
 	deps            *ModuleDeps
 	logger          logger.Logger
 	registeredNames map[string]Module // Tracks registered modules to prevent duplicates
+	// rootDBAbsent records the builder's rootDatabaseAbsent verdict, gating the
+	// DatabaseRequirer check. Zero value (false) leaves that check inert.
+	rootDBAbsent bool
 }
 
 // NewModuleRegistry creates a new module registry with the given dependencies.
@@ -32,7 +36,9 @@ func NewModuleRegistry(deps *ModuleDeps) *ModuleRegistry {
 
 // Register adds a module to the registry and initializes it.
 // It calls the module's Init method with the injected dependencies.
-// Returns an error if a module with the same name is already registered.
+// Returns an error if a module with the same name is already registered, or if the
+// module implements DatabaseRequirer on a deployment with no database — the one
+// special case that rejects a module rather than wiring it.
 // Special handling: modules implementing JobRegistrar, OutboxProvider, InboxProvider,
 // or KeyStoreProvider are automatically wired into the corresponding ModuleDeps fields
 // (Scheduler, Outbox, Inbox, KeyStore) so subsequent modules can use them.
@@ -52,6 +58,10 @@ func (r *ModuleRegistry) Register(module Module) error {
 	r.logger.Info().
 		Str("module", moduleName).
 		Msg("Registering module")
+
+	if err := r.checkDatabaseRequirement(module); err != nil {
+		return err
+	}
 
 	if err := module.Init(r.deps); err != nil {
 		return err
@@ -113,6 +123,30 @@ func (r *ModuleRegistry) Register(module Module) error {
 		Msg("Registered module")
 
 	return nil
+}
+
+// checkDatabaseRequirement rejects a module that declared DatabaseRequirer on a
+// deployment with no database. It runs before Init so the module never sees a
+// dependency it declared as mandatory and cannot get.
+//
+// rootDBAbsent is supplied by the builder, which is the only place that can see both
+// the config and the Options needed to evaluate rootDatabaseAbsent. Its zero value
+// disables the check, so a registry built directly — outside the builder, with no
+// Options to consult — stays inert rather than aborting on a verdict it cannot reach.
+func (r *ModuleRegistry) checkDatabaseRequirement(module Module) error {
+	requirer, ok := module.(DatabaseRequirer)
+	if !ok || !requirer.RequiresDatabase() || !r.rootDBAbsent {
+		return nil
+	}
+
+	// Deliberately the "missing" category, never "not_configured": the latter marks a
+	// feature as intentionally absent and is used framework-wide as a skip-and-degrade
+	// predicate (config.IsNotConfigured — see app/prewarm.go, app/health.go). A caller
+	// mirroring that idiom would turn this fatal into a silent module skip, dropping the
+	// module's routes and global middleware while the rest of the app still served.
+	err := config.NewMissingFieldError(componentDatabase, "DATABASE_TYPE", "database")
+	err.Message = fmt.Sprintf("required by module %q", module.Name())
+	return err
 }
 
 // RegisterRoutes calls RegisterRoutes on modules that implement RouteRegisterer.
