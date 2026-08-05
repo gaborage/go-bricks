@@ -274,7 +274,13 @@ func TestLoadServerLogRoutesEnv(t *testing.T) {
 }
 
 func TestLoadInvalidEnvironmentVariables(t *testing.T) {
+	// A COMPLETE database section, so each case isolates the one variable it makes
+	// invalid. A partial section (identity fields without a type) now fails validation
+	// on its own and would mask the error under test.
 	baseEnv := map[string]string{
+		"DATABASE_TYPE":      "postgresql",
+		"DATABASE_HOST":      "localhost",
+		"DATABASE_PORT":      "5432",
 		testDatabaseDatabase: "testdb",
 		testDatabaseUsername: "testuser",
 	}
@@ -483,14 +489,16 @@ func TestLoadEdgeCases(t *testing.T) {
 	})
 }
 
+// TestLoadCustomConfiguration exercises custom (non-framework) config keys. Its
+// subtests set no database section at all: they previously set database.database +
+// database.username, which validation skipped, but that pair is now a partial config
+// and fails load. The two subtests that assert on a resolved database value complete
+// the section instead.
 func TestLoadCustomConfiguration(t *testing.T) {
 	defer clearEnvironmentVariables()
 
 	t.Run("custom_config_via_environment", func(t *testing.T) {
 		clearEnvironmentVariables()
-		// Set required database fields
-		os.Setenv(testDatabaseDatabase, "testdb")
-		os.Setenv(testDatabaseUsername, "testuser")
 
 		// Set custom configuration via environment variables
 		// Note: underscores in env vars are converted to dots by Koanf
@@ -516,9 +524,6 @@ func TestLoadCustomConfiguration(t *testing.T) {
 
 	t.Run("custom_config_with_defaults", func(t *testing.T) {
 		clearEnvironmentVariables()
-		// Set required database fields
-		os.Setenv(testDatabaseDatabase, "testdb")
-		os.Setenv(testDatabaseUsername, "testuser")
 
 		cfg, err := Load()
 		require.NoError(t, err)
@@ -532,9 +537,6 @@ func TestLoadCustomConfiguration(t *testing.T) {
 
 	t.Run("custom_config_required_fields", func(t *testing.T) {
 		clearEnvironmentVariables()
-		// Set required database fields
-		os.Setenv(testDatabaseDatabase, "testdb")
-		os.Setenv(testDatabaseUsername, "testuser")
 		os.Setenv("CUSTOM_API_KEY", "secret-key-123")
 
 		cfg, err := Load()
@@ -554,9 +556,6 @@ func TestLoadCustomConfiguration(t *testing.T) {
 
 	t.Run("custom_config_unmarshal_struct", func(t *testing.T) {
 		clearEnvironmentVariables()
-		// Set required database fields
-		os.Setenv(testDatabaseDatabase, "testdb")
-		os.Setenv(testDatabaseUsername, "testuser")
 
 		// Set complex custom configuration
 		os.Setenv("CUSTOM_SERVICE_NAME", appName)
@@ -584,7 +583,11 @@ func TestLoadCustomConfiguration(t *testing.T) {
 
 	t.Run("custom_config_exists_check", func(t *testing.T) {
 		clearEnvironmentVariables()
-		// Set required database fields
+		// This subtest asserts on database.database, so it needs a COMPLETE database
+		// section: any identity field alone is now a partial config and fails validation.
+		os.Setenv("DATABASE_TYPE", "postgresql")
+		os.Setenv("DATABASE_HOST", "localhost")
+		os.Setenv("DATABASE_PORT", "5432")
 		os.Setenv(testDatabaseDatabase, "testdb")
 		os.Setenv(testDatabaseUsername, "testuser")
 		os.Setenv("CUSTOM_FEATURE_FLAG", "true")
@@ -606,9 +609,6 @@ func TestLoadCustomConfiguration(t *testing.T) {
 
 	t.Run("custom_namespace_retrieval", func(t *testing.T) {
 		clearEnvironmentVariables()
-		// Set required database fields
-		os.Setenv(testDatabaseDatabase, "testdb")
-		os.Setenv(testDatabaseUsername, "testuser")
 		os.Setenv("CUSTOM_KEY1", "value1")
 		os.Setenv("CUSTOM_KEY2", "value2")
 

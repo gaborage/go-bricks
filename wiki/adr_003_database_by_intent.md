@@ -25,6 +25,9 @@ Implement "database by intent" configuration with the following principles:
 - **Removed**: All database defaults from `loadDefaults()` in `config/config.go`
 - **Added**: `IsDatabaseConfigured(cfg *DatabaseConfig) bool` function in `config/validation.go`
 - **Logic**: Database enabled when `ConnectionString != ""` OR `Host != ""` OR `Type != ""`
+  — widened by [ADR-047](adr_047_database_absence_vs_misconfiguration.md) to *any*
+  connection-identity field, so a partial section is intent (and must be completed)
+  rather than absence
 
 ### Validation Changes
 - **Before**: Database validation always required, caused failures for database-free apps
@@ -32,8 +35,17 @@ Implement "database by intent" configuration with the following principles:
 - **Consistency**: Shared logic between validation and runtime via `IsDatabaseConfigured()`
 
 ### Runtime Integration
-- **Updated**: The app builder checks `config.IsDatabaseConfigured(&cfg.Database)` directly (`app/app_builder.go`)
-- **Behavior**: Module dependency injection skips database when not configured
+- **Historical**: The app builder checked `config.IsDatabaseConfigured(&cfg.Database)` directly
+  (`app/app_builder.go`) to gate its startup connection probe. That check remains, but it is no
+  longer where absence is decided — [ADR-047](adr_047_database_absence_vs_misconfiguration.md)
+  moved the verdict to `config.TenantStore.DBConfig`, scoped to the default `""` key
+- **Behavior**: Module dependency injection is wired unconditionally — `deps.DB` is always
+  present. When no database is configured, calling it returns a `not_configured`
+  `*config.ConfigError` (`config.IsNotConfigured(err)` is true) rather than being absent.
+  See [ADR-047](adr_047_database_absence_vs_misconfiguration.md), which supersedes this
+  section in part: absence is decided at config resolution, and any single
+  connection-identity field now counts as intent, so a *partial* database section fails
+  startup instead of reading as an intentionally database-free service.
 
 ## Consequences
 

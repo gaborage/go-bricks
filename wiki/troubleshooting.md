@@ -50,7 +50,27 @@ Currently this is a documented developer convenience: TestMain always spins up a
 # → Check placeholder numbering (PostgreSQL: $1,$2; Oracle: :1,:2)
 
 # "database not configured" errors
-# → Set database.type, database.host OR database.connectionstring (see ADR-003)
+# → Provide a COMPLETE database section: type + host + port + username + a target
+#   (database, or for Oracle oracle.service.name / oracle.service.sid). A
+#   connectionstring still needs a type. A partial one now fails startup
+#   (see ADR-003, ADR-047)
+
+# /ready returns 200 with "database": "not_configured"
+# → Expected for a service with NO database: block. If the service DOES need one,
+#   its config never reached the process — implement app.DatabaseRequirer so this
+#   aborts startup instead of going green (see ADR-047)
+
+# /ready returns 200 with "database": "per_tenant"
+# → Multi-tenant, and the fixed "" key does not resolve — no tenant database has
+#   ever been probed, so /ready carries no database signal for this deployment.
+#   A multi-tenant service that DOES configure a root block (a shared-ledger
+#   control plane) is still probed and still 503s when that database is down
+
+# Startup fails: config_invalid: database.type '' is not supported
+# → A PARTIAL database: block. Any one of type/host/port/database/username/
+#   password/connectionstring/oracle.service.name/oracle.service.sid marks the
+#   section as intended, and an intended section must be complete (type + host +
+#   port + username + a target). Complete it, or remove the block entirely
 ```
 
 ## Connection Pool Issues (ORA-01013, connection reset)

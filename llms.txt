@@ -379,7 +379,7 @@ database:
   connectionstring: ${DATABASE_URL}      # e.g. postgres://user:pass@host:5432/dbname?sslmode=require
 ```
 
-Per ADR-003, at least one of `host` *or* `connectionstring` must be set, otherwise startup fails fast. Pool defaults are production-safe — override only when you have a measured reason (see wiki/database.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
+Per ADR-003 and ADR-047, the `database:` block is all-or-nothing: omit it entirely for a database-free service (`/ready` then reports `not_configured` and returns 200), or complete it. Setting *any* identity field — `type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`, `oracle.service.name`, `oracle.service.sid` — marks the section as intended, and an intended section that is incomplete fails startup. A module that cannot work without a database should implement `app.DatabaseRequirer` so absence aborts startup rather than going green. Pool defaults are production-safe — override only when you have a measured reason (see wiki/database.md "Connection Pool Defaults"). Multiple databases can be exposed under `databases.<name>` and accessed via `deps.DBByName(ctx, "name")`.
 
 ### Step 2: Access the Connection from a Module
 

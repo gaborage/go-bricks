@@ -64,8 +64,16 @@ func (h healthProbeFunc) Run(ctx context.Context) HealthStatus {
 	}
 }
 
-// databaseManagerHealthProbe creates a health probe for the database manager
-func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) Prober {
+// databaseManagerHealthProbe creates a health probe for the database manager.
+//
+// perTenant marks a deployment whose database configuration is resolved per tenant. It
+// only relabels the not-configured verdict (see handleDatabaseConnectionError) — the
+// probe still resolves and connects first. Deciding up-front would be wrong: multi-tenancy
+// does not imply the "" key is unconfigured, and a shared-ledger deployment
+// (outbox.tenancy: shared, ADR-041) resolves a real control-plane database through
+// exactly that key. Short-circuiting would leave that database unprobed while /ready
+// reported 200.
+func databaseManagerHealthProbe(dbManager *database.DbManager, perTenant bool, _ logger.Logger) Prober {
 	if dbManager == nil {
 		return healthProbeFunc{
 			name: componentDatabase,
@@ -79,16 +87,16 @@ func databaseManagerHealthProbe(dbManager *database.DbManager, _ logger.Logger) 
 		name:     componentDatabase,
 		critical: true,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
-			return checkDatabaseHealth(ctx, dbManager)
+			return checkDatabaseHealth(ctx, dbManager, perTenant)
 		},
 	}
 }
 
 // checkDatabaseHealth checks database connection and health status
-func checkDatabaseHealth(ctx context.Context, dbManager *database.DbManager) (status string, stats map[string]any, err error) {
+func checkDatabaseHealth(ctx context.Context, dbManager *database.DbManager, perTenant bool) (status string, stats map[string]any, err error) {
 	conn, release, err := dbManager.Get(ctx, "")
 	if err != nil {
-		return handleDatabaseConnectionError(err, dbManager)
+		return handleDatabaseConnectionError(err, dbManager, perTenant)
 	}
 	defer release() // probe holds no scope; release the lease when the check returns
 
@@ -104,13 +112,21 @@ func checkDatabaseHealth(ctx context.Context, dbManager *database.DbManager) (st
 }
 
 // handleDatabaseConnectionError handles errors when getting database connection
-func handleDatabaseConnectionError(err error, dbManager *database.DbManager) (status string, stats map[string]any, e error) {
+func handleDatabaseConnectionError(err error, dbManager *database.DbManager, perTenant bool) (status string, stats map[string]any, e error) {
 	dbStats := getStatsOrEmpty(dbManager.Stats())
 
 	// Check if database is not configured (not a critical failure)
 	if config.IsNotConfigured(err) {
-		dbStats[statusKey] = notConfiguredStatus
-		return notConfiguredStatus, dbStats, nil
+		// A per-tenant deployment whose "" key does not resolve has databases, just not
+		// under this key — saying not_configured would claim it has none. Only reachable
+		// once resolution has actually failed, so a shared-ledger control-plane database
+		// still reports its real health.
+		status := notConfiguredStatus
+		if perTenant {
+			status = perTenantStatus
+		}
+		dbStats[statusKey] = status
+		return status, dbStats, nil
 	}
 
 	// Other errors mean connection issues

@@ -26,12 +26,17 @@ const (
 	unhealthyStatus     = "unhealthy"
 	notConfiguredStatus = "not_configured"
 	readyStatus         = "ready"
-	degradedStatus      = "degraded"
-	statusKey           = "status"
-	componentDatabase   = "database"
-	componentMessaging  = "messaging"
-	componentCache      = "cache"
-	errorKey            = "error"
+	// perTenantStatus marks a component whose configuration is resolved per tenant and
+	// is therefore not probed by the fixed-key readiness check. Distinct from
+	// not_configured, which would claim the service has no database at all — false on a
+	// multi-tenant deployment with N tenant databases.
+	perTenantStatus    = "per_tenant"
+	degradedStatus     = "degraded"
+	statusKey          = "status"
+	componentDatabase  = "database"
+	componentMessaging = "messaging"
+	componentCache     = "cache"
+	errorKey           = "error"
 )
 
 var ErrNoTenantInContext = errors.New("no tenant in context")
@@ -83,12 +88,15 @@ type App struct {
 }
 
 // createHealthProbes builds the readiness probe set from the configured managers.
-// Criticality is resolved from config here and passed per probe.
+// Criticality is resolved from config here and passed per probe, as is whether the
+// database is resolved per tenant (nil-guarded like Config.IsCacheCritical, since a
+// directly-constructed App may carry no config).
 func (a *App) createHealthProbes() []Prober {
 	var probes []Prober
 
 	if a.dbManager != nil {
-		probes = append(probes, databaseManagerHealthProbe(a.dbManager, a.logger))
+		dbPerTenant := a.cfg != nil && a.cfg.Multitenant.Enabled
+		probes = append(probes, databaseManagerHealthProbe(a.dbManager, dbPerTenant, a.logger))
 	}
 
 	if a.messagingManager != nil {
