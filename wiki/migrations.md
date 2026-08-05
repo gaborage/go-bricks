@@ -1308,13 +1308,17 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   (`active_connections`, `max_connections`, `idle_ttl_seconds`, `status`) are untouched, so
   a consumer reading only those sees no difference.
 - before:
+
   ```json
   {"status":"ready","database":"healthy","db_stats":{"active_connections":3,"max_connections":25,"idle_ttl_seconds":3600,"status":"healthy","connections":[{"key":"acme","last_used":"2026-08-05T10:00:00Z","idle_duration":4},{"key":"globex","last_used":"2026-08-05T09:58:12Z","idle_duration":112}]}}
   ```
+
 - after:
+
   ```json
   {"status":"ready","database":"healthy","db_stats":{"active_connections":3,"max_connections":25,"idle_ttl_seconds":3600,"status":"healthy"}}
   ```
+
   (database keys only — the body also carries `messaging`, `cache`, their stats, `time` and
   `app`.)
 - apply: repoint anything alerting on per-tenant pool activity. Two channels still carry it.
