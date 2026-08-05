@@ -1239,13 +1239,17 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   critical `503` and `<debug.pathprefix>/health-debug`. no-match = nothing to do; this atom
   emits no byte difference for a consumer running only framework probes.
 - before:
+
   ```json
   {"status":"not ready","vault":"unhealthy","error":"dial tcp 10.0.0.9:8200: connect: connection refused"}
   ```
+
 - after:
+
   ```json
   {"status":"not ready","vault":"unhealthy","error":"vault unavailable"}
   ```
+
 - apply: nothing, if the synthesized `"<Name> unavailable"` reads correctly for your probe —
   that is the intended outcome, and the detail your alerting needs is on the log line
   `Readiness check failed` (with a `component` field) and on the debug health endpoint. To
