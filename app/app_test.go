@@ -794,6 +794,43 @@ func TestCreateHealthProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 	}
 }
 
+// TestCreateHealthProbesCriticalProbesDeclarePublicError enforces the Prober contract over
+// every probe the app actually wires, rather than probe by probe. SECURITY: readyCheck
+// renders a critical probe's error into the unauthenticated /ready 503 body, and an empty
+// PublicErr renders Err verbatim — so a critical probe without one leaks whatever its
+// driver put in the error. The per-constructor tests pin the probes that exist today; this
+// is the only guard that catches a critical probe added tomorrow.
+func TestCreateHealthProbesCriticalProbesDeclarePublicError(t *testing.T) {
+	cfg := &config.Config{}
+	require.True(t, cfg.IsCacheCritical(), "a zero-value config must leave the cache probe critical, or this test covers only the database probe")
+
+	app := &App{
+		cfg:              cfg,
+		logger:           logger.New("error", false),
+		dbManager:        newRealConnectorDBManager(cfg),
+		messagingManager: createTestMessagingManagerWithNotReadyClient(t),
+		cacheManager:     createTestCacheManager(t),
+	}
+
+	probes := app.createHealthProbes()
+	require.Len(t, probes, 3)
+
+	criticalSeen := 0
+	for _, probe := range probes {
+		st := probe.Run(context.Background())
+		if !st.Critical {
+			continue
+		}
+		criticalSeen++
+		assert.NotEmptyf(t, st.PublicErr,
+			"critical probe %q declares no PublicErr: its raw error would render into the unauthenticated /ready 503 body", st.Name)
+	}
+
+	// Without this the test would pass by iterating nothing the day every probe is made
+	// advisory — the exact change that would also silently retire the contract above.
+	require.GreaterOrEqual(t, criticalSeen, 2, "expected the database and cache probes to be critical")
+}
+
 func TestReadyCheckScenarios(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -840,8 +877,8 @@ func TestReadyCheckScenarios(t *testing.T) {
 			},
 		},
 		{
-			// Scope guard for the cache-only sanitization: the database 503 body must stay
-			// byte-identical, so this asserts the RAW error, not a stable placeholder.
+			// The database probe now sanitizes like the cache one (#879): a driver error
+			// names the user, database and resolved address, and /ready is unauthenticated.
 			name: "database unhealthy",
 			prepare: func(f *testAppFixture) {
 				f.db.On(methodHealth, mock.Anything).Return(errors.New(errorDBDown))
@@ -850,7 +887,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				assert.Equal(t, "not ready", body[statusKey])
 				assert.Equal(t, "unhealthy", body[componentDatabase])
-				assert.Equal(t, errorDBDown, body["error"])
+				assert.Equal(t, databaseUnavailableMessage, body["error"])
 			},
 		},
 		{

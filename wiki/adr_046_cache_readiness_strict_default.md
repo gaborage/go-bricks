@@ -106,7 +106,10 @@ IP-allowlisted `GET /_sys/health-debug` endpoint where that is enabled
 when `AllowedIPs` is empty, which the framework already warns about separately). The
 sanitization is **per-probe, not a blanket rewrite of the shared branch**: the database
 and messaging `503` bodies are byte-identical to before, because those probes leave
-`PublicErr` empty and `publicProbeError` falls back to the raw error. A single fixed
+`PublicErr` empty and `publicProbeError` falls back to the raw error. (Superseded for the
+database probe: it sets `PublicErr` to `database unavailable` as of `[C57.1]`, through this
+same seam. Messaging is still never critical, so no messaging error reaches a `503` body.)
+A single fixed
 string, rather than a per-shape classifier, covers every cache failure shape
 (`*cache.ConnectionError` — which already wraps the ping timeouts the 500ms cap produces —
 `cache.ErrManagerClosed` from a closed manager, and whatever a custom
@@ -156,6 +159,8 @@ narrow what an operator can see.
 
 **Scope held deliberately narrow.** The database probe (always critical) and the messaging
 probe (never critical, still no knob) are untouched in both criticality and `503` body.
+That narrowness did not hold: the database body carried the same class of disclosure and
+was sanitized to `database unavailable` in `[C57.1]`, reusing this ADR's seam unchanged.
 `GET /health` is unchanged and still dependency-free, which is what makes it the wrong
 target for a readiness probe and the right one for liveness. No `degraded` status was
 introduced — `/ready` answers a binary question for a binary consumer, and a third status
