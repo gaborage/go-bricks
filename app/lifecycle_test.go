@@ -307,6 +307,60 @@ func TestPrepareRuntimeSucceedsWithDeclarationsAndConfiguredMessaging(t *testing
 	require.NoError(t, app.prepareRuntime())
 }
 
+// debugCheckConfig builds a config whose Debug block enables one endpoint, leaving the
+// access-control keys to the caller. Assembled in Go, so it never receives the koanf
+// loopback default for allowedips — the state ADR-049 refuses is reachable here by omission.
+func debugCheckConfig(allowedIPs []string, bearerToken string) *config.Config {
+	return &config.Config{
+		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Multitenant: config.MultitenantConfig{Enabled: false},
+		Debug: config.DebugConfig{
+			Enabled:     true,
+			PathPrefix:  "/_sys",
+			AllowedIPs:  allowedIPs,
+			BearerToken: bearerToken,
+			Endpoints:   config.DebugEndpointsConfig{Health: true},
+		},
+	}
+}
+
+// TestPrepareRuntimeFailsWhenDebugEndpointsHaveNoAccessControl is the guard for ADR-049's
+// central claim — that the refusal is *fatal at startup*, not merely an error returned from
+// RegisterDebugEndpoints. Every other test calls that method directly; this one drives the
+// path the framework actually takes, so a future refactor that drops the error on the floor
+// in registerDebugHandlers or prepareRuntime fails here.
+func TestPrepareRuntimeFailsWhenDebugEndpointsHaveNoAccessControl(t *testing.T) {
+	app := newLifecycleCheckApp(t, debugCheckConfig(nil, ""))
+
+	err := app.prepareRuntime()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "would expose enhanced health at /_sys")
+	assert.Contains(t, err.Error(), "debug.allowedips")
+	assert.Contains(t, err.Error(), "debug.bearertoken")
+}
+
+// TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl is the negative half: startup must
+// still proceed once either access-control key is set, so the abort cannot be over-eager.
+func TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl(t *testing.T) {
+	tests := []struct {
+		name        string
+		allowedIPs  []string
+		bearerToken string
+	}{
+		{name: "allowlist_set", allowedIPs: []string{localhostIPV4}},
+		{name: "token_set", bearerToken: "s3cret-token"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newLifecycleCheckApp(t, debugCheckConfig(tt.allowedIPs, tt.bearerToken))
+
+			require.NoError(t, app.prepareRuntime())
+		})
+	}
+}
+
 // globalMWCapturingServer implements ServerRunner (via embedded mockServer) plus the
 // optional RegisterGlobalMiddleware capability, capturing what it receives.
 type globalMWCapturingServer struct {

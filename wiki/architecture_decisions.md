@@ -848,6 +848,31 @@ also holds for probes the framework never constructs. See [migrations.md](migrat
 
 ---
 
+### [ADR-049: Debug Endpoints Refuse to Register Without Access Control](adr_049_debug_endpoints_fail_closed.md)
+
+**Date:** 2026-08-05 | **Status:** Accepted | **Related:** ADR-038, ADR-046
+
+`RegisterDebugEndpoints` now returns an error — fatal at startup — when
+`debug.enabled: true` would expose one or more debug endpoints with neither
+`debug.allowedips` nor `debug.bearertoken` set. That state used to register the
+group behind a pass-through `ipWhitelistMiddleware` and a startup WARN naming the
+exposed endpoints, leaving `/_sys/health-debug` (full probe errors incl.
+connection identity, per-key pool detail) and `/_sys/goroutines` reachable by any
+peer that could reach the port. A WARN is not a control. The two access controls
+now compose explicitly: each middleware is applied only when its key is
+configured, and the allowlist's pass-through branch is gone, so its residual
+failure mode is deny-all. `len(exposed) > 0` gates the refusal, so an enabled
+group with every endpoint flag off is unaffected, as is the `debug.enabled: false`
+default.
+
+**Key Benefits:** the exposure the WARN failed to prevent is no longer
+deployable; every doc describing `/_sys/health-debug` as access-controlled
+becomes unconditionally true. Follows the ADR-038 (CORS dev wildcard opt-in) and
+ADR-046 (cache probe critical by default) precedent. Deploy-time break for a
+service currently in that state — see [migrations.md](migrations.md) `[C57.7]`.
+
+---
+
 ### [ADR-050: Infer `database.type` from the Connection-String Scheme, Fail Fast on What's Left Untyped](adr_050_connectionstring_type_inference.md)
 
 **Date:** 2026-08-05 | **Status:** Accepted

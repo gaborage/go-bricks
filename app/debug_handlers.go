@@ -74,11 +74,27 @@ func NewDebugHandlers(app *App, cfg *config.DebugConfig, log logger.Logger) *Deb
 	}
 }
 
-// RegisterDebugEndpoints registers all debug endpoints if enabled
-func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) {
+// RegisterDebugEndpoints registers all debug endpoints if enabled. It returns an error —
+// fatal at startup — when enabling them would expose the group with no access control.
+func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) error {
 	if !d.config.Enabled {
 		d.logger.Info().Msg("Debug endpoints disabled")
-		return
+		return nil
+	}
+
+	exposed := d.exposedEndpoints()
+
+	// SECURITY: this group renders what /ready deliberately withholds — full probe errors
+	// including database connection identity, and per-key connection-pool detail. An empty
+	// debug.allowedips used to yield a pass-through middleware backed only by a startup
+	// WARN, leaving the whole group reachable by any peer that can reach the port. A WARN
+	// is not a control, so registration is refused instead (ADR-049); either access-control
+	// key satisfies the check.
+	if len(exposed) > 0 && len(d.config.AllowedIPs) == 0 && d.config.BearerToken == "" {
+		return fmt.Errorf("debug endpoints are enabled and would expose %s at %s with NO access control: "+
+			"set debug.allowedips (env DEBUG_ALLOWEDIPS) and/or debug.bearertoken (env DEBUG_BEARERTOKEN), "+
+			"or set debug.enabled to false",
+			strings.Join(exposed, ", "), d.config.PathPrefix)
 	}
 
 	g := r.Group(d.config.PathPrefix)
@@ -95,8 +111,13 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) {
 			Msg("Debug endpoint trustedproxies list contains invalid CIDR entries; proxy headers from those ranges will not be trusted")
 	}
 
-	// Apply security middleware (ipWhitelist before auth — ordering preserved via Use order).
-	g.Use(d.ipWhitelistMiddleware(trustedNets))
+	// Each control is applied only when it is configured, and the two compose rather than
+	// one short-circuiting the other: with both set a request must come from an allowlisted
+	// IP AND carry the token (ipWhitelist before auth — ordering preserved via Use order).
+	// The refusal above guarantees at least one of them is present.
+	if len(d.config.AllowedIPs) > 0 {
+		g.Use(d.ipWhitelistMiddleware(trustedNets))
+	}
 	if d.config.BearerToken != "" {
 		g.Use(d.authMiddleware(trustedNets))
 	}
@@ -116,6 +137,17 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) {
 		g.Add(http.MethodGet, "/info", d.handleInfo)
 	}
 
+	d.logger.Info().
+		Str("prefix", d.config.PathPrefix).
+		Msgf("Debug endpoints registered (allowed_ips=%d, auth_enabled=%t)",
+			len(d.config.AllowedIPs), d.config.BearerToken != "")
+
+	return nil
+}
+
+// exposedEndpoints names, in registration order, the debug endpoints the current config
+// enables. An empty result means the group would carry no routes at all.
+func (d *DebugHandlers) exposedEndpoints() []string {
 	var exposed []string
 	if d.config.Endpoints.Goroutines {
 		exposed = append(exposed, "goroutine dumps")
@@ -129,19 +161,7 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) {
 	if d.config.Endpoints.Info {
 		exposed = append(exposed, "build info")
 	}
-	if len(exposed) > 0 && len(d.config.AllowedIPs) == 0 && d.config.BearerToken == "" {
-		d.logger.Warn().
-			Str("prefix", d.config.PathPrefix).
-			Str("exposed", strings.Join(exposed, ", ")).
-			Msg("Debug endpoints registered with NO access control (empty allowedips, no bearertoken): " +
-				"the listed endpoints are reachable by anyone who can reach this port. " +
-				"Set debug.allowedips and/or debug.bearertoken.")
-	}
-
-	d.logger.Info().
-		Str("prefix", d.config.PathPrefix).
-		Msgf("Debug endpoints registered (allowed_ips=%d, auth_enabled=%t)",
-			len(d.config.AllowedIPs), d.config.BearerToken != "")
+	return exposed
 }
 
 // IPWhitelist manages a list of allowed IP networks for access control
@@ -214,13 +234,10 @@ func (w *IPWhitelist) normalizeToCIDR(ipStr string) string {
 
 // ipWhitelistMiddleware restricts access to allowed IPs. The trusted-proxy nets are parsed
 // once by RegisterDebugEndpoints and threaded in so client-IP derivation is spoof-resistant.
+// RegisterDebugEndpoints applies it only when the allowlist is non-empty; an empty allowlist
+// yields a whitelist that matches nothing, so the failure mode is deny-all rather than the
+// pass-through it used to be.
 func (d *DebugHandlers) ipWhitelistMiddleware(trustedNets []*net.IPNet) server.MiddlewareFunc {
-	if len(d.config.AllowedIPs) == 0 {
-		return func(_ server.HandlerContext, next func() error) error {
-			return next()
-		}
-	}
-
 	whitelist := NewIPWhitelist(d.config.AllowedIPs, d.logger)
 	return d.createIPCheckHandler(whitelist, trustedNets)
 }
@@ -263,6 +280,14 @@ func (d *DebugHandlers) handleAccessDenied(clientIP, reason string) error {
 // (server.ClientIP) instead of echo's spoofable c.RealIP().
 func (d *DebugHandlers) authMiddleware(trustedNets []*net.IPNet) server.MiddlewareFunc {
 	return func(c server.HandlerContext, next func() error) error {
+		// SECURITY: defense-in-depth against a caller that registers this unconditionally.
+		// RegisterDebugEndpoints wires it only when BearerToken is set, but with an empty
+		// one `Authorization: Bearer ` would authenticate — strings.Cut yields "" and
+		// ConstantTimeCompare("", "") returns 1.
+		if d.config.BearerToken == "" {
+			return server.NewUnauthorizedError("Bearer token required")
+		}
+
 		authHeader := c.RequestHeader("Authorization")
 		// The Authorization scheme is case-insensitive per RFC 7235; match it with EqualFold.
 		scheme, token, ok := strings.Cut(authHeader, " ")
