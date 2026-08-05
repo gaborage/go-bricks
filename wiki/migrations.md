@@ -1234,7 +1234,14 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   where a registration API lands. The framework's own probes are **not** a match either: the
   database and cache `503` bodies are byte-identical across this atom (`database
   unavailable` / `cache unavailable`, exactly what they served in C57.1 and C56.12) — both
-  fixed literals — and messaging is never critical.
+  fixed literals — and messaging is never critical. **Limits of the probe:** it only catches
+  a `Prober` that names `app.Prober` explicitly or builds its status from an inline
+  `HealthStatus{` literal, so it misses an implicit `Prober` (a `Run(context.Context)
+  HealthStatus` method that never names the interface), a `Run` whose status comes from a
+  helper function instead of an inline literal, and a `PublicErr` set by field access on a
+  variable built elsewhere. Treat a clean result as a strong hint, not proof; inspect each
+  `Run` implementation and the probe registration path by hand for helper-generated statuses
+  and implicit `Prober` implementations.
 - gate: match = your probe's `503` body stops carrying `Err` and now reads
   `<Name> unavailable`, synthesized from `HealthStatus.Name`. `publicProbeError` no longer
   falls back to the raw error for an empty `PublicErr` — `/ready` is unauthenticated and
