@@ -1257,9 +1257,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   derived from config — a host, a DSN, a tenant key — reintroduces on an unauthenticated
   endpoint exactly the disclosure this default removes.
 - verify: with your dependency down, `curl -s localhost:8080/ready | jq -r '.error'` prints
-  your probe's `Name` followed by ` unavailable` (or your `PublicErr`), and contains no
-  host, port, IP, username, or database name. The same request's application log line still
-  carries the full error.
+  `<Name> unavailable` (using your probe's `Name`, or your `PublicErr` if you set one), and
+  contains no host, port, IP, username, or database name. The same request's application
+  log line still carries the full error.
 - ref: ADR-048 · `app/lifecycle.go` (`publicProbeError`) · `app/health.go` (`Prober`,
   `HealthStatus.PublicErr`)
 
