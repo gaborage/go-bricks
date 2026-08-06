@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -540,6 +541,30 @@ func publicProbeError(result *HealthStatus) string {
 	return result.Name + " unavailable"
 }
 
+// dbConnectionsKey is the DbManager.Stats() entry publicDBStats withholds from /ready.
+const dbConnectionsKey = "connections"
+
+// publicDBStats renders db_stats for the unauthenticated /ready body: every scalar counter,
+// never the per-connection array.
+//
+// SECURITY: DbManager.Stats()["connections"] holds one entry per live pooled connection, and
+// each entry's "key" is the resourcepool key — the tenant ID in a multi-tenant deployment,
+// the named-database key otherwise — alongside last_used and idle_duration. /ready carries no
+// authentication and no IP allowlist, and its only throttle is the 2000 rps/IP abuse
+// pre-guard, which is no barrier to enumeration — so polling it enumerated which tenants were
+// active and when each was last served.
+//
+// The redaction belongs at this render site and not in DbManager.Stats() or the probe: the
+// access-controlled <debug.pathprefix>/health-debug renders that same details map and
+// operators need the per-key detail there, so this copies rather than mutating the caller's
+// map.
+func publicDBStats(details map[string]any) map[string]any {
+	public := make(map[string]any, len(details))
+	maps.Copy(public, details)
+	delete(public, dbConnectionsKey)
+	return public
+}
+
 // readyCheck handles the health check endpoint
 func (a *App) readyCheck(c server.HandlerContext) error {
 	ctx := c.RequestContext()
@@ -575,7 +600,7 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		dbStatus.Status = disabledStatus
 		dbStatus.Details = map[string]any{statusKey: disabledStatus}
 	}
-	dbStats := getStatsOrEmpty(dbStatus.Details)
+	dbStats := publicDBStats(dbStatus.Details)
 
 	messagingStatus, messagingStats := componentReport(componentStatus, componentMessaging)
 	cacheStatus, cacheStats := componentReport(componentStatus, componentCache)

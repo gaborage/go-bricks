@@ -717,6 +717,44 @@ func TestReadyCheckSanitizesCriticalProbeWithoutPublicError(t *testing.T) {
 	assert.Contains(t, event.err, "10.0.0.5:5432")
 }
 
+// TestPublicDBStatsDropsConnectionsOnACopy pins both halves of the render-site redaction:
+// the /ready view loses the per-connection array, and the map it was built from keeps it.
+// The copy is what keeps the redaction local to the unauthenticated body — the same map is
+// what /_sys/health-debug renders as the database component's details.
+func TestPublicDBStatsDropsConnectionsOnACopy(t *testing.T) {
+	details := map[string]any{
+		"active_connections": 2,
+		"max_connections":    25,
+		"idle_ttl_seconds":   3600,
+		statusKey:            healthyStatus,
+		dbConnectionsKey: []map[string]any{
+			{"key": "tenant-alpha", "last_used": "2026-08-05T10:00:00Z", "idle_duration": 4},
+		},
+	}
+
+	public := publicDBStats(details)
+
+	assert.Equal(t, map[string]any{
+		"active_connections": 2,
+		"max_connections":    25,
+		"idle_ttl_seconds":   3600,
+		statusKey:            healthyStatus,
+	}, public, "every scalar counter must survive; only the keyed array is withheld")
+
+	assert.Contains(t, details, dbConnectionsKey,
+		"redacting in place would strip the array from the debug endpoint's view too")
+}
+
+// TestPublicDBStatsPreservesAbsentDatabaseShape guards the published body for a deployment
+// with no database: db_stats {"status":"disabled"} rather than null or a missing key.
+func TestPublicDBStatsPreservesAbsentDatabaseShape(t *testing.T) {
+	assert.Equal(t, map[string]any{statusKey: disabledStatus},
+		publicDBStats(map[string]any{statusKey: disabledStatus}))
+
+	assert.Equal(t, map[string]any{}, publicDBStats(nil),
+		"a nil details map must still render {} — never JSON null")
+}
+
 // runReadyCheck drives readyCheck over httptest and decodes the JSON body.
 func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]any, code int) {
 	t.Helper()

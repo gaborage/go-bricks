@@ -39,7 +39,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56  | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
-| E57  | v0.56.0 → v0.57.0 | silent-behavior | 2 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `/_sys/health-debug` — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2) |
+| E57  | v0.56.0 → v0.57.0 | silent-behavior | 3 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -1141,7 +1141,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - verify: `curl -s -o /dev/null -w '%{http_code}' localhost:8080/ready`
 - ref: ADR-047 · `config/tenant_store.go` (`DBConfig`) · `app/health.go` · `app/debug_health.go` · #872
 
-## E57 · v0.56.0 → v0.57.0 — `/ready` stops carrying probe errors in its `503` body
+## E57 · v0.56.0 → v0.57.0 — `/ready` stops disclosing internals in either body
 
 - gist: The database readiness probe now declares a sanitized public string, so `/ready`'s
   `503` body reports `database unavailable` instead of the driver's error. That error named
@@ -1158,7 +1158,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   (C57.1). The same hop then inverts the seam itself: sanitization is the default for
   **every** critical probe rather than something each one opts into, so a critical
   `Prober` you wrote yourself now serves `<Name> unavailable` instead of its raw error
-  (C57.2). For the framework's own probes that flip emits identical bytes.
+  (C57.2). For the framework's own probes that flip emits identical bytes. The hop then
+  closes the same disclosure on the **200** body, which is the one actually polled:
+  `db_stats.connections` carried one entry per live pooled connection, keyed by the
+  resourcepool key — the tenant ID in a multi-tenant deployment — with `last_used` and
+  `idle_duration` alongside it, so an unauthenticated caller read a live tenant enumeration
+  and per-tenant timing. That array is now withheld from `/ready`; the scalar counters stay,
+  and the per-key detail is unchanged on `<debug.pathprefix>/health-debug` (C57.3).
 - build-caught: none
 - exit: `go get github.com/gaborage/go-bricks@v0.57.0 && go mod tidy && go build ./... && go test ./...`
 
@@ -1276,6 +1282,67 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   log line still carries the full error.
 - ref: ADR-048 · `app/lifecycle.go` (`publicProbeError`) · `app/health.go` (`Prober`,
   `HealthStatus.PublicErr`)
+
+### [C57.3] `/ready`'s 200 body drops `db_stats.connections` · silent-behavior · when: match
+
+- detect: `git grep -rn 'db_stats' --` finds the in-repo consumers — a contract test pinning
+  the key set, a checked-in log-pipeline config. **A clean grep is not sufficient on its
+  own**, and treating it as one is how a dashboard breaks on deploy. Most consumers of
+  `/ready` live outside the Go repo, and some are invisible to a literal grep even inside it:
+  Grafana panels, Prometheus / Datadog alert rules, synthetic checks, k6 or Postman scripts,
+  and any code assembling the path dynamically (`body["db_stats"]["connections"][i]["key"]`,
+  a JSONPath expression, a field name held in a variable). Search those by hand for
+  `connections` and for the fields under it — `key`, `last_used`, `idle_duration`. Match =
+  any consumer, inside the repo or outside it, reads the array. Only `db_stats` changes:
+  `messaging_stats` and `cache_stats` were already counters-only and carry no per-key
+  entries, so nothing reading those needs checking.
+- gate: match = your consumer now finds `db_stats` without its array. `/ready` has no
+  authentication and no IP allowlist — load balancers must reach it — and its only throttle is
+  the `app.rate.ippreguard` abuse ceiling (enabled by default at 2000 rps/IP), which is no
+  barrier to enumeration. Each entry's `key` is the resourcepool key, which is the **tenant
+  ID** in a multi-tenant deployment and the named-database key in a multi-DB one. Polling the
+  endpoint therefore returned a live enumeration of which tenants were active, plus
+  `last_used` and `idle_duration` showing when each was last served. This is the 200-body
+  counterpart of C57.1: unlike a `503`, it answers on the healthy path, which is the one actually
+  polled. no-match = nothing reads the array; the change is invisible. The scalar counters
+  (`active_connections`, `max_connections`, `idle_ttl_seconds`, `status`) are untouched, so
+  a consumer reading only those sees no difference.
+- before:
+
+  ```json
+  {"status":"ready","database":"healthy","db_stats":{"active_connections":3,"max_connections":25,"idle_ttl_seconds":3600,"status":"healthy","connections":[{"key":"acme","last_used":"2026-08-05T10:00:00Z","idle_duration":4},{"key":"globex","last_used":"2026-08-05T09:58:12Z","idle_duration":112}]}}
+  ```
+
+- after:
+
+  ```json
+  {"status":"ready","database":"healthy","db_stats":{"active_connections":3,"max_connections":25,"idle_ttl_seconds":3600,"status":"healthy"}}
+  ```
+
+  (database keys only — the body also carries `messaging`, `cache`, their stats, `time` and
+  `app`.)
+- apply: repoint anything alerting on per-tenant pool activity. Two channels still carry it.
+  The debug health endpoint renders the full array verbatim under
+  `data.components.database.details.connections` at `<debug.pathprefix>/health-debug`
+  (`debug.pathprefix` defaults to `/_sys`), but only where `debug.enabled: true` (default
+  `false`) and `debug.endpoints.health: true` (default `true`) — and its access control is
+  conditional, so confirm `debug.allowedips` is non-empty (it defaults to loopback) or
+  `debug.bearertoken` is set before pointing a scraper at it. The durable answer for a
+  dashboard is the OpenTelemetry database metrics, which carry pool state without publishing
+  it on an unauthenticated port. `database.DbManager.Stats()` is unchanged for code calling
+  it directly — the redaction happens where `/ready` renders, not in the manager — but note
+  the same rule now applies to any surface you render it on: a pool key is tenant identity.
+- verify: with at least two tenants warm, `curl -s localhost:8080/ready | jq '.db_stats'`
+  shows the four scalar keys and no `connections`, and `curl -s localhost:8080/ready` grepped
+  for a known tenant ID returns nothing. For the debug channel, build the URL from your own
+  settings rather than assuming the defaults — with `debug.enabled: true`,
+  `debug.endpoints.health` left at `true`, the request coming from an address inside
+  `debug.allowedips`, and `PREFIX` set to `debug.pathprefix` (`/_sys` unless you changed it):
+  `curl -s -H "Authorization: Bearer $DEBUG_TOKEN" "localhost:8080$PREFIX/health-debug" | jq
+  '.data.components.database.details.connections'` still lists every key (drop the header when
+  `debug.bearertoken` is empty).
+- ref: `app/lifecycle.go` (`publicDBStats`) · `database/manager.go` (`DbManager.Stats`) ·
+  `app/debug_health.go`
 
 ---
 

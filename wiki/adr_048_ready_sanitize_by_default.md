@@ -127,6 +127,19 @@ covers the case this ADR exists for — a critical probe with no `PublicErr`, dr
 `TestHealthProbeFuncRun`. Deleting it would leave an exported `PublicErr` that the
 framework's own `Prober` implementation could not populate.
 
+**The generalized rule, which outlives this seam.** Everything `/ready` returns is public at
+**any** status code — the `200` body just as much as the `503` this ADR governs, and the `200`
+is the one actually polled. Identity-bearing detail belongs on the access-controlled debug
+endpoint and never here — and "access-controlled" holds only where `debug.allowedips` or
+`debug.bearertoken` actually supplies that control, since `ipWhitelistMiddleware` is a
+pass-through on an empty allowlist and the bearer check registers only when a token is set.
+Adding a key to either body is a disclosure decision a reviewer should treat as such. `[C57.3]` is the second application of that lens rather than of this mechanism: it
+removed `db_stats.connections` from the `200` body, whose per-entry `key` is the resourcepool
+key — the tenant ID in a multi-tenant deployment — so an unauthenticated poll returned a live
+tenant enumeration with per-tenant timing. That redaction sits at the `readyCheck` render site
+(`publicDBStats`), not behind `PublicErr`, because `DbManager.Stats()` must keep serving the
+full detail to the debug endpoint.
+
 See [ADR-046](adr_046_cache_readiness_strict_default.md) for the seam this extends and the
 `cache.critical` decision it sits on, and [migrations.md](migrations.md) `[C57.1]`,
-`[C57.2]` for the upgrade atoms.
+`[C57.2]`, `[C57.3]` for the upgrade atoms.

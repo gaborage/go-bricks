@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
+	dbtest "github.com/gaborage/go-bricks/database/testing"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -452,6 +454,85 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 		"readyCheck must log the full error so operators keep the diagnostic the 503 body drops")
 	assert.Equal(t, componentCache, logged.str["component"],
 		"the sanitized body no longer identifies the failure, so the log must name the component")
+}
+
+// TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem pins both halves of the
+// db_stats routing contract from a single DbManager. SECURITY: a pooled connection's key is
+// the resourcepool key — the tenant ID in a multi-tenant deployment — so /ready's 200 body
+// used to answer an unauthenticated, unthrottled caller with a live tenant enumeration plus
+// per-tenant timing. It must now carry the scalar counters only, while the access-controlled
+// /health-debug keeps the per-connection detail operators diagnose with. Redacting inside
+// DbManager.Stats() or the probe would satisfy the /ready half alone, so the two are
+// asserted together.
+func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
+	const (
+		tenantAlpha = "tenant-alpha"
+		tenantBeta  = "tenant-beta"
+	)
+
+	log := &recLogger{}
+	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+		return dbtest.NewTestDB(dbTypePostgres), nil
+	}
+	dbManager := database.NewDbManager(&stubTenantResource{}, log,
+		database.DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+	t.Cleanup(func() { assert.NoError(t, dbManager.Close()) })
+
+	for _, key := range []string{tenantAlpha, tenantBeta} {
+		_, release, err := dbManager.Get(context.Background(), key)
+		require.NoError(t, err)
+		release()
+	}
+
+	// The premise the /ready assertions rest on: two distinct keys really are pooled, so
+	// their absence below is a redaction rather than an empty fixture asserting nothing.
+	statsConns, err := json.Marshal(dbManager.Stats()[dbConnectionsKey])
+	require.NoError(t, err)
+	require.Contains(t, string(statsConns), tenantAlpha, "Stats() must still carry the pool keys")
+	require.Contains(t, string(statsConns), tenantBeta, "Stats() must still carry the pool keys")
+
+	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
+	app := &App{cfg: cfg, logger: log, dbManager: dbManager}
+	app.healthProbes = app.createHealthProbes()
+	require.Len(t, app.healthProbes, 1)
+
+	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
+	readyRec := httptest.NewRecorder()
+	require.NoError(t, app.readyCheck(server.NewHandlerContextForTest(readyRec, readyReq, cfg)))
+
+	debugHandlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, log)
+	debugReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
+	debugRec := httptest.NewRecorder()
+	require.NoError(t, debugHandlers.handleHealthDebug(server.NewHandlerContextForTest(debugRec, debugReq, cfg)))
+
+	var readyBody map[string]any
+	require.NoError(t, json.Unmarshal(readyRec.Body.Bytes(), &readyBody))
+	assert.Equal(t, http.StatusOK, readyRec.Code)
+
+	dbStats, ok := readyBody["db_stats"].(map[string]any)
+	require.True(t, ok, "the 200 body must still carry db_stats")
+	assert.Contains(t, dbStats, "active_connections")
+	assert.Contains(t, dbStats, "max_connections")
+	assert.Contains(t, dbStats, "idle_ttl_seconds")
+	assert.Equal(t, healthyStatus, dbStats[statusKey])
+	assert.NotContains(t, dbStats, dbConnectionsKey,
+		"the per-connection array enumerates tenants on an unauthenticated endpoint")
+	assertReadyBodyOmits(t, readyBody, tenantAlpha, tenantBeta)
+
+	assert.Equal(t, http.StatusOK, debugRec.Code)
+	var debugBody struct {
+		Data struct {
+			Components map[string]struct {
+				Details map[string]any `json:"details"`
+			} `json:"components"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(debugRec.Body.Bytes(), &debugBody))
+	debugConns, err := json.Marshal(debugBody.Data.Components[componentDatabase].Details[dbConnectionsKey])
+	require.NoError(t, err)
+	assert.Contains(t, string(debugConns), tenantAlpha,
+		"/health-debug renders the probe's details; redacting in Stats() or the probe would gut it")
+	assert.Contains(t, string(debugConns), tenantBeta)
 }
 
 func TestCalculateHealthSummaryTreatsAbsenceAsHealthy(t *testing.T) {
