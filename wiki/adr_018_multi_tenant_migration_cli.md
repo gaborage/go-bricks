@@ -171,6 +171,7 @@ returns the first error. Use `--continue-on-error` to override.
 ## Consequences
 
 **Pros:**
+
 - Multi-tenant fleets get a documented, repeatable migration story.
 - Library entry point lets the back-office reuse the same flow on tenant
   events without shelling out to the binary.
@@ -180,6 +181,7 @@ returns the first error. Use `--continue-on-error` to override.
   `aws-sdk-go-v2`.
 
 **Cons:**
+
 - The pre-defined HTTP contract is now a published API surface and changes
   must be backwards-compatible (versioned via `/v2/tenants` if ever needed).
 - Operators must provision AWS Secrets Manager entries with a documented JSON

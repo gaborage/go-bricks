@@ -7,6 +7,7 @@ The `httpclient` package provides a production-ready outbound HTTP client built 
 The `httpclient` package provides a production-ready HTTP client with built-in observability and resilience.
 
 **Key Features:**
+
 - **Builder pattern**: Fluent configuration via `NewBuilder(logger).WithTimeout(...).Build()`, which returns `(Client, error)` — `Build` fails construction rather than silently building a client with a discarded transport (see [Transport composition](#transport-composition))
 - **W3C trace propagation**: Automatic `traceparent`/`tracestate` header injection
 - **Retry with backoff**: Exponential backoff with full jitter, configurable max retries

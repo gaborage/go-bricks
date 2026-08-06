@@ -30,6 +30,7 @@ Generated: {date}
 ```
 
 ## Severity Classification
+
 - **Critical**: Hardcoded secrets, SQL injection without sanitization, known CVEs with exploits
 - **High**: Missing input validation on public endpoints, raw-SQL escape hatch (`f.Raw` / `jf.Raw` / `database.Raw`) without `// SECURITY:` annotation
 - **Medium**: Missing validation tags, outdated dependencies with vulnerabilities

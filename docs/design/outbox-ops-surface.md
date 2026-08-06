@@ -330,6 +330,7 @@ SELECT count(*) FROM <table> WHERE status = 'failed';   -- both vendors
 ## CIDR middleware reuse — recommendation
 
 **Options.**
+
 - **(a)** `outbox` imports `scheduler.CIDRMiddleware` directly. Works today (it is exported at
   `scheduler/cidr_middleware.go:23`), but couples `outbox → scheduler` for an HTTP concern —
   the outbox already depends on `scheduler` for the *relay job* (`outbox/relay.go:15`), yet
@@ -357,6 +358,7 @@ in ctx). `/_sys/job` never faced this because scheduler jobs are process-global 
 per-tenant DB rows (`listJobsHandler` reads `m.jobs`, `scheduler/api_handlers.go:38-56`).
 
 **Options.**
+
 - **(a) One tenant per call, addressed by a discriminator.** The tenant-resolution middleware
   already runs before handlers and puts the resolved tenant in ctx (the standard resolver
   header, e.g. `X-Tenant-ID`), so the handler just calls `deps.DB(ctx)` / the tenant's store

@@ -110,6 +110,7 @@ observability:
 ```
 
 **Environment variables:**
+
 ```bash
 export OTEL_API_KEY="your-api-key-here"
 ```
@@ -367,11 +368,12 @@ observability:
 
 ### Connection Errors
 
-```
+```text
 Error: failed to initialize trace provider: failed to create trace exporter
 ```
 
 **Solutions:**
+
 - Verify endpoint is correct (hostname:port)
 - Check protocol matches endpoint (HTTP=4318, gRPC=4317)
 - Ensure firewall allows outbound connections

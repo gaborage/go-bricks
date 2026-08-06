@@ -7,6 +7,7 @@ This document covers GoBricks' built-in Transactional Outbox: the components tha
 GoBricks provides a built-in **Transactional Outbox** for reliable event publishing. It solves the dual-write problem: events are written to an outbox table in the **same database transaction** as business data, then reliably delivered to the message broker by a background relay.
 
 **Core Components:**
+
 - **Publisher**: Writes events to the outbox table within a database transaction
 - **Relay**: Background poller (scheduler job) that publishes pending events to AMQP
 - **Cleanup**: Scheduled job that removes published events after retention period
@@ -15,6 +16,7 @@ GoBricks provides a built-in **Transactional Outbox** for reliable event publish
 **Delivery Guarantee:** At-least-once. Consumers MUST be idempotent. Use the `x-outbox-event-id` header for deduplication.
 
 **Module Setup:**
+
 ```go
 for _, m := range []app.Module{
     scheduler.NewModule(), // Required: relay runs as a scheduled job
@@ -35,6 +37,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 ```
 
 **Business Logic Pattern (atomic write + event):**
+
 ```go
 func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) error {
     db, err := s.getDB(ctx)
@@ -65,6 +68,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 ```
 
 **How It Works:**
+
 1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction
 2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `pollinterval`
 3. Each pending event is published to the target AMQP exchange with `x-outbox-event-id` header

@@ -12,6 +12,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
 ## Development Workflow
 
 ### Prerequisites
+
 - Go 1.26 or later
 - golangci-lint for linting
 - Make for build automation
@@ -19,15 +20,18 @@ Thank you for your interest in contributing to GoBricks! This document provides 
 ### Making Changes
 
 1. Create a new branch for your feature/fix:
+
    ```bash
    git checkout -b feature/your-feature-name
    ```
 
 2. Make your changes following the project conventions
 3. Run pre-commit checks:
+
    ```bash
    make check
    ```
+
    This runs formatting, linting, tests, alloc-stability guards, a vulnerability scan, gosec, and a go.mod/go.sum/go.work.sum tidiness check.
 
 ### Code Quality Standards

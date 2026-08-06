@@ -48,6 +48,7 @@ Authorization: Bearer <optional>
 ```
 
 Rules:
+
 - `id` is the only required field per tenant; extra fields are ignored.
 - Empty/absent `next_cursor` ends iteration.
 - `limit` is advisory; the CLI defaults to 100.

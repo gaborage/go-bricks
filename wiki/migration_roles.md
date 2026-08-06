@@ -64,6 +64,7 @@ opt-out flag. Re-running the same spec converges the setting; manual drift
 back on the next provisioning call.
 
 **Why it matters on both sides:**
+
 - **Migrator side.** Flyway's fallback when no schema is explicitly targeted
   resolves against the *connection's* current schema, which in turn is
   driven by the role's default `search_path`. Without this `ALTER ROLE`, a
@@ -180,6 +181,7 @@ see [multi_tenant_migration.md](multi_tenant_migration.md#aws-secrets-manager-co
 ```
 
 After provisioning:
+
 - The migration runner connects as `migrator` and applies Flyway migrations.
   All new tables are owned by `migrator`.
 - The running service connects as `tenant_a_app` and performs DML only. Any

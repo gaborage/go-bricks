@@ -86,6 +86,7 @@ Currently this is a documented developer convenience: TestMain always spins up a
 ```
 
 **Override defaults for aggressive environments (e.g., strict firewall):**
+
 ```yaml
 database:
   pool:
@@ -99,6 +100,7 @@ database:
 ```
 
 **On-premises with no NAT/firewall concerns, opt-out of recycling:**
+
 ```yaml
 database:
   pool:
@@ -163,7 +165,7 @@ database:
 
 ### gRPC error: "frame header looked like an HTTP/1.1 header" (New Relic)
 
-```
+```text
 ERROR: rpc error: code = Unavailable desc = connection error: desc = "error reading server preface:
        http2: failed reading the frame payload: http2: frame too large, note that the frame header
        looked like an HTTP/1.1 header"
@@ -172,11 +174,13 @@ ERROR: rpc error: code = Unavailable desc = connection error: desc = "error read
 **Root cause:** gRPC client connecting to HTTP endpoint (port mismatch).
 
 **Solutions:**
+
 1. Using port 4318 with `protocol: grpc` → WRONG (4318 is HTTP port). Change endpoint to `otlp.nr-data.net:4317` (gRPC port).
 2. Using `https://` scheme with gRPC protocol → WRONG (gRPC doesn't accept scheme). Use `otlp.nr-data.net:4317` (no `https://`).
 3. Missing TLS configuration → Check `insecure: false` (New Relic requires TLS).
 
 **Correct New Relic gRPC config:**
+
 ```yaml
 observability:
   trace:
@@ -189,6 +193,7 @@ observability:
 ```
 
 **HTTP endpoint format:**
+
 - HTTP requires `https://` or `http://` scheme: `https://otlp.nr-data.net:4318/v1/traces`
 - gRPC requires NO scheme, just `host:port`: `otlp.nr-data.net:4317`
 
@@ -265,6 +270,7 @@ observability:
 ```
 
 **Diagnostic commands:**
+
 ```bash
 grep "Starting message consumers" logs/app.log
 grep "Multiple consumers registered for same queue" logs/app.log

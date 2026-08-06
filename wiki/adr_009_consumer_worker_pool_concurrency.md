@@ -9,13 +9,15 @@
 GoBricks v0.16 and earlier processed AMQP messages sequentially (one at a time per consumer). This created severe throughput bottlenecks when handlers performed blocking I/O operations like database queries or HTTP calls:
 
 **Impact Examples:**
+
 - **100ms database query**: Maximum 10 messages/second per consumer
 - **500ms batch operation**: Maximum 2 messages/second per consumer
 - **CPU underutilization**: 1 thread per consumer, leaving 7-31 cores idle on modern servers
 - **Queue backlogs**: Messages piled up faster than they could be processed
 
 **Real-World Scenario:**
-```
+
+```text
 8-core production server
 Handler: 500ms (database query + business logic)
 Current throughput: 2 msg/sec
@@ -24,6 +26,7 @@ Queue depth: Constantly growing
 ```
 
 Users had no way to configure concurrency per consumer, forcing them to either:
+
 1. Accept poor throughput
 2. Run multiple service instances (wasteful resource usage)
 3. Implement custom worker pools in application code (error-prone)
@@ -33,7 +36,8 @@ Users had no way to configure concurrency per consumer, forcing them to either:
 ### Option 1: Application-Level Worker Pool (CHOSEN)
 
 **Architecture:**
-```
+
+```text
 handleMessages()
 ├─> Delivery channel (from RabbitMQ)
 ├─> Worker pool (N goroutines)
@@ -44,6 +48,7 @@ handleMessages()
 ```
 
 **Pros:**
+
 - ✅ Simple, idiomatic Go implementation (sync.WaitGroup + buffered channels)
 - ✅ Non-breaking with smart defaults (Workers=0 → auto-scales to NumCPU*4)
 - ✅ Flexible per-consumer tuning
@@ -51,6 +56,7 @@ handleMessages()
 - ✅ Natural backpressure via buffered channel
 
 **Cons:**
+
 - ⚠️ Requires thread-safe handlers (breaking change for existing code)
 - ⚠️ No message ordering guarantees with Workers>1
 
@@ -61,7 +67,8 @@ handleMessages()
 ### Option 2: Multiple RabbitMQ Consumers (Rejected)
 
 **Architecture:**
-```
+
+```text
 startSingleConsumer() - called N times for same queue
 ├─> Consumer 1: ConsumeFromQueue(tag="worker-1") → handleMessages()
 ├─> Consumer 2: ConsumeFromQueue(tag="worker-2") → handleMessages()
@@ -69,10 +76,12 @@ startSingleConsumer() - called N times for same queue
 ```
 
 **Pros:**
+
 - ✅ True RabbitMQ-level parallelism
 - ✅ Simpler code (no worker pool management)
 
 **Cons:**
+
 - ❌ Higher AMQP channel overhead (N channels per consumer declaration)
 - ❌ Less flexible prefetch distribution
 - ❌ Incompatible with exclusive consumers
@@ -87,10 +96,12 @@ startSingleConsumer() - called N times for same queue
 **Architecture:** No changes, users explicitly opt-in via configuration flag.
 
 **Pros:**
+
 - ✅ Fully backward compatible
 - ✅ No thread-safety requirements for existing handlers
 
 **Cons:**
+
 - ❌ Poor discoverability (users don't know feature exists)
 - ❌ Most users miss performance benefits
 - ❌ Framework should optimize by default (fail-fast philosophy)
@@ -104,9 +115,11 @@ startSingleConsumer() - called N times for same queue
 **Architecture:** Fixed default instead of CPU-based auto-scaling.
 
 **Pros:**
+
 - ✅ Predictable across environments
 
 **Cons:**
+
 - ❌ Too few on 32-core servers (underutilized)
 - ❌ Too many on 2-core laptops (oversubscribed)
 - ❌ Doesn't scale with hardware
@@ -128,6 +141,7 @@ startSingleConsumer() - called N times for same queue
 ### Why NumCPU × 4?
 
 The **4x multiplier** is standard for I/O-bound workloads:
+
 - While 1 worker waits on database/HTTP response, 3 others use CPU
 - Industry standard (Spring AMQP, Akka, etc. use similar patterns)
 - Balances throughput vs resource usage
@@ -135,6 +149,7 @@ The **4x multiplier** is standard for I/O-bound workloads:
 ### API Design
 
 **Configuration:**
+
 ```go
 type ConsumerOptions struct {
     Queue         string
@@ -147,6 +162,7 @@ type ConsumerOptions struct {
 ```
 
 **Examples:**
+
 ```go
 // Auto-scaling (default)
 decls.DeclareConsumer(&ConsumerOptions{
@@ -182,6 +198,7 @@ decls.DeclareConsumer(&ConsumerOptions{
 ### Worker Pool Architecture
 
 **Main Loop (Producer):**
+
 ```go
 jobs := make(chan *amqp.Delivery, workers*2)  // Buffered for backpressure
 
@@ -203,6 +220,7 @@ wg.Wait()
 ```
 
 **Worker (Consumer):**
+
 ```go
 func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration,
     jobs <-chan *amqp.Delivery, workerID int, wg *sync.WaitGroup) {
@@ -224,6 +242,7 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration,
 ### Resource Safeguards
 
 **Smart Defaults with Caps:**
+
 ```go
 func DeclareConsumer(opts *ConsumerOptions, queue *QueueDeclaration) {
     // Auto-scale workers
@@ -247,6 +266,7 @@ func DeclareConsumer(opts *ConsumerOptions, queue *QueueDeclaration) {
 ### Prefetch Configuration
 
 **Dynamic QoS:**
+
 ```go
 func (c *AMQPClientImpl) ConsumeFromQueue(ctx context.Context, options ConsumeOptions) {
     prefetchCount := options.PrefetchCount
@@ -267,61 +287,74 @@ func (c *AMQPClientImpl) ConsumeFromQueue(ctx context.Context, options ConsumeOp
 ### Positive
 
 ✅ **Massive Throughput Gains:**
+
 - 8-core machine, 100ms handler: **10 → 320 msg/sec (32x improvement)**
 - 32-core production server: **128 workers** automatically
 
 ✅ **Hardware Adaptive:**
+
 - Dev laptop (4 cores): 16 workers
 - Test server (8 cores): 32 workers
 - Production (32 cores): 128 workers
 
 ✅ **Better Resource Utilization:**
+
 - Multi-core CPUs fully engaged
 - Reduced service instance count needs
 
 ✅ **Flexible Configuration:**
+
 - Per-consumer tuning for different workload characteristics
 - Sequential processing still supported (Workers=1)
 
 ✅ **Production-Safe:**
+
 - Resource caps prevent goroutine/memory exhaustion
 - Graceful shutdown prevents message loss
 
 ### Negative
 
 ⚠️ **Breaking Change (v0.17.0):**
+
 - Default behavior changes from 1 → NumCPU*4 workers
 - Existing handlers MUST be thread-safe
 
 ⚠️ **Message Ordering Loss:**
+
 - Concurrent processing breaks sequential ordering
 - Applications requiring order MUST explicitly set Workers=1
 
 ⚠️ **Resource Requirements:**
+
 - Database connection pools must be sized appropriately:
   `MaxOpenConns >= NumCPU * 4 * NumConsumers`
 - Memory overhead: ~2KB per worker goroutine + prefetch buffer
 
 ⚠️ **Testing Requirements:**
+
 - All handlers must pass `go test -race`
 - Shared state requires synchronization (mutexes, atomic, channels)
 
 ### Mitigation Strategies
 
 **Thread-Safety:**
+
 - Document requirements prominently in CLAUDE.md and llms.txt
 - Recommend `go test -race` in CI pipelines
 - Provide clear examples of thread-safe patterns
 
 **Database Pools:**
+
 - Document sizing formula: `MaxOpenConns >= NumCPU * 4 * NumConsumers`
 - Add to troubleshooting guide
 
 **Message Ordering:**
+
 - Clear examples showing Workers=1 for sequential processing
 - Prominent documentation in configuration sections
 
 **Memory Management:**
+
 - PrefetchCount caps prevent unbounded growth
 - Buffer size tied to worker count (workers * 2)
 
@@ -350,12 +383,14 @@ func (c *AMQPClientImpl) ConsumeFromQueue(ctx context.Context, options ConsumeOp
 ### For Application Developers
 
 **1. Audit Handler Thread-Safety:**
+
 ```bash
 # Run race detector on all tests
 go test -race ./...
 ```
 
 **2. Size Database Pools:**
+
 ```go
 // Calculate required connections
 numCPU := runtime.NumCPU()
@@ -367,6 +402,7 @@ db.SetMaxIdleConns(maxConns / 2)
 ```
 
 **3. Identify Order-Dependent Consumers:**
+
 ```go
 // Set Workers=1 explicitly for ordering
 decls.DeclareConsumer(&ConsumerOptions{
@@ -379,6 +415,7 @@ decls.DeclareConsumer(&ConsumerOptions{
 ```
 
 **4. Test Concurrency:**
+
 ```go
 // Add concurrent test scenarios
 func TestHandlerConcurrency(t *testing.T) {
@@ -401,6 +438,7 @@ func TestHandlerConcurrency(t *testing.T) {
 ### Unit Tests
 
 **Added Tests:**
+
 - `TestAutoScaleWorkersDefault`: Verify Workers=0 → NumCPU*4
 - `TestExplicitWorkersOverride`: Verify explicit Workers/PrefetchCount honored
 - `TestSequentialProcessing`: Verify Workers=1 sequential behavior
@@ -411,11 +449,13 @@ func TestHandlerConcurrency(t *testing.T) {
 - `TestWorkerResourceCaps`: Verify resource safeguards
 
 **Benchmark:**
+
 - `BenchmarkSequentialVsConcurrent`: Compare Workers=1 vs Workers=4/8
 
 ### Integration Tests
 
 **Future Work:**
+
 - Testcontainers-based RabbitMQ integration tests
 - Verify prefetch behavior with real AMQP broker
 - Load testing with production-like message volumes

@@ -25,12 +25,14 @@ Rename 6 interfaces to follow Go idiomatic naming:
 ## Implementation Details
 
 ### Changed
+
 - Interface definitions in their respective packages
 - All internal references (field types, parameters, type assertions, godoc)
 - Composite `app.TenantStore` interface embedding updated names
 - CLAUDE.md migration table added for downstream consumers
 
 ### Unchanged
+
 - `config.TenantStore` (struct, not an interface — different type)
 - `app.TenantStore` (composite interface name kept — it's the user-facing abstraction)
 - All method signatures on the interfaces remain identical
@@ -38,17 +40,20 @@ Rename 6 interfaces to follow Go idiomatic naming:
 ## Consequences
 
 ### Positive
+
 - Resolves 5 SonarCloud S8196 issues
 - Aligns with Go community naming conventions
 - More descriptive interface names improve code readability
 
 ### Negative
+
 - Breaking change for any code that references the old interface names
 - Downstream applications must update type assertions and variable declarations
 
 ## Migration Impact
 
 Applications referencing old interface names must update:
+
 1. `scheduler.Job` → `scheduler.Executor`
 2. `app.HealthProbe` → `app.Prober`
 3. `database.TenantStore` → `database.DBConfigProvider`

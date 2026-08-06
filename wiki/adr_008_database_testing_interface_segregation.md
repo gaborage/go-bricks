@@ -1,12 +1,15 @@
 # ADR-008: Database Testing with Interface Segregation
 
 ## Status
+
 Accepted (2025-01-10)
 
 > **Note (2026-05-12):** Code examples in this ADR were updated to reflect the S8179 rename (`GetDB` → `DB` field on `ModuleDeps`). The decision, rationale, and test-helper API surface are unchanged. The full rename table lives in [wiki/migrations.md](migrations.md).
 
 ## Context
+
 Application developers faced testing friction with `database.Interface` requiring ~25 methods across 4 wrapper types (Interface, Tx, Row, Statement). Testing required:
+
 - **30+ lines of sqlmock boilerplate** per test
 - **Mocking 13 methods** even when only using Query/QueryRow/Exec
 - **Manual sql.Rows construction** with complex sqlmock expectations
@@ -17,6 +20,7 @@ This violated YAGNI (mocking unused methods) and created hundreds of lines of te
 ## Decision
 
 ### 1. Interface Segregation
+
 Split `database.Interface` into focused sub-interfaces following Single Responsibility Principle:
 
 ```go
@@ -49,6 +53,7 @@ type Interface interface {
 Created comprehensive testing utilities following `observability/testing` patterns:
 
 **TestDB** - Fluent expectation-based mocking:
+
 ```go
 db := dbtest.NewTestDB(dbtypes.PostgreSQL).
     ExpectQuery("SELECT").
@@ -58,6 +63,7 @@ db := dbtest.NewTestDB(dbtypes.PostgreSQL).
 ```
 
 **RowSet** - Vendor-agnostic row builder:
+
 ```go
 rows := NewRowSet("id", "name", "email").
     AddRow(1, "Alice", "alice@example.com").
@@ -65,6 +71,7 @@ rows := NewRowSet("id", "name", "email").
 ```
 
 **TestTx** - Transaction testing with commit/rollback tracking:
+
 ```go
 tx := db.ExpectTransaction().
     ExpectExec("INSERT INTO orders").WillReturnRowsAffected(1).
@@ -75,6 +82,7 @@ AssertCommitted(t, tx)
 ```
 
 **TenantDBMap** - Multi-tenant testing support:
+
 ```go
 tenants := NewTenantDBMap()
 tenants.ForTenant("acme").ExpectQuery("SELECT").WillReturnRows(...)
@@ -86,6 +94,7 @@ deps := &app.ModuleDeps{
 ```
 
 **Assertion Helpers** - Clear test failures:
+
 ```go
 AssertQueryExecuted(t, db, "SELECT")
 AssertExecExecuted(t, db, "INSERT")
@@ -95,6 +104,7 @@ AssertTransactionCommitted(t, db)
 ## Consequences
 
 ### Positive
+
 - **73% less test boilerplate**: 30+ lines → 8 lines per test
 - **100% backward compatible**: All 32 test suites pass unchanged
 - **Honors SRP**: Separate Querier (execution) from Transactor (transactions)
@@ -104,11 +114,13 @@ AssertTransactionCommitted(t, db)
 - **Zero breaking changes**: Existing code unaffected
 
 ### Negative
+
 - **One more abstraction**: Developers must learn TestDB API (mitigated by clear examples in llms.txt)
 - **RowSet.toSQLRows() complexity**: Full multi-row support requires a `sql.DB`-backed connector (`newRowSetConnector`), adding internal complexity (resolved in final implementation)
 - **Intentional code duplication**: TestDB.Query and TestTx.Query share implementation (~65 lines each, marked with `//nolint:dupl`)
 
 ### Trade-offs Accepted
+
 - **Duplication over abstraction**: TestDB and TestTx implement similar Query/Exec logic separately to maintain clear separation of concerns and avoid premature abstraction
 - **Test fidelity vs speed**: In-memory fake sacrifices exact database behavior for instant feedback (0ms vs 2-5s testcontainers)
 - **Vendor-agnostic testing**: Most tests don't verify vendor-specific behavior (placeholder numbering, quoting) - integration tests cover this
@@ -116,20 +128,25 @@ AssertTransactionCommitted(t, db)
 ## Alternatives Considered
 
 ### 1. Keep Monolithic Interface
+
 **Rejected** - Violates SRP, makes testing unnecessarily complex
 
 ### 2. Use sqlmock Directly
+
 **Rejected** - Too verbose (~30 lines of setup), regex-based SQL matching error-prone
 
 ### 3. Split ModuleDeps (DB vs DBFull)
+
 **Rejected** - Violates SRP at wrong layer (ModuleDeps shouldn't have two database references)
 
 ### 4. Extract Shared Code to Helper Function
+
 **Rejected** - Premature abstraction for ~65 lines. TestDB and TestTx have different error messages ("unexpected query" vs "unexpected query in transaction") and logging contexts, making extraction add complexity without clear benefit.
 
 ## Implementation
 
 ### Files Created
+
 - `database/types/querier.go` - 4-method focused interface
 - `database/types/transactor.go` - Transaction management interface
 - `database/testing/fake_db.go` - TestDB with fluent API
@@ -140,9 +157,11 @@ AssertTransactionCommitted(t, db)
 - `database/testing/fake_db_test.go` - Comprehensive tests
 
 ### Files Modified
+
 - `database/types/interfaces.go` - Interface now embeds Querier + Transactor
 
 ### Quality Metrics
+
 - **Linter**: 0 issues (golangci-lint passes)
 - **Tests**: All 32 suites pass (including new database/testing tests)
 - **Coverage**: New package has comprehensive tests for all APIs
@@ -190,6 +209,7 @@ deps := &app.ModuleDeps{
 ```
 
 ## References
+
 - Similar pattern: `messaging.Client` (5 methods) vs `messaging.AMQPClient` (16 methods)
 - Inspiration: `observability/testing` package fluent API design
 - Related: [MULTI_TENANT.md](../MULTI_TENANT.md) - Multi-tenant patterns

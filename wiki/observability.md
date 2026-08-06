@@ -15,6 +15,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 **Go Runtime Metrics:** Auto-exports memory, goroutines, CPU, scheduler latency, GC config when `observability.enabled: true`. Follows [OpenTelemetry semantic conventions](https://opentelemetry.io/docs/specs/semconv/runtime/go-metrics/)
 
 **Export Timeout Configuration:** GoBricks gates export timeouts on `observability.environment` and the signal's endpoint, balancing fail-fast feedback against network resilience:
+
 - **`observability.environment: development` (the default) or `endpoint: stdout`:** 10s (quick failure detection for debugging)
 - **Any other environment with a network endpoint:** 60s (accommodates network latency, TLS handshake, batch transmission)
 - **⚠️ `observability.environment` is not derived from `app.env`.** It is an independent key defaulting to `development`, so a service running `app.env: production` against a remote OTLP collector keeps the 10s default until you set `observability.environment` explicitly.
@@ -22,6 +23,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 - **Why 60s?** Real-world production scenarios involve cross-region latency, TLS negotiation, and 512-span batch transmission to remote OTLP endpoints
 
 **Dual-Mode Logging:** `DualModeLogProcessor` routes logs by `log.type`:
+
 - **Action logs** (`log.type="action"`): Always exported at 100% (request summaries)
 - **Trace logs** (`log.type="trace"`): ERROR/WARN always exported, INFO/DEBUG sampled by `samplingrate`
 - Configure via `observability.logs.samplingrate` (0.0-1.0, default 0.0 drops INFO/DEBUG)
@@ -30,6 +32,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 **Request Logging:** HTTP requests track severity escalation via `requestLogContext`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `c.EscalateSeverity(zerolog.WarnLevel)` (the `HandlerContext` method). Configure `observability.logs.slowrequestthreshold` for slow request detection.
 
 **Testing:** Use `observability/testing` package:
+
 ```go
 tp := obtest.NewTestTraceProvider()
 spans := tp.Exporter.GetSpans()
@@ -39,6 +42,7 @@ mp := obtest.NewTestMeterProvider()
 rm := mp.Collect(t)
 obtest.AssertMetricExists(t, rm, "my.counter")
 ```
+
 Span helpers: `AssertSpanName`, `AssertSpanAttribute`, `AssertSpanStatus`, `AssertSpanStatusDescription`, `AssertSpanError`, plus `NewSpanCollector(t, exporter)` for filtering. Metric helpers: `AssertMetricExists`, `AssertMetricValue`, `AssertMetricCount`, `AssertMetricDescription`, `FindMetric`, `GetMetricSumValue`, `GetMetricHistogramCount`. There is no in-memory log exporter today — capture zerolog output via an `io.Writer` sink for action/trace log assertions.
 
 **Debug Mode:** Set `GOBRICKS_DEBUG=true` for `[OBSERVABILITY]` logs (provider init, exporter setup, span lifecycle)
@@ -87,6 +91,7 @@ No Go code changes. The framework reads `cfg.Log.SensitiveFields` during `Builde
 **Seam 2 — `app.Options.LoggerFilterConfig` (full replacement, code-level):**
 
 Use this when YAML can't express what you need:
+
 - Custom `MaskValue` (e.g., `[REDACTED]`, `<hidden>`, vendor-specific).
 - Opting out of every default field (testing, deterministic-output fixtures).
 - Composing the list at startup from a secret manager, feature flag, or remote config.
@@ -155,19 +160,23 @@ Field-name masking is *one* layer. A complete PCI-DSS 3.3/3.4/3.5 posture combin
 GoBricks exposes `MeterProvider` via `ModuleDeps` for creating application-specific metrics. When `observability.enabled: false`, a no-op provider is used with zero overhead.
 
 **Available in ModuleDeps:**
+
 - `deps.MeterProvider` - OpenTelemetry MeterProvider for creating custom instruments
 
 **Helper Functions (observability/metrics.go):**
+
 - `CreateCounter(meter, name, description)` - Monotonically increasing values (requests, errors)
 - `CreateHistogram(meter, name, description)` - Distributions (latency, size)
 - `CreateUpDownCounter(meter, name, description)` - Values that increase/decrease (connections, queue depth)
 
 **Pattern:**
+
 1. Store `MeterProvider` in module struct
 2. Create instruments in `Init()` (one-time, cached)
 3. Record values in business logic with attributes
 
 **Quick Example:**
+
 ```go
 type OrderModule struct {
     meterProvider metric.MeterProvider
@@ -207,6 +216,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) 
 | `Int64ObservableGauge` | Current state via callback | Memory usage, pool size |
 
 **Best Practices:**
+
 - Pre-create instruments in `Init()` for performance (avoid per-request creation)
 - Use semantic naming: `<namespace>.<entity>.<measurement>` (e.g., `orders.processing.duration`)
 - Add attributes for dimensions: `status`, `tenant_id`, `operation_type`
@@ -248,6 +258,7 @@ GoBricks supports all New Relic OTLP optimizations: gzip compression (~70% bandw
 | `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` |
 
 **Common Mistakes:**
+
 - `https://otlp.nr-data.net:4317` with `protocol: grpc` → ERROR
 - `otlp.nr-data.net:4317` with `protocol: grpc` → Correct
 

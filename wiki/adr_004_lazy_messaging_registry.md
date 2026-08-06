@@ -18,16 +18,19 @@ During the implementation of the multi-tenant architecture and the transition to
 ## Options Considered
 
 ### Option 1: Lazy Registry Creation (CHOSEN)
+
 - Initialize messaging registry only when first needed in `RegisterMessaging()`
 - Use singleflight protection to handle concurrent initialization
 - Keep registry self-contained and not dependent on external initialization
 
 ### Option 2: Eager Creation with Context
+
 - Require context parameter in `NewModuleRegistry(deps, ctx)`
 - Create registry immediately during construction
 - Break constructor signature compatibility
 
 ### Option 3: External Registry Management
+
 - Remove messaging registry from ModuleRegistry entirely
 - Require external code to create and pass registry to methods
 - Increase API surface and complexity for consumers
@@ -47,6 +50,7 @@ During the implementation of the multi-tenant architecture and the transition to
 ### Core Components
 
 **Lazy Initialization Method**:
+
 ```go
 func (r *ModuleRegistry) initializeMessagingRegistry(ctx context.Context) (*messaging.Registry, error) {
     result, err, _ := r.registryOnce.Do("messaging-registry", func() (any, error) {
@@ -72,6 +76,7 @@ func (r *ModuleRegistry) initializeMessagingRegistry(ctx context.Context) (*mess
 ```
 
 **Updated RegisterMessaging Method**:
+
 - Calls `initializeMessagingRegistry()` to ensure registry exists
 - Gracefully handles messaging unavailability by logging and continuing
 - Maintains all existing functionality once registry is created
@@ -86,6 +91,7 @@ func (r *ModuleRegistry) initializeMessagingRegistry(ctx context.Context) (*mess
 ## Consequences
 
 ### Positive
+
 - **Maintains Encapsulation**: Registry manages its own lifecycle without external dependencies
 - **Thread-Safe**: Concurrent calls to RegisterMessaging are safe
 - **Context-Aware**: Can properly resolve context-dependent messaging clients
@@ -93,11 +99,13 @@ func (r *ModuleRegistry) initializeMessagingRegistry(ctx context.Context) (*mess
 - **Future-Proof**: Architecture supports both single-tenant and multi-tenant modes
 
 ### Negative
+
 - **Deferred Errors**: Messaging configuration errors appear later during RegisterMessaging
 - **Additional Complexity**: Introduces singleflight dependency and lazy initialization pattern
 - **State Management**: Registry state becomes more complex with initialization tracking
 
 ### Neutral
+
 - **Performance**: Negligible impact, initialization happens once
 - **Memory**: Minimal additional memory for singleflight.Group
 - **Testing**: Tests needed updates but overall complexity remained similar

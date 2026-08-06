@@ -89,6 +89,7 @@ release. See `wiki/migrations.md`. **No application-facing change:** `deps.DB/Ca
 `ResourceProvider` are unchanged.
 
 **Benefits:**
+
 - An in-use handle is **never** `Close()`d — the M3 eviction-while-in-use race is closed for every
   concurrent multi-tenant path (HTTP, consumers, jobs, outbox relay, inbox).
 - Leased entries can temporarily exceed `MaxSize` (they are detached, off-book) instead of being
@@ -98,6 +99,7 @@ release. See `wiki/migrations.md`. **No application-facing change:** `deps.DB/Ca
   with no retry storm.
 
 **Costs / limitations:**
+
 - A `refs++`/`refs--` per borrow under the manager mutex (negligible; already on the lock path).
 - Unscoped contexts are not protected (documented fallback). New framework entry points that
   borrow per-tenant handles concurrently should install a `leasescope.Scope` at their boundary.

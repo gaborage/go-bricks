@@ -3,6 +3,7 @@
 Unified `database.Interface` supporting PostgreSQL and Oracle with vendor-specific SQL generation, type-safe WHERE clauses, performance tracking via OpenTelemetry, connection pooling, and health monitoring.
 
 **Package Structure:**
+
 - `database/types/` — Core interfaces
 - `database/internal/tracking/` — Performance metrics
 - `database/internal/builder/` — Query builder implementations
@@ -17,6 +18,7 @@ Unified `database.Interface` supporting PostgreSQL and Oracle with vendor-specif
 GoBricks supports accessing multiple databases in single-tenant mode, useful for legacy system migrations where applications need to access both old (e.g., Oracle) and new (e.g., PostgreSQL) databases.
 
 **Configuration:**
+
 ```yaml
 database:                # Default database (unchanged - backward compatible)
   type: postgresql
@@ -42,6 +44,7 @@ databases:               # Named databases — supports mixed vendors
 ```
 
 **Module Usage:**
+
 ```go
 func (m *Module) Init(deps *app.ModuleDeps) error {
     m.getDB = deps.DB              // Default database (unchanged)
@@ -65,6 +68,7 @@ func (h *Handler) MigrateLegacyData(ctx context.Context) error {
 ```
 
 **Key Features:**
+
 - Mixed vendor support per named database
 - Backward compatible: `deps.DB(ctx)` works exactly as before
 - Reuses infrastructure: same DbManager with LRU, connection pooling, idle cleanup
@@ -75,6 +79,7 @@ func (h *Handler) MigrateLegacyData(ctx context.Context) error {
 GoBricks eliminates column repetition through struct-based column management using `db:"column_name"` tags.
 
 **Benefits:**
+
 - **DRY:** Define columns once in struct tags, reference by field name
 - **Type Safety:** Compile-time field name validation (panics on typos)
 - **Vendor-Aware:** Automatic Oracle reserved word quoting
@@ -82,6 +87,7 @@ GoBricks eliminates column repetition through struct-based column management usi
 - **Refactor-Friendly:** Rename struct fields → compiler catches all query references
 
 **Quick Example:**
+
 ```go
 type User struct {
     ID    int64  `db:"id"`
@@ -106,6 +112,7 @@ qb.Update("users").
 ```
 
 **Service-Level Caching Pattern:**
+
 ```go
 type ProductService struct {
     qb   *database.QueryBuilder
@@ -321,6 +328,7 @@ would leave the operator believing the connection is encrypted.
 > **Idle defaults to max (changed in [ADR-025](adr_025_pool_idle_tracks_max.md)).** Earlier versions defaulted idle to a fixed `2`, which made the pool repeatedly open and close physical connections (TCP+TLS+auth) under sustained load. Idle now defaults to `pool.max.connections` so warm connections are reused. Set a lower `pool.idle.connections` explicitly only when you deliberately want idle connections released back to the database. See [migrations.md](migrations.md#connection-pool-idle-default--tracks-max-adr-025) for the footprint implications.
 
 **Cloud Provider Idle Timeouts:**
+
 | Provider | Component | Timeout |
 |----------|-----------|---------|
 | AWS | NAT Gateway/ALB | 350s |
@@ -329,6 +337,7 @@ would leave the operator believing the connection is encrypted.
 | On-prem | Firewalls | 60-300s |
 
 **Override defaults:**
+
 ```yaml
 database:
   pool:
@@ -461,6 +470,7 @@ case err != nil:
 | `database.timezone` | `UTC` | IANA timezone applied per session (PostgreSQL via pgx `RuntimeParams`, Oracle via `ALTER SESSION SET TIME_ZONE` on every new physical connection) |
 
 **Behavior:**
+
 - Unset / empty → defaulted to `UTC` at config validation
 - IANA name (`Asia/Tokyo`, `America/New_York`) → validated via `time.LoadLocation`, applied per-connection
 - `-` sentinel → opt-out; sessions inherit the database server's default (legacy behavior)

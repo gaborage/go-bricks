@@ -71,7 +71,7 @@ framework-level exemption is the health/ready probes.
 
 Global middleware lands at the **innermost slot** of the root chain:
 
-```
+```text
 requestID → tenant resolution → logger → Recover → timeout → rate-limit → [GLOBAL MIDDLEWARE] → handler
 ```
 

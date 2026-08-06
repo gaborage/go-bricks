@@ -17,6 +17,7 @@ The GoBricks framework provided comprehensive OpenTelemetry integration for dist
 ## Options Considered
 
 ### Option 1: External Log Forwarder (Rejected)
+
 - Use external agents (Fluent Bit, Filebeat) to tail log files and forward to collectors
 - Keep framework focused only on stdout logging
 - **Rejected**:
@@ -26,6 +27,7 @@ The GoBricks framework provided comprehensive OpenTelemetry integration for dist
   - Harder to correlate with framework-generated traces
 
 ### Option 2: Hook-Based Logger Modification (Rejected)
+
 - Modify zerolog internals to add OpenTelemetry hooks
 - Fork or wrap zerolog with custom export logic
 - **Rejected**:
@@ -35,6 +37,7 @@ The GoBricks framework provided comprehensive OpenTelemetry integration for dist
   - Could break on upstream zerolog changes
 
 ### Option 3: io.Writer Bridge Pattern (CHOSEN)
+
 - Implement `io.Writer` that intercepts zerolog JSON output
 - Parse JSON and convert to OpenTelemetry log records
 - Leverage existing observability provider infrastructure
@@ -55,6 +58,7 @@ The GoBricks framework provided comprehensive OpenTelemetry integration for dist
 ### Architecture Components
 
 **1. Configuration Layer** (`observability/config.go`)
+
 ```go
 type LogsConfig struct {
     Enabled               *bool          // nil=default true when observability enabled
@@ -70,6 +74,7 @@ type LogsConfig struct {
 ```
 
 **Log Sampling Behavior** (via `DualModeLogProcessor`):
+
 - **Action logs** (`log.type="action"`): Always exported at 100% for request summaries
 - **Trace logs** (`log.type="trace"`):
   - ERROR/WARN: Always exported at 100%
@@ -77,6 +82,7 @@ type LogsConfig struct {
   - Sampling is deterministic per trace (all logs in same trace sampled together)
 
 **2. OTel Bridge** (`logger/otel_bridge.go`)
+
 ```go
 type OTelBridge struct {
     loggerProvider *sdklog.LoggerProvider
@@ -93,6 +99,7 @@ func (b *OTelBridge) Write(p []byte) (n int, err error) {
 ```
 
 **3. Logger Integration** (`logger/logger.go`)
+
 ```go
 func (l *ZeroLogger) WithOTelProvider(provider OTelProvider) *ZeroLogger {
     // Fail-fast validation: panic if pretty=true
@@ -119,6 +126,7 @@ func (l *ZeroLogger) WithOTelProvider(provider OTelProvider) *ZeroLogger {
 ```
 
 **4. Automatic Trace Correlation** (`logger/logger.go`)
+
 ```go
 func (l *ZeroLogger) WithContext(ctx any) Logger {
     // Phase 1: Check for explicit zerolog.Ctx() logger
@@ -140,6 +148,7 @@ func (l *ZeroLogger) WithContext(ctx any) Logger {
 ```
 
 **5. Bootstrap Integration** (`app/bootstrap.go`)
+
 ```go
 func (b *appBootstrap) dependencies() *dependencyBundle {
     obsProvider := b.initializeObservability()
@@ -201,7 +210,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
 
 ### Integration Points
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │         Application Bootstrap Flow              │
 │                                                 │
@@ -251,6 +260,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
 ## Configuration Examples
 
 ### Development Configuration
+
 ```yaml
 observability:
   enabled: true
@@ -272,6 +282,7 @@ observability:
 ```
 
 ### Production Configuration
+
 ```yaml
 observability:
   enabled: true
@@ -295,6 +306,7 @@ observability:
 ```
 
 **Sampling Behavior:**
+
 - `samplingrate: 0.0` (default): Drop all INFO/DEBUG trace logs, keep ERROR/WARN
 - `samplingrate: 0.1`: Export 10% of INFO/DEBUG, all ERROR/WARN
 - `samplingrate: 1.0`: Export all trace logs (full visibility, higher volume)
@@ -332,15 +344,18 @@ observability:
 ### For Existing Applications
 
 **No Migration Required** for applications that:
+
 - Use JSON logging (`logger.pretty=false`)
 - Don't need OTLP log export
 
 **Optional Enablement** for applications wanting centralized logs:
+
 1. Add `observability.logs.enabled: true` to config
 2. Configure OTLP endpoint (or inherit from trace config)
 3. Logs automatically export to collector
 
 **Configuration Conflict** for applications using:
+
 - `logger.pretty=true` AND `observability.logs.enabled=true`
 - **Resolution**: Change `pretty: false` or disable `logs.enabled`
 - **Detection**: Fail-fast panic at startup with clear error message
@@ -387,6 +402,7 @@ observability:
 ## Observability Benefits in Practice
 
 ### Before (Fragmented)
+
 ```text
 Developer Workflow:
 1. Check application logs (stdout/files)
@@ -402,6 +418,7 @@ Challenges:
 ```
 
 ### After (Unified)
+
 ```text
 Developer Workflow:
 1. Open Grafana Explore

@@ -7,6 +7,7 @@
 ## Problem Statement
 
 The original handler system required developers to:
+
 - Manually handle Echo context boilerplate (`c.JSON()`, `c.Bind()`, etc.)
 - Implement repetitive request binding and validation logic
 - Maintain inconsistent response formats across endpoints
@@ -19,6 +20,7 @@ This led to verbose code, inconsistent APIs, and reduced developer productivity.
 Implement an enhanced handler system with the following characteristics (updated to reflect current implementation):
 
 ### 1. **Type-Safe Handler Signature**
+
 - **Decision:** Adopt `func(request T, ctx HandlerContext) (response R, error IAPIError)` signature, with support for a typed `Result[R]` wrapper to control HTTP status and headers.
 - **Rationale:**
   - Focuses handlers on business logic rather than HTTP mechanics
@@ -28,6 +30,7 @@ Implement an enhanced handler system with the following characteristics (updated
 - **Trade-offs:** Breaking change for existing handlers, but significantly improves DX
 
 ### 2. **Generic Handler Wrapper Implementation**
+
 - **Decision:** Use Go generics for type-safe wrapper functions
 - **Rationale:**
   - Enables compile-time type checking
@@ -36,6 +39,7 @@ Implement an enhanced handler system with the following characteristics (updated
 - **Alternative Considered:** Interface{}-based approach with runtime reflection
 
 ### 3. **Comprehensive Request Binding Strategy**
+
 - **Decision:** Support multiple binding sources via struct tags
   - `param:"id"` for URL parameters
   - `query:"page"` for query parameters
@@ -53,7 +57,9 @@ Implement an enhanced handler system with the following characteristics (updated
 - **Trade-offs:** More complex implementation, but much cleaner usage
 
 ### 4. **Standardized Response Format**
+
 - **Decision:** Implement consistent JSON response envelope
+
   ```json
   {
     "data": {...},           // Success responses
@@ -64,6 +70,7 @@ Implement an enhanced handler system with the following characteristics (updated
     }
   }
   ```
+
 - **Rationale:**
   - Provides predictable API structure for consumers
   - Enables consistent error handling across all endpoints
@@ -76,6 +83,7 @@ Implement an enhanced handler system with the following characteristics (updated
   - `204 No Content` is supported via `server.NoContent()` and returns no body by design.
 
 ### 5. **Hierarchical Error System**
+
 - **Decision:** Implement `IAPIError` interface with predefined error types
   - `ValidationError`, `NotFoundError`, `ConflictError`, etc.
   - Environment-aware error details (dev vs production)
@@ -92,6 +100,7 @@ Implement an enhanced handler system with the following characteristics (updated
   - Error `details` are included only in development (`app.env=development|dev|local` — matched via `config.IsDevelopment()`; see ADR-022).
 
 ### 6. **Validation Integration Strategy**
+
 - **Decision:** Integrate `validator/v10` with automatic validation
 - **Rationale:**
   - Industry-standard validation library
@@ -106,10 +115,13 @@ Implement an enhanced handler system with the following characteristics (updated
   - Legacy ad-hoc validation formatting helpers were removed from the handler layer to avoid duplication.
 
 ### 7. **Module Interface Evolution**
+
 - **Decision:** Update Module interface to include HandlerRegistry parameter
+
   ```go
   RegisterRoutes(hr *HandlerRegistry, e *echo.Echo)
   ```
+
 - **Rationale:**
   - Provides access to enhanced handler registration
   - Maintains backward compatibility for Echo access
@@ -119,7 +131,9 @@ Implement an enhanced handler system with the following characteristics (updated
 - **Superseded in part by [ADR-002](adr_002_base_path_and_health_routes.md):** the second parameter is no longer the raw `*echo.Echo`; the current signature is `RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)`.
 
 ### 8. **Context Access Design**
+>
 > Superseded by [ADR-034](adr_034_echo_boundary_types.md) for the public boundary types — `HandlerContext` no longer exposes the underlying `echo.Context`; advanced access is via stdlib-typed accessors (`RequestContext()`, `Request()`, …).
+
 - **Decision:** Provide optional HandlerContext for advanced scenarios
 - **Rationale:**
   - Most handlers don't need direct request/response access
@@ -133,12 +147,14 @@ Implement an enhanced handler system with the following characteristics (updated
 ## Implementation Details
 
 ### Core Components
+
 - **`server/handler.go`**: Generic handler wrapper and registration system, `Result` helpers, request binder
 - **`server/errors.go`**: Predefined error types, `BaseAPIError` implements `error`
 - **`server/server.go`**: Unified `HTTPErrorHandler` that emits standard envelopes
 - **Updated Module System**: Enhanced interface with HandlerRegistry support
 
 ### Key Technical Decisions
+
 1. **Go Generics**: Leveraged for type-safe handler registration
 2. **Reflection**: Used minimally for request binding only
 3. **Middleware Integration**: Preserved existing middleware stack compatibility
@@ -147,6 +163,7 @@ Implement an enhanced handler system with the following characteristics (updated
 ## Consequences
 
 ### Positive
+
 - **Developer Experience**: Significant reduction in boilerplate code
 - **Type Safety**: Compile-time validation of request/response types
 - **Consistency**: Standardized response format across all APIs
@@ -154,11 +171,13 @@ Implement an enhanced handler system with the following characteristics (updated
 - **Error Handling**: Structured, consistent error responses
 
 ### Negative
+
 - **Breaking Change**: Existing handlers require migration
 - **Learning Curve**: Developers need to understand new patterns
 - **Complexity**: More sophisticated type system and error handling
 
 ### Neutral
+
 - **Performance**: Minimal impact due to compile-time optimization
 - **Dependencies**: Added `github.com/google/uuid` for trace ID generation
 

@@ -14,6 +14,7 @@ GoBricks uses `panic()` for fail-fast validation in several internal APIs, follo
 4. **Consumer experience**: Library consumers receive stack traces instead of actionable error messages
 
 **Affected Patterns:**
+
 - Empty string validation (table names, expressions, aliases)
 - Nil checks (subqueries)
 - Parameter count validation (variadic alias arguments)
@@ -22,15 +23,18 @@ GoBricks uses `panic()` for fail-fast validation in several internal APIs, follo
 ## Options Considered
 
 ### Option 1: Mark as False Positives (NOSONAR)
+
 Keep existing panics, mark with NOSONAR comments.
 
 **Pros:** No breaking changes, maintains current behavior
 **Cons:** Doesn't improve reliability rating, existing NOSONAR comments not recognized
 
 ### Option 2: Convert to Error Returns (CHOSEN)
+
 Change function signatures to return errors instead of panicking.
 
 **Pros:**
+
 - ✅ Achieves reliability rating A
 - ✅ Follows Go idioms (explicit error handling)
 - ✅ Better consumer experience (actionable errors vs stack traces)
@@ -38,10 +42,12 @@ Change function signatures to return errors instead of panicking.
 - ✅ Improves testability (errors can be asserted, panics cannot)
 
 **Cons:**
+
 - ❌ Breaking API changes
 - ❌ Consumers must update call sites
 
 ### Option 3: Wrapper Functions
+
 Create new error-returning functions alongside panic variants.
 
 **Pros:** Non-breaking, gradual migration
@@ -49,9 +55,11 @@ Create new error-returning functions alongside panic variants.
 
 ## Decision
 
+<!-- markdownlint-disable-next-line MD036 -->
 **Option 2: Convert to Error Returns**
 
 This aligns with GoBricks manifesto principles:
+
 - **Explicit > Implicit**: Error returns make failure modes explicit
 - **Robustness**: Handle errors idiomatically, no silent failures
 - **Type Safety**: Compile-time error handling enforcement
@@ -86,6 +94,7 @@ type Tx interface {
 **Rationale:** This fixes S8242 (context-in-struct) by removing stored context from transactions. Context now flows through method parameters following Go idioms.
 
 **Migration:**
+
 ```go
 // Before
 tx, _ := db.Begin(ctx)
@@ -103,6 +112,7 @@ tx.Commit(ctx)
 ### Code Migration Examples
 
 **Before (panic-based):**
+
 ```go
 // Simple table reference
 table := dbtypes.Table("users")
@@ -118,6 +128,7 @@ types.ValidateSubquery(subquery)
 ```
 
 **After (error-returning):**
+
 ```go
 // Simple table reference
 table, err := dbtypes.Table("users")
@@ -227,6 +238,7 @@ The following S8242 (context-in-struct) patterns are **intentionally retained** 
 | `logger/context_test.go:17,59` | Table-driven tests | **Standard Go testing pattern**. Storing context in test struct for table-driven tests is universally accepted in Go testing. |
 
 **Why not refactored:**
+
 1. **Scheduler shutdown context**: Refactoring to channel-based shutdown would be complex and risky. The context-with-cancel pattern is idiomatic for service lifecycle management.
 2. **Job context embedding**: Changing to composition (storing `ctx` as field and delegating all methods) would add boilerplate without architectural benefit.
 3. **Test patterns**: Table-driven test patterns with context in struct are standard Go practice.

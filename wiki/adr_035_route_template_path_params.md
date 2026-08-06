@@ -111,6 +111,7 @@ stranded today — there is no public write channel that `Param()` or the
 ## Consequences
 
 **Positive:**
+
 - Purely additive: the `apidiff` gate stays green and the change ships in
   minor v0.46.0 as `feat(server):`, not `feat!:` — no migration for existing
   consumers.
@@ -121,6 +122,7 @@ stranded today — there is no public write channel that `Param()` or the
   boundary instead of being rediscovered by every consumer.
 
 **Negative:**
+
 - A future non-echo engine must support post-route path-parameter
   replacement — `SetPathParams` becomes part of the engine contract alongside
   the read accessors.

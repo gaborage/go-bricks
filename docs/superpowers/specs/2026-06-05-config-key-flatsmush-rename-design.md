@@ -69,11 +69,13 @@ Renaming koanf keys breaks existing YAML/env using the snake_case form — old k
 ## Components / files
 
 **Core (behavioral):**
+
 - `config/types.go` — rename `koanf`/`json`/`yaml`/`toml`/`mapstructure` tags on the 21 fields.
 - `config/config.go` — `loadDefaults`: `keystore.secret_min_length` → `keystore.secretminlength` (the only underscored default key).
 - `config.example.yaml` — the outbox/inbox/log keys.
 
 **Consistency (strings that name the key, updated for accuracy):**
+
 - `config/validation.go` — `NewValidationError("messaging.reconnect.reinit_delay", …)` and the other dotted key paths (8 sites).
 - `outbox/config.go`, `inbox/config.go`, `cache/manager.go` — error-message strings (`poll_interval`, `batch_size`, `max_size`, …).
 - `keystore/keystore.go` — doc comment.
@@ -83,10 +85,12 @@ Renaming koanf keys breaks existing YAML/env using the snake_case form — old k
 **Governance:** `wiki/adr_024_*.md` (new) + `wiki/architecture_decisions.md` index + `wiki/migrations.md` entry.
 
 **Ride-along doc fixes** (independently misleading, found in the earlier audit):
+
 - `README.md:329-339` — wrong server-path env vars (`SERVER_BASE_PATH`→`SERVER_PATH_BASE`, `SERVER_HEALTH_ROUTE`→`SERVER_PATH_HEALTH`, `SERVER_READY_ROUTE`→`SERVER_PATH_READY`) + drifted YAML block shape; `:226` — soften the "auto-maps to dot notation" claim.
 - `.env.example` — `DATABASE_TYPE=postgres`→`postgresql`; verify-then-fix the 3 orphan `MULTITENANT_*` entries.
 
 **Explicit EXCLUSIONS** (false-positive tokens — do NOT rename):
+
 - `messaging/manager.go` `idle_ttl_seconds` (a metric/log field name).
 - `database/*` `table_name` etc. (SQL column names), and any other non-config use.
 - Implementation classifies each reference; `make check` + targeted tests catch mistakes.

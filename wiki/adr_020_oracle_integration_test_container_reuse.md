@@ -61,6 +61,7 @@ We *will* apply this **as an interim safeguard** in the implementation PR — th
 testcontainers-go supports a `Reuse: true` flag that, combined with `Name`, lets multiple processes (or repeat runs) attach to the same running container. On a developer laptop this gives instant re-runs; in CI each fresh runner is a new VM so reuse provides no benefit there.
 
 Rejected because:
+
 - CI is where the flake hurts most, and reuse provides nothing on fresh runners.
 - The `Reuse` flag interacts oddly with testcontainers' Ryuk reaper — a reused container outlives the test session that "owned" it, and Ryuk's container-cleanup heuristics depend on session labels we'd need to manage by hand.
 - Containers persisting across test runs can mask state-leak bugs that a clean baseline would catch (e.g., a test that forgets to drop a sequence still passes the next run because the sequence already exists).

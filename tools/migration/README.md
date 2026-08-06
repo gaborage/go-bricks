@@ -7,6 +7,7 @@ go-bricks framework so the runtime engine and the CLI honor the same contract
 tenant, advisory-lock concurrency provided by Flyway natively).
 
 Deep dives:
+
 - [wiki/multi_tenant_migration.md](../../wiki/multi_tenant_migration.md) — full
   architecture, control-plane response shape, AWS Secrets Manager layout.
 - [wiki/migration_audit.md](../../wiki/migration_audit.md) — `migration.applied`

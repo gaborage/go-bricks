@@ -44,6 +44,7 @@ The actual secret lives in the deployment environment (Kubernetes Secret, AWS Se
 ## Security Best Practices
 
 1. **Never hardcode secrets in YAML.** Always use `${VAR}` references for credentials, even in non-production configs.
+
    ```yaml
    # SAFE
    api-key: ${NEW_RELIC_API_KEY}

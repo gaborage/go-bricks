@@ -130,6 +130,7 @@ Run: `GOWORK=off go test ./server/... ./app/... ./scheduler/...` — Expected: a
 ## Self-Review
 
 **Spec coverage** — every spec section maps to a task:
+
 - §1 boundary types → Task 1 ✓; §2 HandlerContext → Task 1 ✓; §3 RouteRegistrar+seam → Tasks 1,2 ✓; §4 ServerRunner → Task 3 ✓; §5 app echo-free → Task 5 ✓; §6 scheduler → Task 6 ✓; §7 middleware class → Task 4 ✓; §8 test ctor → Task 1 ✓; §9 perf → Task 8 benchmarks ✓; Testing → Task 8 ✓; Docs → Task 9 ✓; gates → Task 10 ✓.
 
 **Panel resolutions covered:** benchmarks+invariant (Task 8) ✓; SetRequest/SetRequestContext (Task 1) ✓; constructor class Option A (Task 4) ✓; `Handler` rename + `RequestHeader` (Task 1) ✓; RealIP dropped + ClientIP denial log (Tasks 1,5) ✓; doc expansion + doc gate (Tasks 9,10) ✓.

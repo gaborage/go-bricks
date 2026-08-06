@@ -5,6 +5,7 @@ This document covers GoBricks' AMQP messaging subsystem in depth: declaration he
 ## Messaging Architecture
 
 AMQP-based messaging with **validate-once, replay-many** pattern:
+
 - Declarations validated upfront, replayed per-tenant for isolation
 - Automatic reconnection with exponential backoff
 - Context propagation for tenant IDs and tracing
@@ -14,6 +15,7 @@ AMQP-based messaging with **validate-once, replay-many** pattern:
 GoBricks provides production-safe defaults to reduce AMQP boilerplate (~50+ lines → ~15 lines):
 
 **Concise Declaration Pattern:**
+
 ```go
 exchange := decls.DeclareTopicExchange("issuance.events")
 queue := decls.DeclareQueue("issuance.events.queue")
@@ -31,6 +33,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 ```
 
 **Production-Safe Defaults:**
+
 - Exchanges: `Durable: true`, `AutoDelete: false`, `Type: "topic"`
 - Queues: `Durable: true`, `AutoDelete: false`, `Exclusive: false`
 - Publishers: `Mandatory: false`, `Immediate: false`
@@ -56,7 +59,7 @@ Exchanges and bindings are unaffected: `RegisterExchange` still keeps the last d
 
 ## Consumer Registration Best Practices
 
-**CRITICAL: Deduplication Rules**
+### CRITICAL: Deduplication Rules
 
 GoBricks enforces **strict deduplication** to prevent message duplication bugs. Each unique `queue + consumer_tag + event_type` combination must be registered exactly once:
 
@@ -79,6 +82,7 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 ```
 
 **Common Mistakes:**
+
 - Registering consumers in loops or conditional blocks (creates duplicates)
 - Calling `app.RegisterModule()` multiple times for the same module
 - Module registration errors are unrecoverable - MUST use `log.Fatal(err)` to handle
@@ -167,6 +171,7 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 **Behavior:** All handler errors → Message nacked WITHOUT requeue (message dropped). Prevents poison messages from blocking queues. Rich ERROR logs + OpenTelemetry metrics track all failures.
 
 **Panic Recovery:** Handler panics are automatically recovered and treated identically to errors:
+
 - Panic recovered with stack trace logging
 - Message nacked WITHOUT requeue (consistent with error policy)
 - Service continues processing other messages
@@ -174,6 +179,7 @@ messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
 - Other consumers remain unaffected (panic isolation)
 
 **Error Handling Pattern:**
+
 ```go
 func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
     var order Order
@@ -260,6 +266,7 @@ via `x-death` count before parking permanently — remains future work; see
 GoBricks automatically configures `Workers = runtime.NumCPU() * 4` to handle blocking I/O operations (database queries, HTTP calls, file operations). The 4x multiplier ensures CPU utilization while threads wait on I/O.
 
 **Configuration:**
+
 ```go
 // Auto-scaling (default): Workers = NumCPU * 4, PrefetchCount = Workers * 10
 decls.DeclareConsumer(&messaging.ConsumerOptions{
@@ -291,28 +298,33 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 ```
 
 **Thread-Safety Requirements:**
+
 - Handlers MUST be thread-safe (no shared mutable state without locks/atomic operations)
 - Database pools MUST be sized: `MaxOpenConns >= NumCPU * 4 * NumConsumers`
 - External APIs: Add semaphore for rate limit enforcement if needed
 - Test with `go test -race` to detect data races
 
 **Resource Safeguards:**
+
 - Workers capped at 200 per consumer (prevents goroutine explosion)
 - PrefetchCount capped at 1000 (prevents memory exhaustion)
 - Caps are applied silently (no warning is currently logged when a value is reduced)
 
 **Performance Impact (8-core machine, 100ms handler):**
+
 | Version | Workers | Throughput | Speedup |
 |---------|---------|------------|---------|
 | v0.16.x | 1 | 10 msg/sec | Baseline |
 | v0.17.0 | 32 | 320 msg/sec | **32x** |
 
 **When to Override Defaults:**
+
 - **Workers=1**: Message ordering required (events must be processed sequentially)
 - **Workers>NumCPU*4**: Very slow handlers (>1s per message) or high throughput needs
 - **Workers<NumCPU*4**: CPU-bound handlers (rare - most handlers are I/O-bound)
 
 **Observability:**
+
 - Startup logs include `workers` and `prefetch` counts
 - Each worker logs with `worker_id` for debugging
 - OpenTelemetry metrics track per-consumer throughput
@@ -397,8 +409,8 @@ headers are poison — see
 `NewAMQPClient` starts connecting asynchronously and returns immediately — `IsReady()` only flips
 true once the broker handshake and channel init finish. Before this pre-flight existed, the very
 first publish against a freshly created (or mid-reconnect) client failed instantly with
-`messaging.ErrNotConnected`, even though the client would have become ready a moment later (issue
-#655).
+`messaging.ErrNotConnected`, even though the client would have become ready a moment later
+(issue #655).
 
 `PublishToExchange` now runs a bounded, context-aware wait for readiness **before** entering the
 retry loop described above. The wait polls every 100ms (the same cadence

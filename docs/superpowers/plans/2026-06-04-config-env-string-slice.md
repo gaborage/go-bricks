@@ -26,6 +26,7 @@
 ## Task 1: Prefactor — isolate the decoder config (behavior-preserving)
 
 **Files:**
+
 - Modify: `config/config.go` (imports; `Load()` unmarshal call; new `buildDecoderConfig`)
 
 - [ ] **Step 1: Add imports**
@@ -101,6 +102,7 @@ git commit -m "refactor(config): extract buildDecoderConfig to control unmarshal
 ## Task 2: The fix — comma-split-and-trim decode hook (Unmarshal path)
 
 **Files:**
+
 - Create helper: `config/converters.go` (`splitAndTrimList`)
 - Modify: `config/config.go` (`stringToTrimmedSliceHookFunc`, add to chain)
 - Test: `config/config_test.go`
@@ -213,6 +215,7 @@ git commit -m "fix(config): split comma-separated env vars into []string fields 
 ## Task 3: Fail-fast on all-invalid security CIDR lists
 
 **Files:**
+
 - Modify: `config/validation.go` (`net` import; `validateCIDRList`; call sites in `validateScheduler`)
 - Test: `config/validation_test.go`
 
@@ -341,6 +344,7 @@ git commit -m "feat(config): fail startup when scheduler CIDR list has zero vali
 ## Task 4: `InjectInto` `[]string` support
 
 **Files:**
+
 - Modify: `config/converters.go` (`toStringSlice`)
 - Modify: `config/injection.go` (`reflect.Slice` arm; `assignStringSliceField`; doc comment)
 - Test: `config/injection_test.go`, `config/converters_test.go`
@@ -512,6 +516,7 @@ git commit -m "feat(config): support []string fields in InjectInto (#539)"
 ## Task 5: Documentation
 
 **Files:**
+
 - Modify: `CLAUDE.md` (Configuration Injection → Supported Types)
 - Modify: `llms.txt` (if it enumerates `InjectInto` supported types)
 
@@ -553,6 +558,7 @@ Run `/code-review` then `/security-audit` on the staged/branch diff; apply findi
 ```bash
 git push -u origin feature/config-env-string-slice
 ```
+
 Open PR titled `config: split comma-separated env vars for []string fields (#539)`, body referencing the issue, the four changes, and the fail-fast behavior note.
 
 ---

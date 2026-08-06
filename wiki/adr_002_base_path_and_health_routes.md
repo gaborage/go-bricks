@@ -14,6 +14,7 @@
 ## Context
 
 GoBricks applications often need to be deployed behind proxies, load balancers, or in containerized environments where:
+
 1. All application routes need a common prefix (e.g., `/api/v1`, `/service-name`)
 2. Health check endpoints need custom paths for infrastructure compatibility
 3. Different deployment environments require different routing configurations
@@ -42,6 +43,7 @@ We will implement configurable base paths and health routes through:
 ## Implementation Details
 
 ### Configuration Structure
+
 ```go
 type ServerConfig struct {
     // ... existing fields ...
@@ -72,7 +74,9 @@ type RouteRegistrar interface {
 ```
 
 ### Smart Path Handling
+
 The `routeGroup` implementation includes:
+
 - **Path Normalization**: Ensures consistent leading/trailing slash handling
 - **Duplication Prevention**: Detects and prevents double-prefixing when paths already contain base prefix
 - **Nested Group Support**: Proper prefix inheritance for complex routing scenarios
@@ -89,6 +93,7 @@ The `routeGroup` implementation includes:
 ## Configuration Examples
 
 ### Basic Configuration
+
 ```yaml
 server:
   path:
@@ -113,6 +118,7 @@ SERVER_PATH_READY="/readiness"
 ### Route Resolution Examples
 
 With `server.path.base: "/api/v1"`:
+
 - Module route `/users` → `/api/v1/users`
 - Health endpoint → `/api/v1/health` (or custom path)
 - Ready endpoint → `/api/v1/ready` (or custom path)
@@ -121,6 +127,7 @@ With `server.path.base: "/api/v1"`:
 ## Consequences
 
 ### Positive
+
 - **Enhanced Deployment Flexibility**: Single codebase works across multiple deployment scenarios
 - **Better Infrastructure Integration**: Health endpoints can be customized for specific load balancer requirements
 - **Improved Developer Experience**: Automatic base path inheritance eliminates manual prefix management
@@ -128,23 +135,27 @@ With `server.path.base: "/api/v1"`:
 - **Smart Path Logic**: Prevents common pitfalls like double-prefixing in complex routing scenarios
 
 ### Negative
+
 - **Increased Complexity**: Additional abstraction layer over Echo's routing
 - **Breaking Change**: Module interface signature changes (mitigated by interface compatibility)
 - **Configuration Overhead**: More configuration options to understand and manage
 
 ### Neutral
+
 - **Learning Curve**: Developers need to understand the new RouteRegistrar abstraction
 - **Testing Complexity**: Additional test scenarios for path resolution and nested groups
 
 ## Quality Assurance
 
 ### Testing Strategy
+
 - **Unit Tests**: Path normalization, configuration validation, route resolution
 - **Integration Tests**: End-to-end HTTP requests with various configurations
 - **Backward Compatibility Tests**: Verify existing functionality remains unchanged
 - **Edge Case Testing**: Double-prefixing prevention, nested groups, malformed paths
 
 ### Code Quality
+
 - **Linting**: All code passes golangci-lint with zero issues
 - **Race Detection**: Tests pass with `-race` flag
 - **Performance**: Zero overhead when base path is empty
