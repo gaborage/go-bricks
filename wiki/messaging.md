@@ -128,7 +128,33 @@ messaging: decode failed for event "OrderCreated": json: type mismatch at field 
 messaging: validate failed for event "OrderCreated" (fields: OrderCreated.Currency)
 ```
 
-**Delivery headers are not exposed (yet).** `fn` receives the decoded payload and nothing else, so a typed consumer cannot read `x-outbox-event-id` and wrap its body in `inbox.ProcessOnce`. Outbox delivery is at-least-once, so a consumer fed by the outbox relay still needs that dedup — use the untyped `DeclareConsumer` for those until [#852](https://github.com/gaborage/go-bricks/issues/852) lands.
+**Delivery metadata.** `DeclareTypedConsumerWithMeta` / `messaging.NewTypedHandlerWithMeta[T](eventType, fn)` are the metadata-carrying siblings of `DeclareTypedConsumer` / `NewTypedHandler`: `fn` is `func(ctx context.Context, payload T, meta messaging.Metadata) error`, with the same decode → validate → `fn` pipeline and failure semantics. `Metadata` exposes three read-only accessors — `Headers() amqp.Table`, `EventType() string`, `Redelivered() bool` — so a typed consumer can read `x-outbox-event-id` and wrap its body in `inbox.ProcessOnce`, the canonical composition for an outbox-fed consumer:
+
+```go
+// Same DeclareMessaging body as above, with this call REPLACING the
+// DeclareTypedConsumer one — the same queue + consumer tag + event type twice
+// panics at startup. m.inbox is deps.Inbox, captured in Init; DeclareMessaging
+// receives only decls.
+messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
+    Queue:     queue.Name,
+    Consumer:  "order-processor",
+    EventType: "OrderCreated",
+}, func(ctx context.Context, evt OrderCreated, meta messaging.Metadata) error {
+    id, ok := outbox.EventIDFromHeaders(meta.Headers())
+    if !ok {
+        // No id, no dedup key — processing here would repeat the business
+        // write on every redelivery, so fail closed.
+        return fmt.Errorf("missing x-outbox-event-id header")
+    }
+    return m.inbox.ProcessOnce(ctx, id, func(ctx context.Context, tx dbtypes.Tx) error {
+        return processTx(ctx, tx, evt) // business write joins the dedup transaction
+    })
+})
+```
+
+**Mixed-queue variant.** A queue that also carries directly-published messages has deliveries with no ledger key by design. There, and only there, swap the `!ok` branch for `return process(ctx, evt)` — processed without dedup, so that handler must be idempotent on its own. An outbox-only queue keeps the fail-closed default above.
+
+**Headers are publisher-controlled.** AMQP headers come from whoever published the message, so on a queue fed by an exchange outside this service `meta.Headers()` is caller-supplied input — reading it is identification, not authorization. In the dedup shape above the publisher therefore picks the ledger key: replaying a known `x-outbox-event-id` makes `ProcessOnce` skip the handler and ACK (a silent drop), and novel ids each cost a ledger row until retention sweeps them. Omitting the header is a third lever: the relay stamps `x-outbox-event-id` on every message it publishes, so a publisher that simply drops it would opt out of dedup entirely — which is why the example returns an error on `!ok` rather than processing, and why the mixed-queue variant is a deliberate opt-in for a queue whose traffic you know. Broker-side publish authorization is what bounds all three.
 
 **Concurrency.** One adapter instance serves every worker of the consumer and every tenant replaying the declarations. It holds no mutable state and allocates a fresh payload per delivery, so the concurrency rules below apply unchanged: the default is `NumCPU * 4` workers, and `Workers: 1` still buys sequential processing when ordering matters. Your `fn` must be safe for concurrent use.
 

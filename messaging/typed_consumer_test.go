@@ -513,6 +513,155 @@ func TestDeclareTypedConsumerPanicsOnWiringMistakes(t *testing.T) {
 	assert.Empty(t, decls.Consumers(), "nothing is registered when the guard fires")
 }
 
+func TestMetadataAccessors(t *testing.T) {
+	tests := []struct {
+		name        string
+		meta        Metadata
+		wantHeaders amqp.Table
+		wantType    string
+		wantRedeliv bool
+	}{
+		{
+			name: "populated_delivery",
+			meta: Metadata{delivery: &amqp.Delivery{
+				Headers:     amqp.Table{"x-outbox-event-id": "evt-1"},
+				Type:        orderEventType,
+				Redelivered: true,
+			}},
+			wantHeaders: amqp.Table{"x-outbox-event-id": "evt-1"},
+			wantType:    orderEventType,
+			wantRedeliv: true,
+		},
+		{
+			name:        "zero_value_is_inert",
+			meta:        Metadata{},
+			wantHeaders: nil,
+			wantType:    "",
+			wantRedeliv: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.wantHeaders, tc.meta.Headers())
+			assert.Equal(t, tc.wantType, tc.meta.EventType())
+			assert.Equal(t, tc.wantRedeliv, tc.meta.Redelivered())
+		})
+	}
+}
+
+func TestNewTypedHandlerWithMeta(t *testing.T) {
+	var got orderPayload
+	var gotMeta Metadata
+	var calls int
+	h := NewTypedHandlerWithMeta(orderEventType, func(_ context.Context, p orderPayload, meta Metadata) error {
+		got = p
+		gotMeta = meta
+		calls++
+		return nil
+	})
+
+	delivery := &amqp.Delivery{
+		Body:    validBody(t),
+		Headers: amqp.Table{"x-outbox-event-id": "evt-1"},
+	}
+	require.NoError(t, h.Handle(t.Context(), delivery))
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, orderPayload{Reference: "abc", Amount: 7}, got)
+	assert.Equal(t, "evt-1", gotMeta.Headers()["x-outbox-event-id"])
+
+	// The pre-fn pipeline is typedHandler.Handle's, asserted in depth against
+	// NewTypedHandler above; the meta-carrying constructor only has to reach the
+	// same short-circuits without ever calling fn.
+	t.Run("failures_short_circuit_before_fn", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			delivery *amqp.Delivery
+			wantErr  error
+		}{
+			{name: "nil_delivery", delivery: nil, wantErr: ErrPayloadUndecodable},
+			{name: "undecodable_body", delivery: &amqp.Delivery{Body: []byte("not json")}, wantErr: ErrPayloadUndecodable},
+			{
+				name:     "invalid_payload",
+				delivery: &amqp.Delivery{Body: []byte(`{"reference":"over-max-5","amount":1}`)},
+				wantErr:  ErrPayloadInvalid,
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				h := NewTypedHandlerWithMeta(orderEventType, func(context.Context, orderPayload, Metadata) error {
+					t.Error("fn must not run after a pre-dispatch failure")
+					return nil
+				})
+
+				err := h.Handle(t.Context(), tc.delivery)
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tc.wantErr)
+			})
+		}
+	})
+
+	t.Run("nil_fn_panics", func(t *testing.T) {
+		assert.PanicsWithValue(t,
+			"messaging: NewTypedHandlerWithMeta requires a non-nil handler function (event_type=OrderCreated)",
+			func() { NewTypedHandlerWithMeta[orderPayload](orderEventType, nil) })
+	})
+}
+
+func TestDeclareTypedConsumerWithMeta(t *testing.T) {
+	decls := NewDeclarations()
+	var got orderPayload
+	opts := &ConsumerOptions{Queue: testQueue, Consumer: testConsumer, EventType: orderEventType}
+
+	decl := DeclareTypedConsumerWithMeta(decls, opts, func(_ context.Context, p orderPayload, _ Metadata) error {
+		got = p
+		return nil
+	})
+
+	require.NotNil(t, decl)
+	assert.Same(t, opts.Handler, decl.Handler)
+
+	registered := decls.Consumers()
+	require.Len(t, registered, 1)
+	require.NotNil(t, registered[0].Handler)
+	assert.Equal(t, orderEventType, registered[0].Handler.EventType())
+
+	require.NoError(t, registered[0].Handler.Handle(t.Context(), &amqp.Delivery{Body: validBody(t)}))
+	assert.Equal(t, orderPayload{Reference: "abc", Amount: 7}, got)
+
+	t.Run("panics_on_wiring_mistakes", func(t *testing.T) {
+		fn := func(context.Context, orderPayload, Metadata) error { return nil }
+		opts := func() *ConsumerOptions {
+			return &ConsumerOptions{Queue: testQueue, Consumer: testConsumer, EventType: orderEventType}
+		}
+
+		assert.PanicsWithValue(t, "messaging: DeclareTypedConsumerWithMeta requires a non-nil *Declarations",
+			func() { DeclareTypedConsumerWithMeta(nil, opts(), fn) })
+
+		assert.PanicsWithValue(t, "messaging: DeclareTypedConsumerWithMeta requires non-nil *ConsumerOptions",
+			func() { DeclareTypedConsumerWithMeta[orderPayload](NewDeclarations(), nil, fn) })
+
+		taken := opts()
+		mine := &MockMessageHandler{eventType: orderEventType}
+		taken.Handler = mine
+		decls := NewDeclarations()
+
+		recovered := func() (msg any) {
+			defer func() { msg = recover() }()
+			DeclareTypedConsumerWithMeta(decls, taken, fn)
+			return nil
+		}()
+
+		require.NotNil(t, recovered, "a pre-set Handler must panic")
+		assert.Contains(t, recovered, "ConsumerOptions.Handler must be nil")
+		assert.Contains(t, recovered, "queue="+testQueue)
+		assert.Same(t, mine, taken.Handler, "the caller's handler is not overwritten")
+		assert.Empty(t, decls.Consumers(), "nothing is registered when the guard fires")
+	})
+}
+
 func TestJSONCodecSummarize(t *testing.T) {
 	typeErr := &json.UnmarshalTypeError{
 		Value:  "number " + numericMarker,
