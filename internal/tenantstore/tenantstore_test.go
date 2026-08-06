@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
@@ -310,6 +311,115 @@ func TestRejectSharedWithStaticTenants(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStartupCheckApplies(t *testing.T) {
+	tests := []struct {
+		name         string
+		cfg          *config.Config
+		sharedLedger bool
+		want         bool
+	}{
+		{name: "nil_config", cfg: nil, sharedLedger: false, want: false},
+		{name: "single_tenant_static_source", cfg: &config.Config{}, sharedLedger: false, want: true},
+		{name: "dynamic_source_skips",
+			cfg:          &config.Config{Source: config.SourceConfig{Type: config.SourceTypeDynamic}},
+			sharedLedger: false, want: false},
+		{name: "per_tenant_multitenant_skips",
+			cfg:          &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}},
+			sharedLedger: false, want: false},
+		{name: "shared_ledger_multitenant_applies",
+			cfg:          &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}},
+			sharedLedger: true, want: true},
+		{name: "shared_ledger_dynamic_source_skips",
+			cfg: &config.Config{
+				Multitenant: config.MultitenantConfig{Enabled: true},
+				Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
+			}, sharedLedger: true, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, StartupCheckApplies(tt.cfg, tt.sharedLedger))
+		})
+	}
+}
+
+func TestStartupDatabaseNotConfigured(t *testing.T) {
+	cfg := &config.Config{}
+	getDB := func(context.Context) (dbtypes.Interface, error) {
+		return nil, config.NewNotConfiguredError("database", "DATABASE_TYPE", "database")
+	}
+
+	ctx, cancel, db, err := StartupDatabase(context.Background(), cfg, "outbox", getDB)
+	defer cancel()
+	require.Error(t, err)
+	assert.Equal(t, "outbox: outbox.enabled=true requires a database, but none is configured; "+
+		"configure the database section (or the control-plane database for tenancy=shared) "+
+		"or set outbox.enabled=false: config_not_configured: database (optional) to enable: "+
+		"set DATABASE_TYPE env var or add database to config.yaml", err.Error())
+	assert.Nil(t, db)
+	assert.NotNil(t, ctx)
+}
+
+func TestStartupDatabaseUnreachable(t *testing.T) {
+	cfg := &config.Config{}
+	cause := errors.New("dial tcp: connection refused")
+	getDB := func(context.Context) (dbtypes.Interface, error) { return nil, cause }
+
+	_, cancel, db, err := StartupDatabase(context.Background(), cfg, "inbox", getDB)
+	defer cancel()
+	require.Error(t, err)
+	assert.Equal(t, "inbox: database unreachable at startup: dial tcp: connection refused", err.Error())
+	assert.ErrorIs(t, err, cause)
+	assert.Nil(t, db)
+}
+
+func TestStartupDatabaseNilDatabase(t *testing.T) {
+	cfg := &config.Config{}
+	getDB := func(context.Context) (dbtypes.Interface, error) { return nil, nil }
+
+	_, cancel, db, err := StartupDatabase(context.Background(), cfg, "outbox", getDB)
+	defer cancel()
+	require.Error(t, err)
+	assert.Equal(t, "outbox: database resolver returned a nil database", err.Error())
+	assert.Nil(t, db)
+}
+
+func TestStartupDatabaseSuccess(t *testing.T) {
+	cfg := &config.Config{}
+	want := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	getDB := func(context.Context) (dbtypes.Interface, error) { return want, nil }
+
+	ctx, cancel, db, err := StartupDatabase(context.Background(), cfg, "outbox", getDB)
+	defer cancel()
+	require.NoError(t, err)
+	assert.Same(t, want, db)
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok, "StartupDatabase must derive a bounded context")
+	assert.InDelta(t, float64(defaultStartupTimeout), float64(time.Until(deadline)), float64(2*time.Second),
+		"a zero App.Startup.Database must default the probe timeout to 10s")
+}
+
+func TestStartupDatabaseUsesConfiguredTimeout(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Startup: config.StartupConfig{Database: 2 * time.Second}}}
+	getDB := func(context.Context) (dbtypes.Interface, error) { return dbtesting.NewTestDB(dbtypes.PostgreSQL), nil }
+
+	ctx, cancel, _, err := StartupDatabase(context.Background(), cfg, "outbox", getDB)
+	defer cancel()
+	require.NoError(t, err)
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.InDelta(t, float64(2*time.Second), float64(time.Until(deadline)), float64(500*time.Millisecond),
+		"a configured App.Startup.Database must be used verbatim, not overridden by the 10s default")
+}
+
+func TestTableUnusableError(t *testing.T) {
+	cause := errors.New("relation does not exist")
+	err := TableUnusableError("outbox", "gobricks_outbox", "outbox.autocreatetable", cause)
+	require.Error(t, err)
+	assert.Equal(t, `outbox: table "gobricks_outbox" is not usable (missing table or insufficient privileges); `+
+		`run migrations or set outbox.autocreatetable=true: relation does not exist`, err.Error())
+	assert.ErrorIs(t, err, cause)
 }
 
 // waitForGoroutineBlockedOnTenantLock spins until some goroutine's stack shows

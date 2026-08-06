@@ -125,7 +125,7 @@ func TestModuleInitEnabledWithBothResolvers(t *testing.T) {
 			},
 		},
 		DB: func(_ context.Context) (dbtypes.Interface, error) {
-			return nil, nil
+			return probeReadyDB("postgresql"), nil
 		},
 		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
 			return nil, nil
@@ -266,7 +266,7 @@ func TestModuleInitAllowsShortPublishTimeoutWhenNoRetries(t *testing.T) {
 				},
 			},
 		},
-		DB:        func(_ context.Context) (dbtypes.Interface, error) { return nil, nil },
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil },
 		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
 	}
 
@@ -384,6 +384,169 @@ func TestModuleInitEnabledMessagingUnconfiguredMultiTenant(t *testing.T) {
 	assert.NotNil(t, m.publisher, "Publisher should be initialized in static multi-tenant mode even with empty global broker URL")
 }
 
+// outboxTestConfig returns a minimal enabled, single-tenant, static-source
+// config whose messaging/publishtimeout guards already pass — the shared base
+// for the startup-database verification tests below.
+func outboxTestConfig() *config.Config {
+	return &config.Config{
+		Outbox:    config.OutboxConfig{Enabled: true},
+		Messaging: config.MessagingConfig{Broker: config.BrokerConfig{URL: "amqp://localhost"}},
+	}
+}
+
+// initDeps builds the ModuleDeps for the Init tests; the config and the DB
+// resolver are the only axes they vary.
+func initDeps(cfg *config.Config, db func(context.Context) (dbtypes.Interface, error)) *app.ModuleDeps {
+	return &app.ModuleDeps{
+		Logger:    logger.New("disabled", true),
+		Config:    cfg,
+		DB:        db,
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+}
+
+// TestModuleInitFailsWhenDatabaseNotConfigured guards gap (a) from issue #876:
+// an enabled outbox with no database configured must fail startup, not boot green.
+func TestModuleInitFailsWhenDatabaseNotConfigured(t *testing.T) {
+	m := NewModule()
+	deps := initDeps(outboxTestConfig(), func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, config.NewNotConfiguredError("database", "DATABASE_TYPE", "database")
+	})
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires a database, but none is configured")
+}
+
+// TestModuleInitFailsWhenDatabaseUnreachable guards gap (b): a configured but
+// unreachable database must fail startup rather than let the relay fail once per
+// poll interval forever.
+func TestModuleInitFailsWhenDatabaseUnreachable(t *testing.T) {
+	m := NewModule()
+	deps := initDeps(outboxTestConfig(), func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("dial tcp 10.0.0.1:5432: connect: connection refused")
+	})
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database unreachable at startup")
+}
+
+// TestModuleInitFailsWhenTableMissing guards gap (c): a reachable database whose
+// outbox table does not exist (or is unreadable) must fail startup — the fixture
+// has no query expectations, so the probe's SELECT goes unmatched.
+func TestModuleInitFailsWhenTableMissing(t *testing.T) {
+	m := NewModule()
+	deps := initDeps(outboxTestConfig(), func(_ context.Context) (dbtypes.Interface, error) {
+		return dbtesting.NewTestDB("postgresql"), nil
+	})
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not usable")
+}
+
+// TestModuleInitPerTenantMultitenantSkipsStartupProbe pins
+// startupDatabaseCheckApplies' Multitenant clause: the failing getDB must not fail Init.
+func TestModuleInitPerTenantMultitenantSkipsStartupProbe(t *testing.T) {
+	m := NewModule()
+	deps := initDeps(&config.Config{
+		Outbox: config.OutboxConfig{Enabled: true},
+		Multitenant: config.MultitenantConfig{
+			Enabled: true,
+			Tenants: map[string]config.TenantEntry{"tenant-a": {}},
+		},
+	}, func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("would fail the probe if it ran")
+	})
+
+	err := m.Init(deps)
+	require.NoError(t, err, "per-tenant fan-out resolves databases at runtime, not at Init")
+}
+
+// TestModuleInitDynamicSourceSkipsStartupProbe pins
+// startupDatabaseCheckApplies' Source.Type clause: the failing getDB must not fail Init.
+func TestModuleInitDynamicSourceSkipsStartupProbe(t *testing.T) {
+	m := NewModule()
+	deps := initDeps(&config.Config{
+		Outbox:    config.OutboxConfig{Enabled: true},
+		Messaging: config.MessagingConfig{Broker: config.BrokerConfig{URL: "amqp://localhost"}},
+		Source:    config.SourceConfig{Type: config.SourceTypeDynamic},
+	}, func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("would fail the probe if it ran")
+	})
+
+	err := m.Init(deps)
+	require.NoError(t, err, "a dynamic source resolves the \"\" key at runtime, not at Init")
+}
+
+// TestModuleInitSharedTenancyStaticSourceProbesControlPlaneDatabase closes gap
+// (3): tenancy=shared with a static source resolves the "" key statically, so
+// Init must now probe the control-plane database — previously this mode was
+// never probed at startup at all.
+func TestModuleInitSharedTenancyStaticSourceProbesControlPlaneDatabase(t *testing.T) {
+	m := NewModule()
+	failingDB := func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("dial tcp control-plane-db: connection refused")
+	}
+	m.SetSharedResolvers(failingDB, stubSharedMsg)
+	deps := sharedTenancyDeps(&config.Config{
+		Outbox:      config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+		Messaging:   config.MessagingConfig{Broker: config.BrokerConfig{URL: "amqp://localhost"}},
+		Multitenant: config.MultitenantConfig{Enabled: true}, // pins the sharedLedger() clause, not just !Multitenant.Enabled
+	})
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database unreachable at startup",
+		"tenancy=shared with a static source must probe the control-plane \"\" database at startup")
+}
+
+// TestModuleInitDisabledOutboxSkipsStartupProbe pins that a disabled outbox never
+// reaches the probe, regardless of how the DB resolver would behave.
+func TestModuleInitDisabledOutboxSkipsStartupProbe(t *testing.T) {
+	m := NewModule()
+	deps := initDeps(&config.Config{Outbox: config.OutboxConfig{Enabled: false}},
+		func(_ context.Context) (dbtypes.Interface, error) {
+			return nil, errors.New("would fail the probe if it ran")
+		})
+
+	err := m.Init(deps)
+	require.NoError(t, err)
+}
+
+// TestModuleInitDefaultsZeroStartupTimeoutToTenSeconds pins the timeout <= 0
+// default: an unset App.Startup.Database must bound the probe's context at
+// 10s, not 0 (an immediately-expired context) or another arithmetic result.
+func TestModuleInitDefaultsZeroStartupTimeoutToTenSeconds(t *testing.T) {
+	m := NewModule()
+	var deadline time.Time
+	var hasDeadline bool
+	// App.Startup.Database left at its zero value.
+	deps := initDeps(outboxTestConfig(), func(ctx context.Context) (dbtypes.Interface, error) {
+		deadline, hasDeadline = ctx.Deadline()
+		return probeReadyDB("postgresql"), nil
+	})
+
+	err := m.Init(deps)
+	require.NoError(t, err)
+	require.True(t, hasDeadline, "verifyStartupDatabase must derive a bounded context")
+	assert.InDelta(t, float64(10*time.Second), float64(time.Until(deadline)), float64(2*time.Second),
+		"a zero App.Startup.Database must default the probe timeout to 10s")
+}
+
+// TestModuleInitFailsWhenDatabaseResolverReturnsNilDatabase pins the nil-db
+// contract-violation guard: without it, ensureStoreInitialized's
+// db.DatabaseType() call would panic inside Init instead of erroring.
+func TestModuleInitFailsWhenDatabaseResolverReturnsNilDatabase(t *testing.T) {
+	m := NewModule()
+	deps := initDeps(outboxTestConfig(), func(_ context.Context) (dbtypes.Interface, error) { return nil, nil })
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "returned a nil database")
+}
+
 func TestModuleInitFailsFastForDynamicMultitenant(t *testing.T) {
 	m := NewModule()
 	deps := &app.ModuleDeps{
@@ -439,12 +602,7 @@ func stubSharedMsg(_ context.Context) (messaging.AMQPClient, error) {
 // sharedTenancyDeps builds the ModuleDeps used by the shared-tenancy tests;
 // only Config varies between them.
 func sharedTenancyDeps(cfg *config.Config) *app.ModuleDeps {
-	return &app.ModuleDeps{
-		Logger:    logger.New("disabled", true),
-		Config:    cfg,
-		DB:        stubSharedDB,
-		Messaging: stubSharedMsg,
-	}
+	return initDeps(cfg, stubSharedDB)
 }
 
 func TestModuleInitSharedTenancyDynamicMultitenantSucceeds(t *testing.T) {
@@ -528,12 +686,22 @@ func TestRegisterJobsSharedTenancySinglePass(t *testing.T) {
 		"logCycle derives the tenancy stamp from the relay's config copy")
 }
 
+// probeReadyDB returns a fresh TestDB whose SELECT expectation satisfies Init's
+// startup-database probe (verifyStartupDatabase's FetchPending call), for tests
+// that only need Init to succeed. vendor must be one FetchPending supports
+// (postgresql/oracle) or Init fails on the probe's ensureStoreInitialized.
+func probeReadyDB(vendor string) *dbtesting.TestDB {
+	db := dbtesting.NewTestDB(vendor)
+	db.ExpectQuery("SELECT").WillReturnRows(dbtesting.NewRowSet("id"))
+	return db
+}
+
 // initEnabledModule returns an outbox Module that has gone through Init
 // against the supplied dbVendor (no auto-create-table). getDB is wired to
 // return a TestDB of that vendor.
 func initEnabledModule(t *testing.T, dbVendor string, retention time.Duration) (*Module, *dbtesting.TestDB) {
 	t.Helper()
-	db := dbtesting.NewTestDB(dbVendor)
+	db := probeReadyDB(dbVendor)
 	m := NewModule()
 	deps := &app.ModuleDeps{
 		Logger: logger.New("disabled", true),
@@ -569,8 +737,21 @@ func TestModuleEnsureStoreInitializedOracle(t *testing.T) {
 	assert.NotNil(t, store, "store created for oracle vendor")
 }
 
+// directModule constructs a Module bypassing Init, so ensureStoreInitialized's own
+// error handling is exercised in isolation — Init's startup-database probe would
+// otherwise surface the same failure earlier, via verifyStartupDatabase.
+func directModule(getDB func(context.Context) (dbtypes.Interface, error)) *Module {
+	return &Module{
+		logger: logger.New("disabled", true),
+		cfg:    config.OutboxConfig{TableName: DefaultTableName},
+		getDB:  getDB,
+	}
+}
+
 func TestModuleEnsureStoreInitializedUnknownVendor(t *testing.T) {
-	m, _ := initEnabledModule(t, "mysql", 0)
+	m := directModule(func(_ context.Context) (dbtypes.Interface, error) {
+		return dbtesting.NewTestDB("mysql"), nil
+	})
 	store, err := m.ensureStoreInitialized(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported database vendor")
@@ -578,19 +759,9 @@ func TestModuleEnsureStoreInitializedUnknownVendor(t *testing.T) {
 }
 
 func TestModuleEnsureStoreInitializedDBResolverError(t *testing.T) {
-	m := NewModule()
-	deps := &app.ModuleDeps{
-		Logger: logger.New("disabled", true),
-		Config: &config.Config{
-			Outbox:    config.OutboxConfig{Enabled: true},
-			Messaging: config.MessagingConfig{Broker: config.BrokerConfig{URL: "amqp://x"}},
-		},
-		DB: func(_ context.Context) (dbtypes.Interface, error) {
-			return nil, errors.New("connection refused")
-		},
-		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
-	}
-	require.NoError(t, m.Init(deps))
+	m := directModule(func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("connection refused")
+	})
 
 	store, err := m.ensureStoreInitialized(context.Background())
 	require.Error(t, err)
@@ -673,10 +844,13 @@ func TestModuleRegisterJobsPropagatesCleanupError(t *testing.T) {
 	assert.Len(t, reg.FixedRateCalls, 1, "relay registered before cleanup failure")
 }
 
-func TestLazyPublisherPublishLazilyInitializesStore(t *testing.T) {
+// TestLazyPublisherPublishReusesEagerlyInitializedStore pins that Init's startup
+// probe (verifyStartupDatabase) already warms the tenant store — Publish must
+// reuse that same instance rather than creating a second one.
+func TestLazyPublisherPublishReusesEagerlyInitializedStore(t *testing.T) {
 	m, db := initEnabledModule(t, "postgresql", 0)
-	_, ok := m.stores.Cached("")
-	require.False(t, ok, "store is nil before first Publish")
+	preInit, ok := m.stores.Cached("")
+	require.True(t, ok, "the startup probe eagerly initializes the store")
 
 	// Wire the tx's INSERT expectation matching postgresStore.Insert.
 	db.ExpectTransaction().
@@ -695,8 +869,8 @@ func TestLazyPublisherPublishLazilyInitializesStore(t *testing.T) {
 	id, err := m.OutboxPublisher().Publish(context.Background(), tx, event)
 	require.NoError(t, err)
 	assert.NotEmpty(t, id, "Publish returns a generated event ID")
-	_, ok = m.stores.Cached("")
-	assert.True(t, ok, "store initialized lazily on first Publish")
+	postPublish, _ := m.stores.Cached("")
+	assert.Same(t, preInit, postPublish, "Publish must reuse the store the startup probe already initialized")
 }
 
 func TestLazyStoreDelegatesAllMethodsAfterInit(t *testing.T) {

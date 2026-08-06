@@ -95,8 +95,9 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
-	// Fail fast: when outbox is enabled, DB and Messaging resolvers are required.
-	// Without them, the relay job would panic on first poll instead of failing at startup.
+	// Guards direct construction only: app.RegisterModule always wires non-nil
+	// resolvers, so these never fire through the normal registration path.
+	// verifyStartupDatabase (below) is the real fail-fast for an enabled outbox.
 	if m.getDB == nil {
 		return fmt.Errorf("outbox: database resolver (deps.DB) is required when outbox is enabled")
 	}
@@ -122,9 +123,14 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return err
 	}
 
-	// Store creation is deferred until first use (lazy init like scheduler)
-	// because we need to know the database vendor type, which requires a DB connection.
-	// The publisher wraps the store and handles lazy initialization.
+	if m.startupDatabaseCheckApplies() {
+		if err := m.verifyStartupDatabase(); err != nil {
+			return err
+		}
+	}
+
+	// The "" store is already warm when verifyStartupDatabase ran; every other key
+	// (per-tenant fan-out, dynamic sources) is still created lazily on first use.
 	m.publisher = &lazyPublisher{module: m}
 
 	m.logger.Info().
@@ -197,6 +203,34 @@ func (m *Module) checkTenancyFanOutGuards() error {
 				"the relay would never deliver any events. Configure multitenant.tenants, set outbox.tenancy=shared, " +
 				"or set outbox.enabled=false")
 		}
+	}
+	return nil
+}
+
+// startupDatabaseCheckApplies reports whether Init can statically resolve the
+// "" key; see tenantstore.StartupCheckApplies for the predicate and its
+// exemptions (shared with inbox so it cannot drift between the two).
+func (m *Module) startupDatabaseCheckApplies() bool {
+	return tenantstore.StartupCheckApplies(m.config, m.sharedLedger())
+}
+
+// verifyStartupDatabase fails Init when the enabled outbox cannot possibly
+// relay: no database configured, database unreachable, or outbox table
+// missing/unusable. FetchPending(…, 1) is the probe: the exact read the relay
+// performs every poll, side-effect free.
+func (m *Module) verifyStartupDatabase() error {
+	ctx, cancel, db, err := tenantstore.StartupDatabase(context.Background(), m.config, "outbox", m.getDB)
+	defer cancel()
+	if err != nil {
+		return err
+	}
+
+	store, err := m.ensureStoreInitialized(ctx)
+	if err != nil {
+		return err // already "outbox: …"-prefixed by the tenantstore cache
+	}
+	if _, err := store.FetchPending(ctx, db, 1); err != nil {
+		return tenantstore.TableUnusableError("outbox", m.cfg.TableName, "outbox.autocreatetable", err)
 	}
 	return nil
 }

@@ -39,7 +39,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56  | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
-| E57  | v0.56.0 → v0.57.0 | silent-behavior | 3 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3) |
+| E57  | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4 aborts startup) | 4 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -1141,7 +1141,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - verify: `curl -s -o /dev/null -w '%{http_code}' localhost:8080/ready`
 - ref: ADR-047 · `config/tenant_store.go` (`DBConfig`) · `app/health.go` · `app/debug_health.go` · #872
 
-## E57 · v0.56.0 → v0.57.0 — `/ready` stops disclosing internals in either body
+## E57 · v0.56.0 → v0.57.0 — `/ready` stops disclosing internals in either body + outbox/inbox startup database verification
 
 - gist: The database readiness probe now declares a sanitized public string, so `/ready`'s
   `503` body reports `database unavailable` instead of the driver's error. That error named
@@ -1164,7 +1164,21 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   resourcepool key — the tenant ID in a multi-tenant deployment — with `last_used` and
   `idle_duration` alongside it, so an unauthenticated caller read a live tenant enumeration
   and per-tenant timing. That array is now withheld from `/ready`; the scalar counters stay,
-  and the per-key detail is unchanged on `<debug.pathprefix>/health-debug` (C57.3).
+  and the per-key detail is unchanged on `<debug.pathprefix>/health-debug` (C57.3). Separately,
+  an enabled outbox or inbox now verifies at `Init` that its ledger database and table are
+  actually usable — previously `outbox.enabled: true`/`inbox.enabled: true` with no database
+  configured (or an unreachable one, or a missing ledger table) booted green and only failed
+  once per poll interval, forever, with a relay log line that misleadingly read
+  `database (optional)`. The check runs the read/write the relay or cleanup job already performs
+  every cycle (the outbox's `FetchPending(…, 1)`; the inbox's `DeleteProcessed` before the Unix
+  epoch, which matches no row) against the same database and table, so `Init` now fails fast
+  with an actionable error instead. It is a reachability-and-table check, not a full capability
+  check: the outbox probe covers exactly what the relay reads, but the inbox probe is the
+  *cleanup* job's `DELETE`, so it does not prove `ProcessOnce`'s `INSERT` — a role holding
+  `DELETE` but not `INSERT` still passes `Init` and fails at the first processed event. Per-tenant fan-out and `source.type: dynamic` deployments are
+  unaffected — those resolve their database at runtime, not at `Init`. A custom dynamic
+  `Options.ResourceSource` behind a *static* `source.type` is not among them: a module cannot see
+  that resource source, so such a deployment is probed (C57.4).
 - build-caught: none
 - exit: `go get github.com/gaborage/go-bricks@v0.57.0 && go mod tidy && go build ./... && go test ./...`
 
@@ -1343,6 +1357,71 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `debug.bearertoken` is empty).
 - ref: `app/lifecycle.go` (`publicDBStats`) · `database/manager.go` (`DbManager.Stats`) ·
   `app/debug_health.go`
+
+### [C57.4] An enabled outbox/inbox now fails startup without a usable database · breaking · when: match
+
+- detect: `git grep -n 'outbox:\|inbox:' -- '*.yaml' '*.yml' 'config*.yaml'` and
+  `git grep -nE 'OUTBOX_ENABLED|INBOX_ENABLED'` across your deployment manifests and env
+  files for every environment that sets `outbox.enabled: true` or `inbox.enabled: true`, then
+  check each one against the exempt-mode list in `scope` below — anything not exempt is a
+  match if its database is absent, unreachable, its outbox/inbox table has not been migrated
+  yet and `autocreatetable` is off, or its runtime role lacks the privilege the probe needs
+  (outbox `SELECT`, inbox `DELETE`, plus table DDL wherever `autocreatetable` is on).
+- scope: `outbox.Module.Init` / `inbox.Module.Init` now run a startup probe
+  (`verifyStartupDatabase`) whenever the `""` key is statically resolvable at `Init` time —
+  single-tenant, or `tenancy: shared` with a static `source.type` (the same set
+  `checkTenancyFanOutGuards` already gated). The probe is the exact read/write the relay or
+  cleanup job already performs every cycle (outbox: `FetchPending(…, 1)`; inbox:
+  `DeleteProcessed` before the Unix epoch, a write that matches no row), so it fails for the
+  same reasons the job would have — just at startup instead of once per `pollinterval`/day,
+  forever. The inbox probe therefore needs `DELETE` on the inbox table even where nothing else
+  deletes from it: `ProcessOnce` only issues an `INSERT`, and the retention cleanup job — the
+  sole runtime `DELETE` — is registered only when a scheduler module is present, so a
+  least-privilege runtime role for a `ProcessOnce`-only deployment must be granted `DELETE`
+  before the bump. With `autocreatetable` enabled the table DDL moves to `Init` as well, since
+  the probe initializes the store. **Exempt** (unaffected, still runtime-resolved): per-tenant
+  fan-out (`multitenant.enabled: true` with the default tenancy) and a dynamic source
+  (`source.type: dynamic`). **Not exempt, unlike elsewhere in the framework:** a custom
+  dynamic `Options.ResourceSource` behind a static `source.type` — the app builder's
+  pre-init and `/ready` skip that mode, but a module sees only `*config.Config` and cannot
+  detect it, so such a deployment is probed at startup where it previously wasn't. Set
+  `source.type: dynamic` to opt out.
+- gate: match = an enabled outbox/inbox in a non-exempt mode has no database configured, an
+  unreachable database, or a table the probe cannot use. `Init` now returns one of:
+  `outbox.enabled=true requires a database, but none is configured` (or `inbox`, same
+  wording) for an unconfigured database; `database unreachable at startup` for a
+  network/auth/DNS failure; or `table %q is not usable (missing table or insufficient
+  privileges)` when the table is missing, or the runtime role cannot run the probe's statement
+  (outbox: `SELECT`; inbox: `DELETE`). no-match = the database is configured and reachable and
+  the table exists — or `autocreatetable` is on and its DDL succeeds — or the deployment is
+  exempt.
+- before:
+  ```yaml
+  outbox:
+    enabled: true
+  # no database: block — the service booted green; the relay then logged a
+  # poll-interval failure forever, captioned "database (optional)"
+  ```
+- after:
+  ```yaml
+  database:
+    type: postgresql
+    host: db.internal
+    port: 5432
+    database: appdb
+    username: app
+  outbox:
+    enabled: true
+  # …and the outbox table must already exist (run migrations), or set
+  # outbox.autocreatetable: true
+  ```
+- verify: `go build ./... && go test ./...` exercises the probe logic itself, but no test can
+  see your environment's config — start the service against each non-exempt environment and
+  confirm it now exits non-zero (instead of logging a relay/cleanup failure once per interval)
+  when the database is absent or unreachable, or its table is missing with `autocreatetable`
+  off (or on, but the DDL fails); confirm a healthy environment still starts cleanly.
+- ref: wiki/outbox.md#startup-verification · `outbox/module.go` (`verifyStartupDatabase`) ·
+  `inbox/module.go` (`verifyStartupDatabase`) · #876
 
 ---
 
