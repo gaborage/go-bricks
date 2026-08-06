@@ -476,7 +476,7 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 	}
 	dbManager := database.NewDbManager(&stubTenantResource{}, log,
 		database.DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
-	defer func() { _ = dbManager.Close() }()
+	t.Cleanup(func() { assert.NoError(t, dbManager.Close()) })
 
 	for _, key := range []string{tenantAlpha, tenantBeta} {
 		_, release, err := dbManager.Get(context.Background(), key)
