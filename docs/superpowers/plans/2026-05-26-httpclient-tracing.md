@@ -1312,7 +1312,7 @@ git commit -m "test(httpclient): cover full retry-sequence span tree (#471)"
 
 - [ ] **Step 1: Locate the "## Metrics" section in `wiki/httpclient.md` and add a new "## Tracing" section AFTER the metrics section ends.**
 
-Find the end of the metrics section (look for the next `##` heading), then insert the following block immediately before it:
+Find the end of the metrics section (look for the next `## ` heading), then insert the following block immediately before it:
 
 ````markdown
 ## Tracing

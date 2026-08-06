@@ -372,7 +372,8 @@ func ConstraintName(err error) (string, bool) {
 	}
 ```
 
-- createDBSpan record-error guard (currently lines 246-251):
+<!-- markdownlint-disable-next-line MD007 -- nested under Step 3; the fenced block above breaks list continuation for the parser, so it reads the 2-space indent as stray -->
+  - createDBSpan record-error guard (currently lines 246-251):
 
 ```go
 	if err != nil {
