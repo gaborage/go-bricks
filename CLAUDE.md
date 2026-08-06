@@ -323,13 +323,13 @@ For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authe
 | Boundary | Config key | Default |
 | --- | --- | --- |
 | HTTP request handler (deadline on `c.Request().Context()`) | `server.timeout.middleware` | **5s** |
-| HTTP server read / write / idle / shutdown | `server.timeout.read`, `.write`, `.idle`, `.shutdown` | 15s / 30s / 60s / 10s |
+| HTTP server read / write / idle / shutdown | `server.timeout.read`, `server.timeout.write`, `server.timeout.idle`, `server.timeout.shutdown` | 15s / 30s / 60s / 10s |
 | Outbound HTTP client | `httpclient.NewBuilder(...).WithTimeout(d)` | 30s |
-| Cache (Redis) dial / read / write | `cache.redis.dialtimeout`, `.readtimeout`, `.writetimeout` | 5s / 3s / 3s |
+| Cache (Redis) dial / read / write | `cache.redis.dialtimeout`, `cache.redis.readtimeout`, `cache.redis.writetimeout` | 5s / 3s / 3s |
 | AMQP publish readiness pre-flight (cold/reconnecting client); also bounds the startup publisher pre-warm wait (WARN-only, never fails startup) | `messaging.reconnect.readytimeout` | 5s |
 | AMQP publish confirmation | `messaging.reconnect.connectiontimeout` | 30s |
-| Scheduler slow-job WARN / shutdown | `scheduler.timeout.slowjob`, `.shutdown` | 25s / 30s |
-| Observability export | `observability.{trace,metrics,logs}.export.timeout` | 10s when `observability.environment` is `development` (its default — **not** derived from `app.env`) or the signal's endpoint is `stdout`; 60s otherwise |
+| Scheduler slow-job WARN / shutdown | `scheduler.timeout.slowjob`, `scheduler.timeout.shutdown` | 25s / 30s |
+| Observability export | `observability.trace.export.timeout`, `observability.metrics.export.timeout`, `observability.logs.export.timeout` | 10s when `observability.environment` is `development` (its default — **not** derived from `app.env`) or the signal's endpoint is `stdout`; 60s otherwise |
 
 
 **The default pattern is to do nothing** — the request context already carries a 5s deadline, and every framework call propagates it. Shorten only when one sub-operation should fail fast (e.g., cap a cache lookup at 200–500ms so Redis hiccups don't burn the whole request budget). For fire-and-forget background work that must outlive the request, use `context.WithoutCancel(ctx)` to inherit values (trace ID, tenant ID) while severing cancellation — never `context.Background()`.
@@ -399,14 +399,14 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **ToSQL standardization (ADR-017):** Insert builders return `types.InsertQueryBuilder` with `ToSQL()`.
 - **Session timezone (ADR-016):** default `UTC`; opt out with `database.timezone: "-"`.
 - **Consumer concurrency (v0.17.0):** default workers `1` → `NumCPU * 4`; set `Workers: 1` when ordering matters.
-- **Message error handling (v2.X):** errors and panics nack without requeue.
+- **Message error handling (v2.X):** handler errors and panics cause messages to be nacked without requeue.
 - **MongoDB removed (ADR-012):** PostgreSQL and Oracle only.
-- **Bounded publish + outbox dead-lettering (ADR-033):** publish returns `ErrPublishRetriesExhausted` after `messaging.reconnect.maxpublishattempts` — match with `errors.Is`, not `==`. `outbox.Store.FetchPending` drops `maxRetries` and gains `MarkDeadLettered`.
+- **Bounded publish + outbox dead-lettering (ADR-033):** publish returns `ErrPublishRetriesExhausted` after `messaging.reconnect.maxpublishattempts` — match with `errors.Is`, not `==`. `outbox.Store.FetchPending` drops `maxRetries` and gains `MarkDeadLettered`. New keys: `messaging.reconnect.maxpublishattempts`, `outbox.publishtimeout`.
 - **Env policy (ADR-022):** `app.env` accepts any conforming string; behavior switches go through `config.IsDevelopment()` / `config.IsProduction()` alias sets, never equality.
 - **CORS dev wildcard opt-in (ADR-038):** the dev reflect-any-origin posture also requires `CORS_DEV_WILDCARD=true`; without it, dev fails closed.
 - **Composite resolver order required (ADR-039):** `resolver.order` is mandatory — no default.
 - **Declaration Args reach the broker (ADR-040):** declare methods take `(ctx, *…Declaration)` and forward `Args`; may surface `406 PRECONDITION_FAILED` against ops-provisioned queues.
-- **Database absence vs misconfiguration (ADR-047):** the `database:` block is all-or-nothing — omitting it is supported (`/ready` reports `not_configured`, 200), but an *incomplete* block now fails startup. Modules needing a database implement `app.DatabaseRequirer`.
+- **Database absence vs misconfiguration (ADR-047):** the `database:` block is all-or-nothing — omitting it is supported (`/ready` reports `not_configured`, 200), but setting *any* identity field (`type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`, `oracle.service.name`, `oracle.service.sid`) marks the section as intended, and an incomplete intended block now fails startup. Modules needing a database implement `app.DatabaseRequirer`.
 - **httpclient Build fail-closed (ADR-044):** `Build()` returns `(Client, error)` and refuses compositions that would silently discard TLS material or a caller's `RoundTripper`.
 - **Readiness strict + sanitized by default (ADR-046, ADR-048):** an absent `cache.critical` means the cache probe IS critical (503 during a Redis outage); every critical probe's 503 body serves a fixed `"<name> unavailable"` unless `HealthStatus.PublicErr` overrides it.
 
