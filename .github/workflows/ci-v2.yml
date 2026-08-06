@@ -31,6 +31,13 @@ jobs:
       # SonarCloud) gates on this; doc-only PRs match nothing and skip it.
       # yamllint: valid GitHub Actions context expression
       code: ${{ steps.filter.outputs.code }}
+      # `docs` = any Markdown change, plus the two files that decide how Markdown
+      # is linted (the markdownlint config and the Makefile holding the pinned
+      # linter version). It is the deliberate COMPLEMENT of the three filters
+      # above — they ignore prose on purpose, so without this a doc-only PR would
+      # run no job at all. Only lint-docs gates on it; it must never gate a Go job.
+      # yamllint: valid GitHub Actions context expression
+      docs: ${{ steps.filter.outputs.docs }}
     steps:
       - uses: actions/checkout@v7
 
@@ -38,10 +45,13 @@ jobs:
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d  # v4.0.3
         id: filter
         with:
-          # Filters intentionally match only code-affecting paths. Doc-only
-          # changes (`wiki/**`, `CLAUDE.md`, `README.md`, `MULTI_TENANT.md`,
-          # `llms.txt`, etc.) match nothing here, so the test/build/lint/security
-          # jobs gated on these outputs cleanly skip — keeping doc PRs fast.
+          # The framework/migrate_tool/code filters intentionally match only
+          # code-affecting paths. Doc-only changes (`wiki/**`, `CLAUDE.md`,
+          # `README.md`, `MULTI_TENANT.md`, `llms.txt`, etc.) match none of them,
+          # so the test/build/lint/security jobs gated on those outputs cleanly
+          # skip — keeping doc PRs fast. `docs` is their complement: it matches
+          # exactly the Markdown those three ignore, so a doc-only PR still runs
+          # the (cheap) markdownlint job rather than running nothing at all.
           # CI workflow changes still trigger every component so reviewers see
           # the consequences of pipeline edits.
           #
@@ -113,6 +123,28 @@ jobs:
               - 'tools/migration/go.sum'
               - 'tools/migration/Makefile'
               - '**/testdata/**'
+            docs:
+              # Markdown only — `llms.txt` and the other non-Markdown prose files
+              # are not linted. The single `**/*.md` entry is exactly as wide as
+              # the linter's own glob: a picomatch globstar spans zero directories
+              # so `README.md` matches without a second `*.md` entry, and
+              # paths-filter compiles with `dot: true` so `.claude/**/*.md` (which
+              # markdownlint DOES lint) matches too. Keep those two properties in
+              # mind before "clarifying" this into several narrower globs — a
+              # filter narrower than the linter lets a violation merge unlinted
+              # and then fail an unrelated PR later.
+              # The last two entries are inputs, not outputs:
+              # `.markdownlint-cli2.jsonc` owns the rule set AND the glob/ignore
+              # list, and the Makefile owns the pinned MARKDOWNLINT_VERSION that
+              # `make lint-md` runs — a Renovate bump of that pin touches no
+              # Markdown, so without `Makefile` here the new linter version would
+              # merge without ever having linted the tree. Still no `!` negations
+              # (see the NOTE above) — one would make this filter true for every
+              # Go-only change and run the doc lint on every PR.
+              - '**/*.md'
+              - '.markdownlint-cli2.jsonc'
+              - 'Makefile'
+              - '.github/workflows/ci-v2.yml'
 
   # ============================================================================
   # Framework CI Jobs (conditional on framework changes)
@@ -846,6 +878,33 @@ jobs:
           fi
 
   # ============================================================================
+  # Documentation Jobs (conditional on Markdown changes)
+  # ============================================================================
+
+  lint-docs:
+    permissions:
+      contents: read
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: markdownlint-cli2 (docs)
+        # Delegates to `make lint-md` so the command, the pinned
+        # MARKDOWNLINT_VERSION, and the glob/ignore set live in exactly one place
+        # — the same single-source-of-truth rule the `make test-alloc`,
+        # `make sec`, and `make vuln` steps follow. Deliberately NOT the
+        # markdownlint-cli2 GitHub Action: that action bundles its own linter
+        # build, so pinning the action would pin a version this repo cannot run
+        # locally, and `make lint-md` and CI could drift. npx resolves the pinned
+        # package against the runner's preinstalled Node.
+        run: make lint-md
+
+  # ============================================================================
   # SonarCloud (framework + tool coverage)
   # ============================================================================
 
@@ -1065,9 +1124,18 @@ jobs:
   # ----------------------------------------------------------------------------
   # Branch protection requires only THIS check. It depends on every PR-relevant
   # leaf job and fails if any of them failed or was cancelled. 'skipped' counts
-  # as success so doc-only PRs (where the path-filtered jobs skip) still pass —
-  # the same always()+skipped-tolerant idiom used by framework-merge-coverage
-  # and sonarcloud above. vuln-weekly is schedule-only and intentionally absent.
+  # as success so doc-only PRs (where the Go jobs skip) and code-only PRs (where
+  # lint-docs skips) both still pass — the same always()+skipped-tolerant idiom
+  # used by framework-merge-coverage and sonarcloud above. That tolerance is safe
+  # in BOTH directions because every job in this `needs:` list is gated either on
+  # `changes` outputs alone, or on another job that is ALSO in this list — so a
+  # failure always surfaces under its own key even when it makes a downstream job
+  # skip. (It is NOT true that a job only skips when its own filter said "not my
+  # paths": framework-merge-coverage and sonarcloud both skip when an upstream
+  # job fails. Their tolerance is safe purely because those upstreams are listed
+  # here too.) Never add a job here whose `needs:` reference a job that is not —
+  # that job's failure would reach this gate only as a tolerated 'skipped'.
+  # vuln-weekly is schedule-only and intentionally absent.
   # When you add a new PR job, add it to `needs:` here or it stays unenforced.
   # ============================================================================
   ci-ok:
@@ -1089,6 +1157,7 @@ jobs:
       - security-framework
       - vuln-framework
       - vuln-migrate-tool
+      - lint-docs
       - apidiff
       - sonarcloud
     runs-on: ubuntu-latest
