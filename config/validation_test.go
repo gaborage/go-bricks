@@ -14,6 +14,7 @@ import (
 const (
 	testConnectionString         = "postgresql://user:pass@localhost/db"
 	testOracleConnectionString   = "oracle://user:pass@localhost:1521/XEPDB1"
+	testUnknownSchemeConnString  = "sqlserver://user:pass@localhost:1433/db"
 	testOracleHost               = "oracle.example.com"
 	testAppName                  = "test-app"
 	testAppVersion               = "v1.0.0"
@@ -1310,7 +1311,10 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 		{
 			name: "connection_string_with_invalid_type",
 			config: DatabaseConfig{
-				ConnectionString: testConnectionString,
+				// Unrecognized scheme on purpose: a postgres:// DSN would be
+				// intercepted by ADR-050's conflict branch, leaving the
+				// validateDatabaseType call on this path with no failing test.
+				ConnectionString: testUnknownSchemeConnString,
 				Type:             "invalid",
 				Pool: PoolConfig{
 					Max: PoolMaxConfig{
@@ -1319,7 +1323,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 				},
 			},
 			expectError:   true,
-			errorContains: databaseType,
+			errorContains: "'invalid' is not supported",
 		},
 		{
 			name: "connection_string_missing_max_conns_applies_default",
@@ -1510,6 +1514,84 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateInfersDatabaseTypeFromConnectionString(t *testing.T) {
+	tests := []struct {
+		name          string
+		config        DatabaseConfig
+		expectError   bool
+		errorContains string
+		expectedType  string
+	}{
+		{
+			name:         "postgres_scheme_infers_type",
+			config:       DatabaseConfig{ConnectionString: "postgres://user:pass@localhost:5432/db"},
+			expectedType: PostgreSQL,
+		},
+		{
+			name:         "postgresql_scheme_infers_type",
+			config:       DatabaseConfig{ConnectionString: testConnectionString},
+			expectedType: PostgreSQL,
+		},
+		{
+			name:         "oracle_scheme_infers_type",
+			config:       DatabaseConfig{ConnectionString: testOracleConnectionString},
+			expectedType: Oracle,
+		},
+		{
+			name:         "scheme_case_insensitive",
+			config:       DatabaseConfig{ConnectionString: "POSTGRES://user:pass@localhost:5432/db"},
+			expectedType: PostgreSQL,
+		},
+		{
+			name:         "unknown_scheme_keeps_empty_type_and_passes",
+			config:       DatabaseConfig{ConnectionString: testUnknownSchemeConnString},
+			expectedType: "",
+		},
+		{
+			name: "explicit_type_conflicting_with_scheme_fails",
+			config: DatabaseConfig{
+				Type:             Oracle,
+				ConnectionString: "postgres://user:pass@localhost:5432/db",
+			},
+			expectError:   true,
+			errorContains: "conflicts with the connectionstring scheme",
+		},
+		{
+			name: "explicit_matching_type_untouched",
+			config: DatabaseConfig{
+				Type:             PostgreSQL,
+				ConnectionString: "postgres://user:pass@localhost:5432/db",
+			},
+			expectedType: PostgreSQL,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDatabase(&tt.config)
+			if tt.expectError {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errorContains)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedType, tt.config.Type)
+		})
+	}
+}
+
+func TestValidateNamedDatabaseInfersTypeFromConnectionString(t *testing.T) {
+	databases := map[string]DatabaseConfig{
+		"reporting": {ConnectionString: testConnectionString},
+	}
+	mt := MultitenantConfig{Enabled: false}
+
+	err := validateNamedDatabases(databases, &mt)
+
+	require.NoError(t, err)
+	assert.Equal(t, PostgreSQL, databases["reporting"].Type)
 }
 
 func assertValidationError(t *testing.T, err error, errorContains string) {
@@ -2873,10 +2955,10 @@ func TestValidateOracleFields(t *testing.T) {
 				Host:     testOracleHost,
 				Port:     1521,
 				Username: "oracleuser",
-				// No Service.Name, SID, or Database
+				// No Service.Name, SID, or Database — and no connection string to supply one.
 			},
 			expectError:   true,
-			errorContains: oracleConnectionIdentifier,
+			errorContains: oracleConnectionIdentifier + " exactly one required",
 		},
 		{
 			name: "Oracle config with service name and SID",
@@ -3014,14 +3096,13 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 			errorContains: oracleConnectionIdentifier,
 		},
 		{
-			name: "Oracle with connection string but no identifiers",
+			name: "Oracle with connection string and no identifiers",
 			config: DatabaseConfig{
 				Type:             Oracle,
 				ConnectionString: testOracleConnectionString,
-				// No Service.Name, SID, or Database
+				// The DSN carries the identifier; buildOracleDSN ignores these fields.
 			},
-			expectError:   true,
-			errorContains: oracleConnectionIdentifier,
+			expectError: false,
 		},
 	}
 
@@ -3035,6 +3116,27 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateOracleConnectionStringNeedsNoIdentifier(t *testing.T) {
+	cfg := DatabaseConfig{ConnectionString: testOracleConnectionString}
+
+	require.NoError(t, validateDatabase(&cfg))
+
+	assert.Equal(t, Oracle, cfg.Type, "the oracle:// scheme must infer the type")
+	require.Empty(t, cfg.Oracle.Service.Name)
+	require.Empty(t, cfg.Oracle.Service.SID)
+	require.Empty(t, cfg.Database, "buildOracleDSN returns the connection string verbatim, so no identifier field is needed")
+}
+
+func TestValidateOracleWithoutConnectionStringStillNeedsIdentifier(t *testing.T) {
+	cfg := DatabaseConfig{Type: Oracle, Host: testOracleHost, Port: 1521, Username: "oracleuser"}
+
+	err := validateDatabase(&cfg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exactly one required",
+		"without a DSN nothing else names the target, so the identifier stays mandatory")
 }
 
 // =============================================================================
@@ -4627,15 +4729,25 @@ func TestValidateOracleFieldsRejectsTLSMaterial(t *testing.T) {
 		{"cert", func(c *DatabaseConfig) { c.TLS.CertFile = "/etc/ssl/client.crt" }},
 		{"key", func(c *DatabaseConfig) { c.TLS.KeyFile = "/etc/ssl/client.key" }},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := &DatabaseConfig{Type: "oracle", Database: "PDB1"}
-			tc.mutate(cfg)
-			err := validateOracleFields(cfg)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "not supported for Oracle",
-				"Oracle TLS material must be rejected, not silently dropped (which leaves the connection unauthenticated)")
-		})
+	bases := []struct {
+		name string
+		cfg  DatabaseConfig
+	}{
+		{"identifier", DatabaseConfig{Type: "oracle", Database: "PDB1"}},
+		// A connection string waives the identifier requirement but never the TLS one.
+		{"connection_string", DatabaseConfig{Type: "oracle", ConnectionString: testOracleConnectionString}},
+	}
+	for _, base := range bases {
+		for _, tc := range cases {
+			t.Run(base.name+"_"+tc.name, func(t *testing.T) {
+				cfg := base.cfg
+				tc.mutate(&cfg)
+				err := validateOracleFields(&cfg)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "not supported for Oracle",
+					"Oracle TLS material must be rejected, not silently dropped (which leaves the connection unauthenticated)")
+			})
+		}
 	}
 }
 

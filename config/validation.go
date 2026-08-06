@@ -442,13 +442,20 @@ func validateDatabase(cfg *DatabaseConfig) error {
 }
 
 // validateDatabaseWithConnectionString validates database settings when a connection
-// string is provided and applies the full database pool/session defaults via
-// applyDatabasePoolDefaults (timezone, connection counts, idle time, lifetime,
-// keep-alive, and query logging/slow-threshold) when zero.
-// It checks (and returns an error for) an explicit database Type that is not allowed,
-// an invalid optional Port, and negative values for Pool/Query fields.
-// The cfg argument is mutated for those default assignments.
+// string is provided. It mutates cfg: pool/session defaults via
+// applyDatabasePoolDefaults, plus ADR-050 Type inference from the DSN scheme (an
+// explicit Type that contradicts the scheme is an error rather than an override).
 func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
+	if inferred := inferDatabaseTypeFromConnectionString(cfg.ConnectionString); inferred != "" {
+		if cfg.Type == "" {
+			cfg.Type = inferred
+		} else if cfg.Type != inferred {
+			return NewInvalidFieldError("database.type",
+				fmt.Sprintf("conflicts with the connectionstring scheme (which implies %s)", inferred),
+				[]string{inferred})
+		}
+	}
+
 	if cfg.Type != "" {
 		if err := validateDatabaseType(cfg.Type); err != nil {
 			return err
@@ -469,6 +476,20 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 	}
 
 	return nil
+}
+
+// inferDatabaseTypeFromConnectionString maps a recognized DSN scheme to its vendor.
+// An unrecognized scheme returns "" and is deliberately not an error here: whether
+// an untyped DSN is fatal depends on who connects (ADR-050).
+func inferDatabaseTypeFromConnectionString(cs string) string {
+	lower := strings.ToLower(cs)
+	switch {
+	case strings.HasPrefix(lower, "postgres://"), strings.HasPrefix(lower, "postgresql://"):
+		return PostgreSQL
+	case strings.HasPrefix(lower, "oracle://"):
+		return Oracle
+	}
+	return ""
 }
 
 // validateDatabaseType validates that dbType is one of the supported database type
@@ -1043,7 +1064,8 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 
 // validateOracleFields validates Oracle-specific configuration fields.
 // It ensures that exactly one of Service.Name, SID, or Database is configured,
-// mirroring the DSN selection logic in database/oracle/connection.go.
+// mirroring the DSN selection logic in database/oracle/connection.go — except in
+// connection-string mode, where the DSN supplies the identifier and none is required.
 func validateOracleFields(cfg *DatabaseConfig) error {
 	// Oracle TLS (tcps/wallet) is not implemented, so reject TLS material rather than
 	// silently ignoring it — otherwise an operator who configures database.tls.cert/key/ca
@@ -1072,7 +1094,10 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 		count++
 	}
 
-	if count == 0 {
+	// buildOracleDSN returns ConnectionString verbatim, so none of these fields is
+	// consulted in that mode — the DSN carries the identifier. Requiring a separate
+	// one that is then ignored would reject a valid connection-string-only config.
+	if count == 0 && cfg.ConnectionString == "" {
 		return &ConfigError{
 			Category: errCategoryMissing,
 			Field:    "oracle connection identifier",

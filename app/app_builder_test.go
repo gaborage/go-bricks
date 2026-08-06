@@ -21,6 +21,9 @@ import (
 const (
 	shouldSkipWithPreviousError = "with previous error should skip"
 	missingAppInstanceErrorMsg  = "missing app instance"
+	// A well-formed DSN whose scheme config's inference does not recognize, so it
+	// reaches ConfigureRuntimeHelpers still carrying an empty Type.
+	unrecognizedSchemeDSN = "sqlserver://user:pass@localhost:1433/db"
 )
 
 func TestNewAppBuilder(t *testing.T) {
@@ -463,6 +466,122 @@ func TestAppBuilderConfigureRuntimeHelpersThreadsReadyTimeout(t *testing.T) {
 
 	require.NoError(t, result.err)
 	assert.Equal(t, 20*time.Second, result.app.connectionPreWarmer.readinessTimeout)
+}
+
+// TestAppBuilderConfigureRuntimeHelpersRejectsUntypedConnectionString pins ADR-050: with
+// the built-in connector, a connection string whose scheme inference (config/validation.go)
+// didn't recognize it and that carries no explicit type can never dispatch, so the builder
+// must fail fast rather than let startup succeed into a dead database.
+func TestAppBuilderConfigureRuntimeHelpersRejectsUntypedConnectionString(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Database.ConnectionString = unrecognizedSchemeDSN
+
+	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: &App{}}
+	result := builder.ConfigureRuntimeHelpers()
+
+	require.Error(t, result.err)
+	assert.Contains(t, result.err.Error(), "connectionstring has no resolved database type")
+	// Bracketed: the message's own prefix is "database configuration at …", so a bare
+	// "database" substring holds for every path list and would pin nothing.
+	assert.Contains(t, result.err.Error(), "[database]")
+}
+
+// TestAppBuilderConfigureRuntimeHelpersGuardsWhenOptionsLackDatabaseConnector pins the
+// DatabaseConnector-nil half of the guard: a non-nil Options set for an unrelated reason
+// (here, MessagingClientFactory) is the common consumer shape, and the guard must still
+// fire on the built-in connector rather than being defeated by Options merely being non-nil.
+func TestAppBuilderConfigureRuntimeHelpersGuardsWhenOptionsLackDatabaseConnector(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Database.ConnectionString = unrecognizedSchemeDSN
+
+	opts := &Options{
+		MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+	}
+	builder := &Builder{cfg: cfg, opts: opts, logger: logger.New("error", false), app: &App{}}
+	result := builder.ConfigureRuntimeHelpers()
+
+	require.Error(t, result.err)
+	assert.Contains(t, result.err.Error(), "connectionstring has no resolved database type")
+	// Bracketed: the message's own prefix is "database configuration at …", so a bare
+	// "database" substring holds for every path list and would pin nothing.
+	assert.Contains(t, result.err.Error(), "[database]")
+}
+
+// TestAppBuilderConfigureRuntimeHelpersGuardsRecognizedSchemeWithoutValidation pins the
+// app.NewWithConfig path: it skips config.Validate, so even a recognized scheme reaches the
+// guard untyped and the message must report the state, not blame the scheme.
+func TestAppBuilderConfigureRuntimeHelpersGuardsRecognizedSchemeWithoutValidation(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Database.ConnectionString = "postgres://user:pass@localhost:5432/db"
+
+	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: &App{}}
+	result := builder.ConfigureRuntimeHelpers()
+
+	require.Error(t, result.err)
+	assert.Contains(t, result.err.Error(),
+		"database configuration at [database]: connectionstring has no resolved database type")
+	assert.Contains(t, result.err.Error(), "run config.Validate")
+}
+
+// TestAppBuilderConfigureRuntimeHelpersExemptsCustomConnector pins that a custom
+// Options.DatabaseConnector owns DSN parsing and is exempt from the untyped-DSN guard.
+func TestAppBuilderConfigureRuntimeHelpersExemptsCustomConnector(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Database.ConnectionString = unrecognizedSchemeDSN
+	cfg.Multitenant.Enabled = true // skip pre-initialization; only the guard is under test
+
+	opts := &Options{
+		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return &testmocks.MockDatabase{}, nil
+		},
+	}
+	builder := &Builder{cfg: cfg, opts: opts, logger: logger.New("error", false), app: &App{}}
+	result := builder.ConfigureRuntimeHelpers()
+
+	require.NoError(t, result.err)
+}
+
+// TestAppBuilderConfigureRuntimeHelpersListsAllUntypedPaths pins the sorted, multi-path
+// error shape. TWO entries in cfg.Databases is what makes slices.Sort load-bearing: Go
+// randomizes map iteration, so without the sort "analytics" and "reporting" would flip
+// between runs. Asserting the rendered slice pins the exact set AND the order.
+func TestAppBuilderConfigureRuntimeHelpersListsAllUntypedPaths(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Databases = map[string]config.DatabaseConfig{
+		"reporting": {ConnectionString: "sqlserver://h1:1433/db1"},
+		"analytics": {ConnectionString: "sqlserver://h3:1433/db3"},
+	}
+	cfg.Multitenant.Enabled = true // tenant DSNs reach inference only when multitenancy is on
+	cfg.Multitenant.Tenants = map[string]config.TenantEntry{
+		"acme": {Database: config.DatabaseConfig{ConnectionString: "sqlserver://h2:1433/db2"}},
+	}
+
+	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: &App{}}
+	result := builder.ConfigureRuntimeHelpers()
+
+	require.Error(t, result.err)
+	assert.Contains(t, result.err.Error(),
+		"[databases.analytics databases.reporting multitenant.tenants.acme.database]")
+}
+
+// TestAppBuilderConfigureRuntimeHelpersIgnoresTenantsWhenMultitenantDisabled pins that a
+// leftover tenants block under multitenant.enabled=false cannot abort startup: config skips
+// tenant validation entirely there, so inference never ran and even a recognized scheme
+// would otherwise be reported as untyped.
+func TestAppBuilderConfigureRuntimeHelpersIgnoresTenantsWhenMultitenantDisabled(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Multitenant.Tenants = map[string]config.TenantEntry{
+		"acme": {Database: config.DatabaseConfig{ConnectionString: "postgres://user:pass@localhost:5432/db"}},
+	}
+
+	// Empty bundle: single-tenant static config runs pre-initialization, which no-ops
+	// on nil managers.
+	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: &App{}, bundle: &dependencyBundle{}}
+	result := builder.ConfigureRuntimeHelpers()
+
+	require.NoError(t, result.err)
 }
 
 func TestAppBuilderCreateHealthProbesErrors(t *testing.T) {

@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"net"
+	"net/url"
 	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -227,6 +230,279 @@ func TestConnectionBasicMethodsWithSQLMock(t *testing.T) {
 func TestConnectionNewConnectionWithConnectionString(t *testing.T) {
 	cfg := createOracleConfig("connection_string", "oracle://user:pass@localhost:1521/XE")
 	testConnectionExpectedError(t, cfg)
+}
+
+// TestConnectionNewConnectionRedactsConnectionStringPassword pins the startup-error
+// leak: go-ora returns url.Parse's *url.Error unwrapped, and net/url renders the whole
+// raw URL (userinfo included) with %q. The DEL byte in the host is the url.Parse trigger.
+func TestConnectionNewConnectionRedactsConnectionStringPassword(t *testing.T) {
+	const password = "zqxvwmarmaladeplinth"
+	cfg := createOracleConfig("connection_string", "oracle://appuser:"+password+"@zonk\x7fhost:1521/XE")
+
+	_, err := NewConnection(cfg, dbtestlog.NewTestLogger())
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), password, "connection-string password leaked into the startup error")
+}
+
+// TestConnectionNewConnectionRedactsBuiltDSNPassword covers the other DSN source:
+// go_ora.BuildUrl embeds cfg.Password, so the same masking must apply there.
+func TestConnectionNewConnectionRedactsBuiltDSNPassword(t *testing.T) {
+	const password = "zqxvwtrellisfathom"
+	cfg := createOracleConfig("service_name", "XE")
+	cfg.Host = "zonk\x7fhost"
+	cfg.Password = password
+
+	_, err := NewConnection(cfg, dbtestlog.NewTestLogger())
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), password, "built-DSN password leaked into the startup error")
+	assert.Contains(t, err.Error(), "testuser", "username must stay visible so the failing connection is identifiable")
+	assert.Contains(t, err.Error(), "zonk", "host must stay visible so the failing connection is identifiable")
+}
+
+// TestConnectionNewConnectionRedactsDelimiterPasswords covers passwords carrying an
+// unescaped URL delimiter. Those hide the '@' behind the authority terminator, and
+// net/url then echoes the leading password segment a second time as the port it
+// rejected — so the assertion targets that segment, not just the whole password.
+func TestConnectionNewConnectionRedactsDelimiterPasswords(t *testing.T) {
+	const leadingSegment = "zqxvwmarrow"
+	tests := []struct {
+		name     string
+		password string
+	}{
+		{name: "password_with_slash", password: leadingSegment + "/plinth"},
+		{name: "password_with_question_mark", password: leadingSegment + "?plinth"},
+		{name: "password_with_hash", password: leadingSegment + "#plinth"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dsn := "oracle://appuser:" + tt.password + "@host:1521/XE"
+			// Premise, checked before dialing: the delimiter makes url.Parse reject the
+			// authority, so NewConnection fails at parse and never resolves "host". A case
+			// that ever became parseable trips here instead of doing real network I/O.
+			_, parseErr := url.Parse(dsn)
+			require.Error(t, parseErr, "premise: url.Parse must reject the DSN before any connect attempt")
+
+			cfg := createOracleConfig("connection_string", dsn)
+
+			_, err := NewConnection(cfg, dbtestlog.NewTestLogger())
+
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), leadingSegment, "password leaked into the startup error")
+			assert.Contains(t, err.Error(), "appuser", "username must stay visible so the failing connection is identifiable")
+		})
+	}
+}
+
+func TestRedactDSNErrorPreservesErrorChain(t *testing.T) {
+	// Assembled from a variable so staticcheck (SA1007) does not constant-fold the
+	// deliberately invalid URL away.
+	host := "zonk\x7fhost"
+	dsn := "oracle://appuser:s3cr3t@" + host + ":1521/XE"
+	_, parseErr := url.Parse(dsn)
+	require.Error(t, parseErr)
+
+	err := redactDSNError(fmt.Errorf("%s: %w", oraclePingErrorMsg, parseErr), dsn)
+
+	assert.NotContains(t, err.Error(), "s3cr3t")
+	assert.Contains(t, err.Error(), "appuser")
+	// A net/url reason that quotes nothing carries no password material, so it survives.
+	assert.Contains(t, err.Error(), "invalid control character")
+
+	var urlErr *url.Error
+	require.ErrorAs(t, err, &urlErr, "wrapping must keep the original error reachable")
+	assert.Equal(t, dsn, urlErr.URL, "the unwrapped error still carries the raw DSN")
+}
+
+func TestRedactDSNErrorPassesOriginalThrough(t *testing.T) {
+	tests := []struct {
+		name string
+		dsn  string
+		err  error
+	}{
+		{name: "dsn_without_password", dsn: "oracle://host:1521/XE", err: errors.New("boom: oracle://host:1521/XE")},
+		{name: "message_omits_the_dsn", dsn: "oracle://appuser:s3cr3t@host:1521/XE", err: errors.New("context deadline exceeded")},
+		{
+			name: "url_error_without_password",
+			dsn:  "oracle://host:1521/XE",
+			err:  &url.Error{Op: "parse", URL: "oracle://host:1521/XE", Err: errors.New("boom")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Same(t, tt.err, redactDSNError(tt.err, tt.dsn), "nothing to mask must not allocate a wrapper")
+		})
+	}
+}
+
+// TestRedactDSNErrorHandlesURLErrorWithoutReason pins the nil guard: url.Error is a
+// plain struct, so a driver can hand one back with no wrapped reason at all.
+func TestRedactDSNErrorHandlesURLErrorWithoutReason(t *testing.T) {
+	const dsn = "oracle://appuser:zqxvwbarrowclasp@host:1521/XE"
+
+	err := redactDSNError(&url.Error{Op: "parse", URL: dsn}, dsn)
+
+	assert.NotContains(t, err.Error(), "zqxvwbarrowclasp")
+	assert.Contains(t, err.Error(), "appuser")
+}
+
+// TestNetURLErrorFormatUnchanged is a tripwire on the single stdlib assumption
+// maskURLError depends on: net/url renders url.Error as `%s %q: %s` over Op, URL, Err.
+// maskURLError replaces urlErr.Error() with a rebuild of that exact format, so a
+// format change makes the replacement silently stop matching and the password is
+// exposed again — a redaction that fails open. If this test ever fails, revisit
+// maskURLError before anything else.
+func TestNetURLErrorFormatUnchanged(t *testing.T) {
+	err := &url.Error{Op: "parse", URL: "x", Err: errors.New("boom")}
+
+	assert.Equal(t, `parse "x": boom`, err.Error())
+}
+
+// TestMaskDSNPasswordLeavesParseableAuthorityAlone pins the premise behind the
+// looksLikeHostPort guard, which is the whole reason these two DSNs are left unmasked:
+// url.Parse ACCEPTS both, so neither is ever rendered into an error. They are the same
+// shape read two ways — credentials in the first, host:port plus an '@' in the path in
+// the second — so masking one necessarily mangles the other, for no security gain.
+func TestMaskDSNPasswordLeavesParseableAuthorityAlone(t *testing.T) {
+	tests := []struct {
+		name string
+		dsn  string
+	}{
+		{name: "digit_password_segment_reads_as_a_real_port", dsn: "oracle://user:1234/secret@db"},
+		{name: "host_port_with_at_sign_in_path", dsn: "oracle://host:1521/XE@weird"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := url.Parse(tt.dsn)
+			require.NoError(t, err, "premise: url.Parse accepts it, so no error ever echoes this DSN")
+			assert.Equal(t, tt.dsn, maskDSNPassword(tt.dsn))
+		})
+	}
+}
+
+func TestMaskDSNPassword(t *testing.T) {
+	tests := []struct {
+		name string
+		dsn  string
+		want string
+	}{
+		{name: "empty_dsn", dsn: "", want: ""},
+		{name: "no_userinfo", dsn: "oracle://host:1521/XE", want: "oracle://host:1521/XE"},
+		{name: "user_only_no_colon", dsn: "oracle://appuser@host:1521/XE", want: "oracle://appuser@host:1521/XE"},
+		{name: "user_and_password", dsn: "oracle://appuser:s3cr3t@host:1521/XE", want: "oracle://appuser:xxxxx@host:1521/XE"},
+		{name: "empty_password", dsn: "oracle://appuser:@host:1521/XE", want: "oracle://appuser:xxxxx@host:1521/XE"},
+		{name: "password_with_at", dsn: "oracle://appuser:pa@ss@host:1521/XE", want: "oracle://appuser:xxxxx@host:1521/XE"},
+		{name: "password_with_colon", dsn: "oracle://appuser:pa:ss@host:1521/XE", want: "oracle://appuser:xxxxx@host:1521/XE"},
+		{name: "password_with_slash", dsn: "oracle://appuser:pa/ss@host:1521/XE", want: "oracle://appuser:xxxxx@host:1521/XE"},
+		{name: "password_with_question_mark", dsn: "oracle://appuser:pa?ss@host:1521/XE", want: "oracle://appuser:xxxxx@host:1521/XE"},
+		{name: "password_with_hash", dsn: "oracle://appuser:pa#ss@host:1521/XE", want: "oracle://appuser:xxxxx@host:1521/XE"},
+		// What url.Parse is handed once it drops the fragment: no '@' survives, so the
+		// userinfo is only recognizable by "appuser:pa" not being a valid host[:port].
+		{name: "fragment_truncated_userinfo", dsn: "oracle://appuser:pa", want: "oracle://appuser:xxxxx"},
+		// looksLikeHostPort rejects a non-numeric port, so this credential-free authority
+		// reads as userinfo and everything past "host:" is masked — including the "/XE"
+		// tail. Over-masking on purpose: the shape is one url.Parse rejects, so the DSN
+		// does reach an error message, and masking a DSN that holds no password is the
+		// safe direction. The accepted cost is that a plain port typo costs the operator
+		// the invalid-port text and the service path.
+		{name: "credential_free_authority_with_non_numeric_port", dsn: "oracle://host:abc/XE", want: "oracle://host:xxxxx"},
+		{name: "ipv6_host_with_port", dsn: "oracle://[::1]:1521/XE", want: "oracle://[::1]:1521/XE"},
+		{name: "ipv6_host_without_port", dsn: "oracle://[::1]/XE", want: "oracle://[::1]/XE"},
+		// A zero-compressed literal ends in the ':' the port scan looks for, so it is the
+		// only shape where skipping to the wrong side of the ']' changes the verdict.
+		{name: "ipv6_zero_compressed_host_without_port", dsn: "oracle://[::]/XE", want: "oracle://[::]/XE"},
+		// The scan tests each strings.Index result against -1, so index 0 must read as a
+		// hit. One case per sentinel: scheme, authority terminator, '@', ':'.
+		{name: "scheme_separator_at_index_zero", dsn: "://appuser:s3cr3t@host:1521/XE", want: "://appuser:xxxxx@host:1521/XE"},
+		{name: "authority_terminator_at_index_zero", dsn: "oracle:///user:pass@host", want: "oracle:///user:pass@host"},
+		{name: "at_sign_at_index_zero", dsn: "oracle://@host:1521/XE", want: "oracle://@host:1521/XE"},
+		{name: "empty_username_with_password", dsn: "oracle://:s3cr3t@host:1521/XE", want: "oracle://:xxxxx@host:1521/XE"},
+		{name: "query_options_preserved", dsn: "oracle://appuser:s3cr3t@host:1521/XE?SID=XE", want: "oracle://appuser:xxxxx@host:1521/XE?SID=XE"},
+		{name: "at_sign_only_in_path", dsn: "oracle://host:1521/XE@weird", want: "oracle://host:1521/XE@weird"},
+		{name: "scheme_without_authority", dsn: "oracle://", want: "oracle://"},
+		{name: "unparseable_host_still_masked", dsn: "oracle://appuser:s3cr3t@zonk\x7fhost:1521/XE", want: "oracle://appuser:xxxxx@zonk\x7fhost:1521/XE"},
+		{name: "ez_connect_not_a_url", dsn: "appuser/s3cr3t@host:1521/XE", want: "appuser/s3cr3t@host:1521/XE"},
+		{
+			name: "tns_descriptor_not_a_url",
+			dsn:  "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=host)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XE)))",
+			want: "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=host)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=XE)))",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, maskDSNPassword(tt.dsn))
+		})
+	}
+}
+
+func TestLooksLikeHostPort(t *testing.T) {
+	tests := []struct {
+		name      string
+		authority string
+		want      bool
+	}{
+		{name: "bare_host", authority: "host", want: true},
+		{name: "host_with_numeric_port", authority: "host:1521", want: true},
+		{name: "userinfo_with_non_numeric_tail", authority: "user:pa", want: false},
+		{name: "bracketed_ipv6_without_port", authority: "[::1]", want: true},
+		// Skipping to the wrong side of the ']' leaves a ':' behind and turns the
+		// trailing "]" into the port.
+		{name: "zero_compressed_ipv6_without_port", authority: "[::]", want: true},
+		{name: "bracketed_ipv6_with_port", authority: "[2001:db8::1]:1521", want: true},
+		// LastIndex returns -1 for an unterminated literal, so the +1 slice is a no-op
+		// and the whole segment is examined: "db8" is not a port.
+		{name: "unterminated_ipv6_literal", authority: "[2001:db8", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, looksLikeHostPort(tt.authority))
+		})
+	}
+}
+
+// TestMaskDSNIn covers the seam directly: redactDSNError reaches it for every error,
+// but a *url.Error has already had its rendering rebuilt by maskURLError, so only a
+// non-url.Error carrying the raw DSN exercises the replacement here.
+func TestMaskDSNIn(t *testing.T) {
+	const password = "zqxvwgirdlespan"
+	// The DEL byte makes %q escape the DSN, so the quoted rendering is not a substring
+	// of the message and only the second replacement can reach it.
+	leaky := "oracle://appuser:" + password + "@zonk\x7fhost:1521/XE"
+	masked := "oracle://appuser:xxxxx@zonk\x7fhost:1521/XE"
+
+	tests := []struct {
+		name string
+		dsn  string
+		msg  string
+		want string
+	}{
+		{
+			name: "dsn_without_password_leaves_the_message_alone",
+			dsn:  "oracle://host:1521/XE",
+			msg:  `dial oracle://host:1521/XE: connection refused`,
+			want: `dial oracle://host:1521/XE: connection refused`,
+		},
+		{
+			name: "verbatim_and_quoted_renderings_both_masked",
+			dsn:  leaky,
+			msg:  "dial " + leaky + ": parse " + strconv.Quote(leaky) + ": bad",
+			want: "dial " + masked + ": parse " + strconv.Quote(masked) + ": bad",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := maskDSNIn(tt.msg, tt.dsn)
+			assert.Equal(t, tt.want, got)
+			assert.NotContains(t, got, password)
+		})
+	}
 }
 
 func TestConnectionNewConnectionWithServiceName(t *testing.T) {

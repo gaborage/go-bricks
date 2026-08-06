@@ -39,7 +39,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56  | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
-| E57  | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4 aborts startup) | 4 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4) |
+| E57  | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5 abort startup) | 5 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -1178,7 +1178,14 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `DELETE` but not `INSERT` still passes `Init` and fails at the first processed event. Per-tenant fan-out and `source.type: dynamic` deployments are
   unaffected — those resolve their database at runtime, not at `Init`. A custom dynamic
   `Options.ResourceSource` behind a *static* `source.type` is not among them: a module cannot see
-  that resource source, so such a deployment is probed (C57.4).
+  that resource source, so such a deployment is probed (C57.4). Separately, a
+  `database.connectionstring` with no `database.type` passed `config.Validate` and then
+  could never connect — `database.NewConnection` dispatches solely on `type` and errored
+  only at first query. `config.Validate` now infers `type` from a recognized DSN scheme
+  (`postgres://`/`postgresql://` → `postgresql`, `oracle://` → `oracle`) when `type` is
+  empty, and rejects an explicit `type` that conflicts with the inferred scheme. For the
+  built-in connector, any other scheme left untyped now fails startup instead of booting
+  into a dead database; a caller-supplied `Options.DatabaseConnector` is exempt (C57.5).
 - build-caught: none
 - exit: `go get github.com/gaborage/go-bricks@v0.57.0 && go mod tidy && go build ./... && go test ./...`
 
@@ -1422,6 +1429,111 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   off (or on, but the DDL fails); confirm a healthy environment still starts cleanly.
 - ref: wiki/outbox.md#startup-verification · `outbox/module.go` (`verifyStartupDatabase`) ·
   `inbox/module.go` (`verifyStartupDatabase`) · #876
+
+### [C57.5] `database.type` is inferred from a recognized connection-string scheme; an unrecognized one now fails startup on the built-in connector · breaking · when: match
+
+- detect: `git grep -n 'connectionstring' -- '*.yaml' '*.yml'` and
+  `git grep -nE 'DATABASE_CONNECTIONSTRING|DATABASES_.*_CONNECTIONSTRING|MULTITENANT_TENANTS_.*_CONNECTIONSTRING'`
+  across deployment manifests and env files for every `database.connectionstring` /
+  `databases.<name>.connectionstring` / `multitenant.tenants.<id>.database.connectionstring`
+  — **with or without** a sibling `type`. Match = one exists; check its scheme against the
+  recognized list (`postgres://`, `postgresql://`, `oracle://`), whether a sibling `type` is
+  set and agrees with that scheme, and whether the deployment uses the built-in connector (no
+  `Options.DatabaseConnector`). An entry with no `type` matters only on the built-in connector;
+  a `type` that contradicts the scheme matters on every connector.
+- scope: `config.validateDatabaseWithConnectionString` now infers `Type` from the DSN scheme
+  when `Type` is empty, and errors on an explicit `Type` that conflicts with the inferred
+  one. This applies everywhere `validateDatabase` runs: the root `database:` block, every
+  `databases.*` entry (write-back persists the inference the same way it already persists
+  pool/session defaults), and every static `multitenant.tenants.*.database` entry. Separately,
+  `app.Builder.ConfigureRuntimeHelpers` now fails startup when the root `database:` block, a
+  `databases.*` entry, or — **only under `multitenant.enabled: true`** — a
+  `multitenant.tenants.*.database` entry still carries a connection string with no resolved
+  type, but **only** when the built-in connector (`database.NewConnection`) would be used. A
+  tenants block left behind under `multitenant.enabled: false` is inert (koanf loads it from
+  YAML regardless of the flag, but neither validation nor `config.NewTenantStore` reads it)
+  and is deliberately not policed. A caller-supplied `Options.DatabaseConnector` parses the DSN
+  itself and is exempt from that startup guard — but from the guard only: `config.Validate` is
+  connector-blind, so a `type` that contradicts the DSN scheme fails on a custom connector too.
+  The quiesce CLI's tolerated-empty-`Type` PostgreSQL path
+  (`tools/migration/internal/commands/quiesce.go`) now arrives with `Type` already
+  inferred to `postgresql` and so is unaffected either way.
+  **Oracle only:** inference makes `validateOracleFields` run on a DSN-only config for the
+  first time (an empty `Type` used to skip vendor validation entirely), so that check is
+  relaxed in the same change — a connection string waives the "exactly one of
+  `oracle.service.name` / `oracle.service.sid` / `database`" requirement, because
+  `buildOracleDSN` returns the connection string verbatim and never reads those fields.
+  `oracle://user:pw@host:1521/XE` alone is therefore a complete config. Two Oracle checks are
+  **not** waived alongside a connection string: setting more than one identifier is still
+  "multiple identifiers configured", and `database.tls.cert`/`key`/`ca` are still rejected
+  (tcps/wallet is not implemented, so accepting them would imply an encryption that does not
+  exist).
+- gate: match = one of three outcomes. (1) A connstring with a recognized scheme and no
+  explicit `type` — this used to pass validation and then fail at first query with
+  `unsupported database type: ""`; it now infers the type and **actually connects**, which is
+  the surprising direction: a deployment that "worked" only because its database layer was
+  never exercised now dials a real database at startup pre-init. (2) A connstring with an
+  unrecognized scheme, no `type`, on the built-in connector — this also used to boot and fail
+  at first query; it now fails startup with an error naming every affected config path. (3) An
+  explicit `type` that conflicts with the DSN's scheme — this used to pass validation with the
+  explicit value taken as-is; it now fails validation, on every connector. A fourth outcome
+  needs no action, only awareness: an `oracle://` connection string with no identifier field
+  now validates, where `type: oracle` alongside the same DSN used to be rejected. That is a
+  relaxation — nothing that validated before stops validating. no-match = every
+  connection string either already carries a matching explicit `type`, or carries no `type`
+  while the deployment supplies its own `Options.DatabaseConnector`, or is one of the untyped
+  ones sitting under `multitenant.tenants` in a `multitenant.enabled: false` deployment, where
+  the whole block is inert.
+- before:
+
+  ```yaml
+  database:
+    connectionstring: postgres://app:pass@db.internal:5432/appdb
+  # no type — passed config.Validate, then every query hit
+  # "unsupported database type: \"\""
+  ```
+
+- after:
+
+  ```yaml
+  database:
+    connectionstring: postgres://app:pass@db.internal:5432/appdb
+  # type inferred to postgresql — the service now actually connects
+  ```
+
+  and, for an unrecognized scheme with no explicit `type`:
+
+  ```yaml
+  database:
+    connectionstring: sqlserver://app:pass@db.internal:1433/appdb
+  # built-in connector: Init now fails with
+  # "database configuration at [database]: connectionstring has no resolved database type; ..."
+  ```
+
+  and, for Oracle, where the DSN alone is now enough:
+
+  ```yaml
+  database:
+    connectionstring: oracle://app:pass@db.internal:1521/XEPDB1
+  # type inferred to oracle; no oracle.service.name / .sid / database needed —
+  # the DSN carries the identifier. Previously "type: oracle" plus this DSN failed
+  # with "oracle connection identifier exactly one required".
+  ```
+
+- apply: for outcome (1), confirm the target database is reachable and reviewed as a startup
+  dependency — it was previously inert, so pre-init now dials it for the first time. For
+  outcome (2), set `<path>.type` to `postgresql` or `oracle` explicitly (the schemes
+  `postgres://`, `postgresql://`, `oracle://` infer automatically and need no `type`), or
+  switch to a custom `Options.DatabaseConnector` if the scheme is neither vendor. For outcome
+  (3), fix the conflicting `type` or connection-string scheme — one of them is wrong.
+- verify: `go build ./... && go test ./...` exercises the inference and guard logic itself,
+  but no test can see your environment's config — start each affected environment and confirm
+  it now connects (outcome 1) or fails startup with a clear error naming the path (outcome 2)
+  instead of booting green.
+- ref: [ADR-050](adr_050_connectionstring_type_inference.md) ·
+  `config/validation.go` (`inferDatabaseTypeFromConnectionString`,
+  `validateDatabaseWithConnectionString`) · `app/app_builder.go`
+  (`untypedConnectionStringPaths`, `ConfigureRuntimeHelpers`) · #877
 
 ---
 

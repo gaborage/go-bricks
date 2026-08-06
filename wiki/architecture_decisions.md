@@ -847,6 +847,40 @@ also holds for probes the framework never constructs. See [migrations.md](migrat
 
 ---
 
+### [ADR-050: Infer `database.type` from the Connection-String Scheme, Fail Fast on What's Left Untyped](adr_050_connectionstring_type_inference.md)
+
+**Date:** 2026-08-05 | **Status:** Accepted
+
+A `database.connectionstring` with no `database.type` passed `config.Validate` and then
+could never connect: `database.NewConnection` dispatches solely on `Type` and errors
+`unsupported database type: ""` at first use — validation accepted a guaranteed-dead
+config. `validateDatabaseWithConnectionString` now infers `Type` from a recognized DSN
+scheme (`postgres://`/`postgresql://` → `postgresql`, `oracle://` → `oracle`) when `Type`
+is empty, and rejects an explicit `Type` that conflicts with the inferred scheme. An
+unrecognized scheme is not a validation error — whether it's fatal depends on who connects.
+`app.Builder.ConfigureRuntimeHelpers` closes that residue: it fails startup when the root
+`database:` block, a `databases.*` entry, or — only under `multitenant.enabled: true`, the
+same gate `config.NewTenantStore` uses — a `multitenant.tenants.*` entry still carries a
+connection string with no resolved type, but only for the built-in connector; a caller-supplied
+`Options.DatabaseConnector` parses the DSN itself and is exempt, as is the quiesce CLI's
+tolerated-empty-`Type` PostgreSQL path. Rejected: a hard `type` requirement (breaks both
+exemptions), inference without the builder guard (leaves the boots-then-fails residue for
+unrecognized schemes), and the guard without inference (forces redundant `type` on every
+working DSN). Because inference makes Oracle's vendor validation run on a DSN-only config
+for the first time, `validateOracleFields` waives its "exactly one of
+`oracle.service.name` / `oracle.service.sid` / `database`" requirement when a connection
+string is set — `buildOracleDSN` returns that string verbatim and never reads those fields.
+The `count > 1` ambiguity error and the Oracle TLS rejection are not waived.
+
+**Key Benefits:** A connstring-only config with a recognized scheme now connects instead of
+booting into a dead database — including `oracle://…` with no separate identifier field; an
+unrecognized scheme on the built-in connector fails fast
+at startup instead of at first query; a `type`/scheme conflict is caught at validation.
+Fixes [#877](https://github.com/gaborage/go-bricks/issues/877). See
+[migrations.md](migrations.md) `[C57.5]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -856,7 +890,7 @@ also holds for probes the framework never constructs. See [migrations.md](migrat
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-048) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-050) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
