@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -133,4 +134,74 @@ func RejectSharedWithStaticTenants(module string, cfg *config.Config) error {
 			"use the default per-tenant tenancy, or a dynamic source", module)
 	}
 	return nil
+}
+
+// defaultStartupTimeout bounds the Init-time database probe when
+// app.startup.database is unset. config.Validate always defaults that key to
+// the same 10s, so this only matters for a hand-built *config.Config.
+const defaultStartupTimeout = 10 * time.Second
+
+// StartupCheckApplies reports whether the "" key is statically resolvable at
+// Init time: single-tenant, or shared-ledger tenancy, both with a static
+// source. Per-tenant fan-out resolves databases per tenant at runtime, and
+// dynamic sources resolve "" at runtime. The app builder's skipPreInit and
+// app.rootDatabaseAbsent exempt a third mode this predicate cannot see: a
+// dynamic Options.ResourceSource behind a static source.type, which is
+// invisible from config alone and is therefore probed here. Shared by the
+// outbox and inbox modules' Init so the predicate cannot drift between them.
+func StartupCheckApplies(cfg *config.Config, sharedLedger bool) bool {
+	return cfg != nil &&
+		cfg.Source.Type != config.SourceTypeDynamic &&
+		(!cfg.Multitenant.Enabled || sharedLedger)
+}
+
+// StartupDatabase derives a bounded context from cfg.App.Startup.Database
+// (defaulting to defaultStartupTimeout when unset), resolves the "" database
+// via getDB, and classifies a resolver failure: a config.IsNotConfigured
+// error becomes an actionable "requires a database" message, any other error
+// becomes "database unreachable at startup", and a (nil, nil) result — a
+// resolver contract violation — is rejected explicitly (without this guard,
+// the caller's next call, db.DatabaseType(), would panic instead of
+// erroring). The returned cancel is always non-nil; callers must defer it
+// unconditionally and use the returned context for every subsequent call
+// (ensureStoreInitialized, the probe) so they all share one deadline. Shared
+// by the outbox and inbox modules so the error text and classification
+// cannot drift between them.
+func StartupDatabase(
+	parent context.Context,
+	cfg *config.Config,
+	module string,
+	getDB func(context.Context) (dbtypes.Interface, error),
+) (ctx context.Context, cancel context.CancelFunc, db dbtypes.Interface, err error) {
+	timeout := cfg.App.Startup.Database
+	if timeout <= 0 {
+		timeout = defaultStartupTimeout
+	}
+	ctx, cancel = context.WithTimeout(parent, timeout)
+
+	db, err = getDB(ctx)
+	if err != nil {
+		if config.IsNotConfigured(err) {
+			return ctx, cancel, nil, fmt.Errorf("%s: %s.enabled=true requires a database, but none is configured; "+
+				"configure the database section (or the control-plane database for tenancy=shared) "+
+				"or set %s.enabled=false: %w", module, module, module, err)
+		}
+		return ctx, cancel, nil, fmt.Errorf("%s: database unreachable at startup: %w", module, err)
+	}
+	if db == nil {
+		// Contract violation (resolver returned nil, nil). Without this guard the
+		// caller's db.DatabaseType() call panics inside Init instead of erroring.
+		return ctx, cancel, nil, fmt.Errorf("%s: database resolver returned a nil database", module)
+	}
+	return ctx, cancel, db, nil
+}
+
+// TableUnusableError formats the startup-probe's table-unusable error: the
+// database is reachable, but the module's table is missing, or the
+// credentials can't use it. autocreateKey is the config key that would have
+// created it, e.g. "outbox.autocreatetable". Shared so the message cannot
+// drift between outbox and inbox.
+func TableUnusableError(module, tableName, autocreateKey string, cause error) error {
+	return fmt.Errorf("%s: table %q is not usable (missing table or insufficient privileges); "+
+		"run migrations or set %s=true: %w", module, tableName, autocreateKey, cause)
 }

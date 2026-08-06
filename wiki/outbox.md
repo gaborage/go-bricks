@@ -188,6 +188,57 @@ outbox:
   retentionperiod: 168h      # 7-day retention
 ```
 
+## Startup Verification
+
+When `outbox.enabled: true` (or `inbox.enabled: true`), `Init` verifies the `""`-key ledger database
+and table are actually usable before the app finishes booting — instead of booting green and failing
+once per poll interval forever. The check probes that database with the operation the relay or
+cleanup job already performs every cycle — the outbox's `FetchPending(…, 1)`, a read; the inbox's
+`DeleteProcessed` before the Unix epoch, a write that matches no row (so it changes nothing, but it
+is still a write and will fail against a read-only replica) — and fails `Init` with one of:
+
+- `outbox.enabled=true requires a database, but none is configured` / same for `inbox` — the
+  `""`-key database resolver reports `config.IsNotConfigured`.
+- `database unreachable at startup` — the resolver returned a different error (network, auth, DNS).
+- `table %q is not usable (missing table or insufficient privileges)` — the database is reachable but
+  the table is missing, or the runtime role lacks the privilege the probe needs (outbox: `SELECT`;
+  inbox: `DELETE`). Missing table → run migrations, or set
+  `outbox.autocreatetable`/`inbox.autocreatetable` where the role also holds DDL rights. Privilege
+  failure → grant that privilege; auto-creation does not help.
+- `database resolver returned a nil database` — a resolver contract violation (`(nil, nil)`).
+
+**Exempt modes** (the `""` key is not statically resolvable at `Init` time, so the check is skipped —
+these deployments keep today's runtime-resolution behavior):
+
+- **Per-tenant fan-out** (`multitenant.enabled: true`, default `outbox.tenancy`/`inbox.tenancy`) —
+  each tenant's database is resolved per-poll via the resource source, not at `Init`.
+- **Dynamic source** (`source.type: dynamic`) — the `""` key itself resolves at runtime.
+
+`tenancy: shared` with a **static** source IS checked: the shared ledger's control-plane database is
+statically known at `Init`, so a slow or unreachable control-plane database now delays startup by up
+to `app.startup.database` (10s default) instead of failing silently on the first relay/cleanup cycle.
+
+Three further consequences of running the check inside `Init`:
+
+- The inbox probe requires **`DELETE`** on the inbox table even where nothing else deletes from it:
+  `ProcessOnce` only ever issues an `INSERT`, and the retention cleanup job — the sole runtime
+  `DELETE` — is registered only when a scheduler module is present. A least-privilege runtime role
+  for a `ProcessOnce`-only deployment (no scheduler registered) must be granted `DELETE` before
+  upgrading, or `Init` fails with `table … is not usable`. The converse also holds: because the
+  inbox probe is the cleanup job's `DELETE`, it does **not** prove `ProcessOnce`'s `INSERT`, so a
+  role granted `DELETE` but not `INSERT` still passes `Init` and fails at the first processed
+  event. The outbox probe has no such gap — `FetchPending` is exactly what the relay reads.
+- A **custom dynamic `Options.ResourceSource` behind a static `source.type`** is NOT exempt, although
+  the app builder's own pre-init and `/ready` database probe both skip it. The module sees only
+  `*config.Config`, so it cannot detect that resource source; such a deployment is probed at startup
+  where it previously wasn't. Set `source.type: dynamic` to opt out until the exemption is threaded
+  down to modules — that opt-out is open to single-tenant and `tenancy: shared` deployments only. A
+  per-tenant fan-out deployment is already exempt by the rule above and must **not** set it: the
+  outbox relay (and the inbox cleanup job) reject dynamic multi-tenant sources outright.
+- With `outbox.autocreatetable`/`inbox.autocreatetable` enabled, the `""` key's table DDL now runs at
+  `Init` rather than on the first publish or poll — the probe initializes that store, which is what
+  creates the table. The exempt modes above run no probe, so their DDL still waits for first use.
+
 ## Multi-Tenant
 
 In multi-tenant mode the outbox/inbox support two tenancy modes, set via `outbox.tenancy` /
