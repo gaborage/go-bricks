@@ -1,7 +1,10 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -5240,4 +5243,214 @@ func TestApplyDatabasePoolDefaultsNilConfig(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "configuration is nil")
+}
+
+// loadDeliveredEmptyFixture stages one TestValidateNoDeliveredEmptyDatabaseViaLoad
+// case — a scratch working directory holding yaml (when non-empty) plus env — and
+// returns Load()'s results from inside it. t.Cleanup rather than defer, so the
+// environment is cleared at subtest end from within a helper.
+func loadDeliveredEmptyFixture(t *testing.T, yaml string, env map[string]string) (*Config, error) {
+	t.Helper()
+	clearEnvironmentVariables()
+	t.Cleanup(clearEnvironmentVariables)
+
+	dir := t.TempDir()
+	if yaml != "" {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, testConfigFileYAML), []byte(yaml), 0o600))
+	}
+	t.Chdir(dir)
+
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+	return Load()
+}
+
+// assertDeliveredEmptyError checks a rendered startup error against one case's
+// expectations. wantOrdered pins the sorted-path contract: each entry must appear
+// strictly before the next.
+func assertDeliveredEmptyError(t *testing.T, got string, wantContains, wantNotContain, wantOrdered []string) {
+	t.Helper()
+	for _, s := range wantContains {
+		assert.Contains(t, got, s)
+	}
+	for _, s := range wantNotContain {
+		assert.NotContains(t, got, s)
+	}
+	for i := 1; i < len(wantOrdered); i++ {
+		prev, cur := strings.Index(got, wantOrdered[i-1]), strings.Index(got, wantOrdered[i])
+		assert.Less(t, prev, cur, "%s must be reported before %s", wantOrdered[i-1], wantOrdered[i])
+	}
+}
+
+// TestValidateNoDeliveredEmptyDatabaseViaLoad drives validateNoDeliveredEmptyDatabase
+// through the real Load() path (env + YAML), since the koanf presence semantics it
+// relies on cannot be exercised through a hand-built Config literal (see
+// TestValidateNoDeliveredEmptyDatabaseInertForLiteral for that guarantee instead).
+func TestValidateNoDeliveredEmptyDatabaseViaLoad(t *testing.T) {
+	tests := []struct {
+		name           string
+		env            map[string]string
+		yaml           string
+		wantErr        bool
+		wantContains   []string
+		wantNotContain []string
+		// wantOrdered pins the sorted-path contract: each entry must appear
+		// strictly before the next in the rendered error.
+		wantOrdered []string
+	}{
+		{
+			name:         "env_delivered_empty_host_fails",
+			env:          map[string]string{"DATABASE_HOST": ""},
+			wantErr:      true,
+			wantContains: []string{"delivered empty", "database.host"},
+		},
+		{
+			name:         "yaml_bare_host_key_fails",
+			yaml:         "database:\n  host:\n",
+			wantErr:      true,
+			wantContains: []string{"database.host"},
+		},
+		{
+			name: "empty_database_block_is_absence",
+			yaml: "database: {}\n",
+		},
+		{
+			name: "absent_section_is_absence",
+		},
+		{
+			name: "real_value_bypasses",
+			env: map[string]string{
+				"DATABASE_TYPE":      PostgreSQL,
+				"DATABASE_HOST":      "db.internal",
+				"DATABASE_PORT":      "5432",
+				testDatabaseDatabase: "testdb",
+				testDatabaseUsername: "testuser",
+			},
+		},
+		{
+			name:         "named_database_empty_host_fails",
+			yaml:         "databases:\n  reporting:\n    host:\n",
+			wantErr:      true,
+			wantContains: []string{"databases.reporting.host"},
+		},
+		{
+			name: "tenant_database_empty_username_fails",
+			yaml: "multitenant:\n  enabled: true\n  resolver:\n    type: header\n  tenants:\n" +
+				"    acme:\n      database:\n        username:\n",
+			wantErr:        true,
+			wantContains:   []string{"multitenant.tenants.acme.database.username"},
+			wantNotContain: []string{"configuration required"},
+		},
+		{
+			name:         "multiple_offenders_listed",
+			yaml:         "databases:\n  alpha:\n    host:\n  beta:\n    host:\n",
+			wantErr:      true,
+			wantContains: []string{"databases.alpha.host", "databases.beta.host"},
+			wantOrdered:  []string{"databases.alpha.host", "databases.beta.host"},
+		},
+		{
+			// Every empty key in one section is named, not just the first: an
+			// operator who cleared only the first would hit the same abort again.
+			// The keys are chosen so databaseIdentityKeys order (type before host)
+			// contradicts sorted order — wantOrdered therefore pins slices.Sort,
+			// not the traversal order it happens to share elsewhere.
+			name:         "all_empty_keys_in_one_section_listed",
+			yaml:         "database:\n  type:\n  host:\n  username:\n",
+			wantErr:      true,
+			wantContains: []string{"database.type", "database.host", "database.username"},
+			wantOrdered:  []string{"database.host", "database.type", "database.username"},
+		},
+		{
+			// Koanf populates Multitenant.Tenants from YAML regardless of the enabled
+			// flag, but TenantStore, ManagerConfigBuilder and validateMultitenant all
+			// ignore the block in single-tenant mode — so a leftover tenants section is
+			// inert, and aborting startup over it would be a false abort on a config
+			// that runs today.
+			name: "disabled_multitenancy_leftover_tenant_ignored",
+			yaml: "multitenant:\n  enabled: false\n  tenants:\n" +
+				"    acme:\n      database:\n        username:\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadDeliveredEmptyFixture(t, tc.yaml, tc.env)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Nil(t, cfg)
+				assertDeliveredEmptyError(t, err.Error(), tc.wantContains, tc.wantNotContain, tc.wantOrdered)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, cfg)
+		})
+	}
+}
+
+// TestValidateNoDeliveredEmptyDatabaseInertForLiteral pins the Exists nil-safety the
+// whole design leans on: a hand-built Config (no koanf instance) never trips the
+// validator, regardless of how empty its Database section is. Calling Validate(&Config{})
+// instead would fail earlier at validateApp on the empty app name, never reaching this
+// validator, so the function is called directly.
+func TestValidateNoDeliveredEmptyDatabaseInertForLiteral(t *testing.T) {
+	cfg := &Config{}
+	assert.NoError(t, validateNoDeliveredEmptyDatabase(cfg))
+}
+
+// TestLoadDefaultsCarryNoDatabaseIdentityKeys pins the enabling invariant this whole
+// design rests on (config/config.go's loadDefaults registers no database.* keys): if a
+// default is ever added for one of these keys, every deployment would read as
+// "delivered" and this test fails.
+func TestLoadDefaultsCarryNoDatabaseIdentityKeys(t *testing.T) {
+	clearEnvironmentVariables()
+	defer clearEnvironmentVariables()
+	t.Chdir(t.TempDir())
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	for _, k := range databaseIdentityKeys {
+		assert.False(t, cfg.Exists("database."+k), "database.%s must not be a registered default", k)
+	}
+}
+
+// TestDatabaseIdentityKeysMatchPredicate pins the one direction it can enforce
+// automatically: every entry in databaseIdentityKeys corresponds to a DatabaseConfig
+// field that IsDatabaseConfigured recognizes. The reverse direction — a field added to
+// IsDatabaseConfigured but never to the list — is not detectable by iterating the list;
+// the length assertion below is the tripwire for that direction.
+func TestDatabaseIdentityKeysMatchPredicate(t *testing.T) {
+	// grew IsDatabaseConfigured? grow this list first, then this number.
+	require.Len(t, databaseIdentityKeys, 9)
+
+	for _, key := range databaseIdentityKeys {
+		t.Run(key, func(t *testing.T) {
+			cfg := DatabaseConfig{}
+			switch key {
+			case "connectionstring":
+				cfg.ConnectionString = testConnectionString
+			case "type":
+				cfg.Type = PostgreSQL
+			case "host":
+				cfg.Host = "db.internal"
+			case "port":
+				cfg.Port = 5432
+			case "database":
+				cfg.Database = "appdb"
+			case "username":
+				cfg.Username = "app"
+			case "password":
+				cfg.Password = "s3cretpw"
+			case "oracle.service.name":
+				cfg.Oracle.Service.Name = "ORCLPDB1"
+			case "oracle.service.sid":
+				cfg.Oracle.Service.SID = "ORCL"
+			default:
+				t.Fatalf("databaseIdentityKeys entry %q has no mapping in this test — add one, and check IsDatabaseConfigured too", key)
+			}
+			assert.True(t, IsDatabaseConfigured(&cfg))
+		})
+	}
 }

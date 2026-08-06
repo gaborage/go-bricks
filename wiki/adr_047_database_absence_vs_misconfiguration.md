@@ -130,13 +130,17 @@ second-guess a caller-supplied resolver.
   a module supplies that missing intent; a startup WARN is the backstop for
   modules that do not. Neither reaches multi-tenant mode, which
   `rootDatabaseAbsent` exempts.
-- **The widened predicate does not catch every partial delivery.** Three shapes
-  still read as absence and boot green:
-  - **Identity fields delivered but empty** (`DATABASE_HOST=""` from an empty
-    `secretKeyRef`, `envsubst` over an unset variable, an empty mounted file). The
-    predicate sees a zero value and cannot tell "set to empty" from "never set".
-    This is a more common Kubernetes failure than a wholly unmounted secret, and
-    it is the one shape this design cannot see.
+- **At the time of ADR-047, the widened predicate did not catch every partial
+  delivery.** The shape it most conspicuously missed — **identity fields
+  delivered but empty** (`DATABASE_HOST=""` from an empty `secretKeyRef`,
+  `envsubst` over an unset variable, an empty mounted file), where the predicate
+  sees a zero value and cannot tell "set to empty" from "never set", a more
+  common Kubernetes failure than a wholly unmounted secret — is closed by
+  **[ADR-051](adr_051_delivered_empty_database_identity.md)**, which rejects a
+  delivered-but-empty identity key during `Load` by checking koanf key presence
+  instead of decoded values; configs carrying no koanf instance (hand-built
+  `Config` literals, dynamic-source tenant configs) stay outside its reach.
+  What the predicate still does not catch:
   - **TLS material alone** (`database.tls.*`) — deliberately excluded, because it
     identifies no database. Note the inverse hazard, which predates this ADR: a
     ConfigMap-provides-`host`/`type` + Secret-provides-TLS split whose TLS secret

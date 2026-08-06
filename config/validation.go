@@ -175,6 +175,10 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("scheduler config: %w", err)
 	}
 
+	if err := validateNoDeliveredEmptyDatabase(cfg); err != nil {
+		return fmt.Errorf("database config: %w", err)
+	}
+
 	if err := validateMultitenant(&cfg.Multitenant, &cfg.Database, &cfg.Messaging, &cfg.Source); err != nil {
 		return fmt.Errorf("multitenant config: %w", err)
 	}
@@ -387,6 +391,83 @@ func validateServerTLSMaterial(fileField, valueField, file, value string) error 
 	}
 }
 
+// identityKeyHost and identityKeyPort name recurring identity-key suffixes as
+// constants (goconst: both bare literals recur elsewhere in the package's
+// test fixtures).
+const (
+	identityKeyHost = "host"
+	identityKeyPort = "port"
+)
+
+// databaseIdentityKeys mirrors IsDatabaseConfigured's field set — the koanf
+// key suffixes whose PRESENCE marks a database section as delivered. Keep the
+// two in lockstep; TestDatabaseIdentityKeysMatchPredicate pins it.
+var databaseIdentityKeys = []string{
+	"connectionstring", "type", identityKeyHost, identityKeyPort, fieldDatabase,
+	"username", "password", "oracle.service.name", "oracle.service.sid",
+}
+
+// deliveredEmptyDatabaseKeys returns every identity key present in the loaded
+// configuration under base while the decoded section carries zero identity
+// values — the "delivered but empty" shape ADR-047 could not see (ADR-051).
+// All of them, not just the first: the error promises "field(s)", and an
+// operator who clears only the one key named would hit the same abort again.
+// Nil means the section is either genuinely absent or carries a real value
+// (later validators own that).
+func deliveredEmptyDatabaseKeys(cfg *Config, base string, db *DatabaseConfig) []string {
+	if IsDatabaseConfigured(db) {
+		return nil
+	}
+	var keys []string
+	for _, k := range databaseIdentityKeys {
+		key := base + "." + k
+		if cfg.Exists(key) {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// validateNoDeliveredEmptyDatabase fails startup when any database section —
+// root, named, or static-tenant — was delivered with only empty identity
+// fields. Tenant sections are walked only when multitenancy is enabled (see
+// below). Inert for hand-built Config literals (no koanf instance) and for
+// dynamic-source tenant configs (never in koanf). Offending paths are
+// collected sorted so the startup error is deterministic.
+func validateNoDeliveredEmptyDatabase(cfg *Config) error {
+	var offending []string
+	collect := func(base string, db *DatabaseConfig) {
+		offending = append(offending, deliveredEmptyDatabaseKeys(cfg, base, db)...)
+	}
+	collect(fieldDatabase, &cfg.Database)
+	for name := range cfg.Databases {
+		db := cfg.Databases[name]
+		collect("databases."+name, &db)
+	}
+	// Koanf populates Multitenant.Tenants from YAML regardless of the enabled flag,
+	// but a leftover block is inert in single-tenant mode: TenantStore skips it
+	// (config/tenant_store.go), ManagerConfigBuilder does not count it
+	// (app/bootstrap.go), and validateMultitenant returns before reaching it.
+	// Walking it anyway would abort startup over config no deployment consumes.
+	if cfg.Multitenant.Enabled {
+		for id := range cfg.Multitenant.Tenants {
+			t := cfg.Multitenant.Tenants[id]
+			collect("multitenant.tenants."+id+".database", &t.Database)
+		}
+	}
+	if len(offending) == 0 {
+		return nil
+	}
+	slices.Sort(offending)
+	return &ConfigError{
+		Category: errCategoryInvalid,
+		Field:    offending[0],
+		Message:  fmt.Sprintf("database identity field(s) delivered empty: %v", offending),
+		Action: "set real values (empty secretKeyRef / unset envsubst variable?) or remove the keys entirely — " +
+			"an absent database section is the supported database-free posture (ADR-047, ADR-051)",
+	}
+}
+
 // IsDatabaseConfigured reports whether a database is intentionally configured
 // (ADR-003, ADR-047).
 //
@@ -399,10 +480,14 @@ func validateServerTLSMaterial(fileField, valueField, file, value string) error 
 // Fields that applyDatabasePoolDefaults fills in (timezone, pool, query) are
 // deliberately excluded, so the verdict is identical before and after defaulting.
 //
-// Known limit: a field delivered as an EMPTY string is indistinguishable from an
-// unset one here (an empty secretKeyRef, envsubst over an unset variable). That shape
-// still reads as absence. TLS material is likewise excluded — it identifies no
-// database on its own.
+// A field delivered as an EMPTY string (an empty secretKeyRef, envsubst over an
+// unset variable) is indistinguishable from an unset one here and reads as
+// absence — but that shape is now caught at Load time by
+// validateNoDeliveredEmptyDatabase (ADR-051), which consults koanf key presence
+// rather than decoded values. The remaining blind spots are hand-built Config
+// values (no koanf instance to consult) and dynamic-source tenant configs
+// (resolved from a remote store, never koanf). TLS material is likewise
+// excluded from this predicate — it identifies no database on its own.
 func IsDatabaseConfigured(cfg *DatabaseConfig) bool {
 	return cfg.ConnectionString != "" ||
 		cfg.Type != "" ||

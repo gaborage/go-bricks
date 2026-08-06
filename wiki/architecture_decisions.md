@@ -881,6 +881,37 @@ Fixes [#877](https://github.com/gaborage/go-bricks/issues/877). See
 
 ---
 
+### [ADR-051: A Delivered-but-Empty Database Identity Field Fails Startup](adr_051_delivered_empty_database_identity.md)
+
+**Date:** 2026-08-06 | **Status:** Accepted
+
+`config.IsDatabaseConfigured` (ADR-047) infers intent from decoded values, so an identity
+field delivered as an empty string — an empty `secretKeyRef`, `envsubst` over an unset
+variable, `DATABASE_HOST=""` — is indistinguishable from one never set and reads as
+absence: the service boots, `/ready` reports `not_configured`, and the first query fails.
+`validateNoDeliveredEmptyDatabase` now runs inside `config.Validate`, immediately before
+`validateMultitenant`, and consults the koanf instance `config.Load` already stores on
+`cfg.k` before validating: for the root `database` section, each `databases.<name>`, and —
+only when `multitenant.enabled: true` — each static `multitenant.tenants.<id>.database`, a
+section that decodes as unconfigured but has any identity key present in koanf fails startup
+naming every such key. A leftover `tenants:` block under disabled multitenancy stays inert, matching
+`TenantStore` and `ManagerConfigBuilder`, which both ignore it. Sections with real
+values short-circuit via `IsDatabaseConfigured` unchanged. Placement before
+`validateMultitenant` means a delivered-empty tenant section gets the precise key path
+instead of `validateMultitenantTenants`'s generic "configuration required" message. The
+issue's original six-call-site `IsDatabaseConfigured` signature change was rejected as
+strictly more churn for the identical verdict. Hand-built `Config` literals (no koanf
+instance) and dynamic-source tenant configs (never routed through koanf) remain out of
+reach, unchanged from ADR-047.
+
+**Key Benefits:** A partially-injected Kubernetes secret now fails loudly at startup
+instead of silently booting as database-free; `IsDatabaseConfigured`'s signature and all
+six existing call sites are untouched — the fix is additive at the `Validate` level only.
+Fixes [#880](https://github.com/gaborage/go-bricks/issues/880). See
+[migrations.md](migrations.md) `[C57.6]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -890,7 +921,7 @@ Fixes [#877](https://github.com/gaborage/go-bricks/issues/877). See
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-050) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-051) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
