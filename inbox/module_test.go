@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -31,11 +32,21 @@ func (r *fakeRegistrar) WeeklyAt(string, any, time.Weekday, time.Time) error { r
 func (r *fakeRegistrar) HourlyAt(string, any, int) error                     { return nil }
 func (r *fakeRegistrar) MonthlyAt(string, any, int, time.Time) error         { return nil }
 
+// probeReadyDB returns a fresh TestDB whose DELETE expectation satisfies Init's
+// startup-database probe (verifyStartupDatabase's DeleteProcessed call).
+func probeReadyDB() *dbtesting.TestDB {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectExec("DELETE").WillReturnRowsAffected(0)
+	return db
+}
+
+// testDeps' DB resolver mints a fresh, probe-ready TestDB on every call, so any
+// test that reaches the startup-database probe passes it.
 func testDeps() *app.ModuleDeps {
 	return &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		DB: func(context.Context) (dbtypes.Interface, error) {
-			return dbtesting.NewTestDB(dbtypes.PostgreSQL), nil
+			return probeReadyDB(), nil
 		},
 	}
 }
@@ -81,6 +92,161 @@ func TestModuleInitRejectsBadTableName(t *testing.T) {
 	err := m.Init(deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unqualified")
+}
+
+// TestModuleInitFailsWhenDatabaseNotConfigured guards gap (a) from issue #876:
+// an enabled inbox with no database configured must fail startup, not boot green.
+func TestModuleInitFailsWhenDatabaseNotConfigured(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true}}
+	deps.DB = func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, config.NewNotConfiguredError("database", "DATABASE_TYPE", "database")
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires a database, but none is configured")
+}
+
+// TestModuleInitFailsWhenDatabaseUnreachable guards gap (b): a configured but
+// unreachable database must fail startup rather than let every ProcessOnce call
+// fail against a store that was never usable.
+func TestModuleInitFailsWhenDatabaseUnreachable(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true}}
+	deps.DB = func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("dial tcp 10.0.0.1:5432: connect: connection refused")
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database unreachable at startup")
+}
+
+// TestModuleInitFailsWhenTableMissing guards gap (c): a reachable database whose
+// inbox table does not exist (or is unwritable) must fail startup — the fixture
+// has no exec expectations, so the probe's DELETE goes unmatched.
+func TestModuleInitFailsWhenTableMissing(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true}}
+	deps.DB = func(_ context.Context) (dbtypes.Interface, error) {
+		return dbtesting.NewTestDB(dbtypes.PostgreSQL), nil
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not usable")
+}
+
+// TestModuleInitPerTenantMultitenantSkipsStartupProbe pins
+// startupDatabaseCheckApplies' Multitenant clause: the failing getDB must not fail Init.
+func TestModuleInitPerTenantMultitenantSkipsStartupProbe(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox: config.InboxConfig{Enabled: true},
+		Multitenant: config.MultitenantConfig{
+			Enabled: true,
+			Tenants: map[string]config.TenantEntry{"tenant-a": {}},
+		},
+	}
+	deps.DB = func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("would fail the probe if it ran")
+	}
+
+	err := m.Init(deps)
+	require.NoError(t, err, "per-tenant fan-out resolves databases at runtime, not at Init")
+}
+
+// TestModuleInitDynamicSourceSkipsStartupProbe pins
+// startupDatabaseCheckApplies' Source.Type clause: the failing getDB must not fail Init.
+func TestModuleInitDynamicSourceSkipsStartupProbe(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox:  config.InboxConfig{Enabled: true},
+		Source: config.SourceConfig{Type: config.SourceTypeDynamic},
+	}
+	deps.DB = func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("would fail the probe if it ran")
+	}
+
+	err := m.Init(deps)
+	require.NoError(t, err, "a dynamic source resolves the \"\" key at runtime, not at Init")
+}
+
+// TestModuleInitSharedTenancyStaticSourceProbesControlPlaneDatabase closes gap
+// (3): tenancy=shared with a static source resolves the "" key statically, so
+// Init must now probe the control-plane database — previously this mode was
+// never probed at startup at all.
+func TestModuleInitSharedTenancyStaticSourceProbesControlPlaneDatabase(t *testing.T) {
+	m := NewModule()
+	failingDB := func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("dial tcp control-plane-db: connection refused")
+	}
+	m.SetSharedResolvers(failingDB, nil)
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox:       config.InboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+		Multitenant: config.MultitenantConfig{Enabled: true}, // pins the sharedLedger() clause, not just !Multitenant.Enabled
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "database unreachable at startup",
+		"tenancy=shared with a static source must probe the control-plane \"\" database at startup")
+}
+
+// TestModuleInitDisabledInboxSkipsStartupProbe pins that a disabled inbox never
+// reaches the probe, regardless of how the DB resolver would behave.
+func TestModuleInitDisabledInboxSkipsStartupProbe(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: false}}
+	deps.DB = func(_ context.Context) (dbtypes.Interface, error) {
+		return nil, errors.New("would fail the probe if it ran")
+	}
+
+	err := m.Init(deps)
+	require.NoError(t, err)
+}
+
+// TestModuleInitDefaultsZeroStartupTimeoutToTenSeconds pins the timeout <= 0
+// default: an unset App.Startup.Database must bound the probe's context at
+// 10s, not 0 (an immediately-expired context) or another arithmetic result.
+func TestModuleInitDefaultsZeroStartupTimeoutToTenSeconds(t *testing.T) {
+	m := NewModule()
+	var deadline time.Time
+	var hasDeadline bool
+	deps := testDeps()
+	deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true}} // App.Startup.Database left at zero
+	deps.DB = func(ctx context.Context) (dbtypes.Interface, error) {
+		deadline, hasDeadline = ctx.Deadline()
+		return probeReadyDB(), nil
+	}
+
+	err := m.Init(deps)
+	require.NoError(t, err)
+	require.True(t, hasDeadline, "verifyStartupDatabase must derive a bounded context")
+	assert.InDelta(t, float64(10*time.Second), float64(time.Until(deadline)), float64(2*time.Second),
+		"a zero App.Startup.Database must default the probe timeout to 10s")
+}
+
+// TestModuleInitFailsWhenDatabaseResolverReturnsNilDatabase pins the nil-db
+// contract-violation guard: without it, ensureStoreInitialized's
+// db.DatabaseType() call would panic inside Init instead of erroring.
+func TestModuleInitFailsWhenDatabaseResolverReturnsNilDatabase(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{Inbox: config.InboxConfig{Enabled: true}}
+	deps.DB = func(_ context.Context) (dbtypes.Interface, error) { return nil, nil }
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "returned a nil database")
 }
 
 func TestRegisterJobsFailsFastForDynamicMultitenant(t *testing.T) {

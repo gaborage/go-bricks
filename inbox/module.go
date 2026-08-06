@@ -88,7 +88,9 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
-	// Fail fast: when the inbox is enabled, the DB resolver is required.
+	// Guards direct construction only: app.RegisterModule always wires a non-nil
+	// resolver, so this never fires through the normal registration path.
+	// verifyStartupDatabase (below) is the real fail-fast for an enabled inbox.
 	if m.getDB == nil {
 		return fmt.Errorf("inbox: database resolver (deps.DB) is required when inbox is enabled")
 	}
@@ -108,6 +110,12 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		}
 	}
 
+	if m.startupDatabaseCheckApplies() {
+		if err := m.verifyStartupDatabase(); err != nil {
+			return err
+		}
+	}
+
 	m.processor = &Inbox{module: m}
 
 	m.logger.Info().
@@ -115,6 +123,35 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		Dur("retentionPeriod", m.cfg.RetentionPeriod).
 		Str("tenancy", m.cfg.Tenancy).
 		Msg("Inbox module initialized")
+	return nil
+}
+
+// startupDatabaseCheckApplies reports whether Init can statically resolve the
+// "" key; see tenantstore.StartupCheckApplies for the predicate and its
+// exemptions (shared with outbox so it cannot drift between the two).
+func (m *Module) startupDatabaseCheckApplies() bool {
+	return tenantstore.StartupCheckApplies(m.config, m.sharedLedger())
+}
+
+// verifyStartupDatabase fails Init when the enabled inbox cannot possibly
+// process events: no database configured, database unreachable, or inbox
+// table missing/unusable. DeleteProcessed before the epoch is the probe: a
+// no-op write that still proves table + privileges — MarkProcessed is the only
+// writer and stamps time.Now(), so no framework-written row predates 1970.
+func (m *Module) verifyStartupDatabase() error {
+	ctx, cancel, db, err := tenantstore.StartupDatabase(context.Background(), m.config, "inbox", m.getDB)
+	defer cancel()
+	if err != nil {
+		return err
+	}
+
+	store, err := m.ensureStoreInitialized(ctx)
+	if err != nil {
+		return err // already "inbox: …"-prefixed by the tenantstore cache
+	}
+	if _, err := store.DeleteProcessed(ctx, db, time.Unix(0, 0).UTC()); err != nil {
+		return tenantstore.TableUnusableError("inbox", m.cfg.TableName, "inbox.autocreatetable", err)
+	}
 	return nil
 }
 
