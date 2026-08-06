@@ -3073,6 +3073,34 @@ func (m *Module) DeclareMessaging(decls *messaging.Declarations) {
 
 Decode/validation failures return a `*messaging.PayloadError` before the function runs — match with `errors.Is(err, messaging.ErrPayloadUndecodable)` / `messaging.ErrPayloadInvalid`. The function's own error passes through unwrapped. `Error()` and `Fields()` carry no payload bytes (map-key namespaces are redacted to `Limits[*]`) and are safe to log; `Unwrap()` returns the raw decoder/validator error and is not. The adapter is stateless, so `Workers` tuning below applies unchanged.
 
+**Need the delivery headers (outbox dedup)?** `DeclareTypedConsumerWithMeta` / `NewTypedHandlerWithMeta[T]` are the same adapter with `fn` as `func(ctx, T, messaging.Metadata) error` — `meta.Headers()` exposes the AMQP headers so an outbox-fed consumer can read `x-outbox-event-id` via `outbox.EventIDFromHeaders` and wrap the body in `deps.Inbox.ProcessOnce`:
+
+```go
+// Same DeclareMessaging body as above, with this call REPLACING the
+// DeclareTypedConsumer one — the same queue + consumer tag + event type twice
+// panics at startup. m.inbox is deps.Inbox, captured in Init; DeclareMessaging
+// receives only decls.
+messaging.DeclareTypedConsumerWithMeta(decls, &messaging.ConsumerOptions{
+	Queue: queue.Name, Consumer: "order-processor", EventType: "OrderCreated",
+}, func(ctx context.Context, evt OrderCreatedEvent, meta messaging.Metadata) error {
+	id, ok := outbox.EventIDFromHeaders(meta.Headers())
+	if !ok {
+		// No id, no dedup key — processing here would repeat the business
+		// write on every redelivery, so fail closed.
+		return fmt.Errorf("missing x-outbox-event-id header")
+	}
+	return m.inbox.ProcessOnce(ctx, id, func(ctx context.Context, tx dbtypes.Tx) error {
+		// Use tx: the business write must commit with the dedup row, or a crash
+		// between the two commits loses exactly-once.
+		return m.svc.ProcessOrderTx(ctx, tx, evt.OrderID)
+	})
+})
+```
+
+**Mixed-queue variant:** a queue that also carries directly-published messages has deliveries with no ledger key by design. There, and only there, swap the `!ok` branch for `return m.svc.ProcessOrder(ctx, evt.OrderID)` — processed without dedup, so that path must be idempotent on its own.
+
+Headers are written by the publisher, so on a queue fed from outside this service they are untrusted input: whoever can publish picks the ledger key. The relay stamps `x-outbox-event-id` on everything it publishes, so a publisher that simply drops it would opt out of dedup entirely — which is why the example returns an error on `!ok` rather than processing, and why the variant above is a deliberate opt-in for a queue whose traffic you know. Authorize publishers at the broker.
+
 ### Step 5: Wire the Module into `main`
 
 ```go
@@ -3119,6 +3147,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 | Atomic publish (with DB) | Use Transactional Outbox — `deps.Outbox.Publish(ctx, tx, event)` |
 | Consumer Handler | `Handle(ctx, *amqp.Delivery) error` + `EventType() string` |
 | Typed consumer (decode + validate) | `messaging.DeclareTypedConsumer(decls, opts, fn)` — `fn` is `func(ctx, T) error` |
+| Typed consumer + delivery metadata | `messaging.DeclareTypedConsumerWithMeta(decls, opts, fn)` — `fn` is `func(ctx, T, messaging.Metadata) error` |
 | ACK | Return `nil` |
 | nack-without-requeue (drop) | Return `error` |
 | Concurrency | Auto = `NumCPU * 4` workers; override via `Workers` field |
@@ -3227,6 +3256,8 @@ return tx.Commit(ctx) // Both events committed to the outbox for relay
 ```
 
 ### Consumer Idempotency (Required)
+
+Hand-rolled and **best-effort only**: `isProcessed` → process → `markProcessed` are three separate steps, so a crash between the last two reprocesses the event on redelivery. For exactly-once, use `deps.Inbox.ProcessOnce` (see the typed-consumer example above), which commits the dedup row and the business write in one transaction.
 
 ```go
 func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
