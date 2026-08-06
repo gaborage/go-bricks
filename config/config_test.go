@@ -881,12 +881,11 @@ func clearEnvironmentVariables() {
 }
 
 func TestLoadDatabaseDisabled(t *testing.T) {
+	clearEnvironmentVariables()
 	defer clearEnvironmentVariables()
+	t.Chdir(t.TempDir())
 
-	// Explicitly disable database by clearing defaults
-	os.Setenv("DATABASE_HOST", "")
-	os.Setenv("DATABASE_TYPE", "")
-
+	// A genuinely absent database section (no identity key set at all) loads fine.
 	cfg, err := Load()
 	require.NoError(t, err) // Should NOT fail validation now
 	require.NotNil(t, cfg)
@@ -1079,14 +1078,12 @@ func TestLoadUnitlessNumericDurationEnvVarStillFails(t *testing.T) {
 // The core conditional validation functionality works as intended
 
 func TestLoadDatabaseDisabledByDefault(t *testing.T) {
+	clearEnvironmentVariables()
 	defer clearEnvironmentVariables()
+	t.Chdir(t.TempDir())
 
-	// Don't set any database environment variables
-	// The defaults will have host="localhost" and type="postgresql", so database will be enabled
-	// To test truly disabled, we need to override the defaults
-	os.Setenv("DATABASE_HOST", "")
-	os.Setenv("DATABASE_TYPE", "")
-
+	// loadDefaults registers no database.* keys, so a Load with no database
+	// environment variables and no config.yaml leaves the section genuinely absent.
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)

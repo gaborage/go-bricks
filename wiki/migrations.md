@@ -39,7 +39,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E52  | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56  | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
-| E57  | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5 abort startup) | 5 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5) |
+| E57  | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6 abort startup) | 6 | none | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 - **`when: match`** → act only if `detect` returns ≥1 line (an API/arity/interface change, or a config key you set).
@@ -1534,6 +1534,85 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `config/validation.go` (`inferDatabaseTypeFromConnectionString`,
   `validateDatabaseWithConnectionString`) · `app/app_builder.go`
   (`untypedConnectionStringPaths`, `ConfigureRuntimeHelpers`) · #877
+
+---
+
+### [C57.6] A database identity field delivered as an empty string now fails startup · breaking · when: match
+
+- detect: `git grep -nE "(MULTITENANT_TENANTS_[A-Z0-9_]+_)?DATABASE(S_[A-Z0-9_]+)?_(TYPE|HOST|PORT|DATABASE|USERNAME|PASSWORD|CONNECTIONSTRING|ORACLE_SERVICE_(NAME|SID))=(\"\"|'')?$"`
+  across env files and deployment manifests for any identity var set to an
+  empty value — the optional prefix covers the per-tenant namespace, which
+  `config.Load` maps to `multitenant.tenants.<id>.database.*` like any other
+  key — and
+  `git grep -nE "(host|type|port|database|username|password|connectionstring):[[:space:]]*(\"\"|''|null|~)?[[:space:]]*$"`
+  under `database:`, `databases.*`, and `multitenant.tenants.*.database` blocks
+  in YAML for a key that is bare **or** set to an explicit empty scalar: `""`,
+  `''`, `null`, and `~` all decode to the empty string and all abort startup, so
+  a bare-key-only pattern would miss the very shape the `before:` block below
+  shows. Use `[[:space:]]`, not `\s`: `git grep -E`
+  is POSIX ERE and silently drops the backslash, so `\s*` degrades to "zero or
+  more literal `s`" — it would miss a key with trailing whitespace and match
+  `weird:sss`. C56.14 named this exact shape as its one
+  blind spot: a field delivered empty (an empty `secretKeyRef`, `envsubst` over
+  an unset variable) reads as absence and the predicate cannot tell it from a
+  field never set. Both greps are repo-local and `config.Load` ingests **every**
+  process environment variable, so also check the rendered environment your
+  deployment actually runs with — a CI runner's exported vars, a base image
+  `ENV`, a `docker run -e DATABASE_HOST` with no value, an operator's shell
+  profile. None of those live in the tree, and each one now aborts startup.
+  Both greps are also line-oriented, which bounds them to flat YAML keys and
+  shell-style assignments; two shapes need a manual pass. The YAML pattern omits
+  `oracle.service.name` and `oracle.service.sid` deliberately — the env pattern
+  covers them, but in YAML they nest four deep under `database.oracle.service`
+  and their leaves, `name:` and `sid:`, are among the commonest keys in the
+  format, so folding them into the alternation above matches every unrelated
+  `name:` in reach. Locate the block instead, with
+  `git grep -nE "^[[:space:]]*oracle:[[:space:]]*$"`, and read its two leaves.
+  And a structured manifest carries the key and its value on separate lines
+  (`- name: DATABASE_HOST` then `value: ""`), which no line-oriented pattern can
+  correlate — nor can any repo grep see a `secretKeyRef` / `configMapKeyRef`
+  whose referenced secret is the empty thing. Check those by eye, the same way
+  `[C57.3]` sends you outside the repo for its dashboards.
+- scope: `config.Validate` gains `validateNoDeliveredEmptyDatabase`, which runs
+  before `validateMultitenant` and consults the koanf instance `config.Load`
+  already stores on `cfg.k`, not just the decoded `DatabaseConfig` values. For
+  the root `database` section, each `databases.<name>`, and each static
+  `multitenant.tenants.<id>.database`, a section that `IsDatabaseConfigured`
+  reports as unconfigured but that has ANY identity key present in the loaded
+  configuration now fails startup, naming every offending key path so one boot
+  surfaces the whole set.
+  Tenant sections are walked only when `multitenant.enabled: true`, so a
+  leftover `tenants:` block in a single-tenant deployment stays inert.
+  `IsDatabaseConfigured`'s signature and its six existing call sites are
+  unchanged; hand-built `Config` values (no koanf instance) and dynamic-source
+  tenant configs (never routed through koanf) are unaffected.
+- gate: match = some environment sets a database identity key to an empty
+  value with no other identity field completing the section. no-match = every
+  environment either configures the section fully, sets no identity key at
+  all, the empty key sits under `multitenant.tenants.*` with
+  `multitenant.enabled: false`, or the empty key belongs to a config source
+  that bypasses `config.Load` (dynamic-source tenants, hand-built `Config`
+  literals).
+- before:
+  ```yaml
+  database:
+    host: ""   # e.g. from an empty secretKeyRef
+  # loaded as database-free; /ready reported not_configured; first query failed
+  ```
+- after:
+  ```yaml
+  database:
+    host: ""   # config.Load now fails: "database identity field(s) delivered
+               # empty: [database.host]"
+  ```
+  Fix by supplying a real value, or removing the key entirely if the service
+  genuinely has no database — an absent section is unaffected.
+- verify: `config.Load()` succeeds for every environment you deploy; an
+  environment relying on an empty `DATABASE_*` var as its "no database" signal
+  must switch to leaving the var unset.
+- ref: [ADR-051](adr_051_delivered_empty_database_identity.md) ·
+  `config/validation.go` (`validateNoDeliveredEmptyDatabase`,
+  `deliveredEmptyDatabaseKeys`, `databaseIdentityKeys`) · C56.14 · #880
 
 ---
 
