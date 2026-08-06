@@ -284,6 +284,29 @@ Two consequences worth knowing:
   `app.DatabaseRequirer`; registration then aborts startup when the database is absent,
   instead of the service going green and serving errors.
 
+## Connection String Type Inference (ADR-050)
+
+A `connectionstring` alone used to pass validation and then never connect —
+`database.NewConnection` dispatches on `type`, so an untyped DSN failed only at first
+query. `config.Validate` now infers `type` from a recognized scheme when `type` is
+omitted: `postgres://`/`postgresql://` → `postgresql`, `oracle://` → `oracle`. An explicit
+`type` that conflicts with the inferred scheme is a validation error. Any other scheme
+passes validation with `type` left empty — the *effect* of an unrecognized scheme depends
+on the connector: the built-in one (`database.NewConnection`) fails startup with a
+`connectionstring has no resolved database type` error naming every affected path
+(`database`, `databases.<name>`, and — only under `multitenant.enabled: true` —
+`multitenant.tenants.<id>.database`); a caller-supplied `Options.DatabaseConnector` parses
+the DSN itself and is exempt.
+
+**An Oracle DSN needs no separate identifier.** `oracle://user:pw@host:1521/XE` alone is a
+complete config: `buildOracleDSN` returns the connection string verbatim, so
+`oracle.service.name`, `oracle.service.sid` and `database` are never consulted in that mode
+and none of them is required. Without a connection string the rule is unchanged — exactly
+one of the three, and zero or several is still a validation error. The Oracle TLS rejection
+is unconditional either way: `database.tls.cert`/`key`/`ca` fail validation even alongside a
+connection string, because tcps/wallet is not implemented and silently ignoring TLS material
+would leave the operator believing the connection is encrypted.
+
 ## Connection Pool Defaults
 
 | Setting | Default | Purpose |

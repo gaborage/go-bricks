@@ -4,8 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"net"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	go_ora "github.com/sijms/go-ora/v2"
@@ -112,13 +116,13 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 
 	db, err := openOracleConnection(dsn, cfg, log)
 	if err != nil {
-		return nil, err
+		return nil, redactDSNError(err, dsn)
 	}
 
 	configureConnectionPool(db, cfg)
 
 	if err := verifyConnection(db, log); err != nil {
-		return nil, err
+		return nil, redactDSNError(err, dsn)
 	}
 
 	logConnectionSuccess(log, cfg)
@@ -257,6 +261,139 @@ func buildOracleDSN(cfg *config.DatabaseConfig) string {
 	}
 
 	return go_ora.BuildUrl(cfg.Host, cfg.Port, serviceName, cfg.Username, cfg.Password, optsArg)
+}
+
+// redactionPlaceholder is the placeholder substituted for a DSN password, matching
+// pgx's redactPW so both vendors redact identically.
+const redactionPlaceholder = "xxxxx"
+
+// dsnRedactedError carries a sanitized message while keeping the original error
+// reachable through errors.Is / errors.As.
+type dsnRedactedError struct {
+	err error
+	msg string
+}
+
+func (e *dsnRedactedError) Error() string { return e.msg }
+func (e *dsnRedactedError) Unwrap() error { return e.err }
+
+// invalidDSNReason stands in for a net/url failure reason that quotes part of the DSN.
+const invalidDSNReason = "invalid DSN"
+
+// SECURITY: go-ora returns url.Parse's *url.Error unwrapped, and net/url renders the
+// whole raw URL with %q — so a DSN carrying inline credentials puts the password in a
+// startup error, hence in the log and the pod termination message. Mask every rendering
+// of the DSN before the error escapes NewConnection. Scheme, username and host survive
+// so an operator can still tell which connection failed; only the password is masked
+// (pgx's redactPW precedent).
+func redactDSNError(err error, dsn string) error {
+	msg := err.Error()
+	redacted := msg
+	// Rebuild the net/url rendering before masking the DSN in general: masking first
+	// would rewrite the URL inside that rendering, leaving nothing here to match.
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		redacted = maskURLError(redacted, urlErr)
+	}
+	redacted = maskDSNIn(redacted, dsn)
+	if redacted == msg {
+		return err
+	}
+	return &dsnRedactedError{err: err, msg: redacted}
+}
+
+// maskDSNIn replaces every rendering of dsn in msg with its masked form.
+func maskDSNIn(msg, dsn string) string {
+	masked := maskDSNPassword(dsn)
+	if masked == dsn {
+		return msg
+	}
+	// %q escapes non-printable bytes, so the DSN can appear either verbatim or quoted.
+	msg = strings.ReplaceAll(msg, dsn, masked)
+	return strings.ReplaceAll(msg, strconv.Quote(dsn), strconv.Quote(masked))
+}
+
+// SECURITY: net/url does not only render the URL — it also echoes the component it
+// rejected, and an unescaped '/', '?' or '#' in the password lands part of the password
+// where a port belongs ("invalid port \":pa\" after host"). Masking the URL alone leaves
+// that copy behind, so rebuild the whole rendering instead of scrubbing it. urlErr.URL
+// is what url.Parse actually saw — the DSN with any '#' fragment already stripped — so
+// it, not the DSN we built, is the string that reached the message.
+func maskURLError(msg string, urlErr *url.Error) string {
+	masked := maskDSNPassword(urlErr.URL)
+	if masked == urlErr.URL {
+		return msg
+	}
+	// net/url embeds URL-derived text only via %q, so a reason that quotes nothing
+	// cannot carry password material; anything else is dropped wholesale.
+	reason := invalidDSNReason
+	if urlErr.Err != nil && !strings.Contains(urlErr.Err.Error(), `"`) {
+		reason = urlErr.Err.Error()
+	}
+	return strings.ReplaceAll(msg, urlErr.Error(), fmt.Sprintf("%s %q: %s", urlErr.Op, masked, reason))
+}
+
+// maskDSNPassword masks the password of a URL-form DSN by scanning the string rather
+// than parsing it — the DSNs that leak are precisely the ones url.Parse rejects.
+// Non-URL DSNs (EZ-connect, TNS descriptors) and DSNs without a password pass through
+// unchanged: the leak is url.Parse's %q rendering of what it was handed, which only
+// fires for the URL form.
+func maskDSNPassword(dsn string) string {
+	const schemeSep = "://"
+	sep := strings.Index(dsn, schemeSep)
+	if sep == -1 {
+		return dsn
+	}
+	authority := sep + len(schemeSep)
+
+	rest := dsn[authority:]
+	end := strings.IndexAny(rest, "/?#")
+	if end == -1 {
+		end = len(rest)
+	}
+	// net/url splits userinfo at the last '@' of the authority, so an unescaped '@'
+	// inside the password stays part of the userinfo.
+	at := strings.LastIndex(rest[:end], "@")
+	if at == -1 {
+		// An unescaped '/', '?' or '#' in the password hides the '@' behind the
+		// authority terminator, and url.Parse drops everything from '#' on before it
+		// reports, so the '@' can be missing from the string entirely. Read the segment
+		// as userinfo only when it cannot be a host[:port] — that is exactly the shape
+		// url.Parse rejects, and so exactly the shape whose error echoes the DSN.
+		if looksLikeHostPort(rest[:end]) {
+			return dsn
+		}
+		if at = strings.LastIndex(rest, "@"); at == -1 {
+			at = len(rest)
+		}
+	}
+	// Everything after the first ':' is the password, so an unescaped ':' inside it
+	// is masked too.
+	colon := strings.Index(rest[:at], ":")
+	if colon == -1 {
+		return dsn
+	}
+
+	return dsn[:authority+colon+1] + redactionPlaceholder + dsn[authority+at:]
+}
+
+// looksLikeHostPort reports whether an authority segment is a plausible host[:port],
+// i.e. carries no credentials to mask. A true answer also means url.Parse accepts the
+// DSN, and an accepted DSN is never rendered into an error — so the ambiguous shape
+// "oracle://user:1234/secret@db" is left alone on purpose: masking it would buy nothing
+// and would mangle its mirror image, a passwordless DSN whose path holds an '@'.
+func looksLikeHostPort(authority string) bool {
+	if strings.HasPrefix(authority, "[") {
+		// Skip an IPv6 literal so only a trailing ":port" is examined; an unterminated
+		// literal yields index 0 and leaves the segment as it stands.
+		authority = authority[strings.LastIndex(authority, "]")+1:]
+	}
+	colon := strings.LastIndex(authority, ":")
+	if colon == -1 {
+		return true
+	}
+	port := authority[colon+1:]
+	return port != "" && strings.TrimLeft(port, "0123456789") == ""
 }
 
 // configureConnectionPool sets pool settings on the database connection.
