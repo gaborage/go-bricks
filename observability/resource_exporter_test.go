@@ -381,7 +381,7 @@ func exportThroughBridge(t *testing.T, res *resource.Resource, line string) []sd
 	enriched := newResourceAttributeExporter(wrapped, res)
 	logProvider := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(enriched)))
 	t.Cleanup(func() {
-		_ = logProvider.Shutdown(context.Background())
+		require.NoError(t, logProvider.Shutdown(context.Background()))
 	})
 
 	bridge := logger.NewOTelBridge(logProvider)

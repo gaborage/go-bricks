@@ -49,7 +49,7 @@ func newCaptureBridge(t *testing.T) (*OTelBridge, *captureProcessor) {
 	proc := &captureProcessor{}
 	provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(proc))
 	t.Cleanup(func() {
-		_ = provider.Shutdown(context.Background())
+		require.NoError(t, provider.Shutdown(context.Background()))
 	})
 	bridge := NewOTelBridge(provider)
 	require.NotNil(t, bridge)
