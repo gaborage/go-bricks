@@ -410,6 +410,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **Database absence vs misconfiguration (ADR-047):** the `database:` block is all-or-nothing — omitting it is supported (`/ready` reports `not_configured`, 200), but setting *any* identity field (`type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`, `oracle.service.name`, `oracle.service.sid`) marks the section as intended, and an incomplete intended block now fails startup. Modules needing a database implement `app.DatabaseRequirer`.
 - **httpclient Build fail-closed (ADR-044):** `Build()` returns `(Client, error)` and refuses compositions that would silently discard TLS material or a caller's `RoundTripper`.
 - **Readiness strict + sanitized by default (ADR-046, ADR-048):** an absent `cache.critical` means the cache probe IS critical (503 during a Redis outage); every critical probe's 503 body serves a fixed `"<name> unavailable"` unless `HealthStatus.PublicErr` overrides it.
+- **Debug endpoints fail closed (ADR-049):** `RegisterDebugEndpoints` returns `error` and aborts startup when `debug.enabled: true` would expose an endpoint with neither `debug.allowedips` nor `debug.bearertoken` set (previously pass-through middleware + a startup WARN); either key — or `debug.enabled: false` — satisfies the check.
 
 ## File Organization
 

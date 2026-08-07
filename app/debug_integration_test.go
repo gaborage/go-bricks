@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -96,13 +97,19 @@ func (r *recordingRegistrar) match(method, path string) (group *recordingRegistr
 	return nil, recordedRoute{}, false
 }
 
-// serve runs method+target through the recorded middleware chain (group middleware
-// outermost, then route middleware) and handler, returning the resulting HTTP status and
-// the response recorder. The client peer is always the loopback testIPAddress; IP/auth
-// variation is covered by the unit tests, while these integration tests vary the allowlist
-// and endpoint config instead. Unmatched routes resolve to 404 (mirroring the real router);
-// a middleware/handler error carrying an IAPIError resolves to that error's HTTP status.
+// serve runs method+target through the recorded middleware chain from the loopback peer
+// testIPAddress with no Authorization header. Most tests vary the allowlist and endpoint
+// config rather than the caller identity; serveWith covers the cases that vary both.
 func (r *recordingRegistrar) serve(method, target string) (status int, rec *httptest.ResponseRecorder) {
+	return r.serveWith(method, target, testIPAddress, "")
+}
+
+// serveWith runs method+target through the recorded middleware chain (group middleware
+// outermost, then route middleware) and handler as a request from remoteAddr carrying
+// authHeader (skipped when empty), returning the resulting HTTP status and the response
+// recorder. Unmatched routes resolve to 404 (mirroring the real router); a middleware or
+// handler error carrying an IAPIError resolves to that error's HTTP status.
+func (r *recordingRegistrar) serveWith(method, target, remoteAddr, authHeader string) (status int, rec *httptest.ResponseRecorder) {
 	rec = httptest.NewRecorder()
 
 	path := target
@@ -116,7 +123,10 @@ func (r *recordingRegistrar) serve(method, target string) (status int, rec *http
 	}
 
 	req := httptest.NewRequestWithContext(context.Background(), method, target, http.NoBody)
-	req.RemoteAddr = testIPAddress
+	req.RemoteAddr = remoteAddr
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
 	ctx := server.NewHandlerContextForTest(rec, req, nil)
 
 	mws := append(group.chain(), route.middleware...)
@@ -158,7 +168,7 @@ func TestDebugEndpointsIntegration(t *testing.T) {
 
 	// Register debug endpoints through the echo-free RouteRegistrar.
 	root := newRecordingRegistrar()
-	debugHandlers.RegisterDebugEndpoints(root)
+	require.NoError(t, debugHandlers.RegisterDebugEndpoints(root))
 
 	// The info endpoint is accessible from an allowlisted client IP.
 	status, rec := root.serve(http.MethodGet, debugInfoPath)
@@ -188,7 +198,7 @@ func TestDebugEndpointsIPRestriction(t *testing.T) {
 	debugHandlers := NewDebugHandlers(app, debugConfig, testLogger)
 
 	root := newRecordingRegistrar()
-	debugHandlers.RegisterDebugEndpoints(root)
+	require.NoError(t, debugHandlers.RegisterDebugEndpoints(root))
 
 	// A request from a non-allowed IP is rejected.
 	status, _ := root.serve(http.MethodGet, debugInfoPath)
@@ -210,7 +220,7 @@ func TestDebugEndpointsDisabled(t *testing.T) {
 	debugHandlers := NewDebugHandlers(app, debugConfig, testLogger)
 
 	root := newRecordingRegistrar()
-	debugHandlers.RegisterDebugEndpoints(root)
+	require.NoError(t, debugHandlers.RegisterDebugEndpoints(root))
 
 	// Nothing is registered when disabled, so the route resolves to 404.
 	assert.Empty(t, root.children)
@@ -238,7 +248,7 @@ func TestGoroutineEndpoint(t *testing.T) {
 	debugHandlers := NewDebugHandlers(app, debugConfig, testLogger)
 
 	root := newRecordingRegistrar()
-	debugHandlers.RegisterDebugEndpoints(root)
+	require.NoError(t, debugHandlers.RegisterDebugEndpoints(root))
 
 	// Test goroutines endpoint with JSON format
 	status, rec := root.serve(http.MethodGet, debugPath+"/goroutines")
