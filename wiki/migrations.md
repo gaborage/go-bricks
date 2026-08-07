@@ -41,7 +41,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E52 | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55 | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56 | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
-| E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7 abort startup) | 7 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7) |
+| E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup) | 8 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -1297,6 +1297,15 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   built-in connector, any other scheme left untyped now fails startup instead of booting
   into a dead database; a caller-supplied `Options.DatabaseConnector` is exempt (C57.5).
   Finally, debug endpoints refuse to register without access control: `debug.enabled: true` exposing at least one endpoint with neither `debug.allowedips` nor `debug.bearertoken` set now aborts startup instead of registering behind a pass-through middleware and a WARN (C57.7, ADR-049).
+  And the hop closes the messaging counterpart of the same fail-fast argument: a
+  single-tenant service whose declared consumers could not be started logged one WARN and
+  carried on, and since nothing retried and the messaging readiness probe is not critical,
+  it passed `/ready` with 200 and consumed zero messages for the life of the pod — a silent
+  total outage for a consumer service. That failure is now fatal. The grade is scoped to
+  services that actually declared consumers: consumer setup still runs unconditionally
+  (it is what declares exchanges, queues, and bindings), so publisher-only services — and
+  every service with no messaging configured, which reaches the same call with an empty
+  declaration set and an unresolvable broker URL — keep warn-and-continue (C57.8).
 - build-caught: none
 - exit: `go get github.com/gaborage/go-bricks@v0.57.0 && go mod tidy && go build ./... && go test ./...`
 
@@ -1761,6 +1770,61 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   If the empty list was deliberate — reaching the endpoint from a container or a LAN peer during development — say so explicitly with `allowedips: ["0.0.0.0/0"]` (plus `["::/0"]` for IPv6), which is greppable in a way the empty list was not. Setting `debug.enabled: false` is the other exit. In a Go-assembled config, set the field explicitly — `Debug: config.DebugConfig{Enabled: true, AllowedIPs: []string{"127.0.0.1", "::1"}, …}` — since nothing back-fills it there
 - verify: the service starts. On the refused config it now exits during startup with `debug endpoints are enabled and would expose <list> at <prefix> with NO access control: set debug.allowedips (env DEBUG_ALLOWEDIPS) and/or debug.bearertoken (env DEBUG_BEARERTOKEN), or set debug.enabled to false`
 - ref: ADR-049 · `app/debug_handlers.go` (`RegisterDebugEndpoints`, `exposedEndpoints`, `bearerTokenConfigured`, `ipWhitelistMiddleware`, `authMiddleware`) · `app/lifecycle.go` (`registerDebugHandlers`, `prepareRuntime`)
+
+### [C57.8] A single-tenant service that declared consumers now fails startup when they cannot start · breaking · when: match
+
+- detect: `git grep -nE 'DeclareConsumer|RegisterConsumer'` for modules that declare
+  AMQP consumers, then confirm the deployment is single-tenant
+  (`multitenant.enabled` absent or `false`). Only that intersection is affected. A
+  repo grep cannot tell you whether the broker those consumers need is reachable
+  from each environment at boot, which is the other half of the match — check the
+  broker's availability and credentials per environment, and whether any queue or
+  exchange in the declaration set is ops-provisioned with arguments that differ
+  from what the module declares (that mismatch surfaces as `406
+  PRECONDITION_FAILED` — see [ADR-040](adr_040_declaration_args_passthrough.md)).
+- scope: `MessagingInitializer.PrepareRuntimeConsumers` previously logged one WARN
+  (`Failed to start single-tenant consumers`) and returned nil when
+  `Manager.EnsureConsumers` failed. Nothing ever retried it, and the messaging
+  readiness probe is not critical, so the pod passed `/ready` with 200 and served
+  HTTP while consuming **zero** messages — permanently. That failure is now
+  returned, and `prepareRuntime` already propagates it, so startup aborts. The
+  fatal grade applies **only when the declaration set contains at least one
+  consumer**. `EnsureConsumers` itself still runs unconditionally — it is what
+  declares exchanges, queues, and bindings — so a **publisher-only** service, or one
+  with no messaging configured at all, keeps the historical warn-and-continue and is
+  unaffected. Multi-tenant is unaffected: consumers start lazily per tenant, so
+  nothing is attempted at startup. The publisher pre-warm pass that runs immediately
+  after remains WARN-only by design. This complements the existing
+  `assertMessagingConfiguredIfDeclared` check, which already aborted when
+  declarations existed but no broker URL was configured; the new gate covers the
+  case where a broker **is** configured but unusable.
+- gate: match = a single-tenant service with at least one consumer declaration whose
+  broker is unreachable, rejects its credentials, or rejects one of its declarations
+  at boot. Startup now exits non-zero with `failed to start single-tenant consumers:
+  <cause>`. no-match = multi-tenant, no consumer declarations (publisher-only or
+  messaging-free), or a healthy reachable broker.
+- before:
+
+  ```text
+  WARN  Failed to start single-tenant consumers error="..."
+  INFO  Starting HTTP server on :8080        # serves traffic, consumes nothing, forever
+  ```
+
+- after:
+
+  ```text
+  FATAL failed to start single-tenant consumers: <cause>   # process exits non-zero
+  ```
+
+- verify: `go build ./... && go test ./...` covers the grading logic, but no test can
+  see your broker. Start each single-tenant consumer service against its real broker
+  and confirm it still boots; then confirm that with the broker stopped it now exits
+  non-zero instead of logging the WARN and serving. Container orchestrators restart
+  a service that exits, so an environment whose broker comes up *after* the service
+  will now crash-loop until the broker is ready rather than idling deaf — make sure
+  restart backoff is configured, or start the broker first.
+- ref: `app/messaging_setup.go` (`PrepareRuntimeConsumers`) · `app/lifecycle.go`
+  (`prepareMessagingConsumers`, `assertMessagingConfiguredIfDeclared`)
 
 ---
 

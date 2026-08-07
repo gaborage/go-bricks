@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -11,6 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
 func TestCollectDeclarations(t *testing.T) {
@@ -155,9 +159,132 @@ func TestPrepareRuntimeConsumersComprehensive(t *testing.T) {
 		err := initializer.PrepareRuntimeConsumers(ctx, declarations)
 		assert.NoError(t, err)
 	})
+}
 
-	// Note: single-tenant mode with real manager is covered by integration tests
-	// since it requires proper manager initialization with resource sources
+// errBrokerLookupFailed stands in for the broker-config and broker-availability
+// failures that make single-tenant consumer bootstrap fail at startup.
+var errBrokerLookupFailed = errors.New("broker lookup failed")
+
+// failingBrokerURLProvider fails every broker-URL resolution and counts the
+// attempts, so a test can prove consumer bootstrap was reached — or never was.
+type failingBrokerURLProvider struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (p *failingBrokerURLProvider) BrokerURL(context.Context, string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	return "", errBrokerLookupFailed
+}
+
+func (p *failingBrokerURLProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+// newFailingConsumerManager wires a *messaging.Manager whose consumer bootstrap
+// always fails at broker-URL resolution, before any AMQP client is created.
+func newFailingConsumerManager(t *testing.T, log logger.Logger, source messaging.BrokerURLProvider) *messaging.Manager {
+	t.Helper()
+	return messaging.NewMessagingManager(source, log, messaging.ManagerOptions{},
+		func(string, logger.Logger) messaging.AMQPClient {
+			t.Errorf("client factory must not run when broker URL resolution fails")
+			return nil
+		})
+}
+
+// noopMessageHandler is a real (non-documentation-only) consumer handler, so the
+// fixture below models a service that actually consumes.
+type noopMessageHandler struct{}
+
+func (noopMessageHandler) Handle(context.Context, *amqp.Delivery) error { return nil }
+func (noopMessageHandler) EventType() string                            { return "order.created" }
+
+// declarationsWithConsumer builds the declaration set of a service that actually
+// consumes — the only population whose failed bootstrap aborts startup.
+func declarationsWithConsumer() *messaging.Declarations {
+	decls := messaging.NewDeclarations()
+	decls.RegisterConsumer(&messaging.ConsumerDeclaration{
+		Queue:     "orders.queue",
+		Consumer:  "orders-consumer",
+		EventType: "order.created",
+		Handler:   noopMessageHandler{},
+	})
+	return decls
+}
+
+// TestPrepareRuntimeConsumersFailsStartupOnEnsureError pins the fail-fast
+// contract: a single-tenant service that declared consumers and cannot start
+// them must abort startup rather than boot deaf, serving HTTP while consuming
+// nothing.
+func TestPrepareRuntimeConsumersFailsStartupOnEnsureError(t *testing.T) {
+	log := logger.New("debug", true)
+	source := &failingBrokerURLProvider{}
+	initializer := NewMessagingInitializer(log, newFailingConsumerManager(t, log, source), false)
+
+	err := initializer.PrepareRuntimeConsumers(context.Background(), declarationsWithConsumer())
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errBrokerLookupFailed)
+	assert.ErrorContains(t, err, "failed to start single-tenant consumers")
+	assert.Equal(t, 1, source.callCount(), "the error must come from consumer bootstrap")
+}
+
+// TestPrepareRuntimeConsumersWarnsOnlyWithoutConsumers pins the gate on the
+// fatal path. A service that declared no consumers — including every service
+// with no messaging configured at all, which reaches this call with an empty
+// declaration set and an unresolvable broker URL — must still boot.
+func TestPrepareRuntimeConsumersWarnsOnlyWithoutConsumers(t *testing.T) {
+	log := logger.New("debug", true)
+	source := &failingBrokerURLProvider{}
+	initializer := NewMessagingInitializer(log, newFailingConsumerManager(t, log, source), false)
+
+	require.NoError(t, initializer.PrepareRuntimeConsumers(context.Background(), messaging.NewDeclarations()))
+	assert.Equal(t, 1, source.callCount(), "topology setup must still be attempted")
+}
+
+// TestPrepareRuntimeConsumersToleratesNilDeclarations guards the fatality gate's
+// own dereference: messaging.EnsureConsumers documents that this call site
+// forwards its argument unguarded, so a nil set must warn rather than panic.
+func TestPrepareRuntimeConsumersToleratesNilDeclarations(t *testing.T) {
+	log := logger.New("debug", true)
+	source := &failingBrokerURLProvider{}
+	initializer := NewMessagingInitializer(log, newFailingConsumerManager(t, log, source), false)
+
+	require.NotPanics(t, func() {
+		require.NoError(t, initializer.PrepareRuntimeConsumers(context.Background(), nil))
+	})
+}
+
+// TestPrepareRuntimeConsumersSkipsEnsureInMultiTenantMode guards the other
+// direction: multi-tenant consumers start lazily per tenant, so a broker that
+// cannot be resolved at startup must not abort the boot.
+func TestPrepareRuntimeConsumersSkipsEnsureInMultiTenantMode(t *testing.T) {
+	log := logger.New("debug", true)
+	source := &failingBrokerURLProvider{}
+	initializer := NewMessagingInitializer(log, newFailingConsumerManager(t, log, source), true)
+
+	require.NoError(t, initializer.PrepareRuntimeConsumers(context.Background(), messaging.NewDeclarations()))
+	assert.Zero(t, source.callCount(), "multi-tenant mode must not start consumers at startup")
+}
+
+// TestPrepareRuntimeConsumersSucceedsSingleTenant proves the fail-fast return
+// is scoped to real failures: a reachable broker still boots green.
+func TestPrepareRuntimeConsumersSucceedsSingleTenant(t *testing.T) {
+	log := logger.New("debug", true)
+	client := testmocks.NewMockAMQPClient()
+	client.ExpectClose(nil)
+	manager := messaging.NewMessagingManager(
+		&fakeBrokerURLProvider{url: "amqp://localhost"}, log, messaging.ManagerOptions{},
+		func(string, logger.Logger) messaging.AMQPClient { return client })
+	defer func() { _ = manager.Close() }()
+
+	initializer := NewMessagingInitializer(log, manager, false)
+
+	require.NoError(t, initializer.PrepareRuntimeConsumers(context.Background(), messaging.NewDeclarations()))
 }
 
 func TestIsAvailable(t *testing.T) {

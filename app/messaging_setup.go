@@ -97,9 +97,16 @@ func (m *MessagingInitializer) PrepareRuntimeConsumers(
 		return nil
 	}
 
+	// EnsureConsumers also declares the exchanges, queues, and bindings publishers
+	// rely on, so it runs regardless; only the failure is graded. A service that
+	// declared consumers and cannot start them would serve HTTP while consuming
+	// nothing, so it fails fast. One that declared none — including a service with
+	// no messaging configured at all — keeps the historical warn-and-continue.
 	if err := m.manager.EnsureConsumers(ctx, "", declarations); err != nil {
+		if declarations != nil && len(declarations.Consumers()) > 0 {
+			return fmt.Errorf("failed to start single-tenant consumers: %w", err)
+		}
 		m.logger.Warn().Err(err).Msg("Failed to start single-tenant consumers")
-		// Don't fail the app startup for messaging issues
 		return nil
 	}
 
