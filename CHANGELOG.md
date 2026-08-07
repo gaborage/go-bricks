@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.57.0](https://github.com/gaborage/go-bricks/compare/v0.56.0...v0.57.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **httpclient:** validate JOSE policies at Build time ([#908](https://github.com/gaborage/go-bricks/issues/908))
+* **app:** refuse to register debug endpoints with no access control ([#905](https://github.com/gaborage/go-bricks/issues/905))
+* **config:** a delivered-but-empty database identity field fails startup ([#897](https://github.com/gaborage/go-bricks/issues/897))
+* **config:** infer database.type from the connectionstring scheme ([#896](https://github.com/gaborage/go-bricks/issues/896))
+* **outbox:** fail startup without a usable outbox/inbox database ([#892](https://github.com/gaborage/go-bricks/issues/892))
+
+### Added
+
+* **messaging:** expose delivery metadata to typed consumers ([72da338](https://github.com/gaborage/go-bricks/commit/72da33888e8858a9ff59694390db237657ff3716))
+* **messaging:** expose delivery metadata to typed consumers ([#899](https://github.com/gaborage/go-bricks/issues/899)) ([72da338](https://github.com/gaborage/go-bricks/commit/72da33888e8858a9ff59694390db237657ff3716))
+
+
+### Fixed
+
+* **app:** drop db_stats.connections from /ready's 200 body ([#889](https://github.com/gaborage/go-bricks/issues/889)) ([0854123](https://github.com/gaborage/go-bricks/commit/0854123a0f93925a4716786297dded48c435e11c))
+* **app:** fail startup when consumer bootstrap fails for declared consumers ([#907](https://github.com/gaborage/go-bricks/issues/907)) ([34b97cf](https://github.com/gaborage/go-bricks/commit/34b97cfe5666b6d6475c1964702239ed17fc9d8a))
+* **app:** refuse to register debug endpoints with no access control ([#905](https://github.com/gaborage/go-bricks/issues/905)) ([ab24463](https://github.com/gaborage/go-bricks/commit/ab24463e51ab6be2e9852f0106b2e2dd5019273f))
+* **app:** sanitize every critical probe's /ready error by default ([#888](https://github.com/gaborage/go-bricks/issues/888)) ([79d20cb](https://github.com/gaborage/go-bricks/commit/79d20cb4fed5d0ebf2d78028b93677cce3681175))
+* **app:** serve a fixed public error for the database readiness probe ([#887](https://github.com/gaborage/go-bricks/issues/887)) ([fe17325](https://github.com/gaborage/go-bricks/commit/fe17325607a4c8b5fb52a54199ab3f7b1e3ebdc4))
+* **app:** warn for named databases with parameter logging enabled ([#909](https://github.com/gaborage/go-bricks/issues/909)) ([f5dbbb7](https://github.com/gaborage/go-bricks/commit/f5dbbb72a4a13854a1ffa57204972c4728907954))
+* **config:** a delivered-but-empty database identity field fails startup ([#897](https://github.com/gaborage/go-bricks/issues/897)) ([590ee62](https://github.com/gaborage/go-bricks/commit/590ee6269f41e94d244743ed72d00da65ab996cb)), closes [#880](https://github.com/gaborage/go-bricks/issues/880) [#880](https://github.com/gaborage/go-bricks/issues/880)
+* **config:** infer database.type from the connectionstring scheme ([#896](https://github.com/gaborage/go-bricks/issues/896)) ([a790e43](https://github.com/gaborage/go-bricks/commit/a790e43fc84a64d8821778708adfe887b0f2934a))
+* **config:** ship parameter logging off in the example config ([#906](https://github.com/gaborage/go-bricks/issues/906)) ([bd304ee](https://github.com/gaborage/go-bricks/commit/bd304ee41dca4294b0bec25971d512d4a4284e00))
+* **deps:** update module github.com/gaborage/go-bricks to v0.56.0 ([#884](https://github.com/gaborage/go-bricks/issues/884)) ([ac6b5a8](https://github.com/gaborage/go-bricks/commit/ac6b5a8c45c0bfc0f1da8b14302a9471bc83d427))
+* **deps:** update module go.opentelemetry.io/contrib/instrumentation/runtime to v0.70.0 ([#875](https://github.com/gaborage/go-bricks/issues/875)) ([bdcdcf5](https://github.com/gaborage/go-bricks/commit/bdcdcf5570c04d4289db50c89ad4e2ad71e49369))
+* **httpclient:** validate JOSE policies at Build time ([#908](https://github.com/gaborage/go-bricks/issues/908)) ([dc5e057](https://github.com/gaborage/go-bricks/commit/dc5e05762b42060ce0c4d6d2cb4662572d882125))
+* **outbox:** fail startup without a usable outbox/inbox database ([#892](https://github.com/gaborage/go-bricks/issues/892)) ([90ef35d](https://github.com/gaborage/go-bricks/commit/90ef35d917f6576345e4352abf607625771f231b))
+
 ## [0.56.0](https://github.com/gaborage/go-bricks/compare/v0.55.0...v0.56.0) (2026-08-05)
 
 
