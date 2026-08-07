@@ -962,6 +962,39 @@ these values. Fixes [#818](https://github.com/gaborage/go-bricks/issues/818). Se
 
 ---
 
+### [ADR-054: A Cache the Framework Cannot Construct Aborts Startup](adr_054_cache_construction_fails_startup.md)
+
+**Date:** 2026-08-07 | **Status:** Accepted
+
+`ResourceManagerFactory.CreateCacheManager` logged a WARN and returned a bare `nil` when
+`cache.NewCacheManager` rejected its options — defeating the intent `BuildCacheOptions`
+documents one function away, that a negative `cache.manager.*` value "must pass through and
+fail loudly there instead of being silently swallowed into a live pool". The nil then
+bypassed ADR-046 entirely: `createHealthProbes` registers a cache probe only when the
+manager is non-nil, so with no manager there was no probe, `/ready` reported the cache
+`disabled`, and the pod answered `200` — a service that asked for a cache, got none, and
+joined the rotation. Two paths reached it, and neither is the obvious one:
+`app.NewWithConfig` with a hand-assembled `*config.Config` (that constructor never runs
+`config.Validate`, so nothing checks the pool values), and `cache.enabled: false` carrying a
+leftover negative (`validateCache` returns early for a disabled cache). A `config.Load`
+deployment with the cache enabled was already caught by `applyCacheManagerDefaults`.
+`CreateCacheManager` now returns `(*cache.CacheManager, error)`,
+`appBootstrap.dependencies` propagates it, and `Builder.ResolveDependencies` records it in
+`b.err`, so startup aborts. Promoting the WARN to a fatal inside the factory was rejected —
+an exported constructor that terminates the process is a worse contract than one that
+returns an error. Reaching the cache stays best-effort: `preInitCache` still WARNs and
+continues on an unreachable Redis, which is a runtime condition, not a construction one.
+
+**Key Benefits:** A cache misconfiguration fails at boot rather than at the first
+cache-dependent request; the exported factory stops handing out a bare `nil` that panics on
+use (the #859 zero-value guards cover `&cache.CacheManager{}`, not a nil pointer); and
+ADR-046's critical-by-default posture stops being bypassable by breaking the cache badly
+enough that no manager exists to probe. Fixes
+[#861](https://github.com/gaborage/go-bricks/issues/861). See
+[migrations.md](migrations.md) `[C58.3]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -971,7 +1004,7 @@ these values. Fixes [#818](https://github.com/gaborage/go-bricks/issues/818). Se
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-053) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-054) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

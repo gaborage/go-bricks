@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/gaborage/go-bricks/cache"
@@ -291,9 +292,14 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 
 // CreateCacheManager creates a cache manager using the resolved factory
 // and appropriate configuration options for the deployment mode.
+//
+// It fails closed: a nil manager registers no cache readiness probe, so /ready reports
+// the cache "disabled" and answers 200 — a service that asked for a cache, got none, and
+// joined the rotation anyway. Returning the error instead of logging it matters most on
+// the app.NewWithConfig path, which never runs config.Validate.
 func (f *ResourceManagerFactory) CreateCacheManager(
 	resourceSource TenantStore,
-) *cache.CacheManager {
+) (*cache.CacheManager, error) {
 	if f.configBuilder.IsMultiTenant() {
 		f.logger.Info().
 			Int("tenant_limit", f.configBuilder.TenantLimit()).
@@ -309,11 +315,15 @@ func (f *ResourceManagerFactory) CreateCacheManager(
 
 	manager, err := cache.NewCacheManager(cacheOptions, cacheConnector)
 	if err != nil {
-		f.logger.Warn().Err(err).Msg("Failed to create cache manager, cache will be disabled")
-		return nil
+		// Report the resolved values, not just the key names: in multi-tenant mode an unset
+		// cache.manager.maxsize takes multitenant.limits.tenants, so naming only cache.manager.*
+		// would point at a key the operator never set.
+		return nil, fmt.Errorf(
+			"create cache manager with maxsize=%d idlettl=%v (from cache.manager.*, or multitenant.limits.tenants where maxsize is unset in multi-tenant mode): %w",
+			cacheOptions.MaxSize, cacheOptions.IdleTTL, err)
 	}
 
-	return manager
+	return manager, nil
 }
 
 // LogFactoryInfo logs information about which factories are being used.

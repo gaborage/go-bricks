@@ -148,11 +148,17 @@ func (b *Builder) ResolveDependencies() *Builder {
 		return b
 	}
 
-	b.bundle = b.bootstrap.dependencies(context.Background())
-	if b.bundle != nil && b.bundle.deps != nil && b.bundle.deps.Logger != nil {
-		// Synchronize the builder's logger with the enhanced instance returned from bootstrap.
-		b.logger = b.bundle.deps.Logger
+	bundle, err := b.bootstrap.dependencies(context.Background())
+	if err != nil {
+		b.err = fmt.Errorf("dependency resolution failed: %w", err)
+		return b
 	}
+
+	// Synchronize the builder's logger with the enhanced instance returned from bootstrap.
+	// No nil guard: a bundle only reaches here on success, dependencies always populates
+	// deps, and enhanceLoggerWithOTel falls back to the bootstrap logger rather than nil.
+	b.bundle = bundle
+	b.logger = bundle.deps.Logger
 	return b
 }
 
@@ -300,8 +306,9 @@ func untypedConnectionStringPaths(cfg *config.Config) []string {
 // fallback hierarchy (component value > app.startup.timeout > built-in default,
 // resolved earlier in config.applyStartupDefaults). Database and messaging
 // failures are fatal (a misconfigured backing store should fail fast at startup);
-// cache pre-init is best-effort, matching the manager-creation contract where a
-// failing cache is disabled rather than crashing the app.
+// cache pre-init stays best-effort, because an unreachable cache is a runtime
+// condition — cache *misconfiguration* already aborted earlier, at manager
+// construction (CreateCacheManager).
 func (b *Builder) performPreInitialization() {
 	if b.err != nil {
 		return
@@ -408,8 +415,8 @@ func (b *Builder) preInitFatalComponent(
 
 // preInitCache pre-initializes the cache connection under its own startup budget.
 // Cache is optional: a not-configured cache is skipped silently and any other
-// failure is logged as a warning without aborting startup, mirroring the
-// manager-creation contract (a failing cache is disabled, not fatal).
+// failure is logged as a warning without aborting startup — reaching the cache is
+// a runtime concern, distinct from the manager-creation contract, which fails closed.
 func (b *Builder) preInitCache(parent context.Context, timeout time.Duration) {
 	if b.bundle.cacheManager == nil {
 		return

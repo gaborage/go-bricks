@@ -176,10 +176,12 @@ deleted there; the emitted strings are unchanged.
 `GET /health` is unchanged and still dependency-free, which is what makes it the wrong
 target for a readiness probe and the right one for liveness. No `degraded` status was
 introduced — `/ready` answers a binary question for a binary consumer, and a third status
-code would be invented vocabulary no orchestrator reads. A failing cache is still not
+code would be invented vocabulary no orchestrator reads. An *unreachable* cache is still not
 fatal at startup: the process boots, `Builder.preInitCache` logs a WARN, and the pod simply
-never reports Ready, matching the manager contract that a failing cache is disabled rather
-than fatal.
+never reports Ready. A cache that cannot be **constructed** is the other case, and
+[ADR-054](adr_054_cache_construction_fails_startup.md) makes it abort startup rather than
+leave a nil manager behind — with no manager there is no probe at all, which is exactly the
+hole that let a misconfigured cache answer `200` under this ADR's strict default.
 
 **What this does not protect.** The probe leases key `""`, so it observes only the
 top-level `cache.*` connection. A deployment whose caches live exclusively under

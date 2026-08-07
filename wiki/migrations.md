@@ -42,7 +42,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E55 | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56 | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
 | E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup; C57.9 fails `httpclient` construction) | 9 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8); and read every `WithJOSE` policy and direct `jose.Seal` call for an explicitly-set algorithm outside the allowlist — `KeyAlg: RSA1_5` or a non-AEAD `Enc` sealed successfully before and now fails `Build()` at startup, while a policy that named no algorithms at all takes the package defaults and starts working instead of failing every request (C57.9) |
-| E58 | v0.57.0 → v0.58.0 | compile-break | 1 | C58.2 | none |
+| E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) | 2 | C58.2 C58.3 | check every environment that sets `cache.manager.maxsize` or `cache.manager.idlettl` to a **negative** value — with `cache.enabled: false` that value used to be inert and now aborts startup (C58.3) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -1928,15 +1928,29 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `jose/sealer.go` (`Seal`) · `jose/policy.go` (`validateAlgorithms`) ·
   [wiki/httpclient.md](httpclient.md#jose-policy-validation-at-build)
 
-## E58 · v0.57.0 → v0.58.0 — dead exported surface removed
+## E58 · v0.57.0 → v0.58.0 — dead exported surface removed + a cache that cannot be constructed aborts startup
 
 - gist: `server.TestShortTimeout`, `TestMediumTimeout` and `TestLongTimeout` leave the public
   API. The three exported `time.Duration` constants were declared under a header asserting
   they are "used exclusively in test files" and were referenced by nothing in the framework,
   production or test, for their whole life. No framework code ever read them, so removing
   them changes no behaviour — only whether code naming them compiles (C58.2).
-- build-caught: C58.2
-- preflight: none
+  Separately, a cache the framework was told to build and could not build stops being
+  survivable. `ResourceManagerFactory.CreateCacheManager` logged one WARN and returned a bare
+  `nil` when `cache.NewCacheManager` rejected its options, defeating the intent
+  `BuildCacheOptions` documents one function away — that a negative `cache.manager.*` value must
+  "fail loudly there instead of being silently swallowed into a live pool". The `nil` then
+  bypassed ADR-046's critical-by-default cache probe outright: `createHealthProbes` registers a
+  cache probe only when the manager is non-nil, so with no manager there was no probe, `/ready`
+  reported the cache `disabled`, and the pod answered `200` — a service that asked for a cache,
+  got none, and joined the rotation. It now returns `(*cache.CacheManager, error)`,
+  `dependencies` propagates it, and `Builder.ResolveDependencies` records it, so startup aborts.
+  Reaching the cache is unaffected: an unreachable Redis at boot still only WARNs
+  (C58.3, ADR-054).
+- build-caught: C58.2 C58.3
+- preflight: check every environment that sets `cache.manager.maxsize` or
+  `cache.manager.idlettl` to a **negative** value — under `cache.enabled: false` that value
+  used to be inert and now aborts startup (C58.3)
 - exit: `go get github.com/gaborage/go-bricks@v0.58.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C58.2] `server.TestShortTimeout`, `TestMediumTimeout` and `TestLongTimeout` are removed · compile-break · when: match
@@ -1959,6 +1973,44 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   Or keep the vocabulary as constants in your own test package — `const testShortTimeout = 100 * time.Millisecond` — which is where test-timing values belong. The three removed values were 100ms, 1s and 5s respectively
 - verify: `go build ./... && go test ./...`
 - ref: [ADR-053](adr_053_remove_server_test_timeout_constants.md) · #818 · `server/constants.go`
+
+### [C58.3] `CreateCacheManager` returns an error, and a cache that cannot be constructed now aborts startup · breaking · when: match
+
+- detect: two steps, because this atom has two independent audiences and the compiler sees only one.
+  **(1) Compile side.** `git grep -nE 'CreateCacheManager|NewResourceManagerFactory' -- '*.go'` — a direct caller of the exported factory must adopt the two-value form. Few consumers have one: the framework calls it from `appBootstrap.dependencies`, which apps reach through `app.New`/`app.NewWithConfig`, not directly.
+  **(2) Config side.** Look for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`: `git grep -nE '^[[:space:]]*(maxsize|idlettl):[[:space:]]*-' -- '*.yaml' '*.yml'` scoped to each file's `cache.manager:` block, and `git grep -nE 'CACHE_MANAGER_(MAXSIZE|IDLETTL)=-'` across env files and deployment manifests. Keep the patterns free of `\b`/`\s`/`\d` — `git grep -E` has no PCRE escapes and a pattern carrying one silently matches nothing. Then narrow by **how that config is loaded**, which is what decides whether you were already protected — see `scope`
+- scope: `CreateCacheManager` returns `(*cache.CacheManager, error)` instead of a bare `*cache.CacheManager`; `appBootstrap.dependencies` propagates it; `Builder.ResolveDependencies` records it in the builder error. The WARN line `Failed to create cache manager, cache will be disabled` is gone. **Two config shapes actually reach this, and the obvious one is not among them.** A deployment loaded through `config.Load` with `cache.enabled: true` was never affected: `config.Validate` runs `applyCacheManagerDefaults`, which has always rejected a negative `maxsize`/`idlettl`/`cleanupinterval`, so it failed at validation and never reached the factory. What reaches it is (a) **`cache.enabled: false` carrying a leftover negative** — `validateCache` returns early for a disabled cache, so the defaults applier never runs, the value passed through untouched, and the resulting nil manager was harmless because nothing wanted a cache; that shape now aborts startup, and it is the one real upgrade hazard in this atom — and (b) **a hand-assembled `*config.Config` handed to `app.NewWithConfig`**, directly or via `Options.ConfigLoader`, which never calls `config.Validate` at all, so nothing checks the pool values. Not in scope: reaching the cache. An unreachable Redis at boot still logs a WARN in `preInitCache` and continues, and a service with no cache configured never fails here
+- gate: match = either detect fires — you name the factory in Go, **or** an environment resolves a negative value for those two keys under one of the two shapes in `scope`. no-match = you never call the factory directly AND every environment leaves `cache.manager.maxsize` and `cache.manager.idlettl` absent, zero, or positive. Read the asymmetry carefully, because it inverts the usual config-atom instinct: an **absent** key is safe (it takes the mode default), a **zero** is safe (zero means unset), and only a **negative** is fatal. Finding the keys set is not a match — the sign is what decides
+- before:
+
+  ```go
+  cacheManager := factory.CreateCacheManager(resourceSource)
+  ```
+
+  ```yaml
+  cache:
+    enabled: false
+    manager:
+      maxsize: -1        # inert: the cache was off, so the nil manager cost nothing
+  ```
+
+- after:
+
+  ```go
+  cacheManager, err := factory.CreateCacheManager(resourceSource)
+  if err != nil {
+      return fmt.Errorf("create cache manager: %w", err)
+  }
+  ```
+
+  ```yaml
+  cache:
+    enabled: false       # drop the stale manager block, or give it positive values
+  ```
+
+  If a negative was reaching for "unbounded", it never meant that — `cache.NewCacheManager` has always rejected it. Omit the key instead: an unset `maxsize` takes the mode default (`multitenant.limits.tenants` in multi-tenant mode, the built-in single-tenant default otherwise). Running without a cache is still supported and still silent — that is `cache.enabled: false` with no stale tuning values under it
+- verify: the service starts. On the refused config it now exits during startup with `create cache manager with maxsize=-1 idlettl=15m0s (from cache.manager.*, or multitenant.limits.tenants where maxsize is unset in multi-tenant mode): maxsize cannot be negative` rather than logging `Failed to create cache manager, cache will be disabled` and serving traffic. The error reports the **resolved** values rather than only the key names, because a third input can produce them: in multi-tenant mode an unset `cache.manager.maxsize` takes `multitenant.limits.tenants`, so a negative there lands here too — `validateMultitenantLimits` clamps it for `config.Load`, leaving that shape reachable on the same `app.NewWithConfig` path as the rest of this atom
+- ref: [ADR-054](adr_054_cache_construction_fails_startup.md) · #861 · `app/managers.go` (`CreateCacheManager`, `BuildCacheOptions`) · `app/bootstrap.go` (`dependencies`) · `app/app_builder.go` (`ResolveDependencies`) · `config/validation.go` (`validateCache`, `applyCacheManagerDefaults`) · `cache/manager.go` (`NewCacheManager`)
 
 ---
 
