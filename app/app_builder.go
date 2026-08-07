@@ -443,6 +443,7 @@ func (b *Builder) CreateHealthProbes() *Builder {
 	}
 
 	b.warnIfCacheCriticalityOptOut()
+	b.warnIfQueryParameterLogging()
 	b.app.healthProbes = b.app.createHealthProbes()
 
 	return b
@@ -470,6 +471,22 @@ func (b *Builder) warnIfCacheCriticalityOptOut() {
 		Msg("cache.critical is explicitly false; readiness will not reflect cache health — " +
 			"/ready keeps answering 200 while the cache is down, so a dead cache still reports ready " +
 			"(remove cache.critical to restore the strict default)")
+}
+
+// warnIfQueryParameterLogging WARNs (never fails) when database.query.log.parameters is
+// enabled outside development. Bound parameter VALUES — on cardholder tables, the PAN —
+// are then logged verbatim, and they bypass SensitiveDataFilter: it masks by field name,
+// but parameters arrive as a positional []any under one "args" key, so no field-name
+// needle can match. See config.example.yaml.
+func (b *Builder) warnIfQueryParameterLogging() {
+	cfg := b.app.cfg
+	if cfg == nil || !cfg.Database.Query.Log.Parameters {
+		return
+	}
+	if config.IsDevelopment(cfg.App.Env) {
+		return
+	}
+	b.logger.Warn().Msg("database.query.log.parameters is enabled: bound parameter values (possible PII/PAN) will be logged verbatim")
 }
 
 // RegisterClosers registers all components that need cleanup on shutdown.

@@ -684,6 +684,48 @@ func TestAppBuilderWarnsOnCacheCriticalityOptOut(t *testing.T) {
 	}
 }
 
+// TestAppBuilderWarnsOnQueryParameterLogging pins that database.query.log.parameters
+// is loud everywhere except development: bound parameter values (PANs on cardholder
+// tables) are logged verbatim and bypass SensitiveDataFilter's field-name matching.
+func TestAppBuilderWarnsOnQueryParameterLogging(t *testing.T) {
+	const warnMarker = "database.query.log.parameters is enabled"
+
+	tests := []struct {
+		name      string
+		params    bool
+		env       string
+		expectLog bool
+	}{
+		{name: "enabled_in_production_alias_warns", params: true, env: "prod", expectLog: true},
+		{name: "disabled_is_silent", params: false, env: "prod", expectLog: false},
+		{name: "enabled_in_development_is_silent", params: true, env: config.EnvDevelopment, expectLog: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.App.Env = tc.env
+			cfg.Database.Query.Log.Parameters = tc.params
+
+			rec := &recLogger{}
+			builder := &Builder{
+				logger: rec,
+				app:    &App{cfg: cfg},
+			}
+			require.NoError(t, builder.CreateHealthProbes().err)
+
+			event, logged := loggedEvent(rec, warnMarker)
+			require.Equal(t, tc.expectLog, logged)
+			if tc.expectLog {
+				assert.Equal(t, "warn", event.level)
+				assert.Equal(t,
+					"database.query.log.parameters is enabled: bound parameter values (possible PII/PAN) will be logged verbatim",
+					event.msg)
+			}
+		})
+	}
+}
+
 func TestAppBuilderRegisterClosersErrors(t *testing.T) {
 	t.Run(missingAppInstanceErrorMsg, func(t *testing.T) {
 		builder := NewAppBuilder()
