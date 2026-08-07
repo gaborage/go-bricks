@@ -2778,6 +2778,46 @@ func TestBuildAppliesJOSEDefaultsToZeroValuePolicy(t *testing.T) {
 	assert.Equal(t, string(jose.DefaultSigAlg), hdr.JWS.Alg, "an unset SigAlg must land on the package default")
 	assert.Equal(t, string(jose.DefaultKeyAlg), hdr.JWE.Alg)
 	assert.Equal(t, string(jose.DefaultEnc), hdr.JWE.Enc)
+	// Asserted explicitly because nothing else here would notice: Policy.Validate
+	// ignores Cty, and Open's cty check is permissive by design — it accepts a token
+	// that declares no cty at all, so an undefaulted Cty would reach the wire silently.
+	assert.Equal(t, jose.DefaultCty, hdr.JWS.Cty, "an unset Cty must land on the package default")
+}
+
+// The mirror of the defaulting above: a Cty the caller set explicitly must survive
+// Build untouched. Cty is the one normalized field Policy.Validate never inspects,
+// so only the emitted header can show which way the default went.
+func TestBuildKeepsExplicitJOSECty(t *testing.T) {
+	const customCty = "application/vnd.test+json"
+
+	log := createTestLogger()
+	f := jositest.NewBidirectionalFixture(t)
+	inner := &capturingRoundTripper{}
+
+	outbound := outboundKidsOnly(f)
+	outbound.Cty = customCty
+
+	built, err := NewBuilder(log).
+		WithTransport(inner).
+		WithJOSE(JOSEConfig{Outbound: outbound, Resolver: f.Resolver}).
+		Build()
+	require.NoError(t, err)
+
+	_, err = built.Post(context.Background(), &Request{
+		URL:  "http://example.invalid/tokens",
+		Body: []byte(`{"hello":"world"}`),
+	})
+	require.NoError(t, err)
+
+	// The peer declares the same cty, so a clobbered one is rejected outright
+	// (JOSE_CTY_REJECTED) as well as being visible in the header below.
+	peerInbound := *f.PeerInbound
+	peerInbound.Cty = customCty
+
+	plaintext, _, hdr, err := jose.Open(inner.body, &peerInbound, f.Resolver)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"hello":"world"}`, string(plaintext))
+	assert.Equal(t, customCty, hdr.JWS.Cty, "an explicitly-set Cty must not be overwritten by the default")
 }
 
 // A nil Resolver used to fail per-request as JOSE_KEYSTORE_UNAVAILABLE.
