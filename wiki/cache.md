@@ -171,7 +171,7 @@ carries `cache` (a status string) alongside `cache_stats` (the manager counters)
 | `not_configured` | The probe ran and the lease returned a not-configured error — `cache.enabled: false`, where the *default Redis* connector declines by design; `cache_stats` carries the manager counters with `status` `not_configured`. A custom `Options.CacheConnector` never reads `cache.enabled` and is probed regardless | none | no |
 | `unhealthy` | The lease failed — the manager is closed, or a cold pool tried to build the instance and the construction-time `PING` failed; `cache_stats.status` is `connection_failed` | yes | **yes**, unless `critical: false` |
 | `unhealthy` | The lease succeeded but the per-probe `Health(ctx)` `PING` failed or timed out — a live Redis outage against a warm pool; `cache_stats.status` is `unhealthy` | yes | **yes**, unless `critical: false` |
-| `disabled` | **No probe is registered at all** — `cache.NewCacheManager` failed at startup, so the manager is nil (a WARN says so; it is not fatal) and `/ready` falls back to this. `cache.enabled: false` does **not** land here — that is `not_configured` above; `cache_stats` is `{}` | n/a | no — there is no probe to error, so not under the strict default either |
+| `disabled` | **No probe is registered at all** — the manager is nil, so `/ready` falls back to this. Since [`[C58.3]`](migrations.md) the framework can no longer reach that state on its own: a cache manager that fails to construct aborts startup instead of leaving a nil behind, so this row now describes only an `App` value assembled directly, without a manager. `cache.enabled: false` does **not** land here — that is `not_configured` above; `cache_stats` is `{}` | n/a | no — there is no probe to error, so not under the strict default either |
 
 **`cache.critical` (strict by default)**
 
@@ -287,7 +287,10 @@ Redis blip into a simultaneous restart of every replica, which is strictly worse
 rotation drain described under *Choosing a value* above: restarts also drop in-flight requests
 and can settle into `CrashLoopBackOff`. Nor is this a "refuse to start" switch — the process
 boots either way and simply never reports Ready; `Builder.preInitCache` logs a WARN and
-continues, mirroring the manager contract that a failing cache is disabled, not fatal.
+continues. That covers *reaching* the cache: an unreachable Redis at boot is a runtime
+condition and stays non-fatal. A cache the framework cannot **construct** — a negative
+`cache.manager.maxsize` or `idlettl` — is the other case, and it does abort startup
+([ADR-054](adr_054_cache_construction_fails_startup.md), [`[C58.3]`](migrations.md)).
 
 ```yaml
 readinessProbe:

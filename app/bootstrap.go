@@ -65,7 +65,10 @@ func newManagerConfigBuilderFromConfig(cfg *config.Config) *ManagerConfigBuilder
 
 // dependencies creates and configures all resource managers and dependencies.
 // Returns a bundle containing the database manager, messaging manager, cache manager, resource provider, and observability.
-func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundle {
+// A manager that cannot be constructed from the supplied configuration aborts startup;
+// nothing constructed before that point holds a connection or a background goroutine
+// (pool cleanup starts later, in the app lifecycle), so an early return leaks nothing.
+func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBundle, error) {
 	resolver := NewFactoryResolver(b.opts)
 	configBuilder := newManagerConfigBuilderFromConfig(b.cfg)
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
@@ -85,7 +88,10 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundl
 	dbManager := factory.CreateDatabaseManager(resourceSource)
 	b.warnIfDatabaseAbsent()
 	messagingManager := factory.CreateMessagingManager(resourceSource)
-	cacheManager := factory.CreateCacheManager(resourceSource)
+	cacheManager, err := factory.CreateCacheManager(resourceSource)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create appropriate resource provider based on mode
 	var provider ResourceProvider
@@ -122,7 +128,7 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) *dependencyBundl
 		cacheManager:     cacheManager,
 		provider:         provider,
 		observability:    obsProvider,
-	}
+	}, nil
 }
 
 // rootDatabaseAbsent reports whether a deployment that expects a root database: block

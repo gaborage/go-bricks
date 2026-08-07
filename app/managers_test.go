@@ -675,8 +675,9 @@ func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
 		log := logger.New("error", false)
 		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
 
-		manager := factory.CreateCacheManager(nil)
+		manager, err := factory.CreateCacheManager(nil)
 
+		require.NoError(t, err)
 		assert.NotNil(t, manager)
 	})
 
@@ -686,8 +687,9 @@ func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
 		log := logger.New("error", false)
 		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
 
-		manager := factory.CreateCacheManager(nil)
+		manager, err := factory.CreateCacheManager(nil)
 
+		require.NoError(t, err)
 		assert.NotNil(t, manager)
 	})
 
@@ -699,9 +701,10 @@ func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
 		log := logger.New("error", false)
 		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
 
-		manager := factory.CreateCacheManager(nil)
+		manager, err := factory.CreateCacheManager(nil)
 
 		// Manager creation succeeds with default connector
+		require.NoError(t, err)
 		assert.NotNil(t, manager)
 	})
 
@@ -716,17 +719,76 @@ func TestResourceManagerFactoryCreateCacheManager(t *testing.T) {
 		log := logger.New("error", false)
 		factory := NewResourceManagerFactory(factoryResolver, configBuilder, log)
 
-		manager := factory.CreateCacheManager(nil)
+		manager, err := factory.CreateCacheManager(nil)
 
-		// Manager creation succeeds even with failing connector
-		assert.NotNil(t, manager)
+		// A connector that fails at Get() time is not a construction failure
+		require.NoError(t, err)
+		require.NotNil(t, manager)
 
 		// Verify Get() operations fail with the connector error
 		ctx := context.Background()
-		_, _, err := manager.Get(ctx, "test-key")
-		assert.Error(t, err)
-		assert.ErrorContains(t, err, "cache connector failed")
+		_, _, getErr := manager.Get(ctx, "test-key")
+		assert.Error(t, getErr)
+		assert.ErrorContains(t, getErr, "cache connector failed")
 	})
+}
+
+// TestResourceManagerFactoryCreateCacheManagerFailsClosed pins the fail-closed contract:
+// BuildCacheOptions forwards a negative cache.manager.* value unclamped so
+// cache.NewCacheManager rejects it, and the factory must surface that as an error rather
+// than the bare nil that used to boot the service green with no cache.
+func TestResourceManagerFactoryCreateCacheManagerFailsClosed(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(cfg *config.CacheManagerConfig)
+		wantCause string
+	}{
+		{
+			name:      "negative_maxsize",
+			mutate:    func(cfg *config.CacheManagerConfig) { cfg.MaxSize = -1 },
+			wantCause: "maxsize cannot be negative",
+		},
+		{
+			name:      "negative_idlettl",
+			mutate:    func(cfg *config.CacheManagerConfig) { cfg.IdleTTL = -time.Second },
+			wantCause: "idlettl cannot be negative",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configBuilder := NewManagerConfigBuilder(false, 50)
+			tt.mutate(&configBuilder.cacheConfig)
+			factory := NewResourceManagerFactory(createTestFactoryResolver(t), configBuilder, logger.New("error", false))
+
+			manager, err := factory.CreateCacheManager(nil)
+
+			require.Error(t, err)
+			assert.Nil(t, manager, "a rejected configuration must not yield a usable manager")
+			assert.ErrorContains(t, err, "cache manager")
+			assert.ErrorContains(t, err, tt.wantCause)
+			// %w, not %v: consumers must be able to unwrap to the cache package's cause.
+			assert.NotNil(t, errors.Unwrap(err), "the underlying cause must stay unwrappable")
+		})
+	}
+}
+
+// TestResourceManagerFactoryCreateCacheManagerReportsResolvedPoolSize covers the input that
+// reaches the same failure without naming a cache.manager.* key: in multi-tenant mode an
+// unset maxsize takes multitenant.limits.tenants, so a negative tenant limit lands here.
+// The error has to report the resolved value or it points at a key nobody set.
+func TestResourceManagerFactoryCreateCacheManagerReportsResolvedPoolSize(t *testing.T) {
+	configBuilder := NewManagerConfigBuilder(true, -1)
+	require.Zero(t, configBuilder.cacheConfig.MaxSize, "the substitution only happens for an unset maxsize")
+	factory := NewResourceManagerFactory(createTestFactoryResolver(t), configBuilder, logger.New("error", false))
+
+	manager, err := factory.CreateCacheManager(nil)
+
+	require.Error(t, err)
+	assert.Nil(t, manager)
+	assert.ErrorContains(t, err, "maxsize=-1", "the resolved pool size must appear in the error")
+	assert.ErrorContains(t, err, "multitenant.limits.tenants", "and the key it actually came from")
+	assert.ErrorContains(t, err, "maxsize cannot be negative")
 }
 
 func TestResourceManagerFactoryLogFactoryInfo(t *testing.T) {

@@ -372,6 +372,74 @@ func TestAppBuilderResolveDependenciesErrors(t *testing.T) {
 	})
 }
 
+// TestAppBuilderResolveDependenciesFailsClosedOnInvalidCacheConfig pins that a
+// misconfigured cache aborts the build instead of leaving the app with a nil cache
+// manager. Driven through the full builder because the propagation seam
+// (bootstrap.dependencies -> ResolveDependencies -> Build) is where the bug lived.
+func TestAppBuilderResolveDependenciesFailsClosedOnInvalidCacheConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(cfg *config.Config)
+		wantCause string
+	}{
+		{
+			name:      "negative_maxsize",
+			mutate:    func(cfg *config.Config) { cfg.Cache.Manager.MaxSize = -1 },
+			wantCause: "maxsize cannot be negative",
+		},
+		{
+			name:      "negative_idlettl",
+			mutate:    func(cfg *config.Config) { cfg.Cache.Manager.IdleTTL = -time.Second },
+			wantCause: "idlettl cannot be negative",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultTestConfig()
+			tt.mutate(cfg)
+
+			builder := NewAppBuilder().WithConfig(cfg, &Options{}).CreateLogger().CreateBootstrap().ResolveDependencies()
+
+			require.Error(t, builder.err)
+			assert.Nil(t, builder.bundle, "a failed resolution must not publish a partial bundle")
+			assert.ErrorContains(t, builder.err, tt.wantCause)
+
+			app, log, err := builder.CreateApp().Build()
+			require.Error(t, err, "startup must abort, not continue with a nil cache manager")
+			assert.Nil(t, app)
+			assert.NotNil(t, log)
+		})
+	}
+}
+
+// TestNewWithConfigFailsClosedOnInvalidCacheConfig is the consumer-facing half of the
+// contract above: the same misconfiguration must reach the caller of the public
+// constructor as an error rather than a running App. Every connector is stubbed so a
+// regression cannot substitute a dial failure for the assertion under test.
+func TestNewWithConfigFailsClosedOnInvalidCacheConfig(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Cache.Manager.MaxSize = -1
+
+	app, log, err := NewWithConfig(cfg, &Options{
+		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return &testmocks.MockDatabase{}, nil
+		},
+		MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+		CacheConnector: func(context.Context, string) (cache.Cache, error) {
+			return cachetesting.NewMockCache(), nil
+		},
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, app)
+	assert.NotNil(t, log)
+	assert.ErrorContains(t, err, "cache manager")
+	assert.ErrorContains(t, err, "maxsize cannot be negative")
+}
+
 func TestAppBuilderCreateAppErrors(t *testing.T) {
 	t.Run("missing dependencies", func(t *testing.T) {
 		builder := NewAppBuilder()
