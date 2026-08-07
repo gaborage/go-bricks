@@ -2833,3 +2833,43 @@ func TestBuildDoesNotMutateCallerJOSEPolicy(t *testing.T) {
 	assert.NotSame(t, caller, joseTransport.Outbound)
 	assert.Equal(t, jose.DefaultSigAlg, joseTransport.Outbound.SigAlg)
 }
+
+// Two WithJOSE calls must not stack two body-transform layers: the wrapper closure
+// reads the builder's config, so a second layer would seal the first layer's JWE
+// again. Last call wins, and the body is sealed exactly once.
+func TestWithJOSECalledTwiceSealsOnce(t *testing.T) {
+	log := createTestLogger()
+	// Two fixtures reuse the same kid names but hold different keys, so which config
+	// sealed the body is decided by whose resolver can open it.
+	first := jositest.NewBidirectionalFixture(t)
+	last := jositest.NewBidirectionalFixture(t)
+	inner := &capturingRoundTripper{}
+
+	built, err := NewBuilder(log).
+		WithTransport(inner).
+		WithJOSE(JOSEConfig{Outbound: first.ClientOutbound, Inbound: first.ClientInbound, Resolver: first.Resolver}).
+		WithJOSE(JOSEConfig{Outbound: last.ClientOutbound, Resolver: last.Resolver}).
+		Build()
+	require.NoError(t, err)
+
+	clientImpl, ok := built.(*client)
+	require.True(t, ok)
+	joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
+	require.True(t, ok)
+	assert.Same(t, inner, joseTransport.Inner,
+		"the single JOSE layer must sit directly on the base transport, not on a second JOSE layer")
+	assert.Nil(t, joseTransport.Inbound,
+		"the last call wins outright, including the Inbound policy it did not carry")
+
+	_, err = built.Post(context.Background(), &Request{
+		URL:  "http://example.invalid/tokens",
+		Body: []byte(`{"hello":"world"}`),
+	})
+	require.NoError(t, err)
+
+	// Double sealing would yield the inner compact JWE here, not the payload — and
+	// only the last config's peer can decrypt at all.
+	plaintext, _, _, err := jose.Open(inner.body, last.PeerInbound, last.Resolver)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"hello":"world"}`, string(plaintext))
+}

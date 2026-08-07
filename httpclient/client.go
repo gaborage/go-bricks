@@ -337,16 +337,26 @@ type JOSEConfig struct {
 // missing for the policy's direction, or a nil Resolver fails construction rather
 // than every request. Kids are NOT resolved at Build time: a resolver may be backed
 // by lazily-loaded key material, so an unknown kid still surfaces per request.
+//
+// Calling this twice does not stack two JOSE layers: the last call wins outright,
+// as it does for the base-transport slot. The body is sealed exactly once, with the
+// config from the final call — including its nil fields.
 func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
+	// The closure below reads b.joseConfig, so registering a second layer would seal
+	// an already-sealed body — a JWE nested inside a JWE — instead of replacing the
+	// first. Register once; every call still overwrites the config.
+	needsLayer := b.joseConfig == nil
 	b.joseConfig = &cfg
-	b.addTransportWrapper(layerBodyTransform, func(inner nethttp.RoundTripper) nethttp.RoundTripper {
-		return &JOSETransport{
-			Inner:    inner,
-			Outbound: b.joseConfig.Outbound,
-			Inbound:  b.joseConfig.Inbound,
-			Resolver: b.joseConfig.Resolver,
-		}
-	})
+	if needsLayer {
+		b.addTransportWrapper(layerBodyTransform, func(inner nethttp.RoundTripper) nethttp.RoundTripper {
+			return &JOSETransport{
+				Inner:    inner,
+				Outbound: b.joseConfig.Outbound,
+				Inbound:  b.joseConfig.Inbound,
+				Resolver: b.joseConfig.Resolver,
+			}
+		})
+	}
 	return b
 }
 
