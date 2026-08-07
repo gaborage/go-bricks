@@ -684,21 +684,52 @@ func TestAppBuilderWarnsOnCacheCriticalityOptOut(t *testing.T) {
 	}
 }
 
+// namedDBWithParamLogging returns a named-database entry (cfg.Databases) with
+// query parameter logging enabled, for TestAppBuilderWarnsOnQueryParameterLogging.
+func namedDBWithParamLogging() config.DatabaseConfig {
+	return config.DatabaseConfig{Query: config.QueryConfig{Log: config.QueryLogConfig{Parameters: true}}}
+}
+
 // TestAppBuilderWarnsOnQueryParameterLogging pins that database.query.log.parameters
 // is loud everywhere except development: bound parameter values (PANs on cardholder
 // tables) are logged verbatim and bypass SensitiveDataFilter's field-name matching.
+// This applies independently to the root database and to each named database
+// (cfg.Databases, multi-DB single-tenant) — a named entry warns even when the root
+// flag is off, and carries its own name in the message.
 func TestAppBuilderWarnsOnQueryParameterLogging(t *testing.T) {
-	const warnMarker = "database.query.log.parameters is enabled"
+	// rootMarker carries the trailing ": " so it cannot match a named-database
+	// message ("...enabled for named database ..."), keeping the two independent.
+	const rootMarker = "database.query.log.parameters is enabled: "
 
 	tests := []struct {
-		name      string
-		params    bool
-		env       string
-		expectLog bool
+		name        string
+		params      bool
+		env         string
+		databases   map[string]config.DatabaseConfig
+		expectLog   bool
+		expectNamed []string
 	}{
 		{name: "enabled_in_production_alias_warns", params: true, env: "prod", expectLog: true},
 		{name: "disabled_is_silent", params: false, env: "prod", expectLog: false},
 		{name: "enabled_in_development_is_silent", params: true, env: config.EnvDevelopment, expectLog: false},
+		{
+			name:        "named_db_enabled_in_production_warns",
+			env:         "prod",
+			databases:   map[string]config.DatabaseConfig{"reporting": namedDBWithParamLogging()},
+			expectNamed: []string{"reporting"},
+		},
+		{
+			name:      "named_db_enabled_in_development_is_silent",
+			env:       config.EnvDevelopment,
+			databases: map[string]config.DatabaseConfig{"reporting": namedDBWithParamLogging()},
+		},
+		{
+			name:        "root_false_named_true_warns_only_named",
+			params:      false,
+			env:         "prod",
+			databases:   map[string]config.DatabaseConfig{"reporting": namedDBWithParamLogging()},
+			expectNamed: []string{"reporting"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -706,6 +737,7 @@ func TestAppBuilderWarnsOnQueryParameterLogging(t *testing.T) {
 			cfg := &config.Config{}
 			cfg.App.Env = tc.env
 			cfg.Database.Query.Log.Parameters = tc.params
+			cfg.Databases = tc.databases
 
 			rec := &recLogger{}
 			builder := &Builder{
@@ -714,14 +746,29 @@ func TestAppBuilderWarnsOnQueryParameterLogging(t *testing.T) {
 			}
 			require.NoError(t, builder.CreateHealthProbes().err)
 
-			event, logged := loggedEvent(rec, warnMarker)
-			require.Equal(t, tc.expectLog, logged)
+			event, logged := loggedEvent(rec, rootMarker)
+			require.Equal(t, tc.expectLog, logged, "root WARN presence")
 			if tc.expectLog {
 				assert.Equal(t, "warn", event.level)
 				assert.Equal(t,
 					"database.query.log.parameters is enabled: bound parameter values (possible PII/PAN) will be logged verbatim",
 					event.msg)
 			}
+
+			for _, name := range tc.expectNamed {
+				wantMsg := `database.query.log.parameters is enabled for named database "` + name +
+					`": bound parameter values (possible PII/PAN) will be logged verbatim`
+				namedEvent, namedLogged := loggedEvent(rec, wantMsg)
+				require.True(t, namedLogged, "expected named WARN for %q", name)
+				assert.Equal(t, "warn", namedEvent.level)
+				assert.Equal(t, wantMsg, namedEvent.msg)
+			}
+
+			wantTotal := len(tc.expectNamed)
+			if tc.expectLog {
+				wantTotal++
+			}
+			assert.Len(t, rec.events, wantTotal, "unexpected WARN count")
 		})
 	}
 }
