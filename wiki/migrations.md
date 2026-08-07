@@ -42,7 +42,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E55 | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56 | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
 | E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup; C57.9 fails `httpclient` construction) | 9 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8); and read every `WithJOSE` policy and direct `jose.Seal` call for an explicitly-set algorithm outside the allowlist — `KeyAlg: RSA1_5` or a non-AEAD `Enc` sealed successfully before and now fails `Build()` at startup, while a policy that named no algorithms at all takes the package defaults and starts working instead of failing every request (C57.9) |
-| E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) | 3 | C58.1 C58.2 C58.3 | check every environment for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`, and — in multi-tenant mode with `cache.manager.maxsize` unset — a negative `multitenant.limits.tenants`, which becomes the pool size. Under `cache.enabled: false` such a value used to be inert and now aborts startup (C58.3) |
+| E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) + behavior (C58.4) | 4 | C58.1 C58.2 C58.3 | check every environment for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`, and — in multi-tenant mode with `cache.manager.maxsize` unset — a negative `multitenant.limits.tenants`, which becomes the pool size. Under `cache.enabled: false` such a value used to be inert and now aborts startup (C58.3); and if any dashboard, alert, or saved query reads OTLP-exported log records by a `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` **record** attribute your code sets as a log field, re-key it to the `app.`-prefixed name (C58.4) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -1928,7 +1928,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `jose/sealer.go` (`Seal`) · `jose/policy.go` (`validateAlgorithms`) ·
   [wiki/httpclient.md](httpclient.md#jose-policy-validation-at-build)
 
-## E58 · v0.57.0 → v0.58.0 — dead exported surface removed + a cache that cannot be constructed aborts startup
+## E58 · v0.57.0 → v0.58.0 — dead exported surface removed + a cache that cannot be constructed aborts startup + reserved log attribute namespaces
 
 - gist: Two clusters of dead exported symbols leave the public API, both carrying a comment
   that asserted a use they never had. `jose.PolicyRegistry` goes with its constructor and its
@@ -1956,13 +1956,20 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   got none, and joined the rotation. It now returns `(*cache.CacheManager, error)`,
   `dependencies` propagates it, and `Builder.ResolveDependencies` records it, so startup aborts.
   Reaching the cache is unaffected: an unreachable Redis at boot still only WARNs
-  (C58.3, ADR-054).
+  (C58.3, ADR-054). Separately, the OTel log bridge now reserves the resource-identity
+  attribute namespaces: a top-level log field keyed `service.*`, `telemetry.sdk.*`, or
+  `deployment.environment.name` is remapped under the `app.` prefix in OTLP-exported log
+  records (value preserved, one-time WARN), so a log call can no longer shadow the service's
+  identity at record level (C58.4).
 - build-caught: C58.1 C58.2 C58.3
 - preflight: check every environment for a **negative** `cache.manager.maxsize` or
   `cache.manager.idlettl`, and — in multi-tenant mode where `cache.manager.maxsize` is unset —
   a negative `multitenant.limits.tenants`, which `BuildCacheOptions` substitutes as the pool
   size. Under `cache.enabled: false` such a value used to be inert and now aborts startup
-  (C58.3)
+  (C58.3). For C58.4, grep for reserved-key literals (see its detect) and hand-review any code
+  path that ranges a map into log fields — dynamic keys escape every grep, and the bridge's
+  runtime WARN only exists after the bump, so it is post-upgrade confirmation, not preflight
+  evidence; when such paths exist, smoke-test in staging before relying on the old key names
 - exit: `go get github.com/gaborage/go-bricks@v0.58.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C58.1] `jose.PolicyRegistry` and its constructor and methods are removed · compile-break · when: match
@@ -2056,6 +2063,27 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   If a negative was reaching for "unbounded", it never meant that — `cache.NewCacheManager` has always rejected it. Omit the key instead: an unset `maxsize` takes the mode default (`multitenant.limits.tenants` in multi-tenant mode, the built-in single-tenant default otherwise). Running without a cache is still supported and still silent — that is `cache.enabled: false` with no stale tuning values under it
 - verify: the service starts. On the refused config it now exits during startup with `create cache manager with maxsize=-1 idlettl=15m0s (from cache.manager.*, or multitenant.limits.tenants where maxsize is unset in multi-tenant mode): maxsize cannot be negative` rather than logging `Failed to create cache manager, cache will be disabled` and serving traffic. The error reports the **resolved** values rather than only the key names, because a third input can produce them: in multi-tenant mode an unset `cache.manager.maxsize` takes `multitenant.limits.tenants`, so a negative there lands here too — `validateMultitenantLimits` clamps it for `config.Load`, leaving that shape reachable on the same `app.NewWithConfig` path as the rest of this atom
 - ref: [ADR-054](adr_054_cache_construction_fails_startup.md) · #861 · `app/managers.go` (`CreateCacheManager`, `BuildCacheOptions`) · `app/bootstrap.go` (`dependencies`) · `app/app_builder.go` (`ResolveDependencies`) · `config/validation.go` (`validateCache`, `applyCacheManagerDefaults`) · `cache/manager.go` (`NewCacheManager`)
+
+### [C58.4] Log fields in resource-identity namespaces are remapped under `app.` in OTLP log records · behavior · when: match
+
+- detect: `` git grep -nE '["`](service|telemetry[.]sdk)[.][^"`[:space:]]*["`]' -- '*.go' `` and `` git grep -nE '["`]deployment[.]environment[.]name["`]' -- '*.go' `` — key-literal based across both Go string-literal forms (quoted and raw) with any non-space suffix, so it catches every zerolog constructor (`Str`, `Uint`, `Dur`, `Time`, `RawJSON`, …) and keys like `service.1` at the cost of some non-log noise. Fields built dynamically (ranging a caller- or tenant-influenced map into log fields) escape any literal grep — hand-review those call sites; the runtime WARN record confirms only after the bump
+- scope: the OTel log bridge only — the boundary where zerolog field names become OTLP record attributes. A top-level field keyed with the `service.` or `telemetry.sdk.` prefix, or exactly `deployment.environment.name`, reaches the backend as `app.<original key>` with its value preserved; the first remap per bridge instance (one bridge per process in practice) also emits a WARN record (`reserved.keys` names the offending keys, never values). The raw zerolog stream (stdout/file JSON, console output) is **unchanged** — only OTLP-exported records are affected. `log.type` stays caller-settable; nested map values are untouched (they flatten under their parent key); the resource-level identity was never spoofable and does not change
+- gate: match = a detect hit, or any code path that ranges caller/tenant-influenced keys into log fields. no-match = nothing to do
+- before:
+
+  ```text
+  record attribute: service.name = "downstream-svc"   (shadows identity on flattening backends)
+  ```
+
+- after:
+
+  ```text
+  record attribute: app.service.name = "downstream-svc"   (+ one-time WARN naming service.name)
+  ```
+
+  Re-key dashboards, alerts, and saved queries reading the old record attribute to the `app.`-prefixed name — or rename the field at the call site out of the reserved namespace (for a downstream peer, semconv's `peer.service` is the conventional home). Never treat `app.*` as service identity: it is caller-supplied and unauthenticated
+- verify: with `observability.logs.enabled: true`, log a field keyed `service.name` and confirm the backend shows `app.service.name` plus the WARN record; `go test ./...`
+- ref: [ADR-055](adr_055_reserved_log_attribute_namespaces.md) · #915 · `logger/otel_bridge.go`
 
 ---
 

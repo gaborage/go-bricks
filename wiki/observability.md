@@ -29,6 +29,8 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 - Configure via `observability.logs.samplingrate` (0.0-1.0, default 0.0 drops INFO/DEBUG)
 - Sampling is deterministic per trace (all logs in same trace sampled together)
 
+**Reserved log attribute namespaces:** record attributes deliberately win over resource attributes on key collision (that precedence is what keeps a caller-set `log.type` authoritative), so the OTel bridge reserves the resource-identity namespaces at the boundary where zerolog field names become record attributes. A top-level log field whose key starts with `service.` or `telemetry.sdk.`, or equals `deployment.environment.name`, is remapped under the `app.` prefix with its value preserved (`service.name` → `app.service.name`), and the first remap per bridge instance (one bridge per process in practice) emits a one-time WARN record (`reserved.keys` names the offending keys — never their values). `log.type` is intentionally not reserved. `app.*` keys are caller-supplied and unauthenticated — never treat them as service identity. Nested map values are not remapped: they flatten under their parent key and cannot collide with bare resource keys. See [ADR-055](adr_055_reserved_log_attribute_namespaces.md).
+
 **Request Logging:** HTTP requests track severity escalation via `requestLogContext`. Automatic escalation from status codes (4xx→WARN, 5xx→ERROR). Explicit: `c.EscalateSeverity(zerolog.WarnLevel)` (the `HandlerContext` method). Configure `observability.logs.slowrequestthreshold` for slow request detection.
 
 **Testing:** Use `observability/testing` package:

@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/log/logtest"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
+
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // Keyed off semconv rather than literals so the fixtures track the keys provider.go
@@ -350,6 +352,94 @@ func BenchmarkResourceAttributeExporterEnrichWithResource(b *testing.B) {
 			for b.Loop() {
 				_ = enricher.enrichWithResource(&rec)
 			}
+		})
+	}
+}
+
+func identityTestResource(t *testing.T) *resource.Resource {
+	t.Helper()
+	p := &provider{
+		config: Config{
+			Service: ServiceConfig{
+				Name:    "real-svc",
+				Version: "1.2.3",
+			},
+			Environment: "production",
+		},
+	}
+	res, err := p.createResource(context.Background())
+	require.NoError(t, err)
+	return res
+}
+
+// exportThroughBridge runs one zerolog JSON line through the real OTel bridge
+// and a resource-enriching exporter, returning the records a backend would see.
+func exportThroughBridge(t *testing.T, res *resource.Resource, line string) []sdklog.Record {
+	t.Helper()
+
+	wrapped := &fakeLogExporter{}
+	enriched := newResourceAttributeExporter(wrapped, res)
+	logProvider := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(enriched)))
+	t.Cleanup(func() {
+		require.NoError(t, logProvider.Shutdown(context.Background()))
+	})
+
+	bridge := logger.NewOTelBridge(logProvider)
+	require.NotNil(t, bridge)
+
+	_, err := bridge.Write([]byte(line))
+	require.NoError(t, err)
+	require.NoError(t, logProvider.ForceFlush(context.Background()))
+
+	var records []sdklog.Record
+	for _, batch := range wrapped.batches {
+		records = append(records, batch...)
+	}
+	return records
+}
+
+// The composed invariant behind the bridge's reserved-namespace remap (#915):
+// because the bridge frees the reserved key, this exporter's record-over-resource
+// precedence backfills the framework's true identity, while the caller's value
+// survives under the app. prefix.
+func TestResourceEnrichmentRestoresIdentityAfterBridgeRemap(t *testing.T) {
+	res := identityTestResource(t)
+
+	records := exportThroughBridge(t, res, `{"level":"info","message":"m","service.name":"spoofed-svc"}`)
+	require.NotEmpty(t, records)
+	attrs := collectAttrs(&records[0])
+
+	require.Contains(t, attrs, serviceNameKey, "resource identity must be backfilled on the exported record")
+	assert.Equal(t, attribute.StringValue("real-svc"), attrs[serviceNameKey],
+		"the exported service.name must be the resource's, not the caller's")
+
+	require.Contains(t, attrs, attribute.Key("app.service.name"), "the caller's field must survive under the app. prefix")
+	assert.Equal(t, attribute.StringValue("spoofed-svc"), attrs[attribute.Key("app.service.name")])
+}
+
+// Drift guard: every identity key the real resource carries must be protected
+// by the bridge's reserved-namespace guard. A new resource attribute added in
+// createResource (or a semconv rename) that the bridge does not cover fails
+// here instead of silently reopening the #915 shadowing hole.
+func TestBridgeGuardCoversEveryResourceIdentityKey(t *testing.T) {
+	res := identityTestResource(t)
+
+	for _, kv := range res.Attributes() {
+		key := string(kv.Key)
+		t.Run(key, func(t *testing.T) {
+			line := fmt.Sprintf(`{"level":"info","message":"m",%q:"spoofed"}`, key)
+			records := exportThroughBridge(t, res, line)
+			require.NotEmpty(t, records)
+			attrs := collectAttrs(&records[0])
+
+			require.Contains(t, attrs, kv.Key, "identity key %s must reach the backend", key)
+			assert.NotEqual(t, attribute.StringValue("spoofed"), attrs[kv.Key],
+				"resource identity key %s is spoofable at record level — extend the bridge's reserved namespaces", key)
+
+			remapped := attribute.Key("app." + key)
+			require.Contains(t, attrs, remapped,
+				"the caller's value for %s must be preserved under the app. prefix, not dropped", key)
+			assert.Equal(t, attribute.StringValue("spoofed"), attrs[remapped])
 		})
 	}
 }

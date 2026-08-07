@@ -2,6 +2,11 @@ package logger
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +16,81 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// captureProcessor records every emitted log record for assertions.
+type captureProcessor struct {
+	mu      sync.Mutex
+	records []sdklog.Record
+}
+
+func (p *captureProcessor) OnEmit(_ context.Context, rec *sdklog.Record) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.records = append(p.records, rec.Clone())
+	return nil
+}
+
+//nolint:gocritic // hugeParam: EnabledParameters passed by value per OTel SDK interface contract
+func (p *captureProcessor) Enabled(_ context.Context, _ sdklog.EnabledParameters) bool {
+	return true
+}
+
+func (p *captureProcessor) Shutdown(_ context.Context) error   { return nil }
+func (p *captureProcessor) ForceFlush(_ context.Context) error { return nil }
+
+func (p *captureProcessor) snapshot() []sdklog.Record {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]sdklog.Record(nil), p.records...)
+}
+
+func newCaptureBridge(t *testing.T) (*OTelBridge, *captureProcessor) {
+	t.Helper()
+	proc := &captureProcessor{}
+	provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(proc))
+	t.Cleanup(func() {
+		require.NoError(t, provider.Shutdown(context.Background()))
+	})
+	bridge := NewOTelBridge(provider)
+	require.NotNil(t, bridge)
+	return bridge, proc
+}
+
+// dataRecord returns the first record NOT emitted at WARN severity, so tests
+// don't depend on the data-before-WARN emission order.
+func dataRecord(records []sdklog.Record) (sdklog.Record, bool) {
+	for i := range records {
+		if records[i].Severity() != log.SeverityWarn {
+			return records[i], true
+		}
+	}
+	return sdklog.Record{}, false
+}
+
+// warnRecords filters the records emitted at WARN severity (the remap WARN).
+func warnRecords(records []sdklog.Record) []sdklog.Record {
+	var warns []sdklog.Record
+	for i := range records {
+		if records[i].Severity() == log.SeverityWarn {
+			warns = append(warns, records[i])
+		}
+	}
+	return warns
+}
+
+func recordAttrValue(rec *sdklog.Record, key string) (attribute.Value, bool) {
+	var val attribute.Value
+	found := false
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+		if string(kv.Key) == key {
+			val = kv.Value
+			found = true
+			return false
+		}
+		return true
+	})
+	return val, found
+}
 
 // TestOTelBridge_ValidJSON tests parsing of valid zerolog JSON output
 func TestOTelBridgeValidJSON(t *testing.T) {
@@ -105,7 +185,7 @@ func TestBuildLogRecordWithTraceFields(t *testing.T) {
 		"message":  "hello",
 	}
 
-	_, ctx := buildLogRecord(entry)
+	_, ctx, _ := buildLogRecord(entry)
 
 	spanCtx := trace.SpanContextFromContext(ctx)
 	require.True(t, spanCtx.IsValid(), "span context should be valid when trace_id/span_id are present")
@@ -119,7 +199,7 @@ func TestBuildLogRecordWithTraceParentFallback(t *testing.T) {
 		"message":     "hello",
 	}
 
-	_, ctx := buildLogRecord(entry)
+	_, ctx, _ := buildLogRecord(entry)
 
 	spanCtx := trace.SpanContextFromContext(ctx)
 	require.True(t, spanCtx.IsValid(), "span context should be derived from traceparent")
@@ -137,7 +217,7 @@ func TestBuildLogRecordAddsTraceAttributes(t *testing.T) {
 		"level":       "info",
 	}
 
-	rec, ctx := buildLogRecord(entry)
+	rec, ctx, _ := buildLogRecord(entry)
 
 	// Verify context has span context
 	spanCtx := trace.SpanContextFromContext(ctx)
@@ -178,13 +258,151 @@ func TestBuildLogRecordAddsTraceAttributes(t *testing.T) {
 	assert.Equal(t, int64(1), traceFlagsValue)
 }
 
+func TestOTelBridgeReservedKeyRemapPolicy(t *testing.T) {
+	tests := []struct {
+		name      string
+		key       string
+		value     string
+		wantRemap bool
+	}{
+		{name: "service_name_remapped", key: "service.name", value: "spoofed-svc", wantRemap: true},
+		{name: "service_instance_id_remapped", key: "service.instance.id", value: "spoofed-instance", wantRemap: true},
+		{name: "telemetry_sdk_name_remapped", key: "telemetry.sdk.name", value: "spoofed-sdk", wantRemap: true},
+		{name: "deployment_environment_name_remapped", key: "deployment.environment.name", value: "spoofed-env", wantRemap: true},
+		{name: "bare_service_verbatim", key: "service", value: "v", wantRemap: false},
+		{name: "servicex_verbatim", key: "servicex", value: "v", wantRemap: false},
+		{name: "services_count_verbatim", key: "services.count", value: "v", wantRemap: false},
+		{name: "telemetry_sdkx_verbatim", key: "telemetry.sdkx", value: "v", wantRemap: false},
+		{name: "deployment_environment_verbatim", key: "deployment.environment", value: "v", wantRemap: false},
+		{name: "deployment_environment_namex_verbatim", key: "deployment.environment.namex", value: "v", wantRemap: false},
+		{name: "log_type_stays_caller_settable", key: "log.type", value: "action", wantRemap: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bridge, proc := newCaptureBridge(t)
+
+			line := fmt.Sprintf(`{"level":"info","message":"m",%q:%q}`, tt.key, tt.value)
+			_, err := bridge.Write([]byte(line))
+			require.NoError(t, err)
+
+			records := proc.snapshot()
+			require.NotEmpty(t, records)
+			rec, foundData := dataRecord(records)
+			require.True(t, foundData, "data record should be present")
+
+			wantKey, forbiddenKey := tt.key, "app."+tt.key
+			if tt.wantRemap {
+				wantKey, forbiddenKey = "app."+tt.key, tt.key
+			}
+
+			val, found := recordAttrValue(&rec, wantKey)
+			require.True(t, found, "key %s should be present", wantKey)
+			assert.Equal(t, tt.value, val.AsString(), "value must be preserved under %s", wantKey)
+
+			_, present := recordAttrValue(&rec, forbiddenKey)
+			assert.False(t, present, "key %s must not be present", forbiddenKey)
+		})
+	}
+}
+
+func TestOTelBridgeWarnsOnceOnReservedKeyRemap(t *testing.T) {
+	bridge, proc := newCaptureBridge(t)
+
+	colliding := []byte(`{"level":"info","message":"m","service.name":"evil-svc"}`)
+	clean := []byte(`{"level":"info","message":"clean"}`)
+
+	for i := 0; i < 2; i++ {
+		_, err := bridge.Write(colliding)
+		require.NoError(t, err)
+	}
+	_, err := bridge.Write(clean)
+	require.NoError(t, err)
+
+	records := proc.snapshot()
+	require.Len(t, records, 4, "3 data records + exactly 1 WARN")
+
+	warns := warnRecords(records)
+	require.Len(t, warns, 1, "remap WARN must fire exactly once per bridge instance")
+
+	warn := warns[0]
+	keys, found := recordAttrValue(&warn, "reserved.keys")
+	require.True(t, found, "WARN must name the offending keys")
+	assert.Contains(t, keys.AsString(), "service.name")
+	assert.NotContains(t, keys.AsString(), "evil-svc", "WARN must never carry the field value (bypasses SensitiveDataFilter)")
+	assert.NotContains(t, warn.Body().AsString(), "evil-svc")
+
+	logType, found := recordAttrValue(&warn, "log.type")
+	require.True(t, found, "WARN must be routable by dual-mode processing")
+	assert.Equal(t, "trace", logType.AsString())
+}
+
+func TestOTelBridgeRemapWarnTruncatesKeyList(t *testing.T) {
+	bridge, proc := newCaptureBridge(t)
+
+	entry := map[string]any{"level": "info", "message": "m"}
+	for i := 0; i < 10; i++ {
+		entry[fmt.Sprintf("service.padding.%02d.%s", i, strings.Repeat("k", 40))] = "v"
+	}
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	_, err = bridge.Write(line)
+	require.NoError(t, err)
+
+	warns := warnRecords(proc.snapshot())
+	require.Len(t, warns, 1, "remap WARN expected")
+
+	keys, found := recordAttrValue(&warns[0], "reserved.keys")
+	require.True(t, found)
+	assert.LessOrEqual(t, len(keys.AsString()), maxRemapWarnKeysLen,
+		"caller-influenced key list must be length-bounded on the WARN record")
+	assert.Contains(t, keys.AsString(), "service.padding.00.")
+}
+
+func TestOTelBridgeNoWarnWithoutCollision(t *testing.T) {
+	bridge, proc := newCaptureBridge(t)
+
+	_, err := bridge.Write([]byte(`{"level":"info","message":"m","user_id":"123"}`))
+	require.NoError(t, err)
+
+	assert.Empty(t, warnRecords(proc.snapshot()), "clean writes must not emit the remap WARN")
+}
+
+func TestOTelBridgeConcurrentRemapWarnsOnce(t *testing.T) {
+	bridge, proc := newCaptureBridge(t)
+
+	const goroutines = 8
+	const writesPerGoroutine = 5
+
+	var wg sync.WaitGroup
+	var writeErrs atomic.Int32
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < writesPerGoroutine; i++ {
+				if _, err := bridge.Write([]byte(`{"level":"info","message":"m","service.name":"evil"}`)); err != nil {
+					writeErrs.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	require.Zero(t, writeErrs.Load(), "no Write may fail under concurrency")
+
+	records := proc.snapshot()
+	require.Len(t, records, goroutines*writesPerGoroutine+1, "all data records plus exactly one WARN")
+	assert.Len(t, warnRecords(records), 1)
+}
+
 func TestBuildLogRecordWithoutTraceContext(t *testing.T) {
 	entry := map[string]any{
 		"message": "test message without trace",
 		"level":   "info",
 	}
 
-	rec, ctx := buildLogRecord(entry)
+	rec, ctx, _ := buildLogRecord(entry)
 
 	// Verify context has no span context
 	spanCtx := trace.SpanContextFromContext(ctx)
