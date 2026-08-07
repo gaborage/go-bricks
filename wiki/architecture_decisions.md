@@ -1023,6 +1023,31 @@ enough that no manager exists to probe. Fixes
 
 ---
 
+### [ADR-055: Reserve Resource-Identity Namespaces in the OTel Log Bridge](adr_055_reserved_log_attribute_namespaces.md)
+
+**Date:** 2026-08-07 | **Status:** Accepted
+
+The OTel log bridge copied every zerolog field key verbatim into record attributes, and the
+resource-attribute exporter deliberately lets record attributes win over resource attributes on
+collision (that precedence keeps a caller-set `log.type` authoritative for dual-mode routing) — so
+a log call could set a record-level `service.name` that shadows the service's identity on backends
+that flatten record attributes over resource attributes. The bridge now reserves `service.*`,
+`telemetry.sdk.*`, and `deployment.environment.name` at the boundary where field names become
+attributes: a colliding top-level key is remapped under the `app.` prefix with its value preserved,
+and the first remap per bridge instance (one bridge per process in practice) emits a one-time WARN
+naming the keys (never the values — the WARN bypasses zerolog, and therefore the
+`SensitiveDataFilter`, to avoid writer-chain recursion). Dropping the field was rejected as
+anti-forensic and data-destroying; a per-key WARN dedup map was rejected as an unbounded allocation
+under caller-influenced key churn. `log.type` stays caller-settable; the exporter's precedence and
+the resource-level identity are untouched.
+
+**Key Benefits:** Record-level identity spoofing neutralized for every backend; the no-collision
+hot path stays allocation-free; the remap is self-evidencing per record. Fixes
+[#915](https://github.com/gaborage/go-bricks/issues/915). See
+[migrations.md](migrations.md) `[C58.4]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -1032,7 +1057,7 @@ enough that no manager exists to probe. Fixes
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-054) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-055) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

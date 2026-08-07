@@ -4,14 +4,45 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
+)
+
+// Reserved resource-identity attribute namespaces (OTel semantic conventions).
+// Caller log fields matching these are remapped under callerAttrPrefix so a log
+// call can never shadow the provider's resource identity at record level, where
+// record attributes deliberately win over resource attributes on collision (#915).
+// log.type is intentionally NOT reserved: dual-mode routing depends on callers
+// (e.g. request middleware) setting it. Only top-level keys are guarded: nested
+// map values flatten under their parent key and cannot collide with bare
+// resource keys.
+const (
+	reservedServicePrefix      = "service."
+	reservedTelemetrySDKPrefix = "telemetry.sdk."
+	// Same semconv constant observability/provider.go stamps on the resource,
+	// so the guard and the resource cannot drift apart on this key.
+	reservedDeploymentEnvKey = string(semconv.DeploymentEnvironmentNameKey)
+
+	// callerAttrPrefix relocates colliding caller fields
+	// (e.g. service.name -> app.service.name), preserving the value.
+	callerAttrPrefix = "app."
+
+	// maxRemapWarnKeysLen bounds the key list carried by the one-time remap
+	// WARN; field names are caller-influenced and must not grow the record.
+	maxRemapWarnKeysLen = 256
+
+	// logTypeAttrKey routes records through dual-mode processing
+	// (observability.DualModeLogProcessor); deliberately caller-settable.
+	logTypeAttrKey = "log.type"
 )
 
 // OTelBridge converts zerolog JSON output to OpenTelemetry log records.
@@ -19,6 +50,7 @@ import (
 type OTelBridge struct {
 	loggerProvider *sdklog.LoggerProvider
 	logger         log.Logger
+	remapWarnOnce  sync.Once
 }
 
 // NewOTelBridge creates a new bridge that converts zerolog logs to OTel log records.
@@ -49,16 +81,55 @@ func (b *OTelBridge) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 
-	rec, ctx := buildLogRecord(entry)
+	rec, ctx, remapped := buildLogRecord(entry)
 	b.logger.Emit(ctx, rec)
+
+	if len(remapped) > 0 {
+		b.remapWarnOnce.Do(func() {
+			b.emitRemapWarning(ctx, remapped)
+		})
+	}
 
 	return len(p), nil
 }
 
-func buildLogRecord(entry map[string]any) (log.Record, context.Context) {
-	var rec log.Record
+// emitRemapWarning emits a WARN naming the remapped keys, once per bridge
+// instance (the framework wires a single bridge per process).
+// It builds the record directly and emits via b.logger — never through zerolog
+// (the bridge sits inside zerolog's writer chain; logging through it recurses).
+// Because it bypasses the SensitiveDataFilter it carries key names only, never
+// field values.
+func (b *OTelBridge) emitRemapWarning(ctx context.Context, remapped []string) {
+	sort.Strings(remapped)
+	keys := strings.Join(remapped, ",")
+	// Unconditional bound: ToValidUTF8 repairs a rune split by the byte cut and
+	// returns the string unchanged when nothing was cut.
+	keys = strings.ToValidUTF8(keys[:min(len(keys), maxRemapWarnKeysLen)], "")
 
-	ctx := context.Background()
+	var rec log.Record
+	rec.SetTimestamp(time.Now())
+	rec.SetSeverity(log.SeverityWarn)
+	rec.SetSeverityText(LevelWarn)
+	rec.SetBody(attribute.StringValue(
+		"log fields shadow reserved resource attribute namespaces; remapped with \"" + callerAttrPrefix + "\" prefix"))
+	rec.AddAttributes(
+		attribute.String("reserved.keys", keys),
+		attribute.String(logTypeAttrKey, "trace"),
+	)
+	b.logger.Emit(ctx, rec)
+}
+
+// isReservedAttrKey reports whether a caller field key would shadow the
+// provider's resource identity. Trailing dots in the prefixes are load-bearing:
+// bare "service", "servicex", or "deployment.environment" must not match.
+func isReservedAttrKey(k string) bool {
+	return strings.HasPrefix(k, reservedServicePrefix) ||
+		strings.HasPrefix(k, reservedTelemetrySDKPrefix) ||
+		k == reservedDeploymentEnvKey
+}
+
+func buildLogRecord(entry map[string]any) (rec log.Record, ctx context.Context, remapped []string) {
+	ctx = context.Background()
 	var traceIDStr, spanIDStr string
 	var traceFlags trace.TraceFlags
 	hasTraceContext := false
@@ -80,7 +151,7 @@ func buildLogRecord(entry map[string]any) (log.Record, context.Context) {
 	applyTimestamp(&rec, entry)
 	applySeverity(&rec, entry)
 	applyBody(&rec, entry)
-	applyAttributes(&rec, entry)
+	remapped = applyAttributes(&rec, entry)
 
 	// Add trace correlation attributes if available
 	// - String format (trace_id, span_id) enables text-based queries
@@ -96,10 +167,10 @@ func buildLogRecord(entry map[string]any) (log.Record, context.Context) {
 	// Default to trace logs unless caller explicitly sets log.type
 	// This ensures all application logs are categorized for dual-mode routing
 	if !hasLogTypeAttribute(&rec) {
-		rec.AddAttributes(attribute.String("log.type", "trace"))
+		rec.AddAttributes(attribute.String(logTypeAttrKey, "trace"))
 	}
 
-	return rec, ctx
+	return rec, ctx, remapped
 }
 
 func applyTimestamp(rec *log.Record, entry map[string]any) {
@@ -131,12 +202,20 @@ func applyBody(rec *log.Record, entry map[string]any) {
 	}
 }
 
-func applyAttributes(rec *log.Record, entry map[string]any) {
+// applyAttributes copies entry fields onto the record and returns the original
+// names of any keys remapped out of the reserved resource namespaces (nil in
+// the common no-collision case).
+func applyAttributes(rec *log.Record, entry map[string]any) (remapped []string) {
 	attrs := make([]attribute.KeyValue, 0, len(entry))
 	for k, v := range entry {
 		// Skip fields handled elsewhere
 		if k == "time" || k == fieldLevel || k == fieldMessage || k == "msg" {
 			continue
+		}
+
+		if isReservedAttrKey(k) {
+			remapped = append(remapped, k)
+			k = callerAttrPrefix + k
 		}
 
 		attrs = append(attrs, attribute.KeyValue{
@@ -147,6 +226,7 @@ func applyAttributes(rec *log.Record, entry map[string]any) {
 	if len(attrs) > 0 {
 		rec.AddAttributes(attrs...)
 	}
+	return remapped
 }
 
 func extractSpanContext(entry map[string]any) (trace.SpanContext, bool) {
@@ -338,7 +418,7 @@ func jsonStringify(v interface{}) string {
 func hasLogTypeAttribute(rec *log.Record) bool {
 	found := false
 	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
-		if kv.Key == "log.type" {
+		if kv.Key == logTypeAttrKey {
 			found = true
 			return false // Stop iteration
 		}
