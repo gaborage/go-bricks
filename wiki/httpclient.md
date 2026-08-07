@@ -89,6 +89,24 @@ if err != nil {
 }
 ```
 
+#### JOSE policy validation at `Build()`
+
+`Build()` also validates the `WithJOSE` policies, which the server's tag scanner has
+always done at route registration. Each non-nil policy gets its unset algorithms
+filled from the `jose` package defaults (`RS256`, `RSA-OAEP-256`, `A256GCM`,
+`application/json`) and is then run through `jose.Policy.Validate`, so a disallowed
+algorithm, a kid missing for the policy's direction, or a `Resolver` left nil while
+a policy is set now fails construction instead of failing every request. Validation
+runs on **copies** — a `jose.Policy` you reuse across builders is never mutated. The
+error is its own path, not `ErrUnsafeTransportComposition` (whose meaning stays
+transport-slot composition): every one of these — the nil `Resolver` included, which
+reports `JOSE_KEYSTORE_UNAVAILABLE` — wraps a `*jose.Error`, so match it with
+`errors.As`, or its sentinel with `errors.Is`.
+
+Kids are **not** resolved at `Build()`. A `KeyResolver` may be backed by key material
+loaded lazily, and resolving eagerly would force that load at construction — so an
+unknown kid still surfaces per request as `JOSE_KID_UNKNOWN`.
+
 ### Mutual TLS (client certificates)
 
 `NewClientTLSConfig` turns declarative certificate material into a hardened

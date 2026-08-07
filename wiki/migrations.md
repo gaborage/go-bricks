@@ -41,7 +41,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E52 | v0.51.0 → v0.52.0 | compile-break | 4 | C52.1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading |
 | E55 | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56 | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
-| E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup) | 8 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8) |
+| E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup; C57.9 fails `httpclient` construction) | 9 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8); and read every `WithJOSE` policy and direct `jose.Seal` call for an explicitly-set algorithm outside the allowlist — `KeyAlg: RSA1_5` or a non-AEAD `Enc` sealed successfully before and now fails `Build()` at startup, while a policy that named no algorithms at all takes the package defaults and starts working instead of failing every request (C57.9) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -1306,6 +1306,15 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   (it is what declares exchanges, queues, and bindings), so publisher-only services — and
   every service with no messaging configured, which reaches the same call with an empty
   declaration set and an unresolvable broker URL — keep warn-and-continue (C57.8).
+  Lastly, `httpclient.Builder.Build()` extends its ADR-044 fail-closed posture to JOSE:
+  it fills a policy's unset algorithms from the `jose` defaults and runs
+  `jose.Policy.Validate` — the check the server's tag scanner has always run at
+  registration — so a disallowed algorithm, direction-mismatched kids, or a nil
+  `Resolver` fails construction rather than every request. `jose.Seal` now runs the
+  allowlist itself as well, closing the gap where an httpclient-built policy could emit
+  a JWE wrapped with `RSA1_5` or a non-AEAD content encryption — shapes go-jose sealed
+  happily, below the framework's own floor. Kid *resolution* stays per-request, so a
+  lazily-loaded keystore is not forced open at construction (C57.9).
 - build-caught: none
 - exit: `go get github.com/gaborage/go-bricks@v0.57.0 && go mod tidy && go build ./... && go test ./...`
 
@@ -1825,6 +1834,98 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   restart backoff is configured, or start the broker first.
 - ref: `app/messaging_setup.go` (`PrepareRuntimeConsumers`) · `app/lifecycle.go`
   (`prepareMessagingConsumers`, `assertMessagingConfiguredIfDeclared`)
+
+### [C57.9] `httpclient.Build` validates JOSE policies; `jose.Seal` enforces the algorithm allowlist · breaking · when: match
+
+- detect: `git grep -n 'WithJOSE(' -- '*.go'` for the builder call sites and
+  `git grep -n 'jose\.Seal(' -- '*.go'` for direct sealing, then read the
+  `*jose.Policy` each one is handed. You are looking for three shapes:
+  an explicitly-set `SigAlg`, `KeyAlg`, or `Enc` outside the allowlist
+  (`RS256`/`PS256`; `RSA-OAEP-256`; `A256GCM`) — `git grep -nE
+  'SigAlg:|KeyAlg:|Enc:' -- '*.go'` enumerates the assignments; kids that do
+  not match the policy's `Direction` (an outbound policy carrying
+  `DecryptKid`/`VerifyKid`, or missing `SignKid`/`EncryptKid`); and a
+  `JOSEConfig` whose `Resolver` is nil while `Outbound` or `Inbound` is set.
+  All three greps are line-oriented and blind to an import alias or a policy
+  built field-by-field across statements, so treat them as probes: the
+  authoritative answer is that `Build()` now returns the error, at startup,
+  for every affected client.
+- scope: `Build` normalizes each non-nil policy — unset `SigAlg`/`KeyAlg`/`Enc`/`Cty`
+  take the `jose` package defaults — and then runs `jose.Policy.Validate`, the same
+  check the server's struct-tag scanner has always run at route registration.
+  Normalization happens on **copies**, so a `jose.Policy` shared across builders is
+  never mutated. **The two call-site classes are not affected alike.** Through
+  `WithJOSE` you get both halves — unset algorithms take the package defaults, and only
+  a genuinely invalid policy fails, at `Build()`, before the process serves traffic. A
+  **direct** `jose.Seal` caller gets the check without the defaults: `Seal` now runs the
+  allowlist itself before touching the crypto adapter, so an explicitly-set disallowed
+  algorithm that used to seal successfully returns `JOSE_ALGORITHM_DISALLOWED` at
+  runtime, and a policy that left its algorithms unset now fails the same way rather
+  than on whatever go-jose made of an empty `alg`. **Kid *resolution* is
+  deliberately not part of this**: a `KeyResolver` may be backed by lazily-loaded key
+  material, so an unknown kid still fails per request as `JOSE_KID_UNKNOWN`.
+- gate: match = a policy you hand to `WithJOSE` or `jose.Seal` explicitly names an
+  algorithm outside the allowlist, or sets kids that contradict its `Direction`, or
+  you call `WithJOSE` with a policy and no `Resolver`. The consequential case is
+  `KeyAlg: RSA1_5` or a non-AEAD `Enc`: those **worked** before — go-jose sealed them
+  and the peer accepted them — so the client is emitting tokens below the framework's
+  floor today and stops building after the bump. no-match = your policies come from
+  the defaults or `jose/testing`'s fixtures, or they set no algorithms at all *and*
+  reach the wire through `WithJOSE`. A policy that named **no** algorithms is strictly
+  better off on that path — it used to reach the crypto adapter with an empty `alg` and
+  fail every request with `JOSE_OUTBOUND_FAILED`, and now takes the package defaults and
+  works — but the same policy handed to `jose.Seal` **directly** is a match, because
+  nothing defaults it there and it now fails as `JOSE_ALGORITHM_DISALLOWED`.
+  A disallowed *signature* algorithm (`HS256`) is likewise not a regression in
+  outcome — it already failed every request — only in timing.
+- before:
+
+  ```go
+  // Built fine; every request failed, or (RSA1_5) succeeded below the algorithm floor.
+  client, err := httpclient.NewBuilder(logger).
+      WithTransport(base).
+      WithJOSE(httpclient.JOSEConfig{
+          Outbound: &jose.Policy{
+              Direction: jose.DirectionOutbound,
+              SignKid:   "our-signing", EncryptKid: "visa-vts-encrypt",
+              KeyAlg:    "RSA1_5",
+          },
+          Resolver: resolver,
+      }).Build()
+  ```
+
+- after:
+
+  ```go
+  // err: "httpclient: invalid JOSE policy: JOSE_ALGORITHM_DISALLOWED:
+  //       key-wrapping algorithm not in allowlist"
+  //
+  // Drop the field to take the default (RSA-OAEP-256):
+  Outbound: &jose.Policy{
+      Direction: jose.DirectionOutbound,
+      SignKid:   "our-signing", EncryptKid: "visa-vts-encrypt",
+  },
+  ```
+
+- apply: remove the disallowed algorithm and let the default apply, or fix the kids
+  for the policy's direction, or pass the `Resolver` you were relying on the transport
+  to have. Do not work around it by constructing the `JOSETransport` struct directly —
+  `jose.Seal` enforces the allowlist too, so that path fails at the same point without
+  the startup signal. A peer that genuinely requires `RSA1_5` needs the allowlist
+  widened in `jose/algorithms.go` with the padding-oracle risk argued in an ADR, not a
+  per-client escape hatch. To distinguish this failure from a transport-slot
+  displacement, match the error rather than its text: it wraps `*jose.Error`
+  (`errors.As`) and its sentinel (`errors.Is(err, jose.ErrAlgorithmDisallowed)`,
+  `jose.ErrPolicyMismatch`, or `jose.ErrKeyResolution` for the nil `Resolver`), and it
+  is **not** `httpclient.ErrUnsafeTransportComposition`.
+- verify: every `WithJOSE` client constructs at startup — `Build()` returns a nil
+  error — and a request through it still round-trips against the peer. A client that
+  previously sealed with `RSA1_5` will fail construction until the algorithm is
+  changed; confirm with the peer that it accepts `RSA-OAEP-256` before deploying.
+- ref: ADR-044 (the fail-closed `Build` posture this extends) ·
+  `httpclient/client.go` (`WithJOSE`, `normalizeJOSE`, `normalizedJOSEPolicy`) ·
+  `jose/sealer.go` (`Seal`) · `jose/policy.go` (`validateAlgorithms`) ·
+  [wiki/httpclient.md](httpclient.md#jose-policy-validation-at-build)
 
 ---
 

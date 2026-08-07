@@ -292,3 +292,33 @@ func TestOpenAcceptsMatchingCty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, custom, hdr.JWS.Cty)
 }
+
+// Open threads the allowlists into the parser; Seal handed its algorithms to the crypto
+// adapter verbatim, so a hand-built policy could emit a JWE wrapped with an algorithm the
+// framework's own floor excludes. Defense in depth for callers that skip Policy.Validate.
+func TestSealRejectsDisallowedKeyAlgorithm(t *testing.T) {
+	f := newTestFixture(t)
+
+	cases := []struct {
+		name   string
+		mutate func(p *Policy)
+	}{
+		{name: "pkcs1v15_key_wrapping", mutate: func(p *Policy) { p.KeyAlg = "RSA1_5" }},
+		{name: "symmetric_signature", mutate: func(p *Policy) { p.SigAlg = "HS256" }},
+		{name: "non_aead_content_encryption", mutate: func(p *Policy) { p.Enc = "A256CBC-HS512" }},
+		{name: "unset_algorithms", mutate: func(p *Policy) { p.SigAlg, p.KeyAlg, p.Enc = "", "", "" }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := *f.outbound
+			tc.mutate(&p)
+
+			compact, err := Seal([]byte(`{"pan":"4111111111111111"}`), &p, f.resolver)
+			require.Error(t, err)
+			assert.Empty(t, compact, "no token may be emitted for a disallowed algorithm")
+			require.ErrorIs(t, err, ErrAlgorithmDisallowed)
+			requireJOSEErrorCode(t, err, codeAlgorithmDisallowed)
+		})
+	}
+}
