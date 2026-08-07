@@ -42,7 +42,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E55 | v0.52.0 → v0.55.0 | additive (safe) | 3 | none | none |
 | E56 | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
 | E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup; C57.9 fails `httpclient` construction) | 9 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8); and read every `WithJOSE` policy and direct `jose.Seal` call for an explicitly-set algorithm outside the allowlist — `KeyAlg: RSA1_5` or a non-AEAD `Enc` sealed successfully before and now fails `Build()` at startup, while a policy that named no algorithms at all takes the package defaults and starts working instead of failing every request (C57.9) |
-| E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) | 2 | C58.2 C58.3 | check every environment for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`, and — in multi-tenant mode with `cache.manager.maxsize` unset — a negative `multitenant.limits.tenants`, which becomes the pool size. Under `cache.enabled: false` such a value used to be inert and now aborts startup (C58.3) |
+| E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) | 3 | C58.1 C58.2 C58.3 | check every environment for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`, and — in multi-tenant mode with `cache.manager.maxsize` unset — a negative `multitenant.limits.tenants`, which becomes the pool size. Under `cache.enabled: false` such a value used to be inert and now aborts startup (C58.3) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -1930,8 +1930,18 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ## E58 · v0.57.0 → v0.58.0 — dead exported surface removed + a cache that cannot be constructed aborts startup
 
-- gist: `server.TestShortTimeout`, `TestMediumTimeout` and `TestLongTimeout` leave the public
-  API. The three exported `time.Duration` constants were declared under a header asserting
+- gist: Two clusters of dead exported symbols leave the public API, both carrying a comment
+  that asserted a use they never had. `jose.PolicyRegistry` goes with its constructor and its
+  two methods: it cached scanned-and-resolved JOSE policies keyed by
+  `(reflect.Type, Direction)` and justified itself, in its own doc comment, with a per-request
+  hot path that does not exist — `jose:` tag scanning happens once per route at
+  `RegisterHandler` time and the resolved policies live on the route descriptor that the
+  request path reads, so there was never a re-scan for the cache to prevent, and nothing in
+  the framework ever called it. A consumer with a hand-rolled registration path scans with
+  `jose.ScanType` + `jose.ResolvePolicy` directly and memoizes the resolved `*jose.Policy`
+  itself — keyed on the type **and** the direction, since one struct used as both request and
+  response resolves to two different policies (C58.1). Alongside it,
+  `server.TestShortTimeout`, `TestMediumTimeout` and `TestLongTimeout` go too. Those three exported `time.Duration` constants were declared under a header asserting
   they are "used exclusively in test files" and were referenced by nothing in the framework,
   production or test, for their whole life. No framework code ever read them, so removing
   them changes no behaviour — only whether code naming them compiles (C58.2).
@@ -1947,13 +1957,44 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `dependencies` propagates it, and `Builder.ResolveDependencies` records it, so startup aborts.
   Reaching the cache is unaffected: an unreachable Redis at boot still only WARNs
   (C58.3, ADR-054).
-- build-caught: C58.2 C58.3
+- build-caught: C58.1 C58.2 C58.3
 - preflight: check every environment for a **negative** `cache.manager.maxsize` or
   `cache.manager.idlettl`, and — in multi-tenant mode where `cache.manager.maxsize` is unset —
   a negative `multitenant.limits.tenants`, which `BuildCacheOptions` substitutes as the pool
   size. Under `cache.enabled: false` such a value used to be inert and now aborts startup
   (C58.3)
 - exit: `go get github.com/gaborage/go-bricks@v0.58.0 && go mod tidy && go build ./... && go test ./...`
+
+### [C58.1] `jose.PolicyRegistry` and its constructor and methods are removed · compile-break · when: match
+
+- detect: `git grep -nE 'PolicyRegistry|LoadOrScan' -- '*.go'`. Keep the pattern plain — **do not write `\b` in a `git grep -E` pattern**; Git's POSIX-ERE engine strips the backslash and matches a literal `b`, so the detect silently reports "not affected" (see step 4 of the runbook protocol). Four exported symbols go: the type `jose.PolicyRegistry`, the constructor `jose.NewPolicyRegistry`, and the methods `LoadOrScan` and `Store`. Grep for the type and the constructor, not for `.Store(` on its own — `Store` is a common method name and searching it directly buries the real hits; find the registry *values* first, then their call sites
+- scope: only code that names the type or calls the constructor. The registry was never reachable from any framework entry point — `ModuleDeps` never carried one, `server.HandlerRegistry` never accepted one, no `HandlerRegistryOption` took one — so the only way to hold one is to have called `jose.NewPolicyRegistry()` yourself, in a hand-rolled registration path. Everything else in package `jose` is untouched: `ScanType`, `ResolvePolicy`, `Policy`, `Direction`, and the `jose:` struct-tag surface are unchanged
+- gate: match = the detect returns ≥1 line outside a vendor directory. no-match = no Go file names either symbol. `go build ./...` is the authoritative answer here, since a compile-break atom is resolved by the compiler regardless of how the package was imported (an alias or dot-import defeats a line-oriented grep)
+- before:
+
+  ```go
+  reg := jose.NewPolicyRegistry()
+  p, err := reg.LoadOrScan(reflect.TypeOf(req), jose.DirectionInbound)
+  ```
+
+- after:
+
+  ```go
+  p, err := jose.ScanType(reflect.TypeOf(req), jose.DirectionInbound)
+  if err != nil {
+      return err
+  }
+  if p != nil {
+      if err := jose.ResolvePolicy(resolver, p); err != nil {
+          return err
+      }
+  }
+  ```
+
+  If you were memoizing deliberately, hold the **resolved** `*jose.Policy` rather than re-deriving it — that is what the framework does: `scanRouteJOSE` scans and resolves once per route at `RegisterHandler` time and writes the result onto the route descriptor, and the request path reads that field. Your own `map[joseKey]*jose.Policy` behind a mutex — where `joseKey` is a `struct{ t reflect.Type; dir jose.Direction }` — or a `sync.Map` under that same composite key, is the whole of what `PolicyRegistry` provided. The direction must stay in the key: one struct used as both a request and a response scans to two different policies with different required keys, and a type-only key returns the wrong one on the second lookup
+- why: the type's own doc comment justified it with a per-request hot path that does not exist. `jose:` tag scanning happens once per route at registration and never per request, so there was nothing for the cache to serve — and nothing in the framework ever called it
+- verify: `go build ./... && go test ./...`
+- ref: [ADR-052](adr_052_remove_jose_policy_registry.md) · #817 · `jose/registry.go` (deleted) · `jose/scanner.go` (`ScanType`) · `jose/resolver.go` (`ResolvePolicy`) · `server/jose.go` (`scanRouteJOSE`)
 
 ### [C58.2] `server.TestShortTimeout`, `TestMediumTimeout` and `TestLongTimeout` are removed · compile-break · when: match
 

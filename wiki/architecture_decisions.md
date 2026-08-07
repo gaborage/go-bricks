@@ -938,6 +938,34 @@ Fixes [#880](https://github.com/gaborage/go-bricks/issues/880). See
 
 ---
 
+### [ADR-052: Delete `jose.PolicyRegistry` Rather Than Wire It Up](adr_052_remove_jose_policy_registry.md)
+
+**Date:** 2026-08-07 | **Status:** Accepted
+
+`jose.PolicyRegistry` was a `sync.Map`-backed cache of scanned-and-resolved JOSE policies keyed
+by `(reflect.Type, Direction)`, fully tested, exporting four symbols, and called by nothing. Its
+doc comment justified the design with a claim that does not hold: that the nil-caching avoids
+"re-scanning untagged types on every request, which would otherwise dominate the request hot
+path for non-JOSE routes". `jose:` tag scanning happens in `server.scanRouteJOSE`, which
+`RegisterHandler` calls once per route at startup; it resolves every kid and writes the policies
+onto the route descriptor (`InboundJOSE`/`OutboundJOSE`), and the request path reads those
+fields. There is no per-request scan, so the cache had nothing to serve. That measurement is what
+rejected the alternative of wiring it into `scanRouteJOSE` — it would memoize a startup-time
+operation that runs a handful of times per process — and keeping it as an "extension point" would
+preserve four exported symbols whose only justification was the disproved claim. A stale second
+copy of the same claim in `jose/policy.go` (a `Policy` described as "cached in the registry",
+which no grep for the deleted identifiers would find) is corrected in the same change. No security
+control moves: the algorithm allowlist, bidirectional-symmetry check and fail-fast kid resolution
+all live in `scanRouteJOSE`, independent of the registry.
+
+**Key Benefits:** Removes four exported symbols and, more importantly, a doc comment asserting a
+performance property the framework does not have — which would have misled the next reader
+reasoning about JOSE request cost. Fixes
+[#817](https://github.com/gaborage/go-bricks/issues/817). See [migrations.md](migrations.md)
+`[C58.1]`.
+
+---
+
 ### [ADR-053: Delete `server`'s Exported Test-Timeout Constants](adr_053_remove_server_test_timeout_constants.md)
 
 **Date:** 2026-08-07 | **Status:** Accepted

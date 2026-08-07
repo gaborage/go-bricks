@@ -28,7 +28,7 @@ func (d Direction) String() string {
 // SigAlg/KeyAlg/Enc/Cty fall back to package defaults when unset.
 //
 // A Policy is constructed once at registration time by the scanner, validated against the
-// KeyResolver, and cached in the registry — never re-parsed per request.
+// KeyResolver, and stored on the route descriptor — never re-parsed per request.
 type Policy struct {
 	Direction Direction
 
