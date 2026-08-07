@@ -474,19 +474,32 @@ func (b *Builder) warnIfCacheCriticalityOptOut() {
 }
 
 // warnIfQueryParameterLogging WARNs (never fails) when database.query.log.parameters is
-// enabled outside development. Bound parameter VALUES — on cardholder tables, the PAN —
-// are then logged verbatim, and they bypass SensitiveDataFilter: it masks by field name,
-// but parameters arrive as a positional []any under one "args" key, so no field-name
-// needle can match. See config.example.yaml.
+// enabled outside development, for the root database or any named database
+// (cfg.Databases — multi-DB single-tenant, see wiki/database.md). Bound parameter
+// VALUES — on cardholder tables, the PAN — are then logged verbatim, and they bypass
+// SensitiveDataFilter: it masks by field name, but parameters arrive as a positional
+// []any under one "args" key, so no field-name needle can match. See config.example.yaml.
 func (b *Builder) warnIfQueryParameterLogging() {
 	cfg := b.app.cfg
-	if cfg == nil || !cfg.Database.Query.Log.Parameters {
+	if cfg == nil || config.IsDevelopment(cfg.App.Env) {
 		return
 	}
-	if config.IsDevelopment(cfg.App.Env) {
-		return
+
+	if cfg.Database.Query.Log.Parameters {
+		b.logger.Warn().Msg("database.query.log.parameters is enabled: bound parameter values (possible PII/PAN) will be logged verbatim")
 	}
-	b.logger.Warn().Msg("database.query.log.parameters is enabled: bound parameter values (possible PII/PAN) will be logged verbatim")
+
+	names := make([]string, 0, len(cfg.Databases))
+	for name := range cfg.Databases {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		if cfg.Databases[name].Query.Log.Parameters {
+			b.logger.Warn().Msgf("database.query.log.parameters is enabled for named database %q: "+
+				"bound parameter values (possible PII/PAN) will be logged verbatim", name)
+		}
+	}
 }
 
 // RegisterClosers registers all components that need cleanup on shutdown.
