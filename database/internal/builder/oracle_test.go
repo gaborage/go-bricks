@@ -1,6 +1,8 @@
 package builder
 
 import (
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -43,6 +45,23 @@ func TestBuildOraclePaginationClause(t *testing.T) {
 	}
 	if clause := buildOraclePaginationClause(5, 10); clause != "OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY" {
 		t.Fatalf("unexpected clause with offset: %s", clause)
+	}
+
+	// Boundary: math.MaxInt still fits a signed int, so it survived the old
+	// int() narrowing too.
+	maxInt := uint64(math.MaxInt)
+	want := fmt.Sprintf("OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", maxInt, maxInt)
+	if clause := buildOraclePaginationClause(maxInt, maxInt); clause != want {
+		t.Fatalf("math.MaxInt clause dropped or altered: %s", clause)
+	}
+
+	// Boundary: math.MaxInt+1 wrapped negative under the old int() narrowing,
+	// which made both guards fall through and silently returned no clause --
+	// an unpaginated query returning every row.
+	overflow := uint64(math.MaxInt) + 1
+	want = fmt.Sprintf("OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", overflow, overflow)
+	if clause := buildOraclePaginationClause(overflow, overflow); clause != want {
+		t.Fatalf("math.MaxInt+1 clause dropped or altered: %s", clause)
 	}
 }
 

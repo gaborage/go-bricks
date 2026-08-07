@@ -1100,7 +1100,7 @@ func (sqb *SelectQueryBuilder) buildSelectBuilder() squirrel.SelectBuilder {
 
 	if sqb.qb.vendor == dbtypes.Oracle {
 		// Oracle 12c+ uses OFFSET...FETCH syntax
-		if clause := buildOraclePaginationClause(int(sqb.limit), int(sqb.offset)); clause != "" { //#nosec G115 -- pagination values are realistic LIMIT/OFFSET, well within int range
+		if clause := buildOraclePaginationClause(sqb.limit, sqb.offset); clause != "" {
 			builder = builder.Suffix(clause)
 		}
 		return builder
