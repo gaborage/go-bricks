@@ -613,7 +613,7 @@ The `manager.*` keys tune the per-tenant lifecycle; tune them up if you serve ma
 ### Operations
 
 | Operation | Method | Use Case |
-|-----------|--------|----------|
+| ----------- | -------- | ---------- |
 | **Basic read** | `Get(ctx, key)` | Query result caching |
 | **Basic write** | `Set(ctx, key, value, ttl)` | Store computed data with TTL |
 | **Deduplication** | `GetOrSet(ctx, key, value, ttl)` | Idempotency keys, atomic SET NX |

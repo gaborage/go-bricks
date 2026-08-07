@@ -60,7 +60,7 @@ go-bricks-migrate migrate \
 ## Subcommands
 
 | Command | Purpose |
-|---|---|
+| --- | --- |
 | `migrate` | Apply pending migrations. Default action for CI/CD rollouts. |
 | `validate` | Validate the locally-checked-in migration set against the schema history without applying anything. |
 | `info` | Print Flyway's migration status table for each target. Operator-facing; not for CI parsing. |
@@ -92,7 +92,7 @@ go-bricks-migrate quiesce clear --tenant control-plane --source-config tenants.y
 ### Tenant selection (mutually exclusive)
 
 | Flag | When to use |
-|---|---|
+| --- | --- |
 | `--tenant ID` | One-shot operator run against a single tenant. |
 | `--source-url URL` | Fleet run; lists tenants from a control-plane API matching the [HTTP listing contract](../../wiki/multi_tenant_migration.md#pre-defined-http-listing-contract). |
 | `--source-config PATH` | Fleet run from a YAML file containing a `multitenant.tenants` block. |
@@ -100,14 +100,14 @@ go-bricks-migrate quiesce clear --tenant control-plane --source-config tenants.y
 ### Credentials
 
 | Flag | Source |
-|---|---|
+| --- | --- |
 | `--credentials-from aws-secrets-manager` (default) | Per-tenant secrets fetched from AWS SM under `--secrets-prefix`. |
 | `--credentials-from config-file` | Per-tenant credentials embedded in the YAML supplied via `--source-config`. |
 
 ### Runtime tuning
 
 | Flag | Purpose |
-|---|---|
+| --- | --- |
 | `--parallel N` | Concurrency for fleet runs. `1` = sequential (default). Capped at 32 in the engine. |
 | `--continue-on-error` | Keep iterating after the first per-tenant failure instead of fail-fast. |
 | `--json` | Emit structured per-tenant and summary events on stdout for CI ingestion. |
@@ -121,7 +121,7 @@ go-bricks-migrate quiesce clear --tenant control-plane --source-config tenants.y
 Recorded on every `migration.applied` audit event. The principal is **never inferred** — pass it explicitly or it emits `<unspecified>` with a warning.
 
 | Flag | Purpose |
-|---|---|
+| --- | --- |
 | `--applied-by` | Principal that triggered the run (operator, service account, pipeline). |
 | `--git-sha` | Source commit SHA, for correlating an event to a deployment. |
 | `--pipeline-run-id` | CI/CD run identifier. |
@@ -129,7 +129,7 @@ Recorded on every `migration.applied` audit event. The principal is **never infe
 ### Environment variable overrides
 
 | Variable | Meaning |
-|---|---|
+| --- | --- |
 | `GOBRICKS_MIGRATE_SOURCE_TOKEN` | Bearer token passed to the control-plane API. Used when `--source-url` is set. |
 | `GOBRICKS_MIGRATE_SECRETS_PREFIX` | Default `--secrets-prefix`. An explicit flag still wins. |
 | `GOBRICKS_MIGRATE_APPLIED_BY` | Default `--applied-by`. An explicit flag still wins. |

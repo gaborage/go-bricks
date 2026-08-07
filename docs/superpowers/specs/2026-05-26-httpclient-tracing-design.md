@@ -81,7 +81,7 @@ func ResetTracerForTesting()
 Per the design's URL-redaction decision: `url.full` is **never** emitted. `url.path` is emitted with query string + userinfo stripped.
 
 | Attribute | Source | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `peer.service` | `info.PeerName` | Omitted when `""`. |
 | `http.request.method` | `canonicalMethod(info.Method)` | Canonical uppercase; `"_OTHER"` fallback. |
 | `server.address` | `info.URL.Hostname()` | Omitted when URL has no host. |
@@ -96,7 +96,7 @@ Per the design's URL-redaction decision: `url.full` is **never** emitted. `url.p
 ### Status mapping (verbatim from OTel HTTP client semconv v1.32.0+)
 
 | Condition | Span status |
-|---|---|
+| --- | --- |
 | `statusCode == 0 && err != nil` | `codes.Error`, message = `errType`, plus `RecordError(err)` |
 | `500 <= statusCode < 600` | `codes.Error`, message = `"HTTP {code}"`, no `RecordError` |
 | `100 <= statusCode < 500` | unset (default OK) |

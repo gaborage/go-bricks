@@ -21,7 +21,7 @@ applied **scheduler-wide** via gocron's `WithLocation`. The contract mirrors
 `database.timezone` (ADR-016) so the framework has exactly one timezone idiom.
 
 | Value | Result |
-|-------|--------|
+| ------- | -------- |
 | Unset (`""`) | Defaulted to `"UTC"` during `config.Validate()` |
 | `"UTC"`, `"America/New_York"`, … | Validated via `time.LoadLocation`; applied scheduler-wide |
 | `"-"` (sentinel) | `WithLocation` omitted → gocron uses `time.Local` (legacy) |
@@ -56,7 +56,7 @@ honor the zone with no changes to schedule construction. `FixedRate`
 ### Rejected alternatives
 
 | Alternative | Why rejected |
-|-------------|--------------|
+| ------------- | -------------- |
 | Per-job timezones | gocron has no per-job `WithLocation`; would force raw `CRON_TZ` cron strings. Out of scope for the stated need (YAGNI). |
 | Code-based `NewModule(WithTimezone(...))` | Not 12-factor; can't change per environment without recompile; diverges from the `database.timezone` config precedent. |
 | Default to host-local | Perpetuates the cross-environment drift this change exists to kill. The `"-"` sentinel preserves the escape hatch without making it the default. |

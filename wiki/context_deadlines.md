@@ -7,7 +7,7 @@
 Every operation that crosses an external boundary already has a configured timeout. Module authors do not need to wrap these themselves. The table below covers timeouts that shape **runtime, request-scoped behavior** — the budgets your handler context observes:
 
 | Boundary | Config key | Default | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | HTTP request handler (deadline applied to `c.Request().Context()`) | `server.timeout.middleware` | **5s** | Set by the framework's `Timeout` middleware. This is the budget every handler inherits. |
 | HTTP server read | `server.timeout.read` | 15s | Time to read the request body |
 | HTTP server write | `server.timeout.write` | 30s | Time to write the response (must exceed `middleware`) |
@@ -74,7 +74,7 @@ func (s *UserService) Get(ctx context.Context, id int64) (*User, error) {
 Recommended budgets when shortening (these are *upper bounds*, not floors):
 
 | Operation | Recommended cap | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | Hot-path cache lookup before DB fallback | **200–500 ms** | If Redis is slow, fall through fast |
 | Idempotency-key check / dedup lookup | **100–300 ms** | Short by design; fall through to actual work on miss |
 | Optional enrichment (recommendations, A/B flags) | **500 ms – 1 s** | Best-effort augmentation; degrade on timeout |
@@ -113,7 +113,7 @@ For scheduler jobs, the `JobContext` passed to `Executor.Execute` carries a cont
 ## Common pitfalls
 
 | Pitfall | Symptom | Fix |
-|---|---|---|
+| --- | --- | --- |
 | Forgetting `defer cancel()` on `context.WithTimeout` | `lostcancel` lint failure; goroutine leaks under load | Always pair `cancel` with `defer` on the next line |
 | Calling `context.Background()` mid-handler | Logs and spans missing trace/tenant attribution; broken trace tree | Use the inherited `ctx` or `context.WithoutCancel(ctx)` |
 | Wrapping with timeout *longer* than the inherited deadline | The longer timeout is silently ignored — the parent's earlier deadline still fires | Don't wrap; the inherited deadline is the cap. If you need longer, see "detach" above |

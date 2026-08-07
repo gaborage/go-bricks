@@ -77,7 +77,7 @@ Signatures unchanged. Framework-internal direct callers (`app/health.go`, `app/p
 ### 4. Three install seams (cover six unit-of-work types via ctx inheritance)
 
 | Seam | File | Covers |
-|---|---|---|
+| --- | --- | --- |
 | HTTP | `server/request_enrich.go` (folded into the clone) | HTTP requests |
 | AMQP message | `messaging/registry.go:690` `processMessage` (install at entry, `ReleaseAll` in the existing defer) | AMQP consumers **+ inbox `ProcessOnce`** (runs inside a handler, inherits ctx) |
 | Scheduler job | `scheduler/module.go:610` `executeJob` (install after ctx creation, `ReleaseAll` in defer) | Scheduler jobs **+ outbox relay + inbox cleanup** (run as jobs; per-tenant `SetTenant` children inherit the scope) |

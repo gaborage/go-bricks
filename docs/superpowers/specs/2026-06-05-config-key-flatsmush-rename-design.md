@@ -18,7 +18,7 @@ koanf nests on `.`, so **every** underscore becomes a nesting boundary. Any koan
 ### Empirical confirmation
 
 | Env var | Lands at koanf key | Field result |
-|---|---|---|
+| --- | --- | --- |
 | `LOG_SENSITIVE_FIELDS=pan,cvv2,otp` | `log.sensitive.fields` (orphan) | `cfg.Log.SensitiveFields == nil` |
 | `KEYSTORE_SECRET_MIN_LENGTH=64` | `keystore.secret.min.length` (orphan) | `cfg.KeyStore.SecretMinLength == 32` (default) |
 
@@ -43,7 +43,7 @@ Rename all 21 snake_case koanf leaf tags to the underscore-free flat-smushed for
 ### The full mapping (all flat-smush)
 
 | old koanf key | new koanf key | old koanf key | new koanf key |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `cache.manager.max_size` | `cache.manager.maxsize` | `outbox.table_name` | `outbox.tablename` |
 | `cache.manager.idle_ttl` | `cache.manager.idlettl` | `outbox.auto_create_table` | `outbox.autocreatetable` |
 | `cache.manager.cleanup_interval` | `cache.manager.cleanupinterval` | `outbox.default_exchange` | `outbox.defaultexchange` |

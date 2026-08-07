@@ -15,7 +15,7 @@ The question this ADR resolves: **do migration audit events ride the existing Op
 The trade-off matrix from [#381](https://github.com/gaborage/go-bricks/issues/381):
 
 | Criterion | OTel reuse | Separate sink |
-|---|---|---|
+| --- | --- | --- |
 | Compliance-grade durability (PCI / SOC 2 evidence retention) | Collectors typically buffer-and-drop under load | Stronger durability if backed by Kafka / S3 / append-only store |
 | Operator surface | Reuses existing dashboards, alerts, retention | New pipeline to operate, monitor, retain |
 | Implementation cost | Trivial — emit spans + structured log records via existing providers | New abstraction, new config, new tests |
@@ -56,7 +56,7 @@ GoBricks ships **both paths simultaneously**. The default is OTel; the `AuditRec
 Four event types, defined in `migration`:
 
 | Type | Emitter | When |
-|---|---|---|
+| --- | --- | --- |
 | `migration.applied` | Engine ([#376](https://github.com/gaborage/go-bricks/issues/376)) | Every successful or failed Flyway application against a target |
 | `state.transitioned` | Orchestrator ([#379](https://github.com/gaborage/go-bricks/issues/379)) | Every provisioning-state-machine transition (`pending` → `schema_created` → … → `ready`/`failed`) |
 | `quiesce.set` | CLI / orchestrator ([#380](https://github.com/gaborage/go-bricks/issues/380)) | Operator sets the deployment quiesce flag |
@@ -67,7 +67,7 @@ Four event types, defined in `migration`:
 Required fields on every event:
 
 | Field | Type | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `Type` | `AuditEventType` | One of the four above |
 | `Target` | `string` | Schema/database identifier. **MUST NOT** be a DSN — credentials never appear in audit |
 | `AppliedByPrincipal` | `string` | Sourced from explicit input (CLI flag or library call argument), not inferred from IAM/OS — operators must pass it |
@@ -77,7 +77,7 @@ Required fields on every event:
 Conditional fields:
 
 | Field | When set |
-|---|---|
+| --- | --- |
 | `Version` | On `migration.applied` (the Flyway version applied) |
 | `FromState`, `ToState` | On `state.transitioned` |
 | `ErrorClass` | When `Outcome == failed`; a stable string (e.g. `checksum_mismatch`, `lock_timeout`, `connection_refused`) — NOT the raw error message |

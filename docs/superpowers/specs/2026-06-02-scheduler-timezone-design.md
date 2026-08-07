@@ -35,7 +35,7 @@ Add `scheduler.timezone`, a single optional config field on `SchedulerConfig`, a
 ### Scope decisions (locked during brainstorming)
 
 | Decision | Choice | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | Granularity | **One zone for the whole service** | Maps directly to gocron's scheduler-wide `WithLocation`; matches the user's need. Per-job/per-tenant are non-goals. |
 | Configuration surface | **Config key** (`scheduler.timezone`) | 12-factor, env-overridable (`SCHEDULER_TIMEZONE=...`), sits beside existing `scheduler.security.*` / `scheduler.timeout.*`, matches ADR-016. |
 | Default when unset | **`UTC`** | Consistent with `database.timezone`; kills cross-environment drift. Accepted as a documented breaking change. |
@@ -45,7 +45,7 @@ Add `scheduler.timezone`, a single optional config field on `SchedulerConfig`, a
 ### Behavior contract
 
 | Value | Result |
-|---|---|
+| --- | --- |
 | Unset (`""`) | Defaulted to `"UTC"` during `config.Validate()` |
 | `"UTC"`, `"America/New_York"`, `"Asia/Tokyo"`, … | Validated via `time.LoadLocation`; applied scheduler-wide through `gocron.WithLocation` |
 | `"-"` (sentinel) | `WithLocation` omitted → gocron uses `time.Local` (legacy behavior) |
@@ -230,7 +230,7 @@ scheduler:
 ## Files Touched
 
 | File | Change |
-|---|---|
+| --- | --- |
 | `config/types.go` | Add `Timezone` to `SchedulerConfig` |
 | `config/validation.go` | Extract `normalizeIANATimezone` helper; default+validate `scheduler.timezone` in `Validate()` |
 | `scheduler/module.go` | Apply `gocron.WithLocation` in `ensureSchedulerInitialized`; startup-log the zone; doc-comment updates |

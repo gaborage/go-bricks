@@ -33,7 +33,7 @@ the `Store` interface, or the relay/dispatcher mechanism.
 ### Patterns mirrored from `outbox/`
 
 | Pattern | Outbox manifestation | Provisioning manifestation |
-|---|---|---|
+| --- | --- | --- |
 | Status enum on a row | `Record.Status` (`pending`/`published`/`failed`) | `Job.State` (8-value graph) |
 | Retry counter | `Record.RetryCount` + `maxRetries` ceiling | `Job.Attempts` (bookkeeping; no ceiling — failures terminate) |
 | Vendor-pluggable Store | `outbox.Store` interface; PG + Oracle impls | `provisioning.StateStore` interface; PG impl in v1 |

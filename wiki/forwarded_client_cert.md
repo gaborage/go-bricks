@@ -12,7 +12,7 @@ it to handlers and other middleware via `server.ForwardedClientCertFromContext`.
 ## Config Reference
 
 | Key | Env var | Type | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `server.forwardedclientcert.enabled` | `SERVER_FORWARDEDCLIENTCERT_ENABLED` | bool | Default `false` — middleware not wired |
 | `server.forwardedclientcert.require` | `SERVER_FORWARDEDCLIENTCERT_REQUIRE` | bool | Default `false` — parse-and-expose only. `true` rejects (401) when **either**: both `-Subject` and `-Serial-Number` are absent, **or** any of the four headers carries more than one value (the duplicate check runs first, so a duplicated `-Issuer` alone rejects even with a valid Subject/Serial-Number). A missing or malformed `-Leaf` never rejects when either identity field is present. Requires `enabled: true` (config validation error otherwise). |
 
@@ -36,7 +36,7 @@ AWS ALB verify mode forwards these headers (passthrough mode's single
 error):
 
 | Header | Carried as |
-|---|---|
+| --- | --- |
 | `X-Amzn-Mtls-Clientcert-Subject` | `ForwardedClientCert.Subject` (RFC2253 DN string, verbatim) |
 | `X-Amzn-Mtls-Clientcert-Issuer` | `ForwardedClientCert.Issuer` (verbatim) |
 | `X-Amzn-Mtls-Clientcert-Serial-Number` | `ForwardedClientCert.SerialNumber` (verbatim) |

@@ -7,7 +7,7 @@ GoBricks applies component-specific startup timeouts for graceful initialization
 GoBricks applies component-specific startup timeouts for graceful initialization:
 
 | Setting | Default | Purpose |
-|---------|---------|---------|
+| --------- | --------- | --------- |
 | `app.startup.timeout` | 10s | Overall startup timeout (also serves as fallback for unset components) |
 | `app.startup.database` | 10s | Database connection establishment |
 | `app.startup.messaging` | 10s | AMQP broker connection |
@@ -43,7 +43,7 @@ app:
 `server.bodylimit` (int64 bytes; env `SERVER_BODYLIMIT`) caps the accepted HTTP request body size, rejecting an over-cap request with `413 Request Entity Too Large`. A request with a known `Content-Length` above the cap is rejected up front, before the handler runs; a chunked / unknown-length body is bounded by a limited reader instead, so the 413 surfaces when the read crosses the cap while the handler consumes the body:
 
 | Setting | Default | Purpose |
-|---------|---------|---------|
+| --- | --- | --- |
 | `server.bodylimit` | 10 MB (10485760 bytes) | Maximum accepted HTTP request body size |
 
 Raise it for endpoints that accept large uploads or bulk imports, or lower it to tighten the boundary:
@@ -58,7 +58,7 @@ server:
 `server.tls.*` enables HTTPS on the HTTP server listener (ADR-042). The default posture is **disabled** — every field defaults to its zero value, which leaves the listener plaintext, byte-for-byte unchanged from prior behavior:
 
 | Setting | Default | Purpose |
-|---------|---------|---------|
+| --------- | --------- | --------- |
 | `server.tls.enabled` | `false` | Enable the HTTPS listener |
 | `server.tls.certfile` / `server.tls.certvalue` | `""` | Server certificate: file path or base64-encoded PEM (exactly one) |
 | `server.tls.keyfile` / `server.tls.keyvalue` | `""` | Server private key: file path or base64-encoded PEM (exactly one) |
@@ -71,7 +71,7 @@ Bad or unreadable material fails `Start()` fast — it never silently falls back
 `server.forwardedclientcert.*` (ADR-043) parses ALB verify-mode `X-Amzn-Mtls-Clientcert-*` identity headers. The default posture is **disabled** — the middleware is not wired into the request path at all:
 
 | Setting | Default | Purpose |
-|---------|---------|---------|
+| --- | --- | --- |
 | `server.forwardedclientcert.enabled` | `false` | Wire the middleware; parse and expose the identity |
 | `server.forwardedclientcert.require` | `false` | Reject (401) requests missing both `-Subject` and `-Serial-Number` (a malformed `-Leaf` alone never rejects); requires `enabled: true` |
 

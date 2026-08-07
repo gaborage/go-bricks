@@ -19,7 +19,7 @@ Explicitly out of scope (considered, rejected for now): adversarial test authors
 ## Decisions
 
 | Question | Decision |
-|---|---|
+| --- | --- |
 | Goal | Harden gauntlet; human/agent review stays the final gate |
 | Layers | Mutation testing gate + property-based testing exemplar suites |
 | Mutation enforcement | Diff-scoped local gate (`make mutate`) + advisory nightly full-repo baseline |
@@ -72,7 +72,7 @@ the source-to-test 1:1 naming rule, alongside the existing `testhelpers_test.go`
 exception. Test functions use the mandatory camelCase convention.
 
 | Package | Invariants |
-|---|---|
+| --- | --- |
 | `database` (query builder) | placeholder count == arg count; Oracle reserved words always quoted; PG placeholders `$1..$n` sequential; same input twice → identical SQL |
 | `config` | `InjectInto` never panics on arbitrary values; env > yaml > default priority holds; `time.Duration` and `[]string` round-trip |
 | `jose` | random payload sign+encrypt → decrypt+verify round-trips; any single-byte ciphertext tamper is rejected |

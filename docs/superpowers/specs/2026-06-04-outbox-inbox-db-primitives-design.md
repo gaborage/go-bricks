@@ -30,7 +30,7 @@ All work is **additive** (new exported symbols) and **non-breaking**. The projec
 ## 2. Locked decisions
 
 | # | Decision | Choice |
-|---|----------|--------|
+| --- | ---------- | -------- |
 | D1 | Scope/sequencing | All four in one effort, primitives first, then inbox builds on them |
 | D2 | #535 header constant home | `outbox` package (relay is the single source of truth) |
 | D3 | #536 `ProcessOnce` tx model | Inbox **owns the tx** and passes `tx` to `fn` (atomic dedup + side effects) |

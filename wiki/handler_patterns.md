@@ -124,7 +124,7 @@ func (h *Handler) getLegacyUser(req GetReq, ctx server.HandlerContext) (LegacyUs
 **Error Handling in Raw Mode:**
 
 | Error Path | Raw Mode Behavior |
-|------------|-------------------|
+| ------------ | ------------------- |
 | Handler returns `IAPIError` | Minimal JSON: `{"code": "...", "message": "..."}` |
 | Binding/validation fails | Same minimal JSON |
 | Unhandled error (panic, timeout) | Detected via context key, same minimal JSON |
@@ -186,7 +186,7 @@ Produces:
 ### Interaction with Other Modes
 
 | Mode | Behavior |
-|------|----------|
+| ------ | ---------- |
 | **Standard envelope** (default) | Response body: `{"data": ..., "meta": {handler-meta ∪ framework-meta}}` |
 | **Raw mode** (`WithRawResponse()`) | Meta map is silently dropped; only `data` is serialized. A debug log notes the misconfiguration. |
 | **JOSE-protected route** | Sealed body is the full `{data, meta}` envelope (symmetric with how the JOSE error path already builds an envelope). Vanilla `Result[R]` from JOSE routes continues to seal bare data unchanged. |

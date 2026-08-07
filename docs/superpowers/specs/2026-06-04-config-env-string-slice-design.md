@@ -32,7 +32,7 @@ A **single**-element env override works; only multi-element lists are broken. Th
 path affects **every** `[]string` field — all of which are security-relevant:
 
 | Config key | Env var | Failure mode (multi-value via env) |
-|---|---|---|
+| --- | --- | --- |
 | `scheduler.security.cidrallowlist` | `SCHEDULER_SECURITY_CIDRALLOWLIST` | 0 valid CIDRs → **localhost-only** (fail-closed, allowlist ignored) |
 | `scheduler.security.trustedproxies` | `SCHEDULER_SECURITY_TRUSTEDPROXIES` | 0 valid proxies → proxy headers untrusted, real client IPs lost |
 | `debug.allowedips` | `DEBUG_ALLOWEDIPS` | debug-endpoint IP gate degraded |
@@ -63,7 +63,7 @@ valid entries.
 ### Scope decisions (locked during brainstorming)
 
 | Decision | Choice | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | Fix approach | **Universal decode hook** (not per-key env registry, not docs-only) | One change fixes every `[]string` field, present and future. No hand-maintained key list to forget. Matches "Explicit > Implicit / no silent failures". |
 | Whitespace / empties | **Trim each element, drop empties** | `logger/filter.go:220` substring-matches sensitive-field names **without** trimming; the stock `mapstructure.StringToSliceHookFunc` would leave `" cvv2"` and silently fail to redact. |
 | All-invalid security CIDR list | **Fail-fast at startup** (`config.Validate`) | A fat-fingered security control must fail loudly, not silently lock to localhost. |
@@ -75,7 +75,7 @@ valid entries.
 ### Behavior contract (`string → []string`)
 
 | Input (env value or `default:` tag) | Result |
-|---|---|
+| --- | --- |
 | `"10.0.0.0/8,192.168.0.0/16"` | `["10.0.0.0/8", "192.168.0.0/16"]` |
 | `"10.0.0.0/8"` | `["10.0.0.0/8"]` (unchanged from today) |
 | `"pan, cvv2 , otp"` | `["pan", "cvv2", "otp"]` (trimmed) |

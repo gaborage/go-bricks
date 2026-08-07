@@ -65,7 +65,7 @@ with the pre-existing flat `reconnect.delay` sibling and contradicts the
 ### The 21 renamed keys
 
 | old key | new key |
-|---|---|
+| --- | --- |
 | `cache.manager.max_size` | `cache.manager.maxsize` |
 | `cache.manager.idle_ttl` | `cache.manager.idlettl` |
 | `cache.manager.cleanup_interval` | `cache.manager.cleanupinterval` |

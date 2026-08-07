@@ -42,7 +42,7 @@ The `ModuleRegistry` type-asserts each module before calling these methods. Modu
 ### 3. Remove stutter from framework module names
 
 | Package | Old Type | New Type | Old Constructor | New Constructor |
-|---------|----------|----------|-----------------|-----------------|
+| --------- | ---------- | ---------- | ----------------- | ----------------- |
 | `outbox` | `OutboxModule` | `Module` | `NewOutboxModule()` | `NewModule()` |
 | `scheduler` | `SchedulerModule` | `Module` | `NewSchedulerModule()` | `NewModule()` |
 | `keystore` | `KeystoreModule` | `Module` | `NewKeystoreModule()` | `NewModule()` |

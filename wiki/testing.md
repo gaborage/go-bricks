@@ -252,7 +252,7 @@ never routed, so routing-derived state is empty by default — seed only what th
 test reads:
 
 | State | How to seed | Read back via |
-|---|---|---|
+| --- | --- | --- |
 | Route template (`RouteTemplate()`) | `server.WithRouteTemplate("/api/orders/:id")` construction option | `ctx.RouteTemplate()` |
 | Path params (`Param`, `param:"…"` binding) | `ctx.SetPathParams([]server.PathParam{…})` | `ctx.Param("id")` / `PathParams()` |
 | Query params | already read from the request URL | `ctx.Query("limit")` |
@@ -341,7 +341,7 @@ ranges vs `git merge-base HEAD origin/main`, runs gremlins per changed package,
 and applies this policy to mutants that land on changed lines:
 
 | Status | Verdict | Rationale |
-|---|---|---|
+| --- | --- | --- |
 | `LIVED` | **fail** (exit 1) | A mutant on a line you wrote survived your tests |
 | `NOT COVERED` | warn | Coverage is SonarCloud's gate; no double-gating |
 | `TIMED OUT` | warn | Indeterminate — see the timeout ceiling below |
@@ -363,7 +363,7 @@ the set that would have been discarded.
 Knobs (all `?=`, so the environment overrides):
 
 | Variable | Default | Effect |
-|---|---|---|
+| --- | --- | --- |
 | `MUTATE_CPU` | 4 | Whole-run core budget for `make mutate`. A per-worker share and an effective worker count are derived from it together, so `workers x share` never exceeds it — a budget below `MUTATE_WORKERS` shrinks the worker count rather than handing each worker a core. The share is pinned as `GOMAXPROCS`/`GOFLAGS -p` on every child. Negative values are rejected; `0` opts out. |
 | `MUTATE_WORKERS` | 2 | Concurrent gremlins workers for `make mutate`. **Not** a core count — each worker is a full `go test`, whose own parallelism `MUTATE_CPU` is what bounds. |
 | `MUTATE_COOLDOWN` | 30s | Pause after each mutated package so the machine sheds heat. Any `time.ParseDuration` string; `0` disables. Skipped after a skipped package and after the last one. |

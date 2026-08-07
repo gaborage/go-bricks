@@ -248,7 +248,7 @@ For cross-package invocation of the flat `MiddlewareFunc`, use `server.NewHandle
 ## 10. Files touched
 
 | File | Change |
-|---|---|
+| --- | --- |
 | `app/module.go` | New `GlobalMiddlewareRegisterer` interface |
 | `app/module_registry.go` | New `CollectGlobalMiddleware()` (ranges `r.modules`, ~:105/:141) |
 | `app/lifecycle.go` | Collect + register via optional type assertion, before `RegisterRoutes` (:63) |

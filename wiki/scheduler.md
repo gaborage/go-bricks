@@ -57,7 +57,7 @@ scheduler:
 ```
 
 | Value | Behavior |
-|-------|----------|
+| ------- | ---------- |
 | unset | UTC (default) |
 | IANA name (`UTC`, `Europe/Madrid`, …) | Jobs fire at that zone's wall-clock time; DST handled by the zone |
 | `"-"` | Host-local time (the process `time.Local`) — legacy behavior |

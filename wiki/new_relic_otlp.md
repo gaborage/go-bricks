@@ -101,7 +101,7 @@ trace:
 ## Configuration Options Explained
 
 | Option | Values | Default | New Relic Recommendation |
-|--------|--------|---------|--------------------------|
+| -------- | -------- | --------- | -------------------------- |
 | `compression` | `gzip`, `none` | `gzip` | **gzip** (~70% bandwidth reduction) |
 | `temporality` | `delta`, `cumulative` | `cumulative` | **delta** (lower memory, better performance) |
 | `histogramaggregation` | `exponential`, `explicit` | `explicit` | **exponential** (better precision, ~10x lower memory) |
@@ -118,7 +118,7 @@ New Relic enforces attribute limits on its ingest side, but be aware of:
 ## Performance Impact
 
 | Feature | Bandwidth Savings | Memory Savings | Notes |
-|---------|-------------------|----------------|-------|
+| --------- | ------------------- | ---------------- | ------- |
 | gzip compression | ~70% | N/A | CPU overhead ~1-2ms per batch |
 | Delta temporality | N/A | ~50% | Resets counters after each export |
 | Exponential histograms | ~30% | ~90% | MaxSize=160, MaxScale=20 (auto-configured) |
@@ -126,7 +126,7 @@ New Relic enforces attribute limits on its ingest side, but be aware of:
 ## Endpoint Format Rules (CRITICAL)
 
 | Protocol | Endpoint Format | Example | TLS |
-|----------|-----------------|---------|-----|
+| ---------- | ----------------- | --------- | ----- |
 | `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` | Auto-enabled for 4317 |
 | `grpc` (insecure) | `host:port` + `insecure: true` | `localhost:4317` | Disabled |
 | `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` | Enabled |

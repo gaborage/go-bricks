@@ -13,7 +13,7 @@
 ## File Structure
 
 | File | Responsibility | Change |
-|---|---|---|
+| --- | --- | --- |
 | server/handler.go | Boundary types, HandlerContext, RouteRegistrar+seam, adapters, test ctor | Modify (foundation) |
 | server/route_registrar.go | routeGroup adapts go-bricks↔echo.Group | Modify |
 | server/server.go | drop Echo(); RootGroup(); RegisterReadyHandler retype | Modify |

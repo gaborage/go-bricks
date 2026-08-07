@@ -42,7 +42,7 @@ keystore:
 Each `keys.<name>` entry resolves to **exactly one** of:
 
 | Shape | Required | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `public` (+ optional `private`) | `public` | RSA pair. PKCS8 with PKCS1 fallback for private; public/private mismatch is a startup error |
 | `secret` | the source | Raw symmetric bytes. Mutually exclusive with `public`/`private` |
 

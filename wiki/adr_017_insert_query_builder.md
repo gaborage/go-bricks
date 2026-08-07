@@ -8,7 +8,7 @@
 Three of the four mutation entry points on `QueryBuilder` returned a go-bricks-owned interface (`SelectQueryBuilder`, `UpdateQueryBuilder`, `DeleteQueryBuilder`) that exposed `ToSQL()` (uppercase, idiomatic Go per [SonarCloud rule S8179](https://rules.sonarsource.com/go/RSPEC-8179/)). The fourth — `Insert` — leaked the upstream `squirrel.InsertBuilder` directly, whose only render method is the lowercase `ToSql()` defined by `squirrel.Sqlizer`.
 
 | Builder | Previous return | Render method |
-|---|---|---|
+| --- | --- | --- |
 | `qb.Select(...)` | `types.SelectQueryBuilder` | `ToSQL()` ✅ |
 | `qb.Update(...)` | `types.UpdateQueryBuilder` | `ToSQL()` ✅ |
 | `qb.Delete(...)` | `types.DeleteQueryBuilder` | `ToSQL()` ✅ |

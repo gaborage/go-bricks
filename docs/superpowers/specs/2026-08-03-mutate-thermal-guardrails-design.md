@@ -38,7 +38,7 @@ speed.
 ### 1. Knobs
 
 | Variable | Default | Effect |
-|---|---|---|
+| --- | --- | --- |
 | `MUTATE_CPU` | `4` | Total core budget for the local gate |
 | `MUTATE_WORKERS` | `2` | Concurrent gremlins workers (unchanged) |
 | `MUTATE_COOLDOWN` | `30s` | Pause after each package's mutants |
