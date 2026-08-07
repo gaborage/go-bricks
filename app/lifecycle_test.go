@@ -378,6 +378,39 @@ func TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl(t *testing.T) {
 	}
 }
 
+// TestPrepareRuntimeSucceedsWithNoMessagingConfigured is the regression guard for
+// the population that has nothing to do with messaging at all. Consumer bootstrap
+// is attempted unconditionally — the messaging manager is built whether or not a
+// broker is configured, and the declaration set is non-nil even when empty — so
+// `EnsureConsumers` fails here with a not-configured error on every messaging-free
+// service. Grading that failure as fatal would stop all of them from booting.
+// Built through the public constructor because the failure only appears once the
+// real manager and declaration wiring are in place.
+func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
+	cfg := &config.Config{
+		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Server:      config.ServerConfig{Port: 8080},
+		Multitenant: config.MultitenantConfig{Enabled: false},
+		// No Messaging and no Database block at all.
+	}
+
+	a, _, err := NewWithConfig(cfg, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if a.messagingManager != nil {
+			a.messagingManager.StopCleanup()
+		}
+		if a.dbManager != nil {
+			a.dbManager.StopCleanup()
+		}
+	})
+
+	require.True(t, a.messagingInitializer.IsAvailable(),
+		"a messaging manager is built even with no broker configured — the premise of this guard")
+
+	require.NoError(t, a.prepareRuntime())
+}
+
 // globalMWCapturingServer implements ServerRunner (via embedded mockServer) plus the
 // optional RegisterGlobalMiddleware capability, capturing what it receives.
 type globalMWCapturingServer struct {
