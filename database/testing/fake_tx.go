@@ -3,6 +3,7 @@ package testing
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -228,7 +229,7 @@ func (tx *TestTx) Exec(_ context.Context, query string, args ...any) (sql.Result
 
 // Prepare implements dbtypes.Tx.Prepare (rarely used in tests).
 func (tx *TestTx) Prepare(_ context.Context, _ string) (dbtypes.Statement, error) {
-	return nil, fmt.Errorf("Prepare() not implemented in TestTx (prepared statements rarely needed in transaction tests)")
+	return nil, errors.New("Prepare() not implemented in TestTx (prepared statements rarely needed in transaction tests)")
 }
 
 // Commit implements dbtypes.Tx.Commit.
@@ -237,10 +238,10 @@ func (tx *TestTx) Commit(_ context.Context) error {
 	defer tx.mu.Unlock()
 
 	if tx.committed {
-		return fmt.Errorf("transaction already committed")
+		return errors.New("transaction already committed")
 	}
 	if tx.rolledBack {
-		return fmt.Errorf("transaction already rolled back")
+		return errors.New("transaction already rolled back")
 	}
 
 	tx.committed = true

@@ -175,7 +175,7 @@ func newControllableMockClient() (client *controllableMockAMQPClient, readySigna
 		}
 	}
 
-	return
+	return client, readySignal
 }
 
 // IsReady overrides the base implementation with channel-based signaling

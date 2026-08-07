@@ -120,10 +120,10 @@ func (s *PGRoleSpec) Validate() error {
 // to converge; the idempotent template makes that safe.
 func ProvisionPGRoles(ctx context.Context, db *sql.DB, spec *PGRoleSpec) error {
 	if spec == nil {
-		return fmt.Errorf("migration: ProvisionPGRoles requires a non-nil *PGRoleSpec")
+		return errors.New("migration: ProvisionPGRoles requires a non-nil *PGRoleSpec")
 	}
 	if db == nil {
-		return fmt.Errorf("migration: ProvisionPGRoles requires a non-nil *sql.DB")
+		return errors.New("migration: ProvisionPGRoles requires a non-nil *sql.DB")
 	}
 	if err := spec.Validate(); err != nil {
 		return err
@@ -156,7 +156,7 @@ func ProvisionPGRoles(ctx context.Context, db *sql.DB, spec *PGRoleSpec) error {
 // for review should redact the literal before persisting to disk.
 func PGRoleProvisioningSQL(spec *PGRoleSpec) ([]string, error) {
 	if spec == nil {
-		return nil, fmt.Errorf("migration: PGRoleProvisioningSQL requires a non-nil *PGRoleSpec")
+		return nil, errors.New("migration: PGRoleProvisioningSQL requires a non-nil *PGRoleSpec")
 	}
 	if err := spec.Validate(); err != nil {
 		return nil, err

@@ -39,7 +39,7 @@ func (b *OTelBridge) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 
-	var entry map[string]interface{}
+	var entry map[string]any
 	if json.Unmarshal(p, &entry) != nil {
 		// Ignore malformed or non-JSON entries (e.g., pretty/console logs). As an
 		// io.Writer we MUST report the bytes as consumed (len(p), nil); surfacing the
@@ -285,7 +285,7 @@ func mapZerologLevelToOTel(level string) log.Severity {
 }
 
 // toLogValue converts a Go value to an OpenTelemetry attribute value.
-func toLogValue(v interface{}) attribute.Value {
+func toLogValue(v any) attribute.Value {
 	if v == nil {
 		return attribute.StringValue("")
 	}
@@ -301,14 +301,14 @@ func toLogValue(v interface{}) attribute.Value {
 		return attribute.Float64Value(val)
 	case bool:
 		return attribute.BoolValue(val)
-	case []interface{}:
+	case []any:
 		// Convert array to slice of attribute values
 		slice := make([]attribute.Value, len(val))
 		for i, item := range val {
 			slice[i] = toLogValue(item)
 		}
 		return attribute.SliceValue(slice...)
-	case map[string]interface{}:
+	case map[string]any:
 		// Convert map to key-value pairs
 		kvs := make([]attribute.KeyValue, 0, len(val))
 		for k, v := range val {
@@ -325,7 +325,7 @@ func toLogValue(v interface{}) attribute.Value {
 }
 
 // jsonStringify safely converts a value to JSON string.
-func jsonStringify(v interface{}) string {
+func jsonStringify(v any) string {
 	bytes, err := json.Marshal(v)
 	if err != nil {
 		return ""

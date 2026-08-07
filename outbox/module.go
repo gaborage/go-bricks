@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -99,10 +100,10 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	// resolvers, so these never fire through the normal registration path.
 	// verifyStartupDatabase (below) is the real fail-fast for an enabled outbox.
 	if m.getDB == nil {
-		return fmt.Errorf("outbox: database resolver (deps.DB) is required when outbox is enabled")
+		return errors.New("outbox: database resolver (deps.DB) is required when outbox is enabled")
 	}
 	if m.getMsg == nil {
-		return fmt.Errorf("outbox: messaging resolver (deps.Messaging) is required when outbox is enabled")
+		return errors.New("outbox: messaging resolver (deps.Messaging) is required when outbox is enabled")
 	}
 
 	// Tenancy guard-order: resolver-presence/swap → shared+static-tenants conflict →
@@ -177,10 +178,10 @@ func (m *Module) checkTenancyFanOutGuards() error {
 	if m.config != nil && !config.IsMessagingConfigured(&m.config.Messaging) {
 		switch {
 		case !m.config.Multitenant.Enabled && !m.sharedLedger():
-			return fmt.Errorf("outbox: messaging is not configured but outbox.enabled=true; " +
+			return errors.New("outbox: messaging is not configured but outbox.enabled=true; " +
 				"set messaging.broker.url (or env MESSAGING_BROKER_URL) or set outbox.enabled=false")
 		case m.sharedLedger() && m.config.Source.Type != config.SourceTypeDynamic:
-			return fmt.Errorf("outbox: tenancy=shared with a static source requires the root " +
+			return errors.New("outbox: tenancy=shared with a static source requires the root " +
 				"messaging.broker.url (the shared relay publishes on the control-plane broker); " +
 				"set messaging.broker.url or use a dynamic source that resolves the \"\" key")
 		}
@@ -195,11 +196,11 @@ func (m *Module) checkTenancyFanOutGuards() error {
 	if m.config != nil && m.config.Multitenant.Enabled && !m.sharedLedger() {
 		switch {
 		case m.config.Source.Type == config.SourceTypeDynamic:
-			return fmt.Errorf("outbox: relay is not supported with dynamic multi-tenant sources " +
+			return errors.New("outbox: relay is not supported with dynamic multi-tenant sources " +
 				"(source.type=dynamic); use static multitenant.tenants config, set outbox.tenancy=shared " +
 				"to relay a single control-plane ledger, or set outbox.enabled=false")
 		case len(m.config.Multitenant.Tenants) == 0:
-			return fmt.Errorf("outbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
+			return errors.New("outbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
 				"the relay would never deliver any events. Configure multitenant.tenants, set outbox.tenancy=shared, " +
 				"or set outbox.enabled=false")
 		}
@@ -377,7 +378,7 @@ type sharedTx struct {
 // assertion on deps.Outbox.
 func (p *lazyPublisher) RunInSharedTx(ctx context.Context, fn func(ctx context.Context, tx dbtypes.Tx) error) error {
 	if !p.module.sharedLedger() {
-		return fmt.Errorf("outbox: RunInSharedTx requires outbox.tenancy=shared")
+		return errors.New("outbox: RunInSharedTx requires outbox.tenancy=shared")
 	}
 	db, err := p.module.getDB(ctx)
 	if err != nil {
@@ -391,7 +392,7 @@ func (p *lazyPublisher) RunInSharedTx(ctx context.Context, fn func(ctx context.C
 func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.OutboxEvent) (string, error) {
 	if p.module.sharedLedger() {
 		if _, ok := tx.(*sharedTx); !ok {
-			return "", fmt.Errorf("outbox: tenancy=shared requires the transaction to originate from " +
+			return "", errors.New("outbox: tenancy=shared requires the transaction to originate from " +
 				"RunInSharedTx (deps.Outbox); a foreign transaction may target a database the relay never polls, " +
 				"and its events would be silently lost")
 		}

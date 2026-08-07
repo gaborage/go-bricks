@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -413,7 +414,7 @@ func TestWrapHandlerValidationErrorProdEnvOmitsDetails(t *testing.T) {
 
 func TestWrapHandlerValidateOtherErrorInDevIncludesErrorDetail(t *testing.T) {
 	e := echo.New()
-	e.Validator = failingValidator{err: fmt.Errorf("boom")} // not a ValidationError
+	e.Validator = failingValidator{err: errors.New("boom")} // not a ValidationError
 
 	binder := NewRequestBinder()
 	cfg := &config.Config{App: config.AppConfig{Env: "development"}}

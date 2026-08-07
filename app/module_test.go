@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -203,7 +202,7 @@ func TestModuleRegistryDeclareMessaging(t *testing.T) {
 			return mockDB, nil
 		},
 		Messaging: func(_ context.Context) (messaging.AMQPClient, error) {
-			return nil, fmt.Errorf("messaging not configured")
+			return nil, errors.New("messaging not configured")
 		},
 	}
 

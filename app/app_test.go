@@ -5,7 +5,6 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -387,15 +386,15 @@ var _ KeyStoreProvider = (*MockKeyStoreModule)(nil)
 type stubKeyStore struct{}
 
 func (s *stubKeyStore) PublicKey(_ string) (*rsa.PublicKey, error) {
-	return nil, fmt.Errorf("stub")
+	return nil, errors.New("stub")
 }
 
 func (s *stubKeyStore) PrivateKey(_ string) (*rsa.PrivateKey, error) {
-	return nil, fmt.Errorf("stub")
+	return nil, errors.New("stub")
 }
 
 func (s *stubKeyStore) Secret(_ string) ([]byte, error) {
-	return nil, fmt.Errorf("stub")
+	return nil, errors.New("stub")
 }
 
 type testAppFixture struct {
@@ -1313,7 +1312,7 @@ func TestNew(t *testing.T) {
 		// We trigger a failure by providing an invalid config loader
 		opts := &Options{
 			ConfigLoader: func() (*config.Config, error) {
-				return nil, fmt.Errorf("simulated config error")
+				return nil, errors.New("simulated config error")
 			},
 		}
 
@@ -1677,7 +1676,7 @@ func TestDrainServerError(t *testing.T) {
 	t.Run("channel with error returns error", func(t *testing.T) {
 		app := &App{}
 		ch := make(chan error, 1)
-		expectedErr := fmt.Errorf("server error")
+		expectedErr := errors.New("server error")
 		ch <- expectedErr
 
 		err := app.drainServerError(ch)

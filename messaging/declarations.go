@@ -334,7 +334,7 @@ func (d *Declarations) validateQueueConflicts() error {
 // The order is important: exchanges first, then queues, then bindings, then publishers/consumers.
 func (d *Declarations) ReplayToRegistry(reg RegistryInterface) error {
 	if reg == nil {
-		return fmt.Errorf("registry is nil")
+		return errors.New("registry is nil")
 	}
 
 	// Register exchanges first

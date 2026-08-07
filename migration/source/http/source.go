@@ -228,7 +228,7 @@ func (s *TenantSource) fetchPage(ctx context.Context, cursor string) (*envelopeD
 		return nil, fmt.Errorf("decode control-plane envelope: %w", err)
 	}
 	if env.Data == nil {
-		return nil, fmt.Errorf("control-plane envelope missing data field")
+		return nil, errors.New("control-plane envelope missing data field")
 	}
 	return env.Data, nil
 }

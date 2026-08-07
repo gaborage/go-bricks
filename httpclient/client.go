@@ -1374,6 +1374,28 @@ func isJSONContentType(ct string) bool {
 // can mask sensitive keys. Non-JSON, JSON primitive/array roots, and parse failures
 // log only metadata (content-type + byte count) — primitive/array roots cannot be
 // key-walked by the filter, so dropping them is the safe default.
+// appendBodyPreview attaches body size, a truncation flag, and a filtered
+// preview to dbg. Returns dbg untouched when there is no body.
+// Callers must hold the `c.config != nil && c.config.LogPayloads` guard.
+func (c *client) appendBodyPreview(dbg logger.LogEvent, body []byte, ct string) logger.LogEvent {
+	if len(body) == 0 {
+		return dbg
+	}
+	limit := c.config.MaxPayloadLogBytes
+	if limit <= 0 {
+		limit = defaultMaxPayloadLogBytes
+	}
+	preview := body
+	truncated := false
+	if len(preview) > limit {
+		preview = preview[:limit]
+		truncated = true
+	}
+	dbg = dbg.Int("body_size", len(body)).
+		Str("body_truncated", strconv.FormatBool(truncated))
+	return logBodyPreview(dbg, preview, ct)
+}
+
 func logBodyPreview(dbg logger.LogEvent, preview []byte, ct string) logger.LogEvent {
 	if !isJSONContentType(ct) {
 		return dbg.Str("body_content_type", ct).Int("body_preview_dropped", len(preview))
@@ -1437,21 +1459,7 @@ func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID strin
 			// Headers go through logger filter to mask sensitive keys/values
 			dbg = dbg.Interface("headers", httpReq.Header)
 		}
-		if len(body) > 0 {
-			limit := c.config.MaxPayloadLogBytes
-			if limit <= 0 {
-				limit = defaultMaxPayloadLogBytes
-			}
-			truncated := false
-			preview := body
-			if len(preview) > limit {
-				preview = preview[:limit]
-				truncated = true
-			}
-			dbg = dbg.Int("body_size", len(body)).
-				Str("body_truncated", strconv.FormatBool(truncated))
-			dbg = logBodyPreview(dbg, preview, httpReq.Header.Get(headerContentType))
-		}
+		dbg = c.appendBodyPreview(dbg, body, httpReq.Header.Get(headerContentType))
 		dbg.Msg("REST client request")
 	}
 }
@@ -1479,21 +1487,7 @@ func (c *client) logResponse(resp *Response, traceID string) {
 			Dur("elapsed", resp.Stats.ElapsedTime).
 			Int64("call_count", resp.Stats.CallCount).
 			Str("request_id", traceID)
-		if len(resp.Body) > 0 {
-			limit := c.config.MaxPayloadLogBytes
-			if limit <= 0 {
-				limit = defaultMaxPayloadLogBytes
-			}
-			truncated := false
-			preview := resp.Body
-			if len(preview) > limit {
-				preview = preview[:limit]
-				truncated = true
-			}
-			dbg = dbg.Int("body_size", len(resp.Body)).
-				Str("body_truncated", strconv.FormatBool(truncated))
-			dbg = logBodyPreview(dbg, preview, resp.Headers.Get(headerContentType))
-		}
+		dbg = c.appendBodyPreview(dbg, resp.Body, resp.Headers.Get(headerContentType))
 		// Response headers go through logger filter to mask sensitive keys/values
 		if len(resp.Headers) > 0 {
 			dbg = dbg.Interface("headers", resp.Headers)

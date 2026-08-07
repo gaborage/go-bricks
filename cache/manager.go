@@ -104,15 +104,15 @@ func DefaultManagerConfig() ManagerConfig {
 // The connector function is called to create new cache instances on demand.
 func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, error) {
 	if connector == nil {
-		return nil, fmt.Errorf("connector function is required")
+		return nil, errors.New("connector function is required")
 	}
 
 	if cfg.MaxSize < 0 {
-		return nil, fmt.Errorf("maxsize cannot be negative")
+		return nil, errors.New("maxsize cannot be negative")
 	}
 
 	if cfg.IdleTTL < 0 {
-		return nil, fmt.Errorf("idlettl cannot be negative")
+		return nil, errors.New("idlettl cannot be negative")
 	}
 
 	if cfg.CleanupInterval <= 0 {

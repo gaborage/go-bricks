@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -92,7 +93,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	// resolver, so this never fires through the normal registration path.
 	// verifyStartupDatabase (below) is the real fail-fast for an enabled inbox.
 	if m.getDB == nil {
-		return fmt.Errorf("inbox: database resolver (deps.DB) is required when inbox is enabled")
+		return errors.New("inbox: database resolver (deps.DB) is required when inbox is enabled")
 	}
 
 	// Shared (control-plane) ledger tenancy: require the framework-injected resolver
@@ -197,11 +198,11 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 	if m.config != nil && m.config.Multitenant.Enabled && !m.sharedLedger() {
 		switch {
 		case m.config.Source.Type == config.SourceTypeDynamic:
-			return fmt.Errorf("inbox: retention cleanup is not supported with dynamic multi-tenant sources " +
+			return errors.New("inbox: retention cleanup is not supported with dynamic multi-tenant sources " +
 				"(source.type=dynamic); use static multitenant.tenants config, set inbox.tenancy=shared to " +
 				"prune a single control-plane ledger, or run without the scheduler to use ProcessOnce only")
 		case len(m.config.Multitenant.Tenants) == 0:
-			return fmt.Errorf("inbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
+			return errors.New("inbox: multi-tenant is enabled but no static multitenant.tenants are configured; " +
 				"the cleanup job would prune nothing. Configure multitenant.tenants, set inbox.tenancy=shared to " +
 				"prune a single control-plane ledger, or run without the scheduler to use ProcessOnce only")
 		}

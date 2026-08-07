@@ -8,14 +8,14 @@ import (
 
 // JobListResponse represents the response for GET /_sys/job using standard GoBricks envelope
 type JobListResponse struct {
-	Data []*JobMetadata         `json:"data"`
-	Meta map[string]interface{} `json:"meta"`
+	Data []*JobMetadata `json:"data"`
+	Meta map[string]any `json:"meta"`
 }
 
 // JobTriggerResponse represents the response for POST /_sys/job/:jobId using standard GoBricks envelope
 type JobTriggerResponse struct {
-	Data JobTriggerData         `json:"data"`
-	Meta map[string]interface{} `json:"meta"`
+	Data JobTriggerData `json:"data"`
+	Meta map[string]any `json:"meta"`
 }
 
 // JobTriggerData contains the trigger response data
@@ -58,7 +58,7 @@ func (m *Module) listJobsHandler(_ EmptyRequest, _ server.HandlerContext) (serve
 	// Return with standard GoBricks envelope
 	response := JobListResponse{
 		Data: jobs,
-		Meta: map[string]interface{}{
+		Meta: map[string]any{
 			"total":    len(jobs),
 			"timezone": m.timezoneLabel(),
 		},
@@ -96,7 +96,7 @@ func (m *Module) triggerJobHandler(req JobIDParam, _ server.HandlerContext) (ser
 			Trigger: "manual",
 			Message: "Request accepted: job will run unless an instance is already running",
 		},
-		Meta: map[string]interface{}{},
+		Meta: map[string]any{},
 	}
 
 	return server.NewResult(http.StatusAccepted, response), nil

@@ -293,7 +293,7 @@ func (a *App) drainServerError(ch <-chan error) error {
 		if a.logger != nil {
 			a.logger.Warn().Msg("Timeout waiting for server goroutine to complete - this may indicate a shutdown issue")
 		}
-		return fmt.Errorf("server goroutine failed to complete within timeout")
+		return errors.New("server goroutine failed to complete within timeout")
 	}
 }
 
@@ -337,7 +337,7 @@ func (a *App) Run() error {
 	case <-time.After(outer):
 		a.logger.Error().Msg("Shutdown timed out, forcing exit")
 		cancel()
-		return fmt.Errorf("shutdown timed out")
+		return errors.New("shutdown timed out")
 	}
 
 	var errs []error

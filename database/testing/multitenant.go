@@ -2,6 +2,7 @@ package testing
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -173,7 +174,7 @@ func (m *TenantDBMap) AsGetDBFunc() func(context.Context) (dbtypes.Interface, er
 			return defaultDB, nil
 		}
 
-		return nil, fmt.Errorf("no tenant in context and no default DB configured (use SetDefaultDB())")
+		return nil, errors.New("no tenant in context and no default DB configured (use SetDefaultDB())")
 	}
 }
 
@@ -370,7 +371,7 @@ func (m *NamedDBMap) AsDBFunc() func(context.Context) (dbtypes.Interface, error)
 		m.mu.RUnlock()
 
 		if defaultDB == nil {
-			return nil, fmt.Errorf("no default DB configured (use SetDefaultDB() to set up)")
+			return nil, errors.New("no default DB configured (use SetDefaultDB() to set up)")
 		}
 
 		return defaultDB, nil
@@ -394,7 +395,7 @@ func (m *NamedDBMap) AsDBFunc() func(context.Context) (dbtypes.Interface, error)
 func (m *NamedDBMap) AsDBByNameFunc() func(context.Context, string) (dbtypes.Interface, error) {
 	return func(_ context.Context, name string) (dbtypes.Interface, error) {
 		if name == "" {
-			return nil, fmt.Errorf("database name cannot be empty")
+			return nil, errors.New("database name cannot be empty")
 		}
 
 		m.mu.RLock()

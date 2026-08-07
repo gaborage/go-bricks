@@ -108,7 +108,7 @@ func (t *JOSETransport) wrapRequest(req *nethttp.Request) (*nethttp.Request, err
 		if req.Body != nil {
 			_ = req.Body.Close()
 		}
-		return nil, fmt.Errorf("httpclient: JOSETransport requires a KeyResolver when Outbound is set")
+		return nil, errors.New("httpclient: JOSETransport requires a KeyResolver when Outbound is set")
 	}
 
 	// Sealing a request that has no body would stamp a JWE body onto it: gateways, CDNs and
@@ -176,7 +176,7 @@ func (t *JOSETransport) unwrapResponse(req *nethttp.Request, resp *nethttp.Respo
 		return nil
 	}
 	if t.Resolver == nil {
-		return fmt.Errorf("httpclient: JOSETransport requires a KeyResolver when Inbound is set")
+		return errors.New("httpclient: JOSETransport requires a KeyResolver when Inbound is set")
 	}
 
 	maxBytes := t.MaxResponseBytes

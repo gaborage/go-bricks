@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -1433,7 +1434,7 @@ func validateStaticTenantConfig(source *SourceConfig, mt *MultitenantConfig, db 
 	// For dynamic sources, tenants are optional and loaded from external store
 	if source.Type == SourceTypeStatic && mt.Tenants != nil {
 		if len(mt.Tenants) == 0 {
-			return fmt.Errorf("tenants: empty map provided - either omit tenants section or provide at least one tenant for static source")
+			return errors.New("tenants: empty map provided - either omit tenants section or provide at least one tenant for static source")
 		}
 		if err := validateMultitenantTenants(mt.Tenants); err != nil {
 			return fmt.Errorf("tenants: %w", err)

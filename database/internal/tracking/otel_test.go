@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,7 +102,7 @@ func TestCreateDBSpanSpanAttributes(t *testing.T) {
 
 	// Extract attributes into map for easier testing
 	attrs := spans[0].Attributes
-	attrMap := make(map[string]interface{})
+	attrMap := make(map[string]any)
 	for _, attr := range attrs {
 		attrMap[string(attr.Key)] = attr.Value.AsInterface()
 	}
@@ -249,14 +250,16 @@ func TestCreateDBSpanQueryTruncation(t *testing.T) {
 	}
 
 	// Create a very long query
-	longQuery := "SELECT * FROM users WHERE id IN ("
+	var sb strings.Builder
+	sb.WriteString("SELECT * FROM users WHERE id IN (")
 	for i := 0; i < 1000; i++ {
 		if i > 0 {
-			longQuery += ","
+			sb.WriteString(",")
 		}
-		longQuery += fmt.Sprintf("$%d", i+1)
+		fmt.Fprintf(&sb, "$%d", i+1)
 	}
-	longQuery += ")"
+	sb.WriteString(")")
+	longQuery := sb.String()
 
 	ctx := context.Background()
 	start := time.Now().Add(-10 * time.Millisecond)

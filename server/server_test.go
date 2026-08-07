@@ -686,7 +686,7 @@ func TestClassifyError5xxDebugModeLogsFullError(t *testing.T) {
 	cfg.App.Debug = true
 	server := New(cfg, testLog)
 	server.ModuleGroup().Add(http.MethodGet, "/boom", func(HandlerContext) error {
-		return fmt.Errorf("boom detail")
+		return errors.New("boom detail")
 	})
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/boom", http.NoBody)

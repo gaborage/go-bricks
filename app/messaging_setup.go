@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gaborage/go-bricks/logger"
@@ -46,7 +47,7 @@ func (m *MessagingInitializer) SetupLazyConsumerInit(
 	declarations *messaging.Declarations,
 ) error {
 	if m.manager == nil {
-		return fmt.Errorf("messaging manager not configured")
+		return errors.New("messaging manager not configured")
 	}
 
 	switch p := provider.(type) {
@@ -89,7 +90,7 @@ func (m *MessagingInitializer) PrepareRuntimeConsumers(
 	declarations *messaging.Declarations,
 ) error {
 	if m.manager == nil {
-		return fmt.Errorf("messaging manager not configured")
+		return errors.New("messaging manager not configured")
 	}
 
 	if m.multiTenant {

@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -368,7 +369,7 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 // buildOracleMerge constructs an Oracle MERGE statement for upsert operations
 func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
 	if len(conflictColumns) == 0 {
-		return "", nil, fmt.Errorf("conflict columns required for Oracle MERGE")
+		return "", nil, errors.New("conflict columns required for Oracle MERGE")
 	}
 
 	// Every conflict column must be present in the insert columns. Otherwise the

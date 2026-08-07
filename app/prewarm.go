@@ -126,7 +126,7 @@ func (w *ConnectionPreWarmer) attemptMessagingPreWarm(
 // Returns error but caller determines if it's fatal.
 func (w *ConnectionPreWarmer) PreWarmDatabase(ctx context.Context, key string) error {
 	if w.dbManager == nil {
-		return fmt.Errorf("database manager not available")
+		return errors.New("database manager not available")
 	}
 
 	_, release, err := w.dbManager.Get(ctx, key)
@@ -146,7 +146,7 @@ func (w *ConnectionPreWarmer) PreWarmMessaging(
 	declarations *messaging.Declarations,
 ) error {
 	if w.messagingManager == nil {
-		return fmt.Errorf("messaging manager not available")
+		return errors.New("messaging manager not available")
 	}
 
 	if declarations != nil {
