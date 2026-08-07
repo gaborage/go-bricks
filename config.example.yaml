@@ -74,7 +74,10 @@ database:
       threshold: 100ms
       enabled: true
     log:
-      parameters: true
+      # SECURITY: bound parameter VALUES are logged verbatim when true — on
+      # cardholder tables that is the PAN. Values are positional, so
+      # log.sensitivefields cannot mask them. Enable only in development.
+      parameters: false
       max: 1000
 
   tls:
