@@ -938,6 +938,30 @@ Fixes [#880](https://github.com/gaborage/go-bricks/issues/880). See
 
 ---
 
+### [ADR-053: Delete `server`'s Exported Test-Timeout Constants](adr_053_remove_server_test_timeout_constants.md)
+
+**Date:** 2026-08-07 | **Status:** Accepted
+
+`server/constants.go` exported `TestShortTimeout` (100ms), `TestMediumTimeout` (1s) and
+`TestLongTimeout` (5s) under a header asserting they "are used exclusively in test files for
+simulating timeout scenarios and synchronization". Nothing in the repository referenced them, in
+production or test code, for their whole life — the header described a convention that was never
+adopted rather than one that lapsed. Adopting them was counted before being rejected: 14
+occurrences of `100 * time.Millisecond`, 10 of `1 * time.Second`, 3 of `5 * time.Second`, but most
+of the one-second hits are `SlowRequestThreshold` values (a threshold, not a timeout) and several
+100ms hits are rate-limiter refill sleeps, so substituting a shared constant would name each value
+after something it is not. Deprecating in place was rejected as the compatibility shim the
+manifesto forbids. Where a shared test vocabulary is genuinely wanted, an unexported constant in
+the test file is the right home — a framework exporting test-timing values constrains nothing,
+since no production code ever read them.
+
+**Key Benefits:** Three exported symbols leave the public surface along with a comment asserting a
+convention the codebase never followed; nothing behavioural changes, since no framework code read
+these values. Fixes [#818](https://github.com/gaborage/go-bricks/issues/818). See
+[migrations.md](migrations.md) `[C58.2]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -947,7 +971,7 @@ Fixes [#880](https://github.com/gaborage/go-bricks/issues/880). See
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-051) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-053) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
