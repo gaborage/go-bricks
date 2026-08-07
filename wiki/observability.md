@@ -60,7 +60,7 @@ Every log line emitted via the framework logger passes through a `logger.Sensiti
 `logger.DefaultFilterConfig()` (in [`logger/filter.go`](../logger/filter.go)) ships these names (all matched case-insensitive substring, so `password` matches `Password`, `db_password`, `oldPasswordHash`, etc.):
 
 | Category | Default names |
-|---|---|
+| --- | --- |
 | Credentials | `password`, `passwd`, `pwd`, `secret`, `key`, `api_key`, `apikey`, `token`, `access_token`, `refresh_token` |
 | Auth headers | `auth`, `authorization` |
 | Generic | `credential`, `credentials` |
@@ -209,7 +209,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) 
 **Metric Types:**
 
 | Type | Use Case | Example |
-|------|----------|---------|
+| ------ | ---------- | --------- |
 | `Int64Counter` | Monotonically increasing counts | Requests, errors, events |
 | `Float64Histogram` | Value distributions | Latency (seconds), payload size (bytes) |
 | `Int64UpDownCounter` | Values that increase/decrease | Active connections, queue depth |
@@ -253,7 +253,7 @@ GoBricks supports all New Relic OTLP optimizations: gzip compression (~70% bandw
 **Endpoint Format Rules (CRITICAL):**
 
 | Protocol | Endpoint Format | Example |
-|----------|-----------------|---------|
+| --- | --- | --- |
 | `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` |
 | `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` |
 

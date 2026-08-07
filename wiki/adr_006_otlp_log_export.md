@@ -245,7 +245,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
 ### File Changes Summary
 
 | File | LOC Changed | Purpose |
-|------|-------------|---------|
+| ------ | ------------- | --------- |
 | `observability/config.go` | +191 | LogsConfig, defaults, validation |
 | `observability/logs.go` | +241 | Log exporter factory, severity filter |
 | `observability/provider.go` | +55 | Provider interface, init logic |

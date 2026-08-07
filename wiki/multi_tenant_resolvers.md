@@ -7,7 +7,7 @@
 The `multitenant.resolver.type` field selects one of four strategies:
 
 | Type | Tenant source | Typical shape |
-|---|---|---|
+| --- | --- | --- |
 | `header` | Request header (default `X-Tenant-ID`, configurable) | `X-Tenant-ID: acme` |
 | `subdomain` | Hostname with `.<RootDomain>` suffix | `acme.api.example.com` |
 | `path` | Path segment (1-indexed) | `/itsp/acme/lifecycle/...` |
@@ -101,7 +101,7 @@ Tries each sub-resolver named in `order` until one returns a non-empty, valid te
 **Which order do you need?**
 
 | Your edge | Order to pin |
-|---|---|
+| --- | --- |
 | A trusted gateway authenticates the caller and **owns `X-Tenant-ID`** (strips the inbound header, sets its own) | `[header, subdomain, path]` — otherwise a caller-controlled `Host`/path outranks the gateway's assertion |
 | Per-tenant DNS (each tenant has its own hostname) | `[subdomain, path, header]` — the recommended order |
 | **Path-scoped contracts only**, no per-tenant DNS | `[path, header]` — omit `subdomain` and you need no `domain` at all. Listing `subdomain` without per-tenant DNS just forces you to invent a `domain` the resolver will never match |

@@ -33,7 +33,7 @@ Echo v5.1.0 changed `RealIP()` to only return `request.RemoteAddr` by default â€
 GoBricks' enhanced handler pattern (`server.GET/POST/etc.` with `HandlerFunc[T, R]`) abstracts most Echo internals. The migration impact on application code is limited to:
 
 | Change | Old | New | Impact |
-|--------|-----|-----|--------|
+| -------- | ----- | ----- | -------- |
 | `HandlerContext.Echo` field | `echo.Context` | `*echo.Context` | Update code accessing `ctx.Echo` methods |
 | `RouteRegistrar.Add()` return | `*echo.Route` | `echo.RouteInfo` | Update code capturing route return values |
 | `echo.HandlerFunc` signature | `func(echo.Context) error` | `func(*echo.Context) error` | Update raw Echo handlers (e.g., `RegisterReadyHandler`) |

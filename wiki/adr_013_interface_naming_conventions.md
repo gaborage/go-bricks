@@ -14,7 +14,7 @@ Additionally, `cache.TenantCacheResourceSource` follows the same pattern as the 
 Rename 6 interfaces to follow Go idiomatic naming:
 
 | Package | Old Name | New Name | Rationale |
-|---------|----------|----------|-----------|
+| --------- | ---------- | ---------- | ----------- |
 | `scheduler` | `Job` | `Executor` | Avoids ambiguity with `jobEntry` struct; describes behavior |
 | `app` | `HealthProbe` | `Prober` | `-er` suffix for single-method interface per Go conventions |
 | `database` | `TenantStore` | `DBConfigProvider` | Describes what it provides, not what it is |

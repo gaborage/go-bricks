@@ -13,7 +13,7 @@ The `framework-integration-test` job is the dominant cost in CI today and the mo
 Pulled per-package timing from a representative successful run (`framework-integration-test` job 25748764278, 2026-05-12):
 
 | Package | Wall time | Share of suite |
-|---|---|---|
+| --- | --- | --- |
 | `database/oracle` | **572.131s** (9m32s) | **~80%** of integration time |
 | `messaging` | 149.458s | ~21% |
 | `database/postgresql` | 71.618s | ~10% |
@@ -41,7 +41,7 @@ For comparison, `database/postgresql` uses the exact same anti-pattern (20 `setu
 How to bring the Oracle integration-test wall time down while keeping the test architecture honest. The eight directions enumerated in [#402](https://github.com/gaborage/go-bricks/issues/402) cluster into three groups, evaluated against the measurement:
 
 | Group | Directions | Math against root cause |
-|---|---|---|
+| --- | --- | --- |
 | **A. Reduce per-start cost** | Slimmer image; pre-bake schemas; cache Docker layer | We already use `gvenzl/oracle-free:23-slim` and pre-pull in CI. The ~18.5s is mostly Oracle's *startup* (listener boot, PDB open), not image pull. Optimistic ceiling: maybe -3s per start = ~93s suite-wide. Doesn't solve the problem. |
 | **B. Mask the symptom** | Bump `-timeout=20m`; auto-retry on timeout; isolate Oracle in its own CI job | Eliminates the panic but leaves the cost. Hides the systemic drift that put us at 10m in the first place. Wins back nothing in developer-laptop time. |
 | **C. Eliminate redundant starts** | Share one container across the package via `TestMain` / testcontainers reuse; aggressive `t.Parallel()` | This is where the math actually moves. Going from 31 starts to 1 drops the floor to ~80s (1 × 18.5s container + 31 × ~2s schema lifecycle + ~1s test logic). The conservative headline estimate of **~250s (~55% reduction)** carries a deliberate ~3× safety margin over that floor — see Safety margin note in §Decision. Either number clears the issue's 50% target. |

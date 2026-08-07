@@ -24,7 +24,7 @@ Add `database.timezone`, a single optional config field on `DatabaseConfig`, tha
 ### Behavior
 
 | Value | Result |
-|-------|--------|
+| ------- | -------- |
 | Unset (`""`) | Defaulted to `"UTC"` during `Validate()` |
 | `"UTC"`, `"America/New_York"`, etc. | Validated via `time.LoadLocation`; applied to every new physical connection |
 | `"-"` (sentinel) | Skip session timezone enforcement; sessions inherit DB server default (legacy behavior) |
@@ -33,7 +33,7 @@ Add `database.timezone`, a single optional config field on `DatabaseConfig`, tha
 ### Vendor implementations
 
 | Vendor | Mechanism | Why |
-|--------|-----------|-----|
+| --- | --- | --- |
 | **PostgreSQL** | `pgxConfig.RuntimeParams["timezone"]` | pgx sends RuntimeParams in the StartupMessage on every new connection — automatic, zero round-trip overhead, guaranteed pool-wide consistency |
 | **Oracle** | `driver.Connector` wrapper running `ALTER SESSION SET TIME_ZONE = '<tz>'` on every `Connect()` | go-ora has no equivalent of pgx's RuntimeParams. The wrapper at the connector level is the only mechanism that fires for every pool member, including ones spawned later for pool growth or after drops |
 
@@ -89,7 +89,7 @@ Both implementations apply the timezone *per physical connection*, not once afte
 ### Rejected alternatives
 
 | Alternative | Why rejected |
-|-------------|--------------|
+| ------------- | -------------- |
 | One-shot `SET TIME ZONE` after `sql.Open` | Only the first borrowed connection inherits it; later pool members silently revert. Exactly the bug we want to prevent. |
 | Per-query `SET` middleware | Doubles round-trip count, breaks correlated session state (e.g., temp tables). |
 | DSN string mutation only | Fragile under user-supplied connection strings; doesn't work for Oracle (no DSN flag for session timezone). |

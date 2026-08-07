@@ -20,7 +20,7 @@
 Each token is replaced in all five tag namespaces (`koanf`/`json`/`yaml`/`toml`/`mapstructure`) by replacing the **quoted** form `"old"` → `"new"` (the quoted token appears only inside tags). Some tokens occur in two parents (e.g. `idle_ttl`, `table_name`); a global replace covers both.
 
 | # | old token | new token | parent(s) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | `max_size` | `maxsize` | cache.manager |
 | 2 | `idle_ttl` | `idlettl` | cache.manager, messaging.publisher |
 | 3 | `cleanup_interval` | `cleanupinterval` | cache.manager |

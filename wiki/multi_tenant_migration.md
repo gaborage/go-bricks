@@ -230,28 +230,28 @@ go-bricks-migrate quiesce clear  --source-url https://control-plane.example.com/
 
 ### Flag reference
 
-| Flag                     | Default                | Description                                         |
-|--------------------------|------------------------|-----------------------------------------------------|
-| `--source-url`           |                        | Control-plane base URL (required for fleet runs)    |
-| `--source-token`         | `$GOBRICKS_MIGRATE_SOURCE_TOKEN` | Bearer token for the control-plane API   |
-| `--source-config`        |                        | YAML file with `multitenant.tenants` (dev fallback) |
-| `--secrets-prefix`       | `gobricks/migrate/`    | Secret-name prefix (final = prefix + tenant_id)     |
-| `--aws-region`           | `$AWS_REGION`          | AWS region                                          |
-| `--aws-profile`          | `$AWS_PROFILE`         | AWS profile                                         |
-| `--aws-endpoint`         |                        | LocalStack / private VPC endpoint override          |
-| `--credentials-from`     | `aws-secrets-manager`  | `aws-secrets-manager` or `config-file`              |
-| `--flyway-path`          | `flyway`               | Flyway executable                                   |
-| `--flyway-config`        | (per-vendor default)   | `flyway.conf` path                                  |
-| `--migrations-dir`       | (per-vendor default)   | Migrations directory                                |
-| `--continue-on-error`    | `false`                | Don't stop after the first per-tenant failure       |
-| `--parallel <N>`         | `1`                    | Concurrent tenants (1 = sequential, max 32)         |
-| `--tenant <id>`          |                        | Run for a single tenant; bypasses listing           |
-| `--json`                 | `false`                | NDJSON progress + summary records                   |
-| `--applied-by`           | `$GOBRICKS_MIGRATE_APPLIED_BY`      | Principal recorded in `migration.applied` audit events   |
-| `--git-sha`              | `$GOBRICKS_MIGRATE_GIT_SHA`         | Source commit SHA recorded in the audit event            |
-| `--pipeline-run-id`      | `$GOBRICKS_MIGRATE_PIPELINE_RUN_ID` | CI/CD run ID recorded in the audit event                 |
-| `--allow-insecure-scheme` | `false`               | Allow `http://` base URLs for `--source-url` (dev/LocalStack only; bearer token would be cleartext) |
-| `--verbose` / `-v`       | `false`                | Enable debug-level logging                          |
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--source-url` | | Control-plane base URL (required for fleet runs) |
+| `--source-token` | `$GOBRICKS_MIGRATE_SOURCE_TOKEN` | Bearer token for the control-plane API |
+| `--source-config` | | YAML file with `multitenant.tenants` (dev fallback) |
+| `--secrets-prefix` | `gobricks/migrate/` | Secret-name prefix (final = prefix + tenant_id) |
+| `--aws-region` | `$AWS_REGION` | AWS region |
+| `--aws-profile` | `$AWS_PROFILE` | AWS profile |
+| `--aws-endpoint` | | LocalStack / private VPC endpoint override |
+| `--credentials-from` | `aws-secrets-manager` | `aws-secrets-manager` or `config-file` |
+| `--flyway-path` | `flyway` | Flyway executable |
+| `--flyway-config` | (per-vendor default) | `flyway.conf` path |
+| `--migrations-dir` | (per-vendor default) | Migrations directory |
+| `--continue-on-error` | `false` | Don't stop after the first per-tenant failure |
+| `--parallel <N>` | `1` | Concurrent tenants (1 = sequential, max 32) |
+| `--tenant <id>` | | Run for a single tenant; bypasses listing |
+| `--json` | `false` | NDJSON progress + summary records |
+| `--applied-by` | `$GOBRICKS_MIGRATE_APPLIED_BY` | Principal recorded in `migration.applied` audit events |
+| `--git-sha` | `$GOBRICKS_MIGRATE_GIT_SHA` | Source commit SHA recorded in the audit event |
+| `--pipeline-run-id` | `$GOBRICKS_MIGRATE_PIPELINE_RUN_ID` | CI/CD run ID recorded in the audit event |
+| `--allow-insecure-scheme` | `false` | Allow `http://` base URLs for `--source-url` (dev/LocalStack only; bearer token would be cleartext) |
+| `--verbose` / `-v` | `false` | Enable debug-level logging |
 
 ## CI/CD recipe (GitHub Actions, OIDC → AWS)
 

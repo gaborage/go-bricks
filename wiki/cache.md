@@ -32,7 +32,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 **Benchmark Results** (Apple M4 Pro, localhost Redis):
 
 | Operation | Performance | Allocations | Notes |
-|-----------|-------------|-------------|-------|
+| ----------- | ------------- | ------------- | ------- |
 | CBOR Marshal (simple) | ~83 ns/op | 96 B/op, 2 allocs | 12M ops/sec |
 | CBOR Unmarshal (simple) | ~167 ns/op | 88 B/op, 3 allocs | 6M ops/sec |
 | CBOR Marshal (complex) | ~800 ns/op | 400 B/op, 8 allocs | Nested structs, maps, slices |
@@ -119,7 +119,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 **Key Operations:**
 
 | Operation | Method | Use Case | Atomicity |
-|-----------|--------|----------|-----------|
+| ----------- | -------- | ---------- | ----------- |
 | Basic read | `Get(ctx, key)` | Query result caching | Single-key |
 | Basic write | `Set(ctx, key, value, ttl)` | Store computed result | Single-key |
 | Deduplication | `GetOrSet(ctx, key, value, ttl)` | Idempotency keys | Atomic SET NX |
@@ -166,7 +166,7 @@ carries `cache` (a status string) alongside `cache_stats` (the manager counters)
 ```
 
 | `cache` value | When | Probe error | 503? |
-|---------------|------|-------------|------|
+| --------------- | ------ | ------------- | ------ |
 | `healthy` | An instance was leased and its `Health(ctx)` `PING` succeeded; `cache_stats.status` is `healthy` | none | no |
 | `not_configured` | The probe ran and the lease returned a not-configured error — `cache.enabled: false`, where the *default Redis* connector declines by design; `cache_stats` carries the manager counters with `status` `not_configured`. A custom `Options.CacheConnector` never reads `cache.enabled` and is probed regardless | none | no |
 | `unhealthy` | The lease failed — the manager is closed, or a cold pool tried to build the instance and the construction-time `PING` failed; `cache_stats.status` is `connection_failed` | yes | **yes**, unless `critical: false` |
@@ -353,7 +353,7 @@ column, the `Unhealthy` kubelet event, `kube_pod_status_ready`. Size
 GoBricks applies production-safe cache manager defaults when cache is configured:
 
 | Setting | Default (single-tenant) | Default (multi-tenant) | Purpose |
-|---------|-------------------------|------------------------|---------|
+| --------- | ------------------------- | ------------------------ | --------- |
 | `manager.maxsize` | 100 | `multitenant.limits.tenants` | Maximum tenant cache instances (LRU cap) |
 | `manager.idlettl` | 15m | 15m | Close idle cache connections |
 | `manager.cleanupinterval` | 5m | 5m | Frequency of idle cache cleanup |

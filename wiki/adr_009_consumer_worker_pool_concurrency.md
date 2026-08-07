@@ -363,7 +363,7 @@ func (c *AMQPClientImpl) ConsumeFromQueue(ctx context.Context, options ConsumeOp
 ### Benchmarks (8-core machine, 100ms handler)
 
 | Configuration | Workers | Throughput | Latency (p95) |
-|---------------|---------|------------|---------------|
+| --------------- | --------- | ------------ | --------------- |
 | v0.16 (baseline) | 1 | 10 msg/sec | 100ms |
 | v0.17 (default) | 32 | 320 msg/sec | 105ms |
 | v0.17 (explicit) | 64 | 500 msg/sec | 115ms |
@@ -371,7 +371,7 @@ func (c *AMQPClientImpl) ConsumeFromQueue(ctx context.Context, options ConsumeOp
 ### Memory Overhead
 
 | Workers | Goroutines | Jobs Buffer | Total Overhead |
-|---------|------------|-------------|----------------|
+| --------- | ------------ | ------------- | ---------------- |
 | 1 | 1 | 2 deliveries | ~3KB |
 | 32 | 32 | 64 deliveries | ~70KB |
 | 100 | 100 | 200 deliveries | ~210KB |

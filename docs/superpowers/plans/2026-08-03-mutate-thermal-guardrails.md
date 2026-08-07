@@ -24,7 +24,7 @@
 ## File Structure
 
 | File | Status | Responsibility |
-|---|---|---|
+| --- | --- | --- |
 | `scripts/mutatediff/throttle.go` | create | The `throttle` type, budget derivation, environment pinning, cooldown, and the one-line budget banner. Everything resource-posture related lives here and nowhere else. |
 | `scripts/mutatediff/throttle_test.go` | create | Unit tests for the above. |
 | `scripts/mutatediff/main.go` | modify | Two new flags; `run` takes a `throttle`; budget applied before the package loop; cooldown placed inside it; `mutatePackage` reports whether it ran. |

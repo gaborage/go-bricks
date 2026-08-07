@@ -7,7 +7,7 @@
 ## Config Reference
 
 | Key | Env var | Type | Notes |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `server.tls.enabled` | `SERVER_TLS_ENABLED` | bool | Default `false` — plaintext listener |
 | `server.tls.certfile` | `SERVER_TLS_CERTFILE` | string | Server certificate PEM file path |
 | `server.tls.certvalue` | `SERVER_TLS_CERTVALUE` | string | Server certificate as a base64-encoded PEM string |

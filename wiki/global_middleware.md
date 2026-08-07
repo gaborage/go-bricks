@@ -25,7 +25,7 @@ keystore-backed token verifier, a DB/cache handle, resolved config.
 ## Guarantees
 
 | Property | Behavior |
-|---|---|
+| --- | --- |
 | Runs once per request | Registered on the root echo chain (`e.Use`), compiled once, applied to every request. |
 | Cannot be skipped per-route | Registration is framework-controlled; no route-level opt-out exists. |
 | After tenant resolution | Lands after the built-in chain, so the tenant is already in `context.Context`. |

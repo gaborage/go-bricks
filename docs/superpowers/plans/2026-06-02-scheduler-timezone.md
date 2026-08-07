@@ -15,7 +15,7 @@
 ## File Structure
 
 | File | Responsibility | Change |
-|---|---|---|
+| --- | --- | --- |
 | `config/types.go` | Config structs | Add `Timezone` field to `SchedulerConfig` |
 | `config/validation.go` | Config defaulting/validation | Add `normalizeIANATimezone` helper; refactor `applyDatabaseTimezoneDefault` to use it; add `validateScheduler`; call it from `Validate` |
 | `config/validation_test.go` | Config tests | Append scheduler-timezone table tests |

@@ -20,7 +20,7 @@ never the vendor's).
 Six leak classes were verified against HEAD (issue #623):
 
 | # | Leak | Location |
-|---|------|----------|
+| --- | ------ | ---------- |
 | L1 | `HandlerContext.Echo *echo.Context` exported field | `server/handler.go` |
 | L2 | `RouteRegistrar.Add/Group/Use` take `echo.HandlerFunc`/`echo.MiddlewareFunc`; `Add` returns `echo.RouteInfo` | `server/handler.go`, `server/route_registrar.go` |
 | L3 | `ServerRunner.Echo() *echo.Echo` + `RegisterReadyHandler(echo.HandlerFunc)` | `app/interfaces.go` |

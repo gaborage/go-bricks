@@ -96,7 +96,7 @@ is the PostgreSQL-only alternative when atomicity is required.
 ## API surface
 
 | Type / function | Purpose |
-|---|---|
+| --- | --- |
 | `provisioning.State` | The eight-value enum (`StatePending`, `StateSchemaCreated`, …, `StateFailed`) |
 | `provisioning.Job` | Persisted record: ID, TenantID, State, Attempts, LastError, Metadata, timestamps |
 | `provisioning.Steps` | Consumer-supplied callbacks invoked at each forward transition |
@@ -115,7 +115,7 @@ is the PostgreSQL-only alternative when atomicity is required.
 Every step **must** be idempotent. The framework's design assumes:
 
 | State at crash | What the persisted row reflects | What `Run` does on restart |
-|---|---|---|
+| --- | --- | --- |
 | Step `X` running when crash hits, side effects done | Previous state | Re-invokes step `X` (idempotency required) |
 | Step `X` returned successfully, Transition not yet persisted | Previous state | Re-invokes step `X` (idempotency required) |
 | Transition committed, step `Y` not yet started | New state from `X` | Invokes step `Y` |

@@ -893,6 +893,10 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
       - name: markdownlint-cli2 (docs)
         # Delegates to `make lint-md` so the command, the pinned
         # MARKDOWNLINT_VERSION, and the glob/ignore set live in exactly one place
@@ -900,8 +904,9 @@ jobs:
         # `make sec`, and `make vuln` steps follow. Deliberately NOT the
         # markdownlint-cli2 GitHub Action: that action bundles its own linter
         # build, so pinning the action would pin a version this repo cannot run
-        # locally, and `make lint-md` and CI could drift. npx resolves the pinned
-        # package against the runner's preinstalled Node.
+        # locally, and `make lint-md` and CI could drift. setup-node pins the
+        # Node floor (markdownlint-cli2 0.23+ requires Node >= 22); npx
+        # resolves the pinned package against it.
         run: make lint-md
 
   # ============================================================================

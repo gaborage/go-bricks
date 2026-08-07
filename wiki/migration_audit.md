@@ -39,7 +39,7 @@ mcfg := &migration.Config{
 ADR-019 defines four event types:
 
 | Type | Emitter | Status |
-|---|---|---|
+| --- | --- | --- |
 | `migration.applied` | `FlywayMigrator` | ✅ Shipped |
 | `state.transitioned` | `provisioning.Executor` | ✅ Shipped |
 | `quiesce.set` / `quiesce.cleared` | `QuiesceController` | ✅ Shipped |
@@ -77,7 +77,7 @@ The same struct flows into the OpenTelemetry emission path AND the optional `Aud
 When `Outcome == failed`, `ErrorClass` is a stable string from ADR-019's published list. Downstream alerting can pin on these values:
 
 | ErrorClass | Set by | Trigger |
-|---|---|---|
+| --- | --- | --- |
 | `checksum_mismatch` | engine | Flyway detected an applied script was modified after the fact |
 | `lock_timeout` | engine | Could not acquire the advisory / `DBMS_LOCK` within the configured timeout |
 | `schema_history_corrupt` | engine | `flyway_schema_history` is in an inconsistent state |
@@ -164,7 +164,7 @@ Audit is opt-in: an `Executor` built without `WithAudit` emits nothing and behav
 The migration audit emitter publishes two counters via the global OTel meter:
 
 | Metric | Type | Attributes | Trigger |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `migration.audit.sink_drops` | `Int64Counter` | `audit.type` | Sink queue was full when an event was enqueued |
 | `migration.audit.sink_failures` | `Int64Counter` | `audit.type` | `AuditRecorder.Record` returned a non-nil error |
 

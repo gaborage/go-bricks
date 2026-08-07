@@ -69,7 +69,7 @@ This aligns with GoBricks manifesto principles:
 ### Affected Functions
 
 | Package | Function | Old Signature | New Signature |
-|---------|----------|---------------|---------------|
+| --------- | ---------- | --------------- | --------------- |
 | `database/types` | `Expr()` | `func Expr(sql string, alias ...string) RawExpression` | `func Expr(sql string, alias ...string) (RawExpression, error)` |
 | `database/types` | `Table()` | `func Table(name string) *TableRef` | `func Table(name string) (*TableRef, error)` |
 | `database/types` | `TableRef.As()` | `func (t *TableRef) As(alias string) *TableRef` | `func (t *TableRef) As(alias string) (*TableRef, error)` |
@@ -207,7 +207,7 @@ Beyond `database/types/`, `database/internal/builder/query_builder.go` also had 
 The following files **intentionally retain panics** (suppressed with `// NOSONAR` for SonarCloud rule S8148) because the panics represent startup-time configuration failures or test-helper programmer-error conditions that should crash immediately rather than return errors:
 
 | File | Reason panics are retained |
-|------|---------------------------|
+| ------ | --------------------------- |
 | `scheduler/helpers.go` | `ParseTime()` — invalid time format is a configuration error at startup (fail-fast) |
 | `observability/dual_processor.go` | `NewDualModeLogProcessor()` — nil processor arguments are a wiring bug, not a runtime condition |
 | `database/testing/rowset.go` | `AddRow` — test-helper misuse; panicking gives a clear programmer-error signal |
@@ -232,7 +232,7 @@ The following files **intentionally retain panics** (suppressed with `// NOSONAR
 The following S8242 (context-in-struct) patterns are **intentionally retained** as they represent legitimate architectural patterns, not anti-patterns:
 
 | Location | Pattern | Justification |
-|----------|---------|---------------|
+| ---------- | --------- | --------------- |
 | `scheduler/module.go:71-72` | Shutdown context | **Lifecycle context** for graceful shutdown coordination. This spans the entire service lifetime (not request-scoped). Standard Go pattern for service lifecycle management. |
 | `scheduler/job.go:73` | Context embedding | **Interface extension pattern**. `JobContext` IS-A `context.Context` with additional job-specific methods. This is the idiomatic way to extend context in Go. |
 | `logger/context_test.go:17,59` | Table-driven tests | **Standard Go testing pattern**. Storing context in test struct for table-driven tests is universally accepted in Go testing. |

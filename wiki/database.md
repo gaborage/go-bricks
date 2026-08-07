@@ -9,7 +9,7 @@ Unified `database.Interface` supporting PostgreSQL and Oracle with vendor-specif
 - `database/internal/builder/` — Query builder implementations
 
 | Database | Placeholders | Key Features |
-|----------|--------------|--------------|
+| --- | --- | --- |
 | **Oracle** | `:1`, `:2` | Automatic reserved word quoting, service name/SID options, **SEQUENCE support (built-in), UDT registration for custom types** |
 | **PostgreSQL** | `$1`, `$2` | pgx driver with optimized connection pooling |
 
@@ -317,7 +317,7 @@ would leave the operator believing the connection is encrypted.
 ## Connection Pool Defaults
 
 | Setting | Default | Purpose |
-|---------|---------|---------|
+| --------- | --------- | --------- |
 | `pool.max.connections` | 25 | Maximum open connections |
 | `pool.idle.connections` | tracks `pool.max.connections` | Idle connection cap (not a floor — no pre-warming). Tracking max avoids connection churn under load; `database/sql` clamps it to max |
 | `pool.idle.time` | 5m | Close idle connections (prevents stale connections) |
@@ -330,7 +330,7 @@ would leave the operator believing the connection is encrypted.
 **Cloud Provider Idle Timeouts:**
 
 | Provider | Component | Timeout |
-|----------|-----------|---------|
+| ---------- | ----------- | --------- |
 | AWS | NAT Gateway/ALB | 350s |
 | GCP | Cloud NAT | 30s |
 | Azure | NAT Gateway | 240s |
@@ -364,7 +364,7 @@ Size `multitenant.limits.tenants` to at least the number of tenants you expect t
 The manager's own lifecycle is operator-tunable, matching the `messaging.publisher.*` and `cache.manager.*` surfaces. All three keys default to today's hardcoded behavior, so leaving them unset changes nothing.
 
 | Key | Default (single-tenant) | Default (multi-tenant) | Purpose |
-|-----|-------------------------|------------------------|---------|
+| ----- | ------------------------- | ------------------------ | --------- |
 | `database.manager.maxsize` | `10` | `multitenant.limits.tenants` | Max cached database handles (LRU cap) |
 | `database.manager.idlettl` | `1h` | `30m` | Idle timeout before a cached handle is closed |
 | `database.manager.cleanupinterval` | `5m` | `5m` | How often the background cleanup sweep runs |
@@ -410,7 +410,7 @@ per-request data such as IDs or emails would explode metric cardinality.
 `database.ExecuteQuerySingle` / `ExecuteQueryMany` / `ExecuteUpdate` / `ExecuteUpdateOne` / `ExecuteInsert` collapse the repeated `ToSQL()` → `Query`/`Exec` → `Scan`/`RowsAffected` → error-wrap glue that every SQL repository re-implements. Each helper takes a `database.Executor` (a 2-method `Query`/`Exec` interface satisfied by both `database.Interface` and `database.Tx`, so the same call works inside or outside a transaction) and a `database.SQLProvider` (implemented by every query-builder result, or by `database.Raw(sql, args...)` for hand-written SQL). An `op string` label identifies the call site in errors — it labels errors only and does not feed metrics or tracing; use `database.WithRepositoryMethod(ctx, ...)` for attribution.
 
 | Outcome | Error shape |
-|---|---|
+| --- | --- |
 | Zero-row `SELECT` (`ExecuteQuerySingle`) or an `UPDATE`/`DELETE` that matched no rows when exactly one was expected (`ExecuteUpdateOne`) | `fmt.Errorf("%s: %w", op, database.ErrNoRows)` — `ErrNoRows` wraps `sql.ErrNoRows`, so both `errors.Is(err, database.ErrNoRows)` and `database.IsNotFound(err)` match |
 | Build/exec/scan/iterate/close/rows-affected infrastructure failure | `*database.ExecError{Op, Stage, Err}` — `Stage` (type `database.ExecStage`) is one of `StageBuild`, `StageExec`, `StageScan`, `StageIterate`, `StageClose`, `StageRowsAffected`; `errors.As(err, &execErr)` and `errors.Unwrap` reach the underlying driver error. `StageClose` is specific to `ExecuteQuerySingle`: after a successful scan it closes the rows explicitly (mirroring `sql.Row.Scan`) so a driver error surfacing only at `Close` — a truncated result, a connection fault mid-statement — is reported instead of swallowed; `Close` is idempotent, so the helper's deferred `Close` remains a safe early-return net. `StageRowsAffected` covers two distinct failures: the driver's `RowsAffected()` call itself erroring (any helper that inspects it), or — `ExecuteUpdateOne` only — `RowsAffected()` succeeding with a count greater than one, rejected instead of silently reported as success |
 
@@ -466,7 +466,7 @@ case err != nil:
 ## Session Timezone (Breaking Change — ADR-016)
 
 | Setting | Default | Purpose |
-|---------|---------|---------|
+| --- | --- | --- |
 | `database.timezone` | `UTC` | IANA timezone applied per session (PostgreSQL via pgx `RuntimeParams`, Oracle via `ALTER SESSION SET TIME_ZONE` on every new physical connection) |
 
 **Behavior:**

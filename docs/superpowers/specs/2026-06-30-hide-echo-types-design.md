@@ -31,7 +31,7 @@ This change wraps every remaining `echo.*` leak behind go-bricks types so **no `
 ## The Leaks (verified against HEAD)
 
 | # | Leak | Location |
-|---|------|----------|
+| --- | ------ | ---------- |
 | L1 | `HandlerContext.Echo *echo.Context` exported field | server/handler.go:79 (constructed :328) |
 | L2 | `RouteRegistrar` Add/Group/Use take `echo.HandlerFunc`/`echo.MiddlewareFunc`; Add returns `echo.RouteInfo` | server/handler.go:1050-1055; impl server/route_registrar.go |
 | L3 | `ServerRunner.Echo() *echo.Echo` + `RegisterReadyHandler(echo.HandlerFunc)` | app/interfaces.go:31,33 |
@@ -48,7 +48,7 @@ This change wraps every remaining `echo.*` leak behind go-bricks types so **no `
 Six critics each found their single strongest objection. Verdicts: 4 blockers, 1 major, 1 hold-with-required-deliverables.
 
 | Lens | Verdict | Objection | Resolution baked into this design |
-|------|---------|-----------|-----------------------------------|
+| ------ | --------- | ----------- | ----------------------------------- |
 | Performance hawk | **HOLDS** | Typed path provably unchanged, but perf story unproven and the consumer-middleware baton (`func() error { return next(c) }`, a structurally unavoidable +1 heap-alloc/req/middleware-layer under the locked flat shape) was under-stated. | Ship `BenchmarkTypedHandlerPath` (assert identical allocs/op via `testing.AllocsPerRun`) + `BenchmarkMiddlewareAdapter` (record the bounded +1 alloc). Add a **test-enforced invariant**: framework/default middleware is registered echo-native via `e.Use`, never through the flat adapter. Document the bounded cost in migrations.md. |
 | API-ergonomics | **BLOCKER** | The locked flat shape can't express the canonical context-propagation pattern (`c.SetRequest(c.Request().WithContext(ctx))`) — read-only accessors strand any consumer auth/tenant middleware; `Set/Get` (echo store) ≠ `context.Context`. `EscalateSeverity` becomes uncallable. | Add `SetRequest(*http.Request)` and `SetRequestContext(context.Context)` to `HandlerContext`. Retype `EscalateSeverity` to take `HandlerContext`. |
 | Blast-radius | **BLOCKER** | 6th leak **class**: retyping `RouteRegistrar.Use` to flat breaks `r.Use(server.CORS(...))` for every constructor still returning `echo.MiddlewareFunc`; no migration path. | Convert all constructors + `SkipperFunc` to flat (maintainer Option A); add every symbol to the migration table; add a constructor-signature grep gate. |
@@ -266,7 +266,7 @@ func Auth() server.MiddlewareFunc {
 ## Files Touched
 
 | File | Change |
-|------|--------|
+| ------ | -------- |
 | server/handler.go | `MiddlewareFunc`, `Handler` types; HandlerContext accessors + `ectx`/`echoContext()`; `RouteRegistrar` retype + `echoRegistrar` seam; `newHandlerContext`; `adaptHandler`/`adaptMiddleware`/`fromEchoMiddleware`; `NewHandlerContextForTest`; :328 construction |
 | server/route_registrar.go | `routeGroup` gains `cfg`; `addEcho`; flat-typed public Add/Use/Group |
 | server/server.go | drop `Echo()`; add `RootGroup()`; retype `RegisterReadyHandler`; :128 |

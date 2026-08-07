@@ -196,7 +196,7 @@ observability:
 ### Top-Level Configuration
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| ------- | ------ | --------- | ------------- |
 | `enabled` | bool | `false` | Enable/disable observability (no-op when false) |
 | `service.name` | string | (required) | Service name for trace identification |
 | `service.version` | string | `"unknown"` | Service version for filtering/grouping |
@@ -205,7 +205,7 @@ observability:
 ### Trace Configuration
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| ------- | ------ | --------- | ------------- |
 | `trace.enabled` | bool | `true` | Enable/disable tracing |
 | `trace.endpoint` | string | `"stdout"` | Endpoint for trace export (stdout, http, grpc) |
 | `trace.protocol` | string | `"http"` | OTLP protocol: "http" or "grpc" |
@@ -220,7 +220,7 @@ observability:
 ### Metrics Configuration
 
 | Field | Type | Default | Description |
-|-------|------|---------|-------------|
+| ------- | ------ | --------- | ------------- |
 | `metrics.enabled` | bool | `true` | Enable/disable metrics |
 | `metrics.endpoint` | string | `"stdout"` | Endpoint for metric export (stdout, http, grpc) |
 | `metrics.protocol` | string | Fallback to `trace.protocol` or `"http"` | OTLP protocol for metrics transport |

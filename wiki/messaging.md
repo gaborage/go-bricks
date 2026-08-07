@@ -313,7 +313,7 @@ decls.DeclareConsumer(&messaging.ConsumerOptions{
 **Performance Impact (8-core machine, 100ms handler):**
 
 | Version | Workers | Throughput | Speedup |
-|---------|---------|------------|---------|
+| --- | --- | --- | --- |
 | v0.16.x | 1 | 10 msg/sec | Baseline |
 | v0.17.0 | 32 | 320 msg/sec | **32x** |
 
@@ -336,7 +336,7 @@ GoBricks applies production-safe AMQP reconnection defaults unconditionally at s
 cross-field validators like the outbox `publishtimeout` guards read these effective values):
 
 | Setting | Default | Purpose |
-|---------|---------|---------|
+| --------- | --------- | --------- |
 | `reconnect.delay` | 5s | Initial delay before reconnect attempts |
 | `reconnect.reinitdelay` | 2s | Delay between channel re-initialization |
 | `reconnect.resenddelay` | 5s | Delay before resending failed messages |
@@ -374,7 +374,7 @@ broker NACK, or confirmation timeout — but the loop is **bounded** by
 failure:
 
 | Cause sentinel | Meaning |
-|----------------|---------|
+| --- | --- |
 | `messaging.ErrPublishNacked` | the broker received the message and returned `basic.nack` (a transient broker condition — disk alarm, mirror resync, failover; also how a missing exchange surfaces) |
 | `messaging.ErrPublishConfirmTimeout` | no ACK/NACK arrived within `connectiontimeout` |
 

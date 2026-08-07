@@ -94,7 +94,7 @@ outbox:
 **Event Struct:**
 
 | Field | Type | Required | Description |
-|-------|------|----------|-------------|
+| ------- | ------ | ---------- | ------------- |
 | `EventType` | string | Yes | Event routing key (e.g., "order.created") |
 | `AggregateID` | string | Yes | Entity identifier for idempotency (e.g., "order-123") |
 | `Payload` | any | No | Event data. `[]byte` stored as-is, otherwise JSON-marshaled. Nil is accepted and stored as JSON `null`. |
@@ -137,7 +137,7 @@ Whether the relay ever **gives up** on an event is decoupled from `retry_count` 
 the failure's class:
 
 | Class | Causes | Behavior |
-|-------|--------|----------|
+| --- | --- | --- |
 | **Connectivity** | broker down / not ready, **broker NACK**, confirmation timeout, per-record `publishtimeout` elapsed, missing exchange (surfaces as a synthesized NACK) | `retry_count` advances; **never** dead-lettered. The event stays `pending` and delivers once the broker recovers or the config is fixed. |
 | **Poison** | corrupt / undecodable headers **only** (a deterministic, broker-independent failure) | `retry_count` advances; once it reaches `maxretries` the event is **dead-lettered** to `status = 'failed'` and stops being retried. |
 
@@ -173,7 +173,7 @@ Consequences worth knowing:
 GoBricks applies production-safe outbox defaults when outbox is enabled:
 
 | Setting | Default | Purpose |
-|---------|---------|---------|
+| --------- | --------- | --------- |
 | `outbox.tablename` | `gobricks_outbox` | Outbox table name |
 | `outbox.autocreatetable` | `false` | Auto-create table on first use (opt-in) |
 | `outbox.pollinterval` | `5s` | Relay poll frequency |

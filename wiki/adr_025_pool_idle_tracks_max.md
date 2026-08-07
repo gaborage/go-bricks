@@ -28,7 +28,7 @@ surfacing as HTTP 500s and a long tail dominated by `pgx` connect / TLS handshak
 allocations. Raising idle to match max eliminated the churn:
 
 | Config | p95 | p99 | errors | warm backends |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | idle 2 / max 25 (shipped default) | 16.25 ms | 38.19 ms | 8.15% | 3 (churning) |
 | idle = max (A/B run at max 50) | 1.46 ms | 2.20 ms | 0% | 51 (warm) |
 

@@ -5,7 +5,7 @@ The OpenTelemetry Collector is a **vendor-agnostic proxy** that sits between you
 ## Why Use a Collector?
 
 | Feature | Direct Export | With OTEL Collector |
-|---------|---------------|---------------------|
+| --------- | --------------- | --------------------- |
 | **Retry Logic** | Limited (SDK retries 5x) | Advanced retry with exponential backoff |
 | **Buffering** | Small in-memory buffers | Large disk-backed queues |
 | **Batching** | Fixed batch sizes | Dynamic batching based on backend load |
@@ -131,7 +131,7 @@ service:
 ## When to Use Collector
 
 | Scenario | Recommendation |
-|----------|----------------|
+| ---------- | ---------------- |
 | **Development/Staging** | Direct export (simpler, faster iteration) |
 | **Production (low volume)** | Direct export with compression (simplicity > overhead) |
 | **Production (high volume)** | Collector (retry logic, buffering critical) |

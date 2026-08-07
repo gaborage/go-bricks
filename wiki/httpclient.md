@@ -506,7 +506,7 @@ The `httpclient` package emits five OpenTelemetry instruments under the meter na
 ### Instrument Reference
 
 | Name | Kind | Unit | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `http.client.request.duration` | `Float64Histogram` | `s` | Duration of HTTP client requests |
 | `http.client.active_requests` | `Int64UpDownCounter` | `{request}` | Number of in-flight HTTP client requests |
 | `http.client.request.body.size` | `Int64Histogram` | `By` | Size of HTTP client request bodies |
@@ -520,7 +520,7 @@ The `httpclient` package emits five OpenTelemetry instruments under the meter na
 **Base attributes** (present on `http.client.request.duration`, `http.client.request.body.size`, and `http.client.response.body.size`):
 
 | Attribute | Type | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `peer.service` | string | Logical peer name set via `WithPeerName`. Omitted when not configured. |
 | `server.address` | string | Hostname extracted from the request URL. |
 | `server.port` | int | Port extracted from URL; defaults to 80 (http) or 443 (https) when absent. |
@@ -530,7 +530,7 @@ The `httpclient` package emits five OpenTelemetry instruments under the meter na
 **Duration-only additional attributes** (on `http.client.request.duration` only):
 
 | Attribute | Notes |
-|---|---|
+| --- | --- |
 | `http.response.status_code` | Integer status code. Omitted on transport errors (no response received). |
 | `error.type` | OTel error type enum. Omitted on success and on 4xx/5xx responses — only set for transport-level failures. See `error.type` Enum below. |
 | `http.request.resend_count` | Number of prior attempts. `0` on the first (non-retry) attempt. |
@@ -538,7 +538,7 @@ The `httpclient` package emits five OpenTelemetry instruments under the meter na
 **`http.client.active_requests` attributes:**
 
 | Attribute | Type | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `peer.service` | string | Omitted when `WithPeerName` is not set. |
 | `http.request.method` | string | Canonical HTTP method. |
 | `server.address` | string | Omitted when URL parsing fails or the URL has no hostname. |
@@ -546,7 +546,7 @@ The `httpclient` package emits five OpenTelemetry instruments under the meter na
 **`http.client.retries.total` attributes:**
 
 | Attribute | Type | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `peer.service` | string | Omitted when `WithPeerName` is not set. |
 | `http.request.method` | string | Canonical HTTP method. |
 | `retry.reason` | string | One of `"timeout"`, `"network"`, `"5xx"`, `"build_response"`. |
@@ -554,7 +554,7 @@ The `httpclient` package emits five OpenTelemetry instruments under the meter na
 ### `error.type` Enum
 
 | Value | Condition |
-|---|---|
+| --- | --- |
 | `"timeout"` | Framework `TimeoutError`, `context.DeadlineExceeded`, or any `net.Error` where `Timeout() == true` (after more-specific classifiers below are checked). |
 | `"context_canceled"` | `context.Canceled` |
 | `"name_resolution_error"` | `*net.DNSError` (DNS lookup failure, including DNS timeouts) |
@@ -634,7 +634,7 @@ Every attempt span has the parent Do span as its direct parent in the trace tree
 ### Span Naming
 
 | Condition | Span name |
-|---|---|
+| --- | --- |
 | `PeerName` set via `WithPeerName` | `"{METHOD} {peer}"` (e.g. `"POST stripe"`) |
 | `PeerName` unset | `"HTTP {METHOD}"` (e.g. `"HTTP GET"`) |
 | Non-standard HTTP method | `METHOD` canonicalises to `"_OTHER"` |
@@ -646,7 +646,7 @@ URL paths are **never** in the span name. Without route templating (which the cl
 Set at span start (both Do span and attempt span unless noted):
 
 | Attribute | Notes |
-|---|---|
+| --- | --- |
 | `peer.service` | From `WithPeerName`. Omitted when empty. |
 | `http.request.method` | Canonical uppercase. `"_OTHER"` for non-standard methods. |
 | `server.address` | Hostname from the parsed URL. |
@@ -659,7 +659,7 @@ Set at span start (both Do span and attempt span unless noted):
 Set at span end:
 
 | Attribute | Notes |
-|---|---|
+| --- | --- |
 | `http.response.status_code` | Set when a response is received. Omitted on transport error. |
 | `http.response.body.size` | Set when response body bytes > 0. |
 | `error.type` | Set on transport error (status 0), on response-build errors, and on the parent Do span for a terminal HTTP-status error (any 4xx, or 5xx after retries are exhausted — classified as `_OTHER`). Does not mirror the duration histogram's `error.type`, which stays empty for any completed roundtrip regardless of status code. |
@@ -671,7 +671,7 @@ Set at span end:
 OTel HTTP **client** span status convention (different from server spans):
 
 | Outcome | Span status | Exception event? |
-|---|---|---|
+| --- | --- | --- |
 | 2xx / 3xx response (no err) | `codes.Unset` (default OK) | no |
 | 4xx response (no err) | `codes.Unset` | no |
 | 5xx response (no err) | `codes.Error`, description `"HTTP {code}"` | no |
@@ -749,7 +749,7 @@ if err != nil {
 **Content-type-aware logging:** Request and response bodies are handled differently depending on the `Content-Type` header:
 
 | Content-Type | Behaviour |
-|---|---|
+| --- | --- |
 | `application/json` or `*+json` | Body is parsed with `json.Unmarshal`. If the root is a JSON object, it is logged as `body_preview` after `SensitiveDataFilter` walks it to mask sensitive keys (`password`, `token`, `api_key`, …); nested maps and arrays inside that object root are processed recursively. Primitive and array roots are dropped — the filter requires a top-level JSON object with keys to walk and mask, so root-level scalars (`"secret-token"`, `123456`) and bare arrays would land verbatim without one. |
 | Everything else (form-urlencoded, binary, multipart, missing/unknown) | Bytes are **not** logged. Instead `body_content_type` and `body_preview_dropped` (byte count) appear in the log. Form-urlencoded bodies often carry credential pairs; multipart and binary blobs are not filterable. |
 

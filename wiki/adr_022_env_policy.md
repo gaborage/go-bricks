@@ -19,7 +19,7 @@ Until this ADR, `config/validation.go` rejected any `app.env` value outside the 
 A grep of `cfg.App.Env` usage across the framework shows only **6 behavior-switching call sites**:
 
 | Site | Logic |
-|---|---|
+| --- | --- |
 | `server/server.go` × 2 | `SetCaptureStackTraces(isDevelopmentEnv(env))`; dev-only error details |
 | `server/handler.go` × 2 | Dev-only error details on enveloped + raw responses |
 | `server/cors.go` × 1 | Strict CORS when `APP_ENV == production` |
