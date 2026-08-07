@@ -117,6 +117,7 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 - **Automation:** Makefile/Taskfile for common tasks, multi-platform CI/CD pipelines.
 - **Documentation:** Just enough for others to understand quickly, examples over exhaustive docs.
 
+<!-- markdownlint-disable-next-line MD036 -->
 **"Build it simple, build it strong, and refactor when it matters."**
 
 ## Code Quality
@@ -321,7 +322,6 @@ For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authe
 
 > **Mental model:** GoBricks treats `context.Context` as the primary carrier of deadlines and cancellation. The framework configures timeouts at every external boundary — HTTP server, HTTP client, database pool, AMQP, Redis, observability exporter, startup — and lets those deadlines propagate. Inside business logic, **the default is to use the inherited deadline**: do not introduce new timeouts unless you have a specific reason to *shorten* what's already in flight.
 
-
 | Boundary | Config key | Default |
 | --- | --- | --- |
 | HTTP request handler (deadline on `c.Request().Context()`) | `server.timeout.middleware` | **5s** |
@@ -332,7 +332,6 @@ For dual-mode log routing, runtime metrics, custom-metric patterns, vendor authe
 | AMQP publish confirmation | `messaging.reconnect.connectiontimeout` | 30s |
 | Scheduler slow-job WARN / shutdown | `scheduler.timeout.slowjob`, `scheduler.timeout.shutdown` | 25s / 30s |
 | Observability export | `observability.trace.export.timeout`, `observability.metrics.export.timeout`, `observability.logs.export.timeout` | 10s when `observability.environment` is `development` (its default — **not** derived from `app.env`) or the signal's endpoint is `stdout`; 60s otherwise |
-
 
 **The default pattern is to do nothing** — the request context already carries a 5s deadline, and every framework call propagates it. Shorten only when one sub-operation should fail fast (e.g., cap a cache lookup at 200–500ms so Redis hiccups don't burn the whole request budget). For fire-and-forget background work that must outlive the request, use `context.WithoutCancel(ctx)` to inherit values (trace ID, tenant ID) while severing cancellation — never `context.Background()`.
 
@@ -430,5 +429,3 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **.claude/tasks/** — Development task planning.
 - **llms.txt** — Quick reference examples for LLM code generation.
 - Tests alongside source files (`*_test.go`).
-
-

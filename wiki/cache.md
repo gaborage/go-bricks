@@ -7,12 +7,14 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 **Requires Redis 7.0+** because `GetOrSet` uses `SET … NX GET`, which Redis rejected as a syntax error before 7.0.0. The client fails construction when the server advertises an older version; because `CacheManager` builds clients lazily per tenant, a too-old server surfaces on the first request that touches the cache rather than at startup. The check is best-effort — it fails open when `INFO` is unavailable (ACL-restricted or redacted by a managed provider).
 
 **Core Components:**
+
 - **Redis Client**: Atomic operations (Get/Set/GetOrSet/CompareAndSet), connection pooling, health monitoring
 - **CacheManager**: Per-tenant cache lifecycle with lazy initialization, LRU eviction, idle cleanup, singleflight
 - **CBOR Serialization**: Type-safe encoding with security limits (max 10k array/map elements, max nesting depth 16)
 - **Multi-tenant integration**: Automatic tenant resolution from context via `deps.Cache(ctx)`
 
 **Lifecycle Management (CacheManager):**
+
 - **Lazy Initialization**: Cache created on first access per tenant (no upfront connections)
 - **LRU Eviction**: Oldest cache evicted when MaxSize exceeded (default: 100 tenants)
 - **Idle Cleanup**: Unused caches closed after IdleTTL (default: 15m, checked every 5m)
@@ -20,6 +22,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 - **Lock-Free Close**: Cache close operations don't block Get/Set/Delete operations
 
 **Performance Characteristics:**
+
 - **Latency**: <1ms for Get/Set (localhost), ~2ms for atomic operations (Lua scripts)
 - **Throughput**: 100k reads/sec, 80k writes/sec (single Redis instance)
 - **CBOR Serialization**: ~83ns/op marshal, ~167ns/op unmarshal (simple structs)
@@ -27,6 +30,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 - **Network Impact**: +0.5-1ms (same datacenter), +50-200ms (cross-region, not recommended)
 
 **Benchmark Results** (Apple M4 Pro, localhost Redis):
+
 | Operation | Performance | Allocations | Notes |
 |-----------|-------------|-------------|-------|
 | CBOR Marshal (simple) | ~83 ns/op | 96 B/op, 2 allocs | 12M ops/sec |
@@ -38,6 +42,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 *Redis benchmarks require:* `docker run -d -p 6379:6379 redis:7-alpine` then `go test -bench=BenchmarkRealRedis -benchmem -tags=integration ./cache/redis/`
 
 **Configuration Example:**
+
 ```yaml
 cache:
   enabled: true
@@ -57,6 +62,7 @@ cache:
 ```
 
 **Module Setup Pattern:**
+
 ```go
 type Module struct {
     svc *Service
@@ -111,6 +117,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 ```
 
 **Key Operations:**
+
 | Operation | Method | Use Case | Atomicity |
 |-----------|--------|----------|-----------|
 | Basic read | `Get(ctx, key)` | Query result caching | Single-key |
@@ -120,6 +127,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 | Type-safe store | `Marshal(v)` + `Set()` | Struct serialization | CBOR encoding |
 
 **Multi-Tenant Isolation:**
+
 - Each tenant gets separate Redis database (configurable per-tenant)
 - Cache instances managed by CacheManager with automatic lifecycle
 - Context propagation ensures tenant resolution via `deps.Cache(ctx)`
@@ -127,6 +135,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 
 **Observability Integration:**
 When `observability.enabled: true`, cache operations automatically emit:
+
 - **Metrics**: `db.client.operation.duration` (histogram, tagged with `error.type` on failure), `cache.hit`/`cache.miss` (counters), `cache.manager.active_caches`, `cache.manager.evictions`, `cache.manager.idle_cleanups`, `cache.manager.total_created`, `cache.manager.errors` — no distributed-tracing spans are emitted today
 - **Health**: A probe registered in the `/ready` probe set whenever the cache manager exists. It leases an instance from the manager (`cacheManager.Get(ctx, "")`) and then calls `Cache.Health(ctx)` on it — under the default connector that is one Redis `PING` on a warm poll and three round trips on a cold one (the construction-time `PING`, the `INFO` version check, then the probe's own `PING`); `Health` is connector-defined, so a custom `Options.CacheConnector` costs whatever its own implementation does, which need not touch the network. Its status is surfaced as the top-level `cache` and `cache_stats` keys in the `/ready` **200** body (a `503` carries only `status`, `cache` and `error`), and it fails `/ready` with `503` by default — `cache.critical: false` opts out and emits a startup WARN. See [Readiness](#readiness) below
 

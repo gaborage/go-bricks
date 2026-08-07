@@ -7,12 +7,14 @@ These are advanced HTTP handler patterns built on top of the basic Enhanced Hand
 The enhanced handler pattern supports both **value** and **pointer** types for requests and responses, allowing you to optimize for performance when handling large payloads.
 
 **When to Use Value Types (Default)**:
+
 - ✅ Small requests/responses (<1KB, ~10-15 simple fields)
 - ✅ No large embedded arrays or slices
 - ✅ Emphasizes immutability (idiomatic Go)
 - ✅ Examples: login credentials, ID lookups, simple CRUD operations
 
 **When to Use Pointer Types**:
+
 - ✅ Large requests/responses (>1KB)
 - ✅ File uploads (base64-encoded images, documents)
 - ✅ Bulk imports/exports (hundreds or thousands of records)
@@ -68,12 +70,14 @@ func (h *Handler) processBulk(req *BulkRequest, ctx server.HandlerContext) (Summ
 ```
 
 **Performance Impact**:
+
 - **Value types**: Small struct copy overhead (~nanoseconds for <1KB)
 - **Pointer types**: Zero copy overhead, just 8-byte pointer
 - **Rule of thumb**: Use pointers when struct size >1KB or contains large slices/arrays
 
 **Linter Configuration**:
 Configure `govet` to warn on large value copies:
+
 ```yaml
 # .golangci.yml  (add under the existing linters: block)
 linters:
@@ -100,6 +104,7 @@ server.GET(hr, e, "/v2/users/:id", h.getUser)
 ```
 
 **Handler returns the exact legacy shape:**
+
 ```go
 type LegacyUser struct {
     UserID   int64  `json:"userId"`

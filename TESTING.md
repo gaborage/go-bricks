@@ -457,6 +457,7 @@ func TestService_ConfigInjection(t *testing.T) {
 If you're currently using internal mock implementations, here's how to migrate:
 
 **Before (internal mocks):**
+
 ```go
 type MockDB struct {
     // custom implementation
@@ -469,6 +470,7 @@ func TestExample(t *testing.T) {
 ```
 
 **After (framework mocks):**
+
 ```go
 import "github.com/gaborage/go-bricks/testing/mocks"
 
@@ -481,6 +483,7 @@ func TestExample(t *testing.T) {
 ### From sqlmock to Framework Database Mocks
 
 **Before (sqlmock):**
+
 ```go
 db, mock, err := sqlmock.New()
 require.NoError(t, err)
@@ -490,6 +493,7 @@ mock.ExpectQuery("SELECT").WillReturnRows(rows)
 ```
 
 **After (framework mocks):**
+
 ```go
 mockDB := &mocks.MockDatabase{}
 rows := fixtures.NewMockRows([]string{"id", "name"}, [][]any{{1, "John"}})

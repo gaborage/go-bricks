@@ -120,6 +120,7 @@ if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
 ```
 
 Notes:
+
 - koanf's default text hook (`textUnmarshalerHookFunc`) is unexported; we substitute the
   public `mapstructure.TextUnmarshallerHookFunc()`. Safe: the `Config` struct has **no**
   `[]byte`, custom string types, or `TextUnmarshaler` fields (verified), so the two behave
@@ -277,6 +278,7 @@ addition, nothing more.
 ## Testing (TDD order)
 
 **Step A — Fix tests first (red before Change 2):**
+
 - `config.Load()` with `SCHEDULER_SECURITY_CIDRALLOWLIST=10.0.0.0/8,192.168.0.0/16` → len 2, exact values.
 - `LOG_SENSITIVE_FIELDS=pan, cvv2 , otp` → `["pan","cvv2","otp"]` (trim + drop empties).
 - Single-element env still works (regression).
@@ -286,12 +288,14 @@ addition, nothing more.
 **Step B — Prefactor regression (Change 1):** full existing `config` suite green.
 
 **Step C — Fail-fast tests (Change 3):**
+
 - Non-empty all-invalid `cidrallowlist` via env → `Load()` errors naming `scheduler.security.cidrallowlist`.
 - Non-empty all-invalid `trustedproxies` → error naming the field.
 - Partial-invalid (≥1 valid) → no error.
 - Empty list → no error. Valid multi → no error.
 
 **Step D — `InjectInto` tests (Change 4):**
+
 - `[]string` field from env comma string → multi-element, trimmed.
 - From YAML sequence → multi-element.
 - From `default:"a,b,c"` tag → split.

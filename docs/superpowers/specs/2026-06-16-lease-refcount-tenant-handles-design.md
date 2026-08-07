@@ -66,6 +66,7 @@ Each entry gains `refs int` and `detached bool` (guarded by the existing manager
 ### 3. `app/resource_provider.go`
 
 Each accessor calls the manager, then `leasescope.Register(ctx, release)`:
+
 - scope present → lease auto-released at the boundary;
 - no scope → `release()` immediately = today's behavior (non-leaking, **unprotected**), so
   uncovered paths (health/prewarm/startup probes, key `""`) never regress.

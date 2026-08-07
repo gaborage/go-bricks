@@ -18,6 +18,7 @@ SELECT id, "number" FROM accounts WHERE number = :1
 ```
 
 This issue occurred because:
+
 1. **Inconsistent Quoting**: SELECT clause properly quoted "number" but WHERE clause did not
 2. **Runtime Failures**: Errors only surfaced during query execution, not at compile time
 3. **Developer Confusion**: Inconsistent behavior between different SQL vendors
@@ -26,16 +27,19 @@ This issue occurred because:
 ## Options Considered
 
 ### Option 1: WHERE Clause Parser (Rejected)
+
 - Parse string-based WHERE clauses to identify and quote column names
 - Maintain backward compatibility with string-based API
 - **Rejected**: Complex implementation, potential parsing edge cases, runtime overhead
 
 ### Option 2: Enhanced Documentation (Rejected)
+
 - Improve documentation about Oracle quoting requirements
 - Provide more examples of correct usage
 - **Rejected**: Does not prevent the fundamental issue, relies on developer memory
 
 ### Option 3: Type-Safe WHERE Methods (CHOSEN)
+
 - Remove `.Where()` method entirely
 - Implement type-safe methods like `WhereEq()`, `WhereLt()`, etc.
 - Provide `WhereRaw()` escape hatch with clear documentation
@@ -46,12 +50,14 @@ This issue occurred because:
 **We chose Option 3: Type-Safe WHERE Methods** with the following implementation:
 
 ### Core Design Principles
+
 1. **Compile-Time Safety**: Prevent unquoted identifier issues at build time
 2. **Clear Responsibility**: Explicit methods vs. escape hatch with documented risks
 3. **Oracle-First**: Design that works reliably with Oracle's quoting requirements
 4. **Zero Ambiguity**: No possibility of accidentally bypassing safety mechanisms
 
 ### New SelectQueryBuilder API
+
 ```go
 // Type-safe methods (automatically handle quoting)
 .WhereEq(column, value)           // column = value
@@ -67,6 +73,7 @@ This issue occurred because:
 ```
 
 ### Architecture Changes
+
 1. **SelectQueryBuilder**: New wrapper around squirrel.SelectBuilder
 2. **Method Delegation**: All squirrel methods (Join, OrderBy, etc.) delegated through wrapper
 3. **Quoting Integration**: Type-safe methods use existing `qb.Eq()`, `qb.Lt()` infrastructure
@@ -77,6 +84,7 @@ This issue occurred because:
 ### Technical Components
 
 **Core Architecture**:
+
 ```go
 type SelectQueryBuilder struct {
     qb            *QueryBuilder
@@ -92,6 +100,7 @@ func (qb *QueryBuilder) Select(columns ...string) *SelectQueryBuilder {
 ```
 
 **Type-Safe WHERE Implementation**:
+
 ```go
 func (sqb *SelectQueryBuilder) WhereEq(column string, value any) *SelectQueryBuilder {
     sqb.selectBuilder = sqb.selectBuilder.Where(sqb.qb.Eq(column, value))
@@ -100,6 +109,7 @@ func (sqb *SelectQueryBuilder) WhereEq(column string, value any) *SelectQueryBui
 ```
 
 **Clear Escape Hatch Documentation**:
+
 ```go
 // WhereRaw adds a raw SQL WHERE condition to the query.
 //
@@ -112,6 +122,7 @@ func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) *SelectQu
 ```
 
 ### Testing Strategy
+
 1. **Comprehensive Oracle Tests**: All Oracle reserved words tested with type-safe methods
 2. **Original Bug Reproduction**: Specific test demonstrating the fix for the exact error
 3. **Escape Hatch Tests**: WhereRaw functionality with manual quoting examples
@@ -120,11 +131,13 @@ func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) *SelectQu
 ## Migration Strategy
 
 ### Breaking Change Implementation
+
 - **No Deprecation Period**: Immediate breaking change for compile-time safety
 - **Clear Error Messages**: Compilation errors guide developers to correct methods
 - **Comprehensive Examples**: Documentation shows exact replacements
 
 ### Migration Patterns
+
 ```go
 // OLD (no longer compiles)
 .Where("number = ?", value)
@@ -143,6 +156,7 @@ func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) *SelectQu
 ## Consequences
 
 ### Positive
+
 - **Eliminates Oracle Quoting Bugs**: Impossible to accidentally create unquoted WHERE clauses
 - **Compile-Time Safety**: Errors caught during build, not runtime
 - **Clear Responsibility Boundaries**: Type-safe methods vs. explicit escape hatch
@@ -151,12 +165,14 @@ func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) *SelectQu
 - **Self-Documenting Code**: Method names clearly indicate operation type
 
 ### Negative
+
 - **Breaking Change**: All existing `.Where()` usage requires migration
 - **Learning Curve**: Developers must learn new API methods
 - **Verbosity**: Some complex conditions require multiple method calls
 - **Migration Effort**: Existing codebases need comprehensive updates
 
 ### Neutral
+
 - **Performance**: No runtime impact, compile-time code generation
 - **Memory**: Minimal wrapper overhead
 - **Dependencies**: No new external dependencies required
@@ -164,12 +180,14 @@ func (sqb *SelectQueryBuilder) WhereRaw(condition string, args ...any) *SelectQu
 ## Quality Assurance
 
 ### Testing Coverage
+
 - **Oracle Reserved Words**: Comprehensive testing with 20+ reserved words
 - **All Operators**: Coverage for =, <>, <, <=, >, >=, IN, NOT IN, IS NULL
 - **Edge Cases**: Complex queries, nested conditions, function calls
 - **Regression**: Original bug scenario specifically tested and verified fixed
 
 ### Code Quality
+
 - **Type Safety**: Full Go type checking throughout query construction
 - **Documentation**: Extensive inline documentation with examples
 - **Error Handling**: Clear error messages for incorrect usage

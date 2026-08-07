@@ -123,12 +123,14 @@ baton-free.
 ## Consequences
 
 **Positive:**
+
 - No `echo.*` symbol appears in any code an application developer writes, names, or imports; the consumer surface matches the database/cache/messaging precedent.
 - Downstream services are decoupled from Echo's concrete API and version — a future Echo bump is a `server/`-internal change.
 - The flat middleware shape is simpler than Echo's nested closure and is uniform across custom, framework, scheduler, and debug middleware.
 - Security improvement: no `RealIP()` accessor is exposed (it would graduate Echo's spoofable `LegacyIPExtractor` into the blessed path); the one internal consumer (the auth denial log) now uses `server.ClientIP(c.Request(), trustedNets)`, removing the spoofable IP from that log.
 
 **Negative:**
+
 - Breaking change for every consumer that touched the removed surface — mitigated by the compiler (each removed symbol fails the build), the `wiki/migrations.md` section, and the demo-project migration.
 - A custom-middleware route pays a bounded **+1 heap-alloc/request/middleware-layer** — the `func() error { return next(c) }` baton, structurally unavoidable under the locked flat shape (see Performance).
 

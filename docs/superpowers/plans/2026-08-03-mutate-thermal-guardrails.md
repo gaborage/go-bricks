@@ -37,10 +37,12 @@
 ### Task 1: Budget derivation and environment pinning
 
 **Files:**
+
 - Create: `scripts/mutatediff/throttle.go`
 - Test: `scripts/mutatediff/throttle_test.go`
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks.
 - Produces:
   - `type throttle struct { cpu int; workers int; cooldown time.Duration; sleep func(time.Duration) }`
@@ -372,10 +374,12 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ### Task 2: Wire the budget into the gate
 
 **Files:**
+
 - Modify: `scripts/mutatediff/main.go:17-46` (flags and dispatch), `scripts/mutatediff/main.go:48-94` (`run`)
 - Modify: `scripts/mutatediff/main_test.go:11`, `scripts/mutatediff/main_test.go:77`
 
 **Interfaces:**
+
 - Consumes: `throttle`, `applyBudget`, `describeBudget` from Task 1.
 - Produces: `func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer) int` — the `workers int` parameter is replaced by the `throttle`, which carries it.
 
@@ -504,9 +508,11 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ### Task 3: Cool down between packages
 
 **Files:**
+
 - Modify: `scripts/mutatediff/main.go:82-92` (the package loop), `scripts/mutatediff/main.go:178-214` (`mutatePackage`)
 
 **Interfaces:**
+
 - Consumes: `shouldCool`, `throttle.coolDown` from Task 1; the `throttle`-taking `run` from Task 2.
 - Produces: `func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir string, changed map[string][]lineRange, workers int, out io.Writer) (failures, warnings []mutantVerdict, ran bool, err error)` — the new third return reports whether the engine actually executed mutants for this package.
 
@@ -632,10 +638,12 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ### Task 4: Makefile knobs and documentation
 
 **Files:**
+
 - Modify: `Makefile:26-32` (the `MUTATE_*` knob block), `Makefile:126-127` (the `mutate` target)
 - Modify: `wiki/testing.md` (the knobs table under `## Mutation Gate`)
 
 **Interfaces:**
+
 - Consumes: the `-cpu` and `-cooldown` flags from Task 2.
 - Produces: `MUTATE_CPU` and `MUTATE_COOLDOWN` make variables.
 

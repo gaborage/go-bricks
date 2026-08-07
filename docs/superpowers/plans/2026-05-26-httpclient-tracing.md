@@ -13,10 +13,12 @@
 ## File Structure
 
 **Created:**
+
 - `httpclient/internal/tracking/tracing.go` — `InitHTTPTracer`, `HTTPSpanInfo`, `StartHTTPClientSpan`, `EndHTTPClientSpan`, internal helpers.
 - `httpclient/internal/tracking/tracing_test.go` — unit tests for span emission, attributes, status mapping, name template, no-op behavior.
 
 **Modified:**
+
 - `httpclient/internal/tracking/testing.go` — add `ResetTracerForTesting()` alongside the existing `ResetMeterForTesting()`.
 - `httpclient/client.go` — wire parent + child spans in `Do` / `executeAttempt`; switch `ensureTraceContextHeaders` to propagator-based injection when a span is active.
 - `httpclient/client_test.go` — add integration test for full retry sequence (`5xx → 5xx → 2xx`) verifying parent/child relationship.
@@ -30,6 +32,7 @@
 ### Task 1: Scaffold `tracing.go` with lazy init + failing first test
 
 **Files:**
+
 - Create: `httpclient/internal/tracking/tracing.go`
 - Modify: `httpclient/internal/tracking/testing.go`
 - Create: `httpclient/internal/tracking/tracing_test.go`
@@ -210,6 +213,7 @@ git commit -m "feat(httpclient): scaffold OTel tracer + lazy init (#471)"
 ### Task 2: Span name template — method-only vs method+peer
 
 **Files:**
+
 - Modify: `httpclient/internal/tracking/tracing_test.go`
 - Modify: `httpclient/internal/tracking/tracing.go` (already covered, just add edge-case test)
 
@@ -294,6 +298,7 @@ git commit -m "test(httpclient): cover span name template variants (#471)"
 ### Task 3: Attribute set on StartHTTPClientSpan
 
 **Files:**
+
 - Modify: `httpclient/internal/tracking/tracing.go`
 - Modify: `httpclient/internal/tracking/tracing_test.go`
 
@@ -480,6 +485,7 @@ git commit -m "feat(httpclient): emit OTel HTTP client semconv attributes on spa
 ### Task 4: Status mapping in EndHTTPClientSpan (2xx/3xx/4xx unset, 5xx Error, transport RecordError)
 
 **Files:**
+
 - Modify: `httpclient/internal/tracking/tracing.go`
 - Modify: `httpclient/internal/tracking/tracing_test.go`
 
@@ -635,6 +641,7 @@ git commit -m "feat(httpclient): map HTTP status to OTel span status (#471)"
 ### Task 5: No-op behavior when no tracer provider
 
 **Files:**
+
 - Modify: `httpclient/internal/tracking/tracing_test.go`
 
 - [ ] **Step 1: Write the failing test**
@@ -690,6 +697,7 @@ git commit -m "test(httpclient): pin no-op tracer behavior for tracing seam (#47
 ### Task 6: Wire parent Do span into `client.Do`
 
 **Files:**
+
 - Modify: `httpclient/client.go`
 - Modify: `httpclient/client_test.go`
 
@@ -840,6 +848,7 @@ git commit -m "feat(httpclient): emit parent OTel span per logical Do call (#471
 ### Task 7: Wire child attempt span into `executeAttempt`
 
 **Files:**
+
 - Modify: `httpclient/client.go`
 - Modify: `httpclient/client_test.go`
 
@@ -986,6 +995,7 @@ Add this import at the top of `client.go`:
 > **Note:** `injectW3CTraceContext` is added in Task 8. For now, leave `c.ensureTraceContextHeaders(httpReq)` inside `applyHeaders` as it is — this means the parent header injection still happens once at applyHeaders-time. Task 8 replaces it with a propagator-aware version.
 
 Actually, to keep this task self-contained, **rename and adjust** the existing `ensureTraceContextHeaders` call:
+
 - In `applyHeaders`, remove the `c.ensureTraceContextHeaders(httpReq)` call.
 - Add `c.ensureTraceContextHeaders(httpReq)` (the existing function) immediately after the `c.applyHeaders(httpReq, req)` line inside `executeAttempt` is no longer needed — the call inside `applyHeaders` runs once per attempt anyway. Leave `applyHeaders` alone and DELETE the inline call I added in Step 3 above.
 
@@ -1031,6 +1041,7 @@ git commit -m "feat(httpclient): emit child attempt spans under Do span (#471)"
 ### Task 8: Replace `ensureTraceContextHeaders` with propagator injection when a span is active
 
 **Files:**
+
 - Modify: `httpclient/client.go`
 - Modify: `httpclient/client_test.go`
 
@@ -1193,6 +1204,7 @@ git commit -m "feat(httpclient): inject real traceparent via OTel propagator whe
 ### Task 9: Integration test for retry sequence (5xx → 5xx → 2xx)
 
 **Files:**
+
 - Modify: `httpclient/client_test.go`
 
 - [ ] **Step 1: Write the failing test**
@@ -1295,6 +1307,7 @@ git commit -m "test(httpclient): cover full retry-sequence span tree (#471)"
 ### Task 10: Documentation — wiki/httpclient.md Tracing section
 
 **Files:**
+
 - Modify: `wiki/httpclient.md`
 
 - [ ] **Step 1: Locate the "## Metrics" section in `wiki/httpclient.md` and add a new "## Tracing" section AFTER the metrics section ends.**
@@ -1394,6 +1407,7 @@ git commit -m "docs(httpclient): add Tracing section to wiki (#471)"
 ### Task 11: Documentation — wiki/observability.md, CLAUDE.md, llms.txt
 
 **Files:**
+
 - Modify: `wiki/observability.md`
 - Modify: `CLAUDE.md`
 - Modify: `llms.txt`
@@ -1443,6 +1457,7 @@ git commit -m "docs: reference httpclient tracing in observability/CLAUDE/llms.t
 ### Task 12: Run `make check-all` and fix any issues
 
 **Files:**
+
 - Possibly modify any of the above based on lint/test feedback.
 
 - [ ] **Step 1: Run the comprehensive checks**
@@ -1454,6 +1469,7 @@ make check-all
 - [ ] **Step 2: If anything fails, fix at the root cause (never bypass)**
 
 Common possibilities:
+
 - Lint may flag an unused `attemptCtx` in `executeAttempt` if propagator wiring uses `httpReq.WithContext(...)` only — handle by removing the local var.
 - `go vet` may flag missing argument names in the new `EndHTTPClientSpan` — apply Go-idiomatic naming.
 - Race detector may catch a tracerOnce race if `ResetTracerForTesting` is missing the mutex — verify it acquires `tracerInitMu`.
@@ -1478,6 +1494,7 @@ git commit -m "chore(httpclient): address make check-all feedback for tracing (#
 ## Self-review notes
 
 **Spec coverage:**
+
 - Q1 (one span per Do or per attempt): ✅ Task 6 (parent), Task 7 (child).
 - Q2 (span name template): ✅ Task 2.
 - Q3 (URL redaction): ✅ Task 3 (`url.path` only; no `url.full`).

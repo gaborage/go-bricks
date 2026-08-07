@@ -183,7 +183,7 @@ func fromEchoMiddleware(em echo.MiddlewareFunc, cfg *config.Config) MiddlewareFu
 // public: func CORS(expose bool, env ...string) MiddlewareFunc { return fromEchoMiddleware(corsEcho(expose, env...), nil) }
 ```
 
-`SetupMiddlewares` calls the unexported `xxxEcho()` forms directly through `e.Use(...)` → **the default request path stays echo-native, zero baton** (the ADR-026 invariant, test-enforced). `SkipperFunc` becomes `func(r *http.Request) bool`; `CreateProbeSkipper` returns the flat form; internal echo `Skipper` configs adapt at the `SetupMiddlewares` seam. Severity escalation is the `HandlerContext.EscalateSeverity(level)` method. _(SkipperFunc→`*http.Request` and method-only EscalateSeverity were refined in Phase-3 code review.)_
+`SetupMiddlewares` calls the unexported `xxxEcho()` forms directly through `e.Use(...)` → **the default request path stays echo-native, zero baton** (the ADR-026 invariant, test-enforced). `SkipperFunc` becomes `func(r *http.Request) bool`; `CreateProbeSkipper` returns the flat form; internal echo `Skipper` configs adapt at the `SetupMiddlewares` seam. Severity escalation is the `HandlerContext.EscalateSeverity(level)` method. *(SkipperFunc→`*http.Request` and method-only EscalateSeverity were refined in Phase-3 code review.)*
 
 ### 8. Test support (exported, server package)
 

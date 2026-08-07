@@ -5,6 +5,7 @@ This document serves as an index to all architectural decisions made during the 
 ## Overview
 
 Architecture Decision Records help us:
+
 - Document **why** decisions were made, not just what was decided
 - Understand the context and trade-offs of past decisions
 - Onboard new developers with historical architectural context
@@ -450,7 +451,7 @@ migration.
 
 **Date:** 2026-06-30 | **Status:** Accepted
 
-> _Numbering note: ADR-033 is reserved for a concurrent change (outbox retry-count, PR #626) landing in parallel; this echo-boundary ADR took the next free number, 034._
+> *Numbering note: ADR-033 is reserved for a concurrent change (outbox retry-count, PR #626) landing in parallel; this echo-boundary ADR took the next free number, 034.*
 
 Resolves issue #623. Wraps every remaining `github.com/labstack/echo/v5` leak on the
 public surface behind go-bricks boundary types while Echo stays the unchanged engine

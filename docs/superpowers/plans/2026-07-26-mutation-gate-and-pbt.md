@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+<!-- MD028: separator keeps the two notes below as distinct blockquotes -->
+
 > **Historical record:** this document is the pre-execution blueprint plus
 > mid-execution patches. Its code blocks show what was planned at dispatch
 > time; the review gates (/simplify, /security-audit, CodeRabbit) refined the
@@ -34,11 +36,13 @@
 ### Task 1: Gremlins compatibility spike + pinned configuration
 
 **Files:**
+
 - Modify: `Makefile` (version pin block at top, near `GOVULNCHECK_VERSION`)
 - Modify: `.gitignore` (allowlist `.gremlins.yaml`)
 - Create: `.gremlins.yaml`
 
 **Interfaces:**
+
 - Produces: Makefile var `GREMLINS_VERSION`, a validated gremlins invocation shape (`unleash --output <file> <pkg>`), and a captured real report JSON used verbatim as the Task 3 fixture.
 
 - [ ] **Step 1: Verify gremlins runs on Go 1.26**
@@ -103,10 +107,12 @@ Save `/tmp/gremlins-config.json` — Task 3 pastes a trimmed excerpt of it as th
 ### Task 2: Wrapper diff parsing (`diff.go`)
 
 **Files:**
+
 - Create: `scripts/mutatediff/diff.go`
 - Create: `scripts/mutatediff/diff_test.go`
 
 **Interfaces:**
+
 - Produces (consumed by Tasks 3–4):
   - `type lineRange struct { Start, End int }` — half-open `[Start, End)` new-file line numbers
   - `func parseUnifiedDiff(diff string) map[string][]lineRange`
@@ -315,10 +321,12 @@ git log -1
 ### Task 3: Wrapper report judging (`report.go`)
 
 **Files:**
+
 - Create: `scripts/mutatediff/report.go`
 - Create: `scripts/mutatediff/report_test.go`
 
 **Interfaces:**
+
 - Consumes: `lineRange` from Task 2.
 - Produces (consumed by Task 4):
   - `type mutantVerdict struct { File string; Line int; Operator, Status string }`
@@ -491,10 +499,12 @@ git log -1
 ### Task 4: Wrapper orchestration + `make mutate` + live verification
 
 **Files:**
+
 - Create: `scripts/mutatediff/main.go`
 - Modify: `Makefile` (new `mutate` and `mutate-baseline` targets, after the `sec:` target)
 
 **Interfaces:**
+
 - Consumes: `parseUnifiedDiff`, `mutationScope`, `packagesOf`, `judge`, `lineRange`, `mutantVerdict` (Tasks 2–3).
 - Produces: `make mutate` (diff gate, exit 0 clean / 1 survivors / 2 tool error) and `make mutate-baseline` (full-repo run writing `gremlins-report.json`, used by Task 5).
 
@@ -631,9 +641,11 @@ git log -1
 ### Task 5: Nightly baseline workflow
 
 **Files:**
+
 - Create: `.github/workflows/mutation-nightly.yml`
 
 **Interfaces:**
+
 - Consumes: `make mutate-baseline` (Task 4), which writes `gremlins-report.json` at the repo root.
 
 - [ ] **Step 1: Write the workflow**
@@ -714,6 +726,7 @@ The cron cannot be exercised pre-merge; `workflow_dispatch` exists so it can be 
 ### Task 6: PR1 documentation
 
 **Files:**
+
 - Modify: `CLAUDE.md` (Quick Reference block + Workflow Rules bullet)
 - Modify: `wiki/testing.md` (new `## Mutation Gate` section at the end)
 
@@ -815,10 +828,12 @@ git checkout -b feature/property-based-suites
 ```
 
 **Files:**
+
 - Modify: `go.mod` / `go.sum` (root)
 - Create: `database/database_properties_test.go`
 
 **Interfaces:**
+
 - Consumes: `database.NewQueryBuilder(vendor string)`, consts `database.PostgreSQL` / `database.Oracle`, `qb.Filter() types.FilterFactory` (`Eq(column string, value any) types.Filter`, `And(filters ...types.Filter) types.Filter`), `qb.Select(...).From(...).Where(...).ToSQL() (string, []any, error)`.
 
 - [ ] **Step 1: Add the dependency**
@@ -952,9 +967,11 @@ git log -1
 ### Task 9: Config property suite
 
 **Files:**
+
 - Create: `config/config_properties_test.go`
 
 **Interfaces:**
+
 - Consumes: `Load() (*Config, error)`, `(*Config).InjectInto(target any) error`, test helper `clearEnvironmentVariables()` (already in `config` package tests).
 
 - [ ] **Step 1: Write the suite**
@@ -1090,9 +1107,11 @@ git log -1
 ### Task 10: JOSE property suite
 
 **Files:**
+
 - Create: `jose/jose_properties_test.go` (package `jose_test` — white-box would cycle through `jose/testing`, which imports `jose`)
 
 **Interfaces:**
+
 - Consumes: `jose.Seal(payload []byte, p *jose.Policy, r jose.KeyResolver) (string, error)`, `jose.Open(compact string, p *jose.Policy, r jose.KeyResolver) ([]byte, *jose.Claims, jose.OpenHeader, error)`, `josetest.NewBidirectionalFixture(t)` (fields `ClientOutbound`, `PeerInbound`, `Resolver`).
 
 - [ ] **Step 1: Write the suite**
@@ -1174,9 +1193,11 @@ git log -1
 ### Task 11: Multitenant resolver property suite
 
 **Files:**
+
 - Create: `multitenant/multitenant_properties_test.go` (package `multitenant`)
 
 **Interfaces:**
+
 - Consumes: `TenantResolver` interface (`ResolveTenant(ctx, *http.Request) (string, error)`), struct literals `&HeaderResolver{HeaderName}`, `&SubdomainResolver{RootDomain, TrustProxies}`, `&PathResolver{Segment, Prefix}`, `&CompositeResolver{Resolvers, TenantRegex}`.
 
 - [ ] **Step 1: Write the suite**
@@ -1287,6 +1308,7 @@ git log -1
 ### Task 12: PR2 documentation
 
 **Files:**
+
 - Modify: `wiki/testing.md` (new `## Property-Based Tests` section, after the Mutation Gate section from Task 6)
 
 - [ ] **Step 1: Append the section**

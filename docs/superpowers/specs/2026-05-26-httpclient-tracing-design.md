@@ -64,11 +64,13 @@ func ResetTracerForTesting()
 ### Wiring inside `client.go`
 
 `Do`:
+
 - After `validateRequest`, open the **parent "Do" span** via `StartHTTPClientSpan(ctx, &HTTPSpanInfo{Method, URL: parsedURL, PeerName})`.
 - `defer EndHTTPClientSpan(doSpan, finalStatus, finalErrType, finalRespBytes, finalErr)` — final values are captured by closure (or a small `final` struct updated by the loop).
 - The retry loop runs against the context that has the Do span attached, so each attempt span is its child.
 
 `executeAttempt`:
+
 - After `buildRequest` succeeds (so `httpReq.URL` is available), open the **child attempt span** via `StartHTTPClientSpan(attemptCtx, &HTTPSpanInfo{Method, URL: httpReq.URL, PeerName, ResendCount: attempt})`.
 - Move `applyHeaders → ensureTraceContextHeaders` to use `otel.GetTextMapPropagator().Inject(...)` *after* the attempt span starts, so the injected traceparent matches the attempt span's IDs.
 - Close the attempt span via `EndHTTPClientSpan(attemptSpan, statusCode, errType, respBytes, err)` after recording metrics — same lifecycle as the metric observation.

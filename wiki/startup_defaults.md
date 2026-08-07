@@ -15,11 +15,13 @@ GoBricks applies component-specific startup timeouts for graceful initialization
 | `app.startup.observability` | 15s | OTLP endpoint connection (higher for TLS handshake) |
 
 **Fallback Hierarchy:**
+
 1. Explicit component value (e.g., `app.startup.database: 15s`) → preserved
 2. Global timeout (if set): `app.startup.timeout: 30s` → applied to all unset components
 3. Per-component default (shown in table) → used when neither is set
 
 **Example - Global fallback:**
+
 ```yaml
 app:
   startup:
@@ -27,6 +29,7 @@ app:
 ```
 
 **Override defaults** in `config.yaml`:
+
 ```yaml
 app:
   startup:
@@ -97,6 +100,7 @@ Attribution is by **registration order** (`module.Name()`), covering both typed 
 Startup fails when two registrations claim the same **exact method + full path**. The echo engine is constructed with `AllowOverwritingRoute: true`, so without this check the second registration silently wins and the first module's handler is dead on arrival — no error, no warning, unless the shadowed route happens to be exercised. This closes that gap at the framework's own registration seam (`server.RouteRegistrar`), covering both typed (`server.GET/POST`) and raw (`RouteRegistrar.Add`) routes, plus anything registered through nested `Group()`s.
 
 **Coverage notes:**
+
 - `health`/`ready` probes register directly on the HTTP engine (not through `RouteRegistrar` — same seam note as route logging above), but `server.New` records their method+path pairs in the conflict tracker explicitly, so a module claiming `GET /health` (or the configured probe paths) fails startup like any other collision.
 - Param-name-differing route templates (e.g. `/users/:id` vs `/users/:uid`) are **excluded** — these are distinct strings and are not detected as duplicates, even though they collide in echo's radix tree at request time; echo's own behavior governs there.
 

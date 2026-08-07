@@ -22,6 +22,7 @@ Implement "database by intent" configuration with the following principles:
 ## Implementation
 
 ### Configuration Changes
+
 - **Removed**: All database defaults from `loadDefaults()` in `config/config.go`
 - **Added**: `IsDatabaseConfigured(cfg *DatabaseConfig) bool` function in `config/validation.go`
 - **Logic**: Database enabled when `ConnectionString != ""` OR `Host != ""` OR `Type != ""`
@@ -30,11 +31,13 @@ Implement "database by intent" configuration with the following principles:
   rather than absence
 
 ### Validation Changes
+
 - **Before**: Database validation always required, caused failures for database-free apps
 - **After**: `validateDatabase()` returns early when `!IsDatabaseConfigured()`
 - **Consistency**: Shared logic between validation and runtime via `IsDatabaseConfigured()`
 
 ### Runtime Integration
+
 - **Historical**: The app builder checked `config.IsDatabaseConfigured(&cfg.Database)` directly
   (`app/app_builder.go`) to gate its startup connection probe. That check remains, but it is no
   longer where absence is decided — [ADR-047](adr_047_database_absence_vs_misconfiguration.md)
@@ -50,18 +53,21 @@ Implement "database by intent" configuration with the following principles:
 ## Consequences
 
 ### Positive
+
 - **Deterministic**: Configuration behavior is predictable and explicit
 - **Database-Free Support**: Applications can run without any database configuration
 - **Clear Intent**: Explicit configuration signals intentional database usage
 - **Reduced Confusion**: No ambiguity about database enablement
 
 ### Negative
+
 - **Breaking Change**: Applications relying on database defaults must update configuration
 - **More Explicit**: Requires intentional database configuration in all database-using applications
 
 ## Migration Impact
 
 Existing applications using database functionality must explicitly configure:
+
 - Connection string, OR
 - Host + type combination
 

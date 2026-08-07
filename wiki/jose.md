@@ -7,6 +7,7 @@ The `jose` package provides nested JWE-of-JWS protection on HTTP request and res
 The `jose` package provides nested JWE-of-JWS protection on HTTP request and response bodies. Designed for **Visa Token Services**-style integrations and any partner API that requires sign-then-encrypt outbound and decrypt-then-verify inbound on every payload.
 
 **Key Features:**
+
 - **Struct-tag opt-in**: Add a `jose:` tag to a sentinel field on the request/response type — no per-route plumbing
 - **Bidirectional symmetry enforced**: both request and response must carry tags or neither (registration-time check)
 - **Strict algorithm allowlist**: `RS256`/`PS256` for signing; `RSA-OAEP-256` + `A256GCM` for encryption. `alg=none`, `HS*`, `RSA1_5`, and `ES256` are rejected at parse time. ECDSA support is gated on extending `keystore.KeyStore` to return ECDSA keys (tracked in [#347](https://github.com/gaborage/go-bricks/issues/347))
@@ -15,6 +16,7 @@ The `jose` package provides nested JWE-of-JWS protection on HTTP request and res
 - **Observability**: spans (`jose.decode_request`, `jose.encode_response`), failure counter (`jose.failures.total` by code/direction), duration histogram (`jose.operation.duration`)
 
 **Tag syntax:**
+
 ```go
 type CreateTokenRequest struct {
     _   struct{} `jose:"decrypt=our-signing,verify=visa-vts-verify"`
@@ -28,11 +30,13 @@ type CreateTokenResponse struct {
 ```
 
 **Tag keys (all kids are case-sensitive, charset `[A-Za-z0-9_-]+`):**
+
 - Request: `decrypt` (our private key), `verify` (peer public key)
 - Response: `sign` (our private key), `encrypt` (peer public key)
 - Optional everywhere: `sig_alg` (default `RS256`), `key_alg` (default `RSA-OAEP-256`), `enc` (default `A256GCM`), `cty` (default `application/json`)
 
 **Wiring:**
+
 ```yaml
 keystore:
   keys:
@@ -94,6 +98,7 @@ Vanilla `Result[R]` continues to seal raw `data` so VTS-style vendor-prescribed 
 **Replay protection**: the framework verifies the JWS signature and exposes verified claims via `jose.ClaimsFromContext(ctx)`. Applications enforce `iat`/`exp`/`jti` policies (Visa skew rules vary by product); `jose.CheckJTIReplay(ctx, recorder, claims, window)` provides the cache-backed `jti` half. `CheckJTIReplay` requires a non-empty `claims.Issuer` — iss-less token profiles must call `jose.CheckJTIReplayInNamespace(ctx, recorder, policy.VerifyKid, claims, window)` instead, so partners sharing no issuer don't collide on the same jti namespace.
 
 **Test utilities** (`jose/testing/`):
+
 - `GenerateTestKeyPair(t)` — 2048-bit RSA pair for fast tests
 - `NewTestResolver(map[string]any{kid: key})` — in-memory KeyResolver
 - `SealForTest(t, payload, policy, resolver)` — produce compact JWE for arrange step

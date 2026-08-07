@@ -4,6 +4,7 @@ This document covers the GoBricks testing conventions and the dedicated testing 
 
 ## Test Naming Conventions
 
+<!-- markdownlint-disable-next-line MD036 -->
 **MANDATORY: Use camelCase for ALL test function names**
 
 ```go
@@ -19,6 +20,7 @@ func TestQueryBuilder_with_complex_joins(t *testing.T) { }
 ```
 
 **Table-Driven Test Naming:**
+
 ```go
 // ✅ CORRECT
 func TestFilterEq(t *testing.T) {
@@ -38,6 +40,7 @@ func Test_Filter_Eq(t *testing.T) { }
 ```
 
 **Rationale:**
+
 - **Consistency:** GoBricks enforces camelCase across the entire codebase
 - **Go Idioms:** Test function names are regular Go identifiers (prefer camelCase)
 - **Tooling:** Some tools parse test names assuming camelCase convention
@@ -46,6 +49,7 @@ func Test_Filter_Eq(t *testing.T) { }
 **Exception:** Test case descriptions in table-driven tests use snake_case for readability (e.g., `name: "with_invalid_credentials"`)
 
 ## Testing Strategy
+
 - **Unit tests:** testify, `database/testing` (DB mocking), `cache/testing` (cache mocking), `outbox/testing` (outbox mocking), httptest (server), fake adapters (messaging)
 - **Integration tests:** testcontainers, `-tags=integration` flag
 - **Race detection:** All tests run with `-race` in CI
@@ -56,6 +60,7 @@ func Test_Filter_Eq(t *testing.T) { }
 GoBricks provides `database/testing` package for easy database mocking without sqlmock complexity (**73% less boilerplate**).
 
 **Simple Query Test:**
+
 ```go
 import dbtest "github.com/gaborage/go-bricks/database/testing"
 
@@ -85,6 +90,7 @@ func TestProductServiceFindActive(t *testing.T) {
 ```
 
 **Transaction Testing:**
+
 ```go
 db := dbtest.NewTestDB(dbtypes.PostgreSQL)
 tx := db.ExpectTransaction().
@@ -98,6 +104,7 @@ dbtest.AssertCommitted(t, tx)
 ```
 
 **Multi-Tenant Testing:**
+
 ```go
 tenants := dbtest.NewTenantDBMap()
 tenants.ForTenant("acme").ExpectQuery("SELECT").WillReturnRows(...)
@@ -112,6 +119,7 @@ result, err := svc.Process(ctx)  // Uses acme's TestDB
 ```
 
 **Key Features:**
+
 - Fluent expectation API (ExpectQuery/ExpectExec)
 - Multi-tenant support via TenantDBMap
 - Transaction tracking (commit/rollback assertions)
@@ -125,6 +133,7 @@ See [database/testing](../database/testing/) package and llms.txt's "Database Te
 GoBricks provides `cache/testing` package for easy cache mocking without Redis dependencies (**similar to database/testing pattern**).
 
 **Simple Cache Test:**
+
 ```go
 import cachetest "github.com/gaborage/go-bricks/cache/testing"
 
@@ -146,6 +155,7 @@ func TestUserServiceCaching(t *testing.T) {
 ```
 
 **Configurable Failures:**
+
 ```go
 mockCache := cachetest.NewMockCache().
     WithGetFailure(cache.ErrClosed)
@@ -159,6 +169,7 @@ cachetest.AssertOperationCount(t, mockCache, "Get", 1)
 ```
 
 **Multi-Tenant Testing:**
+
 ```go
 tenantCaches := map[string]*cachetest.MockCache{
     "acme":   cachetest.NewMockCache(),
@@ -177,6 +188,7 @@ result, err := svc.Process(acmeCtx)  // Uses acme's MockCache
 ```
 
 **Key Features:**
+
 - Fluent configuration API (`WithGetFailure`, `WithDelay`, `WithCloseCallback`)
 - Operation tracking (Get/Set/Delete/GetOrSet/CompareAndSet counts)
 - 17 assertion helpers (`AssertCacheHit`, `AssertOperationCount`, `AssertValue`)
@@ -190,6 +202,7 @@ See [cache/testing](../cache/testing/) package for full API documentation and th
 GoBricks provides `outbox/testing` package for mocking outbox operations in unit tests.
 
 **Simple Test:**
+
 ```go
 import outboxtest "github.com/gaborage/go-bricks/outbox/testing"
 
@@ -211,6 +224,7 @@ func TestOrderServiceCreateOrder(t *testing.T) {
 ```
 
 **Configurable Failures:**
+
 ```go
 mockOutbox := outboxtest.NewMockOutbox().
     WithError(fmt.Errorf("outbox unavailable"))
@@ -221,6 +235,7 @@ assert.Error(t, err)
 ```
 
 **Key Features:**
+
 - Fluent configuration API (`WithError`)
 - Event tracking (type, aggregate ID, payload, exchange)
 - Assertion helpers (`AssertEventPublished`, `AssertEventCount`, `AssertEventWithAggregate`, `AssertNoEvents`)
@@ -282,6 +297,7 @@ a `server.Server` and drive it with `httptest` / `ServeHTTP` instead.
 **Prerequisites:** Docker Desktop or Docker Engine running
 
 **Run Integration Tests:**
+
 ```bash
 make test-integration           # All integration tests
 make test-coverage-integration  # With coverage
@@ -290,6 +306,7 @@ make test-coverage-integration  # With coverage
 **Build Tag Isolation:** Integration tests use `//go:build integration` - testcontainers dependencies only compiled with `-tags=integration`
 
 **Writing Integration Tests:**
+
 ```go
 //go:build integration
 

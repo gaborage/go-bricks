@@ -3,6 +3,7 @@
 Fix all review comments on a pull request in a single pass.
 
 ## Usage
+
 Provide a PR number or URL as argument. If omitted, uses the current branch's PR.
 
 ## Workflow
@@ -17,6 +18,7 @@ Provide a PR number or URL as argument. If omitted, uses the current branch's PR
 5. **Commit and push**: Create a single commit with a message summarizing all fixes, then push.
 
 ## Rules
+
 - NEVER push incremental fixes. All comments must be addressed in a single commit.
 - If `make check` fails after fixes, fix the issues and re-run until it passes.
 - If a review comment conflicts with another, flag it to the user before proceeding.

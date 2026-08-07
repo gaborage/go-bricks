@@ -9,6 +9,7 @@
 **Tech Stack:** Go 1.26, koanf v2 (`koanf` struct tag), go-viper/mapstructure, testify, reflection.
 
 **Delivered as two self-contained PRs:**
+
 - **PR1** (this plan, Tasks 1–10): the rename + ADR + migration + tests + doc updates for the renamed keys.
 - **PR2** (Task 11, separate branch off `main` after PR1 merges): unrelated ride-along doc-drift fixes.
 
@@ -45,6 +46,7 @@ Each token is replaced in all five tag namespaces (`koanf`/`json`/`yaml`/`toml`/
 ### Task 1: No-underscore invariant test (the cornerstone guard)
 
 **Files:**
+
 - Create: `config/keyinvariant_test.go`
 
 - [ ] **Step 1: Write the failing test**
@@ -131,6 +133,7 @@ git commit -m "test(config): add no-underscore koanf-tag invariant (red)"
 ### Task 2: Env-reachability tests for renamed keys (red)
 
 **Files:**
+
 - Modify: `config/config_test.go` (append test)
 
 - [ ] **Step 1: Write the failing test** (uses the existing `clearEnvironmentVariables()` helper in `config_test.go` for env isolation)
@@ -174,6 +177,7 @@ git commit -m "test(config): assert env overrides reach renamed keys (red)"
 ### Task 3: Rename the 21 koanf tags + the one default key (green)
 
 **Files:**
+
 - Modify: `config/types.go`
 - Modify: `config/config.go` (loadDefaults: `keystore.secret_min_length` → `keystore.secretminlength`)
 
@@ -227,6 +231,7 @@ BREAKING: snake_case YAML/env keys no longer recognized. See ADR-024."
 ### Task 4: Fix pre-existing config tests that hardcode old keys
 
 **Files:**
+
 - Modify: `config/config_test.go`, `config/validation_test.go` (and any other failing `config/*_test.go`)
 
 - [ ] **Step 1: Identify failures**
@@ -252,6 +257,7 @@ git commit -m "test(config): update tests to renamed flat-smushed keys"
 ### Task 5: Update consistency strings (error messages + comments) and their tests
 
 **Files:**
+
 - Modify: `config/validation.go` (8 `NewValidationError("…reinit_delay"/…)` dotted key paths → smushed)
 - Modify: `outbox/config.go`, `inbox/config.go`, `cache/manager.go` (error-message strings naming the keys)
 - Modify: `keystore/keystore.go` (doc comment `secret_min_length: 32` → `secretminlength: 32`)
@@ -284,6 +290,7 @@ git commit -m "fix(config): align error messages and comments with renamed keys"
 ### Task 6: Update `config.example.yaml`
 
 **Files:**
+
 - Modify: `config.example.yaml`
 
 - [ ] **Step 1: Rename the keys** under `outbox:`, `inbox:`, and `log:` (lines ~112–139): `table_name`→`tablename`, `auto_create_table`→`autocreatetable`, `default_exchange`→`defaultexchange`, `poll_interval`→`pollinterval`, `batch_size`→`batchsize`, `max_retries`→`maxretries`, `retention_period`→`retentionperiod`, `sensitive_fields`→`sensitivefields`. (Leave the explanatory comment mentioning `password, api_key` — those are example sensitive field *values*, not config keys.)
@@ -305,6 +312,7 @@ git commit -m "docs(config): rename keys in config.example.yaml"
 ### Task 7: Update documentation references to the renamed keys
 
 **Files:**
+
 - Modify: `README.md`, `llms.txt`, `CLAUDE.md`, and the relevant `wiki/*.md` (`outbox.md`, `keystore.md`, `observability.md`, `cache.md`, `messaging.md`, others as found)
 
 - [ ] **Step 1: Enumerate exact references** (read-only) — distinguish our config keys from unrelated tokens (e.g. httpclient's own `connection_timeout`, DB columns). For each candidate file, confirm the match is one of the 21 config keys before editing:
@@ -330,6 +338,7 @@ git commit -m "docs: update config key references to flat-smushed names"
 ### Task 8: ADR-024 + migration table
 
 **Files:**
+
 - Create: `wiki/adr_024_config_key_flatsmush.md`
 - Modify: `wiki/architecture_decisions.md` (add ADR-024 to the index)
 - Modify: `wiki/migrations.md` (add a before→after rename table)
@@ -372,6 +381,7 @@ Expected: fmt + lint + tests pass, including `TestConfigKoanfTagsHaveNoUnderscor
 git push -u origin feature/config-key-flatsmush-rename
 ```
 
+<!-- markdownlint-disable-next-line MD033 -->
 - [ ] **Step 2: Open the PR** (`gh pr create`) — title `fix(config): rename underscored config keys to flat-smushed convention`; body: problem, the 21-key table, audit rationale (flat-smush is the standard; single-field structs are drift), BREAKING + ADR-024 link, "Closes #<finding issue if one exists>", and a note that Class 2 (InjectInto parity) is a deferred follow-up.
 
 - [ ] **Step 3: Babysit** — wait for CI; address CodeRabbit comments and SonarCloud NEW issues (fetch via `curl "https://sonarcloud.io/api/issues/search?componentKeys=gaborage_go-bricks&pullRequest=<N>&statuses=OPEN,CONFIRMED"`). Fix or document each skip in the commit. Push fixes. Re-check until quality gate green + reviews resolved.

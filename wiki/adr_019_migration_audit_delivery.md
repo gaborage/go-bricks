@@ -125,11 +125,13 @@ This list is part of the public API (additive changes only) so downstream alerti
 ## Consequences
 
 **Pros:**
+
 - Zero-config audit for the majority of adopters; durable audit for the compliance minority.
 - Audit events benefit from the same backend correlation as spans / metrics / logs in the OTel pipeline — operators can pivot from a span to an audit event and back in their existing tooling.
 - The `AuditRecorder` interface is small (one method) and stable; backwards-compatible additions to `AuditEvent` follow Go's struct-additive rules.
 
 **Cons:**
+
 - Two emission paths means schema discipline is essential: any change to `AuditEvent` must update OTel attribute mapping **and** sink contract. Mitigated by the single `AuditEvent` struct flowing into both paths.
 - The "sink-failure does not abort migration" semantics is a real trade-off. Customers requiring zero-loss audit must back their sink with a durable buffer; the framework does not retry on the sink's behalf. Documented in the operator wiki.
 - `ErrorClass` taxonomy must be maintained as Runner implementations grow. Adding a class is non-breaking; removing one is.

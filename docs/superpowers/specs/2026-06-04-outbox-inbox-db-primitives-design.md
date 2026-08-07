@@ -151,6 +151,7 @@ func WithTxOptions(ctx context.Context, db Interface, opts *sql.TxOptions, fn fu
 ```
 
 Contract:
+
 - `Begin`/`BeginTx` → `defer` closure: `recover()` → rollback → **re-panic**; else if `committed` skip;
   else rollback.
 - On `fn` error: rollback, return the **original `fn` error** (not the rollback error; join a rollback
@@ -233,7 +234,7 @@ return database.WithTx(ctx, db, func(ctx context.Context, tx dbtypes.Tx) error {
   `store_oracle.go` with vendor DDL **consts** (exported, so managed-migration shops can run them):
   - PG: `CREATE TABLE IF NOT EXISTS %s (tenant_id VARCHAR(255) NOT NULL DEFAULT '', event_id VARCHAR(255)
     NOT NULL, processed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(), PRIMARY KEY (tenant_id,event_id))`
-    + `CREATE INDEX IF NOT EXISTS idx_%s_processed ON %s (processed_at)`.
+    - `CREATE INDEX IF NOT EXISTS idx_%s_processed ON %s (processed_at)`.
   - Oracle: `VARCHAR2(255)`, `SYSTIMESTAMP`, no `IF NOT EXISTS` (tolerate ORA-00955 as warning),
     function-based index; mirror outbox's reserved-word handling.
 - `inbox/module.go`: copy `ensureStoreInitialized` (double-checked mutex, `switch db.DatabaseType()`,

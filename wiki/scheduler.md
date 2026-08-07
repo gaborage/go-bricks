@@ -7,6 +7,7 @@ The `scheduler` package provides gocron-based job scheduling integrated with the
 The `scheduler` package provides gocron-based job scheduling integrated with the GoBricks module system.
 
 **Key Features:**
+
 - **Lazy initialization**: Scheduler created only when first job is registered
 - **Overlapping prevention**: Mutex-based lock per job (skips trigger if already running)
 - **Panic recovery**: Automatic recovery with stack trace logging and metrics
@@ -14,6 +15,7 @@ The `scheduler` package provides gocron-based job scheduling integrated with the
 - **OpenTelemetry**: Counter, histogram, and panic tracking per job
 
 **Executor Interface:**
+
 ```go
 type Executor interface {
     Execute(ctx JobContext) error
@@ -23,6 +25,7 @@ type Executor interface {
 ```
 
 **Registration via ModuleDeps:**
+
 ```go
 // mustParseTime parses "HH:MM" and panics on error — acceptable in init paths
 // where a malformed literal is a programmer bug that must crash at startup.

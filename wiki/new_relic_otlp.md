@@ -110,6 +110,7 @@ trace:
 ## Attribute Limits
 
 New Relic enforces attribute limits on its ingest side, but be aware of:
+
 - **Maximum attributes per span/metric/log:** 255 attributes
 - **Maximum attribute value size:** 4095 bytes
 - **Truncation behavior:** GoBricks does not validate or truncate attributes before export — oversized or excess attributes may be silently dropped by New Relic, not by GoBricks

@@ -8,6 +8,7 @@ dev, a base64 env var / secrets-manager value in deployed environments, loaded
 once at startup and held read-only in memory.
 
 **Key Features:**
+
 - **One custody story** for asymmetric and symmetric material — no parallel,
   un-audited secret path, no deriving a MAC key off an RSA private key
 - **Per-entry RSA *or* secret**, never both — a mixed entry is a startup config

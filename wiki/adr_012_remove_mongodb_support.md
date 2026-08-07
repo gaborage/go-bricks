@@ -10,14 +10,17 @@ GoBricks supported three database vendors: PostgreSQL, Oracle, and MongoDB. Mong
 ## Options Considered
 
 ### Option A: Keep MongoDB (Status Quo)
+
 - **Pros:** Feature parity, potential future use
 - **Cons:** Maintenance burden (~4,500 lines of unused code), additional dependency (`go.mongodb.org/mongo-driver/v2`), complexity in vendor-agnostic abstractions
 
 ### Option B: Deprecate MongoDB
+
 - **Pros:** Gradual migration path
 - **Cons:** Extended maintenance period, deprecation warnings add noise, no active users to migrate
 
 ### Option C: Remove MongoDB Entirely (Chosen)
+
 - **Pros:** Immediate reduction in complexity, smaller dependency tree, clearer framework scope
 - **Cons:** Breaking change for any hypothetical MongoDB users
 
@@ -28,6 +31,7 @@ Remove MongoDB support entirely with no deprecation period. The framework focuse
 ## Implementation Details
 
 ### Removed
+
 - `database/mongodb/` package (11 files, ~4,500 lines)
 - `internal/database/document_interface.go` (~430 lines of document-oriented interfaces)
 - `testing/containers/mongodb.go` (testcontainer helper)
@@ -39,6 +43,7 @@ Remove MongoDB support entirely with no deprecation period. The framework focuse
 - `go.mongodb.org/mongo-driver/v2` and `testcontainers-go/modules/mongodb` dependencies
 
 ### Unchanged
+
 - `database.Interface` — MongoDB implemented it but the interface itself is generic
 - `database/factory.go` — already only handled PostgreSQL and Oracle
 - All PostgreSQL and Oracle functionality
@@ -46,21 +51,25 @@ Remove MongoDB support entirely with no deprecation period. The framework focuse
 ## Consequences
 
 ### Positive
+
 - ~5,000 lines of code removed
 - Two fewer direct dependencies (`mongo-driver`, `testcontainers-go/modules/mongodb`)
 - Simplified vendor abstraction (no document vs. SQL interface split)
 - Faster CI (no MongoDB container pre-pull or integration tests)
 
 ### Negative
+
 - Breaking change for any applications using `database/mongodb` package
 - Breaking change for any applications using `DocumentInterface` type assertions
 
 ### Neutral
+
 - The `normalizeDBVendor` function in tracking still handles unknown vendors gracefully
 
 ## Migration Impact
 
 Applications using MongoDB with GoBricks must:
+
 1. Remove `database.type: mongodb` from configuration files
 2. Remove `DATABASE_MONGO_*` environment variables
 3. Replace `database/mongodb` imports with a direct MongoDB driver dependency

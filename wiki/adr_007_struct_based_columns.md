@@ -26,6 +26,7 @@ qb.InsertWithColumns("users", "name", "email").Values(...)
 ```
 
 This led to:
+
 - **Code duplication**: Column names defined in structs, then hardcoded as strings
 - **Typo risk**: No compile-time validation of column references
 - **Oracle reserved words**: Manual quoting burden (`"LEVEL"`, `"NUMBER"`)
@@ -37,6 +38,7 @@ This led to:
 Implement struct-based column extraction using reflection with lazy caching, following these principles:
 
 ### 1. **Struct Tag-Based Column Definition**
+
 - **Decision:** Use `db:"column_name"` tags to define database columns on struct fields
 - **Rationale:**
   - Follows existing Go ecosystem conventions (GORM, sqlx)
@@ -46,6 +48,7 @@ Implement struct-based column extraction using reflection with lazy caching, fol
 - **Trade-offs:** Runtime reflection overhead, but mitigated by caching
 
 **API:**
+
 ```go
 type User struct {
     ID    int64  `db:"id"`
@@ -57,6 +60,7 @@ cols := qb.Columns(&User{})  // Extract and cache metadata
 ```
 
 ### 2. **Lazy Registry with Global Caching**
+
 - **Decision:** Parse struct tags on first use, cache forever per vendor
 - **Implementation:** `sync.Map` for lock-free cached reads after first parse
 - **Rationale:**
@@ -67,13 +71,15 @@ cols := qb.Columns(&User{})  // Extract and cache metadata
 - **Trade-offs:** First-use latency acceptable for development-time benefits
 
 **Performance:**
-```
+
+```text
 BenchmarkColumnRegistry_FirstUse-12     0.591 µs/op  (5 fields)
 BenchmarkColumnRegistry_CachedAccess-12 26.26 ns/op  (cached)
 BenchmarkColumnMetadata_Get-12          5.518 ns/op  (field lookup)
 ```
 
 ### 3. **Vendor-Aware Automatic Quoting**
+
 - **Decision:** Pre-compute vendor-specific quoting during struct parsing
 - **Rationale:**
   - **Oracle**: Reserved words (`NUMBER`, `LEVEL`, `SIZE`) quoted at parse time
@@ -83,6 +89,7 @@ BenchmarkColumnMetadata_Get-12          5.518 ns/op  (field lookup)
 - **Trade-offs:** Slightly more memory (cached quoted strings), significantly faster queries
 
 **Example:**
+
 ```go
 // Oracle
 cols := qb.Columns(&User{})
@@ -94,6 +101,7 @@ cols.Col("Level")  // Returns: "level" (no quoting needed)
 ```
 
 ### 4. **Explicit API Over Implicit Magic**
+
 - **Decision:** Fail-fast panics on invalid field names (not silent fallbacks)
 - **Rationale:**
   - Aligns with GoBricks "Explicit > Implicit" principle
@@ -103,6 +111,7 @@ cols.Col("Level")  // Returns: "level" (no quoting needed)
 - **Trade-offs:** Stricter API, but prevents subtle bugs
 
 **Error Handling:**
+
 ```go
 cols := qb.Columns(&User{})
 col := cols.Col("NonExistent")
@@ -125,6 +134,7 @@ col := cols.Col("NonExistent")
 - **Trade-offs:** Supports both patterns, but clean migration path
 
 ### 6. **Security-First Tag Validation**
+
 - **Decision:** Reject dangerous SQL patterns at parse time
 - **Implementation:**
   - Validate tags for `;`, `--`, `/*`, `*/` (SQL injection vectors)
@@ -140,7 +150,8 @@ col := cols.Col("NonExistent")
 ## Implementation
 
 **Package Structure:**
-```
+
+```text
 database/
 ├── internal/
 │   └── columns/
@@ -153,6 +164,7 @@ database/
 ```
 
 **Thread Safety:**
+
 - `sync.Map` for lock-free cached reads (read-heavy workload)
 - Double-checked locking for vendor cache creation
 - `LoadOrStore()` for atomic first-parse deduplication
@@ -161,6 +173,7 @@ database/
 ## Consequences
 
 **Positive:**
+
 - **DRY Principle**: Column names defined once in struct tags
 - **Type Safety**: Compile-time field name references (refactor-friendly)
 - **Oracle Safety**: Reserved words auto-quoted (eliminates manual quoting burden)
@@ -168,12 +181,14 @@ database/
 - **Backward Compatible**: Zero breaking changes, opt-in adoption
 
 **Negative:**
+
 - **Reflection Dependency**: First-use reflection (~0.6µs per struct type)
 - **Memory Overhead**: ~1-2KB per registered struct type (negligible at scale)
 - **INSERT Friction**: Requires type conversion `[]any` → `[]string` for `InsertWithColumns()`
   - Mitigated with helper: `toStrings := func(v []any) []string { ... }`
 
 **Neutral:**
+
 - **Breaking Change**: Added `Columns()` to `QueryBuilderInterface`
   - Impact: Mock implementations need update (testify mocks updated)
   - Mitigation: `make check-all` catches tool compatibility issues
@@ -181,12 +196,14 @@ database/
 ## Testing Strategy
 
 **Coverage:**
+
 - Unit tests: metadata, parser, registry (100% critical paths)
 - Integration tests: SELECT/INSERT/UPDATE/WHERE/JOIN across Oracle/PostgreSQL
 - Benchmarks: first-use parsing, cached access, concurrent safety
 - Security tests: tag validation, SQL injection prevention
 
 **CI/CD:**
+
 - `make check-all` validates framework + tool compatibility
 - Multi-platform (Ubuntu/Windows) × Go 1.26
 - SonarCloud: 80% coverage target maintained

@@ -35,6 +35,7 @@
 ## Task 1: Config field, shared validation helper, and `Validate()` wiring
 
 **Files:**
+
 - Modify: `config/types.go` (`SchedulerConfig`, ~line 508)
 - Modify: `config/validation.go` (`Validate` ~line 102, `applyDatabaseTimezoneDefault` ~line 417)
 - Test: `config/validation_test.go` (append near the existing `TestApplyDatabaseTimezone*` tests, ~line 1796)
@@ -189,6 +190,7 @@ git commit -m "feat(scheduler): add and validate scheduler.timezone config key"
 ## Task 2: Apply the timezone to the gocron scheduler
 
 **Files:**
+
 - Modify: `scheduler/module.go` (`ensureSchedulerInitialized`, ~line 225)
 - Modify: `scheduler/test_helpers_test.go` (add `withTimezone`)
 - Test: `scheduler/module_test.go` (append)
@@ -404,6 +406,7 @@ git commit -m "feat(scheduler): apply configured timezone via gocron WithLocatio
 ## Task 3: Remove the dead `ScheduleConfiguration.Timezone` field
 
 **Files:**
+
 - Modify: `scheduler/schedule.go` (~lines 45-48)
 
 - [ ] **Step 1: Confirm the field is unreferenced**
@@ -441,6 +444,7 @@ git commit -m "refactor(scheduler): remove dead ScheduleConfiguration.Timezone f
 ## Task 4: Expose the active timezone in `GET /_sys/job`
 
 **Files:**
+
 - Modify: `scheduler/api_handlers.go` (`listJobsHandler`, ~line 62)
 - Test: `scheduler/api_handlers_test.go` (append)
 
@@ -501,6 +505,7 @@ git commit -m "feat(scheduler): expose active timezone in /_sys/job response"
 No behavior change — clarify that the `localTime` parameters are interpreted in the scheduler's configured zone.
 
 **Files:**
+
 - Modify: `app/module.go` (`JobRegistrar` interface, ~lines 47-62)
 - Modify: `scheduler/module.go` (`DailyAt`/`WeeklyAt`/`MonthlyAt` doc comments)
 
@@ -556,6 +561,7 @@ git commit -m "docs(scheduler): clarify localTime is in the configured timezone"
 ## Task 6: Documentation and ADR-023
 
 **Files:**
+
 - Create: `wiki/adr_023_scheduler_timezone.md`
 - Modify: `wiki/architecture_decisions.md`, `wiki/scheduler.md`, `wiki/migrations.md`, `CLAUDE.md`, `llms.txt`
 
@@ -724,6 +730,7 @@ Expected: PASS — fmt clean, lint clean, all tests pass with `-race`. Fix any i
 - [ ] **Step 2: Run the mandatory pre-push reviews**
 
 Per `CLAUDE.md` Workflow Rules, run both skills on the staged diff before pushing:
+
 - `/code-review` (reuse / quality / efficiency / correctness)
 - `/security-audit` (boundary validation, etc.)
 
@@ -738,6 +745,7 @@ Use the `superpowers:finishing-a-development-branch` skill to decide merge/PR. C
 ## Self-Review
 
 **Spec coverage** — every spec section maps to a task:
+
 - Config field + contract → Task 1 ✓
 - Shared validation helper (reuse `DefaultDatabaseTimezone`, no rename — confirmed cross-package referenced) → Task 1 ✓
 - Scheduler wiring via `WithLocation`, no per-schedule changes, sentinel/nil edges → Task 2 ✓
