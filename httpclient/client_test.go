@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	nethttp "net/http"
 	"net/http/httptest"
@@ -27,6 +28,8 @@ import (
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 
 	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
+	"github.com/gaborage/go-bricks/jose"
+	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -2670,4 +2673,163 @@ func TestNewBuilderAndBuildRejectNilLogger(t *testing.T) {
 			_, _ = b.Build()
 		})
 	})
+}
+
+// capturingRoundTripper records the body and Content-Type the chain actually put on
+// the wire, then answers 200 with plaintext JSON.
+type capturingRoundTripper struct {
+	body        string
+	contentType string
+}
+
+func (c *capturingRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
+	if req.Body != nil {
+		raw, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		c.body = string(raw)
+	}
+	c.contentType = req.Header.Get(testContentTypeHdr)
+	return &nethttp.Response{
+		StatusCode: nethttp.StatusOK,
+		Header:     nethttp.Header{testContentTypeHdr: []string{testJSONType}},
+		Body:       io.NopCloser(strings.NewReader(`{"ok":true}`)),
+		Request:    req,
+	}, nil
+}
+
+// outboundKidsOnly is an outbound policy carrying only the two kids — every algorithm
+// left at its zero value, the shape Build must fill from the jose package defaults.
+func outboundKidsOnly(f *jositest.BidirectionalFixture) *jose.Policy {
+	return &jose.Policy{
+		Direction:  jose.DirectionOutbound,
+		SignKid:    f.ClientOutbound.SignKid,
+		EncryptKid: f.ClientOutbound.EncryptKid,
+	}
+}
+
+// A policy whose algorithms sit outside the jose allowlist used to seal every request
+// and fail per-request in production. Build now refuses it, the ADR-044 posture.
+func TestBuildRejectsJOSEPolicyWithDisallowedAlgorithm(t *testing.T) {
+	log := createTestLogger()
+	f := jositest.NewBidirectionalFixture(t)
+
+	cases := []struct {
+		name    string
+		mutate  func(p *jose.Policy)
+		wantAlg string
+	}{
+		{name: "symmetric_signature", mutate: func(p *jose.Policy) { p.SigAlg = "HS256" }, wantAlg: "HS256"},
+		{name: "pkcs1v15_key_wrapping", mutate: func(p *jose.Policy) { p.KeyAlg = "RSA1_5" }, wantAlg: "RSA1_5"},
+		{name: "non_aead_content_encryption", mutate: func(p *jose.Policy) { p.Enc = "A256CBC-HS512" }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := outboundKidsOnly(f)
+			tc.mutate(policy)
+
+			_, err := NewBuilder(log).
+				WithTransport(&stubRoundTripper{name: "base"}).
+				WithJOSE(JOSEConfig{Outbound: policy, Resolver: f.Resolver}).
+				Build()
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid JOSE policy")
+			assert.NotErrorIs(t, err, ErrUnsafeTransportComposition,
+				"a policy failure is its own error path, not a transport-slot displacement")
+
+			var jerr *jose.Error
+			require.ErrorAs(t, err, &jerr)
+			require.ErrorIs(t, err, jose.ErrAlgorithmDisallowed)
+			assert.Equal(t, "JOSE_ALGORITHM_DISALLOWED", jerr.Code)
+			if tc.wantAlg != "" {
+				assert.Equal(t, tc.wantAlg, jerr.Alg)
+			}
+		})
+	}
+}
+
+// A policy that names only its kids must build and seal: Build fills the algorithms
+// from the jose defaults, exactly as the server's tag parser does.
+func TestBuildAppliesJOSEDefaultsToZeroValuePolicy(t *testing.T) {
+	log := createTestLogger()
+	f := jositest.NewBidirectionalFixture(t)
+	inner := &capturingRoundTripper{}
+
+	built, err := NewBuilder(log).
+		WithTransport(inner).
+		WithJOSE(JOSEConfig{Outbound: outboundKidsOnly(f), Resolver: f.Resolver}).
+		Build()
+	require.NoError(t, err)
+
+	resp, err := built.Post(context.Background(), &Request{
+		URL:  "http://example.invalid/tokens",
+		Body: []byte(`{"hello":"world"}`),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, nethttp.StatusOK, resp.StatusCode)
+
+	assert.Equal(t, jose.ContentType, inner.contentType, "the defaulted policy must still seal the body")
+	plaintext, _, hdr, err := jose.Open(inner.body, f.PeerInbound, f.Resolver)
+	require.NoError(t, err, "the sealed payload must parse under the peer's inbound policy")
+	assert.JSONEq(t, `{"hello":"world"}`, string(plaintext))
+	assert.Equal(t, string(jose.DefaultSigAlg), hdr.JWS.Alg, "an unset SigAlg must land on the package default")
+	assert.Equal(t, string(jose.DefaultKeyAlg), hdr.JWE.Alg)
+	assert.Equal(t, string(jose.DefaultEnc), hdr.JWE.Enc)
+}
+
+// A nil Resolver used to fail per-request as JOSE_KEYSTORE_UNAVAILABLE.
+func TestBuildRejectsJOSEWithoutResolver(t *testing.T) {
+	log := createTestLogger()
+	f := jositest.NewBidirectionalFixture(t)
+
+	cases := []struct {
+		name string
+		cfg  JOSEConfig
+	}{
+		{name: "outbound_without_resolver", cfg: JOSEConfig{Outbound: f.ClientOutbound}},
+		{name: "inbound_without_resolver", cfg: JOSEConfig{Inbound: f.ClientInbound}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewBuilder(log).WithTransport(&stubRoundTripper{name: "base"}).WithJOSE(tc.cfg).Build()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "Resolver is required")
+		})
+	}
+
+	t.Run("no_policy_needs_no_resolver", func(t *testing.T) {
+		_, err := NewBuilder(log).WithTransport(&stubRoundTripper{name: "base"}).WithJOSE(JOSEConfig{}).Build()
+		require.NoError(t, err, "an all-nil JOSEConfig registers an inert layer and must still build")
+	})
+}
+
+// Build normalizes copies: the caller may reuse its jose.Policy across builders, so
+// defaulting must not write algorithms back into the struct it was handed.
+func TestBuildDoesNotMutateCallerJOSEPolicy(t *testing.T) {
+	log := createTestLogger()
+	f := jositest.NewBidirectionalFixture(t)
+
+	caller := outboundKidsOnly(f)
+	before := *caller
+	cfg := JOSEConfig{Outbound: caller, Resolver: f.Resolver}
+
+	built, err := NewBuilder(log).WithTransport(&capturingRoundTripper{}).WithJOSE(cfg).Build()
+	require.NoError(t, err)
+
+	assert.Equal(t, before, *caller, "Build must normalize a copy, never the caller's policy")
+	assert.Empty(t, string(caller.SigAlg), "the caller's unset algorithm must stay unset")
+	assert.Same(t, caller, cfg.Outbound, "the caller's JOSEConfig must not be repointed either")
+
+	// The normalized copy is what reached the transport — proving the copy is not a
+	// discarded intermediate the request path bypasses.
+	clientImpl, ok := built.(*client)
+	require.True(t, ok)
+	joseTransport, ok := clientImpl.httpClient.Transport.(*JOSETransport)
+	require.True(t, ok)
+	assert.NotSame(t, caller, joseTransport.Outbound)
+	assert.Equal(t, jose.DefaultSigAlg, joseTransport.Outbound.SigAlg)
 }

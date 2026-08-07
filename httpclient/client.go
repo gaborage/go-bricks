@@ -84,6 +84,10 @@ type Builder struct {
 	// silently losing a client certificate or a caller's RoundTripper is not.
 	baseSlot      baseSource
 	displacedBase baseSource
+	// joseConfig holds WithJOSE's material. The wrapper closure cannot be inspected,
+	// so Build reads it from here to normalize and validate the policies before
+	// resolveTransport builds the JOSETransport from it.
+	joseConfig *JOSEConfig
 }
 
 // transportLayer orders RoundTripper wrappers independently of the order the
@@ -327,16 +331,72 @@ type JOSEConfig struct {
 // Per-attempt freshness: because httpclient retries by re-running the request build
 // loop, each retry produces a freshly-sealed payload — useful for protocols that
 // require unique iat/jti claims per attempt.
+//
+// Validation: Build fills each non-nil policy's unset algorithms from the jose
+// package defaults and runs Policy.Validate, so a disallowed algorithm, a kid
+// missing for the policy's direction, or a nil Resolver fails construction rather
+// than every request. Kids are NOT resolved at Build time: a resolver may be backed
+// by lazily-loaded key material, so an unknown kid still surfaces per request.
 func (b *Builder) WithJOSE(cfg JOSEConfig) *Builder {
+	b.joseConfig = &cfg
 	b.addTransportWrapper(layerBodyTransform, func(inner nethttp.RoundTripper) nethttp.RoundTripper {
 		return &JOSETransport{
 			Inner:    inner,
-			Outbound: cfg.Outbound,
-			Inbound:  cfg.Inbound,
-			Resolver: cfg.Resolver,
+			Outbound: b.joseConfig.Outbound,
+			Inbound:  b.joseConfig.Inbound,
+			Resolver: b.joseConfig.Resolver,
 		}
 	})
 	return b
+}
+
+// normalizeJOSE replaces the configured policies with normalized, validated copies.
+// It runs on b.joseConfig, which WithJOSE already populated from its own by-value
+// parameter, so the caller's JOSEConfig and jose.Policy values are never mutated.
+// A nil policy stays nil: one-directional protection is legitimate.
+func (b *Builder) normalizeJOSE() error {
+	if b.joseConfig == nil {
+		return nil
+	}
+	if b.joseConfig.Resolver == nil && (b.joseConfig.Outbound != nil || b.joseConfig.Inbound != nil) {
+		return errors.New("a Resolver is required when Outbound or Inbound is set")
+	}
+	outbound, err := normalizedJOSEPolicy(b.joseConfig.Outbound)
+	if err != nil {
+		return err
+	}
+	inbound, err := normalizedJOSEPolicy(b.joseConfig.Inbound)
+	if err != nil {
+		return err
+	}
+	b.joseConfig.Outbound, b.joseConfig.Inbound = outbound, inbound
+	return nil
+}
+
+// normalizedJOSEPolicy returns a validated copy of p with unset algorithms filled from
+// the jose package defaults. Defaults must be applied before Validate: a zero SigAlg is
+// not in the allowlist, so an otherwise-valid policy that omits algorithms would fail.
+func normalizedJOSEPolicy(p *jose.Policy) (*jose.Policy, error) {
+	if p == nil {
+		return nil, nil
+	}
+	cp := *p
+	if cp.SigAlg == "" {
+		cp.SigAlg = jose.DefaultSigAlg
+	}
+	if cp.KeyAlg == "" {
+		cp.KeyAlg = jose.DefaultKeyAlg
+	}
+	if cp.Enc == "" {
+		cp.Enc = jose.DefaultEnc
+	}
+	if cp.Cty == "" {
+		cp.Cty = jose.DefaultCty
+	}
+	if err := cp.Validate(); err != nil {
+		return nil, err
+	}
+	return &cp, nil
 }
 
 // addTransportWrapper registers a RoundTripper layer applied at Build time.
@@ -437,7 +497,9 @@ var ErrUnsafeTransportComposition = errors.New("unsafe transport composition")
 
 // Build creates the REST client. It returns an error wrapping
 // ErrUnsafeTransportComposition on a base-transport-slot displacement —
-// see ADR-044 for scope (what counts, what doesn't).
+// see ADR-044 for scope (what counts, what doesn't). A WithJOSE policy that
+// fails jose.Policy.Validate is reported on a separate error path that carries
+// the underlying *jose.Error (match it with errors.As), not that sentinel.
 func (b *Builder) Build() (Client, error) {
 	if b == nil || b.config == nil || isNilLogger(b.logger) {
 		panic("httpclient: Build requires a Builder created by NewBuilder") // NOSONAR: Fail-fast on invalid initialization (manifesto: configuration errors crash at startup)
@@ -459,6 +521,12 @@ func (b *Builder) Build() (Client, error) {
 			c.Timeout = cfg.Timeout
 		}
 		httpClient = &c
+	}
+
+	// Before resolveTransport: the wrapper closure reads b.joseConfig, so the
+	// JOSETransport must be built from the normalized policies, not the raw ones.
+	if err := b.normalizeJOSE(); err != nil {
+		return nil, fmt.Errorf("httpclient: invalid JOSE policy: %w", err)
 	}
 
 	rt := b.resolveTransport()

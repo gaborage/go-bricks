@@ -10,7 +10,9 @@ import (
 //
 // On failure, returns an *Error. Pre-flight guard failures (Status 500) use Code
 // JOSE_POLICY_DIRECTION_MISMATCH (nil or wrong-direction policy) or JOSE_KEYSTORE_UNAVAILABLE
-// (nil resolver); sign/encrypt failures (Status 500) use JOSE_OUTBOUND_FAILED. Key-resolution
+// (nil resolver), or JOSE_ALGORITHM_DISALLOWED when an algorithm is outside the allowlist
+// (unset Status, which callers map to 500);
+// sign/encrypt failures (Status 500) use JOSE_OUTBOUND_FAILED. Key-resolution
 // failures propagate the resolver's *Error verbatim (e.g. JOSE_KID_UNKNOWN), whose Status is
 // resolver-defined. The Cause field carries the underlying detail for logging.
 func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
@@ -29,6 +31,13 @@ func Seal(payload []byte, p *Policy, r KeyResolver) (string, error) {
 			Status:   500,
 			Message:  "Seal called without a KeyResolver",
 		}
+	}
+	// Defense in depth: Open threads the allowlists into the parser, but the outbound
+	// algorithms are handed to the crypto adapter verbatim. Both live callers (the tag
+	// scanner, httpclient's Build) normalize and validate first, so an empty algorithm
+	// reaching here is a policy that skipped that path and must fail closed.
+	if err := p.validateAlgorithms(); err != nil {
+		return "", err
 	}
 
 	signKey, err := r.PrivateKey(p.SignKid)
