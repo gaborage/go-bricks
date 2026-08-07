@@ -31,6 +31,7 @@ linters:
     - noctx                     # finds sending HTTP request without context.Context
     - nolintlint                # reports ill-formed or insufficient nolint directives
     - prealloc                  # finds slice declarations that could potentially be preallocated
+    - recvcheck                 # flags types mixing pointer and value receivers (uber-go: Receivers and Interfaces)
     - revive                    # fast, configurable, extensible, flexible, and beautiful linter for Go
     - rowserrcheck              # checks whether Err of rows is checked successfully
     - spancheck                 # checks for mistakes with OpenTelemetry/Census spans
@@ -76,6 +77,50 @@ linters:
       allow-unused: false
     revive:
       confidence: 0
+      # Declaring `rules` REPLACES revive's default set rather than extending it,
+      # so every rule golangci-lint enables by default is re-listed below before
+      # the additions. An unknown rule name only logs `level=error` and still
+      # exits 0, so a typo here silently disables a rule — keep names exact.
+      rules:
+        # Default set — re-declared to preserve current behavior.
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: var-declaration
+        - name: var-naming
+        # Additions from the uber-go style guide. Each measured 0 findings
+        # against the tree, so they ratchet current behavior without a sweep.
+        - name: atomic                  # non-atomic assignment to an atomic value
+        - name: confusing-results       # unnamed same-type multi-returns
+        - name: defer                   # defer in loop, recover, return-in-defer
+        - name: identical-branches      # if/else with identical bodies
+        - name: max-control-nesting     # "Reduce Nesting"
+        - name: modifies-value-receiver # mutation lost on a value receiver
+        - name: optimize-operands-order
+        - name: range-val-address       # address of a range value
+        - name: string-of-int           # string(intValue) conversions
+        - name: unconditional-recursion
+        - name: unnecessary-stmt
+        - name: useless-break
+        - name: waitgroup-by-value      # "Zero-value Mutexes are Valid"
     staticcheck:
       checks:
         - all
