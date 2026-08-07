@@ -2684,6 +2684,9 @@ type capturingRoundTripper struct {
 
 func (c *capturingRoundTripper) RoundTrip(req *nethttp.Request) (*nethttp.Response, error) {
 	if req.Body != nil {
+		// A RoundTripper owns the request body once it reads it — close it on every
+		// path, the same obligation addTransportWrapper documents for real layers.
+		defer req.Body.Close()
 		raw, err := io.ReadAll(req.Body)
 		if err != nil {
 			return nil, err
@@ -2837,7 +2840,11 @@ func TestBuildRejectsJOSEWithoutResolver(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := NewBuilder(log).WithTransport(&stubRoundTripper{name: "base"}).WithJOSE(tc.cfg).Build()
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "Resolver is required")
+			require.ErrorIs(t, err, jose.ErrKeyResolution)
+
+			var jerr *jose.Error
+			require.ErrorAs(t, err, &jerr, "every Build JOSE failure must be matchable as a *jose.Error")
+			assert.Equal(t, "JOSE_KEYSTORE_UNAVAILABLE", jerr.Code)
 		})
 	}
 

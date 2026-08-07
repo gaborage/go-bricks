@@ -369,7 +369,14 @@ func (b *Builder) normalizeJOSE() error {
 		return nil
 	}
 	if b.joseConfig.Resolver == nil && (b.joseConfig.Outbound != nil || b.joseConfig.Inbound != nil) {
-		return errors.New("a Resolver is required when Outbound or Inbound is set")
+		// Mirrors Seal's nil-resolver guard so every Build JOSE failure is a
+		// *jose.Error, as the package doc and wiki promise.
+		return &jose.Error{
+			Sentinel: jose.ErrKeyResolution,
+			Code:     "JOSE_KEYSTORE_UNAVAILABLE",
+			Status:   500,
+			Message:  "a Resolver is required when Outbound or Inbound is set",
+		}
 	}
 	outbound, err := normalizedJOSEPolicy(b.joseConfig.Outbound)
 	if err != nil {

@@ -1916,7 +1916,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   per-client escape hatch. To distinguish this failure from a transport-slot
   displacement, match the error rather than its text: it wraps `*jose.Error`
   (`errors.As`) and its sentinel (`errors.Is(err, jose.ErrAlgorithmDisallowed)`,
-  `jose.ErrPolicyMismatch`), and it is **not** `httpclient.ErrUnsafeTransportComposition`.
+  `jose.ErrPolicyMismatch`, or `jose.ErrKeyResolution` for the nil `Resolver`), and it
+  is **not** `httpclient.ErrUnsafeTransportComposition`.
 - verify: every `WithJOSE` client constructs at startup — `Build()` returns a nil
   error — and a request through it still round-trips against the peer. A client that
   previously sealed with `RSA1_5` will fail construction until the algorithm is
