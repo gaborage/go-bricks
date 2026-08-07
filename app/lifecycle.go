@@ -86,7 +86,9 @@ func (a *App) prepareRuntime() error {
 	}
 
 	// Register debug endpoints if enabled
-	a.registerDebugHandlers()
+	if err := a.registerDebugHandlers(); err != nil {
+		return err
+	}
 
 	// Register scheduled jobs (after all modules initialized, before routes)
 	if err := a.registry.RegisterJobs(); err != nil {
@@ -189,12 +191,15 @@ func (a *App) assertMessagingConfiguredIfDeclared(decls *messaging.Declarations)
 		s.Publishers, s.Consumers, s.Exchanges, s.Queues, s.Bindings)
 }
 
-// registerDebugHandlers sets up debug endpoints if enabled in configuration
-func (a *App) registerDebugHandlers() {
-	if a.cfg.Debug.Enabled {
-		debugHandlers := NewDebugHandlers(a, &a.cfg.Debug, a.logger)
-		debugHandlers.RegisterDebugEndpoints(a.server.RootGroup())
+// registerDebugHandlers sets up debug endpoints if enabled in configuration. The error is
+// fatal: RegisterDebugEndpoints refuses a registration that would expose the group with no
+// access control at all (ADR-049).
+func (a *App) registerDebugHandlers() error {
+	if !a.cfg.Debug.Enabled {
+		return nil
 	}
+	debugHandlers := NewDebugHandlers(a, &a.cfg.Debug, a.logger)
+	return debugHandlers.RegisterDebugEndpoints(a.server.RootGroup())
 }
 
 // serve starts the HTTP server in a goroutine and returns an error channel

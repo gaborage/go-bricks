@@ -248,6 +248,50 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 	}
 }
 
+// TestAuthMiddlewareRejectsWhenNoTokenConfigured pins the defense-in-depth guard shut.
+// Without it, an authMiddleware built against a blank BearerToken would AUTHENTICATE the
+// matching blank header — strings.Cut yields the same blank token and ConstantTimeCompare
+// returns 1. Both blank spellings must trip it: "" and a whitespace-only value, which
+// bearerTokenConfigured collapses to the same "no credential" verdict. RegisterDebugEndpoints
+// never wires the middleware in either state, so this is unreachable through the framework;
+// the trap survives any future re-wiring that registers it unconditionally.
+func TestAuthMiddlewareRejectsWhenNoTokenConfigured(t *testing.T) {
+	// The guard returns before the Authorization header is ever read, so the header cases
+	// exist to document the shapes that would otherwise slip through — not to multiply
+	// coverage. The last case is the pairing that actually matters: a whitespace-only
+	// configured token against the blank header that would match it byte for byte.
+	tests := []struct {
+		name            string
+		configuredToken string
+		authHeader      string
+	}{
+		{name: "bearer_with_trailing_space", authHeader: "Bearer "},
+		{name: "bearer_with_no_token", authHeader: "Bearer"},
+		{name: "no_header_at_all", authHeader: ""},
+		{name: "bearer_with_arbitrary_token", authHeader: "Bearer anything"},
+		{name: "whitespace_only_token_against_its_matching_header", configuredToken: "  ", authHeader: "Bearer  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &App{logger: logger.New("info", false)}
+			debugConfig := &config.DebugConfig{Enabled: true, PathPrefix: debugPath, BearerToken: tt.configuredToken}
+			authMiddleware := NewDebugHandlers(app, debugConfig, app.logger).authMiddleware(nil)
+
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+			req.RemoteAddr = testIPAddress
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+
+			nextCalled, err := invokeDebugMiddleware(authMiddleware, req)
+
+			assert.False(t, nextCalled, "next must never run when no bearer token is configured")
+			assertAPIErrorStatus(t, err, http.StatusUnauthorized)
+		})
+	}
+}
+
 // loggedEvent returns the first recorded log event whose message contains substr.
 func loggedEvent(rec *recLogger, substr string) (recEvent, bool) {
 	rec.mu.Lock()
@@ -267,49 +311,137 @@ func loggedMsgContains(rec *recLogger, substr string) bool {
 	return ok
 }
 
-// loggedStr returns the value of the given Str field on the first recorded log
-// event whose message contains substr, or "" if none.
-func loggedStr(rec *recLogger, substr, field string) string {
-	e, ok := loggedEvent(rec, substr)
-	if !ok {
-		return ""
-	}
-	return e.str[field]
+// debugProbe is one request issued against a registered debug group: the peer address and
+// Authorization header it carries, and the HTTP status the access-control chain must answer.
+type debugProbe struct {
+	name       string
+	remoteAddr string
+	authHeader string
+	wantStatus int
 }
 
-// TestRegisterDebugEndpointsAccessControlWarn verifies the no-access-control WARN fires only
-// when at least one debug endpoint is registered AND neither an IP allowlist nor a bearer token
-// is configured, and that the warning's "exposed" field lists exactly the enabled endpoints so
-// it cannot over-state the exposure.
-func TestRegisterDebugEndpointsAccessControlWarn(t *testing.T) {
+// TestRegisterDebugEndpointsAccessControl covers the four access-control config states.
+// Registration is refused outright when debug endpoints would be exposed with neither an IP
+// allowlist nor a bearer token (ADR-049) — the state that used to register the group behind a
+// pass-through middleware and a startup WARN. The three configured states still register, and
+// the both-set case asserts the two controls compose (neither bypasses the other).
+func TestRegisterDebugEndpointsAccessControl(t *testing.T) {
+	const (
+		token       = "s3cret-token"
+		allowedPeer = testIPAddress
+		otherPeer   = "203.0.113.9:54321"
+	)
+
 	tests := []struct {
 		name        string
+		disabled    bool
 		allowedIPs  []string
 		bearerToken string
 		endpoints   config.DebugEndpointsConfig
-		wantWarn    bool
+		wantErr     bool
 		wantExposed string
+		// wantRegisteredLog is the exact rendered success line. Empty means the line must be
+		// absent. Both values are formatted into the message by Msgf rather than recorded as
+		// structured fields, so the assertion pins the rendered text — see the block below.
+		wantRegisteredLog string
+		probes            []debugProbe
 	}{
-		{name: "no_access_control_warns", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: true, wantExposed: "build info"},
-		{name: "lists_only_enabled_endpoints", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{Goroutines: true, Info: true}, wantWarn: true, wantExposed: "goroutine dumps, build info"},
 		{
-			name:        "all_endpoints_listed",
-			allowedIPs:  nil,
-			bearerToken: "",
+			name:              "allowlist_set_no_token",
+			allowedIPs:        []string{localhostIPV4},
+			endpoints:         config.DebugEndpointsConfig{Info: true},
+			wantRegisteredLog: "Debug endpoints registered (allowed_ips=1, auth_enabled=false)",
+			probes: []debugProbe{
+				{name: "allowlisted_peer_needs_no_token", remoteAddr: allowedPeer, wantStatus: http.StatusOK},
+				{name: "other_peer_denied", remoteAddr: otherPeer, wantStatus: http.StatusForbidden},
+			},
+		},
+		{
+			name:              "token_set_no_allowlist",
+			bearerToken:       token,
+			endpoints:         config.DebugEndpointsConfig{Info: true},
+			wantRegisteredLog: "Debug endpoints registered (allowed_ips=0, auth_enabled=true)",
+			probes: []debugProbe{
+				// An empty allowlist must neither pass everyone through nor deny everyone:
+				// the bearer token alone decides.
+				{name: "correct_token_from_any_peer", remoteAddr: otherPeer, authHeader: "Bearer " + token, wantStatus: http.StatusOK},
+				{name: "wrong_token_denied", remoteAddr: otherPeer, authHeader: "Bearer wrong", wantStatus: http.StatusUnauthorized},
+				{name: "absent_token_denied", remoteAddr: allowedPeer, wantStatus: http.StatusUnauthorized},
+			},
+		},
+		{
+			name:              "both_set",
+			allowedIPs:        []string{localhostIPV4},
+			bearerToken:       token,
+			endpoints:         config.DebugEndpointsConfig{Info: true},
+			wantRegisteredLog: "Debug endpoints registered (allowed_ips=1, auth_enabled=true)",
+			probes: []debugProbe{
+				{name: "allowlisted_peer_with_token", remoteAddr: allowedPeer, authHeader: "Bearer " + token, wantStatus: http.StatusOK},
+				// Each control still bites with the other satisfied — they compose.
+				{name: "allowlisted_peer_without_token_denied", remoteAddr: allowedPeer, wantStatus: http.StatusUnauthorized},
+				{name: "other_peer_with_token_denied", remoteAddr: otherPeer, authHeader: "Bearer " + token, wantStatus: http.StatusForbidden},
+			},
+		},
+		{
+			name:        "neither_set",
+			endpoints:   config.DebugEndpointsConfig{Info: true},
+			wantErr:     true,
+			wantExposed: "build info",
+		},
+		{
+			// SECURITY: a whitespace-only token is not a credential — `Authorization: Bearer  `
+			// splits into scheme "Bearer" and token " ", which ConstantTimeCompare matches. It
+			// must not satisfy the gate, so this is refused exactly like an unset token.
+			name:        "whitespace_only_token_does_not_satisfy_the_gate",
+			bearerToken: "   ",
+			endpoints:   config.DebugEndpointsConfig{Info: true},
+			wantErr:     true,
+			wantExposed: "build info",
+		},
+		{
+			// With the allowlist already satisfying the gate, a whitespace-only token must
+			// still not wire authMiddleware — doing so would make `Bearer  ` a valid
+			// credential. The allowlisted peer probe carries no token and must pass.
+			name:              "whitespace_only_token_wires_no_auth",
+			allowedIPs:        []string{localhostIPV4},
+			bearerToken:       "  ",
+			endpoints:         config.DebugEndpointsConfig{Info: true},
+			wantRegisteredLog: "Debug endpoints registered (allowed_ips=1, auth_enabled=false)",
+			probes: []debugProbe{
+				{name: "allowlisted_peer_needs_no_token", remoteAddr: allowedPeer, wantStatus: http.StatusOK},
+			},
+		},
+		{
+			name:        "neither_set_lists_every_enabled_endpoint",
 			endpoints:   config.DebugEndpointsConfig{Goroutines: true, GC: true, Health: true, Info: true},
-			wantWarn:    true,
+			wantErr:     true,
 			wantExposed: "goroutine dumps, GC endpoints, enhanced health, build info",
 		},
-		{name: "allowlist_set_no_warn", allowedIPs: []string{"127.0.0.1"}, bearerToken: "", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: false},
-		{name: "token_set_no_warn", allowedIPs: nil, bearerToken: "x", endpoints: config.DebugEndpointsConfig{Info: true}, wantWarn: false},
-		{name: "no_endpoints_no_warn", allowedIPs: nil, bearerToken: "", endpoints: config.DebugEndpointsConfig{}, wantWarn: false},
+		{
+			// Nothing is enabled, so nothing is exposed and there is nothing to protect.
+			name:              "neither_set_no_endpoints_enabled",
+			endpoints:         config.DebugEndpointsConfig{},
+			wantRegisteredLog: "Debug endpoints registered (allowed_ips=0, auth_enabled=false)",
+			probes: []debugProbe{
+				{name: "info_not_registered", remoteAddr: otherPeer, wantStatus: http.StatusNotFound},
+			},
+		},
+		{
+			// The default posture: debug off. The refusal must not fire for it.
+			name:      "disabled_debug_is_unaffected",
+			disabled:  true,
+			endpoints: config.DebugEndpointsConfig{Goroutines: true, GC: true, Health: true, Info: true},
+			probes: []debugProbe{
+				{name: "info_not_registered", remoteAddr: otherPeer, wantStatus: http.StatusNotFound},
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			debugConfig := &config.DebugConfig{
-				Enabled:     true,
-				PathPrefix:  "/_debug",
+				Enabled:     !tt.disabled,
+				PathPrefix:  debugPath,
 				AllowedIPs:  tt.allowedIPs,
 				BearerToken: tt.bearerToken,
 				Endpoints:   tt.endpoints,
@@ -317,11 +449,48 @@ func TestRegisterDebugEndpointsAccessControlWarn(t *testing.T) {
 
 			rec := &recLogger{}
 			debugHandlers := NewDebugHandlers(&App{logger: rec}, debugConfig, rec)
-			debugHandlers.RegisterDebugEndpoints(newRecordingRegistrar())
+			root := newRecordingRegistrar()
+			err := debugHandlers.RegisterDebugEndpoints(root)
 
-			assert.Equal(t, tt.wantWarn, loggedMsgContains(rec, "NO access control"))
-			if tt.wantWarn {
-				assert.Equal(t, tt.wantExposed, loggedStr(rec, "NO access control", "exposed"))
+			if tt.wantErr {
+				require.Error(t, err)
+				// The refusal names what would have been exposed and both keys that fix it.
+				// Anchored on both sides of the %s so an over-stated list (naming an endpoint
+				// that is off) fails too — a bare Contains would accept any superset.
+				assert.Contains(t, err.Error(), "would expose "+tt.wantExposed+" at ")
+				assert.Contains(t, err.Error(), "debug.allowedips")
+				assert.Contains(t, err.Error(), "debug.bearertoken")
+				assert.Empty(t, root.children, "no route group may be registered when the refusal fires")
+				return
+			}
+
+			require.NoError(t, err)
+			if tt.disabled {
+				assert.True(t, loggedMsgContains(rec, "Debug endpoints disabled"))
+			}
+
+			// The success line is the operator-facing statement of this group's security
+			// posture — it is what an auditor greps to confirm a deployment is protected —
+			// so assert its VALUES, not merely that it was emitted. An inverted
+			// auth_enabled would report the opposite of the truth. allowed_ips and
+			// auth_enabled are rendered into the message by Msgf and are not recorded as
+			// separate structured fields (recEvent captures only Str fields), so the
+			// rendered text is the only surface available; prefix IS a Str field and is
+			// asserted as one.
+			registered, logged := loggedEvent(rec, "Debug endpoints registered")
+			if tt.wantRegisteredLog == "" {
+				assert.False(t, logged, "no registration line may be logged when nothing is registered")
+			} else {
+				require.True(t, logged, "the registration line must be logged")
+				assert.Equal(t, tt.wantRegisteredLog, registered.msg)
+				assert.Equal(t, debugPath, registered.str["prefix"])
+			}
+
+			for _, p := range tt.probes {
+				t.Run(p.name, func(t *testing.T) {
+					status, _ := root.serveWith(http.MethodGet, debugInfoPath, p.remoteAddr, p.authHeader)
+					assert.Equal(t, p.wantStatus, status)
+				})
 			}
 		})
 	}
