@@ -895,7 +895,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
 
       - name: markdownlint-cli2 (docs)
         # Delegates to `make lint-md` so the command, the pinned
