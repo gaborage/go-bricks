@@ -68,21 +68,3 @@ const (
 	// DefaultAPITimeout is the maximum duration for external API calls.
 	DefaultAPITimeout = 30 * time.Second
 )
-
-// Test-Specific Timeouts
-//
-// These constants are used exclusively in test files for simulating
-// timeout scenarios and synchronization.
-
-const (
-	// TestShortTimeout is a very short timeout for testing timeout behavior.
-	// Used in handler tests to verify proper timeout error handling.
-	TestShortTimeout = 100 * time.Millisecond
-
-	// TestMediumTimeout is a moderate timeout for async operations in tests.
-	TestMediumTimeout = 1 * time.Second
-
-	// TestLongTimeout is a generous timeout for slow operations in tests.
-	// Used when testing complex handlers or integration scenarios.
-	TestLongTimeout = 5 * time.Second
-)
