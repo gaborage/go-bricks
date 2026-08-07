@@ -1,4 +1,4 @@
-.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint fmt update clean check docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
+.PHONY: all help build test test-integration test-all test-coverage test-coverage-integration test-coverage-combined coverage-report lint lint-md fmt update clean check docker-check vuln sec verify-mod mutate mutate-baseline release release-cli
 # verify-mod mutates go.mod/go.sum/go.work.sum via `go mod tidy` — under `make
 # -j check` that would race lint/test reading the same module files. Force
 # check's prerequisites to run serially regardless of -j.
@@ -18,6 +18,8 @@ GOSEC_VERSION := v2.28.0
 GOLANGCI_LINT_VERSION := v2.12.2
 # renovate: datasource=go depName=github.com/go-gremlins/gremlins
 GREMLINS_VERSION := v0.5.1
+# renovate: datasource=npm depName=markdownlint-cli2
+MARKDOWNLINT_VERSION := 0.18.1
 GREMLINS_CMD := go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 # Hosted runners are 4-vCPU/16GB; 2 workers bounds peak memory (each worker keeps its
 # own copy of the module tree).
@@ -103,6 +105,17 @@ lint: ## Run golangci-lint (pinned + GOWORK=off, mirroring CI; LINT_CLEAN=1 wipe
 	fi
 	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=5m
 
+# No globs on the command line: .markdownlint-cli2.jsonc owns both `globs` and
+# `ignores`, so the file set has one definition that this target, CI, and an
+# editor plugin all read. (A command-line glob would be ADDED to the configured
+# ones, not substituted for them, and the ignores keep applying either way —
+# it simply gives the file set a second home.)
+# npx resolves and caches by package spec, so the version pin is the whole
+# reproducibility story: `markdownlint-cli2` unpinned would silently follow upstream
+# and a rule added in a later release would fail CI on a tree that lints clean here.
+lint-md: ## Run markdownlint-cli2 on Markdown files (pinned; globs and ignores come from .markdownlint-cli2.jsonc)
+	npx --yes markdownlint-cli2@$(MARKDOWNLINT_VERSION)
+
 fmt: ## Format Go code
 	go fmt ./...
 
@@ -119,7 +132,7 @@ clean: ## Clean build cache and test artifacts
 # common-false-positives preset, so classes like G304 are suppressed there and
 # reported only by the standalone scanner CI runs. Leaving it out of `check` meant
 # a clean local run could still fail the security-framework job.
-check: fmt lint test test-alloc vuln sec verify-mod ## Run fmt, lint, test, alloc guards, vuln scan, gosec, and mod-tidy verification (pre-commit checks; mirrors CI)
+check: fmt lint lint-md test test-alloc vuln sec verify-mod ## Run fmt, lint, markdownlint, test, alloc guards, vuln scan, gosec, and mod-tidy verification (pre-commit checks; mirrors CI)
 
 verify-mod: ## Verify go.mod/go.sum are tidy and go.work.sum is settled (mirrors CI)
 	go mod tidy

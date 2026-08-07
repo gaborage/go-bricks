@@ -47,6 +47,9 @@
 
 !sonar-project.properties
 !.gremlins.yaml
+# Required by `make lint-md` and the lint-docs CI job: it carries the rule set
+# AND the glob/ignore list. Without it markdownlint-cli2 has no globs and exits 2.
+!.markdownlint-cli2.jsonc
 
 !CHANGELOG.md
 !RELEASING.md

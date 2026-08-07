@@ -65,14 +65,16 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 **Quick Commands:**
 
 ```bash
-make check              # Pre-commit: fmt + lint + test + alloc guards + vuln scan + gosec
+make check              # Pre-commit: fmt + lint + markdownlint + test + alloc guards + vuln scan + gosec
 make mutate             # Diff-scoped mutation gate (required before pushing)
 make test-integration   # Integration tests (requires Docker)
 go test -run TestName   # Run specific test
 ```
 
 `make check` and `make mutate` are both required before pushing — see
-[CONTRIBUTING.md](CONTRIBUTING.md#build-commands).
+[CONTRIBUTING.md](CONTRIBUTING.md#build-commands). `make check` runs
+markdownlint through `npx`, so it needs Node available on PATH; `make lint-md`
+runs that step on its own.
 
 ---
 
