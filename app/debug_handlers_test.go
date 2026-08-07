@@ -249,27 +249,35 @@ func TestAuthMiddlewareConstantTimeComparison(t *testing.T) {
 }
 
 // TestAuthMiddlewareRejectsWhenNoTokenConfigured pins the defense-in-depth guard shut.
-// Without it, an authMiddleware built against an empty BearerToken would AUTHENTICATE
-// `Authorization: Bearer ` — strings.Cut yields "" and ConstantTimeCompare("", "") returns 1.
-// RegisterDebugEndpoints never wires it in that state, so this is unreachable through the
-// framework; the trap survives any future re-wiring that registers it unconditionally.
+// Without it, an authMiddleware built against a blank BearerToken would AUTHENTICATE the
+// matching blank header — strings.Cut yields the same blank token and ConstantTimeCompare
+// returns 1. Both blank spellings must trip it: "" and a whitespace-only value, which
+// bearerTokenConfigured collapses to the same "no credential" verdict. RegisterDebugEndpoints
+// never wires the middleware in either state, so this is unreachable through the framework;
+// the trap survives any future re-wiring that registers it unconditionally.
 func TestAuthMiddlewareRejectsWhenNoTokenConfigured(t *testing.T) {
-	app := &App{logger: logger.New("info", false)}
-	debugConfig := &config.DebugConfig{Enabled: true, PathPrefix: debugPath}
-	authMiddleware := NewDebugHandlers(app, debugConfig, app.logger).authMiddleware(nil)
-
+	// The guard returns before the Authorization header is ever read, so the header cases
+	// exist to document the shapes that would otherwise slip through — not to multiply
+	// coverage. The last case is the pairing that actually matters: a whitespace-only
+	// configured token against the blank header that would match it byte for byte.
 	tests := []struct {
-		name       string
-		authHeader string
+		name            string
+		configuredToken string
+		authHeader      string
 	}{
 		{name: "bearer_with_trailing_space", authHeader: "Bearer "},
 		{name: "bearer_with_no_token", authHeader: "Bearer"},
 		{name: "no_header_at_all", authHeader: ""},
 		{name: "bearer_with_arbitrary_token", authHeader: "Bearer anything"},
+		{name: "whitespace_only_token_against_its_matching_header", configuredToken: "  ", authHeader: "Bearer  "},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			app := &App{logger: logger.New("info", false)}
+			debugConfig := &config.DebugConfig{Enabled: true, PathPrefix: debugPath, BearerToken: tt.configuredToken}
+			authMiddleware := NewDebugHandlers(app, debugConfig, app.logger).authMiddleware(nil)
+
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
 			req.RemoteAddr = testIPAddress
 			if tt.authHeader != "" {
@@ -379,6 +387,29 @@ func TestRegisterDebugEndpointsAccessControl(t *testing.T) {
 			endpoints:   config.DebugEndpointsConfig{Info: true},
 			wantErr:     true,
 			wantExposed: "build info",
+		},
+		{
+			// SECURITY: a whitespace-only token is not a credential — `Authorization: Bearer  `
+			// splits into scheme "Bearer" and token " ", which ConstantTimeCompare matches. It
+			// must not satisfy the gate, so this is refused exactly like an unset token.
+			name:        "whitespace_only_token_does_not_satisfy_the_gate",
+			bearerToken: "   ",
+			endpoints:   config.DebugEndpointsConfig{Info: true},
+			wantErr:     true,
+			wantExposed: "build info",
+		},
+		{
+			// With the allowlist already satisfying the gate, a whitespace-only token must
+			// still not wire authMiddleware — doing so would make `Bearer  ` a valid
+			// credential. The allowlisted peer probe carries no token and must pass.
+			name:              "whitespace_only_token_wires_no_auth",
+			allowedIPs:        []string{localhostIPV4},
+			bearerToken:       "  ",
+			endpoints:         config.DebugEndpointsConfig{Info: true},
+			wantRegisteredLog: "Debug endpoints registered (allowed_ips=1, auth_enabled=false)",
+			probes: []debugProbe{
+				{name: "allowlisted_peer_needs_no_token", remoteAddr: allowedPeer, wantStatus: http.StatusOK},
+			},
 		},
 		{
 			name:        "neither_set_lists_every_enabled_endpoint",

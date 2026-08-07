@@ -330,14 +330,31 @@ func debugCheckConfig(allowedIPs []string, bearerToken string) *config.Config {
 // path the framework actually takes, so a future refactor that drops the error on the floor
 // in registerDebugHandlers or prepareRuntime fails here.
 func TestPrepareRuntimeFailsWhenDebugEndpointsHaveNoAccessControl(t *testing.T) {
-	app := newLifecycleCheckApp(t, debugCheckConfig(nil, ""))
+	tests := []struct {
+		name        string
+		bearerToken string
+	}{
+		{name: "no_token", bearerToken: ""},
+		// A whitespace-only token is not a credential (`Bearer  ` matches it), so it must
+		// reach the same abort rather than registering the group behind a guessable one.
+		{name: "whitespace_only_token", bearerToken: "   "},
+	}
 
-	err := app.prepareRuntime()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newLifecycleCheckApp(t, debugCheckConfig(nil, tt.bearerToken))
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "would expose enhanced health at /_sys")
-	assert.Contains(t, err.Error(), "debug.allowedips")
-	assert.Contains(t, err.Error(), "debug.bearertoken")
+			err := app.prepareRuntime()
+
+			require.Error(t, err)
+			// prepareRuntime passes its callees' errors through untouched, so the error
+			// reaching startup must be self-describing on its own: what would have been
+			// exposed, at which prefix, and both keys that resolve it.
+			assert.Contains(t, err.Error(), "would expose enhanced health at /_sys")
+			assert.Contains(t, err.Error(), "debug.allowedips")
+			assert.Contains(t, err.Error(), "debug.bearertoken")
+		})
+	}
 }
 
 // TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl is the negative half: startup must

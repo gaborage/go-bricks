@@ -90,7 +90,7 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) error {
 	// WARN, leaving the whole group reachable by any peer that can reach the port. A WARN
 	// is not a control, so registration is refused instead (ADR-049); either access-control
 	// key satisfies the check.
-	if len(exposed) > 0 && len(d.config.AllowedIPs) == 0 && d.config.BearerToken == "" {
+	if len(exposed) > 0 && len(d.config.AllowedIPs) == 0 && !d.bearerTokenConfigured() {
 		return fmt.Errorf("debug endpoints are enabled and would expose %s at %s with NO access control: "+
 			"set debug.allowedips (env DEBUG_ALLOWEDIPS) and/or debug.bearertoken (env DEBUG_BEARERTOKEN), "+
 			"or set debug.enabled to false",
@@ -118,7 +118,7 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) error {
 	if len(d.config.AllowedIPs) > 0 {
 		g.Use(d.ipWhitelistMiddleware(trustedNets))
 	}
-	if d.config.BearerToken != "" {
+	if d.bearerTokenConfigured() {
 		g.Use(d.authMiddleware(trustedNets))
 	}
 
@@ -140,9 +140,19 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) error {
 	d.logger.Info().
 		Str("prefix", d.config.PathPrefix).
 		Msgf("Debug endpoints registered (allowed_ips=%d, auth_enabled=%t)",
-			len(d.config.AllowedIPs), d.config.BearerToken != "")
+			len(d.config.AllowedIPs), d.bearerTokenConfigured())
 
 	return nil
+}
+
+// bearerTokenConfigured reports whether debug.bearertoken carries an actual credential.
+// SECURITY: a whitespace-only value is not one. strings.Cut splits `Authorization: Bearer  `
+// into scheme "Bearer" and token " ", which ConstantTimeCompare matches against a " " config
+// value — so such a token would authenticate any caller that guesses its length in spaces.
+// Trimming here keeps it from satisfying the access-control gate, wiring authMiddleware, or
+// being reported as auth_enabled.
+func (d *DebugHandlers) bearerTokenConfigured() bool {
+	return strings.TrimSpace(d.config.BearerToken) != ""
 }
 
 // exposedEndpoints names, in registration order, the debug endpoints the current config
@@ -281,10 +291,10 @@ func (d *DebugHandlers) handleAccessDenied(clientIP, reason string) error {
 func (d *DebugHandlers) authMiddleware(trustedNets []*net.IPNet) server.MiddlewareFunc {
 	return func(c server.HandlerContext, next func() error) error {
 		// SECURITY: defense-in-depth against a caller that registers this unconditionally.
-		// RegisterDebugEndpoints wires it only when BearerToken is set, but with an empty
-		// one `Authorization: Bearer ` would authenticate — strings.Cut yields "" and
-		// ConstantTimeCompare("", "") returns 1.
-		if d.config.BearerToken == "" {
+		// RegisterDebugEndpoints wires it only when BearerToken carries a credential, but
+		// with an empty or whitespace-only one `Authorization: Bearer ` would authenticate —
+		// strings.Cut yields the same blank token and ConstantTimeCompare returns 1.
+		if !d.bearerTokenConfigured() {
 			return server.NewUnauthorizedError("Bearer token required")
 		}
 
@@ -329,7 +339,7 @@ func (d *DebugHandlers) handleInfo(c server.HandlerContext) error {
 		"debug_config": map[string]any{
 			"enabled":      d.config.Enabled,
 			"path_prefix":  d.config.PathPrefix,
-			"auth_enabled": d.config.BearerToken != "",
+			"auth_enabled": d.bearerTokenConfigured(),
 			"allowed_ips":  len(d.config.AllowedIPs),
 		},
 	}

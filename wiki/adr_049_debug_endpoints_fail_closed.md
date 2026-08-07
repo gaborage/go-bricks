@@ -48,10 +48,19 @@ would expose one or more debug endpoints with neither `debug.allowedips` nor
 and startup aborts.
 
 ```go
-if len(exposed) > 0 && len(d.config.AllowedIPs) == 0 && d.config.BearerToken == "" {
+if len(exposed) > 0 && len(d.config.AllowedIPs) == 0 && !d.bearerTokenConfigured() {
     return fmt.Errorf("debug endpoints are enabled and would expose %s at %s with NO access control: …")
 }
 ```
+
+`bearerTokenConfigured` is `strings.TrimSpace(d.config.BearerToken) != ""`, not a bare
+`!= ""` test, because a whitespace-only token is not a credential: `strings.Cut` splits
+`Authorization: Bearer  ` into scheme `Bearer` and token `" "`, which
+`ConstantTimeCompare` matches against a `" "` config value. Treating it as configured
+would have let it satisfy this gate and then wire `authMiddleware` around a secret
+guessable in one try. The same predicate governs wiring the middleware, the
+`auth_enabled` field, and `authMiddleware`'s own defense-in-depth guard, so the three
+cannot disagree.
 
 Three properties fall out of that shape:
 
@@ -70,11 +79,26 @@ Three properties fall out of that shape:
   residual failure mode is deny-all rather than allow-all.
 
 `RegisterDebugEndpoints` changing from `func(server.RouteRegistrar)` to
-`func(server.RouteRegistrar) error` is an incompatible exported-API change. It
-breaks no consumer *source* — Go permits discarding a return value in an
-expression statement — but it is reported by `apidiff` and will newly be flagged
-by `errcheck` in a consumer that calls it directly. Almost none do: the framework
-calls it from `App.registerDebugHandlers`.
+`func(server.RouteRegistrar) error` is an incompatible exported-API change. A
+*direct* call written as an expression statement still compiles — Go permits
+discarding a return value there — but it is reported by `apidiff` and will newly
+be flagged by `errcheck`, and the source-compatibility only holds for that one
+shape. Any consumer that names the old signature breaks at compile time: a method
+value assigned to a `func(server.RouteRegistrar)` variable or struct field, a
+call passed as such an argument, or an interface declaring the method without the
+`error` result — the concrete type stops satisfying it. Those consumers must
+adopt the new signature and handle or propagate the error:
+
+```go
+if err := debugHandlers.RegisterDebugEndpoints(r); err != nil {
+    return fmt.Errorf("register debug handlers: %w", err)
+}
+```
+
+Almost none exist: the framework calls it from `App.registerDebugHandlers`, and
+`App.prepareRuntime` returns that error to startup untouched — like its six
+sibling steps, it passes callee errors through, so the message above has to be
+self-describing on its own, and is.
 
 This repo has made the same call twice before. ADR-038 turned the dev-permissive
 CORS wildcard into an explicit `CORS_DEV_WILDCARD=true` opt-in; ADR-046 made the
@@ -103,7 +127,7 @@ are fatal. Validation errors crash at startup, never degrade silently."*
   empty allowlist and no token will not start after the bump. All four conjuncts
   are required: the refusal is gated on `len(exposed) > 0`, so an enabled group
   with every endpoint flag off exposes nothing and still boots. That is the
-  point, and it is the reason this ships with a migration atom (`[C57.4]`)
+  point, and it is the reason this ships with a migration atom (`[C57.7]`)
   carrying a `detect` an operator can run against their own config before
   upgrading.
 - The abort is unconditional on environment. A developer who cleared
@@ -119,7 +143,9 @@ are fatal. Validation errors crash at startup, never degrade silently."*
   defaults to 100 rps and `app.rate.ippreguard.threshold` to 2000, but both are
   *koanf* defaults — a `*config.Config` assembled in Go leaves them at the zero
   value, and `rateLimitEcho` is a pass-through for `<= 0`, so that deployment has
-  no brute-force ceiling at all. Token-only access control is therefore intended
+  no brute-force ceiling at all. The one shape rejected is a blank one — a
+  whitespace-only value counts as unset, so it aborts startup rather than
+  installing a one-guess credential. Token-only access control is therefore intended
   for deployments that are not internet-facing; pair it with `debug.allowedips`
   wherever the port is reachable from outside the perimeter. A minimum-length
   floor on `debug.bearertoken` is a candidate follow-up — deliberately not taken
@@ -150,12 +176,25 @@ endpoint when it had not. The abort forces the decision to be made explicitly;
 `allowedips: ["0.0.0.0/0"]` is the honest spelling of what the empty list was
 being used for, and unlike an empty list it is greppable.
 
-**Validate in `config.validateDebug`.** Fails even earlier, at `config.Load`, and
-needs no signature change. Rejected because the refusal depends on which
-endpoints are actually enabled (`len(exposed) > 0`), which is registration-time
-knowledge expressed in `app`, and because a programmatically assembled config
-that never calls `config.Validate` would slip past it — the same gap `[C56.5]`
-closed for `forwardedclientcert.require`.
+**Validate in `config.validateDebug` *instead*.** Fails even earlier, at
+`config.Load`, and needs no signature change. Rejected as a *replacement*: a
+programmatically assembled config never calls `config.Validate` —
+`app.NewWithConfig` goes straight to the builder — so it would slip past, the
+same gap `[C56.5]` closed for `forwardedclientcert.require`. The `app`-layer
+refusal is therefore load-bearing and cannot be moved.
+
+Note what this does **not** argue. `validateDebug` receives the whole
+`*DebugConfig`, `Endpoints` included, so every conjunct of the predicate is
+available at load time; there is no registration-time knowledge involved. A
+config-layer clause is thus perfectly implementable, and the two precedents this
+ADR leans on ship *both* halves: ADR-043 validates `forwardedclientcert` at load
+time **and** backstops it in `server`, and ADR-050 validates the connection-string
+scheme at load time **and** backstops it in `app_builder`. Adding the same clause
+to `validateDebug` — which would surface the error before the broker and database
+are dialed, and put it beside `debug.trustedproxies`, the sibling rule on the same
+config block that already fails at `config.Load` — is a worthwhile follow-up,
+deliberately not taken here so that this change ships one new failure path rather
+than two.
 
 **Leave the WARN, raise it to ERROR.** Rejected on the same grounds as the WARN
 itself: severity is not a control.
@@ -165,6 +204,6 @@ itself: severity is not a control.
 - `app/debug_handlers.go` — `RegisterDebugEndpoints`, `exposedEndpoints`,
   `ipWhitelistMiddleware`
 - `app/lifecycle.go` — `registerDebugHandlers`, `prepareRuntime`
-- [migrations.md](migrations.md) `[C57.4]`
+- [migrations.md](migrations.md) `[C57.7]`
 - [ADR-038](adr_038_cors_dev_wildcard_opt_in.md) — dev CORS wildcard opt-in
 - [ADR-046](adr_046_cache_readiness_strict_default.md) — cache readiness strict by default
