@@ -24,6 +24,11 @@ deliberately protected from correction. The authoritative resource-level
 is backends that flatten record attributes over resource attributes in search and
 dashboards, where the record-level duplicate wins.
 
+As of [ADR-056](adr_056_log_enricher_delta_attributes.md) the enricher (now
+`processorAttributeExporter`) stamps only the `log.type` delta, so identity attributes no
+longer reach records as duplicates at all. The record-over-resource precedence described
+above is unchanged, and so is everything this ADR decides — it now guards `log.type` alone.
+
 The fix belongs at the bridge — the boundary where caller-supplied field names become
 attributes — not at the exporter, whose precedence must not change. The open question
 was what to do with a colliding field: drop it, prefix it, and/or warn.

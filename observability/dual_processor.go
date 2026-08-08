@@ -11,6 +11,7 @@ import (
 )
 
 const (
+	logTypeKey    = "log.type"
 	logTypeAction = "action"
 	logTypeTrace  = "trace"
 )
@@ -143,7 +144,7 @@ func extractLogType(rec *sdklog.Record) string {
 	logType := logTypeTrace // Default to trace logs
 
 	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
-		if kv.Key == "log.type" {
+		if kv.Key == logTypeKey {
 			if kv.Value.Type() == attribute.STRING {
 				logType = kv.Value.AsString()
 			}

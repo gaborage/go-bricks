@@ -11,10 +11,6 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
-const (
-	logTypeAttrKey = "log.type"
-)
-
 func TestCreateOTLPHTTPLogExporter(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -347,11 +343,7 @@ func TestCreateDualModeProcessor(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, baseExporter)
 
-			baseRes, err := p.createResource(context.Background())
-			require.NoError(t, err)
-
-			processor, err := p.createDualModeProcessor(baseRes, baseExporter)
-			assert.NoError(t, err)
+			processor := p.createDualModeProcessor(baseExporter)
 
 			if tt.expectedNotNil {
 				assert.NotNil(t, processor)
@@ -368,67 +360,7 @@ func TestCreateDualModeProcessor(t *testing.T) {
 	}
 }
 
-func TestCreateLogResource(t *testing.T) {
-	tests := []struct {
-		name      string
-		logType   string
-		wantErr   bool
-		checkFunc func(*testing.T, *provider)
-	}{
-		{
-			name:      "action_log_type",
-			logType:   "action",
-			wantErr:   false,
-			checkFunc: checkLogResourceHasType("action"),
-		},
-		{
-			name:      "trace_log_type",
-			logType:   "trace",
-			wantErr:   false,
-			checkFunc: checkLogResourceHasType("trace"),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := &provider{
-				config: Config{
-					Service: ServiceConfig{
-						Name:    "test-service",
-						Version: "1.0.0",
-					},
-					Environment: "test",
-				},
-			}
-
-			if tt.checkFunc != nil {
-				tt.checkFunc(t, p)
-			}
-		})
-	}
-}
-
-// checkLogResourceHasType returns a checker that builds a log resource for the
-// given log type and asserts the produced resource carries a log.type
-// attribute matching expectedType.
-func checkLogResourceHasType(expectedType string) func(*testing.T, *provider) {
-	return func(t *testing.T, p *provider) {
-		baseRes, err := p.createResource(context.Background())
-		require.NoError(t, err)
-		res, err := p.createLogResource(baseRes, expectedType)
-		require.NoError(t, err)
-		require.NotNil(t, res)
-
-		for _, attr := range res.Attributes() {
-			if attr.Key == logTypeAttrKey && attr.Value.AsString() == expectedType {
-				return
-			}
-		}
-		t.Errorf("Resource should have log.type=%s attribute", expectedType)
-	}
-}
-
-func TestCreateBatchProcessorWithResource(t *testing.T) {
+func TestCreateBatchProcessor(t *testing.T) {
 	// Create base exporter
 	p := &provider{
 		config: Config{
@@ -461,15 +393,8 @@ func TestCreateBatchProcessorWithResource(t *testing.T) {
 	require.NotNil(t, baseExporter)
 	defer baseExporter.Shutdown(context.Background())
 
-	// Create resource
-	baseRes, err := p.createResource(context.Background())
-	require.NoError(t, err)
-	res, err := p.createLogResource(baseRes, "action")
-	require.NoError(t, err)
-	require.NotNil(t, res)
-
-	// Create batch processor with resource
-	processor := p.createBatchProcessorWithResource(baseExporter, res, "action")
+	// Create batch processor for the action log type
+	processor := p.createBatchProcessor(baseExporter, "action")
 	assert.NotNil(t, processor)
 
 	// Verify processor can be shut down

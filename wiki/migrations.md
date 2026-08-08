@@ -1928,7 +1928,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `jose/sealer.go` (`Seal`) · `jose/policy.go` (`validateAlgorithms`) ·
   [wiki/httpclient.md](httpclient.md#jose-policy-validation-at-build)
 
-## E58 · v0.57.0 → v0.58.0 — dead exported surface removed + a cache that cannot be constructed aborts startup + reserved log attribute namespaces
+## E58 · v0.57.0 → v0.58.0 — dead exported surface removed + a cache that cannot be constructed aborts startup + reserved log attribute namespaces + log records stop duplicating resource identity
 
 - gist: Two clusters of dead exported symbols leave the public API, both carrying a comment
   that asserted a use they never had. `jose.PolicyRegistry` goes with its constructor and its
@@ -1960,7 +1960,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   attribute namespaces: a top-level log field keyed `service.*`, `telemetry.sdk.*`, or
   `deployment.environment.name` is remapped under the `app.` prefix in OTLP-exported log
   records (value preserved, one-time WARN), so a log call can no longer shadow the service's
-  identity at record level (C58.4).
+  identity at record level (C58.4). Finally, the per-processor log enricher stops copying the
+  service identity onto every record: it was handed the merged resource rather than the
+  `log.type` delta it exists for, so `service.name`, `service.version`,
+  `deployment.environment.name` and the `telemetry.sdk.*` triplet rode every OTLP log record as
+  record-level duplicates of what the `ResourceLogs.resource` block already ships once per batch.
+  Records now carry `log.type` alone; the identity attributes are unchanged where they always
+  were, in the resource block (C58.5, ADR-056).
 - build-caught: C58.1 C58.2 C58.3
 - preflight: check every environment for a **negative** `cache.manager.maxsize` or
   `cache.manager.idlettl`, and — in multi-tenant mode where `cache.manager.maxsize` is unset —
@@ -1969,7 +1975,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   (C58.3). For C58.4, grep for reserved-key literals (see its detect) and hand-review any code
   path that ranges a map into log fields — dynamic keys escape every grep, and the bridge's
   runtime WARN only exists after the bump, so it is post-upgrade confirmation, not preflight
-  evidence; when such paths exist, smoke-test in staging before relying on the old key names
+  evidence; when such paths exist, smoke-test in staging before relying on the old key names.
+  For C58.5 the search moves off the codebase entirely: audit log-backend dashboards, alerts and
+  saved queries for filters on **record-level** identity attributes (see its detect) — no grep over
+  your Go sources can find them
 - exit: `go get github.com/gaborage/go-bricks@v0.58.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C58.1] `jose.PolicyRegistry` and its constructor and methods are removed · compile-break · when: match
@@ -2084,6 +2093,28 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   Re-key dashboards, alerts, and saved queries reading the old record attribute to the `app.`-prefixed name — or rename the field at the call site out of the reserved namespace (for a downstream peer, semconv's `peer.service` is the conventional home). Never treat `app.*` as service identity: it is caller-supplied and unauthenticated
 - verify: with `observability.logs.enabled: true`, log a field keyed `service.name` and confirm the backend shows `app.service.name` plus the WARN record; `go test ./...`
 - ref: [ADR-055](adr_055_reserved_log_attribute_namespaces.md) · #915 · `logger/otel_bridge.go`
+
+### [C58.5] Log records stop carrying record-level copies of resource identity attributes · behavior · when: match
+
+- detect: backend-side only — search the log backend (dashboards, alerts, saved queries) for filters on record-level `service.name`, `service.version`, `deployment.environment.name`, or `telemetry.sdk.*` in LOG records. Filters on resource attributes are unaffected; no code grep can find this
+- scope: OTLP log export only. The per-processor enricher now stamps only `log.type` on records that don't already carry one; `service.name`, `service.version`, `deployment.environment.name` and `telemetry.sdk.{name,language,version}` no longer appear as record-level attributes. They remain, unchanged, in the OTLP `ResourceLogs.resource` block the logger provider has always attached. The raw zerolog stream (stdout/file JSON, console output) is unchanged, and so are traces and metrics
+- gate: match = any log-backend query filtering identity keys at record level. no-match = nothing to do
+- before:
+
+  ```text
+  record attributes: log.type + service.name, service.version,
+  deployment.environment.name, telemetry.sdk.{name,language,version}   (per record)
+  ```
+
+- after:
+
+  ```text
+  record attributes: log.type only   (identity once per batch, in ResourceLogs.resource)
+  ```
+
+  Repoint affected queries at the resource attribute of the same name. Backends that flatten record attributes over resource attributes show the same values as before; backends that index the two levels separately stop matching record-level identity filters until repointed
+- verify: with `observability.logs.enabled: true`, emit a log and confirm the backend shows identity attributes at resource level only and `log.type` at record level; `go test ./observability/...`
+- ref: [ADR-056](adr_056_log_enricher_delta_attributes.md) · #914 · `observability/processor_attribute_exporter.go`
 
 ---
 
