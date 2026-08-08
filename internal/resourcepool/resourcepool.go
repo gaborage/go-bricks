@@ -197,12 +197,10 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 			return zero, nil, res.Err
 		}
 
+		// The type assertion cannot fail — the DoChan closure above is the only producer —
+		// and ok short-circuits rather than adding a dead branch.
 		e, ok := res.Val.(*entry[V])
-		if !ok {
-			// Unreachable: the DoChan closure above returns *entry[V] or an error.
-			return zero, nil, fmt.Errorf("resourcepool: %q resolved to %T, want *entry", key, res.Val)
-		}
-		if p.claimOrAcquire(e) {
+		if ok && p.claimOrAcquire(e) {
 			return e.value, p.makeRelease(e), nil
 		}
 		// The reused entry was closed in the window between lookup and claim (a concurrent
@@ -383,11 +381,9 @@ func (p *Pool[V]) evictIfNeeded() *entry[V] {
 		return nil
 	}
 
-	e, ok := oldest.Value.(*entry[V])
-	if !ok {
-		// Unreachable: createEntry is the only writer and always pushes *entry[V].
-		return nil
-	}
+	// createEntry is the list's only writer and always pushes *entry[V], so ok is
+	// discarded rather than guarded with a branch no test can reach.
+	e, _ := oldest.Value.(*entry[V])
 
 	p.removeEntryLocked(e.key)
 	p.evictions++

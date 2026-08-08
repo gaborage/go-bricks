@@ -262,19 +262,9 @@ func (m *MockCache) GetOrSet(ctx context.Context, key string, value []byte, ttl 
 		expiration = time.Now().Add(100 * 365 * 24 * time.Hour)
 	}
 
-	// Atomic get-or-set operation
+	// Atomic get-or-set: a missing entry and an expired one are both replaced.
 	entry, loaded := m.data[key]
-	if !loaded {
-		entry = &cacheEntry{
-			value:      value,
-			expiration: expiration,
-		}
-		m.store(key, entry)
-	}
-
-	// Check expiration even if loaded
-	if loaded && time.Now().After(entry.expiration) {
-		// Expired, replace it
+	if !loaded || time.Now().After(entry.expiration) {
 		m.store(key, &cacheEntry{
 			value:      value,
 			expiration: expiration,
@@ -282,7 +272,7 @@ func (m *MockCache) GetOrSet(ctx context.Context, key string, value []byte, ttl 
 		return value, true, nil
 	}
 
-	return entry.value, !loaded, nil
+	return entry.value, false, nil
 }
 
 // CompareAndSet atomically compares and sets a value.

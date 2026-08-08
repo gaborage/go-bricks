@@ -15,10 +15,11 @@ import (
 // mocked method, the return index, and the actual type so the misconfigured
 // .Return(...) is identifiable without a stack walk.
 func arg[T any](arguments mock.Arguments, method string, index int) T {
-	value, ok := arguments.Get(index).(T)
+	raw := arguments.Get(index)
+	value, ok := raw.(T)
 	if !ok {
 		panic(fmt.Sprintf("mocks: %s return value %d is %T, want %s",
-			method, index, arguments.Get(index), reflect.TypeFor[T]()))
+			method, index, raw, reflect.TypeFor[T]()))
 	}
 	return value
 }
