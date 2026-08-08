@@ -26,8 +26,12 @@ dashboards, where the record-level duplicate wins.
 
 As of [ADR-056](adr_056_log_enricher_delta_attributes.md) the enricher (now
 `processorAttributeExporter`) stamps only the `log.type` delta, so identity attributes no
-longer reach records as duplicates at all. The record-over-resource precedence described
-above is unchanged, and so is everything this ADR decides — it now guards `log.type` alone.
+longer reach records as duplicates at all. Two separate things follow, and only the first
+narrows: the **exporter's** record-over-resource precedence still works exactly as described
+above, but `log.type` is now the only attribute left for it to decide. The **bridge's**
+reserved-namespace remap in `logger/otel_bridge.go` — everything this ADR decides — is
+untouched: `service.*`, `telemetry.sdk.*` and `deployment.environment.name` are still
+reserved, still remapped under `app.`, still warned about once per bridge.
 
 The fix belongs at the bridge — the boundary where caller-supplied field names become
 attributes — not at the exporter, whose precedence must not change. The open question

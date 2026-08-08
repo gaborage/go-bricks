@@ -1966,8 +1966,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `deployment.environment.name` and the `telemetry.sdk.*` triplet — plus every key injected via
   `OTEL_RESOURCE_ATTRIBUTES`, since the whole resource attribute set was copied — rode every OTLP
   log record as record-level duplicates of what the `ResourceLogs.resource` block already ships
-  once per batch. Records now carry `log.type` alone; those attributes are unchanged where they
-  always were, in the resource block (C58.5, ADR-056).
+  once per batch. `log.type` is now the only record attribute the framework adds; those resource
+  attributes are unchanged where they always were, in the resource block. Log fields your own code
+  sets are not affected — nothing caller-supplied is removed (C58.5, ADR-056).
 - build-caught: C58.1 C58.2 C58.3
 - preflight: check every environment for a **negative** `cache.manager.maxsize` or
   `cache.manager.idlettl`, and — in multi-tenant mode where `cache.manager.maxsize` is unset —
@@ -2105,7 +2106,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - before:
 
   ```text
-  record attributes: log.type + service.name, service.version,
+  FRAMEWORK-ADDED record attributes: log.type + service.name, service.version,
   deployment.environment.name, telemetry.sdk.{name,language,version}
   + every OTEL_RESOURCE_ATTRIBUTES key (k8s.pod.name, …)            (per record)
   ```
@@ -2113,12 +2114,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - after:
 
   ```text
-  record attributes: log.type only   (every resource attribute once per batch,
-                                      in ResourceLogs.resource)
+  FRAMEWORK-ADDED record attributes: log.type only    (every resource attribute
+                                     now once per batch, in ResourceLogs.resource)
   ```
 
-  Repoint affected queries at the resource attribute of the same name. Backends that flatten record attributes over resource attributes show the same values as before; backends that index the two levels separately stop matching record-level identity filters until repointed
-- verify: with `observability.logs.enabled: true`, emit a log and confirm the backend shows identity attributes at resource level only and `log.type` at record level; `go test ./observability/...`
+  Both blocks list only what the **framework** puts on a record. Your own log fields are untouched — an HTTP action log still carries its `request_id`, `http.route`, `http.response.status_code` and the rest exactly as before; this change removes nothing a caller set. Repoint affected queries at the resource attribute of the same name. Backends that flatten record attributes over resource attributes show the same values as before; backends that index the two levels separately stop matching record-level identity filters until repointed
+- verify: with `observability.logs.enabled: true`, emit a log and confirm the backend shows the resource attributes at resource level only, `log.type` still at record level, and your own log fields still at record level unchanged; `go test ./observability/...`
 - ref: [ADR-056](adr_056_log_enricher_delta_attributes.md) · #914 · `observability/processor_attribute_exporter.go`
 
 ---

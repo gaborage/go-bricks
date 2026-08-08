@@ -30,8 +30,9 @@ onto every log line too.
 The one attribute the wrapper existed for was the one it never added. Records leave
 `logger/otel_bridge.go` always carrying `log.type`, and the merged resource always
 declared one, so the record-wins collision branch dropped it on every single record —
-the six duplicates were the entire observable effect. The cost was paid per log line:
-wire payload plus a six-element `AddAttributes` call.
+the resource duplicates were the entire observable effect. The cost was paid per log
+line: wire payload, a clone of the record's attribute storage, and an `AddAttributes`
+call one element wide for every resource attribute the record did not already carry.
 
 Found by the `/simplify` altitude pass during #873/#918; filed as #914.
 
@@ -59,14 +60,21 @@ change rather than being deleted outright.
 
 ## Consequences
 
-**Positive.** Every exported log record loses one `AddAttributes` call and at least six
-attributes — more under `OTEL_RESOURCE_ATTRIBUTES`, which added to the duplicated set.
-Service identity now appears in exactly one place on the wire — the resource block, where
-it was never spoofable — instead of being duplicated into the record attributes, where
+**Positive.** Every exported log record sheds the resource attributes it was duplicating — at
+least six, and more wherever `OTEL_RESOURCE_ATTRIBUTES` adds to the resource. The two paths
+now cost different things. A record that already carries `log.type` — which is every record
+the go-bricks bridge emits — skips enrichment altogether: no `AddAttributes`, and no `Clone()`
+either, since the wrapper returns the record as-is. Measured on a 16-attribute action-log
+record, that path went 374.1 ns · 768 B/op · 1 alloc/op → 52.0 ns · 0 B/op · 0 allocs/op. A
+record *without* `log.type` — third-party code emitting straight through the OTel API — still
+takes exactly one `Clone()` and one `AddAttributes`, unchanged, which is the path the wrapper
+exists for.
+
+Service identity now appears in exactly one place on the wire — the resource block, where it
+was never spoofable — instead of being duplicated into the record attributes, where
 [ADR-055](adr_055_reserved_log_attribute_namespaces.md) had to defend it against caller
-shadowing. That defense is strengthened: with no record-level identity duplicate, a
-backend that flattens record attributes over resource attributes has nothing left to
-flatten *over*.
+shadowing. That defense is strengthened: with no record-level identity duplicate, a backend
+that flattens record attributes over resource attributes has nothing left to flatten *over*.
 
 **Negative.** Behavior change on the OTLP log wire. Backends that index record attributes
 separately from resource attributes stop matching record-level filters on log records —
