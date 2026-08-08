@@ -15,9 +15,10 @@ way out.
 The wrapper was handed the wrong set. `createLogResource` merged the base service
 resource with the one attribute that actually differed, and the merged result — not the
 delta — reached `newResourceAttributeExporter`. Because the wrapper was constructed from
-`res.Attributes()` wholesale, every exported log record carried record-level copies of
-**everything the resource held**, all of which the OTLP `ResourceLogs.resource` block
-already shipped once per batch. On a default deployment that is six attributes:
+`res.Attributes()` wholesale, it attempted **the resource's entire attribute set** on every
+exported log record, adding each key the record did not already carry — all of them keys the
+OTLP `ResourceLogs.resource` block already shipped once per batch. On a default deployment
+that is six attributes:
 
 - `service.name`, `service.version`, `deployment.environment.name`
 - `telemetry.sdk.name`, `telemetry.sdk.language`, `telemetry.sdk.version`
@@ -61,7 +62,12 @@ change rather than being deleted outright.
 ## Consequences
 
 **Positive.** Every exported log record sheds the resource attributes it was duplicating — at
-least six, and more wherever `OTEL_RESOURCE_ATTRIBUTES` adds to the resource. The two paths
+least six for anything emitted through the go-bricks logger, since ADR-055's bridge remaps a
+caller's `service.*` / `telemetry.sdk.*` / `deployment.environment.name` field under `app.`
+before the exporter runs, so those six could never collide and were always added; more wherever
+`OTEL_RESOURCE_ATTRIBUTES` adds to the resource, and fewer only for a record that reached the
+exporter already carrying a resource key — one emitted straight through the OTel API, or an
+env-injected key the bridge does not reserve. The two paths
 now cost different things. A record that already carries `log.type` — which is every record
 the go-bricks bridge emits — skips enrichment altogether: no `AddAttributes`, and no `Clone()`
 either, since the wrapper returns the record as-is. Measured on a 16-attribute action-log
@@ -72,8 +78,9 @@ record *without* `log.type` — third-party code emitting straight through the O
 takes exactly one `Clone()` and one `AddAttributes`, unchanged, which is the path the wrapper
 exists for.
 
-Service identity now appears in exactly one place on the wire — the resource block, where it
-was never spoofable — instead of being duplicated into the record attributes, where
+The **framework-provided** service identity now appears in exactly one place on the wire — the
+resource block, where it was never spoofable — instead of being duplicated into the record
+attributes, where
 [ADR-055](adr_055_reserved_log_attribute_namespaces.md) had to defend it against caller
 shadowing. That defense is strengthened: with no record-level identity duplicate, a backend
 that flattens record attributes over resource attributes has nothing left to flatten *over*.
