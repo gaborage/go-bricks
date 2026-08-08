@@ -109,7 +109,7 @@ func newKeepAliveDialer(interval time.Duration, log logger.Logger) *keepAliveDia
 // to the pool, guaranteeing pool-wide consistency.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("database configuration is nil")
+		return nil, errors.New("database configuration is nil")
 	}
 
 	dsn := buildOracleDSN(cfg)

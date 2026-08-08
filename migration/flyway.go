@@ -633,10 +633,10 @@ func (fm *FlywayMigrator) validateFlywayPath(flywayPath string) error {
 		return nil
 	}
 	if flywayPath == "" {
-		return fmt.Errorf("flyway path cannot be empty")
+		return errors.New("flyway path cannot be empty")
 	}
 	if strings.Contains(flywayPath, "..") || strings.Contains(flywayPath, ";") || strings.Contains(flywayPath, "&") {
-		return fmt.Errorf("flyway path contains dangerous characters")
+		return errors.New("flyway path contains dangerous characters")
 	}
 
 	cleanPath := filepath.Clean(flywayPath)

@@ -170,7 +170,7 @@ func TestOTelMiddlewareSpanAttributes(t *testing.T) {
 	require.Len(t, spans, 1)
 
 	attrs := spans[0].Attributes
-	attrMap := make(map[string]interface{})
+	attrMap := make(map[string]any)
 	for _, attr := range attrs {
 		attrMap[string(attr.Key)] = attr.Value.AsInterface()
 	}

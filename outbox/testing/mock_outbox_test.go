@@ -2,7 +2,9 @@ package testing
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/gaborage/go-bricks/app"
@@ -43,7 +45,7 @@ func TestMockOutboxPublishMultipleEvents(t *testing.T) {
 }
 
 func TestMockOutboxPublishWithError(t *testing.T) {
-	mock := NewMockOutbox().WithError(fmt.Errorf("outbox unavailable"))
+	mock := NewMockOutbox().WithError(errors.New("outbox unavailable"))
 
 	event := &app.OutboxEvent{
 		EventType:   "order.created",
@@ -119,7 +121,7 @@ func TestAssertEventNotPublishedSuccess(t *testing.T) {
 func TestAssertEventCountSuccess(t *testing.T) {
 	mock := NewMockOutbox()
 	for i := range 3 {
-		e := &app.OutboxEvent{EventType: "test", AggregateID: fmt.Sprintf("%d", i)}
+		e := &app.OutboxEvent{EventType: "test", AggregateID: strconv.Itoa(i)}
 		_, _ = mock.Publish(context.Background(), nil, e)
 	}
 

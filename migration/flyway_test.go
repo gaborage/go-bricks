@@ -88,13 +88,7 @@ func TestBuildEnvironmentVariables(t *testing.T) {
 	fm := NewFlywayMigrator(cfg, logger.New("disabled", true))
 	env, err := buildEnvironmentVariables(&fm.config.Database)
 	require.NoError(t, err)
-	joined := "" + (func() string {
-		s := ""
-		for _, e := range env {
-			s += e + "\n"
-		}
-		return s
-	})()
+	joined := strings.Join(env, "\n") + "\n"
 	assert.Contains(t, joined, "DB_HOST=h")
 	assert.Contains(t, joined, "DB_PORT=5432")
 	assert.Contains(t, joined, "DB_USER=u")
@@ -113,13 +107,7 @@ func TestBuildEnvironmentVariables(t *testing.T) {
 	fm = NewFlywayMigrator(cfg, logger.New("disabled", true))
 	env, err = buildEnvironmentVariables(&fm.config.Database)
 	require.NoError(t, err)
-	joined = "" + (func() string {
-		s := ""
-		for _, e := range env {
-			s += e + "\n"
-		}
-		return s
-	})()
+	joined = strings.Join(env, "\n") + "\n"
 	assert.Contains(t, joined, "ORACLE_HOST=oh")
 	assert.Contains(t, joined, "ORACLE_PORT=1521")
 	assert.Contains(t, joined, "ORACLE_USER=ou")

@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"time"
@@ -30,19 +31,19 @@ func newPublisher(store Store, defaultExchange string) app.OutboxPublisher {
 
 func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.OutboxEvent) (string, error) {
 	if tx == nil {
-		return "", fmt.Errorf("outbox: transaction must not be nil")
+		return "", errors.New("outbox: transaction must not be nil")
 	}
 
 	if event == nil {
-		return "", fmt.Errorf("outbox: event must not be nil")
+		return "", errors.New("outbox: event must not be nil")
 	}
 
 	if event.EventType == "" {
-		return "", fmt.Errorf("outbox: event type must not be empty")
+		return "", errors.New("outbox: event type must not be empty")
 	}
 
 	if event.AggregateID == "" {
-		return "", fmt.Errorf("outbox: aggregate ID must not be empty")
+		return "", errors.New("outbox: aggregate ID must not be empty")
 	}
 
 	payload, err := marshalPayload(event.Payload)

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -432,7 +433,7 @@ func TestCustomErrorHandler(t *testing.T) {
 			config: &config.Config{
 				App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 			},
-			error:          fmt.Errorf("generic error"),
+			error:          errors.New("generic error"),
 			expectedStatus: http.StatusInternalServerError,
 			expectedCode:   "INTERNAL_ERROR",
 			expectDetails:  true,
@@ -442,7 +443,7 @@ func TestCustomErrorHandler(t *testing.T) {
 			config: &config.Config{
 				App: config.AppConfig{Env: "production", Debug: false},
 			},
-			error:          fmt.Errorf("generic error"),
+			error:          errors.New("generic error"),
 			expectedStatus: http.StatusInternalServerError,
 			expectedCode:   "INTERNAL_ERROR",
 			expectDetails:  false,
@@ -600,7 +601,7 @@ func TestErrorHandlerLogging(t *testing.T) {
 		},
 		{
 			name:         "generic_error_logged",
-			error:        fmt.Errorf("unexpected error"),
+			error:        errors.New("unexpected error"),
 			expectLogged: true,
 		},
 	}
@@ -637,7 +638,7 @@ func TestErrorHandlerLogging(t *testing.T) {
 
 func TestErrorChaining(t *testing.T) {
 	// Test that errors can be properly chained and wrapped
-	originalErr := fmt.Errorf("database connection failed")
+	originalErr := errors.New("database connection failed")
 	wrappedErr := fmt.Errorf("failed to create user: %w", originalErr)
 
 	e := echo.New()
@@ -746,7 +747,7 @@ func TestPanicRecoveryStructuredLogging(t *testing.T) {
 	c.Response().Header().Set(echo.HeaderXRequestID, "req-42")
 
 	panicErr := &middleware.PanicStackError{
-		Err:   fmt.Errorf("test panic"),
+		Err:   errors.New("test panic"),
 		Stack: []byte("goroutine 1 [running]:\nmain.handler()"),
 	}
 

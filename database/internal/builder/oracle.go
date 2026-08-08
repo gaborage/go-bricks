@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -336,12 +337,12 @@ func (qb *QueryBuilder) quoteOracleColumnsForDML(columns ...string) []string {
 }
 
 // buildOraclePaginationClause constructs an Oracle-compatible pagination clause using OFFSET and FETCH NEXT syntax.
-// The returned string contains "OFFSET {offset} ROWS" and/or "FETCH NEXT {limit} ROWS ONLY" as applicable; it is empty if both limit and offset are less than or equal to zero.
-func buildOraclePaginationClause(limit, offset int) string {
-	if limit <= 0 && offset <= 0 {
-		return ""
-	}
-
+// The returned string contains "OFFSET {offset} ROWS" and/or "FETCH NEXT {limit} ROWS ONLY" as applicable; it is empty if both limit and offset are zero.
+// Takes uint64 to match SelectQueryBuilder's limit/offset: narrowing to int would
+// wrap values above math.MaxInt64 to negative and silently drop the clause.
+func buildOraclePaginationClause(limit, offset uint64) string {
+	// No zero/zero guard: neither branch below appends, and joining no parts
+	// already yields "". A guard would be an equivalent-mutant magnet.
 	parts := make([]string, 0, 2)
 	if offset > 0 {
 		parts = append(parts, fmt.Sprintf("OFFSET %d ROWS", offset))
@@ -368,7 +369,7 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 // buildOracleMerge constructs an Oracle MERGE statement for upsert operations
 func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
 	if len(conflictColumns) == 0 {
-		return "", nil, fmt.Errorf("conflict columns required for Oracle MERGE")
+		return "", nil, errors.New("conflict columns required for Oracle MERGE")
 	}
 
 	// Every conflict column must be present in the insert columns. Otherwise the

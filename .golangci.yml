@@ -27,9 +27,11 @@ linters:
     - misspell                  # finds commonly misspelled English words in comments
     - musttag                   # enforces field tags in (un)marshaled structs
     - nakedret                  # finds naked returns in functions greater than a specified function length
+    - nestif                    # reports deeply nested if statements (uber-go: Reduce Nesting)
     - nilerr                    # finds code that returns nil even if it checks that the error is not nil
     - noctx                     # finds sending HTTP request without context.Context
     - nolintlint                # reports ill-formed or insufficient nolint directives
+    - perfsprint                # fmt.Sprintf calls with faster strconv/concat equivalents (uber-go: Prefer strconv over fmt)
     - prealloc                  # finds slice declarations that could potentially be preallocated
     - recvcheck                 # flags types mixing pointer and value receivers (uber-go: Receivers and Interfaces)
     - revive                    # fast, configurable, extensible, flexible, and beautiful linter for Go
@@ -39,6 +41,7 @@ linters:
     - staticcheck               # staticcheck is a go vet on steroids, applying a ton of static analysis checks
     - unconvert                 # removes unnecessary type conversions
     - unparam                   # reports unused function parameters
+    - usestdlibvars             # prefers stdlib constants (http.MethodGet) over string literals
     - wastedassign              # finds wasted assignment statements
     - whitespace                # detection of leading and trailing whitespace
     - zerologlint               # detects the wrong usage of zerolog that a user forgets to dispatch with Send or Msg
@@ -75,6 +78,11 @@ linters:
       require-explanation: false
       require-specific: false
       allow-unused: false
+    perfsprint:
+      # Rewriting fmt.Sprintf into string concatenation is a speedup the uber-go
+      # guide does not ask for ("Prefer strconv over fmt" covers integer
+      # conversion only), and it costs readability in message-building code.
+      string-format: false
     revive:
       confidence: 0
       # Declaring `rules` REPLACES revive's default set rather than extending it,
@@ -109,7 +117,9 @@ linters:
         # Additions from the uber-go style guide. Each measured 0 findings
         # against the tree, so they ratchet current behavior without a sweep.
         - name: atomic                  # non-atomic assignment to an atomic value
+        - name: bare-return             # "Avoid Naked Returns"
         - name: confusing-results       # unnamed same-type multi-returns
+        - name: early-return            # "Reduce Nesting"
         - name: defer                   # defer in loop, recover, return-in-defer
         - name: identical-branches      # if/else with identical bodies
         - name: max-control-nesting     # "Reduce Nesting"
@@ -119,6 +129,7 @@ linters:
         - name: string-of-int           # string(intValue) conversions
         - name: unconditional-recursion
         - name: unnecessary-stmt
+        - name: use-any                 # interface{} -> any
         - name: useless-break
         - name: waitgroup-by-value      # "Zero-value Mutexes are Valid"
     staticcheck:

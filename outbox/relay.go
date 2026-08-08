@@ -91,7 +91,7 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 		return fmt.Errorf("database not available: %w", err)
 	}
 	if db == nil {
-		return fmt.Errorf("database not available")
+		return errors.New("database not available")
 	}
 
 	// Resolve the broker, but TOLERATE an unresolved/not-ready broker rather than
@@ -220,7 +220,7 @@ func brokerUnavailableErr(msgErr error) error {
 	if msgErr != nil {
 		return fmt.Errorf("messaging not available: %w", msgErr)
 	}
-	return fmt.Errorf("messaging not ready")
+	return errors.New("messaging not ready")
 }
 
 // publishRecord attempts to publish a single outbox record and returns the bookkeeping

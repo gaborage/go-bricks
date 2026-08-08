@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -223,7 +224,7 @@ func (s *Server) Start() error {
 		Str("service", s.cfg.App.Name).
 		Str("version", s.cfg.App.Version).
 		Str("env", s.cfg.App.Env).
-		Str("port", fmt.Sprint(s.cfg.Server.Port)).
+		Str("port", strconv.Itoa(s.cfg.Server.Port)).
 		Str("address", addr).
 		Bool("tls", s.cfg.Server.TLS.Enabled).
 		Msg("Starting server...")

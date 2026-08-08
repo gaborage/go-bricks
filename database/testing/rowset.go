@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -215,7 +216,7 @@ func (c *rowSetConnector) Driver() driver.Driver {
 type rowSetDriver struct{}
 
 func (rowSetDriver) Open(string) (driver.Conn, error) {
-	return nil, fmt.Errorf("rowSetDriver must be used via connector")
+	return nil, errors.New("rowSetDriver must be used via connector")
 }
 
 type rowSetConn struct {
@@ -224,13 +225,13 @@ type rowSetConn struct {
 }
 
 func (c *rowSetConn) Prepare(string) (driver.Stmt, error) {
-	return nil, fmt.Errorf("Prepare not supported for rowSetConn")
+	return nil, errors.New("Prepare not supported for rowSetConn")
 }
 
 func (c *rowSetConn) Close() error { return nil }
 
 func (c *rowSetConn) Begin() (driver.Tx, error) {
-	return nil, fmt.Errorf("transactions not supported for rowSetConn")
+	return nil, errors.New("transactions not supported for rowSetConn")
 }
 
 func (c *rowSetConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {

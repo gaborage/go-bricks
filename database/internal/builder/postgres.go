@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -25,7 +26,7 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	sort.Strings(cc)
 
 	if len(cc) == 0 {
-		return "", nil, fmt.Errorf("conflict columns required for PostgreSQL upsert")
+		return "", nil, errors.New("conflict columns required for PostgreSQL upsert")
 	}
 
 	escapedCC := qb.escapeIdentifiers(cc)

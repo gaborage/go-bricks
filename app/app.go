@@ -116,7 +116,7 @@ func (a *App) buildMessagingDeclarations() error {
 	}
 
 	if a.registry == nil {
-		return fmt.Errorf("module registry not initialized")
+		return errors.New("module registry not initialized")
 	}
 
 	decls := messaging.NewDeclarations()

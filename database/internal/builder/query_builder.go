@@ -5,6 +5,7 @@ package builder
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -329,12 +330,12 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 
 	for _, fieldName := range fields {
 		col := cols.Col(fieldName)
-		if val, ok := fieldMap[col]; ok {
-			columns = append(columns, col)
-			values = append(values, val)
-		} else {
+		val, ok := fieldMap[col]
+		if !ok {
 			panic(fmt.Sprintf("field %q not found in struct", fieldName))
 		}
+		columns = append(columns, col)
+		values = append(values, val)
 	}
 
 	return &InsertQueryBuilder{
@@ -511,7 +512,7 @@ func (qb *QueryBuilder) BuildJSONContains(column string, value any) squirrel.Sql
 		quotedColumn := qb.quoteColumnForQuery(column)
 		return squirrel.Expr(quotedColumn+" @> ?::jsonb", jsonStr)
 	case dbtypes.Oracle:
-		return errorSqlizer{err: fmt.Errorf("JSONContains: Oracle support not implemented; see https://github.com/gaborage/go-bricks/issues/341")}
+		return errorSqlizer{err: errors.New("JSONContains: Oracle support not implemented; see https://github.com/gaborage/go-bricks/issues/341")}
 	default:
 		return errorSqlizer{err: fmt.Errorf("JSONContains: unsupported vendor %q", qb.vendor)}
 	}
@@ -530,7 +531,7 @@ func jsonContainsPayload(value any) (string, error) {
 			return jsonLiteralNull, nil
 		}
 		if !json.Valid(data) {
-			return "", fmt.Errorf("invalid pre-encoded JSON")
+			return "", errors.New("invalid pre-encoded JSON")
 		}
 		return string(data), nil
 	}
@@ -1082,7 +1083,7 @@ func (sqb *SelectQueryBuilder) Paginate(limit, offset uint64) dbtypes.SelectQuer
 // ValidateForSubquery provides lightweight validation without forcing SQL rendering.
 func (sqb *SelectQueryBuilder) ValidateForSubquery() error {
 	if sqb == nil {
-		return fmt.Errorf("subquery cannot be nil")
+		return errors.New("subquery cannot be nil")
 	}
 
 	return sqb.err
@@ -1093,21 +1094,24 @@ func (sqb *SelectQueryBuilder) buildSelectBuilder() squirrel.SelectBuilder {
 	builder := sqb.selectBuilder
 
 	// Apply pagination based on vendor
-	if sqb.limit > 0 || sqb.offset > 0 {
-		if sqb.qb.vendor == dbtypes.Oracle {
-			// Oracle 12c+ uses OFFSET...FETCH syntax
-			if clause := buildOraclePaginationClause(int(sqb.limit), int(sqb.offset)); clause != "" { //#nosec G115 -- pagination values are realistic LIMIT/OFFSET, well within int range
-				builder = builder.Suffix(clause)
-			}
-		} else {
-			// Standard SQL LIMIT/OFFSET for PostgreSQL and others
-			if sqb.limit > 0 {
-				builder = builder.Limit(sqb.limit)
-			}
-			if sqb.offset > 0 {
-				builder = builder.Offset(sqb.offset)
-			}
+	if sqb.limit == 0 && sqb.offset == 0 {
+		return builder
+	}
+
+	if sqb.qb.vendor == dbtypes.Oracle {
+		// Oracle 12c+ uses OFFSET...FETCH syntax
+		if clause := buildOraclePaginationClause(sqb.limit, sqb.offset); clause != "" {
+			builder = builder.Suffix(clause)
 		}
+		return builder
+	}
+
+	// Standard SQL LIMIT/OFFSET for PostgreSQL and others
+	if sqb.limit > 0 {
+		builder = builder.Limit(sqb.limit)
+	}
+	if sqb.offset > 0 {
+		builder = builder.Offset(sqb.offset)
 	}
 
 	return builder
@@ -1197,12 +1201,12 @@ func (uqb *UpdateQueryBuilder) SetStruct(instance any, fields ...string) dbtypes
 	if len(fields) > 0 {
 		for _, fieldName := range fields {
 			col := cols.Col(fieldName)
-			if val, ok := fieldMap[col]; ok {
-				quotedCol := uqb.qb.quoteColumnForQuery(col)
-				uqb.updateBuilder = uqb.updateBuilder.Set(quotedCol, val)
-			} else {
+			val, ok := fieldMap[col]
+			if !ok {
 				panic(fmt.Sprintf("field %q not found in struct", fieldName))
 			}
+			quotedCol := uqb.qb.quoteColumnForQuery(col)
+			uqb.updateBuilder = uqb.updateBuilder.Set(quotedCol, val)
 		}
 	} else {
 		// Use all fields

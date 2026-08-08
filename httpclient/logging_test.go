@@ -178,7 +178,7 @@ func TestClientLogRequest(t *testing.T) {
 			},
 		}
 
-		req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/users", http.NoBody)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/users", http.NoBody)
 		assert.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer token")
 		req.Header.Set(testContentTypeHeader, testContentType)
@@ -212,7 +212,7 @@ func TestClientLogRequest(t *testing.T) {
 			config: &Config{LogPayloads: false},
 		}
 
-		req, err := http.NewRequestWithContext(context.Background(), "GET", "https://api.example.com/status", http.NoBody)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://api.example.com/status", http.NoBody)
 		assert.NoError(t, err)
 
 		c.logRequest(req, nil, "trace-456")
@@ -242,7 +242,7 @@ func TestClientLogRequest(t *testing.T) {
 			},
 		}
 
-		req, err := http.NewRequestWithContext(context.Background(), "PUT", "https://api.example.com/resource", http.NoBody)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, "https://api.example.com/resource", http.NoBody)
 		assert.NoError(t, err)
 		req.Header.Set("X-API-Key", "secret")
 		req.Header.Set(testContentTypeHeader, testContentType)
@@ -281,7 +281,7 @@ func TestClientLogRequest(t *testing.T) {
 			},
 		}
 
-		req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/upload", http.NoBody)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/upload", http.NoBody)
 		assert.NoError(t, err)
 
 		largeBody := []byte("This is a very long body that should be truncated for logging purposes")
@@ -299,6 +299,32 @@ func TestClientLogRequest(t *testing.T) {
 		assert.Nil(t, debugEvent.fields["body_preview"])
 	})
 
+	t.Run("request with body exactly at the limit is not truncated", func(t *testing.T) {
+		fakeLog := &fakeLogger{}
+		c := &client{
+			logger: fakeLog,
+			config: &Config{
+				LogPayloads:        true,
+				MaxPayloadLogBytes: 10,
+			},
+		}
+
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/upload", http.NoBody)
+		assert.NoError(t, err)
+
+		// Exactly MaxPayloadLogBytes: pins the boundary as `>` and not `>=`,
+		// which would report a truncation that did not happen.
+		exactBody := []byte("0123456789")
+		c.logRequest(req, exactBody, "trace-exact")
+
+		debugEvents := fakeLog.eventsByLevel("debug")
+		assert.Len(t, debugEvents, 1)
+
+		debugEvent := debugEvents[0]
+		assert.Equal(t, len(exactBody), debugEvent.fields["body_size"])
+		assert.Equal(t, "false", debugEvent.fields["body_truncated"])
+	})
+
 	t.Run("request with zero MaxPayloadLogBytes uses default", func(t *testing.T) {
 		fakeLog := &fakeLogger{}
 		c := &client{
@@ -309,7 +335,7 @@ func TestClientLogRequest(t *testing.T) {
 			},
 		}
 
-		req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/test", http.NoBody)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/test", http.NoBody)
 		assert.NoError(t, err)
 
 		// Create a body larger than 1024 bytes
@@ -530,7 +556,7 @@ func TestLoggingIntegration(t *testing.T) {
 		assert.Equal(t, 1024, clientImpl.config.MaxPayloadLogBytes)
 
 		// Test that logging methods work
-		req, err := http.NewRequestWithContext(context.Background(), "GET", "http://test.com", http.NoBody)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://test.com", http.NoBody)
 
 		if err != nil {
 			t.Fatalf("failed to create request: %v", err)
@@ -555,7 +581,7 @@ func TestLoggingIntegration(t *testing.T) {
 			},
 		}
 
-		req, err := http.NewRequestWithContext(context.Background(), "POST", "http://test.com", http.NoBody)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://test.com", http.NoBody)
 
 		if err != nil {
 			t.Fatalf("failed to create request: %v", err)
@@ -638,7 +664,7 @@ func TestClientLogRequestJSONBodyParsedAsMap(t *testing.T) {
 		},
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/auth", http.NoBody)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/auth", http.NoBody)
 	assert.NoError(t, err)
 	req.Header.Set(testContentTypeHeader, testContentType)
 
@@ -720,7 +746,7 @@ func TestClientLogRequestRedactsURL(t *testing.T) {
 				},
 			}
 
-			req, err := http.NewRequestWithContext(context.Background(), "GET", tc.rawURL, http.NoBody)
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, tc.rawURL, http.NoBody)
 			assert.NoError(t, err)
 
 			c.logRequest(req, nil, "trace-redact")
@@ -761,7 +787,7 @@ func TestLogBodyPreviewPrimitiveRootDropped(t *testing.T) {
 				config: &Config{LogPayloads: true, MaxPayloadLogBytes: 512},
 			}
 
-			req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/x", http.NoBody)
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/x", http.NoBody)
 			assert.NoError(t, err)
 			req.Header.Set(testContentTypeHeader, testContentType)
 
@@ -790,7 +816,7 @@ func TestLogBodyPreviewMalformedJSONLogsDroppedCount(t *testing.T) {
 
 	// A 10-byte truncation of valid JSON produces invalid JSON (cut mid-token)
 	body := []byte(`{"username": "alice", "password": "s3cr3t"}`)
-	req, err := http.NewRequestWithContext(context.Background(), "POST", "https://api.example.com/x", http.NoBody)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/x", http.NoBody)
 	assert.NoError(t, err)
 	req.Header.Set(testContentTypeHeader, testContentType)
 

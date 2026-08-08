@@ -3,6 +3,7 @@ package oracle
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -47,7 +48,7 @@ func (c *tzConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	execer, ok := conn.(driver.ExecerContext)
 	if !ok {
 		_ = conn.Close()
-		return nil, fmt.Errorf("oracle driver.Conn does not implement driver.ExecerContext; cannot apply session timezone")
+		return nil, errors.New("oracle driver.Conn does not implement driver.ExecerContext; cannot apply session timezone")
 	}
 	if _, err := execer.ExecContext(ctx, c.stmt, nil); err != nil {
 		_ = conn.Close()

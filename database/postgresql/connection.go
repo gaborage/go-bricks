@@ -3,6 +3,7 @@ package postgresql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -135,7 +136,7 @@ func buildPostgresDSN(cfg *config.DatabaseConfig) string {
 // It validates cfg, builds or uses the provided DSN, sets pool options, ensures connectivity with a ping, logs success, and returns the wrapped Connection or an error.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("database configuration is required")
+		return nil, errors.New("database configuration is required")
 	}
 	var dsn string
 	if cfg.ConnectionString != "" {

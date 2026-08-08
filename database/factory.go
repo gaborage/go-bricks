@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
@@ -27,7 +28,7 @@ import (
 // tenant, where absence is never legitimate. See ADR-047.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (Interface, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("database configuration is nil")
+		return nil, errors.New("database configuration is nil")
 	}
 
 	var conn Interface

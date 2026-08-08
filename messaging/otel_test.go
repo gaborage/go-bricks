@@ -428,7 +428,7 @@ func setupReadyClient(t *testing.T) (*AMQPClientImpl, *fakeConnAdapter, *fakeCha
 	return client, fakeConn, fakeCh
 }
 
-func assertAttribute(t *testing.T, attrs []attribute.KeyValue, key string, expectedValue interface{}) {
+func assertAttribute(t *testing.T, attrs []attribute.KeyValue, key string, expectedValue any) {
 	t.Helper()
 
 	for _, attr := range attrs {
@@ -460,10 +460,10 @@ func (l *testLogger) Error() logger.LogEvent { return &testLogEvent{l.t, "ERROR"
 func (l *testLogger) Debug() logger.LogEvent { return &testLogEvent{l.t, "DEBUG"} }
 func (l *testLogger) Warn() logger.LogEvent  { return &testLogEvent{l.t, "WARN"} }
 func (l *testLogger) Fatal() logger.LogEvent { return &testLogEvent{l.t, "FATAL"} }
-func (l *testLogger) WithContext(_ interface{}) logger.Logger {
+func (l *testLogger) WithContext(_ any) logger.Logger {
 	return l
 }
-func (l *testLogger) WithFields(_ map[string]interface{}) logger.Logger {
+func (l *testLogger) WithFields(_ map[string]any) logger.Logger {
 	return l
 }
 

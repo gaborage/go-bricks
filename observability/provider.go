@@ -160,7 +160,7 @@ func NewProvider(cfg *Config) (Provider, error) {
 // provider is returned regardless of ctx.
 func NewProviderWithContext(ctx context.Context, cfg *Config) (Provider, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("observability config is nil")
+		return nil, errors.New("observability config is nil")
 	}
 	debugLogger.Printf("NewProviderWithContext called - enabled=%v, service=%s", cfg.Enabled, cfg.Service.Name)
 

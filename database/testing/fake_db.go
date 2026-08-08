@@ -31,6 +31,7 @@ package testing
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -357,7 +358,7 @@ func (db *TestDB) Begin(_ context.Context) (dbtypes.Tx, error) {
 	defer db.mu.Unlock()
 
 	if len(db.txExpectations) == 0 {
-		return nil, fmt.Errorf("unexpected Begin() call (use ExpectTransaction)")
+		return nil, errors.New("unexpected Begin() call (use ExpectTransaction)")
 	}
 
 	txExp := db.txExpectations[0]
@@ -380,7 +381,7 @@ func (db *TestDB) BeginTx(ctx context.Context, _ *sql.TxOptions) (dbtypes.Tx, er
 
 // Prepare implements database.Interface.Prepare (rarely used in tests).
 func (db *TestDB) Prepare(_ context.Context, _ string) (dbtypes.Statement, error) {
-	return nil, fmt.Errorf("Prepare() not implemented in TestDB (prepared statements rarely needed in tests)")
+	return nil, errors.New("Prepare() not implemented in TestDB (prepared statements rarely needed in tests)")
 }
 
 // Health implements database.Interface.Health.
@@ -452,7 +453,7 @@ func (r *testRow) Scan(dest ...any) error {
 		return r.err
 	}
 	if r.scanned {
-		return fmt.Errorf("row already scanned")
+		return errors.New("row already scanned")
 	}
 	if len(dest) != len(r.values) {
 		return fmt.Errorf("scan expects %d values, got %d", len(dest), len(r.values))
@@ -946,29 +947,29 @@ func setDestNil(dest any) error {
 		// Match database/sql error format for scalar types
 		switch dest.(type) {
 		case *string:
-			return fmt.Errorf("sql: converting NULL to string is unsupported")
+			return errors.New("sql: converting NULL to string is unsupported")
 		case *int:
-			return fmt.Errorf("sql: converting NULL to int is unsupported")
+			return errors.New("sql: converting NULL to int is unsupported")
 		case *int64:
-			return fmt.Errorf("sql: converting NULL to int64 is unsupported")
+			return errors.New("sql: converting NULL to int64 is unsupported")
 		case *int32:
-			return fmt.Errorf("sql: converting NULL to int32 is unsupported")
+			return errors.New("sql: converting NULL to int32 is unsupported")
 		case *bool:
-			return fmt.Errorf("sql: converting NULL to bool is unsupported")
+			return errors.New("sql: converting NULL to bool is unsupported")
 		case *float64:
-			return fmt.Errorf("sql: converting NULL to float64 is unsupported")
+			return errors.New("sql: converting NULL to float64 is unsupported")
 		case *time.Time:
-			return fmt.Errorf("sql: converting NULL to time.Time is unsupported")
+			return errors.New("sql: converting NULL to time.Time is unsupported")
 		case *uint:
-			return fmt.Errorf("sql: converting NULL to uint is unsupported")
+			return errors.New("sql: converting NULL to uint is unsupported")
 		case *uint64:
-			return fmt.Errorf("sql: converting NULL to uint64 is unsupported")
+			return errors.New("sql: converting NULL to uint64 is unsupported")
 		case *uint32:
-			return fmt.Errorf("sql: converting NULL to uint32 is unsupported")
+			return errors.New("sql: converting NULL to uint32 is unsupported")
 		case *uint16:
-			return fmt.Errorf("sql: converting NULL to uint16 is unsupported")
+			return errors.New("sql: converting NULL to uint16 is unsupported")
 		case *uint8:
-			return fmt.Errorf("sql: converting NULL to uint8 is unsupported")
+			return errors.New("sql: converting NULL to uint8 is unsupported")
 		default:
 			return fmt.Errorf("unsupported scan destination type %T", dest)
 		}

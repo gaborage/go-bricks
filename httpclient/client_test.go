@@ -681,7 +681,7 @@ func TestInterceptorErrors(t *testing.T) {
 		defer server.Close()
 
 		reqInterceptor := func(_ context.Context, _ *nethttp.Request) error {
-			return fmt.Errorf("boom")
+			return errors.New("boom")
 		}
 
 		client, buildErr := NewBuilder(log).
@@ -702,7 +702,7 @@ func TestInterceptorErrors(t *testing.T) {
 		defer server.Close()
 
 		respInterceptor := func(_ context.Context, _ *nethttp.Request, _ *nethttp.Response) error {
-			return fmt.Errorf("boom resp")
+			return errors.New("boom resp")
 		}
 
 		client, buildErr := NewBuilder(log).
@@ -1351,7 +1351,7 @@ func TestHTTPClientMetricsBuildResponseFailureRecorded(t *testing.T) {
 	defer server.Close()
 
 	respInterceptor := func(_ context.Context, _ *nethttp.Request, _ *nethttp.Response) error {
-		return fmt.Errorf("interceptor boom")
+		return errors.New("interceptor boom")
 	}
 
 	log := createTestLogger()

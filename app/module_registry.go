@@ -275,7 +275,7 @@ func (r *ModuleRegistry) CollectGlobalMiddleware() []server.MiddlewareFunc {
 // Modules without messaging declarations are silently skipped.
 func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
 	if decls == nil {
-		return fmt.Errorf("declarations store is nil")
+		return errors.New("declarations store is nil")
 	}
 
 	for _, module := range r.modules {

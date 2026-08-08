@@ -441,7 +441,7 @@ func TestRuntimeMetricsDisabledWhenMetricsDisabled(t *testing.T) {
 }
 
 // assertMetricExists checks if a metric with the given name exists in the exported metrics.
-func assertMetricExists(t *testing.T, metrics []metricdata.ResourceMetrics, name string, msgAndArgs ...interface{}) {
+func assertMetricExists(t *testing.T, metrics []metricdata.ResourceMetrics, name string, msgAndArgs ...any) {
 	t.Helper()
 
 	for _, rm := range metrics {

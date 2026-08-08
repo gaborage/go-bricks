@@ -178,7 +178,7 @@ func Encrypt(payload []byte, key *rsa.PublicKey, opts *EncryptOptions) (string, 
 	return compact, nil
 }
 
-func extractStringExtra(extras map[jose.HeaderKey]interface{}, key jose.HeaderKey) string {
+func extractStringExtra(extras map[jose.HeaderKey]any, key jose.HeaderKey) string {
 	if extras == nil {
 		return ""
 	}

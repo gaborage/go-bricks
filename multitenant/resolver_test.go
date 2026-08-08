@@ -22,7 +22,7 @@ const (
 // setupTestRequest creates an HTTP request for testing resolvers
 func setupTestRequest(host string, headers map[string]string) *http.Request {
 	ctx := context.Background()
-	req, _ := http.NewRequestWithContext(ctx, "GET", "http://"+host+"/test", http.NoBody)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+host+"/test", http.NoBody)
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
@@ -446,7 +446,7 @@ func TestSubdomainResolverResolveTenant(t *testing.T) {
 // setupPathRequest creates an HTTP request with a specific URL path for path-resolver tests.
 func setupPathRequest(rawURL string) *http.Request {
 	ctx := context.Background()
-	req, _ := http.NewRequestWithContext(ctx, "GET", "http://example.com"+rawURL, http.NoBody)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.com"+rawURL, http.NoBody)
 	return req
 }
 

@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"runtime/debug"
@@ -263,7 +264,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	}
 
 	if r.client == nil {
-		return fmt.Errorf("AMQP client is not available")
+		return errors.New("AMQP client is not available")
 	}
 
 	// Wait for AMQP client to be ready with timeout. Shares its poll loop with
@@ -280,7 +281,7 @@ func (r *Registry) DeclareInfrastructure(ctx context.Context) error {
 	case readyWaitCanceled:
 		return fmt.Errorf("context canceled while waiting for AMQP client: %w", ctx.Err())
 	default: // readyWaitTimedOut (readyWaitDone is unreachable: done is nil)
-		return fmt.Errorf("timeout waiting for AMQP client to be ready")
+		return errors.New("timeout waiting for AMQP client to be ready")
 	}
 
 	r.logger.Info().
@@ -339,7 +340,7 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 	}
 
 	if r.client == nil || !r.client.IsReady() {
-		return fmt.Errorf("AMQP client is not ready")
+		return errors.New("AMQP client is not ready")
 	}
 
 	// Count consumers with handlers

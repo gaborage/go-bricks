@@ -213,7 +213,7 @@ func toBool(value any) (bool, error) {
 // floatToInt64 converts float64 to int64 with validation.
 func floatToInt64(value float64) (int64, error) {
 	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0, fmt.Errorf("invalid float value")
+		return 0, errors.New("invalid float value")
 	}
 	if math.Trunc(value) != value {
 		return 0, fmt.Errorf("value %v is not an integer", value)

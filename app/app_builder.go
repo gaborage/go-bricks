@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -52,7 +53,7 @@ func (b *Builder) CreateLogger() *Builder {
 	}
 
 	if b.cfg == nil {
-		b.err = fmt.Errorf("configuration required before creating logger")
+		b.err = errors.New("configuration required before creating logger")
 		return b
 	}
 
@@ -129,7 +130,7 @@ func (b *Builder) CreateBootstrap() *Builder {
 	}
 
 	if b.logger == nil {
-		b.err = fmt.Errorf("logger required before creating bootstrap")
+		b.err = errors.New("logger required before creating bootstrap")
 		return b
 	}
 
@@ -144,7 +145,7 @@ func (b *Builder) ResolveDependencies() *Builder {
 	}
 
 	if b.bootstrap == nil {
-		b.err = fmt.Errorf("bootstrap required before resolving dependencies")
+		b.err = errors.New("bootstrap required before resolving dependencies")
 		return b
 	}
 
@@ -169,7 +170,7 @@ func (b *Builder) CreateApp() *Builder {
 	}
 
 	if b.bundle == nil {
-		b.err = fmt.Errorf("dependencies required before creating app")
+		b.err = errors.New("dependencies required before creating app")
 		return b
 	}
 
@@ -199,7 +200,7 @@ func (b *Builder) InitializeRegistry() *Builder {
 	}
 
 	if b.app == nil {
-		b.err = fmt.Errorf("app instance required before initializing registry")
+		b.err = errors.New("app instance required before initializing registry")
 		return b
 	}
 
@@ -218,7 +219,7 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 	}
 
 	if b.app == nil {
-		b.err = fmt.Errorf("app instance required before configuring runtime helpers")
+		b.err = errors.New("app instance required before configuring runtime helpers")
 		return b
 	}
 
@@ -445,7 +446,7 @@ func (b *Builder) CreateHealthProbes() *Builder {
 	}
 
 	if b.app == nil {
-		b.err = fmt.Errorf("app instance required before creating health probes")
+		b.err = errors.New("app instance required before creating health probes")
 		return b
 	}
 
@@ -516,7 +517,7 @@ func (b *Builder) RegisterClosers() *Builder {
 	}
 
 	if b.app == nil {
-		b.err = fmt.Errorf("app instance required before registering closers")
+		b.err = errors.New("app instance required before registering closers")
 		return b
 	}
 
@@ -540,7 +541,7 @@ func (b *Builder) RegisterReadyHandler() *Builder {
 	}
 
 	if b.app == nil {
-		b.err = fmt.Errorf("app instance required before registering ready handler")
+		b.err = errors.New("app instance required before registering ready handler")
 		return b
 	}
 
@@ -563,7 +564,7 @@ func (b *Builder) Build() (*App, logger.Logger, error) {
 	}
 
 	if b.app == nil {
-		return nil, log, fmt.Errorf("app building incomplete")
+		return nil, log, errors.New("app building incomplete")
 	}
 
 	return b.app, log, nil

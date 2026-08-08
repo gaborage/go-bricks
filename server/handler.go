@@ -362,7 +362,7 @@ func (ra *requestAllocator[T]) allocate() (request T, requestPtr any) {
 // Returns an error for nil pointers, nil for value types or non-nil pointers.
 func (ra *requestAllocator[T]) validateNotNil(request T) error {
 	if ra.isPointer && reflect.ValueOf(request).IsNil() {
-		return fmt.Errorf("request cannot be nil")
+		return errors.New("request cannot be nil")
 	}
 	return nil
 }
@@ -1092,7 +1092,7 @@ func parseTime(s string) (time.Time, error) {
 		lastErr = err
 	}
 	if lastErr == nil {
-		lastErr = fmt.Errorf("unable to parse time")
+		lastErr = errors.New("unable to parse time")
 	}
 	return time.Time{}, lastErr
 }
