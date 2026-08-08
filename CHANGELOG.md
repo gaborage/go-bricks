@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.58.0](https://github.com/gaborage/go-bricks/compare/v0.57.0...v0.58.0) (2026-08-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **observability:** log records stop duplicating resource identity ([#929](https://github.com/gaborage/go-bricks/issues/929))
+* **logger:** reserve resource-identity namespaces in OTel bridge ([#920](https://github.com/gaborage/go-bricks/issues/920))
+* **jose:** remove dead PolicyRegistry from the public API ([#916](https://github.com/gaborage/go-bricks/issues/916))
+* **app:** fail startup when the cache manager cannot be built ([#919](https://github.com/gaborage/go-bricks/issues/919))
+* **server:** remove unreferenced Test*Timeout constants ([#917](https://github.com/gaborage/go-bricks/issues/917))
+
+### Fixed
+
+* **app:** fail startup when the cache manager cannot be built ([#919](https://github.com/gaborage/go-bricks/issues/919)) ([a0e3ceb](https://github.com/gaborage/go-bricks/commit/a0e3ceb44e12754da644f8b2cbcffccf4b7894d7))
+* **database:** keep Oracle pagination above math.MaxInt ([#922](https://github.com/gaborage/go-bricks/issues/922)) ([378e4ba](https://github.com/gaborage/go-bricks/commit/378e4bad95299bebe6b9e5a6cbf6603c45f0554a))
+* **deps:** update module github.com/gaborage/go-bricks to v0.57.0 ([#911](https://github.com/gaborage/go-bricks/issues/911)) ([b0627b2](https://github.com/gaborage/go-bricks/commit/b0627b264626f0cb7dfe4fdb93513cc6ad97ec3b))
+* **jose:** remove dead PolicyRegistry from the public API ([#916](https://github.com/gaborage/go-bricks/issues/916)) ([3f90ddc](https://github.com/gaborage/go-bricks/commit/3f90ddc3436ceedc925457a3d350fe302bc16364))
+* **logger:** reserve resource-identity namespaces in OTel bridge ([#920](https://github.com/gaborage/go-bricks/issues/920)) ([099cd40](https://github.com/gaborage/go-bricks/commit/099cd40ddf2629a423e80c7f8afe41cd884cf48e))
+* **observability:** log records stop duplicating resource identity ([#929](https://github.com/gaborage/go-bricks/issues/929)) ([eca4ee1](https://github.com/gaborage/go-bricks/commit/eca4ee1e45968a5aa8089d16a4f7a66ca46e1367))
+* **server:** remove unreferenced Test*Timeout constants ([#917](https://github.com/gaborage/go-bricks/issues/917)) ([b633b17](https://github.com/gaborage/go-bricks/commit/b633b17cd0aa7e8c688839b2ef96085f64ebf101))
+
+
+### Changed
+
+* **mutatediff:** cache clean per-package mutation results ([#923](https://github.com/gaborage/go-bricks/issues/923)) ([6e7717e](https://github.com/gaborage/go-bricks/commit/6e7717e886338bdd9f799a0162b6b76f8bf8bcce))
+* **observability:** stop allocating per log record on export ([#918](https://github.com/gaborage/go-bricks/issues/918)) ([8e20490](https://github.com/gaborage/go-bricks/commit/8e2049094fb421a0910d605fded11ebefdbfdb33))
+
 ## [0.57.0](https://github.com/gaborage/go-bricks/compare/v0.56.0...v0.57.0) (2026-08-07)
 
 
