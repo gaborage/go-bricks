@@ -66,10 +66,19 @@ func newCacheFixture(t *testing.T) *cacheFixture {
 	return f
 }
 
+// writeModule builds a throwaway module that is also its own git repository,
+// because repoRoot asks git for the top level. The `git init` is what keeps
+// TestResultCacheDisablesItselfOnAnUnlistableTree honest — without it the cache
+// would be nil because the root never resolved, and that test would pass without
+// reaching the `go list` seam it claims to pin — and it stops a TMPDIR nested in
+// a real checkout from resolving to that checkout instead.
 func writeModule(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
+	init := exec.CommandContext(t.Context(), "git", "init")
+	init.Dir = root
+	require.NoError(t, init.Run())
 	for name, body := range files {
 		writeFile(t, root, name, body)
 	}
@@ -285,7 +294,29 @@ func TestResultCacheDisablesItselfOnAnUnlistableTree(t *testing.T) {
 	cache := newResultCache(t.Context(), testEngine, "", &out)
 	require.Nil(t, cache, "a tree go list cannot resolve must not produce a cache")
 	assert.Contains(t, out.String(), "result cache disabled")
+	// Attribution: the disable must come from the `go list` seam this test names,
+	// not from an earlier step failing for its own reasons. The second assertion
+	// is what proves go list's stderr survives into the WARN — without capturing
+	// it the message ends at "exit status 1" and diagnoses nothing.
+	assert.Contains(t, out.String(), "go list for the result cache")
+	assert.Contains(t, out.String(), "main module", "go list's own diagnostic must reach the WARN")
 	assert.False(t, cache.hit(appPkg, map[string][]lineRange{}, &out), "a disabled cache must never hit")
+}
+
+// TestResultCacheRootsAtTheRepositoryTopLevel pins the path space. The changed
+// -line map is built from `git diff`, whose paths are repo-root relative, so the
+// root must be the git top level no matter which directory the tool ran from.
+func TestResultCacheRootsAtTheRepositoryTopLevel(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	t.Setenv("GOFLAGS", "")
+	root := writeModule(t, moduleFiles())
+	t.Chdir(filepath.Join(root, "app"))
+
+	var out bytes.Buffer
+	cache := newResultCache(t.Context(), testEngine, "", &out)
+	require.NotNil(t, cache, "cache init failed: %s", out.String())
+	assert.Equal(t, root, cache.root, "the root must be the repository top level, not the working directory")
+	assert.Equal(t, filepath.Join(root, cacheDirName), cache.dir, "one cache directory at the top level, not one per invocation directory")
 }
 
 // TestStoreRefusesAResultWhoseSourcesMovedMidRun covers the window the engine

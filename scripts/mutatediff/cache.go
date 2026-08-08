@@ -90,7 +90,7 @@ type resultCache struct {
 // newResultCache builds the fingerprinting machinery once per run. Any failure
 // returns nil — a run without a cache, never a run that skips on a guess.
 func newResultCache(ctx context.Context, engine, callerGoflags string, out io.Writer) *resultCache {
-	root, err := repoRoot()
+	root, err := repoRoot(ctx)
 	if err != nil {
 		fmt.Fprintf(out, "WARN: result cache disabled (%v)\n", err)
 		return nil
@@ -110,17 +110,23 @@ func newResultCache(ctx context.Context, engine, callerGoflags string, out io.Wr
 	return &resultCache{root: root, dir: dir, static: static, graph: graph, keys: map[string]string{}}
 }
 
-// repoRoot resolves symlinks because `go list` reports resolved directories:
-// on macOS a /var/folders working directory would otherwise never be a prefix of
-// the /private/var/folders paths it prints, and every package would look external.
-func repoRoot() (string, error) {
-	wd, err := os.Getwd()
+// repoRoot is the git top-level rather than the working directory, because the
+// changed-line map this cache is keyed against comes from `git diff`, whose
+// paths are repo-root relative. A root taken from the invocation directory would
+// put package dirs and changed files in two different path spaces, and would
+// also scatter one cache directory per directory the tool is run from.
+//
+// Symlinks are resolved because `go list` reports resolved directories: on macOS
+// a /var/folders root would otherwise never be a prefix of the
+// /private/var/folders paths it prints, and every package would look external.
+func repoRoot(ctx context.Context) (string, error) {
+	top, err := gitOutput(ctx, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return "", fmt.Errorf("working directory: %w", err)
+		return "", err
 	}
-	resolved, err := filepath.EvalSymlinks(wd)
+	resolved, err := filepath.EvalSymlinks(top)
 	if err != nil {
-		return "", fmt.Errorf("resolve working directory: %w", err)
+		return "", fmt.Errorf("resolve repository root: %w", err)
 	}
 	return resolved, nil
 }
@@ -312,9 +318,17 @@ type packageGraph struct {
 func loadPackageGraph(ctx context.Context, root string) (*packageGraph, error) {
 	cmd := exec.CommandContext(ctx, "go", "list", "-deps", "-test", "-json=ImportPath,Dir,Deps", "./...")
 	cmd.Dir = root
+	// Without this, the WARN in newResultCache — the one diagnostic a developer
+	// gets when the cache turns itself off — reads only "exit status 1".
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("go list for the result cache: %w", err)
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			detail = ": " + detail
+		}
+		return nil, fmt.Errorf("go list for the result cache: %w%s", err, detail)
 	}
 	g := &packageGraph{
 		dirOf:  map[string]string{},
