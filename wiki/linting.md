@@ -105,7 +105,7 @@ because they follow from patterns the framework encourages.
 | `wrapcheck` | 321 | Directly contradicts "wrap once at boundaries". Adopting it means wrapping at every call depth. |
 | `revive: unused-receiver` | 302 | Pure style, no guide backing. |
 | `revive: struct-tag` | 24 | False-positives the jose `_ struct{}` marker idiom and any runtime-registered custom validator (`validate:"mcc_code"`). |
-| `revive: datarace` | 3 | All false positives — a syntactic check that cannot see mutex protection. `go test -race` covers the class soundly. |
+| `revive: datarace` | 3 | All false positives — a syntactic check that cannot see mutex protection. `go test -race` is the better tool, but it detects races only on paths a test actually executes and does not prove their absence. |
 | `predeclared` | 0 | Redundant with revive's `redefines-builtin-id`, which is already in the default set. |
 | `gochecknoglobals` | 106 | Sentinel errors and `sync.Pool` instances are legitimate globals. |
 | `mnd` | 156 | Magic-number detection is noisy against HTTP status codes and durations. |
@@ -116,8 +116,11 @@ GoBricks because it requires a real `go.mod` dependency on `github.com/quasilyte
 which for a public library lands in every consumer's module graph. **In a service, that
 objection does not apply** — if you want executable house rules, ruleguard is a reasonable
 choice for you even though it was wrong for us. Two things to know: the rules-file path is
-resolved relative to the working directory (sub-modules break), and `failOn: dsl` is
-mandatory or a rules file that fails to load is silently empty.
+resolved relative to the working directory (sub-modules break), and you must set
+`failOn: dsl,import` (or `all`) or a rules file that fails to load is silently empty.
+`failOn: dsl` alone is not enough — it catches DSL syntax errors but still logs-and-skips
+when an import cannot be resolved, which is the most likely failure since the rules file
+must import `.../go-ruleguard/dsl`.
 
 ## Measuring before you adopt
 
@@ -141,10 +144,19 @@ for it:
 golangci-lint run ./... 2>&1 | grep -E 'level=error|cannot find rule'
 ```
 
-**`revive.rules` REPLACES the default set.** It does not extend it. If you declare any
-rules, you must re-declare every default you still want — GoBricks' config lists all 23
-above its additions for exactly this reason. Dropping one removes enforcement with no
-signal.
+**`revive.rules` REPLACES the default set** when `enable-default-rules` is omitted. It does
+not extend it, so declaring any rule silently drops every default you did not re-list.
+GoBricks re-declares all 23 above its additions for that reason. The alternative is
+`enable-default-rules: true`, which keeps the defaults without re-declaration:
+
+```yaml
+revive:
+  enable-default-rules: true   # keep the golint-equivalent set
+  rules:
+    - name: early-return       # additions only
+```
+
+That is the shorter path for a new config. It cannot be combined with `enable-all-rules`.
 
 Because of all three, a reading of "0 findings" is ambiguous between *no violations*, *the
 rule never ran*, and *another linter claimed the line*. Prove a rule fires by planting a
@@ -163,9 +175,12 @@ error (`can't load config: gofumpt is a formatter`); they belong in a top-level
   `check` target is `fmt lint ...`, it will reformat and then fail lint anyway. Point `fmt`
   at `golangci-lint fmt`.
 
-`golangci-lint fmt` walks **files**, while `run` loads **packages** — so `fmt` reaches
-build-tagged files (`//go:build integration`) that `run` never sees. If you have
-build-tagged code, `fmt` is the only thing keeping it formatted.
+`golangci-lint fmt` walks **files**, while `run` loads **packages** under the build tags it
+was invoked with. So `fmt` reaches build-tagged files (`//go:build integration`)
+unconditionally, whereas `run` sees them only when passed a matching
+`--build-tags=integration`. GoBricks' `make lint` and CI jobs do not pass it, so `fmt` is
+the only thing keeping those files formatted here — check your own invocations before
+assuming the same.
 
 ## Related
 
