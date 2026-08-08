@@ -64,8 +64,8 @@ Recheck your own exclusions periodically: an exclusion that matches on message `
 matching when the linter rewords the message, and it fails **silently** in either
 direction. GoBricks carried two `text: "var-naming: avoid package names"` stanzas that were
 dead from revive v1.15.0 onward, when that check moved to a separate rule and the wording
-changed. Nothing was being suppressed, and nothing said so — deleting them changed no
-findings. Prefer scoping by `path` and `linters` over matching message text.
+changed. Those two stanzas were suppressing nothing, and nothing said so — deleting them
+changed no findings. Prefer scoping by `path` and `linters` over matching message text.
 
 Keep the `presets` list (`comments`, `common-false-positives`, `legacy`,
 `std-error-handling`) — those are generic.
@@ -170,8 +170,8 @@ linters:
 This is what GoBricks does. It previously re-declared all 23 defaults above its additions,
 which worked but meant deleting one line lost a rule silently. The two spellings are
 equivalent at v2.12.2 — golangci-lint's default list is a verbatim copy of revive's, and
-both resolve to the same rule set — so the flag is strictly safer. It cannot be combined
-with `enable-all-rules`.
+both resolve to the same rule set — so the flag is safer against accidental omissions. It
+cannot be combined with `enable-all-rules`.
 
 Because of all three, a reading of "0 findings" is ambiguous between *no violations*, *the
 rule never ran*, and *another linter claimed the line*. Prove a rule fires by planting a
