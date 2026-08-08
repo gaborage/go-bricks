@@ -1424,7 +1424,6 @@ func TestConnectionRegisterType(t *testing.T) {
 
 		// Register without collection type
 		err := c.RegisterType("PRODUCT_TYPE", "", Product{})
-
 		// Method should exist and handle gracefully (may fail without real Oracle)
 		if err != nil {
 			t.Logf("RegisterType returned error (expected without Oracle): %v", err)
@@ -1436,7 +1435,6 @@ func TestConnectionRegisterType(t *testing.T) {
 
 		// Primary use case: register collection type
 		err := c.RegisterType("PRODUCT_TYPE", "PRODUCT_TABLE", Product{})
-
 		if err != nil {
 			t.Logf("RegisterType with collection returned error: %v", err)
 		}
@@ -1461,7 +1459,6 @@ func TestConnectionRegisterTypeWithOwner(t *testing.T) {
 		}()
 
 		err := c.RegisterTypeWithOwner("SHARED_SCHEMA", "CUSTOMER_TYPE", "", Customer{})
-
 		if err != nil {
 			t.Logf("RegisterTypeWithOwner returned error: %v", err)
 		}
@@ -1478,7 +1475,6 @@ func TestConnectionRegisterTypeWithOwner(t *testing.T) {
 		}()
 
 		err := c.RegisterTypeWithOwner("SHARED_SCHEMA", "CUSTOMER_TYPE", "CUSTOMER_TABLE", Customer{})
-
 		if err != nil {
 			t.Logf("RegisterTypeWithOwner with collection returned error: %v", err)
 		}

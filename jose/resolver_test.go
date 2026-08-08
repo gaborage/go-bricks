@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gaborage/go-bricks/jose"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/jose"
 )
 
 // fakeKS is a minimal in-test stub satisfying jose.KeyStoreLike. Inlined here rather

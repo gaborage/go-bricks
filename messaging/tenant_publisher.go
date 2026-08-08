@@ -2,7 +2,6 @@ package messaging
 
 import (
 	"context"
-
 	"maps"
 
 	amqp "github.com/rabbitmq/amqp091-go"

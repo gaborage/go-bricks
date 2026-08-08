@@ -19,9 +19,11 @@ func (m *mockValidSubquery) JoinOn(_ any, _ JoinFilter) SelectQueryBuilder { ret
 func (m *mockValidSubquery) LeftJoinOn(_ any, _ JoinFilter) SelectQueryBuilder {
 	return m
 }
+
 func (m *mockValidSubquery) RightJoinOn(_ any, _ JoinFilter) SelectQueryBuilder {
 	return m
 }
+
 func (m *mockValidSubquery) InnerJoinOn(_ any, _ JoinFilter) SelectQueryBuilder {
 	return m
 }
@@ -46,9 +48,11 @@ func (m *mockInvalidSubquery) JoinOn(_ any, _ JoinFilter) SelectQueryBuilder { r
 func (m *mockInvalidSubquery) LeftJoinOn(_ any, _ JoinFilter) SelectQueryBuilder {
 	return m
 }
+
 func (m *mockInvalidSubquery) RightJoinOn(_ any, _ JoinFilter) SelectQueryBuilder {
 	return m
 }
+
 func (m *mockInvalidSubquery) InnerJoinOn(_ any, _ JoinFilter) SelectQueryBuilder {
 	return m
 }
@@ -73,9 +77,11 @@ func (m *mockEmptySubquery) JoinOn(_ any, _ JoinFilter) SelectQueryBuilder { ret
 func (m *mockEmptySubquery) LeftJoinOn(_ any, _ JoinFilter) SelectQueryBuilder {
 	return m
 }
+
 func (m *mockEmptySubquery) RightJoinOn(_ any, _ JoinFilter) SelectQueryBuilder {
 	return m
 }
+
 func (m *mockEmptySubquery) InnerJoinOn(_ any, _ JoinFilter) SelectQueryBuilder {
 	return m
 }

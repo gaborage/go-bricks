@@ -15,7 +15,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
-	dbtest "github.com/gaborage/go-bricks/database/testing"
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -506,7 +506,7 @@ func TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval(t *testing.T
 	log := logger.New("error", false)
 
 	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-		return dbtest.NewTestDB("postgresql"), nil
+		return dbtesting.NewTestDB("postgresql"), nil
 	}
 	dbManager := database.NewDbManager(&stubTenantResource{}, log, database.DbManagerOptions{MaxSize: 5, IdleTTL: 10 * time.Millisecond}, connector)
 	defer func() { _ = dbManager.Close() }()

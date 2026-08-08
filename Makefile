@@ -116,8 +116,16 @@ lint: ## Run golangci-lint (pinned + GOWORK=off, mirroring CI; LINT_CLEAN=1 wipe
 lint-md: ## Run markdownlint-cli2 on Markdown files (pinned; globs and ignores come from .markdownlint-cli2.jsonc)
 	npx --yes markdownlint-cli2@$(MARKDOWNLINT_VERSION)
 
-fmt: ## Format Go code
-	go fmt ./...
+# `golangci-lint fmt`, not `go fmt`: .golangci.yml declares a formatters block
+# (gofumpt + gci) and `golangci-lint run` reports its output as ordinary issues
+# ("File is not properly formatted (gci)"). `go fmt` cannot fix either one, so
+# with it here `make check` — which is `fmt lint ...` — would reformat and then
+# fail lint anyway. Same pinned binary as the `lint` target so both agree on the
+# rules. Note the two subcommands cover different file sets: `run` is
+# package-scoped and never loads the //go:build integration files, while `fmt`
+# walks the tree and does reach them (5 of them needed reformatting at adoption).
+fmt: ## Format Go code (gofmt + gofumpt + gci, per .golangci.yml's formatters block)
+	GOWORK=off go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) fmt
 
 update: ## Update dependencies to latest versions
 	go get -u ./...

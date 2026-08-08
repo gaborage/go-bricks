@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
-	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/stretchr/testify/assert"
+
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 const (

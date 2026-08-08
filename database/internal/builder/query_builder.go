@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/squirrel"
+
 	colreg "github.com/gaborage/go-bricks/database/internal/columns"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )

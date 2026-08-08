@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	amqp091 "github.com/rabbitmq/amqp091-go"
+	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -214,11 +214,11 @@ func (f *fakeAMQP) PublishToExchange(ctx context.Context, opts messaging.Publish
 	return err
 }
 
-func (f *fakeAMQP) Consume(_ context.Context, _ string) (<-chan amqp091.Delivery, error) {
+func (f *fakeAMQP) Consume(_ context.Context, _ string) (<-chan amqp.Delivery, error) {
 	return nil, nil
 }
 
-func (f *fakeAMQP) ConsumeFromQueue(_ context.Context, _ messaging.ConsumeOptions) (<-chan amqp091.Delivery, error) {
+func (f *fakeAMQP) ConsumeFromQueue(_ context.Context, _ messaging.ConsumeOptions) (<-chan amqp.Delivery, error) {
 	return nil, nil
 }
 

@@ -20,6 +20,7 @@ linters:
     - goprintffuncname          # checks that printf-like functions are named with f at the end
     - gosec                     # inspects source code for security problems
     - govet                     # reports suspicious constructs (go vet)
+    - importas                  # enforces one alias per import path (uber-go: Import Aliasing)
     - ineffassign               # detects when assignments to existing variables are not used
     - lll                       # reports long lines
     - loggercheck               # checks key-value pairs for common logger libraries (zap, zerolog, ...)
@@ -70,6 +71,33 @@ linters:
     govet:
       enable:
         - shadow  # reports shadowed variables (disabled by default)
+    importas:
+      # Conflict-only map: every entry below is an import path the tree already
+      # aliases two or more different ways, pinned to the alias the majority of
+      # call sites already use. Packages with a single consistent alias are left
+      # out on purpose — listing them would add no findings today and only risk
+      # a version-stamped path (go.opentelemetry.io/otel/semconv/v1.NN.0) going
+      # stale and silently matching nothing after the next bump.
+      #
+      # `no-unaliased` and `no-extra-aliases` stay OFF: either one turns this
+      # 11-site cleanup into a ~40-file sweep over imports that read fine.
+      #
+      # net/http is deliberately absent — 56 unaliased sites against 7 nethttp
+      # and 6 stdhttp is not a convention to ratchet, it is a decision nobody
+      # has made yet.
+      alias:
+        - pkg: github.com/gaborage/go-bricks/database/testing
+          alias: dbtesting
+        - pkg: github.com/gaborage/go-bricks/jose/testing
+          alias: jositest
+        - pkg: github.com/go-jose/go-jose/v4
+          alias: jose
+        - pkg: github.com/rabbitmq/amqp091-go
+          alias: amqp
+        # metricznoop (3 sites) outnumbered metricnoop (2) and otelnoop (2), but
+        # it is a typo — the extra findings buy its deletion.
+        - pkg: go.opentelemetry.io/otel/metric/noop
+          alias: metricnoop
     lll:
       line-length: 215
     misspell:
@@ -119,6 +147,7 @@ linters:
         - name: atomic                  # non-atomic assignment to an atomic value
         - name: bare-return             # "Avoid Naked Returns"
         - name: confusing-results       # unnamed same-type multi-returns
+        - name: deep-exit               # "Exit in Main": os.Exit/log.Fatal outside main/init
         - name: early-return            # "Reduce Nesting"
         - name: defer                   # defer in loop, recover, return-in-defer
         - name: identical-branches      # if/else with identical bodies
@@ -178,6 +207,54 @@ linters:
           - revive
         path: "trace/"
         text: "var-naming: avoid package names"
+      # cmd/seal-payload is the only file set that imports BOTH go-jose/v4 (whose
+      # package name is `jose`) and github.com/gaborage/go-bricks/jose. One of
+      # them must be aliased away, and the go-bricks package is the dominant one
+      # here — so the vendor import keeps `gojose`, which is exactly the
+      # collision-avoidance case uber-go's "Import Aliasing" prescribes. The
+      # importas entry still holds everywhere else.
+      - linters:
+          - importas
+        path: ^cmd/seal-payload/
+        text: 'go-jose/go-jose/v4'
+    paths:
+      - third_party$
+      - builtin$
+# Formatters are a separate top-level block in golangci-lint v2 — listing gofumpt
+# or gci under `linters.enable` is a hard config error ("can't load config:
+# gofumpt is a formatter"). `golangci-lint run` still reports their output as
+# ordinary issues ("File is not properly formatted (gci)"), so `make fmt` must
+# invoke `golangci-lint fmt`; `go fmt` cannot fix either of these.
+formatters:
+  enable:
+    - gci     # uber-go: "Import Grouping"
+    - gofumpt # uber-go: "Group Similar Declarations" and the rest of gofmt's stricter superset
+  settings:
+    gci:
+      # Section ORDER is the decision here, and it is deliberate. gci's natural
+      # order already puts `default` (third party) ahead of a `prefix` group,
+      # which is how most of this tree was written by hand. Measured against the
+      # pre-adoption tree at v2.12.2:
+      #   standard, default, prefix(go-bricks)  ->  70 files / 290 lines
+      #   standard, default (no prefix section) -> 138 files / 589 lines
+      #   standard, prefix(go-bricks), default  -> 199 files / 806 lines
+      #     (that third one needs custom-order: true; without it gci normalises
+      #      the sections straight back to the first order)
+      # Dropping the prefix section is not merely 2x the churn: re-running the
+      # no-prefix order against the formatted tree rewrites 197 files, MERGING
+      # third-party imports back into the go-bricks block in every one. Do not
+      # "simplify" this by removing the prefix section or hoisting it above
+      # default.
+      sections:
+        - standard
+        - default
+        - prefix(github.com/gaborage/go-bricks)
+    gofumpt:
+      # extra-rules was measured (+24 lines over the base rules) and rejected: it
+      # implements no rule the uber-go guide asks for.
+      extra-rules: false
+  exclusions:
+    generated: lax
     paths:
       - third_party$
       - builtin$

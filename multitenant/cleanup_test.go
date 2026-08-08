@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	dbtypes "github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 // stubDB is a non-nil dbtypes.Interface whose methods are never called by

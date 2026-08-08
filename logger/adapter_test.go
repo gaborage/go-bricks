@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 // createTestLogger creates a logger that outputs to a buffer for testing

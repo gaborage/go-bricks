@@ -25,9 +25,10 @@ import (
 	"io"
 	"os"
 
+	gojose "github.com/go-jose/go-jose/v4"
+
 	"github.com/gaborage/go-bricks/internal/keymaterial"
 	jose "github.com/gaborage/go-bricks/jose"
-	gojose "github.com/go-jose/go-jose/v4"
 )
 
 // errUsage marks flag-parse failures whose message the FlagSet already

@@ -9,9 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/observability"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric"
@@ -19,6 +16,10 @@ import (
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/observability"
 )
 
 const (
@@ -158,6 +159,7 @@ type mockLogEvent struct{}
 func (e *mockLogEvent) Msg(string) {
 	// No-op
 }
+
 func (e *mockLogEvent) Msgf(string, ...any) {
 	// No-op
 }
@@ -279,7 +281,7 @@ observability:
 	// Create temporary directory and config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, testConfigFile)
-	err := os.WriteFile(configPath, []byte(yamlContent), 0600)
+	err := os.WriteFile(configPath, []byte(yamlContent), 0o600)
 	require.NoError(t, err)
 
 	// Change to temp directory to load config
@@ -379,7 +381,7 @@ observability:
 	// Create temporary directory and config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, testConfigFile)
-	err := os.WriteFile(configPath, []byte(yamlContent), 0600)
+	err := os.WriteFile(configPath, []byte(yamlContent), 0o600)
 	require.NoError(t, err)
 
 	// Set environment variables to override config
@@ -466,7 +468,7 @@ observability:
 	// Create temporary directory and config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, testConfigFile)
-	err := os.WriteFile(configPath, []byte(yamlContent), 0600)
+	err := os.WriteFile(configPath, []byte(yamlContent), 0o600)
 	require.NoError(t, err)
 
 	// Change to temp directory to load config
@@ -525,7 +527,7 @@ debug:
 	// Create temporary directory and config file
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, testConfigFile)
-	err := os.WriteFile(configPath, []byte(yamlContent), 0600)
+	err := os.WriteFile(configPath, []byte(yamlContent), 0o600)
 	require.NoError(t, err)
 
 	// Change to temp directory to load config

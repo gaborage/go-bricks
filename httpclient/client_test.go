@@ -25,12 +25,11 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
-	obtest "github.com/gaborage/go-bricks/observability/testing"
-
 	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
 	"github.com/gaborage/go-bricks/jose"
 	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/gaborage/go-bricks/logger"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 // Test constants to avoid string duplication

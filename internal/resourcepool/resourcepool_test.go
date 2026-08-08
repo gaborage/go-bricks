@@ -227,7 +227,8 @@ type leaseResult struct {
 // immediately, so machine load cannot flake it. unblock lets the in-flight create drain if we do
 // give up.
 func getOrCreateBounded(ctx context.Context, t *testing.T, p *Pool[*fakeResource], key string,
-	create func(context.Context) (*fakeResource, error), unblock func()) leaseResult {
+	create func(context.Context) (*fakeResource, error), unblock func(),
+) leaseResult {
 	t.Helper()
 	out := make(chan leaseResult, 1)
 	go func() {

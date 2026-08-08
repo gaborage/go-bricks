@@ -67,6 +67,7 @@ func (l *testLogger) Fatal() logger.LogEvent { return &testLogEvent{logger: l, l
 func (l *testLogger) WithContext(any) logger.Logger {
 	return l
 }
+
 func (l *testLogger) WithFields(map[string]any) logger.Logger {
 	return l
 }
@@ -92,6 +93,7 @@ func (e *testLogEvent) Err(error) logger.LogEvent {
 	e.fields = append(e.fields, "error")
 	return e
 }
+
 func (e *testLogEvent) Str(key, value string) logger.LogEvent {
 	e.fields = append(e.fields, key)
 	if e.logger.filter != nil {
@@ -103,30 +105,37 @@ func (e *testLogEvent) Str(key, value string) logger.LogEvent {
 	e.values[key] = value
 	return e
 }
+
 func (e *testLogEvent) Int(key string, _ int) logger.LogEvent {
 	e.fields = append(e.fields, key)
 	return e
 }
+
 func (e *testLogEvent) Int64(key string, _ int64) logger.LogEvent {
 	e.fields = append(e.fields, key)
 	return e
 }
+
 func (e *testLogEvent) Uint64(key string, _ uint64) logger.LogEvent {
 	e.fields = append(e.fields, key)
 	return e
 }
+
 func (e *testLogEvent) Dur(key string, _ time.Duration) logger.LogEvent {
 	e.fields = append(e.fields, key)
 	return e
 }
+
 func (e *testLogEvent) Interface(key string, _ any) logger.LogEvent {
 	e.fields = append(e.fields, key)
 	return e
 }
+
 func (e *testLogEvent) Bytes(key string, _ []byte) logger.LogEvent {
 	e.fields = append(e.fields, key)
 	return e
 }
+
 func (e *testLogEvent) Bool(key string, _ bool) logger.LogEvent {
 	e.fields = append(e.fields, key)
 	return e

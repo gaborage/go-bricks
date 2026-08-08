@@ -182,5 +182,7 @@ func TestBuildConfigProviderAWSReturnsSecretsProvider(t *testing.T) {
 }
 
 // Compile-time guard that helps reviewers see the type even without running tests.
-var _ = []*migration.SecretsProvider{nil}
-var _ = (*config.TenantStore)(nil)
+var (
+	_ = []*migration.SecretsProvider{nil}
+	_ = (*config.TenantStore)(nil)
+)

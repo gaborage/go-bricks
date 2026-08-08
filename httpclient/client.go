@@ -20,14 +20,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gaborage/go-bricks/jose"
-	"github.com/gaborage/go-bricks/logger"
-
-	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
-
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/gaborage/go-bricks/httpclient/internal/tracking"
+	"github.com/gaborage/go-bricks/jose"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 const (

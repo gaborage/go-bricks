@@ -3,9 +3,10 @@ package builder
 import (
 	"testing"
 
-	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 const (
