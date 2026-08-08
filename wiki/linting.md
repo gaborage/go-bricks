@@ -57,9 +57,15 @@ Pick the order that moves you *toward* your existing convention, not away from i
 ### 2. Delete the framework-only exclusions
 
 Every entry under `linters.exclusions.rules` is a GoBricks path and means nothing in your
-repo — `logger/adapter.go` (zerologlint), `(cache|database|observability)/testing/` and
-`trace/` (revive var-naming), `^cmd/seal-payload/` (an importas carve-out). Delete them all
-and add your own as findings justify.
+repo — `logger/adapter.go` (zerologlint), `^cmd/seal-payload/` (an importas carve-out), and
+a few rules scoped to `_test.go`. Delete them all and add your own as findings justify.
+
+Recheck your own exclusions periodically: an exclusion that matches on message `text` stops
+matching when the linter rewords the message, and it fails **silently** in either
+direction. GoBricks carried two `text: "var-naming: avoid package names"` stanzas that were
+dead from revive v1.15.0 onward, when that check moved to a separate rule and the wording
+changed. Those two stanzas were suppressing nothing, and nothing said so — deleting them
+changed no findings. Prefer scoping by `path` and `linters` over matching message text.
 
 Keep the `presets` list (`comments`, `common-false-positives`, `legacy`,
 `std-error-handling`) — those are generic.
@@ -148,9 +154,9 @@ golangci-lint run ./... 2>&1 | grep -E 'level=error|cannot find rule'
 ```
 
 **`revive.rules` REPLACES the default set** when `enable-default-rules` is omitted. It does
-not extend it, so declaring any rule silently drops every default you did not re-list.
-GoBricks re-declares all 23 above its additions for that reason. The alternative is
-`enable-default-rules: true`, which keeps the defaults without re-declaration:
+not extend it, so declaring any rule silently drops every default you did not re-list —
+with no warning, because a missing rule and a passing rule both report nothing. Set
+`enable-default-rules: true` and list only your additions:
 
 ```yaml
 linters:
@@ -161,7 +167,11 @@ linters:
         - name: early-return       # additions only
 ```
 
-That is the shorter path for a new config. It cannot be combined with `enable-all-rules`.
+This is what GoBricks does. It previously re-declared all 23 defaults above its additions,
+which worked but meant deleting one line lost a rule silently. The two spellings are
+equivalent at v2.12.2 — golangci-lint's default list is a verbatim copy of revive's, and
+both resolve to the same rule set — so the flag is safer against accidental omissions. It
+cannot be combined with `enable-all-rules`.
 
 Because of all three, a reading of "0 findings" is ambiguous between *no violations*, *the
 rule never ran*, and *another linter claimed the line*. Prove a rule fires by planting a

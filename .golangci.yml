@@ -114,35 +114,15 @@ linters:
       string-format: false
     revive:
       confidence: 0
-      # Declaring `rules` REPLACES revive's default set rather than extending it,
-      # so every rule golangci-lint enables by default is re-listed below before
-      # the additions. An unknown rule name only logs `level=error` and still
-      # exits 0, so a typo here silently disables a rule — keep names exact.
+      # Declaring `rules` REPLACES revive's default set rather than extending it.
+      # `enable-default-rules` restores the defaults, so only the additions need
+      # listing. This is behavior-identical to re-declaring the 23 default names:
+      # golangci-lint's own default list is a verbatim copy of revive's, and both
+      # spellings resolve to the same 40-rule set. An unknown rule name only logs
+      # `level=error` and still exits 0, so a typo below silently disables a rule —
+      # keep names exact.
+      enable-default-rules: true
       rules:
-        # Default set — re-declared to preserve current behavior.
-        - name: blank-imports
-        - name: context-as-argument
-        - name: context-keys-type
-        - name: dot-imports
-        - name: empty-block
-        - name: error-naming
-        - name: error-return
-        - name: error-strings
-        - name: errorf
-        - name: exported
-        - name: increment-decrement
-        - name: indent-error-flow
-        - name: package-comments
-        - name: range
-        - name: receiver-naming
-        - name: redefines-builtin-id
-        - name: superfluous-else
-        - name: time-naming
-        - name: unexported-return
-        - name: unreachable-code
-        - name: unused-parameter
-        - name: var-declaration
-        - name: var-naming
         # Additions from the uber-go style guide. Each measured 0 findings
         # against the tree, so they ratchet current behavior without a sweep.
         - name: atomic                  # non-atomic assignment to an atomic value
@@ -199,16 +179,6 @@ linters:
       - linters:
           - zerologlint
         path: logger/adapter\.go
-      # Intentional "testing" subpackages for test utilities (imported with aliases)
-      - linters:
-          - revive
-        path: "(cache|database|observability)/testing/|^testing/"
-        text: "var-naming: avoid package names"
-      # trace package intentionally named to match its domain
-      - linters:
-          - revive
-        path: "trace/"
-        text: "var-naming: avoid package names"
       # cmd/seal-payload is the only file set that imports BOTH go-jose/v4 (whose
       # package name is `jose`) and github.com/gaborage/go-bricks/jose. One of
       # them must be aliased away, and the go-bricks package is the dominant one
