@@ -14,7 +14,7 @@ type routeGroup struct {
 	tracker *routeConflictTracker
 }
 
-func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) RouteRegistrar {
+func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) *routeGroup {
 	return &routeGroup{
 		group:  group,
 		prefix: pathutil.NormalizePrefix(prefix),
@@ -26,7 +26,7 @@ func newRouteGroup(group *echo.Group, prefix string, cfg *config.Config) RouteRe
 // factories use it so every routeGroup they hand out (including nested Group() children)
 // records into the same per-Server tracker.
 func newTrackedRouteGroup(group *echo.Group, prefix string, cfg *config.Config, tracker *routeConflictTracker) RouteRegistrar {
-	rg := newRouteGroup(group, prefix, cfg).(*routeGroup)
+	rg := newRouteGroup(group, prefix, cfg)
 	rg.tracker = tracker
 	return rg
 }

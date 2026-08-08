@@ -73,8 +73,8 @@ func (cr *ColumnRegistry) Get(vendor string, structPtr any) *ColumnMetadata {
 	}
 
 	// Fast path: check cache first (lock-free read after first write)
-	if cached, ok := cache.cache.Load(t); ok {
-		return cached.(*ColumnMetadata)
+	if cached, ok := cache.load(t); ok {
+		return cached
 	}
 
 	// Slow path: parse struct (this is the one-time reflection cost)
@@ -86,14 +86,28 @@ func (cr *ColumnRegistry) Get(vendor string, structPtr any) *ColumnMetadata {
 		panic(fmt.Sprintf("failed to parse struct %s for vendor %s: %v", t.Name(), vendor, err))
 	}
 
-	// LoadOrStore atomically stores if not already present, or returns existing value
-	actual, loaded := cache.cache.LoadOrStore(t, metadata)
-	if loaded {
-		// Another goroutine stored first - use their result to ensure singleton instance
-		return actual.(*ColumnMetadata)
-	}
+	// Store atomically, yielding whichever instance won the race so every caller
+	// shares one singleton per (vendor, type).
+	return cache.loadOrStore(t, metadata)
+}
 
-	// We stored first - return our parsed metadata
+// load returns the metadata cached for t. loadOrStore is the map's only writer
+// and it stores *ColumnMetadata exclusively, so the comma-ok never rejects a
+// present entry — a cache miss yields a nil value, which fails the assertion
+// and is reported as the miss it is.
+func (vc *vendorCache) load(t reflect.Type) (metadata *ColumnMetadata, ok bool) {
+	value, _ := vc.cache.Load(t)
+	metadata, ok = value.(*ColumnMetadata)
+	return metadata, ok
+}
+
+// loadOrStore caches metadata for t, or returns the instance a concurrent
+// caller stored first.
+func (vc *vendorCache) loadOrStore(t reflect.Type, metadata *ColumnMetadata) *ColumnMetadata {
+	value, _ := vc.cache.LoadOrStore(t, metadata)
+	if existing, ok := value.(*ColumnMetadata); ok {
+		return existing
+	}
 	return metadata
 }
 

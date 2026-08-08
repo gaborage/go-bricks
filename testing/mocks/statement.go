@@ -27,19 +27,19 @@ type MockStatement struct {
 // Query implements types.Statement
 func (m *MockStatement) Query(ctx context.Context, args ...any) (*sql.Rows, error) {
 	arguments := m.Called(ctx, args)
-	return arguments.Get(0).(*sql.Rows), arguments.Error(1)
+	return arg[*sql.Rows](arguments, "Query", 0), arguments.Error(1)
 }
 
 // QueryRow implements types.Statement
 func (m *MockStatement) QueryRow(ctx context.Context, args ...any) types.Row {
 	arguments := m.Called(ctx, args)
-	return arguments.Get(0).(types.Row)
+	return arg[types.Row](arguments, "QueryRow", 0)
 }
 
 // Exec implements types.Statement
 func (m *MockStatement) Exec(ctx context.Context, args ...any) (sql.Result, error) {
 	arguments := m.Called(ctx, args)
-	return arguments.Get(0).(sql.Result), arguments.Error(1)
+	return arg[sql.Result](arguments, "Exec", 0), arguments.Error(1)
 }
 
 // Close implements types.Statement

@@ -31,7 +31,7 @@ func (m *MockDatabase) Query(ctx context.Context, query string, args ...any) (*s
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
-	return arguments.Get(0).(*sql.Rows), arguments.Error(1)
+	return arg[*sql.Rows](arguments, "Query", 0), arguments.Error(1)
 }
 
 // QueryRow implements types.Interface
@@ -41,7 +41,7 @@ func (m *MockDatabase) QueryRow(ctx context.Context, query string, args ...any) 
 	if arguments.Get(0) == nil {
 		return nil
 	}
-	return arguments.Get(0).(types.Row)
+	return arg[types.Row](arguments, "QueryRow", 0)
 }
 
 // Exec implements types.Interface
@@ -51,7 +51,7 @@ func (m *MockDatabase) Exec(ctx context.Context, query string, args ...any) (sql
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
-	return arguments.Get(0).(sql.Result), arguments.Error(1)
+	return arg[sql.Result](arguments, "Exec", 0), arguments.Error(1)
 }
 
 // Prepare implements types.Interface
@@ -60,7 +60,7 @@ func (m *MockDatabase) Prepare(ctx context.Context, query string) (types.Stateme
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
-	return arguments.Get(0).(types.Statement), arguments.Error(1)
+	return arg[types.Statement](arguments, "Prepare", 0), arguments.Error(1)
 }
 
 // Begin implements types.Interface
@@ -69,7 +69,7 @@ func (m *MockDatabase) Begin(ctx context.Context) (types.Tx, error) {
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
-	return arguments.Get(0).(types.Tx), arguments.Error(1)
+	return arg[types.Tx](arguments, "Begin", 0), arguments.Error(1)
 }
 
 // BeginTx implements types.Interface
@@ -78,7 +78,7 @@ func (m *MockDatabase) BeginTx(ctx context.Context, opts *sql.TxOptions) (types.
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
-	return arguments.Get(0).(types.Tx), arguments.Error(1)
+	return arg[types.Tx](arguments, "BeginTx", 0), arguments.Error(1)
 }
 
 // Health implements types.Interface
@@ -93,7 +93,7 @@ func (m *MockDatabase) Stats() (map[string]any, error) {
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
-	return arguments.Get(0).(map[string]any), arguments.Error(1)
+	return arg[map[string]any](arguments, "Stats", 0), arguments.Error(1)
 }
 
 // Close implements types.Interface

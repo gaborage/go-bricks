@@ -631,7 +631,10 @@ func (m *Module) runJobBody(entry *jobEntry, triggerType string) {
 // executeJob executes the job with panic recovery, metadata updates, and observability instrumentation.
 // Per FR-021: Recover panics, log with stack trace, mark as failed.
 // Per FR-017 to FR-020: Create spans, record metrics, propagate trace context.
-func (m *Module) executeJob(entry *jobEntry, ctx JobContext) {
+// The parameter is the concrete *jobContextImpl, not the exported JobContext: the
+// tracing path needs withContext, and a foreign JobContext implementation would
+// otherwise panic inside the very function whose job is to contain panics.
+func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 	// Create OpenTelemetry span for job execution (FR-017) if tracer is configured.
 	// Propagate the traced context so child spans and WithContext(ctx) logs
 	// nest under this "job.execute" span.
@@ -647,7 +650,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx JobContext) {
 			),
 		)
 		defer span.End()
-		ctx = ctx.(*jobContextImpl).withContext(tracedCtx)
+		ctx = ctx.withContext(tracedCtx)
 	}
 
 	start := time.Now()

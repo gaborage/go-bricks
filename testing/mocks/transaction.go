@@ -28,7 +28,7 @@ type MockTx struct {
 func (m *MockTx) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	callArgs := append([]any{ctx, query}, args...)
 	arguments := m.MethodCalled("Query", callArgs...)
-	return arguments.Get(0).(*sql.Rows), arguments.Error(1)
+	return arg[*sql.Rows](arguments, "Query", 0), arguments.Error(1)
 }
 
 // QueryRow implements types.Tx
@@ -38,7 +38,7 @@ func (m *MockTx) QueryRow(ctx context.Context, query string, args ...any) types.
 	if arguments.Get(0) == nil {
 		return nil
 	}
-	return arguments.Get(0).(types.Row)
+	return arg[types.Row](arguments, "QueryRow", 0)
 }
 
 // Exec implements types.Tx
@@ -48,13 +48,13 @@ func (m *MockTx) Exec(ctx context.Context, query string, args ...any) (sql.Resul
 	if arguments.Get(0) == nil {
 		return nil, arguments.Error(1)
 	}
-	return arguments.Get(0).(sql.Result), arguments.Error(1)
+	return arg[sql.Result](arguments, "Exec", 0), arguments.Error(1)
 }
 
 // Prepare implements types.Tx
 func (m *MockTx) Prepare(ctx context.Context, query string) (types.Statement, error) {
 	arguments := m.MethodCalled("Prepare", ctx, query)
-	return arguments.Get(0).(types.Statement), arguments.Error(1)
+	return arg[types.Statement](arguments, "Prepare", 0), arguments.Error(1)
 }
 
 // Commit implements types.Tx

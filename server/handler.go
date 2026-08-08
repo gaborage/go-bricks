@@ -350,7 +350,9 @@ func (ra *requestAllocator[T]) allocate() (request T, requestPtr any) {
 		// T is a pointer type (e.g., *Request)
 		elem := reflect.New(ra.elemType.Elem())
 		requestPtr = elem.Interface()
-		request = elem.Interface().(T)
+		// Cannot fail: elemType is T's own reflect.Type, so reflect.New of its
+		// element is exactly T. Discarding ok keeps the hot path branch-free.
+		request, _ = elem.Interface().(T)
 	} else {
 		// T is a value type (e.g., Request)
 		requestPtr = &request
@@ -522,7 +524,9 @@ func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 
 	// For value types, we need to get the bound value back from the pointer
 	if !rp.allocator.isPointer {
-		request = reflect.ValueOf(requestPtr).Elem().Interface().(T)
+		// Cannot fail: for value types allocate returned requestPtr = *T, so
+		// Elem() is T. Discarding ok keeps the hot path branch-free.
+		request, _ = reflect.ValueOf(requestPtr).Elem().Interface().(T)
 	}
 
 	// Validate not nil (for pointer types)

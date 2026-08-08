@@ -197,7 +197,11 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 			return zero, nil, res.Err
 		}
 
-		e := res.Val.(*entry[V])
+		e, ok := res.Val.(*entry[V])
+		if !ok {
+			// Unreachable: the DoChan closure above returns *entry[V] or an error.
+			return zero, nil, fmt.Errorf("resourcepool: %q resolved to %T, want *entry", key, res.Val)
+		}
 		if p.claimOrAcquire(e) {
 			return e.value, p.makeRelease(e), nil
 		}
@@ -230,8 +234,10 @@ func (p *Pool[V]) releaseAbandoned(ch <-chan singleflight.Result) {
 	if res.Err != nil {
 		return
 	}
-	e := res.Val.(*entry[V])
-	if p.claimOrAcquire(e) {
+	// The type assertion cannot fail — GetOrCreate's DoChan closure is the only
+	// producer — and ok short-circuits rather than adding a dead branch.
+	e, ok := res.Val.(*entry[V])
+	if ok && p.claimOrAcquire(e) {
 		p.releaseEntry(e)
 	}
 }
@@ -377,7 +383,12 @@ func (p *Pool[V]) evictIfNeeded() *entry[V] {
 		return nil
 	}
 
-	e := oldest.Value.(*entry[V])
+	e, ok := oldest.Value.(*entry[V])
+	if !ok {
+		// Unreachable: createEntry is the only writer and always pushes *entry[V].
+		return nil
+	}
+
 	p.removeEntryLocked(e.key)
 	p.evictions++
 
