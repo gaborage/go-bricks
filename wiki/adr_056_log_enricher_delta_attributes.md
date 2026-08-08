@@ -65,7 +65,9 @@ least six, and more wherever `OTEL_RESOURCE_ATTRIBUTES` adds to the resource. Th
 now cost different things. A record that already carries `log.type` — which is every record
 the go-bricks bridge emits — skips enrichment altogether: no `AddAttributes`, and no `Clone()`
 either, since the wrapper returns the record as-is. Measured on a 16-attribute action-log
-record, that path went 374.1 ns · 768 B/op · 1 alloc/op → 52.0 ns · 0 B/op · 0 allocs/op. A
+record, that path drops from 768 B/op · 1 alloc/op to 0 B/op · 0 allocs/op, with time falling
+from roughly 122 ns to roughly 24 ns. The allocation figures are the invariant claim; the
+timings are machine-dependent and quoted only for scale. A
 record *without* `log.type` — third-party code emitting straight through the OTel API — still
 takes exactly one `Clone()` and one `AddAttributes`, unchanged, which is the path the wrapper
 exists for.
