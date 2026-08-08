@@ -282,35 +282,13 @@ func TestCreateLogExporterStdout(t *testing.T) {
 
 func TestCreateDualModeProcessor(t *testing.T) {
 	tests := []struct {
-		name             string
-		samplingRate     *float64
-		expectedNotNil   bool
-		expectedShutdown bool
+		name         string
+		samplingRate *float64
 	}{
-		{
-			name:             "with_zero_sampling_rate",
-			samplingRate:     Float64Ptr(0.0),
-			expectedNotNil:   true,
-			expectedShutdown: true,
-		},
-		{
-			name:             "with_half_sampling_rate",
-			samplingRate:     Float64Ptr(0.5),
-			expectedNotNil:   true,
-			expectedShutdown: true,
-		},
-		{
-			name:             "with_full_sampling_rate",
-			samplingRate:     Float64Ptr(1.0),
-			expectedNotNil:   true,
-			expectedShutdown: true,
-		},
-		{
-			name:             "with_nil_sampling_rate_defaults_to_zero",
-			samplingRate:     nil,
-			expectedNotNil:   true,
-			expectedShutdown: true,
-		},
+		{name: "with_zero_sampling_rate", samplingRate: Float64Ptr(0.0)},
+		{name: "with_half_sampling_rate", samplingRate: Float64Ptr(0.5)},
+		{name: "with_full_sampling_rate", samplingRate: Float64Ptr(1.0)},
+		{name: "with_nil_sampling_rate_defaults_to_zero", samplingRate: nil},
 	}
 
 	for _, tt := range tests {
@@ -348,15 +326,8 @@ func TestCreateDualModeProcessor(t *testing.T) {
 			require.NotNil(t, baseExporter)
 
 			processor := p.createDualModeProcessor(baseExporter)
-
-			if tt.expectedNotNil {
-				assert.NotNil(t, processor)
-			}
-
-			if tt.expectedShutdown {
-				err = processor.Shutdown(context.Background())
-				assert.NoError(t, err)
-			}
+			assert.NotNil(t, processor)
+			assert.NoError(t, processor.Shutdown(context.Background()))
 
 			// Cleanup base exporter
 			_ = baseExporter.Shutdown(context.Background())
@@ -428,10 +399,10 @@ func batchProcessorTestProvider() *provider {
 	}
 }
 
-// wireBatchProcessor assembles the production shape initLogProvider builds — identity on the
-// provider resource, createBatchProcessor's own enricher behind the batch processor — around
-// an inspectable exporter.
-func wireBatchProcessor(t *testing.T, logType string) (*sdklog.LoggerProvider, *fakeLogExporter) {
+// wireProvider assembles the production shape initLogProvider builds — identity on the provider
+// resource, the caller's processor behind it — around an inspectable exporter. build receives the
+// fake so the caller decides which of the provider's processor constructors is under test.
+func wireProvider(t *testing.T, build func(p *provider, exp sdklog.Exporter) sdklog.Processor) (*sdklog.LoggerProvider, *fakeLogExporter) {
 	t.Helper()
 
 	p := batchProcessorTestProvider()
@@ -441,12 +412,36 @@ func wireBatchProcessor(t *testing.T, logType string) (*sdklog.LoggerProvider, *
 	fake := &fakeLogExporter{}
 	logProvider := sdklog.NewLoggerProvider(
 		sdklog.WithResource(res),
-		sdklog.WithProcessor(p.createBatchProcessor(fake, logType)),
+		sdklog.WithProcessor(build(p, fake)),
 	)
 	t.Cleanup(func() {
 		require.NoError(t, logProvider.Shutdown(context.Background()))
 	})
 	return logProvider, fake
+}
+
+func wireBatchProcessor(t *testing.T, logType string) (*sdklog.LoggerProvider, *fakeLogExporter) {
+	t.Helper()
+	return wireProvider(t, func(p *provider, exp sdklog.Exporter) sdklog.Processor {
+		return p.createBatchProcessor(exp, logType)
+	})
+}
+
+// emitAPIRecord emits one record straight through the OTel log API — carrying no log.type, the
+// shape that lets a processor's own stamp show — flushes the batch, and returns its attributes.
+func emitAPIRecord(t *testing.T, logProvider *sdklog.LoggerProvider, fake *fakeLogExporter, sev log.Severity) map[attribute.Key]attribute.Value {
+	t.Helper()
+
+	var rec log.Record
+	rec.SetSeverity(sev)
+	logProvider.Logger("third-party").Emit(context.Background(), rec)
+
+	// BatchProcessor buffers; without the flush the batch never reaches the exporter.
+	require.NoError(t, logProvider.ForceFlush(context.Background()))
+
+	require.NotEmpty(t, fake.batches)
+	require.NotEmpty(t, fake.batches[0])
+	return collectAttrs(&fake.batches[0][0])
 }
 
 // TestCreateBatchProcessorStampsOwnLogType drives the real production wiring rather than a
@@ -467,17 +462,7 @@ func TestCreateBatchProcessorStampsOwnLogType(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logProvider, fake := wireBatchProcessor(t, tt.logType)
-
-			var rec log.Record
-			rec.SetSeverity(log.SeverityInfo)
-			logProvider.Logger("third-party").Emit(context.Background(), rec)
-
-			// BatchProcessor buffers; without the flush the batch never reaches the exporter.
-			require.NoError(t, logProvider.ForceFlush(context.Background()))
-
-			require.NotEmpty(t, fake.batches)
-			require.NotEmpty(t, fake.batches[0])
-			attrs := collectAttrs(&fake.batches[0][0])
+			attrs := emitAPIRecord(t, logProvider, fake, log.SeverityInfo)
 
 			assert.Equal(t, attribute.StringValue(tt.logType), attrs[logTypeKey],
 				"the processor must stamp its own log type on a record that carries none")
@@ -495,29 +480,13 @@ func TestCreateBatchProcessorStampsOwnLogType(t *testing.T) {
 // (extractLogType), so it must come out stamped "trace" — swapping logTypeAction/logTypeTrace at
 // the two call sites fails here and nowhere else.
 func TestCreateDualModeProcessorLabelsUnlabeledRecordsAsTrace(t *testing.T) {
-	p := batchProcessorTestProvider()
-	res, err := p.createResource(context.Background())
-	require.NoError(t, err)
-
-	fake := &fakeLogExporter{}
-	logProvider := sdklog.NewLoggerProvider(
-		sdklog.WithResource(res),
-		sdklog.WithProcessor(p.createDualModeProcessor(fake)),
-	)
-	t.Cleanup(func() {
-		require.NoError(t, logProvider.Shutdown(context.Background()))
+	logProvider, fake := wireProvider(t, func(p *provider, exp sdklog.Exporter) sdklog.Processor {
+		return p.createDualModeProcessor(exp)
 	})
 
 	// ERROR is exported unconditionally on the trace path; INFO/DEBUG would be dropped by the
 	// default 0.0 sampling rate and the assertion below would never run.
-	var rec log.Record
-	rec.SetSeverity(log.SeverityError)
-	logProvider.Logger("third-party").Emit(context.Background(), rec)
-	require.NoError(t, logProvider.ForceFlush(context.Background()))
-
-	require.NotEmpty(t, fake.batches)
-	require.NotEmpty(t, fake.batches[0])
-	attrs := collectAttrs(&fake.batches[0][0])
+	attrs := emitAPIRecord(t, logProvider, fake, log.SeverityError)
 
 	assert.Equal(t, attribute.StringValue(logTypeTrace), attrs[logTypeKey],
 		"an unlabeled record routes to the trace processor, so it must be stamped trace")

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,11 +53,9 @@ func (f *fakeLogExporter) ForceFlush(_ context.Context) error {
 	return f.flushErr
 }
 
-func newTestEnricher(t *testing.T, wrapped sdklog.Exporter, stampAttrs ...attribute.KeyValue) *processorAttributeExporter {
-	t.Helper()
-	enricher, ok := newProcessorAttributeExporter(wrapped, stampAttrs...).(*processorAttributeExporter)
-	require.True(t, ok, "newProcessorAttributeExporter must return *processorAttributeExporter")
-	return enricher
+// newTraceEnricher wraps wrapped with the production stamp shape: a single log.type attribute.
+func newTraceEnricher(wrapped sdklog.Exporter) *processorAttributeExporter {
+	return newProcessorAttributeExporter(wrapped, attribute.String(logTypeKey, logTypeTrace))
 }
 
 func newTestRecord(attrs ...attribute.KeyValue) sdklog.Record {
@@ -78,72 +75,38 @@ func collectAttrs(rec *sdklog.Record) map[attribute.Key]attribute.Value {
 func TestProcessorAttributeExporterEnrich(t *testing.T) {
 	tests := []struct {
 		name        string
-		stampAttrs  []attribute.KeyValue
 		recordAttrs []attribute.KeyValue
 		wantAttrs   map[attribute.Key]attribute.Value
 	}{
 		{
-			name:        "no_stamp_attributes_returns_clone_unchanged",
-			stampAttrs:  nil,
-			recordAttrs: []attribute.KeyValue{attribute.String("msg.id", "abc")},
-			wantAttrs: map[attribute.Key]attribute.Value{
-				"msg.id": attribute.StringValue("abc"),
-			},
-		},
-		{
-			name: "record_without_attributes_receives_all_stamp_attributes",
-			stampAttrs: []attribute.KeyValue{
-				serviceNameKey.String("billing"),
-				serviceVerKey.String("1.2.3"),
-			},
+			name:        "record_without_attributes_receives_the_stamp",
 			recordAttrs: nil,
 			wantAttrs: map[attribute.Key]attribute.Value{
-				serviceNameKey: attribute.StringValue("billing"),
-				serviceVerKey:  attribute.StringValue("1.2.3"),
+				logTypeKey: attribute.StringValue(logTypeTrace),
 			},
 		},
 		{
-			name: "no_collision_adds_every_stamp_attribute",
-			stampAttrs: []attribute.KeyValue{
-				serviceNameKey.String("billing"),
-				deployEnvKey.String("production"),
-				hostNameKey.String("node-7"),
-			},
-			recordAttrs: []attribute.KeyValue{
-				attribute.String(logTypeKey, logTypeAction),
-				attribute.Int("attempt", 2),
-			},
+			name:        "record_without_the_key_keeps_its_own_attributes_and_gains_the_stamp",
+			recordAttrs: []attribute.KeyValue{attribute.String("msg.id", "abc"), attribute.Int("attempt", 2)},
 			wantAttrs: map[attribute.Key]attribute.Value{
-				logTypeKey:     attribute.StringValue(logTypeAction),
-				"attempt":      attribute.IntValue(2),
-				serviceNameKey: attribute.StringValue("billing"),
-				deployEnvKey:   attribute.StringValue("production"),
-				hostNameKey:    attribute.StringValue("node-7"),
+				"msg.id":   attribute.StringValue("abc"),
+				"attempt":  attribute.IntValue(2),
+				logTypeKey: attribute.StringValue(logTypeTrace),
 			},
 		},
 		{
-			name: "partial_collision_adds_only_non_colliding_stamp_attributes",
-			stampAttrs: []attribute.KeyValue{
-				serviceNameKey.String("stamped-service"),
-				serviceVerKey.String("1.2.3"),
-				deployEnvKey.String("production"),
-			},
-			recordAttrs: []attribute.KeyValue{
-				serviceNameKey.String("record-service"),
-				attribute.String(logTypeKey, logTypeTrace),
-			},
+			name:        "collision_leaves_the_record_value_in_place",
+			recordAttrs: []attribute.KeyValue{attribute.String(logTypeKey, logTypeAction), attribute.Int("attempt", 2)},
 			wantAttrs: map[attribute.Key]attribute.Value{
-				serviceNameKey: attribute.StringValue("record-service"),
-				serviceVerKey:  attribute.StringValue("1.2.3"),
-				deployEnvKey:   attribute.StringValue("production"),
-				logTypeKey:     attribute.StringValue(logTypeTrace),
+				logTypeKey: attribute.StringValue(logTypeAction),
+				"attempt":  attribute.IntValue(2),
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			enricher := newTestEnricher(t, &fakeLogExporter{}, tt.stampAttrs...)
+			enricher := newTraceEnricher(&fakeLogExporter{})
 			rec := newTestRecord(tt.recordAttrs...)
 
 			enriched := enricher.enrich(&rec)
@@ -158,7 +121,7 @@ func TestProcessorAttributeExporterEnrich(t *testing.T) {
 // never reach a record that already carries that key. This is what keeps a caller-set
 // log.type authoritative for dual-mode routing.
 func TestProcessorAttributeExporterRecordAttributeWinsOverCollidingStampAttribute(t *testing.T) {
-	enricher := newTestEnricher(t, &fakeLogExporter{},
+	enricher := newProcessorAttributeExporter(&fakeLogExporter{},
 		attribute.String(logTypeKey, "stamp-wins-would-be-a-bug"),
 	)
 	rec := newTestRecord(attribute.String(logTypeKey, logTypeAction))
@@ -169,24 +132,39 @@ func TestProcessorAttributeExporterRecordAttributeWinsOverCollidingStampAttribut
 }
 
 func TestProcessorAttributeExporterEnrichDoesNotMutateOriginal(t *testing.T) {
-	enricher := newTestEnricher(t, &fakeLogExporter{},
-		serviceNameKey.String("billing"),
-		deployEnvKey.String("production"),
-	)
-	rec := newTestRecord(attribute.String(logTypeKey, logTypeAction))
+	t.Run("add_branch_clones_before_stamping", func(t *testing.T) {
+		enricher := newTraceEnricher(&fakeLogExporter{})
+		rec := newTestRecord(attribute.String("msg.id", "abc"))
 
-	enriched := enricher.enrich(&rec)
+		enriched := enricher.enrich(&rec)
 
-	assert.Equal(t, map[attribute.Key]attribute.Value{
-		logTypeKey: attribute.StringValue(logTypeAction),
-	}, collectAttrs(&rec))
-	assert.Len(t, collectAttrs(&enriched), 3)
+		assert.Equal(t, map[attribute.Key]attribute.Value{
+			"msg.id": attribute.StringValue("abc"),
+		}, collectAttrs(&rec), "the stamp must not land on the caller's record")
+		assert.Len(t, collectAttrs(&enriched), 2)
+	})
+
+	// The collision branch skips the clone and returns a value copy aliasing the original's
+	// attribute storage. It adds nothing, so the original must come back untouched.
+	t.Run("no_add_branch_leaves_the_original_untouched", func(t *testing.T) {
+		enricher := newTraceEnricher(&fakeLogExporter{})
+		rec := newTestRecord(attribute.String(logTypeKey, logTypeAction), attribute.String("msg.id", "abc"))
+
+		enriched := enricher.enrich(&rec)
+
+		want := map[attribute.Key]attribute.Value{
+			logTypeKey: attribute.StringValue(logTypeAction),
+			"msg.id":   attribute.StringValue("abc"),
+		}
+		assert.Equal(t, want, collectAttrs(&rec), "the original must be unchanged")
+		assert.Equal(t, want, collectAttrs(&enriched), "the returned record must match it exactly")
+	})
 }
 
 func TestProcessorAttributeExporterExport(t *testing.T) {
 	t.Run("enriches_every_record_in_the_batch", func(t *testing.T) {
 		wrapped := &fakeLogExporter{}
-		enricher := newTestEnricher(t, wrapped, serviceNameKey.String("billing"))
+		enricher := newTraceEnricher(wrapped)
 
 		records := []sdklog.Record{
 			newTestRecord(attribute.String(logTypeKey, logTypeAction)),
@@ -201,25 +179,25 @@ func TestProcessorAttributeExporterExport(t *testing.T) {
 		require.Len(t, exported, 3)
 
 		assert.Equal(t, map[attribute.Key]attribute.Value{
-			logTypeKey:     attribute.StringValue(logTypeAction),
-			serviceNameKey: attribute.StringValue("billing"),
-		}, collectAttrs(&exported[0]))
+			logTypeKey: attribute.StringValue(logTypeAction),
+		}, collectAttrs(&exported[0]), "a record's own log.type survives")
 		assert.Equal(t, map[attribute.Key]attribute.Value{
 			serviceNameKey: attribute.StringValue("record-value"),
+			logTypeKey:     attribute.StringValue(logTypeTrace),
 		}, collectAttrs(&exported[1]))
 		assert.Equal(t, map[attribute.Key]attribute.Value{
-			serviceNameKey: attribute.StringValue("billing"),
+			logTypeKey: attribute.StringValue(logTypeTrace),
 		}, collectAttrs(&exported[2]))
 
 		assert.Equal(t, map[attribute.Key]attribute.Value{
-			logTypeKey: attribute.StringValue(logTypeAction),
-		}, collectAttrs(&records[0]), "originals must stay untouched")
+			serviceNameKey: attribute.StringValue("record-value"),
+		}, collectAttrs(&records[1]), "originals must stay untouched")
 	})
 
 	t.Run("propagates_wrapped_exporter_error", func(t *testing.T) {
 		wantErr := errors.New("export failed")
 		wrapped := &fakeLogExporter{exportErr: wantErr}
-		enricher := newTestEnricher(t, wrapped, serviceNameKey.String("billing"))
+		enricher := newTraceEnricher(wrapped)
 
 		err := enricher.Export(context.Background(), []sdklog.Record{newTestRecord()})
 
@@ -228,45 +206,11 @@ func TestProcessorAttributeExporterExport(t *testing.T) {
 	})
 }
 
-// TestProcessorAttributeExporterMoreAttrsThanInlineBuffer covers the append that spills past
-// stampAttrsInlineCap onto the heap. Production stamps a single attribute, but the constructor
-// is variadic, so the spill path stays reachable and must stay correct — including precedence,
-// which is what an off-by-one in the spill would break first.
-func TestProcessorAttributeExporterMoreAttrsThanInlineBuffer(t *testing.T) {
-	const stampCount = stampAttrsInlineCap * 2
-
-	stampAttrs := make([]attribute.KeyValue, 0, stampCount)
-	for i := range stampCount {
-		stampAttrs = append(stampAttrs, attribute.String(fmt.Sprintf("res.k%02d", i), fmt.Sprintf("resource-%d", i)))
-	}
-	enricher := newTestEnricher(t, &fakeLogExporter{}, stampAttrs...)
-
-	// The constructor aliases the caller's slice, so comparing against stampAttrs after the
-	// fact would compare it with itself and pass no matter what enrich did. Snapshot the
-	// expected contents into an independent slice first.
-	wantStampAttrs := slices.Clone(stampAttrs)
-
-	// One key is shadowed by the record, and it sits inside the inline range so the
-	// spilled tail has to stay aligned with the stamp slice after the drop.
-	rec := newTestRecord(attribute.String("res.k03", "record-value"))
-
-	enriched := enricher.enrich(&rec)
-
-	attrs := collectAttrs(&enriched)
-	assert.Len(t, attrs, stampCount)
-	assert.Equal(t, attribute.StringValue("record-value"), attrs["res.k03"])
-	assert.Equal(t, attribute.StringValue("resource-0"), attrs["res.k00"])
-
-	lastKey := attribute.Key(fmt.Sprintf("res.k%02d", stampCount-1))
-	assert.Equal(t, attribute.StringValue(fmt.Sprintf("resource-%d", stampCount-1)), attrs[lastKey])
-	assert.Equal(t, wantStampAttrs, enricher.attrs, "enrich must not filter the exporter's own slice in place")
-}
-
 func TestProcessorAttributeExporterShutdown(t *testing.T) {
 	t.Run("delegates_once_and_memoizes_result", func(t *testing.T) {
 		wantErr := errors.New("shutdown failed")
 		wrapped := &fakeLogExporter{shutdownErr: wantErr}
-		enricher := newTestEnricher(t, wrapped)
+		enricher := newTraceEnricher(wrapped)
 
 		first := enricher.Shutdown(context.Background())
 		second := enricher.Shutdown(context.Background())
@@ -278,7 +222,7 @@ func TestProcessorAttributeExporterShutdown(t *testing.T) {
 
 	t.Run("memoizes_nil_result", func(t *testing.T) {
 		wrapped := &fakeLogExporter{}
-		enricher := newTestEnricher(t, wrapped)
+		enricher := newTraceEnricher(wrapped)
 
 		assert.NoError(t, enricher.Shutdown(context.Background()))
 		assert.NoError(t, enricher.Shutdown(context.Background()))
@@ -289,7 +233,7 @@ func TestProcessorAttributeExporterShutdown(t *testing.T) {
 func TestProcessorAttributeExporterForceFlush(t *testing.T) {
 	t.Run("delegates_to_wrapped", func(t *testing.T) {
 		wrapped := &fakeLogExporter{}
-		enricher := newTestEnricher(t, wrapped)
+		enricher := newTraceEnricher(wrapped)
 
 		assert.NoError(t, enricher.ForceFlush(context.Background()))
 		assert.Equal(t, 1, wrapped.flushCount)
@@ -298,26 +242,41 @@ func TestProcessorAttributeExporterForceFlush(t *testing.T) {
 	t.Run("propagates_wrapped_exporter_error", func(t *testing.T) {
 		wantErr := errors.New("flush failed")
 		wrapped := &fakeLogExporter{flushErr: wantErr}
-		enricher := newTestEnricher(t, wrapped)
+		enricher := newTraceEnricher(wrapped)
 
 		assert.ErrorIs(t, enricher.ForceFlush(context.Background()), wantErr)
 		assert.Equal(t, 1, wrapped.flushCount)
 	})
 }
 
-// typicalEnricher mirrors what createBatchProcessor hands the exporter in production: the
-// single log.type delta that makes this processor distinguishable. Service identity is
-// absent by design — it rides the provider's resource, once per batch.
-func typicalEnricher() *processorAttributeExporter {
-	return &processorAttributeExporter{
-		wrapped: &fakeLogExporter{},
-		attrs:   []attribute.KeyValue{attribute.String(logTypeKey, logTypeTrace)},
-	}
+// actionLogRecord mirrors the framework's highest-volume record: the HTTP action log built in
+// server/logger.go, which stamps its own log.type and carries ~16 attributes. Size matters here —
+// sdklog.Record keeps 5 attributes inline and spills the rest to a heap-backed slice that Clone
+// duplicates, so a fixture under that threshold reports zero allocations no matter what enrich does.
+func actionLogRecord() sdklog.Record {
+	return newTestRecord(
+		attribute.String(logTypeKey, logTypeAction),
+		attribute.String("request_id", "01J8ZC2K3M4N5P6Q7R8S9T0V1W"),
+		attribute.String("correlation_id", "0af7651916cd43dd8448eb211c80319c"),
+		attribute.String("http.request.method", "POST"),
+		attribute.Int("http.response.status_code", 201),
+		attribute.Int64("http.server.request.duration", 1_250_000),
+		attribute.String("url.path", "/api/v1/payments"),
+		attribute.String("http.route", "/api/v1/payments"),
+		attribute.String("client.address", "10.0.0.7"),
+		attribute.String("user_agent.original", "Go-http-client/2.0"),
+		attribute.String("result_code", "OK"),
+		attribute.Int64("amqp_published", 2),
+		attribute.Int64("amqp_elapsed", 3_200),
+		attribute.Int64("db_queries", 4),
+		attribute.Int64("db_elapsed", 88_000),
+		attribute.String("traceparent", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"),
+	)
 }
 
-// typicalRecord is what the OTel bridge emits: application attributes plus the log.type it
-// stamps on every record, which collides with the processor's own log.type.
-func typicalRecord() sdklog.Record {
+// smallLabeledRecord collides on log.type like actionLogRecord but stays inside the inline
+// attribute slots, so it isolates the cost of the collision check from the cost of the spill.
+func smallLabeledRecord() sdklog.Record {
 	return newTestRecord(
 		attribute.String(logTypeKey, logTypeAction),
 		attribute.String("http.method", "POST"),
@@ -335,13 +294,14 @@ func unlabeledRecord() sdklog.Record {
 }
 
 func BenchmarkProcessorAttributeExporterEnrich(b *testing.B) {
-	enricher := typicalEnricher()
+	enricher := newTraceEnricher(&fakeLogExporter{})
 
 	benchmarks := []struct {
 		name   string
 		record func() sdklog.Record
 	}{
-		{name: "record_carries_log_type", record: typicalRecord},
+		{name: "action_log_record_collides_16_attrs", record: actionLogRecord},
+		{name: "small_record_collides_3_attrs", record: smallLabeledRecord},
 		{name: "record_without_log_type", record: unlabeledRecord},
 	}
 
@@ -356,18 +316,13 @@ func BenchmarkProcessorAttributeExporterEnrich(b *testing.B) {
 	}
 }
 
+// identityTestResource builds the resource from the same provider fixture logs_test.go wires its
+// processors with. Sharing it is load-bearing: identityResourceKeys is asserted with NotContains
+// against resources built in both files, so two fixtures that drifted apart — one dropping
+// Environment, say — would turn those assertions vacuously green.
 func identityTestResource(t *testing.T) *resource.Resource {
 	t.Helper()
-	p := &provider{
-		config: Config{
-			Service: ServiceConfig{
-				Name:    "real-svc",
-				Version: "1.2.3",
-			},
-			Environment: "production",
-		},
-	}
-	res, err := p.createResource(context.Background())
+	res, err := batchProcessorTestProvider().createResource(context.Background())
 	require.NoError(t, err)
 	return res
 }
@@ -490,9 +445,10 @@ func TestExportedRecordCarriesNoIdentityDuplicates(t *testing.T) {
 	}
 }
 
-// TestUnlabeledRecordReceivesLogTypeStamp pins why the enricher exists at all: a record
-// emitted straight through the OTel API carries no log.type, and the trace processor's
-// enricher is what labels it. Deleting the enricher must fail here.
+// TestUnlabeledRecordReceivesLogTypeStamp pins why the enricher exists at all: a record emitted
+// straight through the OTel API carries no log.type, and the enricher is what labels it. This
+// constructs the enricher directly, so it pins the stamping behavior itself — removing the
+// enricher from createBatchProcessor is caught by TestCreateBatchProcessorStampsOwnLogType.
 func TestUnlabeledRecordReceivesLogTypeStamp(t *testing.T) {
 	wrapped := &fakeLogExporter{}
 	enricher := newProcessorAttributeExporter(wrapped, attribute.String(logTypeKey, logTypeTrace))
