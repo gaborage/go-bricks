@@ -69,12 +69,14 @@ Keep the `presets` list (`comments`, `common-false-positives`, `legacy`,
 Two entries are worth keeping, because consumers import these packages too:
 
 ```yaml
-importas:
-  alias:
-    - pkg: github.com/gaborage/go-bricks/database/testing
-      alias: dbtesting
-    - pkg: github.com/gaborage/go-bricks/jose/testing
-      alias: jositest
+linters:
+  settings:
+    importas:
+      alias:
+        - pkg: github.com/gaborage/go-bricks/database/testing
+          alias: dbtesting
+        - pkg: github.com/gaborage/go-bricks/jose/testing
+          alias: jositest
 ```
 
 Leave `no-unaliased` and `no-extra-aliases` **off**. Either one turns a handful of alias
@@ -150,10 +152,12 @@ GoBricks re-declares all 23 above its additions for that reason. The alternative
 `enable-default-rules: true`, which keeps the defaults without re-declaration:
 
 ```yaml
-revive:
-  enable-default-rules: true   # keep the golint-equivalent set
-  rules:
-    - name: early-return       # additions only
+linters:
+  settings:
+    revive:
+      enable-default-rules: true   # keep the golint-equivalent set
+      rules:
+        - name: early-return       # additions only
 ```
 
 That is the shorter path for a new config. It cannot be combined with `enable-all-rules`.
