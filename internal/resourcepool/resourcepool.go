@@ -160,47 +160,16 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 			return e.value, p.makeRelease(e), nil
 		}
 
-		// Slow path: singleflight collapses concurrent creates for the same key into one. It
-		// returns the shared entry (freshly created with a seed lease, or an existing one);
-		// every caller then takes its own lease on that pointer via claimOrAcquire — the first
-		// claims the seed, the rest increment — so each concurrent borrower is counted.
-		// DoChan (not Do) so every collapsed caller waits on ITS OWN context: Do blocks
-		// uncancelably, so a caller whose budget was already spent still sat through the whole
-		// dial before being handed an error that was not its own.
-		ch := p.sf.DoChan(key, func() (any, error) {
-			if e := p.peek(key); e != nil {
-				return e, nil
-			}
-			e, cerr := p.createEntry(ctx, key, create)
-			if cerr != nil {
-				// Count the failure once, HERE in the singleflight leader. Every collapsed caller
-				// receives the same error, so incrementing per caller would over-count a single
-				// create failure by the number of blocked callers.
-				p.incErrors()
-				return nil, cerr
-			}
-			return e, nil
-		})
-
-		var res singleflight.Result
-		select {
-		case res = <-ch:
-		case <-ctx.Done():
-			// This caller gives up on its own budget; the create is deliberately NOT canceled, so
-			// it still installs the resource for future callers. singleflight's result channel is
-			// buffered (capacity 1), so the abandoned send never blocks — but a fresh entry's seed
-			// lease would go unclaimed, so releaseAbandoned settles it off this goroutine.
-			go p.releaseAbandoned(ch)
-			return zero, nil, ctx.Err()
-		}
-		if res.Err != nil {
-			return zero, nil, res.Err
+		// Slow path: collapse concurrent creates for this key into one shared entry.
+		e, err := p.acquireShared(ctx, key, create)
+		if err != nil {
+			return zero, nil, err
 		}
 
-		// The type assertion cannot fail — the DoChan closure above is the only producer —
-		// and ok short-circuits rather than adding a dead branch.
-		e, ok := res.Val.(*entry[V])
-		if ok && p.claimOrAcquire(e) {
+		// e is nil only if the assertion in acquireShared failed, which its sole producer
+		// makes impossible; the short-circuit falls into the retry loop rather than adding
+		// a branch no test can enter.
+		if e != nil && p.claimOrAcquire(e) {
 			return e.value, p.makeRelease(e), nil
 		}
 		// The reused entry was closed in the window between lookup and claim (a concurrent
@@ -209,6 +178,51 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 	}
 
 	return zero, nil, fmt.Errorf("resourcepool: failed to acquire %q after %d attempts (pool churn)", key, maxAcquireAttempts)
+}
+
+// acquireShared collapses concurrent creates for key into one and returns the shared
+// entry — freshly created with a seed lease, or an existing one. The caller then takes
+// its own lease on that pointer via claimOrAcquire: the first claims the seed, the rest
+// increment, so every concurrent borrower is counted.
+//
+// DoChan (not Do) so every collapsed caller waits on ITS OWN context: Do blocks
+// uncancelably, so a caller whose budget was already spent still sat through the whole
+// dial before being handed an error that was not its own.
+func (p *Pool[V]) acquireShared(ctx context.Context, key string, create func(context.Context) (V, error)) (*entry[V], error) {
+	ch := p.sf.DoChan(key, func() (any, error) {
+		if e := p.peek(key); e != nil {
+			return e, nil
+		}
+		e, cerr := p.createEntry(ctx, key, create)
+		if cerr != nil {
+			// Count the failure once, HERE in the singleflight leader. Every collapsed caller
+			// receives the same error, so incrementing per caller would over-count a single
+			// create failure by the number of blocked callers.
+			p.incErrors()
+			return nil, cerr
+		}
+		return e, nil
+	})
+
+	var res singleflight.Result
+	select {
+	case res = <-ch:
+	case <-ctx.Done():
+		// This caller gives up on its own budget; the create is deliberately NOT canceled, so
+		// it still installs the resource for future callers. singleflight's result channel is
+		// buffered (capacity 1), so the abandoned send never blocks — but a fresh entry's seed
+		// lease would go unclaimed, so releaseAbandoned settles it off this goroutine.
+		go p.releaseAbandoned(ch)
+		return nil, ctx.Err()
+	}
+	if res.Err != nil {
+		return nil, res.Err
+	}
+
+	// The assertion cannot fail — the DoChan closure above is the only producer — so a nil
+	// return short-circuits into the caller's retry loop instead of adding a dead branch.
+	e, _ := res.Val.(*entry[V])
+	return e, nil
 }
 
 // releaseAbandoned settles a collapsed create whose caller returned early on its own context. The
