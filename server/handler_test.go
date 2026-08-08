@@ -345,6 +345,85 @@ func TestRequestBinderPrecedenceEmptyPathSegmentKeepsBody(t *testing.T) {
 	assert.Equal(t, 999, seen.ID, "empty path param does not overwrite, so the body value survives")
 }
 
+// TestRequestBinderPrecedenceEmptyQueryParamKeepsBody covers a present-but-empty query
+// key (?limit=), which is distinct from the absent key covered above: bindQueryValue
+// guards on the VALUE being non-empty, so both cases leave the body value in place.
+func TestRequestBinderPrecedenceEmptyQueryParamKeepsBody(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	var seen numericRequest
+	h := WrapHandler(func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
+		seen = req
+		return req, nil
+	}, binder, cfg)
+
+	// `limit` is present but empty; the body supplies 999. Body value survives.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x?limit=", strings.NewReader(`{"limit":999}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, uint16(999), seen.Limit, "an empty query value must not clobber the body value")
+}
+
+// TestRequestBinderPrecedenceAbsentHeaderKeepsBody pins the header side of the guard:
+// bindHeaderValue returns early when the header is absent, so the body value survives.
+func TestRequestBinderPrecedenceAbsentHeaderKeepsBody(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	var seen advancedBindReq
+	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
+		seen = req
+		return req, nil
+	}, binder, cfg)
+
+	// No X-Items header at all; the body supplies headerVals. Body value survives.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader(`{"id":1,"headerVals":["from-body"]}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, []string{"from-body"}, seen.HeaderVals, "an absent header must not clobber the body value")
+}
+
+// TestRequestBinderPrecedenceEmptyHeaderClearsSliceField pins the one place the overlay
+// does NOT fall back to the body. Header and query guards differ in shape: bindQueryValue
+// guards on the value, but bindHeaderValue guards on Header.Values being EMPTY — and a
+// present-but-empty header yields [""], which is length 1. That reaches
+// bindHeaderStringSlice, which parses no non-empty parts and still Sets the result, so the
+// []string field is cleared rather than left holding the body value. Pinned, not endorsed:
+// changing it is a behavior change and belongs in its own PR.
+func TestRequestBinderPrecedenceEmptyHeaderClearsSliceField(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	var seen advancedBindReq
+	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
+		seen = req
+		return req, nil
+	}, binder, cfg)
+
+	// X-Items present but empty; the body supplies headerVals. The field is cleared.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader(`{"id":1,"headerVals":["from-body"]}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("X-Items", "")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, h(c))
+	assert.Empty(t, seen.HeaderVals, "a present-but-empty header clears the field instead of preserving the body value")
+}
+
 func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()

@@ -293,8 +293,12 @@ header value therefore wins over a conflicting body value:
   which is the ordinary case. It is **not** an absolute guarantee: an empty
   segment still matches, so `POST /cards//status` against `/cards/:cardId/status`
   binds `cardId` as `""`, the overlay skips it, and the body's value survives.
-- A **query param** or **header** overrides the body only when present; an absent
-  or empty one leaves the body value in place.
+- A **query param** overrides the body only when its value is non-empty. Both an
+  absent key and a present-but-empty one (`?limit=`) leave the body value in place.
+- A **header** guards on the header being absent, not on its value being empty —
+  a different shape. An absent header leaves the body value in place, but a
+  **present-but-empty** header still binds: for a `[]string` field it parses no
+  entries and clears the field rather than falling back to the body.
 - `SetPathParams()` (above) feeds the same overlay, so a path parameter injected
   by middleware also beats the body.
 
