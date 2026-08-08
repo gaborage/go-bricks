@@ -11,10 +11,12 @@ import (
 	"strings"
 )
 
-// lineRange is a half-open [Start, End) range of new-file line numbers.
+// lineRange is a half-open [Start, End) range of new-file line numbers. The
+// json tags are load-bearing: cache.go persists these ranges, and a cached
+// entry that decoded to zero values would look like "nothing was judged".
 type lineRange struct {
-	Start int
-	End   int
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
