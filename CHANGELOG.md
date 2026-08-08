@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.58.1](https://github.com/gaborage/go-bricks/compare/v0.58.0...v0.58.1) (2026-08-08)
+
+
+### Fixed
+
+* **deps:** update module github.com/gaborage/go-bricks to v0.58.0 ([#930](https://github.com/gaborage/go-bricks/issues/930)) ([f59ef0f](https://github.com/gaborage/go-bricks/commit/f59ef0f9791ccc69976a30ab300527d2c3f98820))
+
 ## [0.58.0](https://github.com/gaborage/go-bricks/compare/v0.57.0...v0.58.0) (2026-08-08)
 
 
