@@ -9,7 +9,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutlog"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
-	"go.opentelemetry.io/otel/sdk/resource"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -34,13 +33,9 @@ func (p *provider) initLogProvider(ctx context.Context) error {
 		return fmt.Errorf("failed to create log exporter: %w", err)
 	}
 
-	// Create dual-mode processor (action logs + trace logs), reusing the base
-	// resource built above so resource detection runs once under the startup
-	// budget rather than three times.
-	processor, err := p.createDualModeProcessor(res, exporter)
-	if err != nil {
-		return fmt.Errorf("failed to create dual-mode processor: %w", err)
-	}
+	// Create dual-mode processor (action logs + trace logs). Identity rides the
+	// resource attached to the provider below; the processors only add log.type.
+	processor := p.createDualModeProcessor(exporter)
 
 	if logInitHook != nil {
 		if hookErr := logInitHook(); hookErr != nil {
@@ -187,26 +182,14 @@ func (p *provider) createOTLPGRPCLogExporter(ctx context.Context) (sdklog.Export
 }
 
 // createDualModeProcessor creates a dual-mode log processor with separate processors for action and trace logs.
-func (p *provider) createDualModeProcessor(baseRes *resource.Resource, baseExporter sdklog.Exporter) (sdklog.Processor, error) {
+func (p *provider) createDualModeProcessor(baseExporter sdklog.Exporter) sdklog.Processor {
 	debugLogger.Println("Creating dual-mode log processor (action logs + trace logs)")
 
-	// Create resource for action logs (log.type="action")
-	actionResource, err := p.createLogResource(baseRes, "action")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create action log resource: %w", err)
-	}
-
-	// Create resource for trace logs (log.type="trace")
-	traceResource, err := p.createLogResource(baseRes, "trace")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create trace log resource: %w", err)
-	}
-
 	// Create batch processor for action logs (100% sampling, all severities)
-	actionProcessor := p.createBatchProcessorWithResource(baseExporter, actionResource, "action")
+	actionProcessor := p.createBatchProcessor(baseExporter, logTypeAction)
 
 	// Create batch processor for trace logs (WARN+ always, INFO/DEBUG sampled)
-	traceProcessor := p.createBatchProcessorWithResource(baseExporter, traceResource, "trace")
+	traceProcessor := p.createBatchProcessor(baseExporter, logTypeTrace)
 
 	// Get sampling rate for INFO/DEBUG trace logs (default 0.0 = drop all)
 	samplingRate := 0.0
@@ -215,38 +198,13 @@ func (p *provider) createDualModeProcessor(baseRes *resource.Resource, baseExpor
 	}
 
 	debugLogger.Printf("Dual-mode log processor created successfully (sampling_rate=%.2f)", samplingRate)
-	return NewDualModeLogProcessor(actionProcessor, traceProcessor, samplingRate), nil
+	return NewDualModeLogProcessor(actionProcessor, traceProcessor, samplingRate)
 }
 
-// createLogResource creates a resource with the specified log.type attribute.
-// This merges the supplied base service resource with log-type-specific
-// attributes. The base resource is built once by the caller so resource
-// detection is not repeated per log type under the startup budget.
-func (p *provider) createLogResource(baseRes *resource.Resource, logType string) (*resource.Resource, error) {
-	// Create log-type-specific resource
-	typeRes, err := resource.Merge(
-		baseRes,
-		resource.NewWithAttributes(
-			baseRes.SchemaURL(),
-			attribute.String("log.type", logType),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to merge resources: %w", err)
-	}
-
-	debugLogger.Printf("Created log resource with log.type=%s", logType)
-	return typeRes, nil
-}
-
-// createBatchProcessorWithResource creates a batch processor with resource attribute enrichment.
-func (p *provider) createBatchProcessorWithResource(
-	baseExporter sdklog.Exporter,
-	res *resource.Resource,
-	logType string,
-) sdklog.Processor {
-	// Wrap exporter with resource attribute injection
-	enrichedExporter := newResourceAttributeExporter(baseExporter, res)
+// createBatchProcessor creates a batch processor that stamps its own log.type on records.
+func (p *provider) createBatchProcessor(baseExporter sdklog.Exporter, logType string) sdklog.Processor {
+	// Wrap exporter with the processor-specific attribute this provider's single resource cannot carry
+	enrichedExporter := newProcessorAttributeExporter(baseExporter, attribute.String(logTypeKey, logType))
 
 	// Create batch processor with configured options
 	debugLogger.Printf("Creating BatchProcessor for %s logs: timeout=%v, queue_size=%d, batch_size=%d",

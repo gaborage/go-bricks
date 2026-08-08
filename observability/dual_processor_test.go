@@ -15,10 +15,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const (
-	logTypeAttr = "log.type"
-)
-
 // mockProcessor is a test processor that counts OnEmit calls
 type mockProcessor struct {
 	emitCount     int
@@ -110,17 +106,17 @@ func TestExtractLogType(t *testing.T) {
 		},
 		{
 			name:       "explicit action log type",
-			attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
+			attributes: []attribute.KeyValue{attribute.String(logTypeKey, "action")},
 			expected:   "action",
 		},
 		{
 			name:       "unknown log type preserved",
-			attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "custom")},
+			attributes: []attribute.KeyValue{attribute.String(logTypeKey, "custom")},
 			expected:   "custom",
 		},
 		{
 			name:       "non string log type defaults to trace",
-			attributes: []attribute.KeyValue{attribute.Int(logTypeAttr, 123)},
+			attributes: []attribute.KeyValue{attribute.Int(logTypeKey, 123)},
 			expected:   "trace",
 		},
 	}
@@ -189,7 +185,7 @@ func TestDualModeLogProcessorRoutesActionLogs(t *testing.T) {
 
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "action")},
 	}
 	rec := factory.NewRecord()
 
@@ -207,7 +203,7 @@ func TestDualModeLogProcessorRoutesTraceWarn(t *testing.T) {
 
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityWarn,
-		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -225,7 +221,7 @@ func TestDualModeLogProcessorDropsTraceInfoWithZeroRate(t *testing.T) {
 
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -378,7 +374,7 @@ func TestDualModeProcessorEnrichesTraceContext(t *testing.T) {
 	// Emit action log (routes to action processor)
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "action")},
 	}
 	rec := factory.NewRecord()
 
@@ -584,7 +580,7 @@ func TestSamplingRateFullExport(t *testing.T) {
 	// Emit INFO trace log (should be exported with rate=1.0)
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -609,7 +605,7 @@ func TestSamplingRateDeterministic(t *testing.T) {
 	// First call with this trace
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
 		TraceID:    traceID,
 		SpanID:     spanID,
 	}
@@ -640,7 +636,7 @@ func TestSamplingWarnAlwaysExported(t *testing.T) {
 	// WARN should still be exported
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityWarn,
-		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -658,7 +654,7 @@ func TestSamplingErrorAlwaysExported(t *testing.T) {
 	// ERROR should still be exported
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityError,
-		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
 	}
 	rec := factory.NewRecord()
 
@@ -676,7 +672,7 @@ func TestSamplingActionLogsUnaffected(t *testing.T) {
 	// Action INFO log should still be exported
 	factory := logtest.RecordFactory{
 		Severity:   log.SeverityInfo,
-		Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
+		Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "action")},
 	}
 	rec := factory.NewRecord()
 
@@ -728,7 +724,7 @@ func TestOnEmitErrorPropagation(t *testing.T) {
 
 		factory := logtest.RecordFactory{
 			Severity:   log.SeverityInfo,
-			Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "action")},
+			Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "action")},
 		}
 		rec := factory.NewRecord()
 
@@ -743,7 +739,7 @@ func TestOnEmitErrorPropagation(t *testing.T) {
 
 		factory := logtest.RecordFactory{
 			Severity:   log.SeverityInfo,
-			Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
+			Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
 		}
 		rec := factory.NewRecord()
 
@@ -762,7 +758,7 @@ func TestShouldSampleEdgeCases(t *testing.T) {
 		// Use a negative timestamp to test the ts < 0 branch (line 109-111)
 		factory := logtest.RecordFactory{
 			Severity:   log.SeverityInfo,
-			Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
+			Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
 			Timestamp:  time.Unix(-1, 0), // Negative timestamp
 		}
 		rec := factory.NewRecord()
@@ -778,7 +774,7 @@ func TestShouldSampleEdgeCases(t *testing.T) {
 
 		factory := logtest.RecordFactory{
 			Severity:   log.SeverityDebug, // DEBUG level subject to sampling
-			Attributes: []attribute.KeyValue{attribute.String(logTypeAttr, "trace")},
+			Attributes: []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
 		}
 		rec := factory.NewRecord()
 

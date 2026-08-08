@@ -1,0 +1,106 @@
+# ADR-056: The log enricher stamps only the `log.type` delta
+
+- **Status**: Accepted
+- **Date**: 2026-08-07
+- **Related**: #914 (the finding), [ADR-055](adr_055_reserved_log_attribute_namespaces.md) (the precedence this builds on)
+
+## Context
+
+OTel's `LoggerProvider` holds a **single** resource for every processor attached to it,
+but dual-mode logging needs each of its two batch processors to label its records with
+its own `log.type` (`"action"` vs `"trace"`). The framework closed that gap with a
+per-processor exporter wrapper that copies a set of attributes onto each record on the
+way out.
+
+The wrapper was handed the wrong set. `createLogResource` merged the base service
+resource with the one attribute that actually differed, and the merged result — not the
+delta — reached `newResourceAttributeExporter`. Because the wrapper was constructed from
+`res.Attributes()` wholesale, it attempted **the resource's entire attribute set** on every
+exported log record, adding each key the record did not already carry — all of them keys the
+OTLP `ResourceLogs.resource` block already shipped once per batch. On a default deployment
+that is six attributes:
+
+- `service.name`, `service.version`, `deployment.environment.name`
+- `telemetry.sdk.name`, `telemetry.sdk.language`, `telemetry.sdk.version`
+
+It is more wherever the environment says so: `createResource` merges `resource.Default()`,
+whose env detector folds in every key from `OTEL_RESOURCE_ATTRIBUTES`, so a pod under the
+Kubernetes OTel operator was duplicating `k8s.pod.name`, `k8s.namespace.name` and the rest
+onto every log line too.
+
+The one attribute the wrapper existed for was the one it never added. Records leave
+`logger/otel_bridge.go` always carrying `log.type`, and the merged resource always
+declared one, so the record-wins collision branch dropped it on every single record —
+the resource duplicates were the entire observable effect. The cost was paid per log
+line: wire payload, a clone of the record's attribute storage, and an `AddAttributes`
+call one element wide for every resource attribute the record did not already carry.
+
+Found by the `/simplify` altitude pass during #873/#918; filed as #914.
+
+## Decision
+
+**Construct the wrapper with the delta, not the merged resource.**
+
+```go
+newProcessorAttributeExporter(baseExporter, attribute.String("log.type", logType))
+```
+
+`createLogResource` is deleted; the provider's own `sdklog.WithResource(res)` remains the
+single place service identity enters the log pipeline. The wrapper is renamed
+`processorAttributeExporter` to say what it is for — attributes specific to a *processor*,
+which the provider's one shared resource structurally cannot carry.
+
+**Record-wins precedence is unchanged.** A record that already carries `log.type` keeps
+its own value; the processor's stamp only lands on records that lack the key. That is not
+a leftover — it is load-bearing twice over. Dual-mode routing happens at `OnEmit`, before
+batching, keyed on the record's own `log.type` (defaulting to `"trace"`), so a caller-set
+value must stay authoritative end to end. And a record emitted directly through the OTel
+API by third-party code carries no `log.type` at all; it routes to the trace processor,
+whose wrapper is what labels it. That injection is the reason the wrapper survives this
+change rather than being deleted outright.
+
+## Consequences
+
+**Positive.** Every exported log record sheds the resource attributes it was duplicating — at
+least six for anything emitted through the go-bricks logger, since ADR-055's bridge remaps a
+caller's `service.*` / `telemetry.sdk.*` / `deployment.environment.name` field under `app.`
+before the exporter runs, so those six could never collide and were always added; more wherever
+`OTEL_RESOURCE_ATTRIBUTES` adds to the resource, and fewer only for a record that reached the
+exporter already carrying a resource key — one emitted straight through the OTel API, or an
+env-injected key the bridge does not reserve. The two paths
+now cost different things. A record that already carries `log.type` — which is every record
+the go-bricks bridge emits — skips enrichment altogether: no `AddAttributes`, and no `Clone()`
+either, since the wrapper returns the record as-is. Measured on a 16-attribute action-log
+record, that path drops from 768 B/op · 1 alloc/op to 0 B/op · 0 allocs/op, with time falling
+from roughly 122 ns to roughly 24 ns. The allocation figures are the invariant claim; the
+timings are machine-dependent and quoted only for scale. A
+record *without* `log.type` — third-party code emitting straight through the OTel API — still
+takes exactly one `Clone()` and one `AddAttributes`, unchanged, which is the path the wrapper
+exists for.
+
+The **framework-provided** service identity now appears in exactly one place on the wire — the
+resource block, where it was never spoofable — instead of being duplicated into the record
+attributes, where
+[ADR-055](adr_055_reserved_log_attribute_namespaces.md) had to defend it against caller
+shadowing. That defense is strengthened: with no record-level identity duplicate, a backend
+that flattens record attributes over resource attributes has nothing left to flatten *over*.
+
+**Negative.** Behavior change on the OTLP log wire. Backends that index record attributes
+separately from resource attributes stop matching record-level filters on log records —
+for any resource attribute, not only the framework's six — until those queries are
+repointed at the resource attribute of the same name.
+Backends that flatten the two levels see the same values as before. No code change can
+detect this — the affected artifacts are dashboards, alerts and saved queries.
+`[C58.5]` in [migrations.md](migrations.md) carries the detection procedure.
+
+**Neutral.** Traces and metrics are untouched: `createResource` and the trace/metric
+providers are unchanged. The raw zerolog stream (stdout/file JSON, console output) never
+carried these attributes and is unaffected.
+
+## References
+
+- #914 — the finding
+- `observability/processor_attribute_exporter.go` — the wrapper and its precedence
+- `observability/logs.go` — `createBatchProcessor`, which now passes the delta
+- [ADR-055](adr_055_reserved_log_attribute_namespaces.md) — the record-over-resource precedence relied on here
+- [migrations.md](migrations.md) `[C58.5]`

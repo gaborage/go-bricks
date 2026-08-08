@@ -1048,6 +1048,37 @@ hot path stays allocation-free; the remap is self-evidencing per record. Fixes
 
 ---
 
+### [ADR-056: The Log Enricher Stamps Only the `log.type` Delta](adr_056_log_enricher_delta_attributes.md)
+
+**Date:** 2026-08-07 | **Status:** Accepted
+
+OTel's `LoggerProvider` holds one resource for all processors, so dual-mode logging wraps each batch
+processor's exporter to stamp its own `log.type` on records. That wrapper was handed the **merged**
+resource instead of the delta, so it worked from the resource's whole attribute set — `service.name`,
+`service.version`, `deployment.environment.name` and the `telemetry.sdk.*` triplet, plus anything
+`OTEL_RESOURCE_ATTRIBUTES` injects — adding to every exported log record each of those keys the
+record did not already carry,
+duplicating what the OTLP `ResourceLogs.resource` block already ships once per batch, while
+dropping the one attribute it existed for, because every record leaves the bridge already carrying
+`log.type` and the record-wins collision branch therefore fired every time. The wrapper (renamed
+`processorAttributeExporter`) is now constructed with the delta alone, and `createLogResource` is
+deleted. Record-wins precedence is unchanged: a caller-set `log.type` stays authoritative for
+dual-mode routing, and a third-party record emitted straight through the OTel API — carrying no
+`log.type` — still gets stamped by the trace processor, which is why the wrapper survives at all.
+
+**Key Benefits:** At least six fewer attributes per log record emitted through the go-bricks
+logger — ADR-055's bridge remaps colliding caller fields under `app.` first, so those six were
+always being added — and more wherever `OTEL_RESOURCE_ATTRIBUTES` adds to the resource, since the
+full resource attribute set is affected. A record that already carries `log.type`, which is every
+record the bridge emits, now skips enrichment entirely (no `Clone`, no `AddAttributes`); a record
+without one still takes exactly one of each. The framework-provided service identity appears
+exactly once on the wire, in the resource block where it was never spoofable,
+strengthening [ADR-055](adr_055_reserved_log_attribute_namespaces.md). Fixes
+[#914](https://github.com/gaborage/go-bricks/issues/914). See
+[migrations.md](migrations.md) `[C58.5]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -1057,7 +1088,7 @@ hot path stays allocation-free; the remap is self-evidencing per record. Fixes
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-055) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-056) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

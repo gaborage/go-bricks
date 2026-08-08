@@ -8,11 +8,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
-)
 
-const (
-	logTypeAttrKey = "log.type"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 func TestCreateOTLPHTTPLogExporter(t *testing.T) {
@@ -282,35 +282,13 @@ func TestCreateLogExporterStdout(t *testing.T) {
 
 func TestCreateDualModeProcessor(t *testing.T) {
 	tests := []struct {
-		name             string
-		samplingRate     *float64
-		expectedNotNil   bool
-		expectedShutdown bool
+		name         string
+		samplingRate *float64
 	}{
-		{
-			name:             "with_zero_sampling_rate",
-			samplingRate:     Float64Ptr(0.0),
-			expectedNotNil:   true,
-			expectedShutdown: true,
-		},
-		{
-			name:             "with_half_sampling_rate",
-			samplingRate:     Float64Ptr(0.5),
-			expectedNotNil:   true,
-			expectedShutdown: true,
-		},
-		{
-			name:             "with_full_sampling_rate",
-			samplingRate:     Float64Ptr(1.0),
-			expectedNotNil:   true,
-			expectedShutdown: true,
-		},
-		{
-			name:             "with_nil_sampling_rate_defaults_to_zero",
-			samplingRate:     nil,
-			expectedNotNil:   true,
-			expectedShutdown: true,
-		},
+		{name: "with_zero_sampling_rate", samplingRate: Float64Ptr(0.0)},
+		{name: "with_half_sampling_rate", samplingRate: Float64Ptr(0.5)},
+		{name: "with_full_sampling_rate", samplingRate: Float64Ptr(1.0)},
+		{name: "with_nil_sampling_rate_defaults_to_zero", samplingRate: nil},
 	}
 
 	for _, tt := range tests {
@@ -347,20 +325,9 @@ func TestCreateDualModeProcessor(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, baseExporter)
 
-			baseRes, err := p.createResource(context.Background())
-			require.NoError(t, err)
-
-			processor, err := p.createDualModeProcessor(baseRes, baseExporter)
-			assert.NoError(t, err)
-
-			if tt.expectedNotNil {
-				assert.NotNil(t, processor)
-			}
-
-			if tt.expectedShutdown {
-				err = processor.Shutdown(context.Background())
-				assert.NoError(t, err)
-			}
+			processor := p.createDualModeProcessor(baseExporter)
+			assert.NotNil(t, processor)
+			assert.NoError(t, processor.Shutdown(context.Background()))
 
 			// Cleanup base exporter
 			_ = baseExporter.Shutdown(context.Background())
@@ -368,67 +335,7 @@ func TestCreateDualModeProcessor(t *testing.T) {
 	}
 }
 
-func TestCreateLogResource(t *testing.T) {
-	tests := []struct {
-		name      string
-		logType   string
-		wantErr   bool
-		checkFunc func(*testing.T, *provider)
-	}{
-		{
-			name:      "action_log_type",
-			logType:   "action",
-			wantErr:   false,
-			checkFunc: checkLogResourceHasType("action"),
-		},
-		{
-			name:      "trace_log_type",
-			logType:   "trace",
-			wantErr:   false,
-			checkFunc: checkLogResourceHasType("trace"),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := &provider{
-				config: Config{
-					Service: ServiceConfig{
-						Name:    "test-service",
-						Version: "1.0.0",
-					},
-					Environment: "test",
-				},
-			}
-
-			if tt.checkFunc != nil {
-				tt.checkFunc(t, p)
-			}
-		})
-	}
-}
-
-// checkLogResourceHasType returns a checker that builds a log resource for the
-// given log type and asserts the produced resource carries a log.type
-// attribute matching expectedType.
-func checkLogResourceHasType(expectedType string) func(*testing.T, *provider) {
-	return func(t *testing.T, p *provider) {
-		baseRes, err := p.createResource(context.Background())
-		require.NoError(t, err)
-		res, err := p.createLogResource(baseRes, expectedType)
-		require.NoError(t, err)
-		require.NotNil(t, res)
-
-		for _, attr := range res.Attributes() {
-			if attr.Key == logTypeAttrKey && attr.Value.AsString() == expectedType {
-				return
-			}
-		}
-		t.Errorf("Resource should have log.type=%s attribute", expectedType)
-	}
-}
-
-func TestCreateBatchProcessorWithResource(t *testing.T) {
+func TestCreateBatchProcessor(t *testing.T) {
 	// Create base exporter
 	p := &provider{
 		config: Config{
@@ -461,20 +368,156 @@ func TestCreateBatchProcessorWithResource(t *testing.T) {
 	require.NotNil(t, baseExporter)
 	defer baseExporter.Shutdown(context.Background())
 
-	// Create resource
-	baseRes, err := p.createResource(context.Background())
-	require.NoError(t, err)
-	res, err := p.createLogResource(baseRes, "action")
-	require.NoError(t, err)
-	require.NotNil(t, res)
-
-	// Create batch processor with resource
-	processor := p.createBatchProcessorWithResource(baseExporter, res, "action")
+	// Create batch processor for the action log type
+	processor := p.createBatchProcessor(baseExporter, "action")
 	assert.NotNil(t, processor)
 
 	// Verify processor can be shut down
 	err = processor.Shutdown(context.Background())
 	assert.NoError(t, err)
+}
+
+// batchProcessorTestProvider builds a provider whose Logs config is valid for
+// createBatchProcessor, with the identity that createResource stamps on the resource.
+func batchProcessorTestProvider() *provider {
+	return &provider{
+		config: Config{
+			Service: ServiceConfig{
+				Name:    "real-svc",
+				Version: "1.2.3",
+			},
+			Environment: "production",
+			Logs: LogsConfig{
+				Batch:  BatchConfig{Timeout: 50 * time.Millisecond, Size: 512},
+				Export: ExportConfig{Timeout: 10 * time.Second},
+				Max: MaxConfig{
+					Queue: QueueConfig{Size: 2048},
+					Batch: MaxBatchConfig{Size: 512},
+				},
+			},
+		},
+	}
+}
+
+// wireProvider assembles the production shape initLogProvider builds — identity on the provider
+// resource, the caller's processor behind it — around an inspectable exporter. build receives the
+// fake so the caller decides which of the provider's processor constructors is under test.
+func wireProvider(t *testing.T, build func(p *provider, exp sdklog.Exporter) sdklog.Processor) (*sdklog.LoggerProvider, *fakeLogExporter) {
+	t.Helper()
+
+	p := batchProcessorTestProvider()
+	res, err := p.createResource(context.Background())
+	require.NoError(t, err)
+
+	fake := &fakeLogExporter{}
+	logProvider := sdklog.NewLoggerProvider(
+		sdklog.WithResource(res),
+		sdklog.WithProcessor(build(p, fake)),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, logProvider.Shutdown(context.Background()))
+	})
+	return logProvider, fake
+}
+
+func wireBatchProcessor(t *testing.T, logType string) (*sdklog.LoggerProvider, *fakeLogExporter) {
+	t.Helper()
+	return wireProvider(t, func(p *provider, exp sdklog.Exporter) sdklog.Processor {
+		return p.createBatchProcessor(exp, logType)
+	})
+}
+
+// emitAPIRecord emits one record straight through the OTel log API — carrying no log.type, the
+// shape that lets a processor's own stamp show — flushes the batch, and returns its attributes.
+func emitAPIRecord(t *testing.T, logProvider *sdklog.LoggerProvider, fake *fakeLogExporter, sev log.Severity) map[attribute.Key]attribute.Value {
+	t.Helper()
+
+	var rec log.Record
+	rec.SetSeverity(sev)
+	logProvider.Logger("third-party").Emit(context.Background(), rec)
+
+	// BatchProcessor buffers; without the flush the batch never reaches the exporter.
+	require.NoError(t, logProvider.ForceFlush(context.Background()))
+
+	require.NotEmpty(t, fake.batches)
+	require.NotEmpty(t, fake.batches[0])
+	return collectAttrs(&fake.batches[0][0])
+}
+
+// TestCreateBatchProcessorStampsOwnLogType drives the real production wiring rather than a
+// hand-assembled enricher, and pins what createBatchProcessor actually hands
+// newProcessorAttributeExporter. The record is emitted straight through the OTel log API, so
+// it carries no log.type of its own — the one shape that can tell the processors apart.
+// Deleting the enricher from the wiring, or swapping the two log-type labels at the
+// createDualModeProcessor call sites, fails here.
+func TestCreateBatchProcessorStampsOwnLogType(t *testing.T) {
+	tests := []struct {
+		name    string
+		logType string
+	}{
+		{name: "trace_processor_stamps_trace", logType: logTypeTrace},
+		{name: "action_processor_stamps_action", logType: logTypeAction},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logProvider, fake := wireBatchProcessor(t, tt.logType)
+			attrs := emitAPIRecord(t, logProvider, fake, log.SeverityInfo)
+
+			assert.Equal(t, attribute.StringValue(tt.logType), attrs[logTypeKey],
+				"the processor must stamp its own log type on a record that carries none")
+			for _, key := range identityResourceKeys {
+				assert.NotContains(t, attrs, key,
+					"%s must reach the backend on the resource block only, never as a record-level duplicate", key)
+			}
+		})
+	}
+}
+
+// TestCreateDualModeProcessorLabelsUnlabeledRecordsAsTrace pins which label each processor is
+// wired with inside createDualModeProcessor, not just what createBatchProcessor does with the
+// label it is handed. A record carrying no log.type routes to the trace processor by default
+// (extractLogType), so it must come out stamped "trace" — swapping logTypeAction/logTypeTrace at
+// the two call sites fails here and nowhere else.
+func TestCreateDualModeProcessorLabelsUnlabeledRecordsAsTrace(t *testing.T) {
+	logProvider, fake := wireProvider(t, func(p *provider, exp sdklog.Exporter) sdklog.Processor {
+		return p.createDualModeProcessor(exp)
+	})
+
+	// ERROR is exported unconditionally on the trace path; INFO/DEBUG would be dropped by the
+	// default 0.0 sampling rate and the assertion below would never run.
+	attrs := emitAPIRecord(t, logProvider, fake, log.SeverityError)
+
+	assert.Equal(t, attribute.StringValue(logTypeTrace), attrs[logTypeKey],
+		"an unlabeled record routes to the trace processor, so it must be stamped trace")
+}
+
+// TestCreateBatchProcessorEmitsNoIdentityDuplicatesThroughBridge is the #914 regression pin on
+// the production path: the whole chain from a zerolog line through the real OTel bridge and the
+// processor createBatchProcessor built. Handing the enricher res.Attributes() again fails here.
+func TestCreateBatchProcessorEmitsNoIdentityDuplicatesThroughBridge(t *testing.T) {
+	logProvider, fake := wireBatchProcessor(t, logTypeTrace)
+
+	bridge := logger.NewOTelBridge(logProvider)
+	require.NotNil(t, bridge)
+	_, err := bridge.Write([]byte(`{"level":"info","message":"m"}`))
+	require.NoError(t, err)
+	require.NoError(t, logProvider.ForceFlush(context.Background()))
+
+	require.NotEmpty(t, fake.batches)
+	require.NotEmpty(t, fake.batches[0])
+	attrs := collectAttrs(&fake.batches[0][0])
+
+	assert.Equal(t, attribute.StringValue(logTypeTrace), attrs[logTypeKey])
+	for _, key := range identityResourceKeys {
+		assert.NotContains(t, attrs, key,
+			"%s must appear once per batch in ResourceLogs.resource, never on the record", key)
+	}
+
+	recordRes := fake.batches[0][0].Resource()
+	require.NotNil(t, recordRes)
+	assert.Contains(t, recordRes.Attributes(), serviceNameKey.String("real-svc"),
+		"identity must still reach the backend on the resource block")
 }
 
 func TestInitLogProviderSuccess(t *testing.T) {
