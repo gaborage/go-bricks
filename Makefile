@@ -48,6 +48,10 @@ MUTATE_WORKERS ?= 2
 # Any time.ParseDuration string; 0 disables. It does nothing inside a single long
 # package — for those, speeding up the slowest tests is the lever.
 MUTATE_COOLDOWN ?= 30s
+# Set to any non-empty value to bypass the result cache and re-mutate every
+# package in the diff. The cache only ever stores a package whose changed lines
+# came back entirely clean, so this is a debugging lever, not a correctness one.
+MUTATE_NO_CACHE ?=
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
@@ -136,6 +140,7 @@ clean: ## Clean build cache and test artifacts
 	go clean -cache -testcache
 	rm -f coverage.out coverage-integration.out coverage.html coverage.func
 	rm -f *.test
+	rm -rf .mutatediff-cache
 
 # `sec` is not redundant with `lint`: golangci-lint's gosec runs under the
 # common-false-positives preset, so classes like G304 are suppressed there and
@@ -161,7 +166,7 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
 
 mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
-	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)" -workers "$(MUTATE_WORKERS)" -cpu "$(MUTATE_CPU)" -cooldown "$(MUTATE_COOLDOWN)"
+	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)" -workers "$(MUTATE_WORKERS)" -cpu "$(MUTATE_CPU)" -cooldown "$(MUTATE_COOLDOWN)" $(if $(MUTATE_NO_CACHE),-no-cache,)
 
 # One gremlins process per package: a single full-repo process with 4 workers
 # exhausted a 4-vCPU/16GB hosted runner ~25 min in (runner shutdown signal).

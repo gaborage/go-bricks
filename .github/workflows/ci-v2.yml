@@ -722,8 +722,23 @@ jobs:
           cache: true
           cache-dependency-path: tools/migration/go.sum
 
-      - name: golangci-lint (migrate tool)
+      # Two platform-scoped passes. golangci-lint analyzes exactly one GOOS —
+      # the runner's unless told otherwise — so a single ubuntu run never type-
+      # checks a `//go:build windows` file. The tool module has no GOOS-
+      # constrained files today; this pass exists so it cannot silently acquire
+      # one. Cross-compiled analysis is cheap enough that this beats adding a
+      # windows-latest matrix leg (see lint-framework for the same rationale).
+      - name: golangci-lint (migrate tool, linux)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
+        with:
+          version: v2.12.2
+          working-directory: tools/migration
+          args: --timeout=5m
+
+      - name: golangci-lint (migrate tool, windows)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
+        env:
+          GOOS: windows
         with:
           version: v2.12.2
           working-directory: tools/migration
@@ -773,7 +788,15 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: golangci-lint (framework)
+      # Two platform-scoped passes, distinctly named so a failure says which GOOS
+      # produced it. golangci-lint analyzes exactly one GOOS — the runner's
+      # unless told otherwise — so an ubuntu-only run never type-checks a file
+      # behind `//go:build windows`. That left migration/proc_windows.go, live
+      # production code, unlinted since it was written, while its
+      # `//go:build !windows` siblings were covered. Cross-compiling the analysis
+      # closes the same hole as a windows-latest matrix leg without paying the
+      # Windows-runner minute multiplier or adding a leg to ci-ok's needs graph.
+      - name: golangci-lint (framework, linux)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         env:
           # Scope the run to the root (framework) module. `--skip-dirs=tools` was
@@ -785,6 +808,15 @@ jobs:
           # resolves against the framework's own go.mod — the dependency view its
           # consumers actually see.
           GOWORK: "off"
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+      - name: golangci-lint (framework, windows)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
+        env:
+          GOWORK: "off"
+          GOOS: windows
         with:
           version: v2.12.2
           args: --timeout=5m
