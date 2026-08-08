@@ -110,7 +110,7 @@ func (m *MockRegistry) StopConsumers() {
 func (m *MockRegistry) Exchanges() map[string]*messaging.ExchangeDeclaration {
 	if m.hasExpectation("Exchanges") {
 		arguments := m.Called()
-		return arguments.Get(0).(map[string]*messaging.ExchangeDeclaration)
+		return arg[map[string]*messaging.ExchangeDeclaration](arguments, "Exchanges", 0)
 	}
 	result := make(map[string]*messaging.ExchangeDeclaration, len(m.exchanges))
 	maps.Copy(result, m.exchanges)
@@ -121,7 +121,7 @@ func (m *MockRegistry) Exchanges() map[string]*messaging.ExchangeDeclaration {
 func (m *MockRegistry) Queues() map[string]*messaging.QueueDeclaration {
 	if m.hasExpectation("Queues") {
 		arguments := m.Called()
-		return arguments.Get(0).(map[string]*messaging.QueueDeclaration)
+		return arg[map[string]*messaging.QueueDeclaration](arguments, "Queues", 0)
 	}
 	result := make(map[string]*messaging.QueueDeclaration, len(m.queues))
 	maps.Copy(result, m.queues)
@@ -132,7 +132,7 @@ func (m *MockRegistry) Queues() map[string]*messaging.QueueDeclaration {
 func (m *MockRegistry) Bindings() []*messaging.BindingDeclaration {
 	if m.hasExpectation("Bindings") {
 		arguments := m.Called()
-		return arguments.Get(0).([]*messaging.BindingDeclaration)
+		return arg[[]*messaging.BindingDeclaration](arguments, "Bindings", 0)
 	}
 	result := make([]*messaging.BindingDeclaration, len(m.bindings))
 	copy(result, m.bindings)
@@ -143,7 +143,7 @@ func (m *MockRegistry) Bindings() []*messaging.BindingDeclaration {
 func (m *MockRegistry) Publishers() []*messaging.PublisherDeclaration {
 	if m.hasExpectation("Publishers") {
 		arguments := m.Called()
-		return arguments.Get(0).([]*messaging.PublisherDeclaration)
+		return arg[[]*messaging.PublisherDeclaration](arguments, "Publishers", 0)
 	}
 	result := make([]*messaging.PublisherDeclaration, len(m.publishers))
 	copy(result, m.publishers)
@@ -154,7 +154,7 @@ func (m *MockRegistry) Publishers() []*messaging.PublisherDeclaration {
 func (m *MockRegistry) Consumers() []*messaging.ConsumerDeclaration {
 	if m.hasExpectation("Consumers") {
 		arguments := m.Called()
-		return arguments.Get(0).([]*messaging.ConsumerDeclaration)
+		return arg[[]*messaging.ConsumerDeclaration](arguments, "Consumers", 0)
 	}
 	result := make([]*messaging.ConsumerDeclaration, len(m.consumers))
 	copy(result, m.consumers)

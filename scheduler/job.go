@@ -90,7 +90,7 @@ func newJobContext(
 	getDB func() types.Interface,
 	getMessaging func() messaging.Client,
 	cfg *config.Config,
-) JobContext {
+) *jobContextImpl {
 	return &jobContextImpl{
 		Context:      ctx,
 		jobID:        jobID,

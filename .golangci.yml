@@ -12,6 +12,7 @@ linters:
     - errname                   # checks that error variables/types follow the errFoo/FooError convention
     - errorlint                 # finds code that may cause problems with the Go 1.13 error wrapping scheme
     - exhaustive                # checks exhaustiveness of enum switch statements
+    - forcetypeassert           # finds unchecked type assertions (uber-go: Handle Type Assertion Failures)
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - gochecknoinits            # checks that no init functions are present
     - goconst                   # finds repeated strings that could be replaced by a constant
@@ -181,6 +182,7 @@ linters:
       - linters:
           - dupl
           - errcheck
+          - forcetypeassert
           - goconst
           - gocyclo
           - gosec

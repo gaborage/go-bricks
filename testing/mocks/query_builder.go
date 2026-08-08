@@ -33,13 +33,13 @@ func (m *MockQueryBuilder) Vendor() string {
 // Filter implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) Filter() types.FilterFactory {
 	args := m.MethodCalled("Filter")
-	return args.Get(0).(types.FilterFactory)
+	return arg[types.FilterFactory](args, "Filter", 0)
 }
 
 // JoinFilter implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) JoinFilter() types.JoinFilterFactory {
 	args := m.MethodCalled("JoinFilter")
-	return args.Get(0).(types.JoinFilterFactory)
+	return arg[types.JoinFilterFactory](args, "JoinFilter", 0)
 }
 
 // Expr implements types.QueryBuilderInterface
@@ -50,7 +50,7 @@ func (m *MockQueryBuilder) Expr(sql string, alias ...string) (types.RawExpressio
 		callArgs[i+1] = a
 	}
 	args := m.MethodCalled("Expr", callArgs...)
-	return args.Get(0).(types.RawExpression), args.Error(1)
+	return arg[types.RawExpression](args, "Expr", 0), args.Error(1)
 }
 
 // MustExpr implements types.QueryBuilderInterface
@@ -65,19 +65,19 @@ func (m *MockQueryBuilder) MustExpr(sql string, alias ...string) types.RawExpres
 // Columns implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) Columns(structPtr any) types.Columns {
 	args := m.MethodCalled("Columns", structPtr)
-	return args.Get(0).(types.Columns)
+	return arg[types.Columns](args, "Columns", 0)
 }
 
 // Select implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) Select(columns ...any) types.SelectQueryBuilder {
 	args := m.MethodCalled("Select", columns...)
-	return args.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](args, "Select", 0)
 }
 
 // Insert implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) Insert(table string) types.InsertQueryBuilder {
 	args := m.MethodCalled("Insert", table)
-	return args.Get(0).(types.InsertQueryBuilder)
+	return arg[types.InsertQueryBuilder](args, "Insert", 0)
 }
 
 // InsertWithColumns implements types.QueryBuilderInterface
@@ -88,13 +88,13 @@ func (m *MockQueryBuilder) InsertWithColumns(table string, columns ...string) ty
 		callArgs[i+1] = col
 	}
 	args := m.MethodCalled("InsertWithColumns", callArgs...)
-	return args.Get(0).(types.InsertQueryBuilder)
+	return arg[types.InsertQueryBuilder](args, "InsertWithColumns", 0)
 }
 
 // InsertStruct implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) InsertStruct(table string, instance any) types.InsertQueryBuilder {
 	args := m.MethodCalled("InsertStruct", table, instance)
-	return args.Get(0).(types.InsertQueryBuilder)
+	return arg[types.InsertQueryBuilder](args, "InsertStruct", 0)
 }
 
 // InsertFields implements types.QueryBuilderInterface
@@ -106,25 +106,25 @@ func (m *MockQueryBuilder) InsertFields(table string, instance any, fields ...st
 		callArgs[i+2] = field
 	}
 	args := m.MethodCalled("InsertFields", callArgs...)
-	return args.Get(0).(types.InsertQueryBuilder)
+	return arg[types.InsertQueryBuilder](args, "InsertFields", 0)
 }
 
 // Update implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) Update(table string) types.UpdateQueryBuilder {
 	args := m.MethodCalled("Update", table)
-	return args.Get(0).(types.UpdateQueryBuilder)
+	return arg[types.UpdateQueryBuilder](args, "Update", 0)
 }
 
 // Delete implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) Delete(table string) types.DeleteQueryBuilder {
 	args := m.MethodCalled("Delete", table)
-	return args.Get(0).(types.DeleteQueryBuilder)
+	return arg[types.DeleteQueryBuilder](args, "Delete", 0)
 }
 
 // BuildCaseInsensitiveLike implements types.QueryBuilderInterface
 func (m *MockQueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer {
 	args := m.MethodCalled("BuildCaseInsensitiveLike", column, value)
-	return args.Get(0).(squirrel.Sqlizer)
+	return arg[squirrel.Sqlizer](args, "BuildCaseInsensitiveLike", 0)
 }
 
 // BuildUpsert implements types.QueryBuilderInterface
@@ -220,67 +220,67 @@ func (m *MockQueryBuilder) ExpectEscapeIdentifier(input, output string) *mock.Ca
 // JoinOn implements types.SelectQueryBuilder
 func (m *MockQueryBuilder) JoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("JoinOn", table, filter)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "JoinOn", 0)
 }
 
 // LeftJoinOn implements types.SelectQueryBuilder
 func (m *MockQueryBuilder) LeftJoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("LeftJoinOn", table, filter)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "LeftJoinOn", 0)
 }
 
 // RightJoinOn implements types.SelectQueryBuilder
 func (m *MockQueryBuilder) RightJoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("RightJoinOn", table, filter)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "RightJoinOn", 0)
 }
 
 // InnerJoinOn implements types.SelectQueryBuilder
 func (m *MockQueryBuilder) InnerJoinOn(table any, filter types.JoinFilter) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("InnerJoinOn", table, filter)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "InnerJoinOn", 0)
 }
 
 // CrossJoinOn implements types.SelectQueryBuilder
 func (m *MockQueryBuilder) CrossJoinOn(table any) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("CrossJoinOn", table)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "CrossJoinOn", 0)
 }
 
 func (m *MockQueryBuilder) From(from ...any) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("From", from...)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "From", 0)
 }
 
 func (m *MockQueryBuilder) GroupBy(groupBys ...any) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("GroupBy", groupBys...)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "GroupBy", 0)
 }
 
 func (m *MockQueryBuilder) Having(pred any, args ...any) types.SelectQueryBuilder {
 	callArgs := append([]any{pred}, args...)
 	arguments := m.MethodCalled("Having", callArgs...)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "Having", 0)
 }
 
 func (m *MockQueryBuilder) OrderBy(orderBys ...any) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("OrderBy", orderBys...)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "OrderBy", 0)
 }
 
 func (m *MockQueryBuilder) Limit(limit uint64) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("Limit", limit)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "Limit", 0)
 }
 
 func (m *MockQueryBuilder) Offset(offset uint64) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("Offset", offset)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "Offset", 0)
 }
 
 func (m *MockQueryBuilder) Paginate(limit, offset uint64) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("Paginate", limit, offset)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "Paginate", 0)
 }
 
 func (m *MockQueryBuilder) ToSQL() (sql string, args []any, err error) {
@@ -297,7 +297,7 @@ func (m *MockQueryBuilder) ToSQL() (sql string, args []any, err error) {
 // Where implements types.SelectQueryBuilder
 func (m *MockQueryBuilder) Where(filter types.Filter) types.SelectQueryBuilder {
 	arguments := m.MethodCalled("Where", filter)
-	return arguments.Get(0).(types.SelectQueryBuilder)
+	return arg[types.SelectQueryBuilder](arguments, "Where", 0)
 }
 
 // Compile-time verification that MockQueryBuilder implements the interface

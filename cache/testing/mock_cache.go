@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,10 +26,10 @@ type MockCache struct {
 	id string
 
 	// Storage
-	// mu serializes mutators so CompareAndSet and GetOrSet are real atomics rather than
-	// check-then-act sequences over data.
+	// mu serializes every data access so CompareAndSet and GetOrSet are real atomics
+	// rather than check-then-act sequences over data.
 	mu     sync.Mutex
-	data   sync.Map // key: string, value: *cacheEntry
+	data   map[string]*cacheEntry
 	closed atomic.Bool
 
 	// Configurable behavior
@@ -60,6 +61,15 @@ type MockCache struct {
 type cacheEntry struct {
 	value      []byte
 	expiration time.Time
+}
+
+// store writes an entry, materializing data on first use so a zero-value
+// MockCache stays usable. Callers must hold mu.
+func (m *MockCache) store(key string, entry *cacheEntry) {
+	if m.data == nil {
+		m.data = make(map[string]*cacheEntry)
+	}
+	m.data[key] = entry
 }
 
 // NewMockCache creates a new MockCache with default behavior.
@@ -166,15 +176,13 @@ func (m *MockCache) Get(ctx context.Context, key string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	val, ok := m.data.Load(key)
+	entry, ok := m.data[key]
 	if !ok {
 		return nil, cache.ErrNotFound
 	}
 
-	entry := val.(*cacheEntry)
-
 	if time.Now().After(entry.expiration) {
-		m.data.Delete(key)
+		delete(m.data, key)
 		return nil, cache.ErrNotFound
 	}
 
@@ -214,12 +222,10 @@ func (m *MockCache) Set(ctx context.Context, key string, value []byte, ttl time.
 		expiration = time.Now().Add(100 * 365 * 24 * time.Hour)
 	}
 
-	entry := &cacheEntry{
+	m.store(key, &cacheEntry{
 		value:      value,
 		expiration: expiration,
-	}
-
-	m.data.Store(key, entry)
+	})
 	return nil
 }
 
@@ -256,26 +262,17 @@ func (m *MockCache) GetOrSet(ctx context.Context, key string, value []byte, ttl 
 		expiration = time.Now().Add(100 * 365 * 24 * time.Hour)
 	}
 
-	// Atomic get-or-set operation
-	actual, loaded := m.data.LoadOrStore(key, &cacheEntry{
-		value:      value,
-		expiration: expiration,
-	})
-
-	entry := actual.(*cacheEntry)
-
-	// Check expiration even if loaded
-	if loaded && time.Now().After(entry.expiration) {
-		// Expired, replace it
-		entry = &cacheEntry{
+	// Atomic get-or-set: a missing entry and an expired one are both replaced.
+	entry, loaded := m.data[key]
+	if !loaded || time.Now().After(entry.expiration) {
+		m.store(key, &cacheEntry{
 			value:      value,
 			expiration: expiration,
-		}
-		m.data.Store(key, entry)
+		})
 		return value, true, nil
 	}
 
-	return entry.value, !loaded, nil
+	return entry.value, false, nil
 }
 
 // CompareAndSet atomically compares and sets a value.
@@ -313,23 +310,24 @@ func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue
 
 	// expectedValue == nil means "set only if key doesn't exist"
 	if expectedValue == nil {
-		_, loaded := m.data.LoadOrStore(key, &cacheEntry{
+		if _, loaded := m.data[key]; loaded {
+			return false, nil
+		}
+		m.store(key, &cacheEntry{
 			value:      newValue,
 			expiration: expiration,
 		})
-		return !loaded, nil
+		return true, nil
 	}
 
 	// Compare and swap existing value
-	actual, ok := m.data.Load(key)
+	entry, ok := m.data[key]
 	if !ok {
 		return false, nil // Key doesn't exist, can't compare
 	}
 
-	entry := actual.(*cacheEntry)
-
 	if time.Now().After(entry.expiration) {
-		m.data.Delete(key)
+		delete(m.data, key)
 		return false, nil
 	}
 
@@ -338,7 +336,7 @@ func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue
 	}
 
 	// Swap to new value
-	m.data.Store(key, &cacheEntry{
+	m.store(key, &cacheEntry{
 		value:      newValue,
 		expiration: expiration,
 	})
@@ -369,7 +367,7 @@ func (m *MockCache) Delete(ctx context.Context, key string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.data.Delete(key)
+	delete(m.data, key)
 	return nil
 }
 
@@ -408,11 +406,9 @@ func (m *MockCache) Stats() (map[string]any, error) {
 		return nil, m.statsError
 	}
 
-	count := 0
-	m.data.Range(func(_, _ any) bool {
-		count++
-		return true
-	})
+	m.mu.Lock()
+	count := len(m.data)
+	m.mu.Unlock()
 
 	return map[string]any{
 		"id":             m.id,
@@ -442,10 +438,9 @@ func (m *MockCache) Close() error {
 	}
 
 	// Clear data on close
-	m.data.Range(func(key, _ any) bool {
-		m.data.Delete(key)
-		return true
-	})
+	m.mu.Lock()
+	clear(m.data)
+	m.mu.Unlock()
 
 	if m.onClose != nil {
 		m.onClose(m.id)
@@ -488,7 +483,10 @@ func (m *MockCache) IsClosed() bool {
 
 // Has returns whether a key exists in the cache (ignoring expiration).
 func (m *MockCache) Has(key string) bool {
-	_, ok := m.data.Load(key)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	_, ok := m.data[key]
 	return ok
 }
 
@@ -498,10 +496,7 @@ func (m *MockCache) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.data.Range(func(key, _ any) bool {
-		m.data.Delete(key)
-		return true
-	})
+	clear(m.data)
 }
 
 // ResetCounters resets all operation counters to zero.
@@ -525,31 +520,32 @@ func (m *MockCache) ID() string {
 // AllKeys returns all keys currently stored (including expired).
 // Useful for debugging test failures.
 func (m *MockCache) AllKeys() []string {
-	var keys []string
-	m.data.Range(func(key, _ any) bool {
-		keys = append(keys, key.(string))
-		return true
-	})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	keys := make([]string, 0, len(m.data))
+	for key := range m.data {
+		keys = append(keys, key)
+	}
 	return keys
 }
 
 // Dump returns a string representation of cache contents for debugging.
 func (m *MockCache) Dump() string {
-	var result string
-	result += fmt.Sprintf("MockCache(%s) closed=%v\n", m.id, m.closed.Load())
-	result += "Contents:\n"
+	var body strings.Builder
 
-	m.data.Range(func(key, val any) bool {
-		entry := val.(*cacheEntry)
+	m.mu.Lock()
+	for key, entry := range m.data {
 		expired := time.Now().After(entry.expiration)
-		result += fmt.Sprintf("  %s: %q (expires: %v, expired: %v)\n",
+		fmt.Fprintf(&body, "  %s: %q (expires: %v, expired: %v)\n",
 			key, string(entry.value), entry.expiration.Format(time.RFC3339), expired)
-		return true
-	})
+	}
+	m.mu.Unlock()
 
-	if result == fmt.Sprintf("MockCache(%s) closed=%v\nContents:\n", m.id, m.closed.Load()) {
-		result += "  (empty)\n"
+	contents := body.String()
+	if contents == "" {
+		contents = "  (empty)\n"
 	}
 
-	return result
+	return fmt.Sprintf("MockCache(%s) closed=%v\nContents:\n%s", m.id, m.closed.Load(), contents)
 }

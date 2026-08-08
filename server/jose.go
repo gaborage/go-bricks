@@ -523,15 +523,15 @@ func formatJOSEPostTrustError(c *echo.Context, apiErr IAPIError, p *jose.Policy,
 // writer; if buildFrameworkMeta ever grows new keys (requestId, region, etc.), JOSE error
 // envelopes pick them up automatically rather than silently drifting.
 func buildErrorEnvelope(c *echo.Context, apiErr IAPIError, _ *config.Config) map[string]any {
-	out := map[string]any{
-		fieldError: map[string]any{
-			"code":       apiErr.ErrorCode(),
-			fieldMessage: apiErr.Message(),
-		},
-		"meta": buildFrameworkMeta(c),
+	errBody := map[string]any{
+		"code":       apiErr.ErrorCode(),
+		fieldMessage: apiErr.Message(),
 	}
 	if details := apiErr.Details(); len(details) > 0 {
-		out[fieldError].(map[string]any)["details"] = details
+		errBody["details"] = details
 	}
-	return out
+	return map[string]any{
+		fieldError: errBody,
+		"meta":     buildFrameworkMeta(c),
+	}
 }

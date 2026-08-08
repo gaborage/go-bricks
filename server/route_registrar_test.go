@@ -21,9 +21,7 @@ const (
 
 func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 	e := echo.New()
-	base := newRouteGroup(e.Group("/api"), "/api", nil)
-	rg, ok := base.(*routeGroup)
-	require.True(t, ok)
+	rg := newRouteGroup(e.Group("/api"), "/api", nil)
 
 	var hits int
 	rg.Add(http.MethodGet, usersRoute, func(c HandlerContext) error {
@@ -65,8 +63,7 @@ func TestRouteGroupAddNormalizesPaths(t *testing.T) {
 
 func TestRouteGroupGroupCreatesNestedRegistrar(t *testing.T) {
 	e := echo.New()
-	base := newRouteGroup(e.Group("/api"), "/api", nil)
-	parent := base.(*routeGroup)
+	parent := newRouteGroup(e.Group("/api"), "/api", nil)
 
 	child := parent.Group("/v1")
 	childGroup, ok := child.(*routeGroup)
@@ -100,8 +97,7 @@ func TestRouteGroupGroupCreatesNestedRegistrar(t *testing.T) {
 
 func TestRouteGroupUseAppliesMiddleware(t *testing.T) {
 	e := echo.New()
-	base := newRouteGroup(e.Group(""), "", nil)
-	rg := base.(*routeGroup)
+	rg := newRouteGroup(e.Group(""), "", nil)
 
 	var called bool
 	rg.Use(func(_ HandlerContext, next func() error) error {

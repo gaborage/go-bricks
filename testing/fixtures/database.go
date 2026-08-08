@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/mock"
@@ -136,17 +137,21 @@ func NewDatabaseWithData(data map[string][]any) *mocks.MockDatabase {
 		if len(rowData) == 0 {
 			continue
 		}
-		// Assume first row defines column structure
-		firstRow := rowData[0].([]any)
-		columns := make([]string, len(firstRow))
-		for i := range firstRow {
-			columns[i] = "col" + string(rune('A'+i)) // Generate column names like "colA", "colB"
-		}
-
 		// Convert the data to the correct format
 		rowsData := make([][]any, len(rowData))
 		for i, row := range rowData {
-			rowsData[i] = row.([]any)
+			cells, ok := row.([]any)
+			if !ok {
+				// NOSONAR: Test fixture - panic on setup failure is intentional
+				panic(fmt.Sprintf("fixtures: NewDatabaseWithData query %q row %d is %T, want []any", query, i, row))
+			}
+			rowsData[i] = cells
+		}
+
+		// Assume first row defines column structure
+		columns := make([]string, len(rowsData[0]))
+		for i := range columns {
+			columns[i] = "col" + string(rune('A'+i)) // Generate column names like "colA", "colB"
 		}
 		rows := NewMockRows(columns, rowsData)
 		if rows.Err() != nil {

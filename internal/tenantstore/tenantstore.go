@@ -40,7 +40,7 @@ type Deps[S TableCreator] struct {
 type Cache[S TableCreator] struct {
 	mu       sync.RWMutex
 	stores   map[string]S
-	tenantMu sync.Map // map[string]*sync.Mutex — per-tenant init locks
+	tenantMu map[string]*sync.Mutex // per-tenant init locks, guarded by mu
 }
 
 // Get returns the store for the tenant in ctx, creating it (and, if
@@ -59,8 +59,7 @@ func (c *Cache[S]) Get(ctx context.Context, d *Deps[S]) (S, error) {
 
 	// Serialize initialization per tenant only — unrelated tenants must not
 	// block on each other's (possibly slow) DB connection or table creation.
-	lockAny, _ := c.tenantMu.LoadOrStore(tenantID, &sync.Mutex{})
-	tenantLock := lockAny.(*sync.Mutex)
+	tenantLock := c.tenantLock(tenantID)
 	tenantLock.Lock()
 	defer tenantLock.Unlock()
 
@@ -102,6 +101,23 @@ func (c *Cache[S]) Get(ctx context.Context, d *Deps[S]) (S, error) {
 	c.stores[tenantID] = store
 	c.mu.Unlock()
 	return store, nil
+}
+
+// tenantLock returns the init lock for tenantID, creating it on first use. mu
+// is held only for the map lookup — never across the returned lock — so one
+// tenant's slow initialization cannot block another's lookup.
+func (c *Cache[S]) tenantLock(tenantID string) *sync.Mutex {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if lock, ok := c.tenantMu[tenantID]; ok {
+		return lock
+	}
+	lock := &sync.Mutex{}
+	if c.tenantMu == nil {
+		c.tenantMu = make(map[string]*sync.Mutex)
+	}
+	c.tenantMu[tenantID] = lock
+	return lock
 }
 
 // Cached reports the store already initialized for tenantID, if any.

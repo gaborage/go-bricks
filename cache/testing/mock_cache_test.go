@@ -413,7 +413,9 @@ const concurrencyRounds = 200
 // seedExpired stores an entry that is already past its expiration, bypassing Set so the
 // test does not depend on platform clock granularity.
 func seedExpired(mock *MockCache, key string, value []byte) {
-	mock.data.Store(key, &cacheEntry{value: value, expiration: time.Now().Add(-time.Minute)})
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	mock.store(key, &cacheEntry{value: value, expiration: time.Now().Add(-time.Minute)})
 }
 
 // countConcurrentWinners releases op on every CPU at once through a yield barrier, so the

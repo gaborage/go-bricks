@@ -3068,3 +3068,28 @@ func BenchmarkBindRequestPlannedVsLegacy(b *testing.B) {
 		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error { return binder.bindRequest(c, d) })
 	})
 }
+
+// allocProbeRequestPtr pins the defined-pointer-type case for requestAllocator.
+// reflect.New yields the unnamed *allocProbeRequest, which is NOT assertable to the
+// named allocProbeRequestPtr — without the Convert the typed request comes back nil
+// and validateNotNil rejects a perfectly good request.
+type allocProbeRequest struct {
+	Name string `json:"name"`
+}
+
+type allocProbeRequestPtr *allocProbeRequest
+
+func TestRequestAllocatorDefinedPointerType(t *testing.T) {
+	ra := newRequestAllocator[allocProbeRequestPtr]()
+	request, requestPtr := ra.allocate()
+
+	require.NotNil(t, requestPtr, "binder target must be allocated")
+	require.NotNil(t, request, "defined pointer type must allocate, not stay nil")
+	require.NoError(t, ra.validateNotNil(request))
+
+	// The binder writes through requestPtr; the typed request must alias it.
+	bound, ok := requestPtr.(*allocProbeRequest)
+	require.True(t, ok, "binder target must be *allocProbeRequest")
+	bound.Name = "bound"
+	assert.Equal(t, "bound", (*allocProbeRequest)(request).Name)
+}
