@@ -4,9 +4,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/jose/internal/cryptoadapter"
 )
 
 // Direct unit tests for mapDecryptError / mapVerifyError. The end-to-end roundtrip

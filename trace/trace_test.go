@@ -79,6 +79,7 @@ func (a *mapAccessor) Get(key string) any {
 	}
 	return a.m[key]
 }
+
 func (a *mapAccessor) Set(key string, value any) {
 	if a.m == nil {
 		a.m = map[string]any{}

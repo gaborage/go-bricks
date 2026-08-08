@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -41,15 +42,19 @@ func (s *mockStore) Insert(_ context.Context, _ dbtypes.Tx, record *Record) erro
 func (s *mockStore) FetchPending(_ context.Context, _ dbtypes.Interface, _ int) ([]Record, error) {
 	return nil, nil
 }
+
 func (s *mockStore) MarkPublished(_ context.Context, _ dbtypes.Interface, _ string) error {
 	return nil
 }
+
 func (s *mockStore) MarkFailed(_ context.Context, _ dbtypes.Interface, _, _ string) error {
 	return nil
 }
+
 func (s *mockStore) MarkDeadLettered(_ context.Context, _ dbtypes.Interface, _, _ string) error {
 	return nil
 }
+
 func (s *mockStore) DeletePublished(_ context.Context, _ dbtypes.Interface, _ time.Time) (int64, error) {
 	return 0, nil
 }

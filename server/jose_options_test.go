@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	otelnoop "go.opentelemetry.io/otel/metric/noop"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/gaborage/go-bricks/config"
@@ -31,7 +31,7 @@ func TestWithJOSETracerSetsField(t *testing.T) {
 }
 
 func TestWithJOSEMeterProviderSetsField(t *testing.T) {
-	mp := otelnoop.NewMeterProvider()
+	mp := metricnoop.NewMeterProvider()
 	hr := NewHandlerRegistry(&config.Config{App: config.AppConfig{Env: "development"}}, WithJOSEMeterProvider(mp))
 	assert.NotNil(t, hr.joseMeterProvider)
 }

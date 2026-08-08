@@ -5,11 +5,12 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/gaborage/go-bricks/app"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	inboxtest "github.com/gaborage/go-bricks/inbox/testing"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // Compile-time guard: MockInbox satisfies the production interface.

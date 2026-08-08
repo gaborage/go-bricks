@@ -4,9 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/config"
 )
 
 func TestApplyDefaults(t *testing.T) {

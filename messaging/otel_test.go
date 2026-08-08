@@ -463,6 +463,7 @@ func (l *testLogger) Fatal() logger.LogEvent { return &testLogEvent{l.t, "FATAL"
 func (l *testLogger) WithContext(_ any) logger.Logger {
 	return l
 }
+
 func (l *testLogger) WithFields(_ map[string]any) logger.Logger {
 	return l
 }

@@ -430,6 +430,7 @@ func (n *noopLogger) WithFields(_ map[string]any) logger.Logger { return n }
 func (e *noopLogEvent) Msg(_ string) {
 	// No-op
 }
+
 func (e *noopLogEvent) Msgf(_ string, _ ...any) {
 	// No-op
 }

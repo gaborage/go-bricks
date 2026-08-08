@@ -4,8 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/config"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/gaborage/go-bricks/config"
 )
 
 func TestApplyDefaultsAllZero(t *testing.T) {

@@ -517,7 +517,8 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 // with others and provides partial metrics coverage.
 func RegisterConnectionPoolMetrics(conn interface {
 	Stats() (map[string]any, error)
-}, vendor, serverAddress string, serverPort int, namespace string) func() {
+}, vendor, serverAddress string, serverPort int, namespace string,
+) func() {
 	meter := getDBMeter()
 	if meter == nil {
 		return noOpCleanup()

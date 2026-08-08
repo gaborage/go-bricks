@@ -320,8 +320,10 @@ func (m *MockSchedulerModule) MonthlyAt(jobID string, job any, dayOfMonth int, l
 	return m.Called(jobID, job, dayOfMonth, localTime).Error(0)
 }
 
-var _ Module = (*MockSchedulerModule)(nil)
-var _ JobRegistrar = (*MockSchedulerModule)(nil)
+var (
+	_ Module       = (*MockSchedulerModule)(nil)
+	_ JobRegistrar = (*MockSchedulerModule)(nil)
+)
 
 // MockJobProviderModule implements Module + JobProvider for testing job registration
 type MockJobProviderModule struct {
@@ -349,8 +351,10 @@ func (m *MockJobProviderModule) RegisterJobs(registrar JobRegistrar) error {
 	return m.Called(registrar).Error(0)
 }
 
-var _ Module = (*MockJobProviderModule)(nil)
-var _ JobProvider = (*MockJobProviderModule)(nil)
+var (
+	_ Module      = (*MockJobProviderModule)(nil)
+	_ JobProvider = (*MockJobProviderModule)(nil)
+)
 
 // MockKeyStoreModule implements Module + KeyStoreProvider for testing keystore wiring
 type MockKeyStoreModule struct {
@@ -379,8 +383,10 @@ func (m *MockKeyStoreModule) KeyStore() KeyStore {
 	return m.keyStore
 }
 
-var _ Module = (*MockKeyStoreModule)(nil)
-var _ KeyStoreProvider = (*MockKeyStoreModule)(nil)
+var (
+	_ Module           = (*MockKeyStoreModule)(nil)
+	_ KeyStoreProvider = (*MockKeyStoreModule)(nil)
+)
 
 // stubKeyStore is a minimal KeyStore implementation for testing wiring only
 type stubKeyStore struct{}
@@ -686,8 +692,10 @@ func (m *sharedResolverModule) SetSharedResolvers(
 	m.msg = msg
 }
 
-var _ Module = (*sharedResolverModule)(nil)
-var _ sharedResolverSetter = (*sharedResolverModule)(nil)
+var (
+	_ Module               = (*sharedResolverModule)(nil)
+	_ sharedResolverSetter = (*sharedResolverModule)(nil)
+)
 
 // TestRegisterModuleInjectsSharedResolvers pins the Step-3 wiring: RegisterModule
 // must inject non-nil shared ("" key) DB/messaging resolvers into any module
@@ -1714,6 +1722,7 @@ func (m *describerModule) DescribeModule() ModuleDescriptor {
 		Version:     "1.0.0",
 	}
 }
+
 func (m *describerModule) DescribeRoutes() []server.RouteDescriptor {
 	return []server.RouteDescriptor{}
 }

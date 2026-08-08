@@ -8,10 +8,11 @@ import (
 	"maps"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gaborage/go-bricks/app"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
-	"github.com/google/uuid"
 )
 
 // outboxPublisher implements app.OutboxPublisher by writing events to the outbox table

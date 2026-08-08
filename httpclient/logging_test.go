@@ -557,7 +557,6 @@ func TestLoggingIntegration(t *testing.T) {
 
 		// Test that logging methods work
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://test.com", http.NoBody)
-
 		if err != nil {
 			t.Fatalf("failed to create request: %v", err)
 		}
@@ -582,7 +581,6 @@ func TestLoggingIntegration(t *testing.T) {
 		}
 
 		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://test.com", http.NoBody)
-
 		if err != nil {
 			t.Fatalf("failed to create request: %v", err)
 		}

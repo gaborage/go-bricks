@@ -4,8 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 const (

@@ -438,8 +438,10 @@ func logConnectionSuccess(log logger.Logger, cfg *config.DatabaseConfig) {
 }
 
 // Oracle re-exports the vendor-agnostic wrappers; see database/internal/wrapper.
-type Statement = wrapper.Statement
-type Transaction = wrapper.Transaction
+type (
+	Statement   = wrapper.Statement
+	Transaction = wrapper.Transaction
+)
 
 // Query, QueryRow, Exec, Prepare, Begin, BeginTx, Health, Stats, Close are
 // inherited from the embedded *wrapper.Connection — see database/internal/wrapper.

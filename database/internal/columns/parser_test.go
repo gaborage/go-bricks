@@ -4,10 +4,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gaborage/go-bricks/database/internal/sqllex"
-	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 const (

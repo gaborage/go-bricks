@@ -14,10 +14,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/internal/secretfile"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/internal/secretfile"
 )
 
 // generateTestKeys creates a fresh RSA key pair for testing.

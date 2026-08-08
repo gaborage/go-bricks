@@ -16,8 +16,9 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/metric"
-	metricznoop "go.opentelemetry.io/otel/metric/noop"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/propagation"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -25,8 +26,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/grpc/credentials/insecure"
-
-	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
 // debugLogger is a simple logger for observability debugging.
@@ -505,7 +504,7 @@ func (p *provider) TracerProvider() trace.TracerProvider {
 // MeterProvider returns the configured meter provider.
 func (p *provider) MeterProvider() metric.MeterProvider {
 	if p.meterProvider == nil {
-		return metricznoop.NewMeterProvider()
+		return metricnoop.NewMeterProvider()
 	}
 	return p.meterProvider
 }

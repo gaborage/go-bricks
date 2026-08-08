@@ -36,7 +36,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
 
 ### Code Quality Standards
 
-- **Formatting**: Use `make fmt` to format code with `go fmt`
+- **Formatting**: Use `make fmt` to format code with `golangci-lint fmt` (gofmt + gofumpt + gci)
 - **Linting**: Code must pass `make lint` (golangci-lint)
 - **Testing**: Add tests for new functionality and ensure `make test` passes
 - **Security**: Code must pass `gosec` security checks

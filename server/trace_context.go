@@ -3,8 +3,9 @@ package server
 import (
 	"context"
 
-	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/labstack/echo/v5"
+
+	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 )
 
 // enrichTraceContext returns the request's context with the resolved trace ID and

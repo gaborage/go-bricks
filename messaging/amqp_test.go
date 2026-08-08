@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/logger"
-	gobrickstrace "github.com/gaborage/go-bricks/trace"
 	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // =============================================================================
@@ -390,6 +391,7 @@ func (e *stubEvent) Msg(msg string) {
 	defer e.l.mu.Unlock()
 	e.l.entries = append(e.l.entries, msg)
 }
+
 func (e *stubEvent) Msgf(format string, args ...any) {
 	e.l.mu.Lock()
 	defer e.l.mu.Unlock()

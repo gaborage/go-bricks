@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/gaborage/go-bricks/cache"
 	cachetesting "github.com/gaborage/go-bricks/cache/testing"
 	"github.com/gaborage/go-bricks/config"
@@ -14,8 +17,6 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const (

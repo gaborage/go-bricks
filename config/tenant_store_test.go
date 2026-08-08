@@ -511,7 +511,6 @@ func TestTenantStoreDBConfigTenantAndNamedKeysStayLoud(t *testing.T) {
 	for _, key := range []string{tenantA, NamedDatabasePrefix + "reporting"} {
 		t.Run(key, func(t *testing.T) {
 			got, err := store.DBConfig(context.Background(), key)
-
 			if err != nil {
 				assert.False(t, IsNotConfigured(err), "a malformed %s must not read as absent", key)
 				return
