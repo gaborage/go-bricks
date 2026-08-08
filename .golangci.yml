@@ -179,16 +179,6 @@ linters:
       - linters:
           - zerologlint
         path: logger/adapter\.go
-      # Intentional "testing" subpackages for test utilities (imported with aliases)
-      - linters:
-          - revive
-        path: "(cache|database|observability)/testing/|^testing/"
-        text: "var-naming: avoid package names"
-      # trace package intentionally named to match its domain
-      - linters:
-          - revive
-        path: "trace/"
-        text: "var-naming: avoid package names"
       # cmd/seal-payload is the only file set that imports BOTH go-jose/v4 (whose
       # package name is `jose`) and github.com/gaborage/go-bricks/jose. One of
       # them must be aliased away, and the go-bricks package is the dominant one
