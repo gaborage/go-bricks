@@ -23,6 +23,7 @@ func main() {
 	workers := flag.Int("workers", 0, "engine workers; each is a concurrent `go test`. 0 inherits .gremlins.yaml")
 	cpu := flag.Int("cpu", 0, "whole-run core budget divided across workers; 0 leaves the machine default")
 	cooldown := flag.Duration("cooldown", 0, "pause between packages so the machine sheds heat; 0 disables")
+	noCache := flag.Bool("no-cache", false, "ignore and do not write the result cache; re-run every package in the diff")
 	flag.Parse()
 
 	// 0 is the documented opt-out for both guardrails, so a negative value is a
@@ -48,13 +49,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mutatediff: -engine is required")
 		code = 2
 	default:
-		code = run(ctx, *engine, *base, throttle{cpu: *cpu, workers: *workers, cooldown: *cooldown}, os.Stdout)
+		code = run(ctx, *engine, *base, throttle{cpu: *cpu, workers: *workers, cooldown: *cooldown}, !*noCache, os.Stdout)
 	}
 	stop()
 	os.Exit(code)
 }
 
-func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer) int {
+func run(ctx context.Context, engine, baseRef string, th throttle, useCache bool, out io.Writer) int {
 	engineArgs := strings.Fields(engine)
 	if len(engineArgs) == 0 {
 		return fail("engine command is blank")
@@ -82,6 +83,9 @@ func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer
 		fmt.Fprintln(out, "mutatediff: no mutatable changes vs merge-base")
 		return 0
 	}
+	// Snapshotted before apply rewrites it: the cache key covers the GOFLAGS the
+	// caller chose (which can carry -tags), not the -p this process adds.
+	callerGoflags := os.Getenv(goflagsEnv)
 	// After the no-op return: a gate with nothing to do must not leave the
 	// caller's GOFLAGS rewritten.
 	b := computeBudget(th.cpu, th.workers)
@@ -94,28 +98,87 @@ func run(ctx context.Context, engine, baseRef string, th throttle, out io.Writer
 		return fail("%v", err)
 	}
 	defer os.RemoveAll(reportDir)
-	var failures, warnings, unjudged []mutantVerdict
-	pkgs := packagesOf(changed)
+	gr := &gateRun{
+		engineArgs: engineArgs,
+		reportDir:  reportDir,
+		changed:    changed,
+		workers:    b.workers,
+		th:         th,
+		cache:      resolveCache(ctx, useCache, engine, callerGoflags, out),
+		out:        out,
+	}
+	v, gateErr := gr.mutateAll(ctx, packagesOf(changed))
+	if gateErr != nil {
+		return fail("%v", gateErr)
+	}
+	return reportVerdict(v.failures, v.warnings, v.unjudged, out)
+}
+
+// resolveCache keeps the disabled path visible in the transcript: a cached run
+// and an uncached one must never be confused for each other, in either direction.
+func resolveCache(ctx context.Context, useCache bool, engine, callerGoflags string, out io.Writer) *resultCache {
+	if !useCache {
+		fmt.Fprintln(out, "mutatediff: result cache disabled (-no-cache) — every package in the diff will run")
+		return nil
+	}
+	return newResultCache(ctx, engine, callerGoflags, out)
+}
+
+// verdictSet is one run's accumulated judgment, split the way reportVerdict
+// consumes it.
+type verdictSet struct {
+	failures []mutantVerdict
+	warnings []mutantVerdict
+	unjudged []mutantVerdict
+}
+
+// gateRun is the per-run state the package loop threads through.
+type gateRun struct {
+	engineArgs []string
+	reportDir  string
+	changed    map[string][]lineRange
+	workers    int
+	th         throttle
+	cache      *resultCache
+	out        io.Writer
+}
+
+// mutateAll walks the changed packages, consulting the result cache before each
+// one and populating it only from a package whose changed lines came back
+// entirely clean. "Entirely" is the load-bearing word: a survivor fails the
+// gate, and a NOT COVERED or TIMED OUT mutant or a vacuous package would have to
+// be replayed for the report to stay honest — so none of them are stored, and a
+// hit therefore contributes nothing at all to the verdict.
+func (r *gateRun) mutateAll(ctx context.Context, pkgs []string) (verdictSet, error) {
+	var v verdictSet
 	for i, pkg := range pkgs {
-		f, w, ran, mErr := mutatePackage(ctx, engineArgs, pkg, reportDir, changed, b.workers, out)
-		if mErr != nil {
-			return fail("%v", mErr)
+		if r.cache.hit(pkg, r.changed, r.out) {
+			fmt.Fprintf(r.out, "mutatediff: %s cached PASS (skipped)\n", pkg)
+			continue
 		}
-		failures = append(failures, f...)
-		warnings = append(warnings, w...)
-		if vacuousPkg(pkg, reportDir, out) {
-			unjudged = append(unjudged, mutantVerdict{File: pkg})
+		f, w, ran, mErr := mutatePackage(ctx, r.engineArgs, pkg, r.reportDir, r.changed, r.workers, r.out)
+		if mErr != nil {
+			return verdictSet{}, mErr
+		}
+		v.failures = append(v.failures, f...)
+		v.warnings = append(v.warnings, w...)
+		isVacuous := vacuousPkg(pkg, r.reportDir, r.out)
+		if isVacuous {
+			v.unjudged = append(v.unjudged, mutantVerdict{File: pkg})
+		}
+		if len(f) == 0 && len(w) == 0 && !isVacuous {
+			r.cache.store(pkg, r.changed, r.out)
 		}
 		if shouldCool(ran, i, len(pkgs)) {
 			// A cooldown cut short means the run was canceled, not that the next
 			// package is ready: reporting a verdict over packages that never ran
 			// would call an interrupted gate clean.
-			if coolErr := th.coolDown(ctx, out); coolErr != nil {
-				return fail("canceled during cooldown: %v", coolErr)
+			if coolErr := r.th.coolDown(ctx, r.out); coolErr != nil {
+				return verdictSet{}, fmt.Errorf("canceled during cooldown: %w", coolErr)
 			}
 		}
 	}
-	return reportVerdict(failures, warnings, unjudged, out)
+	return v, nil
 }
 
 // reportVerdict prints every result and returns the process exit code. Vacuous

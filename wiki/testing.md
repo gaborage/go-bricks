@@ -370,6 +370,7 @@ Knobs (all `?=`, so the environment overrides):
 | `MUTATE_BASELINE_WORKERS` | 2 | Same as `MUTATE_WORKERS`, for the nightly baseline; also bounds peak memory. Unbudgeted — CI runs at full speed. |
 | `MUTATE_CEILING_FLOOR` | 30s | Minimum per-mutant ceiling (any `time.ParseDuration` string). |
 | `MUTATE_FALLBACK_COEFFICIENT` | 600 | Used only when a package's coefficient cannot be computed. |
+| `MUTATE_NO_CACHE` | *(empty)* | Any non-empty value bypasses the result cache below and re-mutates every package in the diff. |
 
 The budget is applied once, on `mutatediff`'s own environment, so gremlins, its
 coverage pass, `measureSuite`'s timing passes, and every mutant's `go test` all
@@ -382,6 +383,56 @@ mutants run unbudgeted.
 The cooldown gives no relief inside a single package — `mutatediff` drives
 gremlins once per package and cannot interrupt its internal mutant loop. For a
 package that dominates a run, speeding up its slowest tests remains the lever.
+
+### Result cache
+
+The gate used to have no memory: every invocation re-ran every package in the
+branch diff, so amending a one-line fix on a wide branch re-mutated everything
+at a full gremlins run plus that package's whole test suite each.
+`scripts/mutatediff/cache.go` remembers packages that came back clean, in
+`.mutatediff-cache/` at the repo root (git-ignored by the allowlist
+`.gitignore`, and removed by `make clean`). Every skip prints
+`mutatediff: <pkg> cached PASS (skipped)`, so a cached run is never mistakable
+for one that did the work. `MUTATE_NO_CACHE=1` bypasses it entirely.
+
+Because this is a gate, the cache is built to be wrong only in the direction of
+doing work twice:
+
+- **PASS only, and only a *fully* clean pass.** A surviving mutant is never
+  stored — and neither is a `NOT COVERED` or `TIMED OUT` one, nor a vacuous
+  package. A timeout is indeterminate and load-dependent, so freezing one into
+  the cache would let a machine under thermal load mint a permanent pass for a
+  mutant that was never evaluated. Refusing every non-clean verdict also keeps
+  the report honest: a hit contributes nothing to it, so the final verdict lines
+  read exactly as they would have without the cache.
+- **The key covers everything that can change a verdict.** The package; the
+  content of every `.go` file — test files included, since the package's own
+  tests are what kill its mutants — and everything under `testdata/`, both in
+  the subtree the engine mutates *and* in its transitive first-party dependency
+  closure (a mutant in X is killed by X's tests, but X's *behavior* changes when
+  a package it imports changes); the pinned engine command, whose `@version` is
+  part of the string; `.gremlins.yaml`, which selects the mutator set; `go.mod`
+  / `go.sum` / `go.work` / `go.work.sum`; the Go toolchain, `GOOS`/`GOARCH`, and
+  the caller's `GOFLAGS`, which can carry `-tags` and decide which files compile
+  at all. The closure comes from one `go list -deps -test ./...` per run.
+- **The judged line set is compared, not hashed.** A cached pass proves only
+  that mutants on the lines judged *at cache time* died. An exact match or a
+  narrower set hits; one extra line — a widened hunk, a file the cached run
+  never saw — misses. This is the subtlest way to mint a false pass, so it is
+  checked line by line rather than by interval arithmetic.
+- **Every doubt is a miss.** A read error, a parse error, a schema mismatch, a
+  clock that moved, a dependency missing from the package listing, a module
+  `go list` cannot resolve: all of them run the package. Nothing in the cache
+  can turn a package that should run into one that does not.
+- **Entries carry a schema version** and are ignored when it differs.
+
+Deliberately *not* in the key: `MUTATE_WORKERS`, `MUTATE_CPU`, and
+`MUTATE_CEILING_FLOOR`. Those move timings only, and any run with a
+timing-sensitive verdict is refused by the first rule before it can be stored.
+
+A hub package is not a leaf. Touching `logger/` on a 12-package diff correctly
+re-ran the nine packages that import it and kept the three that do not — the
+dependency-closure rule doing its job, not a cache miss to debug.
 
 ### Timeout ceiling
 
