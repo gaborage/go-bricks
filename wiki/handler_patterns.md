@@ -281,3 +281,38 @@ func PromoteCardID(c server.HandlerContext, next func() error) error {
 ```
 
 **Trust caveat:** injected params pass through verbatim — no duplicate- or empty-name validation — and reach `param:"x"` binding in downstream handlers. Treat them with the same trust as their source value: a promoted query param is still user input, so keep the usual `validate:` tags on the bound request struct.
+
+## Binding source precedence
+
+When a request struct field carries more than one binding tag — for example a
+field tagged both `json:"id"` and `param:"id"` — the framework binds the **JSON
+body first, then overlays path param, query, and header**. A **present** URL or
+header value therefore wins over a conflicting body value:
+
+- A **path param** overrides the body whenever the matched segment is non-empty,
+  which is the ordinary case. It is **not** an absolute guarantee: an empty
+  segment still matches, so `POST /cards//status` against `/cards/:cardId/status`
+  binds `cardId` as `""`, the overlay skips it, and the body's value survives.
+- A **query param** overrides the body only when its value is non-empty. Both an
+  absent key and a present-but-empty one (`?limit=`) leave the body value in place.
+- A **header** guards on the header being absent, not on its value being empty —
+  a different shape. An absent header leaves the body value in place, but a
+  **present-but-empty** header still binds: for a `[]string` field it parses no
+  entries and clears the field rather than falling back to the body.
+- `SetPathParams()` (above) feeds the same overlay, so a path parameter injected
+  by middleware also beats the body.
+
+This holds on every method, including POST/PUT/PATCH. It is not the underlying
+engine's default — echo's binder binds the body *last* — so the framework runs
+its own overlay pass afterwards to guarantee it.
+
+**For a security-sensitive identifier, do not lean on this ordering — give the
+field only its URL tag.** Dropping the `json` tag makes "the body cannot set
+this" a local, checkable property of the struct, instead of a consequence of
+binder ordering plus the shape of the incoming path. Dual-tagging a tenant or
+resource ID leaves the empty-segment case above open. This precedence is a
+tested contract (`TestRequestBinderPrecedence*` in `server/handler_test.go`).
+
+[ADR-001](adr_001_enhanced_handler_system.md) records the ordering as the original
+design decision; the "only when present" qualifier above refines its wording, which
+says later sources overwrite earlier ones without noting the guard.
