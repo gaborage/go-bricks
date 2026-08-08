@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/cache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/cache"
 )
 
 const (

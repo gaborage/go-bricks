@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/logger"
-	gobrickstrace "github.com/gaborage/go-bricks/trace"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/logger"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 const (
@@ -30,6 +31,7 @@ type fakeConnAdapter struct {
 func (f *fakeConnAdapter) Channel() (*amqp.Channel, error) {
 	return nil, errors.New("adapter does not return *amqp.Channel")
 }
+
 func (f *fakeConnAdapter) NotifyClose(c chan *amqp.Error) chan *amqp.Error {
 	f.notifyCloseCh = c
 	return c
@@ -132,19 +134,23 @@ func (f *fakeChannel) PublishWithContext(_ context.Context, exchange, key string
 	f.mu.Unlock()
 	return err
 }
+
 func (f *fakeChannel) Consume(_, _ string, _, _, _, _ bool, _ amqp.Table) (<-chan amqp.Delivery, error) {
 	return f.consumeCh, f.consumeErr
 }
+
 func (f *fakeChannel) QueueDeclare(name string, _, _, _, _ bool, args amqp.Table) (amqp.Queue, error) {
 	f.declaredQueue = name
 	f.gotQueueArgs = args
 	return amqp.Queue{Name: name}, f.qDeclareErr
 }
+
 func (f *fakeChannel) ExchangeDeclare(name, _ string, _, _, _, _ bool, args amqp.Table) error {
 	f.declaredExchange = name
 	f.gotExchangeArgs = args
 	return f.exDeclareErr
 }
+
 func (f *fakeChannel) QueueBind(name, key, exchange string, _ bool, args amqp.Table) error {
 	f.boundQueue = struct{ q, ex, rk string }{name, exchange, key}
 	f.gotBindingArgs = args

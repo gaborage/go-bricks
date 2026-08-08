@@ -33,8 +33,12 @@ test-coverage: ## Run tests with coverage
 lint: ## Run golangci-lint (pinned; identical to CI)
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
 
-fmt: ## Format Go code
-	go fmt ./...
+# Mirrors the root Makefile: golangci-lint resolves ../../.golangci.yml from
+# here, so this module is held to the same formatters block (gofumpt + gci) and
+# `go fmt` cannot fix those findings. See the root Makefile's `fmt` for the full
+# rationale.
+fmt: ## Format Go code (gofmt + gofumpt + gci, per the repo-root .golangci.yml)
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) fmt
 
 update: ## Update dependencies to latest versions
 	go get -u ./...

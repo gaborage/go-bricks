@@ -1154,7 +1154,7 @@ server:
   port: 9000
 `
 		tmpFile := testConfigFile
-		err := os.WriteFile(tmpFile, []byte(content), 0644)
+		err := os.WriteFile(tmpFile, []byte(content), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(tmpFile)
 
@@ -1184,11 +1184,11 @@ app:
 		yamlFile := testConfigFileYAML
 		ymlFile := testConfigFile
 
-		err := os.WriteFile(yamlFile, []byte(yamlContent), 0644)
+		err := os.WriteFile(yamlFile, []byte(yamlContent), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(yamlFile)
 
-		err = os.WriteFile(ymlFile, []byte(ymlContent), 0644)
+		err = os.WriteFile(ymlFile, []byte(ymlContent), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(ymlFile)
 
@@ -1210,7 +1210,7 @@ app:
   env: production
 `
 		baseFile := testConfigFile
-		err := os.WriteFile(baseFile, []byte(baseContent), 0644)
+		err := os.WriteFile(baseFile, []byte(baseContent), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(baseFile)
 
@@ -1222,7 +1222,7 @@ server:
   port: 8090
 `
 		envFile := "config.production.yml"
-		err = os.WriteFile(envFile, []byte(envContent), 0644)
+		err = os.WriteFile(envFile, []byte(envContent), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(envFile)
 
@@ -1254,11 +1254,11 @@ server:
 		yamlFile := "config.development.yaml"
 		ymlFile := "config.development.yml"
 
-		err := os.WriteFile(yamlFile, []byte(yamlContent), 0644)
+		err := os.WriteFile(yamlFile, []byte(yamlContent), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(yamlFile)
 
-		err = os.WriteFile(ymlFile, []byte(ymlContent), 0644)
+		err = os.WriteFile(ymlFile, []byte(ymlContent), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(ymlFile)
 
@@ -1297,7 +1297,7 @@ app:
   version: v1.0.0
 `
 		tmpFile := testConfigFileYAML
-		err := os.WriteFile(tmpFile, []byte(invalidYAML), 0644)
+		err := os.WriteFile(tmpFile, []byte(invalidYAML), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(tmpFile)
 
@@ -1319,7 +1319,7 @@ app:
   env: production
 `
 		baseFile := testConfigFileYAML
-		err := os.WriteFile(baseFile, []byte(validYAML), 0644)
+		err := os.WriteFile(baseFile, []byte(validYAML), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(baseFile)
 
@@ -1330,7 +1330,7 @@ app:
   broken: [unclosed bracket
 `
 		envFile := "config.production.yaml"
-		err = os.WriteFile(envFile, []byte(invalidEnvYAML), 0644)
+		err = os.WriteFile(envFile, []byte(invalidEnvYAML), 0o644)
 		require.NoError(t, err)
 		defer os.Remove(envFile)
 

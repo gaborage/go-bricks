@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
-
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
@@ -572,18 +571,21 @@ func (j *joseRouteConfig) inbound() *jose.Policy {
 	}
 	return j.Inbound
 }
+
 func (j *joseRouteConfig) outbound() *jose.Policy {
 	if j == nil {
 		return nil
 	}
 	return j.Outbound
 }
+
 func (j *joseRouteConfig) resolver() jose.KeyResolver {
 	if j == nil {
 		return nil
 	}
 	return j.Resolver
 }
+
 func (j *joseRouteConfig) obs() *joseObservability {
 	if j == nil {
 		return nil

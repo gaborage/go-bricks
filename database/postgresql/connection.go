@@ -218,8 +218,10 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 }
 
 // PostgreSQL re-exports the vendor-agnostic wrappers; see database/internal/wrapper.
-type Statement = wrapper.Statement
-type Transaction = wrapper.Transaction
+type (
+	Statement   = wrapper.Statement
+	Transaction = wrapper.Transaction
+)
 
 // DatabaseType returns the database type
 func (c *Connection) DatabaseType() string {

@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
@@ -13,8 +16,6 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // fakeRegistrar captures FixedRate / DailyAt registrations and returns
@@ -595,6 +596,7 @@ func TestModuleInitFailsFastForEmptyStaticMultitenant(t *testing.T) {
 // tenancy logic, so it must be satisfied via SetSharedResolvers even when the
 // test targets a later guard.
 func stubSharedDB(_ context.Context) (dbtypes.Interface, error) { return nil, nil }
+
 func stubSharedMsg(_ context.Context) (messaging.AMQPClient, error) {
 	return nil, nil
 }

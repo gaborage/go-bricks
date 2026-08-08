@@ -226,7 +226,6 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, logger.Logger, erro
 		RegisterClosers().
 		RegisterReadyHandler().
 		Build()
-
 	if err != nil {
 		// Return the logger from builder if available, otherwise create bootstrap logger
 		if log == nil {

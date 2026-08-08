@@ -4,6 +4,7 @@ import (
 	"reflect"
 
 	"github.com/Masterminds/squirrel"
+
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 

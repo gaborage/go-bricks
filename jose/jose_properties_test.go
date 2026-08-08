@@ -11,11 +11,11 @@ import (
 	"pgregory.net/rapid"
 
 	"github.com/gaborage/go-bricks/jose"
-	josetest "github.com/gaborage/go-bricks/jose/testing"
+	jositest "github.com/gaborage/go-bricks/jose/testing"
 )
 
 func TestSealOpenRoundTripProperty(t *testing.T) {
-	fx := josetest.NewBidirectionalFixture(t) // keygen once; iterations reuse
+	fx := jositest.NewBidirectionalFixture(t) // keygen once; iterations reuse
 	rapid.Check(t, func(rt *rapid.T) {
 		payload := rapid.SliceOfN(rapid.Byte(), 1, 4096).Draw(rt, "payload")
 		sealed, err := jose.Seal(payload, fx.ClientOutbound, fx.Resolver)
@@ -36,9 +36,9 @@ func TestSealOpenRoundTripProperty(t *testing.T) {
 // swap can decode identically. It is: Open never succeeds with plaintext
 // different from the original.
 func TestOpenTamperNeverAltersPayloadProperty(t *testing.T) {
-	fx := josetest.NewBidirectionalFixture(t)
+	fx := jositest.NewBidirectionalFixture(t)
 	payload := []byte(`{"amount":"100.00","currency":"USD"}`)
-	sealed := josetest.SealForTest(t, payload, fx.ClientOutbound, fx.Resolver)
+	sealed := jositest.SealForTest(t, payload, fx.ClientOutbound, fx.Resolver)
 
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	rapid.Check(t, func(rt *rapid.T) {
@@ -61,9 +61,9 @@ func TestOpenTamperNeverAltersPayloadProperty(t *testing.T) {
 // cryptographic input — header is AAD, key/IV/ciphertext/tag feed OAEP or
 // GCM — so Open must always fail.
 func TestOpenSemanticTamperAlwaysFailsProperty(t *testing.T) {
-	fx := josetest.NewBidirectionalFixture(t)
+	fx := jositest.NewBidirectionalFixture(t)
 	payload := []byte(`{"amount":"100.00","currency":"USD"}`)
-	sealed := josetest.SealForTest(t, payload, fx.ClientOutbound, fx.Resolver)
+	sealed := jositest.SealForTest(t, payload, fx.ClientOutbound, fx.Resolver)
 	parts := strings.Split(sealed, ".")
 
 	rapid.Check(t, func(rt *rapid.T) {

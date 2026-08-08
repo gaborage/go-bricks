@@ -3,10 +3,11 @@ package testing_test
 import (
 	"testing"
 
-	"github.com/gaborage/go-bricks/jose"
-	jositest "github.com/gaborage/go-bricks/jose/testing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/jose"
+	jositest "github.com/gaborage/go-bricks/jose/testing"
 )
 
 func TestSealOpenRoundtripViaHelpers(t *testing.T) {

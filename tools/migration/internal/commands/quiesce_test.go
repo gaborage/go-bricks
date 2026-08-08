@@ -213,9 +213,11 @@ func (e erroringController) IsSet(context.Context) (bool, error) { return false,
 func (e erroringController) Query(context.Context) (*migration.QuiesceStatus, error) {
 	return nil, e.err
 }
+
 func (e erroringController) Set(context.Context, migration.QuiesceSetOptions) (*migration.QuiesceStatus, error) {
 	return nil, e.err
 }
+
 func (e erroringController) Clear(context.Context, string) (*migration.QuiesceStatus, error) {
 	return nil, e.err
 }

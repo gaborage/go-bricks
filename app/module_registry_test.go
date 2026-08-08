@@ -293,14 +293,20 @@ func TestRegisterAcceptsModulesWhenDatabaseRequirementDoesNotApply(t *testing.T)
 		module       Module
 		rootDBAbsent bool
 	}{
-		{name: "requirer_with_database_present", rootDBAbsent: false,
-			module: &fakeDBRequiringModule{name: "payments", requires: true}},
+		{
+			name: "requirer_with_database_present", rootDBAbsent: false,
+			module: &fakeDBRequiringModule{name: "payments", requires: true},
+		},
 		// A module may implement the interface and still decline, gating the
 		// requirement on its own construction-time config.
-		{name: "requirer_declines_requirement", rootDBAbsent: true,
-			module: &fakeDBRequiringModule{name: "payments", requires: false}},
-		{name: "module_never_declares_requirement", rootDBAbsent: true,
-			module: &minimalModule{name: "forwarder"}},
+		{
+			name: "requirer_declines_requirement", rootDBAbsent: true,
+			module: &fakeDBRequiringModule{name: "payments", requires: false},
+		},
+		{
+			name: "module_never_declares_requirement", rootDBAbsent: true,
+			module: &minimalModule{name: "forwarder"},
+		},
 	}
 
 	for _, tt := range tests {

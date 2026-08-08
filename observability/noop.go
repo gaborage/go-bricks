@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"go.opentelemetry.io/otel/metric"
-	metricznoop "go.opentelemetry.io/otel/metric/noop"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
@@ -22,7 +22,7 @@ type noopProvider struct {
 func newNoopProvider() *noopProvider {
 	return &noopProvider{
 		tracerProvider: noop.NewTracerProvider(),
-		meterProvider:  metricznoop.NewMeterProvider(),
+		meterProvider:  metricnoop.NewMeterProvider(),
 	}
 }
 

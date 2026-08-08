@@ -4,8 +4,9 @@ import (
 	"context"
 	"testing"
 
-	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/stretchr/testify/assert"
+
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 // TestNullScanBehavior verifies that TestDB matches database/sql behavior for NULL scans.

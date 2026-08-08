@@ -1,9 +1,10 @@
 package server
 
 import (
+	"github.com/labstack/echo/v5"
+
 	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/labstack/echo/v5"
 )
 
 // RequestEnrich combines the two adjacent pure-value request enrichers —

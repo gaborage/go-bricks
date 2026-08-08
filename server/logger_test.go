@@ -60,15 +60,19 @@ func (r *recLogger) noop() logger.LogEvent {
 func (r *recLogger) Info() logger.LogEvent {
 	return r.noop()
 }
+
 func (r *recLogger) Error() logger.LogEvent {
 	return r.noop()
 }
+
 func (r *recLogger) Debug() logger.LogEvent {
 	return r.noop()
 }
+
 func (r *recLogger) Warn() logger.LogEvent {
 	return r.noop()
 }
+
 func (r *recLogger) Fatal() logger.LogEvent {
 	return r.noop()
 }
@@ -78,6 +82,7 @@ func (r *recLogger) WithFields(_ map[string]any) logger.Logger { return r }
 func (e *recEvent) Msg(msg string) {
 	e.message = msg
 }
+
 func (e *recEvent) Msgf(_ string, _ ...any) {
 	// No-op (not used in tests)
 }

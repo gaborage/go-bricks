@@ -15,7 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
-	dbtest "github.com/gaborage/go-bricks/database/testing"
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
@@ -472,7 +472,7 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 
 	log := &recLogger{}
 	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-		return dbtest.NewTestDB(dbTypePostgres), nil
+		return dbtesting.NewTestDB(dbTypePostgres), nil
 	}
 	dbManager := database.NewDbManager(&stubTenantResource{}, log,
 		database.DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)

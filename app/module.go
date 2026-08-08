@@ -5,6 +5,9 @@ import (
 	"crypto/rsa"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
@@ -12,8 +15,6 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // Module defines the core interface that all application modules must implement.

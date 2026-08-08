@@ -9,17 +9,17 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/labstack/echo/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
-	otelnoop "go.opentelemetry.io/otel/metric/noop"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/labstack/echo/v5"
 )
 
 // maxJOSERequestBytes caps the inbound JOSE body read. It mirrors the value of
@@ -119,7 +119,7 @@ func (o *joseObservability) recordDuration(ctx context.Context, operation string
 func newJOSEObservability(log logger.Logger, tracer trace.Tracer, mp metric.MeterProvider) *joseObservability {
 	o := &joseObservability{logger: log, tracer: tracer}
 	if mp == nil {
-		mp = otelnoop.NewMeterProvider()
+		mp = metricnoop.NewMeterProvider()
 	}
 	meter := mp.Meter("github.com/gaborage/go-bricks/jose")
 	if c, err := meter.Int64Counter("jose.failures.total",

@@ -5,11 +5,12 @@ import (
 	"testing"
 	"time"
 
-	dbtesting "github.com/gaborage/go-bricks/database/testing"
-	dbtypes "github.com/gaborage/go-bricks/database/types"
 	oranet "github.com/sijms/go-ora/v2/network"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	dbtesting "github.com/gaborage/go-bricks/database/testing"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 const oracleTestTable = "gobricks_inbox"

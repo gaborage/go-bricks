@@ -7,6 +7,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-co-op/gocron/v2"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
@@ -15,11 +21,6 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/server"
-	"github.com/go-co-op/gocron/v2"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // OpenTelemetry attribute names for job scheduler observability.

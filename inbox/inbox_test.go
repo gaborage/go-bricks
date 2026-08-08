@@ -5,14 +5,15 @@ import (
 	"errors"
 	"testing"
 
+	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/outbox"
-	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // newTestInbox builds an Inbox whose module resolves to the given test DB.

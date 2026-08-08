@@ -3,9 +3,10 @@ package testing
 import (
 	"testing"
 
-	"github.com/gaborage/go-bricks/app"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/app"
 )
 
 // AssertPublicKeyAvailable verifies that a public key with the given name

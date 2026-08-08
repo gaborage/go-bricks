@@ -7,9 +7,10 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/gaborage/go-bricks/app"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/app"
 )
 
 func TestMockOutboxPublishRecordsEvent(t *testing.T) {

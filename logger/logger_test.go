@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
 const (

@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // fakeStore implements TableCreator with a controllable CreateTable outcome.
@@ -322,20 +323,28 @@ func TestStartupCheckApplies(t *testing.T) {
 	}{
 		{name: "nil_config", cfg: nil, sharedLedger: false, want: false},
 		{name: "single_tenant_static_source", cfg: &config.Config{}, sharedLedger: false, want: true},
-		{name: "dynamic_source_skips",
+		{
+			name:         "dynamic_source_skips",
 			cfg:          &config.Config{Source: config.SourceConfig{Type: config.SourceTypeDynamic}},
-			sharedLedger: false, want: false},
-		{name: "per_tenant_multitenant_skips",
+			sharedLedger: false, want: false,
+		},
+		{
+			name:         "per_tenant_multitenant_skips",
 			cfg:          &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}},
-			sharedLedger: false, want: false},
-		{name: "shared_ledger_multitenant_applies",
+			sharedLedger: false, want: false,
+		},
+		{
+			name:         "shared_ledger_multitenant_applies",
 			cfg:          &config.Config{Multitenant: config.MultitenantConfig{Enabled: true}},
-			sharedLedger: true, want: true},
-		{name: "shared_ledger_dynamic_source_skips",
+			sharedLedger: true, want: true,
+		},
+		{
+			name: "shared_ledger_dynamic_source_skips",
 			cfg: &config.Config{
 				Multitenant: config.MultitenantConfig{Enabled: true},
 				Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
-			}, sharedLedger: true, want: false},
+			}, sharedLedger: true, want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

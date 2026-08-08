@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/internal/dbtestlog"
 	"github.com/gaborage/go-bricks/testing/containers"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // These tests prove the constraint classifiers in errors.go

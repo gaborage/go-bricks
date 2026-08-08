@@ -7,10 +7,11 @@ import (
 	"testing"
 
 	"github.com/Masterminds/squirrel"
-	"github.com/gaborage/go-bricks/database/internal/columns"
-	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/database/internal/columns"
+	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
 // TestNewQueryBuilderConcurrentSharedBuilders exercises the per-vendor package-level
@@ -982,6 +983,7 @@ func TestTableAliasInvalidTypes(t *testing.T) {
 		})
 	})
 }
+
 func TestSelectExpressions(t *testing.T) {
 	t.Run("Simple expression without alias", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)

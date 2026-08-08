@@ -5,14 +5,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // assertWaitGroupDrains fails if module m's in-flight WaitGroup does not reach
