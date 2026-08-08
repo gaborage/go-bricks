@@ -90,5 +90,5 @@ resource-level identity was correct before and after.
 
 - #915 — the finding
 - `logger/otel_bridge.go` — guard, remap, and WARN emission
-- `observability/resource_exporter.go` — the precedence that stays
+- `observability/processor_attribute_exporter.go` — the precedence that stays (this file was named `resource_exporter.go` when this ADR was written; renamed by ADR-056)
 - [migrations.md](migrations.md) `[C58.4]`

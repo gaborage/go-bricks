@@ -26,7 +26,8 @@ type processorAttributeExporter struct {
 }
 
 // newProcessorAttributeExporter creates an exporter that stamps attrs onto every record that
-// does not already carry the key. attrs is only ever read, so aliasing a caller's slice is safe.
+// does not already carry the key. A slice passed with attrs... is retained, not copied, and is
+// only ever read here — so the caller must not mutate it after construction.
 func newProcessorAttributeExporter(exporter sdklog.Exporter, attrs ...attribute.KeyValue) sdklog.Exporter {
 	return &processorAttributeExporter{
 		wrapped: exporter,

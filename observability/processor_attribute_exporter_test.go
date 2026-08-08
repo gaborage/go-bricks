@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -240,6 +241,11 @@ func TestProcessorAttributeExporterMoreAttrsThanInlineBuffer(t *testing.T) {
 	}
 	enricher := newTestEnricher(t, &fakeLogExporter{}, stampAttrs...)
 
+	// The constructor aliases the caller's slice, so comparing against stampAttrs after the
+	// fact would compare it with itself and pass no matter what enrich did. Snapshot the
+	// expected contents into an independent slice first.
+	wantStampAttrs := slices.Clone(stampAttrs)
+
 	// One key is shadowed by the record, and it sits inside the inline range so the
 	// spilled tail has to stay aligned with the stamp slice after the drop.
 	rec := newTestRecord(attribute.String("res.k03", "record-value"))
@@ -253,7 +259,7 @@ func TestProcessorAttributeExporterMoreAttrsThanInlineBuffer(t *testing.T) {
 
 	lastKey := attribute.Key(fmt.Sprintf("res.k%02d", stampCount-1))
 	assert.Equal(t, attribute.StringValue(fmt.Sprintf("resource-%d", stampCount-1)), attrs[lastKey])
-	assert.Equal(t, stampAttrs, enricher.attrs, "the exporter's own slice must not be filtered in place")
+	assert.Equal(t, wantStampAttrs, enricher.attrs, "enrich must not filter the exporter's own slice in place")
 }
 
 func TestProcessorAttributeExporterShutdown(t *testing.T) {

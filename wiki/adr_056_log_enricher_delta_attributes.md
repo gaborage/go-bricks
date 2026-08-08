@@ -14,12 +14,18 @@ way out.
 
 The wrapper was handed the wrong set. `createLogResource` merged the base service
 resource with the one attribute that actually differed, and the merged result — not the
-delta — reached `newResourceAttributeExporter`. So every exported log record carried
-record-level copies of six attributes the OTLP `ResourceLogs.resource` block already
-shipped once per batch:
+delta — reached `newResourceAttributeExporter`. Because the wrapper was constructed from
+`res.Attributes()` wholesale, every exported log record carried record-level copies of
+**everything the resource held**, all of which the OTLP `ResourceLogs.resource` block
+already shipped once per batch. On a default deployment that is six attributes:
 
 - `service.name`, `service.version`, `deployment.environment.name`
 - `telemetry.sdk.name`, `telemetry.sdk.language`, `telemetry.sdk.version`
+
+It is more wherever the environment says so: `createResource` merges `resource.Default()`,
+whose env detector folds in every key from `OTEL_RESOURCE_ATTRIBUTES`, so a pod under the
+Kubernetes OTel operator was duplicating `k8s.pod.name`, `k8s.namespace.name` and the rest
+onto every log line too.
 
 The one attribute the wrapper existed for was the one it never added. Records leave
 `logger/otel_bridge.go` always carrying `log.type`, and the merged resource always
@@ -53,7 +59,8 @@ change rather than being deleted outright.
 
 ## Consequences
 
-**Positive.** Every exported log record loses six attributes and one `AddAttributes` call.
+**Positive.** Every exported log record loses one `AddAttributes` call and at least six
+attributes — more under `OTEL_RESOURCE_ATTRIBUTES`, which added to the duplicated set.
 Service identity now appears in exactly one place on the wire — the resource block, where
 it was never spoofable — instead of being duplicated into the record attributes, where
 [ADR-055](adr_055_reserved_log_attribute_namespaces.md) had to defend it against caller
@@ -62,8 +69,9 @@ backend that flattens record attributes over resource attributes has nothing lef
 flatten *over*.
 
 **Negative.** Behavior change on the OTLP log wire. Backends that index record attributes
-separately from resource attributes stop matching record-level identity filters on log
-records until those queries are repointed at the resource attribute of the same name.
+separately from resource attributes stop matching record-level filters on log records —
+for any resource attribute, not only the framework's six — until those queries are
+repointed at the resource attribute of the same name.
 Backends that flatten the two levels see the same values as before. No code change can
 detect this — the affected artifacts are dashboards, alerts and saved queries.
 `[C58.5]` in [migrations.md](migrations.md) carries the detection procedure.
