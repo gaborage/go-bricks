@@ -135,7 +135,8 @@ combined run and 149 alone — `err113` and `wrapcheck` were claiming the same
 `fmt.Errorf` lines. Measure one linter at a time:
 
 ```bash
-golangci-lint run --enable-only=<linter> --uniq-by-line=false ./...
+LINTER=perfsprint   # one candidate at a time
+golangci-lint run --enable-only="$LINTER" --uniq-by-line=false ./...
 ```
 
 **An unknown `revive` rule name exits 0.** It logs `level=error ... cannot find rule: <name>`
