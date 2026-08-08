@@ -196,6 +196,155 @@ func TestRequestBinderAdvancedBinding(t *testing.T) {
 	assert.Equal(t, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), got.When.UTC())
 }
 
+// TestRequestBinderPrecedencePathParamOverridesBody locks in that a path param
+// overwrites a conflicting JSON body value for a field tagged with both `param`
+// and `json`. echo's own binder would let the body win on POST (it binds the
+// body last); go-bricks' post-body param overlay is what makes the URL win.
+// See wiki/handler_patterns.md#binding-source-precedence.
+func TestRequestBinderPrecedencePathParamOverridesBody(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	var seen advancedBindReq
+	handler := func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
+		seen = req
+		return req, nil
+	}
+	h := WrapHandler(handler, binder, cfg)
+
+	// Body says id=999; URL path says id=5. URL must win.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/users/5", strings.NewReader(`{"id":999}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPathValues(echo.PathValues{{Name: "id", Value: "5"}})
+
+	require.NoError(t, h(c))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 5, seen.ID, "path param must override JSON body value")
+}
+
+// TestRequestBinderPrecedenceQueryParamOverridesBody locks in that a present
+// query param overwrites a conflicting JSON body value. GET is the interesting
+// method here: echo binds query params before the body for the GET family, so
+// inside c.Bind the body clobbers the query value — go-bricks' overlay is what
+// restores it. See wiki/handler_patterns.md#binding-source-precedence.
+func TestRequestBinderPrecedenceQueryParamOverridesBody(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	var seen numericRequest
+	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
+		seen = req
+		return req, nil
+	}
+	h := WrapHandler(handler, binder, cfg)
+
+	// Body says limit=999; query says limit=10. Query must win.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x?limit=10", strings.NewReader(`{"limit":999}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, uint16(10), seen.Limit, "present query param must override JSON body value")
+}
+
+// TestRequestBinderPrecedenceHeaderOverridesBody locks in the third overlay
+// source: a present header overwrites a conflicting JSON body value. echo binds
+// no headers at all in DefaultBinder.Bind, so this arm exists only in go-bricks'
+// overlay loop.
+func TestRequestBinderPrecedenceHeaderOverridesBody(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	var seen advancedBindReq
+	handler := func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
+		seen = req
+		return req, nil
+	}
+	h := WrapHandler(handler, binder, cfg)
+
+	// Body says headerVals=["from-body"] and id=999; header and path must win.
+	body := `{"id":999,"headerVals":["from-body"]}`
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/items/3", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set("X-Items", "a, b")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	c.SetPathValues(echo.PathValues{{Name: "id", Value: "3"}})
+
+	require.NoError(t, h(c))
+	assert.Equal(t, []string{"a", "b"}, seen.HeaderVals, "present header must override JSON body value")
+	assert.Equal(t, 3, seen.ID, "path param must override JSON body value")
+}
+
+// TestRequestBinderPrecedenceAbsentQueryParamKeepsBody documents the boundary of
+// the contract: the URL overlay only overwrites when the URL value is non-empty,
+// so an absent query param leaves the JSON body value in place. A change that
+// made URL-wins unconditional would break this test.
+func TestRequestBinderPrecedenceAbsentQueryParamKeepsBody(t *testing.T) {
+	e := echo.New()
+	v := NewValidator()
+	e.Validator = v
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	var seen numericRequest
+	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
+		seen = req
+		return req, nil
+	}
+	h := WrapHandler(handler, binder, cfg)
+
+	// No `limit` query param; body supplies limit=999. Body value survives.
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader(`{"limit":999}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	require.NoError(t, h(c))
+	assert.Equal(t, uint16(999), seen.Limit, "absent query param must not clobber the body value")
+}
+
+// TestRequestBinderPrecedenceEmptyPathSegmentKeepsBody pins the sharp edge of the
+// "only when present" qualifier, and is the reason a dual-tagged identifier is not a
+// security control on its own. An empty path segment still MATCHES the route, so
+// c.Param returns "", the overlay's non-empty guard skips the field, and the JSON body
+// value survives. This test routes through the real router (not SetPathValues) because
+// that is the only way the empty-segment match arises.
+// See wiki/handler_patterns.md#binding-source-precedence.
+func TestRequestBinderPrecedenceEmptyPathSegmentKeepsBody(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	binder := NewRequestBinder()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	var seen advancedBindReq
+	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
+		seen = req
+		return req, nil
+	}, binder, cfg)
+	e.POST("/users/:id/detail", h)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/users//detail", strings.NewReader(`{"id":999}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "an empty path segment still matches the route")
+	assert.Equal(t, 999, seen.ID, "empty path param does not overwrite, so the body value survives")
+}
+
 func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
 	e := echo.New()
 	v := NewValidator()

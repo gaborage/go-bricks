@@ -749,7 +749,8 @@ func wrapHandlerWithJOSE[T any, R any](
 // legacy per-request-reflecting path, kept alive as requestProcessor.process's fallback
 // for non-struct T (F26): bindStructFields's NumField() call panics at request time for
 // non-struct types, and that panic must stay exactly there. Struct T never reaches this
-// path — it uses bindRequestPlanned instead.
+// path — it uses bindRequestPlanned instead. It binds body-then-tags in the same order,
+// so the source-precedence note on bindRequestPlanned applies here too.
 func (rb *RequestBinder) bindRequest(c *echo.Context, target any) error {
 	targetValue := reflect.ValueOf(target).Elem()
 	targetType := targetValue.Type()
@@ -766,6 +767,11 @@ func (rb *RequestBinder) bindRequest(c *echo.Context, target any) error {
 // bindRequestPlanned binds request data using a precomputed binding plan (buildBindingPlan),
 // avoiding per-request struct-tag reflection. When plan is empty — the common case, e.g. a
 // JSON-body-only struct — only bindJSONBody runs.
+//
+// Source precedence is load-bearing and tested (TestRequestBinderPrecedence*): the JSON body
+// binds first, then param/query/header overlay on top, so a non-empty URL value wins over a
+// conflicting body value for a dual-tagged field. This overlay is deliberate — echo's own
+// binder binds the body last and would otherwise let the body win. Do not reorder or drop it.
 func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []boundField) error {
 	if err := rb.bindJSONBody(c, target); err != nil {
 		return err
