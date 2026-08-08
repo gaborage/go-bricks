@@ -350,9 +350,11 @@ func (ra *requestAllocator[T]) allocate() (request T, requestPtr any) {
 		// T is a pointer type (e.g., *Request)
 		elem := reflect.New(ra.elemType.Elem())
 		requestPtr = elem.Interface()
-		// Cannot fail: elemType is T's own reflect.Type, so reflect.New of its
-		// element is exactly T. Discarding ok keeps the hot path branch-free.
-		request, _ = elem.Interface().(T)
+		// Convert first: for a defined pointer type (type P *Request), reflect.New
+		// yields the unnamed *Request, which is not assertable to P. Converting to
+		// elemType — T's own reflect.Type — makes the assertion exact for both
+		// forms, so discarding ok is safe and the hot path stays branch-free.
+		request, _ = elem.Convert(ra.elemType).Interface().(T)
 	} else {
 		// T is a value type (e.g., Request)
 		requestPtr = &request
