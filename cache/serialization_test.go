@@ -125,14 +125,15 @@ func TestMarshalPreservesSubSecondPrecision(t *testing.T) {
 // and a whole-second time.Time still encodes to byte-identical output after
 // the TimeRFC3339 -> TimeRFC3339Nano flip.
 func TestUnmarshalReadsLegacyWholeSecondEncoding(t *testing.T) {
+	whole := time.Date(2024, 3, 1, 10, 20, 30, 0, time.UTC)
 	legacy := cborTextString("2024-03-01T10:20:30Z")
 
 	got, err := Unmarshal[time.Time](legacy)
 	require.NoError(t, err)
-	assert.True(t, got.Equal(time.Date(2024, 3, 1, 10, 20, 30, 0, time.UTC)))
+	assert.True(t, got.Equal(whole))
 	assert.Equal(t, 0, got.Nanosecond())
 
-	assert.Equal(t, legacy, MustMarshal(time.Date(2024, 3, 1, 10, 20, 30, 0, time.UTC)))
+	assert.Equal(t, legacy, MustMarshal(whole))
 }
 
 // TestUnmarshalReadsSubSecondEncodingWithLegacyDecoder proves the
