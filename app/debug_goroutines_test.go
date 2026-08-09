@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -22,7 +23,51 @@ const (
 	netListenRef      = "net.listen"
 	netTCPListenerRef = "net.(*TCPListener).Accept"
 	testFuncRef       = "test.func"
+	runningStateRef   = "running"
+	sleepStateRef     = "sleep"
 )
+
+// debug2GoroutineDump was captured on go1.26.5 darwin/arm64 with:
+//
+//	mkdir -p /tmp/grcap && cd /tmp/grcap    # write main.go from plan 102 Step 2
+//	GOWORK=off go run main.go > /tmp/grcap/out.txt
+//
+// The three blocks below are copied verbatim (byte-for-byte, including tab
+// indentation) from the DEBUG2 half of that capture: one goroutine per state
+// (running, chan receive, sleep).
+const debug2GoroutineDump = `goroutine 1 [running]:
+runtime/pprof.writeGoroutineStacks({0x100e2a738, 0x307c2d710018})
+	/opt/homebrew/Cellar/go/1.26.5/libexec/src/runtime/pprof/pprof.go:819 +0x6c
+runtime/pprof.writeGoroutine({0x100e2a738?, 0x307c2d710018?}, 0x0?)
+	/opt/homebrew/Cellar/go/1.26.5/libexec/src/runtime/pprof/pprof.go:782 +0x2c
+runtime/pprof.(*Profile).WriteTo(0x100e2a738?, {0x100e2a738?, 0x307c2d710018?}, 0x1?)
+	/opt/homebrew/Cellar/go/1.26.5/libexec/src/runtime/pprof/pprof.go:408 +0x144
+main.main()
+	/tmp/grcap/main.go:18 +0xe8
+
+goroutine 35 [chan receive]:
+main.main.func1()
+	/tmp/grcap/main.go:12 +0x24
+created by main.main in goroutine 1
+	/tmp/grcap/main.go:12 +0x6c
+
+goroutine 36 [sleep]:
+time.Sleep(0x34630b8a000)
+	/opt/homebrew/Cellar/go/1.26.5/libexec/src/runtime/time.go:363 +0x150
+main.main.func2()
+	/tmp/grcap/main.go:13 +0x28
+created by main.main in goroutine 1
+	/tmp/grcap/main.go:13 +0x78
+`
+
+// debug1GoroutineDump was captured in the same run (see debug2GoroutineDump
+// provenance above) from the DEBUG1 half: the aggregated pprof profile header
+// plus its first two "#\t0x…" frame lines, copied verbatim.
+const debug1GoroutineDump = `goroutine profile: total 3
+1 @ 0x100ca6a8c 0x100cdeef4 0x100d216f4 0x100d21520 0x100d1ed14 0x100d2f478 0x100cafe54 0x100ce6264
+#	0x100d216f3	runtime/pprof.writeRuntimeProfile+0xb3	/opt/homebrew/Cellar/go/1.26.5/libexec/src/runtime/pprof/pprof.go:851
+#	0x100d2151f	runtime/pprof.writeGoroutine+0x4f	/opt/homebrew/Cellar/go/1.26.5/libexec/src/runtime/pprof/pprof.go:784
+`
 
 func TestNormalizeGoroutineState(t *testing.T) {
 	debugHandlers := &DebugHandlers{
@@ -517,4 +562,64 @@ func TestHandleForceGC(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "heap_objects")
 	assert.Contains(t, rec.Body.String(), "forced")
 	assert.Contains(t, rec.Body.String(), `"forced":true`)
+}
+
+func TestParseGoroutineDumpParsesDebug2Format(t *testing.T) {
+	debugHandlers := &DebugHandlers{
+		logger: logger.New("info", false),
+	}
+
+	stacks, err := debugHandlers.parseGoroutineDump(debug2GoroutineDump)
+	require.NoError(t, err)
+	require.Len(t, stacks, 3)
+
+	assert.Equal(t, 1, stacks[0].ID)
+	assert.Equal(t, runningStateRef, stacks[0].State)
+	assert.Equal(t, "runtime/pprof.writeGoroutineStacks", stacks[0].Function)
+	assert.NotEmpty(t, stacks[0].Stack)
+
+	assert.Equal(t, 35, stacks[1].ID)
+	assert.Equal(t, chanReceive, stacks[1].State)
+	assert.Equal(t, "main.main.func1", stacks[1].Function)
+	assert.NotEmpty(t, stacks[1].Stack)
+
+	assert.Equal(t, 36, stacks[2].ID)
+	assert.Equal(t, sleepStateRef, stacks[2].State)
+	assert.Equal(t, "time.Sleep", stacks[2].Function)
+	assert.NotEmpty(t, stacks[2].Stack)
+}
+
+func TestAnalyzeGoroutinesPopulatesAggregatesFromLiveDump(t *testing.T) {
+	debugHandlers := &DebugHandlers{
+		logger: logger.New("info", false),
+	}
+
+	info, err := debugHandlers.analyzeGoroutines(true, false)
+	require.NoError(t, err)
+	require.NotNil(t, info)
+
+	require.NotEmpty(t, info.Stacks)
+	assert.NotEmpty(t, info.ByState)
+	assert.NotEmpty(t, info.ByFunction)
+
+	foundValidStack := false
+	for _, stack := range info.Stacks {
+		if stack.ID > 0 && stack.Function != "" {
+			foundValidStack = true
+			break
+		}
+	}
+	assert.True(t, foundValidStack, "expected at least one stack with a positive ID and non-empty Function")
+
+	assert.Positive(t, info.Count)
+}
+
+func TestParseGoroutineDumpIgnoresDebug1Profile(t *testing.T) {
+	debugHandlers := &DebugHandlers{
+		logger: logger.New("info", false),
+	}
+
+	stacks, err := debugHandlers.parseGoroutineDump(debug1GoroutineDump)
+	require.NoError(t, err)
+	assert.Empty(t, stacks)
 }
