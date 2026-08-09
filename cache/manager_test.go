@@ -11,8 +11,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/cache/internal/tracking"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 const (
@@ -1185,4 +1189,82 @@ func TestCacheManagerZeroValueMethodsAreSafe(t *testing.T) {
 	assert.Equal(t, cache.ManagerStats{}, m.Stats(), "zero-value Stats must report empty stats, not panic")
 
 	assert.NoError(t, m.Close(), "closing a never-initialized manager is a no-op")
+}
+
+const (
+	metricManagerActiveCaches = "cache.manager.active_caches"
+	metricManagerTotalCreated = "cache.manager.total_created"
+	metricManagerEvictions    = "cache.manager.evictions"
+	metricManagerIdleCleanups = "cache.manager.idle_cleanups"
+	metricManagerErrors       = "cache.manager.errors"
+)
+
+// setupManagerMetricsProvider installs a manual-reader MeterProvider globally and
+// clears the cache tracking package's memoized meter so the next
+// RegisterManagerMetrics call binds to it. Mirrors httpclient/client_test.go:1134.
+func setupManagerMetricsProvider(t *testing.T) *obtest.TestMeterProvider {
+	t.Helper()
+	prev := otel.GetMeterProvider()
+	mp := obtest.NewTestMeterProvider()
+	otel.SetMeterProvider(mp)
+	tracking.ResetForTesting()
+	t.Cleanup(func() {
+		otel.SetMeterProvider(prev)
+		tracking.ResetForTesting()
+		require.NoError(t, mp.Shutdown(context.Background()))
+	})
+	return mp
+}
+
+func TestNewCacheManagerRegistersManagerMetrics(t *testing.T) {
+	mp := setupManagerMetricsProvider(t)
+
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return newMockCache(key), nil
+	}
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+	defer mgr.Close()
+
+	for _, tenant := range []string{tenantOne, tenantTwo, tenantThree} {
+		_, release, gerr := mgr.Get(context.Background(), tenant)
+		require.NoError(t, gerr)
+		release()
+	}
+
+	rm := mp.Collect(t)
+	obtest.AssertMetricValue(t, rm, metricManagerActiveCaches, int64(3))
+	obtest.AssertMetricValue(t, rm, metricManagerTotalCreated, int64(3))
+	obtest.AssertMetricValue(t, rm, metricManagerEvictions, int64(0))
+	obtest.AssertMetricValue(t, rm, metricManagerIdleCleanups, int64(0))
+	obtest.AssertMetricValue(t, rm, metricManagerErrors, int64(0))
+}
+
+func TestCacheManagerCloseUnregistersManagerMetrics(t *testing.T) {
+	mp := setupManagerMetricsProvider(t)
+
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return newMockCache(key), nil
+	}
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+
+	_, release, err := mgr.Get(context.Background(), tenantOne)
+	require.NoError(t, err)
+	release()
+
+	// Positive control: without this, the post-Close assertion below passes
+	// vacuously when nothing was ever registered.
+	obtest.AssertMetricValue(t, mp.Collect(t), metricManagerTotalCreated, int64(1))
+
+	require.NoError(t, mgr.Close())
+	require.NoError(t, mgr.Close()) // exactly-once: a second cleanup must not run
+
+	rm := mp.Collect(t)
+	if m := obtest.FindMetric(rm, metricManagerTotalCreated); m != nil {
+		sum, ok := m.Data.(metricdata.Sum[int64])
+		require.True(t, ok, "cache.manager.total_created should be Sum[int64]")
+		assert.Empty(t, sum.DataPoints,
+			"cache.manager.* must stop being observed after Close")
+	}
 }

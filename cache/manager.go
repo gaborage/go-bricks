@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
+	"github.com/gaborage/go-bricks/cache/internal/tracking"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/resourcepool"
 )
@@ -80,8 +82,10 @@ type ReleaseFunc func()
 //
 //nolint:revive // CacheManager mirrors the database.DbManager / messaging.Manager naming
 type CacheManager struct {
-	pool      *resourcepool.Pool[Cache]
-	connector Connector
+	pool           *resourcepool.Pool[Cache]
+	connector      Connector
+	metricsCleanup func()
+	cleanupOnce    sync.Once
 }
 
 // ManagerConfig configures the cache manager's behavior.
@@ -127,6 +131,19 @@ func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, err
 		pool:      pool,
 		connector: connector,
 	}
+
+	// wiki/cache.md documents these five cache.manager.* metrics; registering here
+	// is what makes that true.
+	m.metricsCleanup = tracking.RegisterManagerMetrics(func() tracking.ManagerMetricsStats {
+		s := m.Stats()
+		return tracking.ManagerMetricsStats{
+			ActiveCaches: s.ActiveCaches,
+			TotalCreated: s.TotalCreated,
+			Evictions:    s.Evictions,
+			IdleCleanups: s.IdleCleanups,
+			Errors:       s.Errors,
+		}
+	}, "")
 
 	// Start the background cleanup goroutine if an idle TTL is configured.
 	if cfg.IdleTTL > 0 {
@@ -195,6 +212,11 @@ func (m *CacheManager) Close() error {
 	if m.pool == nil {
 		return nil // zero-value manager: nothing to close
 	}
+	m.cleanupOnce.Do(func() {
+		if m.metricsCleanup != nil {
+			m.metricsCleanup()
+		}
+	})
 	return m.pool.Close()
 }
 
