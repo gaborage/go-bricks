@@ -3321,3 +3321,89 @@ func TestRequestAllocatorDefinedPointerType(t *testing.T) {
 	bound.Name = "bound"
 	assert.Equal(t, "bound", (*allocProbeRequest)(request).Name)
 }
+
+// auditScope is a named string type: its Kind is String, so isStringSliceType admits
+// []auditScope, but a plain `string` is NOT assignable to it in reflect's terms — which is
+// exactly what made bindHeaderStringSlice's reflect.Append panic before this fix.
+type auditScope string
+
+// namedSliceReq pins the named-element-type contract on both slice binders: the header one
+// (comma-split) and the query one (repeated params).
+type namedSliceReq struct {
+	Scopes      []auditScope `header:"X-Scopes"`
+	QueryScopes []auditScope `query:"scopes"`
+}
+
+// TestBindNamedStringSliceElementType pins that a slice whose element is a NAMED string type
+// binds from a header and from repeated query params, through both the precomputed-plan path
+// and the legacy reflect-per-request path. Before the fix the header cases panicked inside
+// reflect.Append, which middleware.Recover() turned into a per-request 500.
+func TestBindNamedStringSliceElementType(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(req *http.Request)
+		want  namedSliceReq
+	}{
+		{
+			name:  "named_type_header_comma_split",
+			setup: func(req *http.Request) { req.Header.Set("X-Scopes", "read, write") },
+			want:  namedSliceReq{Scopes: []auditScope{"read", "write"}},
+		},
+		{
+			name:  "named_type_repeated_query_params",
+			setup: func(req *http.Request) { req.URL.RawQuery = "scopes=read&scopes=write" },
+			want:  namedSliceReq{QueryScopes: []auditScope{"read", "write"}},
+		},
+		{
+			name:  "empty_and_whitespace_segments_dropped",
+			setup: func(req *http.Request) { req.Header.Set("X-Scopes", "a,, b ,") },
+			want:  namedSliceReq{Scopes: []auditScope{"a", "b"}},
+		},
+	}
+
+	plan := buildBindingPlan(reflect.TypeOf(namedSliceReq{}))
+	binder := NewRequestBinder()
+
+	newCtx := func(setup func(*http.Request)) *echo.Context {
+		e := echo.New()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
+		setup(req)
+		return e.NewContext(req, httptest.NewRecorder())
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var planned namedSliceReq
+			require.NoError(t, binder.bindRequestPlanned(newCtx(tc.setup), &planned, plan))
+			assert.Equal(t, tc.want, planned, "planned path must bind the named element type")
+
+			var legacy namedSliceReq
+			require.NoError(t, binder.bindRequest(newCtx(tc.setup), &legacy))
+			assert.Equal(t, tc.want, legacy, "legacy and planned paths must agree")
+		})
+	}
+}
+
+// TestWrapHandlerNamedStringSliceHeaderReturns200 pins the user-visible symptom: a request
+// carrying the header reaches the handler and returns 200 instead of panicking. WrapHandler
+// installs no recover of its own, so a regression surfaces here as a panic in this test.
+func TestWrapHandlerNamedStringSliceHeaderReturns200(t *testing.T) {
+	e := echo.New()
+	e.Validator = NewValidator()
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	binder := NewRequestBinder()
+
+	var seen namedSliceReq
+	h := WrapHandler(func(req namedSliceReq, _ HandlerContext) (namedSliceReq, IAPIError) {
+		seen = req
+		return req, nil
+	}, binder, cfg)
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
+	req.Header.Set("X-Scopes", "read, write")
+	rec := httptest.NewRecorder()
+
+	require.NoError(t, h(e.NewContext(req, rec)))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, []auditScope{"read", "write"}, seen.Scopes)
+}
