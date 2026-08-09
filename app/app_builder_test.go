@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1118,6 +1119,47 @@ func TestPreInitCacheFailureIsNonFatal(t *testing.T) {
 			assert.Equal(t, tc.wantCalls, cacheCalled, "cache connector should be invoked during pre-init")
 		})
 	}
+}
+
+// TestPreInitCacheSkipsAbsentCache pins that preInitCache never leases when
+// App.cacheAbsent is true, so the pool's errors counter starts at a true zero
+// (see rootCacheAbsent).
+func TestPreInitCacheSkipsAbsentCache(t *testing.T) {
+	t.Run("absent_skips_the_connector", func(t *testing.T) {
+		var connectorCalls atomic.Int32
+		mgr := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
+			connectorCalls.Add(1)
+			return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
+		})
+		t.Cleanup(func() { assert.NoError(t, mgr.Close()) })
+
+		builder := &Builder{
+			cfg:    &config.Config{},
+			logger: logger.New("error", false),
+			app:    &App{cacheAbsent: true},
+			bundle: &dependencyBundle{cacheManager: mgr},
+		}
+		builder.preInitCache(context.Background(), time.Second)
+		assert.Equal(t, int32(0), connectorCalls.Load(), "the connector must never be reached")
+	})
+
+	t.Run("present_reaches_the_connector", func(t *testing.T) {
+		var connectorCalls atomic.Int32
+		mgr := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
+			connectorCalls.Add(1)
+			return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
+		})
+		t.Cleanup(func() { assert.NoError(t, mgr.Close()) })
+
+		builder := &Builder{
+			cfg:    &config.Config{},
+			logger: logger.New("error", false),
+			app:    &App{cacheAbsent: false},
+			bundle: &dependencyBundle{cacheManager: mgr},
+		}
+		builder.preInitCache(context.Background(), time.Second)
+		assert.Equal(t, int32(1), connectorCalls.Load(), "an unexempt cache must still be probed")
+	})
 }
 
 func TestAppBuilderErrorRecovery(t *testing.T) {

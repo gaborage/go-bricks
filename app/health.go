@@ -163,10 +163,7 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 	return healthProbeFunc{
 		name: componentMessaging,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
-			stats := msgManager.Stats()
-			if stats == nil {
-				stats = map[string]any{}
-			}
+			stats := getStatsOrEmpty(msgManager.Stats())
 
 			// Attempt to verify readiness using an existing publisher key when available
 			client, release, err := msgManager.Publisher(ctx, "")
@@ -187,11 +184,11 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 				return unhealthyStatus, stats, nil
 			}
 
-			if active, ok := stats["active_publishers"].(int); ok && active == 0 {
-				stats[statusKey] = "no_active_publishers"
-			} else {
-				stats[statusKey] = healthyStatus
-			}
+			// Re-read after the acquisition: the pre-acquisition snapshot published
+			// active_publishers: 0 beside a healthy verdict, because this probe's own
+			// Publisher call is what pools the entry.
+			stats = getStatsOrEmpty(msgManager.Stats())
+			stats[statusKey] = healthyStatus
 			return healthyStatus, stats, nil
 		},
 	}
@@ -199,7 +196,9 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 
 // cacheManagerHealthProbe creates a health probe for the cache manager. A deployment
 // without a cache stays non-critical, so cache.critical cannot fail its readiness.
-func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger, critical bool) Prober {
+// absent means the fixed "" key can never resolve a cache, so the probe reports
+// not_configured without attempting a lease.
+func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger, critical, absent bool) Prober {
 	if cacheManager == nil {
 		return healthProbeFunc{
 			name: componentCache,
@@ -214,6 +213,13 @@ func cacheManagerHealthProbe(cacheManager *cache.CacheManager, _ logger.Logger, 
 		critical: critical,
 		fn: func(ctx context.Context) (string, map[string]any, error) {
 			stats := convertCacheStatsToMap(cacheManager.Stats())
+
+			if absent {
+				// Nothing can resolve under "": the lease would fail every poll and the pool
+				// would count each failure as a cache error (see rootCacheAbsent).
+				stats[statusKey] = notConfiguredStatus
+				return notConfiguredStatus, stats, nil
+			}
 
 			// Attempt to verify readiness by getting cache instance
 			instance, release, err := cacheManager.Get(ctx, "")
