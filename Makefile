@@ -6,7 +6,7 @@
 
 # Package selection for testing (excludes tools directories)
 PKGS := $(shell go list ./... | grep -vE '/(tools)(/|$$)')
-INTEGRATION_PKGS :=
+INTEGRATION_PKGS := $(shell go list -tags=integration ./... | grep -vE '/(tools)(/|$$)')
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=golang.org/x/vuln
 GOVULNCHECK_VERSION := v1.6.0
