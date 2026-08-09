@@ -686,15 +686,30 @@ jobs:
           cache-dependency-path: tools/migration/go.sum
 
       - name: Download dependencies
+        # Every step below runs in tools/migration, which the go command resolves
+        # THROUGH go.work — silently substituting framework HEAD for the
+        # `github.com/gaborage/go-bricks` version this module actually pins. That
+        # is not what `go install .../cmd/go-bricks-migrate@vX` ships, so without
+        # GOWORK=off this job validates a binary no consumer ever gets, and a
+        # breaking framework change plus a stale pin merges green. GOWORK=off
+        # takes the workspace — and go.work.sum with it — out of the path, so
+        # download/build/validate all resolve against tools/migration/go.mod.
+        # Same reasoning as lint-framework's GOWORK env, adapted.
+        env:
+          GOWORK: "off"
         run: go mod download
 
       - name: Build and validate CLI (Unix)
         if: matrix.os != 'windows-latest'
+        env:
+          GOWORK: "off"   # build the pinned graph, not the workspace union
         run: make validate-cli
 
       - name: Build and validate CLI (Windows)
         if: matrix.os == 'windows-latest'
         shell: powershell
+        env:
+          GOWORK: "off"   # build the pinned graph, not the workspace union
         run: |
           go build -ldflags "-X main.version=dev" -o go-bricks-migrate.exe ./cmd/go-bricks-migrate
           ./go-bricks-migrate.exe version
