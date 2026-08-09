@@ -637,7 +637,7 @@ func TestModuleInitSharedTenancyRequiresInjectedResolvers(t *testing.T) {
 }
 
 // TestModuleInitSharedTenancyRequiresMessagingResolver pins the m.sharedMsg == nil
-// half of the module.go:158 guard: a nil DB resolver alone must not satisfy it.
+// half of the module.go:158 guard: a nil messaging resolver alone must not satisfy it.
 func TestModuleInitSharedTenancyRequiresMessagingResolver(t *testing.T) {
 	m := NewModule()
 	m.SetSharedResolvers(stubSharedDB, nil)
@@ -654,7 +654,7 @@ func TestModuleInitSharedTenancyRequiresMessagingResolver(t *testing.T) {
 }
 
 // TestModuleInitSharedTenancyRequiresDatabaseResolver pins the m.sharedDB == nil
-// half of the module.go:158 guard: a nil messaging resolver alone must not satisfy it.
+// half of the module.go:158 guard: a nil database resolver alone must not satisfy it.
 func TestModuleInitSharedTenancyRequiresDatabaseResolver(t *testing.T) {
 	m := NewModule()
 	m.SetSharedResolvers(nil, stubSharedMsg)
