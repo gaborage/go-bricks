@@ -941,10 +941,12 @@ func isSensitiveFieldLinearReference(needles []string, fieldName string) bool {
 
 // alphabetSweep enumerates every string of length 0-3 over the given
 // alphabet. Chosen so it spells out all five 3-byte default needles ("otp",
-// "cvv", "cvc", "key", "pwd") and their one-byte-off neighbours, plus a
+// "cvv", "cvc", "key", "pwd") and their one-byte-off neighbors, plus a
 // separator and a byte that begins no needle.
 func alphabetSweep(alphabet []byte) []string {
-	out := []string{""}
+	n := len(alphabet)
+	out := make([]string, 0, 1+n+n*n+n*n*n)
+	out = append(out, "")
 	for _, a := range alphabet {
 		out = append(out, string([]byte{a}))
 	}
@@ -965,7 +967,7 @@ func alphabetSweep(alphabet []byte) []string {
 
 // buildDifferentialCorpus derives the differential test's input set
 // mechanically from a config's raw SensitiveFields, per plan 121 Step 3.
-func buildDifferentialCorpus(rawNeedles []string, sweep []string) []string {
+func buildDifferentialCorpus(rawNeedles, sweep []string) []string {
 	seen := make(map[string]struct{})
 	add := func(s string) { seen[s] = struct{}{} }
 
