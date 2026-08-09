@@ -11,7 +11,7 @@ import (
 var (
 	// encMode defines encoding options for serialization.
 	// - Sort: SortCanonical ensures deterministic field ordering (same input → same bytes)
-	// - Time: TimeRFC3339 uses standard timestamp format for cross-language compatibility
+	// - Time: TimeRFC3339Nano keeps sub-second precision; decoding is mode-independent, so old whole-second entries still read
 	encMode cbor.EncMode
 
 	// decMode defines decoding options for deserialization.
@@ -27,8 +27,8 @@ func init() {
 
 	// Configure encoding mode
 	encOpts := cbor.EncOptions{
-		Sort: cbor.SortCanonical, // Deterministic encoding
-		Time: cbor.TimeRFC3339,   // Standard timestamp format
+		Sort: cbor.SortCanonical,   // Deterministic encoding
+		Time: cbor.TimeRFC3339Nano, // Nanosecond precision; the decoder reads both old and new encodings
 	}
 	encMode, err = encOpts.EncMode()
 	if err != nil {
