@@ -58,7 +58,7 @@ func (d *DebugHandlers) analyzeGoroutines(includeStacks, detectLeaks bool) (*Gor
 
 	// Get goroutine profile
 	var buf strings.Builder
-	if err := pprof.Lookup("goroutine").WriteTo(&buf, 1); err != nil {
+	if err := pprof.Lookup("goroutine").WriteTo(&buf, 2); err != nil {
 		return nil, err
 	}
 
