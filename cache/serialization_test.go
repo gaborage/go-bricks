@@ -5,9 +5,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fxamacker/cbor/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// cborTextString builds a bare CBOR definite-length text string — the exact
+// shape this package's encMode emits for a time.Time (EncTagNone is the
+// EncOptions zero value, so no tag head is written).
+func cborTextString(s string) []byte {
+	if len(s) < 24 {
+		return append([]byte{0x60 | byte(len(s))}, s...)
+	}
+	return append([]byte{0x78, byte(len(s))}, s...)
+}
 
 // Test structures
 type SimpleStruct struct {
@@ -67,7 +78,7 @@ func TestMarshalUnmarshalBasic(t *testing.T) {
 	})
 
 	t.Run("ComplexStruct", func(t *testing.T) {
-		now := time.Now().UTC().Truncate(time.Second)
+		now := time.Date(2024, 3, 1, 10, 20, 30, 123456789, time.UTC)
 		original := ComplexStruct{
 			ID:   789,
 			Name: "Charlie",
@@ -89,8 +100,58 @@ func TestMarshalUnmarshalBasic(t *testing.T) {
 		assert.Equal(t, original.Name, result.Name)
 		assert.Equal(t, original.Tags, result.Tags)
 		assert.Equal(t, original.IsActive, result.IsActive)
-		assert.Equal(t, original.CreatedAt.Unix(), result.CreatedAt.Unix())
+		assert.True(t, original.CreatedAt.Equal(result.CreatedAt))
 	})
+}
+
+// TestMarshalPreservesSubSecondPrecision pins the fix: nanoseconds must
+// survive a Marshal/Unmarshal round-trip, and the encoded bytes must be the
+// exact RFC3339Nano text string (no tag, no rounding).
+func TestMarshalPreservesSubSecondPrecision(t *testing.T) {
+	want := time.Date(2024, 3, 1, 10, 20, 30, 123456789, time.UTC)
+
+	data, err := Marshal(want)
+	require.NoError(t, err)
+	assert.Equal(t, cborTextString("2024-03-01T10:20:30.123456789Z"), data)
+
+	got, err := Unmarshal[time.Time](data)
+	require.NoError(t, err)
+	assert.True(t, got.Equal(want))
+	assert.Equal(t, 123456789, got.Nanosecond())
+}
+
+// TestUnmarshalReadsLegacyWholeSecondEncoding proves the backward-read
+// direction: a pre-bump binary's whole-second entry still decodes correctly,
+// and a whole-second time.Time still encodes to byte-identical output after
+// the TimeRFC3339 -> TimeRFC3339Nano flip.
+func TestUnmarshalReadsLegacyWholeSecondEncoding(t *testing.T) {
+	whole := time.Date(2024, 3, 1, 10, 20, 30, 0, time.UTC)
+	legacy := cborTextString("2024-03-01T10:20:30Z")
+
+	got, err := Unmarshal[time.Time](legacy)
+	require.NoError(t, err)
+	assert.True(t, got.Equal(whole))
+	assert.Equal(t, 0, got.Nanosecond())
+
+	assert.Equal(t, legacy, MustMarshal(whole))
+}
+
+// TestUnmarshalReadsSubSecondEncodingWithLegacyDecoder proves the
+// forward-read direction: a decoder configured from bare cbor.DecOptions{}
+// (i.e. not this package's decMode, and never consulting EncOptions.Time)
+// still reads a nanosecond-precision entry correctly, so an old binary does
+// too.
+func TestUnmarshalReadsSubSecondEncodingWithLegacyDecoder(t *testing.T) {
+	want := time.Date(2024, 3, 1, 10, 20, 30, 123456789, time.UTC)
+	nano := cborTextString("2024-03-01T10:20:30.123456789Z")
+
+	legacyDecMode, err := cbor.DecOptions{}.DecMode()
+	require.NoError(t, err)
+
+	var got time.Time
+	require.NoError(t, legacyDecMode.Unmarshal(nano, &got))
+	assert.True(t, got.Equal(want))
+	assert.Equal(t, 123456789, got.Nanosecond())
 }
 
 // TestMarshalUnmarshalEdgeCases tests edge cases for marshal/unmarshal.

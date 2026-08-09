@@ -19,7 +19,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```text
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0 ─E581─ v0.58.1
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -43,6 +43,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E56 | v0.55.0 → v0.56.0 | compile-break (C56.6 only partially — see its gate) + silent-behavior default flip (C56.11) | 15 | C56.6 C56.9 | grep log-driven alerts, dashboards, and test assertions for card-data / `iban` / `otp` field names — their values render `***` after the bump (C56.3); expect a cold tenant's first messaging request to fail fast instead of blocking (C56.4); if you assemble config in Go, check for `forwardedclientcert.require` without `enabled` — that service was serving unauthenticated traffic and now returns 401 (C56.5); if one queue name is declared from two places, confirm the two shapes agree — a mismatch that used to be silently overwritten now fails startup (C56.7); if you call a JOSE-protected peer, check for payload-free requests of **any** method — `GET`/`HEAD`/`DELETE` as well as `POST`/`PUT`/`PATCH` — since none of them are sealed now and a peer demanding `application/jose` on every request will answer 415 (C56.8); `/ready`'s 200 body gains `cache` and `cache_stats` and, where a cache is configured, every poll now issues a Redis `PING`, so update any test, schema, or dashboard that pins its exact key set and expect a live cache outage to read `unhealthy` (C56.10); if you run with a top-level cache enabled (or supply an `Options.CacheConnector`, which is probed regardless of `cache.enabled`) and have never set `cache.critical`, that outage now also answers `503` and drains every replica from rotation at once — decide before the bump whether to keep the strict default (and set `readinessProbe.failureThreshold: 3`) or add `cache.critical: false` (C56.11); and if any alert or runbook parses the Redis address out of `/ready`'s `503` body, repoint it at the app log or `/_sys/health-debug` (C56.12); and a module that cannot work without a database can now declare `app.DatabaseRequirer` so an absent one aborts startup rather than booting green (C56.13); check every environment that sets any `database.*` identity field for a complete section, since a partial one now fails startup (C56.14); and re-point any alert asserting `/ready` returns 503 for a database-free or multi-tenant service — both now return 200 (C56.15) |
 | E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup; C57.9 fails `httpclient` construction) | 9 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8); and read every `WithJOSE` policy and direct `jose.Seal` call for an explicitly-set algorithm outside the allowlist — `KeyAlg: RSA1_5` or a non-AEAD `Enc` sealed successfully before and now fails `Build()` at startup, while a policy that named no algorithms at all takes the package defaults and starts working instead of failing every request (C57.9) |
 | E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) + behavior (C58.4, C58.5) | 5 | C58.1 C58.2 C58.3 | check every environment for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`, and — in multi-tenant mode with `cache.manager.maxsize` unset — a negative `multitenant.limits.tenants`, which becomes the pool size. Under `cache.enabled: false` such a value used to be inert and now aborts startup (C58.3); and if any dashboard, alert, or saved query reads OTLP-exported log records by a `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` **record** attribute your code sets as a log field, re-key it to the `app.`-prefixed name (C58.4); and audit the log backend for dashboards, alerts, or saved queries filtering log records by **any** record-level resource attribute — the framework's `service.*` / `telemetry.sdk.*` / `deployment.environment.name` plus every key your deployment injects via `OTEL_RESOURCE_ATTRIBUTES` (`k8s.pod.name`, …) — since all of them move to resource level only; no code grep finds these (C58.5) |
+| E581 | v0.58.0 → v0.58.1 | silent-behavior | 1 | none | if you cache any type carrying a time.Time, decide before the bump whether a compare-and-set on a sub-second timestamp may fail during the rolling deploy (C581.1) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -2121,6 +2122,64 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   Both blocks list only what the **framework** puts on a record. Your own log fields are untouched — an HTTP action log still carries its `request_id`, `http.route`, `http.response.status_code` and the rest exactly as before; this change removes nothing a caller set. Repoint affected queries at the resource attribute of the same name. Backends that flatten record attributes over resource attributes show the same values as before; backends that index the two levels separately stop matching record-level identity filters until repointed
 - verify: with `observability.logs.enabled: true`, emit a log and confirm the backend shows the resource attributes at resource level only, `log.type` still at record level, and your own log fields still at record level unchanged; `go test ./observability/...`
 - ref: [ADR-056](adr_056_log_enricher_delta_attributes.md) · #914 · `observability/processor_attribute_exporter.go`
+
+## E581 · v0.58.0 → v0.58.1 — cached time.Time values keep sub-second precision
+
+- gist: The cache's CBOR encoder moves from `cbor.TimeRFC3339` to
+  `cbor.TimeRFC3339Nano`, so a `time.Time` marshaled through `cache.Marshal`
+  no longer loses its sub-second digits on the wire. Both read directions
+  still work — the decoder was already mode-independent, so an old
+  whole-second entry still parses under the new binary and a new
+  sub-second entry still parses under an old one — and a whole-second time
+  still encodes to byte-identical output. The one thing that shifts is a
+  raw-byte compare-and-set across a mixed-version fleet on a sub-second
+  timestamp.
+- build-caught: none
+- preflight: if any cached type carries a `time.Time` and you use
+  `CompareAndSet`/`GetOrSet` on it, decide before the bump whether a
+  failed swap during the rolling window is acceptable — persistent
+  (`ttl == 0`) entries keep the old encoding until overwritten
+- exit: `go get github.com/gaborage/go-bricks@v0.58.1 && go mod tidy && go build ./... && go test ./...`
+
+### [C581.1] Cached `time.Time` values round-trip with sub-second precision instead of being truncated to whole seconds · silent-behavior · when: match
+
+- detect: `git grep -nE 'cache[.](Must)?(Marshal|Unmarshal)' -- '*.go'` — this
+  only shortlists call sites into the cache's CBOR encoder/decoder. It does
+  **not** chase the type graph: you must hand-review each type passed to
+  `Marshal`/`Unmarshal` (and each type nested inside it) for a `time.Time`
+  field. No grep can do that walk for you.
+- scope: one option in `cache/serialization.go` (`encMode`'s `Time` field).
+  Decoding is unchanged and was always mode-independent — `time.Parse` with
+  the `RFC3339` layout accepts an optional fractional-second field even
+  though the layout does not name one — so **both** directions of a
+  mixed-version fleet hold: an old (whole-second) binary reading a new
+  (sub-second) entry keeps the nanoseconds, and a new binary reading an old
+  entry sees nanosecond `0`. A whole-second `time.Time` encodes to
+  byte-identical bytes under either option, so whole-second cache entries
+  are unaffected either way. Zone offsets render exactly as before —
+  `cbor.TimeRFC3339NanoUTC` was deliberately not chosen because it
+  additionally rewrites every non-UTC time to `Z`.
+- gate: match = you cache a type carrying a `time.Time` (directly or nested)
+  that can hold a non-zero nanosecond. no-match = no cached times, or
+  whole-second-only values (e.g. already truncated before caching).
+- after: two consequences. (i) code that relied on the old truncation —
+  `==` comparisons against a `time.Time` read from the cache, using such a
+  time as a map key, a golden-file assertion pinning the encoded bytes —
+  now sees the sub-second digits it previously lost. (ii)
+  `CompareAndSet`/`GetOrSet` compare **raw stored bytes**, not decoded
+  values (`cache/redis/client.go`, `casScript`: `if current == expected
+  then`). In a rolling deploy sharing one Redis, an `expectedValue`
+  marshaled by one binary version will not byte-match a sub-second-timestamp
+  value written by the other version — the CAS returns `false` (no data
+  loss; the swap simply does not apply) until the entry is next rewritten.
+  TTL bounds that window only where a TTL is set: `Set` treats `ttl == 0`
+  as no expiration, so a persistent entry keeps its old encoding
+  indefinitely rather than aging out on its own.
+- verify: `go test ./cache/...`; in a consuming application, round-trip a
+  `time.Time` with a non-zero nanosecond through
+  `cache.Marshal`/`cache.Unmarshal` and assert `Nanosecond()` survives.
+- ref: `cache/serialization.go` (`encMode`) · `cache/redis/client.go`
+  (`casScript`, `Set`)
 
 ---
 
