@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -250,6 +251,113 @@ func TestHTTPTenantSourceSkipsEmptyIDs(t *testing.T) {
 	got, err := src.ListTenants(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"good", "also-good"}, got)
+}
+
+func TestHTTPTenantSourceRefusesSchemeDowngradeRedirect(t *testing.T) {
+	srv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		stdhttp.Redirect(w, r, "http://"+r.Host+"/tenants", stdhttp.StatusFound)
+	}))
+	defer srv.Close()
+
+	hc := srv.Client() // trusts the test cert; its CheckRedirect is nil, so the guard installs
+	src, err := New(srv.URL, Options{Client: hc})
+	require.NoError(t, err)
+
+	_, err = src.ListTenants(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInsecureScheme) // must be the scheme branch, not the host branch
+	assert.Nil(t, hc.CheckRedirect, "New must not mutate the caller's client")
+}
+
+func TestHTTPTenantSourceRefusesOffHostRedirect(t *testing.T) {
+	srv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		stdhttp.Redirect(w, r, "https://other-host.invalid/tenants", stdhttp.StatusFound)
+	}))
+	defer srv.Close()
+
+	hc := srv.Client()
+	src, err := New(srv.URL, Options{Client: hc})
+	require.NoError(t, err)
+
+	_, err = src.ListTenants(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "off-host")
+	assert.NotErrorIs(t, err, ErrInsecureScheme)
+}
+
+func TestHTTPTenantSourceHonorsCallerCheckRedirect(t *testing.T) {
+	plainSrv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		writeJSON(w, stdhttp.StatusOK, writeEnvelope{
+			Data: map[string]any{
+				"tenants":     []map[string]string{{"id": "t1"}},
+				"next_cursor": "",
+			},
+			Meta: map[string]any{},
+		})
+	}))
+	defer plainSrv.Close()
+
+	tlsSrv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		stdhttp.Redirect(w, r, plainSrv.URL+"/tenants", stdhttp.StatusFound)
+	}))
+	defer tlsSrv.Close()
+
+	hc := tlsSrv.Client()
+	hc.CheckRedirect = func(*stdhttp.Request, []*stdhttp.Request) error { return nil }
+
+	src, err := New(tlsSrv.URL, Options{Client: hc})
+	require.NoError(t, err)
+
+	got, err := src.ListTenants(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"t1"}, got)
+}
+
+func TestHTTPTenantSourceStopsAfterTenRedirects(t *testing.T) {
+	var hits int32
+	srv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
+		atomic.AddInt32(&hits, 1)
+		stdhttp.Redirect(w, r, "https://"+r.Host+"/tenants", stdhttp.StatusFound)
+	}))
+	defer srv.Close()
+
+	hc := srv.Client()
+	src, err := New(srv.URL, Options{Client: hc})
+	require.NoError(t, err)
+
+	_, err = src.ListTenants(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stopped after 10 redirects")
+	assert.Equal(t, int32(10), atomic.LoadInt32(&hits))
+}
+
+func TestHTTPTenantSourceRejectsOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("a"), 1025))
+	}))
+	defer srv.Close()
+
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true, MaxResponseBytes: 1024})
+	require.NoError(t, err)
+
+	_, err = src.ListTenants(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrResponseTooLarge)
+}
+
+func TestHTTPTenantSourceAcceptsResponseAtLimit(t *testing.T) {
+	const body = `{"data":{"tenants":[{"id":"t1"}],"next_cursor":""},"meta":{}}`
+	srv := httptest.NewServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	src, err := New(srv.URL, Options{AllowInsecureScheme: true, MaxResponseBytes: int64(len(body))})
+	require.NoError(t, err)
+
+	got, err := src.ListTenants(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"t1"}, got)
 }
 
 func writeJSON(w stdhttp.ResponseWriter, status int, body any) {
