@@ -16,6 +16,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
 - Go 1.26 or later
 - golangci-lint for linting
 - Make for build automation
+- Node.js on PATH — `make check` runs markdownlint through `npx`; `make lint-md` runs that step on its own
 
 ### Making Changes
 
@@ -32,7 +33,7 @@ Thank you for your interest in contributing to GoBricks! This document provides 
    make check
    ```
 
-   This runs formatting, linting, tests, alloc-stability guards, a vulnerability scan, gosec, and a go.mod/go.sum/go.work.sum tidiness check.
+   This runs formatting, linting, markdownlint, tests, alloc-stability guards, a vulnerability scan, gosec, and a go.mod/go.sum/go.work.sum tidiness check.
 
 ### Code Quality Standards
 
@@ -134,7 +135,8 @@ make lint          # Run golangci-lint
 make fmt           # Format Go code
 make update        # Update deps and tidy modules
 make clean         # Clean build cache
-make check         # Run fmt, lint, test, alloc guards, vuln scan, gosec, and verify-mod (mod-tidy check)
+make lint-md       # Run markdownlint-cli2 (needs Node/npx)
+make check         # Run fmt, lint, markdownlint, test, alloc guards, vuln scan, gosec, and verify-mod (mod-tidy check)
 make test-integration # Integration tests (Docker required)
 make mutate        # Diff-scoped mutation gate: mutants on changed lines must die
 ```
