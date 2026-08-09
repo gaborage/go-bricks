@@ -636,6 +636,40 @@ func TestModuleInitSharedTenancyRequiresInjectedResolvers(t *testing.T) {
 		"a module constructed without SetSharedResolvers must be told how to fix it")
 }
 
+// TestModuleInitSharedTenancyRequiresMessagingResolver pins the m.sharedMsg == nil
+// half of the module.go:158 guard: a nil DB resolver alone must not satisfy it.
+func TestModuleInitSharedTenancyRequiresMessagingResolver(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(stubSharedDB, nil)
+	deps := sharedTenancyDeps(&config.Config{
+		Outbox:      config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
+	})
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "app.RegisterModule",
+		"a nil messaging resolver alone must still trip the guard")
+}
+
+// TestModuleInitSharedTenancyRequiresDatabaseResolver pins the m.sharedDB == nil
+// half of the module.go:158 guard: a nil messaging resolver alone must not satisfy it.
+func TestModuleInitSharedTenancyRequiresDatabaseResolver(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(nil, stubSharedMsg)
+	deps := sharedTenancyDeps(&config.Config{
+		Outbox:      config.OutboxConfig{Enabled: true, Tenancy: config.TenancyShared},
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Source:      config.SourceConfig{Type: config.SourceTypeDynamic},
+	})
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "app.RegisterModule",
+		"a nil database resolver alone must still trip the guard")
+}
+
 func TestModuleInitSharedTenancyRejectsStaticTenants(t *testing.T) {
 	m := NewModule()
 	m.SetSharedResolvers(stubSharedDB, stubSharedMsg)
