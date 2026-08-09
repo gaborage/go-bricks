@@ -39,13 +39,25 @@ const DefaultTimeout = 30 * time.Second
 // set at one million tenants — well past any realistic fleet size.
 const maxPages = 10000
 
+// maxRedirects mirrors net/http's default redirect cap, which a custom
+// CheckRedirect replaces wholesale (see net/http.defaultCheckRedirect).
+const maxRedirects = 10
+
+// DefaultMaxResponseBytes caps a single page response when
+// Options.MaxResponseBytes is unset. 4 MiB is far past any real page: a page
+// carries at most PageLimit tenant IDs, and even 1000 UUIDs is ~40 KB.
+// Spelled as a plain literal rather than 4 << 20 so the mutation gate cannot
+// generate a bitwise-shift mutant on a line no test could distinguish.
+const DefaultMaxResponseBytes int64 = 4194304 // 4 MiB
+
 // Options configures TenantSource.
 type Options struct {
 	// BearerToken is sent in the Authorization header when non-empty.
 	BearerToken string
 
 	// Client overrides the default HTTP client. When nil, a client with a
-	// DefaultTimeout is used.
+	// DefaultTimeout is used. A caller-supplied CheckRedirect is honored as-is
+	// and replaces the source's scheme/host redirect guard.
 	Client *stdhttp.Client
 
 	// PageLimit is sent as the ?limit= query parameter on each request.
@@ -55,8 +67,14 @@ type Options struct {
 	// AllowInsecureScheme opts in to accepting `http://` base URLs. By default
 	// New() rejects plaintext schemes so an operator-supplied bearer token is
 	// never transmitted in clear text. Set this to true only for LocalStack,
-	// dev loops, or internal-only tooling on private networks.
+	// dev loops, or internal-only tooling on private networks. It additionally
+	// permits redirects that downgrade to `http://`.
 	AllowInsecureScheme bool
+
+	// MaxResponseBytes caps how many bytes are read from a single page
+	// response before the read fails with ErrResponseTooLarge. When 0 or
+	// negative, DefaultMaxResponseBytes is used.
+	MaxResponseBytes int64
 }
 
 // ErrInsecureScheme is returned by New when the supplied base URL uses a
@@ -67,12 +85,17 @@ var ErrInsecureScheme = errors.New("migration/source/http: http:// scheme requir
 // scheme other than http or https.
 var ErrUnsupportedScheme = errors.New("migration/source/http: unsupported URL scheme (expected http or https)")
 
+// ErrResponseTooLarge is returned when one page response exceeds
+// Options.MaxResponseBytes (DefaultMaxResponseBytes when unset).
+var ErrResponseTooLarge = errors.New("migration/source/http: control-plane response exceeded the configured maximum")
+
 // TenantSource implements migration.TenantLister against an HTTP control-plane API.
 type TenantSource struct {
-	baseURL     *url.URL
-	bearerToken string
-	client      *stdhttp.Client
-	pageLimit   int
+	baseURL          *url.URL
+	bearerToken      string
+	client           *stdhttp.Client
+	pageLimit        int
+	maxResponseBytes int64
 }
 
 // New constructs a TenantSource. baseURL must be parseable; the /tenants
@@ -105,18 +128,51 @@ func New(baseURL string, opts Options) (*TenantSource, error) {
 	if client == nil {
 		client = &stdhttp.Client{Timeout: DefaultTimeout}
 	}
+	client = redirectGuard(client, u.Host, opts.AllowInsecureScheme)
 
 	limit := opts.PageLimit
 	if limit <= 0 {
 		limit = DefaultPageLimit
 	}
 
+	maxBytes := opts.MaxResponseBytes
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxResponseBytes
+	}
+
 	return &TenantSource{
-		baseURL:     u,
-		bearerToken: opts.BearerToken,
-		client:      client,
-		pageLimit:   limit,
+		baseURL:          u,
+		bearerToken:      opts.BearerToken,
+		client:           client,
+		pageLimit:        limit,
+		maxResponseBytes: maxBytes,
 	}, nil
+}
+
+// redirectGuard returns client unchanged when the caller installed its own
+// CheckRedirect, and otherwise a shallow copy carrying a policy that refuses
+// any redirect which downgrades to http:// or leaves the base host — net/http
+// forwards Authorization on both (it compares hosts only, never the scheme).
+func redirectGuard(client *stdhttp.Client, baseHost string, allowInsecure bool) *stdhttp.Client {
+	if client.CheckRedirect != nil {
+		return client
+	}
+	// Shallow-copy: New must never mutate a client the caller may reuse
+	// (same rule as httpclient/client.go:531-539).
+	c := *client
+	c.CheckRedirect = func(req *stdhttp.Request, via []*stdhttp.Request) error {
+		if len(via) >= maxRedirects {
+			return errors.New("stopped after 10 redirects")
+		}
+		if req.URL.Scheme == "http" && !allowInsecure {
+			return fmt.Errorf("%w: redirect to %q downgrades to http", ErrInsecureScheme, req.URL.Redacted())
+		}
+		if req.URL.Host != baseHost {
+			return fmt.Errorf("control-plane redirected off-host to %q; refusing to follow", req.URL.Redacted())
+		}
+		return nil
+	}
+	return &c
 }
 
 // envelope mirrors the go-bricks server.APIResponse shape (see server/handler.go).
@@ -214,8 +270,15 @@ func (s *TenantSource) fetchPage(ctx context.Context, cursor string) (*envelopeD
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	// nil ResponseWriter is deliberate — the close signal is gated on an
+	// unexported net/http method nothing here can satisfy (same as
+	// server/jose.go:316-319 and httpclient/jose_transport.go:217).
+	body, err := io.ReadAll(stdhttp.MaxBytesReader(nil, resp.Body, s.maxResponseBytes))
 	if err != nil {
+		var maxErr *stdhttp.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return nil, fmt.Errorf("%w (%d bytes)", ErrResponseTooLarge, s.maxResponseBytes)
+		}
 		return nil, fmt.Errorf("read control-plane response: %w", err)
 	}
 
