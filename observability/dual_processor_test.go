@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
@@ -849,5 +850,94 @@ func TestForceFlushWithErrors(t *testing.T) {
 		err := dualProc.ForceFlush(context.Background())
 		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
 		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
+	})
+}
+
+// countKeptTraceID sweeps residues [0, samplingDenominator) through the
+// trace-ID branch of shouldSample. hash is little-endian over trace-ID bytes
+// 0..7, so PutUint64(tid[:8], uint64(i)) makes hash%samplingDenominator == i.
+// tid[15] = 1 keeps the trace ID valid (non-zero) even when i == 0.
+func countKeptTraceID(t *testing.T, dualProc *DualModeLogProcessor) int {
+	t.Helper()
+	kept := 0
+	for i := range samplingDenominator {
+		var tid trace.TraceID
+		binary.LittleEndian.PutUint64(tid[:8], uint64(i))
+		tid[15] = 1
+		factory := logtest.RecordFactory{
+			Severity: log.SeverityInfo,
+			TraceID:  tid,
+		}
+		rec := factory.NewRecord()
+		if dualProc.shouldSample(&rec) {
+			kept++
+		}
+	}
+	return kept
+}
+
+// countKeptTimestamp sweeps residues [0, samplingDenominator) through the
+// timestamp-fallback branch of shouldSample (no trace ID set, so
+// traceID.IsValid() is false). uint64(ts)%samplingDenominator == i.
+func countKeptTimestamp(t *testing.T, dualProc *DualModeLogProcessor) int {
+	t.Helper()
+	kept := 0
+	for i := range samplingDenominator {
+		factory := logtest.RecordFactory{
+			Severity:  log.SeverityInfo,
+			Timestamp: time.Unix(0, int64(i)),
+		}
+		rec := factory.NewRecord()
+		if dualProc.shouldSample(&rec) {
+			kept++
+		}
+	}
+	return kept
+}
+
+// TestShouldSampleResolution pins the sub-percent sampling resolution
+// introduced by samplingDenominator = 10000. Each case asserts an exact kept
+// count across the full residue space [0, 10000), driven through both the
+// trace-ID branch (dual_processor.go:120) and the timestamp-fallback branch
+// (dual_processor.go:111) of shouldSample.
+func TestShouldSampleResolution(t *testing.T) {
+	cases := []struct {
+		name     string
+		rate     float64
+		wantKept int
+	}{
+		{name: "sub_percent_rate_exports_half_a_percent", rate: 0.005, wantKept: 50},
+		{name: "high_precision_rate_keeps_more_than_99_percent", rate: 0.999, wantKept: 9990},
+		{name: "whole_percent_rate_keeps_its_fraction", rate: 0.25, wantKept: 2500},
+		{name: "smallest_representable_rate_keeps_one_in_ten_thousand", rate: 0.0001, wantKept: 1},
+		{name: "sub_resolution_rate_keeps_nothing", rate: 0.00001, wantKept: 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("trace_id", func(t *testing.T) {
+				dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, tc.rate)
+				kept := countKeptTraceID(t, dualProc)
+				assert.Equal(t, tc.wantKept, kept, "rate %v via trace ID should keep exactly %d of %d", tc.rate, tc.wantKept, samplingDenominator)
+			})
+
+			t.Run("timestamp", func(t *testing.T) {
+				dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, tc.rate)
+				kept := countKeptTimestamp(t, dualProc)
+				assert.Equal(t, tc.wantKept, kept, "rate %v via timestamp should keep exactly %d of %d", tc.rate, tc.wantKept, samplingDenominator)
+			})
+		})
+	}
+
+	t.Run("fast_path_rate_zero_drops_all", func(t *testing.T) {
+		dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 0.0)
+		assert.Equal(t, 0, countKeptTraceID(t, dualProc), "rate 0.0 must drop everything via trace ID")
+		assert.Equal(t, 0, countKeptTimestamp(t, dualProc), "rate 0.0 must drop everything via timestamp")
+	})
+
+	t.Run("fast_path_rate_one_keeps_all", func(t *testing.T) {
+		dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 1.0)
+		assert.Equal(t, samplingDenominator, countKeptTraceID(t, dualProc), "rate 1.0 must keep everything via trace ID")
+		assert.Equal(t, samplingDenominator, countKeptTimestamp(t, dualProc), "rate 1.0 must keep everything via timestamp")
 	})
 }

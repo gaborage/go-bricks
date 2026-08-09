@@ -185,16 +185,19 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
         if ts < 0 {
             ts = 0
         }
-        return uint64(ts)%100 < uint64(p.samplingRate*100)
+        return uint64(ts)%samplingDenominator < p.sampleThreshold
     }
 
     traceBytes := traceID[:]
     hash := uint64(traceBytes[0]) | uint64(traceBytes[1])<<8 | uint64(traceBytes[2])<<16 | uint64(traceBytes[3])<<24 |
         uint64(traceBytes[4])<<32 | uint64(traceBytes[5])<<40 | uint64(traceBytes[6])<<48 | uint64(traceBytes[7])<<56
 
-    return hash%100 < uint64(p.samplingRate*100)
+    return hash%samplingDenominator < p.sampleThreshold
 }
 ```
+
+Sampling resolution is 0.01% (`samplingDenominator = 10000`); the threshold is
+precomputed once in the constructor as `sampleThreshold`.
 
 *(WARN and above are always exported before sampling is consulted; see `OnEmit` in `observability/dual_processor.go`.)*
 

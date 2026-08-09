@@ -26,7 +26,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 
 - **Action logs** (`log.type="action"`): Always exported at 100% (request summaries)
 - **Trace logs** (`log.type="trace"`): ERROR/WARN always exported, INFO/DEBUG sampled by `samplingrate`
-- Configure via `observability.logs.samplingrate` (0.0-1.0, default 0.0 drops INFO/DEBUG)
+- Configure via `observability.logs.samplingrate` (0.0-1.0, default 0.0 drops INFO/DEBUG; resolution 0.01%, so a rate below 0.00005 exports nothing)
 - Sampling is deterministic per trace (all logs in same trace sampled together)
 - **All** resource attributes ride the OTLP `ResourceLogs.resource` block once per batch — the identity keys (`service.*`, `deployment.environment.name`, `telemetry.sdk.*`) and anything your deployment injects via `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_SERVICE_NAME` alike. `log.type` is the only record-level attribute the framework injects at export time, and only on records that don't already carry one; log fields your own code sets are untouched ([ADR-056](adr_056_log_enricher_delta_attributes.md))
 

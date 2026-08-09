@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"math"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
@@ -14,6 +15,10 @@ const (
 	logTypeKey    = "log.type"
 	logTypeAction = "action"
 	logTypeTrace  = "trace"
+
+	// samplingDenominator gives log sampling 0.01% resolution. Rates below
+	// half a unit (0.00005) round to a zero threshold and sample nothing.
+	samplingDenominator = 10000
 )
 
 // DualModeLogProcessor routes log records to different processors based on log.type attribute.
@@ -24,6 +29,7 @@ type DualModeLogProcessor struct {
 	actionProcessor sdklog.Processor // Handles action logs (request summaries)
 	traceProcessor  sdklog.Processor // Handles trace logs (application debug logs)
 	samplingRate    float64          // Sampling rate for INFO/DEBUG trace logs (0.0-1.0)
+	sampleThreshold uint64           // samplingRate scaled to samplingDenominator; precomputed (rate is immutable)
 }
 
 // NewDualModeLogProcessor creates a new dual-mode log processor.
@@ -41,6 +47,7 @@ func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor, s
 		actionProcessor: actionProcessor,
 		traceProcessor:  traceProcessor,
 		samplingRate:    samplingRate,
+		sampleThreshold: uint64(math.Round(samplingRate * samplingDenominator)),
 	}
 }
 
@@ -108,7 +115,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
 		if ts < 0 {
 			ts = 0
 		}
-		return uint64(ts)%100 < uint64(p.samplingRate*100)
+		return uint64(ts)%samplingDenominator < p.sampleThreshold
 	}
 
 	// Use first 8 bytes of trace ID for deterministic sampling
@@ -117,7 +124,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
 	hash := uint64(traceBytes[0]) | uint64(traceBytes[1])<<8 | uint64(traceBytes[2])<<16 | uint64(traceBytes[3])<<24 |
 		uint64(traceBytes[4])<<32 | uint64(traceBytes[5])<<40 | uint64(traceBytes[6])<<48 | uint64(traceBytes[7])<<56
 
-	return hash%100 < uint64(p.samplingRate*100)
+	return hash%samplingDenominator < p.sampleThreshold
 }
 
 // Shutdown shuts down both processors.
