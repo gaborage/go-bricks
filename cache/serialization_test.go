@@ -142,6 +142,7 @@ func TestUnmarshalReadsLegacyWholeSecondEncoding(t *testing.T) {
 // still reads a nanosecond-precision entry correctly, so an old binary does
 // too.
 func TestUnmarshalReadsSubSecondEncodingWithLegacyDecoder(t *testing.T) {
+	want := time.Date(2024, 3, 1, 10, 20, 30, 123456789, time.UTC)
 	nano := cborTextString("2024-03-01T10:20:30.123456789Z")
 
 	legacyDecMode, err := cbor.DecOptions{}.DecMode()
@@ -149,6 +150,7 @@ func TestUnmarshalReadsSubSecondEncodingWithLegacyDecoder(t *testing.T) {
 
 	var got time.Time
 	require.NoError(t, legacyDecMode.Unmarshal(nano, &got))
+	assert.True(t, got.Equal(want))
 	assert.Equal(t, 123456789, got.Nanosecond())
 }
 
