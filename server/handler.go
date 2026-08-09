@@ -938,8 +938,8 @@ func (rb *RequestBinder) bindHeaderValue(c *echo.Context, headerName string, isS
 
 // bindHeaderStringSlice binds comma-separated header values to a string-kind slice field.
 // Parts are collected first so the slice can be built with SetString (which accepts any
-// String-Kind element type) instead of appending elements via reflect.Value.Append, which
-// rejects a plain string for a named element type like `type Scope string`.
+// String-Kind element type) instead of reflect.Append, which rejects a plain string for a
+// named element type like `type Scope string`.
 func (rb *RequestBinder) bindHeaderStringSlice(values []string, fieldValue reflect.Value) error {
 	parts := make([]string, 0, 8)
 	for _, raw := range values {
