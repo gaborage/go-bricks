@@ -662,6 +662,70 @@ func TestDeclareTypedConsumerWithMeta(t *testing.T) {
 	})
 }
 
+// TestNewTypedHandlerWithMetaKeepsMetadataPairedUnderConcurrency pins that
+// Metadata stays paired with its own delivery under concurrent Handle calls on
+// one shared typedHandler instance. Reference is capped at 5 chars
+// (validate:"max=5"), so the per-goroutine marker must stay short or every
+// delivery fails validation before fn runs and the pairing assertion never
+// executes.
+func TestNewTypedHandlerWithMetaKeepsMetadataPairedUnderConcurrency(t *testing.T) {
+	const goroutines = 24
+
+	var mismatches atomic.Int64
+	var calls atomic.Int64
+	h := NewTypedHandlerWithMeta(orderEventType, func(_ context.Context, p orderPayload, meta Metadata) error {
+		calls.Add(1)
+		if meta.Headers()["x-check"] != p.Reference {
+			t.Errorf("metadata mismatch: got header %v for payload %+v", meta.Headers()["x-check"], p)
+			mismatches.Add(1)
+		}
+		return nil
+	})
+
+	ctx := t.Context()
+	var wg sync.WaitGroup
+	for i := range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			marker := fmt.Sprintf("r%02d", i)
+			body, err := json.Marshal(orderPayload{Reference: marker, Amount: 1})
+			if err != nil {
+				t.Errorf("marshal payload: %v", err)
+				return
+			}
+			delivery := &amqp.Delivery{
+				Body:    body,
+				Headers: amqp.Table{"x-check": marker},
+			}
+			if err := h.Handle(ctx, delivery); err != nil {
+				t.Errorf("delivery %s failed: %v", marker, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(0), mismatches.Load(), "Metadata must stay paired with its own delivery")
+	assert.Equal(t, int64(goroutines), calls.Load(), "fn must run for every delivery, or the pairing assertion passes vacuously")
+}
+
+// TestNewTypedHandlerWithMetaNilHeaders pins that a delivery with nil Headers
+// survives Handle as a nil amqp.Table via Metadata.Headers() — the shape
+// outbox.EventIDFromHeaders must tolerate.
+func TestNewTypedHandlerWithMetaNilHeaders(t *testing.T) {
+	var calls int
+	var gotMeta Metadata
+	h := NewTypedHandlerWithMeta(orderEventType, func(_ context.Context, _ orderPayload, meta Metadata) error {
+		calls++
+		gotMeta = meta
+		return nil
+	})
+
+	require.NoError(t, h.Handle(t.Context(), &amqp.Delivery{Body: validBody(t)}))
+	assert.Equal(t, 1, calls)
+	assert.Nil(t, gotMeta.Headers())
+}
+
 func TestJSONCodecSummarize(t *testing.T) {
 	typeErr := &json.UnmarshalTypeError{
 		Value:  "number " + numericMarker,
