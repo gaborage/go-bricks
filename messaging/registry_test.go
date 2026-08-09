@@ -13,6 +13,14 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"go.opentelemetry.io/otel/trace"
+
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 // ===== Registry Infrastructure Management Tests =====
@@ -1028,14 +1036,19 @@ type mockAcknowledger struct {
 	nackErr      error
 	nackMultiple bool
 	nackRequeue  bool
+	mu           sync.Mutex
 }
 
 func (m *mockAcknowledger) Ack(_ uint64, _ bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.ackCalled = true
 	return m.ackErr
 }
 
 func (m *mockAcknowledger) Nack(_ uint64, multiple, requeue bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.nackCalled = true
 	m.nackMultiple = multiple
 	m.nackRequeue = requeue
@@ -1044,6 +1057,15 @@ func (m *mockAcknowledger) Nack(_ uint64, multiple, requeue bool) error {
 
 func (m *mockAcknowledger) Reject(_ uint64, _ bool) error {
 	return nil
+}
+
+// AckCalled is a thread-safe read of ackCalled, for tests that poll from a
+// goroutine other than the one calling Ack (e.g. require.Eventually against
+// an asynchronous worker).
+func (m *mockAcknowledger) AckCalled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ackCalled
 }
 
 // ===== processMessage Tests =====
@@ -2145,15 +2167,24 @@ func TestRegistryConsumerResubscribesAfterDeliveryChannelCloses(t *testing.T) {
 	}, time.Second, 2*time.Millisecond, "consumer did not re-subscribe after delivery channel close")
 
 	// Prove the new subscription is live: a delivery on ch2 is processed.
+	acker := &mockAcknowledger{}
 	ch2 <- amqp.Delivery{
 		MessageId:    testMessageID,
 		Body:         []byte(testMessageBody),
 		Headers:      amqp.Table{},
-		Acknowledger: &mockAcknowledger{},
+		Acknowledger: acker,
 	}
 	require.Eventually(t, func() bool {
 		return handler.CallCount() >= 1
 	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not processed")
+
+	// Wait for processMessage's full tail (metrics + ack) to finish, not just
+	// the handler call, so this test's worker goroutine cannot outlive the
+	// test and race a later test's global meter/tracer reset (plan 099 wires
+	// tracking calls into the success path this delivery takes).
+	require.Eventually(t, func() bool {
+		return acker.AckCalled()
+	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not acked")
 
 	registry.StopConsumers()
 }
@@ -2196,15 +2227,24 @@ func TestRegistryConsumerResubscribeRetriesUntilClientReady(t *testing.T) {
 		return client.consumeCallCount() >= 4
 	}, 2*time.Second, 2*time.Millisecond, "consumer did not retry re-subscribe until client ready")
 
+	acker := &mockAcknowledger{}
 	ch2 <- amqp.Delivery{
 		MessageId:    testMessageID,
 		Body:         []byte(testMessageBody),
 		Headers:      amqp.Table{},
-		Acknowledger: &mockAcknowledger{},
+		Acknowledger: acker,
 	}
 	require.Eventually(t, func() bool {
 		return handler.CallCount() >= 1
 	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not processed")
+
+	// Wait for processMessage's full tail (metrics + ack) to finish, not just
+	// the handler call, so this test's worker goroutine cannot outlive the
+	// test and race a later test's global meter/tracer reset (plan 099 wires
+	// tracking calls into the success path this delivery takes).
+	require.Eventually(t, func() bool {
+		return acker.AckCalled()
+	}, time.Second, 2*time.Millisecond, "delivery after re-subscribe was not acked")
 
 	registry.StopConsumers()
 }
@@ -2258,4 +2298,238 @@ func TestRegistryConsumerSupervisorStopsOnContextCancel(t *testing.T) {
 	time.Sleep(20 * registry.resubscribeDelay)
 	assert.Equal(t, settled, client.consumeCallCount(),
 		"supervisor kept re-subscribing after StopConsumers")
+}
+
+// ===== Consume metrics + receive span tests (plan 099) =====
+
+// sleepingCountingHandler wraps countingTestHandler with a fixed sleep before
+// returning, so processMessage observes a non-zero processingTime.
+// RecordAMQPConsumeCompletion skips duration <= 0, and a zero-cost handler
+// can produce a zero delta on a coarse clock, which would make duration
+// assertions flake.
+type sleepingCountingHandler struct {
+	countingTestHandler
+	sleepFor time.Duration
+}
+
+func (h *sleepingCountingHandler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
+	time.Sleep(h.sleepFor)
+	return h.countingTestHandler.Handle(ctx, delivery)
+}
+
+// setupConsumeMetrics installs a test MeterProvider for the AMQP tracking
+// package and returns it plus a cleanup that restores the previous provider.
+// The tracking instruments are singletons bound at first use, so the reset must
+// bracket the test on both sides or state leaks into sibling tests.
+func setupConsumeMetrics(t *testing.T) (mp *obtest.TestMeterProvider, cleanup func()) {
+	t.Helper()
+	prev := otel.GetMeterProvider()
+	mp = obtest.NewTestMeterProvider()
+	otel.SetMeterProvider(mp)
+	tracking.ResetMeterForTesting()
+	return mp, func() {
+		otel.SetMeterProvider(prev)
+		tracking.ResetMeterForTesting()
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}
+}
+
+func TestRegistryProcessMessageRecordsConsumeMetricsOnSuccess(t *testing.T) {
+	mp, cleanup := setupConsumeMetrics(t)
+	defer cleanup()
+
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &sleepingCountingHandler{sleepFor: time.Millisecond}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+
+	rm := mp.Collect(t)
+
+	obtest.AssertMetricValue(t, rm, "messaging.client.consumed.messages", int64(1))
+
+	durationMetric := obtest.FindMetric(rm, "messaging.client.operation.duration")
+	require.NotNil(t, durationMetric)
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok)
+	require.Len(t, histData.DataPoints, 1)
+
+	dp := histData.DataPoints[0]
+	assertAttribute(t, dp.Attributes.ToSlice(), "messaging.operation.name", "receive")
+
+	_, hasErrType := dp.Attributes.Value(attribute.Key("error.type"))
+	assert.False(t, hasErrType, "success path must not stamp error.type")
+}
+
+func TestRegistryProcessMessageRecordsConsumeMetricsOnError(t *testing.T) {
+	mp, cleanup := setupConsumeMetrics(t)
+	defer cleanup()
+
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &sleepingCountingHandler{
+		countingTestHandler: countingTestHandler{
+			testHandler: testHandler{retErr: errors.New("handler error")},
+		},
+		sleepFor: time.Millisecond,
+	}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+
+	rm := mp.Collect(t)
+
+	// Counter is stamped at receive time, before the handler runs.
+	obtest.AssertMetricValue(t, rm, "messaging.client.consumed.messages", int64(1))
+
+	durationMetric := obtest.FindMetric(rm, "messaging.client.operation.duration")
+	require.NotNil(t, durationMetric)
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok)
+	require.Len(t, histData.DataPoints, 1)
+
+	dp := histData.DataPoints[0]
+	assertAttribute(t, dp.Attributes.ToSlice(), "error.type", "*errors.errorString")
+}
+
+func TestRegistryProcessMessageCountsExactlyOncePerDelivery(t *testing.T) {
+	mp, cleanup := setupConsumeMetrics(t)
+	defer cleanup()
+
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &sleepingCountingHandler{sleepFor: time.Millisecond}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+	registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+
+	rm := mp.Collect(t)
+
+	obtest.AssertMetricValue(t, rm, "messaging.client.consumed.messages", int64(2))
+
+	durationMetric := obtest.FindMetric(rm, "messaging.client.operation.duration")
+	require.NotNil(t, durationMetric)
+	histData, ok := durationMetric.Data.(metricdata.Histogram[float64])
+	require.True(t, ok)
+	require.Len(t, histData.DataPoints, 1)
+	assert.Equal(t, uint64(2), histData.DataPoints[0].Count)
+}
+
+func TestRegistryProcessMessageStartsReceiveSpan(t *testing.T) {
+	exporter, cleanup := setupTestTracing(t)
+	defer cleanup()
+
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	span := spans[0]
+	assert.Equal(t, testQueueName+" receive", span.Name)
+	assert.Equal(t, trace.SpanKindConsumer, span.SpanKind)
+	assertAttribute(t, span.Attributes, "messaging.operation.name", "receive")
+}
+
+func TestRegistryProcessMessagePanicMarksSpanError(t *testing.T) {
+	exporter, cleanup := setupTestTracing(t)
+	defer cleanup()
+
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "boom"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	require.NotPanics(t, func() {
+		registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+	})
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, codes.Error, spans[0].Status.Code)
 }

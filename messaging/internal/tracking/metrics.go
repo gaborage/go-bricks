@@ -214,6 +214,35 @@ func RecordAMQPPublishMetrics(ctx context.Context, exchange, routingKey string, 
 	}
 }
 
+// consumeAttributes assembles the metric attribute set shared by the receive
+// counter and the receive duration histogram.
+func consumeAttributes(delivery *amqp.Delivery, queueName string, err error) []attribute.KeyValue {
+	var exchange, routingKey string
+	if delivery != nil {
+		exchange = delivery.Exchange
+		routingKey = delivery.RoutingKey
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
+		attribute.String(attrMessagingOperation, operationReceive),
+		attribute.String(attrMessagingDestination, formatDestinationName(exchange, routingKey, queueName)),
+	}
+	if exchange != "" {
+		attrs = append(attrs, attribute.String(attrMessagingRabbitMQExchange, exchange))
+	}
+	if routingKey != "" {
+		attrs = append(attrs, attribute.String(attrMessagingRabbitMQRoutingKey, routingKey))
+	}
+	if queueName != "" {
+		attrs = append(attrs, attribute.String(attrMessagingRabbitMQQueue, queueName))
+	}
+	if errorType := extractErrorType(err); errorType != "" {
+		attrs = append(attrs, attribute.String(attrErrorType, errorType))
+	}
+	return attrs
+}
+
 // RecordAMQPConsumeMetrics records OpenTelemetry metrics for an AMQP consume operation.
 // This function is called automatically when a message is consumed to emit metrics.
 //
@@ -228,39 +257,7 @@ func RecordAMQPConsumeMetrics(ctx context.Context, delivery *amqp.Delivery, queu
 		return
 	}
 
-	// Extract delivery information
-	var exchange, routingKey string
-	if delivery != nil {
-		exchange = delivery.Exchange
-		routingKey = delivery.RoutingKey
-	}
-
-	// Format destination name per OTel RabbitMQ convention (consumer format)
-	destination := formatDestinationName(exchange, routingKey, queueName)
-	errorType := extractErrorType(err)
-
-	// Common attributes for metrics
-	commonAttrs := []attribute.KeyValue{
-		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
-		attribute.String(attrMessagingOperation, operationReceive),
-		attribute.String(attrMessagingDestination, destination),
-	}
-
-	// Add granular attributes for filtering
-	if exchange != "" {
-		commonAttrs = append(commonAttrs, attribute.String(attrMessagingRabbitMQExchange, exchange))
-	}
-	if routingKey != "" {
-		commonAttrs = append(commonAttrs, attribute.String(attrMessagingRabbitMQRoutingKey, routingKey))
-	}
-	if queueName != "" {
-		commonAttrs = append(commonAttrs, attribute.String(attrMessagingRabbitMQQueue, queueName))
-	}
-
-	// Add error type if present
-	if errorType != "" {
-		commonAttrs = append(commonAttrs, attribute.String(attrErrorType, errorType))
-	}
+	commonAttrs := consumeAttributes(delivery, queueName, err)
 
 	// Record duration histogram (in seconds) - only if duration is > 0
 	if amqpOperationDuration != nil && duration > 0 {
@@ -272,6 +269,24 @@ func RecordAMQPConsumeMetrics(ctx context.Context, delivery *amqp.Delivery, queu
 	if amqpMessagesConsumed != nil && err == nil {
 		amqpMessagesConsumed.Add(ctx, 1, metric.WithAttributes(commonAttrs...))
 	}
+}
+
+// RecordAMQPConsumeCompletion records the receive duration histogram for a
+// delivery whose handling has finished.
+//
+// It deliberately does NOT touch messaging.client.consumed.messages. That
+// counter has a single owner — StartConsumeSpan, which increments it once per
+// delivery received — so a delivery is counted exactly once regardless of how
+// its handler ended. Incrementing here too would double count every message.
+func RecordAMQPConsumeCompletion(ctx context.Context, delivery *amqp.Delivery, queueName string, duration time.Duration, err error) {
+	meter := getAMQPMeter()
+	if meter == nil {
+		return
+	}
+	if amqpOperationDuration == nil || duration <= 0 {
+		return
+	}
+	amqpOperationDuration.Record(ctx, durationToSeconds(duration), metric.WithAttributes(consumeAttributes(delivery, queueName, err)...))
 }
 
 // RecordPublishRetry records a publish retry attempt in the retry counter.
