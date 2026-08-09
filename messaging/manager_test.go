@@ -1054,3 +1054,146 @@ func TestEnsureConsumersRejectsNilDeclarations(t *testing.T) {
 	defer mu.Unlock()
 	assert.Equal(t, 0, calls, "a rejected call must not reach the client factory")
 }
+
+// TestMessagingManagerEnsureConsumersAfterCloseFailsClosed pins failure mode (a): a
+// previously-replayed key must not take the consumersReplayed fast path on a closed manager,
+// which would otherwise report success for consumers that Close already tore down.
+func TestMessagingManagerEnsureConsumersAfterCloseFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} },
+	)
+	decls := newSetupDeclarations()
+
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+	require.NoError(t, manager.Close())
+
+	err := manager.EnsureConsumers(ctx, testTenantID, decls)
+	assert.ErrorIs(t, err, errManagerClosed, "a replayed key must not report success on a closed manager")
+}
+
+// TestMessagingManagerEnsureConsumersAfterCloseDoesNotDialNewKey pins failure mode (b): a
+// closed manager must fail closed for a brand-new key too, rather than dialing a fresh AMQP
+// connection into a map Close already drained (a connection nothing will ever close).
+func TestMessagingManagerEnsureConsumersAfterCloseDoesNotDialNewKey(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return &stubAMQPClient{}
+	}
+	callCount := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost, tenant2ID: amqpURLTenant2}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	decls := newSetupDeclarations()
+
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+	require.NoError(t, manager.Close())
+	snapshot := callCount()
+
+	err := manager.EnsureConsumers(ctx, tenant2ID, decls)
+	assert.ErrorIs(t, err, errManagerClosed, "a new key must fail closed once the manager is closed")
+	assert.Equal(t, snapshot, callCount(), "a closed manager must not dial a new broker connection")
+}
+
+// TestMessagingManagerEnsureConsumersInternalRechecksClosedUnderLock pins Step 1.4
+// specifically: ensureConsumersInternal must re-check the closed flag under consMu, not just
+// rely on EnsureConsumers' outer pre-lock read. Calling the unexported method directly
+// bypasses the outer guard, so this test fails if and only if the re-check is missing.
+func TestMessagingManagerEnsureConsumersInternalRechecksClosedUnderLock(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return &stubAMQPClient{}
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	decls := newSetupDeclarations()
+	manager.closed.Store(true)
+
+	err := manager.ensureConsumersInternal(context.Background(), testTenantID, decls, decls.Hash())
+	assert.ErrorIs(t, err, errManagerClosed, "ensureConsumersInternal must re-check closed under consMu")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 0, calls, "a closed manager's internal setup must not reach the client factory")
+}
+
+// TestMessagingManagerCloseClearsReplayState pins Step 1.6: Close must invalidate
+// replayedHashs, not just drain the consumer map, so a would-be replay of the same
+// declarations after a hypothetical restart cannot skip setup based on stale state.
+func TestMessagingManagerCloseClearsReplayState(t *testing.T) {
+	ctx := context.Background()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} },
+	)
+	decls := newSetupDeclarations()
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	require.NoError(t, manager.Close())
+
+	manager.consMu.RLock()
+	defer manager.consMu.RUnlock()
+	assert.Empty(t, manager.replayedHashs, "Close must invalidate replay state, not just the consumer map")
+}
+
+// TestMessagingManagerStopConsumersKeepsReplayState pins Step 1.5: StopConsumers is the
+// weaker "stop delivering, manager still queryable" phase. Unlike Close it must not mark the
+// manager closed or clear replayedHashs, so a subsequent EnsureConsumers for the same key stays
+// on the warm fast path instead of re-dialing mid-drain.
+func TestMessagingManagerStopConsumersKeepsReplayState(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return &stubAMQPClient{}
+	}
+	callCount := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	t.Cleanup(func() { _ = manager.Close() })
+	decls := newSetupDeclarations()
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	manager.StopConsumers()
+	snapshot := callCount()
+
+	err := manager.EnsureConsumers(ctx, testTenantID, decls)
+	require.NoError(t, err)
+	assert.Equal(t, snapshot, callCount(), "Stop must leave the fast path warm — no re-dial")
+}
