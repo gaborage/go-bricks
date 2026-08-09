@@ -668,9 +668,9 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
 	startTime := time.Now()
 
-	// This performs the same go-bricks header extraction this function used
-	// to do inline, and increments the consumed counter once per delivery
-	// received.
+	// StartConsumeSpan performs the go-bricks header extraction this function
+	// used to do inline, and increments the consumed counter once per
+	// delivery received.
 	msgCtx, span := StartConsumeSpan(ctx, delivery, consumer.Queue)
 
 	// Install the per-message lease scope (ADR-032): per-tenant handles borrowed via
@@ -716,10 +716,10 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 			Err(err).
 			Msg("Message processing failed - discarding without requeue")
 
-		// Record failed message metrics (duration with error.type attribute)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 
+		// Record failed message metrics (duration with error.type attribute)
 		tracking.RecordAMQPConsumeCompletion(msgCtx, delivery, consumer.Queue, processingTime, err)
 
 		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops.

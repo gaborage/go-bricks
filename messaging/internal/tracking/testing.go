@@ -5,8 +5,9 @@ import "sync"
 // ResetMeterForTesting resets the package-level meter state so a test starts
 // with instruments bound to the currently installed global MeterProvider.
 // Intended for messaging-package tests, which cannot reach the unexported
-// state. Safe to call concurrently with initAMQPMeter — the mutex serializes
-// both paths.
+// state. Not safe against a concurrent getAMQPMeter: that path runs
+// meterOnce.Do without meterInitMu, so callers must ensure no goroutine is
+// recording metrics when this runs.
 func ResetMeterForTesting() {
 	meterInitMu.Lock()
 	defer meterInitMu.Unlock()
