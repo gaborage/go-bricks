@@ -650,3 +650,77 @@ func TestClientTLSMutualAuthentication(t *testing.T) {
 		assert.Equal(t, before, hits.Load(), "a rejected handshake must not reach the handler")
 	})
 }
+
+// TestTLSConfigCarriesMaterialPerClause pins every || clause of
+// tlsConfigCarriesMaterial (httpclient/tls.go) through Build()'s fail-closed
+// contract: an incumbent *http.Transport whose TLSClientConfig sets exactly one
+// of those fields must make WithTransport(...).WithTLSConfig(...) fail with
+// ErrUnsafeTransportComposition instead of silently replacing that material.
+// gremlins does not mutate ||, so the mutation gate cannot cover this predicate
+// (same reason as replacement_with_only_deprecated_dial_tls_succeeds in
+// client_test.go) — this table is its only gate. A clause added to the
+// predicate needs a row added here. See ADR-044.
+func TestTLSConfigCarriesMaterialPerClause(t *testing.T) {
+	log := createTestLogger()
+
+	tests := []struct {
+		name      string
+		incumbent *tls.Config // exactly ONE clause-triggering field set
+		wantErr   bool
+	}{
+		{name: "certificates", incumbent: &tls.Config{Certificates: []tls.Certificate{{}}}, wantErr: true},
+		{name: "get_client_certificate", incumbent: &tls.Config{
+			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+				return nil, errors.New("must never be called by this test")
+			},
+		}, wantErr: true},
+		{name: "root_cas", incumbent: &tls.Config{RootCAs: x509.NewCertPool()}, wantErr: true},
+		{name: "insecure_skip_verify", incumbent: &tls.Config{InsecureSkipVerify: true}, wantErr: true},
+		{name: "min_version", incumbent: &tls.Config{MinVersion: tls.VersionTLS12}, wantErr: true},
+		{name: "max_version", incumbent: &tls.Config{MaxVersion: tls.VersionTLS12}, wantErr: true},
+		{name: "server_name", incumbent: &tls.Config{ServerName: "pinned.example"}, wantErr: true},
+		{name: "cipher_suites", incumbent: &tls.Config{CipherSuites: []uint16{tls.TLS_AES_128_GCM_SHA256}}, wantErr: true},
+		{name: "curve_preferences", incumbent: &tls.Config{CurvePreferences: []tls.CurveID{tls.X25519}}, wantErr: true},
+		{name: "renegotiation", incumbent: &tls.Config{Renegotiation: tls.RenegotiateOnceAsClient}, wantErr: true},
+		{name: "verify_peer_certificate", incumbent: &tls.Config{
+			VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error {
+				return errors.New("must never be called by this test")
+			},
+		}, wantErr: true},
+		{name: "verify_connection", incumbent: &tls.Config{
+			VerifyConnection: func(tls.ConnectionState) error {
+				return errors.New("must never be called by this test")
+			},
+		}, wantErr: true},
+		// NextProtos is deliberately NOT a clause: Clone() installs it as an
+		// ALPN-only default, so treating it as material would make composition
+		// depend on how many builders already cloned the transport (ADR-044,
+		// "Determinism"). This case is what stops the predicate from degenerating
+		// into `return true`.
+		{name: "alpn_only_composes", incumbent: &tls.Config{NextProtos: []string{"h2"}}, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Fresh transport per case: http.Transport.Clone() mutates its own
+			// receiver (onceSetNextProtoDefaults), so a shared incumbent would make
+			// the result depend on case order.
+			incumbent := &nethttp.Transport{TLSClientConfig: tt.incumbent}
+			built, err := NewBuilder(log).
+				WithTransport(incumbent).
+				WithTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}).
+				Build()
+
+			if !tt.wantErr {
+				require.NoError(t, err, "this field is not security material and must not block composition")
+				assert.NotNil(t, built)
+				return
+			}
+			require.Error(t, err, "this field is TLS material; Build must refuse to replace it silently")
+			assert.Nil(t, built)
+			assert.ErrorIs(t, err, ErrUnsafeTransportComposition)
+			assert.Contains(t, err.Error(), "WithTLSConfig was called after WithTransport",
+				"the failure must be the incumbent-displacement branch, not another Build issue")
+		})
+	}
+}
