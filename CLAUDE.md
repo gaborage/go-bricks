@@ -393,25 +393,28 @@ The OpenAPI generator now lives in its own repository: [**gaborage/go-bricks-ope
 
 ## Breaking Changes
 
-GoBricks breaks its own API surface when justified. Greenfield work uses the new APIs only. **The lines below are an index, not the migration** — every entry has a tracked ADR (`wiki/adr_NNN_*.md`), and hops that need one have a table in [wiki/migrations.md](wiki/migrations.md). Read those before upgrading.
+GoBricks breaks its own API surface when justified. Greenfield work uses the new APIs only. **The lines below are an index, not the migration** — entries carry a tracked ADR (`wiki/adr_NNN_*.md`) or a `wiki/migrations.md` atom, and hops that need one have a table in [wiki/migrations.md](wiki/migrations.md). Read those before upgrading.
 
 - **S8179 (getter naming):** `GetX()` → `X()` across all packages.
 - **S8196 (interface naming):** `Job` → `Executor`, `HealthProbe` → `Prober`, `TenantStore` → `DBConfigProvider`.
 - **ToSQL standardization (ADR-017):** Insert builders return `types.InsertQueryBuilder` with `ToSQL()`.
 - **Session timezone (ADR-016):** default `UTC`; opt out with `database.timezone: "-"`.
 - **Consumer concurrency (v0.17.0):** default workers `1` → `NumCPU * 4`; set `Workers: 1` when ordering matters.
-- **Message error handling (v2.X):** handler errors and panics cause messages to be nacked without requeue.
+- **Message error handling (v2.X):** handler errors and panics nack messages without requeue.
 - **MongoDB removed (ADR-012):** PostgreSQL and Oracle only.
-- **Bounded publish + outbox dead-lettering (ADR-033):** publish returns `ErrPublishRetriesExhausted` after `messaging.reconnect.maxpublishattempts` — match with `errors.Is`, not `==`. `outbox.Store.FetchPending` drops `maxRetries` and gains `MarkDeadLettered`. New keys: `messaging.reconnect.maxpublishattempts`, `outbox.publishtimeout`.
+- **Bounded publish + outbox dead-lettering (ADR-033):** publish returns `ErrPublishRetriesExhausted` after the new `messaging.reconnect.maxpublishattempts` — match with `errors.Is`, not `==`. `outbox.Store.FetchPending` drops `maxRetries`, gains `MarkDeadLettered`. New key: `outbox.publishtimeout`.
 - **Env policy (ADR-022):** `app.env` accepts any conforming string; behavior switches go through `config.IsDevelopment()` / `config.IsProduction()` alias sets, never equality.
 - **CORS dev wildcard opt-in (ADR-038):** the dev reflect-any-origin posture also requires `CORS_DEV_WILDCARD=true`; without it, dev fails closed.
 - **Composite resolver order required (ADR-039):** `resolver.order` is mandatory — no default.
 - **Declaration Args reach the broker (ADR-040):** declare methods take `(ctx, *…Declaration)` and forward `Args`; may surface `406 PRECONDITION_FAILED` against ops-provisioned queues.
-- **Database absence vs misconfiguration (ADR-047):** the `database:` block is all-or-nothing — omitting it is supported (`/ready` reports `not_configured`, 200), but setting *any* identity field (`type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`, `oracle.service.name`, `oracle.service.sid`) marks the section as intended, and an incomplete intended block now fails startup. Modules needing a database implement `app.DatabaseRequirer`.
+- **Database absence vs misconfiguration (ADR-047):** the `database:` block is all-or-nothing — omitting it is supported (`/ready` reports `not_configured`, 200), but any identity field (`type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`, `oracle.service.name`, `oracle.service.sid`) marks it intended, and an incomplete intended block fails startup. Modules needing a database implement `app.DatabaseRequirer`.
 - **httpclient Build fail-closed (ADR-044):** `Build()` returns `(Client, error)` and refuses compositions that would silently discard TLS material or a caller's `RoundTripper`.
-- **Readiness strict + sanitized by default (ADR-046, ADR-048):** an absent `cache.critical` means the cache probe IS critical (503 during a Redis outage); every critical probe's 503 body serves a fixed `"<name> unavailable"` unless `HealthStatus.PublicErr` overrides it.
-- **Debug endpoints fail closed (ADR-049):** `RegisterDebugEndpoints` returns `error` and aborts startup when `debug.enabled: true` would expose an endpoint with neither `debug.allowedips` nor `debug.bearertoken` set (previously pass-through middleware + a startup WARN); either key — or `debug.enabled: false` — satisfies the check.
-- **Cache construction fails closed (ADR-054):** `ResourceManagerFactory.CreateCacheManager` returns `(*cache.CacheManager, error)`, and a cache the framework was told to build but could not — a negative `cache.manager.maxsize`/`idlettl` — aborts startup instead of a WARN plus a bare `nil` that registered no readiness probe at all. Absence (`cache.enabled: false`, no block) is unchanged; an unreachable Redis at boot still only WARNs.
+- **Readiness strict + sanitized by default (ADR-046, ADR-048):** an absent `cache.critical` makes the cache probe critical (503 during a Redis outage); every critical probe's 503 body serves a fixed `"<name> unavailable"` unless `HealthStatus.PublicErr` overrides it.
+- **Debug endpoints fail closed (ADR-049):** `RegisterDebugEndpoints` returns `error` and aborts startup when `debug.enabled: true` would expose an endpoint with neither `debug.allowedips` nor `debug.bearertoken` set; either key — or `debug.enabled: false` — satisfies the check.
+- **Cache construction fails closed (ADR-054):** `ResourceManagerFactory.CreateCacheManager` returns `(*cache.CacheManager, error)`, so a cache the framework was told to build but could not — a negative `cache.manager.maxsize`/`idlettl` — aborts startup instead of a WARN plus a bare `nil` that registered no readiness probe. Absence (`cache.enabled: false`) is unchanged; an unreachable Redis at boot still only WARNs.
+- **Database wiring fails closed (#892, ADR-050, ADR-051):** an enabled outbox/inbox without a usable ledger database, an unrecognized `connectionstring` scheme on the built-in connector, and any identity key delivered as an empty string each abort startup; a recognized scheme infers `database.type`.
+- **Dead exported surface removed (ADR-052, ADR-053):** `jose.PolicyRegistry` (memoize `jose.ScanType` + `jose.ResolvePolicy` yourself, keyed on type AND direction) and `server.TestShortTimeout`/`TestMediumTimeout`/`TestLongTimeout` are gone.
+- **OTel log-record identity (ADR-055, ADR-056):** top-level fields keyed `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` reach OTLP as `app.<key>`; framework record attributes shrink to `log.type`, identity stays in `ResourceLogs.resource`.
 
 ## File Organization
 
