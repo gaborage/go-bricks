@@ -255,7 +255,7 @@ func TestHTTPTenantSourceSkipsEmptyIDs(t *testing.T) {
 
 func TestHTTPTenantSourceRefusesSchemeDowngradeRedirect(t *testing.T) {
 	srv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
-		stdhttp.Redirect(w, r, "http://"+r.Host+"/tenants", stdhttp.StatusFound)
+		stdhttp.Redirect(w, r, "http://"+r.Host+"/tenants", stdhttp.StatusFound) // NOSONAR: test fixture simulates the redirect attack redirectGuard must refuse (S5146 targets production handlers)
 	}))
 	defer srv.Close()
 
@@ -317,7 +317,7 @@ func TestHTTPTenantSourceStopsAfterTenRedirects(t *testing.T) {
 	var hits int32
 	srv := httptest.NewTLSServer(stdhttp.HandlerFunc(func(w stdhttp.ResponseWriter, r *stdhttp.Request) {
 		atomic.AddInt32(&hits, 1)
-		stdhttp.Redirect(w, r, "https://"+r.Host+"/tenants", stdhttp.StatusFound)
+		stdhttp.Redirect(w, r, "https://"+r.Host+"/tenants", stdhttp.StatusFound) // NOSONAR: test fixture simulates the redirect attack redirectGuard must refuse (S5146 targets production handlers)
 	}))
 	defer srv.Close()
 
