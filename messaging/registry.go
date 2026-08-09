@@ -10,6 +10,8 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
@@ -666,9 +668,10 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
 	startTime := time.Now()
 
-	// Extract trace context using centralized trace package
-	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
-	msgCtx := gobrickstrace.ExtractFromHeaders(ctx, accessor)
+	// This performs the same go-bricks header extraction this function used
+	// to do inline, and increments the consumed counter once per delivery
+	// received.
+	msgCtx, span := StartConsumeSpan(ctx, delivery, consumer.Queue)
 
 	// Install the per-message lease scope (ADR-032): per-tenant handles borrowed via
 	// deps.DB/Cache/Messaging while handling this delivery (including inbox ProcessOnce,
@@ -677,6 +680,11 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	// panic-recovery defer so ReleaseAll runs last (even on panic).
 	msgCtx, scope := leasescope.Install(msgCtx)
 	defer scope.ReleaseAll()
+
+	// Registered after ReleaseAll and before the recovery defer, so LIFO order
+	// is recover -> span.End -> ReleaseAll: the panic path stamps span status
+	// before the span closes, and ReleaseAll still runs last.
+	defer span.End()
 
 	contextLog := log.WithContext(msgCtx)
 	traceID := gobrickstrace.EnsureTraceID(msgCtx)
@@ -709,7 +717,10 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 			Msg("Message processing failed - discarding without requeue")
 
 		// Record failed message metrics (duration with error.type attribute)
-		tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+
+		tracking.RecordAMQPConsumeCompletion(msgCtx, delivery, consumer.Queue, processingTime, err)
 
 		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops.
 		// Queues declared with x-dead-letter-exchange route the message to that
@@ -724,6 +735,8 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		Str("message_id", delivery.MessageId).
 		Dur("processing_time", processingTime).
 		Msg("Message processed successfully")
+
+	tracking.RecordAMQPConsumeCompletion(msgCtx, delivery, consumer.Queue, processingTime, nil)
 
 	// Positive acknowledgment (only when AutoAck is false)
 	if !consumer.AutoAck {
@@ -790,7 +803,10 @@ func (r *Registry) handlePanicRecovery(
 
 	// Record failed message metrics
 	panicErr := fmt.Errorf("panic in message handler: %v", recovered)
-	tracking.RecordAMQPConsumeMetrics(msgCtx, delivery, consumer.Queue, processingTime, panicErr)
+	span := trace.SpanFromContext(msgCtx)
+	span.RecordError(panicErr)
+	span.SetStatus(codes.Error, panicErr.Error())
+	tracking.RecordAMQPConsumeCompletion(msgCtx, delivery, consumer.Queue, processingTime, panicErr)
 
 	// Nack without requeue
 	r.nackMessage(delivery, consumer.AutoAck, log)

@@ -2,7 +2,7 @@ package tracking
 
 import (
 	"context"
-	"sync"
+	"errors"
 	"testing"
 	"time"
 
@@ -24,8 +24,7 @@ const (
 
 // resetMeterForTesting resets the meter state for testing purposes
 func resetMeterForTesting() {
-	meterOnce = sync.Once{}
-	amqpMeter = nil
+	ResetMeterForTesting()
 }
 
 func TestInitAMQPMeter(t *testing.T) {
@@ -270,6 +269,85 @@ func TestRecordAMQPConsumeMetricsZeroDuration(t *testing.T) {
 
 	// Messages consumed counter should still be incremented
 	obtest.AssertMetricValue(t, rm, metricMessagesConsumed, int64(1))
+}
+
+func TestRecordAMQPConsumeCompletion(t *testing.T) {
+	tests := []struct {
+		name          string
+		duration      time.Duration
+		err           error
+		wantHistogram bool
+		wantErrorType bool
+	}{
+		{
+			name:          "success_records_histogram_without_error_type",
+			duration:      150 * time.Millisecond,
+			err:           nil,
+			wantHistogram: true,
+			wantErrorType: false,
+		},
+		{
+			name:          "error_records_histogram_with_error_type",
+			duration:      150 * time.Millisecond,
+			err:           errors.New("boom"),
+			wantHistogram: true,
+			wantErrorType: true,
+		},
+		{
+			name:          "zero_duration_records_nothing",
+			duration:      0,
+			err:           nil,
+			wantHistogram: false,
+			wantErrorType: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp := obtest.NewTestMeterProvider()
+			defer func() {
+				require.NoError(t, mp.Shutdown(context.Background()))
+			}()
+			otel.SetMeterProvider(mp)
+
+			resetMeterForTesting()
+			initAMQPMeter()
+
+			ctx := context.Background()
+			delivery := &amqp.Delivery{
+				Exchange:   "events",
+				RoutingKey: testRoutingKey,
+			}
+
+			RecordAMQPConsumeCompletion(ctx, delivery, testQueueName, tt.duration, tt.err)
+
+			rm := mp.Collect(t)
+
+			// The counter has exactly one owner (StartConsumeSpan) and must
+			// never be touched by RecordAMQPConsumeCompletion.
+			assert.Nil(t, obtest.FindMetric(rm, metricMessagesConsumed))
+
+			durationMetric := obtest.FindMetric(rm, metricOperationDuration)
+			if !tt.wantHistogram {
+				assert.Nil(t, durationMetric)
+				return
+			}
+
+			require.NotNil(t, durationMetric)
+			histData := durationMetric.Data.(metricdata.Histogram[float64])
+			require.Len(t, histData.DataPoints, 1)
+			dp := histData.DataPoints[0]
+			assert.InDelta(t, 0.15, dp.Sum, 0.01)
+
+			attrs := dp.Attributes.ToSlice()
+			if tt.wantErrorType {
+				assertHasAttribute(t, attrs, attrErrorType, "*errors.errorString")
+			} else {
+				_, hasErrType := dp.Attributes.Value(attribute.Key(attrErrorType))
+				assert.False(t, hasErrType, "success path must not stamp error.type")
+			}
+		})
+	}
 }
 
 func TestRecordPublishRetry(t *testing.T) {
