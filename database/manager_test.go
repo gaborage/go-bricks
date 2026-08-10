@@ -317,6 +317,29 @@ func TestDbManagerStatsPopulatedManager(t *testing.T) {
 	assert.ElementsMatch(t, []any{"a", "b"}, keys)
 }
 
+// TestDbManagerStatsSurfacesPoolErrors pins that a deferred-close failure — a connection
+// still borrowed when Close runs, closed only at its final release (ADR-032, C581.2) — is
+// not silently dropped: PoolStats.Errors must reach Stats()["errors"] so callers can observe
+// it, since it is deliberately excluded from Close()'s returned error.
+func TestDbManagerStatsSurfacesPoolErrors(t *testing.T) {
+	stub := &stubDB{key: "a", closeErr: errors.New("deferred close failure")}
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return stub, nil }
+	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{"a": {Type: "postgresql"}}}
+	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
+
+	ctx := context.Background()
+	_, release, err := m.Get(ctx, "a")
+	require.NoError(t, err)
+	assert.Equal(t, 0, m.Stats()["errors"], "no close attempted yet")
+
+	// Close leaves the still-borrowed connection open (liveLeases > 0); the deferred close
+	// attempt — and its failure — only happens once the lease is released.
+	require.NoError(t, m.Close(), "Close must not surface a deferred close failure")
+	release()
+
+	assert.Equal(t, 1, m.Stats()["errors"], "deferred close failure must be counted and surfaced")
+}
+
 func TestStartCleanupIsIdempotent(t *testing.T) {
 	m := NewDbManager(&stubResourceSource{}, newTestLogger(), DbManagerOptions{
 		MaxSize: 5,

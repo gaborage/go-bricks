@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-06-17
 
-> **Amended (2026-08-09):** The `:57-59` bullet below — `Close()` closes every still-mapped handle regardless of `refs` — is reversed: `Close()` now defers a still-borrowed handle to its final `ReleaseFunc` release, the same detach-then-close-on-last-release protocol eviction/idle-cleanup already use, so the "never `Close()`d" benefit claimed under Consequences (`:93-94`) now holds across shutdown too, not only eviction. The original rationale does not survive: ADR-029 cancels consumer contexts but does not join in-flight handlers (`adr_029_graceful_shutdown_order.md:35`), so a handler can still be mid-operation when `Close()` runs. See `internal/resourcepool/resourcepool.go` (`liveLeases`) and Plan 115.
+> **Amended (2026-08-09):** The Decision section's bullet beginning "Manager `Close()`" — originally `Close()` closes every still-mapped handle regardless of `refs` — is reversed: `Close()` now defers a still-borrowed handle to its final `ReleaseFunc` release, the same detach-then-close-on-last-release protocol eviction/idle-cleanup already use, so the "never `Close()`d" benefit claimed under Consequences → Benefits (the bullet beginning "An in-use handle is **never** `Close()`d") now holds across shutdown too, not only eviction. The original rationale does not survive: ADR-029 cancels consumer contexts but does not join in-flight handlers (`adr_029_graceful_shutdown_order.md:35`), so a handler can still be mid-operation when `Close()` runs. See `internal/resourcepool/resourcepool.go` (`liveLeases`) and Plan 115.
 
 ## Context
 

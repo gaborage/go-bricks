@@ -421,8 +421,10 @@ func (m *Manager) StopConsumers() {
 // Close closes all clients and stops cleanup. Publisher closes go through the pool (which
 // stops its own cleanup loop and joins every per-publisher close failure); consumer closes
 // are handled directly. A publisher client still borrowed by in-flight work is closed at its
-// final release instead of by this call (wiki/migrations.md C581.2). Every failure from BOTH
-// sides is surfaced under the historical "errors closing messaging clients" prefix.
+// final release instead of by this call, and that deferred close failure (if any) is excluded
+// from this return value — it is counted in Stats()["errors"] instead (wiki/migrations.md
+// C581.2). Every failure returned here, from BOTH sides, is surfaced under the historical
+// "errors closing messaging clients" prefix.
 func (m *Manager) Close() error {
 	var allErrs []error
 
@@ -470,6 +472,7 @@ func (m *Manager) Stats() map[string]any {
 		"idle_ttl_seconds":  0,
 		"evictions":         0,
 		"idle_cleanups":     0,
+		"errors":            0,
 	}
 
 	if m.pubPool != nil {
@@ -479,6 +482,10 @@ func (m *Manager) Stats() map[string]any {
 		stats["idle_ttl_seconds"] = int(ps.IdleTTL.Seconds())
 		stats["evictions"] = ps.Evictions
 		stats["idle_cleanups"] = ps.IdleCleanups
+		// Publisher create/close failures (including a deferred close on a client still
+		// borrowed when Close ran, C581.2) — excluded from Close()'s returned error, so
+		// this is the only way a caller observes them.
+		stats["errors"] = ps.Errors
 	}
 
 	return stats

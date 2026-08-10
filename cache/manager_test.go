@@ -618,6 +618,34 @@ func TestCacheManagerRemoveWithCloseError(t *testing.T) {
 	assert.Equal(t, 2, stats.TotalCreated)
 }
 
+// TestCacheManagerStatsSurfacesDeferredCloseErrors pins that a deferred-close failure — a
+// cache instance still borrowed when Close runs, closed only at its final release (ADR-032,
+// C581.2) — is not silently dropped: PoolStats.Errors must reach Stats().Errors so callers
+// can observe it, since it is deliberately excluded from Close()'s returned error. This is
+// cache's sibling of the equivalent DbManager/messaging.Manager pins; unlike those two,
+// CacheManager.Stats() already wired ps.Errors through before this pin was added.
+func TestCacheManagerStatsSurfacesDeferredCloseErrors(t *testing.T) {
+	closeErr := errors.New(closeFailedMsg)
+	connector := func(_ context.Context, key string) (cache.Cache, error) {
+		return &failingCloseCache{mockCache: newMockCache(key), closeErr: closeErr}, nil
+	}
+
+	mgr, err := cache.NewCacheManager(cache.DefaultManagerConfig(), connector)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	_, release, err := mgr.Get(ctx, tenantOne)
+	require.NoError(t, err)
+	assert.Equal(t, 0, mgr.Stats().Errors, "no close attempted yet")
+
+	// Close leaves the still-borrowed cache open (liveLeases > 0); the deferred close
+	// attempt — and its failure — only happens once the lease is released.
+	require.NoError(t, mgr.Close(), "Close must not surface a deferred close failure")
+	release()
+
+	assert.Equal(t, 1, mgr.Stats().Errors, "deferred close failure must be counted and surfaced")
+}
+
 // TestCacheManagerClose tests manager shutdown.
 func TestCacheManagerClose(t *testing.T) {
 	var closedCaches sync.Map

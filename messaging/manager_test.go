@@ -621,6 +621,7 @@ func TestMessagingManagerStats(t *testing.T) {
 	assert.Equal(t, 90, stats["idle_ttl_seconds"])
 	assert.Equal(t, 0, stats["evictions"])
 	assert.Equal(t, 0, stats["idle_cleanups"])
+	assert.Equal(t, 0, stats["errors"])
 
 	// One live publisher.
 	_, rel1, err := manager.Publisher(ctx, tenant1ID)
@@ -724,6 +725,36 @@ func TestMessagingManagerPublisherAfterCloseReturnsError(t *testing.T) {
 	assert.ErrorIs(t, err, errManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
 	assert.Nil(t, pub)
 	assert.Nil(t, release)
+}
+
+// TestMessagingManagerStatsSurfacesPoolErrors pins that a deferred-close failure — a publisher
+// still borrowed when Close runs, closed only at its final release (ADR-032, C581.2) — is not
+// silently dropped: PoolStats.Errors must reach Stats()["errors"] so callers can observe it,
+// since it is deliberately excluded from Close()'s returned error (contrast with
+// TestMessagingManagerCloseSurfacesClientErrors, the synchronous-close counterpart).
+func TestMessagingManagerStatsSurfacesPoolErrors(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	client := &stubAMQPClient{closeErr: errors.New("deferred close failure")}
+	factory := func(string, logger.Logger) AMQPClient { return client }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+
+	_, release, err := manager.Publisher(ctx, tenant1ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, manager.Stats()["errors"], "no close attempted yet")
+
+	// Close leaves the still-borrowed publisher open (liveLeases > 0); the deferred close
+	// attempt — and its failure — only happens once the lease is released.
+	require.NoError(t, manager.Close(), "Close must not surface a deferred close failure")
+	release()
+
+	assert.Equal(t, 1, manager.Stats()["errors"], "deferred publisher-close failure must be counted and surfaced")
 }
 
 // TestMessagingManagerZeroValueMethodsAreSafe pins that a zero-value Manager (never built via
