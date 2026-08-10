@@ -698,14 +698,18 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		}
 	}()
 
-	contextLog.Debug().
-		Str("correlation_id", traceID).
-		Str("message_id", delivery.MessageId).
-		Str("routing_key", delivery.RoutingKey).
-		Str("exchange", delivery.Exchange).
-		Uint64("delivery_tag", delivery.DeliveryTag).
-		Int("body_size", len(delivery.Body)).
-		Msg("Processing message")
+	// Skip the per-field sensitive-data scan when the debug event is dropped.
+	// DEBUG is below WarnLevel, so the adapter's Msg -> trackSeverity hook is a
+	// no-op and skipping Msg on the disabled path changes nothing.
+	if dbg := contextLog.Debug(); dbg.Enabled() {
+		dbg.Str("correlation_id", traceID).
+			Str("message_id", delivery.MessageId).
+			Str("routing_key", delivery.RoutingKey).
+			Str("exchange", delivery.Exchange).
+			Uint64("delivery_tag", delivery.DeliveryTag).
+			Int("body_size", len(delivery.Body)).
+			Msg("Processing message")
+	}
 
 	err := consumer.Handler.Handle(msgCtx, delivery)
 	processingTime := time.Since(startTime)

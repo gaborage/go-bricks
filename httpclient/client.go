@@ -1449,17 +1449,21 @@ func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID strin
 
 	// Optional debug payload logging, gated by config
 	if c.config != nil && c.config.LogPayloads {
-		dbg := c.logger.Debug().
-			Str("direction", "outbound").
-			Str("method", httpReq.Method).
-			Str("url", redactURLForLog(httpReq.URL)).
-			Str("request_id", traceID)
-		if len(httpReq.Header) > 0 {
-			// Headers go through logger filter to mask sensitive keys/values
-			dbg = dbg.Interface("headers", httpReq.Header)
+		// Skip field building when the debug event is dropped: this block otherwise
+		// pays a reflective filter walk over the header map (and, here, a second
+		// redactURLForLog). DEBUG is below WarnLevel, so the adapter's
+		// Msg -> trackSeverity hook is a no-op and skipping Msg is safe.
+		if dbg := c.logger.Debug(); dbg.Enabled() {
+			dbg = dbg.Str("direction", "outbound").
+				Str("method", httpReq.Method).
+				Str("url", redactURLForLog(httpReq.URL)).
+				Str("request_id", traceID)
+			if len(httpReq.Header) > 0 {
+				dbg = dbg.Interface("headers", httpReq.Header)
+			}
+			dbg = c.appendBodyPreview(dbg, body, httpReq.Header.Get(headerContentType))
+			dbg.Msg("REST client request")
 		}
-		dbg = c.appendBodyPreview(dbg, body, httpReq.Header.Get(headerContentType))
-		dbg.Msg("REST client request")
 	}
 }
 
@@ -1480,18 +1484,19 @@ func (c *client) logResponse(resp *Response, traceID string) {
 
 	// Optional debug payload logging, gated by config
 	if c.config != nil && c.config.LogPayloads {
-		dbg := c.logger.Debug().
-			Str("direction", "inbound").
-			Int("status", resp.StatusCode).
-			Dur("elapsed", resp.Stats.ElapsedTime).
-			Int64("call_count", resp.Stats.CallCount).
-			Str("request_id", traceID)
-		dbg = c.appendBodyPreview(dbg, resp.Body, resp.Headers.Get(headerContentType))
-		// Response headers go through logger filter to mask sensitive keys/values
-		if len(resp.Headers) > 0 {
-			dbg = dbg.Interface("headers", resp.Headers)
+		// Same guard as logRequest.
+		if dbg := c.logger.Debug(); dbg.Enabled() {
+			dbg = dbg.Str("direction", "inbound").
+				Int("status", resp.StatusCode).
+				Dur("elapsed", resp.Stats.ElapsedTime).
+				Int64("call_count", resp.Stats.CallCount).
+				Str("request_id", traceID)
+			dbg = c.appendBodyPreview(dbg, resp.Body, resp.Headers.Get(headerContentType))
+			if len(resp.Headers) > 0 {
+				dbg = dbg.Interface("headers", resp.Headers)
+			}
+			dbg.Msg("REST client response")
 		}
-		dbg.Msg("REST client response")
 	}
 }
 

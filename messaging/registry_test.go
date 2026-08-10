@@ -2575,6 +2575,14 @@ type recordingLogger struct {
 	mu     *sync.Mutex
 	lines  *[]recordedLine
 	fields [][2]string // context-level fields carried by this logger
+	// debugDisabled, when set, makes every event handed out by Debug() report
+	// Enabled() == false. Zero value = enabled, matching every pre-existing test.
+	debugDisabled bool
+	// lastDebug is the most recent event Debug() handed out, so a disabled-path
+	// test can assert no fields were built on it: the Step 1 guard skips the
+	// whole setter chain (including Msg) when disabled, so no line is ever
+	// recorded to assert against instead.
+	lastDebug *recordingEvent
 }
 
 func newRecordingLogger() *recordingLogger {
@@ -2616,24 +2624,31 @@ func (l *recordingLogger) WithFields(f map[string]any) gobrickslogger.Logger {
 	for _, k := range keys {
 		merged = append(merged, [2]string{k, fmt.Sprint(f[k])})
 	}
-	return &recordingLogger{mu: l.mu, lines: l.lines, fields: merged}
+	return &recordingLogger{mu: l.mu, lines: l.lines, fields: merged, debugDisabled: l.debugDisabled}
 }
 
-func (l *recordingLogger) Info() gobrickslogger.LogEvent  { return l.event() }
-func (l *recordingLogger) Error() gobrickslogger.LogEvent { return l.event() }
-func (l *recordingLogger) Debug() gobrickslogger.LogEvent { return l.event() }
-func (l *recordingLogger) Warn() gobrickslogger.LogEvent  { return l.event() }
-func (l *recordingLogger) Fatal() gobrickslogger.LogEvent { return l.event() }
+func (l *recordingLogger) Info() gobrickslogger.LogEvent  { return l.event(false) }
+func (l *recordingLogger) Error() gobrickslogger.LogEvent { return l.event(false) }
+func (l *recordingLogger) Warn() gobrickslogger.LogEvent  { return l.event(false) }
+func (l *recordingLogger) Fatal() gobrickslogger.LogEvent { return l.event(false) }
 
-func (l *recordingLogger) event() gobrickslogger.LogEvent {
+// Debug additionally tracks the event it hands out in lastDebug (see field doc).
+func (l *recordingLogger) Debug() gobrickslogger.LogEvent {
+	e := l.event(l.debugDisabled)
+	l.lastDebug = e
+	return e
+}
+
+func (l *recordingLogger) event(disabled bool) *recordingEvent {
 	pairs := make([][2]string, len(l.fields), len(l.fields)+8)
 	copy(pairs, l.fields)
-	return &recordingEvent{l: l, pairs: pairs}
+	return &recordingEvent{l: l, pairs: pairs, enabled: !disabled}
 }
 
 type recordingEvent struct {
-	l     *recordingLogger
-	pairs [][2]string
+	l       *recordingLogger
+	pairs   [][2]string
+	enabled bool
 }
 
 func (e *recordingEvent) add(k string, v any) gobrickslogger.LogEvent {
@@ -2651,7 +2666,7 @@ func (e *recordingEvent) Bytes(k string, v []byte) gobrickslogger.LogEvent {
 	return e.add(k, string(v))
 }
 func (e *recordingEvent) Bool(k string, v bool) gobrickslogger.LogEvent { return e.add(k, v) }
-func (e *recordingEvent) Enabled() bool                                 { return true }
+func (e *recordingEvent) Enabled() bool                                 { return e.enabled }
 
 func (e *recordingEvent) Err(err error) gobrickslogger.LogEvent {
 	if err != nil {
@@ -2906,4 +2921,86 @@ func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
 	// 47.0, AFTER = 38.0 allocs/op — fails the old per-delivery WithFields
 	// layer, passes the new per-event stamps with headroom.
 	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
+}
+
+// TestRegistryProcessMessageLogsDebugFieldsWhenEnabled proves the Step 1 guard
+// is transparent when the debug event is enabled: the exact field set and
+// values the live chain sets must still reach the "Processing message" line,
+// in order.
+func TestRegistryProcessMessageLogsDebugFieldsWhenEnabled(t *testing.T) {
+	const wantTraceID = "req-118-enabled"
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{gobrickstrace.HeaderXRequestID: wantTraceID},
+		Acknowledger: acker,
+	}
+
+	rec := newRecordingLogger()
+	registry.processMessage(context.Background(), consumer, delivery, rec)
+
+	debugLine := rec.Line(t, "Processing message")
+	assert.Equal(t, [][2]string{
+		{"correlation_id", wantTraceID},
+		{"message_id", testMessageID},
+		{"routing_key", testRoutingKey},
+		{"exchange", testExchangeName},
+		{"delivery_tag", "123"},
+		{"body_size", fmt.Sprint(len(testMessageBody))},
+	}, debugLine.Pairs)
+}
+
+// TestRegistryProcessMessageSkipsDebugFieldBuildWhenDisabled proves the Step 1
+// guard suppresses field building on the disabled path: no fields are set on
+// the debug event and no "Processing message" line is emitted, while the INFO
+// success line is unaffected (the guard did not swallow the rest of the
+// function).
+func TestRegistryProcessMessageSkipsDebugFieldBuildWhenDisabled(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{},
+		Acknowledger: acker,
+	}
+
+	rec := newRecordingLogger()
+	rec.debugDisabled = true
+	registry.processMessage(context.Background(), consumer, delivery, rec)
+
+	require.NotNil(t, rec.lastDebug, "Debug() was never called")
+	assert.Empty(t, rec.lastDebug.pairs, "guard deleted: debug fields were built for a dropped event")
+	for _, ln := range rec.Lines() {
+		assert.NotEqual(t, "Processing message", ln.Msg, "guard deleted: Msg was called on a disabled debug event")
+	}
+
+	infoLine := rec.Line(t, "Message processed successfully")
+	assert.NotEmpty(t, infoLine.Pairs)
 }

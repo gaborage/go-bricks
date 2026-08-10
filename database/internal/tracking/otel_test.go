@@ -201,6 +201,16 @@ func TestExtractDBOperation(t *testing.T) {
 		{"  select  * from users", "select"}, // Leading whitespace
 		{"", "query"},                        // Empty query
 		{"UNKNOWN_COMMAND", "query"},         // Unknown command
+
+		// Fold-boundary and lowercase special-op equivalence (plan 118).
+		{"PREPARE:", "prepare"},
+		{"SEL", "query"},
+		{"begin", "begin"},
+		{"begin_tx", "begin"},
+		{"commit", "commit"},
+		{"rollback", "rollback"},
+		{"create_migration_table", "create_table"},
+		{"prepare: select 1", "prepare"},
 	}
 
 	for _, tt := range tests {

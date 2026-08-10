@@ -424,6 +424,23 @@ func TestExtractTableName(t *testing.T) {
 			query:         "SELECT * FROM (SELECT id FROM users) AS subquery",
 			expectedTable: "users", // Extracts from main FROM clause
 		},
+
+		// Fold-boundary and mixed-case verb coverage (plan 118).
+		{
+			name:          "select_mixed_case",
+			query:         "SeLeCt * FrOm users",
+			expectedTable: "users",
+		},
+		{
+			name:          "insert_mixed_case",
+			query:         "InSeRt InTo users (name) VALUES ('x')",
+			expectedTable: "users",
+		},
+		{
+			name:          "select_keyword_only",
+			query:         "SELECT",
+			expectedTable: unknownTable,
+		},
 	}
 
 	for _, tt := range tests {

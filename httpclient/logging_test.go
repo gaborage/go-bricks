@@ -88,11 +88,21 @@ func (e *fakeLogEvent) Bool(key string, value bool) logger.LogEvent {
 	return e
 }
 
-func (e *fakeLogEvent) Enabled() bool { return true }
+// Enabled reports false only for a debug event handed out while debugDisabled
+// is set — every other level, and every existing test (zero value = enabled),
+// keeps the prior hardcoded-true behavior.
+func (e *fakeLogEvent) Enabled() bool {
+	if e.level == "debug" && e.logger.debugDisabled {
+		return false
+	}
+	return true
+}
 
 // fakeLogger implements logger.Logger for testing
 type fakeLogger struct {
-	events []loggedEvent
+	events        []loggedEvent
+	debugDisabled bool          // zero value = enabled, matching every existing test
+	lastDebug     *fakeLogEvent // last event handed out by Debug(), for disabled-path assertions
 }
 
 type loggedEvent struct {
@@ -118,11 +128,13 @@ func (l *fakeLogger) Error() logger.LogEvent {
 }
 
 func (l *fakeLogger) Debug() logger.LogEvent {
-	return &fakeLogEvent{
+	e := &fakeLogEvent{
 		logger: l,
 		level:  "debug",
 		fields: make(map[string]any),
 	}
+	l.lastDebug = e
+	return e
 }
 
 func (l *fakeLogger) Warn() logger.LogEvent {
@@ -852,4 +864,58 @@ func TestIsJSONContentTypeEdgeCases(t *testing.T) {
 			t.Errorf("isJSONContentType(%q) = %v, want %v", tc.ct, got, tc.want)
 		}
 	}
+}
+
+// TestClientLogRequestSkipsPayloadFieldBuildWhenDebugDisabled verifies the
+// logRequest guard: when the debug event is disabled, the header/body-preview
+// field chain (and the second redactURLForLog call) is never built, and the
+// INFO line is unaffected.
+func TestClientLogRequestSkipsPayloadFieldBuildWhenDebugDisabled(t *testing.T) {
+	fakeLog := &fakeLogger{debugDisabled: true}
+	c := &client{
+		logger: fakeLog,
+		config: &Config{LogPayloads: true, MaxPayloadLogBytes: 512},
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://api.example.com/users", http.NoBody)
+	assert.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer token")
+	req.Header.Set(testContentTypeHeader, testContentType)
+
+	body := []byte(`{"name": "test user"}`)
+	c.logRequest(req, body, "trace-123")
+
+	assert.Empty(t, fakeLog.eventsByLevel("debug"), "guard deleted: a debug line was emitted for a dropped event")
+	require.NotNil(t, fakeLog.lastDebug, "Debug() was never called")
+	assert.Empty(t, fakeLog.lastDebug.fields, "guard deleted: debug fields were built for a dropped event")
+
+	assert.Len(t, fakeLog.eventsByLevel("info"), 1, "the INFO line is unaffected by the debug guard")
+}
+
+// TestClientLogResponseSkipsPayloadFieldBuildWhenDebugDisabled verifies the
+// logResponse guard: when the debug event is disabled, the body-preview/header
+// field chain is never built, and the INFO line is unaffected.
+func TestClientLogResponseSkipsPayloadFieldBuildWhenDebugDisabled(t *testing.T) {
+	fakeLog := &fakeLogger{debugDisabled: true}
+	c := &client{
+		logger: fakeLog,
+		config: &Config{LogPayloads: true, MaxPayloadLogBytes: 512},
+	}
+
+	response := &Response{
+		StatusCode: 200,
+		Body:       []byte(`{"id": 1}`),
+		Headers:    http.Header{testContentTypeHeader: []string{testContentType}, "Set-Cookie": []string{"session=abc"}},
+		Stats: Stats{
+			ElapsedTime: 250 * time.Millisecond,
+			CallCount:   5,
+		},
+	}
+	c.logResponse(response, "trace-123")
+
+	assert.Empty(t, fakeLog.eventsByLevel("debug"), "guard deleted: a debug line was emitted for a dropped event")
+	require.NotNil(t, fakeLog.lastDebug, "Debug() was never called")
+	assert.Empty(t, fakeLog.lastDebug.fields, "guard deleted: debug fields were built for a dropped event")
+
+	assert.Len(t, fakeLog.eventsByLevel("info"), 1, "the INFO line is unaffected by the debug guard")
 }

@@ -899,3 +899,66 @@ func BenchmarkExtractDBOperation(b *testing.B) {
 		extractDBOperation(q)
 	}
 }
+
+// TestHasPrefixFoldMatchesUpperPrefixOnASCII is a differential test against the
+// removed strings.ToUpper(s) + strings.HasPrefix path, over an ASCII corpus.
+func TestHasPrefixFoldMatchesUpperPrefixOnASCII(t *testing.T) {
+	keywords := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "PREPARE:"}
+	queries := []string{
+		"", "S", "SEL", "SELECT", "select", "SeLeCt", "SELECTED x",
+		"SELECT * FROM users", "select * from products",
+		"INSERT INTO users (name) VALUES ($1)", "insert into products (name) values ('x')",
+		"UPDATE users SET name = $1", "update products set price = 1",
+		"DELETE FROM users WHERE id = $1", "delete from products where x = true",
+		"PREPARE:", "PREPARE: SELECT 1", "prepare: select 1",
+		"BEGIN", "COMMIT", "CREATE_MIGRATION_TABLE", "   select 1",
+	}
+	for _, q := range queries {
+		for _, kw := range keywords {
+			want := strings.HasPrefix(strings.ToUpper(q), kw)
+			assert.Equal(t, want, hasPrefixFold(q, kw), "query=%q keyword=%q", q, kw)
+		}
+	}
+}
+
+// TestHasPrefixFoldNarrowsOnNonASCII pins the documented ASCII-only narrowing
+// (see hasPrefixFold's doc comment) so it is not "fixed" later: a query whose
+// leading bytes are not all ASCII cannot match, unlike the removed
+// strings.ToUpper Unicode-folding path.
+func TestHasPrefixFoldNarrowsOnNonASCII(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "long_s_select", query: "ſelect * from users"},
+		{name: "dotless_i_insert", query: "ınsert into users values (1)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, hasPrefixFold(tt.query, "SELECT"))
+			assert.False(t, hasPrefixFold(tt.query, "INSERT"))
+		})
+	}
+}
+
+// TestEqualFoldASCII covers the whole-string fold, including length mismatch
+// in both directions.
+func TestEqualFoldASCII(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want bool
+	}{
+		{name: "exact_match", s: "BEGIN", want: true},
+		{name: "lowercase_match", s: "begin", want: true},
+		{name: "mixed_case_match", s: "BeGiN", want: true},
+		{name: "longer_no_match", s: "BEGINX", want: false},
+		{name: "shorter_no_match", s: "BEGI", want: false},
+		{name: "different_no_match", s: "COMMIT", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, equalFoldASCII(tt.s, "BEGIN"))
+		})
+	}
+}
