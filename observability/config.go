@@ -2,6 +2,7 @@ package observability
 
 import (
 	"maps"
+	"math"
 	"strings"
 	"time"
 )
@@ -648,7 +649,7 @@ func (c *Config) validateTraceConfig() error {
 	// Validate sample rate if explicitly set
 	if c.Trace.Sample.Rate != nil {
 		rate := *c.Trace.Sample.Rate
-		if rate < 0.0 || rate > 1.0 {
+		if math.IsNaN(rate) || rate < 0.0 || rate > 1.0 {
 			return ErrInvalidSampleRate
 		}
 	}
