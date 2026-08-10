@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/observability"
@@ -830,6 +831,63 @@ func TestRootDatabaseAbsent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.absent, rootDatabaseAbsent(tt.cfg(), tt.opts))
+		})
+	}
+}
+
+func TestRootCacheAbsent(t *testing.T) {
+	stubConnector := func(context.Context, string) (cache.Cache, error) {
+		return nil, nil
+	}
+
+	tests := []struct {
+		name   string
+		cfg    func() *config.Config
+		opts   *Options
+		absent bool
+	}{
+		{name: "cache_disabled_is_absent", absent: true, cfg: func() *config.Config {
+			return &config.Config{}
+		}},
+		{name: "cache_enabled_is_present", absent: false, cfg: func() *config.Config {
+			cfg := &config.Config{}
+			cfg.Cache.Enabled = true
+			return cfg
+		}},
+		{name: "multi_tenant_is_not_an_exemption", absent: true, cfg: func() *config.Config {
+			cfg := &config.Config{}
+			cfg.Multitenant.Enabled = true
+			return cfg
+		}},
+		{name: "dynamic_config_source_exempt", absent: false, cfg: func() *config.Config {
+			cfg := &config.Config{}
+			cfg.Source.Type = config.SourceTypeDynamic
+			return cfg
+		}},
+		{
+			name:   "custom_cache_connector_exempt",
+			absent: false,
+			cfg:    func() *config.Config { return &config.Config{} },
+			opts:   &Options{CacheConnector: stubConnector},
+		},
+		{
+			name:   "static_resource_source_exempt",
+			absent: false,
+			cfg:    func() *config.Config { return &config.Config{} },
+			opts:   &Options{ResourceSource: &dynamicResourceSource{dynamic: false}},
+		},
+		{
+			name:   "dynamic_resource_source_exempt",
+			absent: false,
+			cfg:    func() *config.Config { return &config.Config{} },
+			opts:   &Options{ResourceSource: &dynamicResourceSource{dynamic: true}},
+		},
+		{name: "nil_config_tolerated", absent: false, cfg: func() *config.Config { return nil }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.absent, rootCacheAbsent(tt.cfg(), tt.opts))
 		})
 	}
 }
