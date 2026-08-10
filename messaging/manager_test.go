@@ -1212,7 +1212,11 @@ func TestMessagingManagerEnsureConsumersWarmHashLosesToClosedGuard(t *testing.T)
 		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
 		func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} },
 	)
-	t.Cleanup(func() { _ = manager.Close() })
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close messaging manager: %v", err)
+		}
+	})
 	decls := newSetupDeclarations()
 	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
 
