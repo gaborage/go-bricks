@@ -583,10 +583,11 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		if result.Err != nil && result.Critical {
 			// /ready is unauthenticated and the limiters do not exempt it, but they key probes
 			// by client IP (probeSkipper skips tenant resolution, not the limiters), so one
-			// source can still mint an ERROR line per abandoned request; a caller's own
-			// cancellation is not a readiness incident. The caller's context must actually be
-			// done: a probe that reports context.Canceled while the request is still live was
-			// canceled from inside, which is a genuine incident and stays ERROR.
+			// source can still abandon many requests in a row. An abandoned request — the
+			// caller's own context canceled, and the probe reports that same context.Canceled —
+			// is not a readiness incident, so it logs WARN, not ERROR. The caller's context must
+			// actually be done: a probe that reports context.Canceled while the request is still
+			// live was canceled from inside, which is a genuine incident and stays ERROR.
 			event := a.logger.Error()
 			if errors.Is(ctx.Err(), context.Canceled) && errors.Is(result.Err, context.Canceled) {
 				event = a.logger.Warn()
