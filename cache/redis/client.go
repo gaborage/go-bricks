@@ -272,6 +272,8 @@ func (c *Client) GetOrSet(ctx context.Context, key string, value []byte, ttl tim
 // expectedValue — including an empty slice — is a real compare-and-swap, so an absent key
 // fails the comparison.
 // Uses Lua script for atomicity.
+// A ttl of 0 stores the key without expiration; any positive ttl below 1ms is
+// raised to 1ms, matching what go-redis does for Set and GetOrSet.
 func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, newValue []byte, ttl time.Duration) (bool, error) {
 	if c.closed.Load() {
 		return false, cache.ErrClosed
@@ -293,8 +295,15 @@ func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, n
 
 	start := time.Now()
 
+	// A positive TTL below 1ms truncates to 0, which the script reads as
+	// "no expiry" — clamp it so only ttl == 0 produces a persistent key.
+	ttlMs := ttl.Milliseconds()
+	if ttl > 0 && ttlMs == 0 {
+		ttlMs = 1
+	}
+
 	// Execute Lua script
-	result, err := c.client.Eval(ctx, casScript, []string{key}, expected, newValue, ttl.Milliseconds(), mode).Int()
+	result, err := c.client.Eval(ctx, casScript, []string{key}, expected, newValue, ttlMs, mode).Int()
 
 	duration := time.Since(start)
 	tracking.RecordCacheOperation(ctx, tracking.OpCompareAndSet, duration, false, err, c.namespace(ctx))

@@ -12,6 +12,7 @@ import (
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -437,6 +438,53 @@ func TestConnectionNewConnectionInvalidConfig(t *testing.T) {
 	// Should fail at config parsing stage
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse PostgreSQL config")
+}
+
+func TestConnectionNewConnectionParseErrorOmitsConnectionStringPassword(t *testing.T) {
+	const password = `zqxvw'plinth marmalade`
+	cfg := &config.DatabaseConfig{
+		ConnectionString: `host=zqxvwhost port=notanumber user=zqxvwuser password='zqxvw\'plinth marmalade' dbname=zqxvwdb`,
+	}
+
+	// Premise, so the NotContains below cannot pass vacuously.
+	require.Contains(t, cfg.ConnectionString, "marmalade")
+
+	_, err := NewConnection(cfg, dbtestlog.NewTestLogger())
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "marmalade", "password fragment leaked into the startup error")
+	assert.NotContains(t, err.Error(), password)
+	assert.Contains(t, err.Error(), "failed to parse PostgreSQL config")
+}
+
+func TestConnectionNewConnectionParseErrorOmitsBuiltDSNPassword(t *testing.T) {
+	const password = `zqxvw'plinth marmalade`
+	cfg := &config.DatabaseConfig{
+		Host: "zqxvwhost", Port: 5432, Username: "zqxvwuser",
+		Password: password, Database: "zqxvwdb",
+	}
+	cfg.TLS.Mode = "zqxvwbogusmode"
+
+	// Non-vacuity: prove the value really is in the DSN handed to pgx.
+	require.Contains(t, buildPostgresDSN(cfg), "marmalade")
+
+	_, err := NewConnection(cfg, dbtestlog.NewTestLogger())
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "marmalade", "password fragment leaked into the startup error")
+	assert.NotContains(t, err.Error(), password)
+}
+
+func TestConnectionNewConnectionParseErrorPreservesChain(t *testing.T) {
+	cfg := &config.DatabaseConfig{
+		ConnectionString: `host=zqxvwhost port=notanumber user=zqxvwuser password='zqxvw\'plinth marmalade' dbname=zqxvwdb`,
+	}
+
+	_, err := NewConnection(cfg, dbtestlog.NewTestLogger())
+
+	require.Error(t, err)
+	var pgErr *pgconn.ParseConfigError
+	require.True(t, errors.As(err, &pgErr), "pgx error must stay reachable via errors.As")
 }
 
 func TestStatementQueryAndQueryRow(t *testing.T) {
