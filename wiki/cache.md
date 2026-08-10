@@ -168,7 +168,7 @@ carries `cache` (a status string) alongside `cache_stats` (the manager counters)
 | `cache` value | When | Probe error | 503? |
 | --------------- | ------ | ------------- | ------ |
 | `healthy` | An instance was leased and its `Health(ctx)` `PING` succeeded; `cache_stats.status` is `healthy` | none | no |
-| `not_configured` | The probe ran and the lease returned a not-configured error — `cache.enabled: false`, where the *default Redis* connector declines by design; `cache_stats` carries the manager counters with `status` `not_configured`. A custom `Options.CacheConnector` never reads `cache.enabled` and is probed regardless | none | no |
+| `not_configured` | With the default connector and `cache.enabled: false`, nothing can resolve under the probe's fixed `""` key, so the probe reports `not_configured` without attempting a lease; `cache_stats` carries the manager counters with `status` `not_configured`. A custom `Options.CacheConnector` never reads `cache.enabled` and is probed regardless | none | no |
 | `unhealthy` | The lease failed — the manager is closed, or a cold pool tried to build the instance and the construction-time `PING` failed; `cache_stats.status` is `connection_failed` | yes | **yes**, unless `critical: false` |
 | `unhealthy` | The lease succeeded but the per-probe `Health(ctx)` `PING` failed or timed out — a live Redis outage against a warm pool; `cache_stats.status` is `unhealthy` | yes | **yes**, unless `critical: false` |
 | `disabled` | **No probe is registered at all** — the manager is nil, so `/ready` falls back to this. Since [`[C58.3]`](migrations.md) the framework can no longer reach that state on its own: a cache manager that fails to construct aborts startup instead of leaving a nil behind, so this row now describes only an `App` value assembled directly, without a manager. `cache.enabled: false` does **not** land here — that is `not_configured` above; `cache_stats` is `{}` | n/a | no — there is no probe to error, so not under the strict default either |
@@ -230,8 +230,9 @@ readiness posture stays visible in the same place an operator looks for everythi
 it is deliberately kept rather than banned (ADR-046).
 
 **Probe cost is conditional, not flat.** A `disabled` or `not_configured` deployment issues no
-Redis traffic at all — the first registers no probe, and the second fails the lease before any
-ping. Under the **default Redis connector**, a warm poll costs one `PING` — `Cache.Health` is
+Redis traffic at all — the first registers no probe, and the second (under the default connector
+with `cache.enabled: false`) makes no lease attempt at all, so the pool's `errors` counter stays
+flat. Under the **default Redis connector**, a warm poll costs one `PING` — `Cache.Health` is
 contracted fast (<100ms) and safe to call frequently — and emits one
 `db.client.operation.duration` sample from inside the Redis client,
 tagged `error.type` during a live outage, so a warm-pool outage does reach cache dashboards; the

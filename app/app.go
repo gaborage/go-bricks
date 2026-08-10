@@ -77,6 +77,8 @@ type App struct {
 	messagingManager *messaging.Manager
 	cacheManager     *cache.CacheManager
 	resourceProvider ResourceProvider
+	// cacheAbsent precomputes rootCacheAbsent(cfg, opts); see that function for the rationale.
+	cacheAbsent bool
 
 	// Messaging declarations/initializer, plus the connection pre-warmer (database + messaging)
 	messagingDeclarations *messaging.Declarations
@@ -104,7 +106,7 @@ func (a *App) createHealthProbes() []Prober {
 	}
 
 	if a.cacheManager != nil {
-		probes = append(probes, cacheManagerHealthProbe(a.cacheManager, a.logger, a.cfg.IsCacheCritical()))
+		probes = append(probes, cacheManagerHealthProbe(a.cacheManager, a.logger, a.cfg.IsCacheCritical(), a.cacheAbsent))
 	}
 
 	return probes
