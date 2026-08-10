@@ -941,6 +941,28 @@ func TestHasPrefixFoldNarrowsOnNonASCII(t *testing.T) {
 	}
 }
 
+// TestHasPrefixFoldRejectsExactBoundaryByte pins the >= 0x80 boundary (as opposed
+// to > 0x80) introduced by the byte-wise ASCII fold: a byte of exactly 0x80 — the
+// first non-ASCII value — must reject the match on its own, whether it leads the
+// query or sits mid-prefix, not just byte values above it. equalFoldASCII is
+// exercised too since it delegates to hasPrefixFold and both fixtures happen to
+// match the compared keyword's length.
+func TestHasPrefixFoldRejectsExactBoundaryByte(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "boundary_byte_leading", query: "\x80ELECT"},
+		{name: "boundary_byte_mid_prefix", query: "S\x80LECT"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, hasPrefixFold(tt.query, "SELECT"))
+			assert.False(t, equalFoldASCII(tt.query, "SELECT"))
+		})
+	}
+}
+
 // TestEqualFoldASCII covers the whole-string fold, including length mismatch
 // in both directions.
 func TestEqualFoldASCII(t *testing.T) {

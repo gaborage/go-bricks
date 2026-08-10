@@ -377,7 +377,22 @@ func hasPrefixFold(s, prefix string) bool {
 	if len(s) < len(prefix) {
 		return false
 	}
-	return strings.EqualFold(s[:len(prefix)], prefix)
+	for i := range prefix {
+		left, right := s[i], prefix[i]
+		if left >= 0x80 || right >= 0x80 {
+			return false
+		}
+		if 'A' <= left && left <= 'Z' {
+			left += 'a' - 'A'
+		}
+		if 'A' <= right && right <= 'Z' {
+			right += 'a' - 'A'
+		}
+		if left != right {
+			return false
+		}
+	}
+	return true
 }
 
 // equalFoldASCII reports whether s equals keyword under the same ASCII-only
