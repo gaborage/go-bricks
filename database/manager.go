@@ -85,8 +85,10 @@ func NewDbManager(resourceSource DBConfigProvider, log logger.Logger, opts DbMan
 // single-tenant, use key "". For multi-tenant, use the tenant ID. Connections are created
 // lazily and cached with LRU eviction; the lease prevents a connection that is evicted
 // while in use from being closed under an active caller (the #606 race). Once Close has
-// run, Get fails closed rather than resurrecting a connection (F22). On error the returned
-// ReleaseFunc is nil — check err first.
+// run, Get fails closed rather than resurrecting a connection (F22) — except a caller
+// already mid-Get on a fresh connection another borrower holds, who may still receive
+// that live handle after Close returns; it closes exactly once, at its final release.
+// On error the returned ReleaseFunc is nil — check err first.
 func (m *DbManager) Get(ctx context.Context, key string) (Interface, ReleaseFunc, error) {
 	if m.pool == nil {
 		// Zero-value manager (never built via NewDbManager): unusable, fail closed rather
@@ -155,7 +157,8 @@ func (m *DbManager) StopCleanup() {
 	m.pool.StopCleanup()
 }
 
-// Close closes all database connections and stops cleanup
+// Close closes all database connections and stops cleanup. A connection still borrowed by
+// in-flight work is closed at its final release instead of by this call (wiki/migrations.md C581.3).
 func (m *DbManager) Close() error {
 	if m.pool == nil {
 		return nil // zero-value manager (never built via NewDbManager): nothing to close
@@ -187,6 +190,7 @@ func (m *DbManager) Stats() map[string]any {
 			"active_connections": 0,
 			"max_connections":    0,
 			"idle_ttl_seconds":   0,
+			"errors":             0,
 			"connections":        []map[string]any{},
 		}
 	}
@@ -197,6 +201,9 @@ func (m *DbManager) Stats() map[string]any {
 		"active_connections": ps.Size,
 		"max_connections":    ps.MaxSize,
 		"idle_ttl_seconds":   int(ps.IdleTTL.Seconds()),
+		// Pool create/close failures (including a deferred close on a handle still borrowed
+		// when Close ran, C581.3) — otherwise unobservable outside this Stats() call.
+		"errors": ps.Errors,
 	}
 
 	// Rebuild the per-connection detail array from the pool's entry snapshot so the shape

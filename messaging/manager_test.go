@@ -484,10 +484,12 @@ func TestMessagingManagerCloseClosesPublishersAndConsumers(t *testing.T) {
 	manager.StartCleanup(time.Minute)
 
 	// Seed two publishers and a consumer registry.
-	_, _, err := manager.Publisher(ctx, tenant1ID)
+	_, rel1, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
-	_, _, err = manager.Publisher(ctx, tenant2ID)
+	_, rel2, err := manager.Publisher(ctx, tenant2ID)
 	require.NoError(t, err)
+	rel1()
+	rel2()
 
 	decls := NewDeclarations()
 	decls.RegisterQueue(&QueueDeclaration{Name: genericQueue})
@@ -527,8 +529,9 @@ func TestMessagingManagerCloseSurfacesClientErrors(t *testing.T) {
 		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
 		factory,
 	)
-	_, _, err := manager.Publisher(ctx, tenant1ID)
+	_, rel, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
+	rel()
 
 	err = manager.Close()
 	require.Error(t, err)
@@ -618,6 +621,7 @@ func TestMessagingManagerStats(t *testing.T) {
 	assert.Equal(t, 90, stats["idle_ttl_seconds"])
 	assert.Equal(t, 0, stats["evictions"])
 	assert.Equal(t, 0, stats["idle_cleanups"])
+	assert.Equal(t, 0, stats["errors"])
 
 	// One live publisher.
 	_, rel1, err := manager.Publisher(ctx, tenant1ID)
@@ -718,9 +722,79 @@ func TestMessagingManagerPublisherAfterCloseReturnsError(t *testing.T) {
 
 	pub, release, err := m.Publisher(ctx, "a")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
+	assert.ErrorIs(t, err, ErrManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
 	assert.Nil(t, pub)
 	assert.Nil(t, release)
+}
+
+// TestMessagingManagerPublisherMidCloseWindowFailsClosed pins the gap CodeRabbit flagged on PR
+// #950 (review comment 3750514780): Close flips m.closed BEFORE it closes m.pubPool (see Close),
+// so a caller landing in that narrow window would otherwise reach a still-open pool and could
+// get back a live, cached publisher on a manager that has begun shutting down. Setting the flag
+// directly — instead of calling Close — reproduces exactly that window without also closing the
+// pool, which is what Close's two-step teardown leaves behind for the brief interval between
+// them. Unlike TestMessagingManagerPublisherAfterCloseReturnsError above (where the pool is ALSO
+// closed, so the pre-existing ErrPoolClosed translation alone would already catch it), this test
+// isolates the manager-level guard: the pool's own closed check cannot fire here.
+func TestMessagingManagerPublisherMidCloseWindowFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} },
+	)
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close messaging manager: %v", err)
+		}
+	})
+
+	// Warm the pool with a live, cached publisher for tenant1ID.
+	_, release, err := manager.Publisher(ctx, tenant1ID)
+	require.NoError(t, err)
+	release()
+	created := manager.pubPool.Stats().TotalCreated
+
+	// Close flips closed BEFORE closing the pool, so a caller racing Close can observe
+	// closed=true while the pool is still open and fully able to hand back the cached entry.
+	manager.closed.Store(true)
+
+	pub, rel, err := manager.Publisher(ctx, tenant1ID)
+	assert.ErrorIs(t, err, ErrManagerClosed, "Publisher must fail closed once Close begins, even while the pool is still open")
+	assert.Nil(t, pub, "a manager mid-Close must not hand back the still-cached publisher")
+	assert.Nil(t, rel)
+	assert.Equal(t, created, manager.pubPool.Stats().TotalCreated, "the still-open pool must not create anything new during the close window")
+}
+
+// TestMessagingManagerStatsSurfacesPoolErrors pins that a deferred-close failure — a publisher
+// still borrowed when Close runs, closed only at its final release (ADR-032, C581.3) — is not
+// silently dropped: PoolStats.Errors must reach Stats()["errors"] so callers can observe it,
+// since it is deliberately excluded from Close()'s returned error (contrast with
+// TestMessagingManagerCloseSurfacesClientErrors, the synchronous-close counterpart).
+func TestMessagingManagerStatsSurfacesPoolErrors(t *testing.T) {
+	ctx := context.Background()
+	log := logger.New("error", false)
+
+	client := &stubAMQPClient{closeErr: errors.New("deferred close failure")}
+	factory := func(string, logger.Logger) AMQPClient { return client }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1}},
+		log,
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+
+	_, release, err := manager.Publisher(ctx, tenant1ID)
+	require.NoError(t, err)
+	assert.Equal(t, 0, manager.Stats()["errors"], "no close attempted yet")
+
+	// Close leaves the still-borrowed publisher open (liveLeases > 0); the deferred close
+	// attempt — and its failure — only happens once the lease is released.
+	require.NoError(t, manager.Close(), "Close must not surface a deferred close failure")
+	release()
+
+	assert.Equal(t, 1, manager.Stats()["errors"], "deferred publisher-close failure must be counted and surfaced")
 }
 
 // TestMessagingManagerZeroValueMethodsAreSafe pins that a zero-value Manager (never built via
@@ -739,7 +813,7 @@ func TestMessagingManagerZeroValueMethodsAreSafe(t *testing.T) {
 	assert.Equal(t, 0, stats["idle_cleanups"])
 
 	pub, release, err := m.Publisher(context.Background(), "any")
-	assert.ErrorIs(t, err, errManagerClosed, "zero-value Publisher must fail closed, not panic")
+	assert.ErrorIs(t, err, ErrManagerClosed, "zero-value Publisher must fail closed, not panic")
 	assert.Nil(t, pub)
 	assert.Nil(t, release)
 
@@ -1053,4 +1127,177 @@ func TestEnsureConsumersRejectsNilDeclarations(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, 0, calls, "a rejected call must not reach the client factory")
+}
+
+// TestMessagingManagerEnsureConsumersAfterCloseFailsClosed pins failure mode (a): a
+// previously-replayed key must not take the consumersReplayed fast path on a closed manager,
+// which would otherwise report success for consumers that Close already tore down.
+func TestMessagingManagerEnsureConsumersAfterCloseFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} },
+	)
+	decls := newSetupDeclarations()
+
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+	require.NoError(t, manager.Close())
+
+	err := manager.EnsureConsumers(ctx, testTenantID, decls)
+	assert.ErrorIs(t, err, ErrManagerClosed, "a replayed key must not report success on a closed manager")
+}
+
+// TestMessagingManagerEnsureConsumersAfterCloseDoesNotDialNewKey pins failure mode (b): a
+// closed manager must fail closed for a brand-new key too, rather than dialing a fresh AMQP
+// connection into a map Close already drained (a connection nothing will ever close).
+func TestMessagingManagerEnsureConsumersAfterCloseDoesNotDialNewKey(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return &stubAMQPClient{}
+	}
+	callCount := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost, tenant2ID: amqpURLTenant2}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	decls := newSetupDeclarations()
+
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+	require.NoError(t, manager.Close())
+	snapshot := callCount()
+
+	err := manager.EnsureConsumers(ctx, tenant2ID, decls)
+	assert.ErrorIs(t, err, ErrManagerClosed, "a new key must fail closed once the manager is closed")
+	assert.Equal(t, snapshot, callCount(), "a closed manager must not dial a new broker connection")
+}
+
+// TestMessagingManagerEnsureConsumersInternalRechecksClosedUnderLock pins Step 1.4
+// specifically: ensureConsumersInternal must re-check the closed flag under consMu, not just
+// rely on EnsureConsumers' outer pre-lock read. Calling the unexported method directly
+// bypasses the outer guard, so this test fails if and only if the re-check is missing.
+func TestMessagingManagerEnsureConsumersInternalRechecksClosedUnderLock(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return &stubAMQPClient{}
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	decls := newSetupDeclarations()
+	manager.closed.Store(true)
+
+	err := manager.ensureConsumersInternal(context.Background(), testTenantID, decls, decls.Hash())
+	assert.ErrorIs(t, err, ErrManagerClosed, "ensureConsumersInternal must re-check closed under consMu")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 0, calls, "a closed manager's internal setup must not reach the client factory")
+}
+
+// TestMessagingManagerCloseClearsReplayState pins Step 1.6: Close must invalidate
+// replayedHashs, not just drain the consumer map, so a would-be replay of the same
+// declarations after a hypothetical restart cannot skip setup based on stale state.
+func TestMessagingManagerCloseClearsReplayState(t *testing.T) {
+	ctx := context.Background()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} },
+	)
+	decls := newSetupDeclarations()
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	require.NoError(t, manager.Close())
+
+	manager.consMu.RLock()
+	defer manager.consMu.RUnlock()
+	assert.Empty(t, manager.replayedHashs, "Close must invalidate replay state, not just the consumer map")
+}
+
+// TestMessagingManagerStopConsumersKeepsReplayState pins Step 1.5: StopConsumers is the
+// weaker "stop delivering, manager still queryable" phase. Unlike Close it must not mark the
+// manager closed or clear replayedHashs, so a subsequent EnsureConsumers for the same key stays
+// on the warm fast path instead of re-dialing mid-drain.
+func TestMessagingManagerStopConsumersKeepsReplayState(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	calls := 0
+	factory := func(string, logger.Logger) AMQPClient {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return &stubAMQPClient{}
+	}
+	callCount := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		factory,
+	)
+	t.Cleanup(func() { _ = manager.Close() })
+	decls := newSetupDeclarations()
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	manager.StopConsumers()
+	snapshot := callCount()
+
+	err := manager.EnsureConsumers(ctx, testTenantID, decls)
+	require.NoError(t, err)
+	assert.Equal(t, snapshot, callCount(), "Stop must leave the fast path warm — no re-dial")
+}
+
+// TestMessagingManagerEnsureConsumersWarmHashLosesToClosedGuard pins EnsureConsumers' outer
+// closed check specifically, independent of ensureConsumersInternal's consMu-guarded re-check:
+// Close flips closed before it acquires consMu to clear replayedHashs, so a caller racing Close
+// can observe closed=true with the replay hash still warm. Only the outer guard — which runs
+// before the consumersReplayed fast path — defends that window; the fast path itself has no
+// closed check at all.
+func TestMessagingManagerEnsureConsumersWarmHashLosesToClosedGuard(t *testing.T) {
+	ctx := context.Background()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} },
+	)
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close messaging manager: %v", err)
+		}
+	})
+	decls := newSetupDeclarations()
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	// Close flips closed BEFORE taking consMu to clear replayedHashs, so a caller racing Close
+	// sees the flag with the hash still warm — the window only EnsureConsumers' guard defends.
+	manager.closed.Store(true)
+
+	err := manager.EnsureConsumers(ctx, testTenantID, decls)
+	assert.ErrorIs(t, err, ErrManagerClosed, "a warm replay hash must not beat the closed guard")
 }
