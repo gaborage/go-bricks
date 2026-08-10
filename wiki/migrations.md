@@ -2140,8 +2140,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   nearest 0.01% bucket and exports that fraction; a rate below 0.00005
   still rounds to zero and still exports nothing. The same wider modulus
   also stops flooring non-whole-percent rates (`0.999` was 99%, now
-  99.9%) and redraws which traces land in the sample for every fractional
-  rate, including whole percents.
+  99.9%) and redraws which traces land in the sample for every rate at or
+  above 0.00005 and below 1.0, including whole percents.
 - build-caught: none
 - preflight: if any cached type carries a `time.Time` and you use
   `CompareAndSet`/`GetOrSet` on it, decide before the bump whether a
@@ -2152,9 +2152,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   membership of the sampled set to change: a rate at or above 0.00005 and
   below 0.01 exported nothing before the bump and starts exporting its
   configured fraction after it, a rate that is not a whole percent stops
-  flooring (0.999 was 99%, now 99.9%), and every fractional rate redraws
-  which traces land in the sample; a rate below 0.00005, plus 0.0 and
-  1.0, are unaffected (C581.2)
+  flooring (0.999 was 99%, now 99.9%), and every rate at or above 0.00005
+  and below 1.0 redraws which traces land in the sample; a rate below
+  0.00005, plus 0.0 and 1.0, are unaffected (C581.2)
 - exit: `go get github.com/gaborage/go-bricks@v0.58.1 && go mod tidy && go build ./... && go test ./...`
 
 ### [C581.1] Cached `time.Time` values round-trip with sub-second precision instead of being truncated to whole seconds · silent-behavior · when: match
@@ -2202,7 +2202,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - detect: `git grep -nE 'samplingrate|SAMPLINGRATE|SamplingRate' -- '*.yaml' '*.yml' '*.go'` — plus any `OBSERVABILITY_LOGS_SAMPLINGRATE` set outside the repo (a Helm value, a task definition, a secret); no repo grep finds those.
 - scope: one constant (`samplingDenominator = 10000`) and one constructor-computed field (`sampleThreshold`) in `observability/dual_processor.go`. The sampling comparison scaled from `%100 < uint64(rate*100)` to `%samplingDenominator < sampleThreshold`, where `sampleThreshold = round(rate * samplingDenominator)` is computed once in `NewDualModeLogProcessor` and reused on every call. Config validation is unchanged — `[0.0, 1.0]` is still the accepted range, and no previously-valid value is rejected.
 - gate: match = `observability.logs.samplingrate` is set to a value strictly between 0.0 and 1.0. no-match = unset, `0.0`, or `1.0` — those three paths take the unchanged fast paths and are byte-for-byte unaffected.
-- after: three consequences. (i) A rate at or above 0.00005 (0.005%) and below 0.01 used to truncate to a zero threshold and export **nothing**; it now rounds to the nearest 0.01%-resolution bucket and exports that fraction — `0.005` goes from 0% to 0.5% of INFO/DEBUG trace logs, a real increase in export volume and cost. A rate below 0.00005 still rounds to a zero threshold and still exports nothing — the floor moved, it did not disappear. (ii) Rates that are not whole percents stop flooring — `0.999` was 99% and is now 99.9%, `0.155` was 15% and is now 15.5%. (iii) The **membership** of the sample changes for every fractional rate, including whole-percent ones: the same expected fraction is kept, but the modulus moved from 100 to 10 000, so which traces land in the sample is redrawn. Sampling stays deterministic per trace after the bump; it is simply not the same set as before. Nothing to do for (iii) — but do not read a trace disappearing from the sample as a regression.
+- after: three consequences. (i) A rate at or above 0.00005 (0.005%) and below 0.01 used to truncate to a zero threshold and export **nothing**; it now rounds to the nearest 0.01%-resolution bucket and exports that fraction — `0.005` goes from 0% to 0.5% of INFO/DEBUG trace logs, a real increase in export volume and cost. A rate below 0.00005 still rounds to a zero threshold and still exports nothing — the floor moved, it did not disappear. (ii) Rates that are not whole percents stop flooring — `0.999` was 99% and is now 99.9%, `0.155` was 15% and is now 15.5%. (iii) The **membership** of the sample changes for every rate at or above 0.00005 and below 1.0, including whole-percent ones: the same expected fraction is kept, but the modulus moved from 100 to 10 000, so which traces land in the sample is redrawn. Sampling stays deterministic per trace after the bump; it is simply not the same set as before. Nothing to do for (iii) — but do not read a trace disappearing from the sample as a regression.
 - verify: `go test ./observability/...`; then set `observability.logs.samplingrate: 0.005` and confirm INFO/DEBUG trace logs now reach the backend at roughly 0.5%.
 - ref: `observability/dual_processor.go` (`samplingDenominator`, `sampleThreshold`) · [ADR-006](adr_006_otlp_log_export.md)
 

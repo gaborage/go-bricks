@@ -2,6 +2,7 @@ package observability
 
 import (
 	"maps"
+	"math"
 	"strings"
 	"time"
 )
@@ -728,7 +729,7 @@ func (c *Config) validateLogsConfig() error {
 	// Validate sampling rate if explicitly set
 	if c.Logs.SamplingRate != nil {
 		rate := *c.Logs.SamplingRate
-		if rate < 0.0 || rate > 1.0 {
+		if math.IsNaN(rate) || rate < 0.0 || rate > 1.0 {
 			return ErrInvalidLogSamplingRate
 		}
 	}

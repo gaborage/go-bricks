@@ -43,11 +43,21 @@ func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor, s
 		panic("observability: traceProcessor cannot be nil") // NOSONAR: Fail-fast on invalid initialization (manifesto: configuration errors crash at startup)
 	}
 
+	// Only a finite rate strictly between 0 and 1 needs a threshold: <=0 and
+	// NaN both fail this range (NaN compares false against every bound) and
+	// leave sampleThreshold at its zero value, which the shouldSample fast
+	// paths and hash-modulo fallback all treat as "drop"; >=1 is handled by
+	// the shouldSample fast path and never consults the threshold.
+	var sampleThreshold uint64
+	if samplingRate > 0 && samplingRate < 1.0 {
+		sampleThreshold = uint64(math.Round(samplingRate * samplingDenominator))
+	}
+
 	return &DualModeLogProcessor{
 		actionProcessor: actionProcessor,
 		traceProcessor:  traceProcessor,
 		samplingRate:    samplingRate,
-		sampleThreshold: uint64(math.Round(samplingRate * samplingDenominator)),
+		sampleThreshold: sampleThreshold,
 	}
 }
 

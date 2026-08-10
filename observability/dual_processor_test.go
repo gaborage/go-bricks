@@ -910,6 +910,7 @@ func TestShouldSampleResolution(t *testing.T) {
 		{name: "high_precision_rate_keeps_more_than_99_percent", rate: 0.999, wantKept: 9990},
 		{name: "whole_percent_rate_keeps_its_fraction", rate: 0.25, wantKept: 2500},
 		{name: "smallest_representable_rate_keeps_one_in_ten_thousand", rate: 0.0001, wantKept: 1},
+		{name: "half_unit_rate_rounds_up_to_one", rate: 0.00005, wantKept: 1},
 		{name: "sub_resolution_rate_keeps_nothing", rate: 0.00001, wantKept: 0},
 	}
 
