@@ -63,9 +63,7 @@ func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor, s
 
 // OnEmit routes the log record to the appropriate processor based on log.type attribute.
 func (p *DualModeLogProcessor) OnEmit(ctx context.Context, rec *sdklog.Record) error {
-	enrichTraceContext(ctx, rec)
-
-	logType := extractLogType(rec)
+	logType := enrichAndClassify(ctx, rec)
 
 	// Action logs: export all severities (INFO, WARN, ERROR)
 	if logType == logTypeAction {
@@ -155,26 +153,9 @@ func (p *DualModeLogProcessor) ForceFlush(ctx context.Context) error {
 	return errors.Join(errTrace, errAction)
 }
 
-// extractLogType safely extracts the log.type attribute from a record.
-// Returns "trace" as default if the attribute is not found (for third-party/legacy logs).
-func extractLogType(rec *sdklog.Record) string {
-	logType := logTypeTrace // Default to trace logs
-
-	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
-		if kv.Key == logTypeKey {
-			if kv.Value.Type() == attribute.STRING {
-				logType = kv.Value.AsString()
-			}
-			return false // Stop iteration once found
-		}
-		return true // Continue searching
-	})
-
-	return logType
-}
-
-// enrichTraceContext populates the SDK log record's canonical trace fields (TraceID, SpanID, TraceFlags)
-// from two sources (in order of preference):
+// enrichAndClassify populates the record's canonical trace fields (TraceID,
+// SpanID, TraceFlags) and returns its log.type, in a single attribute walk.
+// Trace data comes from two sources (in order of preference):
 //  1. Span context in the provided context (primary source from active traces)
 //  2. String attributes "trace_id" and "span_id" in the log record (fallback for parsed logs)
 //
@@ -183,15 +164,40 @@ func extractLogType(rec *sdklog.Record) string {
 //   - Logs are forwarded through async processors that may lose context
 //   - External systems emit logs with trace correlation attributes
 //
-// The trace IDs are also kept as string attributes for text-based queryability.
-func enrichTraceContext(ctx context.Context, rec *sdklog.Record) {
-	// Primary source: Extract from context if available
-	if enrichFromContext(ctx, rec) {
-		return
+// Context is always consulted first and never requires a walk; the record's
+// attributes are walked only as a fallback, and only then is trace data
+// collected during that same walk.
+func enrichAndClassify(ctx context.Context, rec *sdklog.Record) string {
+	wantAttrTrace := !enrichFromContext(ctx, rec) // reads ctx only; no walk
+	logType, c := collectRouting(rec, wantAttrTrace)
+	if wantAttrTrace {
+		applyCollectedTrace(rec, &c)
 	}
+	return logType
+}
 
-	// Fallback source: Extract from record attributes when context doesn't have trace
-	enrichFromAttributes(rec)
+// collectRouting is the single walk shared by enrichAndClassify. It always
+// searches for log.type (defaulting to "trace" if absent, or if present with
+// a non-string value), and additionally collects trace correlation
+// attributes when wantTrace is set. It stops as soon as everything it is
+// looking for has been found.
+func collectRouting(rec *sdklog.Record, wantTrace bool) (logType string, c traceAttributeCollector) {
+	logType = logTypeTrace // Default to trace logs
+	foundLogType := false
+
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+		if kv.Key == logTypeKey {
+			if kv.Value.Type() == attribute.STRING {
+				logType = kv.Value.AsString()
+			}
+			foundLogType = true
+		} else if wantTrace {
+			c.collect(kv)
+		}
+		return !foundLogType || (wantTrace && !c.done())
+	})
+
+	return logType, c
 }
 
 // enrichFromContext populates canonical trace fields from the span context.
@@ -248,27 +254,30 @@ func (c *traceAttributeCollector) collect(kv attribute.KeyValue) bool {
 		}
 	}
 	// Continue iteration until all required fields found
-	return !c.foundTraceID || !c.foundSpanID || !c.foundFlags
+	return !c.done()
 }
 
-// enrichFromAttributes populates canonical trace fields from log record attributes.
-// This handles logs parsed from JSON (OTelBridge) or forwarded from external systems.
-func enrichFromAttributes(rec *sdklog.Record) {
-	collector := &traceAttributeCollector{}
-	rec.WalkAttributes(collector.collect)
+// done reports whether all three trace correlation fields have been found.
+func (c *traceAttributeCollector) done() bool {
+	return c.foundTraceID && c.foundSpanID && c.foundFlags
+}
 
-	if !collector.foundTraceID || !collector.foundSpanID {
+// applyCollectedTrace validates and populates a record's canonical trace
+// fields from a traceAttributeCollector populated by collectRouting's walk.
+// This handles logs parsed from JSON (OTelBridge) or forwarded from external systems.
+func applyCollectedTrace(rec *sdklog.Record, c *traceAttributeCollector) {
+	if !c.foundTraceID || !c.foundSpanID {
 		return
 	}
 
 	// Parse and validate trace ID
-	traceID, err := trace.TraceIDFromHex(collector.traceIDStr)
+	traceID, err := trace.TraceIDFromHex(c.traceIDStr)
 	if err != nil || !traceID.IsValid() {
 		return
 	}
 
 	// Parse and validate span ID
-	spanID, err := trace.SpanIDFromHex(collector.spanIDStr)
+	spanID, err := trace.SpanIDFromHex(c.spanIDStr)
 	if err != nil || !spanID.IsValid() {
 		return
 	}
@@ -276,8 +285,8 @@ func enrichFromAttributes(rec *sdklog.Record) {
 	// Populate canonical fields (only after validation to avoid zeroing on parse errors)
 	rec.SetTraceID(traceID)
 	rec.SetSpanID(spanID)
-	if collector.foundFlags {
-		rec.SetTraceFlags(collector.traceFlags)
+	if c.foundFlags {
+		rec.SetTraceFlags(c.traceFlags)
 	}
 	// If trace_flags not found, TraceFlags defaults to 0 (not sampled) which is valid
 }

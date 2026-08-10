@@ -258,6 +258,60 @@ func TestBuildLogRecordAddsTraceAttributes(t *testing.T) {
 	assert.Equal(t, int64(1), traceFlagsValue)
 }
 
+// TestBuildLogRecordDefaultsLogTypeToTrace pins the default direction of the
+// Step 1 presence-only lookup: absent log.type gets defaulted to "trace",
+// and a present-but-non-string log.type is left alone (not overwritten) —
+// the direction a `.(string)` type assertion would silently break, because
+// a failed assertion would (wrongly) look like "absent" and add a second,
+// conflicting log.type attribute.
+func TestBuildLogRecordDefaultsLogTypeToTrace(t *testing.T) {
+	t.Run("absent_log_type_defaults_to_trace", func(t *testing.T) {
+		entry := map[string]any{
+			"level":   "info",
+			"message": "no log.type set",
+		}
+
+		rec, _, _ := buildLogRecord(entry)
+
+		var found bool
+		var val attribute.Value
+		rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+			if kv.Key == logTypeAttrKey {
+				found = true
+				val = kv.Value
+				return false
+			}
+			return true
+		})
+		require.True(t, found, "log.type attribute should be present")
+		assert.Equal(t, "trace", val.AsString())
+	})
+
+	t.Run("non_string_log_type_is_not_overwritten", func(t *testing.T) {
+		entry := map[string]any{
+			"level":    "info",
+			"message":  "numeric log.type",
+			"log.type": 7,
+		}
+
+		rec, _, _ := buildLogRecord(entry)
+
+		var count int
+		var lastValue attribute.Value
+		rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+			if string(kv.Key) == "log.type" {
+				count++
+				lastValue = kv.Value
+			}
+			return true
+		})
+
+		require.Equal(t, 1, count, "log.type must appear exactly once — a type-assertion mistake would add a second, defaulted occurrence")
+		assert.Equal(t, attribute.INT64, lastValue.Type())
+		assert.Equal(t, int64(7), lastValue.AsInt64())
+	})
+}
+
 func TestOTelBridgeReservedKeyRemapPolicy(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -419,4 +473,52 @@ func TestBuildLogRecordWithoutTraceContext(t *testing.T) {
 	})
 
 	assert.False(t, foundTraceAttr, "no trace attributes should be added when trace context is absent")
+}
+
+// benchNoopProcessor discards every record; keeps BenchmarkOTelBridgeWrite's
+// allocation profile isolated to buildLogRecord + Emit, not processor-side
+// bookkeeping.
+type benchNoopProcessor struct{}
+
+func (benchNoopProcessor) OnEmit(context.Context, *sdklog.Record) error           { return nil }
+func (benchNoopProcessor) Enabled(context.Context, sdklog.EnabledParameters) bool { return true }
+func (benchNoopProcessor) Shutdown(context.Context) error                         { return nil }
+func (benchNoopProcessor) ForceFlush(context.Context) error                       { return nil }
+
+// BenchmarkOTelBridgeWrite measures buildLogRecord's per-line cost through
+// the public Write entry point, with and without trace context — the input
+// shape that determines how many attributes the log.type check has to
+// traverse before defaulting (pre-Step-1: a WalkAttributes scan; post: an
+// O(1) map lookup on entry).
+func BenchmarkOTelBridgeWrite(b *testing.B) {
+	cases := []struct {
+		name string
+		line []byte
+	}{
+		{
+			name: "without_trace_context",
+			line: []byte(`{"level":"info","time":"2025-10-10T12:00:00.123456789Z","message":"benchmark line","user_id":"123","method":"POST"}`),
+		},
+		{
+			name: "with_trace_context",
+			line: []byte(`{"level":"info","time":"2025-10-10T12:00:00.123456789Z","message":"benchmark line","user_id":"123","method":"POST",` +
+				`"trace_id":"0123456789abcdef0123456789abcdef","span_id":"0123456789abcdef","trace_flags":"1"}`),
+		},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(benchNoopProcessor{}))
+			b.Cleanup(func() {
+				_ = provider.Shutdown(context.Background())
+			})
+			bridge := NewOTelBridge(provider)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = bridge.Write(tc.line)
+			}
+		})
+	}
 }
