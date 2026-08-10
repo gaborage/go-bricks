@@ -688,18 +688,18 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 
 	contextLog := log.WithContext(msgCtx)
 	traceID := gobrickstrace.EnsureTraceID(msgCtx)
-	tlog := contextLog.WithFields(map[string]any{"correlation_id": traceID})
 
 	// Panic recovery: prevents handler panics from crashing the entire service.
 	// This follows the same pattern as HTTP middleware panic recovery.
 	// Panics are treated like errors: logged with stack trace, nacked without requeue, and metrics recorded.
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			r.handlePanicRecovery(msgCtx, consumer, delivery, startTime, tlog, recovered)
+			r.handlePanicRecovery(msgCtx, consumer, delivery, startTime, contextLog, traceID, recovered)
 		}
 	}()
 
-	tlog.Debug().
+	contextLog.Debug().
+		Str("correlation_id", traceID).
 		Str("message_id", delivery.MessageId).
 		Str("routing_key", delivery.RoutingKey).
 		Str("exchange", delivery.Exchange).
@@ -712,7 +712,7 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 
 	if err != nil {
 		// Enhanced structured logging for failed messages
-		r.buildFailureLogEvent(tlog, delivery, consumer, processingTime).
+		r.buildFailureLogEvent(contextLog, traceID, delivery, consumer, processingTime).
 			Err(err).
 			Msg("Message processing failed - discarding without requeue")
 
@@ -727,11 +727,12 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		// exchange (retained only if a binding delivers it to a queue); queues
 		// without one drop it (logged above).
 		// DeclareQueueWithDLQ declares that full route in one call.
-		r.nackMessage(delivery, consumer.AutoAck, tlog)
+		r.nackMessage(delivery, consumer.AutoAck, contextLog, traceID)
 		return
 	}
 
-	tlog.Info().
+	contextLog.Info().
+		Str("correlation_id", traceID).
 		Str("message_id", delivery.MessageId).
 		Dur("processing_time", processingTime).
 		Msg("Message processed successfully")
@@ -741,7 +742,8 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	// Positive acknowledgment (only when AutoAck is false)
 	if !consumer.AutoAck {
 		if ackErr := delivery.Ack(false); ackErr != nil {
-			tlog.Error().
+			contextLog.Error().
+				Str("correlation_id", traceID).
 				Err(ackErr).
 				Uint64("delivery_tag", delivery.DeliveryTag).
 				Msg("Failed to ack message")
@@ -751,12 +753,13 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 
 // nackMessage negatively acknowledges a message without requeue.
 // Logs any nack errors but does not propagate them (robustness over strict error handling).
-func (r *Registry) nackMessage(delivery *amqp.Delivery, autoAck bool, log logger.Logger) {
+func (r *Registry) nackMessage(delivery *amqp.Delivery, autoAck bool, log logger.Logger, traceID string) {
 	if autoAck {
 		return // No manual ack/nack needed
 	}
 	if err := delivery.Nack(false, false); err != nil {
 		log.Error().
+			Str("correlation_id", traceID).
 			Err(err).
 			Uint64("delivery_tag", delivery.DeliveryTag).
 			Msg("Failed to nack message")
@@ -767,11 +770,16 @@ func (r *Registry) nackMessage(delivery *amqp.Delivery, autoAck bool, log logger
 // Provides consistent error logging across panic and error paths.
 func (r *Registry) buildFailureLogEvent(
 	log logger.Logger,
+	traceID string,
 	delivery *amqp.Delivery,
 	consumer *ConsumerDeclaration,
 	processingTime time.Duration,
 ) logger.LogEvent {
+	// Two correlation_id stamps, deliberately: the trace ID reproduces what the
+	// per-delivery logger used to contribute, the AMQP one is the pre-existing
+	// event field. Order matters — a parser takes the last.
 	return log.Error().
+		Str("correlation_id", traceID).
 		Str("message_id", delivery.MessageId).
 		Str("queue", consumer.Queue).
 		Str("event_type", consumer.EventType).
@@ -790,13 +798,14 @@ func (r *Registry) handlePanicRecovery(
 	delivery *amqp.Delivery,
 	startTime time.Time,
 	log logger.Logger,
+	traceID string,
 	recovered any,
 ) {
 	processingTime := time.Since(startTime)
 	stack := debug.Stack()
 
 	// Log panic with full context and stack trace
-	r.buildFailureLogEvent(log, delivery, consumer, processingTime).
+	r.buildFailureLogEvent(log, traceID, delivery, consumer, processingTime).
 		Interface("panic", recovered).
 		Bytes("stack", stack).
 		Msg("Panic recovered in message handler - discarding without requeue")
@@ -809,7 +818,7 @@ func (r *Registry) handlePanicRecovery(
 	tracking.RecordAMQPConsumeCompletion(msgCtx, delivery, consumer.Queue, processingTime, panicErr)
 
 	// Nack without requeue
-	r.nackMessage(delivery, consumer.AutoAck, log)
+	r.nackMessage(delivery, consumer.AutoAck, log, traceID)
 }
 
 // amqpDeliveryAccessor implements trace.HeaderAccessor for AMQP delivery headers (read-only)

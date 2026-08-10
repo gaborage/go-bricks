@@ -708,3 +708,66 @@ func TestNewClientRejectsOldRedis(t *testing.T) {
 		defer client.Close()
 	})
 }
+
+// TestCompareAndSetTTLClamp pins the TTL conversion at CompareAndSet's Eval
+// site. The pre-existing TestClientCompareAndSet/ZeroTTL_NoExpiration subtest
+// asserts only that the call succeeds, so it cannot distinguish "no expiry"
+// from "1ms expiry"; these cases assert the stored TTL itself.
+func TestCompareAndSetTTLClamp(t *testing.T) {
+	tests := []struct {
+		name        string
+		ttl         time.Duration
+		expectedTTL time.Duration
+	}{
+		{name: "sub_millisecond_ttl_clamps_to_one_millisecond", ttl: 500 * time.Microsecond, expectedTTL: time.Millisecond},
+		{name: "zero_ttl_means_no_expiry", ttl: 0, expectedTTL: 0},
+		{name: "millisecond_ttl_is_unchanged", ttl: 5 * time.Millisecond, expectedTTL: 5 * time.Millisecond},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, mr := setupTestRedis(t)
+			defer client.Close()
+
+			ctx := context.Background()
+			success, err := client.CompareAndSet(ctx, testKey1, nil, []byte(testWorker), tt.ttl)
+			require.NoError(t, err)
+			require.True(t, success)
+			require.True(t, mr.Exists(testKey1))
+
+			// miniredis reports 0 for "no TTL set" (direct.go: TTL godoc).
+			assert.Equal(t, tt.expectedTTL, mr.TTL(testKey1))
+		})
+	}
+}
+
+// TestCompareAndSetSubMillisecondTTLExpires proves the clamped key actually
+// goes away rather than merely carrying a TTL field.
+func TestCompareAndSetSubMillisecondTTLExpires(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	ctx := context.Background()
+	success, err := client.CompareAndSet(ctx, testKey1, nil, []byte(testWorker), 500*time.Microsecond)
+	require.NoError(t, err)
+	require.True(t, success)
+	require.True(t, mr.Exists(testKey1))
+
+	mr.FastForward(2 * time.Millisecond)
+	assert.False(t, mr.Exists(testKey1))
+}
+
+// TestCompareAndSetCASModeSubMillisecondTTLClamps covers the script's second
+// SET branch: the table above only exercises the nx (acquire-if-absent) path.
+func TestCompareAndSetCASModeSubMillisecondTTLClamps(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	require.NoError(t, mr.Set(testKey1, testExistingValue))
+
+	ctx := context.Background()
+	success, err := client.CompareAndSet(ctx, testKey1, []byte(testExistingValue), []byte(testNewValue), 500*time.Microsecond)
+	require.NoError(t, err)
+	require.True(t, success)
+	assert.Equal(t, time.Millisecond, mr.TTL(testKey1))
+}

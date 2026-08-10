@@ -55,7 +55,9 @@ func DefaultFilterConfig() *FilterConfig {
 // loweredNeedles holds the precomputed lowered needle list behind a pointer so
 // SensitiveDataFilter itself stays comparable (a []string field would not be).
 type loweredNeedles struct {
-	fields []string
+	fields      []string
+	byFirstByte [256][]string
+	anyEmpty    bool
 }
 
 // SensitiveDataFilter filters sensitive data from logs. Filtering is enforced by the
@@ -81,7 +83,15 @@ func NewSensitiveDataFilter(config *FilterConfig) *SensitiveDataFilter {
 	for i, f := range config.SensitiveFields {
 		lowered[i] = strings.ToLower(f)
 	}
-	return &SensitiveDataFilter{config: config, needles: &loweredNeedles{fields: lowered}}
+	needles := &loweredNeedles{fields: lowered}
+	for _, n := range lowered {
+		if n == "" {
+			needles.anyEmpty = true
+			continue
+		}
+		needles.byFirstByte[n[0]] = append(needles.byFirstByte[n[0]], n)
+	}
+	return &SensitiveDataFilter{config: config, needles: needles}
 }
 
 // FilterString filters sensitive data from string values
@@ -239,10 +249,15 @@ func (f *SensitiveDataFilter) isSensitiveField(fieldName string) bool {
 	if f.needles == nil {
 		return false
 	}
-	lowerFieldName := strings.ToLower(fieldName)
-	for _, sensitiveField := range f.needles.fields {
-		if strings.Contains(lowerFieldName, sensitiveField) {
-			return true
+	if f.needles.anyEmpty {
+		return true // strings.Contains(x, "") is true for every x, including ""
+	}
+	lower := strings.ToLower(fieldName)
+	for i := range len(lower) {
+		for _, n := range f.needles.byFirstByte[lower[i]] {
+			if strings.HasPrefix(lower[i:], n) {
+				return true
+			}
 		}
 	}
 	return false

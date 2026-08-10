@@ -3,6 +3,7 @@ package logger
 import (
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -923,5 +924,156 @@ func TestNewSensitiveDataFilterSnapshotsSensitiveFields(t *testing.T) {
 	}
 	if filter.isSensitiveField("replaced_entirely") {
 		t.Error("Expected replaced_entirely to NOT be masked — config.SensitiveFields was replaced, not the snapshot")
+	}
+}
+
+// isSensitiveFieldLinearReference is the pre-dispatch implementation, kept
+// verbatim as the differential oracle for the byFirstByte matcher.
+func isSensitiveFieldLinearReference(needles []string, fieldName string) bool {
+	lowerFieldName := strings.ToLower(fieldName)
+	for _, sensitiveField := range needles {
+		if strings.Contains(lowerFieldName, sensitiveField) {
+			return true
+		}
+	}
+	return false
+}
+
+// alphabetSweep enumerates every string of length 0-3 over the given
+// alphabet. Chosen so it spells out all five 3-byte default needles ("otp",
+// "cvv", "cvc", "key", "pwd") and their one-byte-off neighbors, plus a
+// separator and a byte that begins no needle.
+func alphabetSweep(alphabet []byte) []string {
+	n := len(alphabet)
+	out := make([]string, 0, 1+n+n*n+n*n*n)
+	out = append(out, "")
+	for _, a := range alphabet {
+		out = append(out, string([]byte{a}))
+	}
+	for _, a := range alphabet {
+		for _, b := range alphabet {
+			out = append(out, string([]byte{a, b}))
+		}
+	}
+	for _, a := range alphabet {
+		for _, b := range alphabet {
+			for _, c := range alphabet {
+				out = append(out, string([]byte{a, b, c}))
+			}
+		}
+	}
+	return out
+}
+
+// buildDifferentialCorpus derives the differential test's input set
+// mechanically from a config's raw SensitiveFields, per plan 121 Step 3.
+func buildDifferentialCorpus(rawNeedles, sweep []string) []string {
+	seen := make(map[string]struct{})
+	add := func(s string) { seen[s] = struct{}{} }
+
+	// 1. empty field name and "x".
+	add("")
+	add("x")
+
+	// 2. per-needle derived inputs: verbatim, lowered, uppercased forms, each
+	// at start/mid/end placement plus every proper prefix and suffix.
+	for _, n := range rawNeedles {
+		for _, variant := range []string{n, strings.ToLower(n), strings.ToUpper(n)} {
+			add(variant)
+			add("x" + variant)
+			add(variant + "x")
+			add("xy" + variant + "yx")
+			for k := 1; k < len(variant); k++ {
+				add(variant[:k])
+				add(variant[k:])
+			}
+		}
+	}
+
+	// 3. the 8 documented non-matches.
+	for _, s := range []string{
+		"span_id", "company", "expand", "pinned_at",
+		"discard_reason", "tracking_id", "card_type", "expiry_date",
+	} {
+		add(s)
+	}
+
+	// 4. the documented accepted over-match.
+	add("snapshotPath")
+	add("SnapshotPath")
+	add("SNAPSHOTPATH")
+
+	// 5. multi-byte and invalid-UTF-8 cases.
+	for _, s := range []string{
+		"ключ", "xключy", "КЛЮЧ", "Grüße", "xGrüßey", "straße", "\xff",
+	} {
+		add(s)
+	}
+
+	// 6. the deterministic length-0..3 alphabet sweep.
+	for _, s := range sweep {
+		add(s)
+	}
+
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out
+}
+
+// TestIsSensitiveFieldDifferentialAgainstLinearReference proves the
+// byFirstByte matcher is bit-identical to the pre-dispatch linear scan across
+// four filter configurations and a mechanically derived input corpus. See
+// plan 121 for the corpus-construction rationale.
+func TestIsSensitiveFieldDifferentialAgainstLinearReference(t *testing.T) {
+	sweep := alphabetSweep([]byte("otpcvkeywd_asx"))
+
+	type namedConfig struct {
+		name   string
+		config *FilterConfig
+	}
+
+	defaultWithExtras := DefaultFilterConfig()
+	defaultWithExtras.SensitiveFields = append(
+		slices.Clone(defaultWithExtras.SensitiveFields),
+		"PAN", "CVV2", "OTP", "ключ", "Grüße",
+	)
+
+	configs := []namedConfig{
+		{name: "default_config", config: DefaultFilterConfig()},
+		{name: "default_plus_mixed_case_multibyte_extras", config: defaultWithExtras},
+		{name: "single_empty_needle", config: &FilterConfig{SensitiveFields: []string{""}}},
+		{name: "no_needles", config: &FilterConfig{SensitiveFields: []string{}}},
+	}
+
+	// Sanity-check the sweep is doing work under the default config: it must
+	// produce at least one match, or the alphabet proves nothing.
+	sawSweepMatch := false
+	defaultNeedles := NewSensitiveDataFilter(DefaultFilterConfig()).needles.fields
+	for _, in := range sweep {
+		if isSensitiveFieldLinearReference(defaultNeedles, in) {
+			sawSweepMatch = true
+			break
+		}
+	}
+	if !sawSweepMatch {
+		t.Fatal("alphabet sweep produced zero matches under the default config's reference oracle — the alphabet is wrong")
+	}
+
+	for _, nc := range configs {
+		t.Run(nc.name, func(t *testing.T) {
+			filter := NewSensitiveDataFilter(nc.config)
+			refNeedles := filter.needles.fields
+			corpus := buildDifferentialCorpus(nc.config.SensitiveFields, sweep)
+
+			for _, in := range corpus {
+				got := filter.isSensitiveField(in)
+				want := isSensitiveFieldLinearReference(refNeedles, in)
+				if got != want {
+					t.Errorf("config %s, input %q: isSensitiveField() = %v, want %v (linear reference)", nc.name, in, got, want)
+				}
+			}
+		})
 	}
 }
