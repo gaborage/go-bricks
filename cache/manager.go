@@ -207,7 +207,8 @@ func (m *CacheManager) Remove(key string) error {
 
 // Close shuts down all managed cache instances and stops the cleanup goroutine.
 // After Close() returns, subsequent calls to Get() and Remove() return ErrManagerClosed.
-// Closing a zero-value manager is a no-op.
+// A cache instance still borrowed by in-flight work is closed at its final release instead
+// of by this call (wiki/migrations.md C581.2). Closing a zero-value manager is a no-op.
 func (m *CacheManager) Close() error {
 	if m.pool == nil {
 		return nil // zero-value manager: nothing to close

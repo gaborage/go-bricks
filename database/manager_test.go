@@ -133,10 +133,12 @@ func TestDbManagerCloseClosesAllConnections(t *testing.T) {
 	}}
 
 	manager := NewDbManager(resource, log, DbManagerOptions{MaxSize: 5, IdleTTL: time.Hour}, connector)
-	_, _, err := manager.Get(ctx, "tenant-x")
+	_, relX, err := manager.Get(ctx, "tenant-x")
 	require.NoError(t, err)
-	_, _, err = manager.Get(ctx, "tenant-y")
+	_, relY, err := manager.Get(ctx, "tenant-y")
 	require.NoError(t, err)
+	relX()
+	relY()
 
 	err = manager.Close()
 	require.NoError(t, err)

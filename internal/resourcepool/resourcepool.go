@@ -3,11 +3,12 @@
 // consumer; the database and messaging managers adopt it in follow-up PRs.
 //
 // A pool hands each borrower a lease (via GetOrCreate) plus an idempotent
-// ReleaseFunc. A resource evicted (LRU, idle, or explicit Remove) while a
-// lease is outstanding is detached immediately but its Closer runs only once
-// the final lease is released, so an in-use resource is never closed under an
-// active caller (the #606 race). The Closer is ALWAYS invoked outside the pool
-// lock.
+// ReleaseFunc. A resource evicted (LRU, idle, explicit Remove, or pool Close)
+// while a lease is outstanding is detached immediately but its Closer runs only
+// once the final lease is released, so an in-use resource is never closed under
+// an active caller (the #606 race) — including across Close: after Close returns,
+// a still-borrowed value remains usable until released. The Closer is ALWAYS
+// invoked outside the pool lock.
 package resourcepool
 
 import (
@@ -87,6 +88,15 @@ type entry[V any] struct {
 	detached bool
 	// closed guards against a double Closer call once the deferred close has run.
 	closed bool
+}
+
+// liveLeases counts leases held by actual borrowers, discounting an unclaimed seed.
+// Must be called with Pool.mu held.
+func (e *entry[V]) liveLeases() int {
+	if e.seedHeld {
+		return e.refs - 1
+	}
+	return e.refs
 }
 
 // Pool is a keyed pool of leasable, refcounted, LRU-capped, idle-evicted
@@ -239,8 +249,9 @@ func (p *Pool[V]) acquireShared(ctx context.Context, key string, create func(con
 // then evicted while its seed was still unclaimed is detached but not closed, so a concurrent Close
 // (which can no longer see it) may return while this goroutine's releaseEntry runs the Closer. It
 // cannot double-close or resurrect the pool — createEntry re-checks closed under mu, and Close
-// marks every entry it drains closed. Bounding creation is the prerequisite for joining these
-// safely, so both belong to the deferred create-timeout work.
+// marks closed every entry it drains that has no live borrower; a borrowed one is closed exactly
+// once by its final release. Bounding creation is the prerequisite for joining these safely, so
+// both belong to the deferred create-timeout work.
 func (p *Pool[V]) releaseAbandoned(ch <-chan singleflight.Result) {
 	res := <-ch
 	if res.Err != nil {
@@ -562,11 +573,14 @@ func (p *Pool[V]) noteCleanupCloseErr(err error) {
 }
 
 // Close shuts down all pooled resources, stops the cleanup loop, and makes subsequent
-// GetOrCreate calls return ErrPoolClosed. It is idempotent and returns EVERY close error joined
-// via errors.Join (nil if none) — so consumers whose Close contract aggregates all failures
-// (e.g. DbManager) can surface them all, while errors.Is still matches any individual error.
-// Every close failure is also counted. Failures from the idle-cleanup path are included: stopping
-// the cleanup loop joins it, so the errors it recorded are complete by the time Close drains them.
+// GetOrCreate calls return ErrPoolClosed. It is idempotent and returns every close error it
+// triggers itself, joined via errors.Join (nil if none) — so consumers whose Close contract
+// aggregates all failures (e.g. DbManager) can surface them all, while errors.Is still matches
+// any individual error. Every close failure is also counted. Failures from the idle-cleanup path
+// are included: stopping the cleanup loop joins it, so the errors it recorded are complete by the
+// time Close drains them. An entry still borrowed when Close runs is left open — its final release
+// closes it (#606) — so its close error, if any, is NOT in this return value; it surfaces later in
+// Stats().Errors instead.
 func (p *Pool[V]) Close() error {
 	var closeErrs []error
 
@@ -585,10 +599,15 @@ func (p *Pool[V]) Close() error {
 		p.cleanupErrs = nil
 		var toClose []*entry[V]
 		for key := range p.entries {
-			if e := p.removeEntryLocked(key); e != nil {
-				e.closed = true
-				toClose = append(toClose, e)
+			e := p.removeEntryLocked(key)
+			if e == nil {
+				continue
 			}
+			if e.liveLeases() > 0 {
+				continue // still borrowed — the final releaseEntry closes it (#606)
+			}
+			e.closed = true
+			toClose = append(toClose, e)
 		}
 		p.mu.Unlock()
 

@@ -484,10 +484,12 @@ func TestMessagingManagerCloseClosesPublishersAndConsumers(t *testing.T) {
 	manager.StartCleanup(time.Minute)
 
 	// Seed two publishers and a consumer registry.
-	_, _, err := manager.Publisher(ctx, tenant1ID)
+	_, rel1, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
-	_, _, err = manager.Publisher(ctx, tenant2ID)
+	_, rel2, err := manager.Publisher(ctx, tenant2ID)
 	require.NoError(t, err)
+	rel1()
+	rel2()
 
 	decls := NewDeclarations()
 	decls.RegisterQueue(&QueueDeclaration{Name: genericQueue})
@@ -527,8 +529,9 @@ func TestMessagingManagerCloseSurfacesClientErrors(t *testing.T) {
 		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
 		factory,
 	)
-	_, _, err := manager.Publisher(ctx, tenant1ID)
+	_, rel, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
+	rel()
 
 	err = manager.Close()
 	require.Error(t, err)

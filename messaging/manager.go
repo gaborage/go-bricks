@@ -418,8 +418,9 @@ func (m *Manager) StopConsumers() {
 
 // Close closes all clients and stops cleanup. Publisher closes go through the pool (which
 // stops its own cleanup loop and joins every per-publisher close failure); consumer closes
-// are handled directly. Every failure from BOTH sides is surfaced under the historical
-// "errors closing messaging clients" prefix.
+// are handled directly. A publisher client still borrowed by in-flight work is closed at its
+// final release instead of by this call (wiki/migrations.md C581.2). Every failure from BOTH
+// sides is surfaced under the historical "errors closing messaging clients" prefix.
 func (m *Manager) Close() error {
 	var allErrs []error
 

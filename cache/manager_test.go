@@ -634,12 +634,15 @@ func TestCacheManagerClose(t *testing.T) {
 	ctx := context.Background()
 
 	// Create multiple caches
-	_, _, err = mgr.Get(ctx, tenantOne)
+	_, rel1, err := mgr.Get(ctx, tenantOne)
 	require.NoError(t, err)
-	_, _, err = mgr.Get(ctx, tenantTwo)
+	_, rel2, err := mgr.Get(ctx, tenantTwo)
 	require.NoError(t, err)
-	_, _, err = mgr.Get(ctx, tenantThree)
+	_, rel3, err := mgr.Get(ctx, tenantThree)
 	require.NoError(t, err)
+	rel1()
+	rel2()
+	rel3()
 
 	stats := mgr.Stats()
 	assert.Equal(t, 3, stats.ActiveCaches)

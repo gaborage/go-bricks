@@ -155,7 +155,8 @@ func (m *DbManager) StopCleanup() {
 	m.pool.StopCleanup()
 }
 
-// Close closes all database connections and stops cleanup
+// Close closes all database connections and stops cleanup. A connection still borrowed by
+// in-flight work is closed at its final release instead of by this call (wiki/migrations.md C581.2).
 func (m *DbManager) Close() error {
 	if m.pool == nil {
 		return nil // zero-value manager (never built via NewDbManager): nothing to close
