@@ -132,6 +132,13 @@ func buildPostgresDSN(cfg *config.DatabaseConfig) string {
 	return strings.Join(parts, " ")
 }
 
+// parseConfigError reports a DSN parse failure without rendering the DSN, while
+// keeping pgx's error reachable through errors.Is / errors.As.
+type parseConfigError struct{ err error }
+
+func (e *parseConfigError) Error() string { return "failed to parse PostgreSQL config" }
+func (e *parseConfigError) Unwrap() error { return e.err }
+
 // NewConnection creates and configures a PostgreSQL Connection using cfg and log.
 // It validates cfg, builds or uses the provided DSN, sets pool options, ensures connectivity with a ping, logs success, and returns the wrapped Connection or an error.
 func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interface, error) {
@@ -147,7 +154,17 @@ func NewConnection(cfg *config.DatabaseConfig, log logger.Logger) (types.Interfa
 
 	pgxConfig, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse PostgreSQL config: %w", err)
+		// SECURITY: pgx's ParseConfigError.Error() renders the whole DSN and redacts the
+		// password with regexes that a quote-bearing password escapes, so neither the
+		// returned error nor the log may carry its text. Identity comes from cfg fields
+		// we control; the original stays reachable via errors.As for a caller that wants
+		// ParseConfigError.ConnString.
+		log.Error().
+			Str("host", cfg.Host).
+			Int("port", cfg.Port).
+			Str("database", cfg.Database).
+			Msg("Failed to parse PostgreSQL configuration")
+		return nil, &parseConfigError{err: err}
 	}
 
 	// Apply session-level timezone via pgx RuntimeParams. Empty Timezone is
