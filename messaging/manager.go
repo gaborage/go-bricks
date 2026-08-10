@@ -32,11 +32,13 @@ type ClientFactory func(string, logger.Logger) AMQPClient
 // publisher evicted while leased is closed only once its last lease is released. See ADR-032.
 type ReleaseFunc func()
 
-// errManagerClosed is returned by Publisher after Close has been called, rather than
-// resurrecting a publisher on a shut-down manager (backlog F22). It is unexported: Manager
-// exposed no closed-state error before the resourcepool rewire, so this closes F22 while
-// keeping the public surface unchanged.
-var errManagerClosed = errors.New("messaging: manager closed")
+// ErrManagerClosed is returned by Manager's EnsureConsumers and Publisher methods once
+// Close has been called, rather than resurrecting a consumer or publisher on a shut-down
+// manager (backlog F22). Publisher additionally returns it from a zero-value Manager that
+// was never built via NewMessagingManager. Callers can use errors.Is(err, ErrManagerClosed)
+// to distinguish "manager is gone" from a per-key failure and decide whether to abort or
+// fall back to a non-messaging path.
+var ErrManagerClosed = errors.New("messaging: manager closed")
 
 // Manager manages AMQP clients by string keys with different lifecycle strategies.
 // Publishers are cached with idle eviction (can be recreated easily).
@@ -170,7 +172,7 @@ func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declar
 		return fmt.Errorf("messaging: nil declarations for key %q", key)
 	}
 	if m.closed.Load() {
-		return errManagerClosed
+		return ErrManagerClosed
 	}
 	declHash := decls.Hash()
 
@@ -220,7 +222,7 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	// between it and this Lock would otherwise let the setup pass install a consumer into
 	// the map Close just drained — the very connection leak this change exists to close.
 	if m.closed.Load() {
-		return errManagerClosed
+		return ErrManagerClosed
 	}
 
 	// Check if we've already replayed these exact declarations
@@ -338,14 +340,14 @@ func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, Releas
 	if m.pubPool == nil {
 		// Zero-value manager (never built via NewMessagingManager): unusable, fail closed
 		// rather than panic — consistent with the Stats()/Close()/StartCleanup zero-value guards.
-		return nil, nil, errManagerClosed
+		return nil, nil, ErrManagerClosed
 	}
 	client, release, err := m.pubPool.GetOrCreate(ctx, key, func(ctx context.Context) (AMQPClient, error) {
 		return m.createPublisher(ctx, key)
 	})
 	if err != nil {
 		if errors.Is(err, resourcepool.ErrPoolClosed) {
-			return nil, nil, errManagerClosed
+			return nil, nil, ErrManagerClosed
 		}
 		return nil, nil, err
 	}

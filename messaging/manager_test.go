@@ -722,7 +722,7 @@ func TestMessagingManagerPublisherAfterCloseReturnsError(t *testing.T) {
 
 	pub, release, err := m.Publisher(ctx, "a")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
+	assert.ErrorIs(t, err, ErrManagerClosed, "Publisher after Close must fail closed, not resurrect a publisher (F22)")
 	assert.Nil(t, pub)
 	assert.Nil(t, release)
 }
@@ -773,7 +773,7 @@ func TestMessagingManagerZeroValueMethodsAreSafe(t *testing.T) {
 	assert.Equal(t, 0, stats["idle_cleanups"])
 
 	pub, release, err := m.Publisher(context.Background(), "any")
-	assert.ErrorIs(t, err, errManagerClosed, "zero-value Publisher must fail closed, not panic")
+	assert.ErrorIs(t, err, ErrManagerClosed, "zero-value Publisher must fail closed, not panic")
 	assert.Nil(t, pub)
 	assert.Nil(t, release)
 
@@ -1106,7 +1106,7 @@ func TestMessagingManagerEnsureConsumersAfterCloseFailsClosed(t *testing.T) {
 	require.NoError(t, manager.Close())
 
 	err := manager.EnsureConsumers(ctx, testTenantID, decls)
-	assert.ErrorIs(t, err, errManagerClosed, "a replayed key must not report success on a closed manager")
+	assert.ErrorIs(t, err, ErrManagerClosed, "a replayed key must not report success on a closed manager")
 }
 
 // TestMessagingManagerEnsureConsumersAfterCloseDoesNotDialNewKey pins failure mode (b): a
@@ -1140,7 +1140,7 @@ func TestMessagingManagerEnsureConsumersAfterCloseDoesNotDialNewKey(t *testing.T
 	snapshot := callCount()
 
 	err := manager.EnsureConsumers(ctx, tenant2ID, decls)
-	assert.ErrorIs(t, err, errManagerClosed, "a new key must fail closed once the manager is closed")
+	assert.ErrorIs(t, err, ErrManagerClosed, "a new key must fail closed once the manager is closed")
 	assert.Equal(t, snapshot, callCount(), "a closed manager must not dial a new broker connection")
 }
 
@@ -1167,7 +1167,7 @@ func TestMessagingManagerEnsureConsumersInternalRechecksClosedUnderLock(t *testi
 	manager.closed.Store(true)
 
 	err := manager.ensureConsumersInternal(context.Background(), testTenantID, decls, decls.Hash())
-	assert.ErrorIs(t, err, errManagerClosed, "ensureConsumersInternal must re-check closed under consMu")
+	assert.ErrorIs(t, err, ErrManagerClosed, "ensureConsumersInternal must re-check closed under consMu")
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -1259,5 +1259,5 @@ func TestMessagingManagerEnsureConsumersWarmHashLosesToClosedGuard(t *testing.T)
 	manager.closed.Store(true)
 
 	err := manager.EnsureConsumers(ctx, testTenantID, decls)
-	assert.ErrorIs(t, err, errManagerClosed, "a warm replay hash must not beat the closed guard")
+	assert.ErrorIs(t, err, ErrManagerClosed, "a warm replay hash must not beat the closed guard")
 }
