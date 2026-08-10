@@ -424,6 +424,23 @@ func TestExtractTableName(t *testing.T) {
 			query:         "SELECT * FROM (SELECT id FROM users) AS subquery",
 			expectedTable: "users", // Extracts from main FROM clause
 		},
+
+		// Fold-boundary and mixed-case verb coverage (plan 118).
+		{
+			name:          "select_mixed_case",
+			query:         "SeLeCt * FrOm users",
+			expectedTable: "users",
+		},
+		{
+			name:          "insert_mixed_case",
+			query:         "InSeRt InTo users (name) VALUES ('x')",
+			expectedTable: "users",
+		},
+		{
+			name:          "select_keyword_only",
+			query:         "SELECT",
+			expectedTable: unknownTable,
+		},
 	}
 
 	for _, tt := range tests {
@@ -935,4 +952,15 @@ func TestRegisterConnectionPoolMetricsSemconvNames(t *testing.T) {
 		"legacy idle.configured metric must not be emitted")
 	assert.Nil(t, obtest.FindMetric(rm, "db.client.connection.pending_count"),
 		"legacy pending_count metric must not be emitted")
+}
+
+// BenchmarkExtractTableName measures extractTableName's per-call allocations.
+// Baseline (pre-fold, whole-query strings.ToUpper) recorded in the plan 118 PR
+// body; re-run after the hasPrefixFold rewrite to confirm allocs/op decreased.
+func BenchmarkExtractTableName(b *testing.B) {
+	const q = "SELECT u.id, u.name, u.email FROM users u JOIN orders o ON u.id = o.user_id WHERE u.tenant_id = $1 AND o.created_at > $2 ORDER BY o.created_at DESC LIMIT 50"
+	b.ReportAllocs()
+	for b.Loop() {
+		extractTableName(q)
+	}
 }

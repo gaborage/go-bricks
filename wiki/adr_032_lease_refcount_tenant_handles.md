@@ -3,6 +3,8 @@
 **Status:** Accepted
 **Date:** 2026-06-17
 
+> **Amended (2026-08-09):** The Decision section's bullet beginning "Manager `Close()`" — originally `Close()` closes every still-mapped handle regardless of `refs` — is reversed: `Close()` now defers a still-borrowed handle to its final `ReleaseFunc` release, the same detach-then-close-on-last-release protocol eviction/idle-cleanup already use, so the "never `Close()`d" benefit claimed under Consequences → Benefits (the bullet beginning "An in-use handle is **never** `Close()`d") now holds across shutdown too, not only eviction. The original rationale does not survive: ADR-029 cancels consumer contexts but does not join in-flight handlers (`adr_029_graceful_shutdown_order.md:35`), so a handler can still be mid-operation when `Close()` runs. See `internal/resourcepool/resourcepool.go` (`liveLeases`) and Plan 115.
+
 ## Context
 
 The three per-tenant resource managers — `cache.CacheManager`, `database.DbManager`, and
@@ -54,9 +56,10 @@ until all current holders have released.
   `refs`. Because callers operate on the shared entry *pointer* (not a map re-lookup), no caller
   can "miss" the entry under churn — eliminating a retry-storm that a naive re-lookup design
   exhibits when `MaxSize` < concurrent distinct keys (e.g. `Get` racing `Remove`).
-- Manager `Close()` closes every still-mapped handle regardless of `refs` (shutdown is terminal;
-  ADR-029 stops inbound work first) and marks them `closed` under the lock so a late release
-  cannot double-close.
+- Manager `Close()` (2026-08-09: see amendment above) detaches every still-mapped handle; one with
+  no live borrower is closed immediately and marked `closed` under the lock, while one still
+  borrowed is left detached-but-open for its final `ReleaseFunc` to close — the same protocol
+  eviction/idle-cleanup use, so a late release still cannot double-close.
 
 **Activation layer (non-breaking for apps):** a new private `internal/leasescope` package carries
 a `*Scope` in `context.Context`. The framework installs a scope at each unit-of-work boundary and
@@ -123,5 +126,6 @@ release. See `wiki/migrations.md`. **No application-facing change:** `deps.DB/Ca
 - Issue #606 (this deeper fix); PR #605 (non-breaking M3 mitigation).
 - [ADR-026](adr_026_zero_overhead_request_path.md) (zero-overhead request path — informs the
   scope-allocation budget).
-- [ADR-029](adr_029_graceful_shutdown_order.md) (shutdown stops inbound work before teardown —
-  why manager `Close()` may close leased handles).
+- [ADR-029](adr_029_graceful_shutdown_order.md) (shutdown stops inbound work before teardown, but
+  does not join in-flight handlers — why manager `Close()` must defer a still-borrowed handle to
+  its final release rather than close it immediately; see the 2026-08-09 amendment above).
