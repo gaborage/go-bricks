@@ -166,7 +166,7 @@ func buildLogRecord(entry map[string]any) (rec log.Record, ctx context.Context, 
 
 	// Default to trace logs unless caller explicitly sets log.type
 	// This ensures all application logs are categorized for dual-mode routing
-	if !hasLogTypeAttribute(&rec) {
+	if _, ok := entry[logTypeAttrKey]; !ok {
 		rec.AddAttributes(attribute.String(logTypeAttrKey, "trace"))
 	}
 
@@ -411,18 +411,4 @@ func jsonStringify(v any) string {
 		return ""
 	}
 	return string(bytes)
-}
-
-// hasLogTypeAttribute checks if a log record already has a log.type attribute.
-// This prevents overwriting caller-specified log types (e.g., "action" from middleware).
-func hasLogTypeAttribute(rec *log.Record) bool {
-	found := false
-	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
-		if kv.Key == logTypeAttrKey {
-			found = true
-			return false // Stop iteration
-		}
-		return true // Continue
-	})
-	return found
 }

@@ -477,7 +477,7 @@ func TestCreateBatchProcessorStampsOwnLogType(t *testing.T) {
 // TestCreateDualModeProcessorLabelsUnlabeledRecordsAsTrace pins which label each processor is
 // wired with inside createDualModeProcessor, not just what createBatchProcessor does with the
 // label it is handed. A record carrying no log.type routes to the trace processor by default
-// (extractLogType), so it must come out stamped "trace" — swapping logTypeAction/logTypeTrace at
+// (collectRouting), so it must come out stamped "trace" — swapping logTypeAction/logTypeTrace at
 // the two call sites fails here and nowhere else.
 func TestCreateDualModeProcessorLabelsUnlabeledRecordsAsTrace(t *testing.T) {
 	logProvider, fake := wireProvider(t, func(p *provider, exp sdklog.Exporter) sdklog.Processor {
