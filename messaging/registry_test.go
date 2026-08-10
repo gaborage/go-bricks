@@ -20,7 +20,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/gaborage/go-bricks/logger"
+	gobrickslogger "github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -2603,9 +2603,9 @@ func (l *recordingLogger) Line(t *testing.T, msg string) recordedLine {
 	return hits[0]
 }
 
-func (l *recordingLogger) WithContext(_ any) logger.Logger { return l }
+func (l *recordingLogger) WithContext(_ any) gobrickslogger.Logger { return l }
 
-func (l *recordingLogger) WithFields(f map[string]any) logger.Logger {
+func (l *recordingLogger) WithFields(f map[string]any) gobrickslogger.Logger {
 	keys := make([]string, 0, len(f))
 	for k := range f {
 		keys = append(keys, k)
@@ -2619,13 +2619,13 @@ func (l *recordingLogger) WithFields(f map[string]any) logger.Logger {
 	return &recordingLogger{mu: l.mu, lines: l.lines, fields: merged}
 }
 
-func (l *recordingLogger) Info() logger.LogEvent  { return l.event() }
-func (l *recordingLogger) Error() logger.LogEvent { return l.event() }
-func (l *recordingLogger) Debug() logger.LogEvent { return l.event() }
-func (l *recordingLogger) Warn() logger.LogEvent  { return l.event() }
-func (l *recordingLogger) Fatal() logger.LogEvent { return l.event() }
+func (l *recordingLogger) Info() gobrickslogger.LogEvent  { return l.event() }
+func (l *recordingLogger) Error() gobrickslogger.LogEvent { return l.event() }
+func (l *recordingLogger) Debug() gobrickslogger.LogEvent { return l.event() }
+func (l *recordingLogger) Warn() gobrickslogger.LogEvent  { return l.event() }
+func (l *recordingLogger) Fatal() gobrickslogger.LogEvent { return l.event() }
 
-func (l *recordingLogger) event() logger.LogEvent {
+func (l *recordingLogger) event() gobrickslogger.LogEvent {
 	pairs := make([][2]string, len(l.fields), len(l.fields)+8)
 	copy(pairs, l.fields)
 	return &recordingEvent{l: l, pairs: pairs}
@@ -2636,22 +2636,24 @@ type recordingEvent struct {
 	pairs [][2]string
 }
 
-func (e *recordingEvent) add(k string, v any) logger.LogEvent {
+func (e *recordingEvent) add(k string, v any) gobrickslogger.LogEvent {
 	e.pairs = append(e.pairs, [2]string{k, fmt.Sprint(v)})
 	return e
 }
 
-func (e *recordingEvent) Str(k, v string) logger.LogEvent               { return e.add(k, v) }
-func (e *recordingEvent) Int(k string, v int) logger.LogEvent           { return e.add(k, v) }
-func (e *recordingEvent) Int64(k string, v int64) logger.LogEvent       { return e.add(k, v) }
-func (e *recordingEvent) Uint64(k string, v uint64) logger.LogEvent     { return e.add(k, v) }
-func (e *recordingEvent) Dur(k string, v time.Duration) logger.LogEvent { return e.add(k, v) }
-func (e *recordingEvent) Interface(k string, v any) logger.LogEvent     { return e.add(k, v) }
-func (e *recordingEvent) Bytes(k string, v []byte) logger.LogEvent      { return e.add(k, string(v)) }
-func (e *recordingEvent) Bool(k string, v bool) logger.LogEvent         { return e.add(k, v) }
+func (e *recordingEvent) Str(k, v string) gobrickslogger.LogEvent               { return e.add(k, v) }
+func (e *recordingEvent) Int(k string, v int) gobrickslogger.LogEvent           { return e.add(k, v) }
+func (e *recordingEvent) Int64(k string, v int64) gobrickslogger.LogEvent       { return e.add(k, v) }
+func (e *recordingEvent) Uint64(k string, v uint64) gobrickslogger.LogEvent     { return e.add(k, v) }
+func (e *recordingEvent) Dur(k string, v time.Duration) gobrickslogger.LogEvent { return e.add(k, v) }
+func (e *recordingEvent) Interface(k string, v any) gobrickslogger.LogEvent     { return e.add(k, v) }
+func (e *recordingEvent) Bytes(k string, v []byte) gobrickslogger.LogEvent {
+	return e.add(k, string(v))
+}
+func (e *recordingEvent) Bool(k string, v bool) gobrickslogger.LogEvent { return e.add(k, v) }
 func (e *recordingEvent) Enabled() bool                                 { return true }
 
-func (e *recordingEvent) Err(err error) logger.LogEvent {
+func (e *recordingEvent) Err(err error) gobrickslogger.LogEvent {
 	if err != nil {
 		return e.add("error", err.Error())
 	}
@@ -2666,7 +2668,7 @@ func (e *recordingEvent) Msg(msg string) {
 
 func (e *recordingEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
 
-var _ logger.Logger = (*recordingLogger)(nil)
+var _ gobrickslogger.Logger = (*recordingLogger)(nil)
 
 func TestRegistryProcessMessageStampsCorrelationIDOnSuccessLines(t *testing.T) {
 	const wantTraceID = "req-119"
@@ -2875,7 +2877,7 @@ func TestRegistryProcessMessagePanicLineKeepsBothCorrelationIDs(t *testing.T) {
 // cost, which is exactly what is being measured.
 func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
-	log := logger.New("error", false)
+	log := gobrickslogger.New("error", false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
