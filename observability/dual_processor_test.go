@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -1094,6 +1095,28 @@ func TestOnEmitRoutingDecisionTable(t *testing.T) {
 			wantTraceIDValid: false,
 		},
 		{
+			// All three trace fields complete BEFORE log.type. A walk that stops
+			// on c.done() alone would never see log.type and would misroute this
+			// record to the trace processor — pins the other half of invariant 3.
+			name: "trace_fields_before_log_type_walk_must_not_stop_early",
+			attrs: append(
+				append(benchPaddingAttrs(3),
+					attribute.String("trace_id", attrTraceIDHex),
+					attribute.String("span_id", attrSpanIDHex),
+					attribute.Int64("trace_flags", 1),
+				),
+				attribute.String(logTypeKey, "action"),
+			),
+			setupContext:     bgCtx,
+			severity:         log.SeverityInfo,
+			samplingRate:     0.0,
+			wantActionCount:  1,
+			wantTraceCount:   0,
+			wantTraceIDValid: true,
+			wantTraceIDHex:   attrTraceIDHex,
+			wantSpanIDHex:    attrSpanIDHex,
+		},
+		{
 			// log.type sits after 9 padding attributes but BEFORE trace_id/span_id.
 			// A walk that stops unconditionally as soon as it finds log.type
 			// (ignoring wantTrace) would never reach trace_id/span_id — pins
@@ -1156,6 +1179,19 @@ func TestOnEmitRoutingDecisionTable(t *testing.T) {
 //   - timestamp fallback: 9999 % samplingDenominator = 9999, which is NOT <
 //     5000 -> dropped, if enrichment has not run yet (TraceID() invalid).
 func TestOnEmitEnrichesBeforeSampling(t *testing.T) {
+	// Fixture precondition: the two verdicts must disagree, otherwise this
+	// test cannot discriminate enrichment order. Derived from the live
+	// samplingDenominator and the constructor's rate-to-threshold conversion
+	// rather than hardcoded, so a change to either fails this loudly instead
+	// of letting the test degrade into a tautology.
+	const traceIDHash = uint64(0xAAAAAAAAAAAAAAAA)
+	const timestampNanos = int64(9999)
+	threshold := uint64(math.Round(0.5 * samplingDenominator))
+	require.Less(t, traceIDHash%samplingDenominator, threshold,
+		"fixture broken: trace-ID verdict must be 'sampled'")
+	require.GreaterOrEqual(t, uint64(timestampNanos)%samplingDenominator, threshold,
+		"fixture broken: timestamp-fallback verdict must be 'dropped'")
+
 	traceProc := &mockProcessor{}
 	dualProc := NewDualModeLogProcessor(&mockProcessor{}, traceProc, 0.5)
 
@@ -1208,14 +1244,14 @@ func BenchmarkDualModeProcessorOnEmit(b *testing.B) {
 
 		dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 1.0)
 		attrs := benchPaddingAttrs(12)
+		factory := logtest.RecordFactory{
+			Severity:   log.SeverityInfo,
+			Attributes: attrs,
+		}
 
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			factory := logtest.RecordFactory{
-				Severity:   log.SeverityInfo,
-				Attributes: attrs,
-			}
 			rec := factory.NewRecord()
 			_ = dualProc.OnEmit(ctx, &rec)
 		}
@@ -1228,14 +1264,14 @@ func BenchmarkDualModeProcessorOnEmit(b *testing.B) {
 			attribute.String("span_id", "fedcba9876543210"),
 			attribute.Int64("trace_flags", 1),
 		)
+		factory := logtest.RecordFactory{
+			Severity:   log.SeverityInfo,
+			Attributes: attrs,
+		}
 
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
-			factory := logtest.RecordFactory{
-				Severity:   log.SeverityInfo,
-				Attributes: attrs,
-			}
 			rec := factory.NewRecord()
 			_ = dualProc.OnEmit(context.Background(), &rec)
 		}

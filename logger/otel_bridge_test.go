@@ -288,10 +288,13 @@ func TestBuildLogRecordDefaultsLogTypeToTrace(t *testing.T) {
 	})
 
 	t.Run("non_string_log_type_is_not_overwritten", func(t *testing.T) {
+		// float64, not int: buildLogRecord's only production caller (Write) sources
+		// entry from json.Unmarshal, which decodes JSON numbers into float64 — an
+		// int literal here would exercise a path buildLogRecord never actually sees.
 		entry := map[string]any{
 			"level":    "info",
 			"message":  "numeric log.type",
-			"log.type": 7,
+			"log.type": float64(7),
 		}
 
 		rec, _, _ := buildLogRecord(entry)
@@ -307,8 +310,8 @@ func TestBuildLogRecordDefaultsLogTypeToTrace(t *testing.T) {
 		})
 
 		require.Equal(t, 1, count, "log.type must appear exactly once — a type-assertion mistake would add a second, defaulted occurrence")
-		assert.Equal(t, attribute.INT64, lastValue.Type())
-		assert.Equal(t, int64(7), lastValue.AsInt64())
+		assert.Equal(t, attribute.FLOAT64, lastValue.Type())
+		assert.Equal(t, float64(7), lastValue.AsFloat64())
 	})
 }
 
@@ -510,14 +513,18 @@ func BenchmarkOTelBridgeWrite(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(benchNoopProcessor{}))
 			b.Cleanup(func() {
-				_ = provider.Shutdown(context.Background())
+				if err := provider.Shutdown(context.Background()); err != nil {
+					b.Errorf("shutdown logger provider: %v", err)
+				}
 			})
 			bridge := NewOTelBridge(provider)
 
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _ = bridge.Write(tc.line)
+				if _, err := bridge.Write(tc.line); err != nil {
+					b.Fatalf("write benchmark line: %v", err)
+				}
 			}
 		})
 	}
