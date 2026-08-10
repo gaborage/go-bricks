@@ -1197,3 +1197,29 @@ func TestMessagingManagerStopConsumersKeepsReplayState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, snapshot, callCount(), "Stop must leave the fast path warm — no re-dial")
 }
+
+// TestMessagingManagerEnsureConsumersWarmHashLosesToClosedGuard pins EnsureConsumers' outer
+// closed check specifically, independent of ensureConsumersInternal's consMu-guarded re-check:
+// Close flips closed before it acquires consMu to clear replayedHashs, so a caller racing Close
+// can observe closed=true with the replay hash still warm. Only the outer guard — which runs
+// before the consumersReplayed fast path — defends that window; the fast path itself has no
+// closed check at all.
+func TestMessagingManagerEnsureConsumersWarmHashLosesToClosedGuard(t *testing.T) {
+	ctx := context.Background()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} },
+	)
+	t.Cleanup(func() { _ = manager.Close() })
+	decls := newSetupDeclarations()
+	require.NoError(t, manager.EnsureConsumers(ctx, testTenantID, decls))
+
+	// Close flips closed BEFORE taking consMu to clear replayedHashs, so a caller racing Close
+	// sees the flag with the hash still warm — the window only EnsureConsumers' guard defends.
+	manager.closed.Store(true)
+
+	err := manager.EnsureConsumers(ctx, testTenantID, decls)
+	assert.ErrorIs(t, err, errManagerClosed, "a warm replay hash must not beat the closed guard")
+}
