@@ -114,3 +114,19 @@ GET /v1/events — first: createEvent (github.com/example/events), duplicate: le
 The error is built with `errors.Join`, so the individual collisions can be traversed structurally (each child is a plain formatted error — there is no sentinel or typed error to match with `errors.Is`/`errors.As`).
 
 There is no disable knob — a colliding route is always a startup-blocking bug, never a warning. Fix by removing or renaming the colliding route.
+
+## Probe Endpoints and Rate Limiting
+
+`/health` and `/ready` are **not** exempt from the framework's rate limiters. Both limiters are installed engine-globally with echo's never-skip skipper, so probe requests consume limiter budget like any other route:
+
+| Setting | Default | Applies to probes |
+| --- | --- | --- |
+| `app.rate.limit` | 100 rps | Yes — global limiter; a value `<= 0` disables it entirely |
+| `app.rate.ippreguard.enabled` | `true` | Registers the per-IP pre-guard |
+| `app.rate.ippreguard.threshold` | 2000 rps/IP | Yes — per-IP abuse ceiling |
+
+Probe traffic is always keyed by **client IP**, never by tenant: the probe skipper bypasses tenant resolution on the health and ready paths. The two limiters differ in what else lands in that same IP bucket: `app.rate.ippreguard.threshold` (`ipPreGuardEcho`) runs *before* tenant resolution and keys every request — probe or tenant-resolved — by client IP, so it is one shared per-IP budget across all traffic from that address, while `app.rate.limit` (`rateLimitEcho`) runs *after* tenant resolution and keys by the resolved **tenant ID** first, falling back to client IP only when no tenant was resolved — true for probes, but not for a tenant's own ordinary traffic, which draws on that tenant's separate budget instead.
+
+**Operational consequence.** A saturating client that shares a source IP with the prober — an L3/L4 NAT, or any hop that forwards without rewriting the client address — can push the probes themselves to `429` on the pre-guard regardless of that client's own tenant, and on the global limiter too whenever the client's traffic is itself untenanted. The two outcomes differ: a rejected `/ready` drops the instance from the load balancer's rotation, while a rejected `/health` fails one liveness probe; per the wiring documented under [Wiring Kubernetes probes](cache.md#wiring-kubernetes-probes), repeated `/health` failures — `failureThreshold` consecutive ones, not a single `429` — can restart the container, and a failing readiness probe never restarts anything. Mitigate by raising `app.rate.limit` / `app.rate.ippreguard.threshold` for that deployment, or by giving probe traffic a path to the instance that does not share a source IP with application traffic.
+
+These are *koanf* defaults. A `*config.Config` assembled in Go rather than loaded through configuration leaves both at zero, and the global limiter is a pass-through at `<= 0` — such a deployment has no ceiling at all (see [ADR-049](adr_049_debug_endpoints_fail_closed.md)).
