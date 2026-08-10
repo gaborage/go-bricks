@@ -2,7 +2,10 @@ package observability
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -92,8 +95,8 @@ func TestDualModeLogProcessorForceFlush(t *testing.T) {
 	assert.Equal(t, 1, traceProc.flushCount, "Trace processor should be flushed")
 }
 
-// TestExtractLogType verifies log type extraction with different attribute scenarios
-func TestExtractLogType(t *testing.T) {
+// TestCollectRoutingLogType verifies log type extraction with different attribute scenarios
+func TestCollectRoutingLogType(t *testing.T) {
 	tests := []struct {
 		name       string
 		attributes []attribute.KeyValue
@@ -128,7 +131,7 @@ func TestExtractLogType(t *testing.T) {
 				Attributes: tt.attributes,
 			}
 			rec := factory.NewRecord()
-			result := extractLogType(&rec)
+			result, _ := collectRouting(&rec, false)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -250,9 +253,9 @@ func TestDualModeLogProcessorDefaultsToTrace(t *testing.T) {
 	assert.Equal(t, 1, traceProc.emitCount)
 }
 
-// TestEnrichTraceContext verifies that trace context is properly populated
+// TestEnrichAndClassifyTraceContext verifies that trace context is properly populated
 // in the SDK log record from the context parameter
-func TestEnrichTraceContext(t *testing.T) {
+func TestEnrichAndClassifyTraceContext(t *testing.T) {
 	tests := []struct {
 		name            string
 		setupContext    func() context.Context
@@ -317,8 +320,8 @@ func TestEnrichTraceContext(t *testing.T) {
 			}
 			rec := factory.NewRecord()
 
-			// Call enrichTraceContext
-			enrichTraceContext(ctx, &rec)
+			// Call enrichAndClassify
+			enrichAndClassify(ctx, &rec)
 
 			traceID := rec.TraceID()
 			spanID := rec.SpanID()
@@ -413,8 +416,8 @@ func (c *capturingProcessor) ForceFlush(_ context.Context) error {
 	return nil
 }
 
-// TestEnrichFromAttributes verifies trace enrichment from record attributes (fallback path)
-func TestEnrichFromAttributes(t *testing.T) {
+// TestEnrichAndClassifyFromAttributes verifies trace enrichment from record attributes (fallback path)
+func TestEnrichAndClassifyFromAttributes(t *testing.T) {
 	tests := []struct {
 		name            string
 		attributes      []attribute.KeyValue
@@ -494,8 +497,10 @@ func TestEnrichFromAttributes(t *testing.T) {
 			}
 			rec := factory.NewRecord()
 
-			// Call enrichFromAttributes directly (no context)
-			enrichFromAttributes(&rec)
+			// Call enrichAndClassify with a background context (no span, so it
+			// falls back to attributes) — behaviorally identical to the old
+			// enrichFromAttributes(&rec)
+			enrichAndClassify(context.Background(), &rec)
 
 			traceID := rec.TraceID()
 			spanID := rec.SpanID()
@@ -541,7 +546,7 @@ func TestEnrichContextVsAttributes(t *testing.T) {
 	rec := factory.NewRecord()
 
 	// Enrich should prefer context over attributes
-	enrichTraceContext(ctx, &rec)
+	enrichAndClassify(ctx, &rec)
 
 	// Verify context values were used (not attribute values)
 	assert.Equal(t, "cccccccccccccccccccccccccccccccc", rec.TraceID().String())
@@ -564,7 +569,7 @@ func TestEnrichAttributesFallback(t *testing.T) {
 	rec := factory.NewRecord()
 
 	// Should fall back to attributes
-	enrichTraceContext(ctx, &rec)
+	enrichAndClassify(ctx, &rec)
 
 	assert.Equal(t, "dddddddddddddddddddddddddddddddd", rec.TraceID().String())
 	assert.Equal(t, "dddddddddddddddd", rec.SpanID().String())
@@ -849,5 +854,426 @@ func TestForceFlushWithErrors(t *testing.T) {
 		err := dualProc.ForceFlush(context.Background())
 		assert.ErrorIs(t, err, errAction, "Should contain action processor error")
 		assert.ErrorIs(t, err, errTrace, "Should contain trace processor error")
+	})
+}
+
+// countKeptTraceID sweeps residues [0, samplingDenominator) through the
+// trace-ID branch of shouldSample. hash is little-endian over trace-ID bytes
+// 0..7, so PutUint64(tid[:8], uint64(i)) makes hash%samplingDenominator == i.
+// tid[15] = 1 keeps the trace ID valid (non-zero) even when i == 0.
+func countKeptTraceID(t *testing.T, dualProc *DualModeLogProcessor) int {
+	t.Helper()
+	kept := 0
+	for i := range samplingDenominator {
+		var tid trace.TraceID
+		binary.LittleEndian.PutUint64(tid[:8], uint64(i))
+		tid[15] = 1
+		factory := logtest.RecordFactory{
+			Severity: log.SeverityInfo,
+			TraceID:  tid,
+		}
+		rec := factory.NewRecord()
+		if dualProc.shouldSample(&rec) {
+			kept++
+		}
+	}
+	return kept
+}
+
+// countKeptTimestamp sweeps residues [0, samplingDenominator) through the
+// timestamp-fallback branch of shouldSample (no trace ID set, so
+// traceID.IsValid() is false). uint64(ts)%samplingDenominator == i.
+func countKeptTimestamp(t *testing.T, dualProc *DualModeLogProcessor) int {
+	t.Helper()
+	kept := 0
+	for i := range samplingDenominator {
+		factory := logtest.RecordFactory{
+			Severity:  log.SeverityInfo,
+			Timestamp: time.Unix(0, int64(i)),
+		}
+		rec := factory.NewRecord()
+		if dualProc.shouldSample(&rec) {
+			kept++
+		}
+	}
+	return kept
+}
+
+// TestShouldSampleResolution pins the sub-percent sampling resolution
+// introduced by samplingDenominator = 10000. Each case asserts an exact kept
+// count across the full residue space [0, 10000), driven through both the
+// trace-ID branch (dual_processor.go:120) and the timestamp-fallback branch
+// (dual_processor.go:111) of shouldSample.
+func TestShouldSampleResolution(t *testing.T) {
+	cases := []struct {
+		name     string
+		rate     float64
+		wantKept int
+	}{
+		{name: "sub_percent_rate_exports_half_a_percent", rate: 0.005, wantKept: 50},
+		{name: "high_precision_rate_keeps_more_than_99_percent", rate: 0.999, wantKept: 9990},
+		{name: "whole_percent_rate_keeps_its_fraction", rate: 0.25, wantKept: 2500},
+		{name: "smallest_representable_rate_keeps_one_in_ten_thousand", rate: 0.0001, wantKept: 1},
+		{name: "half_unit_rate_rounds_up_to_one", rate: 0.00005, wantKept: 1},
+		{name: "sub_resolution_rate_keeps_nothing", rate: 0.00001, wantKept: 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Run("trace_id", func(t *testing.T) {
+				dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, tc.rate)
+				kept := countKeptTraceID(t, dualProc)
+				assert.Equal(t, tc.wantKept, kept, "rate %v via trace ID should keep exactly %d of %d", tc.rate, tc.wantKept, samplingDenominator)
+			})
+
+			t.Run("timestamp", func(t *testing.T) {
+				dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, tc.rate)
+				kept := countKeptTimestamp(t, dualProc)
+				assert.Equal(t, tc.wantKept, kept, "rate %v via timestamp should keep exactly %d of %d", tc.rate, tc.wantKept, samplingDenominator)
+			})
+		})
+	}
+
+	t.Run("fast_path_rate_zero_drops_all", func(t *testing.T) {
+		dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 0.0)
+		assert.Equal(t, 0, countKeptTraceID(t, dualProc), "rate 0.0 must drop everything via trace ID")
+		assert.Equal(t, 0, countKeptTimestamp(t, dualProc), "rate 0.0 must drop everything via timestamp")
+	})
+
+	t.Run("fast_path_rate_one_keeps_all", func(t *testing.T) {
+		dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 1.0)
+		assert.Equal(t, samplingDenominator, countKeptTraceID(t, dualProc), "rate 1.0 must keep everything via trace ID")
+		assert.Equal(t, samplingDenominator, countKeptTimestamp(t, dualProc), "rate 1.0 must keep everything via timestamp")
+	})
+}
+
+// TestOnEmitRoutingDecisionTable pins the consumer-observable routing
+// decision through the public OnEmit entry point — which processor (if
+// either) receives a record, and what canonical trace fields land on it —
+// across the cross-product of log.type, trace source, severity, and
+// sampling rate. Unit-testing collectRouting in isolation is not
+// sufficient: this is the surface Step 2's walk merge could silently change.
+func TestOnEmitRoutingDecisionTable(t *testing.T) {
+	const (
+		ctxTraceIDHex  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"
+		ctxSpanIDHex   = "bbbbbbbbbbbbbb01"
+		attrTraceIDHex = "dddddddddddddddddddddddddddddddd"
+		attrSpanIDHex  = "dddddddddddddddd"
+	)
+
+	bgCtx := context.Background
+	ctxSpan := func() context.Context {
+		traceID, err := trace.TraceIDFromHex(ctxTraceIDHex)
+		require.NoError(t, err)
+		spanID, err := trace.SpanIDFromHex(ctxSpanIDHex)
+		require.NoError(t, err)
+		spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID:    traceID,
+			SpanID:     spanID,
+			TraceFlags: trace.FlagsSampled,
+		})
+		return trace.ContextWithSpanContext(context.Background(), spanCtx)
+	}
+
+	attrTraceAttrs := []attribute.KeyValue{
+		attribute.String("trace_id", attrTraceIDHex),
+		attribute.String("span_id", attrSpanIDHex),
+	}
+
+	tests := []struct {
+		name             string
+		attrs            []attribute.KeyValue
+		setupContext     func() context.Context
+		severity         log.Severity
+		samplingRate     float64
+		wantActionCount  int
+		wantTraceCount   int
+		wantTraceIDValid bool
+		wantTraceIDHex   string
+		wantSpanIDHex    string
+	}{
+		{
+			name:             "action_ctx_span_info",
+			attrs:            []attribute.KeyValue{attribute.String(logTypeKey, "action")},
+			setupContext:     ctxSpan,
+			severity:         log.SeverityInfo,
+			samplingRate:     0.0,
+			wantActionCount:  1,
+			wantTraceCount:   0,
+			wantTraceIDValid: true,
+			wantTraceIDHex:   ctxTraceIDHex,
+			wantSpanIDHex:    ctxSpanIDHex,
+		},
+		{
+			name:             "action_attrs_only_info",
+			attrs:            append([]attribute.KeyValue{attribute.String(logTypeKey, "action")}, attrTraceAttrs...),
+			setupContext:     bgCtx,
+			severity:         log.SeverityInfo,
+			samplingRate:     0.0,
+			wantActionCount:  1,
+			wantTraceCount:   0,
+			wantTraceIDValid: true,
+			wantTraceIDHex:   attrTraceIDHex,
+			wantSpanIDHex:    attrSpanIDHex,
+		},
+		{
+			name:             "action_none_error",
+			attrs:            []attribute.KeyValue{attribute.String(logTypeKey, "action")},
+			setupContext:     bgCtx,
+			severity:         log.SeverityError,
+			samplingRate:     0.0,
+			wantActionCount:  1,
+			wantTraceCount:   0,
+			wantTraceIDValid: false,
+		},
+		{
+			name:             "absent_ctx_span_info_full_rate",
+			attrs:            nil,
+			setupContext:     ctxSpan,
+			severity:         log.SeverityInfo,
+			samplingRate:     1.0,
+			wantActionCount:  0,
+			wantTraceCount:   1,
+			wantTraceIDValid: true,
+			wantTraceIDHex:   ctxTraceIDHex,
+			wantSpanIDHex:    ctxSpanIDHex,
+		},
+		{
+			name:             "absent_ctx_span_warn_zero_rate",
+			attrs:            nil,
+			setupContext:     ctxSpan,
+			severity:         log.SeverityWarn,
+			samplingRate:     0.0,
+			wantActionCount:  0,
+			wantTraceCount:   1,
+			wantTraceIDValid: true,
+			wantTraceIDHex:   ctxTraceIDHex,
+			wantSpanIDHex:    ctxSpanIDHex,
+		},
+		{
+			name:             "absent_attrs_only_info_zero_rate_dropped",
+			attrs:            attrTraceAttrs,
+			setupContext:     bgCtx,
+			severity:         log.SeverityInfo,
+			samplingRate:     0.0,
+			wantActionCount:  0,
+			wantTraceCount:   0,
+			wantTraceIDValid: true,
+			wantTraceIDHex:   attrTraceIDHex,
+			wantSpanIDHex:    attrSpanIDHex,
+		},
+		{
+			name:             "absent_attrs_only_info_full_rate",
+			attrs:            attrTraceAttrs,
+			setupContext:     bgCtx,
+			severity:         log.SeverityInfo,
+			samplingRate:     1.0,
+			wantActionCount:  0,
+			wantTraceCount:   1,
+			wantTraceIDValid: true,
+			wantTraceIDHex:   attrTraceIDHex,
+			wantSpanIDHex:    attrSpanIDHex,
+		},
+		{
+			name:             "explicit_trace_none_debug_dropped",
+			attrs:            []attribute.KeyValue{attribute.String(logTypeKey, "trace")},
+			setupContext:     bgCtx,
+			severity:         log.SeverityDebug,
+			samplingRate:     0.0,
+			wantActionCount:  0,
+			wantTraceCount:   0,
+			wantTraceIDValid: false,
+		},
+		{
+			name:             "non_string_log_type_defaults_to_trace",
+			attrs:            []attribute.KeyValue{attribute.Int(logTypeKey, 7)},
+			setupContext:     bgCtx,
+			severity:         log.SeverityError,
+			samplingRate:     0.0,
+			wantActionCount:  0,
+			wantTraceCount:   1,
+			wantTraceIDValid: false,
+		},
+		{
+			// All three trace fields complete BEFORE log.type. A walk that stops
+			// on c.done() alone would never see log.type and would misroute this
+			// record to the trace processor — pins the other half of invariant 3.
+			name: "trace_fields_before_log_type_walk_must_not_stop_early",
+			attrs: append(
+				append(benchPaddingAttrs(3),
+					attribute.String("trace_id", attrTraceIDHex),
+					attribute.String("span_id", attrSpanIDHex),
+					attribute.Int64("trace_flags", 1),
+				),
+				attribute.String(logTypeKey, "action"),
+			),
+			setupContext:     bgCtx,
+			severity:         log.SeverityInfo,
+			samplingRate:     0.0,
+			wantActionCount:  1,
+			wantTraceCount:   0,
+			wantTraceIDValid: true,
+			wantTraceIDHex:   attrTraceIDHex,
+			wantSpanIDHex:    attrSpanIDHex,
+		},
+		{
+			// log.type sits after 9 padding attributes but BEFORE trace_id/span_id.
+			// A walk that stops unconditionally as soon as it finds log.type
+			// (ignoring wantTrace) would never reach trace_id/span_id — pins
+			// invariant 3 (the early-exit union in collectRouting).
+			name: "log_type_before_trace_fields_walk_must_not_stop_early",
+			attrs: append(
+				append(benchPaddingAttrs(9), attribute.String(logTypeKey, "trace")),
+				attrTraceAttrs...,
+			),
+			setupContext:     bgCtx,
+			severity:         log.SeverityInfo,
+			samplingRate:     1.0,
+			wantActionCount:  0,
+			wantTraceCount:   1,
+			wantTraceIDValid: true,
+			wantTraceIDHex:   attrTraceIDHex,
+			wantSpanIDHex:    attrSpanIDHex,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actionProc := &mockProcessor{}
+			traceProc := &mockProcessor{}
+			dualProc := NewDualModeLogProcessor(actionProc, traceProc, tt.samplingRate)
+
+			factory := logtest.RecordFactory{
+				Severity:   tt.severity,
+				Attributes: tt.attrs,
+			}
+			rec := factory.NewRecord()
+
+			err := dualProc.OnEmit(tt.setupContext(), &rec)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.wantActionCount, actionProc.emitCount, "action processor emit count")
+			assert.Equal(t, tt.wantTraceCount, traceProc.emitCount, "trace processor emit count")
+
+			traceID := rec.TraceID()
+			if tt.wantTraceIDValid {
+				assert.True(t, traceID.IsValid(), "record TraceID should be valid")
+				assert.Equal(t, tt.wantTraceIDHex, traceID.String())
+				assert.Equal(t, tt.wantSpanIDHex, rec.SpanID().String())
+			} else {
+				assert.False(t, traceID.IsValid(), "record TraceID should remain invalid (zero)")
+			}
+		})
+	}
+}
+
+// TestOnEmitEnrichesBeforeSampling is the ordering discriminator: it fails
+// if enrichment (which populates rec.TraceID(), consulted by shouldSample)
+// ever runs after the sampling decision. The fixture is chosen so the
+// trace-ID-based verdict and the timestamp-fallback verdict disagree under
+// the live samplingDenominator, so a reordering bug is caught by wrong
+// ROUTING, not just a wrong intermediate value:
+//   - trace ID's first 8 bytes are all 0xaa: hash 0xAAAAAAAAAAAAAAAA %
+//     samplingDenominator = 4410, which is < the rate-0.5 threshold (5000) ->
+//     sampled, if TraceID() is valid when shouldSample runs.
+//   - timestamp fallback: 9999 % samplingDenominator = 9999, which is NOT <
+//     5000 -> dropped, if enrichment has not run yet (TraceID() invalid).
+func TestOnEmitEnrichesBeforeSampling(t *testing.T) {
+	// Fixture precondition: the two verdicts must disagree, otherwise this
+	// test cannot discriminate enrichment order. Derived from the live
+	// samplingDenominator and the constructor's rate-to-threshold conversion
+	// rather than hardcoded, so a change to either fails this loudly instead
+	// of letting the test degrade into a tautology.
+	const traceIDHash = uint64(0xAAAAAAAAAAAAAAAA)
+	const timestampNanos = int64(9999)
+	threshold := uint64(math.Round(0.5 * samplingDenominator))
+	require.Less(t, traceIDHash%samplingDenominator, threshold,
+		"fixture broken: trace-ID verdict must be 'sampled'")
+	require.GreaterOrEqual(t, uint64(timestampNanos)%samplingDenominator, threshold,
+		"fixture broken: timestamp-fallback verdict must be 'dropped'")
+
+	traceProc := &mockProcessor{}
+	dualProc := NewDualModeLogProcessor(&mockProcessor{}, traceProc, 0.5)
+
+	factory := logtest.RecordFactory{
+		Severity:  log.SeverityInfo,
+		Timestamp: time.Unix(0, 9999),
+		Attributes: []attribute.KeyValue{
+			attribute.String("trace_id", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1"),
+			attribute.String("span_id", "bbbbbbbbbbbbbb01"),
+		},
+	}
+	rec := factory.NewRecord()
+
+	err := dualProc.OnEmit(context.Background(), &rec)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, traceProc.emitCount,
+		"trace-ID-hash verdict (sampled) must win — this only holds if enrichment populated TraceID() before shouldSample ran")
+}
+
+// benchPaddingAttrs returns n filler attributes so BenchmarkDualModeProcessorOnEmit's
+// walk cost is visible — a too-small attribute set hides it (plans/INDEX.md row 129) —
+// and TestOnEmitRoutingDecisionTable's early-exit-union row reuses it to push log.type
+// ahead of trace_id/span_id.
+func benchPaddingAttrs(n int) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, n)
+	for i := range attrs {
+		attrs[i] = attribute.String(fmt.Sprintf("field_%02d", i), "value")
+	}
+	return attrs
+}
+
+// BenchmarkDualModeProcessorOnEmit measures OnEmit's per-record cost through
+// the public entry point for the two enrichment sources: a valid ctx span
+// (context wins, no attribute-trace collection needed) and attrs-only
+// (context has no span, so trace fields must be collected from attributes
+// during the walk).
+func BenchmarkDualModeProcessorOnEmit(b *testing.B) {
+	b.Run("ctx_span_valid", func(b *testing.B) {
+		traceID, err := trace.TraceIDFromHex("0123456789abcdef0123456789abcdef")
+		require.NoError(b, err)
+		spanID, err := trace.SpanIDFromHex("fedcba9876543210")
+		require.NoError(b, err)
+		spanCtx := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID:    traceID,
+			SpanID:     spanID,
+			TraceFlags: trace.FlagsSampled,
+		})
+		ctx := trace.ContextWithSpanContext(context.Background(), spanCtx)
+
+		dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 1.0)
+		attrs := benchPaddingAttrs(12)
+		factory := logtest.RecordFactory{
+			Severity:   log.SeverityInfo,
+			Attributes: attrs,
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			rec := factory.NewRecord()
+			_ = dualProc.OnEmit(ctx, &rec)
+		}
+	})
+
+	b.Run("attrs_only", func(b *testing.B) {
+		dualProc := NewDualModeLogProcessor(&mockProcessor{}, &mockProcessor{}, 1.0)
+		attrs := append(benchPaddingAttrs(9),
+			attribute.String("trace_id", "0123456789abcdef0123456789abcdef"),
+			attribute.String("span_id", "fedcba9876543210"),
+			attribute.Int64("trace_flags", 1),
+		)
+		factory := logtest.RecordFactory{
+			Severity:   log.SeverityInfo,
+			Attributes: attrs,
+		}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			rec := factory.NewRecord()
+			_ = dualProc.OnEmit(context.Background(), &rec)
+		}
 	})
 }

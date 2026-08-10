@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"math"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
@@ -14,6 +15,10 @@ const (
 	logTypeKey    = "log.type"
 	logTypeAction = "action"
 	logTypeTrace  = "trace"
+
+	// samplingDenominator gives log sampling 0.01% resolution. Rates below
+	// half a unit (0.00005) round to a zero threshold and sample nothing.
+	samplingDenominator = 10000
 )
 
 // DualModeLogProcessor routes log records to different processors based on log.type attribute.
@@ -24,6 +29,7 @@ type DualModeLogProcessor struct {
 	actionProcessor sdklog.Processor // Handles action logs (request summaries)
 	traceProcessor  sdklog.Processor // Handles trace logs (application debug logs)
 	samplingRate    float64          // Sampling rate for INFO/DEBUG trace logs (0.0-1.0)
+	sampleThreshold uint64           // samplingRate scaled to samplingDenominator; precomputed (rate is immutable)
 }
 
 // NewDualModeLogProcessor creates a new dual-mode log processor.
@@ -37,18 +43,27 @@ func NewDualModeLogProcessor(actionProcessor, traceProcessor sdklog.Processor, s
 		panic("observability: traceProcessor cannot be nil") // NOSONAR: Fail-fast on invalid initialization (manifesto: configuration errors crash at startup)
 	}
 
+	// Only a finite rate strictly between 0 and 1 needs a threshold: <=0 and
+	// NaN both fail this range (NaN compares false against every bound) and
+	// leave sampleThreshold at its zero value, which the shouldSample fast
+	// paths and hash-modulo fallback all treat as "drop"; >=1 is handled by
+	// the shouldSample fast path and never consults the threshold.
+	var sampleThreshold uint64
+	if samplingRate > 0 && samplingRate < 1.0 {
+		sampleThreshold = uint64(math.Round(samplingRate * samplingDenominator))
+	}
+
 	return &DualModeLogProcessor{
 		actionProcessor: actionProcessor,
 		traceProcessor:  traceProcessor,
 		samplingRate:    samplingRate,
+		sampleThreshold: sampleThreshold,
 	}
 }
 
 // OnEmit routes the log record to the appropriate processor based on log.type attribute.
 func (p *DualModeLogProcessor) OnEmit(ctx context.Context, rec *sdklog.Record) error {
-	enrichTraceContext(ctx, rec)
-
-	logType := extractLogType(rec)
+	logType := enrichAndClassify(ctx, rec)
 
 	// Action logs: export all severities (INFO, WARN, ERROR)
 	if logType == logTypeAction {
@@ -108,7 +123,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
 		if ts < 0 {
 			ts = 0
 		}
-		return uint64(ts)%100 < uint64(p.samplingRate*100)
+		return uint64(ts)%samplingDenominator < p.sampleThreshold
 	}
 
 	// Use first 8 bytes of trace ID for deterministic sampling
@@ -117,7 +132,7 @@ func (p *DualModeLogProcessor) shouldSample(rec *sdklog.Record) bool {
 	hash := uint64(traceBytes[0]) | uint64(traceBytes[1])<<8 | uint64(traceBytes[2])<<16 | uint64(traceBytes[3])<<24 |
 		uint64(traceBytes[4])<<32 | uint64(traceBytes[5])<<40 | uint64(traceBytes[6])<<48 | uint64(traceBytes[7])<<56
 
-	return hash%100 < uint64(p.samplingRate*100)
+	return hash%samplingDenominator < p.sampleThreshold
 }
 
 // Shutdown shuts down both processors.
@@ -138,26 +153,9 @@ func (p *DualModeLogProcessor) ForceFlush(ctx context.Context) error {
 	return errors.Join(errTrace, errAction)
 }
 
-// extractLogType safely extracts the log.type attribute from a record.
-// Returns "trace" as default if the attribute is not found (for third-party/legacy logs).
-func extractLogType(rec *sdklog.Record) string {
-	logType := logTypeTrace // Default to trace logs
-
-	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
-		if kv.Key == logTypeKey {
-			if kv.Value.Type() == attribute.STRING {
-				logType = kv.Value.AsString()
-			}
-			return false // Stop iteration once found
-		}
-		return true // Continue searching
-	})
-
-	return logType
-}
-
-// enrichTraceContext populates the SDK log record's canonical trace fields (TraceID, SpanID, TraceFlags)
-// from two sources (in order of preference):
+// enrichAndClassify populates the record's canonical trace fields (TraceID,
+// SpanID, TraceFlags) and returns its log.type, in a single attribute walk.
+// Trace data comes from two sources (in order of preference):
 //  1. Span context in the provided context (primary source from active traces)
 //  2. String attributes "trace_id" and "span_id" in the log record (fallback for parsed logs)
 //
@@ -166,15 +164,40 @@ func extractLogType(rec *sdklog.Record) string {
 //   - Logs are forwarded through async processors that may lose context
 //   - External systems emit logs with trace correlation attributes
 //
-// The trace IDs are also kept as string attributes for text-based queryability.
-func enrichTraceContext(ctx context.Context, rec *sdklog.Record) {
-	// Primary source: Extract from context if available
-	if enrichFromContext(ctx, rec) {
-		return
+// Context is always consulted first and never requires a walk; the record's
+// attributes are walked only as a fallback, and only then is trace data
+// collected during that same walk.
+func enrichAndClassify(ctx context.Context, rec *sdklog.Record) string {
+	wantAttrTrace := !enrichFromContext(ctx, rec) // reads ctx only; no walk
+	logType, c := collectRouting(rec, wantAttrTrace)
+	if wantAttrTrace {
+		applyCollectedTrace(rec, &c)
 	}
+	return logType
+}
 
-	// Fallback source: Extract from record attributes when context doesn't have trace
-	enrichFromAttributes(rec)
+// collectRouting is the single walk shared by enrichAndClassify. It always
+// searches for log.type (defaulting to "trace" if absent, or if present with
+// a non-string value), and additionally collects trace correlation
+// attributes when wantTrace is set. It stops as soon as everything it is
+// looking for has been found.
+func collectRouting(rec *sdklog.Record, wantTrace bool) (logType string, c traceAttributeCollector) {
+	logType = logTypeTrace // Default to trace logs
+	foundLogType := false
+
+	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
+		if kv.Key == logTypeKey {
+			if kv.Value.Type() == attribute.STRING {
+				logType = kv.Value.AsString()
+			}
+			foundLogType = true
+		} else if wantTrace {
+			c.collect(kv)
+		}
+		return !foundLogType || (wantTrace && !c.done())
+	})
+
+	return logType, c
 }
 
 // enrichFromContext populates canonical trace fields from the span context.
@@ -231,27 +254,30 @@ func (c *traceAttributeCollector) collect(kv attribute.KeyValue) bool {
 		}
 	}
 	// Continue iteration until all required fields found
-	return !c.foundTraceID || !c.foundSpanID || !c.foundFlags
+	return !c.done()
 }
 
-// enrichFromAttributes populates canonical trace fields from log record attributes.
-// This handles logs parsed from JSON (OTelBridge) or forwarded from external systems.
-func enrichFromAttributes(rec *sdklog.Record) {
-	collector := &traceAttributeCollector{}
-	rec.WalkAttributes(collector.collect)
+// done reports whether all three trace correlation fields have been found.
+func (c *traceAttributeCollector) done() bool {
+	return c.foundTraceID && c.foundSpanID && c.foundFlags
+}
 
-	if !collector.foundTraceID || !collector.foundSpanID {
+// applyCollectedTrace validates and populates a record's canonical trace
+// fields from a traceAttributeCollector populated by collectRouting's walk.
+// This handles logs parsed from JSON (OTelBridge) or forwarded from external systems.
+func applyCollectedTrace(rec *sdklog.Record, c *traceAttributeCollector) {
+	if !c.foundTraceID || !c.foundSpanID {
 		return
 	}
 
 	// Parse and validate trace ID
-	traceID, err := trace.TraceIDFromHex(collector.traceIDStr)
+	traceID, err := trace.TraceIDFromHex(c.traceIDStr)
 	if err != nil || !traceID.IsValid() {
 		return
 	}
 
 	// Parse and validate span ID
-	spanID, err := trace.SpanIDFromHex(collector.spanIDStr)
+	spanID, err := trace.SpanIDFromHex(c.spanIDStr)
 	if err != nil || !spanID.IsValid() {
 		return
 	}
@@ -259,8 +285,8 @@ func enrichFromAttributes(rec *sdklog.Record) {
 	// Populate canonical fields (only after validation to avoid zeroing on parse errors)
 	rec.SetTraceID(traceID)
 	rec.SetSpanID(spanID)
-	if collector.foundFlags {
-		rec.SetTraceFlags(collector.traceFlags)
+	if c.foundFlags {
+		rec.SetTraceFlags(c.traceFlags)
 	}
 	// If trace_flags not found, TraceFlags defaults to 0 (not sampled) which is valid
 }

@@ -227,7 +227,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 	mockLogger := logger.New("info", false)
 
 	t.Run("nil cache manager", func(t *testing.T) {
-		probe := cacheManagerHealthProbe(nil, mockLogger, false)
+		probe := cacheManagerHealthProbe(nil, mockLogger, false, false)
 		result := probe.Run(context.Background())
 
 		assert.Equal(t, "cache", result.Name)
@@ -241,7 +241,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 		notConfigErr := config.NewNotConfiguredError("cache", "CACHE_HOST", "cache.host")
 		cacheManager := createTestCacheManagerWithGetError(t, notConfigErr)
 
-		probe := cacheManagerHealthProbe(cacheManager, mockLogger, false)
+		probe := cacheManagerHealthProbe(cacheManager, mockLogger, false, false)
 		result := probe.Run(context.Background())
 
 		assert.Equal(t, "cache", result.Name)
@@ -254,7 +254,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 		connErr := errors.New(errorRedisDown)
 		cacheManager := createTestCacheManagerWithGetError(t, connErr)
 
-		probe := cacheManagerHealthProbe(cacheManager, mockLogger, false)
+		probe := cacheManagerHealthProbe(cacheManager, mockLogger, false, false)
 		result := probe.Run(context.Background())
 
 		assert.Equal(t, "cache", result.Name)
@@ -267,7 +267,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 	t.Run("healthy cache", func(t *testing.T) {
 		cacheManager := createTestCacheManager(t)
 
-		probe := cacheManagerHealthProbe(cacheManager, mockLogger, false)
+		probe := cacheManagerHealthProbe(cacheManager, mockLogger, false, false)
 		result := probe.Run(context.Background())
 
 		assert.Equal(t, "cache", result.Name)
@@ -280,7 +280,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 	t.Run("critical_true_marks_failing_probe_critical", func(t *testing.T) {
 		cacheManager := createTestCacheManagerWithGetError(t, errors.New(errorRedisDown))
 
-		result := cacheManagerHealthProbe(cacheManager, mockLogger, true).Run(context.Background())
+		result := cacheManagerHealthProbe(cacheManager, mockLogger, true, false).Run(context.Background())
 
 		assert.Equal(t, unhealthyStatus, result.Status)
 		assert.Error(t, result.Err)
@@ -290,7 +290,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 	t.Run("critical_false_marks_failing_probe_non_critical", func(t *testing.T) {
 		cacheManager := createTestCacheManagerWithGetError(t, errors.New(errorRedisDown))
 
-		result := cacheManagerHealthProbe(cacheManager, mockLogger, false).Run(context.Background())
+		result := cacheManagerHealthProbe(cacheManager, mockLogger, false, false).Run(context.Background())
 
 		assert.Equal(t, unhealthyStatus, result.Status)
 		assert.Error(t, result.Err)
@@ -298,7 +298,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 	})
 
 	t.Run("critical_true_marks_healthy_probe_critical", func(t *testing.T) {
-		result := cacheManagerHealthProbe(createTestCacheManager(t), mockLogger, true).Run(context.Background())
+		result := cacheManagerHealthProbe(createTestCacheManager(t), mockLogger, true, false).Run(context.Background())
 
 		assert.Equal(t, healthyStatus, result.Status)
 		assert.True(t, result.Critical)
@@ -308,7 +308,7 @@ func TestCacheManagerHealthProbe(t *testing.T) {
 	// TestReadyCheckScenarios/cache_disabled_stays_ready_when_critical, which goes through
 	// createHealthProbes; this only pins the nil branch's own contract.
 	t.Run("nil_cache_manager_ignores_critical", func(t *testing.T) {
-		result := cacheManagerHealthProbe(nil, mockLogger, true).Run(context.Background())
+		result := cacheManagerHealthProbe(nil, mockLogger, true, false).Run(context.Background())
 
 		assert.Equal(t, disabledStatus, result.Status)
 		assert.False(t, result.Critical)
@@ -329,7 +329,7 @@ func TestCacheProbeReportsWarmPoolOutage(t *testing.T) {
 	})
 	t.Cleanup(func() { assert.NoError(t, cacheManager.Close()) })
 
-	probe := cacheManagerHealthProbe(cacheManager, mockLogger, false)
+	probe := cacheManagerHealthProbe(cacheManager, mockLogger, false, false)
 
 	warm := probe.Run(context.Background())
 	require.Equal(t, healthyStatus, warm.Status)
@@ -355,7 +355,7 @@ func TestCacheProbeBoundsHungPing(t *testing.T) {
 	mc := cachetesting.NewMockCache().WithDelay(time.Minute)
 	cacheManager := cacheManagerServing(t, mc)
 
-	probe := cacheManagerHealthProbe(cacheManager, mockLogger, false)
+	probe := cacheManagerHealthProbe(cacheManager, mockLogger, false, false)
 
 	// Parent budget mirrors the default server.timeout.middleware.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -380,7 +380,7 @@ func TestCacheProbePingHonorsCallerContext(t *testing.T) {
 	mc := cachetesting.NewMockCache().WithDelay(10 * time.Millisecond)
 	cacheManager := cacheManagerServing(t, mc)
 
-	probe := cacheManagerHealthProbe(cacheManager, mockLogger, false)
+	probe := cacheManagerHealthProbe(cacheManager, mockLogger, false, false)
 
 	// Warm the pool so the canceled context reaches Health rather than the create path.
 	require.Equal(t, healthyStatus, probe.Run(context.Background()).Status)
@@ -411,7 +411,7 @@ func TestCacheProbeReleasesLease(t *testing.T) {
 			mc := cachetesting.NewMockCache().WithHealthFailure(tc.healthErr)
 			cacheManager := cacheManagerServing(t, mc)
 
-			result := cacheManagerHealthProbe(cacheManager, mockLogger, false).Run(context.Background())
+			result := cacheManagerHealthProbe(cacheManager, mockLogger, false, false).Run(context.Background())
 			require.Equal(t, tc.wantStatus, result.Status)
 
 			// Remove closes the instance only when no lease is outstanding.
@@ -419,6 +419,57 @@ func TestCacheProbeReleasesLease(t *testing.T) {
 			assert.True(t, mc.IsClosed(), "probe must release its lease before returning")
 		})
 	}
+}
+
+// TestCacheProbeSkipsLeaseWhenCacheAbsent pins that absent=true short-circuits before the
+// doomed lease: the connector must never be called, and the pool's errors counter must
+// stay flat across repeated polls (rootCacheAbsent).
+func TestCacheProbeSkipsLeaseWhenCacheAbsent(t *testing.T) {
+	mockLogger := logger.New("info", false)
+
+	var connectorCalls atomic.Int32
+	cacheManager := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
+		connectorCalls.Add(1)
+		return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
+	})
+	t.Cleanup(func() { assert.NoError(t, cacheManager.Close()) })
+
+	probe := cacheManagerHealthProbe(cacheManager, mockLogger, false, true)
+
+	before := cacheManager.Stats().Errors
+
+	for i := 0; i < 3; i++ {
+		result := probe.Run(context.Background())
+		assert.Equal(t, notConfiguredStatus, result.Status)
+		assert.Equal(t, notConfiguredStatus, result.Details["status"])
+		assert.NoError(t, result.Err)
+	}
+
+	assert.Equal(t, before, cacheManager.Stats().Errors, "the pool's errors counter must not grow")
+	assert.Equal(t, int32(0), connectorCalls.Load(), "the connector must never be reached")
+}
+
+// TestCacheProbeStillLeasesWhenCachePresent pins that the short-circuit does not eat the
+// real probe: with absent=false a genuine connection failure still leases, still counts,
+// and still surfaces as unhealthy.
+func TestCacheProbeStillLeasesWhenCachePresent(t *testing.T) {
+	mockLogger := logger.New("info", false)
+
+	var connectorCalls atomic.Int32
+	cacheManager := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
+		connectorCalls.Add(1)
+		return nil, errors.New(errorRedisDown)
+	})
+	t.Cleanup(func() { assert.NoError(t, cacheManager.Close()) })
+
+	probe := cacheManagerHealthProbe(cacheManager, mockLogger, false, false)
+
+	result := probe.Run(context.Background())
+
+	assert.Equal(t, unhealthyStatus, result.Status)
+	assert.Equal(t, "connection_failed", result.Details["status"])
+	assert.ErrorContains(t, result.Err, errorRedisDown)
+	assert.Equal(t, int32(1), connectorCalls.Load())
 }
 
 func TestHandleDatabaseConnectionError(t *testing.T) {
@@ -516,7 +567,7 @@ func TestMessagingManagerHealthProbeDetailed(t *testing.T) {
 		assert.NoError(t, result.Err)
 	})
 
-	t.Run("no active publishers", func(t *testing.T) {
+	t.Run("publisher_pool_cold_reports_healthy", func(t *testing.T) {
 		msgManager := createTestMessagingManagerWithStats(t, map[string]any{
 			"active_publishers": 0,
 		})
@@ -526,7 +577,9 @@ func TestMessagingManagerHealthProbeDetailed(t *testing.T) {
 
 		assert.Equal(t, "messaging", result.Name)
 		assert.Equal(t, healthyStatus, result.Status)
-		assert.Equal(t, "no_active_publishers", result.Details["status"])
+		assert.Equal(t, healthyStatus, result.Details["status"])
+		assert.Equal(t, 1, result.Details["active_publishers"],
+			"the probe must re-read stats after acquiring, or the body reports 0 publishers beside a healthy verdict")
 		assert.NoError(t, result.Err)
 	})
 
