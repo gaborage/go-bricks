@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.58.1](https://github.com/gaborage/go-bricks/compare/v0.58.0...v0.58.1) (2026-08-10)
+
+
+### Fixed
+
+* **app:** request the per-goroutine pprof dump the analyzer parses ([#941](https://github.com/gaborage/go-bricks/issues/941)) ([0859fb1](https://github.com/gaborage/go-bricks/commit/0859fb13e3891369a2891bbb4dd104752e64fbaa))
+* **app:** stop doomed cache probe leases and messaging body contradiction ([#947](https://github.com/gaborage/go-bricks/issues/947)) ([c0f23a5](https://github.com/gaborage/go-bricks/commit/c0f23a548df9712ae3082e603b5c49e58d8e4fe0))
+* **build:** restore make test-integration package list ([#944](https://github.com/gaborage/go-bricks/issues/944)) ([b4d47ea](https://github.com/gaborage/go-bricks/commit/b4d47ea9167da55efd2207f160d016fa2775b8fd))
+* **cache:** clamp sub-millisecond CompareAndSet TTLs to 1ms ([#946](https://github.com/gaborage/go-bricks/issues/946)) ([90207cd](https://github.com/gaborage/go-bricks/commit/90207cd6df94da2ed405f396d2fe1be116be5e68))
+* **cache:** preserve sub-second time.Time precision in CBOR ([#937](https://github.com/gaborage/go-bricks/issues/937)) ([b2cf8b9](https://github.com/gaborage/go-bricks/commit/b2cf8b9f11b43115838289db774766b4ee0d0950))
+* **cache:** register the documented cache.manager.* metrics ([#936](https://github.com/gaborage/go-bricks/issues/936)) ([595bb58](https://github.com/gaborage/go-bricks/commit/595bb58f7f4b43d72ed2f25c4c648d4fe76ae6f9))
+* **config:** reject NaN trace sampling rate ([#953](https://github.com/gaborage/go-bricks/issues/953)) ([f63747b](https://github.com/gaborage/go-bricks/commit/f63747b80298413877cfaec7d21a3788351fdc0e))
+* **database:** keep the PostgreSQL DSN out of ParseConfig startup errors ([#945](https://github.com/gaborage/go-bricks/issues/945)) ([9d15521](https://github.com/gaborage/go-bricks/commit/9d15521c33237dbcd086f71d2c12b3843f9acca7))
+* **deps:** update aws-sdk-go-v2 monorepo ([#891](https://github.com/gaborage/go-bricks/issues/891)) ([fa5f791](https://github.com/gaborage/go-bricks/commit/fa5f7918862b4151fff2ce2bf65c71850144a506))
+* **deps:** update module github.com/gaborage/go-bricks to v0.58.0 ([#930](https://github.com/gaborage/go-bricks/issues/930)) ([f59ef0f](https://github.com/gaborage/go-bricks/commit/f59ef0f9791ccc69976a30ab300527d2c3f98820))
+* **deps:** update testcontainers-go monorepo to v0.44.0 ([#910](https://github.com/gaborage/go-bricks/issues/910)) ([0920464](https://github.com/gaborage/go-bricks/commit/09204641fac63053e2223bcef444d8ecf98b694a))
+* **messaging:** EnsureConsumers fails closed after manager Close ([#950](https://github.com/gaborage/go-bricks/issues/950)) ([06ac6e5](https://github.com/gaborage/go-bricks/commit/06ac6e5ebd335e9879d6e7a971a9a36e572d5d2b))
+* **messaging:** record consume metrics on success and start a receive span ([#940](https://github.com/gaborage/go-bricks/issues/940)) ([799641f](https://github.com/gaborage/go-bricks/commit/799641f3fe3d8549d7249caf4e9b83509c3deb55))
+* **migration:** guard tenant-source redirects and cap response reads ([#942](https://github.com/gaborage/go-bricks/issues/942)) ([1e808cb](https://github.com/gaborage/go-bricks/commit/1e808cb54bf4ebba1832d2ceb056c2fae6ed8e67))
+* **observability:** sample logs at 0.01% resolution, not whole percent ([#949](https://github.com/gaborage/go-bricks/issues/949)) ([7ab1b32](https://github.com/gaborage/go-bricks/commit/7ab1b32bbab05356f268ad8504ae2459dee455dd))
+* **resourcepool:** Close defers leased entries to final release ([#952](https://github.com/gaborage/go-bricks/issues/952)) ([7b8fa84](https://github.com/gaborage/go-bricks/commit/7b8fa846620690413dc29f5e8fc33ca0e2d7fb00))
+* **server:** bind header slices of named string types ([#939](https://github.com/gaborage/go-bricks/issues/939)) ([e609408](https://github.com/gaborage/go-bricks/commit/e60940833c692d1485028f58b3949f5936951c06))
+
+
+### Changed
+
+* **logger:** first-byte dispatch for sensitive-field matching ([#948](https://github.com/gaborage/go-bricks/issues/948)) ([b55194e](https://github.com/gaborage/go-bricks/commit/b55194e75baacf5097f6d638b1e96c0d87eb6f49))
+* **messaging/httpclient/database:** guard debug log sites and fold SQL prefix matching ([#954](https://github.com/gaborage/go-bricks/issues/954)) ([89ae7a9](https://github.com/gaborage/go-bricks/commit/89ae7a93940cfab48a54d2b939bf17141b6a11a1))
+* **messaging:** drop the per-delivery WithFields logger layer ([#951](https://github.com/gaborage/go-bricks/issues/951)) ([7259011](https://github.com/gaborage/go-bricks/commit/7259011c7a16572f029136290309eacd0aef711e))
+* **observability:** single-walk log routing; drop bridge re-walk ([#955](https://github.com/gaborage/go-bricks/issues/955)) ([8c1c017](https://github.com/gaborage/go-bricks/commit/8c1c017c1d01f21ca35b502b649a5f79662b5e8d))
+
 ## [0.58.0](https://github.com/gaborage/go-bricks/compare/v0.57.0...v0.58.0) (2026-08-08)
 
 
