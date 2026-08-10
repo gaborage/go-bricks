@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -19,8 +20,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // ===== Registry Infrastructure Management Tests =====
@@ -2532,4 +2535,373 @@ func TestRegistryProcessMessagePanicMarksSpanError(t *testing.T) {
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 	assert.Equal(t, codes.Error, spans[0].Status.Code)
+}
+
+// ===== Per-delivery correlation_id log-shape Tests =====
+
+// recordedLine is one emitted log line: the message plus every field write in
+// emission order. Duplicate keys are preserved — zerolog does not de-duplicate,
+// and this package deliberately emits correlation_id twice on failure lines.
+type recordedLine struct {
+	Msg   string
+	Pairs [][2]string
+}
+
+// Last returns the value a JSON parser would keep for key.
+func (l recordedLine) Last(key string) (string, bool) {
+	found, ok := "", false
+	for _, p := range l.Pairs {
+		if p[0] == key {
+			found, ok = p[1], true
+		}
+	}
+	return found, ok
+}
+
+// Values returns every value written under key, in order.
+func (l recordedLine) Values(key string) []string {
+	var out []string
+	for _, p := range l.Pairs {
+		if p[0] == key {
+			out = append(out, p[1])
+		}
+	}
+	return out
+}
+
+// recordingLogger captures field-level log shape. stubLogger cannot: every one
+// of its event setters discards its arguments.
+type recordingLogger struct {
+	mu     *sync.Mutex
+	lines  *[]recordedLine
+	fields [][2]string // context-level fields carried by this logger
+}
+
+func newRecordingLogger() *recordingLogger {
+	return &recordingLogger{mu: &sync.Mutex{}, lines: &[]recordedLine{}}
+}
+
+func (l *recordingLogger) Lines() []recordedLine {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]recordedLine, len(*l.lines))
+	copy(out, *l.lines)
+	return out
+}
+
+// Line returns the single line with the given message, failing the test if the
+// count is not exactly one.
+func (l *recordingLogger) Line(t *testing.T, msg string) recordedLine {
+	t.Helper()
+	var hits []recordedLine
+	for _, ln := range l.Lines() {
+		if ln.Msg == msg {
+			hits = append(hits, ln)
+		}
+	}
+	require.Len(t, hits, 1, "expected exactly one %q line", msg)
+	return hits[0]
+}
+
+func (l *recordingLogger) WithContext(_ any) logger.Logger { return l }
+
+func (l *recordingLogger) WithFields(f map[string]any) logger.Logger {
+	keys := make([]string, 0, len(f))
+	for k := range f {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // map order is random; sort so the shape is deterministic
+	merged := make([][2]string, 0, len(l.fields)+len(keys))
+	merged = append(merged, l.fields...)
+	for _, k := range keys {
+		merged = append(merged, [2]string{k, fmt.Sprint(f[k])})
+	}
+	return &recordingLogger{mu: l.mu, lines: l.lines, fields: merged}
+}
+
+func (l *recordingLogger) Info() logger.LogEvent  { return l.event() }
+func (l *recordingLogger) Error() logger.LogEvent { return l.event() }
+func (l *recordingLogger) Debug() logger.LogEvent { return l.event() }
+func (l *recordingLogger) Warn() logger.LogEvent  { return l.event() }
+func (l *recordingLogger) Fatal() logger.LogEvent { return l.event() }
+
+func (l *recordingLogger) event() logger.LogEvent {
+	pairs := make([][2]string, len(l.fields), len(l.fields)+8)
+	copy(pairs, l.fields)
+	return &recordingEvent{l: l, pairs: pairs}
+}
+
+type recordingEvent struct {
+	l     *recordingLogger
+	pairs [][2]string
+}
+
+func (e *recordingEvent) add(k string, v any) logger.LogEvent {
+	e.pairs = append(e.pairs, [2]string{k, fmt.Sprint(v)})
+	return e
+}
+
+func (e *recordingEvent) Str(k, v string) logger.LogEvent               { return e.add(k, v) }
+func (e *recordingEvent) Int(k string, v int) logger.LogEvent           { return e.add(k, v) }
+func (e *recordingEvent) Int64(k string, v int64) logger.LogEvent       { return e.add(k, v) }
+func (e *recordingEvent) Uint64(k string, v uint64) logger.LogEvent     { return e.add(k, v) }
+func (e *recordingEvent) Dur(k string, v time.Duration) logger.LogEvent { return e.add(k, v) }
+func (e *recordingEvent) Interface(k string, v any) logger.LogEvent     { return e.add(k, v) }
+func (e *recordingEvent) Bytes(k string, v []byte) logger.LogEvent      { return e.add(k, string(v)) }
+func (e *recordingEvent) Bool(k string, v bool) logger.LogEvent         { return e.add(k, v) }
+func (e *recordingEvent) Enabled() bool                                 { return true }
+
+func (e *recordingEvent) Err(err error) logger.LogEvent {
+	if err != nil {
+		return e.add("error", err.Error())
+	}
+	return e
+}
+
+func (e *recordingEvent) Msg(msg string) {
+	e.l.mu.Lock()
+	defer e.l.mu.Unlock()
+	*e.l.lines = append(*e.l.lines, recordedLine{Msg: msg, Pairs: e.pairs})
+}
+
+func (e *recordingEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
+
+var _ logger.Logger = (*recordingLogger)(nil)
+
+func TestRegistryProcessMessageStampsCorrelationIDOnSuccessLines(t *testing.T) {
+	const wantTraceID = "req-119"
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{gobrickstrace.HeaderXRequestID: wantTraceID},
+		Acknowledger: acker,
+	}
+
+	rec := newRecordingLogger()
+	registry.processMessage(context.Background(), consumer, delivery, rec)
+
+	debugLine := rec.Line(t, "Processing message")
+	require.NotEmpty(t, debugLine.Pairs)
+	assert.Equal(t, [2]string{"correlation_id", wantTraceID}, debugLine.Pairs[0])
+	assert.Equal(t, []string{"message_id", "routing_key", "exchange", "delivery_tag", "body_size"}, pairKeys(debugLine.Pairs[1:]))
+
+	infoLine := rec.Line(t, "Message processed successfully")
+	require.NotEmpty(t, infoLine.Pairs)
+	assert.Equal(t, [2]string{"correlation_id", wantTraceID}, infoLine.Pairs[0])
+	assert.Equal(t, []string{"message_id", "processing_time"}, pairKeys(infoLine.Pairs[1:]))
+}
+
+// pairKeys extracts just the keys, in order, from a field-pair slice.
+func pairKeys(pairs [][2]string) []string {
+	keys := make([]string, len(pairs))
+	for i, p := range pairs {
+		keys[i] = p[0]
+	}
+	return keys
+}
+
+func TestRegistryProcessMessageCorrelationIDIsStableAcrossLines(t *testing.T) {
+	tests := []struct {
+		name        string
+		handler     MessageHandler
+		acker       *mockAcknowledger
+		wantMsgs    []string
+		expectPanic bool
+	}{
+		{
+			name:     "success_with_ack_failure",
+			handler:  &countingTestHandler{},
+			acker:    &mockAcknowledger{ackErr: errors.New("ack failed")},
+			wantMsgs: []string{"Processing message", "Message processed successfully", "Failed to ack message"},
+		},
+		{
+			name:     "handler_error_with_nack_failure",
+			handler:  &countingTestHandler{testHandler: testHandler{retErr: errors.New("handler error")}},
+			acker:    &mockAcknowledger{nackErr: errors.New("nack failed")},
+			wantMsgs: []string{"Processing message", "Message processing failed - discarding without requeue", "Failed to nack message"},
+		},
+		{
+			name:        "handler_panic_with_nack_failure",
+			handler:     &panicTestHandler{panicMsg: "boom"},
+			acker:       &mockAcknowledger{nackErr: errors.New("nack failed")},
+			wantMsgs:    []string{"Processing message", "Panic recovered in message handler - discarding without requeue", "Failed to nack message"},
+			expectPanic: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+			consumer := &ConsumerDeclaration{
+				Queue:     testQueueName,
+				EventType: testEventType,
+				Handler:   tt.handler,
+				AutoAck:   false,
+			}
+			delivery := &amqp.Delivery{
+				MessageId:    testMessageID,
+				RoutingKey:   testRoutingKey,
+				Exchange:     testExchangeName,
+				DeliveryTag:  123,
+				Body:         []byte(testMessageBody),
+				Headers:      amqp.Table{},
+				Acknowledger: tt.acker,
+			}
+
+			rec := newRecordingLogger()
+			run := func() {
+				registry.processMessage(context.Background(), consumer, delivery, rec)
+			}
+			if tt.expectPanic {
+				require.NotPanics(t, run)
+			} else {
+				run()
+			}
+
+			lines := rec.Lines()
+			require.GreaterOrEqual(t, len(lines), 3, "expected at least three lines")
+
+			// Use the FIRST correlation_id value, not Last(): the failure/panic
+			// lines deliberately carry a second correlation_id stamp
+			// (delivery.CorrelationId, unset here so it is "") per the log-shape
+			// contract's "first call in the chain" rule. Last() would pick up
+			// that unrelated AMQP field on those lines and always report empty,
+			// masking exactly the traceID-propagation bug this test exists to
+			// catch (Current-state fact 3).
+			var sharedID string
+			for _, msg := range tt.wantMsgs {
+				line := rec.Line(t, msg)
+				values := line.Values("correlation_id")
+				require.NotEmpty(t, values, "line %q missing correlation_id", msg)
+				id := values[0]
+				require.NotEmpty(t, id, "line %q has empty correlation_id", msg)
+				if sharedID == "" {
+					sharedID = id
+				} else {
+					assert.Equal(t, sharedID, id, "line %q correlation_id diverged", msg)
+				}
+			}
+		})
+	}
+}
+
+func TestRegistryProcessMessageFailureLineKeepsBothCorrelationIDs(t *testing.T) {
+	const wantTraceID = "req-119"
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &countingTestHandler{testHandler: testHandler{retErr: errors.New("handler error")}}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:     testMessageID,
+		CorrelationId: "amqp-corr-1",
+		RoutingKey:    testRoutingKey,
+		Exchange:      testExchangeName,
+		DeliveryTag:   123,
+		Body:          []byte(testMessageBody),
+		Headers:       amqp.Table{gobrickstrace.HeaderXRequestID: wantTraceID},
+		Acknowledger:  acker,
+	}
+
+	rec := newRecordingLogger()
+	registry.processMessage(context.Background(), consumer, delivery, rec)
+
+	line := rec.Line(t, "Message processing failed - discarding without requeue")
+	assert.Equal(t, []string{wantTraceID, "amqp-corr-1"}, line.Values("correlation_id"))
+	last, ok := line.Last("correlation_id")
+	require.True(t, ok)
+	assert.Equal(t, "amqp-corr-1", last)
+}
+
+func TestRegistryProcessMessagePanicLineKeepsBothCorrelationIDs(t *testing.T) {
+	const wantTraceID = "req-119"
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+
+	handler := &panicTestHandler{panicMsg: "boom"}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		MessageId:     testMessageID,
+		CorrelationId: "amqp-corr-1",
+		RoutingKey:    testRoutingKey,
+		Exchange:      testExchangeName,
+		DeliveryTag:   123,
+		Body:          []byte(testMessageBody),
+		Headers:       amqp.Table{gobrickstrace.HeaderXRequestID: wantTraceID},
+		Acknowledger:  acker,
+	}
+
+	rec := newRecordingLogger()
+	require.NotPanics(t, func() {
+		registry.processMessage(context.Background(), consumer, delivery, rec)
+	})
+
+	line := rec.Line(t, "Panic recovered in message handler - discarding without requeue")
+	assert.Equal(t, []string{wantTraceID, "amqp-corr-1"}, line.Values("correlation_id"))
+	last, ok := line.Last("correlation_id")
+	require.True(t, ok)
+	assert.Equal(t, "amqp-corr-1", last)
+}
+
+// The per-delivery derived logger is invisible to stubLogger (its WithFields
+// returns the receiver), so this drives a real *ZeroLogger. Level "error" keeps
+// the success path silent while still paying the full WithContext/WithFields
+// cost, which is exactly what is being measured.
+func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	log := logger.New("error", false)
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+		AutoAck:   false,
+	}
+
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{gobrickstrace.HeaderXRequestID: "req-119"},
+		Acknowledger: &mockAcknowledger{},
+	}
+	ctx := context.Background()
+
+	avg := testing.AllocsPerRun(200, func() {
+		registry.processMessage(ctx, consumer, delivery, log)
+	})
+	t.Logf("processMessage allocs/op = %.1f", avg)
+	// Ceiling fixed at 42.0 (advisor resolution 2026-08-09): measured BEFORE =
+	// 47.0, AFTER = 38.0 allocs/op — fails the old per-delivery WithFields
+	// layer, passes the new per-event stamps with headroom.
+	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
 }
