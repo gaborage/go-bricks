@@ -1007,22 +1007,126 @@ func TestPoolCloseIsIdempotent(t *testing.T) {
 	assert.Equal(t, 1, tr.count(keyOne), "each resource closes exactly once across repeated Close")
 }
 
-// TestPoolCloseClosesLeasedEntriesWithoutDoubleClose verifies Close closes even leased entries,
-// and a later release of that lease does not double-close.
-func TestPoolCloseClosesLeasedEntriesWithoutDoubleClose(t *testing.T) {
+// TestPoolCloseDefersBorrowedEntryToRelease pins the #606 invariant on the Close path: a
+// borrowed entry is detached but NOT closed by Close; its final release closes it exactly
+// once. Was TestPoolCloseClosesLeasedEntriesWithoutDoubleClose, which asserted the opposite
+// (see plan 115 and the ADR-032 amendment).
+func TestPoolCloseDefersBorrowedEntryToRelease(t *testing.T) {
 	tr := newCloseTracker()
 	p := New(5, 0, tr.closer)
 
-	v, rel, err := p.GetOrCreate(context.Background(), keyOne, func(c context.Context) (*fakeResource, error) {
-		return keyedConnector()(c, keyOne)
-	})
+	v, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
 	require.NoError(t, err)
 
 	require.NoError(t, p.Close())
-	assert.True(t, tr.wasClosed(v.id), "Close closes leased entries too")
+	assert.False(t, tr.wasClosed(v.id), "Close must not close a borrowed entry (#606)")
+	assert.Equal(t, 0, p.Size(), "the entry is still detached from the pool")
+	assert.Equal(t, 0, p.Stats().Errors)
 
-	rel() // deferred-release must be a safe no-op post-Close
-	assert.Equal(t, 1, tr.count(v.id), "release after Close must not double-close")
+	rel()
+	assert.Equal(t, 1, tr.count(v.id), "the final release closes it exactly once")
+}
+
+// TestPoolCloseClosesUnborrowedImmediately verifies an unborrowed entry still closes during
+// Close, and its failure is returned.
+func TestPoolCloseClosesUnborrowedImmediately(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(5, 0, tr.closer)
+	errBoom := errors.New("close failed")
+
+	v, rel, err := p.GetOrCreate(context.Background(), keyOne, func(context.Context) (*fakeResource, error) {
+		r := newFakeResource(keyOne)
+		r.closeErr = errBoom
+		return r, nil
+	})
+	require.NoError(t, err)
+	rel() // no borrower left
+
+	assert.ErrorIs(t, p.Close(), errBoom)
+	assert.Equal(t, 1, tr.count(v.id))
+	assert.Equal(t, 1, p.Stats().Errors)
+}
+
+// TestPoolCloseThenReleaseCountsBorrowedCloseError verifies a borrowed entry's deferred close
+// failure cannot reach Close's return; it lands in Stats instead.
+func TestPoolCloseThenReleaseCountsBorrowedCloseError(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(5, 0, tr.closer)
+	errBoom := errors.New("close failed")
+
+	v, rel, err := p.GetOrCreate(context.Background(), keyOne, func(context.Context) (*fakeResource, error) {
+		r := newFakeResource(keyOne)
+		r.closeErr = errBoom
+		return r, nil
+	})
+	require.NoError(t, err)
+
+	assert.NoError(t, p.Close(), "a deferred close cannot contribute to Close's returned error")
+	assert.Equal(t, 0, p.Stats().Errors)
+
+	rel()
+	assert.Equal(t, 1, tr.count(v.id))
+	assert.Equal(t, 1, p.Stats().Errors, "the deferred failure is counted at release time instead")
+}
+
+// TestPoolCloseRacingFinalReleaseClosesExactlyOnce verifies Close racing the final release
+// closes exactly once in EITHER interleaving.
+func TestPoolCloseRacingFinalReleaseClosesExactlyOnce(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		tr := newCloseTracker()
+		p := New(5, 0, tr.closer)
+
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, keyedCreate(keyOne))
+		require.NoError(t, err)
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; _ = p.Close() }()
+		go func() { defer wg.Done(); <-start; rel() }()
+		close(start)
+		wg.Wait()
+
+		require.Equal(t, 1, tr.count(v.id), "exactly one close regardless of interleaving")
+	}
+}
+
+// TestPoolCloseClosesUnclaimedSeedEntry verifies an UNCLAIMED SEED is not a borrower: Close
+// closes such an entry, so a late claimer is refused and GetOrCreate reports ErrPoolClosed
+// instead of handing out a live resource.
+func TestPoolCloseClosesUnclaimedSeedEntry(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(5, 0, tr.closer)
+
+	// createEntry installs the entry with refs==1, seedHeld — exactly the state a GetOrCreate
+	// caller is in between createEntry and claimOrAcquire.
+	e, err := p.createEntry(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+
+	require.NoError(t, p.Close())
+	assert.Equal(t, 1, tr.count(keyOne), "a seed-only entry has no borrower — Close closes it")
+	assert.False(t, p.claimOrAcquire(e), "the late claim must be refused, so GetOrCreate reports ErrPoolClosed")
+}
+
+// TestPoolCloseDefersBorrowerHoldingAlongsideSeed verifies the quadrant the seed discount must
+// NOT swallow: a real borrower alongside an unclaimed seed still defers the close to the last
+// release.
+func TestPoolCloseDefersBorrowerHoldingAlongsideSeed(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(5, 0, tr.closer)
+
+	e, err := p.createEntry(context.Background(), keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	require.NotNil(t, p.getExisting(keyOne), "a second caller borrows it: refs==2, seed still unclaimed")
+
+	require.NoError(t, p.Close())
+	assert.Equal(t, 0, tr.count(keyOne), "one live borrower is enough to defer the close")
+
+	require.True(t, p.claimOrAcquire(e), "the pending caller still claims the seed")
+	p.releaseEntry(e)
+	assert.Equal(t, 0, tr.count(keyOne), "one release is not the last one")
+	p.releaseEntry(e)
+	assert.Equal(t, 1, tr.count(keyOne), "the final release closes it exactly once")
 }
 
 // TestPoolStartStopCleanupIdempotent verifies the cleanup lifecycle plumbing.

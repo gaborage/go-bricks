@@ -312,8 +312,10 @@ func (m *Manager) consumersReplayed(key string, declHash uint64) bool {
 // invoke when finished with it for the current unit of work (typically deferred). Publishers
 // are cached with LRU eviction and lazy initialization; the lease prevents a publisher that
 // is evicted while in use from being closed under an active caller (the #606 race). Once Close
-// has run, Publisher fails closed rather than resurrecting a publisher (F22). On error the
-// returned ReleaseFunc is nil — check err first.
+// has run, Publisher fails closed rather than resurrecting a publisher (F22) — except a
+// caller already mid-Publisher on a fresh client another borrower holds, who may still
+// receive that live handle after Close returns; it closes exactly once, at its final
+// release. On error the returned ReleaseFunc is nil — check err first.
 func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, ReleaseFunc, error) {
 	if m.pubPool == nil {
 		// Zero-value manager (never built via NewMessagingManager): unusable, fail closed
@@ -418,7 +420,10 @@ func (m *Manager) StopConsumers() {
 
 // Close closes all clients and stops cleanup. Publisher closes go through the pool (which
 // stops its own cleanup loop and joins every per-publisher close failure); consumer closes
-// are handled directly. Every failure from BOTH sides is surfaced under the historical
+// are handled directly. A publisher client still borrowed by in-flight work is closed at its
+// final release instead of by this call, and that deferred close failure (if any) is excluded
+// from this return value — it is counted in Stats()["errors"] instead (wiki/migrations.md
+// C581.3). Every failure returned here, from BOTH sides, is surfaced under the historical
 // "errors closing messaging clients" prefix.
 func (m *Manager) Close() error {
 	var allErrs []error
@@ -467,6 +472,7 @@ func (m *Manager) Stats() map[string]any {
 		"idle_ttl_seconds":  0,
 		"evictions":         0,
 		"idle_cleanups":     0,
+		"errors":            0,
 	}
 
 	if m.pubPool != nil {
@@ -476,6 +482,10 @@ func (m *Manager) Stats() map[string]any {
 		stats["idle_ttl_seconds"] = int(ps.IdleTTL.Seconds())
 		stats["evictions"] = ps.Evictions
 		stats["idle_cleanups"] = ps.IdleCleanups
+		// Publisher create/close failures (including a deferred close on a client still
+		// borrowed when Close ran, C581.3) — excluded from Close()'s returned error, so
+		// this is the only way a caller observes them.
+		stats["errors"] = ps.Errors
 	}
 
 	return stats
