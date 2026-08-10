@@ -61,6 +61,8 @@ const (
 	sqlOpLowerUpdate      = "update"
 	sqlOpLowerDelete      = "delete"
 	sqlOpLowerCreateTable = "create_table"
+	sqlOpLowerPrepare     = "prepare"
+	sqlOpLowerRollback    = "rollback"
 
 	// OpenTelemetry instrumentation constants
 	dbTracerName      = "go-bricks/database"
@@ -364,6 +366,45 @@ func appendDBErrorType(event logger.LogEvent, driverErr error) logger.LogEvent {
 	return event.Str("error_type", dbErrorClass(driverErr))
 }
 
+// hasPrefixFold reports whether s begins with prefix, comparing ASCII letters
+// case-insensitively, without allocating. prefix must be an ASCII literal.
+// This is narrower than the removed whole-string upper-case-and-compare
+// approach: when the first len(prefix) bytes of s are not all ASCII the fold
+// cannot match, so a query opening with a non-ASCII rune degrades to the
+// "unknown"/"query" default instead of matching. SQL keywords are ASCII, so
+// no real query is affected.
+func hasPrefixFold(s, prefix string) bool {
+	if len(s) < len(prefix) {
+		return false
+	}
+	for i := range prefix {
+		left, right := s[i], prefix[i]
+		// Only left needs the explicit reject: right never folds outside ASCII
+		// (the 'A'-'Z' shift below stays under 0x80), so a non-ASCII right can
+		// never equal a folded left and the mismatch check below already
+		// returns false for it.
+		if left >= 0x80 {
+			return false
+		}
+		if 'A' <= left && left <= 'Z' {
+			left += 'a' - 'A'
+		}
+		if 'A' <= right && right <= 'Z' {
+			right += 'a' - 'A'
+		}
+		if left != right {
+			return false
+		}
+	}
+	return true
+}
+
+// equalFoldASCII reports whether s equals keyword under the same ASCII-only
+// fold as hasPrefixFold, without allocating. keyword must be an ASCII literal.
+func equalFoldASCII(s, keyword string) bool {
+	return len(s) == len(keyword) && hasPrefixFold(s, keyword)
+}
+
 // extractDBOperation determines the database operation name from the given SQL query.
 // It returns a lowercase operation such as "select", "insert", "update", "delete",
 // "create", "drop", "alter", or "truncate". If the query is empty or the first token
@@ -379,21 +420,20 @@ func extractDBOperation(query string) string {
 
 	// Handle special operations
 	q = strings.TrimSuffix(q, ";")
-	upper := strings.ToUpper(q)
 
 	// Handle PREPARE: prefix
-	if strings.HasPrefix(upper, "PREPARE:") {
-		return "prepare"
+	if hasPrefixFold(q, "PREPARE:") {
+		return sqlOpLowerPrepare
 	}
 
-	switch upper {
-	case sqlOpBegin, "BEGIN_TX":
+	switch {
+	case equalFoldASCII(q, sqlOpBegin), equalFoldASCII(q, "BEGIN_TX"):
 		return sqlOpLowerBegin
-	case sqlOpCommit:
+	case equalFoldASCII(q, sqlOpCommit):
 		return sqlOpLowerCommit
-	case sqlOpRollback:
-		return "rollback"
-	case "CREATE_MIGRATION_TABLE":
+	case equalFoldASCII(q, sqlOpRollback):
+		return sqlOpLowerRollback
+	case equalFoldASCII(q, "CREATE_MIGRATION_TABLE"):
 		return sqlOpLowerCreateTable
 	}
 

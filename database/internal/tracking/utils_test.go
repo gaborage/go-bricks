@@ -887,3 +887,122 @@ func TestCreateDBSpanIgnoresErrNoRowsAndTxDone(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkExtractDBOperation measures extractDBOperation's per-call
+// allocations. Baseline (pre-fold, whole-query strings.ToUpper) recorded in
+// the plan 118 PR body; re-run after the hasPrefixFold/equalFoldASCII rewrite
+// to confirm allocs/op decreased.
+func BenchmarkExtractDBOperation(b *testing.B) {
+	const q = "SELECT u.id, u.name, u.email FROM users u JOIN orders o ON u.id = o.user_id WHERE u.tenant_id = $1 AND o.created_at > $2 ORDER BY o.created_at DESC LIMIT 50"
+	b.ReportAllocs()
+	for b.Loop() {
+		extractDBOperation(q)
+	}
+}
+
+// TestHasPrefixFoldMatchesUpperPrefixOnASCII is a differential test against the
+// removed strings.ToUpper(s) + strings.HasPrefix path, over an ASCII corpus.
+func TestHasPrefixFoldMatchesUpperPrefixOnASCII(t *testing.T) {
+	keywords := []string{"SELECT", "INSERT", "UPDATE", "DELETE", "PREPARE:"}
+	queries := []string{
+		"", "S", "SEL", "SELECT", "select", "SeLeCt", "SELECTED x",
+		"SELECT * FROM users", "select * from products",
+		"INSERT INTO users (name) VALUES ($1)", "insert into products (name) values ('x')",
+		"UPDATE users SET name = $1", "update products set price = 1",
+		"DELETE FROM users WHERE id = $1", "delete from products where x = true",
+		"PREPARE:", "PREPARE: SELECT 1", "prepare: select 1",
+		"BEGIN", "COMMIT", "CREATE_MIGRATION_TABLE", "   select 1",
+	}
+	for _, q := range queries {
+		for _, kw := range keywords {
+			want := strings.HasPrefix(strings.ToUpper(q), kw)
+			assert.Equal(t, want, hasPrefixFold(q, kw), "query=%q keyword=%q", q, kw)
+		}
+	}
+}
+
+// TestHasPrefixFoldNarrowsOnNonASCII pins the documented ASCII-only narrowing
+// (see hasPrefixFold's doc comment) so it is not "fixed" later: a query whose
+// leading bytes are not all ASCII cannot match, unlike the removed
+// strings.ToUpper Unicode-folding path.
+func TestHasPrefixFoldNarrowsOnNonASCII(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "long_s_select", query: "ſelect * from users"},
+		{name: "dotless_i_insert", query: "ınsert into users values (1)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, hasPrefixFold(tt.query, "SELECT"))
+			assert.False(t, hasPrefixFold(tt.query, "INSERT"))
+		})
+	}
+}
+
+// TestHasPrefixFoldRejectsExactBoundaryByte pins the >= 0x80 boundary (as opposed
+// to > 0x80) introduced by the byte-wise ASCII fold: a byte of exactly 0x80 — the
+// first non-ASCII value — must reject the match on its own, whether it leads the
+// query or sits mid-prefix, not just byte values above it. equalFoldASCII is
+// exercised too since it delegates to hasPrefixFold and both fixtures happen to
+// match the compared keyword's length.
+func TestHasPrefixFoldRejectsExactBoundaryByte(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "boundary_byte_leading", query: "\x80ELECT"},
+		{name: "boundary_byte_mid_prefix", query: "S\x80LECT"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, hasPrefixFold(tt.query, "SELECT"))
+			assert.False(t, equalFoldASCII(tt.query, "SELECT"))
+		})
+	}
+}
+
+// TestHasPrefixFoldRejectsIdenticalNonASCIIByte guards the reject itself, not
+// just its downstream effect: when s and prefix carry the SAME raw byte >= 0x80,
+// no ASCII fold ever touches it, so without the explicit check the two bytes
+// would compare equal and wrongly report a match. The fixtures above (query
+// non-ASCII, prefix plain ASCII) can't expose this — the trailing byte-mismatch
+// check already returns false whenever exactly one side is non-ASCII, masking a
+// weakened check; only an identical non-ASCII byte on both sides isolates it.
+func TestHasPrefixFoldRejectsIdenticalNonASCIIByte(t *testing.T) {
+	assert.False(t, hasPrefixFold("\x80", "\x80"))
+	assert.False(t, equalFoldASCII("\x80", "\x80"))
+}
+
+// TestHasPrefixFoldFoldsAtZBoundary pins 'Z' as the fold range's upper edge (not
+// narrower): both sides carry 'Z', in same- and mixed-case pairings, so a version
+// that stopped folding just that endpoint left it unfolded and mismatched
+// against the other side's lowercase.
+func TestHasPrefixFoldFoldsAtZBoundary(t *testing.T) {
+	assert.True(t, hasPrefixFold("Z", "Z"))
+	assert.True(t, hasPrefixFold("Z", "z"))
+	assert.True(t, hasPrefixFold("z", "Z"))
+}
+
+// TestEqualFoldASCII covers the whole-string fold, including length mismatch
+// in both directions.
+func TestEqualFoldASCII(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want bool
+	}{
+		{name: "exact_match", s: "BEGIN", want: true},
+		{name: "lowercase_match", s: "begin", want: true},
+		{name: "mixed_case_match", s: "BeGiN", want: true},
+		{name: "longer_no_match", s: "BEGINX", want: false},
+		{name: "shorter_no_match", s: "BEGI", want: false},
+		{name: "different_no_match", s: "COMMIT", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, equalFoldASCII(tt.s, "BEGIN"))
+		})
+	}
+}

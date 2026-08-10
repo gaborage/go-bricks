@@ -292,31 +292,29 @@ func extractTableName(query string) string {
 	}
 
 	// Try each pattern based on query type
-	queryUpper := strings.ToUpper(query)
-
 	// SELECT queries
-	if strings.HasPrefix(queryUpper, "SELECT") {
+	if hasPrefixFold(query, "SELECT") {
 		if table := tryExtractTable(selectTableRegex, query); table != "" {
 			return table
 		}
 	}
 
 	// INSERT queries
-	if strings.HasPrefix(queryUpper, "INSERT") {
+	if hasPrefixFold(query, "INSERT") {
 		if table := tryExtractTable(insertTableRegex, query); table != "" {
 			return table
 		}
 	}
 
 	// UPDATE queries
-	if strings.HasPrefix(queryUpper, "UPDATE") {
+	if hasPrefixFold(query, "UPDATE") {
 		if table := tryExtractTable(updateTableRegex, query); table != "" {
 			return table
 		}
 	}
 
 	// DELETE queries
-	if strings.HasPrefix(queryUpper, "DELETE") {
+	if hasPrefixFold(query, "DELETE") {
 		if table := tryExtractTable(deleteTableRegex, query); table != "" {
 			return table
 		}
