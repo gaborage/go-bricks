@@ -551,6 +551,8 @@ type LogsConfig struct {
 	// ERROR/WARN logs and action logs are always exported at 100%.
 	// Sampling is deterministic per trace (all logs in a trace are sampled together).
 	// 1.0 means export all INFO/DEBUG logs, 0.0 means export none (default).
+	// Resolution is 0.01%: the rate is scaled by 10000, so a value below
+	// 0.00005 rounds to zero and exports nothing.
 	// nil = apply default (0.0 for backward compatibility).
 	SamplingRate *float64 `mapstructure:"samplingrate"`
 }
@@ -727,7 +729,7 @@ func (c *Config) validateLogsConfig() error {
 	// Validate sampling rate if explicitly set
 	if c.Logs.SamplingRate != nil {
 		rate := *c.Logs.SamplingRate
-		if rate < 0.0 || rate > 1.0 {
+		if math.IsNaN(rate) || rate < 0.0 || rate > 1.0 {
 			return ErrInvalidLogSamplingRate
 		}
 	}
