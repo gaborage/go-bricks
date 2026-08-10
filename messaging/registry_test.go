@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -2960,7 +2961,7 @@ func TestRegistryProcessMessageLogsDebugFieldsWhenEnabled(t *testing.T) {
 		{"routing_key", testRoutingKey},
 		{"exchange", testExchangeName},
 		{"delivery_tag", "123"},
-		{"body_size", fmt.Sprint(len(testMessageBody))},
+		{"body_size", strconv.Itoa(len(testMessageBody))},
 	}, debugLine.Pairs)
 }
 

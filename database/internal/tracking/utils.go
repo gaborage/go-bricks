@@ -61,6 +61,8 @@ const (
 	sqlOpLowerUpdate      = "update"
 	sqlOpLowerDelete      = "delete"
 	sqlOpLowerCreateTable = "create_table"
+	sqlOpLowerPrepare     = "prepare"
+	sqlOpLowerRollback    = "rollback"
 
 	// OpenTelemetry instrumentation constants
 	dbTracerName      = "go-bricks/database"
@@ -402,7 +404,7 @@ func extractDBOperation(query string) string {
 
 	// Handle PREPARE: prefix
 	if hasPrefixFold(q, "PREPARE:") {
-		return "prepare"
+		return sqlOpLowerPrepare
 	}
 
 	switch {
@@ -411,7 +413,7 @@ func extractDBOperation(query string) string {
 	case equalFoldASCII(q, sqlOpCommit):
 		return sqlOpLowerCommit
 	case equalFoldASCII(q, sqlOpRollback):
-		return "rollback"
+		return sqlOpLowerRollback
 	case equalFoldASCII(q, "CREATE_MIGRATION_TABLE"):
 		return sqlOpLowerCreateTable
 	}
