@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -92,6 +93,21 @@ func TestConfigValidate(t *testing.T) {
 				Trace: TraceConfig{
 					Sample: SampleConfig{
 						Rate: Float64Ptr(1.1),
+					},
+				},
+			},
+			wantErr: ErrInvalidSampleRate,
+		},
+		{
+			name: "nan_rate_rejected",
+			config: Config{
+				Enabled: true,
+				Service: ServiceConfig{
+					Name: testServiceName,
+				},
+				Trace: TraceConfig{
+					Sample: SampleConfig{
+						Rate: Float64Ptr(math.NaN()),
 					},
 				},
 			},
