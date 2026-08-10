@@ -963,6 +963,28 @@ func TestHasPrefixFoldRejectsExactBoundaryByte(t *testing.T) {
 	}
 }
 
+// TestHasPrefixFoldRejectsIdenticalNonASCIIByte guards the reject itself, not
+// just its downstream effect: when s and prefix carry the SAME raw byte >= 0x80,
+// no ASCII fold ever touches it, so without the explicit check the two bytes
+// would compare equal and wrongly report a match. The fixtures above (query
+// non-ASCII, prefix plain ASCII) can't expose this — the trailing byte-mismatch
+// check already returns false whenever exactly one side is non-ASCII, masking a
+// weakened check; only an identical non-ASCII byte on both sides isolates it.
+func TestHasPrefixFoldRejectsIdenticalNonASCIIByte(t *testing.T) {
+	assert.False(t, hasPrefixFold("\x80", "\x80"))
+	assert.False(t, equalFoldASCII("\x80", "\x80"))
+}
+
+// TestHasPrefixFoldFoldsAtZBoundary pins 'Z' as the fold range's upper edge (not
+// narrower): both sides carry 'Z', in same- and mixed-case pairings, so a version
+// that stopped folding just that endpoint left it unfolded and mismatched
+// against the other side's lowercase.
+func TestHasPrefixFoldFoldsAtZBoundary(t *testing.T) {
+	assert.True(t, hasPrefixFold("Z", "Z"))
+	assert.True(t, hasPrefixFold("Z", "z"))
+	assert.True(t, hasPrefixFold("z", "Z"))
+}
+
 // TestEqualFoldASCII covers the whole-string fold, including length mismatch
 // in both directions.
 func TestEqualFoldASCII(t *testing.T) {

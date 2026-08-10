@@ -379,7 +379,11 @@ func hasPrefixFold(s, prefix string) bool {
 	}
 	for i := range prefix {
 		left, right := s[i], prefix[i]
-		if left >= 0x80 || right >= 0x80 {
+		// Only left needs the explicit reject: right never folds outside ASCII
+		// (the 'A'-'Z' shift below stays under 0x80), so a non-ASCII right can
+		// never equal a folded left and the mismatch check below already
+		// returns false for it.
+		if left >= 0x80 {
 			return false
 		}
 		if 'A' <= left && left <= 'Z' {
