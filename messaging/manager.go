@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -31,11 +32,13 @@ type ClientFactory func(string, logger.Logger) AMQPClient
 // publisher evicted while leased is closed only once its last lease is released. See ADR-032.
 type ReleaseFunc func()
 
-// errManagerClosed is returned by Publisher after Close has been called, rather than
-// resurrecting a publisher on a shut-down manager (backlog F22). It is unexported: Manager
-// exposed no closed-state error before the resourcepool rewire, so this closes F22 while
-// keeping the public surface unchanged.
-var errManagerClosed = errors.New("messaging: manager closed")
+// ErrManagerClosed is returned by Manager's EnsureConsumers and Publisher methods once
+// Close has been called, rather than resurrecting a consumer or publisher on a shut-down
+// manager (backlog F22). Publisher additionally returns it from a zero-value Manager that
+// was never built via NewMessagingManager. Callers can use errors.Is(err, ErrManagerClosed)
+// to distinguish "manager is gone" from a per-key failure and decide whether to abort or
+// fall back to a non-messaging path.
+var ErrManagerClosed = errors.New("messaging: manager closed")
 
 // Manager manages AMQP clients by string keys with different lifecycle strategies.
 // Publishers are cached with idle eviction (can be recreated easily).
@@ -58,6 +61,13 @@ type Manager struct {
 	consMu        sync.RWMutex
 	consumers     map[string]*consumerEntry
 	replayedHashs map[string]uint64 // Tracks declaration hashes to prevent duplicate replay
+
+	// closed flips to true the moment Close begins, mirroring resourcepool.Pool's flag
+	// (the publisher side gets its closed state from the pool; the consumer side has no
+	// pool to ask). It is atomic rather than consMu-guarded because EnsureConsumers must
+	// read it without ever blocking on a lock an in-flight setup pass holds across a
+	// broker dial — see consumersReplayed's TryRLock rationale.
+	closed atomic.Bool
 
 	// Singleflight for concurrent consumer initialization
 	sfg singleflight.Group
@@ -161,6 +171,9 @@ func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declar
 	if decls == nil {
 		return fmt.Errorf("messaging: nil declarations for key %q", key)
 	}
+	if m.closed.Load() {
+		return ErrManagerClosed
+	}
 	declHash := decls.Hash()
 
 	// Fast path: an already-replayed key needs no setup pass, so it must not depend on the
@@ -204,6 +217,13 @@ func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declar
 func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls *Declarations, declHash uint64) error {
 	m.consMu.Lock()
 	defer m.consMu.Unlock()
+
+	// Re-check under the lock: 1.3's guard is a pre-lock read, so a Close that lands
+	// between it and this Lock would otherwise let the setup pass install a consumer into
+	// the map Close just drained — the very connection leak this change exists to close.
+	if m.closed.Load() {
+		return ErrManagerClosed
+	}
 
 	// Check if we've already replayed these exact declarations
 	if existingHash, exists := m.replayedHashs[key]; exists {
@@ -312,7 +332,7 @@ func (m *Manager) consumersReplayed(key string, declHash uint64) bool {
 // invoke when finished with it for the current unit of work (typically deferred). Publishers
 // are cached with LRU eviction and lazy initialization; the lease prevents a publisher that
 // is evicted while in use from being closed under an active caller (the #606 race). Once Close
-// has run, Publisher fails closed rather than resurrecting a publisher (F22) — except a
+// begins, Publisher fails closed rather than resurrecting a publisher (F22) — except a
 // caller already mid-Publisher on a fresh client another borrower holds, who may still
 // receive that live handle after Close returns; it closes exactly once, at its final
 // release. On error the returned ReleaseFunc is nil — check err first.
@@ -320,14 +340,22 @@ func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, Releas
 	if m.pubPool == nil {
 		// Zero-value manager (never built via NewMessagingManager): unusable, fail closed
 		// rather than panic — consistent with the Stats()/Close()/StartCleanup zero-value guards.
-		return nil, nil, errManagerClosed
+		return nil, nil, ErrManagerClosed
+	}
+	if m.closed.Load() {
+		// Close flips this flag before closing the pool (see Close), so without this check a
+		// caller landing in that window would reach a still-open pool and could get back a live
+		// publisher — new or cached — on a manager that has begun shutting down. The
+		// ErrPoolClosed translation below only catches callers arriving once the pool itself
+		// has finished closing.
+		return nil, nil, ErrManagerClosed
 	}
 	client, release, err := m.pubPool.GetOrCreate(ctx, key, func(ctx context.Context) (AMQPClient, error) {
 		return m.createPublisher(ctx, key)
 	})
 	if err != nil {
 		if errors.Is(err, resourcepool.ErrPoolClosed) {
-			return nil, nil, errManagerClosed
+			return nil, nil, ErrManagerClosed
 		}
 		return nil, nil, err
 	}
@@ -407,7 +435,8 @@ func (m *Manager) StopCleanup() {
 // fresh messages to modules that are about to shut down. Cancellation propagates to in-flight
 // handlers via their context, but they are not synchronously joined here. Idempotent:
 // Registry.StopConsumers guards on its active flag, so a subsequent Close (which also stops
-// consumers) is safe.
+// consumers) is safe. Unlike Close it does not mark the manager closed and leaves the replay
+// state intact, so a Stop is recoverable while a Close is terminal.
 func (m *Manager) StopConsumers() {
 	m.consMu.Lock()
 	defer m.consMu.Unlock()
@@ -426,6 +455,11 @@ func (m *Manager) StopConsumers() {
 // C581.3). Every failure returned here, from BOTH sides, is surfaced under the historical
 // "errors closing messaging clients" prefix.
 func (m *Manager) Close() error {
+	// Flip closed BEFORE any teardown, matching resourcepool.Close: it establishes the
+	// happens-before that lets ensureConsumersInternal's re-check see the flag once it
+	// acquires consMu after this drain releases it.
+	m.closed.Store(true)
+
 	var allErrs []error
 
 	// Close all publishers via the pool. pool.Close stops the publisher cleanup loop (exactly
@@ -447,6 +481,7 @@ func (m *Manager) Close() error {
 		}
 	}
 	m.consumers = make(map[string]*consumerEntry)
+	m.replayedHashs = make(map[string]uint64)
 	m.consMu.Unlock()
 
 	if len(allErrs) > 0 {
