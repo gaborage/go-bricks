@@ -2208,15 +2208,15 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C581.3] Manager `Close()` defers a still-borrowed handle to its final release instead of force-closing it · silent-behavior · when: always
 
-- detect: `git grep -nE 'm\.[A-Za-z0-9]*[Pp]ool\.Close\(\)' -- database/manager.go
-  cache/manager.go messaging/manager.go` locates the three call sites this atom
-  governs. In your own application, grep direct callers of `DbManager.Close` /
-  `CacheManager.Close` / `messaging.Manager.Close` (most apps never call these —
-  `deps.DB/Cache/Messaging` callers are unaffected, since lifecycle `Close()` is
-  framework-invoked at shutdown), then hand-audit any shutdown test that asserts
-  every tracked handle is closed *immediately* after `Close()` returns, with no
-  intervening release. No grep can find that assertion shape in out-of-repo code
-  — this is a manual audit, not a search-and-fix.
+- detect: no grep locates this from a consumer repo — the call sites this atom
+  governs (`database/manager.go`, `cache/manager.go`, `messaging/manager.go`) live
+  inside the go-bricks module, not your application. In your own application,
+  audit direct callers of `DbManager.Close` / `CacheManager.Close` /
+  `messaging.Manager.Close` (most apps never call these — `deps.DB/Cache/Messaging`
+  callers are unaffected, since lifecycle `Close()` is framework-invoked at
+  shutdown), then hand-audit any shutdown test that asserts every tracked handle is
+  closed *immediately* after `Close()` returns, with no intervening release. This
+  is a manual audit, not a search-and-fix.
 - scope: `internal/resourcepool.Pool.Close`'s drain loop now splits by live borrowers
   instead of closing every entry unconditionally (Plan 115); all three managers reach it
   through `Close()` unchanged, and `Close()` itself needed no code changes beyond its doc
@@ -2232,15 +2232,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   mid-work — the handle stays open until the handler's `ReleaseFunc` runs, which is the
   reason for the change (see ADR-032's 2026-08-09 amendment and issue #606). (ii) a close
   failure on such a still-borrowed handle is no longer part of `Close()`'s returned
-  `error`; it surfaces later, counted in the manager's `Stats().Errors` instead. Code
+  `error`; it surfaces later in `cacheManager.Stats().Errors`,
+  `dbManager.Stats()["errors"]`, or `messagingManager.Stats()["errors"]`. Code
   that treats `Close()`'s return as the complete error set for that shutdown must read
   stats after the last lease releases, not immediately after `Close()` returns. (iii)
   `Close()` does not join in-flight work — it does not wait for outstanding leases, it
   only stops accepting new borrows and closes what is already idle. Callers that used
   `Close()` itself as the shutdown barrier must now run every outstanding `ReleaseFunc` —
   or, on framework-managed call paths, wait for the automatic per-unit-of-work scope
-  release (ADR-032) — before treating shutdown, and that final `Stats().Errors` read, as
-  complete.
+  release (ADR-032) — before treating shutdown and the final manager-specific
+  error-statistic read as complete.
 - verify: `go test -race ./database/... ./cache/... ./messaging/... ./internal/resourcepool/...`;
   in a consuming application, hold a leased handle open across a `Close()` call and
   assert the handle stays usable until released, then closes exactly once on release.
