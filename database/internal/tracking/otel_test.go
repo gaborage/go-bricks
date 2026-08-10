@@ -211,6 +211,7 @@ func TestExtractDBOperation(t *testing.T) {
 		{"rollback", sqlOpLowerRollback},
 		{"create_migration_table", "create_table"},
 		{"prepare: select 1", sqlOpLowerPrepare},
+		{"BEGIN TRANSACTION", "query"}, // multi-word BEGIN variant: exact-match special-case misses, falls to default
 	}
 
 	for _, tt := range tests {

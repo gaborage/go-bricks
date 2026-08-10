@@ -1459,6 +1459,7 @@ func (c *client) logRequest(httpReq *nethttp.Request, body []byte, traceID strin
 				Str("url", redactURLForLog(httpReq.URL)).
 				Str("request_id", traceID)
 			if len(httpReq.Header) > 0 {
+				// Headers go through logger filter to mask sensitive keys/values
 				dbg = dbg.Interface("headers", httpReq.Header)
 			}
 			dbg = c.appendBodyPreview(dbg, body, httpReq.Header.Get(headerContentType))
@@ -1493,6 +1494,7 @@ func (c *client) logResponse(resp *Response, traceID string) {
 				Str("request_id", traceID)
 			dbg = c.appendBodyPreview(dbg, resp.Body, resp.Headers.Get(headerContentType))
 			if len(resp.Headers) > 0 {
+				// Response headers go through logger filter to mask sensitive keys/values
 				dbg = dbg.Interface("headers", resp.Headers)
 			}
 			dbg.Msg("REST client response")

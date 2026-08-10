@@ -919,3 +919,56 @@ func TestClientLogResponseSkipsPayloadFieldBuildWhenDebugDisabled(t *testing.T) 
 
 	assert.Len(t, fakeLog.eventsByLevel("info"), 1, "the INFO line is unaffected by the debug guard")
 }
+
+// TestClientLogRequestSkipsHeadersFieldWhenEmpty verifies the logRequest
+// header guard on the enabled debug path: with an empty, non-nil Header (as
+// produced by http.NewRequestWithContext), the "headers" field is never
+// added to the debug event. Pins the len(httpReq.Header) > 0 boundary against
+// a >= 0 mutant, which is always true and would add the field even though
+// there are no headers.
+func TestClientLogRequestSkipsHeadersFieldWhenEmpty(t *testing.T) {
+	fakeLog := &fakeLogger{}
+	c := &client{
+		logger: fakeLog,
+		config: &Config{LogPayloads: true, MaxPayloadLogBytes: 512},
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://api.example.com/status", http.NoBody)
+	require.NoError(t, err)
+
+	c.logRequest(req, nil, "trace-empty-headers")
+
+	debugEvents := fakeLog.eventsByLevel("debug")
+	require.Len(t, debugEvents, 1)
+	assert.NotContains(t, debugEvents[0].fields, "headers")
+}
+
+// TestClientLogResponseSkipsHeadersFieldWhenEmpty verifies the logResponse
+// header guard on the enabled debug path: with Headers set to an empty,
+// non-nil http.Header, the "headers" field is never added to the debug
+// event. Pins the len(resp.Headers) > 0 boundary against a >= 0 mutant,
+// which is always true and would add the field even though there are no
+// headers.
+func TestClientLogResponseSkipsHeadersFieldWhenEmpty(t *testing.T) {
+	fakeLog := &fakeLogger{}
+	c := &client{
+		logger: fakeLog,
+		config: &Config{LogPayloads: true, MaxPayloadLogBytes: 512},
+	}
+
+	response := &Response{
+		StatusCode: 200,
+		Body:       nil,
+		Headers:    http.Header{},
+		Stats: Stats{
+			ElapsedTime: 10 * time.Millisecond,
+			CallCount:   1,
+		},
+	}
+
+	c.logResponse(response, "trace-empty-headers")
+
+	debugEvents := fakeLog.eventsByLevel("debug")
+	require.Len(t, debugEvents, 1)
+	assert.NotContains(t, debugEvents[0].fields, "headers")
+}
