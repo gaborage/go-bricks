@@ -728,7 +728,7 @@ func TestMessagingManagerPublisherAfterCloseReturnsError(t *testing.T) {
 }
 
 // TestMessagingManagerStatsSurfacesPoolErrors pins that a deferred-close failure — a publisher
-// still borrowed when Close runs, closed only at its final release (ADR-032, C581.2) — is not
+// still borrowed when Close runs, closed only at its final release (ADR-032, C581.3) — is not
 // silently dropped: PoolStats.Errors must reach Stats()["errors"] so callers can observe it,
 // since it is deliberately excluded from Close()'s returned error (contrast with
 // TestMessagingManagerCloseSurfacesClientErrors, the synchronous-close counterpart).

@@ -423,7 +423,7 @@ func (m *Manager) StopConsumers() {
 // are handled directly. A publisher client still borrowed by in-flight work is closed at its
 // final release instead of by this call, and that deferred close failure (if any) is excluded
 // from this return value — it is counted in Stats()["errors"] instead (wiki/migrations.md
-// C581.2). Every failure returned here, from BOTH sides, is surfaced under the historical
+// C581.3). Every failure returned here, from BOTH sides, is surfaced under the historical
 // "errors closing messaging clients" prefix.
 func (m *Manager) Close() error {
 	var allErrs []error
@@ -483,7 +483,7 @@ func (m *Manager) Stats() map[string]any {
 		stats["evictions"] = ps.Evictions
 		stats["idle_cleanups"] = ps.IdleCleanups
 		// Publisher create/close failures (including a deferred close on a client still
-		// borrowed when Close ran, C581.2) — excluded from Close()'s returned error, so
+		// borrowed when Close ran, C581.3) — excluded from Close()'s returned error, so
 		// this is the only way a caller observes them.
 		stats["errors"] = ps.Errors
 	}

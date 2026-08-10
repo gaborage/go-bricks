@@ -158,7 +158,7 @@ func (m *DbManager) StopCleanup() {
 }
 
 // Close closes all database connections and stops cleanup. A connection still borrowed by
-// in-flight work is closed at its final release instead of by this call (wiki/migrations.md C581.2).
+// in-flight work is closed at its final release instead of by this call (wiki/migrations.md C581.3).
 func (m *DbManager) Close() error {
 	if m.pool == nil {
 		return nil // zero-value manager (never built via NewDbManager): nothing to close
@@ -202,7 +202,7 @@ func (m *DbManager) Stats() map[string]any {
 		"max_connections":    ps.MaxSize,
 		"idle_ttl_seconds":   int(ps.IdleTTL.Seconds()),
 		// Pool create/close failures (including a deferred close on a handle still borrowed
-		// when Close ran, C581.2) — otherwise unobservable outside this Stats() call.
+		// when Close ran, C581.3) — otherwise unobservable outside this Stats() call.
 		"errors": ps.Errors,
 	}
 

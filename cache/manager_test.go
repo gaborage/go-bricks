@@ -620,7 +620,7 @@ func TestCacheManagerRemoveWithCloseError(t *testing.T) {
 
 // TestCacheManagerStatsSurfacesDeferredCloseErrors pins that a deferred-close failure — a
 // cache instance still borrowed when Close runs, closed only at its final release (ADR-032,
-// C581.2) — is not silently dropped: PoolStats.Errors must reach Stats().Errors so callers
+// C581.3) — is not silently dropped: PoolStats.Errors must reach Stats().Errors so callers
 // can observe it, since it is deliberately excluded from Close()'s returned error. This is
 // cache's sibling of the equivalent DbManager/messaging.Manager pins; unlike those two,
 // CacheManager.Stats() already wired ps.Errors through before this pin was added.
