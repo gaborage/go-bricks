@@ -15,6 +15,12 @@
       "groupName": "echo (engine + otel)"
     },
     {
+      "description": "Type the go-bricks-migrate CLI's self-pin as 'chore' so it does not cut a framework release. tools/migration is the only module that depends on go-bricks, and config:recommended's :semanticPrefixFixDepsChoreOthers types dependency updates as 'fix' — which release-please counts as version-bumping for the root module. That made catching the pin up self-defeating: pinning the CLI to v0.58.1 (#960) released framework v0.58.2 (#962, whose entire changelog was that one line), which re-staled the pin and the tools/migration/v* tag the drift check watches (#958). 'chore' does not bump because release-please's default versioning strategy advances the version only on feat/fix/breaking; that is what breaks the loop. release-please-config.json separately marks chore hidden, which affects only changelog rendering — un-hiding it would not re-arm this. Scoped to this one package on purpose: every other fix(deps) carries real content and must keep bumping, since release-cli.sh requires the CLI tag to equal the pinned framework version, so framework releases are what mint the CLI's next releasable number.",
+      "matchDatasources": ["go"],
+      "matchPackageNames": ["github.com/gaborage/go-bricks"],
+      "semanticCommitType": "chore"
+    },
+    {
       "description": "Hold the Oracle driver on go-ora v2 until upstream ships the FastLogin cookie-replay fix. v3.0.1 breaks every connection after the first in a process: v3 added a process-global cookieStore whose replayed handshake truncates OracleVersion (7230/8030/8100) through uint8, so the server closes the socket mid-handshake; because that never yields driver.ErrBadConn the driver's own retry never fires and the poisoned cookie is never evicted. database/sql hits this as soon as a pool opens its second physical connection. Measured against gvenzl/oracle-free:23.26.2-slim on 2026-07-25: v2.9.0 integration suite green, an imports-only v3.0.1 rewrite fails every connection-opening test with a bare EOF, and FAST LOGIN=false restores them. Upstream sijms/go-ora#732 is fixed on master (a968e590) but NOT released — the newest tag is still v3.0.1. Delete this rule once a tagged release carries the fix, then redo the import rewrite (go-bricks#756).",
       "matchDatasources": ["go"],
       "matchPackageNames": ["github.com/sijms/go-ora/v2"],
