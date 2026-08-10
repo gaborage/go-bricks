@@ -936,3 +936,14 @@ func TestRegisterConnectionPoolMetricsSemconvNames(t *testing.T) {
 	assert.Nil(t, obtest.FindMetric(rm, "db.client.connection.pending_count"),
 		"legacy pending_count metric must not be emitted")
 }
+
+// BenchmarkExtractTableName measures extractTableName's per-call allocations.
+// Baseline (pre-fold, whole-query strings.ToUpper) recorded in the plan 118 PR
+// body; re-run after the hasPrefixFold rewrite to confirm allocs/op decreased.
+func BenchmarkExtractTableName(b *testing.B) {
+	const q = "SELECT u.id, u.name, u.email FROM users u JOIN orders o ON u.id = o.user_id WHERE u.tenant_id = $1 AND o.created_at > $2 ORDER BY o.created_at DESC LIMIT 50"
+	b.ReportAllocs()
+	for b.Loop() {
+		extractTableName(q)
+	}
+}

@@ -887,3 +887,15 @@ func TestCreateDBSpanIgnoresErrNoRowsAndTxDone(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkExtractDBOperation measures extractDBOperation's per-call
+// allocations. Baseline (pre-fold, whole-query strings.ToUpper) recorded in
+// the plan 118 PR body; re-run after the hasPrefixFold/equalFoldASCII rewrite
+// to confirm allocs/op decreased.
+func BenchmarkExtractDBOperation(b *testing.B) {
+	const q = "SELECT u.id, u.name, u.email FROM users u JOIN orders o ON u.id = o.user_id WHERE u.tenant_id = $1 AND o.created_at > $2 ORDER BY o.created_at DESC LIMIT 50"
+	b.ReportAllocs()
+	for b.Loop() {
+		extractDBOperation(q)
+	}
+}
