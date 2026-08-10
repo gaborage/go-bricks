@@ -727,6 +727,46 @@ func TestMessagingManagerPublisherAfterCloseReturnsError(t *testing.T) {
 	assert.Nil(t, release)
 }
 
+// TestMessagingManagerPublisherMidCloseWindowFailsClosed pins the gap CodeRabbit flagged on PR
+// #950 (review comment 3750514780): Close flips m.closed BEFORE it closes m.pubPool (see Close),
+// so a caller landing in that narrow window would otherwise reach a still-open pool and could
+// get back a live, cached publisher on a manager that has begun shutting down. Setting the flag
+// directly — instead of calling Close — reproduces exactly that window without also closing the
+// pool, which is what Close's two-step teardown leaves behind for the brief interval between
+// them. Unlike TestMessagingManagerPublisherAfterCloseReturnsError above (where the pool is ALSO
+// closed, so the pre-existing ErrPoolClosed translation alone would already catch it), this test
+// isolates the manager-level guard: the pool's own closed check cannot fire here.
+func TestMessagingManagerPublisherMidCloseWindowFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+		func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} },
+	)
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close messaging manager: %v", err)
+		}
+	})
+
+	// Warm the pool with a live, cached publisher for tenant1ID.
+	_, release, err := manager.Publisher(ctx, tenant1ID)
+	require.NoError(t, err)
+	release()
+	created := manager.pubPool.Stats().TotalCreated
+
+	// Close flips closed BEFORE closing the pool, so a caller racing Close can observe
+	// closed=true while the pool is still open and fully able to hand back the cached entry.
+	manager.closed.Store(true)
+
+	pub, rel, err := manager.Publisher(ctx, tenant1ID)
+	assert.ErrorIs(t, err, ErrManagerClosed, "Publisher must fail closed once Close begins, even while the pool is still open")
+	assert.Nil(t, pub, "a manager mid-Close must not hand back the still-cached publisher")
+	assert.Nil(t, rel)
+	assert.Equal(t, created, manager.pubPool.Stats().TotalCreated, "the still-open pool must not create anything new during the close window")
+}
+
 // TestMessagingManagerStatsSurfacesPoolErrors pins that a deferred-close failure — a publisher
 // still borrowed when Close runs, closed only at its final release (ADR-032, C581.3) — is not
 // silently dropped: PoolStats.Errors must reach Stats()["errors"] so callers can observe it,

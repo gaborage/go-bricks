@@ -332,7 +332,7 @@ func (m *Manager) consumersReplayed(key string, declHash uint64) bool {
 // invoke when finished with it for the current unit of work (typically deferred). Publishers
 // are cached with LRU eviction and lazy initialization; the lease prevents a publisher that
 // is evicted while in use from being closed under an active caller (the #606 race). Once Close
-// has run, Publisher fails closed rather than resurrecting a publisher (F22) — except a
+// begins, Publisher fails closed rather than resurrecting a publisher (F22) — except a
 // caller already mid-Publisher on a fresh client another borrower holds, who may still
 // receive that live handle after Close returns; it closes exactly once, at its final
 // release. On error the returned ReleaseFunc is nil — check err first.
@@ -340,6 +340,14 @@ func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, Releas
 	if m.pubPool == nil {
 		// Zero-value manager (never built via NewMessagingManager): unusable, fail closed
 		// rather than panic — consistent with the Stats()/Close()/StartCleanup zero-value guards.
+		return nil, nil, ErrManagerClosed
+	}
+	if m.closed.Load() {
+		// Close flips this flag before closing the pool (see Close), so without this check a
+		// caller landing in that window would reach a still-open pool and could get back a live
+		// publisher — new or cached — on a manager that has begun shutting down. The
+		// ErrPoolClosed translation below only catches callers arriving once the pool itself
+		// has finished closing.
 		return nil, nil, ErrManagerClosed
 	}
 	client, release, err := m.pubPool.GetOrCreate(ctx, key, func(ctx context.Context) (AMQPClient, error) {
