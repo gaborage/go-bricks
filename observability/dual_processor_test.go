@@ -94,8 +94,8 @@ func TestDualModeLogProcessorForceFlush(t *testing.T) {
 	assert.Equal(t, 1, traceProc.flushCount, "Trace processor should be flushed")
 }
 
-// TestExtractLogType verifies log type extraction with different attribute scenarios
-func TestExtractLogType(t *testing.T) {
+// TestCollectRoutingLogType verifies log type extraction with different attribute scenarios
+func TestCollectRoutingLogType(t *testing.T) {
 	tests := []struct {
 		name       string
 		attributes []attribute.KeyValue
@@ -252,9 +252,9 @@ func TestDualModeLogProcessorDefaultsToTrace(t *testing.T) {
 	assert.Equal(t, 1, traceProc.emitCount)
 }
 
-// TestEnrichTraceContext verifies that trace context is properly populated
+// TestEnrichAndClassifyTraceContext verifies that trace context is properly populated
 // in the SDK log record from the context parameter
-func TestEnrichTraceContext(t *testing.T) {
+func TestEnrichAndClassifyTraceContext(t *testing.T) {
 	tests := []struct {
 		name            string
 		setupContext    func() context.Context
@@ -415,8 +415,8 @@ func (c *capturingProcessor) ForceFlush(_ context.Context) error {
 	return nil
 }
 
-// TestEnrichFromAttributes verifies trace enrichment from record attributes (fallback path)
-func TestEnrichFromAttributes(t *testing.T) {
+// TestEnrichAndClassifyFromAttributes verifies trace enrichment from record attributes (fallback path)
+func TestEnrichAndClassifyFromAttributes(t *testing.T) {
 	tests := []struct {
 		name            string
 		attributes      []attribute.KeyValue
@@ -1177,7 +1177,9 @@ func TestOnEmitEnrichesBeforeSampling(t *testing.T) {
 }
 
 // benchPaddingAttrs returns n filler attributes so BenchmarkDualModeProcessorOnEmit's
-// walk cost is visible — a too-small attribute set hides it (plans/INDEX.md row 129).
+// walk cost is visible — a too-small attribute set hides it (plans/INDEX.md row 129) —
+// and TestOnEmitRoutingDecisionTable's early-exit-union row reuses it to push log.type
+// ahead of trace_id/span_id.
 func benchPaddingAttrs(n int) []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, n)
 	for i := range attrs {
