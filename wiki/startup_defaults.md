@@ -114,3 +114,19 @@ GET /v1/events — first: createEvent (github.com/example/events), duplicate: le
 The error is built with `errors.Join`, so the individual collisions can be traversed structurally (each child is a plain formatted error — there is no sentinel or typed error to match with `errors.Is`/`errors.As`).
 
 There is no disable knob — a colliding route is always a startup-blocking bug, never a warning. Fix by removing or renaming the colliding route.
+
+## Probe Endpoints and Rate Limiting
+
+`/health` and `/ready` are **not** exempt from the framework's rate limiters. Both limiters are installed engine-globally with echo's never-skip skipper, so probe requests consume limiter budget like any other route:
+
+| Setting | Default | Applies to probes |
+| --- | --- | --- |
+| `app.rate.limit` | 100 rps | Yes — global limiter; a value `<= 0` disables it entirely |
+| `app.rate.ippreguard.enabled` | `true` | Registers the per-IP pre-guard |
+| `app.rate.ippreguard.threshold` | 2000 rps/IP | Yes — per-IP abuse ceiling |
+
+Probe traffic is always keyed by **client IP**, never by tenant: the probe skipper bypasses tenant resolution on the health and ready paths, so the global limiter's identifier extractor falls through to the request's real IP.
+
+**Operational consequence.** A saturating client that shares a source IP with your orchestrator's probes — an ingress controller or NAT gateway that fronts both — can exhaust the shared bucket and get the readiness probe a `429`, which the orchestrator reads as a failed probe and answers with a restart. Mitigate by raising `app.rate.limit` / `app.rate.ippreguard.threshold` for that deployment, or by giving probe traffic a path to the pod that does not share a source IP with application traffic.
+
+These are *koanf* defaults. A `*config.Config` assembled in Go rather than loaded through configuration leaves both at zero, and the global limiter is a pass-through at `<= 0` — such a deployment has no ceiling at all (see [ADR-049](adr_049_debug_endpoints_fail_closed.md)).

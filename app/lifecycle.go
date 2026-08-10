@@ -555,9 +555,11 @@ const dbConnectionsKey = "connections"
 // SECURITY: DbManager.Stats()["connections"] holds one entry per live pooled connection, and
 // each entry's "key" is the resourcepool key — the tenant ID in a multi-tenant deployment,
 // the named-database key otherwise — alongside last_used and idle_duration. /ready carries no
-// authentication and no IP allowlist, and its only throttle is the 2000 rps/IP abuse
-// pre-guard, which is no barrier to enumeration — so polling it enumerated which tenants were
-// active and when each was last served.
+// authentication and no IP allowlist, and its throttles are two IP-keyed rate limits
+// (app.rate.limit, koanf default 100 rps; app.rate.ippreguard.threshold, koanf default
+// 2000 rps/IP) that a Go-assembled config leaves at zero entirely (ADR-049) — no barrier to
+// enumeration either way — so polling it enumerated which tenants were active and when each
+// was last served.
 //
 // The redaction belongs at this render site and not in DbManager.Stats() or the probe: the
 // access-controlled <debug.pathprefix>/health-debug renders that same details map and
@@ -579,8 +581,9 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		result := probe.Run(ctx)
 		componentStatus[result.Name] = result
 		if result.Err != nil && result.Critical {
-			// /ready is unauthenticated and excluded from rate limiting, so an ERROR line per
-			// abandoned request would let any caller mint alert noise; a caller's own
+			// /ready is unauthenticated and the limiters do not exempt it, but they key probes
+			// by client IP (probeSkipper skips tenant resolution, not the limiters), so one
+			// source can still mint an ERROR line per abandoned request; a caller's own
 			// cancellation is not a readiness incident. The caller's context must actually be
 			// done: a probe that reports context.Canceled while the request is still live was
 			// canceled from inside, which is a genuine incident and stays ERROR.
