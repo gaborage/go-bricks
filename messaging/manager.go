@@ -312,8 +312,10 @@ func (m *Manager) consumersReplayed(key string, declHash uint64) bool {
 // invoke when finished with it for the current unit of work (typically deferred). Publishers
 // are cached with LRU eviction and lazy initialization; the lease prevents a publisher that
 // is evicted while in use from being closed under an active caller (the #606 race). Once Close
-// has run, Publisher fails closed rather than resurrecting a publisher (F22). On error the
-// returned ReleaseFunc is nil — check err first.
+// has run, Publisher fails closed rather than resurrecting a publisher (F22) — except a
+// caller already mid-Publisher on a fresh client another borrower holds, who may still
+// receive that live handle after Close returns; it closes exactly once, at its final
+// release. On error the returned ReleaseFunc is nil — check err first.
 func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, ReleaseFunc, error) {
 	if m.pubPool == nil {
 		// Zero-value manager (never built via NewMessagingManager): unusable, fail closed

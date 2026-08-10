@@ -156,9 +156,11 @@ func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, err
 // Get retrieves or creates a cache instance for the given key, plus a ReleaseFunc the
 // caller must invoke when finished with it for the current unit of work (typically
 // deferred). Returns ErrManagerClosed if Close() has been called, or if the manager is a
-// zero value that was never built via NewCacheManager. The lease prevents a cache instance
-// evicted while in use from being closed under an active caller (the #606 race). On error
-// the returned ReleaseFunc is nil — check err first.
+// zero value that was never built via NewCacheManager — except a caller already mid-Get
+// on a fresh instance another borrower holds, who may still receive that live handle
+// after Close() returns; it closes exactly once, at its final release. The lease prevents
+// a cache instance evicted while in use from being closed under an active caller (the
+// #606 race). On error the returned ReleaseFunc is nil — check err first.
 func (m *CacheManager) Get(ctx context.Context, key string) (Cache, ReleaseFunc, error) {
 	if m.pool == nil {
 		// Zero-value manager (never built via NewCacheManager): unusable, fail closed rather

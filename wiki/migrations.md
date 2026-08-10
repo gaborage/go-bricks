@@ -2208,14 +2208,15 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C581.3] Manager `Close()` defers a still-borrowed handle to its final release instead of force-closing it · silent-behavior · when: always
 
-- detect: `git grep -nE '\.Close\(\)' -- database/manager.go cache/manager.go
-  messaging/manager.go` locates the three call sites this atom governs. In your own
-  application, grep direct callers of `DbManager.Close` / `CacheManager.Close` /
-  `messaging.Manager.Close` (most apps never call these — `deps.DB/Cache/Messaging`
-  callers are unaffected, since lifecycle `Close()` is framework-invoked at shutdown),
-  then hand-audit any shutdown test that asserts every tracked handle is closed
-  *immediately* after `Close()` returns, with no intervening release. No grep can find
-  that assertion shape in out-of-repo code — this is a manual audit, not a search-and-fix.
+- detect: `git grep -nE 'm\.[A-Za-z0-9]*[Pp]ool\.Close\(\)' -- database/manager.go
+  cache/manager.go messaging/manager.go` locates the three call sites this atom
+  governs. In your own application, grep direct callers of `DbManager.Close` /
+  `CacheManager.Close` / `messaging.Manager.Close` (most apps never call these —
+  `deps.DB/Cache/Messaging` callers are unaffected, since lifecycle `Close()` is
+  framework-invoked at shutdown), then hand-audit any shutdown test that asserts
+  every tracked handle is closed *immediately* after `Close()` returns, with no
+  intervening release. No grep can find that assertion shape in out-of-repo code
+  — this is a manual audit, not a search-and-fix.
 - scope: `internal/resourcepool.Pool.Close`'s drain loop now splits by live borrowers
   instead of closing every entry unconditionally (Plan 115); all three managers reach it
   through `Close()` unchanged — no manager **code** changed, only their `Close` doc

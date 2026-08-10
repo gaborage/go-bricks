@@ -85,8 +85,10 @@ func NewDbManager(resourceSource DBConfigProvider, log logger.Logger, opts DbMan
 // single-tenant, use key "". For multi-tenant, use the tenant ID. Connections are created
 // lazily and cached with LRU eviction; the lease prevents a connection that is evicted
 // while in use from being closed under an active caller (the #606 race). Once Close has
-// run, Get fails closed rather than resurrecting a connection (F22). On error the returned
-// ReleaseFunc is nil — check err first.
+// run, Get fails closed rather than resurrecting a connection (F22) — except a caller
+// already mid-Get on a fresh connection another borrower holds, who may still receive
+// that live handle after Close returns; it closes exactly once, at its final release.
+// On error the returned ReleaseFunc is nil — check err first.
 func (m *DbManager) Get(ctx context.Context, key string) (Interface, ReleaseFunc, error) {
 	if m.pool == nil {
 		// Zero-value manager (never built via NewDbManager): unusable, fail closed rather

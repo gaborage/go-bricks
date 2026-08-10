@@ -25,7 +25,10 @@ import (
 
 // ErrPoolClosed is returned by GetOrCreate after Close has been called.
 // Callers can errors.Is(err, ErrPoolClosed) to distinguish "pool is gone" from
-// a per-resource creation failure.
+// a per-resource creation failure. One deliberate exception: a caller already
+// mid-GetOrCreate on a fresh entry another borrower holds may still receive
+// that live handle after Close returns; it closes exactly once, at its final
+// release.
 var ErrPoolClosed = errors.New("resourcepool: pool closed")
 
 // Closer releases the underlying resource. It is always invoked OUTSIDE the
@@ -152,8 +155,11 @@ func New[V any](maxSize int, idleTTL time.Duration, closer Closer[V]) *Pool[V] {
 // invoke when finished with it for the current unit of work (typically
 // deferred). It creates the resource via create on first use, collapsing
 // concurrent creates for the same key through singleflight. Returns
-// ErrPoolClosed if Close has been called. On error the returned ReleaseFunc is
-// nil — check err first.
+// ErrPoolClosed if Close has been called — except a caller already
+// mid-GetOrCreate on a fresh entry another borrower holds, who may still
+// receive that live handle after Close returns; it closes exactly once, at
+// its final release. On error the returned ReleaseFunc is nil — check err
+// first.
 func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(context.Context) (V, error)) (V, ReleaseFunc, error) {
 	var zero V
 	for attempt := 0; attempt < maxAcquireAttempts; attempt++ {
@@ -590,10 +596,11 @@ func (p *Pool[V]) Close() error {
 		p.closed.Store(true)
 		p.StopCleanup() // joins the loop: no cleanup-path p.closer is in flight past this point
 
-		// Collect all entries under the lock, marking each closed so a concurrent lease release
-		// cannot also close it (avoids a double Closer call). StopCleanup joined the cleanup loop
-		// above, so every idle-cleanup close failure is already recorded — drain them into the same
-		// set Close joins.
+		// Collect all entries under the lock. An entry with no live borrower is marked closed
+		// here so a concurrent lease release cannot double-close it; a still-borrowed entry is
+		// left detached-but-open on purpose — its final releaseEntry closes it exactly once.
+		// StopCleanup joined the cleanup loop above, so every idle-cleanup close failure is
+		// already recorded — drain them into the same set Close joins.
 		p.mu.Lock()
 		closeErrs = append(closeErrs, p.cleanupErrs...)
 		p.cleanupErrs = nil
