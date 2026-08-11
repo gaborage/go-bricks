@@ -1098,8 +1098,10 @@ defaults are kept, so an in-VPC ALB deployment is correct with zero configuratio
 unparseable, host bits set, or a default route — aborts startup rather than silently changing who is
 trusted. `X-Real-IP` is deliberately not honored.
 
-**Key Benefits:** Both limiters throttle on an address the caller cannot choose, so the pre-guard's
-per-IP ceiling on `/ready` is a real ceiling and `client_ip` in access logs stops being caller-authored.
+**Key Benefits:** Both limiters throttle on an address that only a caller already inside loopback,
+link-local, RFC1918, or IPv6 unique-local space can choose — the trust boundary moved rather than
+vanished — so the pre-guard's per-IP ceiling on `/ready` holds against the public internet and
+`client_ip` in access logs stops being authored by an arbitrary caller.
 No access-control decision was ever affected — the debug allowlist and scheduler CIDR middleware already
 used the safe `server.ClientIP` path. **Watch:** rate-limit buckets and the client address logged at all
 five `RealIP()` sites change value; a proxy on a public address now needs a `server.trustedproxies`

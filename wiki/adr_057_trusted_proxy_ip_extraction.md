@@ -76,6 +76,18 @@ this framework documents ([ADR-042](adr_042_server_tls.md), [server_tls.md](serv
   `[<forged>, <attacker's public IP>]`. The attacker's own address is public → untrusted →
   returned. Spoofing defeated.
 
+**The residual: this moves the trust boundary, it does not remove it.** Because the walk
+skips every trusted hop, a caller whose *own* peer address is already inside a default-trusted
+range still picks its own key — send `X-Forwarded-For: 1.2.3.4` from such a peer and the walk
+skips the peer, reaches `1.2.3.4`, finds it untrusted, and returns it. Echo's defaults trust
+four ranges, via `ipChecker.trust`: loopback, link-local unicast, and — through Go's
+`net.IP.IsPrivate`, which covers **both** RFC 1918 and RFC 4193 — IPv4 private space and IPv6
+unique-local `fc00::/7`, the one a reader is least likely to expect. So the boundary moves from
+"anyone who can reach the service" to "anything already inside those four ranges", and the
+deployment must control them for the guarantee to mean anything. That is the trust boundary any
+XFF-walking solution has; `TrustPrivateNet(false)` would trade it away at the cost of breaking
+every in-VPC deployment (see Rejected alternatives).
+
 `server.trustedproxies` is **additive** trust, for a proxy that sits on a public address
 (CloudFront, a partner edge) rather than inside a private range. Empty is the correct value
 for a standard VPC deployment.
@@ -124,7 +136,8 @@ fleet collapses into one bucket.
 
 ## Consequences
 
-**Positive.** Both limiters now throttle on an address the caller cannot choose. The
+**Positive.** Both limiters now throttle on an address that only a caller already inside a
+default-trusted range can choose (see the residual under Decision). The
 pre-guard's per-IP ceiling on `/ready` becomes a true ceiling, so the documented rationale in
 `app/lifecycle.go` and [startup_defaults.md](startup_defaults.md#probe-endpoints-and-rate-limiting)
 is now accurate. The bucket-collision attack on probe traffic is closed. `client_ip` in access

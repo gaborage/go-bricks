@@ -2307,11 +2307,14 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   outside the repo reads `client_ip` from the access log. no-match = the
   service is reached directly with no proxy and nothing consumes the logged
   client address.
-- after: three consequences. (i) Both limiters now bucket on an address the
-  caller cannot choose, so a client that evaded the IP pre-guard by rotating
-  `X-Forwarded-For` is throttled, and traffic that previously spread across
-  forged keys now concentrates on real ones — expect `429` rates to move in
-  both directions. (ii) `client_ip` values change wherever a proxy is in
+- after: three consequences. (i) Both limiters now bucket on an address that
+  only a caller **already inside** loopback, link-local, RFC1918, or IPv6
+  unique-local (`fc00::/7`) space can still choose — the trust boundary moved
+  from "anyone who can reach the service" to those ranges, it did not
+  disappear — so a client on the public internet that evaded the IP pre-guard
+  by rotating `X-Forwarded-For` is throttled, and traffic that previously
+  spread across forged keys now concentrates on real ones — expect `429`
+  rates to move in both directions. (ii) `client_ip` values change wherever a proxy is in
   play; a chart grouped by it will show a different population. (iii) A
   malformed `server.trustedproxies` entry now **aborts startup** rather than
   being dropped with a warning: `net.ParseCIDR` must accept it (a bare
