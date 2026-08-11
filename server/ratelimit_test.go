@@ -175,43 +175,58 @@ func TestRateLimitErrorResponse(t *testing.T) {
 	assert.Contains(t, blockedResponse.Header().Get("Content-Type"), "application/json")
 }
 
+// TestRateLimitIPExtraction runs the limiter behind the extractor New() actually
+// installs, and asserts the address each case is keyed by — not only that some
+// requests were throttled. The allowed/blocked counts alone hold for any
+// extractor, so without the keyed-identity assertion this test would pass
+// unchanged if the engine reverted to trusting raw X-Forwarded-For.
 func TestRateLimitIPExtraction(t *testing.T) {
-	e := echo.New()
-	e.IPExtractor = echo.LegacyIPExtractor() // Restore v4-compatible header-based IP extraction
-	e.Use(rateLimitEcho(2))
+	srv := newIPExtractorServer()
+	srv.echo.Use(rateLimitEcho(2))
 
-	e.GET("/test", func(c *echo.Context) error {
+	var keyedIP string
+	srv.echo.GET("/test", func(c *echo.Context) error {
+		keyedIP = c.RealIP()
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
 	tests := []struct {
-		name     string
-		setupReq func(*http.Request)
+		name       string
+		setupReq   func(*http.Request)
+		expectedIP string
 	}{
 		{
-			name: "x_real_ip_header",
+			// X-Real-IP is not honored at all, so it cannot move the key off
+			// the peer that actually opened the connection.
+			name: "x_real_ip_header_does_not_move_key_off_peer",
 			setupReq: func(req *http.Request) {
 				req.Header.Set(HeaderXRealIP, "203.0.113.1")
 				req.RemoteAddr = "192.168.1.1:8080"
 			},
+			expectedIP: "192.168.1.1",
 		},
 		{
-			name: "x_forwarded_for_header",
+			// The peer is a private-range proxy, so the client address it
+			// relayed is trusted and becomes the key.
+			name: "x_forwarded_for_header_via_trusted_private_peer",
 			setupReq: func(req *http.Request) {
 				req.Header.Set(HeaderXForwardedFor, "203.0.113.2, 192.168.1.1")
 				req.RemoteAddr = "192.168.1.1:8080"
 			},
+			expectedIP: "203.0.113.2",
 		},
 		{
 			name: "remote_addr_fallback",
 			setupReq: func(req *http.Request) {
 				req.RemoteAddr = "203.0.113.3:8080"
 			},
+			expectedIP: "203.0.113.3",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			keyedIP = ""
 			allowedCount := 0
 			blockedCount := 0
 
@@ -221,7 +236,7 @@ func TestRateLimitIPExtraction(t *testing.T) {
 				tt.setupReq(req)
 				rec := httptest.NewRecorder()
 
-				e.ServeHTTP(rec, req)
+				srv.echo.ServeHTTP(rec, req)
 
 				switch rec.Code {
 				case http.StatusOK:
@@ -234,6 +249,10 @@ func TestRateLimitIPExtraction(t *testing.T) {
 			// Should have some allowed and some blocked requests
 			assert.Greater(t, allowedCount, 0, "Should have some allowed requests")
 			assert.Greater(t, blockedCount, 0, "Should have some blocked requests")
+
+			// The bucket identity itself — the assertion that fails if the
+			// engine stops deriving the client IP through trusted proxies.
+			assert.Equal(t, tt.expectedIP, keyedIP, "rate limit must be keyed by the trusted-proxy-derived client IP")
 		})
 	}
 }

@@ -343,6 +343,7 @@ func loadDefaults(k *koanf.Koanf) error {
 		"server.path.ready":         "/ready",
 		"server.gzip.minlength":     1024,
 		"server.bodylimit":          DefaultBodyLimitBytes,
+		fieldServerTrustedProxies:   []string{},
 
 		// Database defaults not provided for deterministic behavior
 		// Database will only be enabled when explicitly configured

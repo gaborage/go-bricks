@@ -98,6 +98,15 @@ type ServerConfig struct {
 
 	ForwardedClientCert ForwardedClientCertConfig `koanf:"forwardedclientcert" json:"forwardedclientcert" yaml:"forwardedclientcert" toml:"forwardedclientcert" mapstructure:"forwardedclientcert"`
 
+	// TrustedProxies holds CIDR ranges of reverse proxies whose
+	// X-Forwarded-For entries are believed when deriving the client IP for
+	// rate limiting and request logging. Loopback, link-local and RFC1918
+	// ranges are trusted by default, so a service behind an in-VPC load
+	// balancer needs no entry here; add one only when a proxy sits on a
+	// public address. An invalid entry fails startup rather than silently
+	// changing who is trusted.
+	TrustedProxies []string `koanf:"trustedproxies" json:"trustedproxies" yaml:"trustedproxies" toml:"trustedproxies" mapstructure:"trustedproxies"`
+
 	// BodyLimit is the maximum request body size in bytes. A value of 0 resolves
 	// to the framework default (10 MB) at wire-up; a negative value is rejected by
 	// config validation.

@@ -28,6 +28,8 @@ Echo v5.1.0 changed `RealIP()` to only return `request.RemoteAddr` by default �
 
 **Future hardening:** Replace `LegacyIPExtractor()` with trusted-proxy-aware extractors (`ExtractIPFromXFFHeader()` / `ExtractIPFromRealIPHeader()`) in a follow-up change.
 
+> **Shipped.** That follow-up landed as [ADR-057](adr_057_trusted_proxy_ip_extraction.md): the shim is gone, `echo.ExtractIPFromXFFHeader()` walks the chain right-to-left to the first untrusted hop, and the new `server.trustedproxies` CIDR list adds trust for a proxy on a public address. `X-Real-IP` is no longer honored at all.
+
 ## Breaking Changes for Downstream Users
 
 GoBricks' enhanced handler pattern (`server.GET/POST/etc.` with `HandlerFunc[T, R]`) abstracts most Echo internals. The migration impact on application code is limited to:
@@ -91,7 +93,7 @@ The community `otelecho` package does not support Echo v5. The first-party `echo
 
 - Breaking change for downstream users (import path + `HandlerContext.Echo` type)
 - `echo-opentelemetry` is v0.0.2 (young package), though it's maintained by the Echo team
-- `LegacyIPExtractor()` is a compatibility shim — should be replaced with proper trusted proxy configuration
+- `LegacyIPExtractor()` is a compatibility shim — should be replaced with proper trusted proxy configuration (resolved: [ADR-057](adr_057_trusted_proxy_ip_extraction.md) replaced it with `echo.ExtractIPFromXFFHeader()` plus `server.trustedproxies`)
 
 ### Neutral
 

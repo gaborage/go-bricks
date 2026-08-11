@@ -19,7 +19,7 @@ A plain `vX.Y.Z` is your current node. `=>` a local path (dev `replace`) means t
 **3 — Select the hop chain** on the Ladder: every edge strictly to the right of CURRENT, up to and including TARGET. Never apply an edge at/left of CURRENT.
 
 ```text
-v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0 ─E581─ v0.58.1
+v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0 ─E43─ v0.43.0 ─E44─ v0.44.0 ─E45─ v0.45.0 ─E49─ v0.49.0 ─E50─ v0.50.0 ─E51─ v0.51.0 ─E52─ v0.52.0 ─E55─ v0.55.0 ─E56─ v0.56.0 ─E57─ v0.57.0 ─E58─ v0.58.0 ─E581─ v0.58.1 ─E59─ v0.59.0
 ```
 
 > v0.46.0–v0.48.0 shipped additive-only changes (route template/path-param accessors, raw-route descriptors, module-contributed global middleware — adopt-only, no migration atoms), so E49 is the next hop after v0.45.0 and applies when crossing from any of v0.45.0–v0.48.0 to v0.49.0.
@@ -44,6 +44,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup; C57.9 fails `httpclient` construction) | 9 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8); and read every `WithJOSE` policy and direct `jose.Seal` call for an explicitly-set algorithm outside the allowlist — `KeyAlg: RSA1_5` or a non-AEAD `Enc` sealed successfully before and now fails `Build()` at startup, while a policy that named no algorithms at all takes the package defaults and starts working instead of failing every request (C57.9) |
 | E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) + behavior (C58.4, C58.5) | 5 | C58.1 C58.2 C58.3 | check every environment for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`, and — in multi-tenant mode with `cache.manager.maxsize` unset — a negative `multitenant.limits.tenants`, which becomes the pool size. Under `cache.enabled: false` such a value used to be inert and now aborts startup (C58.3); and if any dashboard, alert, or saved query reads OTLP-exported log records by a `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` **record** attribute your code sets as a log field, re-key it to the `app.`-prefixed name (C58.4); and audit the log backend for dashboards, alerts, or saved queries filtering log records by **any** record-level resource attribute — the framework's `service.*` / `telemetry.sdk.*` / `deployment.environment.name` plus every key your deployment injects via `OTEL_RESOURCE_ATTRIBUTES` (`k8s.pod.name`, …) — since all of them move to resource level only; no code grep finds these (C58.5) |
 | E581 | v0.58.0 → v0.58.1 | silent-behavior | 3 | none | if you cache any type carrying a time.Time, decide before the bump whether a compare-and-set on a sub-second timestamp may fail during the rolling deploy (C581.1); and if `observability.logs.samplingrate` is set to any value strictly between 0.0 and 1.0, expect the exported INFO/DEBUG log volume AND the membership of the sampled set to change: a rate at or above 0.00005 and below 0.01 exported nothing before the bump and starts exporting its configured fraction after it, a rate that is not a whole percent stops flooring (0.999 was 99%, now 99.9%), and every fractional rate redraws which traces land in the sample; a rate below 0.00005, plus 0.0 and 1.0, are unaffected (C581.2); and if you call `Close()` directly on a `DbManager`/`CacheManager`/`messaging.Manager`, know that a handle still borrowed by in-flight work now stays open until its final release instead of closing immediately (C581.3) |
+| E59 | v0.58.1 → v0.59.0 | silent-behavior | 1 | none | if your service sits behind a proxy on a **public** address (CloudFront, a partner edge), set `server.trustedproxies` to its CIDR range before the bump — otherwise that proxy is itself returned as the client and every caller behind it collapses into a single rate-limit bucket; and check the load balancer for any mode that writes a non-IP `X-Forwarded-For` entry — on AWS ALB that is `routing.http.xff_client_port.enabled` (appends `client_ip:port`) and, separately, `routing.http.xff_header_processing.mode = remove` — since either keys the entire fleet on the load balancer's own address after the bump and `server.trustedproxies` cannot fix it; the remedy is deployment-side (C59.1) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -2249,6 +2250,83 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `database/manager.go` (`Close`, `Stats`) · `cache/manager.go` (`Close`) ·
   `messaging/manager.go` (`Close`, `Stats`) ·
   `wiki/adr_032_lease_refcount_tenant_handles.md` (2026-08-09 amendment)
+
+## E59 · v0.58.1 → v0.59.0 — the client IP is derived through trusted proxies, not raw `X-Forwarded-For`
+
+- gist: `server.New` swaps `echo.LegacyIPExtractor()` — which returned the
+  left-most, unvalidated, caller-authored `X-Forwarded-For` entry — for
+  `echo.ExtractIPFromXFFHeader()`, which walks the chain right-to-left and
+  returns the first hop it does not trust. Echo's loopback / link-local /
+  RFC1918 trust defaults are kept, so a service behind an in-VPC load
+  balancer is correct with **no configuration**. A new `server.trustedproxies`
+  CIDR list adds trust for a proxy sitting on a public address. Nothing
+  fails to compile and most deployments simply get better-keyed limits, but
+  every value `RealIP()` produces can change: both rate-limit bucket keys
+  and the client address written to three log lines.
+- build-caught: none
+- preflight: **two** actions. (i) If a proxy in front of the service sits on
+  a **public** address, set `server.trustedproxies` to its CIDR range before
+  the bump — without an entry it is untrusted, so it is returned as the
+  client and every caller behind it collapses into one bucket. (ii) Check
+  the load balancer for any mode that writes a **non-IP** `X-Forwarded-For`
+  entry. On AWS ALB that is `routing.http.xff_client_port.enabled`, which
+  appends `client_ip:port`: `net.ParseIP` rejects it, and echo then abandons
+  the whole chain and returns the direct peer, so **every request** keys on
+  the load balancer's own address — one bucket for the entire fleet, and
+  `client_ip` reading as the LB in every access log. The same shape reaches
+  any proxy writing RFC 7239 `for=` syntax, an obfuscated identifier, or a
+  hostname. Separately, `routing.http.xff_header_processing.mode = remove`
+  leaves no XFF to walk at all, with the same fleet-wide result — the shim's
+  `X-Real-IP` fallback is deliberately gone. **`server.trustedproxies` does
+  not rescue either case**: the chain is abandoned before trust is
+  consulted. The only remedy is deployment-side (turn the attribute off, or
+  normalize the header).
+- exit: `go get github.com/gaborage/go-bricks@v0.59.0 && go mod tidy && go build ./... && go test ./...`
+
+### [C59.1] Rate-limit buckets and logged client addresses key on the trusted-proxy-derived IP · silent-behavior · when: match
+
+- detect: `git grep -nE 'client_ip|ClientAddr' -- '*.go'` inside your own
+  repo finds code that reads the framework's logged client address, and
+  `git grep -n 'trustedproxies' -- '*.yaml' '*.yml'` shows whether you
+  already configure one. **Neither reaches what actually matters.** The
+  three framework sites whose emitted values move are
+  `server/logger.go` (`ClientAddr` on every access-log record — the
+  `client_ip` field), `server/ip_preguard.go` (the pre-guard's `429`
+  rejection line) and `server/tenant_middleware.go` (the `400`
+  tenant-resolution-failure line). A dashboard, alert, saved query, or
+  synthetic check keyed on any of those three lives **outside this repo**
+  and no repo-local grep will find it — audit the log backend by hand.
+- scope: one line in `server/server.go` (the `IPExtractor` assignment) plus
+  the new `server.trustedproxies` key. The two rate limiters
+  (`server/ratelimit.go`, `server/ip_preguard.go`) are unchanged — they
+  still key on `ctx.RealIP()`; only what `RealIP()` resolves to moves.
+  Middleware order is unchanged. Access-control paths were never affected:
+  the debug allowlist and the scheduler's CIDR middleware already used
+  `server.ClientIP(r, trustedNets)`.
+- gate: match = you are behind any proxy or load balancer, **or** anything
+  outside the repo reads `client_ip` from the access log. no-match = the
+  service is reached directly with no proxy and nothing consumes the logged
+  client address.
+- after: three consequences. (i) Both limiters now bucket on an address the
+  caller cannot choose, so a client that evaded the IP pre-guard by rotating
+  `X-Forwarded-For` is throttled, and traffic that previously spread across
+  forged keys now concentrates on real ones — expect `429` rates to move in
+  both directions. (ii) `client_ip` values change wherever a proxy is in
+  play; a chart grouped by it will show a different population. (iii) A
+  malformed `server.trustedproxies` entry now **aborts startup** rather than
+  being dropped with a warning: `net.ParseCIDR` must accept it (a bare
+  `10.0.0.5` is rejected — write `10.0.0.5/32`), host bits must be clear
+  (`10.1.2.3/8` is rejected because it silently widens to `10.0.0.0/8`), and
+  a default route (`0.0.0.0/0`, `::/0`) is rejected because trusting
+  everyone restores the spoofable behavior this change removes.
+- verify: `go test ./server/... ./config/...`; in a consuming application,
+  send a request carrying `X-Forwarded-For: 1.2.3.4` from a peer that is not
+  in a trusted range and assert the access log's `client_ip` reads the real
+  peer, not `1.2.3.4`.
+- ref: `server/server.go` (`trustedProxyOptions`, the `IPExtractor`
+  assignment) · `config/validation.go` (`validateServerTrustedProxies`) ·
+  [ADR-057](adr_057_trusted_proxy_ip_extraction.md) ·
+  [ADR-015](adr_015_echo_v5_migration.md) (recorded this follow-up)
 
 ---
 

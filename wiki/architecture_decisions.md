@@ -1077,6 +1077,37 @@ strengthening [ADR-055](adr_055_reserved_log_attribute_namespaces.md). Fixes
 [#914](https://github.com/gaborage/go-bricks/issues/914). See
 [migrations.md](migrations.md) `[C58.5]`.
 
+### [ADR-057: The Client IP Is Derived Through Trusted Proxies, Not Raw `X-Forwarded-For`](adr_057_trusted_proxy_ip_extraction.md)
+
+**Date:** 2026-08-10 | **Status:** Accepted
+
+[ADR-015](adr_015_echo_v5_migration.md) installed `echo.LegacyIPExtractor()` to restore v4-compatible
+`RealIP()` across the echo v5 hop and recorded replacing it with trusted-proxy-aware extraction as a
+follow-up. The shim returns the left-most `X-Forwarded-For` entry with no validation, else `X-Real-IP`,
+else the peer — so the identifier both rate limiters throttle on was a string the caller writes. The IP
+pre-guard keys on nothing else and was defeated outright by rotating the header; the global limiter was
+defeated for exactly the untenanted traffic its IP fallback covers, including every `/health` and
+`/ready` request, whose per-IP ceiling the framework documents as the only throttle on an
+unauthenticated database round trip. Because the bucket key was attacker-chosen, so were collisions: a
+caller could consume the prober's budget and push `/ready` to `429`, dropping the instance from the load
+balancer's rotation. [ADR-043](adr_043_forwarded_client_cert.md) had already named this finding (F23) as
+the anti-pattern it refused to repeat. `New` now installs
+`echo.ExtractIPFromXFFHeader`, which walks the chain right-to-left and returns the first untrusted hop,
+plus the new `server.trustedproxies` CIDR list as additive trust. Echo's loopback/link-local/RFC1918
+defaults are kept, so an in-VPC ALB deployment is correct with zero configuration; a malformed entry —
+unparseable, host bits set, or a default route — aborts startup rather than silently changing who is
+trusted. `X-Real-IP` is deliberately not honored.
+
+**Key Benefits:** Both limiters throttle on an address the caller cannot choose, so the pre-guard's
+per-IP ceiling on `/ready` is a real ceiling and `client_ip` in access logs stops being caller-authored.
+No access-control decision was ever affected — the debug allowlist and scheduler CIDR middleware already
+used the safe `server.ClientIP` path. **Watch:** rate-limit buckets and the client address logged at all
+five `RealIP()` sites change value; a proxy on a public address now needs a `server.trustedproxies`
+entry; and a proxy that writes a non-IP XFF entry (AWS ALB's `routing.http.xff_client_port.enabled`)
+makes echo abandon the chain and key the whole fleet on the load balancer — a deployment-side fix that
+`server.trustedproxies` cannot rescue. The tenant-keyed half of F23 remains open. See
+[migrations.md](migrations.md) `[C59.1]`.
+
 ---
 
 ## ADR Lifecycle
@@ -1088,7 +1119,7 @@ strengthening [ADR-055](adr_055_reserved_log_attribute_namespaces.md). Fixes
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-056) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-057) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

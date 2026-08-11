@@ -161,6 +161,8 @@ const (
 	tlsVersion13             = "1.3"
 
 	fieldServerForwardedClientCertRequire = "server.forwardedclientcert.require"
+
+	fieldServerTrustedProxies = "server.trustedproxies"
 )
 
 func Validate(cfg *Config) error {
@@ -337,7 +339,56 @@ func validateServer(cfg *ServerConfig) error {
 		return err
 	}
 
+	if err := validateServerTrustedProxies(cfg.TrustedProxies); err != nil {
+		return err
+	}
+
 	return validateServerForwardedClientCert(&cfg.ForwardedClientCert)
+}
+
+// validateServerTrustedProxies rejects any entry that would change who the
+// client-IP extractor trusts in a way the operator did not write. A trusted
+// proxy list is a security control, so a malformed entry aborts startup
+// instead of being dropped with a warning: the difference between a trusted
+// range and a missing one is invisible in behavior until it is abused.
+func validateServerTrustedProxies(entries []string) error {
+	for _, entry := range entries {
+		ip, ipNet, err := net.ParseCIDR(entry)
+		if err != nil {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fieldServerTrustedProxies,
+				Message:  fmt.Sprintf("'%s' is not a valid CIDR range", entry),
+				Action:   "use CIDR notation with a prefix length (a single host is /32 for IPv4 or /128 for IPv6)",
+			}
+		}
+
+		// net.ParseCIDR accepts host bits and silently masks them away, which
+		// widens the trusted set past what the operator wrote (10.1.2.3/8
+		// becomes 10.0.0.0/8). Make them write the range they mean.
+		if !ip.Equal(ipNet.IP) {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fieldServerTrustedProxies,
+				Message:  fmt.Sprintf("'%s' has host bits set, which silently widens the trusted range", entry),
+				Action:   fmt.Sprintf("write the masked form '%s' if that is the range you mean", ipNet.String()),
+			}
+		}
+
+		// A default route in a trust list trusts every proxy, which walks the
+		// X-Forwarded-For chain to its left-most (caller-authored) entry —
+		// exactly the spoofable behavior this key exists to prevent.
+		if ones, _ := ipNet.Mask.Size(); ones == 0 {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fieldServerTrustedProxies,
+				Message:  fmt.Sprintf("'%s' trusts every address, which restores X-Forwarded-For spoofing", entry),
+				Action:   "list the specific proxy ranges to trust instead of a default route",
+			}
+		}
+	}
+
+	return nil
 }
 
 // validateServerForwardedClientCert rejects a Require-without-Enabled
