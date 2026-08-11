@@ -577,16 +577,9 @@ func TestValidateServerFailures(t *testing.T) {
 // trustedProxyServerConfig returns a ServerConfig that satisfies every other
 // validateServer check, so any error can only come from TrustedProxies.
 func trustedProxyServerConfig(entries ...string) ServerConfig {
-	return ServerConfig{
-		Port: 8080,
-		Timeout: TimeoutConfig{
-			Read:       15 * time.Second,
-			Write:      30 * time.Second,
-			Middleware: 5 * time.Second,
-			Shutdown:   10 * time.Second,
-		},
-		TrustedProxies: entries,
-	}
+	cfg := createValidServerConfig()
+	cfg.TrustedProxies = entries
+	return cfg
 }
 
 func TestTrustedProxiesRejectsInvalidCIDR(t *testing.T) {
@@ -618,7 +611,11 @@ func TestTrustedProxiesRejectsInvalidCIDR(t *testing.T) {
 }
 
 func TestTrustedProxiesAcceptsValidCIDRs(t *testing.T) {
-	cfg := trustedProxyServerConfig("10.0.0.0/8", "2001:db8::/32")
+	// The whitespace-padded entry pins the TrimSpace inside ParseTrustedProxyCIDR:
+	// validateCIDRList and server.ParseCIDRs both forgive incidental YAML spacing,
+	// and a disagreement here would let validation accept an entry the extractor
+	// then silently drops.
+	cfg := trustedProxyServerConfig("10.0.0.0/8", "2001:db8::/32", "  172.16.0.0/12  ")
 	assert.NoError(t, validateServer(&cfg))
 }
 

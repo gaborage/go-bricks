@@ -168,6 +168,20 @@ everyone on the ALB address — with the shim's `X-Real-IP` fallback now gone, d
 **Negative — startup now aborts on a malformed `server.trustedproxies` entry** that
 previously would not have existed as a key at all. This is intended (see Decision).
 
+**Negative — per-request cost rises whenever `X-Forwarded-For` is present.** The shim
+was allocation-free substring slicing (`strings.IndexAny` plus prefix/suffix trims); the
+new extractor does a `strings.Join` and `strings.Split` over the header values plus one
+`net.ParseIP` per hop it walks. Requests without the header are unaffected — `ip.go`
+returns the direct peer on `len(xffs) == 0` before any of that — but `echo.Context.RealIP()`
+is not memoized (it calls `IPExtractor(c.request)` on every invocation), so each of the
+framework's five call sites re-derives the address independently within one request.
+
+**Negative — the walk is O(hops until the first untrusted entry, counting from the right),
+which a caller can inflate.** In the zero-config ALB posture this ADR recommends the direct
+peer is trusted, so a caller reaching that proxy can pad `X-Forwarded-For` with entries
+formatted to look like trusted ranges and each one costs a `net.ParseIP` before the walk
+terminates. Nothing bounds that but the HTTP header size limit.
+
 **What this does not fix.** The tenant-keyed half of the finding is untouched: when a tenant
 resolves, the global limiter still keys on the tenant, so one caller can exhaust a whole
 tenant's budget. That is a separate design question about limiter keying and remains open.

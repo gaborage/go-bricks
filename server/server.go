@@ -81,17 +81,22 @@ func (s *Server) buildFullPath(route string) string {
 // defaults (dropping those would break every in-VPC deployment by keying
 // every request on the load balancer's own address).
 //
-// config.validateServerTrustedProxies has already rejected anything
-// net.ParseCIDR cannot parse, so a failure here means validation was bypassed.
-// Log it loudly and skip the entry: a dropped range narrows trust, which is
-// the safe direction, but it must never pass unnoticed.
+// Every entry is re-vetted through config.ParseTrustedProxyCIDR — the same rule set
+// startup validation applies — rather than parsed here, because config.Validate runs
+// only inside config.Load: app.NewWithConfig reaches this function with a
+// hand-assembled config that was never validated. That path is supported, so this
+// branch is reachable rather than a can't-happen. Without the re-vet, one
+// `0.0.0.0/0` or host-bits entry would trust every hop and hand the extractor back
+// the caller-authored left-most X-Forwarded-For value — the exact spoofing ADR-057
+// closes. Skipping is the safe response because echo's TrustOptions are purely
+// additive, so dropping one can only narrow trust, and the ERROR log makes it visible.
 func trustedProxyOptions(trustedProxies []string, log logger.Logger) []echo.TrustOption {
 	opts := make([]echo.TrustOption, 0, len(trustedProxies))
 	for _, entry := range trustedProxies {
-		_, ipNet, err := net.ParseCIDR(entry)
+		ipNet, err := config.ParseTrustedProxyCIDR(entry)
 		if err != nil {
 			log.Error().Err(err).Str("cidr", entry).
-				Msg("Ignoring unparseable server.trustedproxies entry; its proxy will be treated as an untrusted client")
+				Msg("Ignoring invalid server.trustedproxies entry; its proxy will be treated as an untrusted client")
 			continue
 		}
 		opts = append(opts, echo.TrustIPRange(ipNet))

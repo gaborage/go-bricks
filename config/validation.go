@@ -346,6 +346,48 @@ func validateServer(cfg *ServerConfig) error {
 	return validateServerForwardedClientCert(&cfg.ForwardedClientCert)
 }
 
+// Rejection reasons from ParseTrustedProxyCIDR. Unexported: only this package
+// needs to tell them apart (to pick an Action string); server just skips and logs.
+var (
+	errTrustedProxyInvalidCIDR  = errors.New("not a valid CIDR range")
+	errTrustedProxyHostBits     = errors.New("host bits set, which silently widens the trusted range")
+	errTrustedProxyDefaultRoute = errors.New("trusts every address, which restores X-Forwarded-For spoofing")
+)
+
+// ParseTrustedProxyCIDR parses one server.trustedproxies entry and rejects every
+// shape that would make the list trust more than the operator wrote:
+//
+//   - anything net.ParseCIDR cannot parse, including a bare address — an operator
+//     writing a single host gets an error instead of a silently dropped entry;
+//   - an entry whose host bits are set: net.ParseCIDR accepts 10.1.2.3/8 and
+//     silently masks it to 10.0.0.0/8, widening the range past what was written;
+//   - a default route, which trusts every hop, so echo's walk finds nothing
+//     untrusted and returns the caller-authored left-most X-Forwarded-For entry.
+//
+// Surrounding whitespace is trimmed, matching validateCIDRList and
+// server.ParseCIDRs, so a YAML sequence entry with incidental spacing is accepted.
+//
+// Both config validation and the server's extractor wiring call this, so the rule
+// set cannot drift between what startup accepts and what actually gets trusted.
+// On the host-bits rejection the returned net is the masked range the entry would
+// have silently become, so a caller can name it; every other failure returns nil.
+func ParseTrustedProxyCIDR(entry string) (*net.IPNet, error) {
+	ip, ipNet, err := net.ParseCIDR(strings.TrimSpace(entry))
+	if err != nil {
+		return nil, errTrustedProxyInvalidCIDR
+	}
+
+	if !ip.Equal(ipNet.IP) {
+		return ipNet, errTrustedProxyHostBits
+	}
+
+	if ones, _ := ipNet.Mask.Size(); ones == 0 {
+		return nil, errTrustedProxyDefaultRoute
+	}
+
+	return ipNet, nil
+}
+
 // validateServerTrustedProxies rejects any entry that would change who the
 // client-IP extractor trusts in a way the operator did not write. A trusted
 // proxy list is a security control, so a malformed entry aborts startup
@@ -353,32 +395,24 @@ func validateServer(cfg *ServerConfig) error {
 // range and a missing one is invisible in behavior until it is abused.
 func validateServerTrustedProxies(entries []string) error {
 	for _, entry := range entries {
-		ip, ipNet, err := net.ParseCIDR(entry)
-		if err != nil {
+		ipNet, err := ParseTrustedProxyCIDR(entry)
+
+		switch {
+		case errors.Is(err, errTrustedProxyInvalidCIDR):
 			return &ConfigError{
 				Category: errCategoryInvalid,
 				Field:    fieldServerTrustedProxies,
 				Message:  fmt.Sprintf("'%s' is not a valid CIDR range", entry),
 				Action:   "use CIDR notation with a prefix length (a single host is /32 for IPv4 or /128 for IPv6)",
 			}
-		}
-
-		// net.ParseCIDR accepts host bits and silently masks them away, which
-		// widens the trusted set past what the operator wrote (10.1.2.3/8
-		// becomes 10.0.0.0/8). Make them write the range they mean.
-		if !ip.Equal(ipNet.IP) {
+		case errors.Is(err, errTrustedProxyHostBits):
 			return &ConfigError{
 				Category: errCategoryInvalid,
 				Field:    fieldServerTrustedProxies,
 				Message:  fmt.Sprintf("'%s' has host bits set, which silently widens the trusted range", entry),
 				Action:   fmt.Sprintf("write the masked form '%s' if that is the range you mean", ipNet.String()),
 			}
-		}
-
-		// A default route in a trust list trusts every proxy, which walks the
-		// X-Forwarded-For chain to its left-most (caller-authored) entry —
-		// exactly the spoofable behavior this key exists to prevent.
-		if ones, _ := ipNet.Mask.Size(); ones == 0 {
+		case errors.Is(err, errTrustedProxyDefaultRoute):
 			return &ConfigError{
 				Category: errCategoryInvalid,
 				Field:    fieldServerTrustedProxies,

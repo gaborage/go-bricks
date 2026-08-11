@@ -778,12 +778,10 @@ func newIPExtractorServer(trustedProxies ...string) *Server {
 // extractClientIP runs the installed extractor against a synthetic request.
 // remoteAddr is always set explicitly — httptest defaults it to 192.0.2.1:1234,
 // which is a public address and would silently change what "the peer" means.
-func extractClientIP(srv *Server, remoteAddr string, headers map[string]string) string {
+func extractClientIP(srv *Server, remoteAddr, headerName, headerValue string) string {
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	req.RemoteAddr = remoteAddr
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
+	req.Header.Set(headerName, headerValue)
 	return srv.echo.IPExtractor(req)
 }
 
@@ -793,9 +791,7 @@ func extractClientIP(srv *Server, remoteAddr string, headers map[string]string) 
 func TestServerIPExtractorIgnoresForgedXFFFromUntrustedPeer(t *testing.T) {
 	srv := newIPExtractorServer()
 
-	got := extractClientIP(srv, "203.0.113.5:41234", map[string]string{
-		HeaderXForwardedFor: "1.2.3.4",
-	})
+	got := extractClientIP(srv, "203.0.113.5:41234", HeaderXForwardedFor, "1.2.3.4")
 
 	assert.Equal(t, "203.0.113.5", got, "a forged XFF entry from an untrusted peer must not become the key")
 }
@@ -807,9 +803,7 @@ func TestServerIPExtractorIgnoresForgedXFFFromUntrustedPeer(t *testing.T) {
 func TestServerIPExtractorHonorsXFFFromPrivatePeer(t *testing.T) {
 	srv := newIPExtractorServer()
 
-	got := extractClientIP(srv, "10.0.0.5:41234", map[string]string{
-		HeaderXForwardedFor: "203.0.113.7",
-	})
+	got := extractClientIP(srv, "10.0.0.5:41234", HeaderXForwardedFor, "203.0.113.7")
 
 	assert.Equal(t, "203.0.113.7", got, "an XFF entry relayed by a private-range proxy must be honored")
 }
@@ -820,9 +814,7 @@ func TestServerIPExtractorHonorsXFFFromPrivatePeer(t *testing.T) {
 func TestServerIPExtractorWalksPastTrustedHops(t *testing.T) {
 	srv := newIPExtractorServer("203.0.113.0/24")
 
-	got := extractClientIP(srv, "10.0.0.5:41234", map[string]string{
-		HeaderXForwardedFor: "198.51.100.9, 203.0.113.7",
-	})
+	got := extractClientIP(srv, "10.0.0.5:41234", HeaderXForwardedFor, "198.51.100.9, 203.0.113.7")
 
 	assert.Equal(t, "198.51.100.9", got, "a configured trusted range must be walked past")
 }
@@ -833,9 +825,7 @@ func TestServerIPExtractorWalksPastTrustedHops(t *testing.T) {
 func TestServerIPExtractorIgnoresXRealIP(t *testing.T) {
 	srv := newIPExtractorServer()
 
-	got := extractClientIP(srv, "203.0.113.5:41234", map[string]string{
-		HeaderXRealIP: "1.2.3.4",
-	})
+	got := extractClientIP(srv, "203.0.113.5:41234", HeaderXRealIP, "1.2.3.4")
 
 	assert.Equal(t, "203.0.113.5", got, "X-Real-IP must not move the key off the peer")
 }
@@ -850,9 +840,36 @@ func TestServerIPExtractorIgnoresXRealIP(t *testing.T) {
 func TestServerIPExtractorFailsClosedOnUnparseableXFFEntry(t *testing.T) {
 	srv := newIPExtractorServer()
 
-	got := extractClientIP(srv, "10.0.0.5:41234", map[string]string{
-		HeaderXForwardedFor: "203.0.113.7:41234",
-	})
+	got := extractClientIP(srv, "10.0.0.5:41234", HeaderXForwardedFor, "203.0.113.7:41234")
 
 	assert.Equal(t, "10.0.0.5", got, "an unparseable XFF entry must fail closed to the direct peer")
+}
+
+// TestServerIPExtractorRejectsTrustWideningFromUnvalidatedConfig covers the
+// app.NewWithConfig path, which reaches server.New with a hand-assembled
+// *config.Config that never ran config.Validate (Validate is called only inside
+// config.Load). Both entries below parse cleanly, so a parse-only check would let
+// them through, and each trusts strictly more than the operator wrote: the default
+// route trusts every hop, and the host-bits entry masks to 203.0.113.0/24, which
+// covers the peer. Either one makes echo's walk find nothing untrusted and return
+// the caller-authored left-most X-Forwarded-For value — the spoofing ADR-057 closes.
+func TestServerIPExtractorRejectsTrustWideningFromUnvalidatedConfig(t *testing.T) {
+	tests := []struct {
+		name         string
+		trustedProxy string
+	}{
+		{name: "default_route_trusts_every_hop", trustedProxy: "0.0.0.0/0"},
+		{name: "host_bits_set_widens_to_cover_peer", trustedProxy: "203.0.113.7/24"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newIPExtractorServer(tt.trustedProxy)
+
+			got := extractClientIP(srv, "203.0.113.5:41234", HeaderXForwardedFor, "1.2.3.4")
+
+			assert.NotEqual(t, "1.2.3.4", got, "a trust-widening entry must not let a forged XFF value through")
+			assert.Equal(t, "203.0.113.5", got, "the entry must be dropped, leaving the peer as the client IP")
+		})
+	}
 }
