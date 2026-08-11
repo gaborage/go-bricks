@@ -574,6 +574,51 @@ func TestValidateServerFailures(t *testing.T) {
 	}
 }
 
+// trustedProxyServerConfig returns a ServerConfig that satisfies every other
+// validateServer check, so any error can only come from TrustedProxies.
+func trustedProxyServerConfig(entries ...string) ServerConfig {
+	cfg := createValidServerConfig()
+	cfg.TrustedProxies = entries
+	return cfg
+}
+
+func TestTrustedProxiesRejectsInvalidCIDR(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry string
+	}{
+		{name: "not_a_cidr", entry: "not-a-cidr"},
+		// net.ParseCIDR rejects a bare address, so an operator writing a single
+		// host gets an error rather than a silently dropped entry.
+		{name: "bare_ip_without_prefix", entry: "10.0.0.5"},
+		// net.ParseCIDR accepts these and masks them to 10.0.0.0/8, widening
+		// the trusted set past what was written.
+		{name: "host_bits_set", entry: "10.1.2.3/8"},
+		// A default route trusts every proxy, which walks the XFF chain to its
+		// caller-authored left-most entry.
+		{name: "ipv4_default_route", entry: "0.0.0.0/0"},
+		{name: "ipv6_default_route", entry: "::/0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := trustedProxyServerConfig(tt.entry)
+			err := validateServer(&cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "server.trustedproxies")
+		})
+	}
+}
+
+func TestTrustedProxiesAcceptsValidCIDRs(t *testing.T) {
+	// The whitespace-padded entry pins the TrimSpace inside ParseTrustedProxyCIDR:
+	// validateCIDRList and server.ParseCIDRs both forgive incidental YAML spacing,
+	// and a disagreement here would let validation accept an entry the extractor
+	// then silently drops.
+	cfg := trustedProxyServerConfig("10.0.0.0/8", "2001:db8::/32", "  172.16.0.0/12  ")
+	assert.NoError(t, validateServer(&cfg))
+}
+
 func TestValidateDatabaseSuccess(t *testing.T) {
 	tests := []struct {
 		name string

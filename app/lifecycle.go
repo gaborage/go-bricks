@@ -583,7 +583,10 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		if result.Err != nil && result.Critical {
 			// /ready is unauthenticated and the limiters do not exempt it, but they key probes
 			// by client IP (probeSkipper skips tenant resolution, not the limiters), so one
-			// source can still abandon many requests in a row. An abandoned request — the
+			// source can still abandon many requests in a row. That IP is derived through the
+			// trusted-proxy chain (ADR-057), so only a caller already inside a default-trusted
+			// range (loopback, link-local, RFC1918, IPv6 ULA) can still choose its own key, and
+			// the budget is per-source either way. An abandoned request — the
 			// caller's own context canceled, and the probe reports that same context.Canceled —
 			// is not a readiness incident, so it logs WARN, not ERROR. The caller's context must
 			// actually be done: a probe that reports context.Canceled while the request is still

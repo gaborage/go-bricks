@@ -76,6 +76,34 @@ func (s *Server) buildFullPath(route string) string {
 	return s.basePath + route
 }
 
+// trustedProxyOptions turns the configured server.trustedproxies CIDR ranges
+// into echo TrustOptions, preserving echo's loopback/link-local/private
+// defaults (dropping those would break every in-VPC deployment by keying
+// every request on the load balancer's own address).
+//
+// Every entry is re-vetted through config.ParseTrustedProxyCIDR — the same rule set
+// startup validation applies — rather than parsed here, because config.Validate runs
+// only inside config.Load: app.NewWithConfig reaches this function with a
+// hand-assembled config that was never validated. That path is supported, so this
+// branch is reachable rather than a can't-happen. Without the re-vet, one
+// `0.0.0.0/0` or host-bits entry would trust every hop and hand the extractor back
+// the caller-authored left-most X-Forwarded-For value — the exact spoofing ADR-057
+// closes. Skipping is the safe response because echo's TrustOptions are purely
+// additive, so dropping one can only narrow trust, and the ERROR log makes it visible.
+func trustedProxyOptions(trustedProxies []string, log logger.Logger) []echo.TrustOption {
+	opts := make([]echo.TrustOption, 0, len(trustedProxies))
+	for _, entry := range trustedProxies {
+		ipNet, err := config.ParseTrustedProxyCIDR(entry)
+		if err != nil {
+			log.Error().Err(err).Str("cidr", entry).
+				Msg("Ignoring invalid server.trustedproxies entry; its proxy will be treated as an untrusted client")
+			continue
+		}
+		opts = append(opts, echo.TrustIPRange(ipNet))
+	}
+	return opts
+}
+
 // New creates a new HTTP server instance with the given configuration and logger.
 // It initializes Echo with middlewares, error handling, and health check endpoints.
 func New(cfg *config.Config, log logger.Logger) *Server {
@@ -99,10 +127,16 @@ func New(cfg *config.Config, log logger.Logger) *Server {
 		customErrorHandler(c, err, cfg, log)
 	}
 
-	// LegacyIPExtractor restores v4-compatible IP extraction behavior for RealIP() calls.
-	// Without this, v5.1.0+ only returns request.RemoteAddr.
-	// Trusted-proxy-aware extractors are a follow-up item documented in ADR-015.
-	e.IPExtractor = echo.LegacyIPExtractor()
+	// Derive RealIP() by walking X-Forwarded-For right-to-left and returning the
+	// first untrusted hop, so the address that keys rate limits and appears in
+	// access logs is not one the caller writes. Echo trusts loopback, link-local
+	// and RFC1918 ranges by default, so a service behind an in-VPC load balancer
+	// needs no configuration; server.trustedproxies adds ranges for a proxy that
+	// sits on a public address. X-Real-IP is deliberately not honored — it is
+	// caller-authored whenever the proxy does not overwrite it, and honoring it
+	// would reopen the hole for deployments whose proxy strips XFF.
+	// This discharges the trusted-proxy follow-up recorded in ADR-015 (see ADR-057).
+	e.IPExtractor = echo.ExtractIPFromXFFHeader(trustedProxyOptions(cfg.Server.TrustedProxies, log)...)
 	e.Validator = NewValidator()
 
 	// Initialize server with path configuration

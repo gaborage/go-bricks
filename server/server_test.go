@@ -763,3 +763,113 @@ func TestAppendErrorDetailRedactsByDebugMode(t *testing.T) {
 		assert.NotContains(t, e.fields, "error_type")
 	})
 }
+
+// ==================== Client IP Extraction Tests ====================
+
+// newIPExtractorServer builds a server carrying the production IP extractor,
+// so these tests exercise what New() actually installs rather than a
+// hand-assembled echo engine.
+func newIPExtractorServer(trustedProxies ...string) *Server {
+	cfg := newTestConfig("", "", "")
+	cfg.Server.TrustedProxies = trustedProxies
+	return New(cfg, &testLogger{})
+}
+
+// extractClientIP runs the installed extractor against a synthetic request.
+// remoteAddr is always set explicitly — httptest defaults it to 192.0.2.1:1234,
+// which is a public address and would silently change what "the peer" means.
+func extractClientIP(srv *Server, remoteAddr, headerName, headerValue string) string {
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+	req.RemoteAddr = remoteAddr
+	req.Header.Set(headerName, headerValue)
+	return srv.echo.IPExtractor(req)
+}
+
+// TestServerIPExtractorIgnoresForgedXFFFromUntrustedPeer pins the finding this
+// change exists to close: a caller talking straight to the service cannot move
+// its rate-limit bucket by writing X-Forwarded-For.
+func TestServerIPExtractorIgnoresForgedXFFFromUntrustedPeer(t *testing.T) {
+	srv := newIPExtractorServer()
+
+	got := extractClientIP(srv, "203.0.113.5:41234", HeaderXForwardedFor, "1.2.3.4")
+
+	assert.Equal(t, "203.0.113.5", got, "a forged XFF entry from an untrusted peer must not become the key")
+}
+
+// TestServerIPExtractorHonorsXFFFromPrivatePeer is the zero-config load-balancer
+// case: an in-VPC proxy is trusted by default, so the real client address behind
+// it still wins. Without this the fix could degrade to "ignore XFF entirely",
+// which would collapse a whole fleet into one bucket.
+func TestServerIPExtractorHonorsXFFFromPrivatePeer(t *testing.T) {
+	srv := newIPExtractorServer()
+
+	got := extractClientIP(srv, "10.0.0.5:41234", HeaderXForwardedFor, "203.0.113.7")
+
+	assert.Equal(t, "203.0.113.7", got, "an XFF entry relayed by a private-range proxy must be honored")
+}
+
+// TestServerIPExtractorWalksPastTrustedHops proves server.trustedproxies is
+// actually threaded into the extractor: the extra public range is skipped and
+// the walk continues to the first hop nobody vouched for.
+func TestServerIPExtractorWalksPastTrustedHops(t *testing.T) {
+	srv := newIPExtractorServer("203.0.113.0/24")
+
+	got := extractClientIP(srv, "10.0.0.5:41234", HeaderXForwardedFor, "198.51.100.9, 203.0.113.7")
+
+	assert.Equal(t, "198.51.100.9", got, "a configured trusted range must be walked past")
+}
+
+// TestServerIPExtractorIgnoresXRealIP pins the deliberate omission: X-Real-IP is
+// caller-authored whenever the proxy does not overwrite it, so honoring it would
+// reopen the hole for deployments whose load balancer strips X-Forwarded-For.
+func TestServerIPExtractorIgnoresXRealIP(t *testing.T) {
+	srv := newIPExtractorServer()
+
+	got := extractClientIP(srv, "203.0.113.5:41234", HeaderXRealIP, "1.2.3.4")
+
+	assert.Equal(t, "203.0.113.5", got, "X-Real-IP must not move the key off the peer")
+}
+
+// TestServerIPExtractorFailsClosedOnUnparseableXFFEntry is a contract test
+// against echo, not against this repo. Echo abandons the whole chain and returns
+// the direct peer when any XFF entry fails to parse — the shape AWS ALB produces
+// under routing.http.xff_client_port.enabled (client_ip:port). ADR-057 documents
+// that behavior as a consequence operators must preflight, so an echo upgrade
+// that swapped the `return directIP` for a `continue` would silently falsify the
+// ADR and widen the attack surface. This test fails first instead.
+func TestServerIPExtractorFailsClosedOnUnparseableXFFEntry(t *testing.T) {
+	srv := newIPExtractorServer()
+
+	got := extractClientIP(srv, "10.0.0.5:41234", HeaderXForwardedFor, "203.0.113.7:41234")
+
+	assert.Equal(t, "10.0.0.5", got, "an unparseable XFF entry must fail closed to the direct peer")
+}
+
+// TestServerIPExtractorRejectsTrustWideningFromUnvalidatedConfig covers the
+// app.NewWithConfig path, which reaches server.New with a hand-assembled
+// *config.Config that never ran config.Validate (Validate is called only inside
+// config.Load). Both entries below parse cleanly, so a parse-only check would let
+// them through, and each trusts strictly more than the operator wrote: the default
+// route trusts every hop, and the host-bits entry masks to 203.0.113.0/24, which
+// covers the peer. Either one makes echo's walk find nothing untrusted and return
+// the caller-authored left-most X-Forwarded-For value — the spoofing ADR-057 closes.
+func TestServerIPExtractorRejectsTrustWideningFromUnvalidatedConfig(t *testing.T) {
+	tests := []struct {
+		name         string
+		trustedProxy string
+	}{
+		{name: "default_route_trusts_every_hop", trustedProxy: "0.0.0.0/0"},
+		{name: "host_bits_set_widens_to_cover_peer", trustedProxy: "203.0.113.7/24"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newIPExtractorServer(tt.trustedProxy)
+
+			got := extractClientIP(srv, "203.0.113.5:41234", HeaderXForwardedFor, "1.2.3.4")
+
+			assert.NotEqual(t, "1.2.3.4", got, "a trust-widening entry must not let a forged XFF value through")
+			assert.Equal(t, "203.0.113.5", got, "the entry must be dropped, leaving the peer as the client IP")
+		})
+	}
+}

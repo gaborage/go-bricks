@@ -101,8 +101,8 @@ func (d *DebugHandlers) RegisterDebugEndpoints(r server.RouteRegistrar) error {
 
 	// Parse trusted proxies once and surface any invalid entries here so the warning is
 	// logged a single time at registration rather than on every middleware construction.
-	// The parsed nets are threaded into both security middlewares so client-IP derivation
-	// is trusted-proxy aware (server.ClientIP) rather than echo's spoofable c.RealIP().
+	// The parsed nets are threaded into both security middlewares so each derives the client
+	// IP from debug.trustedproxies rather than the engine-wide extractor's own trust set.
 	trustedNets, invalid := server.ParseCIDRs(d.config.TrustedProxies)
 	if len(invalid) > 0 {
 		d.logger.Warn().
@@ -253,10 +253,12 @@ func (d *DebugHandlers) ipWhitelistMiddleware(trustedNets []*net.IPNet) server.M
 }
 
 // createIPCheckHandler creates the middleware handler with IP validation.
-// The client IP is derived with trusted-proxy verification (server.ClientIP) rather than
-// echo's spoofable c.RealIP(): X-Forwarded-For / X-Real-IP are honored only when the
-// immediate peer is a configured trusted proxy, so the allowlist cannot be bypassed by an
-// unauthenticated client sending a forged X-Forwarded-For header.
+// This middleware sees a raw *http.Request (c.Request()), outside echo's IPExtractor seam,
+// so server.ClientIP is the derivation available here — and the right one: the allowlist is
+// an access-control decision, so it keys on debug.trustedproxies, which defaults to empty
+// (config/config.go) and therefore trusts no proxy and uses the immediate peer, whereas the
+// engine's extractor trusts loopback, link-local and RFC1918 peers by default — correct for
+// throttling, too permissive for an allowlist an operator must opt into.
 func (d *DebugHandlers) createIPCheckHandler(whitelist *IPWhitelist, trustedNets []*net.IPNet) server.MiddlewareFunc {
 	return func(c server.HandlerContext, next func() error) error {
 		clientIP := server.ClientIP(c.Request(), trustedNets)
@@ -286,8 +288,8 @@ func (d *DebugHandlers) handleAccessDenied(clientIP, reason string) error {
 }
 
 // authMiddleware provides bearer token authentication. The trusted-proxy nets are threaded
-// in so the invalid-token denial log records the trusted-proxy-aware client IP
-// (server.ClientIP) instead of echo's spoofable c.RealIP().
+// in so the invalid-token denial log records the same client IP the allowlist judges —
+// server.ClientIP over the raw request, keyed on debug.trustedproxies.
 func (d *DebugHandlers) authMiddleware(trustedNets []*net.IPNet) server.MiddlewareFunc {
 	return func(c server.HandlerContext, next func() error) error {
 		// SECURITY: defense-in-depth against a caller that registers this unconditionally.
