@@ -2316,8 +2316,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   spread across forged keys now concentrates on real ones — expect `429`
   rates to move in both directions. (ii) `client_ip` values change wherever a proxy is in
   play; a chart grouped by it will show a different population. (iii) A
-  malformed `server.trustedproxies` entry now **aborts startup** rather than
-  being dropped with a warning: `net.ParseCIDR` must accept it (a bare
+  malformed `server.trustedproxies` entry now **aborts startup** — except on
+  the `config.Validate`-free `app.NewWithConfig` path, where it is skipped
+  with an ERROR log instead — rather than being dropped with a warning:
+  `net.ParseCIDR` must accept it (a bare
   `10.0.0.5` is rejected — write `10.0.0.5/32`), host bits must be clear
   (`10.1.2.3/8` is rejected because it silently widens to `10.0.0.0/8`), and
   a default route (`0.0.0.0/0`, `::/0`) is rejected because trusting

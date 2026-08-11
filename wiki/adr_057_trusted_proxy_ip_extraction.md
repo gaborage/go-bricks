@@ -97,7 +97,10 @@ security control; a typo silently changes who is trusted, and the framework's re
 direction on security config is to fail closed
 ([ADR-049](adr_049_debug_endpoints_fail_closed.md) debug endpoints,
 [ADR-054](adr_054_cache_construction_fails_startup.md) cache construction, #892 database
-wiring). Three rejections, each verified against `net.ParseCIDR`:
+wiring). The one exception is `app.NewWithConfig`, which reaches `server.New` with a
+hand-assembled config that never ran `config.Validate`: there `trustedProxyOptions` re-vets
+the entry, logs it at ERROR and skips it — narrowing trust rather than aborting — because
+`server.New` has no error return. Three rejections, each verified against `net.ParseCIDR`:
 
 | Entry | Why it is rejected |
 | --- | --- |
@@ -179,7 +182,9 @@ An ALB in `xff_header_processing.mode = remove` has no XFF to walk at all and li
 everyone on the ALB address — with the shim's `X-Real-IP` fallback now gone, deliberately.
 
 **Negative — startup now aborts on a malformed `server.trustedproxies` entry** that
-previously would not have existed as a key at all. This is intended (see Decision).
+previously would not have existed as a key at all — except on the `config.Validate`-free
+`app.NewWithConfig` path, where the entry is skipped with an ERROR log instead. This is
+intended (see Decision).
 
 **Negative — per-request cost rises whenever `X-Forwarded-For` is present.** The shim
 was allocation-free substring slicing (`strings.IndexAny` plus prefix/suffix trims); the
