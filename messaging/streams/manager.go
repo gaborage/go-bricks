@@ -80,7 +80,16 @@ type Manager struct {
 
 // NewManager creates a Manager. It performs no I/O: the environment is dialed by
 // Start, so a service that declares no streams never opens a connection.
+//
+// Panics on a nil Logger. Every consumer lifecycle, handler-failure and shutdown
+// path dereferences it unguarded, so a wiring error would otherwise surface as a
+// nil dereference on the first log line — mid-consumption, in production, from a
+// goroutine the client owns and nothing recovers. Same fail-fast as
+// httpclient.NewBuilder, and it keeps this constructor's single return value.
 func NewManager(opts ManagerOptions) *Manager {
+	if opts.Logger == nil {
+		panic("streams: NewManager requires a non-nil Logger (pass deps.Logger)")
+	}
 	if opts.OffsetStoreCount <= 0 {
 		opts.OffsetStoreCount = defaultOffsetStoreCount
 	}
@@ -97,6 +106,10 @@ func NewManager(opts ManagerOptions) *Manager {
 // nothing to dispose: the connection is closed before the error returns, so a
 // caller that never calls Close does not leak it, and a retried Start cannot
 // orphan the previous environment.
+//
+// ctx contributes its VALUES to every handler invocation, never its cancellation:
+// consumers outlive the startup call that created them, and StopConsumers is what
+// ends them. See consumeContext.
 func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	if decls == nil || decls.IsEmpty() {
 		return nil
@@ -123,7 +136,7 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 		Int("consumers", len(decls.consumers)).
 		Msg("Connected to RabbitMQ stream endpoint")
 
-	consumeCtx, cancel := context.WithCancel(ctx)
+	consumeCtx, cancel := consumeContext(ctx)
 	m.cancel = cancel
 
 	if err := m.declareStreams(env, decls); err != nil {
@@ -140,6 +153,16 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 
 	m.started = true
 	return nil
+}
+
+// consumeContext derives the context the handlers run under: the caller's values
+// (trace, tenant) are inherited, its cancellation is severed, and the returned
+// cancel func — owned by StopConsumers — becomes the only way to stop consumption.
+// Without the detach, a caller whose startup context is canceled after Start
+// returns would silently stop consuming; context.Background() would instead drop
+// the values the handlers' spans and logs are attributed by.
+func consumeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(context.WithoutCancel(ctx))
 }
 
 // environmentOptions renders the client environment configuration.

@@ -175,17 +175,30 @@ func attach(m *Manager, handle consumerHandle, tracker *offsetTracker) {
 }
 
 func TestNewManagerAppliesOffsetStoreDefaults(t *testing.T) {
-	m := NewManager(ManagerOptions{URI: "rabbitmq-stream://localhost:5552/"})
+	m := NewManager(ManagerOptions{URI: "rabbitmq-stream://localhost:5552/", Logger: logger.New("error", false)})
 
 	assert.Equal(t, defaultOffsetStoreCount, m.opts.OffsetStoreCount)
 	assert.Equal(t, defaultOffsetStoreInterval, m.opts.OffsetStoreInterval)
 }
 
 func TestNewManagerKeepsExplicitOffsetStoreTuning(t *testing.T) {
-	m := NewManager(ManagerOptions{OffsetStoreCount: 7, OffsetStoreInterval: 250 * time.Millisecond})
+	m := NewManager(ManagerOptions{
+		OffsetStoreCount:    7,
+		OffsetStoreInterval: 250 * time.Millisecond,
+		Logger:              logger.New("error", false),
+	})
 
 	assert.Equal(t, 7, m.opts.OffsetStoreCount)
 	assert.Equal(t, 250*time.Millisecond, m.opts.OffsetStoreInterval)
+}
+
+// TestNewManagerRequiresLogger pins the constructor guard: ManagerOptions.Logger
+// is documented as required and every log call dereferences it unguarded, so an
+// omitted logger must fail here rather than on the first consumer event.
+func TestNewManagerRequiresLogger(t *testing.T) {
+	assert.PanicsWithValue(t,
+		"streams: NewManager requires a non-nil Logger (pass deps.Logger)",
+		func() { NewManager(ManagerOptions{URI: unreachableTestURI}) })
 }
 
 func TestManagerStartWithoutDeclarationsDoesNotDial(t *testing.T) {
@@ -283,6 +296,42 @@ func TestManagerStopConsumersCancelsConsumeContext(t *testing.T) {
 
 	require.Error(t, ctx.Err())
 	assert.Nil(t, m.cancel)
+}
+
+// TestConsumeContextInheritsValuesWithoutCancellation is the first half of the
+// consume-context contract: the caller's context contributes its values and none
+// of its cancellation, so a startup context that is canceled once Start returned
+// cannot silently stop consumption.
+func TestConsumeContextInheritsValuesWithoutCancellation(t *testing.T) {
+	type tenantKey struct{}
+	parent, cancelParent := context.WithCancel(context.WithValue(context.Background(), tenantKey{}, "tenant-7"))
+	consumeCtx, cancel := consumeContext(parent)
+	defer cancel()
+
+	cancelParent()
+
+	require.NoError(t, consumeCtx.Err(), "the caller's cancellation must not reach the consumers")
+	assert.Equal(t, "tenant-7", consumeCtx.Value(tenantKey{}),
+		"the caller's values must reach the handlers' logs and spans")
+}
+
+// TestManagerStopConsumersStopsDetachedConsumeContext is the second half:
+// severing the caller's cancellation must not cost StopConsumers its own.
+func TestManagerStopConsumersStopsDetachedConsumeContext(t *testing.T) {
+	m := testManager(t)
+	parent, cancelParent := context.WithCancel(context.Background())
+	consumeCtx, cancel := consumeContext(parent)
+	m.cancel = cancel
+	attach(m, &fakeHandle{status: ha.StatusOpen}, newOffsetTracker(1, time.Hour, nil))
+
+	cancelParent()
+	require.NoError(t, consumeCtx.Err(), "the premise: the caller's context is canceled first")
+
+	m.StopConsumers()
+
+	require.ErrorIs(t, consumeCtx.Err(), context.Canceled)
+	assert.Nil(t, m.cancel)
+	assert.False(t, m.started)
 }
 
 func TestManagerCloseWithoutEnvironmentIsIdempotent(t *testing.T) {
@@ -430,7 +479,7 @@ func TestStreamOptionsFromClampsMaxAge(t *testing.T) {
 
 func TestManagerEnvironmentOptions(t *testing.T) {
 	t.Run("without_address_resolver", func(t *testing.T) {
-		m := NewManager(ManagerOptions{URI: "rabbitmq-stream://localhost:5552/%2f"})
+		m := NewManager(ManagerOptions{URI: "rabbitmq-stream://localhost:5552/%2f", Logger: logger.New("error", false)})
 
 		opts := m.environmentOptions()
 
@@ -444,6 +493,7 @@ func TestManagerEnvironmentOptions(t *testing.T) {
 			URI:                 "rabbitmq-stream://localhost:5552/%2f",
 			AddressResolverHost: "lb.example.com",
 			AddressResolverPort: 5553,
+			Logger:              logger.New("error", false),
 		})
 
 		opts := m.environmentOptions()
