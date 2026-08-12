@@ -20,6 +20,7 @@ const (
 	testExchange   = "test.exchange"
 	testRoutingKey = "test.key"
 	testQueueName  = "test-queue"
+	testStreamName = "test-stream"
 )
 
 // resetMeterForTesting resets the meter state for testing purposes
@@ -525,4 +526,86 @@ func assertHasAttribute(t *testing.T, attrs []attribute.KeyValue, key, expectedV
 		}
 	}
 	t.Errorf("Attribute %s not found", key)
+}
+
+func TestRecordStreamConsumeSuccess(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	defer func() {
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}()
+	otel.SetMeterProvider(mp)
+
+	resetMeterForTesting()
+	initAMQPMeter()
+
+	RecordStreamConsume(context.Background(), testStreamName, 15*time.Millisecond, nil)
+
+	rm := mp.Collect(t)
+
+	obtest.AssertMetricExists(t, rm, metricOperationDuration)
+	durationMetric := obtest.FindMetric(rm, metricOperationDuration)
+	require.NotNil(t, durationMetric)
+
+	histData := durationMetric.Data.(metricdata.Histogram[float64])
+	require.NotEmpty(t, histData.DataPoints)
+	attrs := histData.DataPoints[0].Attributes.ToSlice()
+
+	assertHasAttribute(t, attrs, attrMessagingSystem, messagingSystemRabbitMQ)
+	assertHasAttribute(t, attrs, attrMessagingOperation, operationReceive)
+	assertHasAttribute(t, attrs, attrMessagingDestination, testStreamName)
+	assertAttributeAbsent(t, attrs, attrErrorType)
+
+	obtest.AssertMetricValue(t, rm, metricMessagesConsumed, int64(1))
+}
+
+func TestRecordStreamConsumeFailureCarriesErrorType(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	defer func() {
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}()
+	otel.SetMeterProvider(mp)
+
+	resetMeterForTesting()
+	initAMQPMeter()
+
+	RecordStreamConsume(context.Background(), testStreamName, 5*time.Millisecond, errors.New("handler failed"))
+
+	rm := mp.Collect(t)
+
+	durationMetric := obtest.FindMetric(rm, metricOperationDuration)
+	require.NotNil(t, durationMetric)
+	histData := durationMetric.Data.(metricdata.Histogram[float64])
+	require.NotEmpty(t, histData.DataPoints)
+	assertHasAttribute(t, histData.DataPoints[0].Attributes.ToSlice(), attrErrorType, "*errors.errorString")
+
+	// The message was consumed from the stream regardless of how its handler ended.
+	obtest.AssertMetricValue(t, rm, metricMessagesConsumed, int64(1))
+}
+
+func TestRecordStreamConsumeZeroDurationSkipsHistogram(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	defer func() {
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}()
+	otel.SetMeterProvider(mp)
+
+	resetMeterForTesting()
+	initAMQPMeter()
+
+	RecordStreamConsume(context.Background(), testStreamName, 0, nil)
+
+	rm := mp.Collect(t)
+
+	assert.Nil(t, obtest.FindMetric(rm, metricOperationDuration), "zero duration records no histogram sample")
+	obtest.AssertMetricValue(t, rm, metricMessagesConsumed, int64(1))
+}
+
+// assertAttributeAbsent asserts that no attribute with the given key was recorded.
+func assertAttributeAbsent(t *testing.T, attrs []attribute.KeyValue, key string) {
+	t.Helper()
+	for _, attr := range attrs {
+		if string(attr.Key) == key {
+			t.Errorf("Attribute %s should be absent, got %q", key, attr.Value.AsString())
+		}
+	}
 }

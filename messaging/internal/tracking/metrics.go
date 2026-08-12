@@ -289,6 +289,38 @@ func RecordAMQPConsumeCompletion(ctx context.Context, delivery *amqp.Delivery, q
 	amqpOperationDuration.Record(ctx, durationToSeconds(duration), metric.WithAttributes(consumeAttributes(delivery, queueName, err)...))
 }
 
+// RecordStreamConsume records the metrics for one native stream-protocol
+// delivery, reusing the AMQP instruments so both messaging lanes report under
+// the same names.
+//
+// Unlike the AMQP lane — where StartConsumeSpan counts the delivery at receive
+// time and RecordAMQPConsumeCompletion only times it — a stream delivery is
+// recorded exactly once, after its handler returned. The consumed counter
+// therefore increments regardless of the handler outcome (the message WAS
+// consumed from the stream); error.type separates the failures.
+func RecordStreamConsume(ctx context.Context, streamName string, duration time.Duration, err error) {
+	meter := getAMQPMeter()
+	if meter == nil {
+		return
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
+		attribute.String(attrMessagingOperation, operationReceive),
+		attribute.String(attrMessagingDestination, streamName),
+	}
+	if errorType := extractErrorType(err); errorType != "" {
+		attrs = append(attrs, attribute.String(attrErrorType, errorType))
+	}
+
+	if amqpOperationDuration != nil && duration > 0 {
+		amqpOperationDuration.Record(ctx, durationToSeconds(duration), metric.WithAttributes(attrs...))
+	}
+	if amqpMessagesConsumed != nil {
+		amqpMessagesConsumed.Add(ctx, 1, metric.WithAttributes(attrs...))
+	}
+}
+
 // RecordPublishRetry records a publish retry attempt in the retry counter.
 // This is called each time a publish operation is retried due to NACK, timeout, or error.
 //
