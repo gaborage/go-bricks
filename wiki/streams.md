@@ -49,7 +49,15 @@ messaging:
   declarations would otherwise be silently dropped.
 - `multitenant.enabled` together with a stream `uri` is a **startup validation
   error**. Per-tenant stream consumption needs one Environment per tenant, which
-  does not exist yet.
+  does not exist yet. `config.Validate` enforces this, so a service assembled by
+  hand — `app.NewWithConfig` takes a `*config.Config` and never validates it —
+  would slip past; startup repeats the check before building the manager, and
+  both paths carry the `single-tenant only` marker.
+- Plaintext `rabbitmq-stream://` is accepted but **logs a WARN outside
+  development**: the URI's credentials cross the network in the clear. There is
+  no TLS configuration surface yet (see [ADR-059](adr_059_streams_consumption.md)
+  future work), so terminate TLS in front of the broker or use
+  `rabbitmq-stream+tls://` with a publicly-trusted certificate.
 
 ## Declaring streams and consumers
 
@@ -114,6 +122,13 @@ offset claim that messages behind it were handled. This is the deliberate
 opposite of the AMQP lane's `NumCPU*4` default. Scale out with SAC across
 processes (or, from Phase 3, super-stream partitions), not with threads inside
 one.
+
+**There is no handler timeout.** Unlike an HTTP handler, a stream handler gets no
+deadline: the context it receives is cancelled only by `StopConsumers`, so a
+handler that ignores it runs unbounded. Because delivery is sequential, one hung
+handler stalls that consumer entirely and leaks its goroutine at exit — it does
+not block shutdown, but nothing after it is consumed either. Respect `ctx` and
+bound your own work (`context.WithTimeout` around the slow call).
 
 ## Single active consumer
 

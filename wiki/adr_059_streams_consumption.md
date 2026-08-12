@@ -87,6 +87,13 @@ exists, failing loudly beats consuming one tenant's streams on behalf of all of
 them. The error fragment `single-tenant only` is the greppable marker for that
 future work.
 
+The check is repeated at startup, in `app.prepareStreamConsumers`, because
+`config.Validate` is skippable: `app.NewWithConfig` accepts a hand-built
+`*config.Config` and never calls it — the same bypass `untypedConnectionStringPaths`
+guards the database-type invariant against. Note also that `streams.NewManager` is
+exported and carries no tenancy guard of its own; the invariant lives in the two
+places above, not in the manager.
+
 ### The endpoint is configured, never inferred
 
 `messaging.streams.uri` is not derived from `messaging.broker.url`. The stream
@@ -141,6 +148,12 @@ broker flap would be worse than the flap.
 - Trace-context propagation from AMQP-published stream messages (stream
   deliveries are AMQP 1.0; nothing is extracted today).
 - RabbitMQ 3.13 stream filtering.
+- A TLS configuration surface. `rabbitmq-stream+tls://` works today — the client
+  builds a `tls.Config` with `MinVersion: TLS 1.2` and never sets
+  `InsecureSkipVerify` — but `ManagerOptions` exposes no `tls.Config`, so a private
+  CA or a client certificate has no seam. Until one exists, plaintext outside
+  development only WARNs rather than failing closed, because failing would leave
+  those deployments no working option.
 
 ## References
 
