@@ -443,16 +443,33 @@ func (r *Registry) consumeOptionsFor(consumer *ConsumerDeclaration, resume *stre
 		Args:          consumer.Args,
 	}
 
+	// SECURITY: amqp091 encodes a Go int as a 32-bit AMQP field ('I', write.go)
+	// and an int64 as 64-bit ('l'), so a declared offset above math.MaxInt32
+	// would silently truncate on the wire — 1<<32 arrives as 0 and replays the
+	// whole stream, 3000000000 arrives negative. Widening to int64 is lossless
+	// and is what the operator meant.
+	offset, hasOffset := int64(0), false
+	if declared, isInt := consumer.Args[argStreamOffset].(int); isInt {
+		offset, hasOffset = int64(declared), true
+	}
 	if resume != nil && resume.seen {
-		// Copy: the declaration's Args map is shared with the registry state and
-		// every other session, so the override must not reach it.
-		args := make(map[string]any, len(opts.Args))
-		maps.Copy(args, opts.Args)
-		args[argStreamOffset] = resume.last + 1
-		opts.Args = args
+		offset, hasOffset = resume.last+1, true
+	}
+	if hasOffset {
+		opts.Args = withStreamOffset(consumer.Args, offset)
 	}
 
 	return opts
+}
+
+// withStreamOffset returns a copy of args carrying offset as x-stream-offset.
+// The declaration's own map is shared with the registry state and every other
+// session, so the override is never applied in place.
+func withStreamOffset(args map[string]any, offset int64) map[string]any {
+	next := make(map[string]any, len(args))
+	maps.Copy(next, args)
+	next[argStreamOffset] = offset
+	return next
 }
 
 // streamResume carries the last stream offset handed to the worker pool across

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"math"
 	"runtime"
 	"sort"
 	"strconv"
@@ -3219,4 +3221,110 @@ func TestSuperviseConsumerStreamResume(t *testing.T) {
 			registry.StopConsumers()
 		})
 	}
+}
+
+// TestConsumeOptionsWidensIntStreamOffset pins the wire contract for
+// x-stream-offset: amqp091 encodes a Go int as a 32-bit AMQP field ('I') and an
+// int64 as 64-bit ('l'), so a declared offset above math.MaxInt32 must be
+// widened before it reaches the broker or it truncates silently — 1<<32 would
+// arrive as 0 and replay the entire stream.
+func TestConsumeOptionsWidensIntStreamOffset(t *testing.T) {
+	timestamp := time.Now()
+	const pastMaxInt32 = int(1) << 32
+
+	tests := []struct {
+		name     string
+		declared map[string]any
+		wantArgs map[string]any
+	}{
+		{
+			name:     "int_above_max_int32_widened_to_int64",
+			declared: map[string]any{argStreamOffset: pastMaxInt32},
+			wantArgs: map[string]any{argStreamOffset: int64(4294967296)},
+		},
+		{
+			name:     "int_at_max_int32_widened_to_int64",
+			declared: map[string]any{argStreamOffset: math.MaxInt32},
+			wantArgs: map[string]any{argStreamOffset: int64(2147483647)},
+		},
+		{
+			name:     "small_int_widened_without_mangling",
+			declared: map[string]any{argStreamOffset: 7},
+			wantArgs: map[string]any{argStreamOffset: int64(7)},
+		},
+		{
+			name:     "zero_int_widened_without_mangling",
+			declared: map[string]any{argStreamOffset: 0},
+			wantArgs: map[string]any{argStreamOffset: int64(0)},
+		},
+		{
+			name:     "int64_passes_through_untouched",
+			declared: map[string]any{argStreamOffset: int64(4294967296)},
+			wantArgs: map[string]any{argStreamOffset: int64(4294967296)},
+		},
+		{
+			name:     "named_position_untouched",
+			declared: map[string]any{argStreamOffset: streamOffsetFirst},
+			wantArgs: map[string]any{argStreamOffset: streamOffsetFirst},
+		},
+		{
+			name:     "interval_string_untouched",
+			declared: map[string]any{argStreamOffset: "7D"},
+			wantArgs: map[string]any{argStreamOffset: "7D"},
+		},
+		{
+			name:     "timestamp_untouched",
+			declared: map[string]any{argStreamOffset: timestamp},
+			wantArgs: map[string]any{argStreamOffset: timestamp},
+		},
+		{
+			// Only the offset is widened: unrelated int args keep their type, so
+			// the fix's blast radius stays at the one key that needs it.
+			name:     "other_args_survive_the_widening_copy",
+			declared: map[string]any{argStreamOffset: pastMaxInt32, "x-priority": 5},
+			wantArgs: map[string]any{argStreamOffset: int64(4294967296), "x-priority": 5},
+		},
+		{
+			name:     "no_offset_arg_untouched",
+			declared: map[string]any{"x-priority": 5},
+			wantArgs: map[string]any{"x-priority": 5},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+			snapshot := maps.Clone(tt.declared)
+
+			opts := registry.consumeOptionsFor(&ConsumerDeclaration{
+				Queue:    testStreamQueue,
+				Consumer: testConsumer,
+				Args:     tt.declared,
+			}, nil)
+
+			// assert.Equal compares dynamic types, so an un-widened int fails here.
+			assert.Equal(t, tt.wantArgs, opts.Args)
+			assert.Equal(t, snapshot, tt.declared,
+				"the widening must land on a copy, never the declaration's map")
+		})
+	}
+}
+
+// TestStartConsumerWidensDeclaredIntOffset proves the widening survives the
+// whole initial-subscribe path, not just consumeOptionsFor's return value.
+func TestStartConsumerWidensDeclaredIntOffset(t *testing.T) {
+	declared := map[string]any{argStreamOffset: int(1) << 32}
+	registry, client, _ := newStreamResumeRegistry(t, true, declared)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	assert.Equal(t, map[string]any{argStreamOffset: int64(4294967296)},
+		client.consumeOptionsAt(0).Args,
+		"the client must receive the offset as int64 so amqp091 encodes it 64-bit")
+	assert.Equal(t, map[string]any{argStreamOffset: int(1) << 32}, declared,
+		"the declaration's map must be untouched")
+
+	registry.StopConsumers()
 }

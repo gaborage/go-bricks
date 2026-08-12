@@ -1946,6 +1946,9 @@ func TestAMQPClientConsumeFromQueuePassesArgs(t *testing.T) {
 	}{
 		{"stream_offset", map[string]any{"x-stream-offset": streamOffsetFirst}, amqp.Table{"x-stream-offset": streamOffsetFirst}},
 		{"numeric_offset", map[string]any{"x-stream-offset": int64(12)}, amqp.Table{"x-stream-offset": int64(12)}},
+		// amqp091 dispatches on the dynamic type: int64 encodes as 'l' (64-bit),
+		// int as 'I' (32-bit, truncating). The table must carry int64 here.
+		{"offset_past_max_int32", map[string]any{"x-stream-offset": int64(1) << 32}, amqp.Table{"x-stream-offset": int64(4294967296)}},
 		{"nil_map", nil, nil},
 		{"empty_map", map[string]any{}, nil},
 	}
