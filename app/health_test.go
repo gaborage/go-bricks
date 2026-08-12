@@ -826,17 +826,6 @@ func TestDatabaseManagerHealthProbeStillProbesPerTenantControlPlaneDatabase(t *t
 	assert.True(t, result.Critical, "and it must still gate readiness")
 }
 
-func TestStreamsManagerHealthProbeDisabledWithoutManager(t *testing.T) {
-	probe := streamsManagerHealthProbe(nil)
-
-	result := probe.Run(context.Background())
-
-	assert.Equal(t, componentStreams, result.Name)
-	assert.Equal(t, disabledStatus, result.Status)
-	assert.False(t, result.Critical)
-	assert.Equal(t, map[string]any{statusKey: disabledStatus}, result.Details)
-}
-
 func TestStreamsManagerHealthProbeReportsNotReady(t *testing.T) {
 	mgr := streams.NewManager(streams.ManagerOptions{
 		URI:    unreachableStreamURI,

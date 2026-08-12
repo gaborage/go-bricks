@@ -278,25 +278,24 @@ func validateMessagingStreams(cfg *StreamsConfig, multitenant bool) error {
 		return err
 	}
 
-	if cfg.URI == "" {
-		return validateStreamsAddressResolver(&cfg.AddressResolver)
-	}
+	if cfg.URI != "" {
+		// Multi-tenant stream consumption would need one Environment per tenant and a
+		// per-tenant stream URI leg; until that exists the combination fails loudly
+		// instead of consuming one tenant's streams on behalf of all of them.
+		if multitenant {
+			return NewValidationError("messaging.streams",
+				"single-tenant only; multi-tenant stream consumption is not yet supported")
+		}
 
-	// Multi-tenant stream consumption would need one Environment per tenant and a
-	// per-tenant stream URI leg; until that exists the combination fails loudly
-	// instead of consuming one tenant's streams on behalf of all of them.
-	if multitenant {
-		return NewValidationError("messaging.streams",
-			"single-tenant only; multi-tenant stream consumption is not yet supported")
-	}
-
-	u, err := url.Parse(cfg.URI)
-	if err != nil {
-		return NewValidationError("messaging.streams.uri", "must be a valid URI")
-	}
-	if u.Scheme != streamsURIScheme && u.Scheme != streamsURITLSScheme {
-		return NewValidationError("messaging.streams.uri",
-			fmt.Sprintf("scheme %q is not supported; use %s:// or %s://", u.Scheme, streamsURIScheme, streamsURITLSScheme))
+		u, err := url.Parse(cfg.URI)
+		if err != nil {
+			return NewValidationError("messaging.streams.uri", "must be a valid URI")
+		}
+		if u.Scheme != streamsURIScheme && u.Scheme != streamsURITLSScheme {
+			return NewInvalidFieldError("messaging.streams.uri",
+				fmt.Sprintf(errNotSupportedFmt, u.Scheme),
+				[]string{streamsURIScheme + "://", streamsURITLSScheme + "://"})
+		}
 	}
 
 	return validateStreamsAddressResolver(&cfg.AddressResolver)
@@ -313,7 +312,8 @@ func validateStreamsAddressResolver(cfg *StreamsAddressResolverConfig) error {
 			"must be set when messaging.streams.addressresolver.port is set")
 	}
 	if cfg.Port < 1 || cfg.Port > 65535 {
-		return NewValidationError("messaging.streams.addressresolver.port", "must be between 1 and 65535")
+		return NewInvalidFieldError("messaging.streams.addressresolver.port",
+			fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
 	}
 	return nil
 }

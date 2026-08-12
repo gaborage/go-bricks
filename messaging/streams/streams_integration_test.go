@@ -73,7 +73,7 @@ func streamsTestEnv(ctx context.Context, t *testing.T) ManagerOptions {
 		URI: container.StreamURI(),
 		// Without the resolver the broker advertises its container-internal address
 		// and the client's follow-up dial from the host fails.
-		AddressResolverHost: container.StreamHost(),
+		AddressResolverHost: container.Host(),
 		AddressResolverPort: container.StreamPort(),
 		OffsetStoreCount:    1,
 		OffsetStoreInterval: 100 * time.Millisecond,

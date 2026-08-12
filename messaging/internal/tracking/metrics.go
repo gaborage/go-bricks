@@ -304,20 +304,22 @@ func RecordStreamConsume(ctx context.Context, streamName string, duration time.D
 		return
 	}
 
-	attrs := []attribute.KeyValue{
+	attrs := make([]attribute.KeyValue, 0, 4)
+	attrs = append(attrs,
 		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
 		attribute.String(attrMessagingOperation, operationReceive),
 		attribute.String(attrMessagingDestination, streamName),
-	}
+	)
 	if errorType := extractErrorType(err); errorType != "" {
 		attrs = append(attrs, attribute.String(attrErrorType, errorType))
 	}
+	attrSet := metric.WithAttributes(attrs...)
 
 	if amqpOperationDuration != nil && duration > 0 {
-		amqpOperationDuration.Record(ctx, durationToSeconds(duration), metric.WithAttributes(attrs...))
+		amqpOperationDuration.Record(ctx, durationToSeconds(duration), attrSet)
 	}
 	if amqpMessagesConsumed != nil {
-		amqpMessagesConsumed.Add(ctx, 1, metric.WithAttributes(attrs...))
+		amqpMessagesConsumed.Add(ctx, 1, attrSet)
 	}
 }
 

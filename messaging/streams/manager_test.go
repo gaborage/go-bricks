@@ -66,10 +66,10 @@ func testManager(t *testing.T) *Manager {
 // attach wires a fake consumer into a manager as if Start had created it.
 func attach(m *Manager, handle consumerHandle, tracker *offsetTracker) {
 	m.consumers = append(m.consumers, &runningConsumer{
-		stream: testStream,
-		name:   testConsumerName,
-		handle: handle,
-		runner: &consumerRunner{tracker: tracker},
+		stream:  testStream,
+		name:    testConsumerName,
+		handle:  handle,
+		tracker: tracker,
 	})
 	m.started = true
 }

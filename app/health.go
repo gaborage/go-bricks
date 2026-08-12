@@ -181,7 +181,7 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			defer release() // probe holds no scope; release the lease when the check returns
 
 			if !client.IsReady() {
-				stats[statusKey] = "not_ready"
+				stats[statusKey] = notReadyStatus
 				return unhealthyStatus, stats, nil
 			}
 
@@ -200,28 +200,20 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 // broker flap must not take the whole service out of the load balancer while they do.
 //
 // Unlike its siblings this probe is registered at runtime (see
-// prepareStreamConsumers) because the manager does not exist when the builder
-// snapshots the probe list.
+// prepareStreamConsumers) after a successful Start, so mgr is never nil and the
+// probe has no disabled arm: an absent registration already reports disabled
+// through componentReport.
 func streamsManagerHealthProbe(mgr *streams.Manager) Prober {
-	if mgr == nil {
-		return healthProbeFunc{
-			name: componentStreams,
-			fn: func(context.Context) (string, map[string]any, error) {
-				return disabledStatus, map[string]any{statusKey: disabledStatus}, nil
-			},
-		}
-	}
-
 	return healthProbeFunc{
 		name: componentStreams,
 		fn: func(context.Context) (string, map[string]any, error) {
 			stats := getStatsOrEmpty(mgr.Stats())
+			status := healthyStatus
 			if !mgr.Ready() {
-				stats[statusKey] = notReadyStatus
-				return notReadyStatus, stats, nil
+				status = notReadyStatus
 			}
-			stats[statusKey] = healthyStatus
-			return healthyStatus, stats, nil
+			stats[statusKey] = status
+			return status, stats, nil
 		},
 	}
 }

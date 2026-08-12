@@ -6,8 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
-	"strconv"
 	"testing"
 	"time"
 
@@ -21,7 +19,6 @@ const (
 	streamPortSpec = "5552/tcp"
 
 	streamPluginReadyTimeout = 30 * time.Second
-	streamPluginDialTimeout  = time.Second
 	streamPluginPollInterval = 250 * time.Millisecond
 )
 
@@ -137,7 +134,7 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 	}
 
 	if cfg.EnableStreamPlugin {
-		streamPort, err := enableStreamPlugin(ctx, rmqContainer, host)
+		streamPort, err := enableStreamPlugin(ctx, rmqContainer)
 		if err != nil {
 			_ = rmqContainer.Terminate(ctx)
 			return nil, err
@@ -152,7 +149,7 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 // enableStreamPlugin turns on rabbitmq_stream in a running container and waits for
 // its listener to accept connections on the mapped port. The container's own wait
 // strategy ran before the plugin existed, so readiness is polled here.
-func enableStreamPlugin(ctx context.Context, c *rabbitmq.RabbitMQContainer, host string) (port int, err error) {
+func enableStreamPlugin(ctx context.Context, c *rabbitmq.RabbitMQContainer) (port int, err error) {
 	code, reader, err := c.Exec(ctx, []string{"rabbitmq-plugins", "enable", "rabbitmq_stream"})
 	if err != nil {
 		return 0, fmt.Errorf("failed to enable rabbitmq_stream plugin: %w", err)
@@ -162,25 +159,18 @@ func enableStreamPlugin(ctx context.Context, c *rabbitmq.RabbitMQContainer, host
 		return 0, fmt.Errorf("rabbitmq-plugins enable rabbitmq_stream exited %d: %s", code, output)
 	}
 
+	strategy := wait.ForListeningPort(streamPortSpec).
+		WithStartupTimeout(streamPluginReadyTimeout).
+		WithPollInterval(streamPluginPollInterval)
+	if err := strategy.WaitUntilReady(ctx, c); err != nil {
+		return 0, fmt.Errorf("rabbitmq_stream listener did not become ready: %w", err)
+	}
+
 	mapped, err := c.MappedPort(ctx, streamPortSpec)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get RabbitMQ stream port: %w", err)
 	}
-	port = int(mapped.Num())
-
-	address := net.JoinHostPort(host, strconv.Itoa(port))
-	deadline := time.Now().Add(streamPluginReadyTimeout)
-	for time.Now().Before(deadline) {
-		conn, dialErr := net.DialTimeout("tcp", address, streamPluginDialTimeout)
-		if dialErr == nil {
-			_ = conn.Close()
-			return port, nil
-		}
-		time.Sleep(streamPluginPollInterval)
-	}
-
-	return 0, fmt.Errorf("rabbitmq_stream listener did not accept connections on %s within %s",
-		address, streamPluginReadyTimeout)
+	return int(mapped.Num()), nil
 }
 
 // BrokerURL returns the AMQP connection URL for the running container.
@@ -198,12 +188,6 @@ func (r *RabbitMQContainer) Port() int {
 	return r.port
 }
 
-// StreamHost returns the host for native stream-protocol connections.
-// Only meaningful when the container was started with EnableStreamPlugin.
-func (r *RabbitMQContainer) StreamHost() string {
-	return r.host
-}
-
 // StreamPort returns the host-side port Docker mapped to the container's 5552.
 // Zero when the container was started without EnableStreamPlugin.
 func (r *RabbitMQContainer) StreamPort() int {
@@ -211,7 +195,7 @@ func (r *RabbitMQContainer) StreamPort() int {
 }
 
 // StreamURI returns the native stream-protocol URI for the default vhost.
-// Clients must also pin an address resolver to StreamHost/StreamPort: the broker
+// Clients must also pin an address resolver to Host/StreamPort: the broker
 // advertises its container-internal address, which the host cannot dial.
 func (r *RabbitMQContainer) StreamURI() string {
 	return fmt.Sprintf("rabbitmq-stream://%s:%s@%s:%d/%%2f", r.username, r.password, r.host, r.streamPort)

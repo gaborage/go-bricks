@@ -53,13 +53,14 @@ type consumerHandle interface {
 	GetStatus() int
 }
 
-// runningConsumer pairs a live client consumer with the runner that owns its
-// offset bookkeeping.
+// runningConsumer pairs a live client consumer with the offset bookkeeping its
+// runner owns. The runner itself is retained by the client through the
+// messagesHandler callback, so only the tracker is kept here.
 type runningConsumer struct {
-	stream string
-	name   string
-	handle consumerHandle
-	runner *consumerRunner
+	stream  string
+	name    string
+	handle  consumerHandle
+	tracker *offsetTracker
 }
 
 // Manager owns the single stream-protocol Environment of a single-tenant service
@@ -193,10 +194,10 @@ func (m *Manager) startConsumer(ctx context.Context, decl *consumerDeclaration) 
 	}
 
 	m.consumers = append(m.consumers, &runningConsumer{
-		stream: decl.Stream,
-		name:   decl.Name,
-		handle: consumer,
-		runner: runner,
+		stream:  decl.Stream,
+		name:    decl.Name,
+		handle:  consumer,
+		tracker: runner.tracker,
 	})
 
 	m.log.Info().
@@ -265,7 +266,7 @@ func (m *Manager) stopLocked() {
 	}
 
 	for _, rc := range m.consumers {
-		if err := rc.runner.tracker.flush(rc.handle); err != nil {
+		if err := rc.tracker.flush(rc.handle); err != nil {
 			m.log.Warn().Err(err).
 				Str(logFieldStream, rc.stream).
 				Str(logFieldConsumer, rc.name).
@@ -305,7 +306,7 @@ func (m *Manager) Stats() map[string]any {
 
 	offsets := make(map[string]int64, len(m.consumers))
 	for _, rc := range m.consumers {
-		if offset, ok := rc.runner.tracker.lastStored(); ok {
+		if offset, ok := rc.tracker.lastStored(); ok {
 			offsets[rc.stream+"/"+rc.name] = offset
 		}
 	}

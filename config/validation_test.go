@@ -5516,7 +5516,7 @@ func TestValidateMessagingStreamsURIScheme(t *testing.T) {
 		{
 			name:    "amqp_scheme_rejected",
 			uri:     "amqp://svc:" + streamsFixturePassword + "@broker:5672/",
-			wantErr: `scheme "amqp" is not supported`,
+			wantErr: "'amqp' is not supported must be one of: rabbitmq-stream://, rabbitmq-stream+tls://",
 		},
 		{
 			name:    "schemeless_value_rejected",
@@ -5584,17 +5584,17 @@ func TestValidateMessagingStreamsAddressResolver(t *testing.T) {
 		{
 			name:     "host_without_port",
 			resolver: StreamsAddressResolverConfig{Host: "lb.example.com"},
-			wantErr:  "messaging.streams.addressresolver.port must be between 1 and 65535",
+			wantErr:  "messaging.streams.addressresolver.port invalid value: 0 must be one of: 1-65535",
 		},
 		{
 			name:     "port_above_range",
 			resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: 65536},
-			wantErr:  "messaging.streams.addressresolver.port must be between 1 and 65535",
+			wantErr:  "messaging.streams.addressresolver.port invalid value: 65536 must be one of: 1-65535",
 		},
 		{
 			name:     "negative_port",
 			resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: -1},
-			wantErr:  "messaging.streams.addressresolver.port must be between 1 and 65535",
+			wantErr:  "messaging.streams.addressresolver.port invalid value: -1 must be one of: 1-65535",
 		},
 	}
 
