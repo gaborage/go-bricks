@@ -12,6 +12,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -314,4 +315,52 @@ func TestRegisterAcceptsModulesWhenDatabaseRequirementDoesNotApply(t *testing.T)
 			require.NoError(t, newDBRequirementRegistry(tt.rootDBAbsent).Register(tt.module))
 		})
 	}
+}
+
+func TestModuleRegistryDeclareStreamsCollectsFromDeclarers(t *testing.T) {
+	log := logger.New("error", false)
+	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
+	declarer := &streamModule{name: "orders", declaration: declareOneConsumer}
+	require.NoError(t, registry.Register(declarer))
+	require.NoError(t, registry.Register(&minimalModule{name: "plain"}))
+
+	decls := streams.NewDeclarations()
+	require.NoError(t, registry.DeclareStreams(decls))
+
+	assert.Equal(t, 1, declarer.calls, "a declarer is invoked exactly once")
+	assert.Equal(t, streams.Stats{Streams: 1, Consumers: 1}, decls.Stats())
+}
+
+func TestModuleRegistryDeclareStreamsRejectsNilStore(t *testing.T) {
+	registry := NewModuleRegistry(&ModuleDeps{Logger: logger.New("error", false), Config: &config.Config{}})
+
+	err := registry.DeclareStreams(nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stream declarations store is nil")
+}
+
+func TestModuleRegistryDeclareStreamsFailsOnInvalidDeclarations(t *testing.T) {
+	log := logger.New("error", false)
+	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
+	require.NoError(t, registry.Register(&streamModule{name: "orders", declaration: func(decls *streams.Declarations) {
+		decls.DeclareConsumer(&streams.ConsumerOptions{Stream: "ghost", Name: testStreamConsumer})
+	}}))
+
+	err := registry.DeclareStreams(streams.NewDeclarations())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stream declaration validation failed")
+	assert.Contains(t, err.Error(), "references undeclared stream")
+}
+
+func TestModuleRegistryDeclareStreamsWithNoDeclarersIsEmpty(t *testing.T) {
+	log := logger.New("error", false)
+	registry := NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}})
+	require.NoError(t, registry.Register(&minimalModule{name: "plain"}))
+
+	decls := streams.NewDeclarations()
+	require.NoError(t, registry.DeclareStreams(decls))
+
+	assert.True(t, decls.IsEmpty())
 }

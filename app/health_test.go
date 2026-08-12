@@ -17,6 +17,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/testutil"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
@@ -823,4 +824,31 @@ func TestDatabaseManagerHealthProbeStillProbesPerTenantControlPlaneDatabase(t *t
 	assert.Equal(t, unhealthyStatus, result.Status, "a resolvable control-plane database must be probed, not relabeled")
 	require.Error(t, result.Err)
 	assert.True(t, result.Critical, "and it must still gate readiness")
+}
+
+func TestStreamsManagerHealthProbeDisabledWithoutManager(t *testing.T) {
+	probe := streamsManagerHealthProbe(nil)
+
+	result := probe.Run(context.Background())
+
+	assert.Equal(t, componentStreams, result.Name)
+	assert.Equal(t, disabledStatus, result.Status)
+	assert.False(t, result.Critical)
+	assert.Equal(t, map[string]any{statusKey: disabledStatus}, result.Details)
+}
+
+func TestStreamsManagerHealthProbeReportsNotReady(t *testing.T) {
+	mgr := streams.NewManager(streams.ManagerOptions{
+		URI:    unreachableStreamURI,
+		Logger: logger.New("error", false),
+	})
+
+	result := streamsManagerHealthProbe(mgr).Run(context.Background())
+
+	assert.Equal(t, componentStreams, result.Name)
+	assert.Equal(t, notReadyStatus, result.Status)
+	assert.NoError(t, result.Err)
+	assert.False(t, result.Critical, "a reconnecting stream consumer must not 503 the whole service")
+	assert.Equal(t, notReadyStatus, result.Details[statusKey])
+	assert.Equal(t, false, result.Details["started"])
 }

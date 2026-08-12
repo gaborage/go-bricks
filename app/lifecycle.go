@@ -78,6 +78,10 @@ func (a *App) prepareRuntime() error {
 		return err
 	}
 
+	if err := a.prepareStreamConsumers(); err != nil {
+		return err
+	}
+
 	if !a.cfg.Multitenant.Enabled && a.connectionPreWarmer != nil && a.connectionPreWarmer.IsAvailable() {
 		a.connectionPreWarmer.LogAvailability()
 		if err := a.connectionPreWarmer.PreWarmSingleTenant(context.Background(), decls); err != nil {
@@ -502,6 +506,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	//    the messaging-manager closer). Done before module shutdown so the framework stops
 	//    delivering fresh messages to modules that are about to be torn down.
 	a.shutdownConsumers()
+	a.shutdownStreamConsumers()
 
 	// 3. Shut down modules — no new HTTP requests or AMQP deliveries are admitted at this
 	//    point. AMQP handlers already in flight may still be unwinding after cancellation.
@@ -617,7 +622,7 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 	messagingStatus, messagingStats := componentReport(componentStatus, componentMessaging)
 	cacheStatus, cacheStats := componentReport(componentStatus, componentCache)
 
-	return c.JSON(http.StatusOK, map[string]any{
+	body := map[string]any{
 		statusKey:          readyStatus,
 		"time":             time.Now().Unix(),
 		componentDatabase:  dbStatus.Status,
@@ -631,5 +636,14 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 			"environment": a.cfg.App.Env,
 			"version":     a.cfg.App.Version,
 		},
-	})
+	}
+
+	// Streams are reported only where they exist: the probe is registered at
+	// runtime, so services that declare no streams keep the body they had.
+	if streamsStatus, streamsStats := componentReport(componentStatus, componentStreams); streamsStatus != disabledStatus {
+		body[componentStreams] = streamsStatus
+		body["streams_stats"] = streamsStats
+	}
+
+	return c.JSON(http.StatusOK, body)
 }

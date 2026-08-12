@@ -869,3 +869,36 @@ func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	return body, w.Code
 }
+
+// TestReadyCheckOmitsStreamsWhenNoneDeclared pins that services without streams keep
+// the /ready body they had: the component is reported only where a probe exists.
+func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{}}
+
+	body, code := runReadyCheck(t, app, cfg)
+
+	assert.Equal(t, http.StatusOK, code)
+	assert.NotContains(t, body, componentStreams)
+	assert.NotContains(t, body, "streams_stats")
+}
+
+// TestReadyCheckReportsStreamsWhenProbed is the other half: once the runtime probe is
+// registered the component and its stats reach the body.
+func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{
+		healthProbeFunc{
+			name: componentStreams,
+			fn: func(context.Context) (string, map[string]any, error) {
+				return healthyStatus, map[string]any{statusKey: healthyStatus, "consumers": 2}, nil
+			},
+		},
+	}}
+
+	body, code := runReadyCheck(t, app, cfg)
+
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, healthyStatus, body[componentStreams])
+	assert.Equal(t, map[string]any{statusKey: healthyStatus, "consumers": float64(2)}, body["streams_stats"])
+}

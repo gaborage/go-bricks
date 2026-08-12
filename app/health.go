@@ -9,6 +9,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // cacheProbePingTimeout caps the warm-path PING so a hung Redis reports unhealthy instead
@@ -188,6 +189,37 @@ func messagingManagerHealthProbe(msgManager *messaging.Manager, _ logger.Logger)
 			// active_publishers: 0 beside a healthy verdict, because this probe's own
 			// Publisher call is what pools the entry.
 			stats = getStatsOrEmpty(msgManager.Stats())
+			stats[statusKey] = healthyStatus
+			return healthyStatus, stats, nil
+		},
+	}
+}
+
+// streamsManagerHealthProbe creates a health probe for the native stream-protocol
+// manager. It is NON-critical: the reliable consumers reconnect on their own, so a
+// broker flap must not take the whole service out of the load balancer while they do.
+//
+// Unlike its siblings this probe is registered at runtime (see
+// prepareStreamConsumers) because the manager does not exist when the builder
+// snapshots the probe list.
+func streamsManagerHealthProbe(mgr *streams.Manager) Prober {
+	if mgr == nil {
+		return healthProbeFunc{
+			name: componentStreams,
+			fn: func(context.Context) (string, map[string]any, error) {
+				return disabledStatus, map[string]any{statusKey: disabledStatus}, nil
+			},
+		}
+	}
+
+	return healthProbeFunc{
+		name: componentStreams,
+		fn: func(context.Context) (string, map[string]any, error) {
+			stats := getStatsOrEmpty(mgr.Stats())
+			if !mgr.Ready() {
+				stats[statusKey] = notReadyStatus
+				return notReadyStatus, stats, nil
+			}
 			stats[statusKey] = healthyStatus
 			return healthyStatus, stats, nil
 		},
