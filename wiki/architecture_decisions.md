@@ -1160,11 +1160,11 @@ instead of stolen back — and conditional eviction no longer needs an undecodab
 mock↔client parity test (with an expiry case) pins both implementations to the same answers.
 **Watch:** a method on an exported interface **stops external implementers compiling**, and the break
 usually surfaces in *test doubles*, which `go build ./...` does not compile — use `go vet ./...`. Two
-new caller hazards: a lock acquired with `ttl == 0` and released this way is held forever, and
-`false`/error are both **terminal** — falling back to `Delete` reinstates the original hazard behind
-an API that reads as safe. `false` does not distinguish a failed comparison from an
-already-gone key, which is why the result is named `deleted`. See [migrations.md](migrations.md)
-`[C59.3]`.
+new caller hazards: a lock acquired with `ttl == 0` is held forever once its token-verified release
+returns false, with no expiry to recover it, and `false`/error are both **terminal** — falling back
+to `Delete` reinstates the original hazard behind an API that reads as safe. `false` does not
+distinguish a failed comparison from an already-gone key, which is why the result is named
+`deleted`. See [migrations.md](migrations.md) `[C59.3]`.
 
 ---
 

@@ -2133,7 +2133,12 @@ if !success {
 // positive TTL (above worst-case job duration) — a lock taken with ttl 0 that this
 // release declines to remove is held forever, with no expiry to recover it. The TTL is
 // still what bounds a crashed holder, so keep processJob idempotent.
-defer func() { _, _ = c.CompareAndDelete(ctx, lockKey, workerID) }()
+defer func() {
+    // A canceled ctx cannot reach Redis, so release on a detached, bounded context.
+    releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+    defer cancel()
+    _, _ = c.CompareAndDelete(releaseCtx, lockKey, workerID)
+}()
 
 return processJob(ctx)
 ```

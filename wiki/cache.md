@@ -140,7 +140,12 @@ if err != nil {
 if !acquired {
     return ErrLockHeld
 }
-defer func() { _, _ = c.CompareAndDelete(ctx, lockKey, token) }()
+defer func() {
+    // A canceled ctx cannot reach Redis, so release on a detached, bounded context.
+    releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+    defer cancel()
+    _, _ = c.CompareAndDelete(releaseCtx, lockKey, token)
+}()
 ```
 
 Two hazards this pair introduces, both of which turn the safe release back into an unsafe

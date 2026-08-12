@@ -27,6 +27,7 @@ import (
 //	stored, wasSet, err := cache.GetOrSet(ctx, "lock:task:456", []byte("processing"), 30*time.Second)
 //
 //	// Distributed locking — release with the same token, never a bare Delete
+//	// (a deferred release needs a detached context; see CompareAndSet)
 //	token := []byte("worker-1")
 //	acquired, err := cache.CompareAndSet(ctx, "lock:job:789", nil, token, 1*time.Minute)
 //	released, err := cache.CompareAndDelete(ctx, "lock:job:789", token)
@@ -81,7 +82,12 @@ type Cache interface {
 	//	if !acquired {
 	//	    return ErrLockHeld
 	//	}
-	//	defer func() { _, _ = cache.CompareAndDelete(ctx, lockKey, token) }()
+	//	defer func() {
+	//	    // A canceled ctx cannot reach the cache, so release on a detached, bounded context.
+	//	    releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	//	    defer cancel()
+	//	    _, _ = cache.CompareAndDelete(releaseCtx, lockKey, token)
+	//	}()
 	//
 	// Acquire with a positive TTL whenever the release goes through CompareAndDelete: a
 	// lock taken with ttl 0 never expires, so a token-verified release that returns false
@@ -102,6 +108,10 @@ type Cache interface {
 	// Acquire the lock with a bounded, positive TTL before releasing it this way: a lock
 	// taken with ttl 0 is stored without expiration, so a token-verified release that
 	// returns false leaves the key held forever, with no expiry to recover it.
+	//
+	// Release on a context that outlives the guarded work: a canceled context cannot reach
+	// the cache, so a release deferred under the request context never lands, and there is
+	// no Delete fallback to recover it. Detach with context.WithoutCancel and bound that.
 	//
 	// deleted reports only that this call removed the key. A false result covers both
 	// "the stored value was not ours" and "the key was already gone", so it never proves
