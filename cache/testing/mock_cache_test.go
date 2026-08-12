@@ -643,29 +643,67 @@ func TestMockCacheCompareAndSetEmptyVsNilMatchesRedis(t *testing.T) {
 	})
 }
 
+const (
+	parityKey   = "lock:job:parity"
+	parityToken = "worker-1"
+)
+
+// compareAndDeleteParityCase is the table type for
+// TestMockCacheCompareAndDeleteParityWithRedis, extracted so the per-subject runner
+// below can take one case at a time.
+type compareAndDeleteParityCase struct {
+	name        string
+	seedAbsent  bool
+	seedValue   string
+	seedTTL     time.Duration
+	expire      bool
+	closeFirst  bool
+	expected    []byte
+	wantDeleted bool
+	wantErr     error
+	// wantGetErr is what a follow-up Get must report: nil means the key survived.
+	wantGetErr error
+}
+
+// runCompareAndDeleteParity drives one case against one subject: seed, lapse, close,
+// call, then assert both the (deleted, err) pair and what a follow-up Get reports.
+// lapse advances the subject past tt.seedTTL.
+func runCompareAndDeleteParity(t *testing.T, c cache.Cache, tt *compareAndDeleteParityCase, lapse func(ttl time.Duration)) {
+	t.Helper()
+	ctx := context.Background()
+
+	if !tt.seedAbsent {
+		require.NoError(t, c.Set(ctx, parityKey, []byte(tt.seedValue), tt.seedTTL))
+	}
+	if tt.expire {
+		lapse(tt.seedTTL)
+	}
+	if tt.closeFirst {
+		require.NoError(t, c.Close())
+	}
+
+	deleted, err := c.CompareAndDelete(ctx, parityKey, tt.expected)
+	if tt.wantErr != nil {
+		assert.ErrorIs(t, err, tt.wantErr)
+	} else {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, tt.wantDeleted, deleted)
+
+	_, getErr := c.Get(ctx, parityKey)
+	if tt.wantGetErr != nil {
+		assert.ErrorIs(t, getErr, tt.wantGetErr)
+	} else {
+		assert.NoError(t, getErr)
+	}
+}
+
 // TestMockCacheCompareAndDeleteParityWithRedis is the anti-drift device for
 // CompareAndDelete: the mock and the real client must agree on (deleted, err) and on
 // whether the key survives. The expired_key case is the class an isolated-only suite
 // cannot catch — the mock's CompareAndSet NX branch already diverges from Redis there.
 func TestMockCacheCompareAndDeleteParityWithRedis(t *testing.T) {
-	const (
-		parityKey   = "lock:job:parity"
-		parityToken = "worker-1"
-	)
-
-	tests := []struct {
-		name        string
-		seedAbsent  bool
-		seedValue   string
-		seedTTL     time.Duration
-		expire      bool
-		closeFirst  bool
-		expected    []byte
-		wantDeleted bool
-		wantErr     error
-		// wantGetErr is what a follow-up Get must report: nil means the key survived.
-		wantGetErr error
-	}{
+	tests := []compareAndDeleteParityCase{
 		{name: "matching_token_deletes", seedValue: parityToken, seedTTL: time.Minute, expected: []byte(parityToken), wantDeleted: true, wantGetErr: cache.ErrNotFound},
 		{name: "mismatched_token_leaves_key", seedValue: "worker-2", seedTTL: time.Minute, expected: []byte(parityToken)},
 		{name: "absent_key", seedAbsent: true, expected: []byte(parityToken), wantGetErr: cache.ErrNotFound},
@@ -699,32 +737,7 @@ func TestMockCacheCompareAndDeleteParityWithRedis(t *testing.T) {
 
 			for _, subject := range subjects {
 				t.Run(subject.name, func(t *testing.T) {
-					ctx := context.Background()
-
-					if !tt.seedAbsent {
-						require.NoError(t, subject.cache.Set(ctx, parityKey, []byte(tt.seedValue), tt.seedTTL))
-					}
-					if tt.expire {
-						subject.lapse(tt.seedTTL)
-					}
-					if tt.closeFirst {
-						require.NoError(t, subject.cache.Close())
-					}
-
-					deleted, err := subject.cache.CompareAndDelete(ctx, parityKey, tt.expected)
-					if tt.wantErr != nil {
-						assert.ErrorIs(t, err, tt.wantErr)
-					} else {
-						require.NoError(t, err)
-					}
-					assert.Equal(t, tt.wantDeleted, deleted)
-
-					_, getErr := subject.cache.Get(ctx, parityKey)
-					if tt.wantGetErr != nil {
-						assert.ErrorIs(t, getErr, tt.wantGetErr)
-					} else {
-						assert.NoError(t, getErr)
-					}
+					runCompareAndDeleteParity(t, subject.cache, &tt, subject.lapse)
 				})
 			}
 		})
