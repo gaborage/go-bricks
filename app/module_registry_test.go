@@ -364,3 +364,16 @@ func TestModuleRegistryDeclareStreamsWithNoDeclarersIsEmpty(t *testing.T) {
 
 	assert.True(t, decls.IsEmpty())
 }
+
+// warnLines returns every recorded warn-level event.
+func (l *recLogger) warnLines() []recEvent {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []recEvent
+	for _, e := range l.events {
+		if e.level == "warn" {
+			out = append(out, e)
+		}
+	}
+	return out
+}

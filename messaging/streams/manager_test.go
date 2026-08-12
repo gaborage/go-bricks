@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -383,4 +384,45 @@ func TestRedactStreamURI(t *testing.T) {
 			assert.NotContains(t, got, fixturePassword, "the password must never survive redaction")
 		})
 	}
+}
+
+// TestManagerStartDoesNotLeakURIOnParseFailure covers the path reachable when
+// config.Validate never ran (app.NewWithConfig): the client returns a *url.Error
+// whose Error() renders the raw URI, credentials included.
+func TestManagerStartDoesNotLeakURIOnParseFailure(t *testing.T) {
+	const fixturePassword = "fixture-pw"
+	m := NewManager(ManagerOptions{
+		// A space makes url.Parse fail inside the client's environment constructor.
+		URI:    "rabbitmq-stream://svc:" + fixturePassword + "@broker:55 52/%2f",
+		Logger: logger.New("error", false),
+	})
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+
+	err := m.Start(context.Background(), decls)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), fixturePassword, "the credential must not survive into the error")
+	assert.Contains(t, err.Error(), "invalid stream URI")
+	assert.Contains(t, err.Error(), redactedStreamURI,
+		"an unparseable endpoint degrades to the fixed placeholder rather than echoing the input")
+	assert.False(t, m.started)
+}
+
+func TestSafeEnvError(t *testing.T) {
+	// Not const: a constant expression here lets staticcheck evaluate the
+	// deliberately-invalid URL and report SA1007 on the fixture itself.
+	fixturePassword := "fixture-pw"
+	raw := "rabbitmq-stream://svc:" + fixturePassword + "@broker:55 52/"
+	_, parseErr := url.Parse(raw)
+	require.Error(t, parseErr)
+	require.Contains(t, parseErr.Error(), fixturePassword, "the premise: the vendor's error carries the credential")
+
+	safe := safeEnvError(parseErr)
+
+	assert.NotContains(t, safe.Error(), fixturePassword)
+	assert.Contains(t, safe.Error(), "invalid stream URI")
+
+	other := errors.New("connection refused")
+	assert.Equal(t, other, safeEnvError(other), "non-URL errors pass through untouched")
 }

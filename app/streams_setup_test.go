@@ -150,3 +150,65 @@ func TestShutdownStreamConsumersStopsTheManager(t *testing.T) {
 
 	assert.Equal(t, false, a.streamsManager.Stats()["started"])
 }
+
+// TestPrepareStreamConsumersRejectsMultiTenantBypass drives the documented
+// config.Validate bypass: NewWithConfig accepts a hand-built config, so a
+// multi-tenant service with a stream URI and a declaring module would otherwise
+// boot green and run handlers with no tenant in context.
+func TestPrepareStreamConsumersRejectsMultiTenantBypass(t *testing.T) {
+	a := newStreamsApp(t, config.StreamsConfig{URI: unreachableStreamURI},
+		&streamModule{name: "orders", declaration: declareOneConsumer})
+	a.cfg.Multitenant.Enabled = true
+
+	err := a.prepareStreamConsumers()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "single-tenant only")
+	assert.Nil(t, a.streamsManager, "no Environment is built for a multi-tenant service")
+	assert.Empty(t, a.healthProbes)
+	assert.Empty(t, a.closers)
+}
+
+// TestPrepareStreamConsumersAllowsSingleTenant is the negative half: the re-check
+// must not block the supported deployment.
+func TestPrepareStreamConsumersAllowsSingleTenant(t *testing.T) {
+	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
+	a.cfg.Multitenant.Enabled = false
+
+	require.NoError(t, a.assertStreamsSingleTenant())
+}
+
+func TestWarnIfPlaintextStreamURI(t *testing.T) {
+	tests := []struct {
+		name     string
+		env      string
+		uri      string
+		wantWarn bool
+	}{
+		{name: "plaintext_outside_development_warns", env: "production", uri: "rabbitmq-stream://broker:5552/", wantWarn: true},
+		{name: "plaintext_in_development_is_silent", env: "development", uri: "rabbitmq-stream://broker:5552/"},
+		{name: "tls_scheme_is_silent", env: "production", uri: "rabbitmq-stream+tls://broker:5551/"},
+		{name: "unparseable_uri_is_silent", env: "production", uri: "rabbitmq-stream://broker:55 52/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := &recLogger{}
+			a := &App{
+				cfg:    &config.Config{App: config.AppConfig{Name: testApp, Env: tt.env, Version: "1.0.0"}},
+				logger: log,
+			}
+
+			a.warnIfPlaintextStreamURI(tt.uri)
+
+			warnings := log.warnLines()
+			if !tt.wantWarn {
+				assert.Empty(t, warnings)
+				return
+			}
+			require.Len(t, warnings, 1)
+			assert.Contains(t, warnings[0].msg, "plaintext stream protocol")
+			assert.NotContains(t, warnings[0].msg, "broker:5552", "the endpoint itself stays out of the warning")
+		})
+	}
+}
