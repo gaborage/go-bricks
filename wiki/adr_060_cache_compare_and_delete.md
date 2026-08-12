@@ -162,6 +162,17 @@ migration atom prescribes `go vet ./...` for exactly this reason. Migration is
 did. A caller who mechanically swaps `Delete` for `CompareAndDelete` on a lock acquired with `ttl 0`
 converts a recoverable mistake into a permanent one.
 
+**Negative — `MockCache` now reports cancellation with no delay configured.** Adding the method
+brought a copy of the mock's `if m.delay > 0 { select { … } }` guard onto a changed line, where the
+`> 0` → `>= 0` boundary mutant is an equivalent mutant: the two forms differ only at `delay == 0`, and
+there the discriminator is which already-ready `select` case Go happens to pick. All seven such guards
+were therefore restructured behind one `waitDelay` helper that holds no comparison against `m.delay`,
+so the mutant class is no longer generated. The side effect is a uniform cancellation contract — every
+context-taking method now short-circuits on a dead context whatever the delay — bought at the price of
+a silent behavior change to an exported test double: a canceled context with **no** delay used to be
+ignored and is now returned as `ctx.Err()`. A positive delay already behaved this way. Migration is
+[migrations.md](migrations.md) `[C59.4]`.
+
 **Neutral — `false` is less informative than `CompareAndSet`'s `false`.** It does not distinguish a
 failed comparison from a key that was already gone. Callers wanting that distinction cannot get it
 from a single atomic operation, and asking for it usually means the caller is contemplating

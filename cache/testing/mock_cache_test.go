@@ -221,6 +221,20 @@ func TestMockCacheWithDelay(t *testing.T) {
 	assert.GreaterOrEqual(t, duration, 50*time.Millisecond)
 }
 
+func TestMockCacheCompareAndDeleteHonorsDelay(t *testing.T) {
+	ctx := context.Background()
+	mock := NewMockCache().WithDelay(60 * time.Millisecond)
+	require.NoError(t, mock.Set(ctx, "lock", []byte("token"), time.Minute))
+
+	start := time.Now()
+	deleted, err := mock.CompareAndDelete(ctx, "lock", []byte("token"))
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	assert.GreaterOrEqual(t, elapsed, 55*time.Millisecond)
+}
+
 func TestMockCacheWithGetFailure(t *testing.T) {
 	ctx := context.Background()
 	customErr := errors.New("custom get error")
@@ -404,6 +418,50 @@ func TestMockCacheContextCancellation(t *testing.T) {
 
 	_, err := mock.Get(ctx, "key")
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+// A default mock configures no delay, so context.Canceled can only originate in waitDelay:
+// every other outcome for these arguments is a nil error, ErrNotFound, or a false bool.
+func TestMockCacheWaitDelayCancelledContextShortCircuits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name string
+		call func(m *MockCache) error
+	}{
+		{name: "get", call: func(m *MockCache) error {
+			_, err := m.Get(ctx, "key")
+			return err
+		}},
+		{name: "set", call: func(m *MockCache) error {
+			return m.Set(ctx, "key", []byte("value"), time.Minute)
+		}},
+		{name: "get_or_set", call: func(m *MockCache) error {
+			_, _, err := m.GetOrSet(ctx, "key", []byte("value"), time.Minute)
+			return err
+		}},
+		{name: "compare_and_set", call: func(m *MockCache) error {
+			_, err := m.CompareAndSet(ctx, "key", nil, []byte("value"), time.Minute)
+			return err
+		}},
+		{name: "compare_and_delete", call: func(m *MockCache) error {
+			_, err := m.CompareAndDelete(ctx, "key", []byte("value"))
+			return err
+		}},
+		{name: "delete", call: func(m *MockCache) error {
+			return m.Delete(ctx, "key")
+		}},
+		{name: "health", call: func(m *MockCache) error {
+			return m.Health(ctx)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.ErrorIs(t, tt.call(NewMockCache()), context.Canceled)
+		})
+	}
 }
 
 func TestMockCacheChainedConfiguration(t *testing.T) {

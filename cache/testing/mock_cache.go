@@ -76,6 +76,25 @@ func (m *MockCache) store(key string, entry *cacheEntry) {
 	m.data[key] = entry
 }
 
+// waitDelay honors the configured delay, or returns ctx's error if the context is
+// already done or ends while waiting. A canceled context short-circuits regardless of
+// delay, so every method reports cancellation the same way.
+func (m *MockCache) waitDelay(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	timer := time.NewTimer(m.delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // NewMockCache creates a new MockCache with default behavior.
 func NewMockCache() *MockCache {
 	return &MockCache{
@@ -167,12 +186,8 @@ func (m *MockCache) WithCloseCallback(callback func(string)) *MockCache {
 func (m *MockCache) Get(ctx context.Context, key string) ([]byte, error) {
 	m.getCalls.Add(1)
 
-	if m.delay > 0 {
-		select {
-		case <-time.After(m.delay):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+	if err := m.waitDelay(ctx); err != nil {
+		return nil, err
 	}
 
 	if m.closed.Load() {
@@ -203,12 +218,8 @@ func (m *MockCache) Get(ctx context.Context, key string) ([]byte, error) {
 func (m *MockCache) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	m.setCalls.Add(1)
 
-	if m.delay > 0 {
-		select {
-		case <-time.After(m.delay):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	if err := m.waitDelay(ctx); err != nil {
+		return err
 	}
 
 	if m.closed.Load() {
@@ -243,12 +254,8 @@ func (m *MockCache) Set(ctx context.Context, key string, value []byte, ttl time.
 func (m *MockCache) GetOrSet(ctx context.Context, key string, value []byte, ttl time.Duration) (storedValue []byte, wasSet bool, err error) {
 	m.getOrSetCalls.Add(1)
 
-	if m.delay > 0 {
-		select {
-		case <-time.After(m.delay):
-		case <-ctx.Done():
-			return nil, false, ctx.Err()
-		}
+	if err := m.waitDelay(ctx); err != nil {
+		return nil, false, err
 	}
 
 	if m.closed.Load() {
@@ -289,12 +296,8 @@ func (m *MockCache) GetOrSet(ctx context.Context, key string, value []byte, ttl 
 func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue, newValue []byte, ttl time.Duration) (bool, error) {
 	m.compareAndSetCalls.Add(1)
 
-	if m.delay > 0 {
-		select {
-		case <-time.After(m.delay):
-		case <-ctx.Done():
-			return false, ctx.Err()
-		}
+	if err := m.waitDelay(ctx); err != nil {
+		return false, err
 	}
 
 	if m.closed.Load() {
@@ -362,12 +365,8 @@ func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue
 func (m *MockCache) CompareAndDelete(ctx context.Context, key string, expectedValue []byte) (bool, error) {
 	m.compareAndDeleteCalls.Add(1)
 
-	if m.delay > 0 {
-		select {
-		case <-time.After(m.delay):
-		case <-ctx.Done():
-			return false, ctx.Err()
-		}
+	if err := m.waitDelay(ctx); err != nil {
+		return false, err
 	}
 
 	if m.closed.Load() {
@@ -408,12 +407,8 @@ func (m *MockCache) CompareAndDelete(ctx context.Context, key string, expectedVa
 func (m *MockCache) Delete(ctx context.Context, key string) error {
 	m.deleteCalls.Add(1)
 
-	if m.delay > 0 {
-		select {
-		case <-time.After(m.delay):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	if err := m.waitDelay(ctx); err != nil {
+		return err
 	}
 
 	if m.closed.Load() {
@@ -435,12 +430,8 @@ func (m *MockCache) Delete(ctx context.Context, key string) error {
 func (m *MockCache) Health(ctx context.Context) error {
 	m.healthCalls.Add(1)
 
-	if m.delay > 0 {
-		select {
-		case <-time.After(m.delay):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	if err := m.waitDelay(ctx); err != nil {
+		return err
 	}
 
 	if m.closed.Load() {
