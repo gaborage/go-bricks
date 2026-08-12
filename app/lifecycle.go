@@ -577,6 +577,31 @@ func publicDBStats(details map[string]any) map[string]any {
 	return public
 }
 
+// streamsOffsetsKey is the streams.Manager.Stats() entry publicStreamsStats withholds
+// from /ready.
+const streamsOffsetsKey = "stored_offsets"
+
+// publicStreamsStats renders streams_stats for the unauthenticated /ready body: the
+// scalar counters, never the per-consumer offset map.
+//
+// SECURITY: Manager.Stats()["stored_offsets"] is keyed "<stream>/<consumer>" — the
+// declared stream and consumer-group names, which are internal topology and usually
+// name the domain — and its values are live offsets, so differencing two polls of an
+// endpoint with no authentication and no IP allowlist yields the per-stream message
+// rate. Every other component publishes only counters here; this is the one whose
+// stats carry identifiers.
+//
+// Like publicDBStats, the redaction belongs at this render site rather than in
+// Manager.Stats() or the probe: the access-controlled <debug.pathprefix>/health-debug
+// renders the same details map and operators need the offsets there, so this copies
+// rather than mutating the caller's map.
+func publicStreamsStats(details map[string]any) map[string]any {
+	public := make(map[string]any, len(details))
+	maps.Copy(public, details)
+	delete(public, streamsOffsetsKey)
+	return public
+}
+
 // readyCheck handles the health check endpoint
 func (a *App) readyCheck(c server.HandlerContext) error {
 	ctx := c.RequestContext()
@@ -642,7 +667,7 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 	// runtime, so services that declare no streams keep the body they had.
 	if streamsStatus, streamsStats := componentReport(componentStatus, componentStreams); streamsStatus != disabledStatus {
 		body[componentStreams] = streamsStatus
-		body["streams_stats"] = streamsStats
+		body["streams_stats"] = publicStreamsStats(streamsStats)
 	}
 
 	return c.JSON(http.StatusOK, body)
