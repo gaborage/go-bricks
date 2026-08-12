@@ -132,7 +132,9 @@ release with `CompareAndDelete` carrying the same token — never a bare `Delete
 removes whoever holds the key at that moment rather than verifying it is still you:
 
 ```go
-token := []byte(workerID)
+// A fresh token per acquisition: a worker identity would let a stale release
+// delete a later acquisition's lock.
+token := []byte(uuid.New().String())
 acquired, err := c.CompareAndSet(ctx, lockKey, nil, token, 30*time.Second)
 if err != nil {
     return err
@@ -147,6 +149,11 @@ defer func() {
     _, _ = c.CompareAndDelete(releaseCtx, lockKey, token)
 }()
 ```
+
+The token must be unique to a single **acquisition** — mint a fresh one where the lock is
+taken, never a reusable worker identity. A stable identity makes a release that lands after
+the TTL lapsed match whatever the next acquisition stored under that same identity, so it
+deletes the next holder's lock: the unconditional-`Delete` hazard this pair exists to remove.
 
 Two hazards this pair introduces, both of which turn the safe release back into an unsafe
 one if ignored:

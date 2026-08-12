@@ -2104,14 +2104,17 @@ return getCachedResult(storedValue)
 ```go
 // Acquire distributed lock
 lockKey := "lock:job:456"
-workerID := []byte("worker-1")
+
+// A fresh token per acquisition: a worker identity would let a stale release delete a
+// later acquisition's lock.
+lockToken := []byte(uuid.New().String())
 
 c, err := m.getCache(ctx)
 if err != nil {
     return err
 }
 
-success, err := c.CompareAndSet(ctx, lockKey, nil, workerID, 30*time.Second)
+success, err := c.CompareAndSet(ctx, lockKey, nil, lockToken, 30*time.Second)
 if err != nil {
     return err
 }
@@ -2122,7 +2125,7 @@ if !success {
 
 // Lock acquired - perform work.
 //
-// Release with CompareAndDelete, never Delete: it removes the key only while workerID
+// Release with CompareAndDelete, never Delete: it removes the key only while lockToken
 // is still the stored token, so a lock that expired mid-job and was re-acquired by
 // another worker is left alone.
 //
@@ -2137,7 +2140,7 @@ defer func() {
     // A canceled ctx cannot reach Redis, so release on a detached, bounded context.
     releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
     defer cancel()
-    _, _ = c.CompareAndDelete(releaseCtx, lockKey, workerID)
+    _, _ = c.CompareAndDelete(releaseCtx, lockKey, lockToken)
 }()
 
 return processJob(ctx)

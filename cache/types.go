@@ -28,7 +28,7 @@ import (
 //
 //	// Distributed locking — release with the same token, never a bare Delete
 //	// (a deferred release needs a detached context; see CompareAndSet)
-//	token := []byte("worker-1")
+//	token := []byte(uuid.New().String()) // fresh per acquisition, never a worker identity
 //	acquired, err := cache.CompareAndSet(ctx, "lock:job:789", nil, token, 1*time.Minute)
 //	released, err := cache.CompareAndDelete(ctx, "lock:job:789", token)
 type Cache interface {
@@ -74,7 +74,9 @@ type Cache interface {
 	//
 	// Example (distributed lock):
 	//
-	//	token := []byte("worker-1")
+	//	// A fresh token per acquisition: a worker identity would let a stale release
+	//	// delete a later acquisition's lock.
+	//	token := []byte(uuid.New().String())
 	//	acquired, err := cache.CompareAndSet(ctx, lockKey, nil, token, 30*time.Second)
 	//	if err != nil {
 	//	    return err
@@ -99,6 +101,12 @@ type Cache interface {
 	// CompareAndDelete atomically removes the key only if its current value equals
 	// expectedValue. It is the safe release for a lock acquired via CompareAndSet: Delete
 	// removes whoever holds the key now, this removes it only if the caller still does.
+	//
+	// expectedValue must be unique to a single acquisition — a random token minted where the
+	// lock is taken, not a reusable worker identity. Under a stable identity a release that
+	// arrives after the TTL lapsed matches whatever the next acquisition stored under that
+	// same identity and deletes it, silently restoring the unconditional-Delete hazard this
+	// method exists to remove.
 	//
 	// expectedValue must be non-nil. Unlike CompareAndSet, nil has no acquire-if-absent
 	// counterpart here, and unconditional removal is already Delete — a nil expectedValue

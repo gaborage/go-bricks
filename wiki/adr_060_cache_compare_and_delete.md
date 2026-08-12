@@ -136,6 +136,12 @@ Both are new, and both make the *fix* dangerous if undocumented.
    it". So: never fall back to `Delete`, never retry the release with it, and treat `false` as
    authorizing "stop and do nothing" — never compensation.
 
+Both assume a token unique to one **acquisition** — a random value minted where the lock is taken,
+never a reusable worker identity. Under a stable identity a release arriving after the TTL lapsed
+matches whatever the next acquisition stored under that same identity and deletes it, which is
+the #823 hazard restored inside the method built to remove it; every rewritten example therefore
+mints a fresh `uuid`.
+
 ### Not applicable: the sub-millisecond TTL clamp
 
 `CompareAndSet` clamps a positive sub-millisecond TTL to 1ms so it cannot truncate to the script's

@@ -2430,7 +2430,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `ttl == 0` converts a recoverable mistake into a permanent one. `CompareAndSet` accepts ttl 0 and
   stores the key **without expiration**; an unconditional `Delete` always freed it, but a
   token-verified release returns `false` on any token drift and then nothing ever removes the key.
-  Acquire with a bounded, positive TTL before switching the release. Two further contract rules:
+  Acquire with a bounded, positive TTL before switching the release, and make the stored value
+  unique per **acquisition** — a mechanical swap that keeps a reusable worker identity as the token
+  keeps the hazard, because a release landing after the TTL lapsed matches the next acquisition's
+  identical value and deletes its lock. Two further contract rules:
   `false` and any error are both **terminal** — never fall back to `Delete` and never retry the
   release with it, or the unconditional-release hazard returns behind an API that reads as safe — and
   `false` does not prove another holder's value is present, because it also covers "the key was
