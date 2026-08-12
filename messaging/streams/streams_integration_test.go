@@ -219,3 +219,64 @@ func TestStreamsManagerSkipsFailedMessageIntegration(t *testing.T) {
 	assert.Equal(t, bodiesFrom("msg", 10, 2), replayed,
 		"the failed message is skipped on restart - streams have no redelivery")
 }
+
+// startSACManager starts a single active consumer, whose promotion callback is the
+// code path the client invokes from its own read-loop goroutine.
+func startSACManager(t *testing.T, opts ManagerOptions, handler Handler) *Manager {
+	t.Helper()
+
+	decls := NewDeclarations()
+	decls.DeclareStream(itStream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream:  itStream,
+		Name:    itConsumerName,
+		Start:   OffsetFirst(),
+		SAC:     true,
+		Handler: handler,
+	})
+
+	m := NewManager(opts)
+	require.NoError(t, m.Start(context.Background(), decls))
+	return m
+}
+
+// TestStreamsManagerSingleActiveConsumerIntegration exercises the SAC promotion
+// callback the client fires outside the manager's lock. Run with -race, it covers
+// the environment snapshot that callback closes over: reading m.env there instead
+// would be an unsynchronized read of a field Close nils.
+func TestStreamsManagerSingleActiveConsumerIntegration(t *testing.T) {
+	ctx := context.Background()
+	opts := streamsTestEnv(ctx, t)
+
+	first := &recorder{failAt: -1}
+	m := startSACManager(t, opts, first.handle)
+
+	publish(t, opts, itStream, bodiesFrom("msg", 0, 6))
+	waitForCount(t, first, 6)
+
+	_, bodies := first.snapshot()
+	assert.Equal(t, bodiesFrom("msg", 0, 6), bodies, "the promoted consumer starts at the declared position")
+
+	require.Eventually(t, func() bool {
+		stored, ok := m.Stats()["stored_offsets"].(map[string]int64)
+		return ok && stored[itStream+"/"+itConsumerName] == 5
+	}, itWaitTimeout, itPollInterval, "the promoted consumer commits its offsets")
+
+	m.StopConsumers()
+	require.NoError(t, m.Close())
+
+	// A new group member is promoted in turn and must resume from the stored offset.
+	second := &recorder{failAt: -1}
+	m2 := startSACManager(t, opts, second.handle)
+	t.Cleanup(func() {
+		m2.StopConsumers()
+		require.NoError(t, m2.Close())
+	})
+
+	publish(t, opts, itStream, bodiesFrom("msg", 6, 2))
+	waitForCount(t, second, 2)
+
+	_, resumed := second.snapshot()
+	assert.Equal(t, bodiesFrom("msg", 6, 2), resumed,
+		"promotion resolves the stored offset, not the declared start position")
+}

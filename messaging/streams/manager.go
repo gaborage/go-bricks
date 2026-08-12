@@ -110,7 +110,7 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	// dial leaves nothing to clean up here.
 	env, err := stream.NewEnvironment(m.environmentOptions())
 	if err != nil {
-		return fmt.Errorf("failed to connect to stream endpoint %s: %w", redactStreamURI(m.opts.URI), err)
+		return fmt.Errorf("failed to connect to stream endpoint %s: %w", redactStreamURI(m.opts.URI), safeEnvError(err))
 	}
 	m.env = env
 
@@ -123,13 +123,13 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	consumeCtx, cancel := context.WithCancel(ctx)
 	m.cancel = cancel
 
-	if err := m.declareStreams(decls); err != nil {
+	if err := m.declareStreams(env, decls); err != nil {
 		m.stopLocked()
 		return err
 	}
 
 	for _, decl := range decls.consumers {
-		if err := m.startConsumer(consumeCtx, decl); err != nil {
+		if err := m.startConsumer(consumeCtx, env, decl); err != nil {
 			m.stopLocked()
 			return err
 		}
@@ -155,17 +155,18 @@ func (m *Manager) environmentOptions() *stream.EnvironmentOptions {
 // existing stream as success; a retention mismatch surfaces as
 // precondition-failed and aborts startup rather than silently consuming a stream
 // configured differently from the declaration.
-func (m *Manager) declareStreams(decls *Declarations) error {
+func (m *Manager) declareStreams(env *stream.Environment, decls *Declarations) error {
 	for _, s := range decls.streams {
-		if err := m.env.DeclareStream(s.Name, streamOptionsFrom(&s.Spec)); err != nil {
+		if err := env.DeclareStream(s.Name, streamOptionsFrom(&s.Spec)); err != nil {
 			return fmt.Errorf("failed to declare stream %q: %w", s.Name, err)
 		}
 	}
 	return nil
 }
 
-// startConsumer starts one reliable consumer for a declaration.
-func (m *Manager) startConsumer(ctx context.Context, decl *consumerDeclaration) error {
+// startConsumer starts one reliable consumer for a declaration. env is the
+// caller's snapshot of m.env, taken under m.mu.
+func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
 	runner := &consumerRunner{
 		name:    decl.Name,
 		handler: decl.Handler,
@@ -177,18 +178,26 @@ func (m *Manager) startConsumer(ctx context.Context, decl *consumerDeclaration) 
 
 	opts := stream.NewConsumerOptions().
 		SetConsumerName(decl.Name).
-		SetOffset(m.resolveOffset(decl.Name, decl.Stream, decl.Start))
+		SetOffset(m.resolveOffset(env, decl.Name, decl.Stream, decl.Start))
 
 	if decl.SAC {
 		// The promotion callback resolves the offset again: another group member
 		// may have advanced it while this one was passive.
+		//
+		// SECURITY: the client calls this from its own read-loop goroutine, outside
+		// m.mu and with no recover() anywhere in its call path. It therefore closes
+		// over this snapshot instead of reading m.env: that field is written under
+		// m.mu and nil'd by Close, so reading it here would be a data race, and a
+		// promotion frame arriving after Close would dereference nil and kill the
+		// process mid-shutdown. Taking m.mu here instead would deadlock — stopLocked
+		// holds it across a blocking consumer Close.
 		opts = opts.SetSingleActiveConsumer(stream.NewSingleActiveConsumer(
 			func(streamName string, _ bool) stream.OffsetSpecification {
-				return m.resolveOffset(decl.Name, streamName, decl.Start)
+				return m.resolveOffset(env, decl.Name, streamName, decl.Start)
 			}))
 	}
 
-	consumer, err := ha.NewReliableConsumer(m.env, decl.Stream, opts, runner.messagesHandler)
+	consumer, err := ha.NewReliableConsumer(env, decl.Stream, opts, runner.messagesHandler)
 	if err != nil {
 		return fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, err)
 	}
@@ -212,8 +221,12 @@ func (m *Manager) startConsumer(ctx context.Context, decl *consumerDeclaration) 
 // resolveOffset asks the broker for the consumer's stored offset and falls back
 // to the declared start position when it has none. A stored offset always wins,
 // which is what makes restart behavior deterministic.
-func (m *Manager) resolveOffset(consumerName, streamName string, start OffsetStart) stream.OffsetSpecification {
-	stored, err := m.env.QueryOffset(consumerName, streamName)
+//
+// The environment is a parameter, never m.env, so that no call path — including
+// the SAC promotion callback the client invokes from its own goroutine — can read
+// that guarded field without m.mu. m.log is immutable after NewManager.
+func (m *Manager) resolveOffset(env *stream.Environment, consumerName, streamName string, start OffsetStart) stream.OffsetSpecification {
+	stored, err := env.QueryOffset(consumerName, streamName)
 	if err != nil && !errors.Is(err, stream.OffsetNotFoundError) {
 		m.log.Warn().Err(err).
 			Str(logFieldStream, streamName).
@@ -221,6 +234,21 @@ func (m *Manager) resolveOffset(consumerName, streamName string, start OffsetSta
 			Msg("Could not query stored stream offset; using the declared start position")
 	}
 	return offsetSpecFor(stored, err, start)
+}
+
+// safeEnvError strips the URI out of an environment-construction failure.
+//
+// SECURITY: the client parses the endpoint with url.Parse and returns its
+// *url.Error verbatim, whose Error() renders the raw URI — credentials included.
+// Only the cause is kept; the endpoint is reported separately, redacted. This is
+// reachable when config.Validate never ran (app.NewWithConfig, see
+// app/streams_setup.go).
+func safeEnvError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return fmt.Errorf("invalid stream URI: %w", urlErr.Err)
+	}
+	return err
 }
 
 // offsetSpecFor picks between a stored offset and the declared start position.
