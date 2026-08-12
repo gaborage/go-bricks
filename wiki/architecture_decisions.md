@@ -1137,6 +1137,35 @@ would restore only pointer identity and silently change meaning. This lane has n
 tracking, no single active consumer and no super streams; those are stream-protocol features and are
 ADR-059's subject. See [migrations.md](migrations.md) `[C59.2]`.
 
+### [ADR-060: `CompareAndDelete` Gives the Cache Interface a Safe Conditional Release](adr_060_cache_compare_and_delete.md)
+
+**Date:** 2026-08-12 | **Status:** Accepted
+
+`cache.Cache` has advertised `CompareAndSet` as the distributed-locking primitive since
+[ADR-011](adr_011_redis_cache.md) while offering no safe release: the only one was unconditional
+`Delete`, so a worker whose work outran the TTL cleared the *next* holder's lock, and the interface's
+own godoc told callers to live with it. Two independent reporters asked for the same method — #823
+from the locking side, #966 item 2 from conditional eviction — and it could not be emulated, since
+`casScript` has no `DEL` branch and `CompareAndSet(…, workerID, nil, 0)` writes an empty string that
+still occupies the key, with no expiry. `CompareAndDelete(ctx, key, expectedValue) (deleted, err)`
+removes the key only while `expectedValue` is what is stored, via a sibling single-purpose
+`cadScript` (rather than a third mode on `casScript`, departing from plan 071's note: a
+single-behavior script needs no mode discriminator, which is the stronger reading of what #830
+fixed). A nil `expectedValue` is rejected with the new `cache.ErrNilExpectedValue` before any round
+trip, because go-redis renders a nil `[]byte` as a zero-length bulk string that would silently match
+a key holding the empty string.
+
+**Key Benefits:** The locking contract is completable — a lock that lapsed mid-work is left alone
+instead of stolen back — and conditional eviction no longer needs an undecodable tombstone. A new
+mock↔client parity test (with an expiry case) pins both implementations to the same answers.
+**Watch:** a method on an exported interface **stops external implementers compiling**, and the break
+usually surfaces in *test doubles*, which `go build ./...` does not compile — use `go vet ./...`. Two
+new caller hazards: a lock acquired with `ttl == 0` and released this way is held forever, and
+`false`/error are both **terminal** — falling back to `Delete` reinstates the original hazard behind
+an API that reads as safe. `false` does not distinguish a failed comparison from an
+already-gone key, which is why the result is named `deleted`. See [migrations.md](migrations.md)
+`[C59.3]`.
+
 ---
 
 ## ADR Lifecycle
@@ -1148,7 +1177,7 @@ ADR-059's subject. See [migrations.md](migrations.md) `[C59.2]`.
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-058) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-060) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

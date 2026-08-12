@@ -8,7 +8,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 
 **Core Components:**
 
-- **Redis Client**: Atomic operations (Get/Set/GetOrSet/CompareAndSet), connection pooling, health monitoring
+- **Redis Client**: Atomic operations (Get/Set/GetOrSet/CompareAndSet/CompareAndDelete), connection pooling, health monitoring
 - **CacheManager**: Per-tenant cache lifecycle with lazy initialization, LRU eviction, idle cleanup, singleflight
 - **CBOR Serialization**: Type-safe encoding with security limits (max 10k array/map elements, max nesting depth 16)
 - **Multi-tenant integration**: Automatic tenant resolution from context via `deps.Cache(ctx)`
@@ -124,7 +124,36 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 | Basic write | `Set(ctx, key, value, ttl)` | Store computed result | Single-key |
 | Deduplication | `GetOrSet(ctx, key, value, ttl)` | Idempotency keys | Atomic SET NX |
 | Distributed lock | `CompareAndSet(ctx, key, expectedValue, newValue, ttl)` | Job coordination | Lua script CAS |
+| Lock release | `CompareAndDelete(ctx, key, expectedValue)` | Token-verified release, conditional eviction | Lua script CAD |
 | Type-safe store | `Marshal(v)` + `Set()` | Struct serialization | CBOR encoding |
+
+**Releasing a distributed lock:** acquire with `CompareAndSet` and a **positive** TTL, then
+release with `CompareAndDelete` carrying the same token — never a bare `Delete`, which
+removes whoever holds the key at that moment rather than verifying it is still you:
+
+```go
+token := []byte(workerID)
+acquired, err := c.CompareAndSet(ctx, lockKey, nil, token, 30*time.Second)
+if err != nil || !acquired {
+    return ErrLockHeld
+}
+defer func() { _, _ = c.CompareAndDelete(ctx, lockKey, token) }()
+```
+
+Two hazards this pair introduces, both of which turn the safe release back into an unsafe
+one if ignored:
+
+- **A positive TTL is mandatory.** `CompareAndSet` accepts `ttl == 0` (stored without
+  expiration). A token-verified release that declines to remove the key then leaves it
+  held forever, with no expiry to recover it — `Delete` used to paper over that.
+- **`false` and any error are both terminal.** Never fall back to `Delete`, and never
+  retry the release with it; that reinstates the unconditional-release hazard behind an
+  API that reads as safe. A `false` result authorizes stopping, not compensating: a
+  client-side timeout on a delete that actually landed is indistinguishable from another
+  holder owning the key. `false` also does not prove another holder's value is present —
+  it covers "already gone" too.
+
+See [ADR-060](adr_060_cache_compare_and_delete.md).
 
 **Multi-Tenant Isolation:**
 

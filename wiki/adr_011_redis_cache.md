@@ -313,6 +313,10 @@ if !acquired {
 defer c.Delete(ctx, lockKey)
 ```
 
+> The unconditional `Delete` release shown above is superseded by `CompareAndDelete` — see
+> [ADR-060](adr_060_cache_compare_and_delete.md). The example is kept as the historical
+> record of what this ADR decided.
+
 ## Security Considerations
 
 1. **Environment Variables**: Sensitive data (`CACHE_REDIS_PASSWORD`) via env only

@@ -47,7 +47,10 @@ const (
 	OpDelete        = "delete"
 	OpGetOrSet      = "getorset"
 	OpCompareAndSet = "cas"
-	OpHealth        = "ping"
+	// OpCompareAndDelete is deliberately absent from isLookupOperation: a conditional
+	// delete is not a lookup, so it emits no hit/miss counters.
+	OpCompareAndDelete = "cad"
+	OpHealth           = "ping"
 )
 
 // Error classification labels emitted as metric attributes.

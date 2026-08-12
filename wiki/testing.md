@@ -190,7 +190,7 @@ result, err := svc.Process(acmeCtx)  // Uses acme's MockCache
 **Key Features:**
 
 - Fluent configuration API (`WithGetFailure`, `WithDelay`, `WithCloseCallback`)
-- Operation tracking (Get/Set/Delete/GetOrSet/CompareAndSet counts)
+- Operation tracking (Get/Set/Delete/GetOrSet/CompareAndSet/CompareAndDelete counts)
 - 17 assertion helpers (`AssertCacheHit`, `AssertOperationCount`, `AssertValue`)
 - TTL expiration testing (real time-based expiration)
 - Multi-tenant isolation support

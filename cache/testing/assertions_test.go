@@ -150,6 +150,20 @@ func TestOperationCounts(t *testing.T) {
 	assert.Equal(t, int64(1), counts["Delete"])
 }
 
+// TestOperationCountsIncludesCompareAndDelete guards AssertNoOperations, which sums
+// exactly this map: a missing key reads as 0, so omitting the entry would let "the cache
+// was never touched" pass despite a CompareAndDelete call.
+func TestOperationCountsIncludesCompareAndDelete(t *testing.T) {
+	ctx := context.Background()
+	mock := NewMockCache()
+
+	_, err := mock.CompareAndDelete(ctx, "key1", []byte("token"))
+	require.NoError(t, err)
+
+	counts := OperationCounts(mock)
+	assert.Equal(t, int64(1), counts["CompareAndDelete"])
+}
+
 func TestAssertNoOperations(t *testing.T) {
 	mock := NewMockCache()
 

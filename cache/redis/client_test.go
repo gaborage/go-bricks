@@ -3,6 +3,8 @@ package redis
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -770,4 +772,121 @@ func TestCompareAndSetCASModeSubMillisecondTTLClamps(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, success)
 	assert.Equal(t, time.Millisecond, mr.TTL(testKey1))
+}
+
+func TestClientCompareAndDeleteMatchingValueDeletes(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	require.NoError(t, mr.Set(testKey1, testWorker))
+
+	ctx := context.Background()
+	deleted, err := client.CompareAndDelete(ctx, testKey1, []byte(testWorker))
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	assert.False(t, mr.Exists(testKey1))
+}
+
+func TestClientCompareAndDeleteMismatchLeavesKey(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	require.NoError(t, mr.Set(testKey1, testExistingValue))
+
+	ctx := context.Background()
+	deleted, err := client.CompareAndDelete(ctx, testKey1, []byte("worker-2"))
+	require.NoError(t, err)
+	assert.False(t, deleted)
+
+	stored, err := mr.Get(testKey1)
+	require.NoError(t, err)
+	assert.Equal(t, testExistingValue, stored)
+}
+
+func TestClientCompareAndDeleteAbsentKey(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	ctx := context.Background()
+	deleted, err := client.CompareAndDelete(ctx, testKey1, []byte(testWorker))
+	require.NoError(t, err)
+	assert.False(t, deleted)
+	assert.False(t, mr.Exists(testKey1))
+}
+
+// TestClientCompareAndDeleteNilExpectedIsRejected pins both halves of the guard: the
+// sentinel, and that nothing reached Redis. Without the round-trip half it passes even
+// with the guard removed — go-redis renders a nil []byte as a zero-length bulk string,
+// which would match the pre-seeded empty value and delete the key.
+func TestClientCompareAndDeleteNilExpectedIsRejected(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	require.NoError(t, mr.Set(testKey1, ""))
+
+	ctx := context.Background()
+	before := mr.CommandCount()
+
+	deleted, err := client.CompareAndDelete(ctx, testKey1, nil)
+	assert.False(t, deleted)
+	assert.ErrorIs(t, err, cache.ErrNilExpectedValue)
+	assert.Equal(t, before, mr.CommandCount())
+	assert.True(t, mr.Exists(testKey1))
+}
+
+func TestClientCompareAndDeleteEmptySliceComparesAgainstEmptyString(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	require.NoError(t, mr.Set(testKey1, ""))
+
+	ctx := context.Background()
+	deleted, err := client.CompareAndDelete(ctx, testKey1, []byte{})
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	assert.False(t, mr.Exists(testKey1))
+}
+
+// TestClientCompareAndDeleteConcurrentSingleWinner proves the release is atomic: EVAL
+// runs to completion in miniredis as in real Redis, so exactly one racer observes the
+// token and deletes it.
+func TestClientCompareAndDeleteConcurrentSingleWinner(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	defer client.Close()
+
+	require.NoError(t, mr.Set(testKey1, testWorker))
+
+	const racers = 8
+
+	ctx := context.Background()
+	var wins atomic.Int64
+	var wg sync.WaitGroup
+
+	wg.Add(racers)
+	for range racers {
+		go func() {
+			defer wg.Done()
+
+			deleted, err := client.CompareAndDelete(ctx, testKey1, []byte(testWorker))
+			assert.NoError(t, err)
+			if deleted {
+				wins.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int64(1), wins.Load())
+	assert.False(t, mr.Exists(testKey1))
+}
+
+func TestClientCompareAndDeleteAfterCloseFailsClosed(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	_ = mr // miniredis instance not needed for this test
+	client.Close()
+
+	ctx := context.Background()
+	deleted, err := client.CompareAndDelete(ctx, testKey1, []byte(testWorker))
+	assert.False(t, deleted)
+	assert.ErrorIs(t, err, cache.ErrClosed)
 }

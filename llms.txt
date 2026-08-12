@@ -2099,7 +2099,7 @@ if wasSet {
 return getCachedResult(storedValue)
 ```
 
-**Distributed Locking with CompareAndSet:**
+**Distributed Locking with CompareAndSet + CompareAndDelete:**
 
 ```go
 // Acquire distributed lock
@@ -2122,14 +2122,18 @@ if !success {
 
 // Lock acquired - perform work.
 //
-// CAUTION: Delete releases unconditionally. If processJob outruns the 30s TTL, the
-// lock expires, another worker acquires it, and this Delete clears THEIR lock. The
-// cache surface has no compare-and-delete, so a token-verified release is not
-// expressible here (CompareAndSet only ever SETs, and acquisition requires the key
-// to be absent). Until then: set the TTL above worst-case job duration, and keep
-// processJob idempotent — treat the lock as contention reduction, not mutual
-// exclusion.
-defer func() { _ = c.Delete(ctx, lockKey) }()
+// Release with CompareAndDelete, never Delete: it removes the key only while workerID
+// is still the stored token, so a lock that expired mid-job and was re-acquired by
+// another worker is left alone.
+//
+// CAUTION: false and any error are BOTH terminal — never fall back to Delete and never
+// retry the release with it, or the unconditional-release hazard returns behind an API
+// that reads as safe. false authorizes stopping, not compensating: a timed-out delete
+// that actually landed looks identical to another worker owning the key. Acquire with a
+// positive TTL (above worst-case job duration) — a lock taken with ttl 0 that this
+// release declines to remove is held forever, with no expiry to recover it. The TTL is
+// still what bounds a crashed holder, so keep processJob idempotent.
+defer func() { _, _ = c.CompareAndDelete(ctx, lockKey, workerID) }()
 
 return processJob(ctx)
 ```
@@ -2188,9 +2192,10 @@ func TestMultiTenantCacheIsolation(t *testing.T) {
 |-----------|--------|----------|-----------|---------|
 | Basic read | Get(ctx, key) | Query result cache | Single-key | ~1ms |
 | Basic write | Set(ctx, key, value, ttl) | Store computed result | Single-key | ~1ms |
-| Remove | Delete(ctx, key) | Invalidation, lock release | Single-key | ~1ms |
+| Remove | Delete(ctx, key) | Unconditional invalidation | Single-key | ~1ms |
 | Deduplication | GetOrSet(ctx, key, value, ttl) | Idempotency keys | Atomic SET NX | ~2ms |
 | Distributed lock | CompareAndSet(ctx, key, expected, new, ttl) | Job coordination | Lua script CAS | ~2ms |
+| Lock release | CompareAndDelete(ctx, key, expected) | Token-verified release, conditional eviction | Lua script CAD | ~2ms |
 | Type-safe store | Marshal(v) + Set() | Struct serialization | Single-key | ~1ms + encode |
 | Type-safe retrieve | Get() + Unmarshal[T](data) | Struct deserialization | Single-key | ~1ms + decode |
 
@@ -2391,6 +2396,7 @@ No code changes required - observability hooks activate automatically when confi
 - Set: ~0.5-1ms (single key, no network)
 - GetOrSet: ~1-2ms (Lua script execution)
 - CompareAndSet: ~1-2ms (Lua script execution)
+- CompareAndDelete: ~1-2ms (Lua script execution)
 
 **Network Latency Impact:**
 - Same datacenter: +0.5-1ms additional latency
@@ -2422,7 +2428,7 @@ Example: 8 CPUs, 500 concurrent requests → PoolSize = 80
 | Rate limiting (per-tenant) | Redis Cache + `GetOrSet` | Atomic operations, distributed |
 | Idempotency keys | Redis Cache + `CompareAndSet` | Distributed lock semantics |
 | Local caching (per-pod) | `sync.Map` or `ristretto` | No network overhead, pod-local only |
-| Distributed locks | Redis Cache + `CompareAndSet` | Cross-pod coordination |
+| Distributed locks | Redis Cache + `CompareAndSet` / `CompareAndDelete` | Cross-pod coordination, token-verified release |
 
 **Cache vs Database Trade-offs:**
 
@@ -2509,6 +2515,22 @@ func (m *MockCache) CompareAndSet(_ context.Context, key string, expected, new [
         return true, nil
     }
     return false, nil
+}
+
+func (m *MockCache) CompareAndDelete(_ context.Context, key string, expected []byte) (bool, error) {
+    if expected == nil {
+        return false, cache.ErrNilExpectedValue
+    }
+
+    m.mu.Lock()
+    defer m.mu.Unlock()
+
+    existing, exists := m.data[key]
+    if !exists || string(existing) != string(expected) {
+        return false, nil
+    }
+    delete(m.data, key)
+    return true, nil
 }
 
 func (m *MockCache) Health(_ context.Context) error {

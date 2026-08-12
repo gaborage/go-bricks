@@ -12,6 +12,8 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 )
 
+var _ cache.Cache = (*MockCache)(nil)
+
 // MockCache is an in-memory cache implementation for testing.
 // It implements cache.Cache with configurable behavior for simulating failures and delays.
 //
@@ -33,25 +35,27 @@ type MockCache struct {
 	closed atomic.Bool
 
 	// Configurable behavior
-	delay              time.Duration
-	getError           error
-	setError           error
-	deleteError        error
-	getOrSetError      error
-	compareAndSetError error
-	healthError        error
-	statsError         error
-	closeError         error
+	delay                 time.Duration
+	getError              error
+	setError              error
+	deleteError           error
+	getOrSetError         error
+	compareAndSetError    error
+	compareAndDeleteError error
+	healthError           error
+	statsError            error
+	closeError            error
 
 	// Operation tracking
-	getCalls           atomic.Int64
-	setCalls           atomic.Int64
-	deleteCalls        atomic.Int64
-	getOrSetCalls      atomic.Int64
-	compareAndSetCalls atomic.Int64
-	healthCalls        atomic.Int64
-	statsCalls         atomic.Int64
-	closeCalls         atomic.Int64
+	getCalls              atomic.Int64
+	setCalls              atomic.Int64
+	deleteCalls           atomic.Int64
+	getOrSetCalls         atomic.Int64
+	compareAndSetCalls    atomic.Int64
+	compareAndDeleteCalls atomic.Int64
+	healthCalls           atomic.Int64
+	statsCalls            atomic.Int64
+	closeCalls            atomic.Int64
 
 	// Close callback (for tracking in tests)
 	onClose func(string)
@@ -123,6 +127,12 @@ func (m *MockCache) WithGetOrSetFailure(err error) *MockCache {
 // WithCompareAndSetFailure configures CompareAndSet operations to return an error.
 func (m *MockCache) WithCompareAndSetFailure(err error) *MockCache {
 	m.compareAndSetError = err
+	return m
+}
+
+// WithCompareAndDeleteFailure configures CompareAndDelete operations to return an error.
+func (m *MockCache) WithCompareAndDeleteFailure(err error) *MockCache {
+	m.compareAndDeleteError = err
 	return m
 }
 
@@ -344,6 +354,56 @@ func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue
 	return true, nil
 }
 
+// CompareAndDelete atomically removes a key only if its current value matches.
+//
+// A configured error is checked before the nil-expectedValue rejection, mirroring where
+// CompareAndSet places its ttl < 0 guard: on the mock, WithCompareAndDeleteFailure wins
+// over a nil expectedValue.
+func (m *MockCache) CompareAndDelete(ctx context.Context, key string, expectedValue []byte) (bool, error) {
+	m.compareAndDeleteCalls.Add(1)
+
+	if m.delay > 0 {
+		select {
+		case <-time.After(m.delay):
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+
+	if m.closed.Load() {
+		return false, cache.ErrClosed
+	}
+
+	if m.compareAndDeleteError != nil {
+		return false, m.compareAndDeleteError
+	}
+
+	if expectedValue == nil {
+		return false, cache.ErrNilExpectedValue
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry, ok := m.data[key]
+	if !ok {
+		return false, nil
+	}
+
+	// An expired entry reads as absent, matching Redis where GET returns false.
+	if time.Now().After(entry.expiration) {
+		delete(m.data, key)
+		return false, nil
+	}
+
+	if !bytes.Equal(entry.value, expectedValue) {
+		return false, nil
+	}
+
+	delete(m.data, key)
+	return true, nil
+}
+
 // Delete removes a value from the cache.
 func (m *MockCache) Delete(ctx context.Context, key string) error {
 	m.deleteCalls.Add(1)
@@ -418,6 +478,7 @@ func (m *MockCache) Stats() (map[string]any, error) {
 		"delete_calls":   m.deleteCalls.Load(),
 		"getorset_calls": m.getOrSetCalls.Load(),
 		"cas_calls":      m.compareAndSetCalls.Load(),
+		"cad_calls":      m.compareAndDeleteCalls.Load(),
 		"health_calls":   m.healthCalls.Load(),
 		"stats_calls":    m.statsCalls.Load(),
 		"closed":         m.closed.Load(),
@@ -452,7 +513,7 @@ func (m *MockCache) Close() error {
 // Test utility methods
 
 // OperationCount returns the number of times a specific operation was called.
-// Supported operations: "Get", "Set", "Delete", "GetOrSet", "CompareAndSet", "Health", "Stats", "Close"
+// Supported operations: "Get", "Set", "Delete", "GetOrSet", "CompareAndSet", "CompareAndDelete", "Health", "Stats", "Close"
 func (m *MockCache) OperationCount(operation string) int64 {
 	switch operation {
 	case "Get":
@@ -465,6 +526,8 @@ func (m *MockCache) OperationCount(operation string) int64 {
 		return m.getOrSetCalls.Load()
 	case "CompareAndSet", "CAS":
 		return m.compareAndSetCalls.Load()
+	case "CompareAndDelete", "CAD":
+		return m.compareAndDeleteCalls.Load()
 	case "Health":
 		return m.healthCalls.Load()
 	case "Stats":
@@ -507,6 +570,7 @@ func (m *MockCache) ResetCounters() {
 	m.deleteCalls.Store(0)
 	m.getOrSetCalls.Store(0)
 	m.compareAndSetCalls.Store(0)
+	m.compareAndDeleteCalls.Store(0)
 	m.healthCalls.Store(0)
 	m.statsCalls.Store(0)
 	m.closeCalls.Store(0)

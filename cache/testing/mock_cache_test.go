@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/cache/redis"
 	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
@@ -547,4 +549,86 @@ func TestMockCacheCompareAndSetEmptyVsNilMatchesRedis(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []byte("worker-1"), stored)
 	})
+}
+
+// TestMockCacheCompareAndDeleteParityWithRedis is the anti-drift device for
+// CompareAndDelete: the mock and the real client must agree on (deleted, err) and on
+// whether the key survives. The expired_key case is the class an isolated-only suite
+// cannot catch — the mock's CompareAndSet NX branch already diverges from Redis there.
+func TestMockCacheCompareAndDeleteParityWithRedis(t *testing.T) {
+	const (
+		parityKey   = "lock:job:parity"
+		parityToken = "worker-1"
+	)
+
+	tests := []struct {
+		name        string
+		seedAbsent  bool
+		seedValue   string
+		seedTTL     time.Duration
+		expire      bool
+		expected    []byte
+		wantDeleted bool
+		wantErr     error
+		wantKeyGone bool
+	}{
+		{name: "matching_token_deletes", seedValue: parityToken, seedTTL: time.Minute, expected: []byte(parityToken), wantDeleted: true, wantKeyGone: true},
+		{name: "mismatched_token_leaves_key", seedValue: "worker-2", seedTTL: time.Minute, expected: []byte(parityToken)},
+		{name: "absent_key", seedAbsent: true, expected: []byte(parityToken), wantKeyGone: true},
+		{name: "expired_key", seedValue: parityToken, seedTTL: 10 * time.Millisecond, expire: true, expected: []byte(parityToken), wantKeyGone: true},
+		{name: "empty_slice_compares_against_empty_string", seedValue: "", seedTTL: time.Minute, expected: []byte{}, wantDeleted: true, wantKeyGone: true},
+		{name: "nil_expected_rejected", seedValue: parityToken, seedTTL: time.Minute, expected: nil, wantErr: cache.ErrNilExpectedValue},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mr := miniredis.RunT(t)
+			client, err := redis.NewClient(&redis.Config{
+				Host:     mr.Host(),
+				Port:     mr.Server().Addr().Port,
+				PoolSize: 10,
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = client.Close() })
+
+			subjects := []struct {
+				name  string
+				cache cache.Cache
+				// lapse advances the subject past ttl. The mock reads the wall clock, so
+				// only the client can fast-forward.
+				lapse func(ttl time.Duration)
+			}{
+				{name: "mock", cache: NewMockCache(), lapse: func(ttl time.Duration) { time.Sleep(ttl + 10*time.Millisecond) }},
+				{name: "redis", cache: client, lapse: func(ttl time.Duration) { mr.FastForward(ttl + 10*time.Millisecond) }},
+			}
+
+			for _, subject := range subjects {
+				t.Run(subject.name, func(t *testing.T) {
+					ctx := context.Background()
+
+					if !tt.seedAbsent {
+						require.NoError(t, subject.cache.Set(ctx, parityKey, []byte(tt.seedValue), tt.seedTTL))
+					}
+					if tt.expire {
+						subject.lapse(tt.seedTTL)
+					}
+
+					deleted, err := subject.cache.CompareAndDelete(ctx, parityKey, tt.expected)
+					if tt.wantErr != nil {
+						assert.ErrorIs(t, err, tt.wantErr)
+					} else {
+						require.NoError(t, err)
+					}
+					assert.Equal(t, tt.wantDeleted, deleted)
+
+					_, getErr := subject.cache.Get(ctx, parityKey)
+					if tt.wantKeyGone {
+						assert.ErrorIs(t, getErr, cache.ErrNotFound)
+					} else {
+						assert.NoError(t, getErr)
+					}
+				})
+			}
+		})
+	}
 }

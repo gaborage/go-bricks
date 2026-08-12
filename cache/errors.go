@@ -24,6 +24,13 @@ var (
 	// ErrInvalidTTL is returned when a TTL value is invalid (e.g., negative).
 	ErrInvalidTTL = errors.New("cache: invalid TTL")
 
+	// ErrNilExpectedValue is returned by CompareAndDelete when expectedValue is nil.
+	// CompareAndSet gives nil a meaning (acquire-if-absent) that has no counterpart for a
+	// delete, and unconditional removal is already Delete, so nil is rejected rather than
+	// interpreted. The guard runs before any round trip: a nil []byte reaches Redis as a
+	// zero-length bulk string, which would silently compare against the empty string.
+	ErrNilExpectedValue = errors.New("cache: expected value must not be nil")
+
 	// ErrManagerClosed is returned by CacheManager operations (Get, Remove) after
 	// Close() has been called, or from a zero-value CacheManager that was never built
 	// via NewCacheManager. Callers can use errors.Is(err, ErrManagerClosed)
