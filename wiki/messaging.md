@@ -270,7 +270,7 @@ extra dependency.
 
 ```go
 decls.DeclareStreamQueue("orders.events", &messaging.StreamQueueSpec{
-    MaxAge:              7 * 24 * time.Hour, // x-max-age, whole seconds
+    MaxAge:              7 * 24 * time.Hour, // x-max-age, whole seconds (floors at 1s)
     MaxLengthBytes:      10 << 30,           // x-max-length-bytes
     MaxSegmentSizeBytes: 500 << 20,          // x-stream-max-segment-size-bytes
 })

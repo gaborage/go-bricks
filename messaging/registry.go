@@ -479,6 +479,10 @@ func withStreamOffset(args map[string]any, offset int64) map[string]any {
 // re-attaches at the declared offset — handlers must be idempotent.
 // The feed loop in handleMessages is the only writer, and the supervisor reads
 // it only after handleMessages returns, so no synchronization is needed.
+// handleMessages closes the jobs channel and waits for its workers before
+// returning, so last is the last offset fully PROCESSED, not merely received.
+// Hence the resume is last+1 and not last: nothing unprocessed can be skipped,
+// while an inclusive resume would re-deliver that message on every reconnect.
 type streamResume struct {
 	last int64
 	seen bool

@@ -886,6 +886,52 @@ func TestDeclareStreamQueue(t *testing.T) {
 			},
 		},
 		{
+			// RabbitMQ's x-max-age has second granularity, so a sub-second
+			// retention must floor to "1s" rather than render "0s" and silently
+			// discard what the caller asked for.
+			name: "sub_second_max_age_floors_to_one_second",
+			spec: &StreamQueueSpec{MaxAge: 500 * time.Millisecond},
+			wantArgs: map[string]any{
+				argQueueType: queueTypeStream,
+				argMaxAge:    "1s",
+			},
+		},
+		{
+			name: "nanosecond_max_age_floors_to_one_second",
+			spec: &StreamQueueSpec{MaxAge: 1 * time.Nanosecond},
+			wantArgs: map[string]any{
+				argQueueType: queueTypeStream,
+				argMaxAge:    "1s",
+			},
+		},
+		{
+			// Truncation, not rounding to nearest: 1500ms is "1s", not "2s".
+			name: "fractional_max_age_truncates_toward_whole_seconds",
+			spec: &StreamQueueSpec{MaxAge: 1500 * time.Millisecond},
+			wantArgs: map[string]any{
+				argQueueType: queueTypeStream,
+				argMaxAge:    "1s",
+			},
+		},
+		{
+			name: "whole_seconds_max_age_untouched_by_the_floor",
+			spec: &StreamQueueSpec{MaxAge: 90 * time.Second},
+			wantArgs: map[string]any{
+				argQueueType: queueTypeStream,
+				argMaxAge:    "90s",
+			},
+		},
+		{
+			// The floor must not leak into the zero value: MaxAge 0 still means
+			// "broker default", so the key stays absent.
+			name: "zero_max_age_omits_the_key_beside_other_retention",
+			spec: &StreamQueueSpec{MaxLengthBytes: 4096},
+			wantArgs: map[string]any{
+				argQueueType:      queueTypeStream,
+				argMaxLengthBytes: int64(4096),
+			},
+		},
+		{
 			name: "max_length_only",
 			spec: &StreamQueueSpec{MaxLengthBytes: 2048},
 			wantArgs: map[string]any{

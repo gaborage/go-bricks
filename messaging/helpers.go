@@ -231,9 +231,13 @@ func (d *Declarations) hasParkingBinding(parking, dlx string) bool {
 // StreamQueueSpec configures retention for a stream queue. Zero-value fields
 // are omitted (broker defaults apply). MaxAge is rendered as whole seconds.
 type StreamQueueSpec struct {
-	MaxAge              time.Duration // -> x-max-age ("<n>s")
-	MaxLengthBytes      int64         // -> x-max-length-bytes
-	MaxSegmentSizeBytes int64         // -> x-stream-max-segment-size-bytes
+	// MaxAge -> x-max-age ("<n>s"), truncated to whole seconds. A non-zero
+	// sub-second value floors to "1s": second granularity is RabbitMQ's, so
+	// anything briefer is inexpressible and would otherwise render "0s",
+	// discarding the retention the caller asked for.
+	MaxAge              time.Duration
+	MaxLengthBytes      int64 // -> x-max-length-bytes
+	MaxSegmentSizeBytes int64 // -> x-stream-max-segment-size-bytes
 }
 
 // DeclareStreamQueue declares a RabbitMQ stream queue (x-queue-type: stream):
@@ -248,7 +252,7 @@ func (d *Declarations) DeclareStreamQueue(name string, spec *StreamQueueSpec) *Q
 
 	if spec != nil {
 		if spec.MaxAge > 0 {
-			queue.Args[argMaxAge] = fmt.Sprintf("%ds", int64(spec.MaxAge/time.Second))
+			queue.Args[argMaxAge] = fmt.Sprintf("%ds", max(int64(spec.MaxAge/time.Second), 1))
 		}
 		if spec.MaxLengthBytes > 0 {
 			queue.Args[argMaxLengthBytes] = spec.MaxLengthBytes
