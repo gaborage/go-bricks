@@ -560,7 +560,7 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 	if resume != nil && resume.seen {
 		// Copy: the declaration's Args map is shared with the registry state and
 		// every other session, so the override must not reach it.
-		args := make(map[string]any, len(opts.Args)+1)
+		args := make(map[string]any, len(opts.Args))
 		maps.Copy(args, opts.Args)
 		args[argStreamOffset] = resume.last + 1
 		opts.Args = args
