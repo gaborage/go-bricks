@@ -88,7 +88,8 @@ func (o OffsetStart) specification() stream.OffsetSpecification {
 }
 
 // StreamSpec configures retention for a declared stream. Zero-value fields are
-// omitted, leaving the broker's own defaults in place.
+// omitted, leaving the broker's own defaults in place; a negative value is a
+// declaration error that Declarations.Validate reports.
 type StreamSpec struct {
 	// MaxAge discards segments older than this duration, truncated to whole
 	// seconds. A non-zero sub-second value floors to 1s: second granularity is

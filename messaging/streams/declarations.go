@@ -74,12 +74,15 @@ func (d *Declarations) DeclareStream(name string, spec *StreamSpec) {
 }
 
 // DeclareConsumer registers a stream consumer.
-// Panics if the same (stream, name) pair was already declared — a duplicate is a
-// programming error that would otherwise start two members of the same offset
-// group inside one process.
+// Panics on a nil options pointer, and if the same (stream, name) pair was
+// already declared. Both are programming errors: a nil declaration would consume
+// nothing at all, and a duplicate would otherwise start two members of the same
+// offset group inside one process.
 func (d *Declarations) DeclareConsumer(opts *ConsumerOptions) {
 	if opts == nil {
-		return
+		panic("streams: nil consumer declaration detected\n" +
+			"  DeclareConsumer requires a non-nil *ConsumerOptions\n" +
+			"  Pass &streams.ConsumerOptions{...} at every DeclareConsumer call within DeclareStreams")
 	}
 
 	key := consumerKey{Stream: opts.Stream, Name: opts.Name}
@@ -111,6 +114,7 @@ func (d *Declarations) Validate() error {
 		if s.Name == "" {
 			errs = append(errs, errors.New("stream declaration has an empty name"))
 		}
+		errs = append(errs, negativeRetentionErrors(s.Name, s.Spec)...)
 	}
 
 	for _, c := range d.consumers {
@@ -126,6 +130,24 @@ func (d *Declarations) Validate() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// negativeRetentionErrors rejects negative retention values. The manager applies
+// each field only when it is positive, so a negative one would be dropped on the
+// way to the broker and the stream would silently retain by the broker's default
+// instead of the caller's declaration. Zero is how that default is asked for.
+func negativeRetentionErrors(name string, spec StreamSpec) []error {
+	var errs []error
+	if spec.MaxAge < 0 {
+		errs = append(errs, fmt.Errorf("stream %q has a negative MaxAge (%s); zero leaves retention to the broker", name, spec.MaxAge))
+	}
+	if spec.MaxLengthBytes < 0 {
+		errs = append(errs, fmt.Errorf("stream %q has a negative MaxLengthBytes (%d); zero leaves retention to the broker", name, spec.MaxLengthBytes))
+	}
+	if spec.MaxSegmentSizeBytes < 0 {
+		errs = append(errs, fmt.Errorf("stream %q has a negative MaxSegmentSizeBytes (%d); zero leaves retention to the broker", name, spec.MaxSegmentSizeBytes))
+	}
+	return errs
 }
 
 // IsEmpty reports whether nothing was declared.

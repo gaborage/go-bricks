@@ -101,12 +101,19 @@ func TestDeclareConsumerCopiesOptions(t *testing.T) {
 	assert.Equal(t, OffsetFirst(), d.consumers[0].Start)
 }
 
-func TestDeclareConsumerNilIsIgnored(t *testing.T) {
+// TestDeclareConsumerNilPanics is the counterpart to the duplicate-panic case: a
+// nil declaration is the same class of wiring error and must be as loud, instead
+// of leaving the module with no consumer and no complaint.
+func TestDeclareConsumerNilPanics(t *testing.T) {
 	d := NewDeclarations()
 
-	d.DeclareConsumer(nil)
+	assert.PanicsWithValue(t,
+		"streams: nil consumer declaration detected\n"+
+			"  DeclareConsumer requires a non-nil *ConsumerOptions\n"+
+			"  Pass &streams.ConsumerOptions{...} at every DeclareConsumer call within DeclareStreams",
+		func() { d.DeclareConsumer(nil) })
 
-	assert.True(t, d.IsEmpty())
+	assert.True(t, d.IsEmpty(), "the rejected declaration is not stored")
 }
 
 func TestDeclareConsumerDuplicatePanics(t *testing.T) {
@@ -179,6 +186,27 @@ func TestValidateStreamDeclarations(t *testing.T) {
 			},
 			wantErr: `consumer "orders-processor" references undeclared stream "ghost"`,
 		},
+		{
+			name: "negative_max_age",
+			build: func(d *Declarations) {
+				d.DeclareStream(testStream, &StreamSpec{MaxAge: -time.Hour})
+			},
+			wantErr: `stream "orders" has a negative MaxAge (-1h0m0s); zero leaves retention to the broker`,
+		},
+		{
+			name: "negative_max_length_bytes",
+			build: func(d *Declarations) {
+				d.DeclareStream(testStream, &StreamSpec{MaxLengthBytes: -1})
+			},
+			wantErr: `stream "orders" has a negative MaxLengthBytes (-1); zero leaves retention to the broker`,
+		},
+		{
+			name: "negative_max_segment_size_bytes",
+			build: func(d *Declarations) {
+				d.DeclareStream(testStream, &StreamSpec{MaxSegmentSizeBytes: -512})
+			},
+			wantErr: `stream "orders" has a negative MaxSegmentSizeBytes (-512); zero leaves retention to the broker`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -195,6 +223,50 @@ func TestValidateStreamDeclarations(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+// TestValidateAcceptsZeroRetentionAsBrokerDefault is the regression risk carried
+// by the negative-retention rule: zero is how a caller asks for the broker's own
+// retention, so it must stay valid and must stay stored as zero — that is what
+// keeps the manager's positive-only guards from sending anything at all.
+func TestValidateAcceptsZeroRetentionAsBrokerDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		spec *StreamSpec
+		want StreamSpec
+	}{
+		{name: "nil_spec"},
+		{name: "every_field_zero", spec: &StreamSpec{}},
+		{
+			name: "zero_fields_beside_a_populated_sibling",
+			spec: &StreamSpec{MaxLengthBytes: 1024},
+			want: StreamSpec{MaxLengthBytes: 1024},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			d.DeclareStream(testStream, tt.spec)
+
+			require.NoError(t, d.Validate())
+			assert.Equal(t, tt.want, d.streams[0].Spec, "a zero retention field stays zero")
+		})
+	}
+}
+
+// TestValidateReportsEveryNegativeRetentionField proves the three rules aggregate
+// rather than the first one masking the rest.
+func TestValidateReportsEveryNegativeRetentionField(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareStream(testStream, &StreamSpec{MaxAge: -time.Second, MaxLengthBytes: -2, MaxSegmentSizeBytes: -3})
+
+	err := d.Validate()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "negative MaxAge")
+	assert.Contains(t, err.Error(), "negative MaxLengthBytes")
+	assert.Contains(t, err.Error(), "negative MaxSegmentSizeBytes")
 }
 
 func TestValidateAggregatesEveryProblem(t *testing.T) {
