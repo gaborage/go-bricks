@@ -2251,7 +2251,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `messaging/manager.go` (`Close`, `Stats`) ·
   `wiki/adr_032_lease_refcount_tenant_handles.md` (2026-08-09 amendment)
 
-## E59 · v0.58.1 → v0.59.0 — the client IP is derived through trusted proxies, not raw `X-Forwarded-For`
+## E59 · v0.58.1 → v0.59.0 — the client IP is derived through trusted proxies, not raw `X-Forwarded-For` + consumers carry per-consumer AMQP arguments, so three messaging structs stop being comparable
 
 - gist: `server.New` swaps `echo.LegacyIPExtractor()` — which returned the
   left-most, unvalidated, caller-authored `X-Forwarded-For` entry — for
@@ -2262,8 +2262,20 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   CIDR list adds trust for a proxy sitting on a public address. Nothing
   fails to compile and most deployments simply get better-keyed limits, but
   every value `RealIP()` produces can change: both rate-limit bucket keys
-  and the client address written to three log lines.
-- build-caught: none
+  and the client address written to three log lines. Separately, consumers
+  gain per-consumer AMQP arguments. `ConsumeFromQueue` passed a hardcoded
+  `nil` args table, so `x-stream-offset` — which rides `basic.consume`, not
+  the queue declare — had nowhere to go, and a RabbitMQ stream queue that
+  [ADR-040](adr_040_declaration_args_passthrough.md) already let you
+  *declare* could never be correctly *consumed*: every consumer silently
+  attached at the broker default `next`, so a stream declared for replay
+  delivered only what was published after the consumer connected. An
+  `Args map[string]any` on `ConsumerOptions`, `ConsumerDeclaration` and
+  `ConsumeOptions` closes that, and `DeclareStreamQueue` declares the queue
+  with its retention args. The cost is comparability: a struct holding a map
+  is not comparable in Go, so `==` and map-key use on those three types stop
+  compiling (C59.2).
+- build-caught: C59.2
 - preflight: **two** actions. (i) If a proxy in front of the service sits on
   a **public** address, set `server.trustedproxies` to its CIDR range before
   the bump — without an entry it is untrusted, so it is returned as the
@@ -2332,6 +2344,61 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   assignment) · `config/validation.go` (`validateServerTrustedProxies`) ·
   [ADR-057](adr_057_trusted_proxy_ip_extraction.md) ·
   [ADR-015](adr_015_echo_v5_migration.md) (recorded this follow-up)
+
+### [C59.2] `ConsumeOptions`, `ConsumerOptions` and `ConsumerDeclaration` stop being comparable · compile-break · when: match
+
+- detect: `git grep -nE 'messaging[.](Consume|Consumer)(Options|Declaration)' -- '*.go'` shortlists every
+  file naming one of the three types; the hits that matter are the ones where such a value is an operand of
+  `==` or `!=`, or the key type of a `map[...]`. Keep the pattern free of `\b`/`\s`/`\w` — `git grep -E`
+  has no PCRE escapes, so a pattern carrying one silently matches nothing and the gate reports "not
+  affected". `go build ./...` is the authoritative answer regardless, since the compiler resolves this one
+  even through an alias or dot-import that a line-oriented grep misses
+- scope: one added field, `Args map[string]any`, on each of `messaging.ConsumeOptions`
+  (`messaging/messaging.go`), `messaging.ConsumerOptions` (`messaging/helpers.go`) and
+  `messaging.ConsumerDeclaration` (`messaging/registry.go`). A struct containing a map is not comparable in
+  Go, so the three types lose `==`, `!=` and map-key use. **Nothing else about them changes**: assignment,
+  copying, passing by value, struct literals, field access and `reflect.DeepEqual` all behave exactly as
+  before, and a consumer that sets no `Args` produces byte-identical wire traffic — `toTable` normalizes a
+  nil or empty map to a nil `amqp.Table`
+- gate: match = the detect's hits include a `==`/`!=` between two such values, or a map keyed on one.
+  no-match = you only construct, pass and read these types, which is the overwhelmingly common case — the
+  types are declaration inputs, not value objects, so most consumers never compared them
+- before:
+
+  ```go
+  if got == messaging.ConsumeOptions{Queue: "orders", Consumer: "worker"} { /* ... */ }
+
+  seen := map[messaging.ConsumerDeclaration]bool{}
+  seen[decl] = true
+  ```
+
+- after:
+
+  ```go
+  if got.Queue == "orders" && got.Consumer == "worker" { /* ... */ }
+
+  // Key on the identity the framework itself uses: queue + consumer tag
+  // (+ event type for a ConsumerDeclaration), not the whole struct.
+  type consumerKey struct{ queue, consumer string }
+
+  seen := map[consumerKey]bool{}
+  seen[consumerKey{decl.Queue, decl.Consumer}] = true
+  ```
+
+  Compare the fields you actually care about rather than the whole value. If you genuinely need
+  whole-struct equality — most often in a test assertion — `reflect.DeepEqual` (or
+  `require.Equal`/`assert.Equal`, which use it) works unchanged and now correctly compares the `Args`
+  contents too, which `==` could never have done
+- why: `x-stream-offset` is a **per-consumer** argument on `basic.consume`, not a queue argument, because
+  two consumers on one stream legitimately start at different offsets. Reaching the wire with it means
+  carrying a variable-length argument set through all three hops, and a type carrying one is not a
+  comparable value. A pointer-to-map would restore `==` as pointer identity — two consumers with identical
+  arguments comparing unequal, and code that kept compiling silently changing meaning — which is worse than
+  a break the compiler finds for you
+- verify: `go build ./... && go test ./...`
+- ref: [ADR-058](adr_058_consumer_scoped_amqp_arguments.md) · [ADR-040](adr_040_declaration_args_passthrough.md)
+  (the queue-side precedent this completes) · `messaging/messaging.go` · `messaging/helpers.go` ·
+  `messaging/registry.go` · [messaging.md](messaging.md#stream-queues-amqp-lane)
 
 ---
 

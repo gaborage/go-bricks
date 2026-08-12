@@ -1110,6 +1110,33 @@ makes echo abandon the chain and key the whole fleet on the load balancer — a 
 `server.trustedproxies` cannot rescue. The tenant-keyed half of F23 remains open. See
 [migrations.md](migrations.md) `[C59.1]`.
 
+### [ADR-058: Consumers Carry Per-Consumer AMQP Arguments, at the Cost of Struct Comparability](adr_058_consumer_scoped_amqp_arguments.md)
+
+**Date:** 2026-08-11 | **Status:** Accepted
+
+[ADR-040](adr_040_declaration_args_passthrough.md) made declaration `Args` reach the broker, which was
+enough to **declare** a RabbitMQ stream queue (`x-queue-type: stream`) but not to **consume** one:
+`ConsumeFromQueue` passed a hardcoded `nil` args table, so `x-stream-offset` — a per-consumer argument on
+`basic.consume`, not a queue argument — had nowhere to go. Every consumer silently attached at the broker
+default `next`, so a stream declared for replay delivered only what was published after the consumer
+connected. `Args map[string]any` is added to `ConsumerOptions`, `ConsumerDeclaration` and `ConsumeOptions`,
+deep-copied on register/clone and folded into `Declarations.Hash()` so two consumers differing only in
+start offset are not treated as a duplicate replay. `DeclareStreamQueue` adds the queue-type and opt-in
+retention args; `Validate` rejects four shapes the broker would otherwise refuse with an opaque channel
+error (non-durable, exclusive/auto-delete, `AutoAck` on a stream, `x-stream-offset` on a non-stream queue);
+a declared `int` offset is widened to `int64` because amqp091 encodes Go `int` as a 32-bit field; and the
+flap-resume re-subscribes at `last + 1` on a copied args map, correct because `handleMessages` drains its
+worker pool before returning.
+
+**Key Benefits:** Stream queues become declarable *and* correctly consumable over the existing AMQP
+connection, port, tenant manager, worker pool and OTel instrumentation — no second messaging stack and no
+new dependency. The `Args` field is general, so `x-priority` and future per-consumer arguments need no
+further struct widening. **Watch:** a map field makes a struct non-comparable, so `==` and map-key use on
+those three types **stop compiling** — accepted and documented rather than shimmed, since a pointer-to-map
+would restore only pointer identity and silently change meaning. This lane has no server-side offset
+tracking, no single active consumer and no super streams; those are stream-protocol features and are
+ADR-059's subject. See [migrations.md](migrations.md) `[C59.2]`.
+
 ---
 
 ## ADR Lifecycle
@@ -1121,7 +1148,7 @@ makes echo abandon the chain and key the whole fleet on the load balancer — a 
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-057) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-058) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
