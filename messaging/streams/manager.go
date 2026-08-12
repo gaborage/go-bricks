@@ -93,7 +93,10 @@ func NewManager(opts ManagerOptions) *Manager {
 // Start dials the broker, replays the stream declarations, and starts one
 // reliable consumer per declared consumer. Empty declarations are a no-op that
 // dials nothing. Any consumer that fails to start stops the ones already
-// started and returns an error — the caller makes that fatal.
+// started and returns an error — the caller makes that fatal. A failure leaves
+// nothing to dispose: the connection is closed before the error returns, so a
+// caller that never calls Close does not leak it, and a retried Start cannot
+// orphan the previous environment.
 func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	if decls == nil || decls.IsEmpty() {
 		return nil
@@ -124,13 +127,13 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	m.cancel = cancel
 
 	if err := m.declareStreams(env, decls); err != nil {
-		m.stopLocked()
+		m.abortStartLocked()
 		return err
 	}
 
 	for _, decl := range decls.consumers {
 		if err := m.startConsumer(consumeCtx, env, decl); err != nil {
-			m.stopLocked()
+			m.abortStartLocked()
 			return err
 		}
 	}
@@ -317,19 +320,35 @@ func (m *Manager) stopLocked() {
 	m.started = false
 }
 
-// Close stops the consumers and closes the environment. Idempotent.
-func (m *Manager) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+// abortStartLocked unwinds a Start that failed after the dial: it stops whatever
+// consumers came up and disposes the environment, so a caller that treats the
+// error as fatal without calling Close leaks nothing and a retried Start cannot
+// orphan the previous connection pool.
+func (m *Manager) abortStartLocked() {
 	m.stopLocked()
+	if err := m.closeEnvLocked(); err != nil {
+		m.log.Warn().Err(err).Msg("Failed to close stream environment after a failed start")
+	}
+}
 
+// closeEnvLocked is the single disposal path for the environment. Nils the field
+// so a later Close short-circuits instead of closing twice.
+func (m *Manager) closeEnvLocked() error {
 	if m.env == nil {
 		return nil
 	}
 	env := m.env
 	m.env = nil
 	return env.Close()
+}
+
+// Close stops the consumers and closes the environment. Idempotent.
+func (m *Manager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.stopLocked()
+	return m.closeEnvLocked()
 }
 
 // Stats reports the manager state for the readiness probe and /ready body.

@@ -280,3 +280,33 @@ func TestStreamsManagerSingleActiveConsumerIntegration(t *testing.T) {
 	assert.Equal(t, bodiesFrom("msg", 6, 2), resumed,
 		"promotion resolves the stored offset, not the declared start position")
 }
+
+// TestStreamsManagerDisposesEnvironmentOnDeclareFailureIntegration exercises a real
+// post-dial failure: re-declaring an existing stream with different retention makes
+// the broker answer precondition-failed, so Start fails with the environment already
+// dialed. Manager is exported API, so a caller that treats that error as fatal
+// without calling Close must not leak the connection pool.
+func TestStreamsManagerDisposesEnvironmentOnDeclareFailureIntegration(t *testing.T) {
+	ctx := context.Background()
+	opts := streamsTestEnv(ctx, t)
+
+	first := NewManager(opts)
+	firstDecls := NewDeclarations()
+	firstDecls.DeclareStream(itStream, &StreamSpec{MaxAge: time.Hour})
+	require.NoError(t, first.Start(ctx, firstDecls))
+	first.StopConsumers()
+	require.NoError(t, first.Close())
+
+	// Same stream, different retention: the broker rejects the declaration.
+	second := NewManager(opts)
+	conflicting := NewDeclarations()
+	conflicting.DeclareStream(itStream, &StreamSpec{MaxAge: 48 * time.Hour})
+
+	err := second.Start(ctx, conflicting)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to declare stream")
+	assert.Nil(t, second.env, "the dialed environment is disposed by the failed Start itself")
+	assert.False(t, second.started)
+	require.NoError(t, second.Close(), "the caller's follow-up Close short-circuits instead of double-closing")
+}

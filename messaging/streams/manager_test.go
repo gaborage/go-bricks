@@ -56,6 +56,9 @@ func (f *fakeHandle) recorded() []string {
 	return append([]string(nil), f.events...)
 }
 
+// unreachableTestURI points at a port that refuses connections, so a dial fails fast.
+const unreachableTestURI = "rabbitmq-stream://guest:guest@127.0.0.1:1/%2f"
+
 func testManager(t *testing.T) *Manager {
 	t.Helper()
 	return NewManager(ManagerOptions{
@@ -425,4 +428,44 @@ func TestSafeEnvError(t *testing.T) {
 
 	other := errors.New("connection refused")
 	assert.Equal(t, other, safeEnvError(other), "non-URL errors pass through untouched")
+}
+
+// TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the
+// environment was never stored, so Close is a no-op. The post-dial half — where
+// the environment exists and must be disposed — needs a broker and lives in
+// TestStreamsManagerDisposesEnvironmentOnDeclareFailureIntegration.
+func TestManagerStartFailedDialLeavesNothingToDispose(t *testing.T) {
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+
+	require.Error(t, m.Start(context.Background(), decls))
+	assert.Nil(t, m.env)
+	require.NoError(t, m.Close(), "Close after a failed Start is a no-op")
+}
+
+// TestManagerAbortStartLockedDisposesEnvironment drives the post-dial unwind
+// directly: stopLocked alone left m.env non-nil, so a caller that never called
+// Close leaked it and a second Start orphaned it beyond any later Close.
+func TestManagerAbortStartLockedDisposesEnvironment(t *testing.T) {
+	m := testManager(t)
+	handle := &fakeHandle{status: ha.StatusOpen}
+	attach(m, handle, newOffsetTracker(1000, time.Hour, nil))
+
+	m.abortStartLocked()
+
+	assert.Nil(t, m.env, "the environment is disposed, not just the consumers")
+	assert.Empty(t, m.consumers)
+	assert.False(t, m.started)
+	assert.Equal(t, []string{"close"}, handle.recorded())
+
+	require.NoError(t, m.Close(), "the follow-up Close short-circuits instead of closing twice")
+}
+
+func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {
+	m := testManager(t)
+
+	require.NoError(t, m.closeEnvLocked())
+	require.NoError(t, m.closeEnvLocked())
+	assert.Nil(t, m.env)
 }
