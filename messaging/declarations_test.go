@@ -1245,24 +1245,23 @@ func TestValidateStreamConsumerRules(t *testing.T) {
 	timestamp := time.Now()
 
 	tests := []struct {
-		name        string
-		nonStream   bool
-		autoAck     bool
-		args        map[string]any
-		wantErr     string
-		wantNoError bool
+		name      string
+		nonStream bool
+		autoAck   bool
+		args      map[string]any
+		wantErr   string
 	}{
-		{name: "no_args_accepted", wantNoError: true},
-		{name: "offset_first_accepted", args: map[string]any{argStreamOffset: streamOffsetFirst}, wantNoError: true},
-		{name: "offset_last_accepted", args: map[string]any{argStreamOffset: streamOffsetLast}, wantNoError: true},
-		{name: "offset_next_accepted", args: map[string]any{argStreamOffset: streamOffsetNext}, wantNoError: true},
-		{name: "offset_int_zero_accepted", args: map[string]any{argStreamOffset: 0}, wantNoError: true},
-		{name: "offset_int64_accepted", args: map[string]any{argStreamOffset: int64(42)}, wantNoError: true},
-		{name: "offset_int64_zero_accepted", args: map[string]any{argStreamOffset: int64(0)}, wantNoError: true},
-		{name: "offset_timestamp_accepted", args: map[string]any{argStreamOffset: timestamp}, wantNoError: true},
-		{name: "offset_interval_days_accepted", args: map[string]any{argStreamOffset: "7D"}, wantNoError: true},
-		{name: "offset_interval_minutes_accepted", args: map[string]any{argStreamOffset: "30m"}, wantNoError: true},
-		{name: "other_consumer_arg_accepted", args: map[string]any{"x-priority": 5}, wantNoError: true},
+		{name: "no_args_accepted"},
+		{name: "offset_first_accepted", args: map[string]any{argStreamOffset: streamOffsetFirst}},
+		{name: "offset_last_accepted", args: map[string]any{argStreamOffset: streamOffsetLast}},
+		{name: "offset_next_accepted", args: map[string]any{argStreamOffset: streamOffsetNext}},
+		{name: "offset_int_zero_accepted", args: map[string]any{argStreamOffset: 0}},
+		{name: "offset_int64_accepted", args: map[string]any{argStreamOffset: int64(42)}},
+		{name: "offset_int64_zero_accepted", args: map[string]any{argStreamOffset: int64(0)}},
+		{name: "offset_timestamp_accepted", args: map[string]any{argStreamOffset: timestamp}},
+		{name: "offset_interval_days_accepted", args: map[string]any{argStreamOffset: "7D"}},
+		{name: "offset_interval_minutes_accepted", args: map[string]any{argStreamOffset: "30m"}},
+		{name: "other_consumer_arg_accepted", args: map[string]any{"x-priority": 5}},
 		{
 			name:    "auto_ack_rejected",
 			autoAck: true,
@@ -1300,10 +1299,9 @@ func TestValidateStreamConsumerRules(t *testing.T) {
 			wantErr:   `consumer "test-consumer" on queue "events.stream" sets x-stream-offset but the queue is not a stream queue`,
 		},
 		{
-			name:        "auto_ack_on_non_stream_queue_allowed",
-			nonStream:   true,
-			autoAck:     true,
-			wantNoError: true,
+			name:      "auto_ack_on_non_stream_queue_allowed",
+			nonStream: true,
+			autoAck:   true,
 		},
 	}
 
@@ -1318,7 +1316,7 @@ func TestValidateStreamConsumerRules(t *testing.T) {
 			decls.RegisterConsumer(streamConsumer(testStreamQueue, tt.autoAck, tt.args))
 
 			err := decls.Validate()
-			if tt.wantNoError {
+			if tt.wantErr == "" {
 				assert.NoError(t, err)
 				return
 			}

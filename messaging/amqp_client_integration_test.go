@@ -639,8 +639,7 @@ func TestStreamQueueConsumeIntegration(t *testing.T) {
 
 	const messageCount = 5
 	for i := range messageCount {
-		require.NoError(t, client.PublishToExchange(ctx,
-			PublishOptions{RoutingKey: queueName},
+		require.NoError(t, client.Publish(ctx, queueName,
 			[]byte(fmt.Sprintf("stream-message-%d", i))))
 	}
 
@@ -652,7 +651,7 @@ func TestStreamQueueConsumeIntegration(t *testing.T) {
 			Consumer:      consumerTag,
 			AutoAck:       false,
 			PrefetchCount: 10,
-			Args:          map[string]any{"x-stream-offset": offset},
+			Args:          map[string]any{argStreamOffset: offset},
 		})
 		require.NoError(t, err)
 

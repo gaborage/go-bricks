@@ -390,20 +390,16 @@ func isStreamQueue(q *QueueDeclaration) bool {
 func isValidStreamOffset(v any) bool {
 	switch value := v.(type) {
 	case string:
-		switch value {
-		case streamOffsetFirst, streamOffsetLast, streamOffsetNext:
-			return true
-		}
-		return streamOffsetInterval.MatchString(value)
+		return value == streamOffsetFirst || value == streamOffsetLast ||
+			value == streamOffsetNext || streamOffsetInterval.MatchString(value)
 	case int:
 		return value >= 0
 	case int64:
 		return value >= 0
 	case time.Time:
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
 // validateQueueConflicts aggregates every incompatible queue re-declaration into

@@ -3018,18 +3018,42 @@ func TestRegistryProcessMessageSkipsDebugFieldBuildWhenDisabled(t *testing.T) {
 // ===== Stream Queue Consumption Tests =====
 
 func TestConsumeOptionsForwardsArgs(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+	tests := []struct {
+		name     string
+		resume   *streamResume
+		wantArgs map[string]any
+	}{
+		{name: "nil_resume_forwards_declared_args", wantArgs: map[string]any{argStreamOffset: streamOffsetFirst}},
+		{
+			name:     "unseen_resume_forwards_declared_args",
+			resume:   &streamResume{},
+			wantArgs: map[string]any{argStreamOffset: streamOffsetFirst},
+		},
+		{
+			name:     "seen_resume_overrides_offset_to_one_past_last",
+			resume:   &streamResume{last: 11, seen: true},
+			wantArgs: map[string]any{argStreamOffset: int64(12)},
+		},
+	}
 
-	args := map[string]any{argStreamOffset: streamOffsetFirst}
-	opts := registry.consumeOptionsFor(&ConsumerDeclaration{
-		Queue:         testStreamQueue,
-		Consumer:      testConsumer,
-		PrefetchCount: 10,
-		Args:          args,
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
 
-	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, opts.Args)
-	assert.Equal(t, testStreamQueue, opts.Queue)
+			declared := map[string]any{argStreamOffset: streamOffsetFirst}
+			opts := registry.consumeOptionsFor(&ConsumerDeclaration{
+				Queue:         testStreamQueue,
+				Consumer:      testConsumer,
+				PrefetchCount: 10,
+				Args:          declared,
+			}, tt.resume)
+
+			assert.Equal(t, tt.wantArgs, opts.Args)
+			assert.Equal(t, testStreamQueue, opts.Queue)
+			assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, declared,
+				"the override must land on a copy, never the declaration's map")
+		})
+	}
 }
 
 func TestStreamOffsetFromHeaders(t *testing.T) {
@@ -3094,6 +3118,16 @@ func newStreamResumeRegistry(t *testing.T, streamQueue bool, declaredArgs map[st
 	return registry, client, ch1
 }
 
+// waitForResubscribe blocks until the consumer has issued a second
+// ConsumeFromQueue call.
+func waitForResubscribe(t *testing.T, client *resubscribingMockClient) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		return client.consumeCallCount() >= 2
+	}, time.Second, 2*time.Millisecond, "consumer did not re-subscribe after delivery channel close")
+}
+
 // deliverAndFlap sends one delivery carrying offset, waits for it to be acked
 // (so the feed loop has recorded it), then closes the channel to force a
 // re-subscribe and waits for the second ConsumeFromQueue call.
@@ -3111,91 +3145,78 @@ func deliverAndFlap(t *testing.T, client *resubscribingMockClient, ch chan amqp.
 		"delivery was not acked")
 
 	close(ch)
-	require.Eventually(t, func() bool {
-		return client.consumeCallCount() >= 2
-	}, time.Second, 2*time.Millisecond, "consumer did not re-subscribe after delivery channel close")
+	waitForResubscribe(t, client)
 }
 
 // TestSuperviseConsumerStreamResume pins the flap-resume contract: a stream
 // consumer re-subscribes one past the last offset it handed to the worker pool
 // instead of re-reading the stream from its declared start position.
 func TestSuperviseConsumerStreamResume(t *testing.T) {
-	registry, client, ch1 := newStreamResumeRegistry(t, true, map[string]any{argStreamOffset: streamOffsetFirst})
+	offset := func(v int64) *int64 { return &v }
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, registry.StartConsumers(ctx))
+	tests := []struct {
+		name          string
+		streamQueue   bool
+		declaredArgs  map[string]any
+		deliverOffset *int64 // nil = flap before any delivery arrives
+		wantResubArgs map[string]any
+	}{
+		{
+			name:          "resumes_one_past_last_delivered_offset",
+			streamQueue:   true,
+			declaredArgs:  map[string]any{argStreamOffset: streamOffsetFirst},
+			deliverOffset: offset(11),
+			wantResubArgs: map[string]any{argStreamOffset: int64(12)},
+		},
+		{
+			name:          "override_preserves_other_declared_args",
+			streamQueue:   true,
+			declaredArgs:  map[string]any{argStreamOffset: streamOffsetFirst, "x-priority": 5},
+			deliverOffset: offset(7),
+			wantResubArgs: map[string]any{argStreamOffset: int64(8), "x-priority": 5},
+		},
+		{
+			// Stream-ness is read from the declared queue table, not the
+			// delivery, so a publisher-forged x-stream-offset header on a
+			// classic queue must not alter the re-subscribe.
+			name:          "non_stream_queue_ignores_forged_offset_header",
+			streamQueue:   false,
+			declaredArgs:  map[string]any{"x-priority": 5},
+			deliverOffset: offset(99),
+			wantResubArgs: map[string]any{"x-priority": 5},
+		},
+		{
+			name:          "flap_before_first_delivery_keeps_declared_offset",
+			streamQueue:   true,
+			declaredArgs:  map[string]any{argStreamOffset: streamOffsetFirst},
+			wantResubArgs: map[string]any{argStreamOffset: streamOffsetFirst},
+		},
+	}
 
-	deliverAndFlap(t, client, ch1, 11)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry, client, ch1 := newStreamResumeRegistry(t, tt.streamQueue, tt.declaredArgs)
 
-	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, client.consumeOptionsAt(0).Args,
-		"the initial subscribe must use the declared offset")
-	assert.Equal(t, map[string]any{argStreamOffset: int64(12)}, client.consumeOptionsAt(1).Args,
-		"the re-subscribe must resume one past the last delivered offset")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			require.NoError(t, registry.StartConsumers(ctx))
 
-	// The declaration's Args map is shared registry state: the override must
-	// have been applied to a copy.
-	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, registry.Consumers()[0].Args)
+			if tt.deliverOffset != nil {
+				deliverAndFlap(t, client, ch1, *tt.deliverOffset)
+			} else {
+				close(ch1)
+				waitForResubscribe(t, client)
+			}
 
-	registry.StopConsumers()
-}
+			assert.Equal(t, tt.declaredArgs, client.consumeOptionsAt(0).Args,
+				"the initial subscribe must use the declared Args")
+			assert.Equal(t, tt.wantResubArgs, client.consumeOptionsAt(1).Args)
 
-// TestSuperviseConsumerStreamResumePreservesOtherArgs proves the copied-map
-// override keeps the declaration's other consumer arguments.
-func TestSuperviseConsumerStreamResumePreservesOtherArgs(t *testing.T) {
-	registry, client, ch1 := newStreamResumeRegistry(t, true, map[string]any{
-		argStreamOffset: streamOffsetFirst,
-		"x-priority":    5,
-	})
+			// The declaration's Args map is shared registry state: any override
+			// must have been applied to a copy.
+			assert.Equal(t, tt.declaredArgs, registry.Consumers()[0].Args)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, registry.StartConsumers(ctx))
-
-	deliverAndFlap(t, client, ch1, 7)
-
-	assert.Equal(t, map[string]any{argStreamOffset: int64(8), "x-priority": 5},
-		client.consumeOptionsAt(1).Args)
-
-	registry.StopConsumers()
-}
-
-// TestSuperviseConsumerNonStreamIgnoresOffsetHeader proves stream-ness is read
-// from the declared queue table, not the delivery: a publisher-forged
-// x-stream-offset header on a classic queue must not alter the re-subscribe.
-func TestSuperviseConsumerNonStreamIgnoresOffsetHeader(t *testing.T) {
-	registry, client, ch1 := newStreamResumeRegistry(t, false, map[string]any{"x-priority": 5})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, registry.StartConsumers(ctx))
-
-	deliverAndFlap(t, client, ch1, 99)
-
-	assert.Equal(t, map[string]any{"x-priority": 5}, client.consumeOptionsAt(1).Args,
-		"a non-stream consumer must re-subscribe with its declared Args untouched")
-	assert.NotContains(t, client.consumeOptionsAt(1).Args, argStreamOffset)
-
-	registry.StopConsumers()
-}
-
-// TestSuperviseConsumerStreamResumeWithoutDeliveryKeepsDeclaredOffset covers the
-// flap-before-first-message case: with nothing seen, the declared start position
-// still applies.
-func TestSuperviseConsumerStreamResumeWithoutDelivery(t *testing.T) {
-	registry, client, ch1 := newStreamResumeRegistry(t, true, map[string]any{argStreamOffset: streamOffsetFirst})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, registry.StartConsumers(ctx))
-
-	close(ch1)
-	require.Eventually(t, func() bool {
-		return client.consumeCallCount() >= 2
-	}, time.Second, 2*time.Millisecond, "consumer did not re-subscribe after delivery channel close")
-
-	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, client.consumeOptionsAt(1).Args,
-		"no delivery seen yet, so the declared offset must stand")
-
-	registry.StopConsumers()
+			registry.StopConsumers()
+		})
+	}
 }

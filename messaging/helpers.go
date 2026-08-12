@@ -9,19 +9,6 @@ import (
 const (
 	exchangeTypeTopic  = "topic"
 	exchangeTypeFanout = "fanout"
-
-	argQueueType           = "x-queue-type"
-	argStreamOffset        = "x-stream-offset"
-	argMaxAge              = "x-max-age"
-	argMaxLengthBytes      = "x-max-length-bytes"
-	argMaxSegmentSizeBytes = "x-stream-max-segment-size-bytes"
-
-	queueTypeStream = "stream"
-
-	// Named x-stream-offset start positions ("next" is the broker default).
-	streamOffsetFirst = "first"
-	streamOffsetLast  = "last"
-	streamOffsetNext  = "next"
 )
 
 // NewTopicExchange creates a topic exchange with production-safe defaults.
@@ -221,9 +208,9 @@ func (d *Declarations) DeclareQueueWithDLQ(name string, dl *DeadLetterSpec) *Que
 	}
 
 	queue := NewQueue(name)
-	queue.Args["x-dead-letter-exchange"] = dlx
+	queue.Args[argDeadLetterExchange] = dlx
 	if dl.RoutingKey != "" {
-		queue.Args["x-dead-letter-routing-key"] = dl.RoutingKey
+		queue.Args[argDeadLetterRoutingKey] = dl.RoutingKey
 	}
 	d.RegisterQueue(queue)
 	return queue
@@ -261,7 +248,7 @@ func (d *Declarations) DeclareStreamQueue(name string, spec *StreamQueueSpec) *Q
 
 	if spec != nil {
 		if spec.MaxAge > 0 {
-			queue.Args[argMaxAge] = fmt.Sprintf("%ds", int64(spec.MaxAge.Seconds()))
+			queue.Args[argMaxAge] = fmt.Sprintf("%ds", int64(spec.MaxAge/time.Second))
 		}
 		if spec.MaxLengthBytes > 0 {
 			queue.Args[argMaxLengthBytes] = spec.MaxLengthBytes

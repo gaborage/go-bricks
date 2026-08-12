@@ -428,9 +428,11 @@ func (r *Registry) StopConsumers() {
 // consumeOptionsFor builds the ConsumeOptions for a consumer declaration. It is
 // shared by the initial subscription and every re-subscription so the broker
 // re-applies identical settings (QoS/prefetch, consumer tag, ack mode) on the
-// new channel after a reconnect.
-func (r *Registry) consumeOptionsFor(consumer *ConsumerDeclaration) ConsumeOptions {
-	return ConsumeOptions{
+// new channel after a reconnect. The one deliberate per-session difference is a
+// stream consumer's resume offset: a non-nil resume that has seen a delivery
+// overrides x-stream-offset so the new session continues past it.
+func (r *Registry) consumeOptionsFor(consumer *ConsumerDeclaration, resume *streamResume) ConsumeOptions {
+	opts := ConsumeOptions{
 		Queue:         consumer.Queue,
 		Consumer:      consumer.Consumer,
 		AutoAck:       consumer.AutoAck,
@@ -440,6 +442,17 @@ func (r *Registry) consumeOptionsFor(consumer *ConsumerDeclaration) ConsumeOptio
 		PrefetchCount: consumer.PrefetchCount,
 		Args:          consumer.Args,
 	}
+
+	if resume != nil && resume.seen {
+		// Copy: the declaration's Args map is shared with the registry state and
+		// every other session, so the override must not reach it.
+		args := make(map[string]any, len(opts.Args))
+		maps.Copy(args, opts.Args)
+		args[argStreamOffset] = resume.last + 1
+		opts.Args = args
+	}
+
+	return opts
 }
 
 // streamResume carries the last stream offset handed to the worker pool across
@@ -454,12 +467,24 @@ type streamResume struct {
 	seen bool
 }
 
+// observe records a delivery's stream offset. The nil receiver is the
+// non-stream consumer case, so the feed loop can call it unconditionally.
+func (s *streamResume) observe(headers amqp.Table) {
+	if s == nil {
+		return
+	}
+	if offset, found := streamOffsetFromHeaders(headers); found {
+		s.last = offset
+		s.seen = true
+	}
+}
+
 // startSingleConsumer starts a consumer for a specific queue and routes messages to the handler.
 // The first subscription is established synchronously so an unreachable broker
 // fails startup (fail-fast); the supervisor goroutine then keeps the consumer
 // alive across broker reconnects (see superviseConsumer).
 func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDeclaration) error {
-	deliveries, err := r.client.ConsumeFromQueue(ctx, r.consumeOptionsFor(consumer))
+	deliveries, err := r.client.ConsumeFromQueue(ctx, r.consumeOptionsFor(consumer, nil))
 	if err != nil {
 		return fmt.Errorf("failed to start consuming from queue %s: %w", consumer.Queue, err)
 	}
@@ -556,15 +581,7 @@ func consumerLogFields(consumer *ConsumerDeclaration) map[string]any {
 func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaration, resume *streamResume) (<-chan amqp.Delivery, bool) {
 	log := r.logger.WithFields(consumerLogFields(consumer))
 
-	opts := r.consumeOptionsFor(consumer)
-	if resume != nil && resume.seen {
-		// Copy: the declaration's Args map is shared with the registry state and
-		// every other session, so the override must not reach it.
-		args := make(map[string]any, len(opts.Args))
-		maps.Copy(args, opts.Args)
-		args[argStreamOffset] = resume.last + 1
-		opts.Args = args
-	}
+	opts := r.consumeOptionsFor(consumer, resume)
 
 	for attempt := 1; ; attempt++ {
 		// Stop promptly if we're shutting down before trying again.
@@ -642,12 +659,7 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 					return true
 				}
 
-				if resume != nil {
-					if offset, found := streamOffsetFromHeaders(delivery.Headers); found {
-						resume.last = offset
-						resume.seen = true
-					}
-				}
+				resume.observe(delivery.Headers)
 
 				// Create local copy to avoid pointer capture bug (loop variable reuse)
 				d := delivery
