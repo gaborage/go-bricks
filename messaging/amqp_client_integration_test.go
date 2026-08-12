@@ -600,3 +600,90 @@ func TestAMQPClientPublishImmediatelyOnColdStart(t *testing.T) {
 		t.Fatal("Timeout waiting for cold-start published message")
 	}
 }
+
+// =============================================================================
+// Stream Queue Tests
+// =============================================================================
+
+// streamDelivery captures what a stream consumer observed for one message.
+type streamDelivery struct {
+	offset int64
+	body   string
+}
+
+// TestStreamQueueConsumeIntegration exercises the AMQP stream-queue lane end to
+// end against a real broker: DeclareStreamQueue's args are accepted, every
+// delivery carries its own offset, and reads are non-destructive — a second
+// consumer attaching at an absolute offset replays the tail after the first
+// consumer already acked everything.
+func TestStreamQueueConsumeIntegration(t *testing.T) {
+	brokerURL := setupTestBroker(t)
+	log := logger.New("disabled", true)
+
+	client := NewAMQPClient(brokerURL, log)
+	defer client.Close()
+
+	require.Eventually(t, client.IsReady, 10*time.Second, 200*time.Millisecond, clientReadyMsg)
+
+	ctx := context.Background()
+	queueName := uniqueName(t, "stream-queue")
+
+	decls := NewDeclarations()
+	queue := decls.DeclareStreamQueue(queueName, &StreamQueueSpec{
+		MaxAge:              time.Hour,
+		MaxLengthBytes:      10 << 20,
+		MaxSegmentSizeBytes: 1 << 20,
+	})
+	require.NoError(t, decls.Validate())
+	require.NoError(t, client.DeclareQueue(t.Context(), queue))
+
+	const messageCount = 5
+	for i := range messageCount {
+		require.NoError(t, client.Publish(ctx, queueName,
+			[]byte(fmt.Sprintf("stream-message-%d", i))))
+	}
+
+	// Streams require manual ack with a per-consumer prefetch: acks are credit.
+	read := func(consumerTag string, offset any, want int) []streamDelivery {
+		t.Helper()
+		deliveries, err := client.ConsumeFromQueue(ctx, ConsumeOptions{
+			Queue:         queueName,
+			Consumer:      consumerTag,
+			AutoAck:       false,
+			PrefetchCount: 10,
+			Args:          map[string]any{argStreamOffset: offset},
+		})
+		require.NoError(t, err)
+
+		got := make([]streamDelivery, 0, want)
+		for len(got) < want {
+			select {
+			case d := <-deliveries:
+				offset, ok := streamOffsetFromHeaders(d.Headers)
+				require.True(t, ok, "every stream delivery must carry an x-stream-offset header")
+				got = append(got, streamDelivery{offset: offset, body: string(d.Body)})
+				require.NoError(t, d.Ack(false))
+			case <-time.After(15 * time.Second):
+				t.Fatalf("timeout: consumer %s got %d of %d deliveries", consumerTag, len(got), want)
+			}
+		}
+		return got
+	}
+
+	all := read("stream-consumer-first", streamOffsetFirst, messageCount)
+	require.Len(t, all, messageCount)
+	assert.Equal(t, int64(0), all[0].offset, "a stream's first offset is 0")
+	assert.Equal(t, "stream-message-0", all[0].body)
+	for i := 1; i < len(all); i++ {
+		assert.Greater(t, all[i].offset, all[i-1].offset, "stream offsets must increase monotonically")
+		assert.Equal(t, fmt.Sprintf("stream-message-%d", i), all[i].body)
+	}
+
+	// Non-destructive replay: acking deleted nothing, so attaching at offset 3
+	// re-reads exactly the last two messages.
+	replay := read("stream-consumer-replay", int64(3), 2)
+	assert.Equal(t, []streamDelivery{
+		{offset: 3, body: "stream-message-3"},
+		{offset: 4, body: "stream-message-4"},
+	}, replay)
+}

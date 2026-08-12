@@ -2916,6 +2916,23 @@ q.Args["x-dead-letter-exchange"] = "orders.dlx"
 decls.RegisterQueue(q)
 ```
 
+Consume a RabbitMQ **stream queue** (append-only log, non-destructive reads, offset
+replay) over the same AMQP connection. `x-stream-offset` is a **consumer** arg (it rides
+`basic.consume`, not the queue declare) and accepts `"first"`/`"last"`/`"next"`, an offset
+int, a `time.Time`, or an interval like `"7D"`; `AutoAck: false` is mandatory — acks are
+consumer credit on a stream (see [wiki/messaging.md](wiki/messaging.md)):
+
+```go
+// In DeclareMessaging above, swap `decls.DeclareQueue("orders.processing")` for this —
+// DeclareStreamQueue registers the queue itself, so don't also call DeclareQueue for it.
+// Keep the variable named queue: the DeclareBinding and DeclareConsumer lines below already
+// read queue.Name, so the stream stays bound to the exchange and neither line needs editing.
+queue := decls.DeclareStreamQueue("orders.events.stream", &messaging.StreamQueueSpec{MaxAge: 7 * 24 * time.Hour})
+
+// Then add a start position to that same DeclareConsumer call (AutoAck is already false):
+//   Args: map[string]any{"x-stream-offset": "first"},
+```
+
 ### Step 3: Implement the Producer (publish messages)
 
 The `messaging.AMQPClient` returned by `deps.Messaging(ctx)` exposes two publish APIs:

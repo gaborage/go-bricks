@@ -65,6 +65,7 @@ type fakeChannel struct {
 	gotQueueArgs     amqp.Table
 	gotExchangeArgs  amqp.Table
 	gotBindingArgs   amqp.Table
+	gotConsumeArgs   amqp.Table
 	// Signal channel for test coordination
 	publishAttemptSignal chan struct{}
 	// publishAttempts counts every call, including the failed ones that consume no
@@ -135,7 +136,8 @@ func (f *fakeChannel) PublishWithContext(_ context.Context, exchange, key string
 	return err
 }
 
-func (f *fakeChannel) Consume(_, _ string, _, _, _, _ bool, _ amqp.Table) (<-chan amqp.Delivery, error) {
+func (f *fakeChannel) Consume(_, _ string, _, _, _, _ bool, args amqp.Table) (<-chan amqp.Delivery, error) {
+	f.gotConsumeArgs = args
 	return f.consumeCh, f.consumeErr
 }
 
@@ -1930,5 +1932,44 @@ func closeAndWaitForReconnect(c *AMQPClientImpl) {
 	select {
 	case <-c.reconnectDone:
 	case <-time.After(2 * time.Second):
+	}
+}
+
+// TestAMQPClientConsumeFromQueuePassesArgs pins the per-consumer arguments
+// passthrough: x-stream-offset and friends must reach basic.consume, while the
+// no-args path stays byte-identical to the pre-Args nil table.
+func TestAMQPClientConsumeFromQueuePassesArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]any
+		want amqp.Table
+	}{
+		{"stream_offset", map[string]any{"x-stream-offset": streamOffsetFirst}, amqp.Table{"x-stream-offset": streamOffsetFirst}},
+		{"numeric_offset", map[string]any{"x-stream-offset": int64(12)}, amqp.Table{"x-stream-offset": int64(12)}},
+		// amqp091 dispatches on the dynamic type: int64 encodes as 'l' (64-bit),
+		// int as 'I' (32-bit, truncating). The table must carry int64 here.
+		{"offset_past_max_int32", map[string]any{"x-stream-offset": int64(1) << 32}, amqp.Table{"x-stream-offset": int64(4294967296)}},
+		{"nil_map", nil, nil},
+		{"empty_map", map[string]any{}, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deliveries := make(chan amqp.Delivery)
+			close(deliveries)
+			ch := &fakeChannel{consumeCh: deliveries}
+			c := newClientWithFakeChannel(t, ch)
+
+			out, err := c.ConsumeFromQueue(context.Background(), ConsumeOptions{
+				Queue:         "q",
+				Consumer:      "c",
+				PrefetchCount: 10,
+				Args:          tt.args,
+			})
+
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Equal(t, tt.want, ch.gotConsumeArgs)
+		})
 	}
 }

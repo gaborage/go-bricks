@@ -133,6 +133,7 @@ type ConsumerDeclaration struct {
 	Handler       MessageHandler // Message handler (optional for documentation-only declarations)
 	Workers       int            // Number of concurrent workers (0 = auto-scale to NumCPU*4, >0 = explicit)
 	PrefetchCount int            // RabbitMQ prefetch count (0 = auto-scale to Workers*10, capped at 500)
+	Args          map[string]any // Per-consumer arguments forwarded to basic.consume (x-stream-offset, x-priority, ...)
 }
 
 // NewRegistry creates a new messaging registry
@@ -427,9 +428,11 @@ func (r *Registry) StopConsumers() {
 // consumeOptionsFor builds the ConsumeOptions for a consumer declaration. It is
 // shared by the initial subscription and every re-subscription so the broker
 // re-applies identical settings (QoS/prefetch, consumer tag, ack mode) on the
-// new channel after a reconnect.
-func (r *Registry) consumeOptionsFor(consumer *ConsumerDeclaration) ConsumeOptions {
-	return ConsumeOptions{
+// new channel after a reconnect. The one deliberate per-session difference is a
+// stream consumer's resume offset: a non-nil resume that has seen a delivery
+// overrides x-stream-offset so the new session continues past it.
+func (r *Registry) consumeOptionsFor(consumer *ConsumerDeclaration, resume *streamResume) ConsumeOptions {
+	opts := ConsumeOptions{
 		Queue:         consumer.Queue,
 		Consumer:      consumer.Consumer,
 		AutoAck:       consumer.AutoAck,
@@ -437,6 +440,63 @@ func (r *Registry) consumeOptionsFor(consumer *ConsumerDeclaration) ConsumeOptio
 		NoLocal:       consumer.NoLocal,
 		NoWait:        consumer.NoWait,
 		PrefetchCount: consumer.PrefetchCount,
+		Args:          consumer.Args,
+	}
+
+	// SECURITY: amqp091 encodes a Go int as a 32-bit AMQP field ('I', write.go)
+	// and an int64 as 64-bit ('l'), so a declared offset above math.MaxInt32
+	// would silently truncate on the wire — 1<<32 arrives as 0 and replays the
+	// whole stream, 3000000000 arrives negative. Widening to int64 is lossless
+	// and is what the operator meant.
+	offset, hasOffset := int64(0), false
+	if declared, isInt := consumer.Args[argStreamOffset].(int); isInt {
+		offset, hasOffset = int64(declared), true
+	}
+	if resume != nil && resume.seen {
+		offset, hasOffset = resume.last+1, true
+	}
+	if hasOffset {
+		opts.Args = withStreamOffset(consumer.Args, offset)
+	}
+
+	return opts
+}
+
+// withStreamOffset returns a copy of args carrying offset as x-stream-offset.
+// The declaration's own map is shared with the registry state and every other
+// session, so the override is never applied in place.
+func withStreamOffset(args map[string]any, offset int64) map[string]any {
+	next := make(map[string]any, len(args))
+	maps.Copy(next, args)
+	next[argStreamOffset] = offset
+	return next
+}
+
+// streamResume carries the last stream offset handed to the worker pool across
+// a re-subscribe, so a broker flap resumes just past it instead of re-reading
+// the whole stream from the declared start position. Best-effort: messages
+// already handed to workers may be redelivered, and a process restart
+// re-attaches at the declared offset — handlers must be idempotent.
+// The feed loop in handleMessages is the only writer, and the supervisor reads
+// it only after handleMessages returns, so no synchronization is needed.
+// handleMessages closes the jobs channel and waits for its workers before
+// returning, so last is the last offset fully PROCESSED, not merely received.
+// Hence the resume is last+1 and not last: nothing unprocessed can be skipped,
+// while an inclusive resume would re-deliver that message on every reconnect.
+type streamResume struct {
+	last int64
+	seen bool
+}
+
+// observe records a delivery's stream offset. The nil receiver is the
+// non-stream consumer case, so the feed loop can call it unconditionally.
+func (s *streamResume) observe(headers amqp.Table) {
+	if s == nil {
+		return
+	}
+	if offset, found := streamOffsetFromHeaders(headers); found {
+		s.last = offset
+		s.seen = true
 	}
 }
 
@@ -445,16 +505,25 @@ func (r *Registry) consumeOptionsFor(consumer *ConsumerDeclaration) ConsumeOptio
 // fails startup (fail-fast); the supervisor goroutine then keeps the consumer
 // alive across broker reconnects (see superviseConsumer).
 func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDeclaration) error {
-	deliveries, err := r.client.ConsumeFromQueue(ctx, r.consumeOptionsFor(consumer))
+	deliveries, err := r.client.ConsumeFromQueue(ctx, r.consumeOptionsFor(consumer, nil))
 	if err != nil {
 		return fmt.Errorf("failed to start consuming from queue %s: %w", consumer.Queue, err)
+	}
+
+	// Stream-ness comes from the declared queue table, never from a delivery
+	// header, so a publisher-forged x-stream-offset cannot enable the resume
+	// path on a classic queue. Read r.queues directly: StartConsumers holds r.mu
+	// across its whole body, so the exported Queues() accessor would deadlock.
+	var resume *streamResume
+	if isStreamQueue(r.queues[consumer.Queue]) {
+		resume = &streamResume{}
 	}
 
 	// Supervise the subscription so it survives AMQP reconnects: when the broker
 	// closes the delivery channel (connection/channel flap), superviseConsumer
 	// re-subscribes on the client's new channel instead of leaving the queue
 	// with zero consumers until a process restart.
-	go r.superviseConsumer(ctx, consumer, deliveries)
+	go r.superviseConsumer(ctx, consumer, deliveries, resume)
 
 	return nil
 }
@@ -465,12 +534,12 @@ func (r *Registry) startSingleConsumer(ctx context.Context, consumer *ConsumerDe
 // to the client's reconnection supervisor: the publisher path recovers because
 // every publish re-reads the live channel under lock, whereas a consumer
 // captures its delivery channel once, so it needs an explicit re-subscribe.
-func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery) {
+func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery, resume *streamResume) {
 	for {
 		// Run one subscription session until the delivery channel closes
 		// (reconnect needed) or the context is canceled (stop for good).
 		sessionStart := time.Now()
-		if !r.handleMessages(ctx, consumer, deliveries) {
+		if !r.handleMessages(ctx, consumer, deliveries, resume) {
 			return // context canceled → stop for good
 		}
 
@@ -484,7 +553,7 @@ func (r *Registry) superviseConsumer(ctx context.Context, consumer *ConsumerDecl
 			}
 		}
 
-		next, ok := r.resubscribe(ctx, consumer)
+		next, ok := r.resubscribe(ctx, consumer, resume)
 		if !ok {
 			return // context canceled while waiting to re-subscribe
 		}
@@ -530,8 +599,10 @@ func consumerLogFields(consumer *ConsumerDeclaration) map[string]any {
 // client only hands out a fresh usable channel via its own reconnect supervisor
 // (handleReInit, paced by reInitDelay), and while the client is not ready
 // ConsumeFromQueue returns errNotConnected, which takes the backoff path below.
-func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaration) (<-chan amqp.Delivery, bool) {
+func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaration, resume *streamResume) (<-chan amqp.Delivery, bool) {
 	log := r.logger.WithFields(consumerLogFields(consumer))
+
+	opts := r.consumeOptionsFor(consumer, resume)
 
 	for attempt := 1; ; attempt++ {
 		// Stop promptly if we're shutting down before trying again.
@@ -539,7 +610,7 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 			return nil, false
 		}
 
-		deliveries, err := r.client.ConsumeFromQueue(ctx, r.consumeOptionsFor(consumer))
+		deliveries, err := r.client.ConsumeFromQueue(ctx, opts)
 		if err == nil {
 			log.Info().Int("attempt", attempt).
 				Msg("Consumer re-subscribed after delivery channel closed")
@@ -566,7 +637,7 @@ func (r *Registry) resubscribe(ctx context.Context, consumer *ConsumerDeclaratio
 // (v0.17+) and feeds deliveries to it until the session ends. It returns true
 // when the broker closed the delivery channel (the caller should re-subscribe)
 // and false when the context was canceled (shut down for good).
-func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery) bool {
+func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclaration, deliveries <-chan amqp.Delivery, resume *streamResume) bool {
 	workers := consumer.Workers
 	if workers <= 0 {
 		workers = 1 // Fallback (should not happen with smart defaults)
@@ -609,6 +680,8 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 					return true
 				}
 
+				resume.observe(delivery.Headers)
+
 				// Create local copy to avoid pointer capture bug (loop variable reuse)
 				d := delivery
 				// Send to the worker pool, but also honor cancellation: without
@@ -630,6 +703,26 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 	wg.Wait()
 	log.Info().Msg("All workers stopped gracefully")
 	return reconnect
+}
+
+// streamOffsetFromHeaders reads a delivery's x-stream-offset header. amqp091
+// decodes AMQP longs as int64, but the narrower integer types are accepted too
+// rather than assuming one wire encoding.
+func streamOffsetFromHeaders(headers amqp.Table) (int64, bool) {
+	switch v := headers[argStreamOffset].(type) {
+	case int64:
+		return v, true
+	case int32:
+		return int64(v), true
+	case int16:
+		return int64(v), true
+	case int8:
+		return int64(v), true
+	case int:
+		return int64(v), true
+	default:
+		return 0, false
+	}
 }
 
 // worker processes messages from the jobs channel concurrently.

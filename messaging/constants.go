@@ -37,6 +37,26 @@ const (
 	genericEventType = "event_type"
 )
 
+// AMQP declaration/consume argument keys, shared by the declaration
+// constructors in helpers.go, the validators in declarations.go, and the
+// consumer session in registry.go.
+const (
+	argQueueType            = "x-queue-type"
+	argStreamOffset         = "x-stream-offset"
+	argMaxAge               = "x-max-age"
+	argMaxLengthBytes       = "x-max-length-bytes"
+	argMaxSegmentSizeBytes  = "x-stream-max-segment-size-bytes"
+	argDeadLetterExchange   = "x-dead-letter-exchange"
+	argDeadLetterRoutingKey = "x-dead-letter-routing-key"
+
+	queueTypeStream = "stream"
+
+	// Named x-stream-offset start positions ("next" is the broker default).
+	streamOffsetFirst = "first"
+	streamOffsetLast  = "last"
+	streamOffsetNext  = "next"
+)
+
 // Registry readiness polling. Previously inline literals in registry.go's
 // "wait for AMQP client ready" loop.
 const (

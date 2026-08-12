@@ -415,6 +415,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **Database wiring fails closed (#892, ADR-050, ADR-051):** an enabled outbox/inbox without a usable ledger database, an unrecognized `connectionstring` scheme on the built-in connector, and any identity key delivered as an empty string each abort startup; a recognized scheme infers `database.type`.
 - **Dead exported surface removed (ADR-052, ADR-053):** `jose.PolicyRegistry` (memoize `jose.ScanType` + `jose.ResolvePolicy` yourself, keyed on type AND direction) and `server.TestShortTimeout`/`TestMediumTimeout`/`TestLongTimeout` are gone.
 - **OTel log-record identity (ADR-055, ADR-056):** top-level fields keyed `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` reach OTLP as `app.<key>`; framework record attributes shrink to `log.type`, identity stays in `ResourceLogs.resource`.
+- **Consumer-scoped AMQP args (ADR-058):** `ConsumeOptions`/`ConsumerOptions`/`ConsumerDeclaration` gain `Args`, forwarded to `basic.consume` — that is where `x-stream-offset` goes; `DeclareStreamQueue` sets only queue type + retention. A map field makes all three non-comparable: `==` and map-key use stop compiling.
 
 ## File Organization
 

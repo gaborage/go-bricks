@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
@@ -1157,4 +1158,227 @@ func TestRegisterQueueUncomparableArgsValues(t *testing.T) {
 		assert.Contains(t, err.Error(), "[a]")
 		assert.Contains(t, err.Error(), "[b]")
 	})
+}
+
+func streamConsumer(queue string, autoAck bool, args map[string]any) *ConsumerDeclaration {
+	return &ConsumerDeclaration{
+		Queue:     queue,
+		Consumer:  testConsumer,
+		EventType: testEventType,
+		AutoAck:   autoAck,
+		Args:      args,
+	}
+}
+
+func TestValidateStreamQueueShape(t *testing.T) {
+	streamArgs := func() map[string]any { return map[string]any{argQueueType: queueTypeStream} }
+
+	tests := []struct {
+		name    string
+		queue   *QueueDeclaration
+		wantErr string
+	}{
+		{
+			name:  "durable_non_exclusive_non_autodelete_passes",
+			queue: &QueueDeclaration{Name: testStreamQueue, Durable: true, Args: streamArgs()},
+		},
+		{
+			name:    "non_durable_rejected",
+			queue:   &QueueDeclaration{Name: testStreamQueue, Args: streamArgs()},
+			wantErr: `stream queue "events.stream" must be durable`,
+		},
+		{
+			name:    "exclusive_rejected",
+			queue:   &QueueDeclaration{Name: testStreamQueue, Durable: true, Exclusive: true, Args: streamArgs()},
+			wantErr: `stream queue "events.stream" must not be exclusive`,
+		},
+		{
+			name:    "auto_delete_rejected",
+			queue:   &QueueDeclaration{Name: testStreamQueue, Durable: true, AutoDelete: true, Args: streamArgs()},
+			wantErr: `stream queue "events.stream" must not be auto-delete`,
+		},
+		{
+			// Stream-ness gates the whole rule set: a classic queue keeps its
+			// pre-existing freedom to be non-durable, exclusive and auto-delete.
+			name:  "non_stream_queue_unaffected",
+			queue: &QueueDeclaration{Name: testStreamQueue, Exclusive: true, AutoDelete: true},
+		},
+		{
+			name:  "other_queue_type_unaffected",
+			queue: &QueueDeclaration{Name: testStreamQueue, Exclusive: true, Args: map[string]any{argQueueType: "quorum"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+			decls.RegisterQueue(tt.queue)
+
+			err := decls.Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestValidateStreamQueueShapeAggregatesEveryViolation(t *testing.T) {
+	decls := NewDeclarations()
+	decls.RegisterQueue(&QueueDeclaration{
+		Name:       testStreamQueue,
+		Exclusive:  true,
+		AutoDelete: true,
+		Args:       map[string]any{argQueueType: queueTypeStream},
+	})
+
+	err := decls.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `stream queue "events.stream" must be durable`)
+	assert.Contains(t, err.Error(), `stream queue "events.stream" must not be exclusive`)
+	assert.Contains(t, err.Error(), `stream queue "events.stream" must not be auto-delete`)
+}
+
+func TestValidateStreamConsumerRules(t *testing.T) {
+	timestamp := time.Now()
+
+	tests := []struct {
+		name      string
+		nonStream bool
+		autoAck   bool
+		args      map[string]any
+		wantErr   string
+	}{
+		{name: "no_args_accepted"},
+		{name: "offset_first_accepted", args: map[string]any{argStreamOffset: streamOffsetFirst}},
+		{name: "offset_last_accepted", args: map[string]any{argStreamOffset: streamOffsetLast}},
+		{name: "offset_next_accepted", args: map[string]any{argStreamOffset: streamOffsetNext}},
+		{name: "offset_int_zero_accepted", args: map[string]any{argStreamOffset: 0}},
+		{name: "offset_int64_accepted", args: map[string]any{argStreamOffset: int64(42)}},
+		{name: "offset_int64_zero_accepted", args: map[string]any{argStreamOffset: int64(0)}},
+		{name: "offset_timestamp_accepted", args: map[string]any{argStreamOffset: timestamp}},
+		{name: "offset_interval_days_accepted", args: map[string]any{argStreamOffset: "7D"}},
+		{name: "offset_interval_minutes_accepted", args: map[string]any{argStreamOffset: "30m"}},
+		{name: "other_consumer_arg_accepted", args: map[string]any{"x-priority": 5}},
+		{
+			name:    "auto_ack_rejected",
+			autoAck: true,
+			wantErr: `consumer "test-consumer" on stream queue "events.stream" must use manual ack (AutoAck=false)`,
+		},
+		{
+			name:    "offset_garbage_string_rejected",
+			args:    map[string]any{argStreamOffset: "banana"},
+			wantErr: `has invalid x-stream-offset value banana (string)`,
+		},
+		{
+			name:    "offset_bad_interval_unit_rejected",
+			args:    map[string]any{argStreamOffset: "7X"},
+			wantErr: `has invalid x-stream-offset value 7X (string)`,
+		},
+		{
+			name:    "offset_negative_int_rejected",
+			args:    map[string]any{argStreamOffset: -1},
+			wantErr: `has invalid x-stream-offset value -1 (int)`,
+		},
+		{
+			name:    "offset_negative_int64_rejected",
+			args:    map[string]any{argStreamOffset: int64(-1)},
+			wantErr: `has invalid x-stream-offset value -1 (int64)`,
+		},
+		{
+			name:    "offset_float_rejected",
+			args:    map[string]any{argStreamOffset: 3.14},
+			wantErr: `has invalid x-stream-offset value 3.14 (float64)`,
+		},
+		{
+			name:      "offset_on_non_stream_queue_rejected",
+			nonStream: true,
+			args:      map[string]any{argStreamOffset: streamOffsetFirst},
+			wantErr:   `consumer "test-consumer" on queue "events.stream" sets x-stream-offset but the queue is not a stream queue`,
+		},
+		{
+			name:      "auto_ack_on_non_stream_queue_allowed",
+			nonStream: true,
+			autoAck:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+			if tt.nonStream {
+				decls.DeclareQueue(testStreamQueue)
+			} else {
+				decls.DeclareStreamQueue(testStreamQueue, nil)
+			}
+			decls.RegisterConsumer(streamConsumer(testStreamQueue, tt.autoAck, tt.args))
+
+			err := decls.Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestConsumerArgsAffectHash(t *testing.T) {
+	build := func(args map[string]any) *Declarations {
+		d := NewDeclarations()
+		d.DeclareStreamQueue(testStreamQueue, nil)
+		d.RegisterConsumer(streamConsumer(testStreamQueue, false, args))
+		return d
+	}
+
+	first := build(map[string]any{argStreamOffset: streamOffsetFirst})
+	last := build(map[string]any{argStreamOffset: streamOffsetLast})
+
+	assert.NotEqual(t, first.Hash(), last.Hash(),
+		"consumer Args are broker-visible, so they must invalidate the replay hash")
+	assert.Equal(t, first.Hash(), build(map[string]any{argStreamOffset: streamOffsetFirst}).Hash())
+	assert.NotEqual(t, first.Hash(), build(nil).Hash())
+	assert.Equal(t, first.Hash(), first.Clone().Hash(),
+		"a clone must hash identically to its source")
+}
+
+func TestRegisterConsumerDeepCopiesArgs(t *testing.T) {
+	callerArgs := map[string]any{argStreamOffset: streamOffsetFirst}
+
+	decls := NewDeclarations()
+	decls.DeclareStreamQueue(testStreamQueue, nil)
+	decls.RegisterConsumer(streamConsumer(testStreamQueue, false, callerArgs))
+
+	clone := decls.Clone()
+
+	// Mutating the caller's map after registration must not reach either store.
+	callerArgs[argStreamOffset] = streamOffsetLast
+	callerArgs["x-priority"] = 5
+
+	stored := decls.Consumers()[0]
+	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, stored.Args)
+
+	cloned := clone.Consumers()[0]
+	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, cloned.Args)
+
+	// The clone owns its own map too.
+	stored.Args[argStreamOffset] = streamOffsetNext
+	assert.Equal(t, streamOffsetFirst, cloned.Args[argStreamOffset])
+}
+
+func TestRegisterConsumerWithoutArgsGetsEmptyMap(t *testing.T) {
+	decls := NewDeclarations()
+	decls.DeclareQueue(testQueue)
+	decls.RegisterConsumer(streamConsumer(testQueue, false, nil))
+
+	stored := decls.Consumers()[0]
+	require.NotNil(t, stored.Args)
+	assert.Empty(t, stored.Args)
+
+	cloned := decls.Clone().Consumers()[0]
+	require.NotNil(t, cloned.Args)
+	assert.Empty(t, cloned.Args)
 }
