@@ -2933,6 +2933,25 @@ queue := decls.DeclareStreamQueue("orders.events.stream", &messaging.StreamQueue
 //   Args: map[string]any{"x-stream-offset": "first"},
 ```
 
+For **server-side offset tracking** (a restart resumes where handling got to), single
+active consumer, or super streams, use the native stream protocol instead: implement
+`app.StreamDeclarer` and set `messaging.streams.uri`. Handlers run inline and sequentially,
+and an offset is committed only after a handler returns nil — see
+[wiki/streams.md](wiki/streams.md):
+
+```go
+func (m *Module) DeclareStreams(decls *streams.Declarations) {
+	decls.DeclareStream("orders", &streams.StreamSpec{MaxAge: 7 * 24 * time.Hour})
+	decls.DeclareConsumer(&streams.ConsumerOptions{
+		Stream: "orders", Name: "order-projector", // Name is the offset-tracking key
+		Start: streams.OffsetFirst(), SAC: true,
+		Handler: func(ctx context.Context, msg *streams.Message) error {
+			return m.svc.Project(ctx, msg.Data) // msg.Offset, msg.Stream also available
+		},
+	})
+}
+```
+
 ### Step 3: Implement the Producer (publish messages)
 
 The `messaging.AMQPClient` returned by `deps.Messaging(ctx)` exposes two publish APIs:

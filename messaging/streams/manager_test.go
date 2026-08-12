@@ -189,8 +189,8 @@ func TestManagerStats(t *testing.T) {
 	assert.Equal(t, 1, stats["consumers"])
 	assert.Equal(t, true, stats["ready"])
 	assert.Equal(t, map[string]int64{testStream + "/" + testConsumerName: 31}, stats["stored_offsets"])
-	assert.Equal(t, 9, stats["offset_store"])
-	assert.Equal(t, "2s", stats["offset_interval"])
+	assert.Equal(t, 9, stats["offset_store_count"])
+	assert.Equal(t, "2s", stats["offset_flush_interval"])
 }
 
 func TestManagerStatsOmitsUncommittedOffsets(t *testing.T) {

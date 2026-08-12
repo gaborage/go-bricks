@@ -41,7 +41,7 @@ type ManagerOptions struct {
 	// OffsetStoreInterval is how long after the last commit a pending offset is
 	// committed anyway.
 	OffsetStoreInterval time.Duration
-	// Logger receives consumer lifecycle and handler-failure events.
+	// Logger receives consumer lifecycle and handler-failure events. Required.
 	Logger logger.Logger
 }
 
@@ -312,12 +312,12 @@ func (m *Manager) Stats() map[string]any {
 	}
 
 	return map[string]any{
-		"started":         m.started,
-		"consumers":       len(m.consumers),
-		"ready":           m.readyLocked(),
-		"stored_offsets":  offsets,
-		"offset_store":    m.opts.OffsetStoreCount,
-		"offset_interval": m.opts.OffsetStoreInterval.String(),
+		"started":               m.started,
+		"consumers":             len(m.consumers),
+		"ready":                 m.readyLocked(),
+		"stored_offsets":        offsets,
+		"offset_store_count":    m.opts.OffsetStoreCount,
+		"offset_flush_interval": m.opts.OffsetStoreInterval.String(),
 	}
 }
 
