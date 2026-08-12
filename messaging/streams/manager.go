@@ -166,7 +166,6 @@ func (m *Manager) declareStreams(decls *Declarations) error {
 // startConsumer starts one reliable consumer for a declaration.
 func (m *Manager) startConsumer(ctx context.Context, decl *consumerDeclaration) error {
 	runner := &consumerRunner{
-		stream:  decl.Stream,
 		name:    decl.Name,
 		handler: decl.Handler,
 		tracker: newOffsetTracker(m.opts.OffsetStoreCount, m.opts.OffsetStoreInterval, nil),

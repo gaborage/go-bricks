@@ -125,7 +125,6 @@ func (t *offsetTracker) lastStored() (offset int64, ok bool) {
 
 // consumerRunner adapts one declared consumer to the stream client's callback.
 type consumerRunner struct {
-	stream  string
 	name    string
 	handler Handler
 	tracker *offsetTracker

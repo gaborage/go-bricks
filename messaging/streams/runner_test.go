@@ -67,7 +67,6 @@ func (c *fakeClock) advance(d time.Duration) {
 func newTestRunner(t *testing.T, handler Handler, tracker *offsetTracker) *consumerRunner {
 	t.Helper()
 	return &consumerRunner{
-		stream:  testStream,
 		name:    testConsumerName,
 		handler: handler,
 		tracker: tracker,
