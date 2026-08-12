@@ -158,7 +158,10 @@ func enableStreamPlugin(ctx context.Context, c *rabbitmq.RabbitMQContainer) (por
 		return 0, fmt.Errorf("failed to enable rabbitmq_stream plugin: %w", err)
 	}
 	if code != 0 {
-		output, _ := io.ReadAll(reader)
+		output, readErr := io.ReadAll(reader)
+		if readErr != nil {
+			return 0, fmt.Errorf("rabbitmq-plugins enable rabbitmq_stream exited %d; reading its output failed: %w", code, readErr)
+		}
 		return 0, fmt.Errorf("rabbitmq-plugins enable rabbitmq_stream exited %d: %s", code, output)
 	}
 

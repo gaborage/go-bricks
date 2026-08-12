@@ -107,6 +107,11 @@ func NewManager(opts ManagerOptions) *Manager {
 // caller that never calls Close does not leak it, and a retried Start cannot
 // orphan the previous environment.
 //
+// Start is not a resume: once it has dialed, it refuses to run again until Close
+// disposes the environment. StopConsumers deliberately leaves that environment
+// open, so redialing over it would orphan a connection the registered closer
+// still owns.
+//
 // ctx contributes its VALUES to every handler invocation, never its cancellation:
 // consumers outlive the startup call that created them, and StopConsumers is what
 // ends them. See consumeContext.
@@ -118,8 +123,11 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.started {
-		return errors.New("streams manager already started")
+	// Guarded on the environment, not on started: stopLocked clears started but
+	// leaves m.env for Close, so a started-only guard would let a Start after
+	// StopConsumers dial over the live environment and orphan it.
+	if m.env != nil {
+		return errors.New("streams manager already started: Close it before starting again")
 	}
 
 	// NewEnvironment closes its own locator socket before returning, so a failed
@@ -312,6 +320,9 @@ func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
 // StopConsumers stops every consumer. Each one flushes its pending offset BEFORE
 // closing, so a clean shutdown does not replay successfully handled messages.
 // Idempotent.
+//
+// This is shutdown phase one, not a pause: the environment stays open for Close
+// to dispose, and Start stays refused until then.
 func (m *Manager) StopConsumers() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

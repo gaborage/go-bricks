@@ -212,9 +212,14 @@ func TestManagerStartWithoutDeclarationsDoesNotDial(t *testing.T) {
 	assert.False(t, m.started)
 }
 
+// The environment is installed alongside the consumer because Start sets it
+// before it sets started; attach alone would leave a state Start never produces.
+// The URI is unreachable so a guard that stopped holding surfaces as a dial
+// failure the message assertion rejects, rather than as a lucky local broker.
 func TestManagerStartRejectsSecondStart(t *testing.T) {
-	m := testManager(t)
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
 	attach(m, &fakeHandle{status: ha.StatusOpen}, newOffsetTracker(1, time.Hour, nil))
+	m.env = &stream.Environment{}
 
 	decls := NewDeclarations()
 	decls.DeclareStream(testStream, nil)
@@ -641,6 +646,36 @@ func TestManagerAbortStartLockedReportsOnlyRealDisposalFailures(t *testing.T) {
 	assert.NotContains(t, log.warnMessages(), msgCloseEnvFailed,
 		"a disposal that succeeded is not reported as a failure")
 	assert.Empty(t, log.warnMessages(), "the whole unwind is silent when every step succeeds")
+}
+
+// TestManagerStartRefusesRestartAfterStopConsumers is the restart variant of the
+// environment-lifecycle class: stopLocked clears started but leaves m.env for
+// Close, so a guard reading only started let a second Start dial over the live
+// environment and orphan it beyond any later Close.
+//
+// The URI is unreachable on purpose: if the guard stopped holding, Start would
+// reach the dial and report a connection failure instead, which is what the
+// message assertion below separates from a genuine refusal.
+func TestManagerStartRefusesRestartAfterStopConsumers(t *testing.T) {
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
+	handle := &fakeHandle{status: ha.StatusOpen}
+	attach(m, handle, newOffsetTracker(1000, time.Hour, nil))
+	env := &stream.Environment{}
+	m.env = env
+
+	m.StopConsumers()
+	require.False(t, m.started, "the premise: StopConsumers clears started")
+	require.Same(t, env, m.env, "the premise: StopConsumers leaves the environment for Close")
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	err := m.Start(context.Background(), decls)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already started",
+		"the restart is refused by the guard, not by a failed dial")
+	assert.Same(t, env, m.env, "the first environment is still the one Close disposes, not an orphan")
+	assert.False(t, m.started)
 }
 
 func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {
