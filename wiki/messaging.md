@@ -258,6 +258,70 @@ Both forms only shape topology (Tier 1). Bounded redelivery — capping retries
 via `x-death` count before parking permanently — remains future work; see
 [#721](https://github.com/gaborage/go-bricks/issues/721).
 
+## Stream Queues (AMQP lane)
+
+A RabbitMQ **stream** is an append-only replicated log rather than a classic
+queue: reads are non-destructive, so acking never deletes anything and each
+consumer picks its own start position in the log. This lane speaks ordinary
+AMQP 0.9.1 over the existing broker connection (port 5672) — no extra port, no
+extra dependency.
+
+**Declaring:**
+
+```go
+decls.DeclareStreamQueue("orders.events", &messaging.StreamQueueSpec{
+    MaxAge:              7 * 24 * time.Hour, // x-max-age, whole seconds
+    MaxLengthBytes:      10 << 30,           // x-max-length-bytes
+    MaxSegmentSizeBytes: 500 << 20,          // x-stream-max-segment-size-bytes
+})
+```
+
+A `nil` spec declares the stream with broker-default retention. Zero-valued
+fields are omitted, so each retention arg is opt-in.
+
+**Consuming** — pick the start position with the `x-stream-offset` consumer
+argument:
+
+```go
+decls.DeclareConsumer(&messaging.ConsumerOptions{
+    Queue:     "orders.events",
+    Consumer:  "orders-projector",
+    EventType: "order.created",
+    Handler:   handler,
+    AutoAck:   false,
+    Args:      map[string]any{"x-stream-offset": "first"},
+}, nil)
+```
+
+Legal `x-stream-offset` values: `"first"`, `"last"`, `"next"` (the broker
+default when the arg is absent), an absolute offset (`int`/`int64` ≥ 0), a
+`time.Time`, or an interval string such as `"7D"`. Each delivery carries its own
+position in `delivery.Headers["x-stream-offset"]`.
+
+**Startup validation** — `Declarations.Validate` rejects, by name, four shapes
+the broker would otherwise refuse with an opaque channel error:
+
+1. A stream queue that is not durable.
+2. A stream queue that is exclusive or auto-delete.
+3. A stream consumer with `AutoAck: true` — streams require manual acks,
+   because acks act as consumer credit.
+4. An `x-stream-offset` on a consumer whose queue is not a stream queue (the
+   broker would silently ignore it).
+
+**Resume on broker flap:** when the broker drops the delivery channel, the
+supervisor re-subscribes one past the last offset it handed to the worker pool
+instead of replaying the whole stream from the declared start position. This is
+best-effort and session-local: messages already in flight may be redelivered,
+and a **process restart** re-attaches at the declared offset. AMQP 0.9.1 has no
+server-side offset tracking, so handlers must be idempotent — the framework-wide
+consumer rule.
+
+Consumer concurrency is unchanged in this lane (see below), so a stream consumer
+that must preserve log order needs `Workers: 1`.
+
+Server-side offset tracking, single active consumer, and super streams need the
+native stream protocol (port 5552) — see `wiki/streams.md`.
+
 ## Consumer Concurrency (v0.17+)
 
 **Breaking Change (v0.17.0):** Default worker count changed from 1 to `runtime.NumCPU() * 4` for optimal I/O-bound performance (20-30x throughput improvement).

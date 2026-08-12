@@ -766,7 +766,7 @@ func (c *AMQPClientImpl) ConsumeFromQueue(_ context.Context, options ConsumeOpti
 		options.Exclusive,
 		options.NoLocal,
 		options.NoWait,
-		nil, // args
+		toTable(options.Args),
 	)
 }
 

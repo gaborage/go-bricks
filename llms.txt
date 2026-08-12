@@ -2916,6 +2916,21 @@ q.Args["x-dead-letter-exchange"] = "orders.dlx"
 decls.RegisterQueue(q)
 ```
 
+Consume a RabbitMQ **stream queue** (append-only log, non-destructive reads, offset
+replay) over the same AMQP connection — `AutoAck: false` is mandatory and
+`x-stream-offset` accepts `"first"`/`"last"`/`"next"`, an offset int, a `time.Time`, or
+an interval like `"7D"` (see [wiki/messaging.md](wiki/messaging.md)):
+
+```go
+// In DeclareMessaging above, instead of DeclareQueue:
+stream := decls.DeclareStreamQueue("orders.events", &messaging.StreamQueueSpec{MaxAge: 7 * 24 * time.Hour})
+decls.DeclareConsumer(&messaging.ConsumerOptions{
+	Queue: stream.Name, Consumer: "orders-projector", EventType: "OrderCreated",
+	Handler: NewOrderHandler(m.svc, m.logger), AutoAck: false,
+	Args: map[string]any{"x-stream-offset": "first"},
+}, nil)
+```
+
 ### Step 3: Implement the Producer (publish messages)
 
 The `messaging.AMQPClient` returned by `deps.Messaging(ctx)` exposes two publish APIs:

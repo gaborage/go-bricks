@@ -1,10 +1,27 @@
 package messaging
 
-import "runtime"
+import (
+	"fmt"
+	"runtime"
+	"time"
+)
 
 const (
 	exchangeTypeTopic  = "topic"
 	exchangeTypeFanout = "fanout"
+
+	argQueueType           = "x-queue-type"
+	argStreamOffset        = "x-stream-offset"
+	argMaxAge              = "x-max-age"
+	argMaxLengthBytes      = "x-max-length-bytes"
+	argMaxSegmentSizeBytes = "x-stream-max-segment-size-bytes"
+
+	queueTypeStream = "stream"
+
+	// Named x-stream-offset start positions ("next" is the broker default).
+	streamOffsetFirst = "first"
+	streamOffsetLast  = "last"
+	streamOffsetNext  = "next"
 )
 
 // NewTopicExchange creates a topic exchange with production-safe defaults.
@@ -103,6 +120,7 @@ type ConsumerOptions struct {
 	NoLocal       bool           // Don't deliver to the connection that published (default: false)
 	Workers       int            // Number of concurrent workers (0 = auto-scale to NumCPU*4, >0 = explicit)
 	PrefetchCount int            // RabbitMQ prefetch count (0 = auto-scale to Workers*10, capped at 500)
+	Args          map[string]any // Per-consumer arguments forwarded to basic.consume (x-stream-offset, x-priority, ...)
 }
 
 // NewConsumer creates a consumer declaration from options.
@@ -119,6 +137,7 @@ func NewConsumer(opts *ConsumerOptions) *ConsumerDeclaration {
 		Handler:       opts.Handler,
 		Workers:       opts.Workers,
 		PrefetchCount: opts.PrefetchCount,
+		Args:          opts.Args,
 	}
 }
 
@@ -220,6 +239,40 @@ func (d *Declarations) hasParkingBinding(parking, dlx string) bool {
 		}
 	}
 	return false
+}
+
+// StreamQueueSpec configures retention for a stream queue. Zero-value fields
+// are omitted (broker defaults apply). MaxAge is rendered as whole seconds.
+type StreamQueueSpec struct {
+	MaxAge              time.Duration // -> x-max-age ("<n>s")
+	MaxLengthBytes      int64         // -> x-max-length-bytes
+	MaxSegmentSizeBytes int64         // -> x-stream-max-segment-size-bytes
+}
+
+// DeclareStreamQueue declares a RabbitMQ stream queue (x-queue-type: stream):
+// an append-only replicated log read non-destructively at a client-chosen
+// offset, instead of a classic queue's destructive consume. Consumers pick a
+// start position with the x-stream-offset consumer Arg (see
+// wiki/messaging.md). A nil spec declares the queue with broker-default
+// retention. Returns the registered queue declaration.
+func (d *Declarations) DeclareStreamQueue(name string, spec *StreamQueueSpec) *QueueDeclaration {
+	queue := NewQueue(name)
+	queue.Args[argQueueType] = queueTypeStream
+
+	if spec != nil {
+		if spec.MaxAge > 0 {
+			queue.Args[argMaxAge] = fmt.Sprintf("%ds", int64(spec.MaxAge.Seconds()))
+		}
+		if spec.MaxLengthBytes > 0 {
+			queue.Args[argMaxLengthBytes] = spec.MaxLengthBytes
+		}
+		if spec.MaxSegmentSizeBytes > 0 {
+			queue.Args[argMaxSegmentSizeBytes] = spec.MaxSegmentSizeBytes
+		}
+	}
+
+	d.RegisterQueue(queue)
+	return queue
 }
 
 // DeclarePublisher creates and registers a publisher in one step.

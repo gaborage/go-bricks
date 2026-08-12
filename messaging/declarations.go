@@ -9,8 +9,13 @@ import (
 	"maps"
 	"math"
 	"reflect"
+	"regexp"
 	"slices"
+	"time"
 )
+
+// streamOffsetInterval matches the interval form of x-stream-offset ("7D", "30m").
+var streamOffsetInterval = regexp.MustCompile(`^\d+[YMDhms]$`)
 
 // consumerKey uniquely identifies a consumer declaration.
 // The combination of Queue + Consumer tag + EventType must be unique across all registrations.
@@ -264,6 +269,12 @@ func (d *Declarations) RegisterConsumer(c *ConsumerDeclaration) {
 		Handler:       c.Handler, // Handlers are typically stateless, so no deep copy needed
 		Workers:       c.Workers,
 		PrefetchCount: c.PrefetchCount,
+		Args:          make(map[string]any),
+	}
+
+	// Deep copy args map
+	if c.Args != nil {
+		maps.Copy(decl.Args, c.Args)
 	}
 
 	d.consumerIndex[key] = decl
@@ -304,6 +315,10 @@ func (d *Declarations) Validate() error {
 		}
 	}
 
+	if err := d.validateStreamDeclarations(); err != nil {
+		return err
+	}
+
 	// Check that all publisher exchanges exist
 	for _, publisher := range d.Publishers {
 		if _, exists := d.Exchanges[publisher.Exchange]; !exists {
@@ -312,6 +327,83 @@ func (d *Declarations) Validate() error {
 	}
 
 	return nil
+}
+
+// validateStreamDeclarations enforces the shape RabbitMQ stream queues and
+// their consumers must have. The broker rejects a violating declaration with an
+// opaque channel error at declare time, so failing here names the offending
+// queue and consumer instead. Aggregated so one boot reports every problem.
+func (d *Declarations) validateStreamDeclarations() error {
+	var errs []error
+
+	for _, name := range slices.Sorted(maps.Keys(d.Queues)) {
+		q := d.Queues[name]
+		if !isStreamQueue(q) {
+			continue
+		}
+		if !q.Durable {
+			errs = append(errs, fmt.Errorf("stream queue %q must be durable", name))
+		}
+		if q.Exclusive {
+			errs = append(errs, fmt.Errorf("stream queue %q must not be exclusive", name))
+		}
+		if q.AutoDelete {
+			errs = append(errs, fmt.Errorf("stream queue %q must not be auto-delete", name))
+		}
+	}
+
+	for _, c := range d.Consumers() {
+		offset, hasOffset := c.Args[argStreamOffset]
+
+		if !isStreamQueue(d.Queues[c.Queue]) {
+			if hasOffset {
+				errs = append(errs, fmt.Errorf(
+					"consumer %q on queue %q sets %s but the queue is not a stream queue",
+					c.Consumer, c.Queue, argStreamOffset))
+			}
+			continue
+		}
+
+		if c.AutoAck {
+			errs = append(errs, fmt.Errorf(
+				"consumer %q on stream queue %q must use manual ack (AutoAck=false): acks are consumer credit on streams",
+				c.Consumer, c.Queue))
+		}
+		if hasOffset && !isValidStreamOffset(offset) {
+			errs = append(errs, fmt.Errorf(
+				"consumer %q on stream queue %q has invalid %s value %v (%T): want \"first\"/\"last\"/\"next\", a non-negative int, a time.Time, or an interval like \"7D\"",
+				c.Consumer, c.Queue, argStreamOffset, offset, offset))
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// isStreamQueue reports whether a queue declaration asks the broker for a
+// stream queue.
+func isStreamQueue(q *QueueDeclaration) bool {
+	return q != nil && q.Args[argQueueType] == queueTypeStream
+}
+
+// isValidStreamOffset reports whether v is an x-stream-offset value RabbitMQ
+// accepts: the named positions, an absolute offset, a timestamp, or an interval.
+func isValidStreamOffset(v any) bool {
+	switch value := v.(type) {
+	case string:
+		switch value {
+		case streamOffsetFirst, streamOffsetLast, streamOffsetNext:
+			return true
+		}
+		return streamOffsetInterval.MatchString(value)
+	case int:
+		return value >= 0
+	case int64:
+		return value >= 0
+	case time.Time:
+		return true
+	default:
+		return false
+	}
 }
 
 // validateQueueConflicts aggregates every incompatible queue re-declaration into
@@ -478,6 +570,10 @@ func (d *Declarations) Clone() *Declarations {
 			Handler:       consumer.Handler, // Handlers are stateless, so shallow copy is fine
 			Workers:       consumer.Workers,
 			PrefetchCount: consumer.PrefetchCount,
+			Args:          make(map[string]any),
+		}
+		if consumer.Args != nil {
+			maps.Copy(cloneConsumer.Args, consumer.Args)
 		}
 		cloneKey := consumerKey{
 			Queue:     consumer.Queue,
@@ -553,6 +649,9 @@ func (d *Declarations) Hash() uint64 {
 		writeBool(h, c.Exclusive)
 		writeBool(h, c.NoLocal)
 		writeBool(h, c.NoWait)
+		// Consumer Args change broker-visible behavior (x-stream-offset, ...), so
+		// they must invalidate the replay-idempotency hash.
+		writeMapArgs(h, c.Args)
 		// NOTE: Handler functions are NOT hashable (intentional)
 	}
 

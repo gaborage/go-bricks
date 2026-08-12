@@ -48,6 +48,9 @@ type ConsumeOptions struct {
 	NoLocal       bool   // No-local flag
 	NoWait        bool   // No-wait flag
 	PrefetchCount int    // RabbitMQ prefetch count (0 or negative = default to 1)
+	// Args are per-consumer arguments forwarded to basic.consume
+	// (x-stream-offset, x-priority, ...).
+	Args map[string]any
 }
 
 // AMQPClient extends the basic Client interface with AMQP-specific functionality.

@@ -69,6 +69,9 @@ const (
 	missingQueue    = "missing-queue"
 	missingExchange = "missing-exchange"
 
+	// Stream queue test identifiers
+	testStreamQueue = "events.stream"
+
 	// Named test entities (for registry tests)
 	testExchangeName  = "test-exchange"
 	testQueueName     = "test-queue"

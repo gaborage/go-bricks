@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -844,4 +845,81 @@ func TestHelpersIntegrationWorkflow(t *testing.T) {
 		// Clone should be unaffected
 		assert.Equal(t, "original", clonedExchange.Args["custom"])
 	})
+}
+
+func TestDeclareStreamQueue(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     *StreamQueueSpec
+		wantArgs map[string]any
+	}{
+		{
+			name:     "nil_spec_sets_queue_type_only",
+			spec:     nil,
+			wantArgs: map[string]any{argQueueType: queueTypeStream},
+		},
+		{
+			name:     "empty_spec_omits_every_retention_arg",
+			spec:     &StreamQueueSpec{},
+			wantArgs: map[string]any{argQueueType: queueTypeStream},
+		},
+		{
+			name: "full_retention_spec",
+			spec: &StreamQueueSpec{
+				MaxAge:              90 * time.Second,
+				MaxLengthBytes:      1024,
+				MaxSegmentSizeBytes: 512,
+			},
+			wantArgs: map[string]any{
+				argQueueType:           queueTypeStream,
+				argMaxAge:              "90s",
+				argMaxLengthBytes:      int64(1024),
+				argMaxSegmentSizeBytes: int64(512),
+			},
+		},
+		{
+			name: "max_age_only",
+			spec: &StreamQueueSpec{MaxAge: 48 * time.Hour},
+			wantArgs: map[string]any{
+				argQueueType: queueTypeStream,
+				argMaxAge:    "172800s",
+			},
+		},
+		{
+			name: "max_length_only",
+			spec: &StreamQueueSpec{MaxLengthBytes: 2048},
+			wantArgs: map[string]any{
+				argQueueType:      queueTypeStream,
+				argMaxLengthBytes: int64(2048),
+			},
+		},
+		{
+			name: "max_segment_size_only",
+			spec: &StreamQueueSpec{MaxSegmentSizeBytes: 4096},
+			wantArgs: map[string]any{
+				argQueueType:           queueTypeStream,
+				argMaxSegmentSizeBytes: int64(4096),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decls := NewDeclarations()
+			queue := decls.DeclareStreamQueue(testStreamQueue, tt.spec)
+
+			require.NotNil(t, queue)
+			assert.Equal(t, tt.wantArgs, queue.Args)
+
+			registered, ok := decls.Queues[testStreamQueue]
+			require.True(t, ok, "stream queue must be registered")
+			assert.Equal(t, tt.wantArgs, registered.Args)
+
+			// Streams require durable, non-exclusive, non-auto-delete queues.
+			assert.True(t, registered.Durable)
+			assert.False(t, registered.Exclusive)
+			assert.False(t, registered.AutoDelete)
+			assert.NoError(t, decls.Validate())
+		})
+	}
 }

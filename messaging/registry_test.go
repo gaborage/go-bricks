@@ -888,7 +888,7 @@ func TestRegistryHandleMessagesContextCancellation(t *testing.T) {
 	handlerStarted := make(chan struct{})
 	go func() {
 		close(handlerStarted) // Signal handler is about to start
-		handlerDone <- registry.handleMessages(ctx, consumer, deliveries)
+		handlerDone <- registry.handleMessages(ctx, consumer, deliveries, nil)
 	}()
 
 	// Wait for handler to start, then cancel context immediately
@@ -927,7 +927,7 @@ func TestRegistryHandleMessagesChannelClosure(t *testing.T) {
 	handlerStarted := make(chan struct{})
 	go func() {
 		close(handlerStarted) // Signal handler is about to start
-		handlerDone <- registry.handleMessages(ctx, consumer, deliveries)
+		handlerDone <- registry.handleMessages(ctx, consumer, deliveries, nil)
 	}()
 
 	// Wait for handler to start, then close delivery channel immediately
@@ -982,7 +982,7 @@ func TestRegistryHandleMessagesWithDelivery(t *testing.T) {
 	go func() {
 		defer close(handlerDone)
 		close(handlerStarted) // Signal handler is about to start
-		registry.handleMessages(ctx, consumer, deliveries)
+		registry.handleMessages(ctx, consumer, deliveries, nil)
 	}()
 
 	// Wait for handler to start, then send the delivery
@@ -1452,7 +1452,7 @@ func TestRegistryHandleMessagesContinuesAfterPanic(t *testing.T) {
 	defer cancel()
 
 	// Process messages from panic consumer
-	registry.handleMessages(ctx, panicConsumer, deliveries)
+	registry.handleMessages(ctx, panicConsumer, deliveries, nil)
 
 	// Verify all messages were processed despite first panic
 	assert.Equal(t, 3, panicHandler.CallCount(), "All messages should be processed despite panics")
@@ -1517,12 +1517,12 @@ func TestRegistryMultipleConsumersPanicIsolation(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		registry.handleMessages(ctx, consumer1, deliveries1)
+		registry.handleMessages(ctx, consumer1, deliveries1, nil)
 	}()
 
 	go func() {
 		defer wg.Done()
-		registry.handleMessages(ctx, consumer2, deliveries2)
+		registry.handleMessages(ctx, consumer2, deliveries2, nil)
 	}()
 
 	wg.Wait()
@@ -1845,7 +1845,7 @@ func TestWorkerPoolConcurrentProcessing(t *testing.T) {
 	defer cancel()
 
 	// This will process all messages and return when deliveries channel closes
-	registry.handleMessages(ctx, consumer, deliveries)
+	registry.handleMessages(ctx, consumer, deliveries, nil)
 
 	// Verify all 8 messages were processed
 	assert.Equal(t, 8, handler.CallCount(), "All messages should be processed")
@@ -1930,7 +1930,7 @@ func TestWorkerPoolGracefulShutdown(t *testing.T) {
 	// Start processing in background
 	done := make(chan struct{})
 	go func() {
-		registry.handleMessages(ctx, consumer, deliveries)
+		registry.handleMessages(ctx, consumer, deliveries, nil)
 		close(done)
 	}()
 
@@ -2019,7 +2019,7 @@ func BenchmarkSequentialVsConcurrent(b *testing.B) {
 			close(deliveries)
 
 			ctx := context.Background()
-			registry.handleMessages(ctx, consumer, deliveries)
+			registry.handleMessages(ctx, consumer, deliveries, nil)
 		}
 	})
 
@@ -2053,7 +2053,7 @@ func BenchmarkSequentialVsConcurrent(b *testing.B) {
 			close(deliveries)
 
 			ctx := context.Background()
-			registry.handleMessages(ctx, consumer, deliveries)
+			registry.handleMessages(ctx, consumer, deliveries, nil)
 		}
 	})
 
@@ -2087,7 +2087,7 @@ func BenchmarkSequentialVsConcurrent(b *testing.B) {
 			close(deliveries)
 
 			ctx := context.Background()
-			registry.handleMessages(ctx, consumer, deliveries)
+			registry.handleMessages(ctx, consumer, deliveries, nil)
 		}
 	})
 }
@@ -2110,16 +2110,18 @@ type resubscribingMockClient struct {
 	callMu       sync.Mutex
 	results      []consumeResult
 	calls        int
+	optsSeen     []ConsumeOptions
 	exhaustedErr error
 }
 
 var _ AMQPClient = (*resubscribingMockClient)(nil)
 
-func (m *resubscribingMockClient) ConsumeFromQueue(_ context.Context, _ ConsumeOptions) (<-chan amqp.Delivery, error) {
+func (m *resubscribingMockClient) ConsumeFromQueue(_ context.Context, opts ConsumeOptions) (<-chan amqp.Delivery, error) {
 	m.callMu.Lock()
 	defer m.callMu.Unlock()
 	idx := m.calls
 	m.calls++
+	m.optsSeen = append(m.optsSeen, opts)
 	if idx < len(m.results) {
 		return m.results[idx].ch, m.results[idx].err
 	}
@@ -2133,6 +2135,13 @@ func (m *resubscribingMockClient) consumeCallCount() int {
 	m.callMu.Lock()
 	defer m.callMu.Unlock()
 	return m.calls
+}
+
+// consumeOptionsAt returns the ConsumeOptions of the i-th ConsumeFromQueue call.
+func (m *resubscribingMockClient) consumeOptionsAt(i int) ConsumeOptions {
+	m.callMu.Lock()
+	defer m.callMu.Unlock()
+	return m.optsSeen[i]
 }
 
 // TestRegistryConsumerResubscribesAfterDeliveryChannelCloses is the regression
@@ -3004,4 +3013,189 @@ func TestRegistryProcessMessageSkipsDebugFieldBuildWhenDisabled(t *testing.T) {
 
 	infoLine := rec.Line(t, "Message processed successfully")
 	assert.NotEmpty(t, infoLine.Pairs)
+}
+
+// ===== Stream Queue Consumption Tests =====
+
+func TestConsumeOptionsForwardsArgs(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+
+	args := map[string]any{argStreamOffset: streamOffsetFirst}
+	opts := registry.consumeOptionsFor(&ConsumerDeclaration{
+		Queue:         testStreamQueue,
+		Consumer:      testConsumer,
+		PrefetchCount: 10,
+		Args:          args,
+	})
+
+	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, opts.Args)
+	assert.Equal(t, testStreamQueue, opts.Queue)
+}
+
+func TestStreamOffsetFromHeaders(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers amqp.Table
+		want    int64
+		wantOK  bool
+	}{
+		{name: "int64", headers: amqp.Table{argStreamOffset: int64(9223372036854775807)}, want: 9223372036854775807, wantOK: true},
+		{name: "int32", headers: amqp.Table{argStreamOffset: int32(2147483647)}, want: 2147483647, wantOK: true},
+		{name: "int16", headers: amqp.Table{argStreamOffset: int16(32767)}, want: 32767, wantOK: true},
+		{name: "int8", headers: amqp.Table{argStreamOffset: int8(127)}, want: 127, wantOK: true},
+		{name: "int", headers: amqp.Table{argStreamOffset: 4242}, want: 4242, wantOK: true},
+		{name: "absent", headers: amqp.Table{}, want: 0, wantOK: false},
+		{name: "nil_headers", headers: nil, want: 0, wantOK: false},
+		{name: "string_value", headers: amqp.Table{argStreamOffset: "12"}, want: 0, wantOK: false},
+		{name: "float_value", headers: amqp.Table{argStreamOffset: 12.5}, want: 0, wantOK: false},
+		{name: "other_header_only", headers: amqp.Table{"x-priority": int64(5)}, want: 0, wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := streamOffsetFromHeaders(tt.headers)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// newStreamResumeRegistry wires a registry whose single consumer runs against a
+// scripted client, so a test can flap the delivery channel and inspect the
+// ConsumeOptions of the re-subscribe.
+func newStreamResumeRegistry(t *testing.T, streamQueue bool, declaredArgs map[string]any) (
+	registry *Registry, client *resubscribingMockClient, ch1 chan amqp.Delivery,
+) {
+	t.Helper()
+
+	ch1 = make(chan amqp.Delivery, 1)
+	ch2 := make(chan amqp.Delivery)
+	client = &resubscribingMockClient{
+		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
+		results:              []consumeResult{{ch: ch1}, {ch: ch2}},
+	}
+	registry = NewRegistry(client, &stubLogger{})
+	registry.resubscribeDelay = 5 * time.Millisecond
+
+	queue := &QueueDeclaration{Name: testStreamQueue, Durable: true, Args: map[string]any{}}
+	if streamQueue {
+		queue.Args[argQueueType] = queueTypeStream
+	}
+	registry.RegisterQueue(queue)
+	registry.RegisterConsumer(&ConsumerDeclaration{
+		Queue:     testStreamQueue,
+		Consumer:  testConsumer,
+		EventType: testEventType,
+		Workers:   1,
+		Handler:   &countingTestHandler{},
+		Args:      declaredArgs,
+	})
+
+	return registry, client, ch1
+}
+
+// deliverAndFlap sends one delivery carrying offset, waits for it to be acked
+// (so the feed loop has recorded it), then closes the channel to force a
+// re-subscribe and waits for the second ConsumeFromQueue call.
+func deliverAndFlap(t *testing.T, client *resubscribingMockClient, ch chan amqp.Delivery, offset int64) {
+	t.Helper()
+
+	acker := &mockAcknowledger{}
+	ch <- amqp.Delivery{
+		MessageId:    testMessageID,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{argStreamOffset: offset},
+		Acknowledger: acker,
+	}
+	require.Eventually(t, acker.AckCalled, time.Second, 2*time.Millisecond,
+		"delivery was not acked")
+
+	close(ch)
+	require.Eventually(t, func() bool {
+		return client.consumeCallCount() >= 2
+	}, time.Second, 2*time.Millisecond, "consumer did not re-subscribe after delivery channel close")
+}
+
+// TestSuperviseConsumerStreamResume pins the flap-resume contract: a stream
+// consumer re-subscribes one past the last offset it handed to the worker pool
+// instead of re-reading the stream from its declared start position.
+func TestSuperviseConsumerStreamResume(t *testing.T) {
+	registry, client, ch1 := newStreamResumeRegistry(t, true, map[string]any{argStreamOffset: streamOffsetFirst})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	deliverAndFlap(t, client, ch1, 11)
+
+	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, client.consumeOptionsAt(0).Args,
+		"the initial subscribe must use the declared offset")
+	assert.Equal(t, map[string]any{argStreamOffset: int64(12)}, client.consumeOptionsAt(1).Args,
+		"the re-subscribe must resume one past the last delivered offset")
+
+	// The declaration's Args map is shared registry state: the override must
+	// have been applied to a copy.
+	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, registry.Consumers()[0].Args)
+
+	registry.StopConsumers()
+}
+
+// TestSuperviseConsumerStreamResumePreservesOtherArgs proves the copied-map
+// override keeps the declaration's other consumer arguments.
+func TestSuperviseConsumerStreamResumePreservesOtherArgs(t *testing.T) {
+	registry, client, ch1 := newStreamResumeRegistry(t, true, map[string]any{
+		argStreamOffset: streamOffsetFirst,
+		"x-priority":    5,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	deliverAndFlap(t, client, ch1, 7)
+
+	assert.Equal(t, map[string]any{argStreamOffset: int64(8), "x-priority": 5},
+		client.consumeOptionsAt(1).Args)
+
+	registry.StopConsumers()
+}
+
+// TestSuperviseConsumerNonStreamIgnoresOffsetHeader proves stream-ness is read
+// from the declared queue table, not the delivery: a publisher-forged
+// x-stream-offset header on a classic queue must not alter the re-subscribe.
+func TestSuperviseConsumerNonStreamIgnoresOffsetHeader(t *testing.T) {
+	registry, client, ch1 := newStreamResumeRegistry(t, false, map[string]any{"x-priority": 5})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	deliverAndFlap(t, client, ch1, 99)
+
+	assert.Equal(t, map[string]any{"x-priority": 5}, client.consumeOptionsAt(1).Args,
+		"a non-stream consumer must re-subscribe with its declared Args untouched")
+	assert.NotContains(t, client.consumeOptionsAt(1).Args, argStreamOffset)
+
+	registry.StopConsumers()
+}
+
+// TestSuperviseConsumerStreamResumeWithoutDeliveryKeepsDeclaredOffset covers the
+// flap-before-first-message case: with nothing seen, the declared start position
+// still applies.
+func TestSuperviseConsumerStreamResumeWithoutDelivery(t *testing.T) {
+	registry, client, ch1 := newStreamResumeRegistry(t, true, map[string]any{argStreamOffset: streamOffsetFirst})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, registry.StartConsumers(ctx))
+
+	close(ch1)
+	require.Eventually(t, func() bool {
+		return client.consumeCallCount() >= 2
+	}, time.Second, 2*time.Millisecond, "consumer did not re-subscribe after delivery channel close")
+
+	assert.Equal(t, map[string]any{argStreamOffset: streamOffsetFirst}, client.consumeOptionsAt(1).Args,
+		"no delivery seen yet, so the declared offset must stand")
+
+	registry.StopConsumers()
 }
