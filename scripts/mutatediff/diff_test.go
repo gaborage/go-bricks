@@ -59,16 +59,19 @@ func TestParseUnifiedDiffSkipsPureDeletionHunks(t *testing.T) {
 
 func TestMutationScopeFiltersNonTargets(t *testing.T) {
 	in := map[string][]lineRange{
-		"config/injection.go":          {{Start: 1, End: 2}},
-		"config/injection_test.go":     {{Start: 1, End: 2}},
-		"tools/migration/main.go":      {{Start: 1, End: 2}},
-		"database/testdata/fixture.go": {{Start: 1, End: 2}},
-		"wiki/testing.md":              {{Start: 1, End: 2}},
-		"scripts/mutatediff/diff.go":   {{Start: 1, End: 2}},
+		"config/injection.go":            {{Start: 1, End: 2}},
+		"config/injection_test.go":       {{Start: 1, End: 2}},
+		"tools/migration/main.go":        {{Start: 1, End: 2}},
+		"database/testdata/fixture.go":   {{Start: 1, End: 2}},
+		"wiki/testing.md":                {{Start: 1, End: 2}},
+		"scripts/mutatediff/diff.go":     {{Start: 1, End: 2}},
+		"testing/containers/rabbitmq.go": {{Start: 1, End: 2}},
+		"testing/mocks/registry.go":      {{Start: 1, End: 2}},
 	}
 	got := mutationScope(in)
 	want := map[string][]lineRange{
-		"config/injection.go": {{Start: 1, End: 2}},
+		"config/injection.go":       {{Start: 1, End: 2}},
+		"testing/mocks/registry.go": {{Start: 1, End: 2}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("mutationScope = %#v, want %#v", got, want)

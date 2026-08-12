@@ -66,7 +66,10 @@ func mutationScope(changes map[string][]lineRange) map[string][]lineRange {
 		}
 		// scripts/ is excluded because gremlins v0.5.0 misverdicts this nested
 		// package main (wiki/testing.md#mutation-gate); its own unit tests are its net.
-		if strings.HasPrefix(file, "tools/") || strings.HasPrefix(file, "scripts/") || strings.Contains(file, "testdata/") {
+		// testing/containers/ is excluded because every file there is //go:build
+		// integration, so the package is empty under the default build and gremlins
+		// fails to gather coverage rather than reporting zero mutants.
+		if strings.HasPrefix(file, "tools/") || strings.HasPrefix(file, "scripts/") || strings.HasPrefix(file, "testing/containers/") || strings.Contains(file, "testdata/") {
 			continue
 		}
 		scoped[file] = ranges
