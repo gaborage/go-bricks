@@ -42,13 +42,11 @@ const (
 
 // Cache operation names
 const (
-	OpGet           = "get"
-	OpSet           = "set"
-	OpDelete        = "delete"
-	OpGetOrSet      = "getorset"
-	OpCompareAndSet = "cas"
-	// OpCompareAndDelete is deliberately absent from isLookupOperation: a conditional
-	// delete is not a lookup, so it emits no hit/miss counters.
+	OpGet              = "get"
+	OpSet              = "set"
+	OpDelete           = "delete"
+	OpGetOrSet         = "getorset"
+	OpCompareAndSet    = "cas"
 	OpCompareAndDelete = "cad"
 	OpHealth           = "ping"
 )
@@ -60,7 +58,8 @@ const (
 )
 
 // isLookupOperation returns true if the operation is a cache lookup (get or getorset).
-// These operations track hit/miss statistics.
+// These operations track hit/miss statistics. Mutations — set, delete, cas, cad — are not
+// lookups and emit no hit/miss counters.
 func isLookupOperation(operation string) bool {
 	return operation == OpGet || operation == OpGetOrSet
 }

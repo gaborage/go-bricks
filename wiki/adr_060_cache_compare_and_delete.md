@@ -105,6 +105,11 @@ inventing a third placement.
   falling back when absent). Rejected because the fallback *is* the hazard: a cache not implementing
   it sends callers back to unconditional `Delete`, now reached silently rather than visibly. An
   interface addition breaks compilation loudly, which is the correct failure for this change.
+  The fail-closed variant — type-assert and return an error when the capability is absent — is
+  rejected too: `cache.Cache` is the only type consumers ever receive (`deps.Cache(ctx)`,
+  `CacheManager.Get`), so an optional interface moves the capability check into every business-code
+  release site instead of resolving it once in the framework, and the manifesto's position is that
+  breaking GoBricks' own surface is fine when documented, not shimmed.
 - **Naming the result `success`.** Rejected in favour of `deleted` — see below.
 
 ### `deleted`, not `success`
@@ -173,6 +178,10 @@ metrics are emitted as for every other operation.
   derivation would remove the footgun; out of scope here.
 - **A `LoadThrough` helper** ([#966](https://github.com/gaborage/go-bricks/issues/966) item 3) would
   be the natural second consumer — that reporter's case is conditional eviction, not locking.
+- **A `cache.AcquireLock`-style helper** would retire both hazards this ADR documents rather than
+  merely warning about them: if it owns the token, rejects a non-positive TTL, and exposes
+  `CompareAndDelete` as its only release path, neither the `ttl == 0` deadlock nor the
+  `Delete`-fallback regression is representable.
 
 ## References
 

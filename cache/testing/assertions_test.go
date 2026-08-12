@@ -3,11 +3,14 @@ package testing
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/cache"
 )
 
 func TestAssertCacheHit(t *testing.T) {
@@ -150,9 +153,24 @@ func TestOperationCounts(t *testing.T) {
 	assert.Equal(t, int64(1), counts["Delete"])
 }
 
+// TestOperationCountsCoversEveryCacheMethod generalizes the guard below: every future
+// cache.Cache method must land in OperationCounts, or AssertNoOperations silently stops
+// covering it. Reflecting over the interface catches the next one without a new test.
+func TestOperationCountsCoversEveryCacheMethod(t *testing.T) {
+	iface := reflect.TypeOf((*cache.Cache)(nil)).Elem()
+	counts := OperationCounts(NewMockCache())
+
+	for i := range iface.NumMethod() {
+		name := iface.Method(i).Name
+		_, ok := counts[name]
+		assert.True(t, ok, "OperationCounts is missing %s; AssertNoOperations would silently stop covering it", name)
+	}
+}
+
 // TestOperationCountsIncludesCompareAndDelete guards AssertNoOperations, which sums
 // exactly this map: a missing key reads as 0, so omitting the entry would let "the cache
-// was never touched" pass despite a CompareAndDelete call.
+// was never touched" pass despite a CompareAndDelete call. The reflection test above pins
+// the key's presence; this one pins that the counter actually increments.
 func TestOperationCountsIncludesCompareAndDelete(t *testing.T) {
 	ctx := context.Background()
 	mock := NewMockCache()
