@@ -92,7 +92,13 @@ value), `OffsetAt(n)`, `OffsetSince(t)`.
 stream is accepted; a **retention mismatch** surfaces as precondition-failed and
 aborts startup rather than consuming a stream configured differently from the
 declaration. Duplicate `(stream, name)` consumer registrations panic at startup,
-exactly as in the AMQP lane.
+exactly as in the AMQP lane, and so does a nil `*ConsumerOptions` — a declaration
+that consumes nothing is a wiring error, not a no-op.
+
+Retention values must not be negative: a negative `MaxAge`, `MaxLengthBytes` or
+`MaxSegmentSizeBytes` fails validation, because it would be dropped on the way to
+the broker and silently leave the stream with the broker's default. **Zero is
+different** — it is how a field asks for exactly that default.
 
 ## Offset semantics
 
@@ -173,6 +179,7 @@ opts := streams.ManagerOptions{
     URI:                 c.StreamURI(),
     AddressResolverHost: c.Host(), // required under Docker port mapping
     AddressResolverPort: c.StreamPort(),
+    Logger:              logger.New("error", false), // required: NewManager panics without one
 }
 ```
 
