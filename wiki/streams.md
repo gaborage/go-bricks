@@ -171,7 +171,7 @@ c := containers.MustStartRabbitMQContainer(ctx, t, cfg).WithCleanup(t)
 
 opts := streams.ManagerOptions{
     URI:                 c.StreamURI(),
-    AddressResolverHost: c.StreamHost(), // required under Docker port mapping
+    AddressResolverHost: c.Host(), // required under Docker port mapping
     AddressResolverPort: c.StreamPort(),
 }
 ```
