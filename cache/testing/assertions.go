@@ -46,7 +46,7 @@ func AssertCacheMiss(t *testing.T, c cache.Cache, key string) {
 // AssertOperationCount asserts that a specific operation was called a certain number of times.
 // Only works with MockCache instances.
 //
-// Supported operations: "Get", "Set", "Delete", "GetOrSet", "CompareAndSet", "Health", "Stats", "Close"
+// Supported operations: "Get", "Set", "Delete", "GetOrSet", "CompareAndSet", "CompareAndDelete", "Health", "Stats", "Close"
 //
 // Example:
 //
@@ -246,14 +246,15 @@ func ResetMock(mock *MockCache) {
 //	fmt.Printf("Operations: %+v\n", counts)
 func OperationCounts(mock *MockCache) map[string]int64 {
 	return map[string]int64{
-		"Get":           mock.OperationCount("Get"),
-		"Set":           mock.OperationCount("Set"),
-		"Delete":        mock.OperationCount("Delete"),
-		"GetOrSet":      mock.OperationCount("GetOrSet"),
-		"CompareAndSet": mock.OperationCount("CompareAndSet"),
-		"Health":        mock.OperationCount("Health"),
-		"Stats":         mock.OperationCount("Stats"),
-		"Close":         mock.OperationCount("Close"),
+		"Get":              mock.OperationCount("Get"),
+		"Set":              mock.OperationCount("Set"),
+		"Delete":           mock.OperationCount("Delete"),
+		"GetOrSet":         mock.OperationCount("GetOrSet"),
+		"CompareAndSet":    mock.OperationCount("CompareAndSet"),
+		"CompareAndDelete": mock.OperationCount("CompareAndDelete"),
+		"Health":           mock.OperationCount("Health"),
+		"Stats":            mock.OperationCount("Stats"),
+		"Close":            mock.OperationCount("Close"),
 	}
 }
 

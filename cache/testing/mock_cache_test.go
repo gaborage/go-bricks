@@ -10,10 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
+	"github.com/gaborage/go-bricks/cache/redis"
 	"github.com/gaborage/go-bricks/internal/testutil"
 )
 
@@ -219,6 +221,20 @@ func TestMockCacheWithDelay(t *testing.T) {
 	assert.GreaterOrEqual(t, duration, 50*time.Millisecond)
 }
 
+func TestMockCacheCompareAndDeleteHonorsDelay(t *testing.T) {
+	ctx := context.Background()
+	mock := NewMockCache().WithDelay(60 * time.Millisecond)
+	require.NoError(t, mock.Set(ctx, "lock", []byte("token"), time.Minute))
+
+	start := time.Now()
+	deleted, err := mock.CompareAndDelete(ctx, "lock", []byte("token"))
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.True(t, deleted)
+	assert.GreaterOrEqual(t, elapsed, 55*time.Millisecond)
+}
+
 func TestMockCacheWithGetFailure(t *testing.T) {
 	ctx := context.Background()
 	customErr := errors.New("custom get error")
@@ -262,6 +278,19 @@ func TestMockCacheWithCompareAndSetFailure(t *testing.T) {
 
 	_, err := mock.CompareAndSet(ctx, "key", nil, []byte("value"), time.Minute)
 	assert.ErrorIs(t, err, customErr)
+}
+
+// TestMockCacheWithCompareAndDeleteFailure pins the builder's field wiring and the
+// precedence CompareAndDelete's doc promises: a nil expectedValue would otherwise return
+// ErrNilExpectedValue, so seeing customErr proves the configured error is checked first.
+func TestMockCacheWithCompareAndDeleteFailure(t *testing.T) {
+	ctx := context.Background()
+	customErr := errors.New("custom cad error")
+	mock := NewMockCache().WithCompareAndDeleteFailure(customErr)
+
+	_, err := mock.CompareAndDelete(ctx, "key", nil)
+	assert.ErrorIs(t, err, customErr)
+	assert.NotErrorIs(t, err, cache.ErrNilExpectedValue)
 }
 
 func TestMockCacheWithHealthFailure(t *testing.T) {
@@ -389,6 +418,71 @@ func TestMockCacheContextCancellation(t *testing.T) {
 
 	_, err := mock.Get(ctx, "key")
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+// A default mock configures no delay, so context.Canceled can only originate in waitDelay:
+// every other outcome for these arguments is a nil error, ErrNotFound, or a false bool. Each
+// case also asserts the operation left no trace, which is the "short-circuits" half of the
+// claim; the cases that need a pre-existing entry seed it through a live context, so the only
+// canceled context any call sees is still the one under test.
+func TestMockCacheWaitDelayCancelledContextShortCircuits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	seed := func(t *testing.T, m *MockCache) {
+		require.NoError(t, m.Set(context.Background(), "key", []byte("value"), time.Minute))
+	}
+
+	tests := []struct {
+		name  string
+		check func(t *testing.T, m *MockCache)
+	}{
+		{name: "get", check: func(t *testing.T, m *MockCache) {
+			// Seeded so a nil value witnesses the skipped read; an absent key returns nil either way.
+			seed(t, m)
+			value, err := m.Get(ctx, "key")
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.Nil(t, value)
+		}},
+		{name: "set", check: func(t *testing.T, m *MockCache) {
+			assert.ErrorIs(t, m.Set(ctx, "key", []byte("value"), time.Minute), context.Canceled)
+			assert.False(t, m.Has("key"))
+		}},
+		{name: "get_or_set", check: func(t *testing.T, m *MockCache) {
+			_, wasSet, err := m.GetOrSet(ctx, "key", []byte("value"), time.Minute)
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.False(t, wasSet)
+			assert.False(t, m.Has("key"))
+		}},
+		{name: "compare_and_set", check: func(t *testing.T, m *MockCache) {
+			swapped, err := m.CompareAndSet(ctx, "key", nil, []byte("value"), time.Minute)
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.False(t, swapped)
+			assert.False(t, m.Has("key"))
+		}},
+		{name: "compare_and_delete", check: func(t *testing.T, m *MockCache) {
+			seed(t, m)
+			deleted, err := m.CompareAndDelete(ctx, "key", []byte("value"))
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.False(t, deleted)
+			assert.True(t, m.Has("key"))
+		}},
+		{name: "delete", check: func(t *testing.T, m *MockCache) {
+			seed(t, m)
+			assert.ErrorIs(t, m.Delete(ctx, "key"), context.Canceled)
+			assert.True(t, m.Has("key"))
+		}},
+		{name: "health", check: func(t *testing.T, m *MockCache) {
+			// Health mutates nothing, so its error is the only observable.
+			assert.ErrorIs(t, m.Health(ctx), context.Canceled)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.check(t, NewMockCache())
+		})
+	}
 }
 
 func TestMockCacheChainedConfiguration(t *testing.T) {
@@ -547,4 +641,105 @@ func TestMockCacheCompareAndSetEmptyVsNilMatchesRedis(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []byte("worker-1"), stored)
 	})
+}
+
+const (
+	parityKey   = "lock:job:parity"
+	parityToken = "worker-1"
+)
+
+// compareAndDeleteParityCase is the table type for
+// TestMockCacheCompareAndDeleteParityWithRedis, extracted so the per-subject runner
+// below can take one case at a time.
+type compareAndDeleteParityCase struct {
+	name        string
+	seedAbsent  bool
+	seedValue   string
+	seedTTL     time.Duration
+	expire      bool
+	closeFirst  bool
+	expected    []byte
+	wantDeleted bool
+	wantErr     error
+	// wantGetErr is what a follow-up Get must report: nil means the key survived.
+	wantGetErr error
+}
+
+// runCompareAndDeleteParity drives one case against one subject: seed, lapse, close,
+// call, then assert both the (deleted, err) pair and what a follow-up Get reports.
+// lapse advances the subject past tt.seedTTL.
+func runCompareAndDeleteParity(t *testing.T, c cache.Cache, tt *compareAndDeleteParityCase, lapse func(ttl time.Duration)) {
+	t.Helper()
+	ctx := context.Background()
+
+	if !tt.seedAbsent {
+		require.NoError(t, c.Set(ctx, parityKey, []byte(tt.seedValue), tt.seedTTL))
+	}
+	if tt.expire {
+		lapse(tt.seedTTL)
+	}
+	if tt.closeFirst {
+		require.NoError(t, c.Close())
+	}
+
+	deleted, err := c.CompareAndDelete(ctx, parityKey, tt.expected)
+	if tt.wantErr != nil {
+		assert.ErrorIs(t, err, tt.wantErr)
+	} else {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, tt.wantDeleted, deleted)
+
+	_, getErr := c.Get(ctx, parityKey)
+	if tt.wantGetErr != nil {
+		assert.ErrorIs(t, getErr, tt.wantGetErr)
+	} else {
+		assert.NoError(t, getErr)
+	}
+}
+
+// TestMockCacheCompareAndDeleteParityWithRedis is the anti-drift device for
+// CompareAndDelete: the mock and the real client must agree on (deleted, err) and on
+// whether the key survives. The expired_key case is the class an isolated-only suite
+// cannot catch — the mock's CompareAndSet NX branch already diverges from Redis there.
+func TestMockCacheCompareAndDeleteParityWithRedis(t *testing.T) {
+	tests := []compareAndDeleteParityCase{
+		{name: "matching_token_deletes", seedValue: parityToken, seedTTL: time.Minute, expected: []byte(parityToken), wantDeleted: true, wantGetErr: cache.ErrNotFound},
+		{name: "mismatched_token_leaves_key", seedValue: "worker-2", seedTTL: time.Minute, expected: []byte(parityToken)},
+		{name: "absent_key", seedAbsent: true, expected: []byte(parityToken), wantGetErr: cache.ErrNotFound},
+		{name: "expired_key", seedValue: parityToken, seedTTL: 10 * time.Millisecond, expire: true, expected: []byte(parityToken), wantGetErr: cache.ErrNotFound},
+		{name: "empty_slice_compares_against_empty_string", seedValue: "", seedTTL: time.Minute, expected: []byte{}, wantDeleted: true, wantGetErr: cache.ErrNotFound},
+		{name: "nil_expected_rejected", seedValue: parityToken, seedTTL: time.Minute, expected: nil, wantErr: cache.ErrNilExpectedValue},
+		{name: "after_close", seedValue: parityToken, seedTTL: time.Minute, closeFirst: true, expected: []byte(parityToken), wantErr: cache.ErrClosed, wantGetErr: cache.ErrClosed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mr := miniredis.RunT(t)
+			client, err := redis.NewClient(&redis.Config{
+				Host:     mr.Host(),
+				Port:     mr.Server().Addr().Port,
+				PoolSize: 10,
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = client.Close() })
+
+			subjects := []struct {
+				name  string
+				cache cache.Cache
+				// lapse advances the subject past ttl. The mock reads the wall clock, so
+				// only the client can fast-forward.
+				lapse func(ttl time.Duration)
+			}{
+				{name: "mock", cache: NewMockCache(), lapse: func(ttl time.Duration) { time.Sleep(ttl + 10*time.Millisecond) }},
+				{name: "redis", cache: client, lapse: func(ttl time.Duration) { mr.FastForward(ttl + 10*time.Millisecond) }},
+			}
+
+			for _, subject := range subjects {
+				t.Run(subject.name, func(t *testing.T) {
+					runCompareAndDeleteParity(t, subject.cache, &tt, subject.lapse)
+				})
+			}
+		})
+	}
 }

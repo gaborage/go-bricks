@@ -85,6 +85,16 @@ func (m *mockCache) CompareAndSet(_ context.Context, _ string, _, _ []byte, _ ti
 	return true, nil
 }
 
+func (m *mockCache) CompareAndDelete(_ context.Context, _ string, expectedValue []byte) (bool, error) {
+	if m.closed.Load() {
+		return false, cache.ErrClosed
+	}
+	if expectedValue == nil {
+		return false, cache.ErrNilExpectedValue
+	}
+	return true, nil
+}
+
 func (m *mockCache) Delete(_ context.Context, _ string) error {
 	if m.closed.Load() {
 		return cache.ErrClosed

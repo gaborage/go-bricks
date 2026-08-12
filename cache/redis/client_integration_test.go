@@ -213,7 +213,7 @@ func TestRealRedisLargePayload(t *testing.T) {
 }
 
 // =============================================================================
-// Lua Script Tests (GetOrSet, CompareAndSet)
+// Lua Script Tests (GetOrSet, CompareAndSet, CompareAndDelete)
 // =============================================================================
 
 func TestRealRedisGetOrSetLuaScript(t *testing.T) {
@@ -335,6 +335,66 @@ func TestRealRedisCompareAndSetLuaScript(t *testing.T) {
 		retrieved, err := client.Get(ctx, key)
 		require.NoError(t, err, "Get should succeed")
 		assert.Equal(t, []byte("new-value"), retrieved, "Value should remain unchanged")
+	})
+
+	// Cleanup
+	err := client.Delete(ctx, key)
+	assert.NoError(t, err, noErrExpectedMsg)
+}
+
+// The nil-expectedValue case is deliberately absent: that guard returns before any Redis
+// round trip, so a real server witnesses nothing the unit test does not already pin.
+func TestRealRedisCompareAndDeleteLuaScript(t *testing.T) {
+	client, ctx := setupRealRedis(t)
+	defer client.Close()
+
+	key := "test:lua:cad"
+	token := []byte("worker-1")
+
+	t.Run("CAD deletes the key when the token matches", func(t *testing.T) {
+		err := client.Set(ctx, key, token, 10*time.Second)
+		require.NoError(t, err, "Set should succeed")
+
+		deleted, err := client.CompareAndDelete(ctx, key, token)
+		require.NoError(t, err, "CompareAndDelete should succeed")
+		assert.True(t, deleted, "CAD should delete when the token matches")
+
+		_, err = client.Get(ctx, key)
+		assert.ErrorIs(t, err, cache.ErrNotFound, "Key should be gone after a matching CAD")
+	})
+
+	t.Run("CAD leaves the key when the token does not match", func(t *testing.T) {
+		err := client.Set(ctx, key, token, 10*time.Second)
+		require.NoError(t, err, "Set should succeed")
+
+		deleted, err := client.CompareAndDelete(ctx, key, []byte("worker-2"))
+		require.NoError(t, err, "CompareAndDelete should not error on mismatch")
+		assert.False(t, deleted, "CAD should not delete when the token differs")
+
+		retrieved, err := client.Get(ctx, key)
+		require.NoError(t, err, "Get should succeed")
+		assert.Equal(t, token, retrieved, "Value should remain unchanged")
+	})
+
+	t.Run("CAD reports no delete for an absent key", func(t *testing.T) {
+		err := client.Delete(ctx, key)
+		require.NoError(t, err, "Delete should succeed")
+
+		deleted, err := client.CompareAndDelete(ctx, key, token)
+		require.NoError(t, err, "CompareAndDelete should not error on an absent key")
+		assert.False(t, deleted, "CAD should not report a delete for an absent key")
+	})
+
+	t.Run("CAD treats an empty slice as a real comparison", func(t *testing.T) {
+		err := client.Set(ctx, key, []byte{}, 10*time.Second)
+		require.NoError(t, err, "Set should succeed with an empty value")
+
+		deleted, err := client.CompareAndDelete(ctx, key, []byte{})
+		require.NoError(t, err, "CompareAndDelete should succeed")
+		assert.True(t, deleted, "CAD should delete when both sides are empty")
+
+		_, err = client.Get(ctx, key)
+		assert.ErrorIs(t, err, cache.ErrNotFound, "Key should be gone after a matching CAD")
 	})
 
 	// Cleanup

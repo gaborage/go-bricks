@@ -53,6 +53,24 @@ end
 return 0
 `
 
+// Lua script for atomic Compare-And-Delete operation.
+// Returns 1 if the key was deleted, 0 if the comparison failed.
+//
+// Returning DEL's own count rather than a literal 1 keeps the result honest without
+// relying on any claim about mid-script expiry: a key that is somehow gone by the DEL
+// yields 0, and 0 is the truth.
+const cadScript = `
+local key = KEYS[1]
+local expected = ARGV[1]
+
+local current = redis.call('GET', key)
+if current == expected then
+	return redis.call('DEL', key)
+end
+
+return 0
+`
+
 // readServerInfo is a seam: tests override it to drive the version floor.
 var readServerInfo = func(ctx context.Context, c *redis.Client) (string, error) {
 	return c.Info(ctx, "server").Result()
@@ -80,6 +98,8 @@ func redisVersionTooOld(info string) (tooOld bool, version string) {
 
 	return false, ""
 }
+
+var _ cache.Cache = (*Client)(nil)
 
 // Client implements the cache.Cache interface using Redis as the backend.
 type Client struct {
@@ -310,6 +330,45 @@ func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, n
 
 	if err != nil {
 		return false, cache.NewOperationError("cas", key, err)
+	}
+
+	return result == 1, nil
+}
+
+// CompareAndDelete atomically removes a key only if its current value matches.
+// Returns (deleted, error):
+//   - deleted=true: this call removed the key (comparison matched)
+//   - deleted=false: the key was not removed by this call
+//
+// expectedValue must be non-nil: nil returns cache.ErrNilExpectedValue without a round
+// trip, because go-redis writes a nil []byte as a zero-length bulk string that would
+// silently compare against the empty string. An empty slice is a real comparison against
+// the empty string, matching CompareAndSet.
+//
+// deleted=false does not distinguish a failed comparison from a key that was already
+// gone, so it never proves another holder's value is still present.
+// Uses Lua script for atomicity.
+func (c *Client) CompareAndDelete(ctx context.Context, key string, expectedValue []byte) (bool, error) {
+	if c.closed.Load() {
+		return false, cache.ErrClosed
+	}
+
+	// Rejected before start, mirroring CompareAndSet's ttl < 0 guard. The trade-off is
+	// that a caller bug emits no metric and so stays invisible in telemetry.
+	if expectedValue == nil {
+		return false, cache.ErrNilExpectedValue
+	}
+
+	start := time.Now()
+
+	// Execute Lua script
+	result, err := c.client.Eval(ctx, cadScript, []string{key}, string(expectedValue)).Int()
+
+	duration := time.Since(start)
+	tracking.RecordCacheOperation(ctx, tracking.OpCompareAndDelete, duration, false, err, c.namespace(ctx))
+
+	if err != nil {
+		return false, cache.NewOperationError(tracking.OpCompareAndDelete, key, err)
 	}
 
 	return result == 1, nil

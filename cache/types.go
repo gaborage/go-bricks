@@ -26,8 +26,11 @@ import (
 //	// Deduplication
 //	stored, wasSet, err := cache.GetOrSet(ctx, "lock:task:456", []byte("processing"), 30*time.Second)
 //
-//	// Distributed locking
-//	acquired, err := cache.CompareAndSet(ctx, "lock:job:789", nil, []byte("worker-1"), 1*time.Minute)
+//	// Distributed locking — release with the same token, never a bare Delete
+//	// (a deferred release needs a detached context; see CompareAndSet)
+//	token := []byte(uuid.New().String()) // fresh per acquisition, never a worker identity
+//	acquired, err := cache.CompareAndSet(ctx, "lock:job:789", nil, token, 1*time.Minute)
+//	released, err := cache.CompareAndDelete(ctx, "lock:job:789", token)
 type Cache interface {
 	// Get retrieves a value from the cache by key.
 	// Returns ErrNotFound if the key doesn't exist or has expired.
@@ -71,18 +74,63 @@ type Cache interface {
 	//
 	// Example (distributed lock):
 	//
-	//	acquired, err := cache.CompareAndSet(ctx, lockKey, nil, []byte("worker-1"), 30*time.Second)
+	//	// A fresh token per acquisition: a worker identity would let a stale release
+	//	// delete a later acquisition's lock.
+	//	token := []byte(uuid.New().String())
+	//	acquired, err := cache.CompareAndSet(ctx, lockKey, nil, token, 30*time.Second)
+	//	if err != nil {
+	//	    return err
+	//	}
 	//	if !acquired {
 	//	    return ErrLockHeld
 	//	}
-	//	defer cache.Delete(ctx, lockKey)
+	//	defer func() {
+	//	    // A canceled ctx cannot reach the cache, so release on a detached, bounded context.
+	//	    releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+	//	    defer cancel()
+	//	    _, _ = cache.CompareAndDelete(releaseCtx, lockKey, token)
+	//	}()
 	//
-	// Delete releases unconditionally: if the work outruns the TTL, the lock expires,
-	// another holder acquires it, and this Delete clears theirs. There is no
-	// compare-and-delete on this interface, so keep the TTL above worst-case work
-	// duration and make the guarded work idempotent — this is contention reduction,
-	// not guaranteed mutual exclusion.
+	// Acquire with a positive TTL whenever the release goes through CompareAndDelete: a
+	// lock taken with ttl 0 never expires, so a token-verified release that returns false
+	// leaves the key held with nothing to recover it. Keep the TTL above worst-case work
+	// duration and make the guarded work idempotent — the TTL is still what bounds a
+	// crashed holder, so this is contention reduction, not guaranteed mutual exclusion.
 	CompareAndSet(ctx context.Context, key string, expectedValue, newValue []byte, ttl time.Duration) (success bool, err error)
+
+	// CompareAndDelete atomically removes the key only if its current value equals
+	// expectedValue. It is the safe release for a lock acquired via CompareAndSet: Delete
+	// removes whoever holds the key now, this removes it only if the caller still does.
+	//
+	// expectedValue must be unique to a single acquisition — a random token minted where the
+	// lock is taken, not a reusable worker identity. Under a stable identity a release that
+	// arrives after the TTL lapsed matches whatever the next acquisition stored under that
+	// same identity and deletes it, silently restoring the unconditional-Delete hazard this
+	// method exists to remove.
+	//
+	// expectedValue must be non-nil. Unlike CompareAndSet, nil has no acquire-if-absent
+	// counterpart here, and unconditional removal is already Delete — a nil expectedValue
+	// returns ErrNilExpectedValue without contacting the cache. An empty slice is a real
+	// comparison against the empty string, exactly as CompareAndSet treats it.
+	//
+	// Acquire the lock with a bounded, positive TTL before releasing it this way: a lock
+	// taken with ttl 0 is stored without expiration, so a token-verified release that
+	// returns false leaves the key held forever, with no expiry to recover it.
+	//
+	// Release on a context that outlives the guarded work: a canceled context cannot reach
+	// the cache, so a release deferred under the request context never lands, and there is
+	// no Delete fallback to recover it. Detach with context.WithoutCancel and bound that.
+	//
+	// deleted reports only that this call removed the key. A false result covers both
+	// "the stored value was not ours" and "the key was already gone", so it never proves
+	// that another holder's value is still present.
+	//
+	// Both a false result and any error are terminal. Never fall back to Delete and never
+	// retry the release with it — that reinstates the hazard this method exists to remove,
+	// now hidden behind an API that reads as safe. A false result authorizes stopping, not
+	// compensating: a client-side timeout on a delete that actually landed is
+	// indistinguishable from another holder owning the key.
+	CompareAndDelete(ctx context.Context, key string, expectedValue []byte) (deleted bool, err error)
 
 	// Health checks the health of the cache connection.
 	// Should be fast (<100ms) and safe to call frequently.

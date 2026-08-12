@@ -584,7 +584,7 @@ func (s *UserService) GetUser(ctx context.Context, id int64) (*User, error) {
 - **Type-Safe Serialization**: CBOR encoding with compile-time type safety
 - **Multi-Tenant Isolation**: Automatic tenant context resolution
 - **Lifecycle Management**: Lazy initialization, LRU eviction (max 100 tenants), idle cleanup (15m default)
-- **Atomic Operations**: `GetOrSet` for deduplication, `CompareAndSet` for distributed locking
+- **Atomic Operations**: `GetOrSet` for deduplication, `CompareAndSet` for distributed locking, `CompareAndDelete` for token-verified release (never a bare `Delete`)
 - **Performance**: <1ms latency for Get/Set, 100k ops/sec throughput
 - **Observability**: OpenTelemetry metrics (no distributed-tracing spans today), plus a `/ready` probe that pings Redis — a **cache** probe failure answers `503` by default, and `cache.critical: false` opts that out (the database probe is critical regardless). See [wiki/cache.md](wiki/cache.md#readiness)
 
@@ -618,6 +618,7 @@ The `manager.*` keys tune the per-tenant lifecycle; tune them up if you serve ma
 | **Basic write** | `Set(ctx, key, value, ttl)` | Store computed data with TTL |
 | **Deduplication** | `GetOrSet(ctx, key, value, ttl)` | Idempotency keys, atomic SET NX |
 | **Distributed lock** | `CompareAndSet(ctx, key, expected, new, ttl)` | Cross-pod job coordination |
+| **Lock release** | `CompareAndDelete(ctx, key, expected)` | Token-verified release, conditional eviction |
 | **Type-safe store** | `Marshal(v)` + `Set()` | Struct serialization (CBOR) |
 | **Type-safe retrieve** | `Get()` + `Unmarshal[T](data)` | Struct deserialization |
 

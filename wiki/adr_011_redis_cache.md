@@ -310,8 +310,12 @@ acquired, _ := c.CompareAndSet(ctx, lockKey, nil, []byte("worker-1"), 30*time.Se
 if !acquired {
     return ErrLockHeld
 }
-defer c.Delete(ctx, lockKey)
+defer c.Delete(ctx, lockKey) // SUPERSEDED (ADR-060): use CompareAndDelete with the token
 ```
+
+> The unconditional `Delete` release shown above is superseded by `CompareAndDelete` — see
+> [ADR-060](adr_060_cache_compare_and_delete.md). The example is kept as the historical
+> record of what this ADR decided.
 
 ## Security Considerations
 

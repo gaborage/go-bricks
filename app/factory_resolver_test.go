@@ -184,6 +184,13 @@ func (m *mockCacheInstance) CompareAndSet(_ context.Context, _ string, _, _ []by
 	return true, nil
 }
 
+func (m *mockCacheInstance) CompareAndDelete(_ context.Context, _ string, expectedValue []byte) (bool, error) {
+	if expectedValue == nil {
+		return false, cache.ErrNilExpectedValue
+	}
+	return true, nil
+}
+
 func (m *mockCacheInstance) Delete(_ context.Context, _ string) error {
 	return nil
 }
