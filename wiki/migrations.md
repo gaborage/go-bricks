@@ -2278,7 +2278,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   method — the safe, token-verified release the interface never had, since
   its only release was unconditional `Delete` — so every implementer must
   add it (C59.3).
-- build-caught: C59.2 C59.3
+- build-caught: C59.2 C59.3 (via `go vet` — `go build` does not compile test files)
 - preflight: **two** actions. (i) If a proxy in front of the service sits on
   a **public** address, set `server.trustedproxies` to its CIDR range before
   the bump — without an entry it is untrusted, so it is returned as the

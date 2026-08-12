@@ -2824,7 +2824,7 @@ func (m *manualMockCache) Get(ctx context.Context, key string) ([]byte, error) {
     }
     return val, nil
 }
-// ... implement all 8 cache.Cache methods ...
+// ... implement all 9 cache.Cache methods ...
 
 // ✅ cache/testing MockCache (~5 lines)
 mock := cachetest.NewMockCache()

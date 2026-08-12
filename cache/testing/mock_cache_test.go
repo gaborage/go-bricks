@@ -266,6 +266,19 @@ func TestMockCacheWithCompareAndSetFailure(t *testing.T) {
 	assert.ErrorIs(t, err, customErr)
 }
 
+// TestMockCacheWithCompareAndDeleteFailure pins the builder's field wiring and the
+// precedence CompareAndDelete's doc promises: a nil expectedValue would otherwise return
+// ErrNilExpectedValue, so seeing customErr proves the configured error is checked first.
+func TestMockCacheWithCompareAndDeleteFailure(t *testing.T) {
+	ctx := context.Background()
+	customErr := errors.New("custom cad error")
+	mock := NewMockCache().WithCompareAndDeleteFailure(customErr)
+
+	_, err := mock.CompareAndDelete(ctx, "key", nil)
+	assert.ErrorIs(t, err, customErr)
+	assert.NotErrorIs(t, err, cache.ErrNilExpectedValue)
+}
+
 func TestMockCacheWithHealthFailure(t *testing.T) {
 	ctx := context.Background()
 	customErr := errors.New("custom health error")
@@ -567,17 +580,20 @@ func TestMockCacheCompareAndDeleteParityWithRedis(t *testing.T) {
 		seedValue   string
 		seedTTL     time.Duration
 		expire      bool
+		closeFirst  bool
 		expected    []byte
 		wantDeleted bool
 		wantErr     error
-		wantKeyGone bool
+		// wantGetErr is what a follow-up Get must report: nil means the key survived.
+		wantGetErr error
 	}{
-		{name: "matching_token_deletes", seedValue: parityToken, seedTTL: time.Minute, expected: []byte(parityToken), wantDeleted: true, wantKeyGone: true},
+		{name: "matching_token_deletes", seedValue: parityToken, seedTTL: time.Minute, expected: []byte(parityToken), wantDeleted: true, wantGetErr: cache.ErrNotFound},
 		{name: "mismatched_token_leaves_key", seedValue: "worker-2", seedTTL: time.Minute, expected: []byte(parityToken)},
-		{name: "absent_key", seedAbsent: true, expected: []byte(parityToken), wantKeyGone: true},
-		{name: "expired_key", seedValue: parityToken, seedTTL: 10 * time.Millisecond, expire: true, expected: []byte(parityToken), wantKeyGone: true},
-		{name: "empty_slice_compares_against_empty_string", seedValue: "", seedTTL: time.Minute, expected: []byte{}, wantDeleted: true, wantKeyGone: true},
+		{name: "absent_key", seedAbsent: true, expected: []byte(parityToken), wantGetErr: cache.ErrNotFound},
+		{name: "expired_key", seedValue: parityToken, seedTTL: 10 * time.Millisecond, expire: true, expected: []byte(parityToken), wantGetErr: cache.ErrNotFound},
+		{name: "empty_slice_compares_against_empty_string", seedValue: "", seedTTL: time.Minute, expected: []byte{}, wantDeleted: true, wantGetErr: cache.ErrNotFound},
 		{name: "nil_expected_rejected", seedValue: parityToken, seedTTL: time.Minute, expected: nil, wantErr: cache.ErrNilExpectedValue},
+		{name: "after_close", seedValue: parityToken, seedTTL: time.Minute, closeFirst: true, expected: []byte(parityToken), wantErr: cache.ErrClosed, wantGetErr: cache.ErrClosed},
 	}
 
 	for _, tt := range tests {
@@ -612,6 +628,9 @@ func TestMockCacheCompareAndDeleteParityWithRedis(t *testing.T) {
 					if tt.expire {
 						subject.lapse(tt.seedTTL)
 					}
+					if tt.closeFirst {
+						require.NoError(t, subject.cache.Close())
+					}
 
 					deleted, err := subject.cache.CompareAndDelete(ctx, parityKey, tt.expected)
 					if tt.wantErr != nil {
@@ -622,8 +641,8 @@ func TestMockCacheCompareAndDeleteParityWithRedis(t *testing.T) {
 					assert.Equal(t, tt.wantDeleted, deleted)
 
 					_, getErr := subject.cache.Get(ctx, parityKey)
-					if tt.wantKeyGone {
-						assert.ErrorIs(t, getErr, cache.ErrNotFound)
+					if tt.wantGetErr != nil {
+						assert.ErrorIs(t, getErr, tt.wantGetErr)
 					} else {
 						assert.NoError(t, getErr)
 					}

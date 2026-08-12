@@ -116,7 +116,7 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*User, error) {
 }
 ```
 
-**Key Operations:**
+## Key Operations
 
 | Operation | Method | Use Case | Atomicity |
 | ----------- | -------- | ---------- | ----------- |

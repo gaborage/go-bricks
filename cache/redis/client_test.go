@@ -847,9 +847,9 @@ func TestClientCompareAndDeleteEmptySliceComparesAgainstEmptyString(t *testing.T
 	assert.False(t, mr.Exists(testKey1))
 }
 
-// TestClientCompareAndDeleteConcurrentSingleWinner proves the release is atomic: EVAL
-// runs to completion in miniredis as in real Redis, so exactly one racer observes the
-// token and deletes it.
+// TestClientCompareAndDeleteConcurrentSingleWinner pins the single-winner contract under
+// concurrent release: exactly one caller observes the token and reports the delete, the
+// rest get false, and the key ends up gone.
 func TestClientCompareAndDeleteConcurrentSingleWinner(t *testing.T) {
 	client, mr := setupTestRedis(t)
 	defer client.Close()

@@ -96,6 +96,10 @@ type Cache interface {
 	// returns ErrNilExpectedValue without contacting the cache. An empty slice is a real
 	// comparison against the empty string, exactly as CompareAndSet treats it.
 	//
+	// Acquire the lock with a bounded, positive TTL before releasing it this way: a lock
+	// taken with ttl 0 is stored without expiration, so a token-verified release that
+	// returns false leaves the key held forever, with no expiry to recover it.
+	//
 	// deleted reports only that this call removed the key. A false result covers both
 	// "the stored value was not ours" and "the key was already gone", so it never proves
 	// that another holder's value is still present.

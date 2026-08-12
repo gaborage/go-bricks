@@ -245,7 +245,7 @@ For named databases (multi-DB single-tenant), table aliases, mixed JOIN conditio
 
 Redis-based caching with type-safe CBOR serialization, multi-tenant isolation, and automatic lifecycle management. Store the accessor function (`deps.Cache`), NOT a resolved instance — resolution is tenant-aware per call (full example in [llms.txt](llms.txt)).
 
-**Operations:** `Get`, `Set`, `GetOrSet` (atomic SET NX), `CompareAndSet` (Lua CAS), `Marshal`/`Unmarshal` (CBOR). Per-tenant cache instances managed automatically (LRU eviction, idle cleanup, singleflight).
+**Operations:** `Get`, `Set`, `GetOrSet` (atomic SET NX), `CompareAndSet` (Lua CAS), `CompareAndDelete` (Lua CAD), `Marshal`/`Unmarshal` (CBOR). Per-tenant cache instances managed automatically (LRU eviction, idle cleanup, singleflight).
 
 For lifecycle defaults, performance benchmarks, configuration, and multi-tenant patterns, see [wiki/cache.md](wiki/cache.md).
 
@@ -416,6 +416,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **Dead exported surface removed (ADR-052, ADR-053):** `jose.PolicyRegistry` (memoize `jose.ScanType` + `jose.ResolvePolicy` yourself, keyed on type AND direction) and `server.TestShortTimeout`/`TestMediumTimeout`/`TestLongTimeout` are gone.
 - **OTel log-record identity (ADR-055, ADR-056):** top-level fields keyed `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` reach OTLP as `app.<key>`; framework record attributes shrink to `log.type`, identity stays in `ResourceLogs.resource`.
 - **Consumer-scoped AMQP args (ADR-058):** `ConsumeOptions`/`ConsumerOptions`/`ConsumerDeclaration` gain `Args`, forwarded to `basic.consume` — that is where `x-stream-offset` goes; `DeclareStreamQueue` sets only queue type + retention. A map field makes all three non-comparable: `==` and map-key use stop compiling.
+- **Cache conditional release (ADR-060):** `cache.Cache` gains `CompareAndDelete`; every implementer must add it, including test doubles `go build` skips — use `go vet ./...`. Release locks with it, not `Delete`, and acquire with a positive TTL.
 
 ## File Organization
 
