@@ -421,45 +421,66 @@ func TestMockCacheContextCancellation(t *testing.T) {
 }
 
 // A default mock configures no delay, so context.Canceled can only originate in waitDelay:
-// every other outcome for these arguments is a nil error, ErrNotFound, or a false bool.
+// every other outcome for these arguments is a nil error, ErrNotFound, or a false bool. Each
+// case also asserts the operation left no trace, which is the "short-circuits" half of the
+// claim; the cases that need a pre-existing entry seed it through a live context, so the only
+// canceled context any call sees is still the one under test.
 func TestMockCacheWaitDelayCancelledContextShortCircuits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
+	seed := func(t *testing.T, m *MockCache) {
+		require.NoError(t, m.Set(context.Background(), "key", []byte("value"), time.Minute))
+	}
+
 	tests := []struct {
-		name string
-		call func(m *MockCache) error
+		name  string
+		check func(t *testing.T, m *MockCache)
 	}{
-		{name: "get", call: func(m *MockCache) error {
-			_, err := m.Get(ctx, "key")
-			return err
+		{name: "get", check: func(t *testing.T, m *MockCache) {
+			// Seeded so a nil value witnesses the skipped read; an absent key returns nil either way.
+			seed(t, m)
+			value, err := m.Get(ctx, "key")
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.Nil(t, value)
 		}},
-		{name: "set", call: func(m *MockCache) error {
-			return m.Set(ctx, "key", []byte("value"), time.Minute)
+		{name: "set", check: func(t *testing.T, m *MockCache) {
+			assert.ErrorIs(t, m.Set(ctx, "key", []byte("value"), time.Minute), context.Canceled)
+			assert.False(t, m.Has("key"))
 		}},
-		{name: "get_or_set", call: func(m *MockCache) error {
-			_, _, err := m.GetOrSet(ctx, "key", []byte("value"), time.Minute)
-			return err
+		{name: "get_or_set", check: func(t *testing.T, m *MockCache) {
+			_, wasSet, err := m.GetOrSet(ctx, "key", []byte("value"), time.Minute)
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.False(t, wasSet)
+			assert.False(t, m.Has("key"))
 		}},
-		{name: "compare_and_set", call: func(m *MockCache) error {
-			_, err := m.CompareAndSet(ctx, "key", nil, []byte("value"), time.Minute)
-			return err
+		{name: "compare_and_set", check: func(t *testing.T, m *MockCache) {
+			swapped, err := m.CompareAndSet(ctx, "key", nil, []byte("value"), time.Minute)
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.False(t, swapped)
+			assert.False(t, m.Has("key"))
 		}},
-		{name: "compare_and_delete", call: func(m *MockCache) error {
-			_, err := m.CompareAndDelete(ctx, "key", []byte("value"))
-			return err
+		{name: "compare_and_delete", check: func(t *testing.T, m *MockCache) {
+			seed(t, m)
+			deleted, err := m.CompareAndDelete(ctx, "key", []byte("value"))
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.False(t, deleted)
+			assert.True(t, m.Has("key"))
 		}},
-		{name: "delete", call: func(m *MockCache) error {
-			return m.Delete(ctx, "key")
+		{name: "delete", check: func(t *testing.T, m *MockCache) {
+			seed(t, m)
+			assert.ErrorIs(t, m.Delete(ctx, "key"), context.Canceled)
+			assert.True(t, m.Has("key"))
 		}},
-		{name: "health", call: func(m *MockCache) error {
-			return m.Health(ctx)
+		{name: "health", check: func(t *testing.T, m *MockCache) {
+			// Health mutates nothing, so its error is the only observable.
+			assert.ErrorIs(t, m.Health(ctx), context.Canceled)
 		}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.ErrorIs(t, tt.call(NewMockCache()), context.Canceled)
+			tt.check(t, NewMockCache())
 		})
 	}
 }

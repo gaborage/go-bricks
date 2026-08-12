@@ -2500,14 +2500,20 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   was being waited out**: a canceled context on a mock with **no** delay — the default from
   `NewMockCache()` — was ignored and the operation ran to completion. All seven now route through one
   `waitDelay` helper that checks `ctx.Err()` before arming its timer, so a dead context short-circuits
-  with `context.Canceled` / `context.DeadlineExceeded` whatever the delay is. A **positive** delay
-  already behaved exactly this way, and that path is unchanged — only the no-delay case moves. The
+  with `context.Canceled` / `context.DeadlineExceeded` whatever the delay is. `waitDelay` runs first in
+  every method — **before** the `m.closed` check and **before** the configured-`With*Failure` check — so
+  under a dead context the context's error now outranks both: a closed mock returns `context.Canceled`
+  where it returned `cache.ErrClosed`, and a `WithGetFailure(errBoom)` mock returns `context.Canceled`
+  where it returned `errBoom`. A **positive** delay already behaved exactly this way (its guard sat in
+  the same first position), and that path is unchanged — only the no-delay case moves. The
   remedy is normally to stop threading a dead context into the mock, or to assert the cancellation
   error the call now returns. Nothing on the real `cache/redis` client moved, no assertion helper
   changed, and `Stats()` / `Close()` take no context and are untouched.
 - gate: match = a test hands a `MockCache` method a context that is already canceled or expired and
-  expects the call to succeed. no-match = your tests pass live contexts, or already pair cancellation
-  with a configured `WithDelay` (that combination behaved this way before and still does).
+  asserts any specific **non-context** outcome for that call — success, `cache.ErrNotFound`,
+  `cache.ErrClosed`, or a `With*Failure` error — since the context's error now replaces all of them.
+  no-match = your tests pass live contexts, already assert the context's own error, or already pair
+  cancellation with a configured `WithDelay` (that combination behaved this way before and still does).
 - after: a `MockCache` call under a dead context returns the context's error instead of its normal
   result, so a test asserting `assert.NoError` (or `cache.ErrNotFound`) on that call now sees
   `context.Canceled`. Fix the context, not the assertion, unless the test's real subject *is* the
