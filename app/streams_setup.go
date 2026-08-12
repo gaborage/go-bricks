@@ -21,7 +21,7 @@ const plaintextStreamScheme = "rabbitmq-stream"
 // rather than in createHealthProbes or Builder.RegisterClosers, which are
 // snapshotted before prepareRuntime runs. This is safe because prepareRuntime is
 // single-threaded and completes before the server starts serving /ready.
-func (a *App) prepareStreamConsumers() error {
+func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	if a.registry == nil {
 		return errors.New("module registry not initialized")
 	}
@@ -55,7 +55,9 @@ func (a *App) prepareStreamConsumers() error {
 
 	// A service that declared stream consumers and cannot start them would serve
 	// HTTP while consuming nothing, so startup fails rather than booting green.
-	if err := mgr.Start(context.Background(), decls); err != nil {
+	// The startup context is handed over for its values only — Start severs its
+	// cancellation, so shutdownStreamConsumers stays the thing that stops them.
+	if err := mgr.Start(ctx, decls); err != nil {
 		if closeErr := mgr.Close(); closeErr != nil {
 			a.logger.Warn().Err(closeErr).Msg("Failed to close stream environment after a failed start")
 		}
