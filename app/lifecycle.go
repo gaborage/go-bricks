@@ -62,8 +62,10 @@ func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, id
 			"(lower " + keyPrefix + ".cleanupinterval or raise " + keyPrefix + ".idlettl)")
 }
 
-// prepareRuntime prepares the application for runtime execution
-func (a *App) prepareRuntime() error {
+// prepareRuntime prepares the application for runtime execution. ctx is the
+// startup context: components it starts that outlive startup inherit that
+// context's values rather than beginning from a bare context.Background().
+func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.buildMessagingDeclarations(); err != nil {
 		return err
 	}
@@ -78,7 +80,7 @@ func (a *App) prepareRuntime() error {
 		return err
 	}
 
-	if err := a.prepareStreamConsumers(); err != nil {
+	if err := a.prepareStreamConsumers(ctx); err != nil {
 		return err
 	}
 
@@ -304,7 +306,9 @@ func (a *App) drainServerError(ch <-chan error) error {
 // Run starts the application and blocks until a shutdown signal is received.
 // It handles graceful shutdown with a timeout.
 func (a *App) Run() error {
-	if err := a.prepareRuntime(); err != nil {
+	// Run is the process entry point, so the startup context is rooted here and
+	// threaded down; nothing above it has a context to inherit.
+	if err := a.prepareRuntime(context.Background()); err != nil {
 		return err
 	}
 

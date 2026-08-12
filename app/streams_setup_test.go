@@ -68,7 +68,7 @@ func newStreamsAppWithLogger(t *testing.T, log logger.Logger, streamsCfg config.
 func TestPrepareStreamConsumersWithoutDeclarationsIsNoop(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
 
-	require.NoError(t, a.prepareStreamConsumers())
+	require.NoError(t, a.prepareStreamConsumers(context.Background()))
 
 	assert.Nil(t, a.streamsManager)
 	assert.Empty(t, a.healthProbes, "a streams-free service keeps its probe list unchanged")
@@ -78,7 +78,7 @@ func TestPrepareStreamConsumersWithoutDeclarationsIsNoop(t *testing.T) {
 func TestPrepareStreamConsumersRequiresRegistry(t *testing.T) {
 	a := &App{logger: logger.New("error", false)}
 
-	err := a.prepareStreamConsumers()
+	err := a.prepareStreamConsumers(context.Background())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "module registry not initialized")
@@ -88,7 +88,7 @@ func TestPrepareStreamConsumersFailsWhenDeclaredButUnconfigured(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{},
 		&streamModule{name: "orders", declaration: declareOneConsumer})
 
-	err := a.prepareStreamConsumers()
+	err := a.prepareStreamConsumers(context.Background())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stream declarations were registered")
@@ -107,7 +107,7 @@ func TestPrepareStreamConsumersPropagatesValidationFailure(t *testing.T) {
 			})
 		}})
 
-	err := a.prepareStreamConsumers()
+	err := a.prepareStreamConsumers(context.Background())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stream declaration validation failed")
@@ -118,7 +118,7 @@ func TestPrepareStreamConsumersFailsWhenBrokerUnreachable(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{URI: unreachableStreamURI},
 		&streamModule{name: "orders", declaration: declareOneConsumer})
 
-	err := a.prepareStreamConsumers()
+	err := a.prepareStreamConsumers(context.Background())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to start stream consumers")
@@ -126,6 +126,24 @@ func TestPrepareStreamConsumersFailsWhenBrokerUnreachable(t *testing.T) {
 	assert.Nil(t, a.streamsManager, "a failed start registers neither a probe nor a closer")
 	assert.Empty(t, a.healthProbes)
 	assert.Empty(t, a.closers)
+}
+
+// TestPrepareStreamConsumersIgnoresCallerCancellation is the app half of the
+// consume-context contract: the startup context reaches the manager for its
+// values, and its cancellation carries no weight here — consumer lifetime belongs
+// to StopConsumers, so an already-canceled context changes nothing about how
+// startup succeeds or fails.
+func TestPrepareStreamConsumersIgnoresCallerCancellation(t *testing.T) {
+	a := newStreamsApp(t, config.StreamsConfig{URI: unreachableStreamURI},
+		&streamModule{name: "orders", declaration: declareOneConsumer})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := a.prepareStreamConsumers(ctx)
+
+	require.Error(t, err, "the premise: this broker is unreachable")
+	assert.Contains(t, err.Error(), "failed to start stream consumers")
+	assert.NotErrorIs(t, err, context.Canceled, "startup never consults the caller's cancellation")
 }
 
 // TestPrepareStreamConsumersReportsOnlyRealCleanupFailures pins the guard on the
@@ -138,7 +156,7 @@ func TestPrepareStreamConsumersReportsOnlyRealCleanupFailures(t *testing.T) {
 	a := newStreamsAppWithLogger(t, log, config.StreamsConfig{URI: unreachableStreamURI},
 		&streamModule{name: "orders", declaration: declareOneConsumer})
 
-	err := a.prepareStreamConsumers()
+	err := a.prepareStreamConsumers(context.Background())
 
 	require.Error(t, err, "the premise: the start fails before an environment exists")
 	assert.False(t, loggedMsgContains(log, "Failed to close stream environment"),
@@ -149,7 +167,7 @@ func TestPrepareStreamConsumersInvokesEveryDeclarerOnce(t *testing.T) {
 	m := &streamModule{name: "orders", declaration: declareOneConsumer}
 	a := newStreamsApp(t, config.StreamsConfig{}, m)
 
-	_ = a.prepareStreamConsumers()
+	_ = a.prepareStreamConsumers(context.Background())
 
 	assert.Equal(t, 1, m.calls)
 }
@@ -181,7 +199,7 @@ func TestPrepareStreamConsumersRejectsMultiTenantBypass(t *testing.T) {
 		&streamModule{name: "orders", declaration: declareOneConsumer})
 	a.cfg.Multitenant.Enabled = true
 
-	err := a.prepareStreamConsumers()
+	err := a.prepareStreamConsumers(context.Background())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "single-tenant only")

@@ -199,7 +199,7 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 	}
 
 	// Call prepareRuntime
-	err = app.prepareRuntime()
+	err = app.prepareRuntime(context.Background())
 	assert.NoError(t, err)
 
 	// Verify RegisterJobs was called on the provider
@@ -254,7 +254,7 @@ func TestPrepareRuntimeFailsWhenDeclarationsExistAndMessagingUnconfigured(t *tes
 	app := newLifecycleCheckApp(t, cfg)
 	require.NoError(t, app.RegisterModule(publisherDeclaringModule{}))
 
-	err := app.prepareRuntime()
+	err := app.prepareRuntime(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "messaging is not configured")
 	assert.Contains(t, err.Error(), "publishers=1")
@@ -271,7 +271,7 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 	}
 	app := newLifecycleCheckApp(t, cfg)
 
-	require.NoError(t, app.prepareRuntime())
+	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
 // TestPrepareRuntimeSkipsCheckInMultiTenantMode verifies that the static check
@@ -287,7 +287,7 @@ func TestPrepareRuntimeSkipsCheckInMultiTenantMode(t *testing.T) {
 	app := newLifecycleCheckApp(t, cfg)
 	require.NoError(t, app.RegisterModule(publisherDeclaringModule{}))
 
-	require.NoError(t, app.prepareRuntime())
+	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
 // TestPrepareRuntimeSucceedsWithDeclarationsAndConfiguredMessaging is the
@@ -304,7 +304,7 @@ func TestPrepareRuntimeSucceedsWithDeclarationsAndConfiguredMessaging(t *testing
 	app := newLifecycleCheckApp(t, cfg)
 	require.NoError(t, app.RegisterModule(publisherDeclaringModule{}))
 
-	require.NoError(t, app.prepareRuntime())
+	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
 // debugCheckConfig builds a config whose Debug block enables one endpoint, leaving the
@@ -344,7 +344,7 @@ func TestPrepareRuntimeFailsWhenDebugEndpointsHaveNoAccessControl(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			app := newLifecycleCheckApp(t, debugCheckConfig(nil, tt.bearerToken))
 
-			err := app.prepareRuntime()
+			err := app.prepareRuntime(context.Background())
 
 			require.Error(t, err)
 			// prepareRuntime passes its callees' errors through untouched, so the error
@@ -373,7 +373,7 @@ func TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			app := newLifecycleCheckApp(t, debugCheckConfig(tt.allowedIPs, tt.bearerToken))
 
-			require.NoError(t, app.prepareRuntime())
+			require.NoError(t, app.prepareRuntime(context.Background()))
 		})
 	}
 }
@@ -408,7 +408,7 @@ func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
 	require.True(t, a.messagingInitializer.IsAvailable(),
 		"a messaging manager is built even with no broker configured — the premise of this guard")
 
-	require.NoError(t, a.prepareRuntime())
+	require.NoError(t, a.prepareRuntime(context.Background()))
 }
 
 // globalMWCapturingServer implements ServerRunner (via embedded mockServer) plus the
