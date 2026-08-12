@@ -296,6 +296,13 @@ func validateMessagingStreams(cfg *StreamsConfig, multitenant bool) error {
 				fmt.Sprintf(errNotSupportedFmt, u.Scheme),
 				[]string{streamsURIScheme + "://", streamsURITLSScheme + "://"})
 		}
+		// A missing "//" parses as an opaque URI with no host: it clears the scheme
+		// check but has nothing to dial, and redactStreamURI cannot render it, so the
+		// startup failure would name no endpoint at all.
+		if u.Host == "" {
+			return NewValidationError("messaging.streams.uri",
+				"must include a host, e.g. "+streamsURIScheme+"://<user>:<password>@<host>:5552/%2f")
+		}
 	}
 
 	return validateStreamsAddressResolver(&cfg.AddressResolver)

@@ -5528,6 +5528,18 @@ func TestValidateMessagingStreamsURIScheme(t *testing.T) {
 			uri:     "rabbitmq-stream://svc:" + streamsFixturePassword + "@broker:55 52/",
 			wantErr: "messaging.streams.uri must be a valid URI",
 		},
+		{
+			// The realistic typo: a missing "//" parses as an opaque URI whose scheme
+			// still passes the allowlist, leaving nothing to dial.
+			name:    "missing_double_slash_rejected",
+			uri:     "rabbitmq-stream:broker:5552",
+			wantErr: "messaging.streams.uri must include a host",
+		},
+		{
+			name:    "host_less_uri_with_credentials_rejected",
+			uri:     "rabbitmq-stream:svc:" + streamsFixturePassword + "@/vhost",
+			wantErr: "messaging.streams.uri must include a host",
+		},
 	}
 
 	for _, tt := range tests {
