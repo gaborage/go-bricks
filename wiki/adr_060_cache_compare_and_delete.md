@@ -173,9 +173,12 @@ metrics are emitted as for every other operation.
 
 ## Future work
 
-- **`AssertNoOperations` sums a hardcoded map.** Every future `cache.Cache` method must be added to
-  `OperationCounts` in the same change or that assertion silently stops covering it. A table-driven
-  derivation would remove the footgun; out of scope here.
+- **`OperationCounts` is still hand-written.** The omission itself is now caught —
+  `TestOperationCountsCoversEveryCacheMethod` reflects over `cache.Cache`'s method set and fails on
+  any method missing from the map — so what remains out of scope is deriving the map, and collapsing
+  `Stats()`, `OperationCounts`, `OperationCount`, and `ResetCounters` into one counter registry. That
+  the hand-maintained vocabulary has already drifted once is visible today: `MockCache.Stats()` has
+  no `close_calls` key even though `closeCalls` is both tracked and reset.
 - **A `LoadThrough` helper** ([#966](https://github.com/gaborage/go-bricks/issues/966) item 3) would
   be the natural second consumer — that reporter's case is conditional eviction, not locking.
 - **A `cache.AcquireLock`-style helper** would retire both hazards this ADR documents rather than

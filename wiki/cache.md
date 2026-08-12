@@ -134,7 +134,10 @@ removes whoever holds the key at that moment rather than verifying it is still y
 ```go
 token := []byte(workerID)
 acquired, err := c.CompareAndSet(ctx, lockKey, nil, token, 30*time.Second)
-if err != nil || !acquired {
+if err != nil {
+    return err
+}
+if !acquired {
     return ErrLockHeld
 }
 defer func() { _, _ = c.CompareAndDelete(ctx, lockKey, token) }()

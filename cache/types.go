@@ -75,7 +75,10 @@ type Cache interface {
 	//
 	//	token := []byte("worker-1")
 	//	acquired, err := cache.CompareAndSet(ctx, lockKey, nil, token, 30*time.Second)
-	//	if err != nil || !acquired {
+	//	if err != nil {
+	//	    return err
+	//	}
+	//	if !acquired {
 	//	    return ErrLockHeld
 	//	}
 	//	defer func() { _, _ = cache.CompareAndDelete(ctx, lockKey, token) }()
