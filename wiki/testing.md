@@ -505,7 +505,10 @@ no verdict and must stay visible. A run with outstanding timeouts does not repor
 "all mutants killed".
 
 Excluded from scope: `_test.go` files, `testdata/`, `tools/` (separate Go
-module), and `scripts/` (the wrapper itself — see the operational notes).
+module), `scripts/` (the wrapper itself — see the operational notes), and
+`testing/containers/` (every file there carries `//go:build integration`, so the
+package is empty under the default build and the engine fails to gather coverage
+rather than reporting zero mutants).
 Engine version is pinned via `GREMLINS_VERSION` in the Makefile;
 runtime knobs live in `.gremlins.yaml`. The nightly `Mutation Baseline`
 workflow runs every package except the excluded `scripts/` in advisory mode
