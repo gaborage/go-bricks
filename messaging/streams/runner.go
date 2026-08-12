@@ -133,7 +133,7 @@ type consumerRunner struct {
 
 	// baseCtx is held rather than passed because the client's MessagesHandler
 	// carries no context of its own. The manager cancels it in StopConsumers.
-	baseCtx context.Context
+	baseCtx context.Context // NOSONAR S8242: no parameter to pass it through - the vendor callback signature is fixed
 }
 
 // messagesHandler is the callback handed to the stream client. The client
