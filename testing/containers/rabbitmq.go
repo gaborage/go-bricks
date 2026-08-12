@@ -5,12 +5,24 @@ package containers
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 	"github.com/testcontainers/testcontainers-go/wait"
+)
+
+const (
+	// streamPortSpec is the native stream-protocol port the rabbitmq_stream plugin binds.
+	streamPortSpec = "5552/tcp"
+
+	streamPluginReadyTimeout = 30 * time.Second
+	streamPluginPollInterval = 250 * time.Millisecond
 )
 
 // RabbitMQContainerConfig holds configuration for RabbitMQ test container
@@ -23,6 +35,9 @@ type RabbitMQContainerConfig struct {
 	Password string
 	// StartupTimeout for container initialization (default: 60 seconds)
 	StartupTimeout time.Duration
+	// EnableStreamPlugin publishes port 5552 and enables the rabbitmq_stream
+	// plugin after boot, for tests that speak the native stream protocol.
+	EnableStreamPlugin bool
 }
 
 // DefaultRabbitMQConfig returns a RabbitMQContainerConfig populated with sensible defaults.
@@ -41,10 +56,13 @@ func DefaultRabbitMQConfig() *RabbitMQContainerConfig {
 
 // RabbitMQContainer wraps testcontainers RabbitMQ container with helper methods
 type RabbitMQContainer struct {
-	container *rabbitmq.RabbitMQContainer
-	brokerURL string
-	host      string
-	port      int
+	container  *rabbitmq.RabbitMQContainer
+	brokerURL  string
+	host       string
+	port       int
+	streamPort int
+	username   string
+	password   string
 }
 
 // StartRabbitMQContainer starts a RabbitMQ testcontainer using the provided configuration.
@@ -65,8 +83,7 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 
 	// Use composite wait strategy: log message (fast early signal) + port listening (network verification)
 	// This prevents race conditions where the log appears but RabbitMQ isn't ready to accept connections
-	rmqContainer, err := rabbitmq.Run(ctx,
-		fmt.Sprintf("rabbitmq:%s", cfg.ImageTag),
+	opts := []testcontainers.ContainerCustomizer{
 		rabbitmq.WithAdminUsername(cfg.Username),
 		rabbitmq.WithAdminPassword(cfg.Password),
 		testcontainers.WithWaitStrategy(
@@ -75,7 +92,14 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 				wait.ForListeningPort("5672/tcp"),
 			).WithStartupTimeout(cfg.StartupTimeout),
 		),
-	)
+	}
+	if cfg.EnableStreamPlugin {
+		// The port must be published at creation time; the plugin that binds it is
+		// enabled after boot, so it cannot join the wait strategy above.
+		opts = append(opts, testcontainers.WithExposedPorts(streamPortSpec))
+	}
+
+	rmqContainer, err := rabbitmq.Run(ctx, fmt.Sprintf("rabbitmq:%s", cfg.ImageTag), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start RabbitMQ container: %w", err)
 	}
@@ -103,12 +127,53 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 
 	t.Logf("RabbitMQ container started successfully at %s:%d", host, port)
 
-	return &RabbitMQContainer{
+	container := &RabbitMQContainer{
 		container: rmqContainer,
 		brokerURL: amqpURL,
 		host:      host,
 		port:      port,
-	}, nil
+		username:  cfg.Username,
+		password:  cfg.Password,
+	}
+
+	if cfg.EnableStreamPlugin {
+		streamPort, err := enableStreamPlugin(ctx, rmqContainer)
+		if err != nil {
+			_ = rmqContainer.Terminate(ctx)
+			return nil, err
+		}
+		container.streamPort = streamPort
+		t.Logf("RabbitMQ stream protocol available at %s:%d", host, streamPort)
+	}
+
+	return container, nil
+}
+
+// enableStreamPlugin turns on rabbitmq_stream in a running container and waits for
+// its listener to accept connections on the mapped port. The container's own wait
+// strategy ran before the plugin existed, so readiness is polled here.
+func enableStreamPlugin(ctx context.Context, c *rabbitmq.RabbitMQContainer) (port int, err error) {
+	code, reader, err := c.Exec(ctx, []string{"rabbitmq-plugins", "enable", "rabbitmq_stream"})
+	if err != nil {
+		return 0, fmt.Errorf("failed to enable rabbitmq_stream plugin: %w", err)
+	}
+	if code != 0 {
+		output, _ := io.ReadAll(reader)
+		return 0, fmt.Errorf("rabbitmq-plugins enable rabbitmq_stream exited %d: %s", code, output)
+	}
+
+	strategy := wait.ForListeningPort(streamPortSpec).
+		WithStartupTimeout(streamPluginReadyTimeout).
+		WithPollInterval(streamPluginPollInterval)
+	if err := strategy.WaitUntilReady(ctx, c); err != nil {
+		return 0, fmt.Errorf("rabbitmq_stream listener did not become ready: %w", err)
+	}
+
+	mapped, err := c.MappedPort(ctx, streamPortSpec)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get RabbitMQ stream port: %w", err)
+	}
+	return int(mapped.Num()), nil
 }
 
 // BrokerURL returns the AMQP connection URL for the running container.
@@ -124,6 +189,27 @@ func (r *RabbitMQContainer) Host() string {
 // Port returns the host-side port Docker mapped to the container's 5672.
 func (r *RabbitMQContainer) Port() int {
 	return r.port
+}
+
+// StreamPort returns the host-side port Docker mapped to the container's 5552.
+// Zero when the container was started without EnableStreamPlugin.
+func (r *RabbitMQContainer) StreamPort() int {
+	return r.streamPort
+}
+
+// StreamURI returns the native stream-protocol URI for the default vhost.
+// Clients must also pin an address resolver to Host/StreamPort: the broker
+// advertises its container-internal address, which the host cannot dial.
+func (r *RabbitMQContainer) StreamURI() string {
+	// url.UserPassword escapes credentials containing @ : or /, and JoinHostPort
+	// brackets an IPv6 literal, which some Docker setups return from Host(). The
+	// vhost is appended already-encoded: %2f is how the default "/" vhost is spelled.
+	u := url.URL{
+		Scheme: "rabbitmq-stream",
+		User:   url.UserPassword(r.username, r.password),
+		Host:   net.JoinHostPort(r.host, strconv.Itoa(r.streamPort)),
+	}
+	return u.String() + "/%2f"
 }
 
 // Terminate stops and removes the RabbitMQ container
