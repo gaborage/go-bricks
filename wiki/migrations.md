@@ -2351,15 +2351,21 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   file naming one of the three types; the hits that matter are the ones where such a value is an operand of
   `==` or `!=`, or the key type of a `map[...]`. Keep the pattern free of `\b`/`\s`/`\w` — `git grep -E`
   has no PCRE escapes, so a pattern carrying one silently matches nothing and the gate reports "not
-  affected". `go build ./...` is the authoritative answer regardless, since the compiler resolves this one
-  even through an alias or dot-import that a line-oriented grep misses
+  affected". `go vet ./...` is the authoritative answer regardless, since the compiler resolves this one
+  even through an alias or dot-import that a line-oriented grep misses — and unlike `go build ./...` it
+  type-checks `_test.go` files, where a `==` on one of these structs is at least as likely as in
+  production code and would otherwise pass a green build untouched
 - scope: one added field, `Args map[string]any`, on each of `messaging.ConsumeOptions`
   (`messaging/messaging.go`), `messaging.ConsumerOptions` (`messaging/helpers.go`) and
   `messaging.ConsumerDeclaration` (`messaging/registry.go`). A struct containing a map is not comparable in
-  Go, so the three types lose `==`, `!=` and map-key use. **Nothing else about them changes**: assignment,
-  copying, passing by value, struct literals, field access and `reflect.DeepEqual` all behave exactly as
-  before, and a consumer that sets no `Args` produces byte-identical wire traffic — `toTable` normalizes a
-  nil or empty map to a nil `amqp.Table`
+  Go, so the three types lose `==`, `!=` and map-key use. **Unchanged**: assignment, copying, passing by
+  value, struct literals and field access. A consumer that sets no `Args` also produces byte-identical wire
+  traffic — `toTable` normalizes a nil or empty map to a nil `amqp.Table`. `reflect.DeepEqual` still
+  *compiles*, but it is **not** unchanged: it now walks the `Args` contents, and it distinguishes a nil map
+  from an empty one. That last point bites in one specific place — `RegisterConsumer` and `Clone` allocate
+  an empty `Args` map even when the caller supplied nil, so a declaration read back out of `Declarations`
+  will not `DeepEqual` a hand-built literal that left `Args` nil, even though the two are equivalent
+  everywhere else. Compare the fields you care about, or set `Args: map[string]any{}` on the literal
 - gate: match = the detect's hits include a `==`/`!=` between two such values, or a map keyed on one.
   no-match = you only construct, pass and read these types, which is the overwhelmingly common case — the
   types are declaration inputs, not value objects, so most consumers never compared them
@@ -2387,8 +2393,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
   Compare the fields you actually care about rather than the whole value. If you genuinely need
   whole-struct equality — most often in a test assertion — `reflect.DeepEqual` (or
-  `require.Equal`/`assert.Equal`, which use it) works unchanged and now correctly compares the `Args`
-  contents too, which `==` could never have done
+  `require.Equal`/`assert.Equal`, which use it) still compiles, and now compares the `Args` contents too,
+  which `==` could never have done. Read the scope bullet's nil-versus-empty-map caveat before relying on
+  it against a declaration that came back out of `Declarations`
 - why: `x-stream-offset` is a **per-consumer** argument on `basic.consume`, not a queue argument, because
   two consumers on one stream legitimately start at different offsets. Reaching the wire with it means
   carrying a variable-length argument set through all three hops, and a type carrying one is not a

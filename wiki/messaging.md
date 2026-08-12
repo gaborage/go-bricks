@@ -298,11 +298,13 @@ default when the arg is absent), an absolute offset (`int`/`int64` ≥ 0), a
 `time.Time`, or an interval string such as `"7D"`. Each delivery carries its own
 position in `delivery.Headers["x-stream-offset"]`.
 
-Either integer type is safe at any magnitude: AMQP encodes a Go `int` as a
-32-bit field, so the framework widens an `int` offset to `int64` before it
-reaches the broker. Without that, an offset past 2³¹ — the range a
-high-throughput stream actually reaches — would truncate silently, and
-`1 << 32` would arrive as `0` and replay the whole stream.
+An `int` offset is safe up to the platform's `int` range: AMQP encodes a Go
+`int` as a 32-bit field, so the framework widens it to `int64` before it reaches
+the broker. Without that, an offset past 2³¹ — the range a high-throughput
+stream actually reaches — would truncate silently, and `1 << 32` would arrive as
+`0` and replay the whole stream. Go's `int` is itself 32-bit on some platforms,
+where such a value cannot be held at all and no widening can recover it, so use
+`int64` for offsets beyond 2³¹.
 
 **Startup validation** — `Declarations.Validate` rejects, by name, four shapes
 the broker would otherwise refuse with an opaque channel error:

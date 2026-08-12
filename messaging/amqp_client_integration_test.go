@@ -673,6 +673,7 @@ func TestStreamQueueConsumeIntegration(t *testing.T) {
 	all := read("stream-consumer-first", streamOffsetFirst, messageCount)
 	require.Len(t, all, messageCount)
 	assert.Equal(t, int64(0), all[0].offset, "a stream's first offset is 0")
+	assert.Equal(t, "stream-message-0", all[0].body)
 	for i := 1; i < len(all); i++ {
 		assert.Greater(t, all[i].offset, all[i-1].offset, "stream offsets must increase monotonically")
 		assert.Equal(t, fmt.Sprintf("stream-message-%d", i), all[i].body)
