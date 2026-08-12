@@ -6,6 +6,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -198,7 +201,15 @@ func (r *RabbitMQContainer) StreamPort() int {
 // Clients must also pin an address resolver to Host/StreamPort: the broker
 // advertises its container-internal address, which the host cannot dial.
 func (r *RabbitMQContainer) StreamURI() string {
-	return fmt.Sprintf("rabbitmq-stream://%s:%s@%s:%d/%%2f", r.username, r.password, r.host, r.streamPort)
+	// url.UserPassword escapes credentials containing @ : or /, and JoinHostPort
+	// brackets an IPv6 literal, which some Docker setups return from Host(). The
+	// vhost is appended already-encoded: %2f is how the default "/" vhost is spelled.
+	u := url.URL{
+		Scheme: "rabbitmq-stream",
+		User:   url.UserPassword(r.username, r.password),
+		Host:   net.JoinHostPort(r.host, strconv.Itoa(r.streamPort)),
+	}
+	return u.String() + "/%2f"
 }
 
 // Terminate stops and removes the RabbitMQ container
