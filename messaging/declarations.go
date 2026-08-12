@@ -334,6 +334,15 @@ func (d *Declarations) Validate() error {
 // opaque channel error at declare time, so failing here names the offending
 // queue and consumer instead. Aggregated so one boot reports every problem.
 func (d *Declarations) validateStreamDeclarations() error {
+	errs := d.validateStreamQueueShape()
+	errs = append(errs, d.validateStreamConsumerRules()...)
+	return errors.Join(errs...)
+}
+
+// validateStreamQueueShape reports every stream queue carrying a flag the broker
+// refuses: streams must be durable, non-exclusive and non-auto-delete. Queues are
+// visited in sorted order so the aggregate error is identical across runs.
+func (d *Declarations) validateStreamQueueShape() []error {
 	var errs []error
 
 	for _, name := range slices.Sorted(maps.Keys(d.Queues)) {
@@ -351,6 +360,15 @@ func (d *Declarations) validateStreamDeclarations() error {
 			errs = append(errs, fmt.Errorf("stream queue %q must not be auto-delete", name))
 		}
 	}
+
+	return errs
+}
+
+// validateStreamConsumerRules reports every consumer whose stream usage the broker
+// would refuse or silently ignore: auto-ack on a stream (acks are consumer credit),
+// a malformed x-stream-offset, or an x-stream-offset on a non-stream queue.
+func (d *Declarations) validateStreamConsumerRules() []error {
+	var errs []error
 
 	for _, c := range d.Consumers() {
 		offset, hasOffset := c.Args[argStreamOffset]
@@ -376,7 +394,7 @@ func (d *Declarations) validateStreamDeclarations() error {
 		}
 	}
 
-	return errors.Join(errs...)
+	return errs
 }
 
 // isStreamQueue reports whether a queue declaration asks the broker for a
