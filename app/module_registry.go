@@ -8,6 +8,7 @@ import (
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -303,6 +304,37 @@ func (r *ModuleRegistry) DeclareMessaging(decls *messaging.Declarations) error {
 		Int("publishers", stats.Publishers).
 		Int("consumers", stats.Consumers).
 		Msg("Messaging declarations collected and validated successfully")
+
+	return nil
+}
+
+// DeclareStreams calls DeclareStreams on modules that implement StreamDeclarer.
+// Modules without stream declarations are silently skipped.
+func (r *ModuleRegistry) DeclareStreams(decls *streams.Declarations) error {
+	if decls == nil {
+		return errors.New("stream declarations store is nil")
+	}
+
+	for _, module := range r.modules {
+		if sd, ok := module.(StreamDeclarer); ok {
+			r.logger.Info().
+				Str("module", module.Name()).
+				Msg("Collecting module stream declarations")
+
+			sd.DeclareStreams(decls)
+		}
+	}
+
+	if err := decls.Validate(); err != nil {
+		r.logger.Error().Err(err).Msg("Stream declaration validation failed")
+		return fmt.Errorf("stream declaration validation failed: %w", err)
+	}
+
+	stats := decls.Stats()
+	r.logger.Info().
+		Int("streams", stats.Streams).
+		Int("consumers", stats.Consumers).
+		Msg("Stream declarations collected and validated successfully")
 
 	return nil
 }
