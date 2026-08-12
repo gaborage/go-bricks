@@ -59,7 +59,7 @@ startup, validates every declaration at once, and starts the consumers.
 ```go
 func (m *Module) DeclareStreams(decls *streams.Declarations) {
     decls.DeclareStream("orders", &streams.StreamSpec{
-        MaxAge:         7 * 24 * time.Hour,
+        MaxAge:         7 * 24 * time.Hour, // whole seconds (floors at 1s), as in the AMQP lane
         MaxLengthBytes: 5 * 1024 * 1024 * 1024,
     })
 

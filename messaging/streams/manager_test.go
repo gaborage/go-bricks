@@ -279,6 +279,35 @@ func TestStreamOptionsFrom(t *testing.T) {
 	assert.Equal(t, stream.ByteCapacity{}.B(1024), opts.MaxSegmentSizeBytes)
 }
 
+// TestStreamOptionsFromClampsMaxAge pins the retention rendering against
+// messaging.StreamQueueSpec: truncate toward whole seconds, floor a non-zero
+// value at 1s, and leave zero alone so the broker default still applies. The
+// client formats MaxAge with %.0f (round to nearest), so 1500ms would reach the
+// broker as 2s here and 1s in the AMQP lane without the clamp.
+func TestStreamOptionsFromClampsMaxAge(t *testing.T) {
+	tests := []struct {
+		name   string
+		maxAge time.Duration
+		want   time.Duration
+	}{
+		{name: "sub_second_floors_to_one_second", maxAge: 500 * time.Millisecond, want: time.Second},
+		{name: "nanosecond_floors_to_one_second", maxAge: time.Nanosecond, want: time.Second},
+		{name: "fractional_second_truncates_down", maxAge: 1500 * time.Millisecond, want: time.Second},
+		{name: "whole_seconds_pass_through", maxAge: 90 * time.Second, want: 90 * time.Second},
+		{name: "zero_emits_no_max_age", maxAge: 0, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := streamOptionsFrom(&StreamSpec{MaxAge: tt.maxAge, MaxLengthBytes: 2048})
+
+			assert.Equal(t, tt.want, opts.MaxAge)
+			assert.Equal(t, stream.ByteCapacity{}.B(2048), opts.MaxLengthBytes,
+				"the MaxAge clamp must not disturb the other retention knobs")
+		})
+	}
+}
+
 func TestManagerEnvironmentOptions(t *testing.T) {
 	t.Run("without_address_resolver", func(t *testing.T) {
 		m := NewManager(ManagerOptions{URI: "rabbitmq-stream://localhost:5552/%2f"})

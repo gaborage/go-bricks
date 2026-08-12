@@ -90,7 +90,12 @@ func (o OffsetStart) specification() stream.OffsetSpecification {
 // StreamSpec configures retention for a declared stream. Zero-value fields are
 // omitted, leaving the broker's own defaults in place.
 type StreamSpec struct {
-	// MaxAge discards segments older than this duration.
+	// MaxAge discards segments older than this duration, truncated to whole
+	// seconds. A non-zero sub-second value floors to 1s: second granularity is
+	// RabbitMQ's, so anything briefer is inexpressible and would otherwise
+	// discard the retention the caller asked for. Renders identically to
+	// messaging.StreamQueueSpec.MaxAge, so both lanes treat a given value the
+	// same way.
 	MaxAge time.Duration
 	// MaxLengthBytes caps the total retained size of the stream.
 	MaxLengthBytes int64

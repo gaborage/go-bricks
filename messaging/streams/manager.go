@@ -239,7 +239,12 @@ func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
 		return opts
 	}
 	if spec.MaxAge > 0 {
-		opts = opts.SetMaxAge(spec.MaxAge)
+		// Truncate to whole seconds and floor at 1s, matching
+		// messaging.StreamQueueSpec: sub-second retention is inexpressible to the
+		// broker and would render "0s", and passing whole seconds keeps the
+		// client's round-to-nearest formatting from disagreeing with the AMQP
+		// lane's truncation on a value like 1500ms.
+		opts = opts.SetMaxAge(max(spec.MaxAge.Truncate(time.Second), time.Second))
 	}
 	if spec.MaxLengthBytes > 0 {
 		opts = opts.SetMaxLengthBytes(stream.ByteCapacity{}.B(spec.MaxLengthBytes))
