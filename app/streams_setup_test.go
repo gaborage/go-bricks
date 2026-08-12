@@ -47,8 +47,12 @@ func declareOneConsumer(decls *streams.Declarations) {
 
 func newStreamsApp(t *testing.T, streamsCfg config.StreamsConfig, modules ...Module) *App {
 	t.Helper()
+	return newStreamsAppWithLogger(t, logger.New("error", false), streamsCfg, modules...)
+}
 
-	log := logger.New("error", false)
+func newStreamsAppWithLogger(t *testing.T, log logger.Logger, streamsCfg config.StreamsConfig, modules ...Module) *App {
+	t.Helper()
+
 	cfg := &config.Config{
 		App:       config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
 		Messaging: config.MessagingConfig{Streams: streamsCfg},
@@ -122,6 +126,23 @@ func TestPrepareStreamConsumersFailsWhenBrokerUnreachable(t *testing.T) {
 	assert.Nil(t, a.streamsManager, "a failed start registers neither a probe nor a closer")
 	assert.Empty(t, a.healthProbes)
 	assert.Empty(t, a.closers)
+}
+
+// TestPrepareStreamConsumersReportsOnlyRealCleanupFailures pins the guard on the
+// failed-start cleanup. The dial never completed, so the manager holds no
+// environment and Close is a no-op; a guard reading its result the wrong way
+// round would tell the operator the environment failed to close on every single
+// failed startup, burying the real cause.
+func TestPrepareStreamConsumersReportsOnlyRealCleanupFailures(t *testing.T) {
+	log := &recLogger{}
+	a := newStreamsAppWithLogger(t, log, config.StreamsConfig{URI: unreachableStreamURI},
+		&streamModule{name: "orders", declaration: declareOneConsumer})
+
+	err := a.prepareStreamConsumers()
+
+	require.Error(t, err, "the premise: the start fails before an environment exists")
+	assert.False(t, loggedMsgContains(log, "Failed to close stream environment"),
+		"a cleanup that had nothing to close is not reported as a failure")
 }
 
 func TestPrepareStreamConsumersInvokesEveryDeclarerOnce(t *testing.T) {

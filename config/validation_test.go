@@ -5588,6 +5588,10 @@ func TestValidateMessagingStreamsAddressResolver(t *testing.T) {
 	}{
 		{name: "both_unset", resolver: StreamsAddressResolverConfig{}},
 		{name: "both_set", resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: 5552}},
+		// Both ends of the accepted range are inclusive; without these the range
+		// check could be off by one at either edge and every other case still pass.
+		{name: "lowest_valid_port", resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: 1}},
+		{name: "highest_valid_port", resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: 65535}},
 		{
 			name:     "port_without_host",
 			resolver: StreamsAddressResolverConfig{Port: 5552},

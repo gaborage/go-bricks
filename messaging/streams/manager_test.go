@@ -59,6 +59,102 @@ func (f *fakeHandle) recorded() []string {
 // unreachableTestURI points at a port that refuses connections, so a dial fails fast.
 const unreachableTestURI = "rabbitmq-stream://guest:guest@127.0.0.1:1/%2f"
 
+// The shutdown and unwind warnings, verbatim. Tests assert on them so a guard
+// that stops distinguishing success from failure fails here.
+const (
+	msgFlushFailed         = "Failed to flush stream offset on shutdown"
+	msgCloseConsumerFailed = "Failed to close stream consumer"
+	msgCloseEnvFailed      = "Failed to close stream environment after a failed start"
+	msgOffsetStoreFailed   = "Failed to store stream offset"
+)
+
+// recordingLogger captures each event's level, attached error and terminal
+// message, so a test asserts what a shutdown actually told the operator instead
+// of swapping the process-global os.Stdout.
+type recordingLogger struct {
+	mu     sync.Mutex
+	events []recordedEvent
+}
+
+type recordedEvent struct {
+	l     *recordingLogger
+	level string
+	err   string
+	msg   string
+}
+
+func (l *recordingLogger) event(level string) logger.LogEvent {
+	return &recordedEvent{l: l, level: level}
+}
+func (l *recordingLogger) Info() logger.LogEvent                     { return l.event("info") }
+func (l *recordingLogger) Error() logger.LogEvent                    { return l.event("error") }
+func (l *recordingLogger) Debug() logger.LogEvent                    { return l.event("debug") }
+func (l *recordingLogger) Warn() logger.LogEvent                     { return l.event("warn") }
+func (l *recordingLogger) Fatal() logger.LogEvent                    { return l.event("fatal") }
+func (l *recordingLogger) WithContext(_ any) logger.Logger           { return l }
+func (l *recordingLogger) WithFields(_ map[string]any) logger.Logger { return l }
+
+func (l *recordingLogger) warnMessages() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := []string{}
+	for _, e := range l.events {
+		if e.level == "warn" {
+			out = append(out, e.msg)
+		}
+	}
+	return out
+}
+
+// warnError reports the error text attached to the first WARN carrying msg. An
+// empty string with ok=true means the line was emitted with no error at all,
+// which is what a guard reading the wrong way round produces.
+func (l *recordingLogger) warnError(msg string) (text string, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, e := range l.events {
+		if e.level == "warn" && e.msg == msg {
+			return e.err, true
+		}
+	}
+	return "", false
+}
+
+func (e *recordedEvent) Msg(msg string) {
+	e.msg = msg
+	e.l.mu.Lock()
+	e.l.events = append(e.l.events, *e)
+	e.l.mu.Unlock()
+}
+func (e *recordedEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
+func (e *recordedEvent) Err(err error) logger.LogEvent {
+	if err != nil {
+		e.err = err.Error()
+	}
+	return e
+}
+func (e *recordedEvent) Str(_, _ string) logger.LogEvent               { return e }
+func (e *recordedEvent) Int(_ string, _ int) logger.LogEvent           { return e }
+func (e *recordedEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
+func (e *recordedEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
+func (e *recordedEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
+func (e *recordedEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
+func (e *recordedEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
+func (e *recordedEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
+func (e *recordedEvent) Enabled() bool                                 { return true }
+
+// recordingManager builds a manager with one attached fake consumer whose tracker
+// already has a pending offset, so both shutdown guards are reachable.
+func recordingManager(t *testing.T, handle *fakeHandle) (*Manager, *recordingLogger) {
+	t.Helper()
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	tracker := newOffsetTracker(1000, time.Hour, nil)
+	require.NoError(t, tracker.record(4, nil, &fakeStorer{}))
+	attach(m, handle, tracker)
+	return m, log
+}
+
 func testManager(t *testing.T) *Manager {
 	t.Helper()
 	return NewManager(ManagerOptions{
@@ -142,19 +238,39 @@ func TestManagerStopConsumersIsIdempotent(t *testing.T) {
 	assert.Equal(t, []string{"close"}, handle.recorded(), "nothing pending, and no second close")
 }
 
+// TestManagerStopConsumersToleratesFlushAndCloseErrors pins both shutdown
+// guards from the failing side: a flush that never reached the broker and a
+// consumer that would not close each surface to the operator with the underlying
+// error attached, and neither aborts the rest of the teardown.
 func TestManagerStopConsumersToleratesFlushAndCloseErrors(t *testing.T) {
-	m := testManager(t)
-	tracker := newOffsetTracker(1000, time.Hour, nil)
-	require.NoError(t, tracker.record(4, nil, &fakeStorer{}))
-	handle := &fakeHandle{
+	m, log := recordingManager(t, &fakeHandle{
 		status:   ha.StatusOpen,
 		closeErr: errors.New("close failed"),
 		storeErr: errors.New("store failed"),
-	}
-	attach(m, handle, tracker)
+	})
 
 	assert.NotPanics(t, m.StopConsumers)
 	assert.False(t, m.started)
+
+	assert.ElementsMatch(t, []string{msgFlushFailed, msgCloseConsumerFailed}, log.warnMessages())
+	flushErr, ok := log.warnError(msgFlushFailed)
+	require.True(t, ok)
+	assert.Equal(t, "store failed", flushErr)
+	closeErr, ok := log.warnError(msgCloseConsumerFailed)
+	require.True(t, ok)
+	assert.Equal(t, "close failed", closeErr)
+}
+
+// TestManagerStopConsumersIsSilentOnCleanShutdown is the other side of the same
+// two guards: a teardown whose flush and close both succeed reports no failure.
+func TestManagerStopConsumersIsSilentOnCleanShutdown(t *testing.T) {
+	handle := &fakeHandle{status: ha.StatusOpen}
+	m, log := recordingManager(t, handle)
+
+	m.StopConsumers()
+
+	assert.Equal(t, []string{"store:4", "close"}, handle.recorded())
+	assert.Empty(t, log.warnMessages(), "a clean shutdown reports nothing to the operator")
 }
 
 func TestManagerStopConsumersCancelsConsumeContext(t *testing.T) {
@@ -460,6 +576,21 @@ func TestManagerAbortStartLockedDisposesEnvironment(t *testing.T) {
 	assert.Equal(t, []string{"close"}, handle.recorded())
 
 	require.NoError(t, m.Close(), "the follow-up Close short-circuits instead of closing twice")
+}
+
+// TestManagerAbortStartLockedReportsOnlyRealDisposalFailures pins the unwind's
+// own guard: nothing was dialed, so closeEnvLocked has nothing to close and
+// returns nil. A guard reading that the wrong way round would tell the operator
+// the environment failed to close on every successful unwind.
+func TestManagerAbortStartLockedReportsOnlyRealDisposalFailures(t *testing.T) {
+	m, log := recordingManager(t, &fakeHandle{status: ha.StatusOpen})
+
+	m.abortStartLocked()
+
+	require.Nil(t, m.env, "the premise: there was no environment to dispose")
+	assert.NotContains(t, log.warnMessages(), msgCloseEnvFailed,
+		"a disposal that succeeded is not reported as a failure")
+	assert.Empty(t, log.warnMessages(), "the whole unwind is silent when every step succeeds")
 }
 
 func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {

@@ -66,11 +66,16 @@ func (c *fakeClock) advance(d time.Duration) {
 
 func newTestRunner(t *testing.T, handler Handler, tracker *offsetTracker) *consumerRunner {
 	t.Helper()
+	return newTestRunnerWithLogger(t, handler, tracker, logger.New("error", false))
+}
+
+func newTestRunnerWithLogger(t *testing.T, handler Handler, tracker *offsetTracker, log logger.Logger) *consumerRunner {
+	t.Helper()
 	return &consumerRunner{
 		name:    testConsumerName,
 		handler: handler,
 		tracker: tracker,
-		log:     logger.New("error", false),
+		log:     log,
 		tracer:  otel.Tracer(tracerName),
 		baseCtx: context.Background(),
 	}
@@ -280,10 +285,14 @@ func TestRunnerInvokeWrapsPanicAsError(t *testing.T) {
 	assert.Equal(t, "panic in stream handler: kaboom", err.Error())
 }
 
+// TestRunnerDeliverSurvivesStoreFailure pins the commit guard from the failing
+// side: consumption continues, nothing reached the broker, and the operator is
+// told which offset did not land, with the store error attached.
 func TestRunnerDeliverSurvivesStoreFailure(t *testing.T) {
 	clock := newFakeClock()
-	runner := newTestRunner(t, func(context.Context, *Message) error { return nil },
-		newOffsetTracker(1, time.Hour, clock.Now))
+	log := &recordingLogger{}
+	runner := newTestRunnerWithLogger(t, func(context.Context, *Message) error { return nil },
+		newOffsetTracker(1, time.Hour, clock.Now), log)
 	storer := &fakeStorer{failNow: true}
 
 	assert.NotPanics(t, func() {
@@ -291,6 +300,43 @@ func TestRunnerDeliverSurvivesStoreFailure(t *testing.T) {
 	})
 
 	assert.Empty(t, storer.offsets())
+	assert.Equal(t, []string{msgOffsetStoreFailed}, log.warnMessages())
+	storeErr, ok := log.warnError(msgOffsetStoreFailed)
+	require.True(t, ok)
+	assert.Equal(t, "store failed", storeErr)
+}
+
+// TestRunnerDeliverIsSilentWhenTheOffsetLands is the other side: the commit
+// succeeded, so the delivery reports no store failure.
+func TestRunnerDeliverIsSilentWhenTheOffsetLands(t *testing.T) {
+	clock := newFakeClock()
+	log := &recordingLogger{}
+	runner := newTestRunnerWithLogger(t, func(context.Context, *Message) error { return nil },
+		newOffsetTracker(1, time.Hour, clock.Now), log)
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 12, amqpMessage("payload"), storer)
+
+	assert.Equal(t, []int64{12}, storer.offsets())
+	assert.Empty(t, log.warnMessages(), "a committed offset is not reported as a failure")
+}
+
+// TestRunnerDeliverHandlerErrorReportsNoStoreFailure covers the third path into
+// the commit guard: a failed handler contributes no offset, so record returns nil
+// and the delivery must not claim the offset failed to store. The handler failure
+// itself is reported at ERROR.
+func TestRunnerDeliverHandlerErrorReportsNoStoreFailure(t *testing.T) {
+	clock := newFakeClock()
+	log := &recordingLogger{}
+	runner := newTestRunnerWithLogger(t, func(context.Context, *Message) error { return errHandlerFailed },
+		newOffsetTracker(1, time.Hour, clock.Now), log)
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 61, amqpMessage("payload"), storer)
+
+	assert.Empty(t, storer.offsets())
+	assert.Empty(t, log.warnMessages(),
+		"the offset was never eligible for a commit, so nothing failed to store")
 }
 
 func TestRunnerDeliverHandlesEmptyBody(t *testing.T) {
