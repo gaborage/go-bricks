@@ -179,6 +179,18 @@ messaging:
   headers:
     x-app-name: my-service
     x-environment: development
+  # Native stream-protocol consumption (OPTIONAL - see wiki/streams.md).
+  # Required only when a module implements app.StreamDeclarer. Separate listener
+  # (default port 5552, rabbitmq_stream plugin); never derived from broker.url.
+  # Single-tenant only: multitenant.enabled + a uri here fails startup.
+  # streams:
+  #   uri: rabbitmq-stream://guest:guest@localhost:5552/%2f
+  #   addressresolver:            # both or neither; needed behind a load balancer or NAT
+  #     host: rabbitmq.example.com
+  #     port: 5552
+  #   offsetstore:
+  #     countbeforestorage: 500   # handled messages before a server-side offset commit
+  #     flushinterval: 5s         # elapsed time before a pending offset is committed
 
 multitenant:
   enabled: false

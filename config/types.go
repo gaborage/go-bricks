@@ -452,6 +452,53 @@ type MessagingConfig struct {
 	Headers   map[string]string   `koanf:"headers" json:"headers" yaml:"headers" toml:"headers" mapstructure:"headers"`
 	Reconnect ReconnectConfig     `koanf:"reconnect" json:"reconnect" yaml:"reconnect" toml:"reconnect" mapstructure:"reconnect"`
 	Publisher PublisherPoolConfig `koanf:"publisher" json:"publisher" yaml:"publisher" toml:"publisher" mapstructure:"publisher"`
+	Streams   StreamsConfig       `koanf:"streams" json:"streams" yaml:"streams" toml:"streams" mapstructure:"streams"`
+}
+
+// StreamsConfig holds native RabbitMQ stream-protocol settings (consumption).
+// Single-tenant only: multitenant.enabled together with a stream URI is a
+// startup validation error (see config/validation.go: validateMessagingStreams).
+type StreamsConfig struct {
+	// URI is the stream-protocol endpoint, scheme rabbitmq-stream:// (or
+	// rabbitmq-stream+tls://), default port 5552. Required when any module
+	// declares stream consumers. Deliberately NOT derived from
+	// messaging.broker.url — the stream protocol is a separate listener that a
+	// deployment may not expose at all (explicit > implicit).
+	URI string `koanf:"uri" json:"uri" yaml:"uri" toml:"uri" mapstructure:"uri"`
+
+	// AddressResolver pins the client to a single entry point (load balancer,
+	// NAT, or Docker port mapping), which the broker's own metadata cannot
+	// describe. Set both fields or neither.
+	AddressResolver StreamsAddressResolverConfig `koanf:"addressresolver" json:"addressresolver" yaml:"addressresolver" toml:"addressresolver" mapstructure:"addressresolver"`
+
+	// OffsetStore tunes how often successfully handled offsets are committed
+	// server-side.
+	OffsetStore StreamsOffsetStoreConfig `koanf:"offsetstore" json:"offsetstore" yaml:"offsetstore" toml:"offsetstore" mapstructure:"offsetstore"`
+}
+
+// StreamsAddressResolverConfig pins stream connections to one advertised endpoint.
+type StreamsAddressResolverConfig struct {
+	// Host is the entry-point hostname clients dial instead of the address the
+	// broker advertises in its metadata response.
+	Host string `koanf:"host" json:"host" yaml:"host" toml:"host" mapstructure:"host"`
+
+	// Port is the entry-point port. Must be 1-65535 when Host is set.
+	Port int `koanf:"port" json:"port" yaml:"port" toml:"port" mapstructure:"port"`
+}
+
+// StreamsOffsetStoreConfig tunes the server-side offset commit cadence.
+// Offsets are only ever committed AFTER a handler returned successfully, so
+// these keys trade commit traffic against how much already-handled work a
+// crash replays.
+type StreamsOffsetStoreConfig struct {
+	// CountBeforeStorage is how many successfully handled messages accumulate
+	// before the offset is committed. Default: 500. Must be >= 0 (0 applies the default).
+	CountBeforeStorage int `koanf:"countbeforestorage" json:"countbeforestorage" yaml:"countbeforestorage" toml:"countbeforestorage" mapstructure:"countbeforestorage"`
+
+	// FlushInterval is how long after the last commit a pending offset is
+	// committed even if CountBeforeStorage was not reached. Default: 5s.
+	// Must be >= 0 (0 applies the default).
+	FlushInterval time.Duration `koanf:"flushinterval" json:"flushinterval" yaml:"flushinterval" toml:"flushinterval" mapstructure:"flushinterval"`
 }
 
 // ReconnectConfig holds AMQP reconnection settings.
