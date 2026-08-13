@@ -179,9 +179,10 @@ messaging:
   headers:
     x-app-name: my-service
     x-environment: development
-  # Native stream-protocol consumption (OPTIONAL).
-  # Required only when a module declares native streams or consumers. Separate
-  # listener (default port 5552, rabbitmq_stream plugin); never derived from broker.url.
+  # Native stream-protocol consumption (OPTIONAL - see wiki/streams.md).
+  # Required only when a module declares streams or consumers via app.StreamDeclarer.
+  # Separate listener (default port 5552, rabbitmq_stream plugin); never derived
+  # from broker.url.
   # Single-tenant only: multitenant.enabled + a uri here fails startup.
   # Credentials belong in the environment: MESSAGING_STREAMS_URI overrides uri.
   # streams:
