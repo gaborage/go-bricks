@@ -86,7 +86,7 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 
 	if !a.cfg.Multitenant.Enabled && a.connectionPreWarmer != nil && a.connectionPreWarmer.IsAvailable() {
 		a.connectionPreWarmer.LogAvailability()
-		if err := a.connectionPreWarmer.PreWarmSingleTenant(context.Background(), decls); err != nil {
+		if err := a.connectionPreWarmer.PreWarmSingleTenant(ctx, decls); err != nil {
 			a.logger.Warn().Err(err).Msg("Pre-warming completed with warnings")
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -272,6 +273,55 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 	app := newLifecycleCheckApp(t, cfg)
 
 	require.NoError(t, app.prepareRuntime(context.Background()))
+}
+
+type preWarmCtxSentinelKey struct{}
+
+// ctxRecordingDBConfigProvider captures the sentinel carried by the context that
+// reaches DBConfig — the first ctx-aware seam below PreWarmSingleTenant.
+type ctxRecordingDBConfigProvider struct {
+	mu   sync.Mutex
+	seen any
+}
+
+func (p *ctxRecordingDBConfigProvider) DBConfig(ctx context.Context, _ string) (*config.DatabaseConfig, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.seen = ctx.Value(preWarmCtxSentinelKey{})
+	return &config.DatabaseConfig{Type: dbTypePostgres}, nil
+}
+
+// TestPrepareRuntimePropagatesContextToPreWarm pins that prepareRuntime hands its
+// own ctx to PreWarmSingleTenant instead of a fresh context.Background(): a
+// sentinel value on the caller's context must survive down to the pre-warm
+// database seam. The value is the right observable because resourcepool detaches
+// cancellation with context.WithoutCancel, which preserves values — so a deadline
+// or cancellation would not survive that hop, but a value does.
+func TestPrepareRuntimePropagatesContextToPreWarm(t *testing.T) {
+	cfg := &config.Config{
+		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Multitenant: config.MultitenantConfig{Enabled: false},
+	}
+	a := newLifecycleCheckApp(t, cfg)
+
+	provider := &ctxRecordingDBConfigProvider{}
+	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+		return dbtesting.NewTestDB(dbTypePostgres), nil
+	}
+	dbManager := database.NewDbManager(provider, a.logger,
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, connector)
+	defer func() { _ = dbManager.Close() }()
+
+	a.dbManager = dbManager
+	a.connectionPreWarmer = NewConnectionPreWarmer(a.logger, dbManager, nil)
+
+	ctx := context.WithValue(context.Background(), preWarmCtxSentinelKey{}, "from-prepare-runtime")
+	require.NoError(t, a.prepareRuntime(ctx))
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	assert.Equal(t, "from-prepare-runtime", provider.seen,
+		"prepareRuntime must pass its own context to PreWarmSingleTenant; context.Background() drops the sentinel")
 }
 
 // TestPrepareRuntimeSkipsCheckInMultiTenantMode verifies that the static check
