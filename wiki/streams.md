@@ -135,7 +135,7 @@ within each — which is Phase 3, not from threads inside one process. SAC is no
 a throughput lever; see below.
 
 **There is no handler timeout.** Unlike an HTTP handler, a stream handler gets no
-deadline: the context it receives is cancelled only by `StopConsumers`, so a
+deadline: the context it receives is canceled only by `StopConsumers`, so a
 handler that ignores it runs unbounded. Because delivery is sequential, one hung
 handler stalls that consumer entirely and leaks its goroutine at exit — it does
 not block shutdown, but nothing after it is consumed either. Respect `ctx` and
