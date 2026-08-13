@@ -173,6 +173,8 @@ const (
 	fieldServerForwardedClientCertRequire = "server.forwardedclientcert.require"
 
 	fieldServerTrustedProxies = "server.trustedproxies"
+
+	fieldMessagingStreamsURI = "messaging.streams.uri"
 )
 
 func Validate(cfg *Config) error {
@@ -289,10 +291,10 @@ func validateMessagingStreams(cfg *StreamsConfig, multitenant bool) error {
 
 		u, err := url.Parse(cfg.URI)
 		if err != nil {
-			return NewValidationError("messaging.streams.uri", "must be a valid URI")
+			return NewValidationError(fieldMessagingStreamsURI, "must be a valid URI")
 		}
 		if u.Scheme != streamsURIScheme && u.Scheme != streamsURITLSScheme {
-			return NewInvalidFieldError("messaging.streams.uri",
+			return NewInvalidFieldError(fieldMessagingStreamsURI,
 				fmt.Sprintf(errNotSupportedFmt, u.Scheme),
 				[]string{streamsURIScheme + "://", streamsURITLSScheme + "://"})
 		}
@@ -300,7 +302,7 @@ func validateMessagingStreams(cfg *StreamsConfig, multitenant bool) error {
 		// check but has nothing to dial, and redactStreamURI cannot render it, so the
 		// startup failure would name no endpoint at all.
 		if u.Host == "" {
-			return NewValidationError("messaging.streams.uri",
+			return NewValidationError(fieldMessagingStreamsURI,
 				"must include a host, e.g. "+streamsURIScheme+"://<user>:<password>@<host>:5552/%2f")
 		}
 	}
