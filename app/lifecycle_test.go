@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -199,7 +200,7 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 	}
 
 	// Call prepareRuntime
-	err = app.prepareRuntime()
+	err = app.prepareRuntime(context.Background())
 	assert.NoError(t, err)
 
 	// Verify RegisterJobs was called on the provider
@@ -254,7 +255,7 @@ func TestPrepareRuntimeFailsWhenDeclarationsExistAndMessagingUnconfigured(t *tes
 	app := newLifecycleCheckApp(t, cfg)
 	require.NoError(t, app.RegisterModule(publisherDeclaringModule{}))
 
-	err := app.prepareRuntime()
+	err := app.prepareRuntime(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "messaging is not configured")
 	assert.Contains(t, err.Error(), "publishers=1")
@@ -271,7 +272,56 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 	}
 	app := newLifecycleCheckApp(t, cfg)
 
-	require.NoError(t, app.prepareRuntime())
+	require.NoError(t, app.prepareRuntime(context.Background()))
+}
+
+type preWarmCtxSentinelKey struct{}
+
+// ctxRecordingDBConfigProvider captures the sentinel carried by the context that
+// reaches DBConfig — the first ctx-aware seam below PreWarmSingleTenant.
+type ctxRecordingDBConfigProvider struct {
+	mu   sync.Mutex
+	seen any
+}
+
+func (p *ctxRecordingDBConfigProvider) DBConfig(ctx context.Context, _ string) (*config.DatabaseConfig, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.seen = ctx.Value(preWarmCtxSentinelKey{})
+	return &config.DatabaseConfig{Type: dbTypePostgres}, nil
+}
+
+// TestPrepareRuntimePropagatesContextToPreWarm pins that prepareRuntime hands its
+// own ctx to PreWarmSingleTenant instead of a fresh context.Background(): a
+// sentinel value on the caller's context must survive down to the pre-warm
+// database seam. The value is the right observable because resourcepool detaches
+// cancellation with context.WithoutCancel, which preserves values — so a deadline
+// or cancellation would not survive that hop, but a value does.
+func TestPrepareRuntimePropagatesContextToPreWarm(t *testing.T) {
+	cfg := &config.Config{
+		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Multitenant: config.MultitenantConfig{Enabled: false},
+	}
+	a := newLifecycleCheckApp(t, cfg)
+
+	provider := &ctxRecordingDBConfigProvider{}
+	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+		return dbtesting.NewTestDB(dbTypePostgres), nil
+	}
+	dbManager := database.NewDbManager(provider, a.logger,
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, connector)
+	defer func() { _ = dbManager.Close() }()
+
+	a.dbManager = dbManager
+	a.connectionPreWarmer = NewConnectionPreWarmer(a.logger, dbManager, nil)
+
+	ctx := context.WithValue(context.Background(), preWarmCtxSentinelKey{}, "from-prepare-runtime")
+	require.NoError(t, a.prepareRuntime(ctx))
+
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	assert.Equal(t, "from-prepare-runtime", provider.seen,
+		"prepareRuntime must pass its own context to PreWarmSingleTenant; context.Background() drops the sentinel")
 }
 
 // TestPrepareRuntimeSkipsCheckInMultiTenantMode verifies that the static check
@@ -287,7 +337,7 @@ func TestPrepareRuntimeSkipsCheckInMultiTenantMode(t *testing.T) {
 	app := newLifecycleCheckApp(t, cfg)
 	require.NoError(t, app.RegisterModule(publisherDeclaringModule{}))
 
-	require.NoError(t, app.prepareRuntime())
+	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
 // TestPrepareRuntimeSucceedsWithDeclarationsAndConfiguredMessaging is the
@@ -304,7 +354,7 @@ func TestPrepareRuntimeSucceedsWithDeclarationsAndConfiguredMessaging(t *testing
 	app := newLifecycleCheckApp(t, cfg)
 	require.NoError(t, app.RegisterModule(publisherDeclaringModule{}))
 
-	require.NoError(t, app.prepareRuntime())
+	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
 // debugCheckConfig builds a config whose Debug block enables one endpoint, leaving the
@@ -344,7 +394,7 @@ func TestPrepareRuntimeFailsWhenDebugEndpointsHaveNoAccessControl(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			app := newLifecycleCheckApp(t, debugCheckConfig(nil, tt.bearerToken))
 
-			err := app.prepareRuntime()
+			err := app.prepareRuntime(context.Background())
 
 			require.Error(t, err)
 			// prepareRuntime passes its callees' errors through untouched, so the error
@@ -373,7 +423,7 @@ func TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			app := newLifecycleCheckApp(t, debugCheckConfig(tt.allowedIPs, tt.bearerToken))
 
-			require.NoError(t, app.prepareRuntime())
+			require.NoError(t, app.prepareRuntime(context.Background()))
 		})
 	}
 }
@@ -408,7 +458,7 @@ func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
 	require.True(t, a.messagingInitializer.IsAvailable(),
 		"a messaging manager is built even with no broker configured — the premise of this guard")
 
-	require.NoError(t, a.prepareRuntime())
+	require.NoError(t, a.prepareRuntime(context.Background()))
 }
 
 // globalMWCapturingServer implements ServerRunner (via embedded mockServer) plus the
@@ -868,4 +918,115 @@ func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]
 	require.NoError(t, app.readyCheck(server.NewHandlerContextForTest(w, req, cfg)))
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	return body, w.Code
+}
+
+// TestReadyCheckOmitsStreamsWhenNoneDeclared pins that services without streams keep
+// the /ready body they had: the component is reported only where a probe exists.
+func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{}}
+
+	body, code := runReadyCheck(t, app, cfg)
+
+	assert.Equal(t, http.StatusOK, code)
+	assert.NotContains(t, body, componentStreams)
+	assert.NotContains(t, body, "streams_stats")
+}
+
+// TestReadyCheckReportsStreamsWhenProbed is the other half: once the runtime probe is
+// registered the component and its stats reach the body.
+func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{
+		healthProbeFunc{
+			name: componentStreams,
+			fn: func(context.Context) (string, map[string]any, error) {
+				return healthyStatus, map[string]any{statusKey: healthyStatus, "consumers": 2}, nil
+			},
+		},
+	}}
+
+	body, code := runReadyCheck(t, app, cfg)
+
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, healthyStatus, body[componentStreams])
+	assert.Equal(t, map[string]any{statusKey: healthyStatus, "consumers": float64(2)}, body["streams_stats"])
+}
+
+// streamsProbeWithOffsets returns a probe whose details carry the identifier-bearing
+// stored_offsets map a real streams.Manager reports.
+func streamsProbeWithOffsets(streamName, consumerName string) Prober {
+	return healthProbeFunc{
+		name: componentStreams,
+		fn: func(context.Context) (string, map[string]any, error) {
+			return healthyStatus, map[string]any{
+				statusKey:            healthyStatus,
+				"started":            true,
+				"consumers":          1,
+				streamsOffsetsKey:    map[string]int64{streamName + "/" + consumerName: 4242},
+				"offset_store_count": 500,
+			}, nil
+		},
+	}
+}
+
+// TestReadyCheckWithholdsStreamIdentifiers is the /ready half of the disclosure
+// guard: the unauthenticated body must carry the counters but never the stream or
+// consumer-group names, and never the live offsets that differencing two polls
+// would turn into a per-stream message rate.
+func TestReadyCheckWithholdsStreamIdentifiers(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{
+		streamsProbeWithOffsets("payments-ledger", "fraud-scoring"),
+	}}
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
+	w := httptest.NewRecorder()
+	require.NoError(t, app.readyCheck(server.NewHandlerContextForTest(w, req, cfg)))
+
+	body := w.Body.String()
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.NotContains(t, body, "payments-ledger", "the declared stream name must not reach an unauthenticated body")
+	assert.NotContains(t, body, "fraud-scoring", "the consumer-group name must not reach an unauthenticated body")
+	assert.NotContains(t, body, streamsOffsetsKey)
+	assert.NotContains(t, body, "4242", "live offsets must not reach an unauthenticated body")
+
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &decoded))
+	stats, ok := decoded["streams_stats"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(1), stats["consumers"], "the counters survive the filter")
+	assert.Equal(t, true, stats["started"])
+}
+
+// TestHealthDebugRetainsStreamIdentifiers is the other half: the access-controlled
+// debug endpoint still renders the offsets operators need.
+func TestHealthDebugRetainsStreamIdentifiers(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{
+		streamsProbeWithOffsets("payments-ledger", "fraud-scoring"),
+	}}
+
+	handlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, app.logger)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
+	w := httptest.NewRecorder()
+	require.NoError(t, handlers.handleHealthDebug(server.NewHandlerContextForTest(w, req, nil)))
+
+	body := w.Body.String()
+	assert.Contains(t, body, streamsOffsetsKey)
+	assert.Contains(t, body, "payments-ledger/fraud-scoring")
+	assert.Contains(t, body, "4242")
+}
+
+func TestPublicStreamsStatsCopiesRatherThanMutates(t *testing.T) {
+	details := map[string]any{
+		statusKey:         healthyStatus,
+		streamsOffsetsKey: map[string]int64{"orders/projector": 7},
+	}
+
+	public := publicStreamsStats(details)
+
+	assert.NotContains(t, public, streamsOffsetsKey)
+	assert.Equal(t, healthyStatus, public[statusKey])
+	assert.Contains(t, details, streamsOffsetsKey, "the caller's map must not be mutated")
 }

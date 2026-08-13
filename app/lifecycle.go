@@ -62,8 +62,10 @@ func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, id
 			"(lower " + keyPrefix + ".cleanupinterval or raise " + keyPrefix + ".idlettl)")
 }
 
-// prepareRuntime prepares the application for runtime execution
-func (a *App) prepareRuntime() error {
+// prepareRuntime prepares the application for runtime execution. ctx is the
+// startup context: components it starts that outlive startup inherit that
+// context's values rather than beginning from a bare context.Background().
+func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.buildMessagingDeclarations(); err != nil {
 		return err
 	}
@@ -78,9 +80,13 @@ func (a *App) prepareRuntime() error {
 		return err
 	}
 
+	if err := a.prepareStreamConsumers(ctx); err != nil {
+		return err
+	}
+
 	if !a.cfg.Multitenant.Enabled && a.connectionPreWarmer != nil && a.connectionPreWarmer.IsAvailable() {
 		a.connectionPreWarmer.LogAvailability()
-		if err := a.connectionPreWarmer.PreWarmSingleTenant(context.Background(), decls); err != nil {
+		if err := a.connectionPreWarmer.PreWarmSingleTenant(ctx, decls); err != nil {
 			a.logger.Warn().Err(err).Msg("Pre-warming completed with warnings")
 		}
 	}
@@ -300,7 +306,9 @@ func (a *App) drainServerError(ch <-chan error) error {
 // Run starts the application and blocks until a shutdown signal is received.
 // It handles graceful shutdown with a timeout.
 func (a *App) Run() error {
-	if err := a.prepareRuntime(); err != nil {
+	// Run is the process entry point, so the startup context is rooted here and
+	// threaded down; nothing above it has a context to inherit.
+	if err := a.prepareRuntime(context.Background()); err != nil {
 		return err
 	}
 
@@ -502,6 +510,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	//    the messaging-manager closer). Done before module shutdown so the framework stops
 	//    delivering fresh messages to modules that are about to be torn down.
 	a.shutdownConsumers()
+	a.shutdownStreamConsumers()
 
 	// 3. Shut down modules — no new HTTP requests or AMQP deliveries are admitted at this
 	//    point. AMQP handlers already in flight may still be unwinding after cancellation.
@@ -572,6 +581,31 @@ func publicDBStats(details map[string]any) map[string]any {
 	return public
 }
 
+// streamsOffsetsKey is the streams.Manager.Stats() entry publicStreamsStats withholds
+// from /ready.
+const streamsOffsetsKey = "stored_offsets"
+
+// publicStreamsStats renders streams_stats for the unauthenticated /ready body: the
+// scalar counters, never the per-consumer offset map.
+//
+// SECURITY: Manager.Stats()["stored_offsets"] is keyed "<stream>/<consumer>" — the
+// declared stream and consumer-group names, which are internal topology and usually
+// name the domain — and its values are live offsets, so differencing two polls of an
+// endpoint with no authentication and no IP allowlist yields the per-stream message
+// rate. Every other component publishes only counters here; this is the one whose
+// stats carry identifiers.
+//
+// Like publicDBStats, the redaction belongs at this render site rather than in
+// Manager.Stats() or the probe: the access-controlled <debug.pathprefix>/health-debug
+// renders the same details map and operators need the offsets there, so this copies
+// rather than mutating the caller's map.
+func publicStreamsStats(details map[string]any) map[string]any {
+	public := make(map[string]any, len(details))
+	maps.Copy(public, details)
+	delete(public, streamsOffsetsKey)
+	return public
+}
+
 // readyCheck handles the health check endpoint
 func (a *App) readyCheck(c server.HandlerContext) error {
 	ctx := c.RequestContext()
@@ -617,7 +651,7 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 	messagingStatus, messagingStats := componentReport(componentStatus, componentMessaging)
 	cacheStatus, cacheStats := componentReport(componentStatus, componentCache)
 
-	return c.JSON(http.StatusOK, map[string]any{
+	body := map[string]any{
 		statusKey:          readyStatus,
 		"time":             time.Now().Unix(),
 		componentDatabase:  dbStatus.Status,
@@ -631,5 +665,14 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 			"environment": a.cfg.App.Env,
 			"version":     a.cfg.App.Version,
 		},
-	})
+	}
+
+	// Streams are reported only where they exist: the probe is registered at
+	// runtime, so services that declare no streams keep the body they had.
+	if streamsStatus, streamsStats := componentReport(componentStatus, componentStreams); streamsStatus != disabledStatus {
+		body[componentStreams] = streamsStatus
+		body["streams_stats"] = publicStreamsStats(streamsStats)
+	}
+
+	return c.JSON(http.StatusOK, body)
 }

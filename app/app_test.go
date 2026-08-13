@@ -1309,7 +1309,7 @@ func TestMessagingDeclarationsBuiltOnceAndReused(t *testing.T) {
 	require.NoError(t, err)
 
 	// Declarations are built lazily during runtime preparation
-	require.NoError(t, fixture.app.prepareRuntime())
+	require.NoError(t, fixture.app.prepareRuntime(context.Background()))
 	assert.Equal(t, 1, counterModule.callCount, "DeclareMessaging should be called during runtime preparation")
 	assert.NotNil(t, fixture.app.messagingDeclarations, "messagingDeclarations should be built during runtime preparation")
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/observability"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -36,7 +37,10 @@ const (
 	componentDatabase  = "database"
 	componentMessaging = "messaging"
 	componentCache     = "cache"
-	errorKey           = "error"
+	componentStreams   = "streams"
+	// notReadyStatus marks a component that is reachable but not yet serving.
+	notReadyStatus = "not_ready"
+	errorKey       = "error"
 )
 
 var ErrNoTenantInContext = errors.New("no tenant in context")
@@ -84,6 +88,10 @@ type App struct {
 	messagingDeclarations *messaging.Declarations
 	messagingInitializer  *MessagingInitializer
 	connectionPreWarmer   *ConnectionPreWarmer
+
+	// streamsManager is created during prepareRuntime — never at build time — so
+	// its readiness probe and closer are registered there too (see streams_setup.go).
+	streamsManager *streams.Manager
 
 	closers      []namedCloser
 	healthProbes []Prober

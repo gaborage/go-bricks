@@ -14,6 +14,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -40,6 +41,14 @@ type RouteRegisterer interface {
 // during application startup.
 type MessagingDeclarer interface {
 	DeclareMessaging(decls *messaging.Declarations)
+}
+
+// StreamDeclarer is an optional interface that modules can implement to declare
+// RabbitMQ streams and consumers served over the native stream protocol.
+// Modules that implement this interface will have DeclareStreams called automatically
+// during application startup. Single-tenant only — see wiki/streams.md.
+type StreamDeclarer interface {
+	DeclareStreams(decls *streams.Declarations)
 }
 
 // GlobalMiddlewareRegisterer is an optional interface that modules can implement to
