@@ -52,7 +52,10 @@ Instead a per-consumer tracker records the last offset whose handler returned
 `messaging.streams.offsetstore.flushinterval` has elapsed since the last commit.
 There is no background goroutine: a stalled stream commits nothing, which is
 correct because nothing new was handled. `StopConsumers` performs a **final
-flush before closing each consumer**, so a clean shutdown replays nothing.
+flush before closing each consumer**, which narrows the replay window without
+closing it: nothing joins an in-flight `MessagesHandler` callback, so one that
+finishes after that flush leaves its offset unstored and replays on restart.
+Delivery is **at-least-once**, and handlers must be idempotent.
 
 At startup — and at SAC promotion — the framework queries the broker for the
 consumer name's stored offset and resumes at `stored + 1`; the declared `Start`
@@ -64,10 +67,12 @@ happened to spell its start position.
 
 Streams have no nack and no redelivery. On a handler error, or a recovered
 panic, the failure is logged and counted, the offset is not committed, and
-consumption continues. Because a later success commits a *higher* offset, the
-failed message is not seen again after a restart. This is inherent to the
-medium, and stating it plainly is better than a shim that pretends otherwise.
-Parking failed messages (the dead-letter analog) is named as future work.
+consumption continues. The skip becomes permanent only once a *later* success
+stores a **higher** offset; until that commit lands, a restart resumes from the
+last stored offset and replays the failed message along with everything after
+it. This is inherent to the medium, and stating it plainly is better than a shim
+that pretends otherwise. Parking failed messages (the dead-letter analog) is
+named as future work.
 
 ### Handlers run inline, sequentially — no worker pool
 
@@ -75,8 +80,11 @@ The AMQP lane defaults to `runtime.NumCPU() * 4` workers per consumer. This lane
 runs handlers inline on the client's callback. A stream is an ordered log: a
 worker pool would break that order *and* make a committed offset lie, because
 the offset only means "everything up to here was handled" when handling is
-sequential. Throughput scales out across processes (SAC, and later super-stream
-partitions), not with threads inside one.
+sequential. Parallelism therefore comes from super-stream partitions — each
+partition gets its own active consumer, and order is preserved within one —
+which is future work in this lane, not from threads inside a process. SAC is not
+that lever: exactly one group member consumes, so it buys failover, not
+throughput.
 
 ### Single-tenant only, enforced by config validation
 
@@ -112,8 +120,9 @@ Metrics reuse the AMQP instruments rather than minting a second meter.
 
 ## Consequences
 
-**Positive.** A restart resumes where handling actually got to, with no
-client-side offset store to operate. SAC gives failover without a second
+**Positive.** A restart resumes from the last stored offset, with no client-side
+offset store to operate — at-least-once, so anything handled after that offset
+is replayed and handlers must be idempotent. SAC gives failover without a second
 coordination mechanism. Declarations, lifecycle, readiness, logging, and OTel
 signals match the AMQP lane, so a stream consumer is not a foreign object in a
 GoBricks service.
@@ -126,7 +135,8 @@ versions, and the `go.work.sum` gate is where that lands.
 
 **Negative — throughput per consumer is bounded by one handler.** A slow handler
 is a slow stream. That is the price of ordered, truthful offsets, and the
-mitigation is horizontal, not threaded.
+mitigation is partitioning (future work), not threading — adding SAC members
+adds standbys, not consumers.
 
 **Negative — a failed message is lost to the consumer.** See above. Until
 parking exists, a handler that must not lose a message has to persist it itself.

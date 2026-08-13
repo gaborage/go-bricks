@@ -112,22 +112,27 @@ client's own auto-commit is deliberately not used: it advances the offset for
 messages the handler may have failed. A commit happens when either
 `countbeforestorage` successes have accumulated since the last one or
 `flushinterval` has elapsed since it, and once more — a **final flush** — when
-consumers stop, so a clean shutdown replays nothing.
+consumers stop. That final flush narrows the replay window but does not close
+it: nothing waits for an in-flight handler callback, so one that finishes after
+the flush is never committed. **Delivery is at-least-once — a message may be
+handled more than once, so handlers must be idempotent.**
 
 **A failed message is skipped, not redelivered.** Streams have no nack: on a
 handler error (or a recovered panic) the failure is logged and counted, the
-offset is not committed, and the next message is processed. A later success
-therefore commits a *higher* offset, so the failed message is not seen again
-after a restart. Handlers must be idempotent, and anything that must not be lost
-belongs in the handler's own durable store. Parking failed messages is future
-work ([ADR-059](adr_059_streams_consumption.md)).
+offset is not committed, and the next message is processed. The skip only sticks
+once a later success commits a *higher* offset; restart before that and the
+failed message comes back, along with everything after the last stored offset.
+Anything that must not be lost belongs in the handler's own durable store.
+Parking failed messages is future work
+([ADR-059](adr_059_streams_consumption.md)).
 
 **Handlers run inline and sequentially — there is no worker pool.** A stream is
 an ordered log: parallel handlers would break that order and make a committed
 offset claim that messages behind it were handled. This is the deliberate
-opposite of the AMQP lane's `NumCPU*4` default. Scale out with SAC across
-processes (or, from Phase 3, super-stream partitions), not with threads inside
-one.
+opposite of the AMQP lane's `NumCPU*4` default. Parallel consumption comes from
+super-stream partitions — one active consumer per partition, order preserved
+within each — which is Phase 3, not from threads inside one process. SAC is not
+a throughput lever; see below.
 
 **There is no handler timeout.** Unlike an HTTP handler, a stream handler gets no
 deadline: the context it receives is cancelled only by `StopConsumers`, so a
@@ -139,8 +144,11 @@ bound your own work (`context.WithTimeout` around the slow call).
 ## Single active consumer
 
 `SAC: true` makes the broker deliver to exactly one member of the consumer-name
-group at a time (RabbitMQ 3.11+). On promotion the framework re-resolves the
-stored offset, so a takeover resumes where the previous active member committed.
+group at a time (RabbitMQ 3.11+). This is **failover, not parallelism**: the
+other members are standbys promoted when the active one goes away, so more
+members buy availability, not throughput. On promotion the framework re-resolves
+the stored offset, so a takeover resumes where the previous active member
+committed.
 
 ## Observability
 

@@ -1148,15 +1148,18 @@ AMQP has no server-side offset store, no single active consumer, and no super st
 producer must reuse this manager's Environment rather than open a second connection path. The
 client's `SetAutoCommit` is deliberately unused because it advances offsets for *delivered*
 messages: instead the framework commits the last offset whose handler returned `nil`, on a
-count/interval policy plus a final flush before each consumer closes. A handler error or recovered
-panic skips the commit, so a later success commits a higher offset and the failed message is skipped
-rather than redelivered — streams have no nack. Handlers run **inline and sequentially**, the
-deliberate opposite of the AMQP lane's `NumCPU*4` pool, because a worker pool would break log order
-and make a committed offset claim work it had not finished. `messaging.streams.uri` is configured,
-never derived from `messaging.broker.url`, and `multitenant.enabled` beside it fails startup.
+count/interval policy plus a final flush before each consumer closes — a flush that narrows the
+replay window rather than closing it, since nothing joins an in-flight callback. A handler error or
+recovered panic skips the commit, so the failed message is skipped — streams have no nack — only
+once a later success commits a higher offset; restart before that and it replays. Handlers run
+**inline and sequentially**, the deliberate opposite of the AMQP lane's `NumCPU*4` pool, because a
+worker pool would break log order and make a committed offset claim work it had not finished.
+`messaging.streams.uri` is configured, never derived from `messaging.broker.url`, and
+`multitenant.enabled` beside it fails startup.
 
-**Key Benefits:** A restart resumes where handling actually got to, with no client-side offset store
-to operate, and SAC gives failover without a second coordination mechanism. **Watch:** a new
+**Key Benefits:** A restart resumes from the last stored offset with no client-side offset store to
+operate — delivery is at-least-once, so handlers must be idempotent — and SAC gives failover (not
+throughput) without a second coordination mechanism. **Watch:** a new
 dependency (snappy, lz4, murmur3, pkg/errors, a `klauspost/compress` bump) that Renovate will track
 and whose go.mod churns OTel versions; per-consumer throughput is bounded by one handler; a failed
 message is lost to the consumer until failed-message parking exists; and multi-tenant deployments
