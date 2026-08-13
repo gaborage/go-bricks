@@ -1137,6 +1137,35 @@ would restore only pointer identity and silently change meaning. This lane has n
 tracking, no single active consumer and no super streams; those are stream-protocol features and are
 ADR-059's subject. See [migrations.md](migrations.md) `[C59.2]`.
 
+### [ADR-059: Native Stream Consumption Commits Offsets Only After Successful Handling](adr_059_streams_consumption.md)
+
+**Date:** 2026-08-12 | **Status:** Accepted
+
+ADR-058 added the AMQP 0.9.1 stream-queue lane, which cannot reach what streams are for:
+AMQP has no server-side offset store, no single active consumer, and no super streams. The new
+`messaging/streams` package speaks the native stream protocol (port 5552) through
+`rabbitmq-stream-go-client` v1.8.3, for **consumption only** — publishing stays out, and a future
+producer must reuse this manager's Environment rather than open a second connection path. The
+client's `SetAutoCommit` is deliberately unused because it advances offsets for *delivered*
+messages: instead the framework commits the last offset whose handler returned `nil`, on a
+count/interval policy plus a final flush before each consumer closes — a flush that narrows the
+replay window rather than closing it, since nothing joins an in-flight callback. A handler error or
+recovered panic skips the commit, so the failed message is skipped — streams have no nack — only
+once a later success commits a higher offset; restart before that and it replays. Handlers run
+**inline and sequentially**, the deliberate opposite of the AMQP lane's `NumCPU*4` pool, because a
+worker pool would break log order and make a committed offset claim work it had not finished.
+`messaging.streams.uri` is configured, never derived from `messaging.broker.url`, and
+`multitenant.enabled` beside it fails startup.
+
+**Key Benefits:** A restart resumes from the last stored offset with no client-side offset store to
+operate — delivery is at-least-once, so handlers must be idempotent — and SAC gives failover (not
+throughput) without a second coordination mechanism. **Watch:** a new
+dependency (snappy, lz4, murmur3, pkg/errors, a `klauspost/compress` bump) that Renovate will track
+and whose go.mod churns OTel versions; per-consumer throughput is bounded by one handler; a failed
+message is lost to the consumer until failed-message parking exists; and multi-tenant deployments
+keep the AMQP lane. New keys: `messaging.streams.uri`, `messaging.streams.addressresolver.*`,
+`messaging.streams.offsetstore.*`. See [streams.md](streams.md).
+
 ### [ADR-060: `CompareAndDelete` Gives the Cache Interface a Safe Conditional Release](adr_060_cache_compare_and_delete.md)
 
 **Date:** 2026-08-12 | **Status:** Accepted

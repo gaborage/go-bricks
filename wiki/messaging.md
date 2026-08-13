@@ -328,7 +328,8 @@ Consumer concurrency is unchanged in this lane (see below), so a stream consumer
 that must preserve log order needs `Workers: 1`.
 
 Server-side offset tracking, single active consumer, and super streams need the
-native stream protocol (port 5552), which this lane does not cover.
+native stream protocol (port 5552), which this lane does not cover — see
+[streams.md](streams.md).
 
 ## Consumer Concurrency (v0.17+)
 
