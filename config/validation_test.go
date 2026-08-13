@@ -5499,3 +5499,220 @@ func TestDatabaseIdentityKeysMatchPredicate(t *testing.T) {
 		})
 	}
 }
+
+// streamsFixturePassword is a fixture value, not a credential — the leak assertions
+// below prove it never reaches an error string.
+const streamsFixturePassword = "fixture-pw"
+
+func TestValidateMessagingStreamsURIScheme(t *testing.T) {
+	tests := []struct {
+		name    string
+		uri     string
+		wantErr string
+	}{
+		{name: "unset_uri_is_valid", uri: ""},
+		{name: "plain_scheme_accepted", uri: "rabbitmq-stream://svc:" + streamsFixturePassword + "@broker:5552/%2f"},
+		{name: "tls_scheme_accepted", uri: "rabbitmq-stream+tls://svc:" + streamsFixturePassword + "@broker:5551/%2f"},
+		{
+			name:    "amqp_scheme_rejected",
+			uri:     "amqp://svc:" + streamsFixturePassword + "@broker:5672/",
+			wantErr: "'amqp' is not supported must be one of: rabbitmq-stream://, rabbitmq-stream+tls://",
+		},
+		{
+			name:    "schemeless_value_rejected",
+			uri:     "broker:5552",
+			wantErr: "is not supported",
+		},
+		{
+			name:    "unparseable_uri_rejected",
+			uri:     "rabbitmq-stream://svc:" + streamsFixturePassword + "@broker:55 52/",
+			wantErr: "messaging.streams.uri must be a valid URI",
+		},
+		{
+			// The realistic typo: a missing "//" parses as an opaque URI whose scheme
+			// still passes the allowlist, leaving nothing to dial.
+			name:    "missing_double_slash_rejected",
+			uri:     "rabbitmq-stream:broker:5552",
+			wantErr: "messaging.streams.uri must include a host",
+		},
+		{
+			name:    "host_less_uri_with_credentials_rejected",
+			uri:     "rabbitmq-stream:svc:" + streamsFixturePassword + "@/vhost",
+			wantErr: "messaging.streams.uri must include a host",
+		},
+		{
+			// url.URL.Host carries the port, so ":5552" is a non-empty Host with an
+			// empty Hostname: a Host == "" check passes it through with nothing to dial.
+			name:    "port_without_hostname_rejected",
+			uri:     "rabbitmq-stream://:5552/%2f",
+			wantErr: "messaging.streams.uri must include a host",
+		},
+		{
+			name:    "port_without_hostname_with_credentials_rejected",
+			uri:     "rabbitmq-stream://svc:" + streamsFixturePassword + "@:5552/%2f",
+			wantErr: "messaging.streams.uri must include a host",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &MessagingConfig{Streams: StreamsConfig{URI: tt.uri}}
+
+			err := validateMessaging(cfg, false)
+
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.NotContains(t, err.Error(), streamsFixturePassword,
+				"messaging.streams.uri carries credentials; they must never reach an error message")
+		})
+	}
+}
+
+func TestValidateMessagingStreamsRejectsMultiTenant(t *testing.T) {
+	cfg := &MessagingConfig{Streams: StreamsConfig{
+		URI: "rabbitmq-stream://svc:" + streamsFixturePassword + "@broker:5552/%2f",
+	}}
+
+	err := validateMessaging(cfg, true)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messaging.streams single-tenant only")
+	assert.Contains(t, err.Error(), "multi-tenant stream consumption is not yet supported")
+	assert.NotContains(t, err.Error(), streamsFixturePassword)
+}
+
+func TestValidateMessagingStreamsAllowsMultiTenantWithoutURI(t *testing.T) {
+	cfg := &MessagingConfig{}
+
+	require.NoError(t, validateMessaging(cfg, true),
+		"multi-tenant deployments that declare no streams stay valid")
+}
+
+func TestValidateMessagingStreamsAddressResolver(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolver StreamsAddressResolverConfig
+		wantErr  string
+	}{
+		{name: "both_unset", resolver: StreamsAddressResolverConfig{}},
+		{name: "both_set", resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: 5552}},
+		// Both ends of the accepted range are inclusive; without these the range
+		// check could be off by one at either edge and every other case still pass.
+		{name: "lowest_valid_port", resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: 1}},
+		{name: "highest_valid_port", resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: 65535}},
+		{
+			name:     "port_without_host",
+			resolver: StreamsAddressResolverConfig{Port: 5552},
+			wantErr:  "messaging.streams.addressresolver.host must be set",
+		},
+		{
+			name:     "host_without_port",
+			resolver: StreamsAddressResolverConfig{Host: "lb.example.com"},
+			wantErr:  "messaging.streams.addressresolver.port invalid value: 0 must be one of: 1-65535",
+		},
+		{
+			name:     "port_above_range",
+			resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: 65536},
+			wantErr:  "messaging.streams.addressresolver.port invalid value: 65536 must be one of: 1-65535",
+		},
+		{
+			name:     "negative_port",
+			resolver: StreamsAddressResolverConfig{Host: "lb.example.com", Port: -1},
+			wantErr:  "messaging.streams.addressresolver.port invalid value: -1 must be one of: 1-65535",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &MessagingConfig{Streams: StreamsConfig{AddressResolver: tt.resolver}}
+
+			err := validateMessaging(cfg, false)
+
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestApplyStreamsDefaults(t *testing.T) {
+	t.Run("zero_applies_defaults", func(t *testing.T) {
+		cfg := &MessagingConfig{}
+
+		require.NoError(t, validateMessaging(cfg, false))
+
+		assert.Equal(t, 500, cfg.Streams.OffsetStore.CountBeforeStorage)
+		assert.Equal(t, defaultStreamsOffsetCount, cfg.Streams.OffsetStore.CountBeforeStorage)
+		assert.Equal(t, 5*time.Second, cfg.Streams.OffsetStore.FlushInterval)
+		assert.Equal(t, defaultStreamsOffsetInterval, cfg.Streams.OffsetStore.FlushInterval)
+	})
+
+	t.Run("explicit_values_preserved", func(t *testing.T) {
+		cfg := &MessagingConfig{Streams: StreamsConfig{OffsetStore: StreamsOffsetStoreConfig{
+			CountBeforeStorage: 25,
+			FlushInterval:      750 * time.Millisecond,
+		}}}
+
+		require.NoError(t, validateMessaging(cfg, false))
+
+		assert.Equal(t, 25, cfg.Streams.OffsetStore.CountBeforeStorage)
+		assert.Equal(t, 750*time.Millisecond, cfg.Streams.OffsetStore.FlushInterval)
+	})
+
+	t.Run("negative_count_rejected", func(t *testing.T) {
+		cfg := &MessagingConfig{Streams: StreamsConfig{OffsetStore: StreamsOffsetStoreConfig{CountBeforeStorage: -1}}}
+
+		err := validateMessaging(cfg, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "messaging.streams.offsetstore.countbeforestorage must be non-negative")
+	})
+
+	t.Run("negative_interval_rejected", func(t *testing.T) {
+		cfg := &MessagingConfig{Streams: StreamsConfig{OffsetStore: StreamsOffsetStoreConfig{FlushInterval: -time.Second}}}
+
+		err := validateMessaging(cfg, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "messaging.streams.offsetstore.flushinterval must be non-negative")
+	})
+}
+
+// TestValidateStreamsRejectsMultiTenantEndToEnd proves the fail-fast reaches the
+// public Validate(cfg) entry point, not just the internal seam.
+func TestValidateStreamsRejectsMultiTenantEndToEnd(t *testing.T) {
+	cfg := &Config{
+		App:    createValidAppConfig(),
+		Server: createValidServerConfig(),
+		Log:    createValidLogConfig(),
+		Messaging: MessagingConfig{Streams: StreamsConfig{
+			URI: "rabbitmq-stream://svc:" + streamsFixturePassword + "@broker:5552/%2f",
+		}},
+		Multitenant: MultitenantConfig{
+			Enabled:  true,
+			Resolver: ResolverConfig{Type: "header", Header: testTenantHeader},
+			Tenants: map[string]TenantEntry{
+				"acme": {Database: DatabaseConfig{
+					Type:     PostgreSQL,
+					Host:     "acme.db",
+					Port:     5432,
+					Database: "acme",
+					Username: "acme_user",
+				}},
+			},
+		},
+		Source: SourceConfig{Type: SourceTypeStatic},
+	}
+
+	err := Validate(cfg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "single-tenant only")
+}

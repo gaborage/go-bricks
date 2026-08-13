@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -64,6 +65,15 @@ const (
 	defaultPublisherIdleTTLMultiTenant = 10 * time.Minute
 	defaultPublisherCleanupInterval    = 2 * time.Minute // Publisher-pool cleanup goroutine frequency
 	defaultMaxPublishAttempts          = 5               // Bounded publish retry attempts before giving up
+)
+
+// Native stream-protocol (messaging.streams.*) defaults
+const (
+	defaultStreamsOffsetCount    = 500             // Handled messages before a server-side offset commit
+	defaultStreamsOffsetInterval = 5 * time.Second // Elapsed time before a pending offset is committed
+
+	streamsURIScheme    = "rabbitmq-stream"
+	streamsURITLSScheme = "rabbitmq-stream+tls"
 )
 
 // Cache manager defaults
@@ -163,6 +173,8 @@ const (
 	fieldServerForwardedClientCertRequire = "server.forwardedclientcert.require"
 
 	fieldServerTrustedProxies = "server.trustedproxies"
+
+	fieldMessagingStreamsURI = "messaging.streams.uri"
 )
 
 func Validate(cfg *Config) error {
@@ -250,7 +262,82 @@ func validateDebug(cfg *DebugConfig) error {
 // Returns an error if any setting is invalid; otherwise nil.
 func validateMessaging(cfg *MessagingConfig, multitenant bool) error {
 	// Apply messaging defaults (reconnection, publisher pool)
-	return applyMessagingDefaults(cfg, multitenant)
+	if err := applyMessagingDefaults(cfg, multitenant); err != nil {
+		return err
+	}
+
+	return validateMessagingStreams(&cfg.Streams, multitenant)
+}
+
+// validateMessagingStreams validates the native stream-protocol block and applies
+// its offset-store defaults.
+//
+// SECURITY: messaging.streams.uri carries broker credentials, so no error raised
+// here echoes the URI — only the config key and the offending scheme reach the
+// message.
+func validateMessagingStreams(cfg *StreamsConfig, multitenant bool) error {
+	if err := applyStreamsDefaults(cfg); err != nil {
+		return err
+	}
+
+	if cfg.URI != "" {
+		// Multi-tenant stream consumption would need one Environment per tenant and a
+		// per-tenant stream URI leg; until that exists the combination fails loudly
+		// instead of consuming one tenant's streams on behalf of all of them.
+		if multitenant {
+			return NewValidationError("messaging.streams",
+				"single-tenant only; multi-tenant stream consumption is not yet supported")
+		}
+
+		u, err := url.Parse(cfg.URI)
+		if err != nil {
+			return NewValidationError(fieldMessagingStreamsURI, "must be a valid URI")
+		}
+		if u.Scheme != streamsURIScheme && u.Scheme != streamsURITLSScheme {
+			return NewInvalidFieldError(fieldMessagingStreamsURI,
+				fmt.Sprintf(errNotSupportedFmt, u.Scheme),
+				[]string{streamsURIScheme + "://", streamsURITLSScheme + "://"})
+		}
+		// Nothing to dial in either shape: a missing "//" parses opaque with no host,
+		// and "://:5552" gives a port-only Host that a Host == "" check lets through.
+		// Hostname() strips the port, so it catches both; neither names a host in the
+		// manager's connect error, which shows the fixed placeholder or a bare "@:5552".
+		if u.Hostname() == "" {
+			return NewValidationError(fieldMessagingStreamsURI,
+				"must include a host, e.g. "+streamsURIScheme+"://<user>:<password>@<host>:5552/%2f")
+		}
+	}
+
+	return validateStreamsAddressResolver(&cfg.AddressResolver)
+}
+
+// validateStreamsAddressResolver enforces the both-or-neither rule: a host with no
+// port cannot be dialed, and a port with no host silently does nothing.
+func validateStreamsAddressResolver(cfg *StreamsAddressResolverConfig) error {
+	if cfg.Host == "" && cfg.Port == 0 {
+		return nil
+	}
+	if cfg.Host == "" {
+		return NewValidationError("messaging.streams.addressresolver.host",
+			"must be set when messaging.streams.addressresolver.port is set")
+	}
+	if cfg.Port < 1 || cfg.Port > 65535 {
+		return NewInvalidFieldError("messaging.streams.addressresolver.port",
+			fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
+	}
+	return nil
+}
+
+// applyStreamsDefaults materializes the offset-store defaults with the same
+// "zero applies the default, negative is invalid" rule the rest of the messaging
+// block uses.
+func applyStreamsDefaults(cfg *StreamsConfig) error {
+	if err := applyNonNegativeDefault(&cfg.OffsetStore.CountBeforeStorage, defaultStreamsOffsetCount,
+		"messaging.streams.offsetstore.countbeforestorage"); err != nil {
+		return err
+	}
+	return applyNonNegativeDefault(&cfg.OffsetStore.FlushInterval, defaultStreamsOffsetInterval,
+		"messaging.streams.offsetstore.flushinterval")
 }
 
 // validateApp validates the application configuration in cfg.
