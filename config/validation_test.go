@@ -5540,6 +5540,18 @@ func TestValidateMessagingStreamsURIScheme(t *testing.T) {
 			uri:     "rabbitmq-stream:svc:" + streamsFixturePassword + "@/vhost",
 			wantErr: "messaging.streams.uri must include a host",
 		},
+		{
+			// url.URL.Host carries the port, so ":5552" is a non-empty Host with an
+			// empty Hostname: a Host == "" check passes it through with nothing to dial.
+			name:    "port_without_hostname_rejected",
+			uri:     "rabbitmq-stream://:5552/%2f",
+			wantErr: "messaging.streams.uri must include a host",
+		},
+		{
+			name:    "port_without_hostname_with_credentials_rejected",
+			uri:     "rabbitmq-stream://svc:" + streamsFixturePassword + "@:5552/%2f",
+			wantErr: "messaging.streams.uri must include a host",
+		},
 	}
 
 	for _, tt := range tests {
