@@ -74,9 +74,10 @@ var ErrInvalidPGIdentifier = errors.New("migration: PostgreSQL identifier reject
 // subprocess environment.
 var ErrPGRolePasswordHasControlChar = errors.New("migration: role password contains forbidden control character (CR/LF/NUL)")
 
-// Field name constants used in Validate error messages. Exported via
-// ErrInvalidPGIdentifier so callers (including tests) can assert which
-// field failed without coupling to the literal string.
+// Field name constants used in Validate error messages — the identifier
+// fields via ErrInvalidPGIdentifier, the password fields via
+// ErrPGRolePasswordHasControlChar — so callers (including tests) can assert
+// which field failed without coupling to the literal string.
 const (
 	pgRoleFieldSchema           = "Schema"
 	pgRoleFieldMigratorRole     = "MigratorRole"

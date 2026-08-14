@@ -2286,7 +2286,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   field, so a spec that used to provision successfully returns an error
   (C59.5).
 - build-caught: C59.2 C59.3 (via `go vet` — `go build` does not compile test files)
-- preflight: **two** actions. (i) If a proxy in front of the service sits on
+- preflight: **three** actions. (i) If a proxy in front of the service sits on
   a **public** address, set `server.trustedproxies` to its CIDR range before
   the bump — without an entry it is untrusted, so it is returned as the
   client and every caller behind it collapses into one bucket. (ii) Check
