@@ -107,6 +107,14 @@ the framework queries the broker for the consumer name's stored offset and
 resumes at `stored + 1`. `Start` only applies when the broker has no offset for
 that name, which makes restart behavior deterministic.
 
+**A failed offset query never falls back to `Start`.** If the broker cannot be
+asked — a connection or RPC failure, as opposed to simply having no offset — the
+framework resumes from the position this process last committed, or from the
+oldest retained message if it has committed none, and logs the choice at ERROR.
+Falling back to `Start` would mean attaching at `OffsetNext()` by default, i.e.
+past everything written since the last commit, and a stream has no redelivery to
+get it back. Replay is the affordable failure here; a silent skip is not.
+
 **Offsets are committed only AFTER a handler returned successfully.** The
 client's own auto-commit is deliberately not used: it advances the offset for
 messages the handler may have failed. A commit happens when either

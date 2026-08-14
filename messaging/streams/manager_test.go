@@ -66,6 +66,7 @@ const (
 	msgCloseConsumerFailed = "Failed to close stream consumer"
 	msgCloseEnvFailed      = "Failed to close stream environment after a failed start"
 	msgOffsetStoreFailed   = "Failed to store stream offset"
+	msgOffsetQueryFailed   = "Could not query the stored stream offset; attaching at a position that replays rather than skips"
 )
 
 // recordingLogger captures each event's level, attached error and terminal
@@ -94,17 +95,19 @@ func (l *recordingLogger) Fatal() logger.LogEvent                    { return l.
 func (l *recordingLogger) WithContext(_ any) logger.Logger           { return l }
 func (l *recordingLogger) WithFields(_ map[string]any) logger.Logger { return l }
 
-func (l *recordingLogger) warnMessages() []string {
+func (l *recordingLogger) messagesAt(level string) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	out := []string{}
 	for _, e := range l.events {
-		if e.level == "warn" {
+		if e.level == level {
 			out = append(out, e.msg)
 		}
 	}
 	return out
 }
+
+func (l *recordingLogger) warnMessages() []string { return l.messagesAt("warn") }
 
 // warnError reports the error text attached to the first WARN carrying msg. An
 // empty string with ok=true means the line was emitted with no error at all,
@@ -163,15 +166,78 @@ func testManager(t *testing.T) *Manager {
 	})
 }
 
-// attach wires a fake consumer into a manager as if Start had created it.
-func attach(m *Manager, handle consumerHandle, tracker *offsetTracker) {
+// attach wires a fake consumer into a manager as if Start had created it: one
+// stream, whose flush target is the handle itself — the plain lane's shape.
+func attach(m *Manager, handle *fakeHandle, tracker *offsetTracker) {
+	book := bookOf(tracker)
+	book.trackerFor(testStream)
 	m.consumers = append(m.consumers, &runningConsumer{
-		stream:  testStream,
-		name:    testConsumerName,
-		handle:  handle,
-		tracker: tracker,
+		stream:    testStream,
+		name:      testConsumerName,
+		handle:    handle,
+		offsets:   book,
+		storerFor: func(string) offsetStorer { return handle },
 	})
 	m.started = true
+}
+
+// attachPartitioned wires one consumer that tracks two streams, the shape a super
+// stream produces: one book, one flush target per partition.
+// countBeforeStorage decides whether the two recorded offsets are still pending
+// (a high threshold) or already committed (1).
+func attachPartitioned(t *testing.T, m *Manager, countBeforeStorage int) (handle *fakeHandle, storer0, storer1 *fakeStorer) {
+	t.Helper()
+	handle = &fakeHandle{status: ha.StatusOpen}
+	storer0, storer1 = &fakeStorer{}, &fakeStorer{}
+	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(countBeforeStorage, time.Hour, nil) })
+	require.NoError(t, book.trackerFor(testPartition0).record(11, nil, storer0))
+	require.NoError(t, book.trackerFor(testPartition1).record(501, nil, storer1))
+
+	m.consumers = append(m.consumers, &runningConsumer{
+		stream:  testSuperStream,
+		name:    testConsumerName,
+		handle:  handle,
+		offsets: book,
+		storerFor: storerByStream(map[string]offsetStorer{
+			testPartition0: storer0,
+			testPartition1: storer1,
+		}),
+	})
+	m.started = true
+	return handle, storer0, storer1
+}
+
+// TestManagerStopConsumersFlushesEveryTrackedStream extends the shutdown flush to
+// a consumer that tracks more than one stream: every partition's pending offset is
+// committed through the storer that reaches it, and only then is the consumer
+// closed.
+func TestManagerStopConsumersFlushesEveryTrackedStream(t *testing.T) {
+	m := testManager(t)
+	handle, storer0, storer1 := attachPartitioned(t, m, 1000)
+	require.Empty(t, storer0.offsets(), "the premise: both offsets are still pending")
+
+	m.StopConsumers()
+
+	assert.Equal(t, []int64{11}, storer0.offsets())
+	assert.Equal(t, []int64{501}, storer1.offsets())
+	assert.Equal(t, []string{"close"}, handle.recorded(), "the handle itself stores nothing")
+	assert.Empty(t, m.consumers)
+}
+
+// TestManagerStatsKeysOffsetsByTrackedStream pins the /ready body's key: a position
+// is reported under the stream it belongs to, which for a super stream is the
+// partition rather than the declared name.
+func TestManagerStatsKeysOffsetsByTrackedStream(t *testing.T) {
+	m := testManager(t)
+	attachPartitioned(t, m, 1)
+
+	stats := m.Stats()
+
+	assert.Equal(t, map[string]int64{
+		testPartition0 + "/" + testConsumerName: 11,
+		testPartition1 + "/" + testConsumerName: 501,
+	}, stats["stored_offsets"])
+	assert.Equal(t, 1, stats["consumers"], "the two partitions are one consumer")
 }
 
 func TestNewManagerAppliesOffsetStoreDefaults(t *testing.T) {
@@ -401,13 +467,20 @@ func TestManagerReady(t *testing.T) {
 	}
 }
 
+// TestOffsetSpecFor covers the four ways a position is chosen. Only a MISSING
+// offset may fall back to the declared start: any other query failure answered
+// with a start position would skip — fatally so for the zero-value OffsetNext,
+// which attaches past everything written since the last commit, and streams have
+// no redelivery to get it back.
 func TestOffsetSpecFor(t *testing.T) {
 	tests := []struct {
-		name     string
-		stored   int64
-		queryErr error
-		start    OffsetStart
-		want     stream.OffsetSpecification
+		name        string
+		stored      int64
+		queryErr    error
+		start       OffsetStart
+		localOffset int64
+		hasLocal    bool
+		want        stream.OffsetSpecification
 	}{
 		{
 			name:   "stored_offset_resumes_one_past_it",
@@ -422,16 +495,65 @@ func TestOffsetSpecFor(t *testing.T) {
 			want:     stream.OffsetSpecification{}.First(),
 		},
 		{
-			name:     "query_failure_uses_declared_start",
+			name:        "query_failure_resumes_from_the_local_commit",
+			queryErr:    errors.New("boom"),
+			start:       OffsetNext(),
+			localOffset: 41,
+			hasLocal:    true,
+			want:        stream.OffsetSpecification{}.Offset(42),
+		},
+		{
+			name:     "query_failure_without_a_local_commit_replays_from_first",
+			queryErr: errors.New("boom"),
+			start:    OffsetNext(),
+			want:     stream.OffsetSpecification{}.First(),
+		},
+		{
+			name:     "query_failure_never_answers_with_the_declared_start",
 			queryErr: errors.New("boom"),
 			start:    OffsetLast(),
-			want:     stream.OffsetSpecification{}.Last(),
+			want:     stream.OffsetSpecification{}.First(),
+		},
+		{
+			name:        "a_stored_offset_still_wins_over_the_local_commit",
+			stored:      90,
+			localOffset: 5,
+			hasLocal:    true,
+			start:       OffsetFirst(),
+			want:        stream.OffsetSpecification{}.Offset(91),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, offsetSpecFor(tt.stored, tt.queryErr, tt.start))
+			assert.Equal(t, tt.want, offsetSpecFor(tt.stored, tt.queryErr, tt.start, tt.localOffset, tt.hasLocal))
+		})
+	}
+}
+
+// TestManagerReportOffsetQuery pins the level and the silence either side of it: a
+// failed query changes where a consumer attaches, so it is an ERROR, while the
+// routine missing-offset case must not add noise to every first run.
+func TestManagerReportOffsetQuery(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantError []string
+	}{
+		{name: "successful_query_is_silent", err: nil},
+		{name: "missing_offset_is_silent", err: stream.OffsetNotFoundError},
+		{name: "query_failure_is_reported_at_error", err: errors.New("boom"), wantError: []string{msgOffsetQueryFailed}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := &recordingLogger{}
+			m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+
+			m.reportOffsetQuery(tt.err, testConsumerName, testPartition0, false)
+
+			assert.ElementsMatch(t, tt.wantError, log.messagesAt("error"))
+			assert.Empty(t, log.messagesAt("warn"), "a lost position is not a warning")
 		})
 	}
 }

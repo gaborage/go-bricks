@@ -45,22 +45,29 @@ type ManagerOptions struct {
 	Logger logger.Logger
 }
 
-// consumerHandle is the subset of *ha.ReliableConsumer the manager drives. It
-// keeps stop/flush bookkeeping testable without a broker.
+// consumerHandle is the subset of the client's reliable consumers the manager
+// drives. It keeps stop bookkeeping testable without a broker, and it is
+// deliberately narrower than offset storage: *ha.ReliableSuperStreamConsumer has
+// no StoreCustomOffset at all, so the flush target is a per-stream function
+// instead (see runningConsumer.storerFor).
 type consumerHandle interface {
-	offsetStorer
 	Close() error
 	GetStatus() int
 }
 
 // runningConsumer pairs a live client consumer with the offset bookkeeping its
 // runner owns. The runner itself is retained by the client through the
-// messagesHandler callback, so only the tracker is kept here.
+// messagesHandler callback, so only the book is kept here.
 type runningConsumer struct {
-	stream  string
-	name    string
-	handle  consumerHandle
-	tracker *offsetTracker
+	stream string
+	name   string
+	handle consumerHandle
+	// offsets tracks one committed position per stream this consumer reads.
+	offsets *offsetBook
+	// storerFor resolves the flush target of one of those streams. Only the
+	// shutdown flush needs it; every in-flight commit goes through the consumer
+	// the client hands to the delivery callback.
+	storerFor func(streamName string) offsetStorer
 }
 
 // Manager owns the single stream-protocol Environment of a single-tenant service
@@ -204,7 +211,7 @@ func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, de
 	runner := &consumerRunner{
 		name:    decl.Name,
 		handler: decl.Handler,
-		tracker: newOffsetTracker(m.opts.OffsetStoreCount, m.opts.OffsetStoreInterval, nil),
+		offsets: m.newOffsetBook(),
 		log:     m.log,
 		tracer:  otel.Tracer(tracerName),
 		baseCtx: ctx,
@@ -212,7 +219,7 @@ func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, de
 
 	opts := stream.NewConsumerOptions().
 		SetConsumerName(decl.Name).
-		SetOffset(m.resolveOffset(env, decl.Name, decl.Stream, decl.Start))
+		SetOffset(m.resolveOffset(env, decl.Name, decl.Stream, decl.Start, runner.offsets))
 
 	if decl.SAC {
 		// The promotion callback resolves the offset again: another group member
@@ -227,7 +234,7 @@ func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, de
 		// holds it across a blocking consumer Close.
 		opts = opts.SetSingleActiveConsumer(stream.NewSingleActiveConsumer(
 			func(streamName string, _ bool) stream.OffsetSpecification {
-				return m.resolveOffset(env, decl.Name, streamName, decl.Start)
+				return m.resolveOffset(env, decl.Name, streamName, decl.Start, runner.offsets)
 			}))
 	}
 
@@ -237,10 +244,11 @@ func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, de
 	}
 
 	m.consumers = append(m.consumers, &runningConsumer{
-		stream:  decl.Stream,
-		name:    decl.Name,
-		handle:  consumer,
-		tracker: runner.tracker,
+		stream:    decl.Stream,
+		name:      decl.Name,
+		handle:    consumer,
+		offsets:   runner.offsets,
+		storerFor: func(string) offsetStorer { return consumer },
 	})
 
 	m.log.Info().
@@ -252,22 +260,43 @@ func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, de
 	return nil
 }
 
+// newOffsetBook builds the offset bookkeeping of one consumer, with the manager's
+// commit policy applied to every stream it ends up tracking.
+func (m *Manager) newOffsetBook() *offsetBook {
+	return newOffsetBook(func() *offsetTracker {
+		return newOffsetTracker(m.opts.OffsetStoreCount, m.opts.OffsetStoreInterval, nil)
+	})
+}
+
 // resolveOffset asks the broker for the consumer's stored offset and falls back
 // to the declared start position when it has none. A stored offset always wins,
-// which is what makes restart behavior deterministic.
+// which is what makes restart behavior deterministic. committed is the consumer's
+// own bookkeeping, consulted only when the broker cannot be asked.
 //
 // The environment is a parameter, never m.env, so that no call path — including
 // the SAC promotion callback the client invokes from its own goroutine — can read
-// that guarded field without m.mu. m.log is immutable after NewManager.
-func (m *Manager) resolveOffset(env *stream.Environment, consumerName, streamName string, start OffsetStart) stream.OffsetSpecification {
+// that guarded field without m.mu. m.log is immutable after NewManager, and the
+// book takes only its own lock, so neither is a route back to m.mu.
+func (m *Manager) resolveOffset(env *stream.Environment, consumerName, streamName string, start OffsetStart, committed *offsetBook) stream.OffsetSpecification {
 	stored, err := env.QueryOffset(consumerName, streamName)
-	if err != nil && !errors.Is(err, stream.OffsetNotFoundError) {
-		m.log.Warn().Err(err).
-			Str(logFieldStream, streamName).
-			Str(logFieldConsumer, consumerName).
-			Msg("Could not query stored stream offset; using the declared start position")
+	localOffset, hasLocal := committed.stored()[streamName]
+	m.reportOffsetQuery(err, consumerName, streamName, hasLocal)
+	return offsetSpecFor(stored, err, start, localOffset, hasLocal)
+}
+
+// reportOffsetQuery reports a failed offset query at ERROR. A missing offset is
+// routine first-run behavior and stays silent; anything else means the attach
+// position was chosen without the broker's answer, which replays messages — a
+// data-affecting event an operator should see, not a warning among warnings.
+func (m *Manager) reportOffsetQuery(err error, consumerName, streamName string, hasLocal bool) {
+	if err == nil || errors.Is(err, stream.OffsetNotFoundError) {
+		return
 	}
-	return offsetSpecFor(stored, err, start)
+	m.log.Error().Err(err).
+		Str(logFieldStream, streamName).
+		Str(logFieldConsumer, consumerName).
+		Bool("resumed_from_local_commit", hasLocal).
+		Msg("Could not query the stored stream offset; attaching at a position that replays rather than skips")
 }
 
 // safeEnvError strips the URI out of an environment-construction failure.
@@ -285,12 +314,33 @@ func safeEnvError(err error) error {
 	return err
 }
 
-// offsetSpecFor picks between a stored offset and the declared start position.
-func offsetSpecFor(stored int64, queryErr error, start OffsetStart) stream.OffsetSpecification {
-	if queryErr != nil {
+// offsetSpecFor picks the position to attach at, given the broker's answer and
+// whatever this process has committed itself.
+//
+// Only a MISSING offset falls back to the declared start. Any other query failure
+// must not: with the zero-value Start meaning "next message written from now", a
+// transient RPC error would attach past everything written since the last commit,
+// and streams have no redelivery to get it back. Delivery is at-least-once and
+// handlers are documented idempotent, so replaying is the affordable mistake and
+// skipping is not.
+func offsetSpecFor(stored int64, queryErr error, start OffsetStart, localOffset int64, hasLocal bool) stream.OffsetSpecification {
+	switch {
+	case queryErr == nil:
+		return stream.OffsetSpecification{}.Offset(stored + 1)
+	case errors.Is(queryErr, stream.OffsetNotFoundError):
+		// Nothing was ever committed under this name: a first run, which is exactly
+		// what the declared start position is for.
 		return start.specification()
+	case hasLocal:
+		// The broker could not be asked, but this process committed a position for
+		// this stream itself. It is no older than the broker's, so it is the closest
+		// truth available.
+		return stream.OffsetSpecification{}.Offset(localOffset + 1)
+	default:
+		// Nothing is known at all. Replaying what retention still holds is bounded
+		// and idempotent; guessing forward is neither.
+		return stream.OffsetSpecification{}.First()
 	}
-	return stream.OffsetSpecification{}.Offset(stored + 1)
 }
 
 // streamOptionsFrom renders a StreamSpec as client stream options. Zero-value
@@ -336,9 +386,9 @@ func (m *Manager) stopLocked() {
 	}
 
 	for _, rc := range m.consumers {
-		if err := rc.tracker.flush(rc.handle); err != nil {
-			m.log.Warn().Err(err).
-				Str(logFieldStream, rc.stream).
+		for _, failure := range rc.offsets.flush(rc.storerFor) {
+			m.log.Warn().Err(failure.err).
+				Str(logFieldStream, failure.stream).
 				Str(logFieldConsumer, rc.name).
 				Msg("Failed to flush stream offset on shutdown")
 		}
@@ -390,10 +440,12 @@ func (m *Manager) Stats() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Keyed by the stream a position belongs to, which for a super stream is the
+	// partition rather than the declared name.
 	offsets := make(map[string]int64, len(m.consumers))
 	for _, rc := range m.consumers {
-		if offset, ok := rc.tracker.lastStored(); ok {
-			offsets[rc.stream+"/"+rc.name] = offset
+		for streamName, offset := range rc.offsets.stored() {
+			offsets[streamName+"/"+rc.name] = offset
 		}
 	}
 
