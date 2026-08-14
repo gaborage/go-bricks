@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -379,13 +380,26 @@ func TestStreamsManagerSuperStreamDistributesPartitionsIntegration(t *testing.T)
 	stopManager(t, m1)
 	handedOver := secondMember.count()
 
-	publishAcrossPartitions(t, opts, bodiesFrom("msg", 30, 15))
-	require.Eventually(t, func() bool { return secondMember.count() >= handedOver+15 },
-		itWaitTimeout, itPollInterval, "the survivor is promoted on the orphaned partitions")
+	newBodies := bodiesFrom("msg", 30, 15)
+	publishAcrossPartitions(t, opts, newBodies)
+	// Gate on the new bodies themselves: a raw count is satisfied by 15 replays alone.
+	require.Eventually(t, func() bool {
+		_, seen := secondMember.snapshot()
+		for _, body := range newBodies {
+			if !slices.Contains(seen[handedOver:], body) {
+				return false
+			}
+		}
+		return true
+	}, itWaitTimeout, itPollInterval, "the survivor is promoted on the orphaned partitions")
 
 	_, afterTakeover := secondMember.snapshot()
-	assert.ElementsMatch(t, bodiesFrom("msg", 30, 15), afterTakeover[handedOver:],
-		"promotion resumes at the stored offsets, so nothing already handled is replayed")
+	// Not exact equality: the leaver commits over its consumer connection while the
+	// survivor's promotion queries the locator, an ordering window ADR-059 accepts as replay.
+	assert.Subset(t, afterTakeover[handedOver:], newBodies,
+		"promotion resumes the orphaned partitions and delivers everything published after it")
+	assert.Subset(t, bodiesFrom("msg", 0, 45), afterTakeover[handedOver:],
+		"any extra is a replay of an already-published body, never a fabricated one")
 }
 
 // TestStreamsManagerSuperStreamPartitionMismatchIsSilentIntegration pins an
