@@ -65,13 +65,25 @@ type PGRoleSpec struct {
 // fails the safe-identifier check enforced by ProvisionPGRoles.
 var ErrInvalidPGIdentifier = errors.New("migration: PostgreSQL identifier rejected")
 
-// Field name constants used in Validate error messages. Exported via
-// ErrInvalidPGIdentifier so callers (including tests) can assert which
-// field failed without coupling to the literal string.
+// ErrPGRolePasswordHasControlChar is returned by Validate when a role password
+// contains CR, LF, or NUL. Such a password cannot be carried log-safely through
+// the provisioning path: summarizeStmt collapses a failing statement to its
+// first line, so an embedded newline would split a redacted summary apart.
+// PostgreSQL itself accepts these passwords — the rejection is ours, at this
+// API's boundary. Mirrors ErrEnvFieldHasControlChar, which guards the Flyway
+// subprocess environment.
+var ErrPGRolePasswordHasControlChar = errors.New("migration: role password contains forbidden control character (CR/LF/NUL)")
+
+// Field name constants used in Validate error messages — the identifier
+// fields via ErrInvalidPGIdentifier, the password fields via
+// ErrPGRolePasswordHasControlChar — so callers (including tests) can assert
+// which field failed without coupling to the literal string.
 const (
-	pgRoleFieldSchema       = "Schema"
-	pgRoleFieldMigratorRole = "MigratorRole"
-	pgRoleFieldRuntimeRole  = "RuntimeRole"
+	pgRoleFieldSchema           = "Schema"
+	pgRoleFieldMigratorRole     = "MigratorRole"
+	pgRoleFieldRuntimeRole      = "RuntimeRole"
+	pgRoleFieldMigratorPassword = "MigratorPassword"
+	pgRoleFieldRuntimePassword  = "RuntimePassword"
 )
 
 // safePGIdentifier matches the conservative ASCII subset of PostgreSQL
@@ -83,8 +95,10 @@ const (
 var safePGIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
 
 // Validate reports whether the spec's identifiers pass the safe-identifier
-// check and the two roles differ. Returns ErrInvalidPGIdentifier wrapped
-// with the offending field name (and value) on failure.
+// check, the two roles differ, and neither password carries CR, LF, or NUL.
+// Returns ErrInvalidPGIdentifier wrapped with the offending field name (and
+// value) for an identifier failure, or ErrPGRolePasswordHasControlChar wrapped
+// with the offending field name — never the value — for a password failure.
 func (s *PGRoleSpec) Validate() error {
 	for _, f := range []struct{ name, value string }{
 		{pgRoleFieldSchema, s.Schema},
@@ -97,6 +111,14 @@ func (s *PGRoleSpec) Validate() error {
 	}
 	if s.MigratorRole == s.RuntimeRole {
 		return fmt.Errorf("%w: MigratorRole and RuntimeRole must differ", ErrInvalidPGIdentifier)
+	}
+	for _, f := range []struct{ name, value string }{
+		{pgRoleFieldMigratorPassword, s.MigratorPassword},
+		{pgRoleFieldRuntimePassword, s.RuntimePassword},
+	} {
+		if strings.ContainsAny(f.value, "\r\n\x00") {
+			return fmt.Errorf("%w: %s", ErrPGRolePasswordHasControlChar, f.name)
+		}
 	}
 	return nil
 }
@@ -262,16 +284,17 @@ func quotePGStringLiteral(s string) string {
 // chars, for use in provisioning error messages. Keeps the wrapping error
 // short while still naming the failing statement.
 //
-// Redacts any `PASSWORD '<literal>'` clause before truncation so a failure
-// on ALTER ROLE ... PASSWORD doesn't leak the resolved secret into the
-// returned error string (which downstream callers may log).
+// Redacts any `PASSWORD '<literal>'` clause before the first-line split and
+// truncation so a failure on ALTER ROLE ... PASSWORD doesn't leak the resolved
+// secret into the returned error string (which downstream callers may log).
+// Order matters: a password containing a newline would otherwise leave the
+// first-line fragment ending mid-literal, which the pattern cannot match.
 func summarizeStmt(stmt string) string {
-	first := stmt
-	if idx := strings.IndexByte(stmt, '\n'); idx > 0 {
-		first = stmt[:idx]
+	first := pgPasswordLiteralPattern.ReplaceAllString(stmt, "${1}'[REDACTED]'")
+	if idx := strings.IndexByte(first, '\n'); idx > 0 {
+		first = first[:idx]
 	}
 	first = strings.TrimSpace(first)
-	first = pgPasswordLiteralPattern.ReplaceAllString(first, "${1}'[REDACTED]'")
 	if len(first) > 80 {
 		first = first[:80] + "..."
 	}

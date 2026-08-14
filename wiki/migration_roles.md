@@ -91,14 +91,20 @@ names across databases would need to revisit this.
 ## Using the helper
 
 ```go
-import "github.com/gaborage/go-bricks/migration"
+import (
+    "fmt"
+    "os"
+    "strings"
+
+    "github.com/gaborage/go-bricks/migration"
+)
 
 spec := &migration.PGRoleSpec{
     Schema:           "tenant_a",
     MigratorRole:     "migrator",
-    MigratorPassword: os.Getenv("MIGRATOR_PASSWORD"), // optional, omit if managed externally
+    MigratorPassword: strings.TrimSpace(os.Getenv("MIGRATOR_PASSWORD")), // optional, omit if managed externally
     RuntimeRole:      "tenant_a_app",
-    RuntimePassword:  os.Getenv("TENANT_A_RUNTIME_PASSWORD"),
+    RuntimePassword:  strings.TrimSpace(os.Getenv("TENANT_A_RUNTIME_PASSWORD")),
 }
 
 // db is an *sql.DB authenticated as a role with CREATEROLE — typically the
@@ -107,6 +113,14 @@ if err := migration.ProvisionPGRoles(ctx, db, spec); err != nil {
     return fmt.Errorf("provision tenant %q: %w", spec.Schema, err)
 }
 ```
+
+The `strings.TrimSpace` calls are not decorative: `Validate` rejects a
+password containing CR, LF, or NUL with `ErrPGRolePasswordHasControlChar`,
+naming the offending field and never its value, and a trailing newline is
+what a file-sourced or `echo`-piped secret routinely carries. PostgreSQL
+itself accepts such passwords — the restriction is the framework's, taken
+because the provisioning path cannot carry them log-safely (see
+[ADR-061](adr_061_role_password_control_chars.md)).
 
 All operations are idempotent — rerunning with the same spec is a no-op
 except that `MigratorPassword` / `RuntimePassword` (when non-empty) are
@@ -152,7 +166,8 @@ deployment. Treat its credentials accordingly:
 - **Rotation:** Pass the new password as `MigratorPassword` on the next
   provisioning call. The helper emits `ALTER ROLE ... PASSWORD ...`
   unconditionally when the field is non-empty, so rerunning with a rotated
-  secret is sufficient.
+  secret is sufficient — trim it first if it came from a file, a mounted
+  secret, or a command substitution, since a stray CR/LF/NUL is rejected.
 
 For the AWS Secrets Manager naming convention used by `go-bricks-migrate`,
 see [multi_tenant_migration.md](multi_tenant_migration.md#aws-secrets-manager-convention).

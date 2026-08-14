@@ -286,3 +286,108 @@ func TestSummarizeStmtRedactsPasswordLiteral(t *testing.T) {
 		})
 	}
 }
+
+// TestSummarizeStmtRedactsMultilinePassword pins the redact-before-split
+// ordering. A password carrying a newline produces a multi-line ALTER ROLE
+// statement; splitting first would leave a fragment ending mid-literal that
+// the closing-quote-anchored pattern cannot match, leaking the first line of
+// the secret verbatim into the wrapped error.
+func TestSummarizeStmtRedactsMultilinePassword(t *testing.T) {
+	stmt := `ALTER ROLE "tenant_a_app" PASSWORD ` + quotePGStringLiteral("line1\nline2")
+	got := summarizeStmt(stmt)
+	assert.Contains(t, got, "[REDACTED]")
+	assert.NotContains(t, got, "line1")
+	assert.NotContains(t, got, "line2")
+	assert.NotContains(t, got, "\n", "the summary must stay single-line")
+}
+
+// TestSummarizeStmtLeadingNewlineKeepsStatement covers a newline at index 0:
+// the idx > 0 guard must decline to split, since slicing [:0] would discard
+// the whole statement and return an empty summary.
+func TestSummarizeStmtLeadingNewlineKeepsStatement(t *testing.T) {
+	got := summarizeStmt("\n" + `ALTER ROLE "x" PASSWORD 'p'`)
+	assert.Equal(t, `ALTER ROLE "x" PASSWORD '[REDACTED]'`, got)
+}
+
+// TestSummarizeStmtTruncatesMultilineRedactedStatement verifies truncation
+// still applies once a multi-line statement collapses into a single redacted
+// line longer than the 80-char budget.
+func TestSummarizeStmtTruncatesMultilineRedactedStatement(t *testing.T) {
+	ident := strings.Repeat("r", 63)
+	stmt := `ALTER ROLE "` + ident + `" PASSWORD ` + quotePGStringLiteral("sec\nret")
+	got := summarizeStmt(stmt)
+	assert.Len(t, got, 83)
+	assert.True(t, strings.HasSuffix(got, "..."))
+	assert.NotContains(t, got, "sec")
+	assert.NotContains(t, got, "ret")
+}
+
+// TestPGRoleSpecValidateRejectsControlCharPasswords pins the CR/LF/NUL
+// rejection on both password fields. PostgreSQL accepts such passwords; the
+// restriction is this API's, because the provisioning path cannot carry them
+// log-safely.
+func TestPGRoleSpecValidateRejectsControlCharPasswords(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     *PGRoleSpec
+		field    string
+		badValue string
+	}{
+		{
+			name:     "migrator_password_lf",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", MigratorPassword: "bad\npw"},
+			field:    pgRoleFieldMigratorPassword,
+			badValue: "bad\npw",
+		},
+		{
+			name:     "migrator_password_cr",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", MigratorPassword: "bad\rpw"},
+			field:    pgRoleFieldMigratorPassword,
+			badValue: "bad\rpw",
+		},
+		{
+			name:     "migrator_password_nul",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", MigratorPassword: "bad\x00pw"},
+			field:    pgRoleFieldMigratorPassword,
+			badValue: "bad\x00pw",
+		},
+		{
+			name:     "runtime_password_lf",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", RuntimePassword: "bad\npw"},
+			field:    pgRoleFieldRuntimePassword,
+			badValue: "bad\npw",
+		},
+		{
+			name:     "runtime_password_cr",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", RuntimePassword: "bad\rpw"},
+			field:    pgRoleFieldRuntimePassword,
+			badValue: "bad\rpw",
+		},
+		{
+			name:     "runtime_password_nul",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", RuntimePassword: "bad\x00pw"},
+			field:    pgRoleFieldRuntimePassword,
+			badValue: "bad\x00pw",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.spec.Validate()
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrPGRolePasswordHasControlChar),
+				"want wrapped ErrPGRolePasswordHasControlChar, got %v", err)
+			assert.Contains(t, err.Error(), tt.field)
+			assert.NotContains(t, err.Error(), tt.badValue,
+				"the error must name the field, never the password value")
+		})
+	}
+
+	clean := &PGRoleSpec{
+		Schema: "s", MigratorRole: "m", RuntimeRole: "r",
+		MigratorPassword: "clean-migrator-pw", RuntimePassword: "clean-runtime-pw",
+	}
+	assert.NoError(t, clean.Validate(), "control-char-free passwords stay valid")
+
+	empty := &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r"}
+	assert.NoError(t, empty.Validate(), "empty passwords stay valid — they emit no ALTER ROLE statement")
+}
