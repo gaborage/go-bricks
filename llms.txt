@@ -2966,12 +2966,10 @@ queue := decls.DeclareStreamQueue("orders.events.stream", &messaging.StreamQueue
 For **server-side offset tracking** (a restart resumes from the last stored offset), single
 active consumer, or super streams, use the native stream protocol instead: implement
 `app.StreamDeclarer` and set `messaging.streams.uri`. Handlers run inline and sequentially
-within a stream. A handler returning nil advances the *tracked* position only; that
-position is stored on the broker once `messaging.streams.offsetstore.countbeforestorage`
-successes have accumulated or `messaging.streams.offsetstore.flushinterval` has elapsed,
-plus a final flush when consumers stop — so a restart replays everything handled since the
-last stored offset. Delivery is at-least-once, so make handlers idempotent. See
-[wiki/streams.md](wiki/streams.md):
+within a stream. A handler returning nil advances the *tracked* position, and commits are
+batched — so a restart replays everything handled since the last stored offset. Delivery is
+at-least-once, so make handlers idempotent. See
+[wiki/streams.md#offset-semantics](wiki/streams.md#offset-semantics):
 
 ```go
 func (m *Module) DeclareStreams(decls *streams.Declarations) {
@@ -2990,10 +2988,9 @@ For a **super stream** (a stream partitioned into `<name>-0`…`<name>-(n-1)`, R
 3.13+), declare it with a partition count and consume it as one group. There is no `SAC`
 field — super-stream consumption is always a single active consumer group, which is what
 restores a stored offset per partition. Within one `Name`, each partition has exactly one
-active member at a time and the broker spreads partitions across the group, so members
-beyond the partition count are standbys and a promoted member resolves that partition's
-stored offset. Offsets, order and the commit policy are per-partition, and the handler is
-called **concurrently across partitions**, so it must be goroutine-safe:
+active member. Offsets, order and the commit policy are per-partition, and the handler is
+called **concurrently across partitions**, so it must be goroutine-safe — see
+[wiki/streams.md#super-streams](wiki/streams.md#super-streams):
 
 ```go
 decls.DeclareSuperStream("orders", 3, &streams.StreamSpec{MaxLengthBytes: 5 << 30})
