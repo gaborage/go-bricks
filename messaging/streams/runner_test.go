@@ -229,6 +229,59 @@ func TestOffsetTrackerRetriesAfterStoreFailure(t *testing.T) {
 	assert.Equal(t, []int64{21}, storer.offsets(), "the next message retries the commit")
 }
 
+// TestOffsetTrackerReportsAMissingStorer pins the guard on both commit paths: a
+// nil storer must surface as an error, never a nil dereference.
+func TestOffsetTrackerReportsAMissingStorer(t *testing.T) {
+	tests := []struct {
+		name   string
+		commit func(tracker *offsetTracker) error
+	}{
+		{
+			name:   "record_reaching_the_count_threshold",
+			commit: func(tracker *offsetTracker) error { return tracker.record(5, nil, nil) },
+		},
+		{
+			name:   "flush_on_shutdown",
+			commit: func(tracker *offsetTracker) error { return tracker.flush(nil) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clock := newFakeClock()
+			tracker := newOffsetTracker(2, time.Hour, clock.Now)
+			// Leaves one offset pending, so both paths reach the commit.
+			require.NoError(t, tracker.record(4, nil, &fakeStorer{}))
+
+			var err error
+			require.NotPanics(t, func() { err = tt.commit(tracker) })
+
+			require.ErrorIs(t, err, errNoOffsetStorer)
+			_, ok := tracker.lastStored()
+			assert.False(t, ok, "a refused commit stores no offset")
+		})
+	}
+}
+
+// TestOffsetBookFlushReportsAStreamWithNoStorer is the realistic shape of that
+// disagreement: the book holds a tracker for every delivered stream while the
+// resolver knows only some, and the shutdown flush must name the odd one out
+// instead of taking the process down with it.
+func TestOffsetBookFlushReportsAStreamWithNoStorer(t *testing.T) {
+	clock := newFakeClock()
+	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, clock.Now) })
+	landing := &fakeStorer{}
+	require.NoError(t, book.trackerFor(testPartition0).record(7, nil, landing))
+	require.NoError(t, book.trackerFor(testPartition1).record(42, nil, landing))
+
+	failures := book.flush(storerByStream(map[string]offsetStorer{testPartition1: landing}))
+
+	require.Len(t, failures, 1)
+	assert.Equal(t, testPartition0, failures[0].stream)
+	assert.ErrorIs(t, failures[0].err, errNoOffsetStorer)
+	assert.Equal(t, []int64{42}, landing.offsets(), "the resolved partition still commits")
+}
+
 func TestOffsetTrackerLastStored(t *testing.T) {
 	clock := newFakeClock()
 	tracker := newOffsetTracker(1, time.Hour, clock.Now)

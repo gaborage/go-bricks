@@ -2,6 +2,7 @@ package streams
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"runtime/debug"
@@ -38,6 +39,12 @@ const (
 type offsetStorer interface {
 	StoreCustomOffset(offset int64) error
 }
+
+// errNoOffsetStorer reports a commit that had no storer to reach the broker
+// through. Trackers are created per delivered stream while the storer comes from
+// a separate resolver, so the two can disagree about the stream set; the commit is
+// then refused rather than dereferenced, which would panic on the shutdown flush.
+var errNoOffsetStorer = errors.New("no offset storer for this stream; offset not committed")
 
 // offsetTracker owns the commit-after-success policy for one consumer.
 //
@@ -107,6 +114,9 @@ func (t *offsetTracker) flush(store offsetStorer) error {
 // storeLocked commits the last successfully handled offset. On failure the
 // pending counter is deliberately left intact so the next message retries.
 func (t *offsetTracker) storeLocked(store offsetStorer) error {
+	if store == nil {
+		return errNoOffsetStorer
+	}
 	if err := store.StoreCustomOffset(t.lastHandledOK); err != nil {
 		return err
 	}
