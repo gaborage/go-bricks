@@ -212,6 +212,15 @@ func (m *Module) DeclareStreams(decls *streams.Declarations) {
   topology nor fails — the service simply keeps consuming the partitions that
   exist. Change the count by declaring a new super stream, not by editing the
   old one.
+- **Trap: a locator outage during promotion can stall one partition, and
+  `/ready` will not say so.** Resolving a partition's offset asks the broker,
+  and the client's locator reconnect is uncapped — it retries forever, with no
+  timeout to give up on. That call runs on the partition's own read loop, so
+  while it is stuck the broker never gets its promotion answer and that
+  partition consumes nothing. The consumer's status field is untouched by a
+  blocked read loop, so readiness still reports healthy. Alert on
+  **consumed-message rate per partition**, not on `/ready` alone; a restart
+  clears it. Blast radius is one partition per stall.
 - Producer-side routing (which partition a message lands on) is out of scope
   here, as all stream publishing is. Publish through the AMQP lane or a
   dedicated client; the partition a message reached is on `msg.Stream`.

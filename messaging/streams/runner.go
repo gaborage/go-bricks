@@ -221,11 +221,15 @@ type consumerRunner struct {
 	baseCtx context.Context // NOSONAR S8242: no parameter to pass it through - the vendor callback signature is fixed
 }
 
-// messagesHandler is the callback handed to the stream client. The client
-// invokes it sequentially per consumer, and the framework keeps it that way:
-// handlers run inline with no worker pool, because a stream is an ordered log
-// and any parallelism would both break that order and make a committed offset
-// claim messages behind it were handled.
+// messagesHandler is the callback handed to the stream client. The client invokes
+// it sequentially per STREAM — which for a super stream means per partition, where
+// one runner serves every partition and the client calls this from one goroutine
+// each, concurrently. The framework keeps that shape: handlers run inline with no
+// worker pool, because a stream is an ordered log and parallelism *within* one
+// would break that order and make a committed offset claim messages behind it were
+// handled. Anything reachable from here that is not per-stream state must
+// therefore be safe for concurrent use — the offset book is, precisely because it
+// hands each stream its own tracker.
 func (r *consumerRunner) messagesHandler(consumerContext stream.ConsumerContext, message *amqp.Message) {
 	consumer := consumerContext.Consumer
 	r.deliver(consumer.GetStreamName(), consumer.GetOffset(), message, consumer)

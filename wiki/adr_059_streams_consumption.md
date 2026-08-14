@@ -178,6 +178,32 @@ partition consumer that delivered the last message may already have been replace
 by a reconnect. It goes through `Environment.StoreOffset(consumer, partition,
 offset)` instead, on the locator connection.
 
+That splits commits across two connections, and the broker applies whichever
+arrives last: a delivery goroutine's in-flight commit and the shutdown flush can
+land out of order even though the tracker's lock issues them in order, so a stop
+racing a final delivery may leave the older position stored and replay from it on
+restart. It costs duplicate work, not correctness — delivery is at-least-once and
+handlers are idempotent — so it is accepted rather than serialized.
+
+### Known limitation: an uncapped locator reconnect can stall one partition
+
+`Environment.QueryOffset` — which the promotion callback calls to resolve a
+partition's position — routes through the client's `maybeReconnectLocator`, a
+`for err != nil { sleep; connect }` loop with no cap, no deadline and no context
+(`pkg/stream/environment.go`). The callback runs on that partition's read loop, so
+a locator outage during a promotion blocks it: the broker never receives the
+consumer-update response and the partition consumes nothing until the process
+restarts. `ReliableSuperStreamConsumer.GetStatus` reads a stored field that a
+blocked read loop never updates, so `Manager.Ready` — and `/ready` — stay green
+over it.
+
+This is accepted rather than fixed: bounding a vendor call that accepts neither
+context nor timeout means either reimplementing the offset query or wrapping it in
+a goroutine whose abandonment leaks, and the client's `MaxConsumersPerClient: 1`
+holds the blast radius to a single partition. The operational answer is to alert on
+consumed-message rate per partition instead of readiness alone, which
+[wiki/streams.md](streams.md) documents as a trap.
+
 ### Declaring a super stream needs RabbitMQ 3.13+, and a mismatch is silent
 
 The client gates `DeclareSuperStream` on `is313OrMore`; plain-stream SAC needs
