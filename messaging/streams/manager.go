@@ -427,10 +427,19 @@ func offsetSpecFor(stored int64, queryErr error, start OffsetStart, localOffset 
 	}
 }
 
-// streamOptionsFrom renders a StreamSpec as client stream options. Zero-value
+// retentionOptions is the setter triple both client option types expose, each
+// returning its own type. The self-reference on T is what lets one renderer serve
+// both, so a StreamSpec field cannot reach the broker on one kind and be dropped on
+// the other.
+type retentionOptions[T any] interface {
+	SetMaxAge(time.Duration) T
+	SetMaxLengthBytes(*stream.ByteCapacity) T
+	SetMaxSegmentSizeBytes(*stream.ByteCapacity) T
+}
+
+// applyRetention renders a StreamSpec onto either client option type. Zero-value
 // fields are left unset so the broker's own defaults apply.
-func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
-	opts := stream.NewStreamOptions()
+func applyRetention[T retentionOptions[T]](opts T, spec *StreamSpec) T {
 	if spec == nil {
 		return opts
 	}
@@ -446,24 +455,15 @@ func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
 	return opts
 }
 
+// streamOptionsFrom renders a StreamSpec as client stream options.
+func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
+	return applyRetention(stream.NewStreamOptions(), spec)
+}
+
 // partitionOptionsFrom renders a StreamSpec as super-stream partition options; the
-// retention applies to every partition. Zero-value fields are left unset so the
-// broker's own defaults apply.
+// retention applies to every partition.
 func partitionOptionsFrom(partitions int, spec *StreamSpec) *stream.PartitionsOptions {
-	opts := stream.NewPartitionsOptions(partitions)
-	if spec == nil {
-		return opts
-	}
-	if spec.MaxAge > 0 {
-		opts = opts.SetMaxAge(clampedMaxAge(spec.MaxAge))
-	}
-	if spec.MaxLengthBytes > 0 {
-		opts = opts.SetMaxLengthBytes(stream.ByteCapacity{}.B(spec.MaxLengthBytes))
-	}
-	if spec.MaxSegmentSizeBytes > 0 {
-		opts = opts.SetMaxSegmentSizeBytes(stream.ByteCapacity{}.B(spec.MaxSegmentSizeBytes))
-	}
-	return opts
+	return applyRetention(stream.NewPartitionsOptions(partitions), spec)
 }
 
 // clampedMaxAge renders a retention age the way both client renderers and the AMQP
