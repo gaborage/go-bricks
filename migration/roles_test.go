@@ -328,39 +328,46 @@ func TestSummarizeStmtTruncatesMultilineRedactedStatement(t *testing.T) {
 // log-safely.
 func TestPGRoleSpecValidateRejectsControlCharPasswords(t *testing.T) {
 	tests := []struct {
-		name  string
-		spec  *PGRoleSpec
-		field string
+		name     string
+		spec     *PGRoleSpec
+		field    string
+		badValue string
 	}{
 		{
-			name:  "migrator_password_lf",
-			spec:  &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", MigratorPassword: "bad\npw"},
-			field: pgRoleFieldMigratorPassword,
+			name:     "migrator_password_lf",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", MigratorPassword: "bad\npw"},
+			field:    pgRoleFieldMigratorPassword,
+			badValue: "bad\npw",
 		},
 		{
-			name:  "migrator_password_cr",
-			spec:  &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", MigratorPassword: "bad\rpw"},
-			field: pgRoleFieldMigratorPassword,
+			name:     "migrator_password_cr",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", MigratorPassword: "bad\rpw"},
+			field:    pgRoleFieldMigratorPassword,
+			badValue: "bad\rpw",
 		},
 		{
-			name:  "migrator_password_nul",
-			spec:  &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", MigratorPassword: "bad\x00pw"},
-			field: pgRoleFieldMigratorPassword,
+			name:     "migrator_password_nul",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", MigratorPassword: "bad\x00pw"},
+			field:    pgRoleFieldMigratorPassword,
+			badValue: "bad\x00pw",
 		},
 		{
-			name:  "runtime_password_lf",
-			spec:  &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", RuntimePassword: "bad\npw"},
-			field: pgRoleFieldRuntimePassword,
+			name:     "runtime_password_lf",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", RuntimePassword: "bad\npw"},
+			field:    pgRoleFieldRuntimePassword,
+			badValue: "bad\npw",
 		},
 		{
-			name:  "runtime_password_cr",
-			spec:  &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", RuntimePassword: "bad\rpw"},
-			field: pgRoleFieldRuntimePassword,
+			name:     "runtime_password_cr",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", RuntimePassword: "bad\rpw"},
+			field:    pgRoleFieldRuntimePassword,
+			badValue: "bad\rpw",
 		},
 		{
-			name:  "runtime_password_nul",
-			spec:  &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", RuntimePassword: "bad\x00pw"},
-			field: pgRoleFieldRuntimePassword,
+			name:     "runtime_password_nul",
+			spec:     &PGRoleSpec{Schema: "s", MigratorRole: "m", RuntimeRole: "r", RuntimePassword: "bad\x00pw"},
+			field:    pgRoleFieldRuntimePassword,
+			badValue: "bad\x00pw",
 		},
 	}
 	for _, tt := range tests {
@@ -370,7 +377,7 @@ func TestPGRoleSpecValidateRejectsControlCharPasswords(t *testing.T) {
 			assert.True(t, errors.Is(err, ErrPGRolePasswordHasControlChar),
 				"want wrapped ErrPGRolePasswordHasControlChar, got %v", err)
 			assert.Contains(t, err.Error(), tt.field)
-			assert.NotContains(t, err.Error(), tt.spec.MigratorPassword+tt.spec.RuntimePassword,
+			assert.NotContains(t, err.Error(), tt.badValue,
 				"the error must name the field, never the password value")
 		})
 	}

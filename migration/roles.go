@@ -290,10 +290,9 @@ func quotePGStringLiteral(s string) string {
 // Order matters: a password containing a newline would otherwise leave the
 // first-line fragment ending mid-literal, which the pattern cannot match.
 func summarizeStmt(stmt string) string {
-	redacted := pgPasswordLiteralPattern.ReplaceAllString(stmt, "${1}'[REDACTED]'")
-	first := redacted
-	if idx := strings.IndexByte(redacted, '\n'); idx > 0 {
-		first = redacted[:idx]
+	first := pgPasswordLiteralPattern.ReplaceAllString(stmt, "${1}'[REDACTED]'")
+	if idx := strings.IndexByte(first, '\n'); idx > 0 {
+		first = first[:idx]
 	}
 	first = strings.TrimSpace(first)
 	if len(first) > 80 {

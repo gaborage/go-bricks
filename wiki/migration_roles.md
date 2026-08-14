@@ -91,7 +91,12 @@ names across databases would need to revisit this.
 ## Using the helper
 
 ```go
-import "github.com/gaborage/go-bricks/migration"
+import (
+    "os"
+    "strings"
+
+    "github.com/gaborage/go-bricks/migration"
+)
 
 spec := &migration.PGRoleSpec{
     Schema:           "tenant_a",
