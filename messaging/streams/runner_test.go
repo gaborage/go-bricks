@@ -21,6 +21,7 @@ var errHandlerFailed = errors.New("handler failed")
 const (
 	testPartition0 = testSuperStream + "-0"
 	testPartition1 = testSuperStream + "-1"
+	testPartition2 = testSuperStream + "-2"
 )
 
 // fakeStorer records every offset handed to the broker, so tests assert exact
@@ -29,11 +30,17 @@ type fakeStorer struct {
 	mu      sync.Mutex
 	stored  []int64
 	failNow bool
+	// failErr, when set, is returned instead of the shared "store failed" error, so
+	// a test running two failing storers can tell their failures apart.
+	failErr error
 }
 
 func (f *fakeStorer) StoreCustomOffset(offset int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failErr != nil {
+		return f.failErr
+	}
 	if f.failNow {
 		return errors.New("store failed")
 	}
@@ -359,24 +366,41 @@ func TestOffsetBookFlushCommitsEveryStream(t *testing.T) {
 	assert.Equal(t, []int64{42}, storer1.offsets())
 }
 
-// TestOffsetBookFlushReportsEveryFailure pins that one partition's failed commit
-// does not cost the others theirs, and that each failure names its own stream.
+// TestOffsetBookFlushReportsEveryFailure pins that a failed commit does not stop
+// the loop: with TWO of three partitions refusing, both are reported — not just
+// whichever the flush reached first — each failure carries its own partition's
+// error, and the healthy partition still commits. Two failures are what make this
+// discriminating; a single one cannot tell "reports every failure" apart from
+// "stops at the first". flush ranges over a map, so the report order is deliberately
+// not asserted.
 func TestOffsetBookFlushReportsEveryFailure(t *testing.T) {
 	clock := newFakeClock()
 	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, clock.Now) })
-	failing, landing := &fakeStorer{failNow: true}, &fakeStorer{}
-	// Below the count threshold, so neither commit is attempted before the flush.
-	require.NoError(t, book.trackerFor(testPartition0).record(7, nil, failing))
+	errPartition0, errPartition2 := errors.New("partition 0 store failed"), errors.New("partition 2 store failed")
+	failing0, failing2 := &fakeStorer{failErr: errPartition0}, &fakeStorer{failErr: errPartition2}
+	landing := &fakeStorer{}
+	// Below the count threshold, so no commit is attempted before the flush.
+	require.NoError(t, book.trackerFor(testPartition0).record(7, nil, failing0))
 	require.NoError(t, book.trackerFor(testPartition1).record(42, nil, landing))
+	require.NoError(t, book.trackerFor(testPartition2).record(99, nil, failing2))
 
 	failures := book.flush(storerByStream(map[string]offsetStorer{
-		testPartition0: failing,
+		testPartition0: failing0,
 		testPartition1: landing,
+		testPartition2: failing2,
 	}))
 
-	require.Len(t, failures, 1)
-	assert.Equal(t, testPartition0, failures[0].stream)
-	assert.EqualError(t, failures[0].err, "store failed")
+	require.Len(t, failures, 2, "the first failure must not end the loop")
+	reported := make([]string, 0, len(failures))
+	errByStream := make(map[string]error, len(failures))
+	for _, failure := range failures {
+		reported = append(reported, failure.stream)
+		errByStream[failure.stream] = failure.err
+	}
+	assert.ElementsMatch(t, []string{testPartition0, testPartition2}, reported,
+		"both failing partitions are named, in whatever order the map yielded them")
+	assert.ErrorIs(t, errByStream[testPartition0], errPartition0, "each failure carries its own partition's error")
+	assert.ErrorIs(t, errByStream[testPartition2], errPartition2)
 	assert.Equal(t, []int64{42}, landing.offsets(), "the healthy partition still commits")
 }
 
