@@ -163,15 +163,78 @@ func testManager(t *testing.T) *Manager {
 	})
 }
 
-// attach wires a fake consumer into a manager as if Start had created it.
-func attach(m *Manager, handle consumerHandle, tracker *offsetTracker) {
+// attach wires a fake consumer into a manager as if Start had created it: one
+// stream, whose flush target is the handle itself — the plain lane's shape.
+func attach(m *Manager, handle *fakeHandle, tracker *offsetTracker) {
+	book := bookOf(tracker)
+	book.trackerFor(testStream)
 	m.consumers = append(m.consumers, &runningConsumer{
-		stream:  testStream,
-		name:    testConsumerName,
-		handle:  handle,
-		tracker: tracker,
+		stream:    testStream,
+		name:      testConsumerName,
+		handle:    handle,
+		offsets:   book,
+		storerFor: func(string) offsetStorer { return handle },
 	})
 	m.started = true
+}
+
+// attachPartitioned wires one consumer that tracks two streams, the shape a super
+// stream produces: one book, one flush target per partition.
+// countBeforeStorage decides whether the two recorded offsets are still pending
+// (a high threshold) or already committed (1).
+func attachPartitioned(t *testing.T, m *Manager, countBeforeStorage int) (handle *fakeHandle, storer0, storer1 *fakeStorer) {
+	t.Helper()
+	handle = &fakeHandle{status: ha.StatusOpen}
+	storer0, storer1 = &fakeStorer{}, &fakeStorer{}
+	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(countBeforeStorage, time.Hour, nil) })
+	require.NoError(t, book.trackerFor(testPartition0).record(11, nil, storer0))
+	require.NoError(t, book.trackerFor(testPartition1).record(501, nil, storer1))
+
+	m.consumers = append(m.consumers, &runningConsumer{
+		stream:  testSuperStream,
+		name:    testConsumerName,
+		handle:  handle,
+		offsets: book,
+		storerFor: storerByStream(map[string]offsetStorer{
+			testPartition0: storer0,
+			testPartition1: storer1,
+		}),
+	})
+	m.started = true
+	return handle, storer0, storer1
+}
+
+// TestManagerStopConsumersFlushesEveryTrackedStream extends the shutdown flush to
+// a consumer that tracks more than one stream: every partition's pending offset is
+// committed through the storer that reaches it, and only then is the consumer
+// closed.
+func TestManagerStopConsumersFlushesEveryTrackedStream(t *testing.T) {
+	m := testManager(t)
+	handle, storer0, storer1 := attachPartitioned(t, m, 1000)
+	require.Empty(t, storer0.offsets(), "the premise: both offsets are still pending")
+
+	m.StopConsumers()
+
+	assert.Equal(t, []int64{11}, storer0.offsets())
+	assert.Equal(t, []int64{501}, storer1.offsets())
+	assert.Equal(t, []string{"close"}, handle.recorded(), "the handle itself stores nothing")
+	assert.Empty(t, m.consumers)
+}
+
+// TestManagerStatsKeysOffsetsByTrackedStream pins the /ready body's key: a position
+// is reported under the stream it belongs to, which for a super stream is the
+// partition rather than the declared name.
+func TestManagerStatsKeysOffsetsByTrackedStream(t *testing.T) {
+	m := testManager(t)
+	attachPartitioned(t, m, 1)
+
+	stats := m.Stats()
+
+	assert.Equal(t, map[string]int64{
+		testPartition0 + "/" + testConsumerName: 11,
+		testPartition1 + "/" + testConsumerName: 501,
+	}, stats["stored_offsets"])
+	assert.Equal(t, 1, stats["consumers"], "the two partitions are one consumer")
 }
 
 func TestNewManagerAppliesOffsetStoreDefaults(t *testing.T) {

@@ -17,6 +17,12 @@ import (
 
 var errHandlerFailed = errors.New("handler failed")
 
+// The broker names a super stream's partitions "<name>-<index>".
+const (
+	testPartition0 = testSuperStream + "-0"
+	testPartition1 = testSuperStream + "-1"
+)
+
 // fakeStorer records every offset handed to the broker, so tests assert exact
 // stored values rather than "was called".
 type fakeStorer struct {
@@ -74,11 +80,35 @@ func newTestRunnerWithLogger(t *testing.T, handler Handler, tracker *offsetTrack
 	return &consumerRunner{
 		name:    testConsumerName,
 		handler: handler,
-		tracker: tracker,
+		offsets: bookOf(tracker),
 		log:     log,
 		tracer:  otel.Tracer(tracerName),
 		baseCtx: context.Background(),
 	}
+}
+
+// bookOf wraps one prepared tracker in a book that hands it out for every stream,
+// which is how a plain single-stream consumer's bookkeeping behaves.
+func bookOf(tracker *offsetTracker) *offsetBook {
+	return newOffsetBook(func() *offsetTracker { return tracker })
+}
+
+func newTestRunnerWithBook(t *testing.T, handler Handler, book *offsetBook) *consumerRunner {
+	t.Helper()
+	return &consumerRunner{
+		name:    testConsumerName,
+		handler: handler,
+		offsets: book,
+		log:     logger.New("error", false),
+		tracer:  otel.Tracer(tracerName),
+		baseCtx: context.Background(),
+	}
+}
+
+// storerByStream resolves a flush target per stream, standing in for the manager's
+// runningConsumer.storerFor.
+func storerByStream(storers map[string]offsetStorer) func(string) offsetStorer {
+	return func(streamName string) offsetStorer { return storers[streamName] }
 }
 
 func amqpMessage(body string) *amqp.Message {
@@ -220,6 +250,93 @@ func TestOffsetTrackerDefaultsToWallClock(t *testing.T) {
 
 	require.NotNil(t, tracker.now)
 	assert.WithinDuration(t, time.Now(), tracker.lastStoreAt, time.Minute)
+}
+
+func TestOffsetBookKeepsOneTrackerPerStream(t *testing.T) {
+	created := 0
+	book := newOffsetBook(func() *offsetTracker {
+		created++
+		return newOffsetTracker(1, time.Hour, nil)
+	})
+
+	first := book.trackerFor(testPartition0)
+	again := book.trackerFor(testPartition0)
+	other := book.trackerFor(testPartition1)
+
+	assert.Same(t, first, again, "a stream keeps its tracker across deliveries")
+	assert.NotSame(t, first, other, "a second stream gets its own tracker")
+	assert.Equal(t, 2, created, "trackers are created on first delivery, not per message")
+}
+
+// TestOffsetBookIsolatesPartitionOffsets is the reason the book exists. Two
+// partitions are delivered alternately with a count threshold of 2: each commits
+// its OWN second message. Sharing one tracker would instead commit on the second
+// and fourth delivery overall, so the offsets would land on the wrong partitions.
+func TestOffsetBookIsolatesPartitionOffsets(t *testing.T) {
+	clock := newFakeClock()
+	runner := newTestRunnerWithBook(t, func(context.Context, *Message) error { return nil },
+		newOffsetBook(func() *offsetTracker { return newOffsetTracker(2, time.Hour, clock.Now) }))
+	storer0, storer1 := &fakeStorer{}, &fakeStorer{}
+
+	runner.deliver(testPartition0, 10, amqpMessage("a"), storer0)
+	runner.deliver(testPartition1, 500, amqpMessage("b"), storer1)
+	runner.deliver(testPartition0, 11, amqpMessage("c"), storer0)
+	runner.deliver(testPartition1, 501, amqpMessage("d"), storer1)
+
+	assert.Equal(t, []int64{11}, storer0.offsets(), "partition 0 commits its own second offset")
+	assert.Equal(t, []int64{501}, storer1.offsets(), "partition 1 commits its own second offset")
+	assert.Equal(t, map[string]int64{testPartition0: 11, testPartition1: 501}, runner.offsets.stored())
+}
+
+func TestOffsetBookFlushCommitsEveryStream(t *testing.T) {
+	clock := newFakeClock()
+	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, clock.Now) })
+	storer0, storer1 := &fakeStorer{}, &fakeStorer{}
+	require.NoError(t, book.trackerFor(testPartition0).record(7, nil, storer0))
+	require.NoError(t, book.trackerFor(testPartition1).record(42, nil, storer1))
+	require.Empty(t, storer0.offsets(), "the premise: nothing committed before the flush")
+
+	failures := book.flush(storerByStream(map[string]offsetStorer{
+		testPartition0: storer0,
+		testPartition1: storer1,
+	}))
+
+	assert.Empty(t, failures)
+	assert.Equal(t, []int64{7}, storer0.offsets())
+	assert.Equal(t, []int64{42}, storer1.offsets())
+}
+
+// TestOffsetBookFlushReportsEveryFailure pins that one partition's failed commit
+// does not cost the others theirs, and that each failure names its own stream.
+func TestOffsetBookFlushReportsEveryFailure(t *testing.T) {
+	clock := newFakeClock()
+	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, clock.Now) })
+	failing, landing := &fakeStorer{failNow: true}, &fakeStorer{}
+	// Below the count threshold, so neither commit is attempted before the flush.
+	require.NoError(t, book.trackerFor(testPartition0).record(7, nil, failing))
+	require.NoError(t, book.trackerFor(testPartition1).record(42, nil, landing))
+
+	failures := book.flush(storerByStream(map[string]offsetStorer{
+		testPartition0: failing,
+		testPartition1: landing,
+	}))
+
+	require.Len(t, failures, 1)
+	assert.Equal(t, testPartition0, failures[0].stream)
+	assert.EqualError(t, failures[0].err, "store failed")
+	assert.Equal(t, []int64{42}, landing.offsets(), "the healthy partition still commits")
+}
+
+func TestOffsetBookStoredOmitsStreamsWithoutACommit(t *testing.T) {
+	clock := newFakeClock()
+	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, clock.Now) })
+	storer := &fakeStorer{}
+	book.trackerFor(testPartition0)
+	require.NoError(t, book.trackerFor(testPartition1).record(9, nil, storer))
+	require.NoError(t, book.trackerFor(testPartition1).flush(storer))
+
+	assert.Equal(t, map[string]int64{testPartition1: 9}, book.stored(),
+		"a partition that never committed contributes no position")
 }
 
 func TestRunnerDeliverPassesMessageToHandler(t *testing.T) {
