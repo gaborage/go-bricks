@@ -232,11 +232,17 @@ func (publisherDeclaringModule) DeclareMessaging(decls *messaging.Declarations) 
 // fail-fast check without standing up the full bootstrap pipeline.
 func newLifecycleCheckApp(t *testing.T, cfg *config.Config) *App {
 	t.Helper()
-	testLogger := logger.New("info", false)
-	deps := &ModuleDeps{Logger: testLogger, Config: cfg}
+	return newLifecycleCheckAppWithLogger(t, cfg, logger.New("info", false))
+}
+
+// newLifecycleCheckAppWithLogger is newLifecycleCheckApp with the logger supplied,
+// so tests can assert on what prepareRuntime itself emits.
+func newLifecycleCheckAppWithLogger(t *testing.T, cfg *config.Config, log logger.Logger) *App {
+	t.Helper()
+	deps := &ModuleDeps{Logger: log, Config: cfg}
 	return &App{
 		cfg:      cfg,
-		logger:   testLogger,
+		logger:   log,
 		registry: NewModuleRegistry(deps),
 		server:   newMockServer(),
 		closers:  []namedCloser{},
@@ -322,6 +328,72 @@ func TestPrepareRuntimePropagatesContextToPreWarm(t *testing.T) {
 	defer provider.mu.Unlock()
 	assert.Equal(t, "from-prepare-runtime", provider.seen,
 		"prepareRuntime must pass its own context to PreWarmSingleTenant; context.Background() drops the sentinel")
+}
+
+const (
+	preWarmWarnMsg = "Pre-warming completed with warnings"
+	// preWarmFailureMarker travels from the failing config resolution into the WARN's
+	// attached error, so the emission is attributable to pre-warming and nothing else.
+	preWarmFailureMarker = "prewarm-config-resolution-refused"
+)
+
+// staticDBConfigProvider resolves a usable single-tenant config, or fails with err
+// when set — the two outcomes that make PreWarmSingleTenant succeed or return an error.
+type staticDBConfigProvider struct{ err error }
+
+func (p staticDBConfigProvider) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &config.DatabaseConfig{Type: dbTypePostgres}, nil
+}
+
+// TestPrepareRuntimeWarnsOnlyWhenPreWarmFails pins both directions of prepareRuntime's
+// pre-warm error check: a failed pre-warm must surface as a WARN carrying the cause,
+// and a clean one must stay silent. Startup succeeds either way — pre-warming is
+// advisory, never fatal.
+func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
+	tests := []struct {
+		configErr error
+		name      string
+		wantWarn  bool
+	}{
+		{name: "failed_prewarm_warns", configErr: errors.New(preWarmFailureMarker), wantWarn: true},
+		{name: "successful_prewarm_stays_silent", configErr: nil, wantWarn: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+				Multitenant: config.MultitenantConfig{Enabled: false},
+			}
+			rec := &recLogger{}
+			a := newLifecycleCheckAppWithLogger(t, cfg, rec)
+
+			connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+				return dbtesting.NewTestDB(dbTypePostgres), nil
+			}
+			dbManager := database.NewDbManager(staticDBConfigProvider{err: tt.configErr}, rec,
+				database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, connector)
+			t.Cleanup(func() { _ = dbManager.Close() })
+
+			a.dbManager = dbManager
+			a.connectionPreWarmer = NewConnectionPreWarmer(rec, dbManager, nil)
+
+			require.NoError(t, a.prepareRuntime(context.Background()),
+				"pre-warming trouble is advisory: startup completes either way")
+
+			event, emitted := loggedEvent(rec, preWarmWarnMsg)
+			require.Equal(t, tt.wantWarn, emitted,
+				"the pre-warm WARN must track whether pre-warming actually failed")
+			if tt.wantWarn {
+				assert.Equal(t, "warn", event.level)
+				assert.Contains(t, event.err, preWarmFailureMarker,
+					"the WARN must carry the pre-warm error, not just announce one")
+			}
+		})
+	}
 }
 
 // TestPrepareRuntimeSkipsCheckInMultiTenantMode verifies that the static check
