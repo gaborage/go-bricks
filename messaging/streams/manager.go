@@ -137,10 +137,17 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 		return errors.New("streams manager already started: Close it before starting again")
 	}
 
-	// NewEnvironment closes its own locator socket before returning, so a failed
-	// dial leaves nothing to clean up here.
+	// NewEnvironment returns a non-nil Environment BESIDE a non-nil error, so the
+	// failure path has something to dispose and `env != nil` is not a success test.
+	// v1.8.3 does tear the locator socket down itself, but only through an internal
+	// `defer client.Close()` it documents nowhere, and Client.connect opens the
+	// socket and starts its read goroutine before authentication — so disposing it
+	// here is what keeps a rejected credential from depending on that detail.
 	env, err := stream.NewEnvironment(m.environmentOptions())
 	if err != nil {
+		if env != nil {
+			_ = env.Close()
+		}
 		return fmt.Errorf("failed to connect to stream endpoint %s: %w", redactStreamURI(m.opts.URI), safeEnvError(err))
 	}
 	m.env = env
