@@ -157,12 +157,14 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	consumeCtx, cancel := consumeContext(ctx)
 	m.cancel = cancel
 
-	if err := m.declareStreams(env, decls); err != nil {
+	// The caller's ctx, not consumeCtx: declaration is startup work, and a caller
+	// that gave up on startup must be able to cut it short.
+	if err := m.declareStreams(ctx, env, decls); err != nil {
 		m.abortStartLocked()
 		return err
 	}
 
-	if err := m.declareSuperStreams(env, decls); err != nil {
+	if err := m.declareSuperStreams(ctx, env, decls); err != nil {
 		m.abortStartLocked()
 		return err
 	}
@@ -204,8 +206,15 @@ func (m *Manager) environmentOptions() *stream.EnvironmentOptions {
 // existing stream as success; a retention mismatch surfaces as
 // precondition-failed and aborts startup rather than silently consuming a stream
 // configured differently from the declaration.
-func (m *Manager) declareStreams(env *stream.Environment, decls *Declarations) error {
+//
+// Each declaration is a blocking broker round trip the client gives no context of
+// its own, so ctx is checked between them: a caller that gave up on startup stops
+// paying for the rest of the fan-out.
+func (m *Manager) declareStreams(ctx context.Context, env *stream.Environment, decls *Declarations) error {
 	for _, s := range decls.streams {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := env.DeclareStream(s.Name, streamOptionsFrom(&s.Spec)); err != nil {
 			return fmt.Errorf("failed to declare stream %q: %w", s.Name, err)
 		}
@@ -217,8 +226,12 @@ func (m *Manager) declareStreams(env *stream.Environment, decls *Declarations) e
 // declareStreams: the client swallows StreamAlreadyExists here, so a super stream
 // that already exists with a DIFFERENT partition count or retention is accepted
 // silently — see wiki/streams.md.
-func (m *Manager) declareSuperStreams(env *stream.Environment, decls *Declarations) error {
+// Like declareStreams, it checks ctx between round trips.
+func (m *Manager) declareSuperStreams(ctx context.Context, env *stream.Environment, decls *Declarations) error {
 	for _, s := range decls.superStreams {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := env.DeclareSuperStream(s.Name, partitionOptionsFrom(s.Partitions, &s.Spec)); err != nil {
 			return fmt.Errorf("failed to declare super stream %q: %w", s.Name, err)
 		}

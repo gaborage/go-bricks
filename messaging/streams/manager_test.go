@@ -296,6 +296,52 @@ func TestManagerStartRejectsSecondStart(t *testing.T) {
 	assert.Contains(t, err.Error(), "already started")
 }
 
+// TestManagerDeclareAbortsOnACanceledContext pins that a canceled startup stops
+// the declaration fan-out before it reaches the broker. The environment is nil, so
+// any call that got as far as the client would panic rather than return.
+func TestManagerDeclareAbortsOnACanceledContext(t *testing.T) {
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareSuperStream(testSuperStream, 2, nil)
+
+	tests := []struct {
+		name    string
+		declare func(m *Manager, ctx context.Context) error
+	}{
+		{
+			name:    "plain_streams",
+			declare: func(m *Manager, ctx context.Context) error { return m.declareStreams(ctx, nil, decls) },
+		},
+		{
+			name:    "super_streams",
+			declare: func(m *Manager, ctx context.Context) error { return m.declareSuperStreams(ctx, nil, decls) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := testManager(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			var err error
+			require.NotPanics(t, func() { err = tt.declare(m, ctx) })
+
+			assert.ErrorIs(t, err, context.Canceled)
+		})
+	}
+}
+
+// A live context must not short-circuit the fan-out: the nil environment proves
+// the broker call is attempted by panicking, which the guard would have prevented.
+func TestManagerDeclareProceedsOnALiveContext(t *testing.T) {
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	m := testManager(t)
+
+	assert.Panics(t, func() { _ = m.declareStreams(context.Background(), nil, decls) })
+}
+
 func TestManagerStopConsumersFlushesBeforeClosing(t *testing.T) {
 	m := testManager(t)
 	handle := &fakeHandle{status: ha.StatusOpen}
