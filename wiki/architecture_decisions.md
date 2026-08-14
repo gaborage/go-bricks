@@ -1195,6 +1195,34 @@ to `Delete` reinstates the original hazard behind an API that reads as safe. `fa
 distinguish a failed comparison from an already-gone key, which is why the result is named
 `deleted`. See [migrations.md](migrations.md) `[C59.3]`.
 
+### [ADR-061: Redact Role Passwords Before the First-Line Split, and Reject Control Characters in Them](adr_061_role_password_control_chars.md)
+
+**Date:** 2026-08-14 | **Status:** Accepted
+
+`summarizeStmt` exists to keep a resolved role password out of the provisioning errors callers log,
+but it split the statement at its first newline **before** applying the redaction regex — and that
+pattern, `(?i)(PASSWORD\s+)'(?:[^']|'')*'`, is anchored on the closing quote. A password containing
+a newline (the trailing `\n` a file-sourced or `echo`-piped secret normally carries) produced a
+multi-line `ALTER ROLE … PASSWORD '…` whose first-line fragment ended mid-literal, matched nothing,
+and reached the returned error verbatim. Nothing upstream normalized: `quotePGStringLiteral` passes
+newlines through, and `PGRoleSpec` has no in-repo producer, so `Validate` is the only boundary the
+framework owns. The redaction now runs over the whole statement before the split and the truncation
+(Go's RE2 `[^']` matches `\n`, so no `(?s)` is needed), and `PGRoleSpec.Validate` additionally
+rejects CR/LF/NUL in either password field with the new `ErrPGRolePasswordHasControlChar`, naming
+the field and never the value.
+
+**Key Benefits:** The redaction holds for the input shape secrets pipelines most commonly produce,
+and a value the provisioning path cannot carry on one line is refused at the boundary rather than
+trusted to every downstream formatter. The character set (CR/LF/NUL, not "all control characters")
+deliberately matches `flyway.go`'s `ErrEnvFieldHasControlChar` so the two boundaries agree.
+**Watch:** this is **breaking** — a spec carrying such a password used to provision successfully, so
+`ProvisionPGRoles` and `PGRoleProvisioningSQL` now return an error, and callers reading a password
+from a file or command substitution must `strings.TrimSpace` it first. Empty passwords stay valid.
+Normalization was rejected because trimming silently changes a credential, and no
+`minRedactablePasswordLength`-style floor is imported: this redaction is *structural*, never
+comparing against the secret's bytes. The fix stops future leaks, not past ones — rotate any
+credential whose provisioning failure was logged. See [migrations.md](migrations.md) `[C59.5]`.
+
 ---
 
 ## ADR Lifecycle
@@ -1206,7 +1234,7 @@ distinguish a failed comparison from an already-gone key, which is why the resul
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-060) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-061) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

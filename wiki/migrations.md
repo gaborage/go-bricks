@@ -44,7 +44,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup; C57.9 fails `httpclient` construction) | 9 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8); and read every `WithJOSE` policy and direct `jose.Seal` call for an explicitly-set algorithm outside the allowlist — `KeyAlg: RSA1_5` or a non-AEAD `Enc` sealed successfully before and now fails `Build()` at startup, while a policy that named no algorithms at all takes the package defaults and starts working instead of failing every request (C57.9) |
 | E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) + behavior (C58.4, C58.5) | 5 | C58.1 C58.2 C58.3 | check every environment for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`, and — in multi-tenant mode with `cache.manager.maxsize` unset — a negative `multitenant.limits.tenants`, which becomes the pool size. Under `cache.enabled: false` such a value used to be inert and now aborts startup (C58.3); and if any dashboard, alert, or saved query reads OTLP-exported log records by a `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` **record** attribute your code sets as a log field, re-key it to the `app.`-prefixed name (C58.4); and audit the log backend for dashboards, alerts, or saved queries filtering log records by **any** record-level resource attribute — the framework's `service.*` / `telemetry.sdk.*` / `deployment.environment.name` plus every key your deployment injects via `OTEL_RESOURCE_ATTRIBUTES` (`k8s.pod.name`, …) — since all of them move to resource level only; no code grep finds these (C58.5) |
 | E581 | v0.58.0 → v0.58.1 | silent-behavior | 3 | none | if you cache any type carrying a time.Time, decide before the bump whether a compare-and-set on a sub-second timestamp may fail during the rolling deploy (C581.1); and if `observability.logs.samplingrate` is set to any value strictly between 0.0 and 1.0, expect the exported INFO/DEBUG log volume AND the membership of the sampled set to change: a rate at or above 0.00005 and below 0.01 exported nothing before the bump and starts exporting its configured fraction after it, a rate that is not a whole percent stops flooring (0.999 was 99%, now 99.9%), and every fractional rate redraws which traces land in the sample; a rate below 0.00005, plus 0.0 and 1.0, are unaffected (C581.2); and if you call `Close()` directly on a `DbManager`/`CacheManager`/`messaging.Manager`, know that a handle still borrowed by in-flight work now stays open until its final release instead of closing immediately (C581.3) |
-| E59 | v0.58.1 → v0.59.0 | compile-break (C59.2, C59.3) + silent-behavior (C59.1, C59.4) | 4 | C59.2 C59.3 | if your service sits behind a proxy on a **public** address (CloudFront, a partner edge), set `server.trustedproxies` to its CIDR range before the bump — otherwise that proxy is itself returned as the client and every caller behind it collapses into a single rate-limit bucket; and check the load balancer for any mode that writes a non-IP `X-Forwarded-For` entry — on AWS ALB that is `routing.http.xff_client_port.enabled` (appends `client_ip:port`) and, separately, `routing.http.xff_header_processing.mode = remove` — since either keys the entire fleet on the load balancer's own address after the bump and `server.trustedproxies` cannot fix it; the remedy is deployment-side (C59.1); and if any of your code — **including test files**, which `go build` does not compile — implements `cache.Cache`, add the new `CompareAndDelete` method, and before swapping a lock's `Delete` release for it make sure the lock is acquired with a **positive** TTL, since a `ttl == 0` lock that a token-verified release declines to remove is held forever (C59.3); and grep your **test** files for a `cache/testing.MockCache` handed a context that is already canceled or expired while the call is expected to succeed — the mock's cancellation check no longer depends on a configured `WithDelay`, so that call now returns the context's error (C59.4) |
+| E59 | v0.58.1 → v0.59.0 | compile-break (C59.2, C59.3) + silent-behavior (C59.1, C59.4) + breaking (C59.5 rejects a password) | 5 | C59.2 C59.3 | if your service sits behind a proxy on a **public** address (CloudFront, a partner edge), set `server.trustedproxies` to its CIDR range before the bump — otherwise that proxy is itself returned as the client and every caller behind it collapses into a single rate-limit bucket; and check the load balancer for any mode that writes a non-IP `X-Forwarded-For` entry — on AWS ALB that is `routing.http.xff_client_port.enabled` (appends `client_ip:port`) and, separately, `routing.http.xff_header_processing.mode = remove` — since either keys the entire fleet on the load balancer's own address after the bump and `server.trustedproxies` cannot fix it; the remedy is deployment-side (C59.1); and if any of your code — **including test files**, which `go build` does not compile — implements `cache.Cache`, add the new `CompareAndDelete` method, and before swapping a lock's `Delete` release for it make sure the lock is acquired with a **positive** TTL, since a `ttl == 0` lock that a token-verified release declines to remove is held forever (C59.3); and grep your **test** files for a `cache/testing.MockCache` handed a context that is already canceled or expired while the call is expected to succeed — the mock's cancellation check no longer depends on a configured `WithDelay`, so that call now returns the context's error (C59.4); and if you call `ProvisionPGRoles` or `PGRoleProvisioningSQL` with a `PGRoleSpec` whose `MigratorPassword` or `RuntimePassword` is read from a file, a mounted secret, an environment read, or a command substitution, `strings.TrimSpace` it before the bump — a password containing CR, LF, or NUL is now rejected by `Validate` instead of provisioning, and any credential whose provisioning failure was logged while its password contained a newline should be rotated, since the first line of that secret reached the error string (C59.5) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -2277,7 +2277,14 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   compiling (C59.2). Separately, `cache.Cache` gains a `CompareAndDelete`
   method — the safe, token-verified release the interface never had, since
   its only release was unconditional `Delete` — so every implementer must
-  add it (C59.3).
+  add it (C59.3). Separately again, `migration`'s `summarizeStmt` now redacts
+  the `PASSWORD '…'` clause **before** splitting a failing statement at its
+  first newline — the old order left the first-line fragment ending
+  mid-literal, so the closing-quote-anchored pattern matched nothing and the
+  first line of a newline-bearing password reached the logged error verbatim
+  — and `PGRoleSpec.Validate` now rejects CR, LF, or NUL in either password
+  field, so a spec that used to provision successfully returns an error
+  (C59.5).
 - build-caught: C59.2 C59.3 (via `go vet` — `go build` does not compile test files)
 - preflight: **two** actions. (i) If a proxy in front of the service sits on
   a **public** address, set `server.trustedproxies` to its CIDR range before
@@ -2295,7 +2302,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `X-Real-IP` fallback is deliberately gone. **`server.trustedproxies` does
   not rescue either case**: the chain is abandoned before trust is
   consulted. The only remedy is deployment-side (turn the attribute off, or
-  normalize the header).
+  normalize the header). (iii) If you provision PostgreSQL roles through
+  `ProvisionPGRoles` or `PGRoleProvisioningSQL`, trace where each
+  `MigratorPassword` / `RuntimePassword` comes from and `strings.TrimSpace`
+  any value read from a file, a mounted secret, an environment read, a
+  command substitution, or a secret-manager payload — a trailing newline is
+  what those producers routinely append, and after the bump `Validate`
+  rejects it instead of provisioning. Nothing is compiler-caught here, so a
+  staging provisioning run against the real secret source is the decisive
+  check. Rotate any credential whose provisioning failure was logged while
+  its password contained a newline.
 - exit: `go get github.com/gaborage/go-bricks@v0.59.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C59.1] Rate-limit buckets and logged client addresses key on the trusted-proxy-derived IP · silent-behavior · when: match
@@ -2525,6 +2541,47 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - verify: `go test ./...`
 - ref: [ADR-060](adr_060_cache_compare_and_delete.md) (Consequences — why the guard was restructured) ·
   `cache/testing/mock_cache.go` (`waitDelay`) · [testing.md](testing.md#cache-testing)
+
+### [C59.5] A `PGRoleSpec` password containing CR, LF, or NUL now fails `Validate` · breaking · when: match
+
+- detect: `git grep -nE '(Migrator|Runtime)Password[[:space:]]*[:=]' -- '*.go'` lists every site that
+  populates a `PGRoleSpec` password. For each, trace where the value comes from: a literal or an
+  already-trimmed string is safe, while `os.ReadFile`, a mounted-secret read, a command substitution,
+  or a secret-manager payload can all carry a trailing newline. Keep every pattern free of the PCRE
+  escapes — `git grep -E` is POSIX ERE and silently ignores them, so a pattern carrying one matches
+  nothing and the gate falsely reports "not affected". Nothing here is compiler-caught: the failure is
+  a returned error at run time, so a staging provisioning run is the authoritative answer.
+- scope: `migration/roles.go` only — `PGRoleSpec.Validate`, reached by both `ProvisionPGRoles` and
+  `PGRoleProvisioningSQL` (`buildPGRoleStatements` is unexported and reachable only through those
+  two, so no path bypasses the check). `Validate` now rejects `MigratorPassword` or `RuntimePassword`
+  containing CR, LF, or NUL, wrapping the new exported sentinel `ErrPGRolePasswordHasControlChar`
+  with the offending **field name** — never the value. The check runs after the existing identifier
+  and role-differ checks, so all previous error precedence is preserved, and an **empty** password
+  stays valid (it deliberately emits no `ALTER ROLE … PASSWORD` statement at all). The character set
+  is CR/LF/NUL, not "all control characters", matching `flyway.go`'s `ErrEnvFieldHasControlChar` so
+  the two boundaries agree. PostgreSQL itself accepts such passwords — the restriction is this API's,
+  because the provisioning path cannot carry them log-safely. Shipped alongside the fix that motivated
+  it: `summarizeStmt` now redacts the `PASSWORD '…'` clause **before** splitting the statement at its
+  first newline, which is not itself breaking.
+- gate: match = you build a `PGRoleSpec` whose `MigratorPassword` or `RuntimePassword` is sourced from
+  a file, a mounted secret, an environment read, a command substitution, or a secret-manager payload —
+  any producer that can append a newline. no-match = both password fields are always empty (credentials
+  managed out-of-band), or every value is a literal or already passed through `strings.TrimSpace`.
+- before: `ProvisionPGRoles` / `PGRoleProvisioningSQL` accepted the password and emitted a multi-line
+  `ALTER ROLE … PASSWORD 'line1\nline2'`. Worse, if that statement then failed, `summarizeStmt` split
+  the statement before redacting it, so the closing-quote-anchored pattern could not match the
+  first-line fragment and the first line of the secret was interpolated verbatim into the returned
+  error — which callers log.
+- after: `Validate` returns an error wrapping `ErrPGRolePasswordHasControlChar`, naming the field, and
+  provisioning does not run. Match it with `errors.Is`, never `==`. The remedy is to trim at the
+  source — `strings.TrimSpace(string(b))` on the file or secret read — not to strip inside the
+  framework, which would silently provision a credential different from the one you passed. **Rotate
+  any credential** whose provisioning failure was logged while its password contained a newline: this
+  change stops future leaks, not past ones.
+- verify: `go build ./... && go test ./...`, then confirm no provisioning password is read from a file
+  or a command substitution without `strings.TrimSpace`, and run one provisioning pass in staging with
+  the real secret source — a trailing newline that survived to production would now abort the run.
+- ref: [ADR-061](adr_061_role_password_control_chars.md) · `migration/roles.go`
 
 ---
 
