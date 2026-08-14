@@ -12,6 +12,8 @@ import (
 const (
 	testStream       = "orders"
 	testConsumerName = "orders-processor"
+	testSuperStream  = "orders-partitioned"
+	testPartitions   = 3
 )
 
 func noopHandler(context.Context, *Message) error { return nil }
@@ -141,6 +143,286 @@ func TestDeclareConsumerSameNameOnDifferentStreamsIsAllowed(t *testing.T) {
 
 	assert.Equal(t, Stats{Streams: 2, Consumers: 2}, d.Stats())
 	require.NoError(t, d.Validate())
+}
+
+func TestDeclareSuperStreamStoresDefinition(t *testing.T) {
+	d := NewDeclarations()
+	spec := &StreamSpec{MaxAge: 90 * time.Second, MaxLengthBytes: 1024, MaxSegmentSizeBytes: 512}
+
+	d.DeclareSuperStream(testSuperStream, testPartitions, spec)
+
+	require.Len(t, d.superStreams, 1)
+	assert.Equal(t, testSuperStream, d.superStreams[0].Name)
+	assert.Equal(t, testPartitions, d.superStreams[0].Partitions)
+	assert.Equal(t, StreamSpec{MaxAge: 90 * time.Second, MaxLengthBytes: 1024, MaxSegmentSizeBytes: 512}, d.superStreams[0].Spec)
+	assert.False(t, d.IsEmpty(), "a super stream alone is a declaration")
+	assert.Empty(t, d.streams, "a super stream is not stored as a plain stream")
+}
+
+func TestDeclareSuperStreamNilSpecLeavesRetentionUnset(t *testing.T) {
+	d := NewDeclarations()
+
+	d.DeclareSuperStream(testSuperStream, testPartitions, nil)
+
+	require.Len(t, d.superStreams, 1)
+	assert.Equal(t, StreamSpec{}, d.superStreams[0].Spec)
+}
+
+func TestDeclareSuperStreamCopiesSpec(t *testing.T) {
+	d := NewDeclarations()
+	spec := &StreamSpec{MaxAge: time.Minute}
+
+	d.DeclareSuperStream(testSuperStream, testPartitions, spec)
+	spec.MaxAge = time.Hour
+	spec.MaxLengthBytes = 99
+
+	assert.Equal(t, StreamSpec{MaxAge: time.Minute}, d.superStreams[0].Spec,
+		"stored spec must not follow the caller's struct")
+}
+
+func TestDeclareSuperStreamIdenticalRedeclarationIsNoop(t *testing.T) {
+	d := NewDeclarations()
+
+	d.DeclareSuperStream(testSuperStream, testPartitions, &StreamSpec{MaxAge: time.Minute})
+	d.DeclareSuperStream(testSuperStream, testPartitions, &StreamSpec{MaxAge: time.Minute})
+
+	assert.Len(t, d.superStreams, 1)
+	require.NoError(t, d.Validate())
+}
+
+// TestDeclareSuperStreamConflictingRedeclarationFailsValidation covers both halves
+// of a super stream's identity: the partition count is as much part of it as the
+// retention spec, so a mismatch in either must be reported rather than silently
+// keeping whichever declaration ran first.
+func TestDeclareSuperStreamConflictingRedeclarationFailsValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		partitions int
+		spec       *StreamSpec
+	}{
+		{name: "different_partition_count", partitions: 5, spec: &StreamSpec{MaxAge: time.Minute}},
+		{name: "different_retention_spec", partitions: testPartitions, spec: &StreamSpec{MaxAge: time.Hour}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			d.DeclareSuperStream(testSuperStream, testPartitions, &StreamSpec{MaxAge: time.Minute})
+
+			d.DeclareSuperStream(testSuperStream, tt.partitions, tt.spec)
+
+			err := d.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `super stream "orders-partitioned" declared twice with different definitions`)
+			assert.Len(t, d.superStreams, 1, "the conflicting declaration is reported, not stored")
+		})
+	}
+}
+
+// TestDeclareSuperStreamConsumerIsAlwaysSingleActive pins the deviation from the
+// plain lane: SAC is not the caller's choice on a super stream, because the
+// promotion callback is the only per-partition offset seam the client offers.
+func TestDeclareSuperStreamConsumerIsAlwaysSingleActive(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareSuperStream(testSuperStream, testPartitions, nil)
+
+	d.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+		SuperStream: testSuperStream,
+		Name:        testConsumerName,
+		Handler:     noopHandler,
+	})
+
+	require.Len(t, d.consumers, 1)
+	assert.True(t, d.consumers[0].SAC, "super-stream consumption is always a SAC group")
+	assert.True(t, d.consumers[0].Super)
+	require.NoError(t, d.Validate())
+}
+
+func TestDeclareSuperStreamConsumerCopiesOptions(t *testing.T) {
+	d := NewDeclarations()
+	opts := &SuperStreamConsumerOptions{
+		SuperStream: testSuperStream,
+		Name:        testConsumerName,
+		Start:       OffsetFirst(),
+		Handler:     noopHandler,
+	}
+
+	d.DeclareSuperStreamConsumer(opts)
+	opts.Name = "mutated"
+	opts.Start = OffsetLast()
+
+	require.Len(t, d.consumers, 1)
+	assert.Equal(t, testSuperStream, d.consumers[0].Stream)
+	assert.Equal(t, testConsumerName, d.consumers[0].Name)
+	assert.Equal(t, OffsetFirst(), d.consumers[0].Start)
+}
+
+func TestDeclareSuperStreamConsumerNilPanics(t *testing.T) {
+	d := NewDeclarations()
+
+	assert.PanicsWithValue(t,
+		"streams: nil consumer declaration detected\n"+
+			"  DeclareSuperStreamConsumer requires a non-nil *SuperStreamConsumerOptions\n"+
+			"  Pass &streams.SuperStreamConsumerOptions{...} at every DeclareSuperStreamConsumer call within DeclareStreams",
+		func() { d.DeclareSuperStreamConsumer(nil) })
+
+	assert.True(t, d.IsEmpty(), "the rejected declaration is not stored")
+}
+
+func TestDeclareSuperStreamConsumerDuplicatePanics(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareSuperStream(testSuperStream, testPartitions, nil)
+	d.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+		SuperStream: testSuperStream, Name: testConsumerName, Handler: noopHandler,
+	})
+
+	assert.PanicsWithValue(t,
+		"streams: duplicate consumer declaration detected\n"+
+			"  super stream=orders-partitioned name=orders-processor\n"+
+			"  Ensure each DeclareSuperStreamConsumer call is unique within DeclareStreams",
+		func() {
+			d.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+				SuperStream: testSuperStream, Name: testConsumerName, Handler: noopHandler,
+			})
+		})
+}
+
+func TestStatsCountsSuperStreamsInBothFields(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareStream(testStream, nil)
+	d.DeclareSuperStream(testSuperStream, testPartitions, nil)
+	d.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+	d.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+		SuperStream: testSuperStream, Name: testConsumerName, Handler: noopHandler,
+	})
+
+	assert.Equal(t, Stats{Streams: 2, SuperStreams: 1, Consumers: 2}, d.Stats(),
+		"Streams counts every declared stream so a super-stream-only service is not reported as having none")
+	require.NoError(t, d.Validate())
+}
+
+// TestValidateSuperStreamDeclarations covers the rules a super stream adds, and in
+// particular the four ways a consumer can name the wrong kind of target: the two
+// kinds reach the broker through different client APIs, so each mismatch names the
+// declare method that would have been right.
+func TestValidateSuperStreamDeclarations(t *testing.T) {
+	tests := []struct {
+		name    string
+		build   func(d *Declarations)
+		wantErr string
+	}{
+		{
+			name: "valid_super_stream_and_consumer",
+			build: func(d *Declarations) {
+				d.DeclareSuperStream(testSuperStream, testPartitions, &StreamSpec{MaxLengthBytes: 1024})
+				d.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+					SuperStream: testSuperStream, Name: testConsumerName, Handler: noopHandler,
+				})
+			},
+		},
+		{
+			name: "empty_super_stream_name",
+			build: func(d *Declarations) {
+				d.DeclareSuperStream("", testPartitions, nil)
+			},
+			wantErr: "super stream declaration has an empty name",
+		},
+		{
+			name: "zero_partitions",
+			build: func(d *Declarations) {
+				d.DeclareSuperStream(testSuperStream, 0, nil)
+			},
+			wantErr: `super stream "orders-partitioned" declares 0 partitions; at least 1 is required`,
+		},
+		{
+			name: "negative_partitions",
+			build: func(d *Declarations) {
+				d.DeclareSuperStream(testSuperStream, -2, nil)
+			},
+			wantErr: `super stream "orders-partitioned" declares -2 partitions; at least 1 is required`,
+		},
+		{
+			name: "single_partition_is_allowed",
+			build: func(d *Declarations) {
+				d.DeclareSuperStream(testSuperStream, 1, nil)
+			},
+		},
+		{
+			name: "name_declared_as_both_kinds",
+			build: func(d *Declarations) {
+				d.DeclareStream(testStream, nil)
+				d.DeclareSuperStream(testStream, testPartitions, nil)
+			},
+			wantErr: `"orders" is declared both as a stream and as a super stream`,
+		},
+		{
+			name: "negative_retention_names_the_super_stream_kind",
+			build: func(d *Declarations) {
+				d.DeclareSuperStream(testSuperStream, testPartitions, &StreamSpec{MaxAge: -time.Hour})
+			},
+			wantErr: `super stream "orders-partitioned" has a negative MaxAge (-1h0m0s); zero leaves retention to the broker`,
+		},
+		{
+			name: "super_consumer_on_undeclared_super_stream",
+			build: func(d *Declarations) {
+				d.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+					SuperStream: "ghost", Name: testConsumerName, Handler: noopHandler,
+				})
+			},
+			wantErr: `consumer "orders-processor" references undeclared super stream "ghost"`,
+		},
+		{
+			name: "super_consumer_on_a_plain_stream",
+			build: func(d *Declarations) {
+				d.DeclareStream(testStream, nil)
+				d.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+					SuperStream: testStream, Name: testConsumerName, Handler: noopHandler,
+				})
+			},
+			wantErr: `consumer "orders-processor" consumes "orders" as a super stream, but it is declared as a plain stream; use DeclareConsumer`,
+		},
+		{
+			name: "plain_consumer_on_a_super_stream",
+			build: func(d *Declarations) {
+				d.DeclareSuperStream(testSuperStream, testPartitions, nil)
+				d.DeclareConsumer(&ConsumerOptions{
+					Stream: testSuperStream, Name: testConsumerName, Handler: noopHandler,
+				})
+			},
+			wantErr: `consumer "orders-processor" consumes "orders-partitioned" as a plain stream, but it is declared as a super stream; use DeclareSuperStreamConsumer`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			tt.build(d)
+
+			err := d.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestDeclareConsumerAndSuperStreamConsumerShareTheDuplicateKey proves the two
+// declare methods index into one namespace: the same name on the same target is a
+// duplicate whichever method declared it first, so a typo cannot start two members
+// of one offset group inside one process.
+func TestDeclareConsumerAndSuperStreamConsumerShareTheDuplicateKey(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareStream(testStream, nil)
+	d.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+
+	assert.Panics(t, func() {
+		d.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+			SuperStream: testStream, Name: testConsumerName, Handler: noopHandler,
+		})
+	})
 }
 
 func TestValidateStreamDeclarations(t *testing.T) {
