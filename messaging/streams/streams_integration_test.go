@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"testing"
@@ -298,36 +299,88 @@ func stopManager(t *testing.T, m *Manager) {
 	require.NoError(t, m.Close())
 }
 
-// warmUpGroup publishes throwaway rounds until every member has handled a message,
-// which is the only observable proof the join's rebalance landed: until it does, the
-// first member is still active on every partition. A round published before it lands
-// is consumed by the member losing the partition, hence the retry. The returned
+// partitionBaselines snapshots how many messages each member has handled per
+// partition, so the next round's deliveries can be read as a delta.
+func partitionBaselines(members []*recorder) []map[string]int {
+	baselines := make([]map[string]int, len(members))
+	for i, m := range members {
+		_, bodies := m.perStream()
+		counts := make(map[string]int, len(bodies))
+		for name, handled := range bodies {
+			counts[name] = len(handled)
+		}
+		baselines[i] = counts
+	}
+	return baselines
+}
+
+// roundOwnership derives the partition -> member index map of a single warm-up round
+// from the delta since baselines. Ownership is read per round on purpose: a
+// cumulative view would keep listing an outgoing member as a co-owner of a partition
+// it has already handed over, and could never stabilize. It reports ok only when
+// every partition was served, by exactly one member.
+func roundOwnership(members []*recorder, baselines []map[string]int) (owners map[string]int, ok bool) {
+	owners = make(map[string]int, itPartitions)
+	for i, m := range members {
+		_, bodies := m.perStream()
+		for name, handled := range bodies {
+			if len(handled) <= baselines[i][name] {
+				continue
+			}
+			if _, contested := owners[name]; contested {
+				// Two members served one partition: the handover is still in flight.
+				return nil, false
+			}
+			owners[name] = i
+		}
+	}
+	return owners, len(owners) == itPartitions
+}
+
+// warmUpGroup publishes throwaway rounds until the group's partition assignment has
+// demonstrably stopped moving: every partition served within one round, and the same
+// partition -> member map derived from two consecutive rounds. One round proves only
+// that *a* rebalance landed, never that *the* rebalance finished — itPartitions
+// partitions over two members settle unevenly, so the member that ends up owning two
+// of them starts handling messages the moment its first handover lands, with the
+// second still in flight. A round published into a partition mid-handover is consumed
+// by the member losing it and may then be replayed to the member gaining it (the
+// consumer-connection vs locator-connection window ADR-059 accepts), which is why the
+// gate needs a second agreeing round and why the whole thing retries. The returned
 // bodies must stay out of whatever the caller measures.
 func warmUpGroup(t *testing.T, opts ManagerOptions, members ...*recorder) []string {
 	t.Helper()
 
 	warmUp := bodiesFrom("warmup", 0, itPartitions)
-	promoted := func() bool {
-		for _, m := range members {
-			if m.count() == 0 {
-				return false
-			}
-		}
-		return true
-	}
 
-	const rounds = 4
+	const rounds = 6
+	var previous map[string]int
 	for range rounds {
+		baselines := partitionBaselines(members)
 		publishAcrossPartitions(t, opts, warmUp)
+
+		var current map[string]int
 		deadline := time.Now().Add(itWaitTimeout / rounds)
 		for time.Now().Before(deadline) {
-			if promoted() {
-				return warmUp
+			if owners, ok := roundOwnership(members, baselines); ok {
+				current = owners
+				break
 			}
 			time.Sleep(itPollInterval)
 		}
+		if current == nil {
+			// An inconclusive round breaks the chain: the next pair must agree on its own.
+			previous = nil
+			continue
+		}
+		if maps.Equal(previous, current) {
+			return warmUp
+		}
+		previous = current
 	}
-	require.FailNow(t, "the group never converged: a member was never promoted on any partition")
+	require.FailNow(t, "the group never converged",
+		"no two consecutive rounds derived the same owner for all %d partitions; the last round derived %v (empty: a partition went unserved or was served by two members)",
+		itPartitions, previous)
 	return nil
 }
 
