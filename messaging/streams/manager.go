@@ -145,10 +145,13 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	}
 	m.env = env
 
+	// Stats rather than len(decls.streams), which omits the super streams.
+	stats := decls.Stats()
 	m.log.Info().
 		Str("uri", redactStreamURI(m.opts.URI)).
-		Int("streams", len(decls.streams)).
-		Int("consumers", len(decls.consumers)).
+		Int("streams", stats.Streams).
+		Int("super_streams", stats.SuperStreams).
+		Int("consumers", stats.Consumers).
 		Msg("Connected to RabbitMQ stream endpoint")
 
 	consumeCtx, cancel := consumeContext(ctx)
