@@ -247,13 +247,13 @@ func (m *Manager) startStreamConsumer(ctx context.Context, env *stream.Environme
 		// The promotion callback resolves the offset again: another group member
 		// may have advanced it while this one was passive.
 		//
-		// SECURITY: the client calls this from its own read-loop goroutine, outside
-		// m.mu and with no recover() anywhere in its call path. It therefore closes
-		// over this snapshot instead of reading m.env: that field is written under
-		// m.mu and nil'd by Close, so reading it here would be a data race, and a
-		// promotion frame arriving after Close would dereference nil and kill the
-		// process mid-shutdown. Taking m.mu here instead would deadlock — stopLocked
-		// holds it across a blocking consumer Close.
+		// The client calls it from its own read-loop goroutine, outside m.mu and with
+		// no recover() anywhere in its call path. It therefore closes over this
+		// snapshot instead of reading m.env: that field is written under m.mu and
+		// nil'd by Close, so reading it here would be a data race, and a promotion
+		// frame arriving after Close would dereference nil and kill the process
+		// mid-shutdown. Taking m.mu here instead would deadlock — stopLocked holds
+		// it across a blocking consumer Close.
 		opts = opts.SetSingleActiveConsumer(stream.NewSingleActiveConsumer(
 			func(streamName string, _ bool) stream.OffsetSpecification {
 				return m.resolveOffset(env, decl.Name, streamName, decl.Start, runner.offsets)
@@ -280,8 +280,8 @@ func (m *Manager) startSuperStreamConsumer(ctx context.Context, env *stream.Envi
 	// fires once per partition, on promotion — is the only place a per-partition
 	// stored offset can be restored. See ADR-059.
 	//
-	// SECURITY: the env snapshot rather than m.env, for the reason spelled out in
-	// startStreamConsumer: the client calls this from its own goroutine, outside
+	// It closes over the env snapshot rather than m.env, for the reason spelled out
+	// in startStreamConsumer: the client calls this from its own goroutine, outside
 	// m.mu, with no recover() in its call path.
 	opts := stream.NewSuperStreamConsumerOptions().
 		SetConsumerName(decl.Name).
