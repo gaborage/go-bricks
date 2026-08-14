@@ -66,6 +66,7 @@ const (
 	msgCloseConsumerFailed = "Failed to close stream consumer"
 	msgCloseEnvFailed      = "Failed to close stream environment after a failed start"
 	msgOffsetStoreFailed   = "Failed to store stream offset"
+	msgOffsetQueryFailed   = "Could not query the stored stream offset; attaching at a position that replays rather than skips"
 )
 
 // recordingLogger captures each event's level, attached error and terminal
@@ -94,17 +95,19 @@ func (l *recordingLogger) Fatal() logger.LogEvent                    { return l.
 func (l *recordingLogger) WithContext(_ any) logger.Logger           { return l }
 func (l *recordingLogger) WithFields(_ map[string]any) logger.Logger { return l }
 
-func (l *recordingLogger) warnMessages() []string {
+func (l *recordingLogger) messagesAt(level string) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	out := []string{}
 	for _, e := range l.events {
-		if e.level == "warn" {
+		if e.level == level {
 			out = append(out, e.msg)
 		}
 	}
 	return out
 }
+
+func (l *recordingLogger) warnMessages() []string { return l.messagesAt("warn") }
 
 // warnError reports the error text attached to the first WARN carrying msg. An
 // empty string with ok=true means the line was emitted with no error at all,
@@ -464,13 +467,20 @@ func TestManagerReady(t *testing.T) {
 	}
 }
 
+// TestOffsetSpecFor covers the four ways a position is chosen. Only a MISSING
+// offset may fall back to the declared start: any other query failure answered
+// with a start position would skip — fatally so for the zero-value OffsetNext,
+// which attaches past everything written since the last commit, and streams have
+// no redelivery to get it back.
 func TestOffsetSpecFor(t *testing.T) {
 	tests := []struct {
-		name     string
-		stored   int64
-		queryErr error
-		start    OffsetStart
-		want     stream.OffsetSpecification
+		name        string
+		stored      int64
+		queryErr    error
+		start       OffsetStart
+		localOffset int64
+		hasLocal    bool
+		want        stream.OffsetSpecification
 	}{
 		{
 			name:   "stored_offset_resumes_one_past_it",
@@ -485,16 +495,65 @@ func TestOffsetSpecFor(t *testing.T) {
 			want:     stream.OffsetSpecification{}.First(),
 		},
 		{
-			name:     "query_failure_uses_declared_start",
+			name:        "query_failure_resumes_from_the_local_commit",
+			queryErr:    errors.New("boom"),
+			start:       OffsetNext(),
+			localOffset: 41,
+			hasLocal:    true,
+			want:        stream.OffsetSpecification{}.Offset(42),
+		},
+		{
+			name:     "query_failure_without_a_local_commit_replays_from_first",
+			queryErr: errors.New("boom"),
+			start:    OffsetNext(),
+			want:     stream.OffsetSpecification{}.First(),
+		},
+		{
+			name:     "query_failure_never_answers_with_the_declared_start",
 			queryErr: errors.New("boom"),
 			start:    OffsetLast(),
-			want:     stream.OffsetSpecification{}.Last(),
+			want:     stream.OffsetSpecification{}.First(),
+		},
+		{
+			name:        "a_stored_offset_still_wins_over_the_local_commit",
+			stored:      90,
+			localOffset: 5,
+			hasLocal:    true,
+			start:       OffsetFirst(),
+			want:        stream.OffsetSpecification{}.Offset(91),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, offsetSpecFor(tt.stored, tt.queryErr, tt.start))
+			assert.Equal(t, tt.want, offsetSpecFor(tt.stored, tt.queryErr, tt.start, tt.localOffset, tt.hasLocal))
+		})
+	}
+}
+
+// TestManagerReportOffsetQuery pins the level and the silence either side of it: a
+// failed query changes where a consumer attaches, so it is an ERROR, while the
+// routine missing-offset case must not add noise to every first run.
+func TestManagerReportOffsetQuery(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantError []string
+	}{
+		{name: "successful_query_is_silent", err: nil},
+		{name: "missing_offset_is_silent", err: stream.OffsetNotFoundError},
+		{name: "query_failure_is_reported_at_error", err: errors.New("boom"), wantError: []string{msgOffsetQueryFailed}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := &recordingLogger{}
+			m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+
+			m.reportOffsetQuery(tt.err, testConsumerName, testPartition0, false)
+
+			assert.ElementsMatch(t, tt.wantError, log.messagesAt("error"))
+			assert.Empty(t, log.messagesAt("warn"), "a lost position is not a warning")
 		})
 	}
 }
