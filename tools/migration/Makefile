@@ -65,8 +65,13 @@ verify-mod: ## Verify go.mod/go.sum are tidy (mirrors CI)
 dev-deps: ## Install development dependencies
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
-vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
-	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+# GOWORK=off for the reason spelled out on the root Makefile's `vuln` target:
+# go.work is one directory up, and in workspace mode its `go` line — not this
+# module's `toolchain` directive — picks the toolchain, so the scan silently
+# reports an older stdlib than the CI job it is supposed to mirror. Package scope
+# is unaffected (3 packages either way).
+vuln: ## Run govulncheck vulnerability scan (pinned + GOWORK=off, mirroring CI)
+	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 sec: ## Run gosec security scanner (pinned; identical to CI)
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) ./cmd/... ./internal/...

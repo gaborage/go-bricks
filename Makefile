@@ -152,8 +152,18 @@ verify-mod: ## Verify go.mod/go.sum are tidy and go.work.sum is settled (mirrors
 	go mod tidy
 	git diff --exit-code go.mod go.sum go.work.sum
 
-vuln: ## Run govulncheck vulnerability scan (pinned; identical to CI)
-	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+# GOWORK=off like `lint`, but here it decides what the gate can even see: in
+# workspace mode go.work's own `go` line drives toolchain selection and go.mod's
+# `toolchain` directive is ignored, so a developer whose local Go is older than
+# that directive scans an older stdlib than CI, which installs the directive's
+# version via setup-go's go-version-file. That made this gate silently blind —
+# a toolchain bump remediating stdlib advisories still reported every one of them
+# locally until GOWORK=off let the directive win. Nothing else about the verdict
+# moves: only *called* vulnerabilities exit nonzero, and the reachable package set
+# is identical in both modes (tools/migration is a separate module, excluded from
+# ./... either way, and CI scans it in its own vuln-migrate-tool job).
+vuln: ## Run govulncheck vulnerability scan (pinned + GOWORK=off, mirroring CI)
+	GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 sec: ## Run gosec security scanner (pinned; identical to CI)
 	# gosec only accepts relative patterns — the previous $(PKGS) import paths
