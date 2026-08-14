@@ -41,9 +41,11 @@ type offsetStorer interface {
 }
 
 // errNoOffsetStorer reports a commit that had no storer to reach the broker
-// through. Trackers are created per delivered stream while the storer comes from
-// a separate resolver, so the two can disagree about the stream set; the commit is
-// then refused rather than dereferenced, which would panic on the shutdown flush.
+// through. The manager resolves a non-nil storer for every stream name, so this
+// is not a state production reaches: it is defense in depth at the last frame
+// before this package dereferences an interface it does not own, on a path that
+// also runs during shutdown, where a panic would cost every other stream the
+// commit it was about to make.
 var errNoOffsetStorer = errors.New("no offset storer for this stream; offset not committed")
 
 // offsetTracker owns the commit-after-success policy for one consumer.

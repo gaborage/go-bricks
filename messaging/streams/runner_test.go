@@ -263,10 +263,10 @@ func TestOffsetTrackerReportsAMissingStorer(t *testing.T) {
 	}
 }
 
-// TestOffsetBookFlushReportsAStreamWithNoStorer is the realistic shape of that
-// disagreement: the book holds a tracker for every delivered stream while the
-// resolver knows only some, and the shutdown flush must name the odd one out
-// instead of taking the process down with it.
+// TestOffsetBookFlushReportsAStreamWithNoStorer pins the book-level half of that
+// guard, with a resolver no production path builds: one stream left unanswered,
+// and the shutdown flush must name it among the failures while every other stream
+// still commits, instead of taking the process down with it.
 func TestOffsetBookFlushReportsAStreamWithNoStorer(t *testing.T) {
 	clock := newFakeClock()
 	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, clock.Now) })
