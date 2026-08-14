@@ -2966,8 +2966,12 @@ queue := decls.DeclareStreamQueue("orders.events.stream", &messaging.StreamQueue
 For **server-side offset tracking** (a restart resumes from the last stored offset), single
 active consumer, or super streams, use the native stream protocol instead: implement
 `app.StreamDeclarer` and set `messaging.streams.uri`. Handlers run inline and sequentially
-within a stream, and an offset is committed only after a handler returns nil — delivery is
-at-least-once, so make handlers idempotent. See [wiki/streams.md](wiki/streams.md):
+within a stream. A handler returning nil advances the *tracked* position only; that
+position is stored on the broker once `messaging.streams.offsetstore.countbeforestorage`
+successes have accumulated or `messaging.streams.offsetstore.flushinterval` has elapsed,
+plus a final flush when consumers stop — so a restart replays everything handled since the
+last stored offset. Delivery is at-least-once, so make handlers idempotent. See
+[wiki/streams.md](wiki/streams.md):
 
 ```go
 func (m *Module) DeclareStreams(decls *streams.Declarations) {
