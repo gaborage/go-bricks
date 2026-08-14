@@ -298,6 +298,52 @@ func stopManager(t *testing.T, m *Manager) {
 	require.NoError(t, m.Close())
 }
 
+// warmUpGroup publishes throwaway rounds until every member has handled a message,
+// which is the only observable proof the join's rebalance landed: until it does, the
+// first member is still active on every partition. A round published before it lands
+// is consumed by the member losing the partition, hence the retry. The returned
+// bodies must stay out of whatever the caller measures.
+func warmUpGroup(t *testing.T, opts ManagerOptions, members ...*recorder) []string {
+	t.Helper()
+
+	warmUp := bodiesFrom("warmup", 0, itPartitions)
+	promoted := func() bool {
+		for _, m := range members {
+			if m.count() == 0 {
+				return false
+			}
+		}
+		return true
+	}
+
+	const rounds = 4
+	for range rounds {
+		publishAcrossPartitions(t, opts, warmUp)
+		deadline := time.Now().Add(itWaitTimeout / rounds)
+		for time.Now().Before(deadline) {
+			if promoted() {
+				return warmUp
+			}
+			time.Sleep(itPollInterval)
+		}
+	}
+	require.FailNow(t, "the group never converged: a member was never promoted on any partition")
+	return nil
+}
+
+// handledSince returns the bodies a member handled after baseline that belong to
+// want, which keeps the warm-up traffic out of what a test measures.
+func handledSince(r *recorder, baseline int, want []string) []string {
+	_, bodies := r.snapshot()
+	out := make([]string, 0, len(bodies)-baseline)
+	for _, body := range bodies[baseline:] {
+		if slices.Contains(want, body) {
+			out = append(out, body)
+		}
+	}
+	return out
+}
+
 // TestStreamsManagerConsumesSuperStreamPartitionsIntegration proves the whole
 // per-partition contract against a broker: every partition is consumed, order is
 // preserved within each one, offsets are committed per partition, and a restarted
@@ -365,13 +411,28 @@ func TestStreamsManagerSuperStreamDistributesPartitionsIntegration(t *testing.T)
 	m2 := startSuperStreamManager(t, opts, secondMember.handle)
 	t.Cleanup(func() { stopManager(t, m2) })
 
-	publishAcrossPartitions(t, opts, bodiesFrom("msg", 0, 30))
-	require.Eventually(t, func() bool { return firstMember.count()+secondMember.count() >= 30 },
-		itWaitTimeout, itPollInterval, "the group as a whole consumes every partition")
+	// Exclusivity is a property of a settled group, so nothing is measured until the
+	// join's rebalance has demonstrably landed on both members.
+	warmUp := warmUpGroup(t, opts, firstMember, secondMember)
+	firstBase, secondBase := firstMember.count(), secondMember.count()
 
-	_, firstBodies := firstMember.snapshot()
-	_, secondBodies := secondMember.snapshot()
-	assert.ElementsMatch(t, bodiesFrom("msg", 0, 30), append(append([]string{}, firstBodies...), secondBodies...),
+	measured := bodiesFrom("msg", 0, 30)
+	publishAcrossPartitions(t, opts, measured)
+	// Gate on the measured bodies themselves: a raw count is satisfied by duplicates.
+	require.Eventually(t, func() bool {
+		seen := slices.Concat(handledSince(firstMember, firstBase, measured),
+			handledSince(secondMember, secondBase, measured))
+		for _, body := range measured {
+			if !slices.Contains(seen, body) {
+				return false
+			}
+		}
+		return true
+	}, itWaitTimeout, itPollInterval, "the group as a whole consumes every partition")
+
+	firstBodies := handledSince(firstMember, firstBase, measured)
+	secondBodies := handledSince(secondMember, secondBase, measured)
+	assert.ElementsMatch(t, measured, slices.Concat(firstBodies, secondBodies),
 		"each message reaches exactly one member: a partition has one active consumer")
 	assert.NotEmpty(t, firstBodies, "partitions are spread across the group, not served by one member")
 	assert.NotEmpty(t, secondBodies)
@@ -398,7 +459,7 @@ func TestStreamsManagerSuperStreamDistributesPartitionsIntegration(t *testing.T)
 	// survivor's promotion queries the locator, an ordering window ADR-059 accepts as replay.
 	assert.Subset(t, afterTakeover[handedOver:], newBodies,
 		"promotion resumes the orphaned partitions and delivers everything published after it")
-	assert.Subset(t, bodiesFrom("msg", 0, 45), afterTakeover[handedOver:],
+	assert.Subset(t, slices.Concat(warmUp, bodiesFrom("msg", 0, 45)), afterTakeover[handedOver:],
 		"any extra is a replay of an already-published body, never a fabricated one")
 }
 
