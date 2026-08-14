@@ -19,6 +19,22 @@ const (
 	defaultOffsetStoreCount    = 500
 	defaultOffsetStoreInterval = 5 * time.Second
 
+	// shutdownFlushBudget bounds the total wall-clock time StopConsumers spends
+	// committing offsets before it gives up on the rest.
+	//
+	// A healthy flush is one round trip per tracked stream and lands in
+	// milliseconds, so this only ever bites when the broker is unreachable —
+	// exactly the case that must not stall a pod drain. It sits at the low end of
+	// the framework's other shutdown budgets (server.timeout.shutdown 10s,
+	// scheduler.timeout.shutdown 30s) on purpose: those drain real user requests
+	// and real jobs, whereas this drains an OPTIMIZATION. Losing it replays
+	// messages that handlers are already required to be idempotent about, so
+	// trading bounded replay for a faster drain is the right way round. 5s also
+	// matches messaging.reconnect.readytimeout, the framework's other "how long do
+	// we wait on a broker that may be cold before giving up on something optional"
+	// budget.
+	shutdownFlushBudget = 5 * time.Second
+
 	// redactedStreamURI stands in for a URI that could not be parsed, so a
 	// malformed value can never reach a log line with its credentials attached.
 	// #nosec G101 -- placeholder text, not a credential
@@ -78,6 +94,12 @@ type Manager struct {
 	opts ManagerOptions
 	log  logger.Logger
 
+	// flushBudget is shutdownFlushBudget, held as a field so tests can shrink it.
+	// Deliberately not a ManagerOptions field: an operator has no way to know
+	// better than the framework here, and the value only matters when the broker
+	// is already gone.
+	flushBudget time.Duration
+
 	mu        sync.Mutex
 	env       *stream.Environment
 	consumers []*runningConsumer
@@ -103,7 +125,7 @@ func NewManager(opts ManagerOptions) *Manager {
 	if opts.OffsetStoreInterval <= 0 {
 		opts.OffsetStoreInterval = defaultOffsetStoreInterval
 	}
-	return &Manager{opts: opts, log: opts.Logger}
+	return &Manager{opts: opts, log: opts.Logger, flushBudget: shutdownFlushBudget}
 }
 
 // Start dials the broker, replays the stream declarations, and starts one
@@ -544,13 +566,14 @@ func (m *Manager) stopLocked() {
 		m.cancel = nil
 	}
 
+	// One budget for the whole phase rather than one per consumer: what this bounds
+	// is how long App.Shutdown waits, and granting each consumer the full budget
+	// would multiply the very delay it exists to cap.
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), m.flushBudget)
+	defer cancelFlush()
+
 	for _, rc := range m.consumers {
-		for _, failure := range rc.offsets.flush(rc.storerFor) {
-			m.log.Warn().Err(failure.err).
-				Str(logFieldStream, failure.stream).
-				Str(logFieldConsumer, rc.name).
-				Msg("Failed to flush stream offset on shutdown")
-		}
+		m.flushOffsetsLocked(flushCtx, rc)
 		if err := rc.handle.Close(); err != nil {
 			m.log.Warn().Err(err).
 				Str(logFieldStream, rc.stream).
@@ -561,6 +584,62 @@ func (m *Manager) stopLocked() {
 
 	m.consumers = nil
 	m.started = false
+}
+
+// flushOffsetsLocked commits one consumer's pending offsets, giving up once the
+// shutdown flush budget is spent.
+//
+// The flush runs on its own goroutine because it cannot be interrupted from the
+// outside. A super stream's offsets are committed through the environment's
+// locator (envOffsetStorer), and every locator call begins with the client's
+// maybeReconnectLocator — an unbounded, context-free `for err != nil { sleep;
+// connect }` with no attempt cap and no deadline. Against a broker that is down,
+// the FIRST such commit never returns, so a budget checked between partitions
+// would never get its turn: the loop has to be able to walk away from a call in
+// flight, not merely decline to start the next one.
+//
+// Walking away abandons that goroutine for the remaining life of the process.
+// That is the trade being made deliberately: the process is already shutting
+// down, and a leaked goroutine is cheaper than a Shutdown that never returns
+// while holding m.mu — which is what stalls Ready() and Stats(), and with them
+// /ready, for the whole of a pod drain.
+func (m *Manager) flushOffsetsLocked(ctx context.Context, rc *runningConsumer) {
+	// Checked before starting, so an already-spent budget skips the commit outright
+	// instead of attempting one more. Attempting it is what risks another unbounded
+	// block, which is the thing being prevented.
+	if ctx.Err() != nil {
+		m.warnFlushSkipped(rc)
+		return
+	}
+
+	// Buffered: an abandoned flush must still be able to deliver its result and
+	// exit rather than block forever on a send nobody is left to receive.
+	done := make(chan []flushFailure, 1)
+	go func() { done <- rc.offsets.flush(rc.storerFor) }()
+
+	select {
+	case failures := <-done:
+		for _, failure := range failures {
+			m.log.Warn().Err(failure.err).
+				Str(logFieldStream, failure.stream).
+				Str(logFieldConsumer, rc.name).
+				Msg("Failed to flush stream offset on shutdown")
+		}
+	case <-ctx.Done():
+		m.warnFlushSkipped(rc)
+	}
+}
+
+// warnFlushSkipped reports a shutdown flush the manager gave up on, naming the
+// stream the way a flush failure does. Not committing replays the messages the
+// commit would have covered, which at-least-once delivery already permits and
+// idempotent handlers already absorb.
+func (m *Manager) warnFlushSkipped(rc *runningConsumer) {
+	m.log.Warn().
+		Str(logFieldStream, rc.stream).
+		Str(logFieldConsumer, rc.name).
+		Dur("flush_budget", m.flushBudget).
+		Msg("Shutdown offset flush budget spent; offset not committed - handled messages will replay")
 }
 
 // abortStartLocked unwinds a Start that failed after the dial: it stops whatever

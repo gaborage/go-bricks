@@ -125,6 +125,16 @@ it: nothing waits for an in-flight handler callback, so one that finishes after
 the flush is never committed. **Delivery is at-least-once — a message may be
 handled more than once, so handlers must be idempotent.**
 
+That final flush is **bounded to 5 seconds in total**, across every consumer.
+A super stream commits through the environment's locator connection, and the
+client reconnects that locator in a retry loop with no attempt cap and no
+deadline — so against a broker that is down, one commit would otherwise never
+return and shutdown would never complete. When the budget runs out the
+remaining commits are skipped and each is logged at WARN naming its stream
+(`Shutdown offset flush budget spent`). Skipping only widens the replay window
+that at-least-once delivery already allows for, which is why it is preferred
+over a shutdown that hangs and takes `/ready` down with it for the whole drain.
+
 **A failed message is skipped, not redelivered.** Streams have no nack: on a
 handler error (or a recovered panic) the failure is logged and counted, the
 offset is not committed, and the next message is processed. The skip only sticks

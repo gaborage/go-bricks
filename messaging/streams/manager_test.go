@@ -75,6 +75,7 @@ const (
 	msgCloseEnvFailed      = "Failed to close stream environment after a failed start"
 	msgOffsetStoreFailed   = "Failed to store stream offset"
 	msgOffsetQueryFailed   = "Could not query the stored stream offset; attaching at a position that replays rather than skips"
+	msgFlushSkipped        = "Shutdown offset flush budget spent; offset not committed - handled messages will replay"
 )
 
 // recordingLogger captures each event's level, attached error and terminal
@@ -90,6 +91,9 @@ type recordedEvent struct {
 	level string
 	err   string
 	msg   string
+	// fields captures the string fields attached to the event, so a test can
+	// assert WHICH stream a shutdown line named rather than only that it spoke.
+	fields map[string]string
 }
 
 func (l *recordingLogger) event(level string) logger.LogEvent {
@@ -116,6 +120,21 @@ func (l *recordingLogger) messagesAt(level string) []string {
 }
 
 func (l *recordingLogger) warnMessages() []string { return l.messagesAt("warn") }
+
+// warnStreams reports the stream named by every WARN carrying msg, in order, so a
+// test asserts which streams a shutdown accounted for rather than only how many
+// lines it emitted.
+func (l *recordingLogger) warnStreams(msg string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := []string{}
+	for _, e := range l.events {
+		if e.level == "warn" && e.msg == msg {
+			out = append(out, e.fields[logFieldStream])
+		}
+	}
+	return out
+}
 
 // warnError reports the error text attached to the first WARN carrying msg. An
 // empty string with ok=true means the line was emitted with no error at all,
@@ -144,7 +163,14 @@ func (e *recordedEvent) Err(err error) logger.LogEvent {
 	}
 	return e
 }
-func (e *recordedEvent) Str(_, _ string) logger.LogEvent               { return e }
+
+func (e *recordedEvent) Str(key, value string) logger.LogEvent {
+	if e.fields == nil {
+		e.fields = map[string]string{}
+	}
+	e.fields[key] = value
+	return e
+}
 func (e *recordedEvent) Int(_ string, _ int) logger.LogEvent           { return e }
 func (e *recordedEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
 func (e *recordedEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
@@ -230,6 +256,112 @@ func TestManagerStopConsumersFlushesEveryTrackedStream(t *testing.T) {
 	assert.Equal(t, []int64{501}, storer1.offsets())
 	assert.Equal(t, []string{"close"}, handle.recorded(), "the handle itself stores nothing")
 	assert.Empty(t, m.consumers)
+}
+
+// blockingStorer stands in for a commit against a broker that is down. The
+// client's locator reconnect loop has no attempt cap and no deadline, so such a
+// call never returns on its own; release is how the test ends it once the
+// assertions are made.
+type blockingStorer struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingStorer() *blockingStorer {
+	return &blockingStorer{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (b *blockingStorer) StoreCustomOffset(int64) error {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return nil
+}
+
+// TestManagerStopConsumersAbandonsFlushWhenBudgetSpent pins the shutdown flush
+// budget. A super stream commits through the environment's locator, and every
+// locator call starts with a reconnect loop the client gives no deadline, so a
+// broker that is down makes the commit hang forever. Without a budget that hang
+// happens while stopLocked holds m.mu, which takes Ready() and Stats() — and with
+// them /ready — down for the whole of a pod drain.
+//
+// The first consumer's commit never returns. What is asserted is that shutdown
+// completes anyway, that the consumer BEHIND it is not put through a budget
+// already spent, and that both are named at WARN so the replay is not silent.
+func TestManagerStopConsumersAbandonsFlushWhenBudgetSpent(t *testing.T) {
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	m.flushBudget = 50 * time.Millisecond
+
+	blocked := newBlockingStorer()
+	defer close(blocked.release)
+
+	stuck := &fakeHandle{status: ha.StatusOpen}
+	stuckBook := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, nil) })
+	require.NoError(t, stuckBook.trackerFor(testPartition0).record(11, nil, blocked))
+
+	behind := &fakeHandle{status: ha.StatusOpen}
+	behindStorer := &fakeStorer{}
+	behindBook := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, nil) })
+	require.NoError(t, behindBook.trackerFor(testPartition1).record(501, nil, behindStorer))
+	require.Empty(t, behindStorer.offsets(), "the premise: the second consumer's offset is still pending")
+
+	m.consumers = append(m.consumers,
+		&runningConsumer{
+			stream: testSuperStream, name: testConsumerName, handle: stuck, offsets: stuckBook,
+			storerFor: func(string) offsetStorer { return blocked },
+		},
+		&runningConsumer{
+			stream: testStream, name: secondConsumerName, handle: behind, offsets: behindBook,
+			storerFor: func(string) offsetStorer { return behindStorer },
+		},
+	)
+	m.started = true
+
+	returned := make(chan struct{})
+	go func() {
+		m.StopConsumers()
+		close(returned)
+	}()
+
+	select {
+	case <-blocked.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the blocked commit was never attempted, so this test is not exercising the hang it claims to")
+	}
+
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("StopConsumers never returned: the flush budget did not bound a commit that cannot finish")
+	}
+
+	assert.Empty(t, behindStorer.offsets(),
+		"a budget already spent must skip the remaining flush outright, not attempt one more")
+	assert.Equal(t, []string{testSuperStream, testStream}, log.warnStreams(msgFlushSkipped),
+		"every skipped flush is reported at WARN, naming its stream")
+	assert.Equal(t, []string{"close"}, stuck.recorded(),
+		"an abandoned flush must still let its consumer be closed")
+	assert.Equal(t, []string{"close"}, behind.recorded())
+	assert.Empty(t, m.consumers)
+	assert.False(t, m.started)
+}
+
+// TestManagerStopConsumersFlushesWithinBudget is the other half of the budget:
+// with the broker answering, every offset is still committed and nothing is
+// skipped. Without it, a budget wired to skip unconditionally would pass the
+// abandonment test above.
+func TestManagerStopConsumersFlushesWithinBudget(t *testing.T) {
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	handle, storer0, storer1 := attachPartitioned(t, m, 1000)
+
+	m.StopConsumers()
+
+	assert.Equal(t, []int64{11}, storer0.offsets())
+	assert.Equal(t, []int64{501}, storer1.offsets())
+	assert.Empty(t, log.warnStreams(msgFlushSkipped), "a flush that lands well inside the budget skips nothing")
+	assert.Equal(t, []string{"close"}, handle.recorded())
 }
 
 // TestManagerStatsKeysOffsetsByTrackedStream pins the /ready body's key: a position
