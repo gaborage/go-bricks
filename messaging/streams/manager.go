@@ -157,8 +157,9 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	consumeCtx, cancel := consumeContext(ctx)
 	m.cancel = cancel
 
-	// The caller's ctx, not consumeCtx: declaration is startup work, and a caller
-	// that gave up on startup must be able to cut it short.
+	// Every phase below is checked against the caller's ctx, never consumeCtx: all
+	// of it is startup work a caller that gave up must be able to cut short.
+	// consumeCtx is only what the consumers it starts go on running under.
 	if err := m.declareStreams(ctx, env, decls); err != nil {
 		m.abortStartLocked()
 		return err
@@ -169,11 +170,14 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 		return err
 	}
 
-	for _, decl := range decls.consumers {
-		if err := m.startConsumer(consumeCtx, env, decl); err != nil {
-			m.abortStartLocked()
-			return err
-		}
+	// startOne binds consumeCtx, so that is what travels DOWN into each consumer and
+	// keeps its handlers alive past this call; ctx stays the loop's own, only CHECKED.
+	startOne := func(decl *consumerDeclaration) error {
+		return m.startConsumer(consumeCtx, env, decl)
+	}
+	if err := startConsumers(ctx, decls.consumers, startOne); err != nil {
+		m.abortStartLocked()
+		return err
 	}
 
 	m.started = true
@@ -213,7 +217,7 @@ func (m *Manager) environmentOptions() *stream.EnvironmentOptions {
 func (m *Manager) declareStreams(ctx context.Context, env *stream.Environment, decls *Declarations) error {
 	for _, s := range decls.streams {
 		if err := ctx.Err(); err != nil {
-			return err
+			return fmt.Errorf("startup canceled before declaring stream %q: %w", s.Name, err)
 		}
 		if err := env.DeclareStream(s.Name, streamOptionsFrom(&s.Spec)); err != nil {
 			return fmt.Errorf("failed to declare stream %q: %w", s.Name, err)
@@ -230,10 +234,31 @@ func (m *Manager) declareStreams(ctx context.Context, env *stream.Environment, d
 func (m *Manager) declareSuperStreams(ctx context.Context, env *stream.Environment, decls *Declarations) error {
 	for _, s := range decls.superStreams {
 		if err := ctx.Err(); err != nil {
-			return err
+			return fmt.Errorf("startup canceled before declaring super stream %q: %w", s.Name, err)
 		}
 		if err := env.DeclareSuperStream(s.Name, partitionOptionsFrom(s.Partitions, &s.Spec)); err != nil {
 			return fmt.Errorf("failed to declare super stream %q: %w", s.Name, err)
+		}
+	}
+	return nil
+}
+
+// startConsumers starts each declaration in turn, checking ctx before every one:
+// a start opens a subscription, so a caller that gave up on startup stops paying
+// for the consumers not yet started. It stops at the first failure, leaving the
+// already-started ones for the caller to unwind.
+//
+// start is a parameter rather than a method call because it is the only part that
+// reaches the broker — *stream.Environment is a concrete vendor type with no seam
+// to fake — so keeping it out is what lets this loop's cancellation and fail-fast
+// policy be exercised without one.
+func startConsumers(ctx context.Context, decls []*consumerDeclaration, start func(*consumerDeclaration) error) error {
+	for _, decl := range decls {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("startup canceled before starting consumer %q: %w", decl.Name, err)
+		}
+		if err := start(decl); err != nil {
+			return err
 		}
 	}
 	return nil

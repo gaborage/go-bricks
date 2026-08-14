@@ -17,6 +17,14 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+// secondConsumerName is the second member of a two-declaration fan-out.
+const secondConsumerName = testConsumerName + "-2"
+
+// errStartAttempted marks a consumer start that should never have been reached.
+var errStartAttempted = errors.New("consumer start attempted")
+
+func failingStart(*consumerDeclaration) error { return errStartAttempted }
+
 // fakeHandle stands in for *ha.ReliableConsumer so shutdown bookkeeping is
 // testable without a broker.
 type fakeHandle struct {
@@ -296,25 +304,39 @@ func TestManagerStartRejectsSecondStart(t *testing.T) {
 	assert.Contains(t, err.Error(), "already started")
 }
 
-// TestManagerDeclareAbortsOnACanceledContext pins that a canceled startup stops
-// the declaration fan-out before it reaches the broker. The environment is nil, so
-// any call that got as far as the client would panic rather than return.
-func TestManagerDeclareAbortsOnACanceledContext(t *testing.T) {
+// TestManagerStartupAbortsOnACanceledContext pins that a canceled startup stops
+// every one of Start's fan-outs before it reaches the broker, and names the phase
+// it stopped in. The environment is nil, so any call that got as far as the client
+// would panic rather than return.
+func TestManagerStartupAbortsOnACanceledContext(t *testing.T) {
 	decls := NewDeclarations()
 	decls.DeclareStream(testStream, nil)
 	decls.DeclareSuperStream(testSuperStream, 2, nil)
+	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
 
 	tests := []struct {
-		name    string
-		declare func(m *Manager, ctx context.Context) error
+		name      string
+		phase     func(m *Manager, ctx context.Context) error
+		wantPhase string
 	}{
 		{
-			name:    "plain_streams",
-			declare: func(m *Manager, ctx context.Context) error { return m.declareStreams(ctx, nil, decls) },
+			name:      "plain_streams",
+			phase:     func(m *Manager, ctx context.Context) error { return m.declareStreams(ctx, nil, decls) },
+			wantPhase: `declaring stream "` + testStream + `"`,
 		},
 		{
-			name:    "super_streams",
-			declare: func(m *Manager, ctx context.Context) error { return m.declareSuperStreams(ctx, nil, decls) },
+			name:      "super_streams",
+			phase:     func(m *Manager, ctx context.Context) error { return m.declareSuperStreams(ctx, nil, decls) },
+			wantPhase: `declaring super stream "` + testSuperStream + `"`,
+		},
+		{
+			// The starter fails loudly, so a guard that let the loop reach it would
+			// surface errStartAttempted here instead of the cancellation.
+			name: "consumers",
+			phase: func(_ *Manager, ctx context.Context) error {
+				return startConsumers(ctx, decls.consumers, failingStart)
+			},
+			wantPhase: `starting consumer "` + testConsumerName + `"`,
 		},
 	}
 
@@ -325,9 +347,11 @@ func TestManagerDeclareAbortsOnACanceledContext(t *testing.T) {
 			cancel()
 
 			var err error
-			require.NotPanics(t, func() { err = tt.declare(m, ctx) })
+			require.NotPanics(t, func() { err = tt.phase(m, ctx) })
 
 			assert.ErrorIs(t, err, context.Canceled)
+			assert.Contains(t, err.Error(), tt.wantPhase,
+				"the caller must be told which startup phase the cancellation stopped")
 		})
 	}
 }
@@ -340,6 +364,48 @@ func TestManagerDeclareProceedsOnALiveContext(t *testing.T) {
 	m := testManager(t)
 
 	assert.Panics(t, func() { _ = m.declareStreams(context.Background(), nil, decls) })
+}
+
+// twoConsumers declares a pair so the fan-out has a second iteration to reach —
+// with one declaration, stopping early and running to completion look identical.
+func twoConsumers(t *testing.T) *Declarations {
+	t.Helper()
+	decls := NewDeclarations()
+	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: secondConsumerName, Handler: noopHandler})
+	return decls
+}
+
+// TestStartConsumersStartsEveryDeclaration pins that a live context does not
+// short-circuit the fan-out: every declaration is started, in order.
+func TestStartConsumersStartsEveryDeclaration(t *testing.T) {
+	decls := twoConsumers(t)
+
+	var started []string
+	err := startConsumers(context.Background(), decls.consumers, func(decl *consumerDeclaration) error {
+		started = append(started, decl.Name)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{testConsumerName, secondConsumerName}, started,
+		"a live context starts every consumer, not just the first")
+}
+
+// TestStartConsumersStopsAtTheFirstFailure pins the other half: a start that fails
+// reaches the caller unchanged — Start turns it into an aborted startup — and the
+// declarations behind it are never attempted.
+func TestStartConsumersStopsAtTheFirstFailure(t *testing.T) {
+	decls := twoConsumers(t)
+
+	var attempted []string
+	err := startConsumers(context.Background(), decls.consumers, func(decl *consumerDeclaration) error {
+		attempted = append(attempted, decl.Name)
+		return errStartAttempted
+	})
+
+	require.ErrorIs(t, err, errStartAttempted)
+	assert.Equal(t, []string{testConsumerName}, attempted, "the fan-out stops at the first failure")
 }
 
 func TestManagerStopConsumersFlushesBeforeClosing(t *testing.T) {
