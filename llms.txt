@@ -2989,9 +2989,11 @@ func (m *Module) DeclareStreams(decls *streams.Declarations) {
 For a **super stream** (a stream partitioned into `<name>-0`…`<name>-(n-1)`, RabbitMQ
 3.13+), declare it with a partition count and consume it as one group. There is no `SAC`
 field — super-stream consumption is always a single active consumer group, which is what
-restores a stored offset per partition. Offsets, order and the commit policy are
-per-partition, and the handler is called **concurrently across partitions**, so it must be
-goroutine-safe:
+restores a stored offset per partition. Within one `Name`, each partition has exactly one
+active member at a time and the broker spreads partitions across the group, so members
+beyond the partition count are standbys and a promoted member resolves that partition's
+stored offset. Offsets, order and the commit policy are per-partition, and the handler is
+called **concurrently across partitions**, so it must be goroutine-safe:
 
 ```go
 decls.DeclareSuperStream("orders", 3, &streams.StreamSpec{MaxLengthBytes: 5 << 30})
