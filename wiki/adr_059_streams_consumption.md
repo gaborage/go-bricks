@@ -4,6 +4,12 @@
 - **Date**: 2026-08-12
 - **Related**: ADR-058 (the AMQP stream-queue lane and the two-lane framing), [ADR-040](adr_040_declaration_args_passthrough.md) (declaration args reach the broker), [ADR-045](adr_045_no_producer_side_manager_interfaces.md) (no exported manager interface), [ADR-041](adr_041_shared_ledger_tenancy.md) (single-tenant fail-fast precedent)
 
+> **Amended (2026-08-13):** super streams, listed below as the third thing the
+> AMQP lane cannot do, are now implemented in this lane. The amendment settles
+> what that costs: super-stream consumption is always a SAC group, offsets are
+> tracked per partition, and the "handlers run inline, sequentially" rule below
+> holds only *within* a partition — see [Amendment: super streams](#amendment-super-streams).
+
 ## Context
 
 ADR-058 established the AMQP 0.9.1 lane:
@@ -81,10 +87,9 @@ runs handlers inline on the client's callback. A stream is an ordered log: a
 worker pool would break that order *and* make a committed offset lie, because
 the offset only means "everything up to here was handled" when handling is
 sequential. Parallelism therefore comes from super-stream partitions — each
-partition gets its own active consumer, and order is preserved within one —
-which is future work in this lane, not from threads inside a process. SAC is not
-that lever: exactly one group member consumes, so it buys failover, not
-throughput.
+partition gets its own active consumer, and order is preserved within one — not
+from threads inside a process. On a plain stream SAC is not that lever either:
+exactly one group member consumes, so it buys failover, not throughput.
 
 ### Single-tenant only, enforced by config validation
 
@@ -118,6 +123,103 @@ interface ([ADR-045](adr_045_no_producer_side_manager_interfaces.md)) — and no
 `ModuleDeps` field is added, because consumption needs no per-request accessor.
 Metrics reuse the AMQP instruments rather than minting a second meter.
 
+## Amendment: super streams
+
+*Added 2026-08-13, extending the decision above rather than replacing it.*
+`DeclareSuperStream` + `DeclareSuperStreamConsumer` consume a partitioned stream
+through `ha.NewReliableSuperStreamConsumer`. Everything above still holds per
+partition: commit-after-success, the count/interval policy, skip-on-failure, the
+shutdown flush, and at-least-once delivery.
+
+### Super-stream consumption is always a single active consumer group
+
+`SuperStreamConsumerOptions` has no `SAC` field, where the plain
+`ConsumerOptions` does. At client v1.8.3 that is not a preference, it is the only
+correct shape:
+
+- `SuperStreamConsumer.init` attaches **every** partition with the single
+  `SuperStreamConsumerOptions.Offset` — there is one offset specification for the
+  whole super stream.
+- A per-partition position can therefore only be supplied by the SAC
+  `ConsumerUpdate` callback, which the broker fires once per partition on
+  promotion.
+- The one other candidate, `OffsetSpecification.LastConsumed()`, is documented
+  `Deprecated` upstream in favour of `QueryOffset` + `Offset(n)`.
+
+A non-SAC super-stream consumer would therefore replay every partition from
+`Start` on every restart, contradicting "a stored offset always wins" above.
+Since a lone group member is promoted on every partition, always-SAC costs a
+single-instance deployment nothing, and a flag whose only setting is broken is
+worse than no flag. The implementation plan specified a `SAC bool` here; it was
+dropped for these reasons, and should not be restored without first checking
+whether the client has grown a per-partition offset seam.
+
+### Handlers are concurrent across partitions — a contract change
+
+Each partition is a separate connection with its own delivery loop, so the
+framework `Handler` is called **concurrently across partitions** and must be
+goroutine-safe when registered with `DeclareSuperStreamConsumer`. Within one
+partition it stays sequential and ordered, which is what keeps a committed
+offset truthful. Modules written against the plain lane, where a handler is
+never called concurrently, must be re-checked for shared mutable state before
+being pointed at a super stream.
+
+### Offsets are per partition, and the shutdown flush goes through the environment
+
+One consumer now tracks one committed position per partition
+(`consumerContext.Consumer.GetStreamName()` names it, and `Message.Stream`
+carries it to the handler). `Stats` and `/ready` report them keyed
+`<partition>/<consumer name>`.
+
+In-flight commits still go through the consumer the client hands to the delivery
+callback. The **shutdown flush** cannot: `*ha.ReliableSuperStreamConsumer` has no
+`StoreCustomOffset` at all (only the plain `*ha.ReliableConsumer` does), and the
+partition consumer that delivered the last message may already have been replaced
+by a reconnect. It goes through `Environment.StoreOffset(consumer, partition,
+offset)` instead, on the locator connection.
+
+That splits commits across two connections, and the broker applies whichever
+arrives last: a delivery goroutine's in-flight commit and the shutdown flush can
+land out of order even though the tracker's lock issues them in order, so a stop
+racing a final delivery may leave the older position stored and replay from it on
+restart. It costs duplicate work, not correctness — delivery is at-least-once and
+handlers are idempotent — so it is accepted rather than serialized.
+
+### Known limitation: an uncapped locator reconnect can stall one partition
+
+`Environment.QueryOffset` — which the promotion callback calls to resolve a
+partition's position — routes through the client's `maybeReconnectLocator`, a
+`for err != nil { sleep; connect }` loop with no cap, no deadline and no context
+(`pkg/stream/environment.go`). The callback runs on that partition's read loop, so
+a locator outage during a promotion blocks it: the broker never receives the
+consumer-update response and the partition consumes nothing until the process
+restarts. `ReliableSuperStreamConsumer.GetStatus` reads a stored field that a
+blocked read loop never updates, so `Manager.Ready` — and `/ready` — stay green
+over it.
+
+This is accepted rather than fixed: bounding a vendor call that accepts neither
+context nor timeout means either reimplementing the offset query or wrapping it in
+a goroutine whose abandonment leaks, and the client's `MaxConsumersPerClient: 1`
+holds the blast radius to a single partition. The operational answer is to alert on
+consumed-message rate per partition instead of readiness alone, which
+[wiki/streams.md](streams.md) documents as a trap.
+
+### Declaring a super stream needs RabbitMQ 3.13+, and a mismatch is silent
+
+The client gates `DeclareSuperStream` on `is313OrMore`; plain-stream SAC needs
+only 3.11+. Because the framework always declares before consuming, 3.13 is the
+floor for this feature.
+
+`Environment.DeclareSuperStream` swallows `StreamAlreadyExists`, where
+`DeclareStream` surfaces a retention mismatch as precondition-failed. Re-declaring
+a super stream with a **different partition count is therefore accepted silently**
+and the existing topology is kept — pinned by
+`TestStreamsManagerSuperStreamPartitionMismatchIsSilentIntegration`. Failing
+closed would mean querying the partitions before declaring and comparing, which
+buys a startup abort in exchange for a second round trip and a new failure mode
+against ops-provisioned topologies; the trap is documented in
+[wiki/streams.md](streams.md) instead. Revisit if it bites.
+
 ## Consequences
 
 **Positive.** A restart resumes from the last stored offset, with no client-side
@@ -135,8 +237,8 @@ versions, and the `go.work.sum` gate is where that lands.
 
 **Negative — throughput per consumer is bounded by one handler.** A slow handler
 is a slow stream. That is the price of ordered, truthful offsets, and the
-mitigation is partitioning (future work), not threading — adding SAC members
-adds standbys, not consumers.
+mitigation is partitioning (see the amendment), not threading — adding SAC
+members to a *plain* stream adds standbys, not consumers.
 
 **Negative — a failed message is lost to the consumer.** See above. Until
 parking exists, a handler that must not lose a message has to persist it itself.

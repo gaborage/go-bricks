@@ -417,6 +417,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **OTel log-record identity (ADR-055, ADR-056):** top-level fields keyed `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` reach OTLP as `app.<key>`; framework record attributes shrink to `log.type`, identity stays in `ResourceLogs.resource`.
 - **Consumer-scoped AMQP args (ADR-058):** `ConsumeOptions`/`ConsumerOptions`/`ConsumerDeclaration` gain `Args`, forwarded to `basic.consume` — that is where `x-stream-offset` goes; `DeclareStreamQueue` sets only queue type + retention. A map field makes all three non-comparable: `==` and map-key use stop compiling.
 - **Cache conditional release (ADR-060):** `cache.Cache` gains `CompareAndDelete`; every implementer must add it, including test doubles `go build` skips — use `go vet ./...`. Release locks with it, not `Delete`, and acquire with a positive TTL.
+- **Role password control chars (ADR-061):** `PGRoleSpec.Validate` rejects CR/LF/NUL in `MigratorPassword`/`RuntimePassword` — match `errors.Is(err, migration.ErrPGRolePasswordHasControlChar)`; trim file-sourced secrets.
 
 ## File Organization
 

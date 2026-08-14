@@ -18,6 +18,11 @@ import (
 // not for the stream: the failure is logged and counted, the offset is NOT
 // committed, and consumption continues with the next message. Streams have no
 // nack or redelivery, so handlers must be idempotent.
+//
+// Calls are sequential within one stream — and within one partition of a super
+// stream — but CONCURRENT across the partitions of a super stream, because each
+// partition is a separate connection with its own delivery loop. A handler
+// registered with DeclareSuperStreamConsumer must therefore be goroutine-safe.
 type Handler func(ctx context.Context, msg *Message) error
 
 // Message is the framework view of a stream delivery.
@@ -117,5 +122,31 @@ type ConsumerOptions struct {
 	// messages at a time (RabbitMQ 3.11+).
 	SAC bool
 	// Handler processes each message. Required.
+	Handler Handler
+}
+
+// SuperStreamConsumerOptions declares one consumer over every partition of a
+// super stream.
+//
+// There is deliberately no SAC field: super-stream consumption is ALWAYS a single
+// active consumer group. The client attaches every partition with one shared
+// offset specification, so the SAC promotion callback — which the broker fires
+// once per partition — is the only place a per-partition stored offset can be
+// restored. Without it a restart would replay every partition from Start, which
+// contradicts the stored-offset-wins contract the plain lane documents. A lone
+// member is promoted on every partition, so a single-instance deployment loses
+// nothing. See ADR-059.
+type SuperStreamConsumerOptions struct {
+	// SuperStream is the super stream to consume; it must be declared in the same
+	// Declarations.
+	SuperStream string
+	// Name is the consumer/group name. Required: the broker stores an offset per
+	// partition under it, and it is the group identity partitions are distributed by.
+	Name string
+	// Start is where a partition begins when the broker holds no stored offset for
+	// Name on that partition.
+	Start OffsetStart
+	// Handler processes each message. Required, and called concurrently across
+	// partitions — see Handler.
 	Handler Handler
 }
