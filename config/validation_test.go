@@ -5716,3 +5716,63 @@ func TestValidateStreamsRejectsMultiTenantEndToEnd(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "single-tenant only")
 }
+
+func TestApplyDatabasePoolDefaultsInfersTypeFromScheme(t *testing.T) {
+	tests := []struct {
+		name         string
+		config       DatabaseConfig
+		expectedType string
+	}{
+		{
+			name:         "postgres_scheme_infers_type",
+			config:       DatabaseConfig{ConnectionString: "postgres://user:pass@localhost:5432/db"},
+			expectedType: PostgreSQL,
+		},
+		{
+			name:         "postgresql_scheme_infers_type",
+			config:       DatabaseConfig{ConnectionString: testConnectionString},
+			expectedType: PostgreSQL,
+		},
+		{
+			name:         "oracle_scheme_infers_type",
+			config:       DatabaseConfig{ConnectionString: testOracleConnectionString},
+			expectedType: Oracle,
+		},
+		{
+			name:         "scheme_case_insensitive",
+			config:       DatabaseConfig{ConnectionString: "POSTGRES://user:pass@localhost:5432/db"},
+			expectedType: PostgreSQL,
+		},
+		// Unrecognized and absent DSNs leave Type empty and return no error here:
+		// this seam is on the per-tenant connection path, so database.NewConnection's
+		// "unsupported database type" stays the failure surface for dynamic sources
+		// (ADR-050 keeps classification in the config/app layers).
+		{
+			name:         "unknown_scheme_keeps_empty_type",
+			config:       DatabaseConfig{ConnectionString: testUnknownSchemeConnString},
+			expectedType: "",
+		},
+		{
+			name:         "no_connection_string_keeps_empty_type",
+			config:       DatabaseConfig{},
+			expectedType: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, ApplyDatabasePoolDefaults(&tt.config))
+			assert.Equal(t, tt.expectedType, tt.config.Type)
+		})
+	}
+}
+
+func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
+	conflicting := DatabaseConfig{Type: Oracle, ConnectionString: "postgres://user:pass@localhost:5432/db"}
+	require.NoError(t, ApplyDatabasePoolDefaults(&conflicting))
+	assert.Equal(t, Oracle, conflicting.Type)
+
+	matching := DatabaseConfig{Type: PostgreSQL, ConnectionString: testConnectionString}
+	require.NoError(t, ApplyDatabasePoolDefaults(&matching))
+	assert.Equal(t, PostgreSQL, matching.Type)
+}

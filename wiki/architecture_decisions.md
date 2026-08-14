@@ -902,6 +902,8 @@ The `count > 1` ambiguity error and the Oracle TLS rejection are not waived.
 booting into a dead database — including `oracle://…` with no separate identifier field; an
 unrecognized scheme on the built-in connector fails fast
 at startup instead of at first query; a `type`/scheme conflict is caught at validation.
+`config.ApplyDatabasePoolDefaults` applies the same inference on the dynamic
+multi-tenant resolution path, which bypasses `Validate` entirely.
 Fixes [#877](https://github.com/gaborage/go-bricks/issues/877). See
 [migrations.md](migrations.md) `[C57.5]`.
 

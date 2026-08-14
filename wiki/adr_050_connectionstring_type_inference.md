@@ -113,3 +113,19 @@ stays in the config/app layers, not the connector.
   (ADR-012); landing a third vendor would need both
   `inferDatabaseTypeFromConnectionString` and the builder-guard message
   extended in the same commit. See [migrations.md](migrations.md) `[C57.5]`.
+- Inference now also runs on the **dynamic-resolution** path.
+  `config.ApplyDatabasePoolDefaults` — the seam
+  `database.DbManager.createConnection` applies to every config a
+  `DBConfigProvider` returns — infers a missing `Type` from the DSN scheme, so a
+  dynamic multi-tenant source returning `{ConnectionString: "postgres://…"}`
+  dials instead of failing that tenant's every request with
+  `unsupported database type: ""`. The explicit-conflict **error** stays
+  Validate-only: this seam runs per connection, where a wrong explicit `Type`
+  is better surfaced by the vendor dial error than converted into a config
+  error for one tenant at a time.
+- **This narrows the `Options.DatabaseConnector` exemption.** A custom connector
+  is still exempt from `ConfigureRuntimeHelpers`' startup guard, but it now
+  receives `Type` already inferred to `postgresql`/`oracle` for a recognized
+  scheme, where it previously received `""`. A connector that branches on
+  `cfg.Type == ""` to decide whether to parse the DSN itself must be reviewed.
+  Unrecognized schemes are unaffected — `Type` stays `""`.

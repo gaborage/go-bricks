@@ -838,10 +838,20 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 // (log/slow-threshold) settings on cfg to the documented defaults (25 max
 // connections, idle tracks max, keepalive rules, UTC timezone). Exported so
 // callers that bypass Validate — notably dynamic multi-tenant DBConfigProviders
-// resolved in DbManager — get the same normalization as static config.
+// resolved in DbManager — get the same normalization as static config. A missing
+// Type is also inferred from a recognized connectionstring scheme (ADR-050), so a
+// dynamic provider's DSN-only config dials instead of failing on the factory's
+// empty-type dispatch. Unlike config.Validate, this seam never errors on an
+// explicit Type that contradicts the scheme — it is on the per-tenant connection
+// path, where the vendor dial error is the right failure.
 func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg == nil {
 		return NewValidationError("database", "configuration is nil")
+	}
+	if cfg.Type == "" {
+		if inferred := inferDatabaseTypeFromConnectionString(cfg.ConnectionString); inferred != "" {
+			cfg.Type = inferred
+		}
 	}
 	return applyDatabasePoolDefaults(cfg)
 }
