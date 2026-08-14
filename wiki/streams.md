@@ -17,8 +17,8 @@ lane (a stream queue bound to an exchange) or a dedicated client — see
 | Start position | `x-stream-offset` consumer arg | `Start` + stored offset |
 | Offset tracking | client-side, session-local | **server-side, survives restarts** |
 | Single active consumer | no | yes |
-| Super streams | no | Phase 3 |
-| Handler concurrency | worker pool (`NumCPU*4`) | **sequential, inline** |
+| Super streams | no | yes (RabbitMQ 3.13+) |
+| Handler concurrency | worker pool (`NumCPU*4`) | **sequential per stream**, one goroutine per partition |
 | Multi-tenant | yes | no — single-tenant only |
 
 Pick the AMQP lane when port 5552 is not reachable or the deployment is
@@ -134,13 +134,18 @@ Anything that must not be lost belongs in the handler's own durable store.
 Parking failed messages is future work
 ([ADR-059](adr_059_streams_consumption.md)).
 
-**Handlers run inline and sequentially — there is no worker pool.** A stream is
-an ordered log: parallel handlers would break that order and make a committed
-offset claim that messages behind it were handled. This is the deliberate
-opposite of the AMQP lane's `NumCPU*4` default. Parallel consumption comes from
-super-stream partitions — one active consumer per partition, order preserved
-within each — which is Phase 3, not from threads inside one process. SAC is not
-a throughput lever; see below.
+**Handlers run inline and sequentially within a stream — there is no worker
+pool.** A stream is an ordered log: parallel handlers would break that order and
+make a committed offset claim that messages behind it were handled. This is the
+deliberate opposite of the AMQP lane's `NumCPU*4` default.
+
+Parallelism comes from **partitions**, not from threads. Each partition of a
+super stream is a separate connection with its own delivery loop, so a
+super-stream handler is called **concurrently across partitions** — sequential
+and ordered within one, concurrent between them. **A handler registered with
+`DeclareSuperStreamConsumer` must be goroutine-safe**; one registered with
+`DeclareConsumer` on a plain stream never needs to be. On a plain stream, SAC is
+not a throughput lever; see below.
 
 **There is no handler timeout.** Unlike an HTTP handler, a stream handler gets no
 deadline: the context it receives is canceled only by `StopConsumers`, so a
@@ -152,11 +157,64 @@ bound your own work (`context.WithTimeout` around the slow call).
 ## Single active consumer
 
 `SAC: true` makes the broker deliver to exactly one member of the consumer-name
-group at a time (RabbitMQ 3.11+). This is **failover, not parallelism**: the
-other members are standbys promoted when the active one goes away, so more
-members buy availability, not throughput. On promotion the framework re-resolves
-the stored offset, so a takeover resumes where the previous active member
-committed.
+group at a time (RabbitMQ 3.11+). On a **plain stream** this is **failover, not
+parallelism**: the other members are standbys promoted when the active one goes
+away, so more members buy availability, not throughput. On promotion the
+framework re-resolves the stored offset, so a takeover resumes where the previous
+active member committed.
+
+On a **super stream** the same mechanism does more, which is why the flag is not
+the caller's there: the broker distributes the *partitions* across the group, so
+a second member consumes the partitions the first is not active on. Same
+mechanism, two outcomes — failover on one stream, shared partitions on a super
+stream.
+
+## Super streams
+
+A super stream is a partitioned stream: `n` ordinary streams the broker names
+`<name>-0` … `<name>-(n-1)`, addressed as one. Order holds within a partition,
+not across the whole super stream, and the framework tracks a **separate committed
+offset per partition**.
+
+```go
+func (m *Module) DeclareStreams(decls *streams.Declarations) {
+    decls.DeclareSuperStream("orders", 3, &streams.StreamSpec{
+        MaxLengthBytes: 5 * 1024 * 1024 * 1024, // applies to every partition
+    })
+
+    decls.DeclareSuperStreamConsumer(&streams.SuperStreamConsumerOptions{
+        SuperStream: "orders",
+        Name:        "order-projector", // offset key per partition, and the group identity
+        Start:       streams.OffsetFirst(),
+        Handler:     m.svc.HandleOrder, // called concurrently across partitions
+    })
+}
+```
+
+- **There is no `SAC` field, and consumption is always a SAC group.** The client
+  attaches every partition with one shared offset specification, so the promotion
+  callback — fired once per partition — is the only place a per-partition stored
+  offset can be restored; without it a restart would replay every partition from
+  `Start`. A lone member is promoted on every partition, so a single-instance
+  service loses nothing. See [ADR-059](adr_059_streams_consumption.md).
+- **Scale by adding members, up to the partition count.** Members beyond `n` are
+  standbys. Partitions are fixed at declaration time; sizing them is a capacity
+  decision, not something to change casually (see the mismatch trap below).
+- Offsets, the commit policy, the skip-on-failure semantics and the shutdown
+  flush all work per partition. `/ready` and `Stats` report one position per
+  partition, keyed `<partition>/<consumer name>`.
+- Declaring a super stream requires **RabbitMQ 3.13+** (the client's
+  `DeclareSuperStream` command); plain-stream SAC only needs 3.11+.
+- **Trap: re-declaring a super stream with a different partition count is
+  accepted silently.** Where `DeclareStream` surfaces a retention mismatch as
+  precondition-failed and aborts startup, the client swallows "already exists"
+  for super streams, so a changed `partitions` value neither reshapes the
+  topology nor fails — the service simply keeps consuming the partitions that
+  exist. Change the count by declaring a new super stream, not by editing the
+  old one.
+- Producer-side routing (which partition a message lands on) is out of scope
+  here, as all stream publishing is. Publish through the AMQP lane or a
+  dedicated client; the partition a message reached is on `msg.Stream`.
 
 ## Observability
 
@@ -177,6 +235,8 @@ implemented (future work).
 ## Operations
 
 - Enable the plugin: `rabbitmq-plugins enable rabbitmq_stream`.
+- RabbitMQ 3.11+ for single active consumer, **3.13+ for super streams** — the
+  framework declares one at startup, and that command is 3.13-only.
 - Publish port 5552 (or 5551 for TLS) and make it reachable from the service.
 - Behind an LB or NAT, set `messaging.streams.addressresolver.*`.
 - Streams need explicit retention (`MaxAge` / `MaxLengthBytes`); they do not

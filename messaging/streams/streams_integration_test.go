@@ -23,15 +23,20 @@ import (
 const (
 	itStream       = "it-orders"
 	itConsumerName = "it-group"
+	itSuperStream  = "it-orders-super"
+	itSuperGroup   = "it-super-group"
+	itPartitions   = 3
 	itWaitTimeout  = 20 * time.Second
 	itPollInterval = 50 * time.Millisecond
 )
 
-// recorder collects the messages a handler saw, in arrival order.
+// recorder collects the messages a handler saw, in arrival order. A super-stream
+// handler is called concurrently across partitions, so every field is guarded.
 type recorder struct {
 	mu       sync.Mutex
 	offsets  []int64
 	bodies   []string
+	streams  []string
 	failAt   int64
 	failures int
 }
@@ -41,11 +46,26 @@ func (r *recorder) handle(_ context.Context, msg *Message) error {
 	defer r.mu.Unlock()
 	r.offsets = append(r.offsets, msg.Offset)
 	r.bodies = append(r.bodies, string(msg.Data))
+	r.streams = append(r.streams, msg.Stream)
 	if r.failAt >= 0 && msg.Offset == r.failAt {
 		r.failures++
 		return errors.New("deliberate handler failure")
 	}
 	return nil
+}
+
+// perStream splits what arrived by the stream it arrived on, which for a super
+// stream is the partition.
+func (r *recorder) perStream() (offsets map[string][]int64, bodies map[string][]string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	offsets, bodies = map[string][]int64{}, map[string][]string{}
+	for i, name := range r.streams {
+		offsets[name] = append(offsets[name], r.offsets[i])
+		bodies[name] = append(bodies[name], r.bodies[i])
+	}
+	return offsets, bodies
 }
 
 func (r *recorder) snapshot() (offsets []int64, bodies []string) {
@@ -81,9 +101,9 @@ func streamsTestEnv(ctx context.Context, t *testing.T) ManagerOptions {
 	}
 }
 
-// publish writes n messages through a test-only producer environment. Producers
-// are deliberately outside the framework surface, so tests drive the client directly.
-func publish(t *testing.T, opts ManagerOptions, streamName string, bodies []string) {
+// testEnvironment dials the broker the way the manager does, for the test's own
+// producing and querying.
+func testEnvironment(t *testing.T, opts ManagerOptions) *stream.Environment {
 	t.Helper()
 
 	envOpts := stream.NewEnvironmentOptions().
@@ -91,6 +111,15 @@ func publish(t *testing.T, opts ManagerOptions, streamName string, bodies []stri
 		SetAddressResolver(stream.AddressResolver{Host: opts.AddressResolverHost, Port: opts.AddressResolverPort})
 	env, err := stream.NewEnvironment(envOpts)
 	require.NoError(t, err)
+	return env
+}
+
+// publish writes n messages through a test-only producer environment. Producers
+// are deliberately outside the framework surface, so tests drive the client directly.
+func publish(t *testing.T, opts ManagerOptions, streamName string, bodies []string) {
+	t.Helper()
+
+	env := testEnvironment(t, opts)
 	defer func() { require.NoError(t, env.Close()) }()
 
 	producer, err := env.NewProducer(streamName, stream.NewProducerOptions())
@@ -218,6 +247,177 @@ func TestStreamsManagerSkipsFailedMessageIntegration(t *testing.T) {
 	_, replayed := replay.snapshot()
 	assert.Equal(t, bodiesFrom("msg", 10, 2), replayed,
 		"the failed message is skipped on restart - streams have no redelivery")
+}
+
+// partitionName is how the broker names a super stream's partitions.
+func partitionName(superStream string, index int) string {
+	return fmt.Sprintf("%s-%d", superStream, index)
+}
+
+// publishAcrossPartitions writes bodies round-robin into the super stream's
+// partitions and reports what went where. A partition is itself a plain stream, so
+// publishing into it directly is exactly what a routing strategy would do — and it
+// keeps which body lands on which partition deterministic, which a hash strategy
+// would not.
+func publishAcrossPartitions(t *testing.T, opts ManagerOptions, bodies []string) map[string][]string {
+	t.Helper()
+
+	perPartition := make(map[string][]string, itPartitions)
+	for i, body := range bodies {
+		name := partitionName(itSuperStream, i%itPartitions)
+		perPartition[name] = append(perPartition[name], body)
+	}
+	for name, batch := range perPartition {
+		publish(t, opts, name, batch)
+	}
+	return perPartition
+}
+
+// startSuperStreamManager starts one super-stream consumer group member.
+func startSuperStreamManager(t *testing.T, opts ManagerOptions, handler Handler) *Manager {
+	t.Helper()
+
+	decls := NewDeclarations()
+	decls.DeclareSuperStream(itSuperStream, itPartitions, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+		SuperStream: itSuperStream,
+		Name:        itSuperGroup,
+		Start:       OffsetFirst(),
+		Handler:     handler,
+	})
+
+	m := NewManager(opts)
+	require.NoError(t, m.Start(context.Background(), decls))
+	return m
+}
+
+func stopManager(t *testing.T, m *Manager) {
+	t.Helper()
+	m.StopConsumers()
+	require.NoError(t, m.Close())
+}
+
+// TestStreamsManagerConsumesSuperStreamPartitionsIntegration proves the whole
+// per-partition contract against a broker: every partition is consumed, order is
+// preserved within each one, offsets are committed per partition, and a restarted
+// group member resumes on each partition independently instead of replaying it.
+func TestStreamsManagerConsumesSuperStreamPartitionsIntegration(t *testing.T) {
+	ctx := context.Background()
+	opts := streamsTestEnv(ctx, t)
+
+	first := &recorder{failAt: -1}
+	m := startSuperStreamManager(t, opts, first.handle)
+
+	published := publishAcrossPartitions(t, opts, bodiesFrom("msg", 0, 30))
+	waitForCount(t, first, 30)
+
+	offsets, bodies := first.perStream()
+	require.Len(t, bodies, itPartitions, "every partition delivered")
+	for i := range itPartitions {
+		name := partitionName(itSuperStream, i)
+		assert.Equal(t, published[name], bodies[name], "partition %s keeps its publish order", name)
+		for j := 1; j < len(offsets[name]); j++ {
+			assert.Greater(t, offsets[name][j], offsets[name][j-1],
+				"offsets are monotonic within partition %s", name)
+		}
+	}
+
+	require.Eventually(t, func() bool {
+		stored, ok := m.Stats()["stored_offsets"].(map[string]int64)
+		if !ok || len(stored) != itPartitions {
+			return false
+		}
+		for i := range itPartitions {
+			if stored[partitionName(itSuperStream, i)+"/"+itSuperGroup] != 9 {
+				return false
+			}
+		}
+		return true
+	}, itWaitTimeout, itPollInterval, "each partition commits its own last handled offset")
+
+	stopManager(t, m)
+
+	// A fresh member under the same group name must resume on every partition.
+	second := &recorder{failAt: -1}
+	m2 := startSuperStreamManager(t, opts, second.handle)
+	t.Cleanup(func() { stopManager(t, m2) })
+
+	resumed := publishAcrossPartitions(t, opts, bodiesFrom("msg", 30, 9))
+	waitForCount(t, second, 9)
+
+	_, secondBodies := second.perStream()
+	assert.Equal(t, resumed, secondBodies, "the stored offset wins per partition, not per super stream")
+	assert.Equal(t, 9, second.count(), "no partition replays what the previous member committed")
+}
+
+// TestStreamsManagerSuperStreamDistributesPartitionsIntegration exercises the
+// group: two members of one super-stream consumer group share the partitions, each
+// message is handled by exactly one of them, and stopping the first hands its
+// partitions to the second, resumed from the offsets it had committed.
+func TestStreamsManagerSuperStreamDistributesPartitionsIntegration(t *testing.T) {
+	ctx := context.Background()
+	opts := streamsTestEnv(ctx, t)
+
+	firstMember := &recorder{failAt: -1}
+	m1 := startSuperStreamManager(t, opts, firstMember.handle)
+	secondMember := &recorder{failAt: -1}
+	m2 := startSuperStreamManager(t, opts, secondMember.handle)
+	t.Cleanup(func() { stopManager(t, m2) })
+
+	publishAcrossPartitions(t, opts, bodiesFrom("msg", 0, 30))
+	require.Eventually(t, func() bool { return firstMember.count()+secondMember.count() >= 30 },
+		itWaitTimeout, itPollInterval, "the group as a whole consumes every partition")
+
+	_, firstBodies := firstMember.snapshot()
+	_, secondBodies := secondMember.snapshot()
+	assert.ElementsMatch(t, bodiesFrom("msg", 0, 30), append(append([]string{}, firstBodies...), secondBodies...),
+		"each message reaches exactly one member: a partition has one active consumer")
+	assert.NotEmpty(t, firstBodies, "partitions are spread across the group, not served by one member")
+	assert.NotEmpty(t, secondBodies)
+
+	// The surviving member takes over the partitions the leaving one was active on.
+	stopManager(t, m1)
+	handedOver := secondMember.count()
+
+	publishAcrossPartitions(t, opts, bodiesFrom("msg", 30, 15))
+	require.Eventually(t, func() bool { return secondMember.count() >= handedOver+15 },
+		itWaitTimeout, itPollInterval, "the survivor is promoted on the orphaned partitions")
+
+	_, afterTakeover := secondMember.snapshot()
+	assert.ElementsMatch(t, bodiesFrom("msg", 30, 15), afterTakeover[handedOver:],
+		"promotion resumes at the stored offsets, so nothing already handled is replayed")
+}
+
+// TestStreamsManagerSuperStreamPartitionMismatchIsSilentIntegration pins an
+// asymmetry with the plain lane that operators need to know about: DeclareStream
+// surfaces a retention mismatch as precondition-failed, but the client swallows
+// StreamAlreadyExists for super streams, so re-declaring one with a different
+// partition count is accepted and the existing topology is kept.
+func TestStreamsManagerSuperStreamPartitionMismatchIsSilentIntegration(t *testing.T) {
+	ctx := context.Background()
+	opts := streamsTestEnv(ctx, t)
+
+	first := NewManager(opts)
+	firstDecls := NewDeclarations()
+	firstDecls.DeclareSuperStream(itSuperStream, itPartitions, nil)
+	require.NoError(t, first.Start(ctx, firstDecls))
+	stopManager(t, first)
+
+	second := NewManager(opts)
+	conflicting := NewDeclarations()
+	conflicting.DeclareSuperStream(itSuperStream, itPartitions+2, nil)
+
+	err := second.Start(ctx, conflicting)
+
+	require.NoError(t, err, "the broker does not reject the wider declaration")
+	t.Cleanup(func() { stopManager(t, second) })
+
+	env := testEnvironment(t, opts)
+	defer func() { require.NoError(t, env.Close()) }()
+	partitions, err := env.QueryPartitions(itSuperStream)
+	require.NoError(t, err)
+	assert.Len(t, partitions, itPartitions,
+		"the declared widening never reached the topology - the first declaration still stands")
 }
 
 // startSACManager starts a single active consumer, whose promotion callback is the

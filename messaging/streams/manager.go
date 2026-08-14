@@ -159,6 +159,11 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 		return err
 	}
 
+	if err := m.declareSuperStreams(env, decls); err != nil {
+		m.abortStartLocked()
+		return err
+	}
+
 	for _, decl := range decls.consumers {
 		if err := m.startConsumer(consumeCtx, env, decl); err != nil {
 			m.abortStartLocked()
@@ -205,17 +210,31 @@ func (m *Manager) declareStreams(env *stream.Environment, decls *Declarations) e
 	return nil
 }
 
-// startConsumer starts one reliable consumer for a declaration. env is the
-// caller's snapshot of m.env, taken under m.mu.
-func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
-	runner := &consumerRunner{
-		name:    decl.Name,
-		handler: decl.Handler,
-		offsets: m.newOffsetBook(),
-		log:     m.log,
-		tracer:  otel.Tracer(tracerName),
-		baseCtx: ctx,
+// declareSuperStreams replays the declared super streams. Note the asymmetry with
+// declareStreams: the client swallows StreamAlreadyExists here, so a super stream
+// that already exists with a DIFFERENT partition count or retention is accepted
+// silently — see wiki/streams.md.
+func (m *Manager) declareSuperStreams(env *stream.Environment, decls *Declarations) error {
+	for _, s := range decls.superStreams {
+		if err := env.DeclareSuperStream(s.Name, partitionOptionsFrom(s.Partitions, &s.Spec)); err != nil {
+			return fmt.Errorf("failed to declare super stream %q: %w", s.Name, err)
+		}
 	}
+	return nil
+}
+
+// startConsumer starts one consumer for a declaration, on the client API its kind
+// requires. env is the caller's snapshot of m.env, taken under m.mu.
+func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
+	if decl.Super {
+		return m.startSuperStreamConsumer(ctx, env, decl)
+	}
+	return m.startStreamConsumer(ctx, env, decl)
+}
+
+// startStreamConsumer starts one reliable consumer on a plain stream.
+func (m *Manager) startStreamConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
+	runner := m.newRunner(ctx, decl)
 
 	opts := stream.NewConsumerOptions().
 		SetConsumerName(decl.Name).
@@ -243,21 +262,86 @@ func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, de
 		return fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, err)
 	}
 
+	// One stream, so one flush target: the reliable consumer itself.
+	m.trackConsumer(decl, consumer, runner, func(string) offsetStorer { return consumer })
+	return nil
+}
+
+// startSuperStreamConsumer starts one reliable consumer across every partition of
+// a super stream. env is the caller's snapshot of m.env, taken under m.mu.
+func (m *Manager) startSuperStreamConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
+	runner := m.newRunner(ctx, decl)
+
+	// Always a single active consumer group. The client attaches every partition
+	// with one shared offset specification, so this callback — which the broker
+	// fires once per partition, on promotion — is the only place a per-partition
+	// stored offset can be restored. See ADR-059.
+	//
+	// SECURITY: the env snapshot rather than m.env, for the reason spelled out in
+	// startStreamConsumer: the client calls this from its own goroutine, outside
+	// m.mu, with no recover() in its call path.
+	opts := stream.NewSuperStreamConsumerOptions().
+		SetConsumerName(decl.Name).
+		SetSingleActiveConsumer(stream.NewSingleActiveConsumer(
+			func(partition string, _ bool) stream.OffsetSpecification {
+				return m.resolveOffset(env, decl.Name, partition, decl.Start, runner.offsets)
+			}))
+
+	consumer, err := ha.NewReliableSuperStreamConsumer(env, decl.Stream, runner.messagesHandler, opts)
+	if err != nil {
+		return fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, err)
+	}
+
+	// The shutdown flush goes through the environment, per partition:
+	// *ha.ReliableSuperStreamConsumer has no StoreCustomOffset, and the partition
+	// consumer that delivered the last message may already have been replaced by a
+	// reconnect.
+	m.trackConsumer(decl, consumer, runner, func(partition string) offsetStorer {
+		return envOffsetStorer{env: env, consumer: decl.Name, stream: partition}
+	})
+	return nil
+}
+
+// newRunner builds the delivery callback state of one declared consumer.
+func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *consumerRunner {
+	return &consumerRunner{
+		name:    decl.Name,
+		handler: decl.Handler,
+		offsets: m.newOffsetBook(),
+		log:     m.log,
+		tracer:  otel.Tracer(tracerName),
+		baseCtx: ctx,
+	}
+}
+
+// trackConsumer records a started consumer for readiness, stats and shutdown.
+func (m *Manager) trackConsumer(decl *consumerDeclaration, handle consumerHandle, runner *consumerRunner, storerFor func(streamName string) offsetStorer) {
 	m.consumers = append(m.consumers, &runningConsumer{
 		stream:    decl.Stream,
 		name:      decl.Name,
-		handle:    consumer,
+		handle:    handle,
 		offsets:   runner.offsets,
-		storerFor: func(string) offsetStorer { return consumer },
+		storerFor: storerFor,
 	})
 
 	m.log.Info().
 		Str(logFieldStream, decl.Stream).
 		Str(logFieldConsumer, decl.Name).
 		Bool("single_active", decl.SAC).
+		Bool("partitioned", decl.Super).
 		Msg("Stream consumer started")
+}
 
-	return nil
+// envOffsetStorer commits one stream's offset through the environment's locator
+// connection instead of through a consumer.
+type envOffsetStorer struct {
+	env      *stream.Environment
+	consumer string
+	stream   string
+}
+
+func (s envOffsetStorer) StoreCustomOffset(offset int64) error {
+	return s.env.StoreOffset(s.consumer, s.stream, offset)
 }
 
 // newOffsetBook builds the offset bookkeeping of one consumer, with the manager's
@@ -351,12 +435,7 @@ func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
 		return opts
 	}
 	if spec.MaxAge > 0 {
-		// Truncate to whole seconds and floor at 1s, matching
-		// messaging.StreamQueueSpec: sub-second retention is inexpressible to the
-		// broker and would render "0s", and passing whole seconds keeps the
-		// client's round-to-nearest formatting from disagreeing with the AMQP
-		// lane's truncation on a value like 1500ms.
-		opts = opts.SetMaxAge(max(spec.MaxAge.Truncate(time.Second), time.Second))
+		opts = opts.SetMaxAge(clampedMaxAge(spec.MaxAge))
 	}
 	if spec.MaxLengthBytes > 0 {
 		opts = opts.SetMaxLengthBytes(stream.ByteCapacity{}.B(spec.MaxLengthBytes))
@@ -365,6 +444,38 @@ func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
 		opts = opts.SetMaxSegmentSizeBytes(stream.ByteCapacity{}.B(spec.MaxSegmentSizeBytes))
 	}
 	return opts
+}
+
+// partitionOptionsFrom renders a StreamSpec as super-stream partition options; the
+// retention applies to every partition. Zero-value fields are left unset so the
+// broker's own defaults apply.
+func partitionOptionsFrom(partitions int, spec *StreamSpec) *stream.PartitionsOptions {
+	opts := stream.NewPartitionsOptions(partitions)
+	if spec == nil {
+		return opts
+	}
+	if spec.MaxAge > 0 {
+		opts = opts.SetMaxAge(clampedMaxAge(spec.MaxAge))
+	}
+	if spec.MaxLengthBytes > 0 {
+		opts = opts.SetMaxLengthBytes(stream.ByteCapacity{}.B(spec.MaxLengthBytes))
+	}
+	if spec.MaxSegmentSizeBytes > 0 {
+		opts = opts.SetMaxSegmentSizeBytes(stream.ByteCapacity{}.B(spec.MaxSegmentSizeBytes))
+	}
+	return opts
+}
+
+// clampedMaxAge renders a retention age the way both client renderers and the AMQP
+// lane agree on: truncated to whole seconds, floored at 1s.
+//
+// Second granularity is RabbitMQ's, so a sub-second value is inexpressible — the
+// super-stream renderer truncates it (int(MaxAge.Seconds())) and the plain-stream
+// one rounds it, so without the floor the same 500ms would disable retention on one
+// and keep a second of it on the other. Truncating first also keeps 1500ms from
+// reaching the broker as 2s here and 1s in the AMQP lane.
+func clampedMaxAge(maxAge time.Duration) time.Duration {
+	return max(maxAge.Truncate(time.Second), time.Second)
 }
 
 // StopConsumers stops every consumer. Each one flushes its pending offset BEFORE

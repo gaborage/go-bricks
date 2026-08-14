@@ -604,6 +604,66 @@ func TestStreamOptionsFromClampsMaxAge(t *testing.T) {
 	}
 }
 
+func TestPartitionOptionsFrom(t *testing.T) {
+	assert.Equal(t, stream.NewPartitionsOptions(testPartitions), partitionOptionsFrom(testPartitions, nil))
+	assert.Equal(t, stream.NewPartitionsOptions(testPartitions), partitionOptionsFrom(testPartitions, &StreamSpec{}),
+		"a zero spec leaves every retention knob to the broker")
+
+	opts := partitionOptionsFrom(5, &StreamSpec{
+		MaxAge:              45 * time.Minute,
+		MaxLengthBytes:      2048,
+		MaxSegmentSizeBytes: 1024,
+	})
+
+	require.NotNil(t, opts)
+	assert.Equal(t, 5, opts.Partitions)
+	assert.Equal(t, 45*time.Minute, opts.MaxAge)
+	assert.Equal(t, stream.ByteCapacity{}.B(2048), opts.MaxLengthBytes)
+	assert.Equal(t, stream.ByteCapacity{}.B(1024), opts.MaxSegmentSizeBytes)
+}
+
+// TestPartitionOptionsFromClampsMaxAge repeats the plain lane's clamp on the
+// super-stream renderer, which needs it more: it formats MaxAge with
+// int(MaxAge.Seconds()), so an unclamped sub-second value would reach the broker as
+// "0s" and silently disable the retention the caller declared.
+func TestPartitionOptionsFromClampsMaxAge(t *testing.T) {
+	tests := []struct {
+		name   string
+		maxAge time.Duration
+		want   time.Duration
+	}{
+		{name: "sub_second_floors_to_one_second", maxAge: 500 * time.Millisecond, want: time.Second},
+		{name: "nanosecond_floors_to_one_second", maxAge: time.Nanosecond, want: time.Second},
+		{name: "fractional_second_truncates_down", maxAge: 1500 * time.Millisecond, want: time.Second},
+		{name: "whole_seconds_pass_through", maxAge: 90 * time.Second, want: 90 * time.Second},
+		{name: "zero_emits_no_max_age", maxAge: 0, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := partitionOptionsFrom(testPartitions, &StreamSpec{MaxAge: tt.maxAge, MaxLengthBytes: 2048})
+
+			assert.Equal(t, tt.want, opts.MaxAge)
+			assert.Equal(t, testPartitions, opts.Partitions, "the MaxAge clamp must not disturb the partition count")
+			assert.Equal(t, stream.ByteCapacity{}.B(2048), opts.MaxLengthBytes,
+				"the MaxAge clamp must not disturb the other retention knobs")
+		})
+	}
+}
+
+// TestClampedMaxAgeKeepsBothRenderersInAgreement is the property the shared clamp
+// exists for: a stream and a super stream declared with the same retention must
+// send the broker the same age, despite the client rounding one and truncating the
+// other.
+func TestClampedMaxAgeKeepsBothRenderersInAgreement(t *testing.T) {
+	for _, maxAge := range []time.Duration{time.Nanosecond, 500 * time.Millisecond, 1500 * time.Millisecond, 90 * time.Second, time.Hour} {
+		spec := &StreamSpec{MaxAge: maxAge}
+
+		assert.Equal(t, streamOptionsFrom(spec).MaxAge, partitionOptionsFrom(testPartitions, spec).MaxAge,
+			"both lanes must render %s identically", maxAge)
+	}
+}
+
 func TestManagerEnvironmentOptions(t *testing.T) {
 	t.Run("without_address_resolver", func(t *testing.T) {
 		m := NewManager(ManagerOptions{URI: "rabbitmq-stream://localhost:5552/%2f", Logger: logger.New("error", false)})
