@@ -2965,9 +2965,11 @@ queue := decls.DeclareStreamQueue("orders.events.stream", &messaging.StreamQueue
 
 For **server-side offset tracking** (a restart resumes from the last stored offset), single
 active consumer, or super streams, use the native stream protocol instead: implement
-`app.StreamDeclarer` and set `messaging.streams.uri`. Handlers run inline and sequentially,
-and an offset is committed only after a handler returns nil — delivery is at-least-once, so
-make handlers idempotent. See [wiki/streams.md](wiki/streams.md):
+`app.StreamDeclarer` and set `messaging.streams.uri`. Handlers run inline and sequentially
+within a stream. A handler returning nil advances the *tracked* position, and commits are
+batched — so a restart replays everything handled since the last stored offset. Delivery is
+at-least-once, so make handlers idempotent. See
+[wiki/streams.md#offset-semantics](wiki/streams.md#offset-semantics):
 
 ```go
 func (m *Module) DeclareStreams(decls *streams.Declarations) {
@@ -2980,6 +2982,27 @@ func (m *Module) DeclareStreams(decls *streams.Declarations) {
 		},
 	})
 }
+```
+
+For a **super stream** (a stream partitioned into `<name>-0`…`<name>-(n-1)`, RabbitMQ
+3.13+), declare it with a partition count and consume it as one group. The count is
+fixed at declaration time — re-declaring with a different one is accepted silently and
+changes nothing. There is no `SAC` field — super-stream consumption is always a single
+active consumer group, which is what restores a stored offset per partition. Within one
+`Name`, each partition has exactly one active member. Offsets, order and the commit
+policy are per-partition, and the handler is called **concurrently across partitions**,
+so it must be goroutine-safe — see
+[wiki/streams.md#super-streams](wiki/streams.md#super-streams):
+
+```go
+decls.DeclareSuperStream("orders", 3, &streams.StreamSpec{MaxLengthBytes: 5 << 30})
+decls.DeclareSuperStreamConsumer(&streams.SuperStreamConsumerOptions{
+	SuperStream: "orders", Name: "order-projector",
+	Start: streams.OffsetFirst(),
+	Handler: func(ctx context.Context, msg *streams.Message) error {
+		return m.svc.Project(ctx, msg.Data) // msg.Stream is the partition
+	},
+})
 ```
 
 ### Step 3: Implement the Producer (publish messages)

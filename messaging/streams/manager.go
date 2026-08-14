@@ -19,6 +19,22 @@ const (
 	defaultOffsetStoreCount    = 500
 	defaultOffsetStoreInterval = 5 * time.Second
 
+	// shutdownFlushBudget bounds the total wall-clock time StopConsumers spends
+	// committing offsets before it gives up on the rest.
+	//
+	// A healthy flush is one round trip per tracked stream and lands in
+	// milliseconds, so this only ever bites when the broker is unreachable —
+	// exactly the case that must not stall a pod drain. It sits at the low end of
+	// the framework's other shutdown budgets (server.timeout.shutdown 10s,
+	// scheduler.timeout.shutdown 30s) on purpose: those drain real user requests
+	// and real jobs, whereas this drains an OPTIMIZATION. Losing it replays
+	// messages that handlers are already required to be idempotent about, so
+	// trading bounded replay for a faster drain is the right way round. 5s also
+	// matches messaging.reconnect.readytimeout, the framework's other "how long do
+	// we wait on a broker that may be cold before giving up on something optional"
+	// budget.
+	shutdownFlushBudget = 5 * time.Second
+
 	// redactedStreamURI stands in for a URI that could not be parsed, so a
 	// malformed value can never reach a log line with its credentials attached.
 	// #nosec G101 -- placeholder text, not a credential
@@ -78,6 +94,12 @@ type Manager struct {
 	opts ManagerOptions
 	log  logger.Logger
 
+	// flushBudget is shutdownFlushBudget, held as a field so tests can shrink it.
+	// Deliberately not a ManagerOptions field: an operator has no way to know
+	// better than the framework here, and the value only matters when the broker
+	// is already gone.
+	flushBudget time.Duration
+
 	mu        sync.Mutex
 	env       *stream.Environment
 	consumers []*runningConsumer
@@ -103,7 +125,7 @@ func NewManager(opts ManagerOptions) *Manager {
 	if opts.OffsetStoreInterval <= 0 {
 		opts.OffsetStoreInterval = defaultOffsetStoreInterval
 	}
-	return &Manager{opts: opts, log: opts.Logger}
+	return &Manager{opts: opts, log: opts.Logger, flushBudget: shutdownFlushBudget}
 }
 
 // Start dials the broker, replays the stream declarations, and starts one
@@ -137,33 +159,54 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 		return errors.New("streams manager already started: Close it before starting again")
 	}
 
-	// NewEnvironment closes its own locator socket before returning, so a failed
-	// dial leaves nothing to clean up here.
+	// NewEnvironment returns a non-nil Environment BESIDE a non-nil error, so the
+	// failure path has something to dispose and `env != nil` is not a success test.
+	// v1.8.3 does tear the locator socket down itself, but only through an internal
+	// `defer client.Close()` it documents nowhere, and Client.connect opens the
+	// socket and starts its read goroutine before authentication — so disposing it
+	// here is what keeps a rejected credential from depending on that detail.
 	env, err := stream.NewEnvironment(m.environmentOptions())
 	if err != nil {
+		if env != nil {
+			_ = env.Close()
+		}
 		return fmt.Errorf("failed to connect to stream endpoint %s: %w", redactStreamURI(m.opts.URI), safeEnvError(err))
 	}
 	m.env = env
 
+	// Stats rather than len(decls.streams), which omits the super streams.
+	stats := decls.Stats()
 	m.log.Info().
 		Str("uri", redactStreamURI(m.opts.URI)).
-		Int("streams", len(decls.streams)).
-		Int("consumers", len(decls.consumers)).
+		Int("streams", stats.Streams).
+		Int("super_streams", stats.SuperStreams).
+		Int("consumers", stats.Consumers).
 		Msg("Connected to RabbitMQ stream endpoint")
 
 	consumeCtx, cancel := consumeContext(ctx)
 	m.cancel = cancel
 
-	if err := m.declareStreams(env, decls); err != nil {
+	// Every phase below is checked against the caller's ctx, never consumeCtx: all
+	// of it is startup work a caller that gave up must be able to cut short.
+	// consumeCtx is only what the consumers it starts go on running under.
+	if err := m.declareStreams(ctx, env, decls); err != nil {
 		m.abortStartLocked()
 		return err
 	}
 
-	for _, decl := range decls.consumers {
-		if err := m.startConsumer(consumeCtx, env, decl); err != nil {
-			m.abortStartLocked()
-			return err
-		}
+	if err := m.declareSuperStreams(ctx, env, decls); err != nil {
+		m.abortStartLocked()
+		return err
+	}
+
+	// startOne binds consumeCtx, so that is what travels DOWN into each consumer and
+	// keeps its handlers alive past this call; ctx stays the loop's own, only CHECKED.
+	startOne := func(decl *consumerDeclaration) error {
+		return m.startConsumer(consumeCtx, env, decl)
+	}
+	if err := startConsumers(ctx, decls.consumers, startOne); err != nil {
+		m.abortStartLocked()
+		return err
 	}
 
 	m.started = true
@@ -196,8 +239,15 @@ func (m *Manager) environmentOptions() *stream.EnvironmentOptions {
 // existing stream as success; a retention mismatch surfaces as
 // precondition-failed and aborts startup rather than silently consuming a stream
 // configured differently from the declaration.
-func (m *Manager) declareStreams(env *stream.Environment, decls *Declarations) error {
+//
+// Each declaration is a blocking broker round trip the client gives no context of
+// its own, so ctx is checked between them: a caller that gave up on startup stops
+// paying for the rest of the fan-out.
+func (m *Manager) declareStreams(ctx context.Context, env *stream.Environment, decls *Declarations) error {
 	for _, s := range decls.streams {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("startup canceled before declaring stream %q: %w", s.Name, err)
+		}
 		if err := env.DeclareStream(s.Name, streamOptionsFrom(&s.Spec)); err != nil {
 			return fmt.Errorf("failed to declare stream %q: %w", s.Name, err)
 		}
@@ -205,17 +255,56 @@ func (m *Manager) declareStreams(env *stream.Environment, decls *Declarations) e
 	return nil
 }
 
-// startConsumer starts one reliable consumer for a declaration. env is the
-// caller's snapshot of m.env, taken under m.mu.
-func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
-	runner := &consumerRunner{
-		name:    decl.Name,
-		handler: decl.Handler,
-		offsets: m.newOffsetBook(),
-		log:     m.log,
-		tracer:  otel.Tracer(tracerName),
-		baseCtx: ctx,
+// declareSuperStreams replays the declared super streams. Note the asymmetry with
+// declareStreams: the client swallows StreamAlreadyExists here, so a super stream
+// that already exists with a DIFFERENT partition count or retention is accepted
+// silently — see wiki/streams.md.
+// Like declareStreams, it checks ctx between round trips.
+func (m *Manager) declareSuperStreams(ctx context.Context, env *stream.Environment, decls *Declarations) error {
+	for _, s := range decls.superStreams {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("startup canceled before declaring super stream %q: %w", s.Name, err)
+		}
+		if err := env.DeclareSuperStream(s.Name, partitionOptionsFrom(s.Partitions, &s.Spec)); err != nil {
+			return fmt.Errorf("failed to declare super stream %q: %w", s.Name, err)
+		}
 	}
+	return nil
+}
+
+// startConsumers starts each declaration in turn, checking ctx before every one:
+// a start opens a subscription, so a caller that gave up on startup stops paying
+// for the consumers not yet started. It stops at the first failure, leaving the
+// already-started ones for the caller to unwind.
+//
+// start is a parameter rather than a method call because it is the only part that
+// reaches the broker — *stream.Environment is a concrete vendor type with no seam
+// to fake — so keeping it out is what lets this loop's cancellation and fail-fast
+// policy be exercised without one.
+func startConsumers(ctx context.Context, decls []*consumerDeclaration, start func(*consumerDeclaration) error) error {
+	for _, decl := range decls {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("startup canceled before starting consumer %q: %w", decl.Name, err)
+		}
+		if err := start(decl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// startConsumer starts one consumer for a declaration, on the client API its kind
+// requires. env is the caller's snapshot of m.env, taken under m.mu.
+func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
+	if decl.Super {
+		return m.startSuperStreamConsumer(ctx, env, decl)
+	}
+	return m.startStreamConsumer(ctx, env, decl)
+}
+
+// startStreamConsumer starts one reliable consumer on a plain stream.
+func (m *Manager) startStreamConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
+	runner := m.newRunner(ctx, decl)
 
 	opts := stream.NewConsumerOptions().
 		SetConsumerName(decl.Name).
@@ -225,13 +314,13 @@ func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, de
 		// The promotion callback resolves the offset again: another group member
 		// may have advanced it while this one was passive.
 		//
-		// SECURITY: the client calls this from its own read-loop goroutine, outside
-		// m.mu and with no recover() anywhere in its call path. It therefore closes
-		// over this snapshot instead of reading m.env: that field is written under
-		// m.mu and nil'd by Close, so reading it here would be a data race, and a
-		// promotion frame arriving after Close would dereference nil and kill the
-		// process mid-shutdown. Taking m.mu here instead would deadlock — stopLocked
-		// holds it across a blocking consumer Close.
+		// The client calls it from its own read-loop goroutine, outside m.mu and with
+		// no recover() anywhere in its call path. It therefore closes over this
+		// snapshot instead of reading m.env: that field is written under m.mu and
+		// nil'd by Close, so reading it here would be a data race, and a promotion
+		// frame arriving after Close would dereference nil and kill the process
+		// mid-shutdown. Taking m.mu here instead would deadlock — stopLocked holds
+		// it across a blocking consumer Close.
 		opts = opts.SetSingleActiveConsumer(stream.NewSingleActiveConsumer(
 			func(streamName string, _ bool) stream.OffsetSpecification {
 				return m.resolveOffset(env, decl.Name, streamName, decl.Start, runner.offsets)
@@ -243,21 +332,86 @@ func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, de
 		return fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, err)
 	}
 
+	// One stream, so one flush target: the reliable consumer itself.
+	m.trackConsumer(decl, consumer, runner, func(string) offsetStorer { return consumer })
+	return nil
+}
+
+// startSuperStreamConsumer starts one reliable consumer across every partition of
+// a super stream. env is the caller's snapshot of m.env, taken under m.mu.
+func (m *Manager) startSuperStreamConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
+	runner := m.newRunner(ctx, decl)
+
+	// Always a single active consumer group. The client attaches every partition
+	// with one shared offset specification, so this callback — which the broker
+	// fires once per partition, on promotion — is the only place a per-partition
+	// stored offset can be restored. See ADR-059.
+	//
+	// It closes over the env snapshot rather than m.env, for the reason spelled out
+	// in startStreamConsumer: the client calls this from its own goroutine, outside
+	// m.mu, with no recover() in its call path.
+	opts := stream.NewSuperStreamConsumerOptions().
+		SetConsumerName(decl.Name).
+		SetSingleActiveConsumer(stream.NewSingleActiveConsumer(
+			func(partition string, _ bool) stream.OffsetSpecification {
+				return m.resolveOffset(env, decl.Name, partition, decl.Start, runner.offsets)
+			}))
+
+	consumer, err := ha.NewReliableSuperStreamConsumer(env, decl.Stream, runner.messagesHandler, opts)
+	if err != nil {
+		return fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, err)
+	}
+
+	// The shutdown flush goes through the environment, per partition:
+	// *ha.ReliableSuperStreamConsumer has no StoreCustomOffset, and the partition
+	// consumer that delivered the last message may already have been replaced by a
+	// reconnect.
+	m.trackConsumer(decl, consumer, runner, func(partition string) offsetStorer {
+		return envOffsetStorer{env: env, consumer: decl.Name, stream: partition}
+	})
+	return nil
+}
+
+// newRunner builds the delivery callback state of one declared consumer.
+func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *consumerRunner {
+	return &consumerRunner{
+		name:    decl.Name,
+		handler: decl.Handler,
+		offsets: m.newOffsetBook(),
+		log:     m.log,
+		tracer:  otel.Tracer(tracerName),
+		baseCtx: ctx,
+	}
+}
+
+// trackConsumer records a started consumer for readiness, stats and shutdown.
+func (m *Manager) trackConsumer(decl *consumerDeclaration, handle consumerHandle, runner *consumerRunner, storerFor func(streamName string) offsetStorer) {
 	m.consumers = append(m.consumers, &runningConsumer{
 		stream:    decl.Stream,
 		name:      decl.Name,
-		handle:    consumer,
+		handle:    handle,
 		offsets:   runner.offsets,
-		storerFor: func(string) offsetStorer { return consumer },
+		storerFor: storerFor,
 	})
 
 	m.log.Info().
 		Str(logFieldStream, decl.Stream).
 		Str(logFieldConsumer, decl.Name).
 		Bool("single_active", decl.SAC).
+		Bool("partitioned", decl.Super).
 		Msg("Stream consumer started")
+}
 
-	return nil
+// envOffsetStorer commits one stream's offset through the environment's locator
+// connection instead of through a consumer.
+type envOffsetStorer struct {
+	env      *stream.Environment
+	consumer string
+	stream   string
+}
+
+func (s envOffsetStorer) StoreCustomOffset(offset int64) error {
+	return s.env.StoreOffset(s.consumer, s.stream, offset)
 }
 
 // newOffsetBook builds the offset bookkeeping of one consumer, with the manager's
@@ -343,20 +497,24 @@ func offsetSpecFor(stored int64, queryErr error, start OffsetStart, localOffset 
 	}
 }
 
-// streamOptionsFrom renders a StreamSpec as client stream options. Zero-value
+// retentionOptions is the setter triple both client option types expose, each
+// returning its own type. The self-reference on T is what lets one renderer serve
+// both, so a StreamSpec field cannot reach the broker on one kind and be dropped on
+// the other.
+type retentionOptions[T any] interface {
+	SetMaxAge(time.Duration) T
+	SetMaxLengthBytes(*stream.ByteCapacity) T
+	SetMaxSegmentSizeBytes(*stream.ByteCapacity) T
+}
+
+// applyRetention renders a StreamSpec onto either client option type. Zero-value
 // fields are left unset so the broker's own defaults apply.
-func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
-	opts := stream.NewStreamOptions()
+func applyRetention[T retentionOptions[T]](opts T, spec *StreamSpec) T {
 	if spec == nil {
 		return opts
 	}
 	if spec.MaxAge > 0 {
-		// Truncate to whole seconds and floor at 1s, matching
-		// messaging.StreamQueueSpec: sub-second retention is inexpressible to the
-		// broker and would render "0s", and passing whole seconds keeps the
-		// client's round-to-nearest formatting from disagreeing with the AMQP
-		// lane's truncation on a value like 1500ms.
-		opts = opts.SetMaxAge(max(spec.MaxAge.Truncate(time.Second), time.Second))
+		opts = opts.SetMaxAge(clampedMaxAge(spec.MaxAge))
 	}
 	if spec.MaxLengthBytes > 0 {
 		opts = opts.SetMaxLengthBytes(stream.ByteCapacity{}.B(spec.MaxLengthBytes))
@@ -365,6 +523,29 @@ func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
 		opts = opts.SetMaxSegmentSizeBytes(stream.ByteCapacity{}.B(spec.MaxSegmentSizeBytes))
 	}
 	return opts
+}
+
+// streamOptionsFrom renders a StreamSpec as client stream options.
+func streamOptionsFrom(spec *StreamSpec) *stream.StreamOptions {
+	return applyRetention(stream.NewStreamOptions(), spec)
+}
+
+// partitionOptionsFrom renders a StreamSpec as super-stream partition options; the
+// retention applies to every partition.
+func partitionOptionsFrom(partitions int, spec *StreamSpec) *stream.PartitionsOptions {
+	return applyRetention(stream.NewPartitionsOptions(partitions), spec)
+}
+
+// clampedMaxAge renders a retention age the way both client renderers and the AMQP
+// lane agree on: truncated to whole seconds, floored at 1s.
+//
+// Second granularity is RabbitMQ's, so a sub-second value is inexpressible — the
+// super-stream renderer truncates it (int(MaxAge.Seconds())) and the plain-stream
+// one rounds it, so without the floor the same 500ms would disable retention on one
+// and keep a second of it on the other. Truncating first also keeps 1500ms from
+// reaching the broker as 2s here and 1s in the AMQP lane.
+func clampedMaxAge(maxAge time.Duration) time.Duration {
+	return max(maxAge.Truncate(time.Second), time.Second)
 }
 
 // StopConsumers stops every consumer. Each one flushes its pending offset BEFORE
@@ -385,13 +566,14 @@ func (m *Manager) stopLocked() {
 		m.cancel = nil
 	}
 
+	// One budget for the whole phase rather than one per consumer: what this bounds
+	// is how long App.Shutdown waits, and granting each consumer the full budget
+	// would multiply the very delay it exists to cap.
+	flushCtx, cancelFlush := context.WithTimeout(context.Background(), m.flushBudget)
+	defer cancelFlush()
+
 	for _, rc := range m.consumers {
-		for _, failure := range rc.offsets.flush(rc.storerFor) {
-			m.log.Warn().Err(failure.err).
-				Str(logFieldStream, failure.stream).
-				Str(logFieldConsumer, rc.name).
-				Msg("Failed to flush stream offset on shutdown")
-		}
+		m.flushOffsetsLocked(flushCtx, rc)
 		if err := rc.handle.Close(); err != nil {
 			m.log.Warn().Err(err).
 				Str(logFieldStream, rc.stream).
@@ -402,6 +584,62 @@ func (m *Manager) stopLocked() {
 
 	m.consumers = nil
 	m.started = false
+}
+
+// flushOffsetsLocked commits one consumer's pending offsets, giving up once the
+// shutdown flush budget is spent.
+//
+// The flush runs on its own goroutine because it cannot be interrupted from the
+// outside. A super stream's offsets are committed through the environment's
+// locator (envOffsetStorer), and every locator call begins with the client's
+// maybeReconnectLocator — an unbounded, context-free `for err != nil { sleep;
+// connect }` with no attempt cap and no deadline. Against a broker that is down,
+// the FIRST such commit never returns, so a budget checked between partitions
+// would never get its turn: the loop has to be able to walk away from a call in
+// flight, not merely decline to start the next one.
+//
+// Walking away abandons that goroutine for the remaining life of the process.
+// That is the trade being made deliberately: the process is already shutting
+// down, and a leaked goroutine is cheaper than a Shutdown that never returns
+// while holding m.mu — which is what stalls Ready() and Stats(), and with them
+// /ready, for the whole of a pod drain.
+func (m *Manager) flushOffsetsLocked(ctx context.Context, rc *runningConsumer) {
+	// Checked before starting, so an already-spent budget skips the commit outright
+	// instead of attempting one more. Attempting it is what risks another unbounded
+	// block, which is the thing being prevented.
+	if ctx.Err() != nil {
+		m.warnFlushSkipped(rc)
+		return
+	}
+
+	// Buffered: an abandoned flush must still be able to deliver its result and
+	// exit rather than block forever on a send nobody is left to receive.
+	done := make(chan []flushFailure, 1)
+	go func() { done <- rc.offsets.flush(rc.storerFor) }()
+
+	select {
+	case failures := <-done:
+		for _, failure := range failures {
+			m.log.Warn().Err(failure.err).
+				Str(logFieldStream, failure.stream).
+				Str(logFieldConsumer, rc.name).
+				Msg("Failed to flush stream offset on shutdown")
+		}
+	case <-ctx.Done():
+		m.warnFlushSkipped(rc)
+	}
+}
+
+// warnFlushSkipped reports a shutdown flush the manager gave up on, naming the
+// stream the way a flush failure does. Not committing replays the messages the
+// commit would have covered, which at-least-once delivery already permits and
+// idempotent handlers already absorb.
+func (m *Manager) warnFlushSkipped(rc *runningConsumer) {
+	m.log.Warn().
+		Str(logFieldStream, rc.stream).
+		Str(logFieldConsumer, rc.name).
+		Dur("flush_budget", m.flushBudget).
+		Msg("Shutdown offset flush budget spent; offset not committed - handled messages will replay")
 }
 
 // abortStartLocked unwinds a Start that failed after the dial: it stops whatever
