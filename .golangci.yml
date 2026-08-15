@@ -185,9 +185,13 @@ linters:
       # here — so the vendor import keeps `gojose`, which is exactly the
       # collision-avoidance case uber-go's "Import Aliasing" prescribes. The
       # importas entry still holds everywhere else.
+      # Deliberately unanchored: golangci's shared result cache can replay this
+      # finding under a prefixed path (e.g. ../<worktree>/cmd/seal-payload/...),
+      # which a ^-anchor fails to match — defense in depth behind per-tree lint
+      # caches. No other cmd/seal-payload path exists, so the wider match is safe.
       - linters:
           - importas
-        path: ^cmd/seal-payload/
+        path: cmd/seal-payload/
         text: 'go-jose/go-jose/v4'
     paths:
       - third_party$
