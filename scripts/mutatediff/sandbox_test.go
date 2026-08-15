@@ -166,6 +166,9 @@ func TestSandboxCleanupReportsRemovalFailure(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("read-only parent does not block removal on Windows")
 	}
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the read-only parent this test relies on")
+	}
 	parent := t.TempDir()
 	runTmp := filepath.Join(parent, "run")
 	require.NoError(t, os.Mkdir(runTmp, 0o750))
