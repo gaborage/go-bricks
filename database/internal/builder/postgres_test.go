@@ -64,3 +64,92 @@ func TestBuildPostgreSQLUpsertDoNothingWhenNoUpdateColumns(t *testing.T) {
 	require.Contains(t, sql, "DO NOTHING")
 	require.Equal(t, []any{1}, args, "no update values appended for DO NOTHING")
 }
+
+// TestBuildPostgreSQLUpsertRejectsConflictColumnInUpdateSet verifies PostgreSQL
+// refuses the same overlap Oracle's MERGE refuses. PostgreSQL would happily emit
+// ON CONFLICT ("id") DO UPDATE SET "id" = $N; rejecting it here keeps one
+// BuildUpsert call meaning one thing on both vendors.
+func TestBuildPostgreSQLUpsertRejectsConflictColumnInUpdateSet(t *testing.T) {
+	tests := []struct {
+		name            string
+		conflictColumns []string
+		insertColumns   map[string]any
+		updateColumns   map[string]any
+		wantErrColumn   string
+		wantSQLContains string
+		wantDoNothing   bool
+	}{
+		{
+			name:            "conflict_column_only_in_conflict_target",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{"name": "bob"},
+		},
+		{
+			name:            "column_only_in_update_set",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{"name": "bob", "version": 7},
+		},
+		{
+			name:            "conflict_column_in_both_rejected",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{"id": 2, "name": "bob"},
+			wantErrColumn:   "id",
+		},
+		{
+			name:            "one_of_several_conflict_columns_overlaps",
+			conflictColumns: []string{"id", "tenant_id"},
+			insertColumns:   map[string]any{"id": 1, "tenant_id": "acme", "name": "alice"},
+			updateColumns:   map[string]any{"tenant_id": "globex"},
+			wantErrColumn:   "tenant_id",
+		},
+		{
+			name:            "empty_update_set_builds_without_error",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{},
+			wantDoNothing:   true,
+		},
+		{
+			// The mirror of the Oracle case_variant_of_conflict_column_rejected
+			// case, and it must come out the OTHER way: PostgreSQL quotes every
+			// identifier, so "id" and "ID" are two different columns and updating
+			// "ID" on a conflict against "id" is legal, meaningful SQL. Folding
+			// case here would reject a call PostgreSQL executes correctly.
+			name:            "case_variant_of_conflict_column_is_a_distinct_column",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{"ID": 2},
+			wantSQLContains: `DO UPDATE SET "ID" =`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+			sql, _, err := qb.buildPostgreSQLUpsert("users", tt.conflictColumns, tt.insertColumns, tt.updateColumns)
+
+			if tt.wantErrColumn != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "collides with conflict column")
+				require.Contains(t, err.Error(), "ORA-38104")
+				require.Contains(t, err.Error(), tt.wantErrColumn,
+					"error must name the overlapping column, not merely the first conflict column")
+				return
+			}
+
+			require.NoError(t, err)
+			require.Contains(t, sql, "ON CONFLICT")
+			if tt.wantSQLContains != "" {
+				require.Contains(t, sql, tt.wantSQLContains)
+			}
+			if tt.wantDoNothing {
+				require.Contains(t, sql, "DO NOTHING",
+					"an empty update set must still build, emitting DO NOTHING")
+			}
+		})
+	}
+}

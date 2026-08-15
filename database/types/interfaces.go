@@ -493,6 +493,27 @@ type QueryBuilderInterface interface {
 
 	// Vendor-specific helpers
 	BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer
+
+	// BuildUpsert rejects a column present in both conflictColumns and
+	// updateColumns on every vendor, because Oracle's MERGE cannot update a
+	// column referenced in its ON clause (ORA-38104). Identity follows the vendor's
+	// own identifier rules: Oracle folds the unquoted identifiers it emits to upper
+	// case, so id and ID are one column there, while PostgreSQL quotes every
+	// identifier and keeps them distinct. When its update value equals
+	// its insert value, drop it from updateColumns and no column value changes:
+	// the conflict match pins it on a matched row and the INSERT supplies it on an
+	// unmatched one. Dropping the only update column empties the set, which builds
+	// DO NOTHING (and omits Oracle's WHEN MATCHED arm), so a matched row is no
+	// longer updated at all: its UPDATE triggers stop firing and RETURNING yields
+	// no row. Where that matters keep a genuine non-conflict column, or issue the
+	// UPDATE explicitly under the same transaction and locking rule as below.
+	// When the two values differ, the call was rewriting the
+	// conflict column itself, which no vendor-portable upsert can express — issue
+	// a separate UPDATE instead: in the same transaction as the insert, keyed on
+	// the conflict columns, and holding the row lock the single statement took for
+	// you (SELECT ... FOR UPDATE or equivalent). Splitting one atomic upsert into
+	// two statements lets a concurrent writer interleave, and under READ COMMITTED
+	// a shared transaction alone does not stop it.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 
 	// Database function builders

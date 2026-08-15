@@ -357,6 +357,8 @@ func buildOraclePaginationClause(limit, offset uint64) string {
 // BuildUpsert creates a vendor-specific UPSERT query: PostgreSQL emits
 // INSERT ... ON CONFLICT (columns) DO UPDATE/DO NOTHING; Oracle emits
 // MERGE INTO ... USING ... ON ... WHEN MATCHED/NOT MATCHED.
+// A column present in both conflictColumns and updateColumns is rejected on
+// every vendor: Oracle's MERGE cannot update an ON-clause column (ORA-38104).
 func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
 	if qb.vendor != dbtypes.Oracle {
 		return qb.buildNonOracleUpsert(table, conflictColumns, insertColumns, updateColumns)
@@ -379,6 +381,10 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 		if _, ok := insertColumns[col]; !ok {
 			return "", nil, fmt.Errorf("conflict column %q must be present in insert columns for Oracle MERGE", col)
 		}
+	}
+
+	if conflictErr := qb.rejectConflictColumnUpdates(conflictColumns, updateColumns); conflictErr != nil {
+		return "", nil, conflictErr
 	}
 
 	// Build the USING clause with values. Use reserved-word-only quoting (the same
