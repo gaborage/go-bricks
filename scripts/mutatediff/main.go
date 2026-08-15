@@ -93,11 +93,20 @@ func run(ctx context.Context, engine, baseRef string, th throttle, useCache bool
 		return fail("%v", budgetErr)
 	}
 	fmt.Fprintln(out, describeBudget(th.cooldown, b))
-	reportDir, err := os.MkdirTemp("", "mutatediff-*")
-	if err != nil {
-		return fail("%v", err)
+	// After the sandbox env is pinned, every temp path below — the report dir,
+	// gremlins' working copies, measureSuite's coverage scratch — lands inside
+	// the per-run root, and every child build lands in the dedicated cache.
+	sb, sbErr := setupSandbox(out)
+	if sbErr != nil {
+		return fail("%v", sbErr)
 	}
-	defer os.RemoveAll(reportDir)
+	defer sb.cleanup(out)
+	// Explicitly inside the per-run root, so sb.cleanup owns its removal and
+	// the containment survives reordering.
+	reportDir := filepath.Join(sb.runTmp, "reports")
+	if mkErr := os.MkdirAll(reportDir, 0o750); mkErr != nil {
+		return fail("%v", mkErr)
+	}
 	gr := &gateRun{
 		engineArgs: engineArgs,
 		reportDir:  reportDir,

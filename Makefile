@@ -136,6 +136,9 @@ update: ## Update dependencies to latest versions
 	go get -u ./...
 	go mod tidy
 
+# `go clean -cache` empties the MACHINE-WIDE build cache: every checkout and
+# session on this machine pays the rebuild, so keep it out of routine targets
+# (`make mutate` cleans its own dedicated cache instead — scripts/mutatediff/sandbox.go).
 clean: ## Clean build cache and test artifacts
 	go clean -cache -testcache
 	rm -f coverage.out coverage-integration.out coverage.html coverage.func
@@ -175,6 +178,10 @@ sec: ## Run gosec security scanner (pinned; identical to CI)
 	# non-issues, so gating them only here would diverge from the repo's gosec policy.
 	go run github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION) -exclude=G103,G104 ./...
 
+# Mutation builds and temp trees are sandboxed away from the machine-shared
+# GOCACHE and system temp, and cleaned by the gate itself; MUTATE_GOCACHE_CAP
+# (MiB, env-only, 0 = uncapped) bounds what the dedicated cache may leave on
+# disk. See scripts/mutatediff/sandbox.go.
 mutate: ## Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (see wiki/testing.md#mutation-gate)
 	go run ./scripts/mutatediff -engine "$(GREMLINS_CMD)" -workers "$(MUTATE_WORKERS)" -cpu "$(MUTATE_CPU)" -cooldown "$(MUTATE_COOLDOWN)" $(if $(MUTATE_NO_CACHE),-no-cache,)
 
