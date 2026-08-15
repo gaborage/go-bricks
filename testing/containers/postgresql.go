@@ -15,7 +15,7 @@ import (
 
 // PostgreSQLContainerConfig holds configuration for PostgreSQL test container
 type PostgreSQLContainerConfig struct {
-	// ImageTag specifies the PostgreSQL version (default: "17.10-alpine")
+	// ImageTag specifies the PostgreSQL version (default: the pin in DefaultPostgreSQLConfig)
 	ImageTag string
 	// Username for PostgreSQL authentication (default: "testuser")
 	Username string
@@ -29,11 +29,12 @@ type PostgreSQLContainerConfig struct {
 
 // DefaultPostgreSQLConfig returns a PostgreSQLContainerConfig populated with sensible defaults.
 //
-// The returned configuration sets ImageTag to "17.10-alpine", Username to "testuser", Password to "testpass",
+// The returned configuration sets Username to "testuser", Password to "testpass",
 // Database to "testdb", and StartupTimeout to 60 seconds.
 func DefaultPostgreSQLConfig() *PostgreSQLContainerConfig {
 	return &PostgreSQLContainerConfig{
-		ImageTag:       "17.10-alpine",
+		// renovate: datasource=docker depName=postgres
+		ImageTag:       "18.6-alpine",
 		Username:       "testuser",
 		Password:       "testpass",
 		Database:       "testdb",

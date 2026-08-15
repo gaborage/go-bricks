@@ -50,6 +50,28 @@
     },
     {
       "customType": "regex",
+      "description": "Bump testcontainers image tags pinned as Go string literals in testing/containers. These defaults are invisible to every built-in manager, so they rot silently (RabbitMQ sat on EOL 3.13.7 until 2026-08). The inline '// renovate:' annotation above each pin supplies the datasource + depName; the field shape is generic (any string field, like the Makefile manager's \\w+_VERSION) so a field rename cannot silently detach the pin; docker versioning keeps the '-management-alpine'-style suffix stable across bumps. Only annotated pins are managed — annotate the other containers to opt them in.",
+      "managerFilePatterns": [
+        "/(^|/)testing/containers/[^/]+\\.go$/"
+      ],
+      "matchStrings": [
+        "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+:\\s+\"(?<currentValue>[^\"]+)\""
+      ],
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Bump annotated 'docker pull' pins in workflow run: scripts — the CI cache pre-warm duplicates the testing/containers image tags, and shell literals are invisible to built-in managers (the RabbitMQ copy sat stale next to the bumped Go pin until both were annotated). Same-depName updates land in one Renovate PR, keeping the pre-pull and the Go default in lockstep.",
+      "managerFilePatterns": [
+        "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+docker pull \\S+:(?<currentValue>\\S+)"
+      ],
+      "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
       "description": "Track the CI-pinned Flyway CLI version. Flyway 12.x tarballs ship only from Redgate's server (Maven Central stopped at 11.8.2), but flyway/flyway still tags GitHub releases (flyway-X.Y.Z), so github-releases tracks the version number; the SHA256 gate + test fixtures make the resulting bump PR fail CI until a maintainer re-pins the checksum and fixtures — that failing PR is the intended alert.",
       "managerFilePatterns": [
         "/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"
