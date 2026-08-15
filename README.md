@@ -9,6 +9,7 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=gaborage_go-bricks&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=gaborage_go-bricks)
 [![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=gaborage_go-bricks&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=gaborage_go-bricks)
 [![Go Reference](https://pkg.go.dev/badge/github.com/gaborage/go-bricks.svg)](https://pkg.go.dev/github.com/gaborage/go-bricks)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/gaborage/go-bricks)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ---
@@ -84,6 +85,7 @@ runs that step on its own.
 - **Echo-based HTTP server** with typed handlers, standardized response envelopes, and raw response mode for legacy API migration
 - **Production-ready HTTP client** with retries, exponential backoff, W3C trace propagation, and interceptor chains
 - **AMQP messaging** with validate-once, replay-many pattern, auto-scaling consumer concurrency, and panic recovery
+- **RabbitMQ streams consumer** over the native stream protocol with server-side offset commits and single-active-consumer support (single-tenant)
 - **Configuration loader** merging defaults, YAML, and environment variables with struct-based injection (`config:` tags)
 - **Multi-database support** for PostgreSQL and Oracle with struct-based column extraction and type-safe query builders
 - **Named databases** for accessing multiple databases (including mixed vendors) in single-tenant mode
@@ -314,6 +316,12 @@ type MessagingDeclarer interface {
 type GlobalMiddlewareRegisterer interface {
     GlobalMiddleware() []server.MiddlewareFunc
 }
+
+// Optional — implement to declare the module cannot function without a
+// database; registration (and startup) fails when none is configured
+type DatabaseRequirer interface {
+    RequiresDatabase() bool
+}
 ```
 
 `ModuleDeps` injects shared services into every module:
@@ -327,7 +335,7 @@ type ModuleDeps struct {
     Scheduler     JobRegistrar                                           // Job scheduling (nil if no scheduler module)
     Outbox        OutboxPublisher                                        // Transactional event publishing (nil if disabled)
     Inbox         InboxProcessor                                         // Durable consumer-side idempotency (nil if inbox module not registered)
-    KeyStore      KeyStore                                               // Named RSA key pairs (nil if not configured)
+    KeyStore      KeyStore                                               // Named RSA key pairs & symmetric secrets (nil if not configured)
     DB            func(ctx context.Context) (database.Interface, error)  // Tenant-aware database
     DBByName      func(ctx context.Context, name string) (database.Interface, error) // Named databases
     Messaging     func(ctx context.Context) (messaging.AMQPClient, error) // Tenant-aware messaging
@@ -411,6 +419,7 @@ AMQP/RabbitMQ support with validate-once, replay-many declaration pattern:
 - **Auto-Reconnection**: Exponential backoff for resilient operations
 - **Context Propagation**: Tenant IDs and trace information flow automatically through messaging
 - **Consumer Concurrency**: Auto-scaling workers (`NumCPU * 4`) with configurable overrides and resource safeguards
+- **RabbitMQ Streams**: `messaging/streams` consumes streams over the native protocol (port 5552) — offsets committed server-side only after successful handling, single-active-consumer, single-tenant only ([wiki/streams.md](wiki/streams.md))
 
 ---
 
@@ -453,7 +462,7 @@ query := qb.Select("u.name", "p.bio").
     Where(f.NotNull("p.bio"))
 ```
 
-**Filter Methods**: `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Like`, `Null`, `NotNull`, `Between`, `Exists`, `NotExists`, `InSubquery`, `And`, `Or`, `Not`, `Raw`
+**Filter Methods**: `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Like`, `Regex`, `RegexI`, `NotRegex`, `NotRegexI`, `JSONContains` (PostgreSQL only), `Null`, `NotNull`, `Between`, `Exists`, `NotExists`, `InSubquery`, `And`, `Or`, `Not`, `Raw`
 
 **JoinFilter Methods**: `EqColumn`, `NotEqColumn`, `LtColumn`, `LteColumn`, `GtColumn`, `GteColumn`, `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `In`, `NotIn`, `Between`, `Like`, `Null`, `NotNull`, `And`, `Or`, `Raw`
 
@@ -722,7 +731,7 @@ The relay job polls for pending events every `pollinterval` (default 5s), publis
 
 ## KeyStore
 
-Named RSA key pair management for encryption and signing. Keys are loaded at startup from DER files or base64-encoded environment variables.
+Named key-material management for encryption, signing, and MAC/HKDF derivation: RSA key pairs plus raw symmetric secrets. Material is loaded at startup from files (DER for RSA, raw bytes for secrets) or base64-encoded environment variables.
 
 ```go
 func (m *Module) Init(deps *app.ModuleDeps) error {
@@ -733,6 +742,11 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
     // Verify a signature
     publicKey, err := deps.KeyStore.PublicKey("signing")
     if err != nil { return err }
+
+    // Fetch symmetric material (HMAC/HKDF)
+    macKey, err := deps.KeyStore.Secret("webhook-hmac")
+    if err != nil { return err }
+    _ = macKey
 
     return nil
 }
@@ -753,11 +767,14 @@ keystore:
         value: ""    # Cloud/EKS: set via KEYSTORE_KEYS_ENCRYPTION_PUBLIC_VALUE env var (base64-encoded DER)
       private:
         value: ""    # Set via KEYSTORE_KEYS_ENCRYPTION_PRIVATE_VALUE env var (base64-encoded DER)
+    webhook-hmac:
+      secret:
+        file: certs/webhook_hmac.key    # Raw bytes; or value: (base64) via env var
 ```
 
-Each key pair has a `public` and `private` source. For required sources, set exactly one of `file:` (DER path) or `value:` (base64-encoded DER, typically referencing an environment variable). For verification-only services, the `private` entry may be omitted.
+Each key pair has a `public` and `private` source. For required sources, set exactly one of `file:` (DER path) or `value:` (base64-encoded DER, typically referencing an environment variable). For verification-only services, the `private` entry may be omitted. A `secret:` entry supplies raw symmetric material through the same `file:`/`value:` sources; an entry must be either an RSA pair or a secret — mixed entries fail startup, and `keystore.secretminlength` (default 32 bytes, `0` disables) rejects weak material.
 
-See [keystore/](keystore/) package for full API documentation.
+See [wiki/keystore.md](wiki/keystore.md) for full configuration and API documentation.
 
 ---
 
@@ -845,7 +862,7 @@ See [MULTI_TENANT.md](MULTI_TENANT.md) for detailed architecture and [multitenan
      service:
        name: checkout-api
        version: 1.2.3
-       environment: production
+     environment: production   # top-level key — not under service.*
      trace:
        enabled: true
        endpoint: otel-collector:4317
