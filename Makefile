@@ -42,7 +42,7 @@ MUTATE_FALLBACK_COEFFICIENT ?= 600
 # at the defaults the overshoot can reach roughly 2x the budget during build
 # phases, growing with MUTATE_CPU).
 # Set MUTATE_CPU=0 to opt out and run at full speed.
-MUTATE_CPU ?= 4
+MUTATE_CPU ?= 2
 MUTATE_WORKERS ?= 2
 # Pause after each mutated package so the chassis sheds heat before the next one.
 # Any time.ParseDuration string; 0 disables. It does nothing inside a single long
