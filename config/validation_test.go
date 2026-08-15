@@ -5824,6 +5824,23 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 		assert.Equal(t, PostgreSQL, cfg.Type)
 		assert.Equal(t, int32(25), cfg.Pool.Max.Connections, "defaults still applied after vendor validation")
 	})
+
+	// Every case above is rejected by validateVendorSpecificFields, which returns
+	// before any defaulting runs — so none of them proves the rollback holds when
+	// the LATER step fails. This one does: vendor validation passes, Type is
+	// inferred, defaulting then rejects the negative idle time, and the caller must
+	// still get its config back whole (no inferred Type, no half-applied defaults).
+	t.Run("rollback_after_pool_defaulting_error", func(t *testing.T) {
+		cfg := DatabaseConfig{ConnectionString: testBarePostgresConnString}
+		cfg.Pool.Idle.Time = -1
+		original := cfg
+
+		err := ApplyDatabasePoolDefaults(&cfg)
+
+		assertValidationError(t, err, "database.pool.idle.time must be non-negative")
+		assert.Equal(t, original, cfg, "a config rejected after inference must not keep the inferred Type or partial defaults")
+		assert.Empty(t, cfg.Type, "Type is committed only after every step succeeds")
+	})
 }
 
 func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {

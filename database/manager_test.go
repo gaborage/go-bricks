@@ -470,9 +470,12 @@ func TestDbManagerDynamicConfigGetsPoolDefaults(t *testing.T) {
 // tells operators to look for in the "Created new database connection" log line.
 func TestDbManagerDynamicConfigInfersTypeFromConnectionString(t *testing.T) {
 	ctx := context.Background()
+	// No credentials: scheme inference reads only the scheme, and the stub connector
+	// never authenticates.
 	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
-		"tenant": {ConnectionString: "postgres://user:pass@localhost:5432/db"},
+		"tenant": {ConnectionString: "postgres://localhost:5432/db"},
 	}}
+	providerOwned := *resource.configs["tenant"]
 
 	var captured *config.DatabaseConfig
 	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
@@ -488,7 +491,9 @@ func TestDbManagerDynamicConfigInfersTypeFromConnectionString(t *testing.T) {
 
 	require.NotNil(t, captured)
 	assert.Equal(t, "postgresql", captured.Type, "the connector receives the type inferred from the DSN scheme")
-	assert.Empty(t, resource.configs["tenant"].Type, "the provider-owned config stays untyped")
+	// Compare the whole value, not just Type: normalization must not reach the
+	// provider's struct through any field (ConnectionString, Pool, TLS, vendor blocks).
+	assert.Equal(t, providerOwned, *resource.configs["tenant"], "the provider-owned config stays untouched")
 }
 
 // TestDbManagerDynamicConfigExplicitPoolPreserved proves that pool defaulting
