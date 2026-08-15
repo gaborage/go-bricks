@@ -737,10 +737,15 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 }
 
 // inferDatabaseTypeFromConnectionString maps a recognized DSN scheme to its vendor.
-// An unrecognized scheme returns "" and is deliberately not an error here: whether
-// an untyped DSN is fatal depends on who connects (ADR-050).
+// Surrounding whitespace is tolerated for classification only — a DSN read from a
+// file, a mounted secret, or a command substitution routinely carries a trailing
+// newline, and losing the scheme match there would silently leave the config
+// untyped. The caller's stored DSN is never rewritten; whether the untrimmed value
+// then fails at dial is the driver's business. An unrecognized scheme returns "" and
+// is deliberately not an error here: whether an untyped DSN is fatal depends on who
+// connects (ADR-050).
 func inferDatabaseTypeFromConnectionString(cs string) string {
-	lower := strings.ToLower(cs)
+	lower := strings.ToLower(strings.TrimSpace(cs))
 	switch {
 	case strings.HasPrefix(lower, "postgres://"), strings.HasPrefix(lower, "postgresql://"):
 		return PostgreSQL
@@ -843,15 +848,35 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 // dynamic provider's DSN-only config dials instead of failing on the factory's
 // empty-type dispatch. Unlike config.Validate, this seam never errors on an
 // explicit Type that contradicts the scheme — it is on the per-tenant connection
-// path, where the vendor dial error is the right failure.
+// path, where the vendor dial error is the right failure. It does reject vendor
+// field combinations the driver would silently drop (Oracle TLS material, an
+// unpaired PostgreSQL sslcert/sslkey), because that failure mode is silent and
+// open rather than loud at dial. The asymmetry is deliberate.
 func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg == nil {
 		return NewValidationError("database", "configuration is nil")
 	}
-	if cfg.Type == "" {
-		cfg.Type = inferDatabaseTypeFromConnectionString(cfg.ConnectionString)
+
+	inferred := cfg.Type
+	if inferred == "" {
+		inferred = inferDatabaseTypeFromConnectionString(cfg.ConnectionString)
 	}
-	return applyDatabasePoolDefaults(cfg)
+
+	// Vendor validation dispatches on Type, so probe a shallow clone carrying the
+	// inferred value: a config rejected here must go back to its caller
+	// unreclassified.
+	probe := *cfg
+	probe.Type = inferred
+	if err := validateVendorSpecificFields(&probe); err != nil {
+		return err
+	}
+
+	if err := applyDatabasePoolDefaults(cfg); err != nil {
+		return err
+	}
+
+	cfg.Type = inferred
+	return nil
 }
 
 // applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.

@@ -295,15 +295,29 @@ Two consequences worth knowing:
 
 A `connectionstring` alone used to pass validation and then never connect —
 `database.NewConnection` dispatches on `type`, so an untyped DSN failed only at first
-query. `config.Validate` now infers `type` from a recognized scheme when `type` is
-omitted: `postgres://`/`postgresql://` → `postgresql`, `oracle://` → `oracle`. An explicit
-`type` that conflicts with the inferred scheme is a validation error. Any other scheme
-passes validation with `type` left empty — the *effect* of an unrecognized scheme depends
-on the connector: the built-in one (`database.NewConnection`) fails startup with a
-`connectionstring has no resolved database type` error naming every affected path
-(`database`, `databases.<name>`, and — only under `multitenant.enabled: true` —
-`multitenant.tenants.<id>.database`); a caller-supplied `Options.DatabaseConnector` parses
-the DSN itself and is exempt.
+query. `type` is now inferred from a recognized scheme when it is omitted:
+`postgres://`/`postgresql://` → `postgresql`, `oracle://` → `oracle`. Surrounding
+whitespace does not defeat the match (a DSN read from a mounted secret often carries a
+trailing newline), and the stored connection string is never rewritten — only the
+classification tolerates it.
+
+Inference runs at **two** sites, not one. `config.Validate` covers every statically
+configured path (`database`, `databases.<name>`, `multitenant.tenants.<id>.database`);
+`config.ApplyDatabasePoolDefaults` — the seam `database.DbManager` applies to every config
+a dynamic `DBConfigProvider` returns, which never reaches `Validate` — covers the dynamic
+path. Both delegate to the same scheme list, so extending it is one edit. An explicit
+`type` that conflicts with the inferred scheme is a validation error on the `Validate`
+path only: the seam runs per connection, where the vendor's own dial error is the better
+failure.
+
+Any other scheme leaves `type` empty — the *effect* of an unrecognized scheme depends on
+the connector: the built-in one (`database.NewConnection`) fails startup with a
+`connectionstring has no resolved database type` error naming every affected static path;
+a caller-supplied `Options.DatabaseConnector` parses the DSN itself and is exempt **from
+that startup guard**. It is not exempt from inference: the config layer is
+connector-blind, so a custom connector receives `type` already resolved for a recognized
+scheme, and one that branches on an empty `cfg.Type` to decide whether to parse the DSN
+must be reviewed.
 
 **An Oracle DSN needs no separate identifier.** `oracle://user:pw@host:1521/XE` alone is a
 complete config: `buildOracleDSN` returns the connection string verbatim, so
@@ -313,6 +327,11 @@ one of the three, and zero or several is still a validation error. The Oracle TL
 is unconditional either way: `database.tls.cert`/`key`/`ca` fail validation even alongside a
 connection string, because tcps/wallet is not implemented and silently ignoring TLS material
 would leave the operator believing the connection is encrypted.
+
+**These rules reach dynamic configs too.** `ApplyDatabasePoolDefaults` runs the same
+vendor-specific validation as `Validate`, so a config a `DBConfigProvider` returns —
+inferred or explicitly typed — fails at connection acquisition where it previously
+connected with the TLS material silently dropped.
 
 ## Connection Pool Defaults
 

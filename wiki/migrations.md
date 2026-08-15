@@ -44,7 +44,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup; C57.9 fails `httpclient` construction) | 9 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8); and read every `WithJOSE` policy and direct `jose.Seal` call for an explicitly-set algorithm outside the allowlist — `KeyAlg: RSA1_5` or a non-AEAD `Enc` sealed successfully before and now fails `Build()` at startup, while a policy that named no algorithms at all takes the package defaults and starts working instead of failing every request (C57.9) |
 | E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) + behavior (C58.4, C58.5) | 5 | C58.1 C58.2 C58.3 | check every environment for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`, and — in multi-tenant mode with `cache.manager.maxsize` unset — a negative `multitenant.limits.tenants`, which becomes the pool size. Under `cache.enabled: false` such a value used to be inert and now aborts startup (C58.3); and if any dashboard, alert, or saved query reads OTLP-exported log records by a `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` **record** attribute your code sets as a log field, re-key it to the `app.`-prefixed name (C58.4); and audit the log backend for dashboards, alerts, or saved queries filtering log records by **any** record-level resource attribute — the framework's `service.*` / `telemetry.sdk.*` / `deployment.environment.name` plus every key your deployment injects via `OTEL_RESOURCE_ATTRIBUTES` (`k8s.pod.name`, …) — since all of them move to resource level only; no code grep finds these (C58.5) |
 | E581 | v0.58.0 → v0.58.1 | silent-behavior | 3 | none | if you cache any type carrying a time.Time, decide before the bump whether a compare-and-set on a sub-second timestamp may fail during the rolling deploy (C581.1); and if `observability.logs.samplingrate` is set to any value strictly between 0.0 and 1.0, expect the exported INFO/DEBUG log volume AND the membership of the sampled set to change: a rate at or above 0.00005 and below 0.01 exported nothing before the bump and starts exporting its configured fraction after it, a rate that is not a whole percent stops flooring (0.999 was 99%, now 99.9%), and every fractional rate redraws which traces land in the sample; a rate below 0.00005, plus 0.0 and 1.0, are unaffected (C581.2); and if you call `Close()` directly on a `DbManager`/`CacheManager`/`messaging.Manager`, know that a handle still borrowed by in-flight work now stays open until its final release instead of closing immediately (C581.3) |
-| E59 | v0.58.1 → v0.59.0 | compile-break (C59.2, C59.3) + silent-behavior (C59.1, C59.4, C59.6) + breaking (C59.5 rejects a password, C59.7 rejects an upsert call) | 7 | C59.2 C59.3 | if your service sits behind a proxy on a **public** address (CloudFront, a partner edge), set `server.trustedproxies` to its CIDR range before the bump — otherwise that proxy is itself returned as the client and every caller behind it collapses into a single rate-limit bucket; and check the load balancer for any mode that writes a non-IP `X-Forwarded-For` entry — on AWS ALB that is `routing.http.xff_client_port.enabled` (appends `client_ip:port`) and, separately, `routing.http.xff_header_processing.mode = remove` — since either keys the entire fleet on the load balancer's own address after the bump and `server.trustedproxies` cannot fix it; the remedy is deployment-side (C59.1); and if any of your code — **including test files**, which `go build` does not compile — implements `cache.Cache`, add the new `CompareAndDelete` method, and before swapping a lock's `Delete` release for it make sure the lock is acquired with a **positive** TTL, since a `ttl == 0` lock that a token-verified release declines to remove is held forever (C59.3); and grep your **test** files for a `cache/testing.MockCache` handed a context that is already canceled or expired while the call is expected to succeed — the mock's cancellation check no longer depends on a configured `WithDelay`, so that call now returns the context's error (C59.4); and if you call `ProvisionPGRoles` or `PGRoleProvisioningSQL` with a `PGRoleSpec` whose `MigratorPassword` or `RuntimePassword` is read from a file, a mounted secret, an environment read, or a command substitution, `strings.TrimSpace` it before the bump — a password containing CR, LF, or NUL is now rejected by `Validate` instead of provisioning, and any credential whose provisioning failure was logged while its password contained a newline should be rotated, since the first line of that secret reached the error string (C59.5); and hand-read every `BuildUpsert` call for a column key present in BOTH `conflictColumns` and `updateColumns` — grep finds the calls but not the overlap, since both maps are usually built dynamically — because on PostgreSQL such a call built and ran before the bump and now returns an error from the builder, while on Oracle it already failed and now fails earlier, at build time with the builder's message rather than at execution with ORA-38104; match keys the way each vendor does, since Oracle folds the unquoted identifiers it emits to upper case (so `id` and `ID` are one column there, and are now rejected) while PostgreSQL quotes every identifier and keeps them distinct; then compare that column's update value against its insert value before remediating — equal means dropping it from `updateColumns` changes no column value — though if it is the column's **only** entry the set empties, which builds `DO NOTHING` on PostgreSQL and drops Oracle's `WHEN MATCHED` arm, so a matched row stops being updated at all, its UPDATE triggers stop firing and `RETURNING` yields no row; keep a real non-conflict column or issue an explicit `UPDATE` — under the same transaction and locking rule as below — where that matters — but differing means the call was rewriting the conflict column on a matched row, which no vendor-portable upsert can express, so those need a separate `UPDATE` rather than a dropped column — run it in the same transaction as the insert, keyed on the conflict columns, and holding the row lock the single statement took for you (`SELECT … FOR UPDATE` or equivalent), because splitting one atomic upsert into two statements lets a concurrent writer interleave and under READ COMMITTED a shared transaction alone does not stop it (C59.7); and if a dynamic multi-tenant `DBConfigProvider` returns a `database.connectionstring` with no `type`, that tenant now dials a real database at first use instead of failing every request with `unsupported database type: ""`, and if you supply `Options.DatabaseConnector` it now receives an inferred `type` for a recognized scheme instead of an empty one (C59.6) |
+| E59 | v0.58.1 → v0.59.0 | compile-break (C59.2, C59.3) + silent-behavior (C59.1, C59.4) + breaking (C59.5 rejects a password, C59.6 rejects a dynamic config's TLS material, C59.7 rejects an upsert call) | 7 | C59.2 C59.3 | if your service sits behind a proxy on a **public** address (CloudFront, a partner edge), set `server.trustedproxies` to its CIDR range before the bump — otherwise that proxy is itself returned as the client and every caller behind it collapses into a single rate-limit bucket; and check the load balancer for any mode that writes a non-IP `X-Forwarded-For` entry — on AWS ALB that is `routing.http.xff_client_port.enabled` (appends `client_ip:port`) and, separately, `routing.http.xff_header_processing.mode = remove` — since either keys the entire fleet on the load balancer's own address after the bump and `server.trustedproxies` cannot fix it; the remedy is deployment-side (C59.1); and if any of your code — **including test files**, which `go build` does not compile — implements `cache.Cache`, add the new `CompareAndDelete` method, and before swapping a lock's `Delete` release for it make sure the lock is acquired with a **positive** TTL, since a `ttl == 0` lock that a token-verified release declines to remove is held forever (C59.3); and grep your **test** files for a `cache/testing.MockCache` handed a context that is already canceled or expired while the call is expected to succeed — the mock's cancellation check no longer depends on a configured `WithDelay`, so that call now returns the context's error (C59.4); and if you call `ProvisionPGRoles` or `PGRoleProvisioningSQL` with a `PGRoleSpec` whose `MigratorPassword` or `RuntimePassword` is read from a file, a mounted secret, an environment read, or a command substitution, `strings.TrimSpace` it before the bump — a password containing CR, LF, or NUL is now rejected by `Validate` instead of provisioning, and any credential whose provisioning failure was logged while its password contained a newline should be rotated, since the first line of that secret reached the error string (C59.5); and hand-read every `BuildUpsert` call for a column key present in BOTH `conflictColumns` and `updateColumns` — grep finds the calls but not the overlap, since both maps are usually built dynamically — because on PostgreSQL such a call built and ran before the bump and now returns an error from the builder, while on Oracle it already failed and now fails earlier, at build time with the builder's message rather than at execution with ORA-38104; match keys the way each vendor does, since Oracle folds the unquoted identifiers it emits to upper case (so `id` and `ID` are one column there, and are now rejected) while PostgreSQL quotes every identifier and keeps them distinct; then compare that column's update value against its insert value before remediating — equal means dropping it from `updateColumns` changes no column value — though if it is the column's **only** entry the set empties, which builds `DO NOTHING` on PostgreSQL and drops Oracle's `WHEN MATCHED` arm, so a matched row stops being updated at all, its UPDATE triggers stop firing and `RETURNING` yields no row; keep a real non-conflict column or issue an explicit `UPDATE` — under the same transaction and locking rule as below — where that matters — but differing means the call was rewriting the conflict column on a matched row, which no vendor-portable upsert can express, so those need a separate `UPDATE` rather than a dropped column — run it in the same transaction as the insert, keyed on the conflict columns, and holding the row lock the single statement took for you (`SELECT … FOR UPDATE` or equivalent), because splitting one atomic upsert into two statements lets a concurrent writer interleave and under READ COMMITTED a shared transaction alone does not stop it (C59.7); and if a dynamic multi-tenant `DBConfigProvider` returns a `database.connectionstring` with no `type`, that tenant now dials a real database at first use instead of failing every request with `unsupported database type: ""`, and if you supply `Options.DatabaseConnector` it now receives an inferred `type` for a recognized scheme instead of an empty one — inference is unconditional, since that option's exemption only ever covered the startup guard; then enumerate the same source for any tenant carrying `tls.cert`/`tls.key`/`tls.ca` next to an Oracle type or `oracle://` DSN, or exactly one of `tls.cert`/`tls.key` on a PostgreSQL one, since those connect today with the TLS material silently dropped and stop connecting after the bump, typed configs included (C59.6) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -2298,7 +2298,14 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   DSN-only config dials a real database instead of failing that tenant's
   every request with `unsupported database type: ""`, and a caller-supplied
   `Options.DatabaseConnector` now receives an inferred type where it used to
-  receive `""` (C59.6).
+  receive `""` — inference is unconditional, since that option's exemption only
+  ever covered the startup guard. Turning a fail-closed config into a working
+  one means every consumer of that shape must agree, and one did not: the seam
+  ran no vendor-specific validation, so a dynamic Oracle tenant carrying
+  `tls.cert` / `tls.key` / `tls.ca` dialed with the material silently dropped.
+  The seam now runs the same vendor validation `config.Validate` runs, so that
+  tenant — and a PostgreSQL one carrying a lone `sslcert` — fails at connection
+  acquisition instead, typed configs included (C59.6).
 - build-caught: C59.2 C59.3 (via `go vet` — `go build` does not compile test files)
 - preflight: **five** actions. (i) If a proxy in front of the service sits on
   a **public** address, set `server.trustedproxies` to its CIDR range before
@@ -2364,7 +2371,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   database exists, the credentials are current, and the connection budget
   absorbs the tenants that were previously failing closed. If you supply
   `Options.DatabaseConnector`, read it for any branch on an empty `cfg.Type`
-  first.
+  first — inference is unconditional, so that branch now takes the wrong arm.
+  Then enumerate the same source again for every tenant carrying
+  `tls.cert` / `tls.key` / `tls.ca` next to an Oracle type or `oracle://` DSN,
+  and every PostgreSQL tenant carrying exactly one of `tls.cert` / `tls.key`.
+  Those connect **today**, with the TLS material silently dropped, and stop
+  connecting after the bump. Nothing here is compiler-caught and a repo grep
+  finds nothing when the records live in Vault or a control-plane table, so
+  enumerating the store is the decisive check — do it before the bump, since
+  the remedy (drop material that was never in force, or move the tenant to a
+  transport the driver implements) is a data change, not a code change.
 - exit: `go get github.com/gaborage/go-bricks@v0.59.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C59.1] Rate-limit buckets and logged client addresses key on the trusted-proxy-derived IP · silent-behavior · when: match
@@ -2636,45 +2652,70 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   the real secret source — a trailing newline that survived to production would now abort the run.
 - ref: [ADR-061](adr_061_role_password_control_chars.md) · `migration/roles.go`
 
-### [C59.6] `database.type` inference reaches dynamic tenant configs via `ApplyDatabasePoolDefaults` · silent-behavior · when: match
+### [C59.6] `ApplyDatabasePoolDefaults` infers `database.type` and enforces vendor rules on every dynamic config · breaking · when: match
 
 - detect: `git grep -nE 'DBConfig\(ctx context.Context|ConnectionString:' -- '*.go'` over your own
   `DBConfigProvider` / `app.TenantStore` implementations, plus whatever your provider reads (Vault
   path, Secrets Manager key, control-plane table) for a stored connection string with no sibling
-  type. Also `git grep -n 'DatabaseConnector' -- '*.go'`. Keep every pattern free of the PCRE
-  escapes — `git grep -E` is POSIX ERE and silently ignores them, so a pattern carrying one matches
-  nothing and the gate falsely reports "not affected". Match = a dynamic provider can return a
-  `DatabaseConfig` with an empty `Type` and a non-empty `ConnectionString`, or you supply
-  `Options.DatabaseConnector`.
-- scope: `config.ApplyDatabasePoolDefaults` now infers `Type` from a recognized DSN scheme
-  (`postgres://`, `postgresql://` → `postgresql`; `oracle://` → `oracle`) when `Type` is empty,
-  matching what `config.validateDatabaseWithConnectionString` has done for static config since
-  `[C57.5]` ([ADR-050](adr_050_connectionstring_type_inference.md)). Two groups are affected.
-  Dynamic sources: a tenant whose config was DSN-only used to fail every `deps.DB(ctx)` and now
-  connects. Custom connectors: `Options.DatabaseConnector` runs after this seam, so it now receives
-  `Type` populated where it used to receive `""`. Unchanged: an unrecognized scheme still leaves
-  `Type` empty and still fails at the built-in connector; an explicit `Type` contradicting the DSN
-  is still **not** an error on this seam — only `config.Validate` rejects that — so a dynamic source
-  with a wrong explicit type keeps failing at dial with the vendor error.
-- gate: match = a dynamic provider can emit an untyped DSN, or `Options.DatabaseConnector` is set.
-  no-match = every database config your app produces is static YAML (those already went through
-  `[C57.5]`) and you use the built-in connector.
+  type. Then `git grep -nE 'CertFile|KeyFile|CAFile|sslcert|sslkey|tls' -- '*.go'` over the same
+  implementations, and read the records themselves for TLS material stored next to an Oracle tenant,
+  or exactly one of cert/key next to a PostgreSQL one. Also
+  `git grep -n 'DatabaseConnector' -- '*.go'`. Keep every pattern free of the PCRE escapes — `git
+  grep -E` is POSIX ERE and silently ignores them, so a pattern carrying one matches nothing and the
+  gate falsely reports "not affected". Match = a dynamic provider can return a `DatabaseConfig` at
+  all, or you supply `Options.DatabaseConnector`.
+- scope: two changes to `config.ApplyDatabasePoolDefaults` — the seam
+  `database.DbManager.createConnection` applies to every config a dynamic provider returns, and
+  which never reaches `config.Validate`. **(1) Inference.** It infers `Type` from a recognized DSN
+  scheme (`postgres://`, `postgresql://` → `postgresql`; `oracle://` → `oracle`) when `Type` is
+  empty, matching what `config.validateDatabaseWithConnectionString` has done for static config
+  since `[C57.5]` ([ADR-050](adr_050_connectionstring_type_inference.md)). Surrounding whitespace no
+  longer defeats the scheme match at either site — a DSN read from a mounted secret routinely
+  carries a trailing newline — and the stored DSN is not rewritten. Inference is unconditional:
+  `Options.DatabaseConnector`'s exemption covers the **startup guard** only and never covered
+  inference, so a custom connector now receives `Type` populated where it used to receive `""`.
+  **(2) Vendor validation.** The seam now runs the same vendor-specific validation
+  `config.Validate` runs, so Oracle's TLS rejection and PostgreSQL's `sslcert`/`sslkey` pairing rule
+  reach dynamic configs for the first time — including configs whose `Type` was set **explicitly**,
+  not only DSN-only ones. Unchanged: an unrecognized scheme still leaves `Type` empty and still
+  fails at the built-in connector; an explicit `Type` contradicting the DSN is still **not** an
+  error on this seam — only `config.Validate` rejects that — so a dynamic source with a wrong
+  explicit type keeps failing at dial with the vendor error.
+- gate: match = a dynamic provider (`source.type: dynamic`, a custom `DBConfigProvider`, a
+  multi-tenant resource source) can emit a `DatabaseConfig` that is untyped-with-a-DSN, **or** that
+  carries `tls.cert` / `tls.key` / `tls.ca` at all, or `Options.DatabaseConnector` is set. no-match =
+  every database config your app produces is static YAML (those already went through `[C57.5]` and
+  have always had vendor validation) and you use the built-in connector.
 - before: a dynamic multi-tenant source returning `{ConnectionString: "postgres://…"}` with no
   `Type` reached `database.NewConnection`'s `switch cfg.Type` and failed that tenant's every request
   with `unsupported database type: "" (supported: postgresql, oracle)`, forever and with no startup
-  signal — dynamic tenants are resolved lazily, so nothing enumerates them at boot.
-- after: that tenant comes up, which is the fix, but it also means a real dial against a real
-  database that nothing in your deployment has exercised. No code change is required for the fix
-  itself. Decide, per affected tenant, whether connecting is what you want; if a tenant's DSN was
-  untyped because that tenant is meant to be database-free, stop returning a connection string for
-  it. If you supply `Options.DatabaseConnector`, replace any `cfg.Type == ""` branch with one that
-  parses the DSN unconditionally, or that accepts both an empty and an inferred type.
+  signal — dynamic tenants are resolved lazily, so nothing enumerates them at boot. Separately and
+  more quietly, a dynamic tenant resolving to `oracle` — inferred or spelled out — **connected**
+  with its `tls.cert` / `tls.key` / `tls.ca` silently dropped, since go-ora implements neither tcps
+  nor wallet; and a PostgreSQL tenant carrying only `tls.cert` connected with the certificate
+  ignored under `sslmode=disable`. Both are exactly the states the vendor validators exist to
+  prevent, and neither validator was reachable on this path.
+- after: the untyped-DSN tenant comes up, which is the fix, but it also means a real dial against a
+  real database that nothing in your deployment has exercised. The TLS shapes above stop connecting
+  instead: `deps.DB(ctx)` returns a config error at connection acquisition (`TLS cert/key/ca are not
+  supported for Oracle`, or `sslcert and sslkey must be configured together`) rather than a handle
+  whose transport was never what the record claimed. Decide per affected tenant. For the untyped
+  DSNs: whether connecting is what you want — if a tenant's DSN was untyped because that tenant is
+  meant to be database-free, stop returning a connection string for it. For the TLS ones: drop the
+  material that was never in force, or move that tenant to a transport the driver implements; do not
+  read the new error as a regression, because the encryption it names was never applied. A rejected
+  config goes back to the caller **unreclassified** — `Type` is written only after every validation
+  step succeeds — so a provider that reuses the struct sees no partial mutation. If you supply
+  `Options.DatabaseConnector`, replace any `cfg.Type == ""` branch with one that parses the DSN
+  unconditionally, or that accepts both an empty and an inferred type.
 - verify: start the service and resolve a previously-failing tenant — the
   `Created new database connection` log line now carries a non-empty `db_type`
   (`database/manager.go`), and `deps.DB(ctx)` returns a usable handle instead of
-  `unsupported database type: ""`.
+  `unsupported database type: ""`. Then resolve a tenant whose record carries TLS material and
+  confirm it now fails with the vendor message instead of connecting.
 - ref: [ADR-050](adr_050_connectionstring_type_inference.md) · `[C57.5]` ·
-  `config/validation.go` (`ApplyDatabasePoolDefaults`) · `database/manager.go` (`createConnection`)
+  `config/validation.go` (`ApplyDatabasePoolDefaults`, `validateVendorSpecificFields`) ·
+  `database/manager.go` (`createConnection`)
 
 ### [C59.7] `BuildUpsert` rejects a conflict column that also appears in the update set · breaking · when: match
 

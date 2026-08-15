@@ -12,7 +12,18 @@
 > list has two call sites to account for rather than one (both delegate to
 > `inferDatabaseTypeFromConnectionString`, so the list itself stays in one
 > place). The conflicting-`Type` **error** in item 1 is unchanged and remains
-> Validate-only. See Consequences and [migrations.md](migrations.md) `[C59.6]`.
+> Validate-only.
+>
+> **Inference is unconditional on both paths, regardless of connector.** Item 2's
+> exemption is scoped to the startup **guard** ("fails startup … but only when
+> the built-in connector would be used") and never exempted anything from
+> inference. `config.Validate` is connector-blind — the `config` package holds no
+> reference to `Options.DatabaseConnector` at all — so a static `postgres://`
+> config under a custom connector has carried a populated `Type` since item 1
+> shipped, and a connector branching on `cfg.Type == ""` was already wrong there.
+> Inference normalizes the config *shape*; only the guard is connector-aware.
+> `ApplyDatabasePoolDefaults` now also runs `validateVendorSpecificFields`. See
+> Consequences and [migrations.md](migrations.md) `[C59.6]`.
 
 ## Context
 
@@ -140,3 +151,17 @@ stays in the config/app layers, not the connector.
   scheme, where it previously received `""`. A connector that branches on
   `cfg.Type == ""` to decide whether to parse the DSN itself must be reviewed.
   Unrecognized schemes are unaffected — `Type` stays `""`.
+- **Vendor-specific validation now runs on the dynamic path too.** Inference
+  alone would have re-opened, from the other side, the hole item 3 reasons
+  about: on the dynamic path Oracle TLS material was silently dropped and a lone
+  PostgreSQL `sslcert` under `sslmode=disable` silently ignored — the states the
+  vendor validators exist to prevent — so `ApplyDatabasePoolDefaults` runs them
+  after inference and before defaulting. The reach is wider than the DSN-only
+  shape that motivated the seam: a dynamic config with an **explicit**
+  `Type: oracle` plus `database.tls.cert`/`key`/`ca` connected before and now
+  fails at connection acquisition. The seam stays asymmetric by design — it
+  errors on dropped TLS material while still tolerating a `Type` that
+  contradicts the scheme, because that conflict fails loudly at dial with the
+  vendor's own error whereas dropped TLS material fails silently open. Inference
+  is computed into a local and written back only after every validation step
+  succeeds, so a rejected config returns to its caller unreclassified.
