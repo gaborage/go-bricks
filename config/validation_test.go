@@ -1576,8 +1576,10 @@ type dbTypeInferenceCase struct {
 	expectedType string
 }
 
-// databaseTypeInferenceCases returns a fresh slice per call: both callers hand
-// &case.config to a validator that mutates it.
+// databaseTypeInferenceCases returns a fresh slice per call. Both callers already
+// copy twice before mutating (range copies the element, then cfg := tt.config), so
+// this is belt-and-braces against a future caller that takes a pointer straight
+// into the slice and leaks one site's mutations into the other's fixtures.
 func databaseTypeInferenceCases() []dbTypeInferenceCase {
 	return []dbTypeInferenceCase{
 		{
@@ -1656,8 +1658,7 @@ func TestValidateInfersDatabaseTypeFromConnectionString(t *testing.T) {
 
 		err := validateDatabase(&cfg)
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "conflicts with the connectionstring scheme")
+		assertValidationError(t, err, "conflicts with the connectionstring scheme")
 	})
 }
 
@@ -1674,7 +1675,9 @@ func TestValidateNamedDatabaseInfersTypeFromConnectionString(t *testing.T) {
 }
 
 func assertValidationError(t *testing.T, err error, errorContains string) {
-	assert.Error(t, err)
+	// require, not assert: a nil err would otherwise panic on err.Error() below and
+	// take the whole test binary down instead of failing this one case.
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), errorContains)
 }
 
@@ -5780,23 +5783,23 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 		cfg := DatabaseConfig{ConnectionString: testOracleConnectionString}
 		cfg.TLS.CertFile = certPath
 		cfg.TLS.KeyFile = "/etc/certs/client.key"
+		original := cfg
 
 		err := ApplyDatabasePoolDefaults(&cfg)
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "TLS cert/key/ca are not supported for Oracle")
-		assert.Empty(t, cfg.Type, "a rejected config must go back to its caller unreclassified")
+		assertValidationError(t, err, "TLS cert/key/ca are not supported for Oracle")
+		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
 	})
 
 	t.Run("inferred_postgres_with_unpaired_cert_rejected", func(t *testing.T) {
 		cfg := DatabaseConfig{ConnectionString: testBarePostgresConnString}
 		cfg.TLS.CertFile = certPath
+		original := cfg
 
 		err := ApplyDatabasePoolDefaults(&cfg)
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "sslcert and sslkey must be configured together")
-		assert.Empty(t, cfg.Type, "a rejected config must go back to its caller unreclassified")
+		assertValidationError(t, err, "sslcert and sslkey must be configured together")
+		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
 	})
 
 	// The guard reaches typed dynamic configs too, not only the DSN-only shape
@@ -5804,11 +5807,12 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 	t.Run("explicit_oracle_type_with_ca_file_rejected", func(t *testing.T) {
 		cfg := DatabaseConfig{Type: Oracle, Host: testOracleHost, Database: "XEPDB1"}
 		cfg.TLS.CAFile = "/etc/certs/ca.pem"
+		original := cfg
 
 		err := ApplyDatabasePoolDefaults(&cfg)
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "TLS cert/key/ca are not supported for Oracle")
+		assertValidationError(t, err, "TLS cert/key/ca are not supported for Oracle")
+		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
 	})
 
 	t.Run("paired_postgres_certificate_accepted", func(t *testing.T) {
@@ -5827,11 +5831,9 @@ func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
 	// validateDatabaseWithConnectionString, which rejects a Type contradicting the
 	// scheme: this seam runs per connection, so it leaves the explicit Type alone
 	// and lets the vendor dial error be the failure (ADR-050). Do not "fix" it.
+	// The matching-type case is covered by explicit_matching_type_untouched in
+	// databaseTypeInferenceCases, which this seam's table test already runs.
 	conflicting := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}
 	require.NoError(t, ApplyDatabasePoolDefaults(&conflicting))
 	assert.Equal(t, Oracle, conflicting.Type)
-
-	matching := DatabaseConfig{Type: PostgreSQL, ConnectionString: testConnectionString}
-	require.NoError(t, ApplyDatabasePoolDefaults(&matching))
-	assert.Equal(t, PostgreSQL, matching.Type)
 }

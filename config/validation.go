@@ -839,43 +839,43 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 	return nil
 }
 
-// ApplyDatabasePoolDefaults normalizes zero-value Pool, Timezone, and Query
-// (log/slow-threshold) settings on cfg to the documented defaults (25 max
-// connections, idle tracks max, keepalive rules, UTC timezone). Exported so
-// callers that bypass Validate — notably dynamic multi-tenant DBConfigProviders
-// resolved in DbManager — get the same normalization as static config. A missing
-// Type is also inferred from a recognized connectionstring scheme (ADR-050), so a
-// dynamic provider's DSN-only config dials instead of failing on the factory's
-// empty-type dispatch. Unlike config.Validate, this seam never errors on an
-// explicit Type that contradicts the scheme — it is on the per-tenant connection
-// path, where the vendor dial error is the right failure. It does reject vendor
-// field combinations the driver would silently drop (Oracle TLS material, an
-// unpaired PostgreSQL sslcert/sslkey), because that failure mode is silent and
-// open rather than loud at dial. The asymmetry is deliberate.
+// ApplyDatabasePoolDefaults normalizes a DatabaseConfig for connection: it infers
+// a missing Type from a recognized connectionstring scheme, rejects vendor field
+// combinations the driver would silently drop, and fills zero-value Pool,
+// Timezone, and Query (log/slow-threshold) settings with the documented defaults
+// (25 max connections, idle tracks max, keepalive rules, UTC timezone).
+//
+// Exported so callers that bypass Validate — notably dynamic multi-tenant
+// DBConfigProviders resolved in DbManager — get the same normalization as static
+// config; the inference (ADR-050) is what lets a provider's DSN-only config dial
+// instead of failing on the factory's empty-type dispatch. Unlike config.Validate,
+// this seam never errors on an explicit Type that contradicts the scheme — it is on
+// the per-tenant connection path, where the vendor dial error is the right failure.
+// It does reject Oracle TLS material and an unpaired PostgreSQL sslcert/sslkey,
+// because that failure mode is silent and open rather than loud at dial. The
+// asymmetry is deliberate.
+//
+// Normalization happens on a clone that is committed to cfg only after every step
+// succeeds, so a rejected config goes back to its caller completely untouched.
 func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg == nil {
 		return NewValidationError("database", "configuration is nil")
 	}
 
-	inferred := cfg.Type
-	if inferred == "" {
-		inferred = inferDatabaseTypeFromConnectionString(cfg.ConnectionString)
+	normalized := *cfg
+	if normalized.Type == "" {
+		normalized.Type = inferDatabaseTypeFromConnectionString(normalized.ConnectionString)
 	}
 
-	// Vendor validation dispatches on Type, so probe a shallow clone carrying the
-	// inferred value: a config rejected here must go back to its caller
-	// unreclassified.
-	probe := *cfg
-	probe.Type = inferred
-	if err := validateVendorSpecificFields(&probe); err != nil {
+	if err := validateVendorSpecificFields(&normalized); err != nil {
 		return err
 	}
 
-	if err := applyDatabasePoolDefaults(cfg); err != nil {
+	if err := applyDatabasePoolDefaults(&normalized); err != nil {
 		return err
 	}
 
-	cfg.Type = inferred
+	*cfg = normalized
 	return nil
 }
 

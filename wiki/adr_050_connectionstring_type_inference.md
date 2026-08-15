@@ -162,6 +162,7 @@ stays in the config/app layers, not the connector.
   fails at connection acquisition. The seam stays asymmetric by design — it
   errors on dropped TLS material while still tolerating a `Type` that
   contradicts the scheme, because that conflict fails loudly at dial with the
-  vendor's own error whereas dropped TLS material fails silently open. Inference
-  is computed into a local and written back only after every validation step
-  succeeds, so a rejected config returns to its caller unreclassified.
+  vendor's own error whereas dropped TLS material fails silently open.
+  Normalization happens on a clone that is committed to the caller's config only
+  after every step succeeds, so a rejected config returns untouched — neither
+  reclassified nor carrying half-applied pool defaults.

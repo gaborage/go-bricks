@@ -2671,7 +2671,15 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   empty, matching what `config.validateDatabaseWithConnectionString` has done for static config
   since `[C57.5]` ([ADR-050](adr_050_connectionstring_type_inference.md)). Surrounding whitespace no
   longer defeats the scheme match at either site — a DSN read from a mounted secret routinely
-  carries a trailing newline — and the stored DSN is not rewritten. Inference is unconditional:
+  carries a trailing newline — and the stored DSN is not rewritten. That tolerance also reaches the
+  **static** path, with one consequence worth knowing: a root or `databases.*` DSN whose scheme was
+  previously unmatched *because* of surrounding whitespace now resolves a `Type`, so
+  `ConfigureRuntimeHelpers`' untyped-DSN startup guard no longer fires for it. Under static
+  single-tenant that is strictly better (pre-initialization still dials at boot, so it aborts there
+  with the driver's message instead of a misleading "no resolved database type"). Under
+  `multitenant.enabled: true` or `source.type: dynamic`, pre-initialization is skipped, so such a
+  config now boots green and fails at first use where it used to abort at startup. Inference is
+  unconditional:
   `Options.DatabaseConnector`'s exemption covers the **startup guard** only and never covered
   inference, so a custom connector now receives `Type` populated where it used to receive `""`.
   **(2) Vendor validation.** The seam now runs the same vendor-specific validation
@@ -2704,8 +2712,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   meant to be database-free, stop returning a connection string for it. For the TLS ones: drop the
   material that was never in force, or move that tenant to a transport the driver implements; do not
   read the new error as a regression, because the encryption it names was never applied. A rejected
-  config goes back to the caller **unreclassified** — `Type` is written only after every validation
-  step succeeds — so a provider that reuses the struct sees no partial mutation. If you supply
+  config goes back to the caller **completely untouched** — normalization happens on a clone that is
+  committed only after every step succeeds — so a provider that reuses the struct sees no partial
+  mutation, neither a reclassified `Type` nor half-applied pool defaults. If you supply
   `Options.DatabaseConnector`, replace any `cfg.Type == ""` branch with one that parses the DSN
   unconditionally, or that accepts both an empty and an inferred type.
 - verify: start the service and resolve a previously-failing tenant — the
