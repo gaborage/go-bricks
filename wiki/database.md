@@ -324,9 +324,45 @@ complete config: `buildOracleDSN` returns the connection string verbatim, so
 `oracle.service.name`, `oracle.service.sid` and `database` are never consulted in that mode
 and none of them is required. Without a connection string the rule is unchanged — exactly
 one of the three, and zero or several is still a validation error. The Oracle TLS rejection
-is unconditional either way: `database.tls.cert`/`key`/`ca` fail validation even alongside a
-connection string, because tcps/wallet is not implemented and silently ignoring TLS material
-would leave the operator believing the connection is encrypted.
+is unconditional either way: the whole `database.tls` block — `mode` included — fails
+validation even alongside a connection string, because tcps/wallet is not implemented and
+silently ignoring TLS settings would leave the operator believing the connection is
+encrypted.
+
+## TLS (`database.tls`)
+
+Startup validation rejects every `database.tls` shape pgx would silently discard,
+downgrade, or (for `ca: system`) invert
+([ADR-062](adr_062_database_tls_fail_closed.md)). All four fields are trimmed
+before the checks run. The rules fire at startup wherever `config.Validate` does — the root
+`database:` block, every named database, every static tenant entry — and, since #1002, at
+connection acquisition for dynamic `DBConfigProvider` records (see "These rules reach dynamic
+configs too" below).
+
+- **PostgreSQL — `mode` is an allowlist.** `disable`, `allow`, `prefer`, `require`,
+  `verify-ca`, `verify-full`, or unset. A misspelled or wrongly-cased value (`Require`,
+  `verify_full`) is a startup error naming `database.tls.mode`; the framework does not
+  case-fold, because pgx is case-sensitive and the typo is worth reporting.
+- **PostgreSQL — material demands a TLS-mandatory mode.** `cert`, `key` or `ca` may be set
+  only under `require`, `verify-ca` or `verify-full`. Under `disable` pgx returns a nil TLS
+  config before it reads the certificate files, and under an unset mode (which defaults to
+  `prefer`), `allow` or `prefer` it sets `InsecureSkipVerify` plus a plaintext fallback — so
+  the material was being discarded or the connection silently downgraded (`ca: system`
+  inverted instead: pgx force-upgrades that sentinel to `verify-full` — see the quirks
+  below). `cert` and `key` must still be set together.
+- **PostgreSQL — a valid mode alone is always fine.** `mode: disable` with no material stays
+  valid; opportunistic TLS with nothing to discard is a legitimate choice.
+- **`database.tls` is incompatible with `connectionstring`.** The DSN is used verbatim and
+  the block never reaches it, so setting both is a startup error. Put the parameters in the
+  DSN instead (`sslmode`, `sslrootcert`, `sslcert`, `sslkey`) — that is also the escape hatch
+  for pgx-native semantics these rules refuse, such as `prefer` with a client certificate.
+- **Oracle rejects the whole block**, `mode` included (see above).
+
+Two pgx quirks worth knowing when choosing a mode: `require` plus `ca` behaves as
+`verify-ca` (a documented libpq inheritance), and the sentinel `ca: system` means the OS
+trust store and forces `verify-full` regardless of the configured mode. `require` without
+`ca` provides encryption without server authentication — pair it with `ca`, or use
+`verify-ca`/`verify-full`, wherever the peer's identity matters.
 
 **These rules reach dynamic configs too.** `ApplyDatabasePoolDefaults` runs the same
 vendor-specific validation as `Validate`, so a config a `DBConfigProvider` returns —
