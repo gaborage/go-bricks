@@ -20,6 +20,9 @@ const (
 	testOracleConnectionString   = "oracle://user:pass@localhost:1521/XEPDB1"
 	testUnknownSchemeConnString  = "sqlserver://user:pass@localhost:1433/db"
 	testOracleHost               = "oracle.example.com"
+	testTLSCertFile              = "/etc/ssl/client.crt"
+	testTLSKeyFile               = "/etc/ssl/client.key"
+	testTLSCAFile                = "/etc/ssl/ca.pem"
 	testAppName                  = "test-app"
 	testAppVersion               = "v1.0.0"
 	errMaxConnectionsNonNegative = "database.pool.max.connections must be non-negative"
@@ -4781,7 +4784,9 @@ func TestValidatePostgreSQLFieldsRejectsPartialClientCert(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &DatabaseConfig{Type: "postgresql", Host: "h", Database: "d"}
+			cfg := &DatabaseConfig{Type: PostgreSQL, Host: "h", Database: "d"}
+			// A mandatory mode isolates the pairing rule from the material/mode rule.
+			cfg.TLS.Mode = sslModeRequire
 			tc.mutate(cfg)
 			err := validatePostgreSQLFields(cfg)
 			require.Error(t, err)
@@ -4791,15 +4796,142 @@ func TestValidatePostgreSQLFieldsRejectsPartialClientCert(t *testing.T) {
 	}
 }
 
-func TestValidatePostgreSQLFieldsAllowsPairedOrCAOnly(t *testing.T) {
-	both := &DatabaseConfig{Type: "postgresql"}
-	both.TLS.CertFile = "/etc/ssl/client.crt"
-	both.TLS.KeyFile = "/etc/ssl/client.key"
+func TestValidatePostgreSQLFieldsAllowsMaterialUnderMandatoryMode(t *testing.T) {
+	both := &DatabaseConfig{Type: PostgreSQL}
+	both.TLS.Mode = sslModeRequire
+	both.TLS.CertFile = testTLSCertFile
+	both.TLS.KeyFile = testTLSKeyFile
 	require.NoError(t, validatePostgreSQLFields(both))
 
-	caOnly := &DatabaseConfig{Type: "postgresql"}
-	caOnly.TLS.CAFile = "/etc/ssl/ca.pem" // CA alone is valid (server auth, no client cert)
+	caOnly := &DatabaseConfig{Type: PostgreSQL}
+	// CA alone is valid under a mandatory mode (server auth, no client cert).
+	caOnly.TLS.Mode = sslModeVerifyCA
+	caOnly.TLS.CAFile = testTLSCAFile
 	require.NoError(t, validatePostgreSQLFields(caOnly))
+}
+
+func TestValidatePostgreSQLFieldsRejectsUnknownTLSMode(t *testing.T) {
+	cases := []struct {
+		name string
+		mode string
+	}{
+		{"typo", "requird"},
+		{"wrong_case", "Require"},
+		{"underscore", "verify_full"},
+		{"whitespace_only", " "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &DatabaseConfig{Type: PostgreSQL, Host: "h", Database: "d"}
+			cfg.TLS.Mode = tc.mode
+			// Through the vendor seam so the trim runs first (" " must not be treated as a mode).
+			err := validateVendorSpecificFields(cfg)
+			if tc.mode == " " {
+				require.NoError(t, err, "a whitespace-only mode trims to unset, not to an invalid value")
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "database.tls.mode")
+			assert.Contains(t, err.Error(), tc.mode)
+		})
+	}
+}
+
+func TestValidatePostgreSQLFieldsTrimsTLSMode(t *testing.T) {
+	cfg := &DatabaseConfig{Type: PostgreSQL, Host: "h", Database: "d"}
+	cfg.TLS.Mode = " require "
+	cfg.TLS.CertFile = " " + testTLSCertFile + " "
+	cfg.TLS.KeyFile = " " + testTLSKeyFile + " "
+
+	require.NoError(t, validateVendorSpecificFields(cfg))
+	// The trim must persist: buildPostgresDSN reads these fields verbatim later.
+	assert.Equal(t, sslModeRequire, cfg.TLS.Mode)
+	assert.Equal(t, testTLSCertFile, cfg.TLS.CertFile)
+	assert.Equal(t, testTLSKeyFile, cfg.TLS.KeyFile)
+}
+
+func TestValidatePostgreSQLFieldsTrimsTLSCAFile(t *testing.T) {
+	cfg := &DatabaseConfig{Type: PostgreSQL, Host: "h", Database: "d"}
+	cfg.TLS.Mode = sslModeVerifyFull
+	cfg.TLS.CAFile = " " + testTLSCAFile + " "
+
+	require.NoError(t, validateVendorSpecificFields(cfg))
+	assert.Equal(t, testTLSCAFile, cfg.TLS.CAFile)
+}
+
+func TestValidatePostgreSQLFieldsRejectsMaterialWithoutMandatoryMode(t *testing.T) {
+	materials := []struct {
+		name   string
+		mutate func(*DatabaseConfig)
+	}{
+		{"cert_and_key", func(c *DatabaseConfig) {
+			c.TLS.CertFile = testTLSCertFile
+			c.TLS.KeyFile = testTLSKeyFile
+		}},
+		{"ca_only", func(c *DatabaseConfig) { c.TLS.CAFile = testTLSCAFile }},
+	}
+	for _, mode := range []string{"", sslModeDisable, sslModeAllow, sslModePrefer} {
+		for _, m := range materials {
+			name := "unset"
+			if mode != "" {
+				name = mode
+			}
+			t.Run(name+"_"+m.name, func(t *testing.T) {
+				cfg := &DatabaseConfig{Type: PostgreSQL, Host: "h", Database: "d"}
+				cfg.TLS.Mode = mode
+				m.mutate(cfg)
+				err := validatePostgreSQLFields(cfg)
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "require, verify-ca, or verify-full",
+					"pgx discards TLS material under non-mandatory modes, so the config must not boot")
+			})
+		}
+	}
+}
+
+func TestValidatePostgreSQLFieldsAllowsModeAloneAnyValid(t *testing.T) {
+	for _, mode := range []string{"", sslModeDisable, sslModeAllow, sslModePrefer, sslModeRequire, sslModeVerifyCA, sslModeVerifyFull} {
+		name := "unset"
+		if mode != "" {
+			name = mode
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := &DatabaseConfig{Type: PostgreSQL, Host: "h", Database: "d"}
+			cfg.TLS.Mode = mode
+			require.NoError(t, validatePostgreSQLFields(cfg),
+				"a valid mode without TLS material discards nothing, so it stays allowed")
+		})
+	}
+}
+
+func TestValidatePostgreSQLFieldsRejectsTLSBlockWithConnectionString(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*DatabaseConfig)
+	}{
+		{"mode_only", func(c *DatabaseConfig) { c.TLS.Mode = sslModeRequire }},
+		{"ca_only", func(c *DatabaseConfig) { c.TLS.CAFile = testTLSCAFile }},
+		{"cert_and_key", func(c *DatabaseConfig) {
+			c.TLS.Mode = sslModeVerifyFull
+			c.TLS.CertFile = testTLSCertFile
+			c.TLS.KeyFile = testTLSKeyFile
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &DatabaseConfig{Type: PostgreSQL, ConnectionString: testConnectionString}
+			tc.mutate(cfg)
+			err := validatePostgreSQLFields(cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "connectionstring",
+				"the tls block never reaches a connection-string DSN, so accepting it advertises inert TLS")
+		})
+	}
+}
+
+func TestValidatePostgreSQLFieldsAllowsConnectionStringWithoutTLSBlock(t *testing.T) {
+	cfg := &DatabaseConfig{Type: PostgreSQL, ConnectionString: testConnectionString}
+	require.NoError(t, validatePostgreSQLFields(cfg))
 }
 
 func TestValidateOracleFieldsRejectsTLSMaterial(t *testing.T) {
@@ -4807,9 +4939,10 @@ func TestValidateOracleFieldsRejectsTLSMaterial(t *testing.T) {
 		name   string
 		mutate func(*DatabaseConfig)
 	}{
-		{"ca", func(c *DatabaseConfig) { c.TLS.CAFile = "/etc/ssl/ca.pem" }},
-		{"cert", func(c *DatabaseConfig) { c.TLS.CertFile = "/etc/ssl/client.crt" }},
-		{"key", func(c *DatabaseConfig) { c.TLS.KeyFile = "/etc/ssl/client.key" }},
+		{"ca", func(c *DatabaseConfig) { c.TLS.CAFile = testTLSCAFile }},
+		{"cert", func(c *DatabaseConfig) { c.TLS.CertFile = testTLSCertFile }},
+		{"key", func(c *DatabaseConfig) { c.TLS.KeyFile = testTLSKeyFile }},
+		{"mode", func(c *DatabaseConfig) { c.TLS.Mode = sslModeRequire }},
 	}
 	bases := []struct {
 		name string
@@ -4833,12 +4966,8 @@ func TestValidateOracleFieldsRejectsTLSMaterial(t *testing.T) {
 	}
 }
 
-func TestValidateOracleFieldsAllowsModeWithoutMaterial(t *testing.T) {
-	// sslmode alone is a no-op for Oracle today, so it passes; only cert/key/ca (which
-	// would falsely imply authenticated TLS) are rejected.
-	cfg := &DatabaseConfig{Type: "oracle", Database: "PDB1"}
-	cfg.TLS.Mode = "require"
-	require.NoError(t, validateOracleFields(cfg))
+func TestValidateOracleFieldsAllowsAbsentTLSBlock(t *testing.T) {
+	require.NoError(t, validateOracleFields(&DatabaseConfig{Type: Oracle, Database: "PDB1"}))
 }
 
 func TestValidateDebugTrustedProxiesRejectsAllInvalid(t *testing.T) {
@@ -5787,18 +5916,20 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 
 		err := ApplyDatabasePoolDefaults(&cfg)
 
-		assertValidationError(t, err, "TLS cert/key/ca are not supported for Oracle")
+		assertValidationError(t, err, "not supported for Oracle")
 		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
 	})
 
-	t.Run("inferred_postgres_with_unpaired_cert_rejected", func(t *testing.T) {
+	// ADR-062: any database.tls field alongside a connectionstring is rejected
+	// outright (R4), before the pairing rule can fire.
+	t.Run("inferred_postgres_with_tls_block_rejected", func(t *testing.T) {
 		cfg := DatabaseConfig{ConnectionString: testBarePostgresConnString}
 		cfg.TLS.CertFile = certPath
 		original := cfg
 
 		err := ApplyDatabasePoolDefaults(&cfg)
 
-		assertValidationError(t, err, "sslcert and sslkey must be configured together")
+		assertValidationError(t, err, "database.tls is ignored when connectionstring is set")
 		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
 	})
 
@@ -5811,17 +5942,20 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 
 		err := ApplyDatabasePoolDefaults(&cfg)
 
-		assertValidationError(t, err, "TLS cert/key/ca are not supported for Oracle")
+		assertValidationError(t, err, "not supported for Oracle")
 		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
 	})
 
-	t.Run("paired_postgres_certificate_accepted", func(t *testing.T) {
-		cfg := DatabaseConfig{ConnectionString: testBarePostgresConnString}
+	// ADR-062 forbids database.tls next to a connectionstring, so the accepted
+	// shape is a typed config with a TLS-mandatory mode; inference-accepted paths
+	// are pinned by the classification table and the rollback case below.
+	t.Run("paired_postgres_certificate_under_require_accepted", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: PostgreSQL, Host: "h", Database: "d"}
+		cfg.TLS.Mode = sslModeRequire
 		cfg.TLS.CertFile = certPath
 		cfg.TLS.KeyFile = "/etc/certs/client.key"
 
 		require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
-		assert.Equal(t, PostgreSQL, cfg.Type)
 		assert.Equal(t, int32(25), cfg.Pool.Max.Connections, "defaults still applied after vendor validation")
 	})
 

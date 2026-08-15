@@ -80,11 +80,17 @@ database:
       parameters: false
       max: 1000
 
-  tls:
-    mode: disable
-    cert: ""
-    key: ""
-    ca: ""
+  # PostgreSQL only — Oracle rejects this whole block at startup (ADR-062).
+  # Omit it entirely when using `connectionstring`: the DSN is used verbatim, so
+  # setting both fails startup. Put sslmode/sslrootcert/sslcert/sslkey in the DSN.
+  # Left commented out so a copied example composes with `connectionstring`.
+  # Bare `require` encrypts but does NOT authenticate the server — add `ca`
+  # (pgx then verifies as verify-ca) or use verify-ca/verify-full.
+  # tls:
+  #   mode: disable  # disable|allow|prefer|require|verify-ca|verify-full; invalid values fail startup
+  #   cert: ""       # client cert (mTLS); requires key AND mode require/verify-ca/verify-full
+  #   key: ""        # client key; must be paired with cert
+  #   ca: ""         # server CA (or "system" for the OS trust store); requires mode require/verify-ca/verify-full
 
   # Oracle-specific configuration
   oracle:

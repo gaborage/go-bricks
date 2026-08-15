@@ -1230,6 +1230,35 @@ Normalization was rejected because trimming silently changes a credential, and n
 comparing against the secret's bytes. The fix stops future leaks, not past ones — rotate any
 credential whose provisioning failure was logged. See [migrations.md](migrations.md) `[C59.5]`.
 
+### [ADR-062: Fail Closed on `database.tls` Misconfiguration](adr_062_database_tls_fail_closed.md)
+
+**Date:** 2026-08-14 | **Status:** Accepted
+
+`database.tls` reached pgx unvalidated apart from the cert/key pairing check, so five shapes booted
+green while doing something other than what was configured: `disable`/`allow`/`prefer`/unset plus
+`cert`+`key` connected with **no client certificate**; a path-valued `ca:` with no mode ran with
+**no server authentication** (pgx defaults to `prefer`, which sets `InsecureSkipVerify`; the
+`ca: system` sentinel was instead force-upgraded to `verify-full`); a typo'd mode passed
+validation and died inside `NewConnection` behind go-bricks' deliberate parse-error redaction —
+lazily, at first request, for multi-tenant deployments; a `tls:` block alongside `connectionstring`
+was silently ignored entirely; and Oracle accepted `database.tls.mode`, implying TLS go-ora never
+negotiates. Validation — at startup on every path that runs `config.Validate` (root block, named
+databases, static tenants) and, since #1002, at connection acquisition on the dynamic seam — now
+enforces an sslmode allowlist, requires
+`require`/`verify-ca`/`verify-full` wherever cert/key/ca are set, rejects the block alongside a
+connection string, and rejects it wholesale on Oracle — with all four fields trimmed once at the
+vendor-dispatch seam.
+
+**Key Benefits:** Every remaining accepted `database.tls` shape does what it says. Failures move
+from a redacted connect-time parse error (or no error at all) to a validation error naming
+`database.tls` and the fix — at boot for static configs, at acquisition for dynamic records. **Watch:** this is **breaking** — previously-booting configurations now
+abort. A valid mode *without* material stays allowed, `disable` included, and a `connectionstring`
+with ssl parameters embedded remains the escape hatch for pgx-native semantics the rules refuse.
+Not covered: unrecognized-scheme DSNs (the vendor dispatch's `default` arm) and the
+`tools/migration` CLI, which never calls `config.Validate`; dynamic `DBConfigProvider` records
+ARE covered since #1002 routed that seam through the vendor gate. See
+[migrations.md](migrations.md) `[C59.11]`.
+
 ---
 
 ## ADR Lifecycle
@@ -1241,7 +1270,7 @@ credential whose provisioning failure was logged. See [migrations.md](migrations
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-061) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-062) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
