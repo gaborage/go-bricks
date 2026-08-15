@@ -1236,12 +1236,14 @@ credential whose provisioning failure was logged. See [migrations.md](migrations
 
 `database.tls` reached pgx unvalidated apart from the cert/key pairing check, so five shapes booted
 green while doing something other than what was configured: `disable`/`allow`/`prefer`/unset plus
-`cert`+`key` connected with **no client certificate**; `ca:` with no mode ran with **no server
-authentication** (pgx defaults to `prefer`, which sets `InsecureSkipVerify`); a typo'd mode passed
+`cert`+`key` connected with **no client certificate**; a path-valued `ca:` with no mode ran with
+**no server authentication** (pgx defaults to `prefer`, which sets `InsecureSkipVerify`; the
+`ca: system` sentinel was instead force-upgraded to `verify-full`); a typo'd mode passed
 validation and died inside `NewConnection` behind go-bricks' deliberate parse-error redaction —
 lazily, at first request, for multi-tenant deployments; a `tls:` block alongside `connectionstring`
 was silently ignored entirely; and Oracle accepted `database.tls.mode`, implying TLS go-ora never
-negotiates. Startup validation now enforces an sslmode allowlist, requires
+negotiates. Startup validation — on every path that runs `config.Validate`: the root block, named
+databases, static tenants — now enforces an sslmode allowlist, requires
 `require`/`verify-ca`/`verify-full` wherever cert/key/ca are set, rejects the block alongside a
 connection string, and rejects it wholesale on Oracle — with all four fields trimmed once at the
 vendor-dispatch seam.
@@ -1251,8 +1253,9 @@ from a redacted connect-time parse error (or no error at all) to a startup error
 `database.tls` and the fix. **Watch:** this is **breaking** — previously-booting configurations now
 abort. A valid mode *without* material stays allowed, `disable` included, and a `connectionstring`
 with ssl parameters embedded remains the escape hatch for pgx-native semantics the rules refuse.
-Not covered: unrecognized-scheme DSNs (the vendor dispatch's `default` arm) and the
-`tools/migration` CLI, which never calls `config.Validate`. See
+Not covered: unrecognized-scheme DSNs (the vendor dispatch's `default` arm); the
+`tools/migration` CLI, which never calls `config.Validate`; and dynamic `DBConfigProvider`
+records, until open PR #1002 routes that seam through the vendor gate. See
 [migrations.md](migrations.md) `[C59.11]`.
 
 ---

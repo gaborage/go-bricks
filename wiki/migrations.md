@@ -3013,10 +3013,15 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C59.11] `database.tls` fails closed: PG mode allowlist + material requires a TLS-mandatory mode; Oracle rejects the whole block · silent-config · when: match
 
-- detect: `grep -rniE 'database\.tls\.|DATABASE_TLS_' config*.yaml deploy/` across every environment,
-  including the ones you do not deploy from this repo. Add `git grep -n 'TLS' -- '*.go'` if you
-  assemble a `config.DatabaseConfig` in Go. Nothing here is compiler-caught — the struct is unchanged
-  — so the failure is a startup validation error, and the decisive check is booting each environment.
+- detect: two greps, one per config shape. `grep -rniE '^[[:space:]]*tls:' config*.yaml deploy/`
+  catches the standard nested mapping (`database:` → `tls:` → `mode:` — the form
+  `config.example.yaml` shipped live before this change, which a dotted-key grep cannot see; it
+  also matches any other nested `tls:` block, such as the server's, so inspect the hits). `grep -rniE 'database\.tls\.|DATABASE_TLS_'
+  config*.yaml deploy/` catches dotted keys and environment-variable overrides, which the nested
+  grep cannot see. Run both across every environment, including the ones you do not deploy from
+  this repo. Add `git grep -n 'TLS' -- '*.go'` if you assemble a `config.DatabaseConfig` in Go.
+  Nothing here is compiler-caught — the struct is unchanged — so the failure is a startup
+  validation error, and the decisive check is booting each environment.
 - scope: `config/validation.go` only (`validateVendorSpecificFields` and the two vendor functions it
   dispatches to), so the rules run wherever `config.Validate` does: the root `database:` block, every
   `databases.*` entry, and every static `multitenant.tenants.*` entry. All four TLS fields are
