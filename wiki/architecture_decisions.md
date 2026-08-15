@@ -1259,6 +1259,38 @@ Not covered: unrecognized-scheme DSNs (the vendor dispatch's `default` arm) and 
 ARE covered since #1002 routed that seam through the vendor gate. See
 [migrations.md](migrations.md) `[C59.11]`.
 
+### [ADR-063: Native Stream Publishing Is Synchronous and Confirmed, Correlated by Message Pointer](adr_063_streams_native_publishing.md)
+
+**Date:** 2026-08-15 | **Status:** Accepted
+
+[ADR-059](adr_059_streams_consumption.md) shipped `messaging/streams` for consumption only and left
+native publishing as future work with one constraint: it must reuse that manager's Environment. It
+now does. `DeclarePublisher` and `DeclareSuperStreamPublisher` return an inert handle at declaration
+time that `Manager.Start` binds to a client producer — before any consumer starts, because a handler
+may publish from its first delivery. The surface is **sync-confirmed only**: the client's `Send` is
+asynchronous and its `checkWriteError` swallows every write error except `FrameTooLarge`, so a `nil`
+from it proves nothing and the broker confirmation is the only observable truth. Confirmations are
+correlated by the **message pointer** the client hands back, which is valid only at the default
+`SubEntrySize` of 1 — the reason the producer options are the client's defaults verbatim, with no
+deduplication, batching or compression. Because the client's send path parks on a bare `sync.Cond`
+during a reconnect, the send runs on a goroutine the caller's context can abandon; a context expiry
+**tombstones** the correlation entry rather than removing it, so a send that has not routed yet still
+finds its routing key instead of hashing `""` onto one partition. Super streams route by murmur3 with
+RabbitMQ's shared seed, interoperable with the Java/.NET/Python clients; `RoutingKey` is required
+non-empty there and rejected on a plain stream.
+
+**Key Benefits:** A natively-consuming service can publish over the same connection with a confirmed
+result, and super-stream partitioning reaches the framework surface for the first time. No new config
+keys — the client's defaults and the caller's context bound everything. **Watch:** a publish is only
+as bounded as the context passed to it, so background callers must supply a deadline; a context
+timeout is **not** proof of failure, delivery stays at-least-once and consumers must be idempotent;
+an abandoned send leaks a vendor goroutine and holds its map entry until the publisher closes; and the
+correlation rests on a vendor-internal guarantee that a client upgrade must re-verify (the integration
+round trip is what fails loudly if it stops holding). Publisher close sweeps every outstanding waiter
+with `ErrPublisherClosed`, because the client's `entityClosed` confirmations cannot reach a send that
+never enqueued. Deduplication, key routing, sub-entry batching, compression and outbox relay are all
+deferred. See [streams.md](streams.md).
+
 ---
 
 ## ADR Lifecycle
@@ -1270,7 +1302,7 @@ ARE covered since #1002 routed that seam through the vendor gate. See
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-062) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-063) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
