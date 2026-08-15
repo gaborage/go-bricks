@@ -775,6 +775,14 @@ func TestBuildEnvironmentVariablesRejectsControlChars(t *testing.T) {
 		{"database_lf", envFieldDatabase, "\n"},
 		{"database_cr", envFieldDatabase, "\r"},
 		{"database_nul", envFieldDatabase, "\x00"},
+		{"tls_mode_lf", envFieldTLSMode, "\n"},
+		{"tls_mode_nul", envFieldTLSMode, "\x00"},
+		{"tls_cert_cr", envFieldTLSCert, "\r"},
+		{"tls_cert_nul", envFieldTLSCert, "\x00"},
+		{"tls_key_lf", envFieldTLSKey, "\n"},
+		{"tls_key_nul", envFieldTLSKey, "\x00"},
+		{"tls_ca_cr", envFieldTLSCA, "\r"},
+		{"tls_ca_nul", envFieldTLSCA, "\x00"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -788,6 +796,14 @@ func TestBuildEnvironmentVariablesRejectsControlChars(t *testing.T) {
 				db.Password += tc.badChar
 			case envFieldDatabase:
 				db.Database += tc.badChar
+			case envFieldTLSMode:
+				db.TLS.Mode += tc.badChar
+			case envFieldTLSCert:
+				db.TLS.CertFile += tc.badChar
+			case envFieldTLSKey:
+				db.TLS.KeyFile += tc.badChar
+			case envFieldTLSCA:
+				db.TLS.CAFile += tc.badChar
 			}
 			_, err := buildEnvironmentVariables(db)
 			require.ErrorIs(t, err, ErrEnvFieldHasControlChar)
@@ -804,6 +820,86 @@ func TestBuildEnvironmentVariablesRejectsControlChars(t *testing.T) {
 		require.Error(t, err)
 		assert.NotContains(t, err.Error(), "leakySecret", "error message must not echo the offending value")
 	})
+}
+
+func TestBuildEnvironmentVariablesForwardsPostgreSQLTLS(t *testing.T) {
+	db := &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Username: "u", Password: "p", Database: "d"}
+	db.TLS.Mode = "verify-full"
+	db.TLS.CAFile = "/etc/ssl/ca.pem"
+	db.TLS.CertFile = "/etc/ssl/client.crt"
+	db.TLS.KeyFile = "/etc/ssl/client.key"
+
+	envVars, err := buildEnvironmentVariables(db)
+
+	require.NoError(t, err)
+	assertEnvVarsContain(t, envVars, []string{
+		"DB_SSLMODE=verify-full",
+		"DB_SSLROOTCERT=/etc/ssl/ca.pem",
+		"DB_SSLCERT=/etc/ssl/client.crt",
+		"DB_SSLKEY=/etc/ssl/client.key",
+	})
+}
+
+func TestBuildEnvironmentVariablesOmitsUnsetTLSFields(t *testing.T) {
+	db := &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Username: "u", Password: "p", Database: "d"}
+	db.TLS.Mode = "require"
+
+	envVars, err := buildEnvironmentVariables(db)
+
+	require.NoError(t, err)
+	assert.Contains(t, envVars, "DB_SSLMODE=require")
+	// A conf that interpolates ${env.DB_SSLROOTCERT} unconditionally must not receive a
+	// blank value it would paste into the URL as `sslrootcert=`. Prefix-matching on the
+	// key (not slice membership) also catches a stray non-empty value.
+	assertEnvVarsLackPrefixes(t, envVars, []string{"DB_SSLROOTCERT", "DB_SSLCERT", "DB_SSLKEY"})
+}
+
+func TestBuildEnvironmentVariablesEmitsNoTLSWithoutConfig(t *testing.T) {
+	db := &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Username: "u", Password: "p", Database: "d"}
+
+	envVars, err := buildEnvironmentVariables(db)
+
+	require.NoError(t, err)
+	assertEnvVarsLackPrefixes(t, envVars, tlsEnvVarNames)
+}
+
+func TestBuildEnvironmentVariablesOracleCarriesNoTLS(t *testing.T) {
+	// config validation rejects database.tls on Oracle (ADR-062), so even a config that
+	// somehow carries it must not have TLS forwarded into an Oracle Flyway run.
+	db := &config.DatabaseConfig{Type: "oracle", Host: "h", Port: 1521, Username: "u", Password: "p", Database: "PDB1"}
+	db.TLS.Mode = "require"
+	db.TLS.CAFile = "/etc/ssl/ca.pem"
+
+	envVars, err := buildEnvironmentVariables(db)
+
+	require.NoError(t, err)
+	assertEnvVarsLackPrefixes(t, envVars, tlsEnvVarNames)
+}
+
+// tlsEnvVarNames are the keys buildEnvironmentVariables may export for TLS; tests assert
+// against the whole set so a newly added one cannot slip past an outdated literal list.
+var tlsEnvVarNames = []string{"DB_SSLMODE", "DB_SSLROOTCERT", "DB_SSLCERT", "DB_SSLKEY"}
+
+func TestHasTLSSettings(t *testing.T) {
+	assert.False(t, hasTLSSettings(nil))
+	assert.False(t, hasTLSSettings(&config.DatabaseConfig{}))
+
+	tests := []struct {
+		name  string
+		apply func(*config.DatabaseConfig)
+	}{
+		{name: "mode", apply: func(c *config.DatabaseConfig) { c.TLS.Mode = "require" }},
+		{name: "cert", apply: func(c *config.DatabaseConfig) { c.TLS.CertFile = "/c" }},
+		{name: "key", apply: func(c *config.DatabaseConfig) { c.TLS.KeyFile = "/k" }},
+		{name: "ca", apply: func(c *config.DatabaseConfig) { c.TLS.CAFile = "/a" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := &config.DatabaseConfig{}
+			tt.apply(db)
+			assert.True(t, hasTLSSettings(db))
+		})
+	}
 }
 
 func assertEnvVarsContain(t *testing.T, envVars, expected []string) {
