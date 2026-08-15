@@ -495,16 +495,17 @@ type QueryBuilderInterface interface {
 	BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer
 
 	// BuildUpsert requires a non-empty conflictColumns that names no column twice
-	// and whose every entry is also a key of insertColumns, on every vendor; a call
-	// violating any of those returns an error before any SQL is produced. The two
-	// preconditions compare columns differently, deliberately. Insert membership is
-	// an exact key match, so a conflict column must be spelled exactly as its
-	// insertColumns key. Duplicate detection follows the vendor's identifier rules
-	// instead: Oracle folds the identifiers it emits unquoted — the non-reserved
-	// ones — so there a case variant of such a column is a duplicate, while the
-	// reserved words it quotes stay case-sensitive and are not. PostgreSQL quotes
-	// every identifier, so no case variant is ever a duplicate there; it is a second
-	// column and a legitimate composite conflict target.
+	// and whose every entry also names a column of insertColumns, on every vendor;
+	// a call violating any of those returns an error before any SQL is produced.
+	// Both questions — whether two entries are the same column, and whether a
+	// conflict column is among the inserted ones — follow the vendor's identifier
+	// rules. Oracle folds the identifiers it emits unquoted, meaning the
+	// non-reserved ones, so there a case variant of such a column is a duplicate and
+	// also satisfies membership, while the reserved words it quotes stay
+	// case-sensitive and do neither. PostgreSQL quotes every identifier, so a case
+	// variant is never a duplicate there: it is a second column, a legitimate
+	// composite conflict target, and not a match for an insert key spelled
+	// differently.
 	//
 	// BuildUpsert rejects a column present in both conflictColumns and
 	// updateColumns on every vendor, because Oracle's MERGE cannot update a

@@ -57,9 +57,18 @@ func (qb *QueryBuilder) requireUniqueConflictColumns(conflictColumns []string) e
 // target only picks the arbiter index — but the proposed row then takes the
 // column's default, so the conflict fires only when that default collides.
 // Rejecting on both makes the caller state the value it is matching on.
-func requireConflictColumnsInInsertSet(conflictColumns []string, insertColumns map[string]any) error {
+//
+// Membership is keyed by vendor identity, like the two checks around it, so a
+// conflict column that names an inserted column in a different spelling is
+// accepted on Oracle, where both render unquoted and fold to one column.
+func (qb *QueryBuilder) requireConflictColumnsInInsertSet(conflictColumns []string, insertColumns map[string]any) error {
+	insertIdentities := make(map[string]struct{}, len(insertColumns))
+	for col := range insertColumns {
+		insertIdentities[qb.columnIdentity(col)] = struct{}{}
+	}
+
 	for _, col := range conflictColumns {
-		if _, ok := insertColumns[col]; !ok {
+		if _, ok := insertIdentities[qb.columnIdentity(col)]; !ok {
 			return fmt.Errorf("conflict column %q must be present in insert columns for upsert", col)
 		}
 	}

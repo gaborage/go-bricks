@@ -376,7 +376,7 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 		return "", nil, uniqueErr
 	}
 
-	if insertErr := requireConflictColumnsInInsertSet(conflictColumns, insertColumns); insertErr != nil {
+	if insertErr := qb.requireConflictColumnsInInsertSet(conflictColumns, insertColumns); insertErr != nil {
 		return "", nil, insertErr
 	}
 
