@@ -16,7 +16,7 @@ import (
 
 const (
 	testConnectionString         = "postgresql://user:pass@localhost/db"
-	testBarePostgresConnString   = "postgres://user:pass@localhost:5432/db"
+	testBarePostgresConnString   = "postgres://localhost:5432/db"
 	testOracleConnectionString   = "oracle://user:pass@localhost:1521/XEPDB1"
 	testUnknownSchemeConnString  = "sqlserver://user:pass@localhost:1433/db"
 	testOracleHost               = "oracle.example.com"
