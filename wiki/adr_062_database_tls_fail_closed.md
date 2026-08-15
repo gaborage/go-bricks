@@ -16,9 +16,13 @@ green while doing something other than what the operator configured:
    TLS config before it ever reads the cert files; under unset/`allow`/`prefer`
    it permits a plaintext fallback and skips server verification. The operator
    believes mTLS is on; it is not.
-2. **`ca:` with no `mode`** — **zero server authentication**. pgx defaults to
-   `prefer`, which sets `InsecureSkipVerify` and never runs the CA verification
-   path.
+2. **An ordinary path-valued `ca:` with no `mode`** — **zero server
+   authentication**. pgx defaults to `prefer`, which sets `InsecureSkipVerify`
+   and never runs the CA verification path. The sentinel `ca: system` was the
+   lone exception: pgx rewrites it to `verify-full` before the mode switch
+   (config.go:806-814), so that exact value did verify — every path-valued
+   `ca:` did not. R2 rejects both shapes uniformly; the split matters for this
+   record's accuracy, not for the rule.
 3. **A typo'd mode** (`requird`, `Require`, `verify_full`) — passes
    `config.Validate` and dies inside `NewConnection`, where go-bricks
    deliberately redacts pgx parse errors (PR #945): the operator sees a generic

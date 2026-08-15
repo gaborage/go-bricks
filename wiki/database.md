@@ -331,8 +331,9 @@ encrypted.
 
 ## TLS (`database.tls`)
 
-Startup validation rejects every `database.tls` shape pgx would silently discard or
-downgrade ([ADR-062](adr_062_database_tls_fail_closed.md)). All four fields are trimmed
+Startup validation rejects every `database.tls` shape pgx would silently discard,
+downgrade, or (for `ca: system`) invert
+([ADR-062](adr_062_database_tls_fail_closed.md)). All four fields are trimmed
 before the checks run.
 
 - **PostgreSQL — `mode` is an allowlist.** `disable`, `allow`, `prefer`, `require`,
@@ -343,8 +344,9 @@ before the checks run.
   only under `require`, `verify-ca` or `verify-full`. Under `disable` pgx returns a nil TLS
   config before it reads the certificate files, and under an unset mode (which defaults to
   `prefer`), `allow` or `prefer` it sets `InsecureSkipVerify` plus a plaintext fallback — so
-  the material was being discarded or the connection silently downgraded. `cert` and `key`
-  must still be set together.
+  the material was being discarded or the connection silently downgraded (`ca: system`
+  inverted instead: pgx force-upgrades that sentinel to `verify-full` — see the quirks
+  below). `cert` and `key` must still be set together.
 - **PostgreSQL — a valid mode alone is always fine.** `mode: disable` with no material stays
   valid; opportunistic TLS with nothing to discard is a legitimate choice.
 - **`database.tls` is incompatible with `connectionstring`.** The DSN is used verbatim and
