@@ -544,7 +544,8 @@ func newReliableProducer(env *stream.Environment, streamName string, confirmed h
 // clients compute for the same key. Key routing — which asks the broker to resolve
 // a key to partitions — is deferred.
 func newReliableSuperProducer(env *stream.Environment, superStream string,
-	routingKeyFor func(message.StreamMessage) string, confirmed ha.PartitionConfirmMessageHandler) (producerHandle, error) {
+	routingKeyFor func(message.StreamMessage) string, confirmed ha.PartitionConfirmMessageHandler,
+) (producerHandle, error) {
 	opts := stream.NewSuperStreamProducerOptions(stream.NewHashRoutingStrategy(routingKeyFor))
 	return ha.NewReliableSuperStreamProducer(env, superStream, opts, confirmed)
 }

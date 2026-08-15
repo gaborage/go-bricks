@@ -1343,7 +1343,8 @@ func unreachableProducer(*stream.Environment, string, ha.ConfirmMessageHandler) 
 
 // unreachableSuperProducer is its super-stream twin.
 func unreachableSuperProducer(*stream.Environment, string, func(message.StreamMessage) string,
-	ha.PartitionConfirmMessageHandler) (producerHandle, error) {
+	ha.PartitionConfirmMessageHandler,
+) (producerHandle, error) {
 	return nil, errProducerConstruction
 }
 
