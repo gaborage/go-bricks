@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,12 @@ const (
 	streamPluginReadyTimeout = 30 * time.Second
 	streamPluginPollInterval = 250 * time.Millisecond
 )
+
+// RabbitMQ 4.3.0 moved `transient_nonexcl_queues` to denied_by_default and
+// closes the connection (541) on a transient non-exclusive declare. The
+// framework still supports that queue shape, so the test broker opts back
+// in the same way a permitting production broker would.
+const permitDeprecatedFeaturesConf = "deprecated_features.permit.transient_nonexcl_queues = true\n"
 
 // RabbitMQContainerConfig holds configuration for RabbitMQ test container
 type RabbitMQContainerConfig struct {
@@ -92,6 +99,11 @@ func StartRabbitMQContainer(ctx context.Context, t *testing.T, cfg *RabbitMQCont
 				wait.ForListeningPort("5672/tcp"),
 			).WithStartupTimeout(cfg.StartupTimeout),
 		),
+		testcontainers.WithFiles(testcontainers.ContainerFile{
+			Reader:            strings.NewReader(permitDeprecatedFeaturesConf),
+			ContainerFilePath: "/etc/rabbitmq/conf.d/99-go-bricks-permit.conf",
+			FileMode:          0o644,
+		}),
 	}
 	if cfg.EnableStreamPlugin {
 		// The port must be published at creation time; the plugin that binds it is
