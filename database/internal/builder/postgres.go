@@ -29,7 +29,7 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 		return "", nil, errors.New("conflict columns required for PostgreSQL upsert")
 	}
 
-	if conflictErr := rejectConflictColumnUpdates(conflictColumns, updateKeys); conflictErr != nil {
+	if conflictErr := qb.rejectConflictColumnUpdates(conflictColumns, updateKeys); conflictErr != nil {
 		return "", nil, conflictErr
 	}
 

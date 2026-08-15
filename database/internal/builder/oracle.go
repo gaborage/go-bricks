@@ -383,7 +383,7 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 		}
 	}
 
-	if conflictErr := rejectConflictColumnUpdates(conflictColumns, updateColumns); conflictErr != nil {
+	if conflictErr := qb.rejectConflictColumnUpdates(conflictColumns, updateColumns); conflictErr != nil {
 		return "", nil, conflictErr
 	}
 

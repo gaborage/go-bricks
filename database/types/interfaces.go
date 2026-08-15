@@ -496,7 +496,10 @@ type QueryBuilderInterface interface {
 
 	// BuildUpsert rejects a column present in both conflictColumns and
 	// updateColumns on every vendor, because Oracle's MERGE cannot update a
-	// column referenced in its ON clause (ORA-38104). When its update value equals
+	// column referenced in its ON clause (ORA-38104). Identity follows the vendor's
+	// own identifier rules: Oracle folds the unquoted identifiers it emits to upper
+	// case, so id and ID are one column there, while PostgreSQL quotes every
+	// identifier and keeps them distinct. When its update value equals
 	// its insert value, drop it from updateColumns and no resulting row changes:
 	// the conflict match pins it on a matched row and the INSERT supplies it on an
 	// unmatched one. When the two values differ, the call was rewriting the

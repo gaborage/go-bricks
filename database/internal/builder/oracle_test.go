@@ -1309,6 +1309,7 @@ func TestBuildUpsertOracleRejectsConflictColumnInUpdateSet(t *testing.T) {
 		insertColumns      map[string]any
 		updateColumns      map[string]any
 		wantErrColumn      string
+		wantSQLContains    string
 		wantNoUpdateClause bool
 	}{
 		{
@@ -1344,6 +1345,26 @@ func TestBuildUpsertOracleRejectsConflictColumnInUpdateSet(t *testing.T) {
 			updateColumns:      map[string]any{},
 			wantNoUpdateClause: true,
 		},
+		{
+			// Oracle leaves non-reserved identifiers unquoted and folds them to
+			// upper case, so id and ID are the same column: an exact-string check
+			// would emit ON (target.id = source.id) ... SET ID = :3 and still die
+			// with ORA-38104 at execution.
+			name:            "case_variant_of_conflict_column_rejected",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{"ID": 2},
+			wantErrColumn:   "ID",
+		},
+		{
+			// Reserved words ARE quoted on Oracle, and quoted identifiers stay
+			// case-sensitive, so "number" and "NUMBER" are genuinely two columns.
+			name:            "quoted_reserved_word_case_variant_stays_distinct",
+			conflictColumns: []string{"number"},
+			insertColumns:   map[string]any{"number": 1, "name": "alice"},
+			updateColumns:   map[string]any{"NUMBER": 2},
+			wantSQLContains: `SET "NUMBER" =`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1354,7 +1375,7 @@ func TestBuildUpsertOracleRejectsConflictColumnInUpdateSet(t *testing.T) {
 
 			if tt.wantErrColumn != "" {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "cannot appear in update columns")
+				assert.Contains(t, err.Error(), "collides with conflict column")
 				assert.Contains(t, err.Error(), "ORA-38104")
 				assert.Contains(t, err.Error(), tt.wantErrColumn,
 					"error must name the overlapping column, not merely the first conflict column")
@@ -1363,6 +1384,9 @@ func TestBuildUpsertOracleRejectsConflictColumnInUpdateSet(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Contains(t, sql, "MERGE INTO")
+			if tt.wantSQLContains != "" {
+				assert.Contains(t, sql, tt.wantSQLContains)
+			}
 			if tt.wantNoUpdateClause {
 				assert.NotContains(t, sql, "WHEN MATCHED",
 					"an empty update set must still build, emitting no UPDATE arm")
