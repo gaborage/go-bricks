@@ -496,9 +496,12 @@ type QueryBuilderInterface interface {
 
 	// BuildUpsert rejects a column present in both conflictColumns and
 	// updateColumns on every vendor, because Oracle's MERGE cannot update a
-	// column referenced in its ON clause (ORA-38104). Drop it from
-	// updateColumns: the conflict match pins its value on a matched row and the
-	// INSERT supplies it on an unmatched one, so no resulting row changes.
+	// column referenced in its ON clause (ORA-38104). When its update value equals
+	// its insert value, drop it from updateColumns and no resulting row changes:
+	// the conflict match pins it on a matched row and the INSERT supplies it on an
+	// unmatched one. When the two values differ, the call was rewriting the
+	// conflict column itself, which no vendor-portable upsert can express — issue
+	// a separate UPDATE instead.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 
 	// Database function builders
