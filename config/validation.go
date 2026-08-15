@@ -849,9 +849,7 @@ func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 		return NewValidationError("database", "configuration is nil")
 	}
 	if cfg.Type == "" {
-		if inferred := inferDatabaseTypeFromConnectionString(cfg.ConnectionString); inferred != "" {
-			cfg.Type = inferred
-		}
+		cfg.Type = inferDatabaseTypeFromConnectionString(cfg.ConnectionString)
 	}
 	return applyDatabasePoolDefaults(cfg)
 }

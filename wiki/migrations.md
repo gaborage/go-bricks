@@ -2290,7 +2290,15 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   execution with ORA-38104, while PostgreSQL accepted the identical call, so
   the same code diverged by deployment — typically discovered in the Oracle
   environment, far from where it was written. Both builders now refuse it at
-  build time, so one call means one thing everywhere (C59.7).
+  build time, so one call means one thing everywhere (C59.7). Finally, ADR-050's `database.type` inference from the
+  connection-string scheme, which ran only inside `config.Validate`, now also
+  runs in `config.ApplyDatabasePoolDefaults` — the seam
+  `database.DbManager.createConnection` applies to every config a
+  `DBConfigProvider` returns — so a dynamic multi-tenant source returning a
+  DSN-only config dials a real database instead of failing that tenant's
+  every request with `unsupported database type: ""`, and a caller-supplied
+  `Options.DatabaseConnector` now receives an inferred type where it used to
+  receive `""` (C59.6).
 - build-caught: C59.2 C59.3 (via `go vet` — `go build` does not compile test files)
 - preflight: **five** actions. (i) If a proxy in front of the service sits on
   a **public** address, set `server.trustedproxies` to its CIDR range before

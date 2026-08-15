@@ -3,6 +3,17 @@
 **Status:** Accepted
 **Date:** 2026-08-05
 
+> **Amended (2026-08-14):** Decision item 1 names
+> `config.validateDatabaseWithConnectionString` as the inference site; it is no
+> longer the only one. `config.ApplyDatabasePoolDefaults` — the seam
+> `database.DbManager.createConnection` applies to every config a dynamic
+> `DBConfigProvider` returns, and which never reaches `config.Validate` — now
+> performs the same scheme inference, so anyone extending the recognized-scheme
+> list has two call sites to account for rather than one (both delegate to
+> `inferDatabaseTypeFromConnectionString`, so the list itself stays in one
+> place). The conflicting-`Type` **error** in item 1 is unchanged and remains
+> Validate-only. See Consequences and [migrations.md](migrations.md) `[C59.6]`.
+
 ## Context
 
 A `database.connectionstring` with no `database.type` passes `config.Validate`

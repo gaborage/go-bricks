@@ -16,6 +16,7 @@ import (
 
 const (
 	testConnectionString         = "postgresql://user:pass@localhost/db"
+	testBarePostgresConnString   = "postgres://user:pass@localhost:5432/db"
 	testOracleConnectionString   = "oracle://user:pass@localhost:1521/XEPDB1"
 	testUnknownSchemeConnString  = "sqlserver://user:pass@localhost:1433/db"
 	testOracleHost               = "oracle.example.com"
@@ -5725,7 +5726,7 @@ func TestApplyDatabasePoolDefaultsInfersTypeFromScheme(t *testing.T) {
 	}{
 		{
 			name:         "postgres_scheme_infers_type",
-			config:       DatabaseConfig{ConnectionString: "postgres://user:pass@localhost:5432/db"},
+			config:       DatabaseConfig{ConnectionString: testBarePostgresConnString},
 			expectedType: PostgreSQL,
 		},
 		{
@@ -5768,7 +5769,11 @@ func TestApplyDatabasePoolDefaultsInfersTypeFromScheme(t *testing.T) {
 }
 
 func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
-	conflicting := DatabaseConfig{Type: Oracle, ConnectionString: "postgres://user:pass@localhost:5432/db"}
+	// The conflicting case pins a deliberate divergence from
+	// validateDatabaseWithConnectionString, which rejects a Type contradicting the
+	// scheme: this seam runs per connection, so it leaves the explicit Type alone
+	// and lets the vendor dial error be the failure (ADR-050). Do not "fix" it.
+	conflicting := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}
 	require.NoError(t, ApplyDatabasePoolDefaults(&conflicting))
 	assert.Equal(t, Oracle, conflicting.Type)
 
