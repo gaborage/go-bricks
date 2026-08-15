@@ -107,17 +107,15 @@ func blockingProducer(t *testing.T) *fakeProducer {
 
 // boundPublisher builds the publisher a started manager would hand a module.
 func boundPublisher(handle producerHandle) *Publisher {
-	p := newPublisher(testStream)
+	p := newPublisher(testStream, false)
 	p.bind(handle)
 	return p
 }
 
 // boundSuperPublisher is the same for a super-stream target, whose routing rules
-// are the inverse. PR-scope note: no declare method produces one yet, so the
-// publish-side rules are exercised through the field the manager will set.
+// are the inverse.
 func boundSuperPublisher(handle producerHandle) *Publisher {
-	p := newPublisher(testSuperStream)
-	p.super = true
+	p := newPublisher(testSuperStream, true)
 	p.bind(handle)
 	return p
 }
@@ -286,14 +284,14 @@ func TestPublisherCloseReportsTheClientCloseError(t *testing.T) {
 // TestPublisherCloseWithoutABindingIsANoop covers a manager that aborts its start
 // before every publisher was bound.
 func TestPublisherCloseWithoutABindingIsANoop(t *testing.T) {
-	p := newPublisher(testStream)
+	p := newPublisher(testStream, false)
 
 	assert.NoError(t, p.closeBound())
 	assert.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}), ErrPublisherClosed)
 }
 
 func TestPublisherPublishBeforeBindIsNotStarted(t *testing.T) {
-	p := newPublisher(testStream)
+	p := newPublisher(testStream, false)
 
 	err := p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)})
 
@@ -493,6 +491,43 @@ func TestPublisherConfirmedSkipsNilStatuses(t *testing.T) {
 	assert.Zero(t, pendingCount(p))
 }
 
+// TestPartitionStatusesFlattensEveryPartition pins the super-stream unwrapping: a
+// super producer confirms per partition, and every status inside every partition
+// has to reach the correlation — one dropped batch hangs its caller until close.
+func TestPartitionStatusesFlattensEveryPartition(t *testing.T) {
+	first, second, third := &stream.ConfirmationStatus{}, &stream.ConfirmationStatus{}, &stream.ConfirmationStatus{}
+
+	statuses := partitionStatuses([]*stream.PartitionPublishConfirm{
+		nil,
+		{Partition: testPartition0, ConfirmationStatus: []*stream.ConfirmationStatus{first}},
+		{Partition: testPartition1, ConfirmationStatus: []*stream.ConfirmationStatus{second, third}},
+	})
+
+	assert.Equal(t, []*stream.ConfirmationStatus{first, second, third}, statuses,
+		"every partition's statuses carry through, in order, and a nil batch is skipped")
+}
+
+// TestPublisherPartitionsConfirmedResolvesThroughTheSamePath proves a super
+// stream's confirmations land in the same correlation the plain lane uses.
+//
+// The client's ConfirmationStatus keeps its message in an unexported field, so a
+// broker-free test can only drive the nil one a zero value renders; the waiter is
+// registered under that same key, which is what makes the resolution observable.
+// The pointer correlation itself is proven against a broker in the integration suite.
+func TestPublisherPartitionsConfirmedResolvesThroughTheSamePath(t *testing.T) {
+	p := boundSuperPublisher(openProducer())
+	w := p.pending.add(nil, testRoutingKey)
+
+	p.partitionsConfirmed([]*stream.PartitionPublishConfirm{
+		{Partition: testPartition0, ConfirmationStatus: []*stream.ConfirmationStatus{{}}},
+	})
+
+	err := resolvedError(t, w)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), testSuperStream, "the failure names the publisher's own target")
+	assert.Zero(t, pendingCount(p), "a resolved send leaves no entry behind")
+}
+
 // TestPublisherRegisterSendResolvesASendThatRacedTheCloseSweep pins the window
 // the early closed check cannot cover: a close that completes — sweep included —
 // between a send's own closed check and its registration. The entry lands after
@@ -609,7 +644,7 @@ func TestPublisherBindingNamesWhyThereIsNoProducer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := newPublisher(testStream)
+			p := newPublisher(testStream, false)
 			tt.arrange(p)
 
 			bound, err := p.binding()

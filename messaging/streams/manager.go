@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/ha"
+	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/message"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
 	"go.opentelemetry.io/otel"
 
@@ -100,12 +101,14 @@ type Manager struct {
 	// is already gone.
 	flushBudget time.Duration
 
-	// newProducer constructs the client producer bindPublisher installs. Held as a
-	// field for the same reason as flushBudget, so a test can make construction
-	// fail: it dials, so no broker-free test could otherwise reach that path.
-	// Deliberately not a ManagerOptions field — an operator has no reason to
-	// substitute the client's own constructor.
-	newProducer producerFactory
+	// newProducer and newSuperProducer construct the client producer bindPublisher
+	// installs, one per declaration kind. Held as fields for the same reason as
+	// flushBudget, so a test can make construction fail: they dial, so no
+	// broker-free test could otherwise reach that path. Deliberately not
+	// ManagerOptions fields — an operator has no reason to substitute the client's
+	// own constructors.
+	newProducer      producerFactory
+	newSuperProducer superProducerFactory
 
 	mu         sync.Mutex
 	env        *stream.Environment
@@ -134,10 +137,11 @@ func NewManager(opts ManagerOptions) *Manager {
 		opts.OffsetStoreInterval = defaultOffsetStoreInterval
 	}
 	return &Manager{
-		opts:        opts,
-		log:         opts.Logger,
-		flushBudget: shutdownFlushBudget,
-		newProducer: newReliableProducer,
+		opts:             opts,
+		log:              opts.Logger,
+		flushBudget:      shutdownFlushBudget,
+		newProducer:      newReliableProducer,
+		newSuperProducer: newReliableSuperProducer,
 	}
 }
 
@@ -440,7 +444,7 @@ func (m *Manager) trackConsumer(decl *consumerDeclaration, handle consumerHandle
 func bindPublishers(ctx context.Context, decls []*publisherDeclaration, bind func(*publisherDeclaration) error) error {
 	for _, decl := range decls {
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("startup canceled before binding the publisher on stream %q: %w", decl.Stream, err)
+			return fmt.Errorf("startup canceled before binding the publisher on %s %q: %w", streamKindLabel(decl.Super), decl.Stream, err)
 		}
 		if err := bind(decl); err != nil {
 			return err
@@ -451,7 +455,7 @@ func bindPublishers(ctx context.Context, decls []*publisherDeclaration, bind fun
 		// nil into a Start that has no consumer loop left to notice — startConsumers
 		// checks ctx at the top of its body, which never runs with nothing declared.
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("startup canceled after binding the publisher on stream %q: %w", decl.Stream, err)
+			return fmt.Errorf("startup canceled after binding the publisher on %s %q: %w", streamKindLabel(decl.Super), decl.Stream, err)
 		}
 	}
 	return nil
@@ -459,9 +463,9 @@ func bindPublishers(ctx context.Context, decls []*publisherDeclaration, bind fun
 
 // bindPublisher constructs one client producer and hands it to its Publisher.
 func (m *Manager) bindPublisher(env *stream.Environment, decl *publisherDeclaration) error {
-	producer, err := m.newProducer(env, decl.Stream, decl.Publisher.confirmed)
+	producer, err := m.constructProducer(env, decl)
 	if err != nil {
-		return fmt.Errorf("failed to start the publisher on stream %q: %w", decl.Stream, err)
+		return fmt.Errorf("failed to start the publisher on %s %q: %w", streamKindLabel(decl.Super), decl.Stream, err)
 	}
 
 	decl.Publisher.bind(producer)
@@ -469,11 +473,49 @@ func (m *Manager) bindPublisher(env *stream.Environment, decl *publisherDeclarat
 
 	m.log.Info().
 		Str(logFieldStream, decl.Stream).
+		Bool("partitioned", decl.Super).
 		Msg("Stream publisher started")
 	return nil
 }
 
-// producerFactory constructs the client producer one publisher sends through.
+// constructProducer builds one declaration's client producer, on the client API
+// its kind requires.
+func (m *Manager) constructProducer(env *stream.Environment, decl *publisherDeclaration) (producerHandle, error) {
+	if decl.Super {
+		return m.newSuperProducer(env, decl.Stream, m.routingKeyExtractor(decl.Publisher), decl.Publisher.partitionsConfirmed)
+	}
+	return m.newProducer(env, decl.Stream, decl.Publisher.confirmed)
+}
+
+// routingKeyExtractor builds the hash-routing extractor of one super-stream
+// publisher: the client calls it inside its own Send to decide the partition, and
+// the answer is the key the caller registered with that exact message.
+//
+// It closes over m.log rather than reading a guarded field, for the reason spelled
+// out in startStreamConsumer: the client calls this from the sending goroutine,
+// outside m.mu, with no recover() in its call path. m.log is immutable after
+// NewManager, and the waiters map takes only its own lock.
+//
+// A miss cannot happen for a live send — the entry is removed only once the send
+// resolves, and a ctx expiry tombstones it precisely so a late route still finds
+// its key — so it means the correlation assumption broke and is reported at ERROR.
+// Returning "" then keeps the client from panicking; it does not pretend the
+// message landed where the caller asked.
+func (m *Manager) routingKeyExtractor(p *Publisher) func(message.StreamMessage) string {
+	return func(msg message.StreamMessage) string {
+		routingKey, ok := p.pending.routingKeyFor(msg)
+		if !ok {
+			m.log.Error().
+				Str(logFieldStream, p.stream).
+				Msg("No routing key registered for a super-stream message; it will be routed as if unkeyed")
+			return ""
+		}
+		return routingKey
+	}
+}
+
+// producerFactory constructs the client producer one plain-stream publisher sends
+// through.
 //
 // It is the constructor half of the producerHandle seam: producerHandle makes the
 // publish and confirmation policy testable without a broker, and this makes the
@@ -481,12 +523,30 @@ func (m *Manager) bindPublisher(env *stream.Environment, decl *publisherDeclarat
 // broker-free could otherwise reach the path where that fails.
 type producerFactory func(env *stream.Environment, streamName string, confirmed ha.ConfirmMessageHandler) (producerHandle, error)
 
+// superProducerFactory is the same seam for a super-stream publisher. It is a
+// separate type because the client's two reliable producers take neither the same
+// options nor the same confirmation shape: this one needs a routing strategy, and
+// confirms per partition.
+type superProducerFactory func(env *stream.Environment, superStream string,
+	routingKeyFor func(message.StreamMessage) string, confirmed ha.PartitionConfirmMessageHandler) (producerHandle, error)
+
 // newReliableProducer is the production factory. The producer options are the
 // client's defaults on purpose: deduplication, sub-entry batching and compression
 // are all deferred, and the default SubEntrySize of 1 is what makes the
 // confirmation's message pointer a valid correlation key.
 func newReliableProducer(env *stream.Environment, streamName string, confirmed ha.ConfirmMessageHandler) (producerHandle, error) {
 	return ha.NewReliableProducer(env, streamName, stream.NewProducerOptions(), confirmed)
+}
+
+// newReliableSuperProducer is the production factory for a super stream. Hash
+// routing is the only strategy offered: it is murmur3 with RabbitMQ's shared seed,
+// so a partition assignment made here matches what the Java, .NET and Python
+// clients compute for the same key. Key routing — which asks the broker to resolve
+// a key to partitions — is deferred.
+func newReliableSuperProducer(env *stream.Environment, superStream string,
+	routingKeyFor func(message.StreamMessage) string, confirmed ha.PartitionConfirmMessageHandler) (producerHandle, error) {
+	opts := stream.NewSuperStreamProducerOptions(stream.NewHashRoutingStrategy(routingKeyFor))
+	return ha.NewReliableSuperStreamProducer(env, superStream, opts, confirmed)
 }
 
 // envOffsetStorer commits one stream's offset through the environment's locator
