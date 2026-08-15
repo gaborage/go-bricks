@@ -339,7 +339,10 @@ func (p *Publisher) routingError(routingKey string) error {
 func (p *Publisher) buildMessage(ctx context.Context, msg *PublishMessage) message.StreamMessage {
 	clientMsg := amqp.NewMessage(msg.Data)
 
-	properties := make(map[string]any, len(msg.Properties)+3)
+	// Sized to the caller's properties only: the map grows itself for the two or
+	// three trace headers, and over-sizing the hint would be an unobservable
+	// micro-optimisation nobody can test.
+	properties := make(map[string]any, len(msg.Properties))
 	maps.Copy(properties, msg.Properties)
 	gobrickstrace.InjectIntoHeaders(ctx, propertyAccessor(properties))
 	clientMsg.ApplicationProperties = properties

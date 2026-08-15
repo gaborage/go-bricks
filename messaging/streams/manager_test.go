@@ -20,10 +20,21 @@ import (
 // secondConsumerName is the second member of a two-declaration fan-out.
 const secondConsumerName = testConsumerName + "-2"
 
+// secondTestStream is the second target of a two-declaration publisher fan-out.
+const secondTestStream = "shipments"
+
 // errStartAttempted marks a consumer start that should never have been reached.
 var errStartAttempted = errors.New("consumer start attempted")
 
 func failingStart(*consumerDeclaration) error { return errStartAttempted }
+
+// errBindAttempted marks a publisher bind that should never have been reached.
+var errBindAttempted = errors.New("publisher bind attempted")
+
+func failingBind(*publisherDeclaration) error { return errBindAttempted }
+
+// errProducerConstruction is the client constructor's failure, faked.
+var errProducerConstruction = errors.New("producer construction failed")
 
 // fakeHandle stands in for *ha.ReliableConsumer so shutdown bookkeeping is
 // testable without a broker.
@@ -472,8 +483,13 @@ func TestManagerStartupAbortsOnACanceledContext(t *testing.T) {
 			wantPhase: `declaring super stream "` + testSuperStream + `"`,
 		},
 		{
-			name:      "publishers",
-			phase:     func(m *Manager, ctx context.Context) error { return m.bindPublishers(ctx, nil, decls) },
+			// Same shape as the consumer case below: the binder fails loudly, so a
+			// guard that let the loop reach it would surface errBindAttempted here
+			// instead of the cancellation.
+			name: "publishers",
+			phase: func(_ *Manager, ctx context.Context) error {
+				return bindPublishers(ctx, decls.publishers, failingBind)
+			},
 			wantPhase: `binding the publisher on stream "` + testStream + `"`,
 		},
 		{
@@ -1141,16 +1157,99 @@ func rebindPublisher(m *Manager, p *Publisher, handle *fakeProducer) *Publisher 
 	return p
 }
 
-// TestManagerBindPublishersProceedsOnALiveContext is the counterpart to the
-// canceled-context case: the nil environment proves the client call is attempted,
-// which the guard would otherwise have prevented.
-func TestManagerBindPublishersProceedsOnALiveContext(t *testing.T) {
+// twoPublishers declares a pair so the fan-out has a second iteration to reach —
+// with one declaration, stopping early and running to completion look identical.
+func twoPublishers(t *testing.T) *Declarations {
+	t.Helper()
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareStream(secondTestStream, nil)
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	decls.DeclarePublisher(&PublisherOptions{Stream: secondTestStream})
+	return decls
+}
+
+// TestBindPublishersBindsEveryDeclaration pins that a live context does not
+// short-circuit the fan-out: every declaration is bound, in order.
+func TestBindPublishersBindsEveryDeclaration(t *testing.T) {
+	decls := twoPublishers(t)
+
+	var bound []string
+	err := bindPublishers(context.Background(), decls.publishers, func(decl *publisherDeclaration) error {
+		bound = append(bound, decl.Stream)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{testStream, secondTestStream}, bound,
+		"a live context binds every publisher, not just the first")
+}
+
+// TestBindPublishersStopsAtTheFirstFailure pins the other half: a bind that fails
+// reaches the caller unchanged — Start turns it into an aborted startup — and the
+// declarations behind it are never attempted.
+func TestBindPublishersStopsAtTheFirstFailure(t *testing.T) {
+	decls := twoPublishers(t)
+
+	var attempted []string
+	err := bindPublishers(context.Background(), decls.publishers, func(decl *publisherDeclaration) error {
+		attempted = append(attempted, decl.Stream)
+		return errBindAttempted
+	})
+
+	require.ErrorIs(t, err, errBindAttempted)
+	assert.Equal(t, []string{testStream}, attempted, "the fan-out stops at the first failure")
+}
+
+// TestManagerBindPublisherWrapsAConstructionFailure exercises the vendor
+// constructor's failure path through the producerFactory seam: it dials, so this
+// is the only way a broker-free test can reach it.
+func TestManagerBindPublisherWrapsAConstructionFailure(t *testing.T) {
+	m := testManager(t)
+	m.newProducer = func(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
+		return nil, errProducerConstruction
+	}
+	decl := onePublisherDeclaration(t)
+
+	err := m.bindPublisher(nil, decl)
+
+	require.ErrorIs(t, err, errProducerConstruction, "the client's own cause reaches the caller")
+	assert.Contains(t, err.Error(), `failed to start the publisher on stream "`+testStream+`"`)
+	assert.Empty(t, m.publishers, "a publisher that could not be constructed is not tracked")
+	assert.ErrorIs(t, decl.Publisher.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}),
+		ErrPublisherNotStarted, "and its handle stays unbound")
+}
+
+// TestManagerBindPublisherTracksAConstructedProducer is the success half: the
+// producer is built for the declared stream, wired to that publisher's own
+// confirmation handler, bound, and tracked.
+func TestManagerBindPublisherTracksAConstructedProducer(t *testing.T) {
+	m := testManager(t)
+	handle := openProducer()
+	var gotStream string
+	var gotConfirmed ha.ConfirmMessageHandler
+	m.newProducer = func(_ *stream.Environment, streamName string, confirmed ha.ConfirmMessageHandler) (producerHandle, error) {
+		gotStream, gotConfirmed = streamName, confirmed
+		return handle, nil
+	}
+	decl := onePublisherDeclaration(t)
+
+	require.NoError(t, m.bindPublisher(nil, decl))
+
+	assert.Equal(t, testStream, gotStream, "the producer is built for the declared stream")
+	require.NotNil(t, gotConfirmed, "the client is given a confirmation handler")
+	assert.Equal(t, []*Publisher{decl.Publisher}, m.publishers)
+	assert.Equal(t, ha.StatusOpen, decl.Publisher.status(), "the handle is bound to the new producer")
+}
+
+// onePublisherDeclaration builds a single declared publisher for the bind tests.
+func onePublisherDeclaration(t *testing.T) *publisherDeclaration {
+	t.Helper()
 	decls := NewDeclarations()
 	decls.DeclareStream(testStream, nil)
 	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
-	m := testManager(t)
-
-	assert.Panics(t, func() { _ = m.bindPublishers(context.Background(), nil, decls) })
+	require.Len(t, decls.publishers, 1)
+	return decls.publishers[0]
 }
 
 // TestManagerStopClosesPublishersAfterConsumers pins the shutdown order. A
