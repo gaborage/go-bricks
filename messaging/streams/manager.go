@@ -86,15 +86,6 @@ type runningConsumer struct {
 	storerFor func(streamName string) offsetStorer
 }
 
-// runningPublisher pairs a live client producer with the Publisher its declaring
-// module holds. The handle is kept for readiness; shutdown goes through the
-// Publisher, which owns the closing order.
-type runningPublisher struct {
-	stream    string
-	handle    producerHandle
-	publisher *Publisher
-}
-
 // Manager owns the single stream-protocol Environment of a single-tenant service
 // and the consumers started from its declarations. It is a plain struct on
 // purpose (ADR-045): app/ consumes it concretely, so there is no interface to
@@ -112,7 +103,7 @@ type Manager struct {
 	mu         sync.Mutex
 	env        *stream.Environment
 	consumers  []*runningConsumer
-	publishers []*runningPublisher
+	publishers []*Publisher
 	started    bool
 	cancel     context.CancelFunc
 }
@@ -449,11 +440,7 @@ func (m *Manager) bindPublisher(env *stream.Environment, decl *publisherDeclarat
 	}
 
 	decl.Publisher.bind(producer)
-	m.publishers = append(m.publishers, &runningPublisher{
-		stream:    decl.Stream,
-		handle:    producer,
-		publisher: decl.Publisher,
-	})
+	m.publishers = append(m.publishers, decl.Publisher)
 
 	m.log.Info().
 		Str(logFieldStream, decl.Stream).
@@ -607,9 +594,11 @@ func clampedMaxAge(maxAge time.Duration) time.Duration {
 	return max(maxAge.Truncate(time.Second), time.Second)
 }
 
-// StopConsumers stops every consumer. Each one flushes its pending offset BEFORE
-// closing, so a clean shutdown does not replay successfully handled messages.
-// Idempotent.
+// StopConsumers stops every consumer, then closes every publisher. Each consumer
+// flushes its pending offset BEFORE closing, so a clean shutdown does not replay
+// successfully handled messages. Publishers close AFTER them — a handler may
+// publish on its way out — and every publish still awaiting a confirmation is
+// resolved with ErrPublisherClosed rather than left to hang. Idempotent.
 //
 // This is shutdown phase one, not a pause: the environment stays open for Close
 // to dispose, and Start stays refused until then.
@@ -650,10 +639,10 @@ func (m *Manager) stopLocked() {
 // gone: a handler publishing on its way out still needs a producer, and closing
 // the producers first would fail those publishes for no reason.
 func (m *Manager) stopPublishersLocked() {
-	for _, rp := range m.publishers {
-		if err := rp.publisher.closeBound(); err != nil {
+	for _, p := range m.publishers {
+		if err := p.closeBound(); err != nil {
 			m.log.Warn().Err(err).
-				Str(logFieldStream, rp.stream).
+				Str(logFieldStream, p.stream).
 				Msg("Failed to close stream publisher")
 		}
 	}
@@ -789,8 +778,8 @@ func (m *Manager) readyLocked() bool {
 			return false
 		}
 	}
-	for _, rp := range m.publishers {
-		if rp.handle.GetStatus() != ha.StatusOpen {
+	for _, p := range m.publishers {
+		if p.status() != ha.StatusOpen {
 			return false
 		}
 	}

@@ -1136,7 +1136,7 @@ func attachPublisher(m *Manager, handle *fakeProducer) *Publisher {
 // second Manager.Start does to the handle a module has held since declaration.
 func rebindPublisher(m *Manager, p *Publisher, handle *fakeProducer) *Publisher {
 	p.bind(handle)
-	m.publishers = append(m.publishers, &runningPublisher{stream: testStream, handle: handle, publisher: p})
+	m.publishers = append(m.publishers, p)
 	m.started = true
 	return p
 }

@@ -243,6 +243,22 @@ func consumeAttributes(delivery *amqp.Delivery, queueName string, err error) []a
 	return attrs
 }
 
+// streamAttributes assembles the attribute set both stream-lane recorders share.
+// The stream itself is the destination: the stream protocol routes to a stream
+// directly, so there is no exchange and no routing key to attribute.
+func streamAttributes(streamName, operation string, err error) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 0, 4)
+	attrs = append(attrs,
+		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
+		attribute.String(attrMessagingOperation, operation),
+		attribute.String(attrMessagingDestination, streamName),
+	)
+	if errorType := extractErrorType(err); errorType != "" {
+		attrs = append(attrs, attribute.String(attrErrorType, errorType))
+	}
+	return attrs
+}
+
 // RecordAMQPConsumeMetrics records OpenTelemetry metrics for an AMQP consume operation.
 // This function is called automatically when a message is consumed to emit metrics.
 //
@@ -304,16 +320,7 @@ func RecordStreamConsume(ctx context.Context, streamName string, duration time.D
 		return
 	}
 
-	attrs := make([]attribute.KeyValue, 0, 4)
-	attrs = append(attrs,
-		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
-		attribute.String(attrMessagingOperation, operationReceive),
-		attribute.String(attrMessagingDestination, streamName),
-	)
-	if errorType := extractErrorType(err); errorType != "" {
-		attrs = append(attrs, attribute.String(attrErrorType, errorType))
-	}
-	attrSet := metric.WithAttributes(attrs...)
+	attrSet := metric.WithAttributes(streamAttributes(streamName, operationReceive, err)...)
 
 	if amqpOperationDuration != nil && duration > 0 {
 		amqpOperationDuration.Record(ctx, durationToSeconds(duration), attrSet)
@@ -327,26 +334,15 @@ func RecordStreamConsume(ctx context.Context, streamName string, duration time.D
 // publish, reusing the AMQP publish instruments so both messaging lanes report
 // under the same names.
 //
-// The destination is the stream itself: the stream protocol routes to a stream
-// directly, so there is no exchange and no routing key to attribute. Like the
-// AMQP lane, the sent counter increments only once the publish succeeded — here
-// that means the broker confirmed it.
+// Like the AMQP lane, the sent counter increments only once the publish
+// succeeded — here that means the broker confirmed it.
 func RecordStreamPublish(ctx context.Context, streamName string, duration time.Duration, err error) {
 	meter := getAMQPMeter()
 	if meter == nil {
 		return
 	}
 
-	attrs := make([]attribute.KeyValue, 0, 4)
-	attrs = append(attrs,
-		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
-		attribute.String(attrMessagingOperation, operationPublish),
-		attribute.String(attrMessagingDestination, streamName),
-	)
-	if errorType := extractErrorType(err); errorType != "" {
-		attrs = append(attrs, attribute.String(attrErrorType, errorType))
-	}
-	attrSet := metric.WithAttributes(attrs...)
+	attrSet := metric.WithAttributes(streamAttributes(streamName, operationPublish, err)...)
 
 	if amqpOperationDuration != nil && duration > 0 {
 		amqpOperationDuration.Record(ctx, durationToSeconds(duration), attrSet)

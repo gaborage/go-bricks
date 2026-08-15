@@ -573,22 +573,13 @@ func TestDeclarePublisherReturnsAnUnboundHandle(t *testing.T) {
 	require.NotNil(t, p)
 	assert.Equal(t, testStream, p.stream)
 	assert.False(t, p.super)
+	// IsEmpty is what app/ gates the "streams declared but not configured" startup
+	// failure on, so a publisher-only service has to make it false.
 	assert.False(t, d.IsEmpty())
 	assert.Equal(t, Stats{Streams: 1, Publishers: 1}, d.Stats())
 	require.NoError(t, d.Validate())
 	assert.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte("x")}), ErrPublisherNotStarted,
 		"the handle stays inert until Manager.Start binds it")
-}
-
-// TestDeclarePublisherAloneIsNotEmpty is what makes a publisher-only service fail
-// startup when no stream endpoint is configured: app keys that gate off IsEmpty.
-func TestDeclarePublisherAloneIsNotEmpty(t *testing.T) {
-	d := NewDeclarations()
-	d.DeclareStream(testStream, nil)
-	d.DeclarePublisher(&PublisherOptions{Stream: testStream})
-
-	assert.False(t, d.IsEmpty(), "a service that only publishes still declared streams")
-	assert.Equal(t, 1, d.Stats().Publishers)
 }
 
 func TestDeclarePublisherNilPanics(t *testing.T) {

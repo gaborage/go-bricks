@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
+	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/ha"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/message"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
 	"go.opentelemetry.io/otel"
@@ -59,11 +60,11 @@ type waiter struct {
 	done       bool
 }
 
-// resolve delivers err to a waiter that has not been resolved yet. Nil-safe and
-// idempotent: a confirmation for an already-resolved or tombstoned send is a
-// no-op rather than a second send on a cap-1 channel. Callers hold waiters.mu.
+// resolve delivers err to a waiter that has not been resolved yet. Idempotent: a
+// confirmation for an already-resolved or tombstoned send is a no-op rather than
+// a second send on a cap-1 channel. Callers hold waiters.mu.
 func (w *waiter) resolve(err error) {
-	if w == nil || w.done {
+	if w.done {
 		return
 	}
 	w.done = true
@@ -113,7 +114,10 @@ func (ws *waiters) resolve(msg message.StreamMessage, err error) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
-	w := ws.m[msg]
+	w, ok := ws.m[msg]
+	if !ok {
+		return
+	}
 	delete(ws.m, msg)
 	w.resolve(err)
 }
@@ -147,10 +151,10 @@ func (ws *waiters) sweep(err error) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
-	for msg, w := range ws.m {
+	for _, w := range ws.m {
 		w.resolve(err)
-		delete(ws.m, msg)
 	}
+	clear(ws.m)
 }
 
 // Publisher publishes to one declared stream. It is obtained from
@@ -162,6 +166,13 @@ type Publisher struct {
 	// inverts the RoutingKey requirement.
 	super  bool
 	tracer trace.Tracer
+	// spanName and spanStartOpts are precomputed because a Publisher targets
+	// exactly one stream for its lifetime, so the name and every attribute but the
+	// body size are constant. The consume-side twin in runner.go deliberately does
+	// NOT do this: one runner serves every partition of a super stream, so its
+	// stream name is only known per delivery.
+	spanName      string
+	spanStartOpts []trace.SpanStartOption
 
 	bound   atomic.Pointer[boundProducer]
 	closed  atomic.Bool
@@ -171,10 +182,28 @@ type Publisher struct {
 // newPublisher builds the handle a declare method hands back to the module.
 func newPublisher(streamName string) *Publisher {
 	return &Publisher{
-		stream:  streamName,
-		tracer:  otel.Tracer(tracerName),
+		stream:   streamName,
+		tracer:   otel.Tracer(tracerName),
+		spanName: streamName + " " + spanOperationPublish,
+		spanStartOpts: []trace.SpanStartOption{
+			trace.WithSpanKind(trace.SpanKindProducer),
+			trace.WithAttributes(
+				attribute.String(string(semconv.MessagingSystemKey), messagingSystem),
+				semconv.MessagingOperationName(spanOperationPublish),
+				semconv.MessagingDestinationName(streamName),
+			),
+		},
 		pending: newWaiters(),
 	}
+}
+
+// status reports the bound producer's connection status, or ha.StatusClosed when
+// unbound, so readiness asks the one owner of the binding.
+func (p *Publisher) status() int {
+	if b := p.bound.Load(); b != nil {
+		return b.handle.GetStatus()
+	}
+	return ha.StatusClosed
 }
 
 // Publish sends one message and blocks until the broker confirms it, ctx expires,
@@ -192,16 +221,10 @@ func (p *Publisher) Publish(ctx context.Context, msg *PublishMessage) error {
 		data = msg.Data
 	}
 
-	ctx, span := p.tracer.Start(ctx, p.stream+" "+spanOperationPublish,
-		trace.WithSpanKind(trace.SpanKindProducer))
+	ctx, span := p.tracer.Start(ctx, p.spanName, p.spanStartOpts...)
 	defer span.End()
 
-	span.SetAttributes(
-		attribute.String(string(semconv.MessagingSystemKey), messagingSystem),
-		semconv.MessagingOperationName(spanOperationPublish),
-		semconv.MessagingDestinationName(p.stream),
-		semconv.MessagingMessageBodySize(len(data)),
-	)
+	span.SetAttributes(semconv.MessagingMessageBodySize(len(data)))
 
 	err := p.send(ctx, msg)
 	if err != nil {
@@ -299,7 +322,7 @@ func (p *Publisher) buildMessage(ctx context.Context, msg *PublishMessage) messa
 
 	properties := make(map[string]any, len(msg.Properties)+3)
 	maps.Copy(properties, msg.Properties)
-	gobrickstrace.InjectIntoHeaders(ctx, &propertyAccessor{properties: properties})
+	gobrickstrace.InjectIntoHeaders(ctx, propertyAccessor(properties))
 	clientMsg.ApplicationProperties = properties
 
 	return clientMsg
@@ -372,11 +395,11 @@ func (p *Publisher) closeBound() error {
 	return err
 }
 
-// propertyAccessor adapts AMQP 1.0 application properties to trace.HeaderAccessor.
-type propertyAccessor struct {
-	properties map[string]any
-}
+// propertyAccessor adapts AMQP 1.0 application properties to
+// trace.HeaderAccessor. A map type rather than a struct wrapper: a map is already
+// pointer-shaped, so satisfying the interface costs no allocation per publish.
+type propertyAccessor map[string]any
 
-func (a *propertyAccessor) Get(key string) any { return a.properties[key] }
+func (a propertyAccessor) Get(key string) any { return a[key] }
 
-func (a *propertyAccessor) Set(key string, value any) { a.properties[key] = value }
+func (a propertyAccessor) Set(key string, value any) { a[key] = value }
