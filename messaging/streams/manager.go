@@ -86,6 +86,15 @@ type runningConsumer struct {
 	storerFor func(streamName string) offsetStorer
 }
 
+// runningPublisher pairs a live client producer with the Publisher its declaring
+// module holds. The handle is kept for readiness; shutdown goes through the
+// Publisher, which owns the closing order.
+type runningPublisher struct {
+	stream    string
+	handle    producerHandle
+	publisher *Publisher
+}
+
 // Manager owns the single stream-protocol Environment of a single-tenant service
 // and the consumers started from its declarations. It is a plain struct on
 // purpose (ADR-045): app/ consumes it concretely, so there is no interface to
@@ -100,11 +109,12 @@ type Manager struct {
 	// is already gone.
 	flushBudget time.Duration
 
-	mu        sync.Mutex
-	env       *stream.Environment
-	consumers []*runningConsumer
-	started   bool
-	cancel    context.CancelFunc
+	mu         sync.Mutex
+	env        *stream.Environment
+	consumers  []*runningConsumer
+	publishers []*runningPublisher
+	started    bool
+	cancel     context.CancelFunc
 }
 
 // NewManager creates a Manager. It performs no I/O: the environment is dialed by
@@ -128,10 +138,11 @@ func NewManager(opts ManagerOptions) *Manager {
 	return &Manager{opts: opts, log: opts.Logger, flushBudget: shutdownFlushBudget}
 }
 
-// Start dials the broker, replays the stream declarations, and starts one
-// reliable consumer per declared consumer. Empty declarations are a no-op that
-// dials nothing. Any consumer that fails to start stops the ones already
-// started and returns an error — the caller makes that fatal. A failure leaves
+// Start dials the broker, replays the stream declarations, binds one reliable
+// producer per declared publisher and starts one reliable consumer per declared
+// consumer. Empty declarations are a no-op that dials nothing. Anything that
+// fails to start stops what already came up and returns an error — the caller
+// makes that fatal. A failure leaves
 // nothing to dispose: the connection is closed before the error returns, so a
 // caller that never calls Close does not leak it, and a retried Start cannot
 // orphan the previous environment.
@@ -181,6 +192,7 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 		Int("streams", stats.Streams).
 		Int("super_streams", stats.SuperStreams).
 		Int("consumers", stats.Consumers).
+		Int("publishers", stats.Publishers).
 		Msg("Connected to RabbitMQ stream endpoint")
 
 	consumeCtx, cancel := consumeContext(ctx)
@@ -195,6 +207,11 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	}
 
 	if err := m.declareSuperStreams(ctx, env, decls); err != nil {
+		m.abortStartLocked()
+		return err
+	}
+
+	if err := m.bindPublishers(ctx, env, decls); err != nil {
 		m.abortStartLocked()
 		return err
 	}
@@ -402,6 +419,48 @@ func (m *Manager) trackConsumer(decl *consumerDeclaration, handle consumerHandle
 		Msg("Stream consumer started")
 }
 
+// bindPublishers binds every declared publisher to a client producer.
+//
+// It runs BEFORE the consumers start: a consumer handler may publish from its
+// very first delivery, and an unbound publisher would reject that publish with
+// ErrPublisherNotStarted. Like the declare phases it checks ctx between round
+// trips, so a caller that gave up on startup stops paying for the rest.
+func (m *Manager) bindPublishers(ctx context.Context, env *stream.Environment, decls *Declarations) error {
+	for _, decl := range decls.publishers {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("startup canceled before binding the publisher on stream %q: %w", decl.Stream, err)
+		}
+		if err := m.bindPublisher(env, decl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// bindPublisher starts one reliable producer and hands it to its Publisher. The
+// producer options are the client's defaults on purpose: deduplication,
+// sub-entry batching and compression are all deferred, and the default
+// SubEntrySize of 1 is what makes the confirmation's message pointer a valid
+// correlation key.
+func (m *Manager) bindPublisher(env *stream.Environment, decl *publisherDeclaration) error {
+	producer, err := ha.NewReliableProducer(env, decl.Stream, stream.NewProducerOptions(), decl.Publisher.confirmed)
+	if err != nil {
+		return fmt.Errorf("failed to start the publisher on stream %q: %w", decl.Stream, err)
+	}
+
+	decl.Publisher.bind(producer)
+	m.publishers = append(m.publishers, &runningPublisher{
+		stream:    decl.Stream,
+		handle:    producer,
+		publisher: decl.Publisher,
+	})
+
+	m.log.Info().
+		Str(logFieldStream, decl.Stream).
+		Msg("Stream publisher started")
+	return nil
+}
+
 // envOffsetStorer commits one stream's offset through the environment's locator
 // connection instead of through a consumer.
 type envOffsetStorer struct {
@@ -583,7 +642,22 @@ func (m *Manager) stopLocked() {
 	}
 
 	m.consumers = nil
+	m.stopPublishersLocked()
 	m.started = false
+}
+
+// stopPublishersLocked closes every bound publisher, AFTER the consumers are
+// gone: a handler publishing on its way out still needs a producer, and closing
+// the producers first would fail those publishes for no reason.
+func (m *Manager) stopPublishersLocked() {
+	for _, rp := range m.publishers {
+		if err := rp.publisher.closeBound(); err != nil {
+			m.log.Warn().Err(err).
+				Str(logFieldStream, rp.stream).
+				Msg("Failed to close stream publisher")
+		}
+	}
+	m.publishers = nil
 }
 
 // flushOffsetsLocked commits one consumer's pending offsets, giving up once the
@@ -690,6 +764,7 @@ func (m *Manager) Stats() map[string]any {
 	return map[string]any{
 		"started":               m.started,
 		"consumers":             len(m.consumers),
+		"publishers":            len(m.publishers),
 		"ready":                 m.readyLocked(),
 		"stored_offsets":        offsets,
 		"offset_store_count":    m.opts.OffsetStoreCount,
@@ -697,7 +772,8 @@ func (m *Manager) Stats() map[string]any {
 	}
 }
 
-// Ready reports whether every started consumer is currently connected.
+// Ready reports whether every started consumer and publisher is currently
+// connected.
 func (m *Manager) Ready() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -710,6 +786,11 @@ func (m *Manager) readyLocked() bool {
 	}
 	for _, rc := range m.consumers {
 		if rc.handle.GetStatus() != ha.StatusOpen {
+			return false
+		}
+	}
+	for _, rp := range m.publishers {
+		if rp.handle.GetStatus() != ha.StatusOpen {
 			return false
 		}
 	}

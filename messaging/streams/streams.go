@@ -1,10 +1,10 @@
-// Package streams consumes RabbitMQ streams over the native stream protocol
-// (default port 5552, rabbitmq_stream plugin).
+// Package streams publishes to and consumes RabbitMQ streams over the native
+// stream protocol (default port 5552, rabbitmq_stream plugin).
 //
 // It complements the AMQP 0.9.1 lane in the parent messaging package: streams
 // declared as AMQP queues (x-queue-type: stream) can be consumed there, but
 // server-side offset tracking and single active consumer need this protocol.
-// Publishing is deliberately not part of this surface — see wiki/streams.md.
+// Publishing is synchronous and confirmed — see wiki/streams.md.
 package streams
 
 import (
@@ -35,6 +35,19 @@ type Message struct {
 	Stream string
 	// Properties carries the AMQP 1.0 application properties, nil when absent.
 	Properties map[string]any
+}
+
+// PublishMessage is the framework view of an outbound stream message.
+type PublishMessage struct {
+	// Data becomes the AMQP 1.0 data section of the message body.
+	Data []byte
+	// Properties carries AMQP 1.0 application properties; nil is fine. The map is
+	// copied, so the caller's own map is never written to.
+	Properties map[string]any
+	// RoutingKey selects the partition of a super stream (murmur3 hash — the
+	// RabbitMQ cross-client default). Required non-empty when publishing to a
+	// super stream; must be empty when publishing to a plain stream.
+	RoutingKey string
 }
 
 // offsetKind enumerates the start positions. The zero value is Next so that a

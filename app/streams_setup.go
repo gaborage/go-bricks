@@ -14,7 +14,8 @@ import (
 const plaintextStreamScheme = "rabbitmq-stream"
 
 // prepareStreamConsumers collects the modules' native stream declarations and,
-// when there are any, starts the stream-protocol consumers.
+// when there are any, starts the stream-protocol consumers and binds the
+// declared publishers.
 //
 // Everything happens at RUNTIME on purpose: the manager does not exist while the
 // builder runs, so its readiness probe and its closer are both registered here
@@ -53,8 +54,9 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 		Logger:              a.logger,
 	})
 
-	// A service that declared stream consumers and cannot start them would serve
-	// HTTP while consuming nothing, so startup fails rather than booting green.
+	// A service that declared streams and cannot start them would serve HTTP while
+	// consuming nothing and publishing nowhere, so startup fails rather than
+	// booting green.
 	// The startup context is handed over for its values only — Start severs its
 	// cancellation, so shutdownStreamConsumers stays the thing that stops them.
 	if err := mgr.Start(ctx, decls); err != nil {
@@ -121,9 +123,11 @@ func (a *App) assertStreamsConfigured(decls *streams.Declarations) error {
 		s.Streams, s.Consumers)
 }
 
-// shutdownStreamConsumers stops stream consumers before modules are torn down.
-// Each consumer flushes its pending offset first; the environment itself is
-// closed later by the registered closer. No-op when no streams were declared.
+// shutdownStreamConsumers stops stream consumers before modules are torn down,
+// then closes the publishers. Each consumer flushes its pending offset first and
+// every publish still awaiting confirmation is failed rather than left hanging;
+// the environment itself is closed later by the registered closer. No-op when no
+// streams were declared.
 func (a *App) shutdownStreamConsumers() {
 	if a.streamsManager == nil {
 		return

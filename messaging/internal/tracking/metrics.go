@@ -323,6 +323,39 @@ func RecordStreamConsume(ctx context.Context, streamName string, duration time.D
 	}
 }
 
+// RecordStreamPublish records the metrics for one native stream-protocol
+// publish, reusing the AMQP publish instruments so both messaging lanes report
+// under the same names.
+//
+// The destination is the stream itself: the stream protocol routes to a stream
+// directly, so there is no exchange and no routing key to attribute. Like the
+// AMQP lane, the sent counter increments only once the publish succeeded — here
+// that means the broker confirmed it.
+func RecordStreamPublish(ctx context.Context, streamName string, duration time.Duration, err error) {
+	meter := getAMQPMeter()
+	if meter == nil {
+		return
+	}
+
+	attrs := make([]attribute.KeyValue, 0, 4)
+	attrs = append(attrs,
+		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
+		attribute.String(attrMessagingOperation, operationPublish),
+		attribute.String(attrMessagingDestination, streamName),
+	)
+	if errorType := extractErrorType(err); errorType != "" {
+		attrs = append(attrs, attribute.String(attrErrorType, errorType))
+	}
+	attrSet := metric.WithAttributes(attrs...)
+
+	if amqpOperationDuration != nil && duration > 0 {
+		amqpOperationDuration.Record(ctx, durationToSeconds(duration), attrSet)
+	}
+	if amqpMessagesSent != nil && err == nil {
+		amqpMessagesSent.Add(ctx, 1, attrSet)
+	}
+}
+
 // RecordPublishRetry records a publish retry attempt in the retry counter.
 // This is called each time a publish operation is retried due to NACK, timeout, or error.
 //

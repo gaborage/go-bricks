@@ -20,6 +20,7 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/testing/containers"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 const (
@@ -35,12 +36,13 @@ const (
 // recorder collects the messages a handler saw, in arrival order. A super-stream
 // handler is called concurrently across partitions, so every field is guarded.
 type recorder struct {
-	mu       sync.Mutex
-	offsets  []int64
-	bodies   []string
-	streams  []string
-	failAt   int64
-	failures int
+	mu         sync.Mutex
+	offsets    []int64
+	bodies     []string
+	streams    []string
+	properties []map[string]any
+	failAt     int64
+	failures   int
 }
 
 func (r *recorder) handle(_ context.Context, msg *Message) error {
@@ -49,6 +51,7 @@ func (r *recorder) handle(_ context.Context, msg *Message) error {
 	r.offsets = append(r.offsets, msg.Offset)
 	r.bodies = append(r.bodies, string(msg.Data))
 	r.streams = append(r.streams, msg.Stream)
+	r.properties = append(r.properties, msg.Properties)
 	if r.failAt >= 0 && msg.Offset == r.failAt {
 		r.failures++
 		return errors.New("deliberate handler failure")
@@ -80,6 +83,14 @@ func (r *recorder) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.offsets)
+}
+
+// propertiesSnapshot reports the application properties of every delivery, in
+// arrival order.
+func (r *recorder) propertiesSnapshot() []map[string]any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]map[string]any(nil), r.properties...)
 }
 
 // streamsTestEnv boots RabbitMQ with the stream plugin and returns the manager
@@ -637,4 +648,92 @@ func TestStreamsManagerDisposesEnvironmentOnDeclareFailureIntegration(t *testing
 	assert.Nil(t, second.env, "the dialed environment is disposed by the failed Start itself")
 	assert.False(t, second.started)
 	require.NoError(t, second.Close(), "the caller's follow-up Close short-circuits instead of double-closing")
+}
+
+// TestStreamsPublisherRoundTripIntegration is the proof of the correlation
+// assumption the publisher is built on: Publish blocks until the confirmation for
+// ITS OWN message arrives, matched by the pointer the client handed back. If
+// ConfirmationStatus.GetMessage ever stopped returning the exact message passed to
+// Send, no waiter would ever resolve and every Publish below would fail on its
+// deadline instead.
+//
+// It is also the round trip: what a declared publisher sends is what a declared
+// consumer receives, application properties included.
+func TestStreamsPublisherRoundTripIntegration(t *testing.T) {
+	ctx := context.Background()
+	opts := streamsTestEnv(ctx, t)
+
+	received := &recorder{failAt: -1}
+
+	decls := NewDeclarations()
+	decls.DeclareStream(itStream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream:  itStream,
+		Name:    itConsumerName,
+		Start:   OffsetFirst(),
+		Handler: received.handle,
+	})
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: itStream})
+	require.NoError(t, decls.Validate())
+
+	m := NewManager(opts)
+	require.NoError(t, m.Start(ctx, decls))
+	t.Cleanup(func() {
+		m.StopConsumers()
+		require.NoError(t, m.Close())
+	})
+
+	assert.Equal(t, 1, m.Stats()["publishers"])
+	assert.True(t, m.Ready(), "a bound publisher counts towards readiness")
+
+	bodies := bodiesFrom("published", 0, 5)
+	for i, body := range bodies {
+		// The per-publish deadline is the latency bound: a confirmation that never
+		// arrived, or arrived correlated to the wrong message, surfaces here.
+		publishCtx, cancel := context.WithTimeout(ctx, itWaitTimeout)
+		err := publisher.Publish(publishCtx, &PublishMessage{
+			Data:       []byte(body),
+			Properties: map[string]any{"index": int64(i)},
+		})
+		cancel()
+		require.NoError(t, err, "publish %d must be confirmed by the broker", i)
+	}
+
+	waitForCount(t, received, len(bodies))
+
+	_, got := received.snapshot()
+	assert.Equal(t, bodies, got, "every published body arrives, in order")
+
+	for i, props := range received.propertiesSnapshot() {
+		assert.Equal(t, int64(i), props["index"], "the caller's application properties survive the round trip")
+		assert.NotEmpty(t, props[gobrickstrace.HeaderTraceParent], "the framework injects W3C trace context")
+		assert.NotEmpty(t, props[gobrickstrace.HeaderXRequestID])
+	}
+}
+
+// TestStreamsPublisherRejectedAfterStopIntegration pins the shutdown contract
+// against a real broker: once the manager stopped, the publisher refuses rather
+// than publishing into an environment about to be disposed.
+func TestStreamsPublisherRejectedAfterStopIntegration(t *testing.T) {
+	ctx := context.Background()
+	opts := streamsTestEnv(ctx, t)
+
+	decls := NewDeclarations()
+	decls.DeclareStream(itStream, &StreamSpec{MaxLengthBytes: 10 * 1024 * 1024})
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: itStream})
+	require.NoError(t, decls.Validate())
+
+	m := NewManager(opts)
+	require.NoError(t, m.Start(ctx, decls))
+
+	publishCtx, cancel := context.WithTimeout(ctx, itWaitTimeout)
+	require.NoError(t, publisher.Publish(publishCtx, &PublishMessage{Data: []byte("before-stop")}))
+	cancel()
+
+	m.StopConsumers()
+	require.NoError(t, m.Close())
+
+	err := publisher.Publish(ctx, &PublishMessage{Data: []byte("after-stop")})
+
+	assert.ErrorIs(t, err, ErrPublisherClosed)
 }

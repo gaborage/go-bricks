@@ -5,9 +5,10 @@ port 5552, `rabbitmq_stream` plugin) through the `messaging/streams` package.
 Streams are append-only replicated logs: reads are non-destructive, positions are
 offsets, and the broker itself remembers where a named consumer got to.
 
-Publishing to streams is **not** part of this surface. Publish through the AMQP
-lane (a stream queue bound to an exchange) or a dedicated client — see
-[ADR-059](adr_059_streams_consumption.md).
+Publishing over this lane is **confirmed and synchronous**: `DeclarePublisher`
+returns a `*Publisher` whose `Publish` blocks until the broker confirms the
+message, the context expires, or the publisher closes. Delivery is
+at-least-once — a context expiry does not prove the message failed.
 
 ## Which lane
 

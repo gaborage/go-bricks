@@ -33,6 +33,9 @@ type fakeHandle struct {
 	status   int
 	closeErr error
 	storeErr error
+	// onClose records the close in an order shared with other fakes, so the
+	// shutdown SEQUENCE is assertable and not only its outcome.
+	onClose func()
 }
 
 func (f *fakeHandle) StoreCustomOffset(offset int64) error {
@@ -47,9 +50,14 @@ func (f *fakeHandle) StoreCustomOffset(offset int64) error {
 
 func (f *fakeHandle) Close() error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.events = append(f.events, "close")
-	return f.closeErr
+	closeErr, onClose := f.closeErr, f.onClose
+	f.mu.Unlock()
+
+	if onClose != nil {
+		onClose()
+	}
+	return closeErr
 }
 
 func (f *fakeHandle) GetStatus() int {
@@ -70,12 +78,13 @@ const unreachableTestURI = "rabbitmq-stream://guest:guest@127.0.0.1:1/%2f"
 // The shutdown and unwind warnings, verbatim. Tests assert on them so a guard
 // that stops distinguishing success from failure fails here.
 const (
-	msgFlushFailed         = "Failed to flush stream offset on shutdown"
-	msgCloseConsumerFailed = "Failed to close stream consumer"
-	msgCloseEnvFailed      = "Failed to close stream environment after a failed start"
-	msgOffsetStoreFailed   = "Failed to store stream offset"
-	msgOffsetQueryFailed   = "Could not query the stored stream offset; attaching at a position that replays rather than skips"
-	msgFlushSkipped        = "Shutdown offset flush budget spent; offset not committed - handled messages will replay"
+	msgFlushFailed          = "Failed to flush stream offset on shutdown"
+	msgCloseConsumerFailed  = "Failed to close stream consumer"
+	msgCloseEnvFailed       = "Failed to close stream environment after a failed start"
+	msgOffsetStoreFailed    = "Failed to store stream offset"
+	msgOffsetQueryFailed    = "Could not query the stored stream offset; attaching at a position that replays rather than skips"
+	msgFlushSkipped         = "Shutdown offset flush budget spent; offset not committed - handled messages will replay"
+	msgClosePublisherFailed = "Failed to close stream publisher"
 )
 
 // recordingLogger captures each event's level, attached error and terminal
@@ -445,6 +454,7 @@ func TestManagerStartupAbortsOnACanceledContext(t *testing.T) {
 	decls.DeclareStream(testStream, nil)
 	decls.DeclareSuperStream(testSuperStream, 2, nil)
 	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
 
 	tests := []struct {
 		name      string
@@ -460,6 +470,11 @@ func TestManagerStartupAbortsOnACanceledContext(t *testing.T) {
 			name:      "super_streams",
 			phase:     func(m *Manager, ctx context.Context) error { return m.declareSuperStreams(ctx, nil, decls) },
 			wantPhase: `declaring super stream "` + testSuperStream + `"`,
+		},
+		{
+			name:      "publishers",
+			phase:     func(m *Manager, ctx context.Context) error { return m.bindPublishers(ctx, nil, decls) },
+			wantPhase: `binding the publisher on stream "` + testStream + `"`,
 		},
 		{
 			// The starter fails loudly, so a guard that let the loop reach it would
@@ -1110,4 +1125,122 @@ func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {
 	require.NoError(t, m.closeEnvLocked())
 	require.NoError(t, m.closeEnvLocked())
 	assert.Nil(t, m.env)
+}
+
+// attachPublisher wires a fake producer into a manager as if Start had bound it.
+func attachPublisher(m *Manager, handle *fakeProducer) *Publisher {
+	p := newPublisher(testStream)
+	p.bind(handle)
+	m.publishers = append(m.publishers, &runningPublisher{stream: testStream, handle: handle, publisher: p})
+	m.started = true
+	return p
+}
+
+// TestManagerBindPublishersProceedsOnALiveContext is the counterpart to the
+// canceled-context case: the nil environment proves the client call is attempted,
+// which the guard would otherwise have prevented.
+func TestManagerBindPublishersProceedsOnALiveContext(t *testing.T) {
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	m := testManager(t)
+
+	assert.Panics(t, func() { _ = m.bindPublishers(context.Background(), nil, decls) })
+}
+
+// TestManagerStopClosesPublishersAfterConsumers pins the shutdown order. A
+// consumer handler may publish on its way out, so the producers have to outlive
+// the consumers rather than the other way round.
+func TestManagerStopClosesPublishersAfterConsumers(t *testing.T) {
+	m := testManager(t)
+
+	var order []string
+	consumer := &fakeHandle{status: ha.StatusOpen, onClose: func() { order = append(order, "consumer") }}
+	attach(m, consumer, newOffsetTracker(1000, time.Hour, nil))
+	producer := openProducer()
+	producer.onClose = func() { order = append(order, "publisher") }
+	attachPublisher(m, producer)
+
+	m.StopConsumers()
+
+	assert.Equal(t, []string{"consumer", "publisher"}, order)
+	assert.Empty(t, m.publishers)
+	assert.False(t, m.started)
+}
+
+// TestManagerStopFailsAnInFlightPublish is why the close sweep is mandatory: this
+// publish has no deadline of its own, and its send never returned, so without the
+// sweep the caller would hang for the whole shutdown.
+func TestManagerStopFailsAnInFlightPublish(t *testing.T) {
+	m := testManager(t)
+	producer := blockingProducer(t)
+	p := attachPublisher(m, producer)
+
+	done := publishAsync(context.Background(), p, &PublishMessage{Data: []byte(testBody)})
+	waitForSend(t, producer)
+
+	m.StopConsumers()
+
+	require.ErrorIs(t, <-done, ErrPublisherClosed)
+	assert.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}), ErrPublisherClosed,
+		"the publisher stays closed for late callers")
+}
+
+func TestManagerStopReportsAPublisherCloseFailure(t *testing.T) {
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	producer := openProducer()
+	producer.closeErr = errors.New("close failed")
+	attachPublisher(m, producer)
+
+	assert.NotPanics(t, m.StopConsumers)
+
+	assert.Equal(t, []string{msgClosePublisherFailed}, log.warnMessages())
+	closeErr, ok := log.warnError(msgClosePublisherFailed)
+	require.True(t, ok)
+	assert.Equal(t, "close failed", closeErr)
+}
+
+func TestManagerStopIsSilentOnACleanPublisherClose(t *testing.T) {
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	attachPublisher(m, openProducer())
+
+	m.StopConsumers()
+
+	assert.Empty(t, log.warnMessages(), "a clean publisher close reports nothing to the operator")
+}
+
+// TestManagerReadyRequiresEveryPublisher extends readiness to the publish side: a
+// producer that is reconnecting cannot publish, so the probe must say so.
+func TestManagerReadyRequiresEveryPublisher(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		want   bool
+	}{
+		{name: "open_publisher_is_ready", status: ha.StatusOpen, want: true},
+		{name: "reconnecting_publisher_is_not_ready", status: ha.StatusReconnecting, want: false},
+		{name: "closed_publisher_is_not_ready", status: ha.StatusClosed, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := testManager(t)
+			attachPublisher(m, &fakeProducer{status: tt.status})
+
+			assert.Equal(t, tt.want, m.Ready())
+		})
+	}
+}
+
+func TestManagerStatsCountsPublishers(t *testing.T) {
+	m := testManager(t)
+	attachPublisher(m, openProducer())
+
+	stats := m.Stats()
+
+	assert.Equal(t, 1, stats["publishers"])
+	assert.Equal(t, 0, stats["consumers"])
+	assert.Equal(t, true, stats["ready"])
 }
