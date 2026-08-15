@@ -3005,6 +3005,31 @@ decls.DeclareSuperStreamConsumer(&streams.SuperStreamConsumerOptions{
 })
 ```
 
+Publishing on this lane is **synchronous and confirmed**: `Publish` blocks until the broker
+confirms, `ctx` expires, or shutdown closes the publisher, so a nil error means the broker
+acknowledged the message. A ctx expiry does NOT mean it failed — delivery is at-least-once,
+keep consumers idempotent. There is no publish timeout and no config key: the caller's `ctx`
+is the only bound (5s inside an HTTP handler; background work must set its own). Declaring a
+publisher on an undeclared target — or on one declared as the other kind — fails startup, a
+duplicate on the same target panics, and declaring one with no `messaging.streams.uri` set
+fails startup too. See [wiki/streams.md#publishing](wiki/streams.md#publishing):
+
+```go
+// Beside the declarations above; keep the returned handle on the module (no deps accessor).
+m.pub = decls.DeclarePublisher(&streams.PublisherOptions{Stream: "orders"})
+// ...or, for the super-stream variant, beside DeclareSuperStream:
+m.pub = decls.DeclareSuperStreamPublisher(&streams.SuperStreamPublisherOptions{SuperStream: "orders"})
+
+// From a handler or service — plain stream, where a RoutingKey must be EMPTY:
+err := m.pub.Publish(ctx, &streams.PublishMessage{
+	Data:       payload,                              // AMQP 1.0 data section
+	Properties: map[string]any{"order.id": order.ID}, // application properties; traceparent injected, map copied
+})
+// Super-stream publisher instead: RoutingKey is REQUIRED, its murmur3 hash picks the partition.
+err = m.pub.Publish(ctx, &streams.PublishMessage{Data: payload, RoutingKey: order.CustomerID})
+// errors.Is(err, streams.ErrPublisherNotStarted) before Start binds it; ErrPublisherClosed after shutdown.
+```
+
 ### Step 3: Implement the Producer (publish messages)
 
 The `messaging.AMQPClient` returned by `deps.Messaging(ctx)` exposes two publish APIs:
