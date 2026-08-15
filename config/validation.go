@@ -175,6 +175,15 @@ const (
 	fieldServerTrustedProxies = "server.trustedproxies"
 
 	fieldMessagingStreamsURI = "messaging.streams.uri"
+
+	fieldDatabaseTLS = "database.tls"
+
+	sslModeDisable    = "disable"
+	sslModeAllow      = "allow"
+	sslModePrefer     = "prefer"
+	sslModeRequire    = "require"
+	sslModeVerifyCA   = "verify-ca"
+	sslModeVerifyFull = "verify-full"
 )
 
 func Validate(cfg *Config) error {
@@ -579,6 +588,15 @@ var databaseIdentityKeys = []string{
 	"connectionstring", "type", identityKeyHost, identityKeyPort, fieldDatabase,
 	"username", "password", "oracle.service.name", "oracle.service.sid",
 }
+
+// pgSSLModes mirrors the sslmode values pgx v5 accepts in configTLS; anything
+// else fails only at connect time with a redacted parse error, so gate it here.
+var pgSSLModes = []string{sslModeDisable, sslModeAllow, sslModePrefer, sslModeRequire, sslModeVerifyCA, sslModeVerifyFull}
+
+// pgTLSMandatorySSLModes are the modes under which pgx is guaranteed to use
+// configured TLS material; the opportunistic modes silently discard or
+// downgrade it.
+var pgTLSMandatorySSLModes = []string{sslModeRequire, sslModeVerifyCA, sslModeVerifyFull}
 
 // deliveredEmptyDatabaseKeys returns every identity key present in the loaded
 // configuration under base while the decoded section carries zero identity
@@ -1326,6 +1344,12 @@ func applyStartupDefaults(cfg *StartupConfig) error {
 
 // validateVendorSpecificFields validates database vendor-specific configuration fields
 func validateVendorSpecificFields(cfg *DatabaseConfig) error {
+	// Trim once here so both vendors and the downstream DSN builder see canonical values.
+	cfg.TLS.Mode = strings.TrimSpace(cfg.TLS.Mode)
+	cfg.TLS.CertFile = strings.TrimSpace(cfg.TLS.CertFile)
+	cfg.TLS.KeyFile = strings.TrimSpace(cfg.TLS.KeyFile)
+	cfg.TLS.CAFile = strings.TrimSpace(cfg.TLS.CAFile)
+
 	switch cfg.Type {
 	case Oracle:
 		return validateOracleFields(cfg)
@@ -1337,15 +1361,45 @@ func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	}
 }
 
-// validatePostgreSQLFields validates PostgreSQL-specific configuration fields.
+// validatePostgreSQLFields fails closed on database.tls shapes that pgx would silently
+// discard or downgrade (ADR-062). Check order is
+// load-bearing: connectionstring short-circuits, then the mode allowlist, then the
+// material/mode coherence rule, then the cert/key pairing.
 func validatePostgreSQLFields(cfg *DatabaseConfig) error {
-	// Client-certificate (mTLS) auth requires BOTH sslcert and sslkey. pgx rejects a lone
-	// one at connect time, but under sslmode=disable it silently drops them — so validate
-	// the pairing up front rather than letting a half-configured cert be silently ignored.
+	if cfg.ConnectionString != "" {
+		if cfg.TLS.Mode != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fieldDatabaseTLS,
+				Message:  "database.tls is ignored when connectionstring is set (the DSN is used verbatim)",
+				Action:   "move TLS settings into the connection string (sslmode/sslrootcert/sslcert/sslkey) and remove the database.tls block",
+			}
+		}
+		return nil
+	}
+
+	if cfg.TLS.Mode != "" && !slices.Contains(pgSSLModes, cfg.TLS.Mode) {
+		return NewInvalidFieldError("database.tls.mode", fmt.Sprintf(errInvalidField, cfg.TLS.Mode), pgSSLModes)
+	}
+
+	hasMaterial := cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != ""
+	if hasMaterial && !slices.Contains(pgTLSMandatorySSLModes, cfg.TLS.Mode) {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldDatabaseTLS,
+			Message: "TLS cert/key/ca require a mode that guarantees TLS; under disable/allow/prefer " +
+				"(or an unset mode, which defaults to prefer) pgx silently discards the material, downgrades " +
+				"to plaintext, or (for ca: system) silently upgrades the mode — none of which is what the config says",
+			Action: "set database.tls.mode to require, verify-ca, or verify-full",
+		}
+	}
+
+	// Client-certificate (mTLS) auth requires BOTH sslcert and sslkey; pgx rejects a lone
+	// one only at connect time, where go-bricks redacts the parse error.
 	if (cfg.TLS.CertFile != "") != (cfg.TLS.KeyFile != "") {
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    "database.tls",
+			Field:    fieldDatabaseTLS,
 			Message:  "sslcert and sslkey must be configured together for client-certificate (mTLS) auth",
 			Action:   "set both database.tls.cert and database.tls.key, or neither",
 		}
@@ -1358,15 +1412,15 @@ func validatePostgreSQLFields(cfg *DatabaseConfig) error {
 // mirroring the DSN selection logic in database/oracle/connection.go — except in
 // connection-string mode, where the DSN supplies the identifier and none is required.
 func validateOracleFields(cfg *DatabaseConfig) error {
-	// Oracle TLS (tcps/wallet) is not implemented, so reject TLS material rather than
-	// silently ignoring it — otherwise an operator who configures database.tls.cert/key/ca
-	// for Oracle would believe the connection is authenticated/encrypted when it is not.
-	if cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
+	// Oracle TLS (tcps/wallet) is not implemented in go-bricks, so reject the whole
+	// database.tls block rather than silently ignoring it — mode included, since nothing
+	// wires the TLS it implies, leaving an operator to believe the connection is encrypted.
+	if cfg.TLS.Mode != "" || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" || cfg.TLS.CAFile != "" {
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    "database.tls",
-			Message:  "TLS cert/key/ca are not supported for Oracle (tcps/wallet is not implemented)",
-			Action:   "remove database.tls.cert, database.tls.key, and database.tls.ca for Oracle connections",
+			Field:    fieldDatabaseTLS,
+			Message:  "database.tls settings are not supported for Oracle (tcps/wallet is not implemented)",
+			Action:   "remove the database.tls block for Oracle connections",
 		}
 	}
 
