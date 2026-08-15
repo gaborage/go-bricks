@@ -228,17 +228,33 @@ func nilDeclarationPanic(kind, method, optionsType string) string {
 		kind, method, optionsType, optionsType, method)
 }
 
-// Validate reports every problem in the store at once.
+// Validate reports every problem in the store at once. Each declaration kind
+// contributes its own errors, in declaration order, so a caller sees the whole
+// picture rather than the first thing that went wrong.
 func (d *Declarations) Validate() error {
 	errs := append([]error(nil), d.conflicts...)
+	errs = append(errs, d.streamErrors()...)
+	errs = append(errs, d.superStreamErrors()...)
+	errs = append(errs, d.consumerErrors()...)
+	errs = append(errs, d.publisherErrors()...)
+	return errors.Join(errs...)
+}
 
+// streamErrors reports every problem with the declared plain streams.
+func (d *Declarations) streamErrors() []error {
+	var errs []error
 	for _, s := range d.streams {
 		if s.Name == "" {
 			errs = append(errs, errors.New("stream declaration has an empty name"))
 		}
 		errs = append(errs, negativeRetentionErrors("stream", s.Name, s.Spec)...)
 	}
+	return errs
+}
 
+// superStreamErrors reports every problem with the declared super streams.
+func (d *Declarations) superStreamErrors() []error {
+	var errs []error
 	for _, s := range d.superStreams {
 		if s.Name == "" {
 			errs = append(errs, errors.New("super stream declaration has an empty name"))
@@ -251,7 +267,12 @@ func (d *Declarations) Validate() error {
 		}
 		errs = append(errs, negativeRetentionErrors("super stream", s.Name, s.Spec)...)
 	}
+	return errs
+}
 
+// consumerErrors reports every problem with the declared consumers.
+func (d *Declarations) consumerErrors() []error {
+	var errs []error
 	for _, c := range d.consumers {
 		if c.Name == "" {
 			errs = append(errs, fmt.Errorf("consumer on stream %q has an empty name; a name is required for offset tracking", c.Stream))
@@ -263,7 +284,12 @@ func (d *Declarations) Validate() error {
 			errs = append(errs, err)
 		}
 	}
+	return errs
+}
 
+// publisherErrors reports every problem with the declared publishers.
+func (d *Declarations) publisherErrors() []error {
+	var errs []error
 	for _, p := range d.publishers {
 		if p.Stream == "" {
 			errs = append(errs, errors.New("publisher declaration has an empty stream name"))
@@ -273,8 +299,7 @@ func (d *Declarations) Validate() error {
 			errs = append(errs, err)
 		}
 	}
-
-	return errors.Join(errs...)
+	return errs
 }
 
 // publisherTargetError checks that a publisher's target was declared, and
