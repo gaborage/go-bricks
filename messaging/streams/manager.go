@@ -445,6 +445,14 @@ func bindPublishers(ctx context.Context, decls []*publisherDeclaration, bind fun
 		if err := bind(decl); err != nil {
 			return err
 		}
+		// Rechecked AFTER the bind, not only before the next one: a bind is a
+		// blocking dial, so a caller can give up while it is in flight. Without
+		// this, the last successful bind of a publisher-only service would return
+		// nil into a Start that has no consumer loop left to notice — startConsumers
+		// checks ctx at the top of its body, which never runs with nothing declared.
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("startup canceled after binding the publisher on stream %q: %w", decl.Stream, err)
+		}
 	}
 	return nil
 }

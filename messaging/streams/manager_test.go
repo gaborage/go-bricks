@@ -1185,6 +1185,53 @@ func TestBindPublishersBindsEveryDeclaration(t *testing.T) {
 		"a live context binds every publisher, not just the first")
 }
 
+// TestBindPublishersAbortsWhenCanceledDuringABind pins the gap a check only at
+// the top of the loop leaves: a bind is a blocking dial, so the cancellation can
+// land while it is in flight and the bind still succeeds. For a publisher-only
+// service nothing downstream would notice — startConsumers checks ctx inside a
+// loop body that never runs with no consumers declared — so Start would come up
+// green for a caller that had already given up.
+func TestBindPublishersAbortsWhenCanceledDuringABind(t *testing.T) {
+	tests := []struct {
+		name       string
+		publishers []*publisherDeclaration
+	}{
+		{
+			// The regression proper. With nothing queued behind it, a cancellation
+			// during the LAST bind has no later iteration to be caught by: the loop
+			// would return nil, and a publisher-only Start would then set started and
+			// come up green for a caller that had already given up.
+			name:       "canceled_during_the_only_bind",
+			publishers: onePublisher(t).publishers,
+		},
+		{
+			// With a declaration still to come the fan-out stops too, and the error
+			// names the bind that completed rather than the one never attempted.
+			name:       "canceled_during_an_earlier_bind",
+			publishers: twoPublishers(t).publishers,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			var bound []string
+			err := bindPublishers(ctx, tt.publishers, func(decl *publisherDeclaration) error {
+				bound = append(bound, decl.Stream)
+				cancel() // the caller gives up while this bind is in flight
+				return nil
+			})
+
+			require.ErrorIs(t, err, context.Canceled)
+			assert.Contains(t, err.Error(), `after binding the publisher on stream "`+testStream+`"`,
+				"the cancellation is reported against the bind that completed")
+			assert.Equal(t, []string{testStream}, bound, "nothing is bound after the caller gave up")
+		})
+	}
+}
+
 // TestBindPublishersStopsAtTheFirstFailure pins the other half: a bind that fails
 // reaches the caller unchanged — Start turns it into an aborted startup — and the
 // declarations behind it are never attempted.
@@ -1242,12 +1289,20 @@ func TestManagerBindPublisherTracksAConstructedProducer(t *testing.T) {
 	assert.Equal(t, ha.StatusOpen, decl.Publisher.status(), "the handle is bound to the new producer")
 }
 
-// onePublisherDeclaration builds a single declared publisher for the bind tests.
-func onePublisherDeclaration(t *testing.T) *publisherDeclaration {
+// onePublisher declares a single publisher — the shape where a cancellation
+// during its bind has no later iteration to be caught by.
+func onePublisher(t *testing.T) *Declarations {
 	t.Helper()
 	decls := NewDeclarations()
 	decls.DeclareStream(testStream, nil)
 	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	return decls
+}
+
+// onePublisherDeclaration builds a single declared publisher for the bind tests.
+func onePublisherDeclaration(t *testing.T) *publisherDeclaration {
+	t.Helper()
+	decls := onePublisher(t)
 	require.Len(t, decls.publishers, 1)
 	return decls.publishers[0]
 }
