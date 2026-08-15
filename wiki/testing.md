@@ -371,6 +371,7 @@ Knobs (all `?=`, so the environment overrides):
 | `MUTATE_CEILING_FLOOR` | 30s | Minimum per-mutant ceiling (any `time.ParseDuration` string). |
 | `MUTATE_FALLBACK_COEFFICIENT` | 600 | Used only when a package's coefficient cannot be computed. |
 | `MUTATE_NO_CACHE` | *(empty)* | Any non-empty value bypasses the result cache below and re-mutates every package in the diff. |
+| `MUTATE_GOCACHE_CAP` | 4096 | Cap, in MiB, on the gate's dedicated build cache (below). Env-only — read by `mutatediff`, not declared in the Makefile. `0` removes the cap; unset or unparsable falls back to the default. |
 
 The budget is applied once, on `mutatediff`'s own environment, so gremlins, its
 coverage pass, `measureSuite`'s timing passes, and every mutant's `go test` all
@@ -379,6 +380,26 @@ per-mutant ceiling divides the real suite by a cache-served replay, so measuring
 the two under different budgets would corrupt every ceiling. The `-coefficient`
 path is deliberately excluded, because it serves `make mutate-baseline`, whose
 mutants run unbudgeted.
+
+### Disk sandbox
+
+The same set-once-on-own-environment seam isolates the gate's disk footprint
+(`scripts/mutatediff/sandbox.go`). Mutant builds otherwise flow through the
+machine-shared `GOCACHE` — thousands of objects no other build will ever read —
+and the only shared-cache remedy, `go clean -cache`, destroys every other
+session's warm state. Instead the gate pins `GOCACHE` to a dedicated persistent
+cache under the user cache dir (`~/Library/Caches/mutatediff/gocache` on macOS)
+and the temp variables (`TMPDIR`/`TMP`/`TEMP`) to a per-run root, so gremlins'
+working copies, the report dir, and coverage scratch files all land inside one
+tree. Cleanup is deferred in `run`, so it fires on failures the same as on
+passes: the per-run root is removed, and the dedicated cache is wiped only when
+it exceeds `MUTATE_GOCACHE_CAP`. A run killed with `SIGKILL` skips its defers;
+the next run's startup sweep removes orphaned `mutatediff-run-*` roots older
+than 24h. The dedicated cache must stay **outside the repo**: gremlins copies
+the whole module root per worker with an unfiltered `filepath.Walk`, so an
+in-repo cache would be hauled into every working copy. The `-coefficient` and
+`-merge` paths are unsandboxed — they serve `make mutate-baseline` in ephemeral
+CI runners.
 
 The cooldown gives no relief inside a single package — `mutatediff` drives
 gremlins once per package and cannot interrupt its internal mutant loop. For a
