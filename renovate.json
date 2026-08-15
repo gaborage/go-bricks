@@ -56,7 +56,8 @@
       ],
       "matchStrings": [
         "// renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+:\\s+\"(?<currentValue>[^\"]+)\""
-      ]
+      ],
+      "versioningTemplate": "docker"
     },
     {
       "customType": "regex",
@@ -66,7 +67,8 @@
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+docker pull \\S+:(?<currentValue>\\S+)"
-      ]
+      ],
+      "versioningTemplate": "docker"
     },
     {
       "customType": "regex",
