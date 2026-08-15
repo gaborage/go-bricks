@@ -508,7 +508,9 @@ type QueryBuilderInterface interface {
 	// non-conflict column, or issue the UPDATE explicitly, where that matters.
 	// When the two values differ, the call was rewriting the
 	// conflict column itself, which no vendor-portable upsert can express — issue
-	// a separate UPDATE instead.
+	// a separate UPDATE instead, in the same transaction as the insert and keyed
+	// on the conflict columns, since splitting one atomic upsert into two
+	// statements otherwise lets a concurrent writer interleave between them.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 
 	// Database function builders
