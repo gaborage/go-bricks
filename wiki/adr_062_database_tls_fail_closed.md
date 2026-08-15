@@ -64,8 +64,10 @@ non-mandatory mode, which R2 rejects regardless.
 
 ## Decision
 
-Validate `database.tls` at startup and reject every shape pgx would discard or
-downgrade. All four fields are `TrimSpace`d once in
+Validate `database.tls` and reject every shape pgx would discard or downgrade —
+at **startup** for static configuration (the root block, named databases, static
+tenants), and at **connection acquisition** for dynamic `DBConfigProvider`
+records, where #1002's seam runs the same checks. All four fields are `TrimSpace`d once in
 `validateVendorSpecificFields` — before the vendor dispatch — so both vendors
 and the downstream DSN builder see canonical values (externally-sourced strings
 carry whitespace until proven otherwise; the write-back seams that already carry

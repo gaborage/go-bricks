@@ -3029,7 +3029,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `DBConfigProvider` record, at connection acquisition. All four TLS fields are
   `TrimSpace`d once at the dispatch seam, and the trim persists into the DSN. **Not** covered: a
   `connectionstring` whose scheme is unrecognized (the dispatch's `default` arm returns nil, so the
-  block stays inert there), and the `tools/migration` CLI, which never calls `config.Validate`.
+  block stays inert there), and the `tools/migration` CLI, which never calls `config.Validate` —
+  its own DSN builder forwards `mode`/`ca` as `sslmode`/`sslrootcert` unvalidated (raw pgx
+  semantics, `connectionstring` source configs included); routing that load path through the
+  shared validation is a deliberate scope cut and tracked follow-up (ADR-062 consequences).
 - gate: match = startup validation now rejects four shapes that previously booted. (1) PG
   `database.tls.mode` outside `disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full` — a typo
   such as `Require` or `verify_full` used to fail at first *connect* with a parse error go-bricks

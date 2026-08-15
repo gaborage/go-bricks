@@ -1242,15 +1242,16 @@ green while doing something other than what was configured: `disable`/`allow`/`p
 validation and died inside `NewConnection` behind go-bricks' deliberate parse-error redaction —
 lazily, at first request, for multi-tenant deployments; a `tls:` block alongside `connectionstring`
 was silently ignored entirely; and Oracle accepted `database.tls.mode`, implying TLS go-ora never
-negotiates. Startup validation — on every path that runs `config.Validate` (root block, named
-databases, static tenants) and, since #1002, on the dynamic seam — now enforces an sslmode allowlist, requires
+negotiates. Validation — at startup on every path that runs `config.Validate` (root block, named
+databases, static tenants) and, since #1002, at connection acquisition on the dynamic seam — now
+enforces an sslmode allowlist, requires
 `require`/`verify-ca`/`verify-full` wherever cert/key/ca are set, rejects the block alongside a
 connection string, and rejects it wholesale on Oracle — with all four fields trimmed once at the
 vendor-dispatch seam.
 
 **Key Benefits:** Every remaining accepted `database.tls` shape does what it says. Failures move
-from a redacted connect-time parse error (or no error at all) to a startup error naming
-`database.tls` and the fix. **Watch:** this is **breaking** — previously-booting configurations now
+from a redacted connect-time parse error (or no error at all) to a validation error naming
+`database.tls` and the fix — at boot for static configs, at acquisition for dynamic records. **Watch:** this is **breaking** — previously-booting configurations now
 abort. A valid mode *without* material stays allowed, `disable` included, and a `connectionstring`
 with ssl parameters embedded remains the escape hatch for pgx-native semantics the rules refuse.
 Not covered: unrecognized-scheme DSNs (the vendor dispatch's `default` arm) and the

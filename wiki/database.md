@@ -334,9 +334,10 @@ encrypted.
 Startup validation rejects every `database.tls` shape pgx would silently discard,
 downgrade, or (for `ca: system`) invert
 ([ADR-062](adr_062_database_tls_fail_closed.md)). All four fields are trimmed
-before the checks run. The rules fire wherever `config.Validate` does — the root `database:`
-block, every named database, every static tenant entry — and, since #1002, on dynamic
-`DBConfigProvider` records too (see "These rules reach dynamic configs too" below).
+before the checks run. The rules fire at startup wherever `config.Validate` does — the root
+`database:` block, every named database, every static tenant entry — and, since #1002, at
+connection acquisition for dynamic `DBConfigProvider` records (see "These rules reach dynamic
+configs too" below).
 
 - **PostgreSQL — `mode` is an allowlist.** `disable`, `allow`, `prefer`, `require`,
   `verify-ca`, `verify-full`, or unset. A misspelled or wrongly-cased value (`Require`,
@@ -359,7 +360,9 @@ block, every named database, every static tenant entry — and, since #1002, on 
 
 Two pgx quirks worth knowing when choosing a mode: `require` plus `ca` behaves as
 `verify-ca` (a documented libpq inheritance), and the sentinel `ca: system` means the OS
-trust store and forces `verify-full` regardless of the configured mode.
+trust store and forces `verify-full` regardless of the configured mode. `require` without
+`ca` provides encryption without server authentication — pair it with `ca`, or use
+`verify-ca`/`verify-full`, wherever the peer's identity matters.
 
 **These rules reach dynamic configs too.** `ApplyDatabasePoolDefaults` runs the same
 vendor-specific validation as `Validate`, so a config a `DBConfigProvider` returns —
