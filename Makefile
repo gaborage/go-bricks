@@ -138,7 +138,8 @@ update: ## Update dependencies to latest versions
 
 # `go clean -cache` empties the MACHINE-WIDE build cache: every checkout and
 # session on this machine pays the rebuild, so keep it out of routine targets
-# (`make mutate` cleans its own dedicated cache instead — scripts/mutatediff/sandbox.go).
+# (`make mutate` manages its own dedicated cache instead, retained until it
+# exceeds MUTATE_GOCACHE_CAP — scripts/mutatediff/sandbox.go).
 clean: ## Clean build cache and test artifacts
 	go clean -cache -testcache
 	rm -f coverage.out coverage-integration.out coverage.html coverage.func

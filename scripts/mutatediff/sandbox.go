@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -62,12 +64,12 @@ type sandbox struct {
 // setupSandbox resolves the machine-specific roots and delegates. Split from
 // setupSandboxAt so the dir/env/sweep logic stays testable on every platform
 // without faking os.UserCacheDir.
-func setupSandbox(out io.Writer) (*sandbox, error) {
+func setupSandbox(ctx context.Context, out io.Writer) (*sandbox, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve user cache dir for the dedicated build cache: %w", err)
 	}
-	return setupSandboxAt(filepath.Join(base, "mutatediff"), os.TempDir(), time.Now(), out)
+	return setupSandboxAt(ctx, filepath.Join(base, "mutatediff"), os.TempDir(), time.Now(), out)
 }
 
 // setupSandboxAt creates both roots and pins them on this process's
@@ -75,7 +77,11 @@ func setupSandbox(out io.Writer) (*sandbox, error) {
 // uses, and for the same reason: measureSuite's warming passes and the
 // engine's coverage read must land in one cache, or the measured baseline is
 // a lie.
-func setupSandboxAt(cacheBase, sysTmp string, now time.Time, out io.Writer) (*sandbox, error) {
+func setupSandboxAt(ctx context.Context, cacheBase, sysTmp string, now time.Time, out io.Writer) (*sandbox, error) {
+	// A canceled run must not begin a lifecycle it would immediately abandon.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	gocache := filepath.Join(cacheBase, "gocache")
 	if err := os.MkdirAll(gocache, 0o750); err != nil {
 		return nil, fmt.Errorf("create dedicated build cache: %w", err)
@@ -97,27 +103,31 @@ func setupSandboxAt(cacheBase, sysTmp string, now time.Time, out io.Writer) (*sa
 	return &sandbox{gocache: gocache, runTmp: runTmp, capBytes: gocacheCap()}, nil
 }
 
-// cleanup releases what the run created. Deferred in run, so it fires on
+// cleanup releases what the run created and reports what it could not: a
+// gate whose cleanup failed must not exit clean, or the debris this sandbox
+// exists to prevent comes back silently. Deferred in run, so it fires on
 // failures the same as on passes; only SIGKILL skips it, and the startup
 // sweep covers that. The cap wipe assumes gate runs on one machine do not
 // overlap — they are serialized locally by convention, and the shared cache
 // is not safe to wipe under a concurrent run.
-func (s *sandbox) cleanup(out io.Writer) {
+func (s *sandbox) cleanup(out io.Writer) error {
+	var errs []error
 	if err := os.RemoveAll(s.runTmp); err != nil {
-		fmt.Fprintf(out, "WARN: could not remove temp root %s: %v\n", s.runTmp, err)
+		errs = append(errs, fmt.Errorf("remove temp root: %w", err))
 	}
 	if s.capBytes <= 0 {
-		return
+		return errors.Join(errs...)
 	}
 	size := dirSize(s.gocache)
 	if size <= s.capBytes {
 		fmt.Fprintf(out, "mutatediff: build cache %s within its %s cap\n", formatMiB(size), formatMiB(s.capBytes))
-		return
+		return errors.Join(errs...)
 	}
 	fmt.Fprintf(out, "mutatediff: build cache %s exceeds its %s cap — wiping %s\n", formatMiB(size), formatMiB(s.capBytes), s.gocache)
 	if err := os.RemoveAll(s.gocache); err != nil {
-		fmt.Fprintf(out, "WARN: could not wipe build cache: %v\n", err)
+		errs = append(errs, fmt.Errorf("wipe build cache: %w", err))
 	}
+	return errors.Join(errs...)
 }
 
 // gocacheCap reads the cap in MiB and returns bytes. Unset or unparsable

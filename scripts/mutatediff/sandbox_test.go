@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -99,7 +101,7 @@ func TestSandboxCleanup(t *testing.T) {
 
 			var out strings.Builder
 			s := &sandbox{gocache: gocache, runTmp: runTmp, capBytes: tt.capBytes}
-			s.cleanup(&out)
+			require.NoError(t, s.cleanup(&out))
 
 			assert.NoDirExists(t, runTmp)
 			if tt.wantCacheWiped {
@@ -130,7 +132,7 @@ func TestSetupSandboxAtPinsEnvAndCreatesRoots(t *testing.T) {
 	require.NoError(t, os.Chtimes(stale, old, old))
 
 	var out strings.Builder
-	s, err := setupSandboxAt(cacheBase, sysTmp, now, &out)
+	s, err := setupSandboxAt(context.Background(), cacheBase, sysTmp, now, &out)
 	require.NoError(t, err)
 
 	wantCache := filepath.Join(cacheBase, "gocache")
@@ -145,4 +147,36 @@ func TestSetupSandboxAtPinsEnvAndCreatesRoots(t *testing.T) {
 	assert.Equal(t, gocacheCap(), s.capBytes)
 	assert.NoDirExists(t, stale)
 	assert.Contains(t, out.String(), "sandboxed build cache")
+}
+
+func TestSetupSandboxAtCanceledContextCreatesNothing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cacheBase := filepath.Join(t.TempDir(), "cachebase")
+
+	var out strings.Builder
+	s, err := setupSandboxAt(ctx, cacheBase, t.TempDir(), time.Now(), &out)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, s)
+	assert.NoDirExists(t, cacheBase)
+}
+
+func TestSandboxCleanupReportsRemovalFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only parent does not block removal on Windows")
+	}
+	parent := t.TempDir()
+	runTmp := filepath.Join(parent, "run")
+	require.NoError(t, os.Mkdir(runTmp, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(runTmp, "scratch"), []byte("x"), 0o600))
+	require.NoError(t, os.Chmod(parent, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o750) })
+
+	var out strings.Builder
+	s := &sandbox{gocache: t.TempDir(), runTmp: runTmp, capBytes: 0}
+	err := s.cleanup(&out)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "remove temp root")
 }
