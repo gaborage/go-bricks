@@ -20,10 +20,21 @@ import (
 // secondConsumerName is the second member of a two-declaration fan-out.
 const secondConsumerName = testConsumerName + "-2"
 
+// secondTestStream is the second target of a two-declaration publisher fan-out.
+const secondTestStream = "shipments"
+
 // errStartAttempted marks a consumer start that should never have been reached.
 var errStartAttempted = errors.New("consumer start attempted")
 
 func failingStart(*consumerDeclaration) error { return errStartAttempted }
+
+// errBindAttempted marks a publisher bind that should never have been reached.
+var errBindAttempted = errors.New("publisher bind attempted")
+
+func failingBind(*publisherDeclaration) error { return errBindAttempted }
+
+// errProducerConstruction is the client constructor's failure, faked.
+var errProducerConstruction = errors.New("producer construction failed")
 
 // fakeHandle stands in for *ha.ReliableConsumer so shutdown bookkeeping is
 // testable without a broker.
@@ -33,6 +44,9 @@ type fakeHandle struct {
 	status   int
 	closeErr error
 	storeErr error
+	// onClose records the close in an order shared with other fakes, so the
+	// shutdown SEQUENCE is assertable and not only its outcome.
+	onClose func()
 }
 
 func (f *fakeHandle) StoreCustomOffset(offset int64) error {
@@ -47,9 +61,14 @@ func (f *fakeHandle) StoreCustomOffset(offset int64) error {
 
 func (f *fakeHandle) Close() error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.events = append(f.events, "close")
-	return f.closeErr
+	closeErr, onClose := f.closeErr, f.onClose
+	f.mu.Unlock()
+
+	if onClose != nil {
+		onClose()
+	}
+	return closeErr
 }
 
 func (f *fakeHandle) GetStatus() int {
@@ -70,12 +89,13 @@ const unreachableTestURI = "rabbitmq-stream://guest:guest@127.0.0.1:1/%2f"
 // The shutdown and unwind warnings, verbatim. Tests assert on them so a guard
 // that stops distinguishing success from failure fails here.
 const (
-	msgFlushFailed         = "Failed to flush stream offset on shutdown"
-	msgCloseConsumerFailed = "Failed to close stream consumer"
-	msgCloseEnvFailed      = "Failed to close stream environment after a failed start"
-	msgOffsetStoreFailed   = "Failed to store stream offset"
-	msgOffsetQueryFailed   = "Could not query the stored stream offset; attaching at a position that replays rather than skips"
-	msgFlushSkipped        = "Shutdown offset flush budget spent; offset not committed - handled messages will replay"
+	msgFlushFailed          = "Failed to flush stream offset on shutdown"
+	msgCloseConsumerFailed  = "Failed to close stream consumer"
+	msgCloseEnvFailed       = "Failed to close stream environment after a failed start"
+	msgOffsetStoreFailed    = "Failed to store stream offset"
+	msgOffsetQueryFailed    = "Could not query the stored stream offset; attaching at a position that replays rather than skips"
+	msgFlushSkipped         = "Shutdown offset flush budget spent; offset not committed - handled messages will replay"
+	msgClosePublisherFailed = "Failed to close stream publisher"
 )
 
 // recordingLogger captures each event's level, attached error and terminal
@@ -445,6 +465,7 @@ func TestManagerStartupAbortsOnACanceledContext(t *testing.T) {
 	decls.DeclareStream(testStream, nil)
 	decls.DeclareSuperStream(testSuperStream, 2, nil)
 	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
 
 	tests := []struct {
 		name      string
@@ -460,6 +481,16 @@ func TestManagerStartupAbortsOnACanceledContext(t *testing.T) {
 			name:      "super_streams",
 			phase:     func(m *Manager, ctx context.Context) error { return m.declareSuperStreams(ctx, nil, decls) },
 			wantPhase: `declaring super stream "` + testSuperStream + `"`,
+		},
+		{
+			// Same shape as the consumer case below: the binder fails loudly, so a
+			// guard that let the loop reach it would surface errBindAttempted here
+			// instead of the cancellation.
+			name: "publishers",
+			phase: func(_ *Manager, ctx context.Context) error {
+				return bindPublishers(ctx, decls.publishers, failingBind)
+			},
+			wantPhase: `binding the publisher on stream "` + testStream + `"`,
 		},
 		{
 			// The starter fails loudly, so a guard that let the loop reach it would
@@ -1110,4 +1141,288 @@ func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {
 	require.NoError(t, m.closeEnvLocked())
 	require.NoError(t, m.closeEnvLocked())
 	assert.Nil(t, m.env)
+}
+
+// attachPublisher wires a fake producer into a manager as if Start had bound it.
+func attachPublisher(m *Manager, handle *fakeProducer) *Publisher {
+	return rebindPublisher(m, newPublisher(testStream), handle)
+}
+
+// rebindPublisher binds an EXISTING publisher to a new producer, which is what a
+// second Manager.Start does to the handle a module has held since declaration.
+func rebindPublisher(m *Manager, p *Publisher, handle *fakeProducer) *Publisher {
+	p.bind(handle)
+	m.publishers = append(m.publishers, p)
+	m.started = true
+	return p
+}
+
+// twoPublishers declares a pair so the fan-out has a second iteration to reach —
+// with one declaration, stopping early and running to completion look identical.
+func twoPublishers(t *testing.T) *Declarations {
+	t.Helper()
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareStream(secondTestStream, nil)
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	decls.DeclarePublisher(&PublisherOptions{Stream: secondTestStream})
+	return decls
+}
+
+// TestBindPublishersBindsEveryDeclaration pins that a live context does not
+// short-circuit the fan-out: every declaration is bound, in order.
+func TestBindPublishersBindsEveryDeclaration(t *testing.T) {
+	decls := twoPublishers(t)
+
+	var bound []string
+	err := bindPublishers(context.Background(), decls.publishers, func(decl *publisherDeclaration) error {
+		bound = append(bound, decl.Stream)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{testStream, secondTestStream}, bound,
+		"a live context binds every publisher, not just the first")
+}
+
+// TestBindPublishersAbortsWhenCanceledDuringABind pins the gap a check only at
+// the top of the loop leaves: a bind is a blocking dial, so the cancellation can
+// land while it is in flight and the bind still succeeds. For a publisher-only
+// service nothing downstream would notice — startConsumers checks ctx inside a
+// loop body that never runs with no consumers declared — so Start would come up
+// green for a caller that had already given up.
+func TestBindPublishersAbortsWhenCanceledDuringABind(t *testing.T) {
+	tests := []struct {
+		name       string
+		publishers []*publisherDeclaration
+	}{
+		{
+			// The regression proper. With nothing queued behind it, a cancellation
+			// during the LAST bind has no later iteration to be caught by: the loop
+			// would return nil, and a publisher-only Start would then set started and
+			// come up green for a caller that had already given up.
+			name:       "canceled_during_the_only_bind",
+			publishers: onePublisher(t).publishers,
+		},
+		{
+			// With a declaration still to come the fan-out stops too, and the error
+			// names the bind that completed rather than the one never attempted.
+			name:       "canceled_during_an_earlier_bind",
+			publishers: twoPublishers(t).publishers,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			var bound []string
+			err := bindPublishers(ctx, tt.publishers, func(decl *publisherDeclaration) error {
+				bound = append(bound, decl.Stream)
+				cancel() // the caller gives up while this bind is in flight
+				return nil
+			})
+
+			require.ErrorIs(t, err, context.Canceled)
+			assert.Contains(t, err.Error(), `after binding the publisher on stream "`+testStream+`"`,
+				"the cancellation is reported against the bind that completed")
+			assert.Equal(t, []string{testStream}, bound, "nothing is bound after the caller gave up")
+		})
+	}
+}
+
+// TestBindPublishersStopsAtTheFirstFailure pins the other half: a bind that fails
+// reaches the caller unchanged — Start turns it into an aborted startup — and the
+// declarations behind it are never attempted.
+func TestBindPublishersStopsAtTheFirstFailure(t *testing.T) {
+	decls := twoPublishers(t)
+
+	var attempted []string
+	err := bindPublishers(context.Background(), decls.publishers, func(decl *publisherDeclaration) error {
+		attempted = append(attempted, decl.Stream)
+		return errBindAttempted
+	})
+
+	require.ErrorIs(t, err, errBindAttempted)
+	assert.Equal(t, []string{testStream}, attempted, "the fan-out stops at the first failure")
+}
+
+// TestManagerBindPublisherWrapsAConstructionFailure exercises the vendor
+// constructor's failure path through the producerFactory seam: it dials, so this
+// is the only way a broker-free test can reach it.
+func TestManagerBindPublisherWrapsAConstructionFailure(t *testing.T) {
+	m := testManager(t)
+	m.newProducer = func(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
+		return nil, errProducerConstruction
+	}
+	decl := onePublisherDeclaration(t)
+
+	err := m.bindPublisher(nil, decl)
+
+	require.ErrorIs(t, err, errProducerConstruction, "the client's own cause reaches the caller")
+	assert.Contains(t, err.Error(), `failed to start the publisher on stream "`+testStream+`"`)
+	assert.Empty(t, m.publishers, "a publisher that could not be constructed is not tracked")
+	assert.ErrorIs(t, decl.Publisher.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}),
+		ErrPublisherNotStarted, "and its handle stays unbound")
+}
+
+// TestManagerBindPublisherTracksAConstructedProducer is the success half: the
+// producer is built for the declared stream, wired to that publisher's own
+// confirmation handler, bound, and tracked.
+func TestManagerBindPublisherTracksAConstructedProducer(t *testing.T) {
+	m := testManager(t)
+	handle := openProducer()
+	var gotStream string
+	var gotConfirmed ha.ConfirmMessageHandler
+	m.newProducer = func(_ *stream.Environment, streamName string, confirmed ha.ConfirmMessageHandler) (producerHandle, error) {
+		gotStream, gotConfirmed = streamName, confirmed
+		return handle, nil
+	}
+	decl := onePublisherDeclaration(t)
+
+	require.NoError(t, m.bindPublisher(nil, decl))
+
+	assert.Equal(t, testStream, gotStream, "the producer is built for the declared stream")
+	require.NotNil(t, gotConfirmed, "the client is given a confirmation handler")
+	assert.Equal(t, []*Publisher{decl.Publisher}, m.publishers)
+	assert.Equal(t, ha.StatusOpen, decl.Publisher.status(), "the handle is bound to the new producer")
+}
+
+// onePublisher declares a single publisher — the shape where a cancellation
+// during its bind has no later iteration to be caught by.
+func onePublisher(t *testing.T) *Declarations {
+	t.Helper()
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	return decls
+}
+
+// onePublisherDeclaration builds a single declared publisher for the bind tests.
+func onePublisherDeclaration(t *testing.T) *publisherDeclaration {
+	t.Helper()
+	decls := onePublisher(t)
+	require.Len(t, decls.publishers, 1)
+	return decls.publishers[0]
+}
+
+// TestManagerStopClosesPublishersAfterConsumers pins the shutdown order. A
+// consumer handler may publish on its way out, so the producers have to outlive
+// the consumers rather than the other way round.
+func TestManagerStopClosesPublishersAfterConsumers(t *testing.T) {
+	m := testManager(t)
+
+	var order []string
+	consumer := &fakeHandle{status: ha.StatusOpen, onClose: func() { order = append(order, "consumer") }}
+	attach(m, consumer, newOffsetTracker(1000, time.Hour, nil))
+	producer := openProducer()
+	producer.onClose = func() { order = append(order, "publisher") }
+	attachPublisher(m, producer)
+
+	m.StopConsumers()
+
+	assert.Equal(t, []string{"consumer", "publisher"}, order)
+	assert.Empty(t, m.publishers)
+	assert.False(t, m.started)
+}
+
+// TestManagerStopFailsAnInFlightPublish is why the close sweep is mandatory: this
+// publish has no deadline of its own, and its send never returned, so without the
+// sweep the caller would hang for the whole shutdown.
+func TestManagerStopFailsAnInFlightPublish(t *testing.T) {
+	m := testManager(t)
+	producer := blockingProducer(t)
+	p := attachPublisher(m, producer)
+
+	done := publishAsync(context.Background(), p, &PublishMessage{Data: []byte(testBody)})
+	waitForSend(t, producer)
+
+	m.StopConsumers()
+
+	require.ErrorIs(t, <-done, ErrPublisherClosed)
+	assert.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}), ErrPublisherClosed,
+		"the publisher stays closed for late callers")
+}
+
+func TestManagerStopReportsAPublisherCloseFailure(t *testing.T) {
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	producer := openProducer()
+	producer.closeErr = errors.New("close failed")
+	attachPublisher(m, producer)
+
+	assert.NotPanics(t, m.StopConsumers)
+
+	assert.Equal(t, []string{msgClosePublisherFailed}, log.warnMessages())
+	closeErr, ok := log.warnError(msgClosePublisherFailed)
+	require.True(t, ok)
+	assert.Equal(t, "close failed", closeErr)
+}
+
+func TestManagerStopIsSilentOnACleanPublisherClose(t *testing.T) {
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	attachPublisher(m, openProducer())
+
+	m.StopConsumers()
+
+	assert.Empty(t, log.warnMessages(), "a clean publisher close reports nothing to the operator")
+}
+
+// TestManagerReadyRequiresEveryPublisher extends readiness to the publish side: a
+// producer that is reconnecting cannot publish, so the probe must say so.
+func TestManagerReadyRequiresEveryPublisher(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		want   bool
+	}{
+		{name: "open_publisher_is_ready", status: ha.StatusOpen, want: true},
+		{name: "reconnecting_publisher_is_not_ready", status: ha.StatusReconnecting, want: false},
+		{name: "closed_publisher_is_not_ready", status: ha.StatusClosed, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := testManager(t)
+			attachPublisher(m, &fakeProducer{status: tt.status})
+
+			assert.Equal(t, tt.want, m.Ready())
+		})
+	}
+}
+
+func TestManagerStatsCountsPublishers(t *testing.T) {
+	m := testManager(t)
+	attachPublisher(m, openProducer())
+
+	stats := m.Stats()
+
+	assert.Equal(t, 1, stats["publishers"])
+	assert.Equal(t, 0, stats["consumers"])
+	assert.Equal(t, true, stats["ready"])
+}
+
+// TestManagerRebindRevivesAPublisherAfterAStopCycle covers the Start → Close →
+// Start cycle Manager.Start allows: its guard is the environment, which Close
+// nils, and consumers survive it because each Start rebuilds them. A publisher
+// cannot be rebuilt — the module holds the same handle from declaration onwards —
+// so the rebind has to reopen it or the second Start comes up publishing nothing.
+func TestManagerRebindRevivesAPublisherAfterAStopCycle(t *testing.T) {
+	m := testManager(t)
+	first := openProducer()
+	p := attachPublisher(m, first)
+
+	m.StopConsumers()
+
+	require.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}), ErrPublisherClosed)
+	assert.False(t, m.Ready(), "a stopped manager is not ready")
+
+	second := openProducer()
+	rebindPublisher(m, p, second)
+
+	assert.True(t, m.Ready(), "the second start comes up ready")
+	publishConfirmed(t, p, second, &PublishMessage{Data: []byte(testBody)})
+	assert.Zero(t, first.sentCount(), "the revived publisher sends through the new producer, not the disposed one")
 }

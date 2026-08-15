@@ -38,6 +38,13 @@ type consumerKey struct {
 	Name   string
 }
 
+// publisherDeclaration is one declared publisher and the handle its declaring
+// module holds. Manager.Start binds the handle to a client producer.
+type publisherDeclaration struct {
+	Stream    string
+	Publisher *Publisher
+}
+
 // Stats summarizes a declaration store.
 type Stats struct {
 	// Streams counts every declared stream, super streams included.
@@ -46,6 +53,8 @@ type Stats struct {
 	SuperStreams int
 	// Consumers counts every declared consumer, of either kind.
 	Consumers int
+	// Publishers counts every declared publisher.
+	Publishers int
 }
 
 // Declarations collects the stream infrastructure and consumers a set of modules
@@ -57,6 +66,8 @@ type Declarations struct {
 	superStreamIndex map[string]*superStreamDeclaration
 	consumers        []*consumerDeclaration
 	consumerIndex    map[consumerKey]*consumerDeclaration
+	publishers       []*publisherDeclaration
+	publisherIndex   map[string]*publisherDeclaration
 	conflicts        []error
 }
 
@@ -66,6 +77,7 @@ func NewDeclarations() *Declarations {
 		streamIndex:      make(map[string]*streamDeclaration),
 		superStreamIndex: make(map[string]*superStreamDeclaration),
 		consumerIndex:    make(map[consumerKey]*consumerDeclaration),
+		publisherIndex:   make(map[string]*publisherDeclaration),
 	}
 }
 
@@ -121,7 +133,7 @@ func (d *Declarations) DeclareSuperStream(name string, partitions int, spec *Str
 // offset group inside one process.
 func (d *Declarations) DeclareConsumer(opts *ConsumerOptions) {
 	if opts == nil {
-		panic(nilConsumerPanic("DeclareConsumer", "ConsumerOptions"))
+		panic(nilDeclarationPanic("consumer", "DeclareConsumer", "ConsumerOptions"))
 	}
 
 	d.registerConsumer(&consumerDeclaration{
@@ -140,7 +152,7 @@ func (d *Declarations) DeclareConsumer(opts *ConsumerOptions) {
 // SuperStreamConsumerOptions for why the choice is not the caller's.
 func (d *Declarations) DeclareSuperStreamConsumer(opts *SuperStreamConsumerOptions) {
 	if opts == nil {
-		panic(nilConsumerPanic("DeclareSuperStreamConsumer", "SuperStreamConsumerOptions"))
+		panic(nilDeclarationPanic("consumer", "DeclareSuperStreamConsumer", "SuperStreamConsumerOptions"))
 	}
 
 	d.registerConsumer(&consumerDeclaration{
@@ -175,25 +187,74 @@ func (d *Declarations) registerConsumer(decl *consumerDeclaration) {
 	d.consumers = append(d.consumers, decl)
 }
 
-// nilConsumerPanic renders the nil-declaration panic for one declare method.
-func nilConsumerPanic(method, optionsType string) string {
-	return fmt.Sprintf("streams: nil consumer declaration detected\n"+
-		"  %s requires a non-nil *%s\n"+
-		"  Pass &streams.%s{...} at every %s call within DeclareStreams",
-		method, optionsType, optionsType, method)
+// PublisherOptions declares one plain-stream publisher.
+type PublisherOptions struct {
+	// Stream is the stream to publish to; it must be declared in the same Declarations.
+	Stream string
 }
 
-// Validate reports every problem in the store at once.
+// DeclarePublisher registers a publisher on a plain stream and returns the handle
+// to publish through. The handle is inert until Manager.Start binds it.
+//
+// Panics on a nil options pointer, and if the same stream already has a
+// publisher. Both are programming errors: a nil declaration would publish
+// nowhere, and one publisher per target per process is the same contract the
+// consumer side enforces — a second one is a wiring mistake, not a fan-out.
+func (d *Declarations) DeclarePublisher(opts *PublisherOptions) *Publisher {
+	if opts == nil {
+		panic(nilDeclarationPanic("publisher", "DeclarePublisher", "PublisherOptions"))
+	}
+
+	if _, exists := d.publisherIndex[opts.Stream]; exists {
+		panic(fmt.Sprintf(
+			"streams: duplicate publisher declaration detected\n"+
+				"  stream=%s\n"+
+				"  Ensure each DeclarePublisher call is unique within DeclareStreams",
+			opts.Stream,
+		))
+	}
+
+	decl := &publisherDeclaration{Stream: opts.Stream, Publisher: newPublisher(opts.Stream)}
+	d.publisherIndex[opts.Stream] = decl
+	d.publishers = append(d.publishers, decl)
+	return decl.Publisher
+}
+
+// nilDeclarationPanic renders the nil-declaration panic for one declare method.
+func nilDeclarationPanic(kind, method, optionsType string) string {
+	return fmt.Sprintf("streams: nil %s declaration detected\n"+
+		"  %s requires a non-nil *%s\n"+
+		"  Pass &streams.%s{...} at every %s call within DeclareStreams",
+		kind, method, optionsType, optionsType, method)
+}
+
+// Validate reports every problem in the store at once. Each declaration kind
+// contributes its own errors, in declaration order, so a caller sees the whole
+// picture rather than the first thing that went wrong.
 func (d *Declarations) Validate() error {
 	errs := append([]error(nil), d.conflicts...)
+	errs = append(errs, d.streamErrors()...)
+	errs = append(errs, d.superStreamErrors()...)
+	errs = append(errs, d.consumerErrors()...)
+	errs = append(errs, d.publisherErrors()...)
+	return errors.Join(errs...)
+}
 
+// streamErrors reports every problem with the declared plain streams.
+func (d *Declarations) streamErrors() []error {
+	var errs []error
 	for _, s := range d.streams {
 		if s.Name == "" {
 			errs = append(errs, errors.New("stream declaration has an empty name"))
 		}
 		errs = append(errs, negativeRetentionErrors("stream", s.Name, s.Spec)...)
 	}
+	return errs
+}
 
+// superStreamErrors reports every problem with the declared super streams.
+func (d *Declarations) superStreamErrors() []error {
+	var errs []error
 	for _, s := range d.superStreams {
 		if s.Name == "" {
 			errs = append(errs, errors.New("super stream declaration has an empty name"))
@@ -206,7 +267,12 @@ func (d *Declarations) Validate() error {
 		}
 		errs = append(errs, negativeRetentionErrors("super stream", s.Name, s.Spec)...)
 	}
+	return errs
+}
 
+// consumerErrors reports every problem with the declared consumers.
+func (d *Declarations) consumerErrors() []error {
+	var errs []error
 	for _, c := range d.consumers {
 		if c.Name == "" {
 			errs = append(errs, fmt.Errorf("consumer on stream %q has an empty name; a name is required for offset tracking", c.Stream))
@@ -218,8 +284,35 @@ func (d *Declarations) Validate() error {
 			errs = append(errs, err)
 		}
 	}
+	return errs
+}
 
-	return errors.Join(errs...)
+// publisherErrors reports every problem with the declared publishers.
+func (d *Declarations) publisherErrors() []error {
+	var errs []error
+	for _, p := range d.publishers {
+		if p.Stream == "" {
+			errs = append(errs, errors.New("publisher declaration has an empty stream name"))
+			continue
+		}
+		if err := d.publisherTargetError(p); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+// publisherTargetError checks that a publisher's target was declared, and
+// declared as a plain stream. A super stream is reached through a different
+// client API, so publishing to one as if it were plain cannot work.
+func (d *Declarations) publisherTargetError(p *publisherDeclaration) error {
+	if _, ok := d.streamIndex[p.Stream]; ok {
+		return nil
+	}
+	if _, ok := d.superStreamIndex[p.Stream]; ok {
+		return fmt.Errorf("publisher publishes to %q as a plain stream, but it is declared as a super stream", p.Stream)
+	}
+	return fmt.Errorf("publisher references undeclared stream %q", p.Stream)
 }
 
 // consumerTargetError checks that a consumer's target was declared, and declared
@@ -263,7 +356,8 @@ func negativeRetentionErrors(kind, name string, spec StreamSpec) []error {
 
 // IsEmpty reports whether nothing was declared.
 func (d *Declarations) IsEmpty() bool {
-	return len(d.streams) == 0 && len(d.superStreams) == 0 && len(d.consumers) == 0
+	return len(d.streams) == 0 && len(d.superStreams) == 0 &&
+		len(d.consumers) == 0 && len(d.publishers) == 0
 }
 
 // Stats returns the declaration counts.
@@ -272,5 +366,6 @@ func (d *Declarations) Stats() Stats {
 		Streams:      len(d.streams) + len(d.superStreams),
 		SuperStreams: len(d.superStreams),
 		Consumers:    len(d.consumers),
+		Publishers:   len(d.publishers),
 	}
 }

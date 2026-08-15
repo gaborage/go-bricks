@@ -609,3 +609,79 @@ func assertAttributeAbsent(t *testing.T, attrs []attribute.KeyValue, key string)
 		}
 	}
 }
+
+func TestRecordStreamPublishSuccess(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	defer func() {
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}()
+	otel.SetMeterProvider(mp)
+
+	resetMeterForTesting()
+	initAMQPMeter()
+
+	RecordStreamPublish(context.Background(), testStreamName, 12*time.Millisecond, nil)
+
+	rm := mp.Collect(t)
+
+	obtest.AssertMetricExists(t, rm, metricOperationDuration)
+	durationMetric := obtest.FindMetric(rm, metricOperationDuration)
+	require.NotNil(t, durationMetric)
+
+	histData := durationMetric.Data.(metricdata.Histogram[float64])
+	require.NotEmpty(t, histData.DataPoints)
+	attrs := histData.DataPoints[0].Attributes.ToSlice()
+
+	assertHasAttribute(t, attrs, attrMessagingSystem, messagingSystemRabbitMQ)
+	assertHasAttribute(t, attrs, attrMessagingOperation, operationPublish)
+	assertHasAttribute(t, attrs, attrMessagingDestination, testStreamName)
+	assertAttributeAbsent(t, attrs, attrErrorType)
+	// The stream protocol has no exchange and no routing key to attribute.
+	assertAttributeAbsent(t, attrs, attrMessagingRabbitMQExchange)
+	assertAttributeAbsent(t, attrs, attrMessagingRabbitMQRoutingKey)
+
+	obtest.AssertMetricValue(t, rm, metricMessagesSent, int64(1))
+}
+
+// TestRecordStreamPublishFailureIsNotCounted mirrors the AMQP lane: a publish that
+// failed is timed but never counted as sent.
+func TestRecordStreamPublishFailureIsNotCounted(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	defer func() {
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}()
+	otel.SetMeterProvider(mp)
+
+	resetMeterForTesting()
+	initAMQPMeter()
+
+	RecordStreamPublish(context.Background(), testStreamName, 7*time.Millisecond, errors.New("not confirmed"))
+
+	rm := mp.Collect(t)
+
+	durationMetric := obtest.FindMetric(rm, metricOperationDuration)
+	require.NotNil(t, durationMetric)
+	histData := durationMetric.Data.(metricdata.Histogram[float64])
+	require.NotEmpty(t, histData.DataPoints)
+	assertHasAttribute(t, histData.DataPoints[0].Attributes.ToSlice(), attrErrorType, "*errors.errorString")
+
+	assert.Nil(t, obtest.FindMetric(rm, metricMessagesSent), "an unconfirmed publish is never counted as sent")
+}
+
+func TestRecordStreamPublishZeroDurationSkipsHistogram(t *testing.T) {
+	mp := obtest.NewTestMeterProvider()
+	defer func() {
+		require.NoError(t, mp.Shutdown(context.Background()))
+	}()
+	otel.SetMeterProvider(mp)
+
+	resetMeterForTesting()
+	initAMQPMeter()
+
+	RecordStreamPublish(context.Background(), testStreamName, 0, nil)
+
+	rm := mp.Collect(t)
+
+	assert.Nil(t, obtest.FindMetric(rm, metricOperationDuration), "zero duration records no histogram sample")
+	obtest.AssertMetricValue(t, rm, metricMessagesSent, int64(1))
+}

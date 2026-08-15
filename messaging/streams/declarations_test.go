@@ -563,3 +563,118 @@ func TestValidateAggregatesEveryProblem(t *testing.T) {
 	assert.Contains(t, err.Error(), "has a nil handler")
 	assert.Contains(t, err.Error(), `references undeclared stream "ghost"`)
 }
+
+func TestDeclarePublisherReturnsAnUnboundHandle(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareStream(testStream, nil)
+
+	p := d.DeclarePublisher(&PublisherOptions{Stream: testStream})
+
+	require.NotNil(t, p)
+	assert.Equal(t, testStream, p.stream)
+	assert.False(t, p.super)
+	// IsEmpty is what app/ gates the "streams declared but not configured" startup
+	// failure on, so a publisher-only service has to make it false.
+	assert.False(t, d.IsEmpty())
+	assert.Equal(t, Stats{Streams: 1, Publishers: 1}, d.Stats())
+	require.NoError(t, d.Validate())
+	assert.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte("x")}), ErrPublisherNotStarted,
+		"the handle stays inert until Manager.Start binds it")
+}
+
+func TestDeclarePublisherNilPanics(t *testing.T) {
+	d := NewDeclarations()
+
+	assert.PanicsWithValue(t,
+		"streams: nil publisher declaration detected\n"+
+			"  DeclarePublisher requires a non-nil *PublisherOptions\n"+
+			"  Pass &streams.PublisherOptions{...} at every DeclarePublisher call within DeclareStreams",
+		func() { d.DeclarePublisher(nil) })
+
+	assert.True(t, d.IsEmpty(), "the rejected declaration is not stored")
+}
+
+func TestDeclarePublisherDuplicatePanics(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareStream(testStream, nil)
+	d.DeclarePublisher(&PublisherOptions{Stream: testStream})
+
+	assert.PanicsWithValue(t,
+		"streams: duplicate publisher declaration detected\n"+
+			"  stream=orders\n"+
+			"  Ensure each DeclarePublisher call is unique within DeclareStreams",
+		func() { d.DeclarePublisher(&PublisherOptions{Stream: testStream}) })
+
+	assert.Equal(t, 1, d.Stats().Publishers, "the rejected declaration is not stored")
+}
+
+func TestDeclarePublisherOnADifferentStreamIsAllowed(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareStream(testStream, nil)
+	d.DeclareStream("shipments", nil)
+
+	first := d.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	second := d.DeclarePublisher(&PublisherOptions{Stream: "shipments"})
+
+	assert.NotSame(t, first, second, "each target gets its own publisher")
+	assert.Equal(t, Stats{Streams: 2, Publishers: 2}, d.Stats())
+	require.NoError(t, d.Validate())
+}
+
+// TestValidateRejectsAMisdirectedPublisher pins the publisher's target rules: the
+// target has to exist, and it has to be a plain stream — a super stream is reached
+// through a different client API entirely.
+func TestValidateRejectsAMisdirectedPublisher(t *testing.T) {
+	tests := []struct {
+		name    string
+		declare func(d *Declarations)
+		target  string
+		wantErr string
+	}{
+		{
+			name:    "undeclared_target",
+			declare: func(*Declarations) {},
+			target:  "ghost",
+			wantErr: `publisher references undeclared stream "ghost"`,
+		},
+		{
+			name:    "super_stream_target",
+			declare: func(d *Declarations) { d.DeclareSuperStream(testSuperStream, testPartitions, nil) },
+			target:  testSuperStream,
+			wantErr: "but it is declared as a super stream",
+		},
+		{
+			name:    "empty_target",
+			declare: func(*Declarations) {},
+			target:  "",
+			wantErr: "publisher declaration has an empty stream name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			tt.declare(d)
+			d.DeclarePublisher(&PublisherOptions{Stream: tt.target})
+
+			err := d.Validate()
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestValidateReportsAnEmptyPublisherTargetOnce is the reason the empty-name check
+// stops there: reporting an unnamed stream as "undeclared" as well would tell the
+// operator to declare a stream called "".
+func TestValidateReportsAnEmptyPublisherTargetOnce(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclarePublisher(&PublisherOptions{Stream: ""})
+
+	err := d.Validate()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "publisher declaration has an empty stream name")
+	assert.NotContains(t, err.Error(), "references undeclared stream")
+}
