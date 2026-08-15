@@ -122,12 +122,10 @@ go-bricks passes that DSN through untouched.
 - Rules R1–R4 fire wherever `validateVendorSpecificFields` runs: the primary
   database, every named database, and every static tenant entry. They do **not**
   reach a config that never passes through `config.Validate`.
-- **Dynamic `DBConfigProvider` records are not covered yet.**
-  `DbManager.createConnection` applies only `ApplyDatabasePoolDefaults`, which
-  never calls the vendor gate — a provider-returned config with `prefer` plus
-  cert/key connects ungated and untrimmed. Open PR #1002 routes exactly that
-  seam through `validateVendorSpecificFields`; these rules cover dynamic
-  records the moment it lands.
+- **Dynamic `DBConfigProvider` records are covered since PR #1002 merged.**
+  `ApplyDatabasePoolDefaults` routes every dynamic config through
+  `validateVendorSpecificFields` (atom C59.6), so R1–R5 and the trim fire on
+  that seam too — at connection acquisition rather than at boot.
 - **Unrecognized-scheme DSNs are not covered.** `validateVendorSpecificFields`
   dispatches on `cfg.Type`, and its `default` arm returns nil. A connection
   string whose scheme is unrecognized — legal for deployments supplying

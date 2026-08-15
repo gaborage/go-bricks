@@ -3024,13 +3024,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   validation error, and the decisive check is booting each environment.
 - scope: `config/validation.go` only (`validateVendorSpecificFields` and the two vendor functions it
   dispatches to), so the rules run wherever `config.Validate` does: the root `database:` block, every
-  `databases.*` entry, and every static `multitenant.tenants.*` entry. All four TLS fields are
+  `databases.*` entry, and every static `multitenant.tenants.*` entry — and, since #1002 (C59.6),
+  the dynamic seam too: `ApplyDatabasePoolDefaults` runs the same vendor validation on every
+  `DBConfigProvider` record, at connection acquisition. All four TLS fields are
   `TrimSpace`d once at the dispatch seam, and the trim persists into the DSN. **Not** covered: a
   `connectionstring` whose scheme is unrecognized (the dispatch's `default` arm returns nil, so the
-  block stays inert there); the `tools/migration` CLI, which never calls `config.Validate`; and
-  dynamic `DBConfigProvider` records — `DbManager.createConnection` applies only pool defaults, so a
-  provider-returned config with `prefer`+cert/key still connects ungated and untrimmed (open PR #1002
-  routes that seam through `validateVendorSpecificFields`, closing this the moment it lands).
+  block stays inert there), and the `tools/migration` CLI, which never calls `config.Validate`.
 - gate: match = startup validation now rejects four shapes that previously booted. (1) PG
   `database.tls.mode` outside `disable`/`allow`/`prefer`/`require`/`verify-ca`/`verify-full` — a typo
   such as `Require` or `verify_full` used to fail at first *connect* with a parse error go-bricks

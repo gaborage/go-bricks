@@ -5916,18 +5916,20 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 
 		err := ApplyDatabasePoolDefaults(&cfg)
 
-		assertValidationError(t, err, "TLS cert/key/ca are not supported for Oracle")
+		assertValidationError(t, err, "not supported for Oracle")
 		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
 	})
 
-	t.Run("inferred_postgres_with_unpaired_cert_rejected", func(t *testing.T) {
+	// ADR-062: any database.tls field alongside a connectionstring is rejected
+	// outright (R4), before the pairing rule can fire.
+	t.Run("inferred_postgres_with_tls_block_rejected", func(t *testing.T) {
 		cfg := DatabaseConfig{ConnectionString: testBarePostgresConnString}
 		cfg.TLS.CertFile = certPath
 		original := cfg
 
 		err := ApplyDatabasePoolDefaults(&cfg)
 
-		assertValidationError(t, err, "sslcert and sslkey must be configured together")
+		assertValidationError(t, err, "database.tls is ignored when connectionstring is set")
 		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
 	})
 
@@ -5940,17 +5942,20 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 
 		err := ApplyDatabasePoolDefaults(&cfg)
 
-		assertValidationError(t, err, "TLS cert/key/ca are not supported for Oracle")
+		assertValidationError(t, err, "not supported for Oracle")
 		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
 	})
 
-	t.Run("paired_postgres_certificate_accepted", func(t *testing.T) {
-		cfg := DatabaseConfig{ConnectionString: testBarePostgresConnString}
+	// ADR-062 forbids database.tls next to a connectionstring, so the accepted
+	// shape is a typed config with a TLS-mandatory mode; inference-accepted paths
+	// are pinned by the classification table and the rollback case below.
+	t.Run("paired_postgres_certificate_under_require_accepted", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: PostgreSQL, Host: "h", Database: "d"}
+		cfg.TLS.Mode = sslModeRequire
 		cfg.TLS.CertFile = certPath
 		cfg.TLS.KeyFile = "/etc/certs/client.key"
 
 		require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
-		assert.Equal(t, PostgreSQL, cfg.Type)
 		assert.Equal(t, int32(25), cfg.Pool.Max.Connections, "defaults still applied after vendor validation")
 	})
 

@@ -335,8 +335,8 @@ Startup validation rejects every `database.tls` shape pgx would silently discard
 downgrade, or (for `ca: system`) invert
 ([ADR-062](adr_062_database_tls_fail_closed.md)). All four fields are trimmed
 before the checks run. The rules fire wherever `config.Validate` does — the root `database:`
-block, every named database, every static tenant entry; dynamic `DBConfigProvider` records are
-gated only once #1002 lands (see the ADR's consequences).
+block, every named database, every static tenant entry — and, since #1002, on dynamic
+`DBConfigProvider` records too (see "These rules reach dynamic configs too" below).
 
 - **PostgreSQL — `mode` is an allowlist.** `disable`, `allow`, `prefer`, `require`,
   `verify-ca`, `verify-full`, or unset. A misspelled or wrongly-cased value (`Require`,
