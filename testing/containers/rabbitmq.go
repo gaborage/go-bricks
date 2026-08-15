@@ -27,7 +27,7 @@ const (
 
 // RabbitMQContainerConfig holds configuration for RabbitMQ test container
 type RabbitMQContainerConfig struct {
-	// ImageTag specifies the RabbitMQ version (default: "3.13.7-management-alpine")
+	// ImageTag specifies the RabbitMQ version (default: the pin in DefaultRabbitMQConfig)
 	ImageTag string
 	// Username for RabbitMQ authentication (default: "guest")
 	Username string
@@ -42,12 +42,12 @@ type RabbitMQContainerConfig struct {
 
 // DefaultRabbitMQConfig returns a RabbitMQContainerConfig populated with sensible defaults.
 //
-// The returned configuration sets ImageTag to "3.13.7-management-alpine", Username to "guest",
-// Password to "guest", and StartupTimeout to 60 seconds. The container uses the default
-// RabbitMQ virtual host "/".
+// The returned configuration sets Username to "guest", Password to "guest", and StartupTimeout
+// to 60 seconds. The container uses the default RabbitMQ virtual host "/".
 func DefaultRabbitMQConfig() *RabbitMQContainerConfig {
 	return &RabbitMQContainerConfig{
-		ImageTag:       "3.13.7-management-alpine",
+		// renovate: datasource=docker depName=rabbitmq
+		ImageTag:       "4.2.9-management-alpine",
 		Username:       "guest",
 		Password:       "guest",
 		StartupTimeout: 60 * time.Second,

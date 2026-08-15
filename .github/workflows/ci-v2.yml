@@ -296,11 +296,27 @@ jobs:
       - name: Pre-pull container images
         run: |
           echo "Warming Docker cache with container images..."
-          docker pull postgres:17.10-alpine &
+          pids=""
+          # renovate: datasource=docker depName=postgres
+          docker pull postgres:18.6-alpine &
+          pids="$pids $!"
+          # renovate: datasource=docker depName=gvenzl/oracle-free
           docker pull gvenzl/oracle-free:23.26.2-slim &
-          docker pull rabbitmq:3.13.7-management-alpine &
-          docker pull redis:7.4.9-alpine &
-          wait
+          pids="$pids $!"
+          # renovate: datasource=docker depName=rabbitmq
+          docker pull rabbitmq:4.2.9-management-alpine &
+          pids="$pids $!"
+          # renovate: datasource=docker depName=redis
+          docker pull redis:8.10.0-alpine &
+          pids="$pids $!"
+          rc=0
+          for pid in $pids; do
+            wait "$pid" || rc=1
+          done
+          if [ "$rc" -ne 0 ]; then
+            echo "One or more image pulls failed" >&2
+            exit 1
+          fi
           echo "All container images cached"
 
       - name: Cache Flyway CLI
