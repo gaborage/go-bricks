@@ -500,9 +500,13 @@ type QueryBuilderInterface interface {
 	// own identifier rules: Oracle folds the unquoted identifiers it emits to upper
 	// case, so id and ID are one column there, while PostgreSQL quotes every
 	// identifier and keeps them distinct. When its update value equals
-	// its insert value, drop it from updateColumns and no resulting row changes:
+	// its insert value, drop it from updateColumns and no column value changes:
 	// the conflict match pins it on a matched row and the INSERT supplies it on an
-	// unmatched one. When the two values differ, the call was rewriting the
+	// unmatched one. Dropping the only update column empties the set, which builds
+	// DO NOTHING (and omits Oracle's WHEN MATCHED arm), so a matched row is no
+	// longer updated at all and its UPDATE triggers stop firing; keep a genuine
+	// non-conflict column, or issue the UPDATE explicitly, where that matters.
+	// When the two values differ, the call was rewriting the
 	// conflict column itself, which no vendor-portable upsert can express — issue
 	// a separate UPDATE instead.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
