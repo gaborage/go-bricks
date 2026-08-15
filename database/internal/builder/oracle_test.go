@@ -1297,3 +1297,100 @@ func TestBuildUpsertOracleRejectsUnknownConflictColumns(t *testing.T) {
 	assert.Contains(t, err.Error(), "tenant_id",
 		"error should name the offending conflict column")
 }
+
+// TestBuildUpsertOracleRejectsConflictColumnInUpdateSet verifies a column present
+// in both conflictColumns and updateColumns is rejected at build time. Oracle's
+// MERGE cannot update a column referenced in the ON clause and fails at execution
+// with ORA-38104; rejecting here turns that into a build-time error.
+func TestBuildUpsertOracleRejectsConflictColumnInUpdateSet(t *testing.T) {
+	tests := []struct {
+		name               string
+		conflictColumns    []string
+		insertColumns      map[string]any
+		updateColumns      map[string]any
+		wantErrColumn      string
+		wantSQLContains    string
+		wantNoUpdateClause bool
+	}{
+		{
+			name:            "conflict_column_only_in_conflict_target",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{"name": "bob"},
+		},
+		{
+			name:            "column_only_in_update_set",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{"name": "bob", "version": 7},
+		},
+		{
+			name:            "conflict_column_in_both_rejected",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{"id": 2, "name": "bob"},
+			wantErrColumn:   "id",
+		},
+		{
+			name:            "one_of_several_conflict_columns_overlaps",
+			conflictColumns: []string{"id", "tenant_id"},
+			insertColumns:   map[string]any{"id": 1, "tenant_id": "acme", "name": "alice"},
+			updateColumns:   map[string]any{"tenant_id": "globex"},
+			wantErrColumn:   "tenant_id",
+		},
+		{
+			name:               "empty_update_set_builds_without_error",
+			conflictColumns:    []string{"id"},
+			insertColumns:      map[string]any{"id": 1, "name": "alice"},
+			updateColumns:      map[string]any{},
+			wantNoUpdateClause: true,
+		},
+		{
+			// Oracle leaves non-reserved identifiers unquoted and folds them to
+			// upper case, so id and ID are the same column: an exact-string check
+			// would emit ON (target.id = source.id) ... SET ID = :3 and still die
+			// with ORA-38104 at execution.
+			name:            "case_variant_of_conflict_column_rejected",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "alice"},
+			updateColumns:   map[string]any{"ID": 2},
+			wantErrColumn:   "ID",
+		},
+		{
+			// Reserved words ARE quoted on Oracle, and quoted identifiers stay
+			// case-sensitive, so "number" and "NUMBER" are genuinely two columns.
+			name:            "quoted_reserved_word_case_variant_stays_distinct",
+			conflictColumns: []string{"number"},
+			insertColumns:   map[string]any{"number": 1, "name": "alice"},
+			updateColumns:   map[string]any{"NUMBER": 2},
+			wantSQLContains: `SET "NUMBER" =`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.Oracle)
+
+			sql, _, err := qb.BuildUpsert("users", tt.conflictColumns, tt.insertColumns, tt.updateColumns)
+
+			if tt.wantErrColumn != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "collides with conflict column")
+				assert.Contains(t, err.Error(), "ORA-38104")
+				assert.Contains(t, err.Error(), tt.wantErrColumn,
+					"error must name the overlapping column, not merely the first conflict column")
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Contains(t, sql, "MERGE INTO")
+			if tt.wantSQLContains != "" {
+				assert.Contains(t, sql, tt.wantSQLContains)
+			}
+			if tt.wantNoUpdateClause {
+				assert.NotContains(t, sql, "WHEN MATCHED",
+					"an empty update set must still build, emitting no UPDATE arm")
+			}
+		})
+	}
+}
