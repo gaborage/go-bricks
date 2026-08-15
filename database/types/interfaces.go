@@ -504,8 +504,9 @@ type QueryBuilderInterface interface {
 	// the conflict match pins it on a matched row and the INSERT supplies it on an
 	// unmatched one. Dropping the only update column empties the set, which builds
 	// DO NOTHING (and omits Oracle's WHEN MATCHED arm), so a matched row is no
-	// longer updated at all and its UPDATE triggers stop firing; keep a genuine
-	// non-conflict column, or issue the UPDATE explicitly, where that matters.
+	// longer updated at all: its UPDATE triggers stop firing and RETURNING yields
+	// no row. Where that matters keep a genuine non-conflict column, or issue the
+	// UPDATE explicitly under the same transaction rule as below.
 	// When the two values differ, the call was rewriting the
 	// conflict column itself, which no vendor-portable upsert can express — issue
 	// a separate UPDATE instead, in the same transaction as the insert and keyed
