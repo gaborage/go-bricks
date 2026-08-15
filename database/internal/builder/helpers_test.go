@@ -33,6 +33,110 @@ func TestBuildUpsertReportsMissingPreconditionsIdenticallyPerVendor(t *testing.T
 		"both vendors must report a conflict column absent from the insert set the same way")
 }
 
+// TestBuildUpsertMatchesConflictColumnsToInsertSetByVendorIdentity pins the
+// insert-set precondition to the vendor's own notion of column identity, the
+// same rule the checks around it use. It is the mirror of the overlap check:
+// there identity matching widened the REJECTED set, here it widens the ACCEPTED
+// one, so these cases prove the widening stops exactly where the vendor's own
+// folding stops.
+func TestBuildUpsertMatchesConflictColumnsToInsertSetByVendorIdentity(t *testing.T) {
+	t.Run("oracle_folds_unquoted_case_variants_to_one_column", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		// The full SQL is asserted because the ON clause keeps the caller's
+		// spelling while the USING alias keeps the insert key's — the two
+		// fragments differ textually and must still name one column.
+		sql, args, err := qb.BuildUpsert("users", []string{"id"},
+			map[string]any{"ID": 1, "name": "alice"}, nil)
+
+		require.NoError(t, err, "a case variant of an inserted column is the same Oracle column")
+		require.Equal(t,
+			"MERGE INTO users target USING (SELECT :1 AS ID, :2 AS name FROM dual) source "+
+				"ON (target.id = source.id) "+
+				"WHEN NOT MATCHED THEN INSERT (ID, name) VALUES (source.ID, source.name)",
+			sql)
+		require.Equal(t, []any{1, "alice"}, args)
+	})
+
+	t.Run("oracle_folds_whitespace_padded_keys", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		// The renderer trims before folding, so " id " and "id" are one column.
+		// This one emits valid SQL, so it genuinely builds and writes.
+		sql, _, err := qb.BuildUpsert("users", []string{" id "},
+			map[string]any{"id": 1, "name": "alice"}, nil)
+
+		require.NoError(t, err)
+		require.Contains(t, sql, "ON (target.id = source.id)",
+			"the padded spelling must render as the trimmed column")
+	})
+
+	t.Run("oracle_function_shaped_keys_pass_the_precondition_only", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		// Function-shaped keys are returned verbatim by the renderer and folded
+		// for identity, so the membership check now accepts them. That is ALL
+		// this proves: buildOracleMerge still renders them into a MERGE whose
+		// USING alias is not a legal Oracle identifier, so such a call remains
+		// broken at execution. Asserted separately from the valid cases above so
+		// the precondition outcome is never read as an endorsement.
+		sql, _, err := qb.BuildUpsert("users", []string{"count(*)"},
+			map[string]any{"COUNT(*)": 1}, nil)
+
+		require.NoError(t, err, "the precondition no longer rejects it")
+		require.Contains(t, sql, "SELECT :1 AS COUNT(*)",
+			"and the renderer still emits an alias Oracle cannot parse — see #997")
+	})
+
+	t.Run("oracle_accepts_the_reverse_spelling_direction", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		// An implementation applying identity to only one side of the
+		// comparison would pass one direction and fail the other.
+		_, _, err := qb.BuildUpsert("users", []string{"ID"}, map[string]any{"id": 1}, nil)
+
+		require.NoError(t, err)
+	})
+
+	t.Run("exact_spellings_still_match_for_every_rendering", func(t *testing.T) {
+		// The other half of the claim: identity matching only ever ACCEPTS more,
+		// never less, so every spelling that matched itself before still does.
+		// Reserved words matter most, because they render quoted and so take
+		// columnIdentity's other branch.
+		for _, col := range []string{"id", "level", "number", "MixedCase", "col$"} {
+			for _, vendor := range []string{dbtypes.Oracle, dbtypes.PostgreSQL} {
+				qb := NewQueryBuilder(vendor)
+
+				_, _, err := qb.BuildUpsert("users", []string{col}, map[string]any{col: 1}, nil)
+
+				require.NoErrorf(t, err, "%s: an exact spelling must still match itself (%q)", vendor, col)
+			}
+		}
+	})
+
+	t.Run("oracle_keeps_quoted_reserved_word_case_variants_distinct", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		// Reserved words are quoted, and quoted identifiers stay case-sensitive,
+		// so these are two columns and the rejection must survive.
+		_, _, err := qb.BuildUpsert("users", []string{"level"}, map[string]any{"LEVEL": 1}, nil)
+
+		require.ErrorContains(t, err, `conflict column "level" must be present in insert columns`)
+	})
+
+	t.Run("postgresql_keeps_case_and_whitespace_variants_distinct", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		// PostgreSQL quotes every identifier, so folding here would accept calls
+		// the database rejects.
+		_, _, caseErr := qb.BuildUpsert("users", []string{"id"}, map[string]any{"ID": 1}, nil)
+		_, _, spaceErr := qb.BuildUpsert("users", []string{" id "}, map[string]any{"id": 1}, nil)
+
+		require.ErrorContains(t, caseErr, `conflict column "id" must be present in insert columns`)
+		require.ErrorContains(t, spaceErr, `conflict column " id " must be present in insert columns`)
+	})
+}
+
 // TestBuildUpsertRejectsDuplicateConflictColumnsByVendorIdentity pins the
 // uniqueness precondition to the vendor's own notion of column identity. A
 // duplicate conflict target is meaningless in both dialects, but only
