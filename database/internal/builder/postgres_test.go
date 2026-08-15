@@ -14,6 +14,7 @@ func TestBuildPostgreSQLUpsertProducesDeterministicSql(t *testing.T) {
 	insertColumns := map[string]any{
 		"name":       "alice",
 		"id":         42,
+		"tenant_id":  "acme",
 		"updated_at": "2023-05-01",
 	}
 	updateColumns := map[string]any{
@@ -22,20 +23,20 @@ func TestBuildPostgreSQLUpsertProducesDeterministicSql(t *testing.T) {
 	}
 	conflictColumns := []string{"tenant_id", "id"}
 
-	sql, args, err := qb.buildPostgreSQLUpsert("users", conflictColumns, insertColumns, updateColumns)
+	sql, args, err := qb.BuildUpsert("users", conflictColumns, insertColumns, updateColumns)
 	require.NoError(t, err)
 
 	// The on-conflict UPDATE must bind the caller's update values ("bob"/"2023-06-01") as
 	// parameters — NOT reuse EXCLUDED (the insert values), which silently ignored them and
 	// diverged from Oracle's MERGE. Update placeholders follow the insert placeholders.
-	expectedSQL := "INSERT INTO users (\"id\",\"name\",\"updated_at\") VALUES ($1,$2,$3) ON CONFLICT (\"id\", \"tenant_id\") DO UPDATE SET \"name\" = $4, \"updated_at\" = $5"
+	expectedSQL := "INSERT INTO users (\"id\",\"name\",\"tenant_id\",\"updated_at\") VALUES ($1,$2,$3,$4) ON CONFLICT (\"id\", \"tenant_id\") DO UPDATE SET \"name\" = $5, \"updated_at\" = $6"
 	if sql != expectedSQL {
 		t.Fatalf("unexpected SQL generated: %s", sql)
 	}
 
-	// Insert values first (sorted id,name,updated_at), then update values (sorted name,updated_at).
-	require.Len(t, args, 5)
-	if args[0] != 42 || args[1] != "alice" || args[2] != "2023-05-01" || args[3] != "bob" || args[4] != "2023-06-01" {
+	// Insert values first (sorted id,name,tenant_id,updated_at), then update values (sorted name,updated_at).
+	require.Len(t, args, 6)
+	if args[0] != 42 || args[1] != "alice" || args[2] != "acme" || args[3] != "2023-05-01" || args[4] != "bob" || args[5] != "2023-06-01" {
 		t.Fatalf("unexpected argument ordering: %v", args)
 	}
 }
@@ -49,7 +50,7 @@ func TestBuildPostgreSQLUpsertBindsUpdateOnlyColumnAbsentFromInsert(t *testing.T
 	insertColumns := map[string]any{"id": 1, "name": "a"}
 	updateColumns := map[string]any{"version": 7}
 
-	sql, args, err := qb.buildPostgreSQLUpsert("t", []string{"id"}, insertColumns, updateColumns)
+	sql, args, err := qb.BuildUpsert("t", []string{"id"}, insertColumns, updateColumns)
 	require.NoError(t, err)
 	require.NotContains(t, sql, "EXCLUDED")
 	require.Contains(t, sql, "\"version\" = $3")
@@ -59,10 +60,25 @@ func TestBuildPostgreSQLUpsertBindsUpdateOnlyColumnAbsentFromInsert(t *testing.T
 func TestBuildPostgreSQLUpsertDoNothingWhenNoUpdateColumns(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-	sql, args, err := qb.buildPostgreSQLUpsert("t", []string{"id"}, map[string]any{"id": 1}, map[string]any{})
+	sql, args, err := qb.BuildUpsert("t", []string{"id"}, map[string]any{"id": 1}, map[string]any{})
 	require.NoError(t, err)
 	require.Contains(t, sql, "DO NOTHING")
 	require.Equal(t, []any{1}, args, "no update values appended for DO NOTHING")
+}
+
+// TestBuildPostgreSQLUpsertRejectsConflictColumnAbsentFromInsertSet verifies
+// PostgreSQL refuses the conflict target Oracle's MERGE cannot express at all.
+// PostgreSQL would emit valid SQL that leaves the conflict column to a table
+// default and so matches only when that default collides; rejecting it keeps one
+// BuildUpsert call meaning one thing on both vendors.
+func TestBuildPostgreSQLUpsertRejectsConflictColumnAbsentFromInsertSet(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	_, _, err := qb.BuildUpsert("users", []string{"id", "tenant_id"}, map[string]any{"id": 1}, nil)
+
+	require.Error(t, err, "conflict column missing from insert columns must be rejected")
+	require.Contains(t, err.Error(), "tenant_id",
+		"error must name the offending conflict column, not merely the first one")
 }
 
 // TestBuildPostgreSQLUpsertRejectsConflictColumnInUpdateSet verifies PostgreSQL
@@ -130,7 +146,7 @@ func TestBuildPostgreSQLUpsertRejectsConflictColumnInUpdateSet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-			sql, _, err := qb.buildPostgreSQLUpsert("users", tt.conflictColumns, tt.insertColumns, tt.updateColumns)
+			sql, _, err := qb.BuildUpsert("users", tt.conflictColumns, tt.insertColumns, tt.updateColumns)
 
 			if tt.wantErrColumn != "" {
 				require.Error(t, err)

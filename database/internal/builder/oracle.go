@@ -1,7 +1,6 @@
 package builder
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -359,34 +358,41 @@ func buildOraclePaginationClause(limit, offset uint64) string {
 // MERGE INTO ... USING ... ON ... WHEN MATCHED/NOT MATCHED.
 // A column present in both conflictColumns and updateColumns is rejected on
 // every vendor: Oracle's MERGE cannot update an ON-clause column (ORA-38104).
+// The preconditions are checked here rather than in either vendor builder: they
+// are what makes one call mean one thing on both vendors, so enforcing them at
+// the single dispatch point is what stops the two builders drifting apart again.
 func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
-	if qb.vendor != dbtypes.Oracle {
-		return qb.buildNonOracleUpsert(table, conflictColumns, insertColumns, updateColumns)
+	// Vendor support is settled first so an unsupported vendor is reported as
+	// such, rather than as a precondition failure for an upsert it cannot build.
+	if qb.vendor != dbtypes.Oracle && qb.vendor != dbtypes.PostgreSQL {
+		return "", nil, fmt.Errorf("upsert not supported for database vendor: %s", qb.vendor)
 	}
 
-	// Oracle uses MERGE statement
-	return qb.buildOracleMerge(table, conflictColumns, insertColumns, updateColumns)
-}
-
-// buildOracleMerge constructs an Oracle MERGE statement for upsert operations
-func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
 	if len(conflictColumns) == 0 {
-		return "", nil, errors.New("conflict columns required for Oracle MERGE")
+		return "", nil, errConflictColumnsRequired
 	}
 
-	// Every conflict column must be present in the insert columns. Otherwise the
-	// generated ON clause references source.<column> which does not exist in the
-	// USING SELECT, producing invalid SQL that would only fail at runtime.
-	for _, col := range conflictColumns {
-		if _, ok := insertColumns[col]; !ok {
-			return "", nil, fmt.Errorf("conflict column %q must be present in insert columns for Oracle MERGE", col)
-		}
+	if uniqueErr := qb.requireUniqueConflictColumns(conflictColumns); uniqueErr != nil {
+		return "", nil, uniqueErr
+	}
+
+	if insertErr := requireConflictColumnsInInsertSet(conflictColumns, insertColumns); insertErr != nil {
+		return "", nil, insertErr
 	}
 
 	if conflictErr := qb.rejectConflictColumnUpdates(conflictColumns, updateColumns); conflictErr != nil {
 		return "", nil, conflictErr
 	}
 
+	if qb.vendor == dbtypes.Oracle {
+		return qb.buildOracleMerge(table, conflictColumns, insertColumns, updateColumns)
+	}
+	return qb.buildPostgreSQLUpsert(table, conflictColumns, insertColumns, updateColumns)
+}
+
+// buildOracleMerge constructs an Oracle MERGE statement for upsert operations.
+// Its preconditions are enforced by BuildUpsert, the only caller.
+func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
 	// Build the USING clause with values. Use reserved-word-only quoting (the same
 	// quoting the DML paths use) so non-reserved identifiers stay unquoted and Oracle
 	// folds them to the uppercase form created by standard DDL.
@@ -444,13 +450,4 @@ func (qb *QueryBuilder) buildOracleMerge(table string, conflictColumns []string,
 	args = append(args, updateArgs...)
 
 	return query, args, nil
-}
-
-// buildNonOracleUpsert handles upsert for non-Oracle databases (primarily PostgreSQL)
-func (qb *QueryBuilder) buildNonOracleUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error) {
-	if qb.vendor == dbtypes.PostgreSQL {
-		return qb.buildPostgreSQLUpsert(table, conflictColumns, insertColumns, updateColumns)
-	}
-
-	return "", nil, fmt.Errorf("upsert not supported for database vendor: %s", qb.vendor)
 }

@@ -1,7 +1,6 @@
 package builder
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,6 +8,7 @@ import (
 
 // buildPostgreSQLUpsert creates a PostgreSQL upsert: ON CONFLICT (columns) DO UPDATE SET ...
 // when update columns are provided, or DO NOTHING otherwise.
+// Its preconditions are enforced by BuildUpsert, the only caller.
 func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []string, insertColumns, updateKeys map[string]any) (query string, args []any, err error) {
 	// Build the base INSERT statement using the public API for consistency.
 	insertQuery := qb.Insert(table)
@@ -24,14 +24,6 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	cc := make([]string, len(conflictColumns))
 	copy(cc, conflictColumns)
 	sort.Strings(cc)
-
-	if len(cc) == 0 {
-		return "", nil, errors.New("conflict columns required for PostgreSQL upsert")
-	}
-
-	if conflictErr := qb.rejectConflictColumnUpdates(conflictColumns, updateKeys); conflictErr != nil {
-		return "", nil, conflictErr
-	}
 
 	escapedCC := qb.escapeIdentifiers(cc)
 	updateCols := sortedKeys(updateKeys)

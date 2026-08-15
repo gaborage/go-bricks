@@ -1,12 +1,18 @@
 package builder
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
+
+// errConflictColumnsRequired is defined once so both upsert builders report the
+// same precondition the same way; the vendor is already implied by the builder
+// the caller reached.
+var errConflictColumnsRequired = errors.New("conflict columns required for upsert")
 
 // sortedKeys returns a deterministically ordered slice of keys from the provided map.
 func sortedKeys(m map[string]any) []string {
@@ -25,6 +31,39 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 		vals = append(vals, m[k])
 	}
 	return vals
+}
+
+// requireUniqueConflictColumns rejects a conflict column list that names the same
+// column twice. Duplicates are keyed by vendor identity, so Oracle — which folds
+// the unquoted identifiers it emits — sees id and ID as one column, while
+// PostgreSQL quotes every identifier and sees two, making that pairing a
+// legitimate composite conflict target there.
+func (qb *QueryBuilder) requireUniqueConflictColumns(conflictColumns []string) error {
+	seen := make(map[string]string, len(conflictColumns))
+	for _, col := range conflictColumns {
+		identity := qb.columnIdentity(col)
+		if first, ok := seen[identity]; ok {
+			return fmt.Errorf("conflict columns must be distinct: %q and %q name the same column for upsert", first, col)
+		}
+		seen[identity] = col
+	}
+	return nil
+}
+
+// requireConflictColumnsInInsertSet keeps one BuildUpsert call meaning one thing
+// on both vendors. Oracle's MERGE names every conflict column in its ON clause as
+// source.<column>, which the USING SELECT supplies only for inserted columns, so
+// an absent one builds invalid SQL. PostgreSQL builds legal SQL — its conflict
+// target only picks the arbiter index — but the proposed row then takes the
+// column's default, so the conflict fires only when that default collides.
+// Rejecting on both makes the caller state the value it is matching on.
+func requireConflictColumnsInInsertSet(conflictColumns []string, insertColumns map[string]any) error {
+	for _, col := range conflictColumns {
+		if _, ok := insertColumns[col]; !ok {
+			return fmt.Errorf("conflict column %q must be present in insert columns for upsert", col)
+		}
+	}
+	return nil
 }
 
 // rejectConflictColumnUpdates keeps one BuildUpsert call meaning one thing on

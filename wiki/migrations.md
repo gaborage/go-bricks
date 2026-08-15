@@ -44,7 +44,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E57 | v0.56.0 → v0.57.0 | silent-behavior + breaking (C57.4, C57.5, C57.6, C57.7, C57.8 abort startup; C57.9 fails `httpclient` construction) | 9 | C57.7 (only partially — a direct call still compiles; see its scope) | if any alert, runbook, synthetic check, or contract test parses the driver error out of `/ready`'s database `503` body, repoint it at the app log or `<debug.pathprefix>/health-debug` (default `/_sys`) — the field is now the fixed string `database unavailable` (C57.1); and if you implement your own critical `app.Prober`, its `503` body now reads `<Name> unavailable` instead of its raw error, since sanitization became the default rather than an opt-in (C57.2); and if anything reads `db_stats.connections` out of `/ready`'s **200** body — a per-tenant pool dashboard, an activity alert, a test pinning the key set — repoint it at `<debug.pathprefix>/health-debug` or the OTel database metrics, because that array is gone from `/ready`; a repo-local grep alone will not find an out-of-repo dashboard (C57.3); and check every environment with `outbox.enabled: true` or `inbox.enabled: true` (outside per-tenant fan-out or a dynamic source) for a configured, reachable database whose ledger table exists — or whose `autocreatetable` can create it — because Init now aborts startup instead of booting green (C57.4); and check every `database.connectionstring` (root, `databases.*`, `multitenant.tenants.*`) with no `database.type` set — a recognized scheme (`postgres://`, `postgresql://`, `oracle://`) now infers its type and actually dials instead of booting into a dead connection, and an unrecognized scheme on the built-in connector now fails startup instead of failing at first query (C57.5); and check every environment for a database identity key delivered as an empty string (an empty `secretKeyRef`, `envsubst` over an unset variable) — that shape used to load silently as database-free and now aborts startup naming the key (C57.6); and check every environment for `debug.enabled: true` (`DEBUG_ENABLED=true`) with at least one `debug.endpoints.*` flag on, an empty `debug.allowedips` and no `debug.bearertoken` — all four required, and that service refuses to start after the bump; and if you assemble config in Go, check for a `Debug` block with `Enabled: true` and any endpoint flag but no `AllowedIPs` — that path never received the loopback default, so the refusal is reachable there by omission; grep shortlists, booting in staging decides (C57.7); and check every **single-tenant** service that declares AMQP consumers for a broker that is reachable, accepts its credentials, and accepts its declarations at boot, because a consumer bootstrap failure now aborts startup instead of logging one WARN and serving HTTP while consuming nothing forever — publisher-only and messaging-free services are unaffected (C57.8); and read every `WithJOSE` policy and direct `jose.Seal` call for an explicitly-set algorithm outside the allowlist — `KeyAlg: RSA1_5` or a non-AEAD `Enc` sealed successfully before and now fails `Build()` at startup, while a policy that named no algorithms at all takes the package defaults and starts working instead of failing every request (C57.9) |
 | E58 | v0.57.0 → v0.58.0 | compile-break + breaking (C58.3 aborts startup) + behavior (C58.4, C58.5) | 5 | C58.1 C58.2 C58.3 | check every environment for a **negative** `cache.manager.maxsize` or `cache.manager.idlettl`, and — in multi-tenant mode with `cache.manager.maxsize` unset — a negative `multitenant.limits.tenants`, which becomes the pool size. Under `cache.enabled: false` such a value used to be inert and now aborts startup (C58.3); and if any dashboard, alert, or saved query reads OTLP-exported log records by a `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` **record** attribute your code sets as a log field, re-key it to the `app.`-prefixed name (C58.4); and audit the log backend for dashboards, alerts, or saved queries filtering log records by **any** record-level resource attribute — the framework's `service.*` / `telemetry.sdk.*` / `deployment.environment.name` plus every key your deployment injects via `OTEL_RESOURCE_ATTRIBUTES` (`k8s.pod.name`, …) — since all of them move to resource level only; no code grep finds these (C58.5) |
 | E581 | v0.58.0 → v0.58.1 | silent-behavior | 3 | none | if you cache any type carrying a time.Time, decide before the bump whether a compare-and-set on a sub-second timestamp may fail during the rolling deploy (C581.1); and if `observability.logs.samplingrate` is set to any value strictly between 0.0 and 1.0, expect the exported INFO/DEBUG log volume AND the membership of the sampled set to change: a rate at or above 0.00005 and below 0.01 exported nothing before the bump and starts exporting its configured fraction after it, a rate that is not a whole percent stops flooring (0.999 was 99%, now 99.9%), and every fractional rate redraws which traces land in the sample; a rate below 0.00005, plus 0.0 and 1.0, are unaffected (C581.2); and if you call `Close()` directly on a `DbManager`/`CacheManager`/`messaging.Manager`, know that a handle still borrowed by in-flight work now stays open until its final release instead of closing immediately (C581.3) |
-| E59 | v0.58.1 → v0.59.0 | compile-break (C59.2, C59.3) + silent-behavior (C59.1, C59.4) + breaking (C59.5 rejects a password, C59.6 rejects a dynamic config's TLS material, C59.7 rejects an upsert call) | 7 | C59.2 C59.3 | if your service sits behind a proxy on a **public** address (CloudFront, a partner edge), set `server.trustedproxies` to its CIDR range before the bump — otherwise that proxy is itself returned as the client and every caller behind it collapses into a single rate-limit bucket; and check the load balancer for any mode that writes a non-IP `X-Forwarded-For` entry — on AWS ALB that is `routing.http.xff_client_port.enabled` (appends `client_ip:port`) and, separately, `routing.http.xff_header_processing.mode = remove` — since either keys the entire fleet on the load balancer's own address after the bump and `server.trustedproxies` cannot fix it; the remedy is deployment-side (C59.1); and if any of your code — **including test files**, which `go build` does not compile — implements `cache.Cache`, add the new `CompareAndDelete` method, and before swapping a lock's `Delete` release for it make sure the lock is acquired with a **positive** TTL, since a `ttl == 0` lock that a token-verified release declines to remove is held forever (C59.3); and grep your **test** files for a `cache/testing.MockCache` handed a context that is already canceled or expired while the call is expected to succeed — the mock's cancellation check no longer depends on a configured `WithDelay`, so that call now returns the context's error (C59.4); and if you call `ProvisionPGRoles` or `PGRoleProvisioningSQL` with a `PGRoleSpec` whose `MigratorPassword` or `RuntimePassword` is read from a file, a mounted secret, an environment read, or a command substitution, `strings.TrimSpace` it before the bump — a password containing CR, LF, or NUL is now rejected by `Validate` instead of provisioning, and any credential whose provisioning failure was logged while its password contained a newline should be rotated, since the first line of that secret reached the error string (C59.5); and hand-read every `BuildUpsert` call for a column key present in BOTH `conflictColumns` and `updateColumns` — grep finds the calls but not the overlap, since both maps are usually built dynamically — because on PostgreSQL such a call built and ran before the bump and now returns an error from the builder, while on Oracle it already failed and now fails earlier, at build time with the builder's message rather than at execution with ORA-38104; match keys the way each vendor does, since Oracle folds the unquoted identifiers it emits to upper case (so `id` and `ID` are one column there, and are now rejected) while PostgreSQL quotes every identifier and keeps them distinct; then compare that column's update value against its insert value before remediating — equal means dropping it from `updateColumns` changes no column value — though if it is the column's **only** entry the set empties, which builds `DO NOTHING` on PostgreSQL and drops Oracle's `WHEN MATCHED` arm, so a matched row stops being updated at all, its UPDATE triggers stop firing and `RETURNING` yields no row; keep a real non-conflict column or issue an explicit `UPDATE` — under the same transaction and locking rule as below — where that matters — but differing means the call was rewriting the conflict column on a matched row, which no vendor-portable upsert can express, so those need a separate `UPDATE` rather than a dropped column — run it in the same transaction as the insert, keyed on the conflict columns, and holding the row lock the single statement took for you (`SELECT … FOR UPDATE` or equivalent), because splitting one atomic upsert into two statements lets a concurrent writer interleave and under READ COMMITTED a shared transaction alone does not stop it (C59.7); and if a dynamic multi-tenant `DBConfigProvider` returns a `database.connectionstring` with no `type`, that tenant now dials a real database at first use instead of failing every request with `unsupported database type: ""`, and if you supply `Options.DatabaseConnector` it now receives an inferred `type` for a recognized scheme instead of an empty one — inference is unconditional, since that option's exemption only ever covered the startup guard; then enumerate the same source for any tenant carrying `database.tls.cert`/`database.tls.key`/`database.tls.ca` next to an Oracle type or `oracle://` DSN, or exactly one of `database.tls.cert`/`database.tls.key` on a PostgreSQL one, since those connect today with the TLS material silently dropped and stop connecting after the bump, typed configs included (C59.6) |
+| E59 | v0.58.1 → v0.59.0 | compile-break (C59.2, C59.3) + silent-behavior (C59.1, C59.4) + breaking (C59.5 rejects a password, C59.6 rejects a dynamic config's TLS material, C59.7 rejects an upsert call, C59.8 rejects another, C59.10 rejects a duplicated conflict column) | 9 | C59.2 C59.3 | if your service sits behind a proxy on a **public** address (CloudFront, a partner edge), set `server.trustedproxies` to its CIDR range before the bump — otherwise that proxy is itself returned as the client and every caller behind it collapses into a single rate-limit bucket; and check the load balancer for any mode that writes a non-IP `X-Forwarded-For` entry — on AWS ALB that is `routing.http.xff_client_port.enabled` (appends `client_ip:port`) and, separately, `routing.http.xff_header_processing.mode = remove` — since either keys the entire fleet on the load balancer's own address after the bump and `server.trustedproxies` cannot fix it; the remedy is deployment-side (C59.1); and if any of your code — **including test files**, which `go build` does not compile — implements `cache.Cache`, add the new `CompareAndDelete` method, and before swapping a lock's `Delete` release for it make sure the lock is acquired with a **positive** TTL, since a `ttl == 0` lock that a token-verified release declines to remove is held forever (C59.3); and grep your **test** files for a `cache/testing.MockCache` handed a context that is already canceled or expired while the call is expected to succeed — the mock's cancellation check no longer depends on a configured `WithDelay`, so that call now returns the context's error (C59.4); and if you call `ProvisionPGRoles` or `PGRoleProvisioningSQL` with a `PGRoleSpec` whose `MigratorPassword` or `RuntimePassword` is read from a file, a mounted secret, an environment read, or a command substitution, `strings.TrimSpace` it before the bump — a password containing CR, LF, or NUL is now rejected by `Validate` instead of provisioning, and any credential whose provisioning failure was logged while its password contained a newline should be rotated, since the first line of that secret reached the error string (C59.5); and hand-read every `BuildUpsert` call for a column key present in BOTH `conflictColumns` and `updateColumns` — grep finds the calls but not the overlap, since both maps are usually built dynamically — because on PostgreSQL such a call built and ran before the bump and now returns an error from the builder, while on Oracle it already failed and now fails earlier, at build time with the builder's message rather than at execution with ORA-38104; match keys the way each vendor does, since Oracle folds the unquoted identifiers it emits to upper case (so `id` and `ID` are one column there, and are now rejected) while PostgreSQL quotes every identifier and keeps them distinct; then compare that column's update value against its insert value before remediating — equal means dropping it from `updateColumns` changes no column value — though if it is the column's **only** entry the set empties, which builds `DO NOTHING` on PostgreSQL and drops Oracle's `WHEN MATCHED` arm, so a matched row stops being updated at all, its UPDATE triggers stop firing and `RETURNING` yields no row; keep a real non-conflict column or issue an explicit `UPDATE` — under the same transaction and locking rule as below — where that matters — but differing means the call was rewriting the conflict column on a matched row, which no vendor-portable upsert can express, so those need a separate `UPDATE` rather than a dropped column — run it in the same transaction as the insert, keyed on the conflict columns, and holding the row lock the single statement took for you (`SELECT … FOR UPDATE` or equivalent), because splitting one atomic upsert into two statements lets a concurrent writer interleave and under READ COMMITTED a shared transaction alone does not stop it (C59.7); and if a dynamic multi-tenant `DBConfigProvider` returns a `database.connectionstring` with no `type`, that tenant now dials a real database at first use instead of failing every request with `unsupported database type: ""`, and if you supply `Options.DatabaseConnector` it now receives an inferred `type` for a recognized scheme instead of an empty one — inference is unconditional, since that option's exemption only ever covered the startup guard; then enumerate the same source for any tenant carrying `database.tls.cert`/`database.tls.key`/`database.tls.ca` next to an Oracle type or `oracle://` DSN, or exactly one of `database.tls.cert`/`database.tls.key` on a PostgreSQL one, since those connect today with the TLS material silently dropped and stop connecting after the bump, typed configs included (C59.6); and hand-read the `BuildUpsert` shortlist again for a conflict column that is not a key of `insertColumns` — Oracle already rejected those, PostgreSQL let the column fall to its table default, which was inert where the default was absent but is a working pattern where it is a sequence, a `current_setting(...)` or a generated column, and after the bump both vendors refuse it, so a sequence or `current_setting(...)` default means passing the value in `insertColumns` while a generated column — which PostgreSQL forbids writing directly — means `database.Raw` or a schema change; drop any match on the precondition texts too, since `conflict columns required for Oracle MERGE` and `conflict columns required for PostgreSQL upsert` both become `conflict columns required for upsert` (C59.8); and check whether any `BuildUpsert` call can pass the same column twice in `conflictColumns` — an exact repeat, or on Oracle a case variant of a non-reserved identifier, which Oracle emits unquoted and folds (its reserved words are quoted and stay case-sensitive, so `["level", "LEVEL"]` is still accepted; on PostgreSQL no case variant is a duplicate) — because both vendors now refuse it where PostgreSQL previously failed only at execution (`42P10`) and Oracle accepted it outright, so de-duplicate at the call site by the vendor's own rules rather than by lower-casing, which is wrong on PostgreSQL (C59.10) |
 
 **4 — Read each atom's gate before acting.** Every atom carries `when: match | no-match | always`:
 
@@ -2251,7 +2251,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `messaging/manager.go` (`Close`, `Stats`) ·
   `wiki/adr_032_lease_refcount_tenant_handles.md` (2026-08-09 amendment)
 
-## E59 · v0.58.1 → v0.59.0 — the client IP is derived through trusted proxies, not raw `X-Forwarded-For` + consumers carry per-consumer AMQP arguments, so three messaging structs stop being comparable + `cache.Cache` gains `CompareAndDelete`
+## E59 · v0.58.1 → v0.59.0 — the client IP is derived through trusted proxies, not raw `X-Forwarded-For` + consumers carry per-consumer AMQP arguments, so three messaging structs stop being comparable + `cache.Cache` gains `CompareAndDelete` + five new rejections at the boundary: control characters in a role password, a dynamic config whose vendor rules were never enforced, and three `BuildUpsert` preconditions
 
 - gist: `server.New` swaps `echo.LegacyIPExtractor()` — which returned the
   left-most, unvalidated, caller-authored `X-Forwarded-For` entry — for
@@ -2305,9 +2305,24 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `database.tls.cert` / `database.tls.key` / `database.tls.ca` dialed with the material silently dropped.
   The seam now runs the same vendor validation `config.Validate` runs, so that
   tenant — and a PostgreSQL one carrying a lone `database.tls.cert` — fails at connection
-  acquisition instead, typed configs included (C59.6).
+  acquisition instead, typed configs included (C59.6). Separately again,
+  `BuildUpsert` now also requires every conflict column to be a key of
+  `insertColumns`. Oracle enforced that already — its MERGE reads each conflict
+  column from the USING SELECT that `insertColumns` builds — while PostgreSQL
+  accepted the call and let the conflict column fall to its table default, so the
+  same code diverged by deployment a second time. Both vendors now refuse it at
+  build time, and each upsert precondition reports one message instead of one per
+  vendor (C59.8). Separately again, a `conflictColumns` list naming one
+  column twice is now refused on both vendors. PostgreSQL already failed at
+  execution on it; Oracle accepted it, emitting a redundant ON-clause
+  tautology that ran correctly, so the same list diverged by deployment a
+  third time. Duplicates are judged by the vendor's identifier rules, so on
+  Oracle a case variant of an identifier it emits **unquoted** — the
+  non-reserved ones — is one column named twice, while the reserved words it
+  quotes stay case-sensitive and are not; on PostgreSQL, which quotes
+  everything, no case variant is a duplicate at all (C59.10).
 - build-caught: C59.2 C59.3 (via `go vet` — `go build` does not compile test files)
-- preflight: **five** actions. (i) If a proxy in front of the service sits on
+- preflight: **seven** actions. (i) If a proxy in front of the service sits on
   a **public** address, set `server.trustedproxies` to its CIDR range before
   the bump — without an entry it is untrusted, so it is returned as the
   client and every caller behind it collapses into one bucket. (ii) Check
@@ -2380,7 +2395,37 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   finds nothing when the records live in Vault or a control-plane table, so
   enumerating the store is the decisive check — do it before the bump, since
   the remedy (drop material that was never in force, or move the tenant to a
-  transport the driver implements) is a data change, not a code change.
+  transport the driver implements) is a data change, not a code change. (vi) Hand-read the `BuildUpsert` shortlist from (iv) again, now for a
+  conflict column that is **not** a key of
+  `insertColumns`. Oracle already rejected those; PostgreSQL did not, and
+  instead let the conflict column take its table default. That was harmless
+  where the column was NOT NULL with no default (the insert already failed with
+  `23502`) or nullable with no default (the inserted NULL is distinct under a
+  plain unique index, so the conflict never fired), but it is a **working
+  pattern** where the default is a sequence, a `current_setting(...)`, or a
+  generated column — and after the bump both vendors refuse it. For a sequence
+  or a `current_setting(...)` default, compute the value caller-side and pass it
+  in `insertColumns`; prefer that to `database.Raw`, which replaces the whole
+  statement and takes the builder's identifier validation and vendor quoting
+  with it. A **generated** column cannot be passed at all — PostgreSQL forbids
+  writing one directly — so conflicting on one needs `database.Raw` or a schema
+  change. Separately, drop any match on the upsert
+  precondition message texts: `conflict columns required for Oracle MERGE` and
+  `conflict columns required for PostgreSQL upsert` both become `conflict
+  columns required for upsert`, and the membership error no longer names Oracle
+  MERGE.
+  (vii) Check whether any `BuildUpsert` call can pass the same column
+  twice in `conflictColumns` — an exact repeat on either vendor, or on Oracle
+  a case variant of a **non-reserved** identifier, which Oracle emits unquoted
+  and folds to one column. A reserved word is quoted and stays
+  case-sensitive, so `["level", "LEVEL"]` is two columns and is still
+  accepted; on PostgreSQL no case variant is a duplicate. Dynamically
+  assembled lists are where this happens. Both vendors now refuse it, and the two started from different
+  places: on PostgreSQL such a call already failed at execution with `42P10`,
+  but **on Oracle it worked**, because the duplicate only produced a redundant
+  `AND` in the ON clause. De-duplicate at the call site — by the vendor's own
+  rules, since lower-casing before comparison is wrong on PostgreSQL, where
+  case distinguishes columns.
 - exit: `go get github.com/gaborage/go-bricks@v0.59.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C59.1] Rate-limit buckets and logged client addresses key on the trusted-proxy-derived IP · silent-behavior · when: match
@@ -2783,6 +2828,102 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - ref: [ADR-028](adr_028_pg_upsert_binds_update_values.md) (the vendor-parity line this extends) ·
   `database/internal/builder/helpers.go` (`rejectConflictColumnUpdates`) ·
   `database/internal/builder/oracle.go` · `database/internal/builder/postgres.go`
+
+### [C59.8] `BuildUpsert` requires every conflict column in the insert columns on both vendors · breaking · when: match
+
+- detect: `git grep -n 'BuildUpsert' -- '*.go'` lists every call site. Keep the pattern plain — `git
+  grep -E` is POSIX ERE and silently ignores `\b`, `\s`, `\d` and `\w`, so a pattern carrying one
+  matches nothing and the gate falsely reports "not affected". Nothing here is compiler-caught: the
+  `BuildUpsert` signature is unchanged, so the failure is a returned error at run time.
+- scope: `database/internal/builder/` only — a shared helper `requireConflictColumnsInInsertSet`
+  (`helpers.go`) called from `BuildUpsert` itself (`oracle.go`), which now holds all three upsert
+  preconditions rather than repeating them in `buildOracleMerge` and `buildPostgreSQLUpsert`, so the
+  two vendor builders cannot drift apart on a precondition again. It rejects any call whose
+  `conflictColumns` holds an entry that is not a key of `insertColumns`, naming the offending column.
+  An unsupported vendor is still reported as unsupported, ahead of any precondition. Oracle enforced
+  this already; **PostgreSQL is the new
+  rejection**, so only PostgreSQL call sites change behavior. Membership is an exact key match on both
+  vendors, unlike the sibling overlap check C59.7 added, which matches by vendor identity. Grep alone
+  cannot decide whether a given hit is affected — the two collections are usually built dynamically —
+  so hand-read each one. The same change unifies the wording of both upsert preconditions: the empty
+  `conflictColumns` error read `conflict columns required for Oracle MERGE` on one vendor and
+  `conflict columns required for PostgreSQL upsert` on the other, and the membership error named
+  Oracle MERGE. Each precondition now emits one message regardless of vendor.
+- gate: match = a `BuildUpsert` call reaching PostgreSQL whose `conflictColumns` can hold a column
+  absent from `insertColumns`, **or** any code matching on either precondition's message text.
+  no-match = every call's conflict columns are also insert keys, and nothing matches the message text.
+- before: PostgreSQL built and executed the call. `ON CONFLICT (c)` names a column of the *target
+  table* and only picks the arbiter index — it has no relation to the insert column list — so the
+  proposed row took `c`'s `DEFAULT` (or NULL). Three outcomes followed: `c` NOT NULL with no default
+  failed at execution with `23502 not_null_violation`; `c` nullable with no default inserted NULL,
+  which a plain unique index treats as distinct, so the conflict never fired and `DO UPDATE` was dead
+  weight; and `c` carrying a real default (a sequence, `current_setting(...)`, a generated column)
+  worked as intended. Oracle rejected all three at build time, because its MERGE reads each conflict
+  column from the USING SELECT that `insertColumns` builds, so an absent one produced
+  `source.<column>` against an inline view that never declared it.
+- after: both vendors return `conflict column "c" must be present in insert columns for upsert` before
+  any SQL is produced, and an empty `conflictColumns` returns `conflict columns required for upsert`
+  on both. Oracle behavior is unchanged apart from the wording. On PostgreSQL the remedy is to put the
+  conflict column in `insertColumns` with the value the conflict is matching on — for the first two
+  outcomes above that value was never meaningful, and stating it is what the call always meant. The
+  third outcome is the one that costs something: a conflict column populated by a column default is a
+  working PostgreSQL pattern that `BuildUpsert` no longer expresses, because Oracle cannot express it.
+  Where the default is a sequence or a `current_setting(...)`, compute the value caller-side and pass
+  it in `insertColumns` — that keeps the statement inside the builder, so prefer it. A **generated**
+  column has no such remedy: PostgreSQL forbids writing one directly (an INSERT may name it only as
+  `DEFAULT`), so `insertColumns` cannot carry it at all, and conflicting on a generated column now
+  needs `database.Raw` or a schema change. `database.Raw` is a real step down: it replaces the whole
+  statement, so the builder's identifier validation and vendor-specific quoting no longer apply to any
+  part of it, and the SQL becomes yours to review and keep portable.
+- verify: `go build ./... && go test ./...`
+- ref: [ADR-028](adr_028_pg_upsert_binds_update_values.md) — context only: it decides that the
+  PostgreSQL upsert binds update values rather than reusing `EXCLUDED`, and states no vendor-parity
+  policy. The policy this atom applies — `BuildUpsert` expresses what **both** vendors can express,
+  so Oracle's constraints are the floor, and the cost is named in `after:` — is stated here and in
+  C59.7, not in an ADR. · `database/internal/builder/helpers.go`
+  (`requireConflictColumnsInInsertSet`) · `database/internal/builder/oracle.go` (`BuildUpsert`) ·
+  `database/internal/builder/postgres.go`
+
+### [C59.10] `BuildUpsert` rejects a conflict column list that names one column twice · breaking · when: match
+
+- detect: `git grep -n 'BuildUpsert' -- '*.go'` lists every call site. Keep the pattern plain — `git
+  grep -E` is POSIX ERE and silently ignores `\b`, `\s`, `\d` and `\w`. Nothing is compiler-caught;
+  the failure is a returned error at run time. Grep finds the calls but not the duplicate, since
+  `conflictColumns` is usually assembled dynamically — a list built by appending a tenant key and a
+  business key is the shape that produces one twice.
+- scope: `database/internal/builder/` only — a helper `requireUniqueConflictColumns` (`helpers.go`)
+  called from `BuildUpsert` (`oracle.go`) ahead of the other preconditions. Duplicates are keyed by
+  **vendor identity**, so the same list can be legal on one vendor and rejected on the other: Oracle
+  folds the unquoted identifiers it emits, making `["id", "ID"]` one column named twice, while
+  PostgreSQL quotes every identifier, so there `"id"` and `"ID"` are two columns and a legitimate
+  composite conflict target that still builds. Oracle's quoted reserved words stay case-sensitive, so
+  `["level", "LEVEL"]` is two columns there and is also still accepted. **Scope limit, stated because
+  the check does not close the whole class:** only `conflictColumns` is deduplicated. `insertColumns`
+  and `updateColumns` are maps, so they cannot hold an *exact* duplicate, but two keys can still fold
+  to one Oracle column (`{"id": 1, "ID": 2}`), which builds a MERGE with a duplicate alias in the
+  USING clause and an ambiguous `source` reference. That path is unchanged here and tracked in #997.
+  Note also that the conflict ⊆ insert precondition on this hop still matches raw map keys, so the
+  two checks answer "same column?" differently.
+- gate: match = a `BuildUpsert` call whose `conflictColumns` can hold the same column twice — an exact
+  repeat on either vendor, or on Oracle a case variant of a non-reserved identifier (its reserved
+  words are quoted and stay case-sensitive). no-match = every list is built from distinct columns.
+- before: neither vendor complained, and the two behaved differently. PostgreSQL emitted
+  `ON CONFLICT ("id", "id")`, which no unique index can match, so the statement failed at execution
+  with `42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification`.
+  Oracle emitted `ON (target.id = source.id AND target.id = source.id)` — a redundant tautology, but
+  **valid SQL that executed correctly**, so a duplicate there was silently harmless.
+- after: both vendors return `conflict columns must be distinct: "id" and "id" name the same column
+  for upsert` before
+  any SQL is produced. On PostgreSQL this only moves an existing failure earlier, from execution to
+  build. **On Oracle it turns a working call into a failing one** — that is the breaking half, and it
+  is deliberate: a duplicate conflict target expresses nothing the single column does not, and
+  accepting it on one vendor while the other fails is the divergence this whole hop is closing. The
+  remedy is to de-duplicate the list at the call site, which changes no generated semantics on either
+  vendor. If the list is assembled dynamically, de-duplicate by the vendor's own rules — lower-casing
+  before comparison is wrong on PostgreSQL, where case distinguishes columns.
+- verify: `go build ./... && go test ./...`
+- ref: `database/internal/builder/helpers.go` (`requireUniqueConflictColumns`, `columnIdentity`) ·
+  `database/internal/builder/oracle.go` (`BuildUpsert`) · #992
 
 ---
 
