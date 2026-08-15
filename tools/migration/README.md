@@ -134,13 +134,27 @@ does not parse it, so it cannot confirm the settings are applied. A run with any
 `database.tls` value set logs a WARN saying exactly that. Wire them with Flyway's
 `${env.NAME}` substitution:
 
+Server-certificate verification, which needs `database.tls.mode` and `database.tls.ca`:
+
 ```properties
 flyway.url=jdbc:postgresql://${env.DB_HOST}:${env.DB_PORT}/${env.DB_NAME}?sslmode=${env.DB_SSLMODE}&sslrootcert=${env.DB_SSLROOTCERT}
 ```
 
-The `env.` prefix is required — a bare `${DB_SSLMODE}` is not substituted and reaches
-the driver literally. A conf that never mentions `DB_SSLMODE` runs with whatever TLS
-the URL itself specifies — possibly none — no matter what `database.tls.mode` says.
+Client-certificate (mTLS) auth, which additionally needs `cert` and `key`:
+
+```properties
+flyway.url=jdbc:postgresql://${env.DB_HOST}:${env.DB_PORT}/${env.DB_NAME}?sslmode=${env.DB_SSLMODE}&sslrootcert=${env.DB_SSLROOTCERT}&sslcert=${env.DB_SSLCERT}&sslkey=${env.DB_SSLKEY}
+```
+
+**Reference only the variables your config actually sets.** Unset fields are not
+exported, so a URL naming `sslrootcert=${env.DB_SSLROOTCERT}` while `database.tls.ca`
+is empty leaves the placeholder unresolved. With `mode` alone, use
+`?sslmode=${env.DB_SSLMODE}` and nothing further.
+
+The `env.` prefix is required — a bare `${DB_SSLMODE}` is Flyway's *placeholder*
+syntax, which resolves from `flyway.placeholders.*` and migration scripts, not from
+the process environment. A conf that never mentions `DB_SSLMODE` runs with whatever
+TLS the URL itself specifies — possibly none — no matter what `database.tls.mode` says.
 
 `DB_SSLKEY` needs one caveat: `database.tls.key` is validated against libpq
 semantics (as pgx uses it), but pgjdbc's `sslkey` expects a PKCS-8 DER file, not PEM.

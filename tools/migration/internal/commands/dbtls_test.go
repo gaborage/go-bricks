@@ -302,12 +302,18 @@ func TestTLSValidatingProviderIsIdempotentAcrossCalls(t *testing.T) {
 	shared.TLS.Mode = " require "
 	p := &tlsValidatingProvider{inner: &stubProvider{cfg: shared}}
 
+	original := shared.TLS.Mode
+
 	_, firstErr := p.DBConfig(context.Background(), "tenant-a")
 	_, secondErr := p.DBConfig(context.Background(), "tenant-a")
 
 	require.Error(t, firstErr)
 	require.Error(t, secondErr)
 	assert.Equal(t, firstErr.Error(), secondErr.Error())
+	// Matching errors alone would not prove the invariant: Oracle rejects " require " and
+	// "require" identically, so a trim that leaked into the provider's config would produce
+	// the same two errors. Assert the source value directly.
+	assert.Equal(t, original, shared.TLS.Mode, "the rejected path must not mutate the provider's config either")
 }
 
 func TestTLSValidatingProviderHandlesNilConfig(t *testing.T) {

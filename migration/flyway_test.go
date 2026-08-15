@@ -847,11 +847,11 @@ func TestBuildEnvironmentVariablesOmitsUnsetTLSFields(t *testing.T) {
 	envVars, err := buildEnvironmentVariables(db)
 
 	require.NoError(t, err)
-	assert.Contains(t, envVars, "DB_SSLMODE=require")
+	assert.Contains(t, envVars, envVarSSLMode+"=require")
 	// A conf that interpolates ${env.DB_SSLROOTCERT} unconditionally must not receive a
 	// blank value it would paste into the URL as `sslrootcert=`. Prefix-matching on the
 	// key (not slice membership) also catches a stray non-empty value.
-	assertEnvVarsLackPrefixes(t, envVars, []string{"DB_SSLROOTCERT", "DB_SSLCERT", "DB_SSLKEY"})
+	assertEnvVarsLackPrefixes(t, envVars, []string{envVarSSLRootCert, envVarSSLCert, envVarSSLKey})
 }
 
 func TestBuildEnvironmentVariablesEmitsNoTLSWithoutConfig(t *testing.T) {
@@ -878,7 +878,27 @@ func TestBuildEnvironmentVariablesOracleCarriesNoTLS(t *testing.T) {
 
 // tlsEnvVarNames are the keys buildEnvironmentVariables may export for TLS; tests assert
 // against the whole set so a newly added one cannot slip past an outdated literal list.
-var tlsEnvVarNames = []string{"DB_SSLMODE", "DB_SSLROOTCERT", "DB_SSLCERT", "DB_SSLKEY"}
+var tlsEnvVarNames = []string{envVarSSLMode, envVarSSLRootCert, envVarSSLCert, envVarSSLKey}
+
+func TestShouldWarnTLSForwarding(t *testing.T) {
+	withTLS := &config.DatabaseConfig{}
+	withTLS.TLS.Mode = "require"
+
+	// PostgreSQL is the only vendor whose TLS is forwarded, so it is the only one whose
+	// JDBC URL can fail to consume it — the whole point of the advisory.
+	assert.True(t, shouldWarnTLSForwarding(config.PostgreSQL, withTLS))
+
+	// Oracle exports nothing, so an advisory naming DB_SSL* would describe variables that
+	// do not exist. ADR-062 rejects database.tls on Oracle, but a dynamic provider can
+	// still deliver this shape.
+	assert.False(t, shouldWarnTLSForwarding(config.Oracle, withTLS),
+		"Oracle forwards no TLS, so it must not claim it did")
+	assert.False(t, shouldWarnTLSForwarding("", withTLS))
+
+	// No TLS configured means nothing to advise about, on any vendor.
+	assert.False(t, shouldWarnTLSForwarding(config.PostgreSQL, &config.DatabaseConfig{}))
+	assert.False(t, shouldWarnTLSForwarding(config.PostgreSQL, nil))
+}
 
 func TestHasTLSSettings(t *testing.T) {
 	assert.False(t, hasTLSSettings(nil))
