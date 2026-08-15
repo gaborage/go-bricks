@@ -206,6 +206,25 @@ func (p *Publisher) status() int {
 	return ha.StatusClosed
 }
 
+// binding resolves the producer to send through, naming the right reason when
+// there is none.
+//
+// The two sentinels are not interchangeable, and a missing binding does not by
+// itself say which applies: a close that lands between send's own closed check
+// and this load drops the binding, and reporting that as ErrPublisherNotStarted
+// would tell a caller its startup wiring is broken during a normal shutdown.
+// closeBound stores closed BEFORE it swaps the binding away, so a binding that
+// went missing because of a close always has the flag set to distinguish it.
+func (p *Publisher) binding() (*boundProducer, error) {
+	if bound := p.bound.Load(); bound != nil {
+		return bound, nil
+	}
+	if p.closed.Load() {
+		return nil, ErrPublisherClosed
+	}
+	return nil, ErrPublisherNotStarted
+}
+
 // Publish sends one message and blocks until the broker confirms it, ctx expires,
 // or the publisher closes.
 //
@@ -243,9 +262,9 @@ func (p *Publisher) send(ctx context.Context, msg *PublishMessage) error {
 	if p.closed.Load() {
 		return ErrPublisherClosed
 	}
-	bound := p.bound.Load()
-	if bound == nil {
-		return ErrPublisherNotStarted
+	bound, bindErr := p.binding()
+	if bindErr != nil {
+		return bindErr
 	}
 	if err := p.routingError(msg.RoutingKey); err != nil {
 		return err

@@ -583,3 +583,50 @@ func TestPublisherBindReopensAClosedPublisher(t *testing.T) {
 	publishConfirmed(t, p, second, &PublishMessage{Data: []byte(testBody)})
 	assert.Zero(t, first.sentCount(), "the revived publisher sends through the new producer")
 }
+
+// TestPublisherBindingNamesWhyThereIsNoProducer pins the sentinel a missing
+// binding reports. A close drops the binding, so without the flag check a normal
+// shutdown would tell the caller its startup wiring was broken. The closed case
+// is not reachable through Publish — send's own closed check short-circuits an
+// already-closed publisher — so it is asserted here, at the seam.
+func TestPublisherBindingNamesWhyThereIsNoProducer(t *testing.T) {
+	tests := []struct {
+		name    string
+		arrange func(p *Publisher)
+		wantErr error
+	}{
+		{
+			name:    "never_bound_was_never_started",
+			arrange: func(*Publisher) {},
+			wantErr: ErrPublisherNotStarted,
+		},
+		{
+			name:    "binding_dropped_by_a_close_reports_closed",
+			arrange: func(p *Publisher) { p.closed.Store(true) },
+			wantErr: ErrPublisherClosed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newPublisher(testStream)
+			tt.arrange(p)
+
+			bound, err := p.binding()
+
+			assert.Nil(t, bound)
+			assert.ErrorIs(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestPublisherBindingReturnsTheInstalledProducer(t *testing.T) {
+	handle := openProducer()
+	p := boundPublisher(handle)
+
+	bound, err := p.binding()
+
+	require.NoError(t, err)
+	require.NotNil(t, bound)
+	assert.Same(t, handle, bound.handle)
+}
