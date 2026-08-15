@@ -506,12 +506,14 @@ type QueryBuilderInterface interface {
 	// DO NOTHING (and omits Oracle's WHEN MATCHED arm), so a matched row is no
 	// longer updated at all: its UPDATE triggers stop firing and RETURNING yields
 	// no row. Where that matters keep a genuine non-conflict column, or issue the
-	// UPDATE explicitly under the same transaction rule as below.
+	// UPDATE explicitly under the same transaction and locking rule as below.
 	// When the two values differ, the call was rewriting the
 	// conflict column itself, which no vendor-portable upsert can express — issue
-	// a separate UPDATE instead, in the same transaction as the insert and keyed
-	// on the conflict columns, since splitting one atomic upsert into two
-	// statements otherwise lets a concurrent writer interleave between them.
+	// a separate UPDATE instead: in the same transaction as the insert, keyed on
+	// the conflict columns, and holding the row lock the single statement took for
+	// you (SELECT ... FOR UPDATE or equivalent). Splitting one atomic upsert into
+	// two statements lets a concurrent writer interleave, and under READ COMMITTED
+	// a shared transaction alone does not stop it.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 
 	// Database function builders
