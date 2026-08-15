@@ -737,10 +737,15 @@ func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
 }
 
 // inferDatabaseTypeFromConnectionString maps a recognized DSN scheme to its vendor.
-// An unrecognized scheme returns "" and is deliberately not an error here: whether
-// an untyped DSN is fatal depends on who connects (ADR-050).
+// Surrounding whitespace is tolerated for classification only — a DSN read from a
+// file, a mounted secret, or a command substitution routinely carries a trailing
+// newline, and losing the scheme match there would silently leave the config
+// untyped. The caller's stored DSN is never rewritten; whether the untrimmed value
+// then fails at dial is the driver's business. An unrecognized scheme returns "" and
+// is deliberately not an error here: whether an untyped DSN is fatal depends on who
+// connects (ADR-050).
 func inferDatabaseTypeFromConnectionString(cs string) string {
-	lower := strings.ToLower(cs)
+	lower := strings.ToLower(strings.TrimSpace(cs))
 	switch {
 	case strings.HasPrefix(lower, "postgres://"), strings.HasPrefix(lower, "postgresql://"):
 		return PostgreSQL
@@ -834,16 +839,44 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 	return nil
 }
 
-// ApplyDatabasePoolDefaults normalizes zero-value Pool, Timezone, and Query
-// (log/slow-threshold) settings on cfg to the documented defaults (25 max
-// connections, idle tracks max, keepalive rules, UTC timezone). Exported so
-// callers that bypass Validate — notably dynamic multi-tenant DBConfigProviders
-// resolved in DbManager — get the same normalization as static config.
+// ApplyDatabasePoolDefaults normalizes a DatabaseConfig for connection: it infers
+// a missing Type from a recognized connectionstring scheme, rejects vendor field
+// combinations the driver would silently drop, and fills zero-value Pool,
+// Timezone, and Query (log/slow-threshold) settings with the documented defaults
+// (25 max connections, idle tracks max, keepalive rules, UTC timezone).
+//
+// Exported so callers that bypass Validate — notably dynamic multi-tenant
+// DBConfigProviders resolved in DbManager — get the same normalization as static
+// config; the inference (ADR-050) is what lets a provider's DSN-only config dial
+// instead of failing on the factory's empty-type dispatch. Unlike config.Validate,
+// this seam never errors on an explicit Type that contradicts the scheme — it is on
+// the per-tenant connection path, where the vendor dial error is the right failure.
+// It does reject Oracle TLS material and an unpaired PostgreSQL sslcert/sslkey,
+// because that failure mode is silent and open rather than loud at dial. The
+// asymmetry is deliberate.
+//
+// Normalization happens on a clone that is committed to cfg only after every step
+// succeeds, so a rejected config goes back to its caller completely untouched.
 func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg == nil {
 		return NewValidationError("database", "configuration is nil")
 	}
-	return applyDatabasePoolDefaults(cfg)
+
+	normalized := *cfg
+	if normalized.Type == "" {
+		normalized.Type = inferDatabaseTypeFromConnectionString(normalized.ConnectionString)
+	}
+
+	if err := validateVendorSpecificFields(&normalized); err != nil {
+		return err
+	}
+
+	if err := applyDatabasePoolDefaults(&normalized); err != nil {
+		return err
+	}
+
+	*cfg = normalized
+	return nil
 }
 
 // applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.

@@ -3,6 +3,28 @@
 **Status:** Accepted
 **Date:** 2026-08-05
 
+> **Amended (2026-08-14):** Decision item 1 names
+> `config.validateDatabaseWithConnectionString` as the inference site; it is no
+> longer the only one. `config.ApplyDatabasePoolDefaults` — the seam
+> `database.DbManager.createConnection` applies to every config a dynamic
+> `DBConfigProvider` returns, and which never reaches `config.Validate` — now
+> performs the same scheme inference, so anyone extending the recognized-scheme
+> list has two call sites to account for rather than one (both delegate to
+> `inferDatabaseTypeFromConnectionString`, so the list itself stays in one
+> place). The conflicting-`Type` **error** in item 1 is unchanged and remains
+> Validate-only.
+>
+> **Inference is unconditional on both paths, regardless of connector.** Item 2's
+> exemption is scoped to the startup **guard** ("fails startup … but only when
+> the built-in connector would be used") and never exempted anything from
+> inference. `config.Validate` is connector-blind — the `config` package holds no
+> reference to `Options.DatabaseConnector` at all — so a static `postgres://`
+> config under a custom connector has carried a populated `Type` since item 1
+> shipped, and a connector branching on `cfg.Type == ""` was already wrong there.
+> Inference normalizes the config *shape*; only the guard is connector-aware.
+> `ApplyDatabasePoolDefaults` now also runs `validateVendorSpecificFields`. See
+> Consequences and [migrations.md](migrations.md) `[C59.6]`.
+
 ## Context
 
 A `database.connectionstring` with no `database.type` passes `config.Validate`
@@ -113,3 +135,34 @@ stays in the config/app layers, not the connector.
   (ADR-012); landing a third vendor would need both
   `inferDatabaseTypeFromConnectionString` and the builder-guard message
   extended in the same commit. See [migrations.md](migrations.md) `[C57.5]`.
+- Inference now also runs on the **dynamic-resolution** path.
+  `config.ApplyDatabasePoolDefaults` — the seam
+  `database.DbManager.createConnection` applies to every config a
+  `DBConfigProvider` returns — infers a missing `Type` from the DSN scheme, so a
+  dynamic multi-tenant source returning `{ConnectionString: "postgres://…"}`
+  dials instead of failing that tenant's every request with
+  `unsupported database type: ""`. The explicit-conflict **error** stays
+  Validate-only: this seam runs per connection, where a wrong explicit `Type`
+  is better surfaced by the vendor dial error than converted into a config
+  error for one tenant at a time.
+- **This narrows the `Options.DatabaseConnector` exemption.** A custom connector
+  is still exempt from `ConfigureRuntimeHelpers`' startup guard, but it now
+  receives `Type` already inferred to `postgresql`/`oracle` for a recognized
+  scheme, where it previously received `""`. A connector that branches on
+  `cfg.Type == ""` to decide whether to parse the DSN itself must be reviewed.
+  Unrecognized schemes are unaffected — `Type` stays `""`.
+- **Vendor-specific validation now runs on the dynamic path too.** Inference
+  alone would have re-opened, from the other side, the hole item 3 reasons
+  about: on the dynamic path Oracle TLS material was silently dropped and a lone
+  PostgreSQL `sslcert` under `sslmode=disable` silently ignored — the states the
+  vendor validators exist to prevent — so `ApplyDatabasePoolDefaults` runs them
+  after inference and before defaulting. The reach is wider than the DSN-only
+  shape that motivated the seam: a dynamic config with an **explicit**
+  `Type: oracle` plus `database.tls.cert`/`key`/`ca` connected before and now
+  fails at connection acquisition. The seam stays asymmetric by design — it
+  errors on dropped TLS material while still tolerating a `Type` that
+  contradicts the scheme, because that conflict fails loudly at dial with the
+  vendor's own error whereas dropped TLS material fails silently open.
+  Normalization happens on a clone that is committed to the caller's config only
+  after every step succeeds, so a rejected config returns untouched — neither
+  reclassified nor carrying half-applied pool defaults.

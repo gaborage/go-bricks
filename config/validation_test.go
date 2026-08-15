@@ -16,6 +16,7 @@ import (
 
 const (
 	testConnectionString         = "postgresql://user:pass@localhost/db"
+	testBarePostgresConnString   = "postgres://localhost:5432/db"
 	testOracleConnectionString   = "oracle://user:pass@localhost:1521/XEPDB1"
 	testUnknownSchemeConnString  = "sqlserver://user:pass@localhost:1433/db"
 	testOracleHost               = "oracle.example.com"
@@ -1564,17 +1565,26 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 	}
 }
 
-func TestValidateInfersDatabaseTypeFromConnectionString(t *testing.T) {
-	tests := []struct {
-		name          string
-		config        DatabaseConfig
-		expectError   bool
-		errorContains string
-		expectedType  string
-	}{
+// dbTypeInferenceCase is one scheme-classification fixture. Both inference sites
+// — config.Validate and the ApplyDatabasePoolDefaults seam — share the slice so
+// they cannot drift apart on which schemes classify; their single deliberate
+// divergence (an explicit Type contradicting the scheme: an error in Validate,
+// left alone on the seam) is pinned by each site's own test instead.
+type dbTypeInferenceCase struct {
+	name         string
+	config       DatabaseConfig
+	expectedType string
+}
+
+// databaseTypeInferenceCases returns a fresh slice per call. Both callers already
+// copy twice before mutating (range copies the element, then cfg := tt.config), so
+// this is belt-and-braces against a future caller that takes a pointer straight
+// into the slice and leaks one site's mutations into the other's fixtures.
+func databaseTypeInferenceCases() []dbTypeInferenceCase {
+	return []dbTypeInferenceCase{
 		{
 			name:         "postgres_scheme_infers_type",
-			config:       DatabaseConfig{ConnectionString: "postgres://user:pass@localhost:5432/db"},
+			config:       DatabaseConfig{ConnectionString: testBarePostgresConnString},
 			expectedType: PostgreSQL,
 		},
 		{
@@ -1593,41 +1603,63 @@ func TestValidateInfersDatabaseTypeFromConnectionString(t *testing.T) {
 			expectedType: PostgreSQL,
 		},
 		{
-			name:         "unknown_scheme_keeps_empty_type_and_passes",
+			name:         "leading_space_infers_type",
+			config:       DatabaseConfig{ConnectionString: " " + testBarePostgresConnString},
+			expectedType: PostgreSQL,
+		},
+		{
+			name:         "trailing_newline_infers_type",
+			config:       DatabaseConfig{ConnectionString: testOracleConnectionString + "\n"},
+			expectedType: Oracle,
+		},
+		{
+			name:         "surrounding_tab_and_crlf_infers_type",
+			config:       DatabaseConfig{ConnectionString: "\t" + testConnectionString + "\r\n"},
+			expectedType: PostgreSQL,
+		},
+		{
+			name:         "unknown_scheme_keeps_empty_type",
 			config:       DatabaseConfig{ConnectionString: testUnknownSchemeConnString},
 			expectedType: "",
 		},
 		{
-			name: "explicit_type_conflicting_with_scheme_fails",
-			config: DatabaseConfig{
-				Type:             Oracle,
-				ConnectionString: "postgres://user:pass@localhost:5432/db",
-			},
-			expectError:   true,
-			errorContains: "conflicts with the connectionstring scheme",
+			name:         "no_connection_string_keeps_empty_type",
+			config:       DatabaseConfig{},
+			expectedType: "",
 		},
 		{
 			name: "explicit_matching_type_untouched",
 			config: DatabaseConfig{
 				Type:             PostgreSQL,
-				ConnectionString: "postgres://user:pass@localhost:5432/db",
+				ConnectionString: testBarePostgresConnString,
 			},
 			expectedType: PostgreSQL,
 		},
 	}
+}
 
-	for _, tt := range tests {
+func TestValidateInfersDatabaseTypeFromConnectionString(t *testing.T) {
+	for _, tt := range databaseTypeInferenceCases() {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.config)
-			if tt.expectError {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errorContains)
-				return
-			}
-			assert.NoError(t, err)
-			assert.Equal(t, tt.expectedType, tt.config.Type)
+			cfg := tt.config
+			dsn := cfg.ConnectionString
+
+			require.NoError(t, validateDatabase(&cfg))
+
+			assert.Equal(t, tt.expectedType, cfg.Type)
+			assert.Equal(t, dsn, cfg.ConnectionString, "classification tolerates whitespace; the stored DSN stays byte-exact")
 		})
 	}
+
+	// The deliberate divergence from the ApplyDatabasePoolDefaults seam: Validate
+	// rejects an explicit Type contradicting the scheme (ADR-050 item 1).
+	t.Run("explicit_type_conflicting_with_scheme_fails", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}
+
+		err := validateDatabase(&cfg)
+
+		assertValidationError(t, err, "conflicts with the connectionstring scheme")
+	})
 }
 
 func TestValidateNamedDatabaseInfersTypeFromConnectionString(t *testing.T) {
@@ -1643,7 +1675,9 @@ func TestValidateNamedDatabaseInfersTypeFromConnectionString(t *testing.T) {
 }
 
 func assertValidationError(t *testing.T, err error, errorContains string) {
-	assert.Error(t, err)
+	// require, not assert: a nil err would otherwise panic on err.Error() below and
+	// take the whole test binary down instead of failing this one case.
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), errorContains)
 }
 
@@ -5715,4 +5749,108 @@ func TestValidateStreamsRejectsMultiTenantEndToEnd(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "single-tenant only")
+}
+
+// TestApplyDatabasePoolDefaultsInfersTypeFromScheme runs the shared inference
+// fixtures against the seam. Unrecognized and absent DSNs leave Type empty and
+// return no error: this seam is on the per-tenant connection path, so
+// database.NewConnection's "unsupported database type" stays the failure surface
+// for dynamic sources (ADR-050 keeps classification in the config/app layers).
+func TestApplyDatabasePoolDefaultsInfersTypeFromScheme(t *testing.T) {
+	for _, tt := range databaseTypeInferenceCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.config
+			dsn := cfg.ConnectionString
+
+			require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+
+			assert.Equal(t, tt.expectedType, cfg.Type)
+			assert.Equal(t, dsn, cfg.ConnectionString, "classification tolerates whitespace; the stored DSN stays byte-exact")
+		})
+	}
+}
+
+// TestApplyDatabasePoolDefaultsRunsVendorValidation pins the fail-open this seam
+// closes: before it ran validateVendorSpecificFields, a dynamic tenant whose Type
+// resolved to oracle dialed with its TLS material silently dropped — the exact
+// state validateOracleFields exists to prevent — and a PostgreSQL config with a
+// lone sslcert connected with the certificate silently ignored under
+// sslmode=disable.
+func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
+	const certPath = "/etc/certs/client.crt"
+
+	t.Run("inferred_oracle_with_tls_material_rejected", func(t *testing.T) {
+		cfg := DatabaseConfig{ConnectionString: testOracleConnectionString}
+		cfg.TLS.CertFile = certPath
+		cfg.TLS.KeyFile = "/etc/certs/client.key"
+		original := cfg
+
+		err := ApplyDatabasePoolDefaults(&cfg)
+
+		assertValidationError(t, err, "TLS cert/key/ca are not supported for Oracle")
+		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
+	})
+
+	t.Run("inferred_postgres_with_unpaired_cert_rejected", func(t *testing.T) {
+		cfg := DatabaseConfig{ConnectionString: testBarePostgresConnString}
+		cfg.TLS.CertFile = certPath
+		original := cfg
+
+		err := ApplyDatabasePoolDefaults(&cfg)
+
+		assertValidationError(t, err, "sslcert and sslkey must be configured together")
+		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
+	})
+
+	// The guard reaches typed dynamic configs too, not only the DSN-only shape
+	// that motivated the seam: this pair connected before the guard landed.
+	t.Run("explicit_oracle_type_with_ca_file_rejected", func(t *testing.T) {
+		cfg := DatabaseConfig{Type: Oracle, Host: testOracleHost, Database: "XEPDB1"}
+		cfg.TLS.CAFile = "/etc/certs/ca.pem"
+		original := cfg
+
+		err := ApplyDatabasePoolDefaults(&cfg)
+
+		assertValidationError(t, err, "TLS cert/key/ca are not supported for Oracle")
+		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
+	})
+
+	t.Run("paired_postgres_certificate_accepted", func(t *testing.T) {
+		cfg := DatabaseConfig{ConnectionString: testBarePostgresConnString}
+		cfg.TLS.CertFile = certPath
+		cfg.TLS.KeyFile = "/etc/certs/client.key"
+
+		require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
+		assert.Equal(t, PostgreSQL, cfg.Type)
+		assert.Equal(t, int32(25), cfg.Pool.Max.Connections, "defaults still applied after vendor validation")
+	})
+
+	// Every case above is rejected by validateVendorSpecificFields, which returns
+	// before any defaulting runs — so none of them proves the rollback holds when
+	// the LATER step fails. This one does: vendor validation passes, Type is
+	// inferred, defaulting then rejects the negative idle time, and the caller must
+	// still get its config back whole (no inferred Type, no half-applied defaults).
+	t.Run("rollback_after_pool_defaulting_error", func(t *testing.T) {
+		cfg := DatabaseConfig{ConnectionString: testBarePostgresConnString}
+		cfg.Pool.Idle.Time = -1
+		original := cfg
+
+		err := ApplyDatabasePoolDefaults(&cfg)
+
+		assertValidationError(t, err, "database.pool.idle.time must be non-negative")
+		assert.Equal(t, original, cfg, "a config rejected after inference must not keep the inferred Type or partial defaults")
+		assert.Empty(t, cfg.Type, "Type is committed only after every step succeeds")
+	})
+}
+
+func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
+	// The conflicting case pins a deliberate divergence from
+	// validateDatabaseWithConnectionString, which rejects a Type contradicting the
+	// scheme: this seam runs per connection, so it leaves the explicit Type alone
+	// and lets the vendor dial error be the failure (ADR-050). Do not "fix" it.
+	// The matching-type case is covered by explicit_matching_type_untouched in
+	// databaseTypeInferenceCases, which this seam's table test already runs.
+	conflicting := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}
+	require.NoError(t, ApplyDatabasePoolDefaults(&conflicting))
+	assert.Equal(t, Oracle, conflicting.Type)
 }

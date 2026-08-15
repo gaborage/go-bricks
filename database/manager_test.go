@@ -462,6 +462,40 @@ func TestDbManagerDynamicConfigGetsPoolDefaults(t *testing.T) {
 	assert.Empty(t, resource.configs["tenant"].Timezone, "provider config timezone untouched")
 }
 
+// TestDbManagerDynamicConfigInfersTypeFromConnectionString proves the
+// consumer-visible half of ADR-050's seam inference: a dynamic DBConfigProvider
+// returning a DSN-only config reaches the connector with Type populated, so the
+// tenant dials instead of failing every request on the factory's empty-type
+// dispatch. The non-empty db_type this test asserts is the same value [C59.6]
+// tells operators to look for in the "Created new database connection" log line.
+func TestDbManagerDynamicConfigInfersTypeFromConnectionString(t *testing.T) {
+	ctx := context.Background()
+	// No credentials: scheme inference reads only the scheme, and the stub connector
+	// never authenticates.
+	resource := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		"tenant": {ConnectionString: "postgres://localhost:5432/db"},
+	}}
+	providerOwned := *resource.configs["tenant"]
+
+	var captured *config.DatabaseConfig
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		captured = cfg
+		return &stubDB{}, nil
+	}
+	manager := NewDbManager(resource, newErrorTestLogger(), DbManagerOptions{}, connector)
+	defer func() { _ = manager.Close() }()
+
+	_, release, err := manager.Get(ctx, "tenant")
+	require.NoError(t, err)
+	release()
+
+	require.NotNil(t, captured)
+	assert.Equal(t, "postgresql", captured.Type, "the connector receives the type inferred from the DSN scheme")
+	// Compare the whole value, not just Type: normalization must not reach the
+	// provider's struct through any field (ConnectionString, Pool, TLS, vendor blocks).
+	assert.Equal(t, providerOwned, *resource.configs["tenant"], "the provider-owned config stays untouched")
+}
+
 // TestDbManagerDynamicConfigExplicitPoolPreserved proves that pool defaulting
 // on the dynamic path only fills zero values — a dynamic config that already
 // sets an explicit pool size passes through unchanged.
