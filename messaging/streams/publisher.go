@@ -229,18 +229,20 @@ func (p *Publisher) send(ctx context.Context, msg *PublishMessage) error {
 	}
 
 	clientMsg := p.buildMessage(ctx, msg)
-	w := p.pending.add(clientMsg, msg.RoutingKey)
+	w, live := p.registerSend(clientMsg, msg.RoutingKey)
 
 	// The send runs on a goroutine this call is willing to abandon: the client's
 	// send path waits on a bare sync.Cond while the producer reconnects, so a
 	// broker outage can park it indefinitely and only the caller's ctx can cut it
 	// short. Same trade as Manager.flushOffsetsLocked. A non-nil error never
 	// reaches the confirmation handler, so it resolves the waiter here instead.
-	go func() {
-		if sendErr := bound.handle.Send(clientMsg); sendErr != nil {
-			p.pending.resolve(clientMsg, fmt.Errorf("failed to publish to stream %q: %w", p.stream, sendErr))
-		}
-	}()
+	if live {
+		go func() {
+			if sendErr := bound.handle.Send(clientMsg); sendErr != nil {
+				p.pending.resolve(clientMsg, fmt.Errorf("failed to publish to stream %q: %w", p.stream, sendErr))
+			}
+		}()
+	}
 
 	select {
 	case err := <-w.ch:
@@ -249,6 +251,27 @@ func (p *Publisher) send(ctx context.Context, msg *PublishMessage) error {
 		p.pending.abandon(clientMsg)
 		return fmt.Errorf("publish to stream %q abandoned before confirmation: %w", p.stream, ctx.Err())
 	}
+}
+
+// registerSend registers one in-flight send and reports whether it may still be
+// dispatched to the client.
+//
+// The second check of closed is not redundant with the one send() opens with: a
+// close can land between them, and closeBound sweeps the map at a fixed point.
+// An entry added after that sweep would sit outside every removal path — and
+// because the client swallows write errors, a send against the closed producer
+// may return nothing at all, hanging a caller with no deadline across the whole
+// shutdown. closeBound stores closed strictly BEFORE it sweeps, so any entry
+// that lands after the sweep is guaranteed to observe the flag here and resolve
+// itself. An entry that landed before the sweep is resolved by the sweep, and
+// this resolve is then the no-op that idempotency exists for.
+func (p *Publisher) registerSend(clientMsg message.StreamMessage, routingKey string) (w *waiter, live bool) {
+	w = p.pending.add(clientMsg, routingKey)
+	if p.closed.Load() {
+		p.pending.resolve(clientMsg, ErrPublisherClosed)
+		return w, false
+	}
+	return w, true
 }
 
 // routingError rejects a routing key that does not match the publisher's target
@@ -314,9 +337,19 @@ func confirmationError(streamName string, cause error) error {
 	return fmt.Errorf("publish to stream %q not confirmed: %w", streamName, cause)
 }
 
-// bind installs the client producer Manager.Start created for this publisher.
+// bind installs the client producer Manager.Start created for this publisher and
+// reopens it.
+//
+// Clearing closed is what makes a Close-then-Start cycle work: Manager.Start
+// guards on the environment, not on started, so it may run again once Close
+// disposed the previous one — and unlike consumers, which are rebuilt from
+// scratch each time, the module keeps the same *Publisher it was handed at
+// declaration time. Without this it would stay permanently closed. The binding
+// is installed BEFORE the flag clears, so no caller can find an open publisher
+// with nothing to send through.
 func (p *Publisher) bind(handle producerHandle) {
 	p.bound.Store(&boundProducer{handle: handle})
+	p.closed.Store(false)
 }
 
 // closeBound shuts the publisher down and reports the client producer's own close

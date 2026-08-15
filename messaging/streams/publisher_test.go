@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/ha"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/message"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
@@ -151,6 +152,20 @@ func publishConfirmed(t *testing.T, p *Publisher, handle *fakeProducer, msg *Pub
 	done := publishAsync(context.Background(), p, msg)
 	p.resolveConfirmation(waitForSend(t, handle), true, nil)
 	require.NoError(t, <-done)
+}
+
+// resolvedError reads a waiter's outcome, failing the test instead of blocking on
+// it: a waiter nobody resolves is exactly the defect these tests guard against,
+// and it must surface as an attributed failure rather than a suite-wide hang.
+func resolvedError(t *testing.T, w *waiter) error {
+	t.Helper()
+	select {
+	case err := <-w.ch:
+		return err
+	case <-time.After(sendWaitTimeout):
+		t.Fatal("the waiter was never resolved")
+		return nil
+	}
 }
 
 // propertiesOf reads the application properties a message carries to the broker.
@@ -476,4 +491,95 @@ func TestPublisherConfirmedSkipsNilStatuses(t *testing.T) {
 
 	assert.NotPanics(t, func() { p.confirmed([]*stream.ConfirmationStatus{nil, {}}) })
 	assert.Zero(t, pendingCount(p))
+}
+
+// TestPublisherRegisterSendResolvesASendThatRacedTheCloseSweep pins the window
+// the early closed check cannot cover: a close that completes — sweep included —
+// between a send's own closed check and its registration. The entry lands after
+// the sweep already passed, so nothing else would ever remove it, and because the
+// client swallows write errors the send against the closed producer may return
+// nothing at all. Driven directly rather than by racing goroutines so the
+// interleaving is the test's, not the scheduler's.
+func TestPublisherRegisterSendResolvesASendThatRacedTheCloseSweep(t *testing.T) {
+	handle := openProducer()
+	p := boundPublisher(handle)
+	require.NoError(t, p.closeBound())
+
+	clientMsg := amqp.NewMessage([]byte(testBody))
+	w, live := p.registerSend(clientMsg, "")
+
+	assert.False(t, live, "a publisher that closed mid-registration must not reach the client")
+	assert.ErrorIs(t, resolvedError(t, w), ErrPublisherClosed, "the caller is failed, never left waiting")
+	assert.Zero(t, pendingCount(p), "and the entry does not outlive the sweep")
+	assert.Zero(t, handle.sentCount())
+}
+
+// TestPublisherRegisterSendDispatchesWhileOpen is the other side of that guard:
+// an open publisher registers the send and hands it on, entry retained until a
+// confirmation resolves it.
+func TestPublisherRegisterSendDispatchesWhileOpen(t *testing.T) {
+	p := boundPublisher(openProducer())
+
+	clientMsg := amqp.NewMessage([]byte(testBody))
+	w, live := p.registerSend(clientMsg, testRoutingKey)
+
+	assert.True(t, live)
+	assert.Equal(t, 1, pendingCount(p), "an open publisher keeps the entry for its confirmation")
+	assert.Empty(t, w.ch, "and resolves nothing yet")
+
+	key, ok := p.pending.routingKeyFor(clientMsg)
+	require.True(t, ok)
+	assert.Equal(t, testRoutingKey, key)
+}
+
+// TestPublisherConcurrentPublishesSurviveAClose is the end-to-end probe of the
+// same invariant, and the shape that would have caught the defect in the wild:
+// none of these publishes carries a deadline, so a waiter the close failed to
+// resolve hangs its caller forever rather than failing it.
+func TestPublisherConcurrentPublishesSurviveAClose(t *testing.T) {
+	const publishes = 32
+	handle := openProducer()
+	p := boundPublisher(handle)
+
+	var wg sync.WaitGroup
+	results := make(chan error, publishes)
+	for range publishes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)})
+		}()
+	}
+
+	require.NoError(t, p.closeBound())
+
+	finished := make(chan struct{})
+	go func() { wg.Wait(); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(sendWaitTimeout):
+		t.Fatal("a publish outlived the close: its waiter was never resolved")
+	}
+
+	close(results)
+	for err := range results {
+		assert.Error(t, err, "a publish racing a close fails, it never succeeds by accident")
+	}
+	assert.Zero(t, pendingCount(p), "the close leaves no correlation entry behind")
+}
+
+// TestPublisherBindReopensAClosedPublisher pins the Close-then-Start cycle at the
+// handle level: the module keeps the same *Publisher across it, so a rebind has
+// to make it live again or every later publish fails for good.
+func TestPublisherBindReopensAClosedPublisher(t *testing.T) {
+	first := openProducer()
+	p := boundPublisher(first)
+	require.NoError(t, p.closeBound())
+	require.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}), ErrPublisherClosed)
+
+	second := openProducer()
+	p.bind(second)
+
+	publishConfirmed(t, p, second, &PublishMessage{Data: []byte(testBody)})
+	assert.Zero(t, first.sentCount(), "the revived publisher sends through the new producer")
 }

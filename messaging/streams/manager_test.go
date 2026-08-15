@@ -1129,7 +1129,12 @@ func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {
 
 // attachPublisher wires a fake producer into a manager as if Start had bound it.
 func attachPublisher(m *Manager, handle *fakeProducer) *Publisher {
-	p := newPublisher(testStream)
+	return rebindPublisher(m, newPublisher(testStream), handle)
+}
+
+// rebindPublisher binds an EXISTING publisher to a new producer, which is what a
+// second Manager.Start does to the handle a module has held since declaration.
+func rebindPublisher(m *Manager, p *Publisher, handle *fakeProducer) *Publisher {
 	p.bind(handle)
 	m.publishers = append(m.publishers, &runningPublisher{stream: testStream, handle: handle, publisher: p})
 	m.started = true
@@ -1243,4 +1248,27 @@ func TestManagerStatsCountsPublishers(t *testing.T) {
 	assert.Equal(t, 1, stats["publishers"])
 	assert.Equal(t, 0, stats["consumers"])
 	assert.Equal(t, true, stats["ready"])
+}
+
+// TestManagerRebindRevivesAPublisherAfterAStopCycle covers the Start → Close →
+// Start cycle Manager.Start allows: its guard is the environment, which Close
+// nils, and consumers survive it because each Start rebuilds them. A publisher
+// cannot be rebuilt — the module holds the same handle from declaration onwards —
+// so the rebind has to reopen it or the second Start comes up publishing nothing.
+func TestManagerRebindRevivesAPublisherAfterAStopCycle(t *testing.T) {
+	m := testManager(t)
+	first := openProducer()
+	p := attachPublisher(m, first)
+
+	m.StopConsumers()
+
+	require.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}), ErrPublisherClosed)
+	assert.False(t, m.Ready(), "a stopped manager is not ready")
+
+	second := openProducer()
+	rebindPublisher(m, p, second)
+
+	assert.True(t, m.Ready(), "the second start comes up ready")
+	publishConfirmed(t, p, second, &PublishMessage{Data: []byte(testBody)})
+	assert.Zero(t, first.sentCount(), "the revived publisher sends through the new producer, not the disposed one")
 }
