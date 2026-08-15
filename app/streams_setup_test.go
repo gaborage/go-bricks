@@ -45,6 +45,11 @@ func declareOneConsumer(decls *streams.Declarations) {
 	})
 }
 
+func declareOnePublisher(decls *streams.Declarations) {
+	decls.DeclareStream(testStreamName, nil)
+	decls.DeclarePublisher(&streams.PublisherOptions{Stream: testStreamName})
+}
+
 func newStreamsApp(t *testing.T, streamsCfg config.StreamsConfig, modules ...Module) *App {
 	t.Helper()
 	return newStreamsAppWithLogger(t, logger.New("error", false), streamsCfg, modules...)
@@ -92,7 +97,23 @@ func TestPrepareStreamConsumersFailsWhenDeclaredButUnconfigured(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stream declarations were registered")
-	assert.Contains(t, err.Error(), "streams=1, consumers=1")
+	assert.Contains(t, err.Error(), "streams=1, consumers=1, publishers=0")
+	assert.Contains(t, err.Error(), streamsUnconfiguredMsg)
+	assert.Nil(t, a.streamsManager)
+}
+
+// TestPrepareStreamConsumersFailsWhenOnlyAPublisherIsDeclared mirrors the
+// consumer case for a service that only publishes: the gate still fires, and the
+// count names the publisher that tripped it rather than reporting zero of
+// everything the operator can see.
+func TestPrepareStreamConsumersFailsWhenOnlyAPublisherIsDeclared(t *testing.T) {
+	a := newStreamsApp(t, config.StreamsConfig{},
+		&streamModule{name: "orders", declaration: declareOnePublisher})
+
+	err := a.prepareStreamConsumers(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "streams=1, consumers=0, publishers=1")
 	assert.Contains(t, err.Error(), streamsUnconfiguredMsg)
 	assert.Nil(t, a.streamsManager)
 }

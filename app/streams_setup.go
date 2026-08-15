@@ -117,10 +117,10 @@ func (a *App) assertStreamsConfigured(decls *streams.Declarations) error {
 	}
 	s := decls.Stats()
 	return fmt.Errorf("stream declarations were registered "+
-		"(streams=%d, consumers=%d) "+
+		"(streams=%d, consumers=%d, publishers=%d) "+
 		"but the stream protocol is not configured; "+
 		"set messaging.streams.uri (or env MESSAGING_STREAMS_URI)",
-		s.Streams, s.Consumers)
+		s.Streams, s.Consumers, s.Publishers)
 }
 
 // shutdownStreamConsumers stops stream consumers before modules are torn down,
