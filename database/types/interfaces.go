@@ -493,6 +493,12 @@ type QueryBuilderInterface interface {
 
 	// Vendor-specific helpers
 	BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer
+
+	// BuildUpsert rejects a column present in both conflictColumns and
+	// updateColumns on every vendor, because Oracle's MERGE cannot update a
+	// column referenced in its ON clause (ORA-38104). Drop it from
+	// updateColumns: the conflict match pins its value on a matched row and the
+	// INSERT supplies it on an unmatched one, so no resulting row changes.
 	BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 
 	// Database function builders

@@ -24,10 +24,9 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 	return vals
 }
 
-// rejectConflictColumnUpdates enforces the vendor-portable upsert contract:
-// a conflict column cannot also be updated. Oracle's MERGE rejects it at
-// execution (ORA-38104); PostgreSQL would accept it, so both builders reject
-// at build time to keep one call meaning one thing on both vendors.
+// rejectConflictColumnUpdates keeps one BuildUpsert call meaning one thing on
+// both vendors: Oracle's MERGE rejects an updated ON-clause column at execution
+// (ORA-38104) while PostgreSQL would accept it, so both builders reject early.
 func rejectConflictColumnUpdates(conflictColumns []string, updateColumns map[string]any) error {
 	for _, col := range conflictColumns {
 		if _, ok := updateColumns[col]; ok {
