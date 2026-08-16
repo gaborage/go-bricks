@@ -81,6 +81,13 @@ type suiteTiming struct {
 	Baseline time.Duration
 }
 
+// mutantNeed is what one mutant run costs before any floor applies: the real
+// suite, plus headroom for compiling and linking the mutated binary. Both the
+// coefficient and the shortfall WARN start from it, so it is named once.
+func mutantNeed(t suiteTiming) time.Duration {
+	return t.Uncached + buildBudget
+}
+
 // timeoutCoefficient returns the smallest coefficient that holds gremlins'
 // derived ceiling (Baseline × coefficient) above what a mutant run actually
 // costs. Because the two inputs measure different things, targeting a fixed
@@ -89,13 +96,6 @@ type suiteTiming struct {
 //
 // An unmeasurable Baseline fails generous rather than reinstating the vacuous
 // pass this whole mechanism exists to prevent.
-// mutantNeed is what one mutant run costs before any floor applies: the real
-// suite, plus headroom for compiling and linking the mutated binary. Both the
-// coefficient and the shortfall WARN start from it, so it is named once.
-func mutantNeed(t suiteTiming) time.Duration {
-	return t.Uncached + buildBudget
-}
-
 func timeoutCoefficient(t suiteTiming, floor time.Duration) int {
 	target := max(mutantNeed(t), floor)
 	if t.Baseline <= 0 {

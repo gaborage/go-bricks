@@ -99,8 +99,8 @@ type JoinFilter interface {
 //
 // Column-to-value methods accept RawExpression for complex SQL expressions:
 //
-//	jf.Eq("amount", qb.Expr("TO_NUMBER(?)"), 100)  // Expression support
-//	jf.Eq("status", "active")                      // Simple value with placeholder
+//	jf.Eq("amount", qb.MustExpr("TO_NUMBER('100')"))  // Expression support (no placeholders inside expressions)
+//	jf.Eq("status", "active")                         // Simple value with placeholder
 type JoinFilterFactory interface {
 	// Column-to-column comparison operators
 	EqColumn(leftColumn, rightColumn string) JoinFilter
@@ -360,12 +360,12 @@ type Columns interface {
 	// Panics if the field name is not found (fail-fast for development-time typos).
 	//
 	// Example (unaliased):
-	//   cols.Col("ID")    // Returns: "id" (PostgreSQL) or "ID" (Oracle)
-	//   cols.Col("Level") // Returns: "level" (PostgreSQL) or "LEVEL" (Oracle, quoted)
+	//   cols.Col("ID")    // Returns: "id" (PostgreSQL) or "id" (Oracle, not a reserved word)
+	//   cols.Col("Level") // Returns: "level" (PostgreSQL) or "\"level\"" (Oracle, reserved word — double-quoted lowercase)
 	//
 	// Example (aliased):
 	//   u := cols.As("u")
-	//   u.Col("ID")       // Returns: "u.id" (PostgreSQL) or "u.\"ID\"" (Oracle)
+	//   u.Col("ID")       // Returns: "u.id" (PostgreSQL) or "u.id" (Oracle, not a reserved word)
 	Col(fieldName string) string
 
 	// As returns a new Columns instance bound to the specified table alias.

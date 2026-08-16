@@ -105,7 +105,6 @@ func initCacheMeter() {
 	)
 	logMetricError(metricCacheOperationDuration, err)
 
-	// Initialize cache hit counter
 	cacheHitCounter, err = cacheMeter.Int64Counter(
 		metricCacheHit,
 		metric.WithDescription("Number of cache hits"),
@@ -113,7 +112,6 @@ func initCacheMeter() {
 	)
 	logMetricError(metricCacheHit, err)
 
-	// Initialize cache miss counter
 	cacheMissCounter, err = cacheMeter.Int64Counter(
 		metricCacheMiss,
 		metric.WithDescription("Number of cache misses"),
@@ -142,7 +140,6 @@ func ensureCacheMeterInitialized() {
 func RecordCacheOperation(ctx context.Context, operation string, duration time.Duration, hit bool, err error, namespace string) {
 	ensureCacheMeterInitialized()
 
-	// Build base attributes
 	attrs := []attribute.KeyValue{
 		attribute.String(attrDBSystem, "redis"),
 		attribute.String(attrDBOperation, operation),
@@ -163,7 +160,6 @@ func RecordCacheOperation(ctx context.Context, operation string, duration time.D
 		attrs = append(attrs, attribute.String(attrErrorType, classifyError(err)))
 	}
 
-	// Record duration histogram
 	if cacheOperationDuration != nil {
 		durationSec := float64(duration.Nanoseconds()) / 1e9
 		cacheOperationDuration.Record(ctx, durationSec, metric.WithAttributes(attrs...))
@@ -199,7 +195,6 @@ func classifyError(err error) string {
 	}
 }
 
-// contains checks if s contains substr.
 func contains(s, substr string) bool {
 	if substr == "" {
 		return true
@@ -281,14 +276,12 @@ func (r *managerMetricsRegistration) observeManagerStats(_ context.Context, obse
 	return nil
 }
 
-// createObservableUpDownCounter creates an observable up-down counter.
 func createObservableUpDownCounter(meter metric.Meter, name, description string) metric.Int64ObservableUpDownCounter {
 	counter, err := meter.Int64ObservableUpDownCounter(name, metric.WithDescription(description))
 	logMetricError(name, err)
 	return counter
 }
 
-// createObservableCounter creates an observable counter.
 func createObservableCounter(meter metric.Meter, name, description string) metric.Int64ObservableCounter {
 	counter, err := meter.Int64ObservableCounter(name, metric.WithDescription(description))
 	logMetricError(name, err)
@@ -339,7 +332,6 @@ func RegisterManagerMetrics(statsProvider func() ManagerMetricsStats, poolName s
 		baseAttrs:     baseAttrs,
 	}
 
-	// Create observable counters
 	reg.activeCachesCounter = createObservableUpDownCounter(cacheMeter, metricCacheManagerActiveCaches,
 		"Current number of active cache instances")
 	reg.totalCreatedCounter = createObservableCounter(cacheMeter, metricCacheManagerTotalCreated,
@@ -364,7 +356,6 @@ func RegisterManagerMetrics(statsProvider func() ManagerMetricsStats, poolName s
 		return noOpCleanup()
 	}
 
-	// Register callback
 	registration, err := cacheMeter.RegisterCallback(reg.observeManagerStats, instruments...)
 	if err != nil {
 		logMetricError("manager_metrics_callback", err)

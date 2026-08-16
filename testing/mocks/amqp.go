@@ -14,7 +14,7 @@ import (
 //
 // Example usage:
 //
-//	mockAMQP := &mocks.MockAMQPClient{}
+//	mockAMQP := mocks.NewMockAMQPClient()
 //	mockAMQP.On("DeclareQueue", mock.Anything, mock.Anything).Return(nil)
 //	mockAMQP.On("PublishToExchange", mock.Anything, mock.MatchedBy(func(opts messaging.PublishOptions) bool {
 //		return opts.Exchange == "test.exchange"

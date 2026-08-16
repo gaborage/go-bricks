@@ -22,7 +22,6 @@ type outboxPublisher struct {
 	defaultExchange string
 }
 
-// newPublisher creates a new outbox publisher.
 func newPublisher(store Store, defaultExchange string) app.OutboxPublisher {
 	return &outboxPublisher{
 		store:           store,
@@ -151,9 +150,6 @@ func (m *mapHeaderAccessor) Set(key string, value any) {
 	m.headers[key] = value
 }
 
-// marshalPayload converts the payload to []byte.
-// If the payload is already []byte, it is returned as-is.
-// Otherwise, it is JSON-marshaled.
 func marshalPayload(payload any) ([]byte, error) {
 	if payload == nil {
 		return []byte("null"), nil

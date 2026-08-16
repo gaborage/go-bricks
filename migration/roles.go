@@ -10,10 +10,10 @@ import (
 )
 
 // pgPasswordLiteralPattern matches the `PASSWORD 'literal'` clause emitted by
-// buildRoleCreateAndLockdown / buildPGRoleStatements. Used by summarizeStmt
-// to redact the literal before the SQL fragment is wrapped into any error
-// message — keeps the resolved secret out of error logs and stack traces
-// when ExecContext fails on a password-bearing statement.
+// buildPGRoleStatements. Used by summarizeStmt to redact the literal before
+// the SQL fragment is wrapped into any error message — keeps the resolved
+// secret out of error logs and stack traces when ExecContext fails on a
+// password-bearing statement.
 //
 // Matches a single-quoted PostgreSQL string literal: an opening single quote,
 // any number of non-quote characters or escaped doubled-quote pairs, then a

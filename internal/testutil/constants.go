@@ -1,4 +1,4 @@
-// Package testutil provides shared constants and utilities for testing across go-bricks.
+// Package testutil provides shared constants for testing across go-bricks.
 // These constants eliminate repeated string literals in test files and ensure consistency.
 package testutil
 

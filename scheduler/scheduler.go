@@ -8,7 +8,7 @@ import (
 
 // jobEntry represents a registered job with metadata and execution control.
 // Each jobEntry holds:
-// - The user-provided Job implementation
+// - The user-provided Executor implementation
 // - Schedule configuration (how/when to run)
 // - Metadata for system APIs (execution statistics, next run time, etc.)
 // - Mutex for overlapping execution prevention per FR-026

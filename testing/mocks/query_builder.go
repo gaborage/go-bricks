@@ -300,7 +300,7 @@ func (m *MockQueryBuilder) Where(filter types.Filter) types.SelectQueryBuilder {
 	return arg[types.SelectQueryBuilder](arguments, "Where", 0)
 }
 
-// Compile-time verification that MockQueryBuilder implements the interface
+// Compile-time verification that MockQueryBuilder implements the QueryBuilderInterface and SelectQueryBuilder interfaces
 var (
 	_ types.QueryBuilderInterface = (*MockQueryBuilder)(nil)
 	_ types.SelectQueryBuilder    = (*MockQueryBuilder)(nil)

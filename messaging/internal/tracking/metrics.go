@@ -86,7 +86,6 @@ func initAMQPMeter() {
 		return
 	}
 
-	// Get meter from global meter provider
 	amqpMeter = otel.Meter(amqpMeterName)
 
 	var err error
@@ -197,7 +196,6 @@ func RecordAMQPPublishMetrics(ctx context.Context, exchange, routingKey string, 
 		commonAttrs = append(commonAttrs, attribute.String(attrMessagingRabbitMQRoutingKey, routingKey))
 	}
 
-	// Add error type if present
 	if errorType != "" {
 		commonAttrs = append(commonAttrs, attribute.String(attrErrorType, errorType))
 	}
@@ -384,7 +382,6 @@ func RecordPublishRetry(ctx context.Context, exchange, routingKey, reason string
 		attrs = append(attrs, attribute.String(attrMessagingRabbitMQRoutingKey, routingKey))
 	}
 
-	// Record retry counter
 	if amqpPublishRetries != nil {
 		amqpPublishRetries.Add(ctx, 1, metric.WithAttributes(attrs...))
 	}

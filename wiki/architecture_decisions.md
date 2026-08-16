@@ -791,7 +791,7 @@ own.
 
 ---
 
-### [ADR-047: Database Absence Is a Config-Resolution Verdict, Distinct from Misconfiguration](adr_047_database_absence_vs_misconfiguration.md)
+### [ADR-047: Database absence is a config-resolution verdict, distinct from misconfiguration](adr_047_database_absence_vs_misconfiguration.md)
 
 **Date:** 2026-08-04 | **Status:** Accepted | **Supersedes in part:** ADR-003
 
@@ -848,7 +848,7 @@ also holds for probes the framework never constructs. See [migrations.md](migrat
 
 ---
 
-### [ADR-049: Debug Endpoints Refuse to Register Without Access Control](adr_049_debug_endpoints_fail_closed.md)
+### [ADR-049: Debug endpoints refuse to register without access control](adr_049_debug_endpoints_fail_closed.md)
 
 **Date:** 2026-08-05 | **Status:** Accepted | **Related:** ADR-038, ADR-046
 
@@ -945,7 +945,7 @@ Fixes [#880](https://github.com/gaborage/go-bricks/issues/880). See
 
 ---
 
-### [ADR-052: Delete `jose.PolicyRegistry` Rather Than Wire It Up](adr_052_remove_jose_policy_registry.md)
+### [ADR-052: Delete `jose.PolicyRegistry` rather than wire it up](adr_052_remove_jose_policy_registry.md)
 
 **Date:** 2026-08-07 | **Status:** Accepted
 
@@ -973,7 +973,7 @@ reasoning about JOSE request cost. Fixes
 
 ---
 
-### [ADR-053: Delete `server`'s Exported Test-Timeout Constants](adr_053_remove_server_test_timeout_constants.md)
+### [ADR-053: Delete `server`'s exported test-timeout constants](adr_053_remove_server_test_timeout_constants.md)
 
 **Date:** 2026-08-07 | **Status:** Accepted
 
@@ -997,7 +997,7 @@ these values. Fixes [#818](https://github.com/gaborage/go-bricks/issues/818). Se
 
 ---
 
-### [ADR-054: A Cache the Framework Cannot Construct Aborts Startup](adr_054_cache_construction_fails_startup.md)
+### [ADR-054: A cache the framework cannot construct aborts startup](adr_054_cache_construction_fails_startup.md)
 
 **Date:** 2026-08-07 | **Status:** Accepted
 
@@ -1030,7 +1030,7 @@ enough that no manager exists to probe. Fixes
 
 ---
 
-### [ADR-055: Reserve Resource-Identity Namespaces in the OTel Log Bridge](adr_055_reserved_log_attribute_namespaces.md)
+### [ADR-055: Reserve resource-identity namespaces in the OTel log bridge](adr_055_reserved_log_attribute_namespaces.md)
 
 **Date:** 2026-08-07 | **Status:** Accepted
 
@@ -1055,7 +1055,7 @@ hot path stays allocation-free; the remap is self-evidencing per record. Fixes
 
 ---
 
-### [ADR-056: The Log Enricher Stamps Only the `log.type` Delta](adr_056_log_enricher_delta_attributes.md)
+### [ADR-056: The log enricher stamps only the `log.type` delta](adr_056_log_enricher_delta_attributes.md)
 
 **Date:** 2026-08-07 | **Status:** Accepted
 
@@ -1084,7 +1084,7 @@ strengthening [ADR-055](adr_055_reserved_log_attribute_namespaces.md). Fixes
 [#914](https://github.com/gaborage/go-bricks/issues/914). See
 [migrations.md](migrations.md) `[C58.5]`.
 
-### [ADR-057: The Client IP Is Derived Through Trusted Proxies, Not Raw `X-Forwarded-For`](adr_057_trusted_proxy_ip_extraction.md)
+### [ADR-057: The client IP is derived through trusted proxies, not raw `X-Forwarded-For`](adr_057_trusted_proxy_ip_extraction.md)
 
 **Date:** 2026-08-10 | **Status:** Accepted
 
@@ -1117,7 +1117,7 @@ makes echo abandon the chain and key the whole fleet on the load balancer — a 
 `server.trustedproxies` cannot rescue. The tenant-keyed half of F23 remains open. See
 [migrations.md](migrations.md) `[C59.1]`.
 
-### [ADR-058: Consumers Carry Per-Consumer AMQP Arguments, at the Cost of Struct Comparability](adr_058_consumer_scoped_amqp_arguments.md)
+### [ADR-058: Consumers carry per-consumer AMQP arguments, at the cost of struct comparability](adr_058_consumer_scoped_amqp_arguments.md)
 
 **Date:** 2026-08-11 | **Status:** Accepted
 
@@ -1144,7 +1144,7 @@ would restore only pointer identity and silently change meaning. This lane has n
 tracking, no single active consumer and no super streams; those are stream-protocol features and are
 ADR-059's subject. See [migrations.md](migrations.md) `[C59.2]`.
 
-### [ADR-059: Native Stream Consumption Commits Offsets Only After Successful Handling](adr_059_streams_consumption.md)
+### [ADR-059: Native stream consumption commits offsets only after successful handling](adr_059_streams_consumption.md)
 
 **Date:** 2026-08-12 | **Status:** Accepted
 
@@ -1173,7 +1173,7 @@ message is lost to the consumer until failed-message parking exists; and multi-t
 keep the AMQP lane. New keys: `messaging.streams.uri`, `messaging.streams.addressresolver.*`,
 `messaging.streams.offsetstore.*`. See [streams.md](streams.md).
 
-### [ADR-060: `CompareAndDelete` Gives the Cache Interface a Safe Conditional Release](adr_060_cache_compare_and_delete.md)
+### [ADR-060: `CompareAndDelete` gives the cache interface a safe conditional release](adr_060_cache_compare_and_delete.md)
 
 **Date:** 2026-08-12 | **Status:** Accepted
 
@@ -1230,7 +1230,7 @@ Normalization was rejected because trimming silently changes a credential, and n
 comparing against the secret's bytes. The fix stops future leaks, not past ones — rotate any
 credential whose provisioning failure was logged. See [migrations.md](migrations.md) `[C59.5]`.
 
-### [ADR-062: Fail Closed on `database.tls` Misconfiguration](adr_062_database_tls_fail_closed.md)
+### [ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)](adr_062_database_tls_fail_closed.md)
 
 **Date:** 2026-08-14 | **Status:** Accepted
 
@@ -1259,7 +1259,7 @@ Not covered: unrecognized-scheme DSNs (the vendor dispatch's `default` arm) and 
 ARE covered since #1002 routed that seam through the vendor gate. See
 [migrations.md](migrations.md) `[C59.11]`.
 
-### [ADR-063: Native Stream Publishing Is Synchronous and Confirmed, Correlated by Message Pointer](adr_063_streams_native_publishing.md)
+### [ADR-063: Native stream publishing is synchronous and confirmed, correlated by message pointer](adr_063_streams_native_publishing.md)
 
 **Date:** 2026-08-15 | **Status:** Accepted
 

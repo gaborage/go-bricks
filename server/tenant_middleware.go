@@ -94,7 +94,6 @@ func CreateProbeSkipper(healthPath, readyPath string) SkipperFunc {
 	return func(r *http.Request) bool {
 		path := r.URL.Path
 
-		// Use exact path matching for precision and performance
 		return path == healthPath || path == readyPath
 	}
 }

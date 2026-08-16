@@ -275,7 +275,6 @@ func (d *Declarations) DeclareStreamQueue(name string, spec *StreamQueueSpec) *Q
 //   - Pass nil if exchange is already registered separately
 //   - Pass exchange declaration to auto-register (convenience for simple cases)
 func (d *Declarations) DeclarePublisher(opts *PublisherOptions, exchange *ExchangeDeclaration) *PublisherDeclaration {
-	// Auto-register exchange if provided and not already registered
 	if exchange != nil {
 		if _, exists := d.Exchanges[exchange.Name]; !exists {
 			d.RegisterExchange(exchange)

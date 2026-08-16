@@ -28,12 +28,12 @@ type quiesceFlags struct {
 
 // NewQuiesceCommand builds the `quiesce` parent with set/clear/status children.
 //
-// DESIGN NOTE (needs maintainer ratification at PR time): the control-plane
-// quiesce_flags table is located via the SAME tenant/credential resolution as
-// the migrate commands — the operator names the control-plane target with
-// --tenant and supplies its credentials. v1 assumes a single "global" scope
-// row living in that database. An alternative is a dedicated control-plane
-// connection flag; chosen the reuse path to avoid new credential surface.
+// DESIGN NOTE: the control-plane quiesce_flags table is located via the SAME
+// tenant/credential resolution as the migrate commands — the operator names
+// the control-plane target with --tenant and supplies its credentials. v1
+// assumes a single "global" scope row living in that database. An
+// alternative is a dedicated control-plane connection flag; chosen the reuse
+// path to avoid new credential surface.
 func NewQuiesceCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "quiesce",

@@ -64,7 +64,7 @@ type Registry struct {
 	queues     map[string]*QueueDeclaration
 	bindings   []*BindingDeclaration
 	publishers []*PublisherDeclaration
-	// Mutex protects: consumerIndex, consumerOrder, consumersActive, declared
+	// Mutex protects: exchanges, queues, bindings, publishers, consumerIndex, consumerOrder, consumersActive, declared
 	// NOTE: GoBricks startup is single-threaded, but multi-tenant scenarios
 	// may have concurrent registry access during tenant initialization.
 	mu              sync.RWMutex
@@ -346,7 +346,6 @@ func (r *Registry) StartConsumers(ctx context.Context) error {
 		return errors.New("AMQP client is not ready")
 	}
 
-	// Count consumers with handlers
 	consumersWithHandlers := 0
 	for _, key := range r.consumerOrder {
 		consumer := r.consumerIndex[key]
@@ -698,7 +697,6 @@ func (r *Registry) handleMessages(ctx context.Context, consumer *ConsumerDeclara
 		}
 	}()
 
-	// Shutdown: close jobs channel and wait for workers to finish
 	close(jobs)
 	wg.Wait()
 	log.Info().Msg("All workers stopped gracefully")
@@ -836,7 +834,6 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 
 	tracking.RecordAMQPConsumeCompletion(msgCtx, delivery, consumer.Queue, processingTime, nil)
 
-	// Positive acknowledgment (only when AutoAck is false)
 	if !consumer.AutoAck {
 		if ackErr := delivery.Ack(false); ackErr != nil {
 			contextLog.Error().

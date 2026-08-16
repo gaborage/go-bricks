@@ -4,7 +4,7 @@ import "time"
 
 // Logger Constants
 // These constants define common logger configurations used across test files
-// to eliminate duplication of logger initialization strings (96+ occurrences).
+// to avoid duplicating logger initialization strings.
 const (
 	// TestLoggerLevelDebug is the debug log level used in most tests
 	TestLoggerLevelDebug = "debug"
@@ -15,7 +15,7 @@ const (
 )
 
 // Service and Component Names
-// Common service/component names used in test configurations.
+// Common service/component name constants available for test configurations.
 const (
 	TestServiceName  = "test-service"
 	TestCacheName    = "test-cache"
@@ -51,7 +51,7 @@ const (
 )
 
 // Test User Data
-// Common test user data used across multiple test suites.
+// Common test user data constants available for test suites.
 const (
 	TestEmailAlice = "alice@example.com"
 	TestEmailBob   = "bob@example.com"
@@ -78,7 +78,7 @@ const (
 )
 
 // Time Duration Constants
-// Common time durations used in test synchronization and timeouts.
+// Common time duration constants available for test synchronization and timeouts.
 const (
 	// TestShortDelay is a short delay for goroutine synchronization (100ms)
 	TestShortDelay = 100 * time.Millisecond

@@ -459,7 +459,9 @@ func (r *testRow) Scan(dest ...any) error {
 		return fmt.Errorf("scan expects %d values, got %d", len(dest), len(r.values))
 	}
 
-	// Use sql.ConvertAssign for database/sql compatibility
+	// Delegate to convertAssign below, which covers the common subset of
+	// database/sql's coercions (sql.Scanner plus a fixed set of Go types), not
+	// the full reflection-based fallback.
 	for i, v := range r.values {
 		if err := convertAssign(dest[i], v); err != nil {
 			return fmt.Errorf("column %d: %w", i, err)
@@ -474,11 +476,13 @@ func (r *testRow) Err() error {
 	return r.err
 }
 
-// convertAssign mimics sql.ConvertAssign for database/sql compatibility.
-// It handles type conversions from source values to destination pointers,
-// supporting sql.Scanner interface and common Go types.
+// convertAssign mimics the common subset of database/sql's convertAssign:
+// sql.Scanner destinations plus a fixed set of Go pointer types (string,
+// []byte, ints, uints, floats, bool, time.Time and their double-pointer forms).
+// It does not implement the stdlib's reflection-based fallback, so a
+// destination outside that set errors instead of being coerced.
 //
-//nolint:gocyclo // Type conversion requires exhaustive case coverage for database/sql compatibility
+//nolint:gocyclo // Type conversion requires exhaustive case coverage per supported destination type
 func convertAssign(dest, src any) error {
 	if src == nil {
 		return setDestNil(dest)

@@ -57,7 +57,7 @@ Pick the order that moves you *toward* your existing convention, not away from i
 ### 2. Delete the framework-only exclusions
 
 Every entry under `linters.exclusions.rules` is a GoBricks path and means nothing in your
-repo — `logger/adapter.go` (zerologlint), `^cmd/seal-payload/` (an importas carve-out), and
+repo — `logger/adapter.go` (zerologlint), `cmd/seal-payload/` (an importas carve-out), and
 a few rules scoped to `_test.go`. Delete them all and add your own as findings justify.
 
 Recheck your own exclusions periodically: an exclusion that matches on message `text` stops

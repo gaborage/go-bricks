@@ -453,14 +453,12 @@ func (a *App) shutdownObservability(ctx context.Context, errs *[]error) {
 
 	obsStart := time.Now()
 
-	// Force flush pending spans/metrics before shutdown
 	a.logger.Info().Msg("Flushing pending observability data")
 	if err := a.observability.ForceFlush(ctx); err != nil {
 		a.logger.Warn().Err(err).Msg("Failed to flush observability data")
 		// Continue with shutdown even if flush fails
 	}
 
-	// Now shut down observability provider
 	a.logger.Info().Msg("Shutting down observability provider")
 	if err := a.observability.Shutdown(ctx); err != nil {
 		*errs = append(*errs, fmt.Errorf("observability: %w", err))

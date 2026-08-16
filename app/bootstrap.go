@@ -73,10 +73,8 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 	configBuilder := newManagerConfigBuilderFromConfig(b.cfg)
 	factory := NewResourceManagerFactory(resolver, configBuilder, b.log)
 
-	// Log factory configuration for debugging
 	factory.LogFactoryInfo()
 
-	// Resolve resource source
 	resourceSource := resolver.ResourceSource(b.cfg)
 
 	// Gate DB-operation OpenTelemetry spans/metrics on observability.enabled before

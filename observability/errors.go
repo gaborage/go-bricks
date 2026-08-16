@@ -11,13 +11,13 @@ var ErrMissingServiceName = errors.New("observability: service name is required 
 // ErrInvalidSampleRate is returned when the trace sample rate is outside the valid range [0.0, 1.0].
 var ErrInvalidSampleRate = errors.New("observability: trace sample rate must be between 0.0 and 1.0")
 
-// ErrShutdownTimeout is returned when graceful shutdown exceeds the timeout.
+// ErrShutdownTimeout is reserved for future shutdown-timeout handling; no code path currently returns it.
 var ErrShutdownTimeout = errors.New("observability: shutdown timeout exceeded")
 
-// ErrAlreadyInitialized is returned when attempting to initialize an already initialized provider.
+// ErrAlreadyInitialized is reserved for a future re-initialization guard; no code path currently returns it.
 var ErrAlreadyInitialized = errors.New("observability: provider already initialized")
 
-// ErrNotInitialized is returned when attempting to use an uninitialized provider.
+// ErrNotInitialized is reserved for future uninitialized-provider handling; no code path currently returns it.
 var ErrNotInitialized = errors.New("observability: provider not initialized")
 
 // ErrInvalidProtocol is returned when the protocol (trace or metrics) is not "http" or "grpc".

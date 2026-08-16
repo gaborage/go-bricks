@@ -758,14 +758,12 @@ func jsonStringEscape(s string) string {
 func (fm *FlywayMigrator) RunMigrationsAtStartup(ctx context.Context) error {
 	migrationConfig := fm.DefaultMigrationConfig()
 
-	// In development, run migrations automatically
 	if fm.config.App.IsDevelopment() {
 		fm.logger.Info().Msg("Running automatic migrations in development environment")
 		_, err := fm.Migrate(ctx, migrationConfig)
 		return err
 	}
 
-	// In other environments, only validate
 	fm.logger.Info().Msg("Validating migrations in non-development environment")
 	return fm.Validate(ctx, migrationConfig)
 }

@@ -34,7 +34,7 @@ type JobMetadata struct {
 	// LastExecutionTime is when the job last executed (nil if never run)
 	LastExecutionTime *time.Time `json:"lastExecutionTime,omitempty"`
 
-	// LastExecutionStatus is the status of the last execution: "success" or "failure" (nil if never run)
+	// LastExecutionStatus is the status of the last execution: "success" or "failure" (empty string if never run)
 	// Note: skipped triggers do not update last execution status.
 	LastExecutionStatus string `json:"lastExecutionStatus,omitempty"`
 

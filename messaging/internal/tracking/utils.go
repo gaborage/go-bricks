@@ -27,14 +27,12 @@ const (
 // compatibility with OpenTelemetry semantic conventions for RabbitMQ.
 func formatDestinationName(exchange, routingKey, queue string) string {
 	if queue != "" {
-		// Consumer format: include queue name
 		if exchange == "" {
 			return fmt.Sprintf(":%s:%s", routingKey, queue)
 		}
 		return fmt.Sprintf("%s:%s:%s", exchange, routingKey, queue)
 	}
 
-	// Producer format: no queue
 	if exchange == "" {
 		return fmt.Sprintf(":%s", routingKey)
 	}
@@ -58,7 +56,6 @@ func extractErrorType(err error) string {
 	case errors.Is(err, context.DeadlineExceeded):
 		return errTypeContextDeadlineExceeded
 	default:
-		// Return error type name for other errors
 		return fmt.Sprintf("%T", err)
 	}
 }

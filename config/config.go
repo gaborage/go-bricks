@@ -53,7 +53,6 @@ var configSections = map[string]bool{
 func Load() (*Config, error) {
 	k := koanf.New(".")
 
-	// Load default configuration first
 	if err := loadDefaults(k); err != nil {
 		return nil, fmt.Errorf("failed to load defaults: %w", err)
 	}
@@ -96,7 +95,6 @@ func Load() (*Config, error) {
 	// a sub-path at fresh leaves, so they bypass guard 1 and merge normally under guard 2.
 	if err := k.Load(envprovider.Provider(".", envprovider.Opt{
 		TransformFunc: func(k, v string) (string, any) {
-			// Convert UPPER_CASE to lower.case for koanf
 			k = strings.ReplaceAll(strings.ToLower(k), "_", ".")
 			// Drop a bare top-level section name (no sub-key); see SECURITY (M4) above.
 			if configSections[k] {
@@ -108,7 +106,6 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to load environment variables: %w", err)
 	}
 
-	// Unmarshal into config struct
 	var cfg Config
 	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
 		DecoderConfig: buildDecoderConfig(),
@@ -119,7 +116,6 @@ func Load() (*Config, error) {
 	// Store the Koanf instance for flexible access
 	cfg.k = k
 
-	// Validate configuration
 	if err := Validate(&cfg); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}

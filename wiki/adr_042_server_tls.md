@@ -29,7 +29,7 @@ A staged-but-disabled material configuration (fields set while `server.tls.enabl
 
 **Scope limits carried forward:**
 
-- ALB→target TLS is encryption in transit, not peer authentication — the ALB does not validate target certificates. Partner identity data (when needed) arrives via ALB-injected `X-Amzn-Mtls-Clientcert-*` headers, trustworthy only when the ALB strips client-supplied copies and the ALB→app network path is closed; parsing those headers is a separate follow-up.
+- ALB→target TLS is encryption in transit, not peer authentication — the ALB does not validate target certificates. Partner identity data (when needed) arrives via ALB-injected `X-Amzn-Mtls-Clientcert-*` headers; parsing those headers is a separate follow-up. **Amended by ADR-043:** AWS does not publicly document that the ALB strips client-supplied copies of these headers, so trust cannot rest on a stripping guarantee — it rests on deployment posture (mTLS-verify listener, closed security groups, single ingress path) as defined in [wiki/forwarded_client_cert.md#trust-model](forwarded_client_cert.md#trust-model).
 - No revocation checking at the app in this iteration.
 - No certificate hot-reload; rotation requires a restart. `buildServerTLSConfig` is where a future `GetCertificate` watcher slots in.
 - HTTP/2 is not offered on the TLS listener.

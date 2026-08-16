@@ -56,7 +56,6 @@ func makeKeepAliveDialer(keepAliveCfg config.PoolKeepAliveConfig, log logger.Log
 			return nil, err
 		}
 
-		// Explicitly enable TCP keep-alive and set the period
 		if tcpConn, ok := conn.(*net.TCPConn); ok {
 			if setErr := tcpConn.SetKeepAlive(true); setErr != nil {
 				log.Warn().Err(setErr).Msg("Failed to enable TCP keep-alive on PostgreSQL connection")
@@ -93,7 +92,6 @@ func quoteDSN(value string) string {
 		return value
 	}
 
-	// Escape backslashes and single quotes
 	escaped := strings.ReplaceAll(value, "\\", "\\\\")
 	escaped = strings.ReplaceAll(escaped, "'", "\\'")
 

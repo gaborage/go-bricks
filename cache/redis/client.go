@@ -173,7 +173,6 @@ func (c *Client) Get(ctx context.Context, key string) ([]byte, error) {
 	result, err := c.client.Get(ctx, key).Bytes()
 	duration := time.Since(start)
 
-	// Determine hit/miss status
 	hit := err == nil
 	var recordErr error
 	if err != nil {
@@ -322,7 +321,6 @@ func (c *Client) CompareAndSet(ctx context.Context, key string, expectedValue, n
 		ttlMs = 1
 	}
 
-	// Execute Lua script
 	result, err := c.client.Eval(ctx, casScript, []string{key}, expected, newValue, ttlMs, mode).Int()
 
 	duration := time.Since(start)
@@ -361,7 +359,6 @@ func (c *Client) CompareAndDelete(ctx context.Context, key string, expectedValue
 
 	start := time.Now()
 
-	// Execute Lua script
 	result, err := c.client.Eval(ctx, cadScript, []string{key}, string(expectedValue)).Int()
 
 	duration := time.Since(start)

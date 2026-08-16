@@ -108,7 +108,7 @@ executes. It also matches the two real panic-recovery sites already in the frame
 and what they do to a panic that reaches them: `server/middleware.go:114` installs
 `middleware.Recover()`, which turns a handler-path panic into a 500 and keeps serving —
 exactly the "still up, quietly wrong" outcome this ADR is trying to avoid, not
-reproduce inside a constructor. `messaging/registry.go:688` recovers a consumer-handler
+reproduce inside a constructor. `messaging/registry.go:789` recovers a consumer-handler
 panic and nacks the message **without requeue** — a `Build()` panic reached from a
 message handler would silently drop the message instead of failing the deployment.
 Compare `app/module_registry.go`, which is the framework's actual fail-fast idiom:

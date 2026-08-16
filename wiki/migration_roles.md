@@ -222,7 +222,7 @@ Run them with:
 go test -tags=integration -run TestPGRoles ./migration/
 ```
 
-Docker is required (testcontainers spins up a fresh PostgreSQL 17 instance
+Docker is required (testcontainers spins up a fresh PostgreSQL 18 instance
 per test). Flyway is **not** required for these tests — they exercise the
 role helpers directly against PostgreSQL.
 

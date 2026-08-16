@@ -175,7 +175,7 @@ cache:
 
 **Validation:**
 
-- Panic at startup if `enabled: true` but `host` missing (explicit > implicit)
+- Return a config error at startup if `enabled: true` but `host` missing (explicit > implicit) — validated by `config.Validate`, not a runtime panic
 - Skip initialization if `enabled: false` (graceful degradation)
 - Environment variable override support (`CACHE_REDIS_PASSWORD`)
 
@@ -321,7 +321,7 @@ defer c.Delete(ctx, lockKey) // SUPERSEDED (ADR-060): use CompareAndDelete with 
 
 1. **Environment Variables**: Sensitive data (`CACHE_REDIS_PASSWORD`) via env only
 2. **CBOR Safety**: Size limits (10000 max array/map elements) prevent DOS
-3. **Network Encryption**: TLS support via Redis client configuration
+3. **Network Encryption**: not currently implemented — `cache/redis` has no TLS configuration; connections are plaintext
 4. **Tenant Isolation**: Enforced at CacheManager level (prevent cross-tenant access)
 
 ## Quality Assurance

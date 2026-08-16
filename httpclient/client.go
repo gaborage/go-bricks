@@ -256,8 +256,12 @@ func (b *Builder) WithPeerName(name string) *Builder {
 // client keeps its own Transport and Timeout. If the provided client's Timeout
 // is zero, the copy gets the builder's configured Timeout.
 // The copy's Transport is preserved unless explicitly overridden via
-// WithTransport or WithJOSE. The copy is shallow: reference fields such as the
-// cookie Jar remain shared with the caller's client.
+// WithTransport or WithTLSConfig, both of which fill the base-transport slot
+// directly. A WithJOSE wrapper registered with no such base, against a client
+// that already carries its own Transport, does not silently override it
+// either — Build fails with an error wrapping ErrUnsafeTransportComposition
+// instead (see discardsClientTransport). The copy is shallow: reference
+// fields such as the cookie Jar remain shared with the caller's client.
 func (b *Builder) WithHTTPClient(client *nethttp.Client) *Builder {
 	b.httpClient = client
 	return b
@@ -611,7 +615,6 @@ func deepCopyConfig(src *Config) *Config {
 		PeerName:           src.PeerName,
 	}
 
-	// Copy BasicAuth
 	if src.BasicAuth != nil {
 		dst.BasicAuth = &BasicAuth{
 			Username: src.BasicAuth.Username,
@@ -619,7 +622,6 @@ func deepCopyConfig(src *Config) *Config {
 		}
 	}
 
-	// Copy DefaultHeaders
 	if src.DefaultHeaders != nil {
 		dst.DefaultHeaders = make(map[string]string, len(src.DefaultHeaders))
 		maps.Copy(dst.DefaultHeaders, src.DefaultHeaders)
@@ -635,7 +637,6 @@ func deepCopyConfig(src *Config) *Config {
 		copy(dst.ResponseInterceptors, src.ResponseInterceptors)
 	}
 
-	// Copy function fields
 	if src.NewTraceID != nil {
 		dst.NewTraceID = src.NewTraceID
 	}
@@ -1086,7 +1087,6 @@ func (c *client) backoffWithContext(ctx context.Context, attempt int) error {
 	}
 }
 
-// validateRequest validates the request before sending
 func (c *client) validateRequest(req *Request) error {
 	if req == nil {
 		return NewValidationError("request cannot be nil", "request")
@@ -1196,7 +1196,6 @@ func (c *client) ensureTraceContextHeaders(httpReq *nethttp.Request) {
 	}
 }
 
-// applyAuth applies authentication to the HTTP request
 func (c *client) applyAuth(httpReq *nethttp.Request, req *Request) {
 	// Request-specific auth takes precedence
 	auth := req.Auth
@@ -1338,7 +1337,6 @@ func classifyError(err error) string {
 	return errorTypeOther
 }
 
-// runRequestInterceptors executes all request interceptors
 func (c *client) runRequestInterceptors(ctx context.Context, req *nethttp.Request) error {
 	for _, interceptor := range c.requestInterceptors {
 		if err := interceptor(ctx, req); err != nil {
@@ -1348,7 +1346,6 @@ func (c *client) runRequestInterceptors(ctx context.Context, req *nethttp.Reques
 	return nil
 }
 
-// runResponseInterceptors executes all response interceptors
 func (c *client) runResponseInterceptors(ctx context.Context, req *nethttp.Request, resp *nethttp.Response) error {
 	for _, interceptor := range c.responseInterceptors {
 		if err := interceptor(ctx, req, resp); err != nil {
@@ -1368,11 +1365,6 @@ func isJSONContentType(ct string) bool {
 	return ct == mimeApplicationJSON || strings.HasSuffix(ct, "+json")
 }
 
-// logBodyPreview appends body-preview fields to dbg and returns the updated event.
-// JSON object roots are parsed and filter-walked via Interface so SensitiveDataFilter
-// can mask sensitive keys. Non-JSON, JSON primitive/array roots, and parse failures
-// log only metadata (content-type + byte count) — primitive/array roots cannot be
-// key-walked by the filter, so dropping them is the safe default.
 // appendBodyPreview attaches body size, a truncation flag, and a filtered
 // preview to dbg. Returns dbg untouched when there is no body.
 // Callers must hold the `c.config != nil && c.config.LogPayloads` guard.
@@ -1395,6 +1387,11 @@ func (c *client) appendBodyPreview(dbg logger.LogEvent, body []byte, ct string) 
 	return logBodyPreview(dbg, preview, ct)
 }
 
+// logBodyPreview appends body-preview fields to dbg and returns the updated event.
+// JSON object roots are parsed and filter-walked via Interface so SensitiveDataFilter
+// can mask sensitive keys. Non-JSON, JSON primitive/array roots, and parse failures
+// log only metadata (content-type + byte count) — primitive/array roots cannot be
+// key-walked by the filter, so dropping them is the safe default.
 func logBodyPreview(dbg logger.LogEvent, preview []byte, ct string) logger.LogEvent {
 	if !isJSONContentType(ct) {
 		return dbg.Str("body_content_type", ct).Int("body_preview_dropped", len(preview))

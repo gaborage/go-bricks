@@ -12,7 +12,7 @@ the event is invisible to an operator:
 - The `Store` interface has **no read API** for failed rows — the only method that touches
   the failed state is `MarkDeadLettered`, and it is a *write* (`outbox/store.go:66-71`).
 - The outbox module registers **no HTTP routes** — `grep -rn "RegisterRoutes\|_sys" outbox/*.go`
-  returns nothing; `outbox/module.go` implements `RegisterJobs` (`outbox/module.go:200-244`)
+  returns nothing; `outbox/module.go` implements `RegisterJobs` (`outbox/module.go:307-352`)
   but not `RouteRegisterer`.
 - There is **no backlog metric** — nothing counts parked rows.
 
@@ -25,7 +25,7 @@ intentionally never auto-deleted so they stay visible").
 **Scope honesty.** Only poison (undecodable headers) ever parks. Every connectivity failure
 (broker down, NACK, confirmation timeout) advances `retry_count` but keeps retrying forever
 and is *never* parked (`outbox/relay.go:299-317` and the `MaxRetries` doc at
-`config/types.go:637-642`). So the real-world dead-letter backlog is **low-volume but
+`config/types.go:742-747`). So the real-world dead-letter backlog is **low-volume but
 high-signal**: every parked row is a bug or a corruption artifact, not routine churn. That
 shapes the design — a cheap standing count and a small list/retry surface, not a
 high-throughput queue console.
@@ -53,7 +53,8 @@ verified leads).
   calls `MarkDeadLettered` and logs `Warn(...).Msg("Outbox event dead-lettered after
   exhausting retries")` (:309-312). One log line at park time is the *entire* current
   visibility surface.
-- `outbox/module.go:32-42` — the `Module` struct holds `logger`, `config`, `getDB`, `getMsg`,
+- `outbox/module.go:34-49` — the `Module` struct holds `logger`, `config`, `getDB`, `getMsg`,
+  `sharedDB`, `sharedMsg` (the control-plane `""`-key resolvers for `outbox.tenancy=shared`),
   `publisher`, `cfg`, and `stores tenantstore.Cache[Store]` (one store per tenant, `""` =
   single-tenant). No routes, no metric instrument.
 - `outbox/cleanup.go:26-28` — the cleanup job deletes via `DeletePublished` only, so failed
@@ -90,20 +91,20 @@ verified leads).
 
 ### Config precedent
 
-- `config/types.go:611-655` — `OutboxConfig` field/tag style (`koanf`/`json`/`yaml`/`toml`/
+- `config/types.go:716-770` — `OutboxConfig` field/tag style (`koanf`/`json`/`yaml`/`toml`/
   `mapstructure` on every field).
-- `config/types.go:687-710` — `SchedulerConfig.Security SchedulerSecurityConfig`, whose
-  `CIDRAllowlist []string` (:704) and `TrustedProxies []string` (:709) are the shapes to
+- `config/types.go:814-836` — `SchedulerConfig.Security SchedulerSecurityConfig`, whose
+  `CIDRAllowlist []string` (:830) and `TrustedProxies []string` (:835) are the shapes to
   mirror.
 
 ### Multi-tenant / metric precedent
 
 - `outbox/relay.go:46-56` — `Execute` iterates `for _, tenantID := range r.tenants` (:49),
   calling `multitenant.SetTenant(jobCtx, tenantID)` per tenant.
-- `outbox/module.go:207` — `tenants := m.config.PerTenantJobKeys()` feeds `r.tenants`; the
+- `outbox/module.go:312` — `tenants := m.config.PerTenantJobKeys()` feeds `r.tenants`; the
   relay fans out over exactly the **statically configured** tenants (or `[""]` single-tenant).
 - `config/config.go:198-210` — `PerTenantJobKeys()` is the static enumeration seam. Dynamic
-  multi-tenant sources are **rejected at Init** (`outbox/module.go:102-111`), so there is no
+  multi-tenant sources are **rejected at Init** (`outbox/module.go:196-201`), so there is no
   runtime "list every live tenant" API by design.
 - `config/tenant_store.go:175` — `TenantStore.Tenants()` returns the *statically configured*
   map only; it is not a runtime discovery of dynamically-provisioned tenants.
@@ -353,7 +354,7 @@ green before any outbox route rides on it.
 ## Multi-tenant addressing — recommendation
 
 The route is process-global, but stores and DBs are **per-tenant**
-(`stores tenantstore.Cache[Store]`, `outbox/module.go:41`; `getDB(ctx)` resolves by the tenant
+(`stores tenantstore.Cache[Store]`, `outbox/module.go:48`; `getDB(ctx)` resolves by the tenant
 in ctx). `/_sys/job` never faced this because scheduler jobs are process-global metadata, not
 per-tenant DB rows (`listJobsHandler` reads `m.jobs`, `scheduler/api_handlers.go:38-56`).
 
@@ -368,7 +369,7 @@ per-tenant DB rows (`listJobsHandler` reads `m.jobs`, `scheduler/api_handlers.go
   "enumerate every live tenant" seam by design. `PerTenantJobKeys()` (`config/config.go:210`)
   and `TenantStore.Tenants()` (`config/tenant_store.go:175`) enumerate only *statically
   configured* tenants, and dynamic sources are explicitly rejected at outbox Init
-  (`outbox/module.go:102-111`). A fan-out endpoint would silently miss dynamically-provisioned
+  (`outbox/module.go:196-201`). A fan-out endpoint would silently miss dynamically-provisioned
   tenants and give a false "0 parked everywhere" — worse than no endpoint.
 
 **RECOMMEND (a).** It reuses the existing tenant middleware and the per-tenant store cache with
@@ -380,9 +381,9 @@ and it all collapses to the one store — no discriminator needed.
 
 ## Config sketch
 
-Mirror `SchedulerSecurityConfig` (`config/types.go:699-710`) field-for-field, nested under a new
+Mirror `SchedulerSecurityConfig` (`config/types.go:826-836`) field-for-field, nested under a new
 `OutboxConfig.API` block (all five tags on every field, per the `OutboxConfig` convention at
-`config/types.go:611-655`). Default **disabled** (additive, opt-in — matches the framework's
+`config/types.go:716-770`). Default **disabled** (additive, opt-in — matches the framework's
 fail-closed posture):
 
 ```go

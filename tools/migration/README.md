@@ -18,14 +18,14 @@ Deep dives:
 
 ## Install
 
-CLI releases are tagged `tools/migration/vX.Y.Z` — the first, `tools/migration/v0.38.0`, is published with this release. Once a tag exists:
+CLI releases are tagged `tools/migration/vX.Y.Z` (first: `v0.38.0`; latest: `v0.58.1`). Once a tag exists:
 
 ```bash
 # Latest CLI release:
 go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@latest
 
 # Pin to a specific release:
-go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@v0.38.0
+go install github.com/gaborage/go-bricks/tools/migration/cmd/go-bricks-migrate@v0.58.1
 
 # From a clone (contributors):
 cd tools/migration && make build   # produces ./go-bricks-migrate
@@ -229,12 +229,14 @@ go-bricks-migrate migrate \
 ## Development
 
 ```bash
-make check               # fmt + lint + test + CLI smoke + vuln scan
+make check               # fmt + lint + test + CLI smoke + vuln scan + gosec + mod-tidy check
 make test                # unit tests only
 make test-coverage       # writes coverage.html
 ```
 
 The CLI tests use `httptest` for the control-plane source and a fake AWS SM
 client for credentials; no Docker dependency at the unit-test layer.
-Testcontainers-driven end-to-end coverage against real Postgres + Flyway is
-tracked separately (see the parent issue for the migration epic).
+Testcontainers-driven end-to-end coverage against real Postgres + Flyway lives
+in `migrate_integration_test.go` / `quiesce_integration_test.go`
+(`go test -tags=integration ./...` from `tools/migration`, Docker + Flyway
+required); it is not yet wired into CI.

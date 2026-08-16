@@ -89,9 +89,9 @@ func SetObservabilityEnabled(enabled bool) {
 // TrackDBOperation is a no-op if tc or its Logger is nil. It records the operation's duration to
 // request-scoped metrics, clamps the query string to the configured maximum length, and — when
 // enabled — includes a sanitized form of parameters suitable for logging. If err is non-nil the
-// error is logged (with sql.ErrNoRows logged at debug level); if there is no error and the duration
-// exceeds the configured slow-query threshold a warning is emitted, otherwise a debug message is
-// emitted.
+// error is logged (with sql.ErrNoRows and sql.ErrTxDone both logged at debug level as benign,
+// non-error cases); if there is no error and the duration exceeds the configured slow-query
+// threshold a warning is emitted, otherwise a debug message is emitted.
 //
 // The rowsAffected parameter represents the number of rows affected by write operations (INSERT, UPDATE, DELETE).
 // For read operations (SELECT), pass 0.
@@ -272,7 +272,6 @@ func SanitizeArgs(args []any, maxLen int) []any {
 func createDBSpan(ctx context.Context, tc *Context, query string, start time.Time, err error) {
 	tracer := otel.Tracer(dbTracerName)
 
-	// Determine operation type and table/collection name from query
 	operation := extractDBOperation(query)
 	table := extractTableName(query)
 	spanName := fmt.Sprintf("db.%s", operation)

@@ -101,7 +101,8 @@ type JobRegistrar interface {
 
 // OutboxPublisher defines the interface for writing events to the transactional outbox.
 // This interface is defined here to avoid circular imports between app and outbox packages.
-// The outbox package implements this interface via its Module type.
+// The outbox package implements this interface via an internal publisher
+// returned from Module.OutboxPublisher (see OutboxProvider).
 //
 // Events are written to the outbox table within the caller's database transaction,
 // ensuring atomic consistency with business data. A background relay publishes

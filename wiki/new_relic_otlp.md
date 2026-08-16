@@ -127,10 +127,12 @@ New Relic enforces attribute limits on its ingest side, but be aware of:
 
 | Protocol | Endpoint Format | Example | TLS |
 | ---------- | ----------------- | --------- | ----- |
-| `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` | Auto-enabled for 4317 |
+| `grpc` | `host:port` (NO scheme) | `otlp.nr-data.net:4317` | Enabled by default (TLS is the default for gRPC unless `insecure: true` is set — independent of port) |
 | `grpc` (insecure) | `host:port` + `insecure: true` | `localhost:4317` | Disabled |
 | `http` | `https://host:port/path` | `https://otlp.nr-data.net:4318/v1/traces` | Enabled |
-| `http` (insecure) | `http://host:port/path` | `http://localhost:4318/v1/traces` | Disabled |
+| `http` (insecure) | `http://host:port/path` + `insecure: true` | `http://localhost:4318/v1/traces` | Disabled |
+
+> GoBricks strips the URL scheme from `endpoint` before configuring the HTTP exporter and derives TLS solely from the `insecure` field — not from `http://` vs `https://`. Setting `endpoint: http://...` without `insecure: true` still attempts a TLS handshake.
 
 ## Common Mistakes
 

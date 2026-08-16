@@ -4,7 +4,7 @@ Enterprise Go microservice toolkit (Go 1.26+). Provides multi-database access, t
 
 ## Version & Compatibility
 
-- Reflects **go-bricks v0.58.0**. The v0.49.0 line applied messaging defaults in *every* deployment mode with mode-aware pool sizing (publisher `maxcached`, `database.manager.maxsize`, cache `maxsize` scale to the tenant limit in multi-tenant), added `database.manager.*` keys, wired `messaging.reconnect` delay/backoff keys live, required unit-suffixed durations (write `"300s"`, not `300`), and hardened the publisher lifecycle (cold-publish readiness wait + 1h single-tenant publisher IdleTTL). Since then: v0.50.0 made dev CORS wildcard opt-in (`CORS_DEV_WILDCARD`, ADR-038) and `multitenant.resolver.order` REQUIRED for `type: composite` (ADR-039); v0.51.0 made `server.bodylimit` configurable (echo v5.3.0 bump); v0.52.0 made messaging declaration `Args` reach the broker via a breaking `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change (ADR-040); v0.53.0 added `DeclareQueueWithDLQ` declarative dead-lettering; v0.54.0 shipped the `outbox.tenancy`/`inbox.tenancy: shared` control-plane ledger (ADR-041) and duplicate-route-registration fail-fast; v0.55.0 shipped the `database.Execute*` query/exec helpers with `database.Raw` and typed errors (hop E55), deterministic httpclient transport-wrapper layering at `Build()`, config-driven httpclient client TLS, and the `server.tls.*` HTTPS listener (ADR-042). v0.56.0 shipped the ALB forwarded-client-cert identity middleware (`server.forwardedclientcert.*`, ADR-043), the `seal-payload` CLI (#776), typed AMQP consumer binding (`messaging.DeclareTypedConsumer` / `NewTypedHandler`, #777), and a breaking `httpclient.Builder.Build() (Client, error)` signature change — `Build` now fails construction on an unsafe base-transport-slot displacement instead of warning and returning a silently-degraded client (ADR-044); v0.57.0 stopped `/ready` disclosing internals in either body (every critical probe's `503` is sanitized by default — ADR-046/ADR-048 — and `db_stats.connections` left the `200` body) and made five more startup paths fail closed: an enabled outbox/inbox with no usable ledger database (#892), an unrecognized `connectionstring` scheme on the built-in connector (ADR-050), a database identity field delivered as an empty string (ADR-051), debug endpoints with neither an allowlist nor a bearer token (ADR-049), and declared consumers that cannot start — plus `httpclient.Build` JOSE-policy validation and the `jose.Seal` algorithm allowlist; v0.58.0 removed the dead `jose.PolicyRegistry` (ADR-052) and `server.TestShortTimeout`/`TestMediumTimeout`/`TestLongTimeout` (ADR-053), made a cache the framework could not construct abort startup (ADR-054), and reserved the OTel log-record resource-identity namespaces (ADR-055) while dropping record-level copies of resource identity (ADR-056). Requires **Go 1.26+**.
+- Reflects **go-bricks v0.58.1** (a fixes/refactors-only release — no consumer-facing API or config changes since v0.58.0). The v0.49.0 line applied messaging defaults in *every* deployment mode with mode-aware pool sizing (publisher `maxcached`, `database.manager.maxsize`, cache `maxsize` scale to the tenant limit in multi-tenant), added `database.manager.*` keys, wired `messaging.reconnect` delay/backoff keys live, required unit-suffixed durations (write `"300s"`, not `300`), and hardened the publisher lifecycle (cold-publish readiness wait + 1h single-tenant publisher IdleTTL). Since then: v0.50.0 made dev CORS wildcard opt-in (`CORS_DEV_WILDCARD`, ADR-038) and `multitenant.resolver.order` REQUIRED for `type: composite` (ADR-039); v0.51.0 made `server.bodylimit` configurable (echo v5.3.0 bump); v0.52.0 made messaging declaration `Args` reach the broker via a breaking `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change (ADR-040); v0.53.0 added `DeclareQueueWithDLQ` declarative dead-lettering; v0.54.0 shipped the `outbox.tenancy`/`inbox.tenancy: shared` control-plane ledger (ADR-041) and duplicate-route-registration fail-fast; v0.55.0 shipped the `database.Execute*` query/exec helpers with `database.Raw` and typed errors (hop E55), deterministic httpclient transport-wrapper layering at `Build()`, config-driven httpclient client TLS, and the `server.tls.*` HTTPS listener (ADR-042). v0.56.0 shipped the ALB forwarded-client-cert identity middleware (`server.forwardedclientcert.*`, ADR-043), the `seal-payload` CLI (#776), typed AMQP consumer binding (`messaging.DeclareTypedConsumer` / `NewTypedHandler`, #777), and a breaking `httpclient.Builder.Build() (Client, error)` signature change — `Build` now fails construction on an unsafe base-transport-slot displacement instead of warning and returning a silently-degraded client (ADR-044); v0.57.0 stopped `/ready` disclosing internals in either body (every critical probe's `503` is sanitized by default — ADR-046/ADR-048 — and `db_stats.connections` left the `200` body) and made five more startup paths fail closed: an enabled outbox/inbox with no usable ledger database (#892), an unrecognized `connectionstring` scheme on the built-in connector (ADR-050), a database identity field delivered as an empty string (ADR-051), debug endpoints with neither an allowlist nor a bearer token (ADR-049), and declared consumers that cannot start — plus `httpclient.Build` JOSE-policy validation and the `jose.Seal` algorithm allowlist; v0.58.0 removed the dead `jose.PolicyRegistry` (ADR-052) and `server.TestShortTimeout`/`TestMediumTimeout`/`TestLongTimeout` (ADR-053), made a cache the framework could not construct abort startup (ADR-054), and reserved the OTel log-record resource-identity namespaces (ADR-055) while dropping record-level copies of resource identity (ADR-056). Requires **Go 1.26+**.
 - Authoritative sources: `CHANGELOG.md` (release log) and `wiki/migrations.md` — the **per-hop migration runbook** (detect → apply → verify atoms, one hop per release, chainable across any version range). This file carries the ladder + agent protocol; the runbook holds the full atoms.
 - Upgrading an existing app? Read that section first. Across v0.40 → v0.45 **most breaks fail silently** — a renamed config key stops binding, a default flips — with no compile error. The compiler-caught API breaks are concentrated in v0.41.0 (CORS / LogEvent / SetupMiddlewares), v0.43.0 (per-tenant `ReleaseFunc`, `PoolKeepAliveConfig.Enabled`), v0.45.0 (echo-free boundary types, the `outbox.Store` interface), and v0.52.0 (the `AMQPClient.DeclareQueue`/`DeclareExchange`/`BindQueue` signature change, ADR-040). Not everything is silent: v0.50.0's required `multitenant.resolver.order` for `type: composite` (ADR-039) fails **fast** at startup with a config-validation error.
 
@@ -3657,7 +3657,7 @@ Generate a compact token like the one above with the `seal-payload` CLI: `go ins
 | JWE content enc (`enc`) | `A256GCM` | non-AEAD encryptions (`A*CBC-HS*`); larger AES variants not enabled |
 | Content type (`cty`) | `application/json` (default) | mismatched `cty` → `JOSE_CTY_REJECTED` |
 
-The disallowed algorithms produce `JOSE_ALGORITHM_DISALLOWED` (400) at parse time, *before* any key material is touched.
+`JOSE_ALGORITHM_DISALLOWED` is raised only at registration time (an invalid `jose:` struct tag or `Policy.Validate()` failure) and panics at startup — it is never returned to an HTTP caller at request time. A disallowed `alg`/`enc` on the wire instead fails go-jose's compact parse, surfacing as `JOSE_MALFORMED` (or `JOSE_INNER_NOT_JWS` for the inner-JWS layer), before any key material is touched.
 
 ### Tag Grammar (full)
 
@@ -3853,8 +3853,8 @@ func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (Excha
 | Body over the 10 MiB JOSE cap, or an unknown-length body overflowing a lower `server.bodylimit` mid-stream | 413 | `JOSE_BODY_TOO_LARGE` | pre-trust | `application/json` |
 | Body required / empty | 400 | `JOSE_BODY_REQUIRED` | pre-trust | `application/json` |
 | Compact JWE parse failure | 400 | `JOSE_MALFORMED` | pre-trust | `application/json` |
-| `enc`/`alg` not in allowlist | 400 | `JOSE_ALGORITHM_DISALLOWED` | pre-trust | `application/json` |
-| `alg=none` (downgrade) | 400 | `JOSE_ALGORITHM_DISALLOWED` | pre-trust | `application/json` |
+| `enc`/`alg` not allowed on the wire | 400 | `JOSE_MALFORMED` | pre-trust | `application/json` |
+| `alg=none` (downgrade attempt) | 400 | `JOSE_MALFORMED` (rejected by allowlist parse) | pre-trust | `application/json` |
 | Header missing `kid` | 401 | `JOSE_KID_MISSING` | pre-trust | `application/json` |
 | Unknown `kid` in header | 401 | `JOSE_KID_UNKNOWN` | pre-trust | `application/json` |
 | Decryption failed | 401 | `JOSE_DECRYPT_FAILED` | pre-trust | `application/json` |
@@ -3863,6 +3863,8 @@ func (m *Module) exchange(req ExchangeRequest, ctx server.HandlerContext) (Excha
 | Inner JWS `cty` disagrees with policy | 400 | `JOSE_CTY_REJECTED` | pre-trust | `application/json` |
 | Outbound seal failed (server-side bug) | 500 | `JOSE_OUTBOUND_FAILED` | post-trust | `application/json` (cannot encrypt without trust) |
 | Application returns `IAPIError` | per error | (your code) | post-trust | `application/jose` (encrypted standard envelope) |
+
+`JOSE_ALGORITHM_DISALLOWED` is registration-time only (see Algorithm Allowlist above) and never reaches an HTTP caller.
 
 **Security invariant** — pre-trust failures *must* return plaintext (so peers can't probe the decryption oracle); post-trust failures *must* return JOSE-encrypted envelopes (so application errors don't leak through). Tampering one ciphertext byte and asserting `Content-Type: application/json` on the response is the canonical regression test.
 
@@ -3906,10 +3908,10 @@ When `deps.MeterProvider`, `deps.Tracer`, and `deps.Logger` are wired (default w
 
 | Signal | Name | Attributes |
 |---|---|---|
-| Counter | `jose.failures.total` | `code` (e.g. `JOSE_DECRYPT_FAILED`), `direction` (`inbound`/`outbound`), `route` |
-| Histogram | `jose.operation.duration` | `operation` (`decode_request`/`encode_response`), `route` |
-| Span | `jose.decode_request` | request body size, kid, alg |
-| Span | `jose.encode_response` | response body size, kid, alg |
+| Counter | `jose.failures.total` | `code` (e.g. `JOSE_DECRYPT_FAILED`), `direction` (`inbound`/`outbound`), `http.method`, `http.route` |
+| Histogram | `jose.operation.duration` | `operation` (`decode_request`/`encode_response`) |
+| Span | `jose.decode_request` | `jose.direction`; `jose.error.code` on failure |
+| Span | `jose.encode_response` | `jose.direction`; `jose.error.code` on failure |
 | Log (ERROR) | structured | `code`, `direction`, `route` — **never** plaintext body or key material |
 
 ### Outbound HTTP JOSE (calling a partner from your service)
@@ -4551,7 +4553,7 @@ Every Flyway `migrate` invocation emits a `migration.applied` audit event. The d
 ```go
 type kafkaAuditRecorder struct{ producer *kafka.Writer; topic string }
 
-// AuditRecorder.Record takes a pointer (matches outbox.OutboxPublisher convention
+// AuditRecorder.Record takes a pointer (matches app.OutboxPublisher convention
 // for medium-sized event payloads).
 func (s *kafkaAuditRecorder) Record(ctx context.Context, ev *migration.AuditEvent) error {
     payload, _ := json.Marshal(ev)
@@ -4621,7 +4623,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | AMQP publish | `{destination} publish` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.destination.routing_key` | Every `Publish`/`PublishToExchange` |
 | AMQP consume | `{queue} receive` | `messaging.system`, `messaging.destination.name`, `messaging.rabbitmq.exchange` | Every message received |
 | Outbound HTTP | propagates `traceparent` | `url.path`, `http.request.method` | Via `httpclient` package |
-| JOSE | `jose.decode_request` / `jose.encode_response` | `jose.kid`, `jose.alg` | Every JOSE-tagged route |
+| JOSE | `jose.decode_request` / `jose.encode_response` | `jose.direction`; `jose.error.code` on failure | Every JOSE-tagged route |
 
 **Auto-emitted metrics** (OTel semantic conventions; same names work in any backend):
 
@@ -4643,8 +4645,8 @@ When `observability.enabled: true`, the framework auto-emits:
 | Cache manager | `cache.manager.active_caches` | UpDownCounter | — |
 | Cache manager | `cache.manager.evictions` / `.idle_cleanups` / `.total_created` / `.errors` | Counter | — |
 | Go runtime | `process.runtime.go.{mem.*,goroutines,gc.*,sched.*}` | various | OTel runtime semconv |
-| JOSE | `jose.failures.total` | Counter | `code`, `direction`, `route` |
-| JOSE | `jose.operation.duration` | Histogram | `operation`, `route` |
+| JOSE | `jose.failures.total` | Counter | `code`, `direction`, `http.method`, `http.route` |
+| JOSE | `jose.operation.duration` | Histogram | `operation` |
 
 **Auto-emitted logs** (zerolog → OTel logs bridge):
 
@@ -4756,7 +4758,7 @@ observability:
 
 ### Resource Attributes & Export Behavior
 
-The framework attaches the following resource attributes to every signal: `service.name`, `service.version`, `service.instance.id`, plus auto-detected `process.*` and `host.*` per OTel semantic conventions. Override `service.name`/`service.version` via `observability.service.{name,version}`.
+The framework attaches `service.name`, `service.version`, and `deployment.environment.name` to every signal's resource. `service.instance.id` and `process.*`/`host.*` attributes are NOT auto-attached by go-bricks — add them yourself via an OTel resource detector or `OTEL_RESOURCE_ATTRIBUTES` if you need them. Override `service.name`/`service.version` via `observability.service.{name,version}`.
 
 **Export timeout** defaults to 10s when `observability.environment` is `development` (its value when the key is unset) **or** the signal's endpoint is `stdout`, and 60s otherwise (accommodates TLS + cross-region latency). `observability.environment` is a separate key and is never derived from `app.env`, so `app.env: production` against a remote collector still gets 10s unless you set it. Each signal has its own key — set `observability.trace.export.timeout`, `observability.metrics.export.timeout`, and `observability.logs.export.timeout` independently; there is no global override.
 
@@ -5784,9 +5786,9 @@ Same domain errors, different boundary handling:
 - **Configuration injection**: `deps.Config.InjectInto(&cfgStruct)` honors defaults and env overrides.
 - **Testing**: `obtest.NewTestTraceProvider()` captures spans, `obtest.NewTestMeterProvider()` captures metrics; mock `database.Interface` and `messaging.Client` directly.
 
-## Upgrade & Breaking Changes (v0.39 → v0.56)
+## Upgrade & Breaking Changes (v0.39 → v0.56; newer hops in `wiki/migrations.md`)
 
-The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.56), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook.
+The full, executable migration path is the **per-hop runbook in `wiki/migrations.md`** — one hop per release (v0.39 → v0.40 → … → v0.56 → …), every change a gated atom with `detect` / `apply` (inline before/after for compiler-caught API changes) / `verify`, walkable from any current version to any target. This section is the map + protocol; the atoms live in the runbook. The ladder and table below stop at v0.56.0 — hops E57 (v0.56.0 → v0.57.0), E58 (v0.57.0 → v0.58.0), E581 (v0.58.0 → v0.58.1), and beyond are documented directly in `wiki/migrations.md`, not mirrored here.
 
 Ladder:
 ```
@@ -5808,7 +5810,7 @@ v0.39.1 ─E40─ v0.40.0 ─E401─ v0.40.1 ─E41─ v0.41.0 ─E42─ v0.42.0
 | E51  | v0.50.0 → v0.51.0 | silent-behavior (adopt-only) | none | none |
 | E52  | v0.51.0 → v0.52.0 | compile-break | 1 | if you set `.Args` on any declaration in ≤v0.51.0, verify current broker state before upgrading (ADR-040) |
 | E55  | v0.52.0 → v0.55.0 | additive (safe) | none | none |
-| E56  | v0.55.0 → v0.56.0 | compile-break | 1 | `httpclient.Builder.Build()` returns `(Client, error)` (C56.6, ADR-044) — the compiler catches only single-value captures; a bare `Build()` statement, `client, _ := Build()`, `defer` and `go` all still compile and silently drop the error, so audit those by hand |
+| E56  | v0.55.0 → v0.56.0 | compile-break | 2 | `httpclient.Builder.Build()` returns `(Client, error)` (C56.6, ADR-044) — the compiler catches only single-value captures; a bare `Build()` statement, `client, _ := Build()`, `defer` and `go` all still compile and silently drop the error, so audit those by hand; `cache.Manager` interface removed (C56.9, ADR-045) — compile-break only if you named the type |
 
 Agent protocol (condensed — full version in the runbook):
 1. Detect CURRENT: `go list -m -f '{{.Version}}{{if .Replace}} =>{{.Replace.Path}}{{end}}' github.com/gaborage/go-bricks` (a local `replace` → resolve the checkout's tag).

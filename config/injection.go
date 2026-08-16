@@ -54,7 +54,6 @@ func (c *Config) InjectInto(target any) error {
 			continue
 		}
 
-		// Get struct tags
 		configKey := fieldType.Tag.Get("config")
 		if configKey == "" {
 			continue // Skip fields without config tag
