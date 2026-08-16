@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -261,6 +263,11 @@ func reportPathFor(pkg, reportDir string) string {
 	return filepath.Join(reportDir, name)
 }
 
+// errMissingReport marks a report file the engine exited zero without writing.
+// It is deliberately distinct from fs.ErrNotExist: an unavailable engine binary
+// also fails with a chain wrapping ENOENT, and that must stay fatal.
+var errMissingReport = errors.New("engine exited zero without writing a report")
+
 // runEngine invokes gremlins for pkg and returns the report it wrote. extra
 // carries mode-specific flags (--dry-run, the coefficient, the worker count).
 func runEngine(ctx context.Context, engineArgs []string, pkg, reportPath string, extra []string, out io.Writer) ([]byte, error) {
@@ -273,6 +280,9 @@ func runEngine(ctx context.Context, engineArgs []string, pkg, reportPath string,
 	}
 	reportJSON, readErr := os.ReadFile(reportPath) // #nosec G304 -- path built from a per-run os.MkdirTemp dir + package-derived name, not user input
 	if readErr != nil {
+		if errors.Is(readErr, fs.ErrNotExist) {
+			return nil, fmt.Errorf("no report for %s: %w", pkg, errMissingReport)
+		}
 		return nil, fmt.Errorf("no report for %s: %w", pkg, readErr)
 	}
 	return reportJSON, nil
@@ -291,6 +301,15 @@ func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir stri
 	dryJSON, err := runEngine(ctx, engineArgs, pkg, reportPathFor(pkg, reportDir)+".dry",
 		[]string{"--dry-run", workersFlag, "1"}, out)
 	if err != nil {
+		// A missing report after a zero exit is gremlins' shape for a package with
+		// no mutatable statements (e.g. constants-only): it prints "No results to
+		// report." and writes nothing. runEngine tags exactly that case with
+		// errMissingReport; every other failure — including an engine binary whose
+		// own error chain wraps ENOENT — stays fatal.
+		if errors.Is(err, errMissingReport) {
+			fmt.Fprintf(out, "mutatediff: %s produced no dry-run report (no mutatable statements), skipping\n", pkg)
+			return nil, nil, false, nil
+		}
 		return nil, nil, false, err
 	}
 	onChanged, cErr := countOnChangedLines(dryJSON, pkg, changed)

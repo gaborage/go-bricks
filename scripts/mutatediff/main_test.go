@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -96,6 +97,45 @@ func TestRunNoOpDiffLeavesEnvironmentAlone(t *testing.T) {
 	// leaves a hoisted budget half-detectable.
 	if got := os.Getenv("GOMAXPROCS"); got != "sentinel" {
 		t.Errorf("GOMAXPROCS = %q, want it untouched by a no-op run", got)
+	}
+}
+
+// TestMutatePackageSkipsWhenEngineWritesNoDryReport pins the constants-only
+// package case: gremlins exits 0 without writing a report when a package has
+// no mutatable statements, and the gate must skip it rather than abort the
+// whole run. `true` reproduces that shape — zero exit, no report file.
+func TestMutatePackageSkipsWhenEngineWritesNoDryReport(t *testing.T) {
+	var buf bytes.Buffer
+	_, _, ran, err := mutatePackage(t.Context(), []string{"true"}, "./internal/testutil",
+		t.TempDir(), map[string][]lineRange{}, 1, &buf)
+	if err != nil {
+		t.Fatalf("want nil error for a zero-exit engine with no report, got %v", err)
+	}
+	if ran {
+		t.Error("ran = true, want false when no mutants were executed")
+	}
+	if !strings.Contains(buf.String(), "no dry-run report") {
+		t.Errorf("skip reason not reported, output: %q", buf.String())
+	}
+}
+
+// TestMutatePackageUnavailableEngineStaysFatal pins the boundary of the skip:
+// an engine binary that does not exist fails with an error chain wrapping
+// fs.ErrNotExist (ENOENT), which must NOT be mistaken for the missing-report
+// zero-mutants case — a gate whose engine cannot start has verified nothing.
+func TestMutatePackageUnavailableEngineStaysFatal(t *testing.T) {
+	var buf bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "no-such-engine")
+	_, _, ran, err := mutatePackage(t.Context(), []string{missing}, "./scripts/mutatediff",
+		t.TempDir(), map[string][]lineRange{}, 1, &buf)
+	if err == nil {
+		t.Fatal("want an error from an engine binary that does not exist")
+	}
+	if ran {
+		t.Error("ran = true, want false when the engine never started")
+	}
+	if strings.Contains(buf.String(), "skipping") {
+		t.Errorf("dead engine reported as a skip, output: %q", buf.String())
 	}
 }
 
