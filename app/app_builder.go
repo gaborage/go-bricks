@@ -242,7 +242,7 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 		if paths := config.UntypedDatabaseSections(b.cfg); len(paths) > 0 {
 			b.err = fmt.Errorf(
 				"database configuration at %v: connectionstring has no resolved database type; "+
-					"set <path>.type to postgresql or oracle, or use a recognized connectionstring scheme",
+					"set <path>.type to postgresql or oracle, or run config.Validate before configuring runtime helpers",
 				paths)
 			return b
 		}

@@ -1489,7 +1489,7 @@ func TestNewWithConfigErrors(t *testing.T) {
 		cfg := &config.Config{} // Empty config - fails config.Validate before construction proceeds
 		app, log, err := NewWithConfig(cfg, nil)
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "app.name")
 		assert.Nil(t, app)
 		assert.NotNil(t, log)
@@ -1503,7 +1503,7 @@ func TestNewWithConfigErrors(t *testing.T) {
 
 		app, log, err := NewWithConfig(cfg, &Options{})
 
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "database.host")
 		assert.Nil(t, app)
 		assert.NotNil(t, log) // Logger should always be available
