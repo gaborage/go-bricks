@@ -94,10 +94,24 @@ func TestNormalizeDatabaseSectionPlacementRules(t *testing.T) {
 	}{
 		{name: "root_absent_is_a_verdict_not_an_error", section: rootDatabaseSection(), cfg: DatabaseConfig{}},
 		{name: "root_manager_block_allowed", section: rootDatabaseSection(), cfg: withManager()},
-		{name: "named_absent_missing", section: namedDatabaseSection("r"), cfg: DatabaseConfig{}, wantErr: "database configuration incomplete", wantCategory: errCategoryMissing, wantField: "databases.r"},
-		{name: "tenant_absent_missing", section: tenantDatabaseSection("t"), cfg: DatabaseConfig{}, wantErr: "database configuration incomplete", wantCategory: errCategoryMissing, wantField: "multitenant.tenants.t.database"},
+		{name: "named_absent_missing", section: namedDatabaseSection("r"), cfg: DatabaseConfig{}, wantErr: errDatabaseIncomplete, wantCategory: errCategoryMissing, wantField: "databases.r"},
+		{
+			name:         "tenant_absent_missing",
+			section:      tenantDatabaseSection("t"),
+			cfg:          DatabaseConfig{},
+			wantErr:      errDatabaseIncomplete,
+			wantCategory: errCategoryMissing,
+			wantField:    "multitenant.tenants.t.database",
+		},
 		{name: "named_manager_rejected", section: namedDatabaseSection("r"), cfg: withManager(), wantErr: "only supported on the primary database", wantCategory: errCategoryInvalid, wantField: "databases.r.manager"},
-		{name: "tenant_manager_rejected", section: tenantDatabaseSection("t"), cfg: withManager(), wantErr: "only supported on the primary database", wantCategory: errCategoryInvalid, wantField: "multitenant.tenants.t.database.manager"},
+		{
+			name:         "tenant_manager_rejected",
+			section:      tenantDatabaseSection("t"),
+			cfg:          withManager(),
+			wantErr:      "only supported on the primary database",
+			wantCategory: errCategoryInvalid,
+			wantField:    "multitenant.tenants.t.database.manager",
+		},
 		{name: "named_normalization_error_wrapped_with_path", section: namedDatabaseSection("r"), cfg: DatabaseConfig{Type: "mysql", Host: "h"}, wantErr: "databases.r: "},
 		{name: "tenant_normalization_error_wrapped_with_path", section: tenantDatabaseSection("t"), cfg: DatabaseConfig{Type: "mysql", Host: "h"}, wantErr: "multitenant.tenants.t.database: "},
 	}

@@ -139,7 +139,7 @@ func normalizeDatabaseSection(db *DatabaseConfig, section dbSection) error {
 		return &ConfigError{
 			Category: errCategoryMissing,
 			Field:    section.path,
-			Message:  "database configuration incomplete",
+			Message:  errDatabaseIncomplete,
 			Action:   "add host/type or connectionstring to " + section.path,
 		}
 	}

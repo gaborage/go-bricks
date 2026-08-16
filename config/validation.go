@@ -144,6 +144,7 @@ const (
 	errMustBeNonNegative  = "must be non-negative"
 	errMustBePositive     = "must be positive"
 	errNotSupportedFmt    = "'%s' is not supported"
+	errDatabaseIncomplete = "database configuration incomplete"
 	portRange             = "1-65535"
 	fieldDatabase         = "database"
 	fieldDatabasePort     = "database.port"
