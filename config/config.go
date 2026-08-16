@@ -326,7 +326,7 @@ func loadDefaults(k *koanf.Koanf) error {
 		"app.rate.burst":                200,
 		"app.rate.ippreguard.enabled":   true,
 		"app.rate.ippreguard.threshold": 2000,
-		"app.startup.timeout":           "10s",
+		"app.startup.timeout":           defaultStartupTimeout.String(),
 
 		"server.host":               "0.0.0.0",
 		fieldServerPort:             8080,
@@ -345,10 +345,10 @@ func loadDefaults(k *koanf.Koanf) error {
 		// Database defaults not provided for deterministic behavior
 		// Database will only be enabled when explicitly configured
 
-		// Cache defaults. These mirror the defaultRedis* constants in validation.go
-		// (the single source of truth, also applied to per-tenant caches via
-		// applyRedisDefaults) — keep the two in sync. koanf duration defaults are
-		// strings, so the time.Duration constants are rendered via .String().
+		// Cache defaults. Rendered from the same constants applyRedisDefaults uses;
+		// TestKoanfDefaultsMatchApplyDefaultsForSharedKeys pins the equality. koanf
+		// duration defaults are strings, so the time.Duration constants are rendered
+		// via .String().
 		"cache.enabled":               false,
 		"cache.type":                  CacheTypeRedis,
 		"cache.redis.host":            defaultHost,
