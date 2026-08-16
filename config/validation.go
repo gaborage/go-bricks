@@ -697,61 +697,7 @@ func validateDatabase(cfg *DatabaseConfig) error {
 	if !IsDatabaseConfigured(cfg) {
 		return nil
 	}
-
-	if cfg.ConnectionString != "" {
-		return validateDatabaseWithConnectionString(cfg)
-	}
-
-	if err := validateDatabaseType(cfg.Type); err != nil {
-		return err
-	}
-
-	if err := validateDatabaseCoreFields(cfg); err != nil {
-		return err
-	}
-
-	if err := validateVendorSpecificFields(cfg); err != nil {
-		return err
-	}
-
-	return applyDatabasePoolDefaults(cfg)
-}
-
-// validateDatabaseWithConnectionString validates database settings when a connection
-// string is provided. It mutates cfg: pool/session defaults via
-// applyDatabasePoolDefaults, plus ADR-050 Type inference from the DSN scheme (an
-// explicit Type that contradicts the scheme is an error rather than an override).
-func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
-	if inferred := inferDatabaseTypeFromConnectionString(cfg.ConnectionString); inferred != "" {
-		if cfg.Type == "" {
-			cfg.Type = inferred
-		} else if cfg.Type != inferred {
-			return NewInvalidFieldError("database.type",
-				fmt.Sprintf("conflicts with the connectionstring scheme (which implies %s)", inferred),
-				[]string{inferred})
-		}
-	}
-
-	if cfg.Type != "" {
-		if err := validateDatabaseType(cfg.Type); err != nil {
-			return err
-		}
-	}
-
-	if err := validateOptionalDatabasePort(cfg.Port); err != nil {
-		return err
-	}
-
-	if err := applyDatabasePoolDefaults(cfg); err != nil {
-		return err
-	}
-
-	// Validate vendor-specific fields even with connection string
-	if err := validateVendorSpecificFields(cfg); err != nil {
-		return err
-	}
-
-	return nil
+	return normalizeDatabaseValues(cfg, dbStrictnessStartup)
 }
 
 // inferDatabaseTypeFromConnectionString maps a recognized DSN scheme to its vendor.
@@ -873,28 +819,13 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 // because that failure mode is silent and open rather than loud at dial. The
 // asymmetry is deliberate.
 //
-// Normalization happens on a clone that is committed to cfg only after every step
-// succeeds, so a rejected config goes back to its caller completely untouched.
+// It is the connect-strictness door of the database-section normalization
+// module (database_section.go); a rejected config returns untouched.
 func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg == nil {
 		return NewValidationError("database", "configuration is nil")
 	}
-
-	normalized := *cfg
-	if normalized.Type == "" {
-		normalized.Type = inferDatabaseTypeFromConnectionString(normalized.ConnectionString)
-	}
-
-	if err := validateVendorSpecificFields(&normalized); err != nil {
-		return err
-	}
-
-	if err := applyDatabasePoolDefaults(&normalized); err != nil {
-		return err
-	}
-
-	*cfg = normalized
-	return nil
+	return normalizeDatabaseValues(cfg, dbStrictnessConnect)
 }
 
 // applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.

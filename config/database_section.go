@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 // dbPlacement is where a database section sits in the configuration tree. It
 // decides whether the section may be absent, whether a manager block is
 // allowed, and how its errors are addressed.
@@ -39,4 +41,82 @@ func namedDatabaseSection(name string) dbSection {
 
 func tenantDatabaseSection(id string) dbSection {
 	return dbSection{path: "multitenant.tenants." + id + ".database", placement: dbPlacementTenant}
+}
+
+// normalizeDatabaseValues turns a database section into the shape a connection
+// can be opened from. It works on a clone and commits only when every step
+// succeeds, so a rejected section returns untouched. The per-strictness step
+// order is what the two doors ran before they shared this module — kept as is,
+// because it decides which error a doubly-wrong section reports first.
+func normalizeDatabaseValues(db *DatabaseConfig, strictness dbStrictness) error {
+	normalized := *db
+
+	var err error
+	switch {
+	case strictness == dbStrictnessConnect:
+		err = normalizeForConnect(&normalized)
+	case normalized.ConnectionString != "":
+		err = normalizeWithConnectionString(&normalized)
+	default:
+		err = normalizeWithFields(&normalized)
+	}
+	if err != nil {
+		return err
+	}
+
+	*db = normalized
+	return nil
+}
+
+// normalizeForConnect infers a missing Type from a recognized scheme without
+// erroring on a contradiction, rejects vendor field shapes that would fail
+// silently open, and fills pool/session defaults. Identity is the dial's job.
+func normalizeForConnect(db *DatabaseConfig) error {
+	if db.Type == "" {
+		db.Type = inferDatabaseTypeFromConnectionString(db.ConnectionString)
+	}
+	if err := validateVendorSpecificFields(db); err != nil {
+		return err
+	}
+	return applyDatabasePoolDefaults(db)
+}
+
+// normalizeWithConnectionString is the startup path for a DSN-carrying section:
+// an explicit Type that contradicts the scheme is an error, not an override.
+func normalizeWithConnectionString(db *DatabaseConfig) error {
+	if inferred := inferDatabaseTypeFromConnectionString(db.ConnectionString); inferred != "" {
+		if db.Type == "" {
+			db.Type = inferred
+		} else if db.Type != inferred {
+			return NewInvalidFieldError("database.type",
+				fmt.Sprintf("conflicts with the connectionstring scheme (which implies %s)", inferred),
+				[]string{inferred})
+		}
+	}
+	if db.Type != "" {
+		if err := validateDatabaseType(db.Type); err != nil {
+			return err
+		}
+	}
+	if err := validateOptionalDatabasePort(db.Port); err != nil {
+		return err
+	}
+	if err := applyDatabasePoolDefaults(db); err != nil {
+		return err
+	}
+	return validateVendorSpecificFields(db)
+}
+
+// normalizeWithFields is the startup path for a host/port/user section.
+func normalizeWithFields(db *DatabaseConfig) error {
+	if err := validateDatabaseType(db.Type); err != nil {
+		return err
+	}
+	if err := validateDatabaseCoreFields(db); err != nil {
+		return err
+	}
+	if err := validateVendorSpecificFields(db); err != nil {
+		return err
+	}
+	return applyDatabasePoolDefaults(db)
 }
