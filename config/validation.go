@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"slices"
@@ -946,7 +947,9 @@ func validateCIDRList(field string, list []string) error {
 }
 
 func validateNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantConfig) error {
-	for name := range databases {
+	// Sorted, like forEachDatabaseSection: with several malformed entries the
+	// startup error names the same one every run.
+	for _, name := range slices.Sorted(maps.Keys(databases)) {
 		if err := validateNamedDatabaseName(name, mt); err != nil {
 			return err
 		}
@@ -1711,7 +1714,9 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 		return err
 	}
 
-	for tenantID := range tenants {
+	// Sorted, like forEachDatabaseSection: with several malformed tenants the
+	// startup error names the same one every run.
+	for _, tenantID := range slices.Sorted(maps.Keys(tenants)) {
 		tenant := tenants[tenantID]
 		if tenantID == "" {
 			return NewValidationError("multitenant.tenants", "tenant ID cannot be empty")
