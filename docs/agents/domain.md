@@ -5,8 +5,8 @@ How the engineering skills should consume this repo's domain documentation when 
 ## Before exploring, read these
 
 - **`CONTEXT.md`** at the repo root — the glossary. It does not exist yet; `/domain-modeling` creates it lazily
-  when a term actually gets resolved. It is allowlisted in `.gitignore` (`!CONTEXT.md`), so it will be tracked
-  the moment it appears.
+  when a term actually gets resolved. It is allowlisted in `.gitignore` (`!CONTEXT.md`), so it will not be ignored
+  and can be added to the change when it appears.
 - **`wiki/architecture_decisions.md`** — the ADR index. Skim it for decisions touching the area you're about to
   work in, then read the linked `wiki/adr_NNN_<slug>.md` file(s).
 - **`wiki/<topic>.md`** — deep dives per subsystem (`database.md`, `messaging.md`, `outbox.md`, …). CLAUDE.md's

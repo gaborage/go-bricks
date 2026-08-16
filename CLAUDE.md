@@ -443,7 +443,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 
 ### Issue tracker
 
-GitHub Issues via `gh`; titles `<area>: <description>`, labels `area/*` + `kind/*`. See `docs/agents/issue-tracker.md`.
+GitHub Issues via `gh`; titles `<area>: <description>`, labels `area/*` + `kind/*` or `bug`/`documentation`, plus `needs-triage`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
