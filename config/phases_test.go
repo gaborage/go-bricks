@@ -273,6 +273,8 @@ func TestNormalizeDisabledCacheCarriesRedisDefaults(t *testing.T) {
 
 		require.NoError(t, Validate(cfg))
 		assert.Equal(t, defaultRedisPort, cfg.Cache.Redis.Port)
+		assert.Equal(t, defaultRedisPoolSize, cfg.Cache.Redis.PoolSize)
+		assert.Equal(t, defaultRedisDialTimeout, cfg.Cache.Redis.DialTimeout)
 	})
 }
 
