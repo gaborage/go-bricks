@@ -1,6 +1,10 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"maps"
+	"slices"
+)
 
 // dbPlacement is where a database section sits in the configuration tree. It
 // decides whether the section may be absent, whether a manager block is
@@ -156,4 +160,50 @@ func normalizeDatabaseSection(db *DatabaseConfig, section dbSection) error {
 		}
 	}
 	return nil
+}
+
+// forEachDatabaseSection visits every database section the deployment
+// consumes: the root, each databases.* entry, and — only when multitenancy is
+// enabled, since a leftover tenants block is inert otherwise — each static
+// tenant's database. Map entries are copied out, visited, and written back so a
+// visitor that normalizes sees its work persist. Keys are visited in sorted
+// order so the first error, and any list built from the walk, is deterministic.
+func forEachDatabaseSection(cfg *Config, visit func(section dbSection, db *DatabaseConfig) error) error {
+	if err := visit(rootDatabaseSection(), &cfg.Database); err != nil {
+		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(cfg.Databases)) {
+		db := cfg.Databases[name]
+		if err := visit(namedDatabaseSection(name), &db); err != nil {
+			return err
+		}
+		cfg.Databases[name] = db
+	}
+	if !cfg.Multitenant.Enabled {
+		return nil
+	}
+	for _, id := range slices.Sorted(maps.Keys(cfg.Multitenant.Tenants)) {
+		tenant := cfg.Multitenant.Tenants[id]
+		if err := visit(tenantDatabaseSection(id), &tenant.Database); err != nil {
+			return err
+		}
+		cfg.Multitenant.Tenants[id] = tenant
+	}
+	return nil
+}
+
+// UntypedDatabaseSections returns the path of every database section that
+// carries a connectionstring whose vendor is still unresolved after
+// normalization — a scheme inference does not recognize (ADR-050). Whether that
+// is fatal depends on who connects, so this only reports; app.Builder decides.
+// Paths come back in walk order, which is lexicographic. Nil when none.
+func UntypedDatabaseSections(cfg *Config) []string {
+	var paths []string
+	_ = forEachDatabaseSection(cfg, func(section dbSection, db *DatabaseConfig) error {
+		if db.ConnectionString != "" && db.Type == "" {
+			paths = append(paths, section.path)
+		}
+		return nil
+	})
+	return paths
 }

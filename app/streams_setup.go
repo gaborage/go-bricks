@@ -77,7 +77,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 //
 // SECURITY: config.Validate already rejects multitenant.enabled beside a stream
 // URI, but app.NewWithConfig takes a hand-built config and never calls it — the
-// documented bypass untypedConnectionStringPaths guards against for database
+// documented bypass config.UntypedDatabaseSections guards against for database
 // types. Without this repeat, such a service would boot green and run stream
 // handlers against one shared Environment with no tenant in context, which is
 // precisely what the gate exists to prevent.

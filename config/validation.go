@@ -598,54 +598,26 @@ var pgSSLModes = []string{sslModeDisable, sslModeAllow, sslModePrefer, sslModeRe
 // downgrade it.
 var pgTLSMandatorySSLModes = []string{sslModeRequire, sslModeVerifyCA, sslModeVerifyFull}
 
-// deliveredEmptyDatabaseKeys returns every identity key present in the loaded
-// configuration under base while the decoded section carries zero identity
-// values — the "delivered but empty" shape ADR-047 could not see (ADR-051).
-// All of them, not just the first: the error promises "field(s)", and an
-// operator who clears only the one key named would hit the same abort again.
-// Nil means the section is either genuinely absent or carries a real value
-// (later validators own that).
-func deliveredEmptyDatabaseKeys(cfg *Config, base string, db *DatabaseConfig) []string {
-	if IsDatabaseConfigured(db) {
-		return nil
-	}
-	var keys []string
-	for _, k := range databaseIdentityKeys {
-		key := base + "." + k
-		if cfg.Exists(key) {
-			keys = append(keys, key)
-		}
-	}
-	return keys
-}
-
-// validateNoDeliveredEmptyDatabase fails startup when any database section —
-// root, named, or static-tenant — was delivered with only empty identity
-// fields. Tenant sections are walked only when multitenancy is enabled (see
-// below). Inert for hand-built Config literals (no koanf instance) and for
-// dynamic-source tenant configs (never in koanf). Offending paths are
-// collected sorted so the startup error is deterministic.
+// validateNoDeliveredEmptyDatabase fails startup when any database section the
+// deployment consumes was delivered with only empty identity fields — the shape
+// ADR-047 could not see (ADR-051). Inert for hand-built Config literals (no
+// koanf instance) and for dynamic-source tenant configs (never in koanf). Every
+// offending key is reported, not just the first: the error promises
+// "field(s)", and an operator who clears only the one named would hit the same
+// abort again. Sorted, so the startup error is deterministic.
 func validateNoDeliveredEmptyDatabase(cfg *Config) error {
 	var offending []string
-	collect := func(base string, db *DatabaseConfig) {
-		offending = append(offending, deliveredEmptyDatabaseKeys(cfg, base, db)...)
-	}
-	collect(fieldDatabase, &cfg.Database)
-	for name := range cfg.Databases {
-		db := cfg.Databases[name]
-		collect("databases."+name, &db)
-	}
-	// Koanf populates Multitenant.Tenants from YAML regardless of the enabled flag,
-	// but a leftover block is inert in single-tenant mode: TenantStore skips it
-	// (config/tenant_store.go), ManagerConfigBuilder does not count it
-	// (app/bootstrap.go), and validateMultitenant returns before reaching it.
-	// Walking it anyway would abort startup over config no deployment consumes.
-	if cfg.Multitenant.Enabled {
-		for id := range cfg.Multitenant.Tenants {
-			t := cfg.Multitenant.Tenants[id]
-			collect("multitenant.tenants."+id+".database", &t.Database)
+	_ = forEachDatabaseSection(cfg, func(section dbSection, db *DatabaseConfig) error {
+		if IsDatabaseConfigured(db) {
+			return nil
 		}
-	}
+		for _, k := range databaseIdentityKeys {
+			if key := section.path + "." + k; cfg.Exists(key) {
+				offending = append(offending, key)
+			}
+		}
+		return nil
+	})
 	if len(offending) == 0 {
 		return nil
 	}

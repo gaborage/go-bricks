@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -123,4 +124,89 @@ func TestNormalizeDatabaseSectionRootAbsentLeavesConfigUntouched(t *testing.T) {
 	cfg := DatabaseConfig{}
 	require.NoError(t, normalizeDatabaseSection(&cfg, rootDatabaseSection()))
 	assert.Equal(t, DatabaseConfig{}, cfg, "absence must not pick up pool defaults — the verdict is identical before and after")
+}
+
+func TestForEachDatabaseSectionWalksRootNamedThenGatedTenantsInSortedOrder(t *testing.T) {
+	cfg := &Config{
+		Databases:   map[string]DatabaseConfig{"zeta": {}, "alpha": {}},
+		Multitenant: MultitenantConfig{Enabled: true, Tenants: map[string]TenantEntry{"t2": {}, "t1": {}}},
+	}
+	var seen []string
+	require.NoError(t, forEachDatabaseSection(cfg, func(s dbSection, _ *DatabaseConfig) error {
+		seen = append(seen, s.path)
+		return nil
+	}))
+	assert.Equal(t, []string{
+		"database", "databases.alpha", "databases.zeta",
+		"multitenant.tenants.t1.database", "multitenant.tenants.t2.database",
+	}, seen)
+}
+
+func TestForEachDatabaseSectionSkipsTenantsWhenMultitenantDisabled(t *testing.T) {
+	cfg := &Config{Multitenant: MultitenantConfig{Tenants: map[string]TenantEntry{"t1": {}}}}
+	var seen []string
+	require.NoError(t, forEachDatabaseSection(cfg, func(s dbSection, _ *DatabaseConfig) error {
+		seen = append(seen, s.path)
+		return nil
+	}))
+	assert.Equal(t, []string{"database"}, seen)
+}
+
+func TestForEachDatabaseSectionWritesMapEntriesBack(t *testing.T) {
+	cfg := &Config{
+		Databases:   map[string]DatabaseConfig{"r": {}},
+		Multitenant: MultitenantConfig{Enabled: true, Tenants: map[string]TenantEntry{"t": {}}},
+	}
+	require.NoError(t, forEachDatabaseSection(cfg, func(_ dbSection, db *DatabaseConfig) error {
+		db.Host = "written"
+		return nil
+	}))
+	assert.Equal(t, "written", cfg.Database.Host)
+	assert.Equal(t, "written", cfg.Databases["r"].Host)
+	assert.Equal(t, "written", cfg.Multitenant.Tenants["t"].Database.Host)
+}
+
+func TestForEachDatabaseSectionStopsAtFirstError(t *testing.T) {
+	cfg := &Config{Databases: map[string]DatabaseConfig{"a": {}, "b": {}}}
+	calls := 0
+	err := forEachDatabaseSection(cfg, func(s dbSection, _ *DatabaseConfig) error {
+		calls++
+		if s.path == "databases.a" {
+			return errors.New("stop")
+		}
+		return nil
+	})
+	require.EqualError(t, err, "stop")
+	assert.Equal(t, 2, calls, "root then databases.a; databases.b never visited")
+}
+
+func TestUntypedDatabaseSectionsReportsEveryUntypedDSNInWalkOrder(t *testing.T) {
+	cfg := &Config{}
+	cfg.Database.ConnectionString = "sqlserver://h:1433/db"
+	cfg.Databases = map[string]DatabaseConfig{
+		"reporting": {ConnectionString: "sqlserver://h1:1433/db1"},
+		"typed":     {ConnectionString: "sqlserver://h1:1433/db1", Type: PostgreSQL},
+		"analytics": {ConnectionString: "sqlserver://h3:1433/db3"},
+		"nodsn":     {Host: "h"},
+	}
+	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Tenants = map[string]TenantEntry{
+		"acme": {Database: DatabaseConfig{ConnectionString: "sqlserver://h2:1433/db2"}},
+	}
+	assert.Equal(t, []string{
+		"database", "databases.analytics", "databases.reporting", "multitenant.tenants.acme.database",
+	}, UntypedDatabaseSections(cfg))
+}
+
+func TestUntypedDatabaseSectionsIgnoresTenantsWhenMultitenantDisabled(t *testing.T) {
+	cfg := &Config{Multitenant: MultitenantConfig{Tenants: map[string]TenantEntry{
+		"acme": {Database: DatabaseConfig{ConnectionString: "sqlserver://h2:1433/db2"}},
+	}}}
+	assert.Empty(t, UntypedDatabaseSections(cfg))
+}
+
+func TestUntypedDatabaseSectionsIsNilWhenEveryDSNIsTyped(t *testing.T) {
+	cfg := &Config{}
+	cfg.Database = DatabaseConfig{ConnectionString: "postgres://u:p@h/d", Type: PostgreSQL}
+	assert.Nil(t, UntypedDatabaseSections(cfg))
 }
