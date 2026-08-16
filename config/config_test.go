@@ -144,7 +144,7 @@ func TestLoadAppEnvSelectsEnvironmentOverlay(t *testing.T) {
 
 // TestLoadAppEnvRejectsMalformedOverlaySuffix verifies a malformed APP_ENV is not
 // interpolated into the overlay filename (no config.<traversal>.yaml read attempt);
-// the value is left for validateApp to reject with a clear app.env error.
+// the value is left for checkApp to reject with a clear app.env error.
 func TestLoadAppEnvRejectsMalformedOverlaySuffix(t *testing.T) {
 	clearEnvironmentVariables()
 

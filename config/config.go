@@ -131,7 +131,7 @@ func Load() (*Config, error) {
 //
 // The resolved suffix is interpolated into a filename, so it is validated against the same
 // envFormat as cfg.App.Env: a malformed value (path separators, etc.) returns "" so no
-// config.<garbage>.yaml read is attempted, leaving validateApp to reject it with a clear
+// config.<garbage>.yaml read is attempted, leaving checkApp to reject it with a clear
 // error rather than an opaque YAML-parse failure.
 func resolveEnvOverlaySuffix(k *koanf.Koanf) string {
 	env := strings.TrimSpace(os.Getenv(keyToEnvVar(fieldAppEnv)))

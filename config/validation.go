@@ -190,69 +190,12 @@ const (
 	sslModeVerifyFull = "verify-full"
 )
 
-func Validate(cfg *Config) error {
-	if err := validateApp(&cfg.App); err != nil {
-		return fmt.Errorf("app config: %w", err)
-	}
-
-	if err := validateServer(&cfg.Server); err != nil {
-		return fmt.Errorf("server config: %w", err)
-	}
-
-	if err := validateScheduler(&cfg.Scheduler); err != nil {
-		return fmt.Errorf("scheduler config: %w", err)
-	}
-
-	if err := validateNoDeliveredEmptyDatabase(cfg); err != nil {
-		return fmt.Errorf("database config: %w", err)
-	}
-
-	if err := validateMultitenant(&cfg.Multitenant, &cfg.Database, &cfg.Messaging, &cfg.Source); err != nil {
-		return fmt.Errorf("multitenant config: %w", err)
-	}
-
-	if err := normalizeDatabaseSection(&cfg.Database, rootDatabaseSection()); err != nil {
-		return fmt.Errorf("database config: %w", err)
-	}
-
-	// Named/tenant DBs share the primary DbManager (see normalizeDatabaseSection), so manager defaults apply only here.
-	if err := applyDatabaseManagerDefaults(&cfg.Database.Manager, cfg.Multitenant.Enabled); err != nil {
-		return fmt.Errorf("database config: %w", err)
-	}
-
-	if err := validateNamedDatabases(cfg.Databases, &cfg.Multitenant); err != nil {
-		return fmt.Errorf("databases config: %w", err)
-	}
-
-	if err := validateLog(&cfg.Log); err != nil {
-		return fmt.Errorf("log config: %w", err)
-	}
-
-	if err := validateCache(&cfg.Cache, cfg.Multitenant.Enabled); err != nil {
-		return fmt.Errorf("cache config: %w", err)
-	}
-
-	if err := validateMessaging(&cfg.Messaging, cfg.Multitenant.Enabled); err != nil {
-		return fmt.Errorf("messaging config: %w", err)
-	}
-
-	if err := validateKeyStore(&cfg.KeyStore); err != nil {
-		return fmt.Errorf("keystore config: %w", err)
-	}
-
-	if err := validateDebug(&cfg.Debug); err != nil {
-		return fmt.Errorf("debug config: %w", err)
-	}
-
-	return nil
-}
-
-// validateDebug validates the debug-endpoint configuration. The trusted-proxy list uses
-// the same semantics as scheduler.security.trustedproxies: empty is valid (proxy headers
-// ignored), an all-invalid list fails fast, and a partial-invalid list passes with a
-// middleware-time WARN so a single typo cannot silently weaken the allowlist's spoofing
-// protection.
-func validateDebug(cfg *DebugConfig) error {
+// checkDebug rejects an entirely unparseable debug.trustedproxies list.
+// Semantics match scheduler.security.trustedproxies: empty is valid (proxy
+// headers ignored), an all-invalid list fails fast, and a partial-invalid list
+// passes with a middleware-time WARN so a single typo cannot silently weaken
+// the allowlist's spoofing protection.
+func checkDebug(cfg *DebugConfig) error {
 	return validateCIDRList("debug.trustedproxies", cfg.TrustedProxies)
 }
 
@@ -353,13 +296,14 @@ func applyStreamsDefaults(cfg *StreamsConfig) error {
 		"messaging.streams.offsetstore.flushinterval")
 }
 
-// validateApp validates the application configuration in cfg.
-// It requires Name and Version to be non-empty, Env to match envFormat (see
-// envFormat docs for the policy), and Rate.Limit/Rate.Burst to be non-negative.
-// It also applies startup timeout defaults via applyStartupDefaults, mutating
-// cfg.Startup.
-// Returns an error describing the first failed validation, or nil if valid.
-func validateApp(cfg *AppConfig) error {
+// normalizeApp fills the startup timeout defaults.
+func normalizeApp(cfg *AppConfig) error {
+	return applyStartupDefaults(&cfg.Startup)
+}
+
+// checkApp rejects a missing Name or Version, an Env outside envFormat (see
+// its docs for the policy), and negative rate limits.
+func checkApp(cfg *AppConfig) error {
 	if cfg.Name == "" {
 		return NewMissingFieldError("app.name", "APP_NAME", "app.name")
 	}
@@ -384,14 +328,11 @@ func validateApp(cfg *AppConfig) error {
 		return NewValidationError("app.rate.burst", errMustBeNonNegative)
 	}
 
-	if err := applyStartupDefaults(&cfg.Startup); err != nil {
-		return err
-	}
-
 	return nil
 }
 
-func validateServer(cfg *ServerConfig) error {
+// checkServer rejects a server section the server could not start from.
+func checkServer(cfg *ServerConfig) error {
 	if cfg.Port <= 0 || cfg.Port > 65535 {
 		return NewInvalidFieldError(fieldServerPort, fmt.Sprintf(errInvalidField, cfg.Port), []string{portRange})
 	}
@@ -900,15 +841,18 @@ func applyDatabaseTimezoneDefault(cfg *DatabaseConfig) error {
 	return err
 }
 
-// validateScheduler applies defaults and validates scheduler configuration.
-// Currently it normalizes scheduler.timezone (default "UTC", "-" opt-out for
-// host-local, IANA validation) so an invalid zone fails fast at startup.
-func validateScheduler(cfg *SchedulerConfig) error {
+// normalizeScheduler normalizes scheduler.timezone: default "UTC", "-"
+// opt-out for host-local, IANA validation — an invalid zone fails fast at
+// startup.
+func normalizeScheduler(cfg *SchedulerConfig) error {
 	normalized, err := normalizeIANATimezone("scheduler.timezone", cfg.Timezone)
 	cfg.Timezone = normalized
-	if err != nil {
-		return err
-	}
+	return err
+}
+
+// checkScheduler rejects an entirely unparseable CIDR allowlist or
+// trusted-proxy list.
+func checkScheduler(cfg *SchedulerConfig) error {
 	if err := validateCIDRList("scheduler.security.cidrallowlist", cfg.Security.CIDRAllowlist); err != nil {
 		return err
 	}
@@ -1351,11 +1295,11 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 	return nil
 }
 
-// validateKeyStore validates keystore configuration. Returns nil if no keys
-// are configured. SecretMinLength must be non-negative. Each entry is either
-// an RSA pair (public required with exactly one source, private optional) or a
-// symmetric secret — a mixed entry is rejected.
-func validateKeyStore(cfg *KeyStoreConfig) error {
+// checkKeyStore returns nil if no keys are configured. SecretMinLength must be
+// non-negative. Each entry is either an RSA pair (public required with exactly
+// one source, private optional) or a symmetric secret — a mixed entry is
+// rejected.
+func checkKeyStore(cfg *KeyStoreConfig) error {
 	if cfg.SecretMinLength < 0 {
 		return NewValidationError("keystore.secretminlength", errMustBeNonNegative)
 	}
@@ -1431,9 +1375,8 @@ func validateKeySource(src KeySourceConfig, keyName, keyType string, required bo
 	return nil
 }
 
-// validateLog validates that cfg.Level is one of the supported log levels.
-// It returns an error listing the allowed values if the level is invalid.
-func validateLog(cfg *LogConfig) error {
+// checkLog rejects an unsupported log level, listing the allowed values.
+func checkLog(cfg *LogConfig) error {
 	validLevels := []string{logger.LevelTrace, logger.LevelDebug, logger.LevelInfo, logger.LevelWarn, logger.LevelError, logger.LevelFatal, logger.LevelPanic}
 	if !slices.Contains(validLevels, cfg.Level) {
 		return NewInvalidFieldError(fieldLogLevel, fmt.Sprintf(errNotSupportedFmt, cfg.Level), validLevels)
