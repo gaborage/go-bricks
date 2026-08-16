@@ -1341,3 +1341,43 @@ app:
 		assert.Contains(t, err.Error(), "failed to load config.production.yaml")
 	})
 }
+
+// loadDefaultConfig loads koanf defaults (no YAML, no env) and unmarshals them the
+// same way Load does, so a test can inspect the resulting typed Config.
+func loadDefaultConfig(t *testing.T) (*Config, error) {
+	t.Helper()
+	k := koanf.New(".")
+	if err := loadDefaults(k); err != nil {
+		return nil, err
+	}
+	var cfg Config
+	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
+		DecoderConfig: buildDecoderConfig(),
+	}); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// TestKoanfDefaultsMatchApplyDefaultsForSharedKeys pins the two default-rendering
+// mechanisms to one source: koanf defaults (Load path) and apply*Defaults (Validate
+// path) must produce the same values wherever both speak. A new shared default
+// belongs in a constant both sides render.
+func TestKoanfDefaultsMatchApplyDefaultsForSharedKeys(t *testing.T) {
+	loaded, err := loadDefaultConfig(t)
+	require.NoError(t, err)
+
+	applied := &Config{}
+	require.NoError(t, applyStartupDefaults(&applied.App.Startup))
+	applyRedisDefaults(&applied.Cache.Redis)
+
+	assert.Equal(t, applied.App.Startup.Timeout, loaded.App.Startup.Timeout)
+	assert.Equal(t, applied.Cache.Redis.DialTimeout, loaded.Cache.Redis.DialTimeout)
+	assert.Equal(t, applied.Cache.Redis.ReadTimeout, loaded.Cache.Redis.ReadTimeout)
+	assert.Equal(t, applied.Cache.Redis.WriteTimeout, loaded.Cache.Redis.WriteTimeout)
+	assert.Equal(t, applied.Cache.Redis.MaxRetries, loaded.Cache.Redis.MaxRetries)
+	assert.Equal(t, applied.Cache.Redis.MinRetryBackoff, loaded.Cache.Redis.MinRetryBackoff)
+	assert.Equal(t, applied.Cache.Redis.MaxRetryBackoff, loaded.Cache.Redis.MaxRetryBackoff)
+	assert.Equal(t, applied.Cache.Redis.PoolSize, loaded.Cache.Redis.PoolSize)
+	assert.Equal(t, applied.Cache.Redis.Port, loaded.Cache.Redis.Port)
+}
