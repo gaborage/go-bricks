@@ -61,12 +61,11 @@ func normalize(cfg *Config) error {
 		return fmt.Errorf("databases config: %w", err)
 	}
 
-	// validateCache and validateMessaging still interleave shaping and checks; PR3 splits them.
-	if err := validateCache(&cfg.Cache, cfg.Multitenant.Enabled); err != nil {
+	if err := normalizeCache(&cfg.Cache, cfg.Multitenant.Enabled); err != nil {
 		return fmt.Errorf("cache config: %w", err)
 	}
 
-	if err := validateMessaging(&cfg.Messaging, cfg.Multitenant.Enabled); err != nil {
+	if err := normalizeMessaging(&cfg.Messaging, cfg.Multitenant.Enabled); err != nil {
 		return fmt.Errorf("messaging config: %w", err)
 	}
 
@@ -99,6 +98,14 @@ func check(cfg *Config) error {
 
 	if err := checkLog(&cfg.Log); err != nil {
 		return fmt.Errorf("log config: %w", err)
+	}
+
+	if err := checkCache(&cfg.Cache); err != nil {
+		return fmt.Errorf("cache config: %w", err)
+	}
+
+	if err := checkMessaging(&cfg.Messaging, cfg.Multitenant.Enabled); err != nil {
+		return fmt.Errorf("messaging config: %w", err)
 	}
 
 	if err := checkKeyStore(&cfg.KeyStore); err != nil {

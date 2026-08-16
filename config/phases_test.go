@@ -2,15 +2,16 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// idempotencyFixture is a full literal config with a named database, so the
-// map write-back path is under the pin. Static tenants join it with PR2's
-// fixtures.
-func idempotencyFixture() *Config {
+// singleTenantFixture is a full literal config with a named database, so the
+// map write-back path is under every pin that uses it; staticMultitenantFixture
+// is its static-tenant counterpart.
+func singleTenantFixture() *Config {
 	cfg := createValidFullConfig()
 	cfg.Databases = map[string]DatabaseConfig{"reporting": createValidDatabaseConfig()}
 	return cfg
@@ -21,12 +22,12 @@ func TestValidateRejectsNil(t *testing.T) {
 	require.ErrorIs(t, err, errNilConfig)
 }
 
-// idempotencyMultitenantFixture is a full literal config with static
+// staticMultitenantFixture is a full literal config with static
 // multitenancy: two tenant databases (so the tenant map write-back path is
 // under the pin) and a named database. The root database is left absent — a
 // root database and static tenants both configured is a conflict
 // (validateNoSingleTenantConflict).
-func idempotencyMultitenantFixture() *Config {
+func staticMultitenantFixture() *Config {
 	cfg := createValidFullConfig()
 	cfg.Database = DatabaseConfig{}
 	cfg.Source = SourceConfig{Type: SourceTypeStatic}
@@ -49,10 +50,10 @@ func idempotencyMultitenantFixture() *Config {
 // with the value it is compared against and could not catch a mutation.
 func TestValidateIsIdempotent(t *testing.T) {
 	t.Run("literal_door", func(t *testing.T) {
-		a := idempotencyFixture()
+		a := singleTenantFixture()
 		require.NoError(t, Validate(a))
 
-		b := idempotencyFixture()
+		b := singleTenantFixture()
 		require.NoError(t, Validate(b))
 		require.NoError(t, Validate(b))
 
@@ -60,10 +61,10 @@ func TestValidateIsIdempotent(t *testing.T) {
 	})
 
 	t.Run("literal_door_multitenant", func(t *testing.T) {
-		a := idempotencyMultitenantFixture()
+		a := staticMultitenantFixture()
 		require.NoError(t, Validate(a))
 
-		b := idempotencyMultitenantFixture()
+		b := staticMultitenantFixture()
 		require.NoError(t, Validate(b))
 		require.NoError(t, Validate(b))
 
@@ -171,7 +172,7 @@ func TestNormalizeLiteralDoorIncompleteSurfaces(t *testing.T) {
 // reach the root section only; a named or tenant section carrying a manager
 // block is rejected — pinned through Validate in validation_test.go.
 func TestNormalizeManagerDefaultsRootOnly(t *testing.T) {
-	cfg := idempotencyFixture()
+	cfg := singleTenantFixture()
 	require.NoError(t, Validate(cfg))
 
 	assert.Equal(t, defaultDatabaseManagerIdleTTL, cfg.Database.Manager.IdleTTL)
@@ -186,7 +187,7 @@ func TestNormalizeManagerDefaultsRootOnly(t *testing.T) {
 // still abort — normalization never adds identity to a section that had none.
 func TestCheckSingleTenantConflictAfterNormalize(t *testing.T) {
 	t.Run("root_database", func(t *testing.T) {
-		cfg := idempotencyMultitenantFixture()
+		cfg := staticMultitenantFixture()
 		cfg.Database = createValidDatabaseConfig()
 
 		err := Validate(cfg)
@@ -200,7 +201,7 @@ func TestCheckSingleTenantConflictAfterNormalize(t *testing.T) {
 	// A static source with no tenant map has no static tenants: the root
 	// database stays legal, so the gate must be "at least one", not "any map".
 	t.Run("no_tenant_map_permits_root_database", func(t *testing.T) {
-		cfg := idempotencyMultitenantFixture()
+		cfg := staticMultitenantFixture()
 		cfg.Multitenant.Tenants = nil
 		cfg.Database = createValidDatabaseConfig()
 
@@ -208,7 +209,7 @@ func TestCheckSingleTenantConflictAfterNormalize(t *testing.T) {
 	})
 
 	t.Run("root_messaging", func(t *testing.T) {
-		cfg := idempotencyMultitenantFixture()
+		cfg := staticMultitenantFixture()
 		cfg.Messaging.Broker.URL = "amqp://guest:guest@localhost:5672/"
 
 		err := Validate(cfg)
@@ -218,4 +219,73 @@ func TestCheckSingleTenantConflictAfterNormalize(t *testing.T) {
 		assert.Equal(t, fieldMessaging, cfgErr.Field)
 		assert.Contains(t, err.Error(), "not allowed when static tenants are configured")
 	})
+}
+
+// TestNormalizeModeDefaults pins whole-Config test 5: Multitenant.Enabled
+// selects the manager/cache/messaging mode-dependent defaults through the full
+// Validate entry point — single-tenant stamps the flat pool defaults,
+// multi-tenant preserves zero so the manager builders scale to the tenant
+// limit.
+func TestNormalizeModeDefaults(t *testing.T) {
+	t.Run("single_tenant", func(t *testing.T) {
+		cfg := singleTenantFixture()
+		cfg.Cache = CacheConfig{Enabled: true, Type: CacheTypeRedis, Redis: RedisConfig{Host: "localhost"}}
+
+		require.NoError(t, Validate(cfg))
+
+		assert.Equal(t, defaultCacheMaxSize, cfg.Cache.Manager.MaxSize)
+		assert.Equal(t, defaultMaxPublishers, cfg.Messaging.Publisher.MaxCached)
+		assert.Equal(t, defaultPublisherIdleTTL, cfg.Messaging.Publisher.IdleTTL)
+		assert.Equal(t, defaultDatabaseManagerIdleTTL, cfg.Database.Manager.IdleTTL)
+	})
+
+	t.Run("multi_tenant", func(t *testing.T) {
+		cfg := staticMultitenantFixture()
+		cfg.Cache = CacheConfig{Enabled: true, Type: CacheTypeRedis, Redis: RedisConfig{Host: "localhost"}}
+
+		require.NoError(t, Validate(cfg))
+
+		assert.Zero(t, cfg.Cache.Manager.MaxSize, "preserved so the cache pool scales to the tenant limit")
+		assert.Zero(t, cfg.Messaging.Publisher.MaxCached, "preserved so the publisher pool scales to the tenant limit")
+		assert.Equal(t, defaultPublisherIdleTTLMultiTenant, cfg.Messaging.Publisher.IdleTTL)
+		assert.Equal(t, defaultDatabaseManagerIdleTTLMultiTenant, cfg.Database.Manager.IdleTTL)
+	})
+}
+
+// TestNormalizeDisabledCacheCarriesRedisDefaults pins decision 13: Redis
+// defaults are filled unconditionally, even when the cache is disabled —
+// closing the top-level gap where an enabled hand-built cache with a zero
+// port/poolsize used to fail while koanf already gives 6379/10.
+func TestNormalizeDisabledCacheCarriesRedisDefaults(t *testing.T) {
+	t.Run("disabled_cache_carries_redis_defaults", func(t *testing.T) {
+		cfg := createValidFullConfig() // cache disabled
+
+		require.NoError(t, Validate(cfg))
+
+		assert.Equal(t, defaultRedisPort, cfg.Cache.Redis.Port)
+		assert.Equal(t, defaultRedisPoolSize, cfg.Cache.Redis.PoolSize)
+		assert.Equal(t, defaultRedisDialTimeout, cfg.Cache.Redis.DialTimeout)
+	})
+
+	t.Run("enabled_hand_built_zero_port_passes", func(t *testing.T) {
+		cfg := createValidFullConfig()
+		cfg.Cache = CacheConfig{Enabled: true, Type: CacheTypeRedis, Redis: RedisConfig{Host: "localhost"}}
+
+		require.NoError(t, Validate(cfg))
+		assert.Equal(t, defaultRedisPort, cfg.Cache.Redis.Port)
+	})
+}
+
+// TestCheckSeesNormalizedValues pins whole-Config test 7: check's cross-field
+// rules run against normalize's filled defaults, not zero — messaging
+// reconnect.maxdelay >= reconnect.delay compares the filled Delay, proving
+// check ran after normalize.
+func TestCheckSeesNormalizedValues(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.Messaging.Reconnect.MaxDelay = time.Second // Delay left zero: normalize fills 5s
+
+	err := Validate(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messaging.reconnect.maxdelay")
+	assert.Contains(t, err.Error(), "must be >= messaging.reconnect.delay")
 }
