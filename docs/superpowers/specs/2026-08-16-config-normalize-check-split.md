@@ -62,7 +62,7 @@ the normalize phase for the keys normalize owns.
 5. `Multitenant.Enabled` true/false → manager / cache / messaging mode defaults; a disabled cache
    still carries redis defaults (decision 13).
 6. Manager defaults on the root only; named/tenant untouched, and rejected if set.
-7. Checks see normalized values — messaging `publishtimeout >= connectiontimeout` runs against filled
+7. Checks see normalized values — messaging `reconnect.maxdelay >= reconnect.delay` runs against filled
    defaults, not zero.
 
 ### Phase assignment per section (today's `validateX` → `normalizeX` / `checkX`)
@@ -73,11 +73,11 @@ the normalize phase for the keys normalize owns.
 | app | startup timeout defaults | name/version required, env format, rate non-negative |
 | server | — | port, timeouts (incl. middleware < write), gzip/bodylimit non-negative, trusted proxies, TLS material shape, FCC require-without-enabled |
 | scheduler | timezone normalization | CIDR lists |
-| multitenant | resolver header/domain defaults, limits default, tenant database sections (opaque), tenant cache defaults | single-tenant conflicts, source type, resolver order required |
+| multitenant | resolver header/domain defaults, limits default, tenant database sections (opaque), tenant cache defaults | resolver type/order/domain/path rules, limits cap, source type, delivered-but-empty static map, tenant ID rules, cross-tenant messaging consistency, tenant cache, single-tenant conflicts |
 | database | root section (opaque), manager defaults (root only), named sections (opaque) | name-vs-tenant collisions, manager-outside-root (stays inside the opaque module) |
 | log | — | level |
-| cache | manager defaults, redis defaults (unconditional) | redis field ranges when enabled |
-| messaging | reconnect / publisher / streams offset-store defaults | negatives, URI scheme, address-resolver both-or-neither, cross-field timeouts |
+| cache | redis defaults (unconditional), manager defaults when enabled | type enumeration and redis field ranges when enabled |
+| messaging | reconnect / publisher / streams offset-store defaults (negatives rejected by the fill) | `reconnect.maxdelay >= reconnect.delay`, streams URI scheme/host and single-tenant-only, address-resolver both-or-neither |
 | keystore | — | secretminlength non-negative, entry shape |
 | debug | — | trusted proxies |
 

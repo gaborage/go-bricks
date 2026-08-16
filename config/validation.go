@@ -199,43 +199,43 @@ func checkDebug(cfg *DebugConfig) error {
 	return validateCIDRList("debug.trustedproxies", cfg.TrustedProxies)
 }
 
-// validateMessaging validates messaging configuration and applies defaults.
-// multitenant selects the deployment-mode-dependent Publisher.IdleTTL and
-// Publisher.MaxCached defaults (see applyMessagingDefaults); it has no effect
-// on any other field.
+// normalizeMessaging shapes messaging configuration: reconnect/publisher pool
+// defaults (multitenant selects the deployment-mode-dependent Publisher.IdleTTL
+// and Publisher.MaxCached defaults — see applyMessagingDefaults) and the
+// streams offset-store defaults.
 //
 // Defaults are applied unconditionally, even when the root broker URL is empty
-// (IsMessagingConfigured is false). Multi-tenant deployments carry broker URLs
-// per-tenant — a root broker URL is rejected there by
-// validateNoSingleTenantConflict, though other root messaging.* keys remain
-// legal and are the tuning seam for per-tenant clients — yet per-tenant AMQP
-// clients and the outbox relay still run with the client-side
-// reconnect/publisher defaults. Leaving cfg.Messaging.* at zero would silently
-// defeat cross-field validators that read the effective values (e.g. outbox's
-// publishtimeout >= connectiontimeout and >= readytimeout Fail-Fast checks), so
-// defaults are materialized in every deployment mode.
-//
-// Returns an error if any setting is invalid; otherwise nil.
-func validateMessaging(cfg *MessagingConfig, multitenant bool) error {
-	// Apply messaging defaults (reconnection, publisher pool)
+// (IsMessagingConfigured is false): per-tenant AMQP clients and the outbox
+// relay still run with these defaults, and check's cross-field rules read the
+// effective values.
+func normalizeMessaging(cfg *MessagingConfig, multitenant bool) error {
 	if err := applyMessagingDefaults(cfg, multitenant); err != nil {
 		return err
 	}
 
-	return validateMessagingStreams(&cfg.Streams, multitenant)
+	return applyStreamsDefaults(&cfg.Streams)
 }
 
-// validateMessagingStreams validates the native stream-protocol block and applies
-// its offset-store defaults.
+// checkMessaging rejects an inverted reconnect.maxdelay/delay pair, then the
+// streams block.
+func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
+	// Both sides are defaulted by normalizeMessaging, so this compares effective
+	// values. computeBackoff silently clamps an inverted pair (maxdelay <
+	// delay), which would leave the configured ceiling ignored.
+	if cfg.Reconnect.MaxDelay < cfg.Reconnect.Delay {
+		return NewValidationError("messaging.reconnect.maxdelay", "must be >= messaging.reconnect.delay")
+	}
+
+	return checkMessagingStreams(&cfg.Streams, multitenant)
+}
+
+// checkMessagingStreams rejects a stream URI with an unsupported scheme or no
+// host, streams in multi-tenant mode, and a half-set address resolver.
 //
 // SECURITY: messaging.streams.uri carries broker credentials, so no error raised
 // here echoes the URI — only the config key and the offending scheme reach the
 // message.
-func validateMessagingStreams(cfg *StreamsConfig, multitenant bool) error {
-	if err := applyStreamsDefaults(cfg); err != nil {
-		return err
-	}
-
+func checkMessagingStreams(cfg *StreamsConfig, multitenant bool) error {
 	if cfg.URI != "" {
 		// Multi-tenant stream consumption would need one Environment per tenant and a
 		// per-tenant stream URI leg; until that exists the combination fails loudly
@@ -1021,17 +1021,7 @@ func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 		return err
 	}
 
-	if err := applyModeAwarePoolDefault(&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached", multitenant); err != nil {
-		return err
-	}
-
-	// Both sides are defaulted above, so this cross-field check always compares
-	// effective values. computeBackoff silently clamps an inverted pair
-	// (maxdelay < delay), which would leave the configured ceiling ignored.
-	if cfg.Reconnect.MaxDelay < cfg.Reconnect.Delay {
-		return NewValidationError("messaging.reconnect.maxdelay", "must be >= messaging.reconnect.delay")
-	}
-	return nil
+	return applyModeAwarePoolDefault(&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached", multitenant)
 }
 
 // applyModeAwarePoolDefault handles pool-size keys whose multi-tenant default is
@@ -1400,28 +1390,34 @@ func checkLog(cfg *LogConfig) error {
 	return nil
 }
 
-// validateCache validates cache configuration. multitenant selects the
-// deployment-mode-dependent Manager.MaxSize default (see applyCacheManagerDefaults).
-// Returns nil if cache is disabled or if all settings are valid.
-func validateCache(cfg *CacheConfig, multitenant bool) error {
+// normalizeCache fills Redis defaults unconditionally, even when the cache is
+// disabled — koanf already fills cache.redis.* in that state, and an enabled
+// hand-built cache with a zero port/poolsize must not fail where koanf gives
+// 6379/10. Manager defaults (mode-dependent MaxSize, see
+// applyCacheManagerDefaults) fill only when enabled: koanf carries no
+// cache.manager.* defaults, and a disabled cache's negative manager value is
+// CreateCacheManager's to reject (ADR-054), not Validate's.
+func normalizeCache(cfg *CacheConfig, multitenant bool) error {
+	applyRedisDefaults(&cfg.Redis)
+
+	if cfg.Enabled {
+		return applyCacheManagerDefaults(cfg, multitenant)
+	}
+	return nil
+}
+
+// checkCache rejects an enabled cache's type and Redis fields; a disabled
+// cache is not checked.
+func checkCache(cfg *CacheConfig) error {
 	if !cfg.Enabled {
 		return nil
-	}
-
-	if err := applyCacheManagerDefaults(cfg, multitenant); err != nil {
-		return err
 	}
 
 	validTypes := []string{CacheTypeRedis}
 	if !slices.Contains(validTypes, cfg.Type) {
 		return NewInvalidFieldError("cache.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), validTypes)
 	}
-
-	if cfg.Type == CacheTypeRedis {
-		return validateRedisCache(&cfg.Redis)
-	}
-
-	return nil
+	return validateRedisCache(&cfg.Redis)
 }
 
 // applyRedisDefaults fills in production-safe Redis defaults for any unset
@@ -1551,16 +1547,9 @@ func checkMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingC
 		// Sorted, like forEachDatabaseSection: with several malformed tenants the
 		// startup error names the same one every run.
 		for _, tenantID := range slices.Sorted(maps.Keys(mt.Tenants)) {
-			if tenantID == "" {
-				return fmt.Errorf("tenants: %w", NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty"))
-			}
-			// A '.' collides with koanf's path delimiter: the constructed section
-			// path multitenant.tenants.<id>.database becomes ambiguous. Koanf has
-			// no delimiter escaping, so fail fast rather than let a later lookup
-			// consult the wrong flattened key.
-			if strings.Contains(tenantID, ".") {
-				return fmt.Errorf("tenants: %w", NewValidationError(fieldMultitenantTenants,
-					fmt.Sprintf("tenant ID %q cannot contain '.' (the config path delimiter)", tenantID)))
+			tenant := mt.Tenants[tenantID]
+			if err := checkMultitenantTenantEntry(tenantID, &tenant); err != nil {
+				return fmt.Errorf("tenants: %w", err)
 			}
 		}
 	}
@@ -1570,6 +1559,24 @@ func checkMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingC
 	}
 
 	return nil
+}
+
+// checkMultitenantTenantEntry rejects one static tenant's ID and cache
+// section: an empty or dotted ID, or (once the ID is valid) whatever
+// checkTenantCache rejects.
+func checkMultitenantTenantEntry(tenantID string, entry *TenantEntry) error {
+	if tenantID == "" {
+		return NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty")
+	}
+	// A '.' collides with koanf's path delimiter: the constructed section path
+	// multitenant.tenants.<id>.database becomes ambiguous. Koanf has no
+	// delimiter escaping, so fail fast rather than let a later lookup consult
+	// the wrong flattened key.
+	if strings.Contains(tenantID, ".") {
+		return NewValidationError(fieldMultitenantTenants,
+			fmt.Sprintf("tenant ID %q cannot contain '.' (the config path delimiter)", tenantID))
+	}
+	return checkTenantCache(tenantID, &entry.Cache)
 }
 
 // validateNoSingleTenantConflict checks for conflicts with single-tenant configuration
@@ -1746,7 +1753,7 @@ func normalizeMultitenantTenants(tenants map[string]TenantEntry) error {
 			return err
 		}
 
-		if err := validateTenantCache(tenantID, &tenant.Cache); err != nil {
+		if err := normalizeTenantCache(&tenant.Cache); err != nil {
 			return err
 		}
 
@@ -1785,23 +1792,22 @@ func checkTenantMessagingConsistency(tenants map[string]TenantEntry) error {
 	return nil
 }
 
-// validateTenantCache validates a tenant's cache configuration with the same
-// fail-fast posture as the tenant database: an enabled-but-misconfigured cache
-// must crash at startup, not at the first per-request cache access (see
-// tenant_store.go CacheConfig). Per-tenant cache keys have no koanf defaults, so
-// this mirrors the top-level cache.type and cache.redis.* defaults before
-// validating: it defaults the type to redis and fills in the Redis defaults
-// (port 6379, poolsize 10, timeouts). A missing host still fails fast inside
-// validateCache. The CacheConfig is mutated in place via the pointer.
-func validateTenantCache(tenantID string, cache *CacheConfig) error {
-	if cache.Enabled {
-		if cache.Type == "" {
-			cache.Type = CacheTypeRedis
-		}
-		applyRedisDefaults(&cache.Redis)
+// normalizeTenantCache shapes a tenant's cache configuration with the same
+// fail-fast posture as the tenant database: an enabled-but-misconfigured
+// cache must crash at startup, not at the first per-request cache access (see
+// tenant_store.go CacheConfig). Per-tenant cache keys have no koanf defaults,
+// so the type defaults to redis here before normalizeCache fills the rest.
+func normalizeTenantCache(cache *CacheConfig) error {
+	if cache.Enabled && cache.Type == "" {
+		cache.Type = CacheTypeRedis
 	}
 	// per-tenant caches only exist in multi-tenant mode
-	if err := validateCache(cache, true); err != nil {
+	return normalizeCache(cache, true)
+}
+
+// checkTenantCache is checkCache with the tenant named in the error.
+func checkTenantCache(tenantID string, cache *CacheConfig) error {
+	if err := checkCache(cache); err != nil {
 		return fmt.Errorf("tenant %s cache: %w", tenantID, err)
 	}
 	return nil

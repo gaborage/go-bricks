@@ -236,7 +236,7 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 // It fails closed: a nil manager registers no cache readiness probe, so /ready reports
 // the cache "disabled" and answers 200 — a service that asked for a cache, got none, and
 // joined the rotation anyway. Returning the error instead of logging it still matters after
-// WithConfig's config.Validate call (ADR-064): validateCache only checks Manager.MaxSize/IdleTTL
+// WithConfig's config.Validate call (ADR-064): normalizeCache only fills Manager.MaxSize/IdleTTL/CleanupInterval
 // when cache.enabled is true, so a negative value on a disabled cache reaches here unvalidated.
 func (f *ResourceManagerFactory) CreateCacheManager(
 	resourceSource TenantStore,

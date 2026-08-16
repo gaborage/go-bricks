@@ -2481,7 +2481,7 @@ func TestApplyMessagingDefaults(t *testing.T) {
 			// Single-tenant mode: these cases exercise the non-IdleTTL defaults and the
 			// single-tenant IdleTTL default; see TestApplyMessagingDefaultsIdleTTLModeAware
 			// for the mode-dependent IdleTTL behavior.
-			err := validateMessaging(&tt.config, false)
+			err := normalizeMessaging(&tt.config, false)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedReconnectDelay, tt.config.Reconnect.Delay, "Reconnect.Delay mismatch")
 			assert.Equal(t, tt.expectedReinitDelay, tt.config.Reconnect.ReinitDelay, "Reconnect.ReinitDelay mismatch")
@@ -2503,14 +2503,14 @@ func TestApplyMessagingDefaults(t *testing.T) {
 func TestApplyMessagingDefaultsIdleTTLModeAware(t *testing.T) {
 	t.Run("single_tenant_unset_defaults_to_1h", func(t *testing.T) {
 		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 		assert.Equal(t, defaultPublisherIdleTTL, cfg.Publisher.IdleTTL)
 		assert.Equal(t, 1*time.Hour, cfg.Publisher.IdleTTL)
 	})
 
 	t.Run("multi_tenant_unset_defaults_to_10m", func(t *testing.T) {
 		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
-		require.NoError(t, validateMessaging(cfg, true))
+		require.NoError(t, normalizeMessaging(cfg, true))
 		assert.Equal(t, defaultPublisherIdleTTLMultiTenant, cfg.Publisher.IdleTTL)
 		assert.Equal(t, 10*time.Minute, cfg.Publisher.IdleTTL)
 	})
@@ -2520,14 +2520,14 @@ func TestApplyMessagingDefaultsIdleTTLModeAware(t *testing.T) {
 			Broker:    BrokerConfig{URL: testAMQPHost},
 			Publisher: PublisherPoolConfig{IdleTTL: 42 * time.Minute},
 		}
-		require.NoError(t, validateMessaging(cfg, true))
+		require.NoError(t, normalizeMessaging(cfg, true))
 		assert.Equal(t, 42*time.Minute, cfg.Publisher.IdleTTL)
 	})
 }
 
 // TestValidateMessagingPublisherIdleTTLModeAwareEndToEnd proves the mode-aware
 // default reaches Publisher.IdleTTL through the full Validate(cfg) entry point
-// (not just the internal validateMessaging seam), matching the real config.Load()
+// (not just the internal normalizeMessaging seam), matching the real config.Load()
 // path that runs before app/bootstrap.go builds the manager options.
 func TestValidateMessagingPublisherIdleTTLModeAwareEndToEnd(t *testing.T) {
 	t.Run("single_tenant_validate_yields_1h", func(t *testing.T) {
@@ -2564,7 +2564,7 @@ func TestValidateMessagingPublisherIdleTTLModeAwareEndToEnd(t *testing.T) {
 func TestApplyMessagingDefaultsMaxPublishAttempts(t *testing.T) {
 	t.Run("zero_gets_default", func(t *testing.T) {
 		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 		assert.Equal(t, defaultMaxPublishAttempts, cfg.Reconnect.MaxPublishAttempts)
 	})
 	t.Run("explicit_value_preserved", func(t *testing.T) {
@@ -2572,7 +2572,7 @@ func TestApplyMessagingDefaultsMaxPublishAttempts(t *testing.T) {
 			Broker:    BrokerConfig{URL: testAMQPHost},
 			Reconnect: ReconnectConfig{MaxPublishAttempts: 9},
 		}
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 		assert.Equal(t, 9, cfg.Reconnect.MaxPublishAttempts)
 	})
 }
@@ -2580,7 +2580,7 @@ func TestApplyMessagingDefaultsMaxPublishAttempts(t *testing.T) {
 func TestApplyMessagingDefaultsReadyTimeout(t *testing.T) {
 	t.Run("zero_gets_default", func(t *testing.T) {
 		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 		assert.Equal(t, defaultReadyTimeout, cfg.Reconnect.ReadyTimeout)
 	})
 	t.Run("explicit_value_preserved", func(t *testing.T) {
@@ -2588,7 +2588,7 @@ func TestApplyMessagingDefaultsReadyTimeout(t *testing.T) {
 			Broker:    BrokerConfig{URL: testAMQPHost},
 			Reconnect: ReconnectConfig{ReadyTimeout: 9 * time.Second},
 		}
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 		assert.Equal(t, 9*time.Second, cfg.Reconnect.ReadyTimeout)
 	})
 }
@@ -2596,7 +2596,7 @@ func TestApplyMessagingDefaultsReadyTimeout(t *testing.T) {
 func TestApplyMessagingDefaultsCleanupInterval(t *testing.T) {
 	t.Run("zero_gets_default", func(t *testing.T) {
 		cfg := &MessagingConfig{Broker: BrokerConfig{URL: testAMQPHost}}
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 		assert.Equal(t, defaultPublisherCleanupInterval, cfg.Publisher.CleanupInterval)
 	})
 	t.Run("explicit_value_preserved", func(t *testing.T) {
@@ -2604,7 +2604,7 @@ func TestApplyMessagingDefaultsCleanupInterval(t *testing.T) {
 			Broker:    BrokerConfig{URL: testAMQPHost},
 			Publisher: PublisherPoolConfig{CleanupInterval: 90 * time.Second},
 		}
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 		assert.Equal(t, 90*time.Second, cfg.Publisher.CleanupInterval)
 	})
 }
@@ -2699,7 +2699,7 @@ func TestApplyMessagingDefaultsNegativeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMessaging(&tt.config, false)
+			err := normalizeMessaging(&tt.config, false)
 			assertValidationError(t, err, tt.errorContains)
 		})
 	}
@@ -2758,7 +2758,7 @@ func TestApplyCacheManagerDefaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateCache(&tt.config, false)
+			err := normalizeCache(&tt.config, false)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedMaxSize, tt.config.Manager.MaxSize, "Manager.MaxSize mismatch")
 			assert.Equal(t, tt.expectedIdleTTL, tt.config.Manager.IdleTTL, "Manager.IdleTTL mismatch")
@@ -2807,7 +2807,7 @@ func TestApplyCacheManagerDefaultsNegativeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateCache(&tt.config, false)
+			err := normalizeCache(&tt.config, false)
 			assertValidationError(t, err, tt.errorContains)
 		})
 	}
@@ -3314,6 +3314,25 @@ func normalizeAndCheckNamedDatabases(databases map[string]DatabaseConfig, mt *Mu
 	return checkNamedDatabases(databases, mt)
 }
 
+// normalizeAndCheckMessaging runs both halves of the messaging split in phase
+// order, for tables whose cases need a fill before the rejection they pin.
+func normalizeAndCheckMessaging(cfg *MessagingConfig, multitenant bool) error {
+	if err := normalizeMessaging(cfg, multitenant); err != nil {
+		return err
+	}
+	return checkMessaging(cfg, multitenant)
+}
+
+// normalizeTenantsAndCheckMultitenant runs the tenant half of normalize before
+// checkMultitenant: check assumes normalize already ran (per-tenant cache
+// defaults included), and these fixtures are hand-built. Only the tenant loop
+// runs — the resolver/limits fills would change what the failure tables assert.
+func normalizeTenantsAndCheckMultitenant(t *testing.T, mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingConfig, source *SourceConfig) error {
+	t.Helper()
+	require.NoError(t, normalizeMultitenantTenants(mt.Tenants))
+	return checkMultitenant(mt, db, msg, source)
+}
+
 // createValidFullConfig returns a complete valid Config for testing
 func createValidFullConfig() *Config {
 	return &Config{
@@ -3555,7 +3574,7 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 			if sourceConfig == nil {
 				sourceConfig = &SourceConfig{Type: SourceTypeStatic}
 			}
-			err := checkMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
+			err := normalizeTenantsAndCheckMultitenant(t, tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
 			assert.NoError(t, err)
 		})
 	}
@@ -3742,7 +3761,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 			if sourceConfig == nil {
 				sourceConfig = &SourceConfig{Type: SourceTypeStatic}
 			}
-			err := checkMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
+			err := normalizeTenantsAndCheckMultitenant(t, tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -4167,7 +4186,7 @@ func TestValidateMultitenantDynamicSource(t *testing.T) {
 
 func TestValidateCacheDisabled(t *testing.T) {
 	cfg := CacheConfig{Enabled: false}
-	err := validateCache(&cfg, false)
+	err := checkCache(&cfg)
 	assert.NoError(t, err)
 }
 
@@ -4190,7 +4209,7 @@ func TestValidateCacheSuccess(t *testing.T) {
 		},
 	}
 
-	err := validateCache(&cfg, false)
+	err := checkCache(&cfg)
 	assert.NoError(t, err)
 }
 
@@ -4224,7 +4243,7 @@ func TestValidateCacheTypeFailures(t *testing.T) {
 				Type:    tt.cacheType,
 			}
 
-			err := validateCache(&cfg, false)
+			err := checkCache(&cfg)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -4345,7 +4364,7 @@ func TestValidateRedisCacheFailures(t *testing.T) {
 				Redis:   tt.redis,
 			}
 
-			err := validateCache(&cfg, false)
+			err := checkCache(&cfg)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -4408,7 +4427,7 @@ func TestValidateRedisCacheEdgeCases(t *testing.T) {
 				Redis:   tt.redis,
 			}
 
-			err := validateCache(&cfg, false)
+			err := checkCache(&cfg)
 			if tt.valid {
 				assert.NoError(t, err)
 			} else {
@@ -5152,13 +5171,13 @@ func TestLoadFailsOnAllInvalidCIDRAllowlistEnv(t *testing.T) {
 
 // TestValidateMessagingAppliesDefaultsWhenBrokerURLEmpty pins the #659 fix: defaults
 // and negative-value rejection apply even when the root broker URL is empty (see
-// validateMessaging's doc comment for why). Field-by-field defaulting is covered by
+// normalizeMessaging's doc comment for why). Field-by-field defaulting is covered by
 // TestApplyMessagingDefaults; these subtests pin the no-gate behavior and the
 // mode-aware Publisher defaults.
 func TestValidateMessagingAppliesDefaultsWhenBrokerURLEmpty(t *testing.T) {
 	t.Run("single_tenant_empty_broker_applies_defaults", func(t *testing.T) {
 		cfg := &MessagingConfig{} // empty Broker.URL
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 
 		assert.Equal(t, defaultConnectionTimeout, cfg.Reconnect.ConnectionTimeout)
 		assert.Equal(t, defaultPublisherIdleTTL, cfg.Publisher.IdleTTL)
@@ -5167,7 +5186,7 @@ func TestValidateMessagingAppliesDefaultsWhenBrokerURLEmpty(t *testing.T) {
 
 	t.Run("multi_tenant_empty_broker_applies_mode_aware_publisher_defaults", func(t *testing.T) {
 		cfg := &MessagingConfig{}
-		require.NoError(t, validateMessaging(cfg, true))
+		require.NoError(t, normalizeMessaging(cfg, true))
 
 		assert.Equal(t, defaultConnectionTimeout, cfg.Reconnect.ConnectionTimeout)
 		assert.Equal(t, defaultPublisherIdleTTLMultiTenant, cfg.Publisher.IdleTTL)
@@ -5178,12 +5197,12 @@ func TestValidateMessagingAppliesDefaultsWhenBrokerURLEmpty(t *testing.T) {
 
 	t.Run("empty_broker_negative_value_rejected", func(t *testing.T) {
 		cfg := &MessagingConfig{Reconnect: ReconnectConfig{Delay: -1}}
-		require.Error(t, validateMessaging(cfg, false))
+		require.Error(t, normalizeMessaging(cfg, false))
 	})
 
 	t.Run("multi_tenant_negative_maxcached_rejected", func(t *testing.T) {
 		cfg := &MessagingConfig{Publisher: PublisherPoolConfig{MaxCached: -1}}
-		require.Error(t, validateMessaging(cfg, true))
+		require.Error(t, normalizeMessaging(cfg, true))
 	})
 }
 
@@ -5193,23 +5212,32 @@ func TestValidateMessagingAppliesDefaultsWhenBrokerURLEmpty(t *testing.T) {
 func TestValidateMessagingRejectsMaxDelayBelowDelay(t *testing.T) {
 	t.Run("explicit_maxdelay_below_default_delay_rejected", func(t *testing.T) {
 		cfg := &MessagingConfig{Reconnect: ReconnectConfig{MaxDelay: 2 * time.Second}} // delay defaults to 5s
-		err := validateMessaging(cfg, false)
+		err := normalizeAndCheckMessaging(cfg, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "messaging.reconnect.maxdelay")
 	})
 
 	t.Run("explicit_delay_above_default_maxdelay_rejected", func(t *testing.T) {
 		cfg := &MessagingConfig{Reconnect: ReconnectConfig{Delay: 90 * time.Second}} // maxdelay defaults to 60s
-		require.Error(t, validateMessaging(cfg, false))
+		require.Error(t, normalizeAndCheckMessaging(cfg, false))
 	})
 
 	t.Run("consistent_pair_accepted", func(t *testing.T) {
 		cfg := &MessagingConfig{Reconnect: ReconnectConfig{Delay: 10 * time.Second, MaxDelay: 2 * time.Minute}}
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeAndCheckMessaging(cfg, false))
 	})
 
 	t.Run("defaults_accepted", func(t *testing.T) {
-		require.NoError(t, validateMessaging(&MessagingConfig{}, false))
+		require.NoError(t, normalizeAndCheckMessaging(&MessagingConfig{}, false))
+	})
+
+	// The mode flag only selects Publisher.IdleTTL/MaxCached defaults; the
+	// maxdelay >= delay rule itself is mode-independent.
+	t.Run("multi_tenant_maxdelay_below_delay_rejected", func(t *testing.T) {
+		cfg := &MessagingConfig{Reconnect: ReconnectConfig{MaxDelay: 2 * time.Second}}
+		err := normalizeAndCheckMessaging(cfg, true)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "messaging.reconnect.maxdelay")
 	})
 }
 
@@ -5217,7 +5245,7 @@ func TestValidateMessagingRejectsMaxDelayBelowDelay(t *testing.T) {
 // static config — where the root broker URL is necessarily empty — yields effective
 // messaging defaults through the full Validate() entry point, so the outbox
 // publishtimeout Fail-Fast guards have real values to compare against (see
-// validateMessaging's doc comment).
+// normalizeMessaging's doc comment).
 func TestValidateMultiTenantStaticAppliesMessagingDefaultsEndToEnd(t *testing.T) {
 	cfg := &Config{
 		App:    createValidAppConfig(),
@@ -5810,7 +5838,7 @@ func TestValidateMessagingStreamsURIScheme(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &MessagingConfig{Streams: StreamsConfig{URI: tt.uri}}
 
-			err := validateMessaging(cfg, false)
+			err := checkMessaging(cfg, false)
 
 			if tt.wantErr == "" {
 				require.NoError(t, err)
@@ -5829,7 +5857,7 @@ func TestValidateMessagingStreamsRejectsMultiTenant(t *testing.T) {
 		URI: "rabbitmq-stream://svc:" + streamsFixturePassword + "@broker:5552/%2f",
 	}}
 
-	err := validateMessaging(cfg, true)
+	err := checkMessaging(cfg, true)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "messaging.streams single-tenant only")
@@ -5840,7 +5868,7 @@ func TestValidateMessagingStreamsRejectsMultiTenant(t *testing.T) {
 func TestValidateMessagingStreamsAllowsMultiTenantWithoutURI(t *testing.T) {
 	cfg := &MessagingConfig{}
 
-	require.NoError(t, validateMessaging(cfg, true),
+	require.NoError(t, checkMessaging(cfg, true),
 		"multi-tenant deployments that declare no streams stay valid")
 }
 
@@ -5882,7 +5910,7 @@ func TestValidateMessagingStreamsAddressResolver(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &MessagingConfig{Streams: StreamsConfig{AddressResolver: tt.resolver}}
 
-			err := validateMessaging(cfg, false)
+			err := checkMessaging(cfg, false)
 
 			if tt.wantErr == "" {
 				require.NoError(t, err)
@@ -5898,7 +5926,7 @@ func TestApplyStreamsDefaults(t *testing.T) {
 	t.Run("zero_applies_defaults", func(t *testing.T) {
 		cfg := &MessagingConfig{}
 
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 
 		assert.Equal(t, 500, cfg.Streams.OffsetStore.CountBeforeStorage)
 		assert.Equal(t, defaultStreamsOffsetCount, cfg.Streams.OffsetStore.CountBeforeStorage)
@@ -5912,7 +5940,7 @@ func TestApplyStreamsDefaults(t *testing.T) {
 			FlushInterval:      750 * time.Millisecond,
 		}}}
 
-		require.NoError(t, validateMessaging(cfg, false))
+		require.NoError(t, normalizeMessaging(cfg, false))
 
 		assert.Equal(t, 25, cfg.Streams.OffsetStore.CountBeforeStorage)
 		assert.Equal(t, 750*time.Millisecond, cfg.Streams.OffsetStore.FlushInterval)
@@ -5921,7 +5949,7 @@ func TestApplyStreamsDefaults(t *testing.T) {
 	t.Run("negative_count_rejected", func(t *testing.T) {
 		cfg := &MessagingConfig{Streams: StreamsConfig{OffsetStore: StreamsOffsetStoreConfig{CountBeforeStorage: -1}}}
 
-		err := validateMessaging(cfg, false)
+		err := normalizeMessaging(cfg, false)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "messaging.streams.offsetstore.countbeforestorage must be non-negative")
@@ -5930,7 +5958,7 @@ func TestApplyStreamsDefaults(t *testing.T) {
 	t.Run("negative_interval_rejected", func(t *testing.T) {
 		cfg := &MessagingConfig{Streams: StreamsConfig{OffsetStore: StreamsOffsetStoreConfig{FlushInterval: -time.Second}}}
 
-		err := validateMessaging(cfg, false)
+		err := normalizeMessaging(cfg, false)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "messaging.streams.offsetstore.flushinterval must be non-negative")

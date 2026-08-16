@@ -445,7 +445,7 @@ type OutputConfig struct {
 
 // MessagingConfig holds messaging/broker settings.
 // Production-safe defaults are applied unconditionally at startup — even when
-// messaging.broker.url is unset (see config/validation.go: validateMessaging).
+// messaging.broker.url is unset (see config/validation.go: normalizeMessaging).
 type MessagingConfig struct {
 	Broker    BrokerConfig        `koanf:"broker" json:"broker" yaml:"broker" toml:"broker" mapstructure:"broker"`
 	Routing   RoutingConfig       `koanf:"routing" json:"routing" yaml:"routing" toml:"routing" mapstructure:"routing"`
@@ -457,7 +457,7 @@ type MessagingConfig struct {
 
 // StreamsConfig holds native RabbitMQ stream-protocol settings (consumption).
 // Single-tenant only: multitenant.enabled together with a stream URI is a
-// startup validation error (see config/validation.go: validateMessagingStreams).
+// startup validation error (see config/validation.go: checkMessagingStreams).
 type StreamsConfig struct {
 	// URI is the stream-protocol endpoint, scheme rabbitmq-stream:// (or
 	// rabbitmq-stream+tls://), default port 5552. Required when any module
