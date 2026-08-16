@@ -333,6 +333,11 @@ Server-side offset tracking, single active consumer, and super streams need the
 native stream protocol (port 5552), which this lane does not cover — see
 [streams.md](streams.md).
 
+**Publishing** to a stream queue here goes through an exchange bound to it, like
+any other queue. The native lane publishes to the stream directly instead, with
+one synchronous broker confirmation per message and murmur3 partition routing on
+a super stream — see [streams.md#publishing](streams.md#publishing).
+
 ## Consumer Concurrency (v0.17+)
 
 **Breaking Change (v0.17.0):** Default worker count changed from 1 to `runtime.NumCPU() * 4` for optimal I/O-bound performance (20-30x throughput improvement).

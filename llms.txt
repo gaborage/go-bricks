@@ -2882,11 +2882,13 @@ import (
 	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams" // only for the native-stream examples below
 )
 
 type Module struct {
 	svc          *OrderService
 	getMessaging func(context.Context) (messaging.AMQPClient, error)
+	pub          *streams.Publisher // native-stream publisher handle; set in DeclareStreams
 	logger       logger.Logger
 }
 
@@ -3003,6 +3005,46 @@ decls.DeclareSuperStreamConsumer(&streams.SuperStreamConsumerOptions{
 		return m.svc.Project(ctx, msg.Data) // msg.Stream is the partition
 	},
 })
+```
+
+Publishing on this lane is **synchronous and confirmed**: `Publish` blocks until the send
+resolves — broker confirmation, client-side failure, `ctx` expiry, or the publisher closing —
+so a nil error means the broker acknowledged the message. Errors split in two: rejections
+before submission (nil message, wrong-kind `RoutingKey`, `ErrPublisherNotStarted`, a publish
+starting after shutdown) never reach the client, so nothing was published and a retry cannot
+duplicate; anything after submission (ctx expiry, the client's ~10s confirmation timeout, the
+shutdown sweep, a rejected confirmation) leaves the outcome **unknown** — the broker may
+already have accepted the message. `ErrPublisherClosed` spans both, so it alone does not say
+which happened. Retry if you must, but delivery is at-least-once and consumers must
+be idempotent. GoBricks adds no publish timeout and no config key, so the caller's `ctx` is the
+only bound the FRAMEWORK applies (5s inside an HTTP handler; background work must set its own)
+— the client underneath still has its ~10s confirmation timeout while connected, and can park
+a send indefinitely while reconnecting. Declaring a publisher on an undeclared target — or on
+one declared as the other kind — fails startup, a duplicate on the same target panics, and
+declaring one with no `messaging.streams.uri` set fails startup too. See
+[wiki/streams.md#publishing](wiki/streams.md#publishing):
+
+```go
+// Beside the declarations above; keep the returned handle on the module (Module.pub — there is
+// no deps accessor to look one up again).
+m.pub = decls.DeclarePublisher(&streams.PublisherOptions{Stream: "orders"})
+// ...or, for the super-stream variant, beside DeclareSuperStream:
+m.pub = decls.DeclareSuperStreamPublisher(&streams.SuperStreamPublisherOptions{SuperStream: "orders"})
+
+// From a handler or service — plain stream, where a RoutingKey must be EMPTY. evt is the
+// OrderCreatedEvent of Step 3 below (OrderID, CustomerID: int64); needs "encoding/json" and "strconv".
+payload, _ := json.Marshal(evt)
+err := m.pub.Publish(ctx, &streams.PublishMessage{
+	Data:       payload,                                 // AMQP 1.0 data section
+	Properties: map[string]any{"order.id": evt.OrderID}, // application properties; traceparent injected, map copied
+})
+// Super-stream publisher instead: RoutingKey is REQUIRED and is a string — its murmur3 hash,
+// modulo the partition count, picks the partition.
+err = m.pub.Publish(ctx, &streams.PublishMessage{
+	Data: payload, RoutingKey: strconv.FormatInt(evt.CustomerID, 10),
+})
+// errors.Is(err, streams.ErrPublisherNotStarted) before Start binds it; ErrPublisherClosed after
+// shutdown — that one also sweeps in-flight sends, so it is not proof of non-delivery (see above).
 ```
 
 ### Step 3: Implement the Producer (publish messages)
