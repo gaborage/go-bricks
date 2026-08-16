@@ -1281,8 +1281,9 @@ non-empty there and rejected on a plain stream.
 
 **Key Benefits:** A natively-consuming service can publish over the same connection with a confirmed
 result, and super-stream partitioning reaches the framework surface for the first time. No new config
-keys — the client's defaults and the caller's context bound everything. **Watch:** a publish is only
-as bounded as the context passed to it, so background callers must supply a deadline; a context
+keys — the client's defaults and the caller's context are the only settings in play, and that context
+bounds the caller's wait rather than the send behind it. **Watch:** that wait is only as bounded as
+the context passed to it, so background callers must supply a deadline; a context
 timeout is **not** proof of failure, delivery stays at-least-once and consumers must be idempotent;
 an abandoned send leaks a vendor goroutine and holds its map entry until the publisher closes, **with
 no cap on how many accumulate** during a reconnect (the client's `QueueSize` cannot bound them — a

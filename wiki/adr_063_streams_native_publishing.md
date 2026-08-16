@@ -68,7 +68,9 @@ passed to `Send`, no waiter would resolve and every publish in that test would f
 
 Because `isReadyToSend` can park forever, `Publish` dispatches `handle.Send` on its own goroutine and
 selects between the waiter's channel and `ctx.Done()`. The caller's context is therefore the only
-bound on a publish — the framework adds no timeout of its own and no config key for one.
+bound on **how long `Publish` waits** — the framework adds no timeout of its own and no config key
+for one. It does not bound the send behind that wait: the goroutine runs on until the client's own
+send path unblocks, whatever the caller's context did.
 
 Abandoning that goroutine leaks it for as long as the reconnect lasts. This is the same trade
 `Manager.flushOffsetsLocked` already documents and accepts: a leaked goroutine parked on a vendor
@@ -161,9 +163,11 @@ Single-tenancy is inherited unchanged: this lane is still gated by `config.Valid
 **Positive.** A service that consumes a stream natively can now publish to it over the same
 connection, with a confirmed result rather than a hope. Super-stream partitioning is reachable from
 the framework surface for the first time, interoperably with the other RabbitMQ clients. No new
-configuration keys: the client's defaults and the caller's context bound everything.
+configuration keys — the client's defaults and the caller's context are the only settings in play.
+That context bounds how long `Publish` makes its caller wait; it does not bound the send behind it,
+which is the known limitation above.
 
-**Negative — a publish is only as bounded as its context.** A caller that passes
+**Negative — the wait is only as bounded as the caller's context.** A caller that passes
 `context.Background()` to `Publish` can wait for as long as the broker takes. Handler code inherits
 the HTTP layer's 5 s deadline and is fine; background work must pass a deadline of its own.
 
