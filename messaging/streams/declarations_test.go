@@ -621,16 +621,38 @@ func TestDeclarePublisherOnADifferentStreamIsAllowed(t *testing.T) {
 	require.NoError(t, d.Validate())
 }
 
-// TestValidateRejectsAMisdirectedPublisher pins the publisher's target rules: the
-// target has to exist, and it has to be a plain stream — a super stream is reached
-// through a different client API entirely.
+// declarePublisherOfKind declares a publisher through the method that matches the
+// kind under test, so one table can drive both.
+func declarePublisherOfKind(d *Declarations, target string, super bool) *Publisher {
+	if super {
+		return d.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: target})
+	}
+	return d.DeclarePublisher(&PublisherOptions{Stream: target})
+}
+
+// TestValidateRejectsAMisdirectedPublisher pins the publisher's target rules, and
+// in particular the four ways a publisher can name the wrong kind of target: the
+// two kinds reach the broker through different client APIs, so each mismatch names
+// the declare method that would have been right.
 func TestValidateRejectsAMisdirectedPublisher(t *testing.T) {
 	tests := []struct {
 		name    string
 		declare func(d *Declarations)
 		target  string
+		super   bool
 		wantErr string
 	}{
+		{
+			name:    "valid_plain_target",
+			declare: func(d *Declarations) { d.DeclareStream(testStream, nil) },
+			target:  testStream,
+		},
+		{
+			name:    "valid_super_target",
+			declare: func(d *Declarations) { d.DeclareSuperStream(testSuperStream, testPartitions, nil) },
+			target:  testSuperStream,
+			super:   true,
+		},
 		{
 			name:    "undeclared_target",
 			declare: func(*Declarations) {},
@@ -638,10 +660,24 @@ func TestValidateRejectsAMisdirectedPublisher(t *testing.T) {
 			wantErr: `publisher references undeclared stream "ghost"`,
 		},
 		{
-			name:    "super_stream_target",
+			name:    "undeclared_super_target",
+			declare: func(*Declarations) {},
+			target:  "ghost",
+			super:   true,
+			wantErr: `publisher references undeclared super stream "ghost"`,
+		},
+		{
+			name:    "plain_publisher_on_a_super_stream",
 			declare: func(d *Declarations) { d.DeclareSuperStream(testSuperStream, testPartitions, nil) },
 			target:  testSuperStream,
-			wantErr: "but it is declared as a super stream",
+			wantErr: `publisher publishes to "orders-partitioned" as a plain stream, but it is declared as a super stream; use DeclareSuperStreamPublisher`,
+		},
+		{
+			name:    "super_publisher_on_a_plain_stream",
+			declare: func(d *Declarations) { d.DeclareStream(testStream, nil) },
+			target:  testStream,
+			super:   true,
+			wantErr: `publisher publishes to "orders" as a super stream, but it is declared as a plain stream; use DeclarePublisher`,
 		},
 		{
 			name:    "empty_target",
@@ -649,16 +685,27 @@ func TestValidateRejectsAMisdirectedPublisher(t *testing.T) {
 			target:  "",
 			wantErr: "publisher declaration has an empty stream name",
 		},
+		{
+			name:    "empty_super_target",
+			declare: func(*Declarations) {},
+			target:  "",
+			super:   true,
+			wantErr: "publisher declaration has an empty super stream name",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := NewDeclarations()
 			tt.declare(d)
-			d.DeclarePublisher(&PublisherOptions{Stream: tt.target})
+			declarePublisherOfKind(d, tt.target, tt.super)
 
 			err := d.Validate()
 
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
@@ -677,4 +724,64 @@ func TestValidateReportsAnEmptyPublisherTargetOnce(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publisher declaration has an empty stream name")
 	assert.NotContains(t, err.Error(), "references undeclared stream")
+}
+
+func TestDeclareSuperStreamPublisherReturnsAnUnboundHandle(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareSuperStream(testSuperStream, testPartitions, nil)
+
+	p := d.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: testSuperStream})
+
+	require.NotNil(t, p)
+	assert.Equal(t, testSuperStream, p.stream)
+	assert.True(t, p.super, "the handle knows its target is partitioned, which inverts the RoutingKey rule")
+	assert.False(t, d.IsEmpty())
+	assert.Equal(t, Stats{Streams: 1, SuperStreams: 1, Publishers: 1}, d.Stats())
+	require.NoError(t, d.Validate())
+	assert.ErrorIs(t,
+		p.Publish(context.Background(), &PublishMessage{Data: []byte("x"), RoutingKey: testRoutingKey}),
+		ErrPublisherNotStarted, "the handle stays inert until Manager.Start binds it")
+}
+
+func TestDeclareSuperStreamPublisherNilPanics(t *testing.T) {
+	d := NewDeclarations()
+
+	assert.PanicsWithValue(t,
+		"streams: nil publisher declaration detected\n"+
+			"  DeclareSuperStreamPublisher requires a non-nil *SuperStreamPublisherOptions\n"+
+			"  Pass &streams.SuperStreamPublisherOptions{...} at every DeclareSuperStreamPublisher call within DeclareStreams",
+		func() { d.DeclareSuperStreamPublisher(nil) })
+
+	assert.True(t, d.IsEmpty(), "the rejected declaration is not stored")
+}
+
+func TestDeclareSuperStreamPublisherDuplicatePanics(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareSuperStream(testSuperStream, testPartitions, nil)
+	d.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: testSuperStream})
+
+	assert.PanicsWithValue(t,
+		"streams: duplicate publisher declaration detected\n"+
+			"  super stream=orders-partitioned\n"+
+			"  Ensure each DeclareSuperStreamPublisher call is unique within DeclareStreams",
+		func() { d.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: testSuperStream}) })
+
+	assert.Equal(t, 1, d.Stats().Publishers, "the rejected declaration is not stored")
+}
+
+// TestDeclarePublisherAndSuperStreamPublisherShareTheDuplicateKey proves the two
+// declare methods index into one namespace, the same way the consumer pair does: a
+// target already claimed is a duplicate whichever method claimed it.
+func TestDeclarePublisherAndSuperStreamPublisherShareTheDuplicateKey(t *testing.T) {
+	d := NewDeclarations()
+	d.DeclareStream(testStream, nil)
+	d.DeclarePublisher(&PublisherOptions{Stream: testStream})
+
+	assert.PanicsWithValue(t,
+		"streams: duplicate publisher declaration detected\n"+
+			"  super stream=orders\n"+
+			"  Ensure each DeclareSuperStreamPublisher call is unique within DeclareStreams",
+		func() { d.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: testStream}) })
+
+	assert.Equal(t, 1, d.Stats().Publishers)
 }

@@ -45,8 +45,9 @@ type PublishMessage struct {
 	// copied, so the caller's own map is never written to.
 	Properties map[string]any
 	// RoutingKey selects the partition of a super stream (murmur3 hash — the
-	// RabbitMQ cross-client default). Leave it empty: every publisher this package
-	// hands out targets a plain stream, which rejects a non-empty key.
+	// RabbitMQ cross-client default). Required non-empty on a publisher declared
+	// with DeclareSuperStreamPublisher, and must be empty on one declared with
+	// DeclarePublisher, which targets a plain stream with no partitions to pick.
 	RoutingKey string
 }
 
