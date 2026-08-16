@@ -160,7 +160,7 @@ func TestValidateAppSuccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateApp(&tt.cfg)
+			err := checkApp(&tt.cfg)
 			assert.NoError(t, err)
 		})
 	}
@@ -256,7 +256,7 @@ func TestValidateAppFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateApp(&tt.cfg)
+			err := checkApp(&tt.cfg)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -357,7 +357,7 @@ func TestValidateServerSuccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateServer(&tt.cfg)
+			err := checkServer(&tt.cfg)
 			assert.NoError(t, err)
 		})
 	}
@@ -571,7 +571,7 @@ func TestValidateServerFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateServer(&tt.cfg)
+			err := checkServer(&tt.cfg)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -579,7 +579,7 @@ func TestValidateServerFailures(t *testing.T) {
 }
 
 // trustedProxyServerConfig returns a ServerConfig that satisfies every other
-// validateServer check, so any error can only come from TrustedProxies.
+// checkServer check, so any error can only come from TrustedProxies.
 func trustedProxyServerConfig(entries ...string) ServerConfig {
 	cfg := createValidServerConfig()
 	cfg.TrustedProxies = entries
@@ -607,7 +607,7 @@ func TestTrustedProxiesRejectsInvalidCIDR(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := trustedProxyServerConfig(tt.entry)
-			err := validateServer(&cfg)
+			err := checkServer(&cfg)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "server.trustedproxies")
 		})
@@ -620,7 +620,7 @@ func TestTrustedProxiesAcceptsValidCIDRs(t *testing.T) {
 	// and a disagreement here would let validation accept an entry the extractor
 	// then silently drops.
 	cfg := trustedProxyServerConfig("10.0.0.0/8", "2001:db8::/32", "  172.16.0.0/12  ")
-	assert.NoError(t, validateServer(&cfg))
+	assert.NoError(t, checkServer(&cfg))
 }
 
 func TestValidateDatabaseSuccess(t *testing.T) {
@@ -864,7 +864,7 @@ func TestValidateLogSuccess(t *testing.T) {
 	for _, level := range validLevels {
 		t.Run("level_"+level, func(t *testing.T) {
 			cfg := LogConfig{Level: level}
-			err := validateLog(&cfg)
+			err := checkLog(&cfg)
 			assert.NoError(t, err)
 		})
 	}
@@ -908,7 +908,7 @@ func TestValidateLogFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateLog(&tt.cfg)
+			err := checkLog(&tt.cfg)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -4624,7 +4624,7 @@ func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {
 
 func TestValidateKeyStoreEmpty(t *testing.T) {
 	cfg := &KeyStoreConfig{}
-	assert.NoError(t, validateKeyStore(cfg))
+	assert.NoError(t, checkKeyStore(cfg))
 }
 
 func TestValidateKeyStoreValid(t *testing.T) {
@@ -4636,7 +4636,7 @@ func TestValidateKeyStoreValid(t *testing.T) {
 			},
 		},
 	}
-	assert.NoError(t, validateKeyStore(cfg))
+	assert.NoError(t, checkKeyStore(cfg))
 }
 
 func TestValidateKeyStorePublicKeyRequired(t *testing.T) {
@@ -4647,7 +4647,7 @@ func TestValidateKeyStorePublicKeyRequired(t *testing.T) {
 			},
 		},
 	}
-	err := validateKeyStore(cfg)
+	err := checkKeyStore(cfg)
 	assert.ErrorContains(t, err, "key source required")
 }
 
@@ -4659,7 +4659,7 @@ func TestValidateKeyStoreBothSourcesSet(t *testing.T) {
 			},
 		},
 	}
-	err := validateKeyStore(cfg)
+	err := checkKeyStore(cfg)
 	assert.ErrorContains(t, err, "both 'file' and 'value' set")
 }
 
@@ -4671,7 +4671,7 @@ func TestValidateKeyStorePrivateOptional(t *testing.T) {
 			},
 		},
 	}
-	assert.NoError(t, validateKeyStore(cfg))
+	assert.NoError(t, checkKeyStore(cfg))
 }
 
 func TestValidateKeyStoreWiredIntoValidate(t *testing.T) {
@@ -4695,7 +4695,7 @@ func TestValidateKeyStoreSecretValid(t *testing.T) {
 			"mac-value": {Secret: KeySourceConfig{Value: "base64data"}},
 		},
 	}
-	assert.NoError(t, validateKeyStore(cfg))
+	assert.NoError(t, checkKeyStore(cfg))
 }
 
 func TestValidateKeyStoreSecretRequiresSource(t *testing.T) {
@@ -4705,7 +4705,7 @@ func TestValidateKeyStoreSecretRequiresSource(t *testing.T) {
 		},
 	}
 	// An entry with no material at all falls back to the public-key path.
-	err := validateKeyStore(cfg)
+	err := checkKeyStore(cfg)
 	assert.ErrorContains(t, err, "key source required")
 }
 
@@ -4715,7 +4715,7 @@ func TestValidateKeyStoreSecretBothSourcesSet(t *testing.T) {
 			"mac": {Secret: KeySourceConfig{File: "mac.bin", Value: "also"}},
 		},
 	}
-	err := validateKeyStore(cfg)
+	err := checkKeyStore(cfg)
 	assert.ErrorContains(t, err, "both 'file' and 'value' set")
 	assert.ErrorContains(t, err, "keystore.keys.mac.secret")
 }
@@ -4729,7 +4729,7 @@ func TestValidateKeyStoreMixedEntrySecretPlusPublic(t *testing.T) {
 			},
 		},
 	}
-	err := validateKeyStore(cfg)
+	err := checkKeyStore(cfg)
 	assert.ErrorContains(t, err, "both a symmetric 'secret' and asymmetric")
 	assert.ErrorContains(t, err, "keystore.keys.mixed")
 }
@@ -4743,13 +4743,13 @@ func TestValidateKeyStoreMixedEntrySecretPlusPrivate(t *testing.T) {
 			},
 		},
 	}
-	err := validateKeyStore(cfg)
+	err := checkKeyStore(cfg)
 	assert.ErrorContains(t, err, "both a symmetric 'secret' and asymmetric")
 }
 
 func TestValidateKeyStoreSecretMinLengthNegative(t *testing.T) {
 	cfg := &KeyStoreConfig{SecretMinLength: -1}
-	err := validateKeyStore(cfg)
+	err := checkKeyStore(cfg)
 	assert.ErrorContains(t, err, "keystore.secretminlength")
 	assert.ErrorContains(t, err, "must be non-negative")
 }
@@ -4761,7 +4761,7 @@ func TestValidateKeyStoreSecretMinLengthZeroAllowed(t *testing.T) {
 			"mac": {Secret: KeySourceConfig{File: "mac.bin"}},
 		},
 	}
-	assert.NoError(t, validateKeyStore(cfg))
+	assert.NoError(t, checkKeyStore(cfg))
 }
 
 func TestValidateSchedulerTimezoneDefault(t *testing.T) {
@@ -4781,7 +4781,7 @@ func TestValidateSchedulerTimezoneDefault(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &SchedulerConfig{Timezone: tt.input}
-			err := validateScheduler(cfg)
+			err := normalizeScheduler(cfg)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedTimezone, cfg.Timezone)
 		})
@@ -4801,7 +4801,7 @@ func TestValidateSchedulerTimezoneRejectsInvalid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &SchedulerConfig{Timezone: tt.input}
-			err := validateScheduler(cfg)
+			err := normalizeScheduler(cfg)
 			assertValidationError(t, err, "scheduler.timezone")
 		})
 	}
@@ -5013,11 +5013,11 @@ func TestValidateOracleFieldsAllowsAbsentTLSBlock(t *testing.T) {
 
 func TestValidateDebugTrustedProxiesRejectsAllInvalid(t *testing.T) {
 	cfg := &DebugConfig{TrustedProxies: []string{"garbage", "also-bad"}}
-	assertValidationError(t, validateDebug(cfg), "debug.trustedproxies")
+	assertValidationError(t, checkDebug(cfg), "debug.trustedproxies")
 }
 
 // TestValidateDebugTrustedProxiesWiredIntoValidate guards that the top-level Validate()
-// actually invokes validateDebug — not just that validateDebug works in isolation — so a
+// actually invokes checkDebug — not just that checkDebug works in isolation — so a
 // future refactor cannot silently drop the debug-config validation hook.
 func TestValidateDebugTrustedProxiesWiredIntoValidate(t *testing.T) {
 	cfg := createValidFullConfig()
@@ -5038,7 +5038,7 @@ func TestValidateDebugTrustedProxiesAcceptsValidCases(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.NoError(t, validateDebug(tt.cfg))
+			require.NoError(t, checkDebug(tt.cfg))
 		})
 	}
 }
@@ -5064,7 +5064,7 @@ func TestValidateSchedulerCIDRListRejectsAllInvalid(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &SchedulerConfig{Security: tt.security}
-			err := validateScheduler(cfg)
+			err := checkScheduler(cfg)
 			assertValidationError(t, err, tt.wantField)
 		})
 	}
@@ -5085,7 +5085,7 @@ func TestValidateSchedulerCIDRListAcceptsValidCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &SchedulerConfig{Security: tt.security}
-			require.NoError(t, validateScheduler(cfg))
+			require.NoError(t, checkScheduler(cfg))
 		})
 	}
 }
@@ -5639,9 +5639,9 @@ func TestValidateNoDeliveredEmptyDatabaseViaLoad(t *testing.T) {
 
 // TestValidateNoDeliveredEmptyDatabaseInertForLiteral pins the Exists nil-safety the
 // whole design leans on: a hand-built Config (no koanf instance) never trips the
-// validator, regardless of how empty its Database section is. Calling Validate(&Config{})
-// instead would fail earlier at validateApp on the empty app name, never reaching this
-// validator, so the function is called directly.
+// validator, regardless of how empty its Database section is. The function is called
+// directly so the pin does not depend on which other step of Validate rejects the
+// zero Config first.
 func TestValidateNoDeliveredEmptyDatabaseInertForLiteral(t *testing.T) {
 	cfg := &Config{}
 	assert.NoError(t, validateNoDeliveredEmptyDatabase(cfg))
