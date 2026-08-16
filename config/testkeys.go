@@ -38,7 +38,7 @@ const (
 	TestKeyDatabaseUsername         = "database.username"
 	TestKeyDatabasePassword         = "database.password"
 	TestKeyDatabaseName             = "database.database"
-	TestKeyDatabaseConnectionString = "database.connectionstring"
+	TestKeyDatabaseConnectionString = "database.connection_string"
 
 	// Observability Configuration Keys
 	TestKeyObservabilityEnabled        = "observability.enabled"
