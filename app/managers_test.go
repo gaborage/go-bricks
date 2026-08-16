@@ -23,6 +23,14 @@ const (
 	largeLimitTenantTest         = "large tenant limit"
 )
 
+var (
+	validSingleTenantDBConfig        = config.DatabaseManagerConfig{MaxSize: 10, IdleTTL: time.Hour}
+	validMultiTenantDBConfig         = config.DatabaseManagerConfig{IdleTTL: 30 * time.Minute}
+	validSingleTenantPublisherConfig = config.PublisherPoolConfig{MaxCached: 50, IdleTTL: time.Hour}
+	validMultiTenantPublisherConfig  = config.PublisherPoolConfig{IdleTTL: 10 * time.Minute}
+	validMultiTenantCacheConfig      = config.CacheManagerConfig{IdleTTL: 15 * time.Minute, CleanupInterval: 5 * time.Minute}
+)
+
 func TestNewManagerConfigBuilder(t *testing.T) {
 	t.Run("single-tenant configuration", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 100)
@@ -60,7 +68,7 @@ func TestNewManagerConfigBuilder(t *testing.T) {
 func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 	t.Run("single-tenant database options", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 100)
-		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: 10, IdleTTL: time.Hour}
+		builder.dbConfig = validSingleTenantDBConfig
 
 		options := builder.BuildDatabaseOptions()
 
@@ -71,7 +79,7 @@ func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 	t.Run("multi-tenant database options", func(t *testing.T) {
 		tenantLimit := 250
 		builder := NewManagerConfigBuilder(true, tenantLimit)
-		builder.dbConfig = config.DatabaseManagerConfig{IdleTTL: 30 * time.Minute}
+		builder.dbConfig = validMultiTenantDBConfig
 
 		options := builder.BuildDatabaseOptions()
 
@@ -81,7 +89,7 @@ func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 
 	t.Run(zeroLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, 0)
-		builder.dbConfig = config.DatabaseManagerConfig{IdleTTL: 30 * time.Minute}
+		builder.dbConfig = validMultiTenantDBConfig
 
 		options := builder.BuildDatabaseOptions()
 
@@ -91,7 +99,7 @@ func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 
 	t.Run(negativeLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, -5)
-		builder.dbConfig = config.DatabaseManagerConfig{IdleTTL: 30 * time.Minute}
+		builder.dbConfig = validMultiTenantDBConfig
 
 		options := builder.BuildDatabaseOptions()
 
@@ -102,7 +110,7 @@ func TestManagerConfigBuilderBuildDatabaseOptions(t *testing.T) {
 	t.Run(largeLimitTenantTest, func(t *testing.T) {
 		largeLimit := 10000
 		builder := NewManagerConfigBuilder(true, largeLimit)
-		builder.dbConfig = config.DatabaseManagerConfig{IdleTTL: 30 * time.Minute}
+		builder.dbConfig = validMultiTenantDBConfig
 
 		options := builder.BuildDatabaseOptions()
 
@@ -130,7 +138,7 @@ func TestManagerConfigBuilderPassesValidatedValuesThrough(t *testing.T) {
 func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 	t.Run("single-tenant messaging options", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 100)
-		builder.publisherConfig = config.PublisherPoolConfig{MaxCached: 50, IdleTTL: time.Hour}
+		builder.publisherConfig = validSingleTenantPublisherConfig
 
 		options := builder.BuildMessagingOptions()
 
@@ -141,7 +149,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 	t.Run("multi-tenant messaging options", func(t *testing.T) {
 		tenantLimit := 300
 		builder := NewManagerConfigBuilder(true, tenantLimit)
-		builder.publisherConfig = config.PublisherPoolConfig{IdleTTL: 10 * time.Minute}
+		builder.publisherConfig = validMultiTenantPublisherConfig
 
 		options := builder.BuildMessagingOptions()
 
@@ -151,7 +159,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 
 	t.Run(zeroLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, 0)
-		builder.publisherConfig = config.PublisherPoolConfig{IdleTTL: 10 * time.Minute}
+		builder.publisherConfig = validMultiTenantPublisherConfig
 
 		options := builder.BuildMessagingOptions()
 
@@ -161,7 +169,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 
 	t.Run(negativeLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, -3)
-		builder.publisherConfig = config.PublisherPoolConfig{IdleTTL: 10 * time.Minute}
+		builder.publisherConfig = validMultiTenantPublisherConfig
 
 		options := builder.BuildMessagingOptions()
 
@@ -172,7 +180,7 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 	t.Run(largeLimitTenantTest, func(t *testing.T) {
 		largeLimit := 5000
 		builder := NewManagerConfigBuilder(true, largeLimit)
-		builder.publisherConfig = config.PublisherPoolConfig{IdleTTL: 10 * time.Minute}
+		builder.publisherConfig = validMultiTenantPublisherConfig
 
 		options := builder.BuildMessagingOptions()
 
@@ -278,7 +286,7 @@ func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 	t.Run("multi-tenant database zero dbConfig scales to tenant limit", func(t *testing.T) {
 		// Pins #661: unset database.manager.maxsize must fall through to the tenant limit, not literal 0.
 		builder := NewManagerConfigBuilder(true, 250)
-		builder.dbConfig = config.DatabaseManagerConfig{IdleTTL: 30 * time.Minute}
+		builder.dbConfig = validMultiTenantDBConfig
 		opts := builder.BuildDatabaseOptions()
 		assert.Equal(t, 250, opts.MaxSize, "unset database.manager.maxsize must scale to the tenant limit")
 		assert.Equal(t, 30*time.Minute, opts.IdleTTL, "validated database.manager.idlettl must pass through unchanged")
@@ -287,7 +295,7 @@ func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 	t.Run("multi-tenant cache zero cacheConfig scales to tenant limit", func(t *testing.T) {
 		// Pins #668: unset cache.manager.maxsize must scale to the tenant limit (>100), not cap at 100.
 		builder := NewManagerConfigBuilder(true, 500)
-		builder.cacheConfig = config.CacheManagerConfig{IdleTTL: 15 * time.Minute, CleanupInterval: 5 * time.Minute}
+		builder.cacheConfig = validMultiTenantCacheConfig
 		opts := builder.BuildCacheOptions()
 		assert.Equal(t, 500, opts.MaxSize, "unset cache.manager.maxsize must scale to the tenant limit")
 		assert.Equal(t, 15*time.Minute, opts.IdleTTL, "validated cache.manager.idlettl must pass through unchanged")
@@ -407,7 +415,7 @@ func TestManagerConfigBuilderBuildCacheOptions(t *testing.T) {
 	t.Run("multi-tenant cache options", func(t *testing.T) {
 		tenantLimit := 250
 		builder := NewManagerConfigBuilder(true, tenantLimit)
-		builder.cacheConfig = config.CacheManagerConfig{IdleTTL: 15 * time.Minute, CleanupInterval: 5 * time.Minute}
+		builder.cacheConfig = validMultiTenantCacheConfig
 
 		options := builder.BuildCacheOptions()
 
@@ -418,7 +426,7 @@ func TestManagerConfigBuilderBuildCacheOptions(t *testing.T) {
 
 	t.Run(zeroLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, 0)
-		builder.cacheConfig = config.CacheManagerConfig{IdleTTL: 15 * time.Minute, CleanupInterval: 5 * time.Minute}
+		builder.cacheConfig = validMultiTenantCacheConfig
 
 		options := builder.BuildCacheOptions()
 
@@ -429,7 +437,7 @@ func TestManagerConfigBuilderBuildCacheOptions(t *testing.T) {
 
 	t.Run(negativeLimitMultiTenantTest, func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, -3)
-		builder.cacheConfig = config.CacheManagerConfig{IdleTTL: 15 * time.Minute, CleanupInterval: 5 * time.Minute}
+		builder.cacheConfig = validMultiTenantCacheConfig
 
 		options := builder.BuildCacheOptions()
 
@@ -441,7 +449,7 @@ func TestManagerConfigBuilderBuildCacheOptions(t *testing.T) {
 	t.Run(largeLimitTenantTest, func(t *testing.T) {
 		largeLimit := 5000
 		builder := NewManagerConfigBuilder(true, largeLimit)
-		builder.cacheConfig = config.CacheManagerConfig{IdleTTL: 15 * time.Minute, CleanupInterval: 5 * time.Minute}
+		builder.cacheConfig = validMultiTenantCacheConfig
 
 		options := builder.BuildCacheOptions()
 
@@ -454,8 +462,8 @@ func TestManagerConfigBuilderBuildCacheOptions(t *testing.T) {
 func TestManagerConfigBuilderConsistency(t *testing.T) {
 	t.Run("single-tenant configuration consistency", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 999) // Tenant limit should be ignored: validated operator values win.
-		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: 10, IdleTTL: time.Hour}
-		builder.publisherConfig = config.PublisherPoolConfig{MaxCached: 50, IdleTTL: time.Hour}
+		builder.dbConfig = validSingleTenantDBConfig
+		builder.publisherConfig = validSingleTenantPublisherConfig
 
 		dbOptions := builder.BuildDatabaseOptions()
 		msgOptions := builder.BuildMessagingOptions()
@@ -471,8 +479,8 @@ func TestManagerConfigBuilderConsistency(t *testing.T) {
 	t.Run("multi-tenant configuration consistency", func(t *testing.T) {
 		tenantLimit := 200
 		builder := NewManagerConfigBuilder(true, tenantLimit)
-		builder.dbConfig = config.DatabaseManagerConfig{IdleTTL: 30 * time.Minute}
-		builder.publisherConfig = config.PublisherPoolConfig{IdleTTL: 10 * time.Minute}
+		builder.dbConfig = validMultiTenantDBConfig
+		builder.publisherConfig = validMultiTenantPublisherConfig
 
 		dbOptions := builder.BuildDatabaseOptions()
 		msgOptions := builder.BuildMessagingOptions()
@@ -506,12 +514,12 @@ func TestManagerConfigBuilderConsistency(t *testing.T) {
 func TestManagerConfigBuilderEdgeCases(t *testing.T) {
 	t.Run("configuration differences between modes", func(t *testing.T) {
 		singleTenant := NewManagerConfigBuilder(false, 100)
-		singleTenant.dbConfig = config.DatabaseManagerConfig{MaxSize: 10, IdleTTL: time.Hour}
-		singleTenant.publisherConfig = config.PublisherPoolConfig{MaxCached: 50, IdleTTL: time.Hour}
+		singleTenant.dbConfig = validSingleTenantDBConfig
+		singleTenant.publisherConfig = validSingleTenantPublisherConfig
 
 		multiTenant := NewManagerConfigBuilder(true, 100)
-		multiTenant.dbConfig = config.DatabaseManagerConfig{IdleTTL: 30 * time.Minute}
-		multiTenant.publisherConfig = config.PublisherPoolConfig{IdleTTL: 10 * time.Minute}
+		multiTenant.dbConfig = validMultiTenantDBConfig
+		multiTenant.publisherConfig = validMultiTenantPublisherConfig
 
 		singleDbOpts := singleTenant.BuildDatabaseOptions()
 		multiDbOpts := multiTenant.BuildDatabaseOptions()
@@ -527,8 +535,8 @@ func TestManagerConfigBuilderEdgeCases(t *testing.T) {
 
 	t.Run("expected TTL relationships", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(true, 100)
-		builder.dbConfig = config.DatabaseManagerConfig{IdleTTL: 30 * time.Minute}
-		builder.publisherConfig = config.PublisherPoolConfig{IdleTTL: 10 * time.Minute}
+		builder.dbConfig = validMultiTenantDBConfig
+		builder.publisherConfig = validMultiTenantPublisherConfig
 
 		dbOptions := builder.BuildDatabaseOptions()
 		msgOptions := builder.BuildMessagingOptions()
@@ -541,12 +549,12 @@ func TestManagerConfigBuilderEdgeCases(t *testing.T) {
 
 	t.Run("single-tenant ignores tenant limit parameter", func(t *testing.T) {
 		builder1 := NewManagerConfigBuilder(false, 1)
-		builder1.dbConfig = config.DatabaseManagerConfig{MaxSize: 10, IdleTTL: time.Hour}
-		builder1.publisherConfig = config.PublisherPoolConfig{MaxCached: 50, IdleTTL: time.Hour}
+		builder1.dbConfig = validSingleTenantDBConfig
+		builder1.publisherConfig = validSingleTenantPublisherConfig
 
 		builder2 := NewManagerConfigBuilder(false, 10000)
-		builder2.dbConfig = config.DatabaseManagerConfig{MaxSize: 10, IdleTTL: time.Hour}
-		builder2.publisherConfig = config.PublisherPoolConfig{MaxCached: 50, IdleTTL: time.Hour}
+		builder2.dbConfig = validSingleTenantDBConfig
+		builder2.publisherConfig = validSingleTenantPublisherConfig
 
 		// Both should produce identical options since a validated operator value ignores tenantLimit
 		dbOpts1 := builder1.BuildDatabaseOptions()

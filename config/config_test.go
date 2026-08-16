@@ -1379,4 +1379,5 @@ func TestKoanfDefaultsMatchApplyDefaultsForSharedKeys(t *testing.T) {
 	assert.Equal(t, applied.Cache.Redis.MinRetryBackoff, loaded.Cache.Redis.MinRetryBackoff)
 	assert.Equal(t, applied.Cache.Redis.MaxRetryBackoff, loaded.Cache.Redis.MaxRetryBackoff)
 	assert.Equal(t, applied.Cache.Redis.PoolSize, loaded.Cache.Redis.PoolSize)
+	assert.Equal(t, applied.Cache.Redis.Port, loaded.Cache.Redis.Port)
 }
