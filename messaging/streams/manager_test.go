@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/ha"
+	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/message"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,6 +98,7 @@ const (
 	msgOffsetQueryFailed    = "Could not query the stored stream offset; attaching at a position that replays rather than skips"
 	msgFlushSkipped         = "Shutdown offset flush budget spent; offset not committed - handled messages will replay"
 	msgClosePublisherFailed = "Failed to close stream publisher"
+	msgRoutingKeyMissing    = "No routing key registered for a super-stream message; it will be routed as if unkeyed"
 )
 
 // recordingLogger captures each event's level, attached error and terminal
@@ -154,6 +157,20 @@ func (l *recordingLogger) warnStreams(msg string) []string {
 		}
 	}
 	return out
+}
+
+// fieldAt reports the string field key attached to the first event at level
+// carrying msg, so a test asserts WHICH subject a line named and not only that it
+// spoke.
+func (l *recordingLogger) fieldAt(level, msg, key string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, e := range l.events {
+		if e.level == level && e.msg == msg {
+			return e.fields[key]
+		}
+	}
+	return ""
 }
 
 // warnError reports the error text attached to the first WARN carrying msg. An
@@ -1145,7 +1162,7 @@ func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {
 
 // attachPublisher wires a fake producer into a manager as if Start had bound it.
 func attachPublisher(m *Manager, handle *fakeProducer) *Publisher {
-	return rebindPublisher(m, newPublisher(testStream), handle)
+	return rebindPublisher(m, newPublisher(testStream, false), handle)
 }
 
 // rebindPublisher binds an EXISTING publisher to a new producer, which is what a
@@ -1305,6 +1322,124 @@ func onePublisherDeclaration(t *testing.T) *publisherDeclaration {
 	decls := onePublisher(t)
 	require.Len(t, decls.publishers, 1)
 	return decls.publishers[0]
+}
+
+// oneSuperPublisherDeclaration is the same for a super-stream target, which binds
+// through the client's other producer constructor.
+func oneSuperPublisherDeclaration(t *testing.T) *publisherDeclaration {
+	t.Helper()
+	decls := NewDeclarations()
+	decls.DeclareSuperStream(testSuperStream, testPartitions, nil)
+	decls.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: testSuperStream})
+	require.Len(t, decls.publishers, 1)
+	return decls.publishers[0]
+}
+
+// unreachableProducer fails every construction, so a bind reaches its error path
+// without a broker.
+func unreachableProducer(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
+	return nil, errProducerConstruction
+}
+
+// unreachableSuperProducer is its super-stream twin.
+func unreachableSuperProducer(*stream.Environment, string, func(message.StreamMessage) string,
+	ha.PartitionConfirmMessageHandler,
+) (producerHandle, error) {
+	return nil, errProducerConstruction
+}
+
+// TestManagerBindPublisherWrapsASuperConstructionFailure is the super-stream half
+// of the construction-failure path, and pins that the failure names the kind of
+// target the declaration asked for rather than calling every target a stream.
+func TestManagerBindPublisherWrapsASuperConstructionFailure(t *testing.T) {
+	m := testManager(t)
+	m.newProducer = unreachableProducer
+	m.newSuperProducer = unreachableSuperProducer
+	decl := oneSuperPublisherDeclaration(t)
+
+	err := m.bindPublisher(nil, decl)
+
+	require.ErrorIs(t, err, errProducerConstruction)
+	assert.Contains(t, err.Error(), `failed to start the publisher on super stream "`+testSuperStream+`"`)
+	assert.Empty(t, m.publishers)
+}
+
+// TestManagerBindPublisherBuildsASuperProducerForASuperTarget pins the dispatch: a
+// super declaration must reach the client's super-stream constructor, with a
+// routing extractor and the per-partition confirmation handler that constructor
+// requires. Binding it through the plain constructor would compile and then fail at
+// the broker, because a super stream is not a stream.
+func TestManagerBindPublisherBuildsASuperProducerForASuperTarget(t *testing.T) {
+	m := testManager(t)
+	m.newProducer = unreachableProducer // a plain bind here is the defect under test
+	handle := openProducer()
+	var gotStream string
+	var gotExtractor func(message.StreamMessage) string
+	var gotConfirmed ha.PartitionConfirmMessageHandler
+	m.newSuperProducer = func(_ *stream.Environment, superStream string,
+		routingKeyFor func(message.StreamMessage) string, confirmed ha.PartitionConfirmMessageHandler,
+	) (producerHandle, error) {
+		gotStream, gotExtractor, gotConfirmed = superStream, routingKeyFor, confirmed
+		return handle, nil
+	}
+	decl := oneSuperPublisherDeclaration(t)
+
+	require.NoError(t, m.bindPublisher(nil, decl))
+
+	assert.Equal(t, testSuperStream, gotStream, "the producer is built for the declared super stream")
+	require.NotNil(t, gotExtractor, "hash routing needs an extractor")
+	require.NotNil(t, gotConfirmed, "a super stream confirms per partition")
+	assert.Equal(t, []*Publisher{decl.Publisher}, m.publishers)
+	assert.Equal(t, ha.StatusOpen, decl.Publisher.status())
+}
+
+// TestManagerBindPublisherBuildsAPlainProducerForAPlainTarget is the other half of
+// that dispatch, and would fail if the two constructors were ever swapped.
+func TestManagerBindPublisherBuildsAPlainProducerForAPlainTarget(t *testing.T) {
+	m := testManager(t)
+	m.newSuperProducer = unreachableSuperProducer // a super bind here is the defect under test
+	handle := openProducer()
+	m.newProducer = func(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
+		return handle, nil
+	}
+
+	require.NoError(t, m.bindPublisher(nil, onePublisherDeclaration(t)))
+
+	require.Len(t, m.publishers, 1)
+	assert.Equal(t, ha.StatusOpen, m.publishers[0].status())
+}
+
+// TestManagerRoutingKeyExtractorAnswersTheRegisteredKey pins what the client asks
+// this for: the key the caller registered with that exact message, which is what
+// makes the partition assignment the caller's choice rather than a hash of "".
+func TestManagerRoutingKeyExtractorAnswersTheRegisteredKey(t *testing.T) {
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	p := newPublisher(testSuperStream, true)
+	registered := amqp.NewMessage([]byte(testBody))
+	p.pending.add(registered, testRoutingKey)
+
+	key := m.routingKeyExtractor(p)(registered)
+
+	assert.Equal(t, testRoutingKey, key)
+	assert.Empty(t, log.messagesAt("error"), "a routed send is routine, not an incident")
+}
+
+// TestManagerRoutingKeyExtractorReportsAnUnregisteredMessage covers the miss the
+// tombstone lifecycle is supposed to make impossible: the extractor must not
+// panic the client's sending goroutine, and the operator has to hear about it,
+// because a miss means the correlation assumption broke.
+func TestManagerRoutingKeyExtractorReportsAnUnregisteredMessage(t *testing.T) {
+	log := &recordingLogger{}
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	p := newPublisher(testSuperStream, true)
+
+	key := m.routingKeyExtractor(p)(amqp.NewMessage([]byte(testBody)))
+
+	assert.Empty(t, key)
+	assert.Equal(t, []string{msgRoutingKeyMissing}, log.messagesAt("error"))
+	assert.Equal(t, testSuperStream, log.fieldAt("error", msgRoutingKeyMissing, logFieldStream),
+		"the report names the publisher whose correlation broke")
 }
 
 // TestManagerStopClosesPublishersAfterConsumers pins the shutdown order. A

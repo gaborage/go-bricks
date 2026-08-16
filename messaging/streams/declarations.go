@@ -39,10 +39,22 @@ type consumerKey struct {
 }
 
 // publisherDeclaration is one declared publisher and the handle its declaring
-// module holds. Manager.Start binds the handle to a client producer.
+// module holds. Manager.Start binds the handle to a client producer. Super marks
+// which of the two declare methods produced it, because the two publish through
+// different client APIs.
 type publisherDeclaration struct {
 	Stream    string
+	Super     bool
 	Publisher *Publisher
+}
+
+// streamKindLabel names a target the way the declaration that produced it did, so
+// a panic or a validation error speaks the caller's vocabulary.
+func streamKindLabel(super bool) string {
+	if super {
+		return "super stream"
+	}
+	return "stream"
 }
 
 // Stats summarizes a declaration store.
@@ -168,9 +180,9 @@ func (d *Declarations) DeclareSuperStreamConsumer(opts *SuperStreamConsumerOptio
 // registerConsumer stores a consumer declaration of either kind, rejecting a
 // duplicate (target, name) pair in the vocabulary of the method that produced it.
 func (d *Declarations) registerConsumer(decl *consumerDeclaration) {
-	method, label := "DeclareConsumer", "stream"
+	method := "DeclareConsumer"
 	if decl.Super {
-		method, label = "DeclareSuperStreamConsumer", "super stream"
+		method = "DeclareSuperStreamConsumer"
 	}
 
 	key := consumerKey{Stream: decl.Stream, Name: decl.Name}
@@ -179,7 +191,7 @@ func (d *Declarations) registerConsumer(decl *consumerDeclaration) {
 			"streams: duplicate consumer declaration detected\n"+
 				"  %s=%s name=%s\n"+
 				"  Ensure each %s call is unique within DeclareStreams",
-			label, decl.Stream, decl.Name, method,
+			streamKindLabel(decl.Super), decl.Stream, decl.Name, method,
 		))
 	}
 
@@ -191,6 +203,14 @@ func (d *Declarations) registerConsumer(decl *consumerDeclaration) {
 type PublisherOptions struct {
 	// Stream is the stream to publish to; it must be declared in the same Declarations.
 	Stream string
+}
+
+// SuperStreamPublisherOptions declares one super-stream publisher, which routes
+// each message to a partition by the murmur3 hash of its RoutingKey.
+type SuperStreamPublisherOptions struct {
+	// SuperStream is the super stream to publish to; it must be declared in the
+	// same Declarations.
+	SuperStream string
 }
 
 // DeclarePublisher registers a publisher on a plain stream and returns the handle
@@ -205,17 +225,44 @@ func (d *Declarations) DeclarePublisher(opts *PublisherOptions) *Publisher {
 		panic(nilDeclarationPanic("publisher", "DeclarePublisher", "PublisherOptions"))
 	}
 
-	if _, exists := d.publisherIndex[opts.Stream]; exists {
+	return d.registerPublisher(&publisherDeclaration{Stream: opts.Stream})
+}
+
+// DeclareSuperStreamPublisher registers a publisher across every partition of a
+// super stream and returns the handle to publish through. Panics on the same two
+// programming errors as DeclarePublisher.
+//
+// Every PublishMessage sent through the returned handle must carry a non-empty
+// RoutingKey: it is what picks the partition.
+func (d *Declarations) DeclareSuperStreamPublisher(opts *SuperStreamPublisherOptions) *Publisher {
+	if opts == nil {
+		panic(nilDeclarationPanic("publisher", "DeclareSuperStreamPublisher", "SuperStreamPublisherOptions"))
+	}
+
+	return d.registerPublisher(&publisherDeclaration{Stream: opts.SuperStream, Super: true})
+}
+
+// registerPublisher stores a publisher declaration of either kind, rejecting a
+// duplicate target in the vocabulary of the method that produced it, and returns
+// the handle its module publishes through. The two kinds share one index, so a
+// target already claimed by either method is a duplicate.
+func (d *Declarations) registerPublisher(decl *publisherDeclaration) *Publisher {
+	method := "DeclarePublisher"
+	if decl.Super {
+		method = "DeclareSuperStreamPublisher"
+	}
+
+	if _, exists := d.publisherIndex[decl.Stream]; exists {
 		panic(fmt.Sprintf(
 			"streams: duplicate publisher declaration detected\n"+
-				"  stream=%s\n"+
-				"  Ensure each DeclarePublisher call is unique within DeclareStreams",
-			opts.Stream,
+				"  %s=%s\n"+
+				"  Ensure each %s call is unique within DeclareStreams",
+			streamKindLabel(decl.Super), decl.Stream, method,
 		))
 	}
 
-	decl := &publisherDeclaration{Stream: opts.Stream, Publisher: newPublisher(opts.Stream)}
-	d.publisherIndex[opts.Stream] = decl
+	decl.Publisher = newPublisher(decl.Stream, decl.Super)
+	d.publisherIndex[decl.Stream] = decl
 	d.publishers = append(d.publishers, decl)
 	return decl.Publisher
 }
@@ -292,7 +339,7 @@ func (d *Declarations) publisherErrors() []error {
 	var errs []error
 	for _, p := range d.publishers {
 		if p.Stream == "" {
-			errs = append(errs, errors.New("publisher declaration has an empty stream name"))
+			errs = append(errs, fmt.Errorf("publisher declaration has an empty %s name", streamKindLabel(p.Super)))
 			continue
 		}
 		if err := d.publisherTargetError(p); err != nil {
@@ -302,17 +349,25 @@ func (d *Declarations) publisherErrors() []error {
 	return errs
 }
 
-// publisherTargetError checks that a publisher's target was declared, and
-// declared as a plain stream. A super stream is reached through a different
-// client API, so publishing to one as if it were plain cannot work.
+// publisherTargetError checks that a publisher's target was declared, and declared
+// as the kind the publisher publishes to it as. The two kinds reach the broker
+// through different client APIs, so publishing to one as the other cannot work.
 func (d *Declarations) publisherTargetError(p *publisherDeclaration) error {
-	if _, ok := d.streamIndex[p.Stream]; ok {
+	_, isStream := d.streamIndex[p.Stream]
+	_, isSuper := d.superStreamIndex[p.Stream]
+
+	switch {
+	case p.Super && isSuper, !p.Super && isStream:
 		return nil
+	case p.Super && isStream:
+		return fmt.Errorf("publisher publishes to %q as a super stream, but it is declared as a plain stream; use DeclarePublisher", p.Stream)
+	case !p.Super && isSuper:
+		return fmt.Errorf("publisher publishes to %q as a plain stream, but it is declared as a super stream; use DeclareSuperStreamPublisher", p.Stream)
+	case p.Super:
+		return fmt.Errorf("publisher references undeclared super stream %q", p.Stream)
+	default:
+		return fmt.Errorf("publisher references undeclared stream %q", p.Stream)
 	}
-	if _, ok := d.superStreamIndex[p.Stream]; ok {
-		return fmt.Errorf("publisher publishes to %q as a plain stream, but it is declared as a super stream", p.Stream)
-	}
-	return fmt.Errorf("publisher references undeclared stream %q", p.Stream)
 }
 
 // consumerTargetError checks that a consumer's target was declared, and declared

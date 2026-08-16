@@ -157,9 +157,10 @@ func (ws *waiters) sweep(err error) {
 	clear(ws.m)
 }
 
-// Publisher publishes to one declared stream. It is obtained from
-// Declarations.DeclarePublisher at declaration time and is inert until
-// Manager.Start binds it to a client producer. Safe for concurrent use.
+// Publisher publishes to one declared stream or super stream. It is obtained from
+// Declarations.DeclarePublisher or DeclareSuperStreamPublisher at declaration time
+// and is inert until Manager.Start binds it to a client producer. Safe for
+// concurrent use.
 type Publisher struct {
 	stream string
 	// super marks a publisher whose target is a partitioned super stream, which
@@ -180,9 +181,10 @@ type Publisher struct {
 }
 
 // newPublisher builds the handle a declare method hands back to the module.
-func newPublisher(streamName string) *Publisher {
+func newPublisher(streamName string, super bool) *Publisher {
 	return &Publisher{
 		stream:   streamName,
+		super:    super,
 		tracer:   otel.Tracer(tracerName),
 		spanName: streamName + " " + spanOperationPublish,
 		spanStartOpts: []trace.SpanStartOption{
@@ -360,6 +362,27 @@ func (p *Publisher) confirmed(statuses []*stream.ConfirmationStatus) {
 		}
 		p.resolveConfirmation(cs.GetMessage(), cs.IsConfirmed(), cs.GetError())
 	}
+}
+
+// partitionsConfirmed is the super-stream half of confirmed: the client delivers
+// confirmations grouped by the partition each message was routed to, wrapping the
+// same status type the plain lane resolves.
+func (p *Publisher) partitionsConfirmed(confirms []*stream.PartitionPublishConfirm) {
+	p.confirmed(partitionStatuses(confirms))
+}
+
+// partitionStatuses flattens one batch of per-partition confirmations. Which
+// partition a message landed on is the routing strategy's business, not the
+// correlation's: a waiter is found by the message pointer alone.
+func partitionStatuses(confirms []*stream.PartitionPublishConfirm) []*stream.ConfirmationStatus {
+	var statuses []*stream.ConfirmationStatus
+	for _, confirm := range confirms {
+		if confirm == nil {
+			continue
+		}
+		statuses = append(statuses, confirm.ConfirmationStatus...)
+	}
+	return statuses
 }
 
 // resolveConfirmation settles one send from one broker confirmation. It is the
