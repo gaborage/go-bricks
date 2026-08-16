@@ -24,8 +24,9 @@ func (a *App) startMaintenanceLoops() {
 		a.warnIfCleanupIntervalTooLate("database.manager",
 			a.cfg.Database.Manager.CleanupInterval, a.cfg.Database.Manager.IdleTTL)
 		a.logger.Info().Msg("Starting database manager cleanup loop")
-		// cleanupinterval has no builder fallback (unlike maxsize/idlettl); on the
-		// Validate-bypassing NewWithConfig path, StartCleanup's <=0->5m self-default is the only guard.
+		// cleanupinterval has no builder fallback (unlike maxsize/idlettl); on a
+		// Validate-bypassing path (a Builder assembled without WithConfig), StartCleanup's
+		// <=0->5m self-default is the only guard.
 		a.dbManager.StartCleanup(a.cfg.Database.Manager.CleanupInterval)
 	}
 	if a.messagingManager != nil {

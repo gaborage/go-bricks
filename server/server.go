@@ -82,10 +82,10 @@ func (s *Server) buildFullPath(route string) string {
 // every request on the load balancer's own address).
 //
 // Every entry is re-vetted through config.ParseTrustedProxyCIDR — the same rule set
-// startup validation applies — rather than parsed here, because config.Validate runs
-// only inside config.Load: app.NewWithConfig reaches this function with a
-// hand-assembled config that was never validated. That path is supported, so this
-// branch is reachable rather than a can't-happen. Without the re-vet, one
+// startup validation applies — rather than parsed here, because the re-vet stays
+// load-bearing for callers outside the app construction path — server.New used
+// directly, or a Builder assembled without WithConfig — which never pass
+// config.Validate (ADR-064 closed the NewWithConfig bypass). Without the re-vet, one
 // `0.0.0.0/0` or host-bits entry would trust every hop and hand the extractor back
 // the caller-authored left-most X-Forwarded-For value — the exact spoofing ADR-057
 // closes. Skipping is the safe response because echo's TrustOptions are purely

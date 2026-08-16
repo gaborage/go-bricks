@@ -211,10 +211,12 @@ func TestShutdownStreamConsumersStopsTheManager(t *testing.T) {
 	assert.Equal(t, false, a.streamsManager.Stats()["started"])
 }
 
-// TestPrepareStreamConsumersRejectsMultiTenantBypass drives the documented
-// config.Validate bypass: NewWithConfig accepts a hand-built config, so a
-// multi-tenant service with a stream URI and a declaring module would otherwise
-// boot green and run handlers with no tenant in context.
+// TestPrepareStreamConsumersRejectsMultiTenantBypass pins the runtime re-check
+// (assertStreamsSingleTenant) as a defense-in-depth backstop: it builds the App
+// directly, bypassing Builder.WithConfig's config.Validate call (which now runs on
+// every NewWithConfig — see B1), so a multi-tenant service with a stream URI and a
+// declaring module would otherwise boot green and run handlers with no tenant in
+// context.
 func TestPrepareStreamConsumersRejectsMultiTenantBypass(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{URI: unreachableStreamURI},
 		&streamModule{name: "orders", declaration: declareOneConsumer})

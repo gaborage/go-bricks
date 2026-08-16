@@ -510,9 +510,14 @@ func TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl(t *testing.T) {
 // real manager and declaration wiring are in place.
 func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
 	cfg := &config.Config{
-		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
-		Server:      config.ServerConfig{Port: 8080},
+		App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Server: config.ServerConfig{
+			Port: 8080,
+			// The validated timeout floor lives in one fixture; reuse it.
+			Timeout: defaultTestConfig().Server.Timeout,
+		},
 		Multitenant: config.MultitenantConfig{Enabled: false},
+		Log:         config.LogConfig{Level: "info"},
 		// No Messaging and no Database block at all.
 	}
 

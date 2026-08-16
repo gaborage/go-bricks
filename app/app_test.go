@@ -537,11 +537,22 @@ func defaultTestConfig() *config.Config {
 			Env:     testName,
 			Version: appVersion,
 		},
-		Server: config.ServerConfig{Host: localHost, Port: 8080},
-		Database: config.DatabaseConfig{
-			Type: dbTypePostgres,
+		Server: config.ServerConfig{
 			Host: localHost,
-			Port: 5432,
+			Port: 8080,
+			Timeout: config.TimeoutConfig{
+				Read:       15 * time.Second,
+				Write:      30 * time.Second,
+				Middleware: 5 * time.Second,
+				Shutdown:   10 * time.Second,
+			},
+		},
+		Database: config.DatabaseConfig{
+			Type:     dbTypePostgres,
+			Host:     localHost,
+			Port:     5432,
+			Database: "testdb",
+			Username: "testuser",
 		},
 		Messaging: config.MessagingConfig{
 			Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
@@ -1474,39 +1485,26 @@ func TestNewWithConfigErrors(t *testing.T) {
 		assert.NotNil(t, log) // Logger should always be available
 	})
 
-	t.Run("nil options with empty config succeeds (messaging/database now optional)", func(t *testing.T) {
-		cfg := &config.Config{} // Empty config - database and messaging not configured
+	t.Run("nil options with empty config fails validation", func(t *testing.T) {
+		cfg := &config.Config{} // Empty config - fails config.Validate before construction proceeds
 		app, log, err := NewWithConfig(cfg, nil)
 
-		// After the fix: messaging and database are optional, so app creation succeeds
-		// Config validation is NOT performed by NewWithConfig (user's responsibility)
-		assert.NoError(t, err)
-		assert.NotNil(t, app)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "app.name")
+		assert.Nil(t, app)
 		assert.NotNil(t, log)
 	})
 
-	t.Run("invalid database config causes dependency resolution error", func(t *testing.T) {
-		cfg := &config.Config{
-			App: config.AppConfig{
-				Name:    appName,
-				Env:     testName,
-				Version: appVersion,
-			},
-			Log: config.LogConfig{
-				Level:  "info",
-				Pretty: false,
-			},
-			Database: config.DatabaseConfig{
-				Type:     dbTypePostgres,
-				Host:     "", // Invalid empty host
-				Port:     0,  // Invalid port
-				Database: "",
-			},
-		}
+	t.Run("invalid database config causes construction error", func(t *testing.T) {
+		cfg := defaultTestConfig()
+		cfg.Database.Host = "" // Invalid empty host
+		cfg.Database.Port = 0
+		cfg.Database.Database = ""
 
 		app, log, err := NewWithConfig(cfg, &Options{})
 
-		assert.Error(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "database.host")
 		assert.Nil(t, app)
 		assert.NotNil(t, log) // Logger should always be available
 	})
@@ -1545,7 +1543,7 @@ func TestBuildMessagingDeclarations(t *testing.T) {
 		app := &App{}
 
 		err := app.buildMessagingDeclarations()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "module registry not initialized")
 	})
 

@@ -606,8 +606,8 @@ func (m *Manager) reportOffsetQuery(err error, consumerName, streamName string, 
 // SECURITY: the client parses the endpoint with url.Parse and returns its
 // *url.Error verbatim, whose Error() renders the raw URI — credentials included.
 // Only the cause is kept; the endpoint is reported separately, redacted. This is
-// reachable when config.Validate never ran (app.NewWithConfig, see
-// app/streams_setup.go).
+// reachable when config.Validate never ran (a Builder assembled without
+// WithConfig, see app/streams_setup.go).
 func safeEnvError(err error) error {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {

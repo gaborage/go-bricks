@@ -220,7 +220,8 @@ func (c *Config) PerTenantJobKeys() []string {
 // should be emitted. An explicit server.logroutes value always wins; an absent
 // key (nil) defaults to development mode (see AppConfig.IsDevelopment) so routes
 // are visible at first `go run` while production stays silent. Nil-safe so it is
-// correct whether or not Validate has run (the NewWithConfig path bypasses it).
+// correct whether or not Validate has run (a Builder assembled without WithConfig,
+// or any Config built by hand outside app.NewWithConfig, still reaches this unvalidated).
 func (c *Config) ShouldLogRoutes() bool {
 	if c == nil {
 		return false

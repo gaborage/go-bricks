@@ -39,13 +39,7 @@ func TestNewAppBuilder(t *testing.T) {
 
 func TestAppBuilderWithConfig(t *testing.T) {
 	t.Run("valid config and options", func(t *testing.T) {
-		cfg := &config.Config{
-			App: config.AppConfig{
-				Name:    "test-app",
-				Env:     "test",
-				Version: "1.0.0",
-			},
-		}
+		cfg := defaultTestConfig()
 		opts := &Options{}
 
 		builder := NewAppBuilder().WithConfig(cfg, opts)
@@ -61,6 +55,44 @@ func TestAppBuilderWithConfig(t *testing.T) {
 		assert.Equal(t, builder, result)
 		assert.Equal(t, assert.AnError, result.err)
 	})
+}
+
+// TestAppBuilderWithConfigValidatesHandBuiltConfig pins that WithConfig runs
+// config.Validate on every construction path, not just config.Load output.
+func TestAppBuilderWithConfigValidatesHandBuiltConfig(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Database.Type = "mysql" // invalid vendor: Validate must reject at construction
+
+	app, log, err := NewWithConfig(cfg, &Options{})
+
+	require.Error(t, err)
+	assert.Nil(t, app)
+	assert.NotNil(t, log)
+	assert.Contains(t, err.Error(), "invalid configuration")
+	assert.Contains(t, err.Error(), "database.type")
+}
+
+// TestAppBuilderWithConfigStampsDefaultsOnHandBuiltConfig pins that a hand-built
+// config Validate accepts still receives the same defaults config.Load stamps.
+// WithConfig alone is under test — the stamping happens there, before any later
+// builder stage runs.
+func TestAppBuilderWithConfigStampsDefaultsOnHandBuiltConfig(t *testing.T) {
+	cfg := defaultTestConfig()
+
+	result := NewAppBuilder().WithConfig(cfg, &Options{})
+
+	require.NoError(t, result.err)
+	assert.Equal(t, int32(25), cfg.Database.Pool.Max.Connections, "pool defaults reach hand-built configs")
+	assert.Positive(t, cfg.Messaging.Publisher.IdleTTL, "messaging defaults reach hand-built configs")
+}
+
+// TestAppBuilderWithConfigRejectsNilConfig pins that a nil config fails construction
+// with a logger still available, rather than reaching the old nil-cfg CreateLogger check.
+func TestAppBuilderWithConfigRejectsNilConfig(t *testing.T) {
+	app, log, err := NewWithConfig(nil, &Options{})
+	require.Error(t, err)
+	assert.Nil(t, app)
+	assert.NotNil(t, log)
 }
 
 func TestAppBuilderCreateLoggerErrors(t *testing.T) {
@@ -81,17 +113,7 @@ func TestAppBuilderCreateLoggerErrors(t *testing.T) {
 	})
 
 	t.Run("valid config creates logger", func(t *testing.T) {
-		cfg := &config.Config{
-			App: config.AppConfig{
-				Name:    "test-app",
-				Env:     "test",
-				Version: "1.0.0",
-			},
-			Log: config.LogConfig{
-				Level:  "info",
-				Pretty: false,
-			},
-		}
+		cfg := defaultTestConfig()
 
 		builder := NewAppBuilder().WithConfig(cfg, &Options{})
 		result := builder.CreateLogger()
@@ -109,13 +131,8 @@ func TestAppBuilderCreateLoggerWithFormat(t *testing.T) {
 
 	for _, format := range cases {
 		t.Run("format="+format, func(t *testing.T) {
-			cfg := &config.Config{
-				App: config.AppConfig{Name: "test-app", Env: "test", Version: "1.0.0"},
-				Log: config.LogConfig{
-					Level:  "info",
-					Output: config.OutputConfig{Format: format},
-				},
-			}
+			cfg := defaultTestConfig()
+			cfg.Log.Output.Format = format
 
 			result := NewAppBuilder().WithConfig(cfg, &Options{}).CreateLogger()
 			assert.Nil(t, result.err)
@@ -272,10 +289,7 @@ func TestAppBuilderCreateLoggerWithFilterConfig(t *testing.T) {
 	t.Run("options_filter_accepted", func(t *testing.T) {
 		// Smoke test: builder wires Options.LoggerFilterConfig through without
 		// error. End-to-end masking behavior is covered by logger.TestNewWithFilter.
-		cfg := &config.Config{
-			App: config.AppConfig{Name: "test-app", Env: "test", Version: "1.0.0"},
-			Log: config.LogConfig{Level: "info"},
-		}
+		cfg := defaultTestConfig()
 		opts := &Options{
 			LoggerFilterConfig: &logger.FilterConfig{
 				SensitiveFields: []string{"pan", "cvv2"},
@@ -288,13 +302,8 @@ func TestAppBuilderCreateLoggerWithFilterConfig(t *testing.T) {
 	})
 
 	t.Run("config_sensitive_fields_accepted", func(t *testing.T) {
-		cfg := &config.Config{
-			App: config.AppConfig{Name: "test-app", Env: "test", Version: "1.0.0"},
-			Log: config.LogConfig{
-				Level:           "info",
-				SensitiveFields: []string{"pan", "cvv2", "otp"},
-			},
-		}
+		cfg := defaultTestConfig()
+		cfg.Log.SensitiveFields = []string{"pan", "cvv2", "otp"}
 		result := NewAppBuilder().WithConfig(cfg, &Options{}).CreateLogger()
 		assert.Nil(t, result.err)
 		assert.NotNil(t, result.logger)
@@ -339,7 +348,7 @@ observability:
 
 func TestAppBuilderCreateBootstrapErrors(t *testing.T) {
 	t.Run("missing logger", func(t *testing.T) {
-		cfg := &config.Config{}
+		cfg := defaultTestConfig()
 		builder := NewAppBuilder().WithConfig(cfg, &Options{})
 		result := builder.CreateBootstrap()
 
@@ -579,9 +588,11 @@ func TestAppBuilderConfigureRuntimeHelpersGuardsWhenOptionsLackDatabaseConnector
 	assert.Contains(t, result.err.Error(), "[database]")
 }
 
-// TestAppBuilderConfigureRuntimeHelpersGuardsRecognizedSchemeWithoutValidation pins the
-// app.NewWithConfig path: it skips config.Validate, so even a recognized scheme reaches the
-// guard untyped and the message must report the state, not blame the scheme.
+// TestAppBuilderConfigureRuntimeHelpersGuardsRecognizedSchemeWithoutValidation pins a
+// builder invoked without WithConfig's config.Validate step (constructed directly, as
+// this test does — WithConfig itself now validates on every NewWithConfig call): even
+// a recognized scheme reaches the guard untyped and the message must report the state,
+// not blame the scheme.
 func TestAppBuilderConfigureRuntimeHelpersGuardsRecognizedSchemeWithoutValidation(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Database.ConnectionString = "postgres://user:pass@localhost:5432/db"
@@ -592,7 +603,7 @@ func TestAppBuilderConfigureRuntimeHelpersGuardsRecognizedSchemeWithoutValidatio
 	require.Error(t, result.err)
 	assert.Contains(t, result.err.Error(),
 		"database configuration at [database]: connectionstring has no resolved database type")
-	assert.Contains(t, result.err.Error(), "run config.Validate")
+	assert.Contains(t, result.err.Error(), "set <path>.type to postgresql or oracle")
 }
 
 // TestAppBuilderConfigureRuntimeHelpersExemptsCustomConnector pins that a custom
@@ -1031,11 +1042,14 @@ func TestPerformPreInitializationUsesPerComponentTimeouts(t *testing.T) {
 }
 
 // TestPerformPreInitializationZeroBudgetUsesParentContext pins that a component budget resolving to
-// zero — a Config built by hand rather than loaded through config.applyStartupDefaults — means "no
-// explicit budget" and not "already expired". context.WithTimeout(parent, 0) hands the component a
-// context that is dead on arrival, which aborts every pool-backed pre-init before its connector runs.
+// zero means "no explicit budget" and not "already expired". WithConfig's config.Validate call now
+// stamps a real Startup budget on every config reaching NewWithConfig (see B1), so the zero-budget
+// branch is exercised here via a Builder assembled directly, bypassing WithConfig — the same
+// defense-in-depth path startupContext's own doc comment describes. context.WithTimeout(parent, 0)
+// would otherwise hand the component a context that is dead on arrival, aborting every pool-backed
+// pre-init before its connector runs.
 func TestPerformPreInitializationZeroBudgetUsesParentContext(t *testing.T) {
-	cfg := defaultTestConfig() // App.Startup left zero-valued, as a hand-built config arrives
+	cfg := defaultTestConfig() // App.Startup left zero-valued; built directly, bypassing WithConfig
 
 	resource := &deadlineCapturingResource{}
 	opts := &Options{
@@ -1052,8 +1066,10 @@ func TestPerformPreInitializationZeroBudgetUsesParentContext(t *testing.T) {
 		},
 	}
 
-	_, _, err := NewWithConfig(cfg, opts)
-	require.NoError(t, err, "a zero startup budget must not expire pre-initialization instantly")
+	builder := &Builder{cfg: cfg, opts: opts}
+	result := builder.CreateLogger().CreateBootstrap().ResolveDependencies().
+		CreateApp().InitializeRegistry().ConfigureRuntimeHelpers()
+	require.NoError(t, result.err, "a zero startup budget must not expire pre-initialization instantly")
 
 	resource.mu.Lock()
 	defer resource.mu.Unlock()

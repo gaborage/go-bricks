@@ -1294,6 +1294,27 @@ outstanding waiter with `ErrPublisherClosed`, because the client's `entityClosed
 reach a send that never enqueued. An outstanding-send limit, deduplication, key routing, sub-entry
 batching, compression and outbox relay are all deferred. See [streams.md](streams.md).
 
+### [ADR-064: The App Validates Every Config It Is Handed](adr_064_app_validates_every_config.md)
+
+**Date:** 2026-08-16 | **Status:** Accepted
+
+`config.Load` validates; `app.NewWithConfig` did not. ADR-050 documented the obligation — hand-built
+configs must run `config.Validate` before `NewWithConfig` — but nothing enforced it, so parallel
+machinery softened the bypass instead: `app.Builder.ConfigureRuntimeHelpers` re-walked the database
+tree for untyped DSNs, `app/managers.go` mirrored config defaults, `messaging.NewMessagingManager`
+carried a single-tenant-only fallback, and `app/lifecycle.go` guarded cleanup intervals for
+Validate-bypassing callers only. `app.Builder.WithConfig` now runs `config.Validate` itself, so every
+construction path — `New`, `NewWithOptions`, `NewWithConfig`, direct `Builder` use — validates and
+stamps defaults the same way.
+
+**Key Benefits:** One validation path instead of four drifting mirrors, and multi-tenant defaults
+reach every construction path instead of only `config.Load` output. `Validate` is idempotent, so
+revalidating already-loaded config costs microseconds. **Watch:** this is **breaking** — a hand-built
+config that `config.Validate` rejects (missing `app.name`/`app.version`, zero server timeouts, an
+invalid vendor) now fails at construction instead of booting on whatever the mirrors papered over;
+the fix is named in the `ConfigError`'s action line. The app-side mirrors themselves become dead
+weight and are deleted in a follow-up PR. See [migrations.md](migrations.md) `[C59.12]`.
+
 ---
 
 ## ADR Lifecycle
@@ -1305,7 +1326,7 @@ batching, compression and outbox relay are all deferred. See [streams.md](stream
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-063) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-064) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
