@@ -1,11 +1,23 @@
 package config
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// errNilConfig is Validate's answer to a nil *Config: the same wording
+// app.Builder.WithConfig uses, so a direct caller and a builder caller read
+// one message.
+var errNilConfig = errors.New("configuration required")
 
 // Validate turns cfg into the shape the framework consumes and rejects what it
 // cannot accept: normalize, then check. It mutates cfg and is idempotent —
-// every construction path calls it (ADR-064), some more than once.
+// every construction path calls it (ADR-064), some more than once. A nil cfg
+// is an error, not a panic.
 func Validate(cfg *Config) error {
+	if cfg == nil {
+		return errNilConfig
+	}
 	if err := normalize(cfg); err != nil {
 		return err
 	}

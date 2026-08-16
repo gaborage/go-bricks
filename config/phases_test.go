@@ -15,6 +15,11 @@ func idempotencyFixture() *Config {
 	return cfg
 }
 
+func TestValidateRejectsNil(t *testing.T) {
+	err := Validate(nil)
+	require.ErrorIs(t, err, errNilConfig)
+}
+
 // TestValidateIsIdempotent pins decision 5 of the normalize/check split design:
 // every construction path calls Validate, some more than once, so a second
 // pass must be a no-op. Two independently built configs are compared rather
