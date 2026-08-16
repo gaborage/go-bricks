@@ -207,11 +207,11 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("multitenant config: %w", err)
 	}
 
-	if err := validateDatabase(&cfg.Database); err != nil {
+	if err := normalizeDatabaseSection(&cfg.Database, rootDatabaseSection()); err != nil {
 		return fmt.Errorf("database config: %w", err)
 	}
 
-	// Named/tenant DBs share the primary DbManager (see validateNamedDatabaseEntry), so manager defaults apply only here.
+	// Named/tenant DBs share the primary DbManager (see normalizeDatabaseSection), so manager defaults apply only here.
 	if err := applyDatabaseManagerDefaults(&cfg.Database.Manager, cfg.Multitenant.Enabled); err != nil {
 		return fmt.Errorf("database config: %w", err)
 	}
@@ -693,13 +693,6 @@ func IsDatabaseConfigured(cfg *DatabaseConfig) bool {
 		cfg.Oracle.Service.SID != ""
 }
 
-func validateDatabase(cfg *DatabaseConfig) error {
-	if !IsDatabaseConfigured(cfg) {
-		return nil
-	}
-	return normalizeDatabaseValues(cfg, dbStrictnessStartup)
-}
-
 // inferDatabaseTypeFromConnectionString maps a recognized DSN scheme to its vendor.
 // Surrounding whitespace is tolerated for classification only — a DSN read from a
 // file, a mounted secret, or a command substitution routinely carries a trailing
@@ -979,33 +972,24 @@ func validateCIDRList(field string, list []string) error {
 	return nil
 }
 
-// validateNamedDatabases validates the named databases configuration.
-// Named databases are optional but when provided:
-// - Each entry must be a valid DatabaseConfig
-// - Names cannot conflict with tenant IDs when multi-tenancy is enabled
-// - Names cannot be empty or contain the "named:" prefix
 func validateNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantConfig) error {
-	if len(databases) == 0 {
-		return nil
-	}
-
 	for name := range databases {
-		dbCfg := databases[name]
-		if err := validateNamedDatabaseEntry(name, &dbCfg, mt); err != nil {
+		if err := validateNamedDatabaseName(name, mt); err != nil {
 			return err
 		}
-		// Persist defaults back to the map. validateNamedDatabaseEntry → validateDatabase
-		// → applyDatabasePoolDefaults mutates the local copy; without this write-back the
-		// defaults (timezone, pool sizes, etc.) never reach downstream consumers like
-		// TenantStore.
+		dbCfg := databases[name]
+		if err := normalizeDatabaseSection(&dbCfg, namedDatabaseSection(name)); err != nil {
+			return err
+		}
+		// Write back so the defaults reach downstream consumers such as TenantStore.
 		databases[name] = dbCfg
 	}
-
 	return nil
 }
 
-// validateNamedDatabaseEntry validates a single named database entry.
-func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *MultitenantConfig) error {
+// validateNamedDatabaseName checks the map key: non-empty, not the reserved
+// prefix, and not colliding with a static tenant ID.
+func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 	if name == "" {
 		return &ConfigError{
 			Category: errCategoryInvalid,
@@ -1014,7 +998,6 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 			Action:   "provide a non-empty key for each entry in databases section",
 		}
 	}
-
 	if strings.HasPrefix(name, NamedDatabasePrefix) {
 		return &ConfigError{
 			Category: errCategoryInvalid,
@@ -1023,7 +1006,6 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 			Action:   fmt.Sprintf("rename databases.%s to remove the '%s' prefix", name, NamedDatabasePrefix),
 		}
 	}
-
 	if mt.Enabled && mt.Tenants != nil {
 		if _, exists := mt.Tenants[name]; exists {
 			return &ConfigError{
@@ -1034,31 +1016,6 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 			}
 		}
 	}
-
-	if !IsDatabaseConfigured(dbCfg) {
-		return &ConfigError{
-			Category: errCategoryMissing,
-			Field:    fmt.Sprintf(databasesFieldPrefix, name),
-			Message:  "database configuration incomplete",
-			Action:   fmt.Sprintf("add host/type or connectionstring to databases.%s", name),
-		}
-	}
-
-	if err := validateDatabase(dbCfg); err != nil {
-		return fmt.Errorf("databases.%s: %w", name, err)
-	}
-
-	// Named databases share the single primary DbManager; a per-entry manager
-	// block would be silently ignored, so reject it (Fail Fast).
-	if dbCfg.Manager.isSet() {
-		return &ConfigError{
-			Category: errCategoryInvalid,
-			Field:    fmt.Sprintf(databasesFieldPrefix, name) + ".manager",
-			Message:  "database.manager.* is only supported on the primary database",
-			Action:   fmt.Sprintf("remove the manager block from databases.%s; tune the shared pool via database.manager.*", name),
-		}
-	}
-
 	return nil
 }
 
@@ -1787,19 +1744,8 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 			return NewValidationError("multitenant.tenants", "tenant ID cannot be empty")
 		}
 
-		// Validate tenant database configuration
-		if !IsDatabaseConfigured(&tenant.Database) {
-			return NewMultiTenantError(tenantID, fieldDatabase, "configuration required", fmt.Sprintf("add multitenant.tenants.%s.database section", tenantID))
-		}
-		if err := validateDatabase(&tenant.Database); err != nil {
-			return fmt.Errorf("tenant %s database: %w", tenantID, err)
-		}
-
-		// A per-tenant manager block would be silently ignored — tenants share the primary DbManager — so reject it.
-		if tenant.Database.Manager.isSet() {
-			return NewMultiTenantError(tenantID, "database.manager",
-				"database.manager.* is only supported on the primary database",
-				fmt.Sprintf("remove the manager block from multitenant.tenants.%s.database; tune the shared pool via database.manager.*", tenantID))
+		if err := normalizeDatabaseSection(&tenant.Database, tenantDatabaseSection(tenantID)); err != nil {
+			return err
 		}
 
 		if err := validateTenantCache(tenantID, &tenant.Cache); err != nil {

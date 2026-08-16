@@ -120,3 +120,40 @@ func normalizeWithFields(db *DatabaseConfig) error {
 	}
 	return applyDatabasePoolDefaults(db)
 }
+
+// normalizeDatabaseSection is the startup door of the database-section
+// normalization module: placement rules first, then normalizeDatabaseValues at
+// startup strictness. Absence is a verdict at the root (ADR-047) and a missing
+// section elsewhere; a manager block outside the root is rejected because the
+// named and tenant databases share the primary DbManager and it would be
+// silently ignored.
+func normalizeDatabaseSection(db *DatabaseConfig, section dbSection) error {
+	if !IsDatabaseConfigured(db) {
+		if section.placement == dbPlacementRoot {
+			return nil
+		}
+		return &ConfigError{
+			Category: errCategoryMissing,
+			Field:    section.path,
+			Message:  "database configuration incomplete",
+			Action:   "add host/type or connectionstring to " + section.path,
+		}
+	}
+
+	if err := normalizeDatabaseValues(db, dbStrictnessStartup); err != nil {
+		if section.placement == dbPlacementRoot {
+			return err
+		}
+		return fmt.Errorf("%s: %w", section.path, err)
+	}
+
+	if section.placement != dbPlacementRoot && db.Manager.isSet() {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    section.path + ".manager",
+			Message:  "database.manager.* is only supported on the primary database",
+			Action:   "remove the manager block from " + section.path + "; tune the shared pool via database.manager.*",
+		}
+	}
+	return nil
+}
