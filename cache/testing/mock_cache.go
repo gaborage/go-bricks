@@ -348,7 +348,6 @@ func (m *MockCache) CompareAndSet(ctx context.Context, key string, expectedValue
 		return false, nil
 	}
 
-	// Swap to new value
 	m.store(key, &cacheEntry{
 		value:      newValue,
 		expiration: expiration,
@@ -489,7 +488,6 @@ func (m *MockCache) Close() error {
 		return cache.ErrClosed
 	}
 
-	// Clear data on close
 	m.mu.Lock()
 	clear(m.data)
 	m.mu.Unlock()

@@ -383,7 +383,9 @@ func (rh *responseHandler) joseHandleResponseWithObs(c *echo.Context, response a
 // obs is non-nil at production call sites (joseHandleResponseWithObs); only actual JOSE
 // crypto failures (seal/encrypt errors) call obs.recordFailure here. Normal post-trust
 // handler IAPIErrors (validation/business) are encrypted successfully and DO NOT count
-// toward jose.failures.total — keeping that metric a pure crypto-failure signal.
+// toward jose.failures.total. Note the counter isn't a pure crypto-failure signal, though
+// — pre-trust inbound rejections (wrong content-type, oversized/missing body) also
+// increment it via runJOSEInbound's recordFailure call.
 func (rh *responseHandler) joseHandleResponse(c *echo.Context, response any, apiErr IAPIError, p *jose.Policy, r jose.KeyResolver, obs *joseObservability) error {
 	if !jose.IsInboundVerified(c.Request().Context()) {
 		// Defense in depth: if the wrapper somehow skipped inbound verification but

@@ -137,8 +137,8 @@ type Cache interface {
 	Health(ctx context.Context) error
 
 	// Stats returns cache statistics for observability.
-	// Keys may include: connections_active, hits, misses, evictions, memory_used, etc.
-	// The specific keys depend on the cache implementation.
+	// The specific keys depend on the cache implementation (e.g. cache/redis exposes
+	// redis_info/pool_* keys, cache/testing's MockCache exposes entry_count/*_calls keys).
 	Stats() (map[string]any, error)
 
 	// Close closes the cache connection and releases resources.

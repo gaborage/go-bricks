@@ -39,10 +39,11 @@ type StateStore interface {
 	// `from` before applying the update; if it isn't, return ErrStaleRead
 	// without mutating the row.
 	//
-	// metadata replaces the persisted Metadata in full (not merged) so
-	// callers controlling the in-memory job can decide whether to carry
-	// step-specific fields forward. lastError replaces the persisted
-	// LastError (empty string clears a prior error).
+	// A non-nil metadata replaces the persisted Metadata in full (not
+	// merged) so callers controlling the in-memory job can decide whether
+	// to carry step-specific fields forward; passing nil leaves the
+	// persisted Metadata unchanged. lastError always replaces the
+	// persisted LastError (empty string clears a prior error).
 	//
 	// The transition is also validated against the static state graph;
 	// illegal edges return ErrIllegalTransition.

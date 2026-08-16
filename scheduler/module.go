@@ -90,7 +90,9 @@ func (m *Module) Name() string {
 }
 
 // Init implements app.Module
-// Stores dependencies and makes the module available as a JobRegistrar via deps.
+// Stores framework dependencies and multi-tenant resource resolvers used for job execution.
+// (The module registry, not Init, wires this Module into deps.Scheduler after Init returns,
+// because Module implements JobRegistrar; see app/module_registry.go.)
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 	m.config = deps.Config
@@ -679,10 +681,8 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 				span.SetAttributes(attribute.String(jobStatusAttr, "panic"))
 			}
 
-			// Update metadata
 			entry.metadata.incrementFailed()
 
-			// Record metrics
 			m.recordMetrics(entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
 
 			// Emit the structured action log so the panic path also gets the
@@ -779,10 +779,8 @@ func (m *Module) logJobResultSummary(
 ) {
 	contextLog := m.logger.WithContext(ctx)
 
-	// Determine severity and result_code
 	logLevel, resultCode := m.determineJobSeverity(duration, err)
 
-	// Create log event
 	event := createJobLogEvent(contextLog, logLevel)
 	if err != nil {
 		event = event.Err(err)

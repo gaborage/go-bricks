@@ -82,9 +82,7 @@ func logMetricError(metricName string, err error) {
 // The returned function can be safely called but performs no operation, allowing callers
 // to use a consistent cleanup pattern regardless of whether metrics were successfully registered.
 func noOpCleanup() func() {
-	// Return empty function - nothing to clean up if registration failed
 	return func() {
-		// No-op: nothing was registered, so there is nothing to release.
 	}
 }
 
@@ -223,7 +221,6 @@ func recordDBMetrics(ctx context.Context, tc *Context, query string, duration ti
 		return
 	}
 
-	// Extract operation type, table name, and normalize vendor
 	operation := extractDBOperation(query)
 	table := extractTableName(query)
 	vendor := normalizeDBVendor(tc.Vendor)
@@ -292,28 +289,24 @@ func extractTableName(query string) string {
 	}
 
 	// Try each pattern based on query type
-	// SELECT queries
 	if hasPrefixFold(query, "SELECT") {
 		if table := tryExtractTable(selectTableRegex, query); table != "" {
 			return table
 		}
 	}
 
-	// INSERT queries
 	if hasPrefixFold(query, "INSERT") {
 		if table := tryExtractTable(insertTableRegex, query); table != "" {
 			return table
 		}
 	}
 
-	// UPDATE queries
 	if hasPrefixFold(query, "UPDATE") {
 		if table := tryExtractTable(updateTableRegex, query); table != "" {
 			return table
 		}
 	}
 
-	// DELETE queries
 	if hasPrefixFold(query, "DELETE") {
 		if table := tryExtractTable(deleteTableRegex, query); table != "" {
 			return table
@@ -431,7 +424,7 @@ type poolMetricsRegistration struct {
 }
 
 // observePoolStats reads connection pool statistics and updates metrics per OTel spec.
-// This method is called automatically during metrics collection (typically every 30s).
+// This method is called automatically during metrics collection (10s by default, per observability.metrics.interval).
 func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer metric.Observer) error {
 	stats, err := r.conn.Stats()
 	if err != nil {
@@ -508,7 +501,7 @@ func (r *poolMetricsRegistration) observePoolStats(_ context.Context, observer m
 // All metrics include server.address, server.port, and db.namespace (when available) in addition
 // to db.system.name for full OTel compliance and correlation with operation metrics.
 //
-// The metrics are updated automatically when collected (typically every 30s).
+// The metrics are updated automatically when collected (10s by default, per observability.metrics.interval).
 // Returns a cleanup function that can be called to unregister the metrics (optional).
 //
 // This function uses graceful degradation - if any metric fails to register, it continues

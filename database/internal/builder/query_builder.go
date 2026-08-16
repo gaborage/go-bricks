@@ -1198,7 +1198,6 @@ func (uqb *UpdateQueryBuilder) SetStruct(instance any, fields ...string) dbtypes
 	cols := uqb.qb.Columns(instance)
 	fieldMap := cols.FieldMap(instance)
 
-	// If specific fields requested, use only those
 	if len(fields) > 0 {
 		for _, fieldName := range fields {
 			col := cols.Col(fieldName)
@@ -1210,7 +1209,6 @@ func (uqb *UpdateQueryBuilder) SetStruct(instance any, fields ...string) dbtypes
 			uqb.updateBuilder = uqb.updateBuilder.Set(quotedCol, val)
 		}
 	} else {
-		// Use all fields
 		for col, val := range fieldMap {
 			quotedCol := uqb.qb.quoteColumnForQuery(col)
 			uqb.updateBuilder = uqb.updateBuilder.Set(quotedCol, val)

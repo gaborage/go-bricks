@@ -66,7 +66,7 @@ Modern building blocks for Go microservices. GoBricks brings together configurat
 **Quick Commands:**
 
 ```bash
-make check              # Pre-commit: fmt + lint + markdownlint + test + alloc guards + vuln scan + gosec
+make check              # Pre-commit: fmt + lint + markdownlint + test + alloc guards + vuln scan + gosec + verify-mod
 make mutate             # Diff-scoped mutation gate (required before pushing)
 make test-integration   # Integration tests (requires Docker)
 go test -run TestName   # Run specific test
@@ -984,7 +984,7 @@ Issues and pull requests are welcome!
 
 ```bash
 go test ./...              # Run unit tests
-make check                 # Pre-commit checks (fmt, lint, test, alloc guards, vuln scan, gosec)
+make check                 # Pre-commit checks (fmt, lint, markdownlint, test, alloc guards, vuln scan, gosec, verify-mod)
 make test-integration      # Integration tests (Docker required)
 ```
 

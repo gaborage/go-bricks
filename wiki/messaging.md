@@ -308,7 +308,7 @@ stream actually reaches — would truncate silently, and `1 << 32` would arrive 
 where such a value cannot be held at all and no widening can recover it, so use
 `int64` for offsets beyond 2³¹.
 
-**Startup validation** — `Declarations.Validate` rejects, by name, four shapes
+**Startup validation** — `Declarations.Validate` rejects, by name, five shapes
 the broker would otherwise refuse with an opaque channel error:
 
 1. A stream queue that is not durable.
@@ -317,6 +317,9 @@ the broker would otherwise refuse with an opaque channel error:
    because acks act as consumer credit.
 4. An `x-stream-offset` on a consumer whose queue is not a stream queue (the
    broker would silently ignore it).
+5. An `x-stream-offset` value on a stream queue that isn't a valid position
+   (not `"first"`/`"last"`/`"next"`, a non-negative int, a `time.Time`, or an
+   interval like `"7D"`).
 
 **Resume on broker flap:** when the broker drops the delivery channel, the
 supervisor re-subscribes one past the last offset it handed to the worker pool
@@ -545,7 +548,7 @@ Size the cap to hold every concurrently-publishing tenant. For **statically-conf
 
 Idle-TTL eviction is sweep-driven: publishers are only checked when the cleanup goroutine wakes every `publisher.cleanupinterval` (default 2m), so an idle publisher can outlive its `publisher.idlettl` by up to one full sweep interval — keep `cleanupinterval` well below `idlettl`.
 
-Eviction churn is directly observable: both removal paths log at **Info** (`"Evicted publisher client due to LRU limit"` for LRU eviction, `"Cleaned up idle publisher client"` for idle-TTL cleanup), and `Manager.Stats()` exposes cumulative `evictions` and `idle_cleanups` counters alongside `active_publishers`. The stats map is surfaced as `messaging_stats` in the `GET /ready` response and under the `messaging_manager` component of `GET /_sys/health-debug` (when debug endpoints are enabled). A steadily climbing `evictions` count under normal load is the signature of an undersized cap.
+Eviction churn is observable via counters, not logs: `Manager.Stats()` exposes cumulative `evictions` and `idle_cleanups` counters alongside `active_publishers` (there is no per-event log line for either removal path). The stats map is surfaced as `messaging_stats` in the `GET /ready` response and under the `messaging_manager` component of `GET /_sys/health-debug` (when debug endpoints are enabled). A steadily climbing `evictions` count under normal load is the signature of an undersized cap.
 
 > Eviction (and idle cleanup) closes the evicted publisher **outside** the manager lock, so a slow `Close()` on an evicted tenant never blocks concurrent `Publisher()` calls for other tenants.
 >

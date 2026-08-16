@@ -1,6 +1,11 @@
 # ADR-027: Wire `database.tls.cert/key/ca` Into the Drivers (Fail Closed on Oracle)
 
 **Status:** Accepted
+
+> **Superseded (2026-08-14) by [ADR-062](adr_062_database_tls_fail_closed.md):** the claim
+> below that `database.tls.mode` alone is still accepted for Oracle no longer holds —
+> ADR-062 rejects the whole `database.tls` block for Oracle, `mode` included.
+
 **Date:** 2026-06-10
 
 ## Context
@@ -35,6 +40,6 @@ Config validation also now rejects a **half-configured client certificate** for 
 **Non-breaking:**
 
 - PostgreSQL configs without `cert/key/ca` are unaffected (only `sslmode` is emitted, now quoted).
-- `database.tls.mode` continues to work as before on both vendors (no-op on Oracle).
+- *(Historical)* `database.tls.mode` continued to work on both vendors (no-op on Oracle) at the time of this ADR — **superseded**, see the ADR-062 note at the top.
 
 See [migrations.md](migrations.md) for the upgrade note.

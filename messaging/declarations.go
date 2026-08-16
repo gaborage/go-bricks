@@ -80,7 +80,6 @@ func (d *Declarations) RegisterExchange(e *ExchangeDeclaration) {
 		Args:       make(map[string]any),
 	}
 
-	// Deep copy args map
 	if e.Args != nil {
 		maps.Copy(decl.Args, e.Args)
 	}
@@ -124,7 +123,6 @@ func (d *Declarations) RegisterQueue(q *QueueDeclaration) {
 		Args:       make(map[string]any),
 	}
 
-	// Deep copy args map
 	if q.Args != nil {
 		maps.Copy(decl.Args, q.Args)
 	}
@@ -196,7 +194,6 @@ func (d *Declarations) RegisterBinding(b *BindingDeclaration) {
 		Args:       make(map[string]any),
 	}
 
-	// Deep copy args map
 	if b.Args != nil {
 		maps.Copy(decl.Args, b.Args)
 	}
@@ -221,7 +218,6 @@ func (d *Declarations) RegisterPublisher(p *PublisherDeclaration) {
 		Headers:     make(map[string]any),
 	}
 
-	// Deep copy headers map
 	if p.Headers != nil {
 		maps.Copy(decl.Headers, p.Headers)
 	}
@@ -272,7 +268,6 @@ func (d *Declarations) RegisterConsumer(c *ConsumerDeclaration) {
 		Args:          make(map[string]any),
 	}
 
-	// Deep copy args map
 	if c.Args != nil {
 		maps.Copy(decl.Args, c.Args)
 	}
@@ -298,7 +293,6 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
-	// Check that all binding queues and exchanges exist
 	for _, binding := range d.Bindings {
 		if _, exists := d.Queues[binding.Queue]; !exists {
 			return fmt.Errorf("binding references non-existent queue: %s", binding.Queue)
@@ -308,7 +302,6 @@ func (d *Declarations) Validate() error {
 		}
 	}
 
-	// Check that all consumer queues exist
 	for _, consumer := range d.Consumers() {
 		if _, exists := d.Queues[consumer.Queue]; !exists {
 			return fmt.Errorf("consumer references non-existent queue: %s", consumer.Queue)
@@ -319,7 +312,6 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
-	// Check that all publisher exchanges exist
 	for _, publisher := range d.Publishers {
 		if _, exists := d.Exchanges[publisher.Exchange]; !exists {
 			return fmt.Errorf("publisher references non-existent exchange: %s", publisher.Exchange)
@@ -443,12 +435,10 @@ func (d *Declarations) ReplayToRegistry(reg RegistryInterface) error {
 		return errors.New("registry is nil")
 	}
 
-	// Register exchanges first
 	for _, exchange := range d.Exchanges {
 		reg.RegisterExchange(exchange)
 	}
 
-	// Register queues
 	for _, queue := range d.Queues {
 		reg.RegisterQueue(queue)
 	}

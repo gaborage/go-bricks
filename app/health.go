@@ -132,7 +132,6 @@ func handleDatabaseConnectionError(err error, dbManager *database.DbManager, per
 	return unhealthyStatus, dbStats, err
 }
 
-// getStatsOrEmpty returns stats or an empty map if stats is nil
 func getStatsOrEmpty(stats map[string]any) map[string]any {
 	if stats == nil {
 		return map[string]any{}

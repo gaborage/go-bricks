@@ -28,7 +28,7 @@ Echo v5.1.0 changed `RealIP()` to only return `request.RemoteAddr` by default â€
 
 **Future hardening:** Replace `LegacyIPExtractor()` with trusted-proxy-aware extractors (`ExtractIPFromXFFHeader()` / `ExtractIPFromRealIPHeader()`) in a follow-up change.
 
-> **Shipped.** That follow-up landed as [ADR-057](adr_057_trusted_proxy_ip_extraction.md): the shim is gone, `echo.ExtractIPFromXFFHeader()` walks the chain right-to-left to the first untrusted hop, and the new `server.trustedproxies` CIDR list adds trust for a proxy on a public address. `X-Real-IP` is no longer honored at all.
+> **Shipped.** That follow-up landed as [ADR-057](adr_057_trusted_proxy_ip_extraction.md): the shim is gone, `echo.ExtractIPFromXFFHeader()` walks the chain right-to-left to the first untrusted hop, and the new `server.trustedproxies` CIDR list adds trust for a proxy on a public address. `X-Real-IP` is no longer honored on this rate-limiting/logging path (`ctx.RealIP()` / `e.IPExtractor`) â€” the separate `server.ClientIP` helper used by the debug-endpoint allowlist and the scheduler's CIDR middleware still falls back to it when the peer is a trusted proxy.
 
 ## Breaking Changes for Downstream Users
 

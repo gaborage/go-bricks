@@ -215,7 +215,6 @@ func NewMockRows(columns []string, rows [][]any) *sql.Rows {
 		sqlRows.AddRow(driverValues...)
 	}
 
-	// Setup the expectation
 	sqlMock.ExpectQuery(".*").WillReturnRows(sqlRows)
 
 	// Execute the query to get the actual rows. The *sql.Rows is intentionally

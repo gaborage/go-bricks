@@ -252,6 +252,7 @@ go-bricks-migrate quiesce clear  --source-url https://control-plane.example.com/
 | `--pipeline-run-id` | `$GOBRICKS_MIGRATE_PIPELINE_RUN_ID` | CI/CD run ID recorded in the audit event |
 | `--allow-insecure-scheme` | `false` | Allow `http://` base URLs for `--source-url` (dev/LocalStack only; bearer token would be cleartext) |
 | `--verbose` / `-v` | `false` | Enable debug-level logging |
+| `--timeout` | `0` (vendor default, 5m) | Per-tenant Flyway timeout override (e.g. `30m`); raise for large index builds/backfills |
 
 ## CI/CD recipe (GitHub Actions, OIDC → AWS)
 
@@ -286,8 +287,8 @@ jobs:
           # Pin the SHA256 and verify before extracting (fail-closed) so a
           # tampered or swapped tarball aborts the job — never pipe curl|tar.
           # Keep in sync with .github/workflows/ci-v2.yml (source of truth for these pins).
-          FLYWAY_VERSION=13.2.0
-          FLYWAY_SHA256=3587a120d43f1a3170e78241d5cc8d173d6835e46cbf165592500f5fa5edd71b
+          FLYWAY_VERSION=13.3.0
+          FLYWAY_SHA256=329bce15655eda5507ca134fd2b98c1dafbd432af85fd2cce0c8bd2453b613ac
           url="https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/${FLYWAY_VERSION}/flyway-commandline-${FLYWAY_VERSION}-linux-x64.tar.gz"
           curl -fsSL "$url" -o flyway.tar.gz
           echo "${FLYWAY_SHA256}  flyway.tar.gz" | sha256sum -c -

@@ -53,8 +53,8 @@ func NewRootCommand() *cobra.Command {
 
 The CLI lists tenants from a go-bricks control-plane endpoint (or a local YAML
 file in dev mode), resolves each tenant's database credentials from AWS Secrets
-Manager, and applies the Flyway action (migrate/validate/info) sequentially by
-default.
+Manager or a local YAML file (--credentials-from), and applies the Flyway
+action (migrate/validate/info) sequentially by default.
 
 Example:
   go-bricks-migrate migrate \

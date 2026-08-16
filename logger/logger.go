@@ -173,7 +173,6 @@ type OTelProvider interface {
 //   - DisableStdout=false (default): logs go to both stdout and OTLP (useful for dev)
 //   - DisableStdout=true: logs only go to OTLP (production efficiency)
 func (l *ZeroLogger) WithOTelProvider(provider OTelProvider) *ZeroLogger {
-	// Nil provider check - return original logger
 	if provider == nil || provider.LoggerProvider() == nil {
 		return l
 	}
@@ -188,7 +187,6 @@ func (l *ZeroLogger) WithOTelProvider(provider OTelProvider) *ZeroLogger {
 			"Fix: Set logger.pretty=false in config or disable observability.logs.enabled")
 	}
 
-	// Create OTel bridge to convert zerolog JSON to OTel log records
 	bridge := NewOTelBridge(provider.LoggerProvider())
 	if bridge == nil {
 		// Defensive: NewOTelBridge returns nil only for a nil provider, which is already

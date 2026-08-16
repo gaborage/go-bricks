@@ -94,10 +94,9 @@ Rejected alternatives:
   the build).
 - **Standalone `database`-package consumers** must opt in via
   `SetObservabilityEnabled` — documented.
-- **Out of scope (follow-ups):** the DB per-operation *debug log* still builds its
-  `WithFields` map before the level check, and the `messaging`/`httpclient`
-  subsystems still build attributes into the no-op provider when disabled. Both are
-  the same `Enabled()`/explicit-gate pattern and are tracked for a later iteration.
+- **Follow-ups completed:** the DB per-operation *debug log* was gated in #562 and
+  the `messaging`/`httpclient` subsystems were gated in #954, both using the same
+  `Enabled()`-short-circuit pattern.
 
 ## Related
 

@@ -10,7 +10,7 @@ import (
 )
 
 // CIDRMiddleware creates middleware that restricts access based on CIDR allowlist.
-// Per clarification #2: Empty allowlist = localhost-only access (127.0.0.1, ::1).
+// Empty allowlist = localhost-only access (127.0.0.1, ::1).
 // Non-empty allowlist = restrict to matching IP ranges only.
 //
 // trustedProxies: CIDR ranges of reverse proxies that can be trusted to provide

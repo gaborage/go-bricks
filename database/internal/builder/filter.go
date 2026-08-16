@@ -121,10 +121,8 @@ func normalizeToSlice(value any) any {
 	v := reflect.ValueOf(value)
 	switch v.Kind() {
 	case reflect.Slice, reflect.Array:
-		// Already a slice/array - return as-is
 		return value
 	default:
-		// Scalar value - wrap in single-element slice
 		return []any{value}
 	}
 }
@@ -142,7 +140,7 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	normalized := normalizeToSlice(values)
 	// Empty slice special case: generate "1=0" to ensure no matches
 	if s, ok := normalized.([]any); ok && len(s) == 0 {
-		return Filter{sqlizer: squirrel.Expr("(1=0)")} // Empty IN list - always false
+		return Filter{sqlizer: squirrel.Expr("(1=0)")}
 	}
 	return Filter{sqlizer: squirrel.Eq{quotedColumn: normalized}}
 }
@@ -259,7 +257,7 @@ func (ff *FilterFactory) And(filters ...dbtypes.Filter) dbtypes.Filter {
 	sqlizers := make(squirrel.And, 0, len(filters))
 	for _, filter := range filters {
 		if filter == nil {
-			continue // Skip nil filters - treat as no-op
+			continue
 		}
 		// Extract the underlying squirrel.Sqlizer
 		// We know all filters are actually our Filter type
@@ -288,7 +286,7 @@ func (ff *FilterFactory) Or(filters ...dbtypes.Filter) dbtypes.Filter {
 	sqlizers := make(squirrel.Or, 0, len(filters))
 	for _, filter := range filters {
 		if filter == nil {
-			continue // Skip nil filters - treat as no-op
+			continue
 		}
 		// Extract the underlying squirrel.Sqlizer
 		if concreteFilter, ok := filter.(Filter); ok {

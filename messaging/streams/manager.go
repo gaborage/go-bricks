@@ -88,9 +88,9 @@ type runningConsumer struct {
 }
 
 // Manager owns the single stream-protocol Environment of a single-tenant service
-// and the consumers started from its declarations. It is a plain struct on
-// purpose (ADR-045): app/ consumes it concretely, so there is no interface to
-// export and no second implementation to abstract over.
+// and the consumers and publishers started from its declarations. It is a plain
+// struct on purpose (ADR-045): app/ consumes it concretely, so there is no
+// interface to export and no second implementation to abstract over.
 type Manager struct {
 	opts ManagerOptions
 	log  logger.Logger

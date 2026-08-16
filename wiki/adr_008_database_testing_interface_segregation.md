@@ -210,6 +210,6 @@ deps := &app.ModuleDeps{
 
 ## References
 
-- Similar pattern: `messaging.Client` (5 methods) vs `messaging.AMQPClient` (16 methods)
+- Similar pattern: `messaging.Client` (4 methods) vs `messaging.AMQPClient` (9 methods)
 - Inspiration: `observability/testing` package fluent API design
 - Related: [MULTI_TENANT.md](../MULTI_TENANT.md) - Multi-tenant patterns

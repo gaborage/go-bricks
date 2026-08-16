@@ -145,7 +145,6 @@ func NewCacheManager(cfg ManagerConfig, connector Connector) (*CacheManager, err
 		}
 	}, "")
 
-	// Start the background cleanup goroutine if an idle TTL is configured.
 	if cfg.IdleTTL > 0 {
 		pool.StartCleanup(cfg.CleanupInterval)
 	}

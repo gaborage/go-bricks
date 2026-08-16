@@ -1,6 +1,6 @@
 // Package resourcepool implements the ADR-032 keyed pool of leasable,
-// refcounted, LRU-capped, idle-evicted resources. CacheManager is the first
-// consumer; the database and messaging managers adopt it in follow-up PRs.
+// refcounted, LRU-capped, idle-evicted resources, backing the cache, database,
+// and messaging managers.
 //
 // A pool hands each borrower a lease (via GetOrCreate) plus an idempotent
 // ReleaseFunc. A resource evicted (LRU, idle, explicit Remove, or pool Close)

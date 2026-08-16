@@ -244,7 +244,7 @@ func (s *PostgresStore) Transition(
 	if incrAttempts {
 		attemptsExpr = "attempts + 1"
 	}
-	// metadata=COALESCE($5::jsonb, metadata) keeps the persisted value when
+	// metadata=COALESCE($3::jsonb, metadata) keeps the persisted value when
 	// the caller passes nil so the Executor's success path (which threads
 	// the existing job.Metadata back through) doesn't accidentally clear
 	// step-supplied state.

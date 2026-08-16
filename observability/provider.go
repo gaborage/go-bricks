@@ -81,7 +81,6 @@ func setMetricExporterWrapper(wrapper func(sdkmetric.Exporter) sdkmetric.Exporte
 // initDebugLogger initializes the debug logger based on environment variables.
 // Returns a logger that writes to stderr if debugging is enabled, or a no-op logger otherwise.
 func initDebugLogger() *log.Logger {
-	// Check if debug logging is enabled via environment variable
 	debug := os.Getenv("GOBRICKS_DEBUG")
 	if debug == "true" || debug == "1" {
 		return log.New(os.Stderr, "[OBSERVABILITY] ", log.LstdFlags|log.Lmsgprefix)
@@ -178,7 +177,6 @@ func NewProviderWithContext(ctx context.Context, cfg *Config) (Provider, error) 
 	// Defensive check: warn if sample rate is explicitly zero (drops all spans)
 	warnIfZeroSampleRate(&safeCfg)
 
-	// Return no-op provider if observability is disabled
 	if !safeCfg.Enabled {
 		debugLogger.Println("Observability disabled, returning no-op provider")
 		return newNoopProvider(), nil
@@ -227,7 +225,6 @@ func NewProviderWithContext(ctx context.Context, cfg *Config) (Provider, error) 
 		return nil, err
 	}
 
-	// Register global providers and propagator
 	p.registerGlobalProviders()
 
 	// Mark initialization as successful to skip cleanup
@@ -298,13 +295,11 @@ func (p *provider) registerGlobalProviders() {
 
 // initTraceProvider initializes the OpenTelemetry trace provider.
 func (p *provider) initTraceProvider(ctx context.Context) error {
-	// Create resource with service information
 	res, err := p.createResource(ctx)
 	if err != nil {
 		return fmt.Errorf(errCreateResourceFmt, err)
 	}
 
-	// Create trace exporter
 	exporter, err := p.createTraceExporter(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create trace exporter: %w", err)
@@ -362,7 +357,6 @@ func (p *provider) createResource(ctx context.Context) (*resource.Resource, erro
 		return nil, err
 	}
 
-	// Merge default and custom resources
 	return resource.Merge(defaultRes, customRes)
 }
 

@@ -81,7 +81,6 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.getDB = deps.DB
 	m.getMsg = deps.Messaging
 
-	// Load outbox config
 	if m.config != nil {
 		m.cfg = m.config.Outbox
 	}
@@ -314,7 +313,6 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		tenants = []string{""} // single control-plane pass; no fan-out
 	}
 
-	// Register relay job
 	relay := &Relay{
 		store:        &lazyStore{module: m},
 		config:       m.cfg,

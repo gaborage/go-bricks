@@ -39,7 +39,7 @@ GoBricks provides Redis-based caching with type-safe serialization, multi-tenant
 | CBOR Unmarshal (complex) | ~1200 ns/op | 600 B/op, 15 allocs | Full deserialization |
 
 *Run benchmarks:* `go test -bench=BenchmarkCBOR -benchmem ./cache/`
-*Redis benchmarks require:* `docker run -d -p 6379:6379 redis:7-alpine` then `go test -bench=BenchmarkRealRedis -benchmem -tags=integration ./cache/redis/`
+*Redis benchmarks require:* `docker run -d -p 6379:6379 redis:7.4.9-alpine` then `go test -bench=BenchmarkRealRedis -benchmem -tags=integration ./cache/redis/`
 
 **Configuration Example:**
 

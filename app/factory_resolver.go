@@ -38,8 +38,8 @@ func (f *FactoryResolver) DatabaseConnector() database.Connector {
 // MessagingClientFactoryOptions bundles the per-publish tuning knobs threaded
 // into the default messaging client factory. Introduced alongside the
 // existing MessagingClientFactory (kept byte-identical for apidiff
-// compatibility — see reference_apidiff_variadic_incompatible) so ReadyTimeout
-// could be added without breaking that method's exported signature.
+// compatibility) so ReadyTimeout could be added without breaking that
+// method's exported signature.
 type MessagingClientFactoryOptions struct {
 	ConnectionTimeout  time.Duration
 	MaxPublishAttempts int
@@ -150,7 +150,6 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 			return nil, err
 		}
 
-		// Defensive validation: ensure cacheCfg is not nil
 		if cacheCfg == nil {
 			err := config.NewValidationError("cache", fmt.Sprintf("configuration is nil for key '%s'", key))
 			log.Error().
@@ -159,7 +158,6 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 			return nil, err
 		}
 
-		// Defensive validation: ensure cache is enabled
 		if !cacheCfg.Enabled {
 			err := config.NewNotConfiguredError("cache", "CACHE_ENABLED", "cache.enabled")
 			log.Error().
@@ -180,7 +178,6 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 			return nil, err
 		}
 
-		// Validate Redis configuration is properly set
 		if cacheCfg.Redis.Host == "" {
 			err := config.NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
 			log.Error().

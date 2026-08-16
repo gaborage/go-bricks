@@ -26,7 +26,6 @@ type requestLogContext struct {
 	hadExplicitWarning bool          // True if WARN+ log was explicitly emitted during request execution
 }
 
-// newRequestLogContext creates a new request logging context.
 func newRequestLogContext() *requestLogContext {
 	return &requestLogContext{
 		startTime:          time.Now(),

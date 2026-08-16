@@ -68,7 +68,6 @@ type requestLogger struct {
 	config LoggerConfig
 }
 
-// newRequestLogger creates a new request logger with the specified configuration.
 func newRequestLogger(log logger.Logger, cfg LoggerConfig) *requestLogger {
 	return &requestLogger{
 		logger: log,
@@ -279,7 +278,6 @@ func determineSeverity(
 	return logger.LevelInfo, codeInfo
 }
 
-// createLogEvent creates a log event with the specified severity level.
 func createLogEvent(log logger.Logger, level string) logger.LogEvent {
 	switch level {
 	case logger.LevelError:
@@ -369,7 +367,9 @@ func extractTenantID(ctx context.Context) string {
 }
 
 // extractStatusFromError extracts HTTP status code from echo.HTTPError.
-// Returns 0 if err is nil or not an echo.HTTPError.
+// Returns 0 if err is nil. Unwraps *echo.HTTPError.Code first, then falls back
+// to echo.StatusCode(err) for v5 sentinel errors (ErrNotFound, etc.) that
+// implement HTTPStatusCoder but aren't *echo.HTTPError; returns 0 if neither matches.
 //
 // This is necessary because Echo's error handler runs AFTER middleware completes,
 // so c.Response().Status may not be set yet when logger middleware reads it.

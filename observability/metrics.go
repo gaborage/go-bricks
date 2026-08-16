@@ -25,7 +25,6 @@ func (p *provider) initMeterProvider(ctx context.Context) error {
 		return fmt.Errorf(errCreateResourceFmt, err)
 	}
 
-	// Create metric exporter
 	exporter, err := p.createMetricExporter(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create metric exporter: %w", err)

@@ -45,7 +45,7 @@ func NewWorkingMessagingClient() *mocks.MockMessagingClient {
 
 	mockClient.ExpectIsReady(true)
 	mockClient.ExpectPublishAny(nil)
-	mockClient.ExpectConsumeAny(nil) // Allow any queue consumption
+	mockClient.ExpectConsumeAny(nil)
 	mockClient.ExpectClose(nil)
 
 	return mockClient

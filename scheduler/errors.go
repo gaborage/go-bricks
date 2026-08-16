@@ -18,7 +18,7 @@ var (
 )
 
 // ValidationError represents a validation error during job registration or schedule validation.
-// Per Constitution VII: Error messages follow format "scheduler: <field> <message>. <action>"
+// Error messages follow format "scheduler: <field> <message>. <action>"
 type ValidationError struct {
 	Field   string // The field that failed validation (e.g., "hour", "minute", "interval")
 	Message string // Description of what's wrong (e.g., "must be 0-23")

@@ -245,7 +245,6 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	// Check if consumers already exist and are started
 	if entry, exists := m.consumers[key]; exists {
 		if entry.started {
-			// Record hash for future idempotency checks
 			m.replayedHashs[key] = declHash
 			return nil // Already set up
 		}
@@ -297,7 +296,6 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 		key:      key,
 	}
 
-	// Record hash for future idempotency checks
 	m.replayedHashs[key] = declHash
 
 	m.logger.Info().

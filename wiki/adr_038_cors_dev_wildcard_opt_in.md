@@ -112,11 +112,11 @@ the `IsDevelopment`/`IsProduction` alias sets themselves are unchanged and out o
   Added `devWildcardOptIn() bool` and `emitDevOptInRequiredWarn(appEnv string)`. The
   `default:` branch also surfaces a WARN when `CORS_DEV_WILDCARD` is set but ignored (env is
   not a development alias) — an operator debugging "why doesn't the flag do anything" signal.
-- `server/cors_test.go` — four new tests covering the opt-in matrix
-  (`TestCORSDevWithoutOptInFailsClosed`, `TestCORSDevOptInEnablesWildcard`,
-  `TestCORSDevOptInInvalidValueFailsClosed`, `TestCORSDevWildcardIgnoredOutsideDev`); thirteen
-  existing tests updated to set `CORS_DEV_WILDCARD=true` so they keep exercising the
-  dev-permissive branch they were written against.
+- `server/cors_test.go` — a table-driven test, `TestCORSDevWildcardOptInMatrix`, covering the
+  opt-in matrix via subtests (`dev_without_opt_in_fails_closed`, `dev_opt_in_enables_wildcard`,
+  `dev_opt_in_invalid_value_fails_closed`, `flag_ignored_outside_dev`); thirteen existing tests
+  updated to set `CORS_DEV_WILDCARD=true` so they keep exercising the dev-permissive branch they
+  were written against.
 - `server/handler_test.go` — `TestPublicMiddlewareConstructorsReturnFlatForm` opts in for its
   end-to-end CORS assertion.
 

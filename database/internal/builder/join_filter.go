@@ -132,7 +132,6 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
 	quotedColumn := jff.qb.quoteColumnForQuery(column)
 
-	// Check if value is a RawExpression
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
 		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " = " + expr.SQL)}
@@ -148,7 +147,6 @@ func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
 func (jff *JoinFilterFactory) NotEq(column string, value any) dbtypes.JoinFilter {
 	quotedColumn := jff.qb.quoteColumnForQuery(column)
 
-	// Check if value is a RawExpression
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
 		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " != " + expr.SQL)}
@@ -164,7 +162,6 @@ func (jff *JoinFilterFactory) NotEq(column string, value any) dbtypes.JoinFilter
 func (jff *JoinFilterFactory) Lt(column string, value any) dbtypes.JoinFilter {
 	quotedColumn := jff.qb.quoteColumnForQuery(column)
 
-	// Check if value is a RawExpression
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
 		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " < " + expr.SQL)}
@@ -180,7 +177,6 @@ func (jff *JoinFilterFactory) Lt(column string, value any) dbtypes.JoinFilter {
 func (jff *JoinFilterFactory) Lte(column string, value any) dbtypes.JoinFilter {
 	quotedColumn := jff.qb.quoteColumnForQuery(column)
 
-	// Check if value is a RawExpression
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
 		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " <= " + expr.SQL)}
@@ -196,7 +192,6 @@ func (jff *JoinFilterFactory) Lte(column string, value any) dbtypes.JoinFilter {
 func (jff *JoinFilterFactory) Gt(column string, value any) dbtypes.JoinFilter {
 	quotedColumn := jff.qb.quoteColumnForQuery(column)
 
-	// Check if value is a RawExpression
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
 		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " > " + expr.SQL)}
@@ -212,7 +207,6 @@ func (jff *JoinFilterFactory) Gt(column string, value any) dbtypes.JoinFilter {
 func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 	quotedColumn := jff.qb.quoteColumnForQuery(column)
 
-	// Check if value is a RawExpression
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
 		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " >= " + expr.SQL)}
@@ -299,7 +293,6 @@ func (jff *JoinFilterFactory) NotNull(column string) dbtypes.JoinFilter {
 func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any) dbtypes.JoinFilter {
 	quotedColumn := jff.qb.quoteColumnForQuery(column)
 
-	// Check if either bound is a RawExpression
 	lowerIsExpr := false
 	upperIsExpr := false
 	var lowerExpr, upperExpr dbtypes.RawExpression
@@ -416,7 +409,7 @@ func (jff *JoinFilterFactory) Or(filters ...dbtypes.JoinFilter) dbtypes.JoinFilt
 // REQUIRED: Every call site MUST carry an inline annotation of the form
 // `// SECURITY: Manual SQL review completed - <rationale>` documenting the
 // specific safety property checked. See FilterFactory.Raw for details and
-// CLAUDE.md "Detailed Security Guidelines".
+// CLAUDE.md "Security Guidelines".
 //
 // Use this method ONLY when the type-safe methods cannot express your JOIN condition.
 //

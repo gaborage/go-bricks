@@ -15,14 +15,24 @@ import (
 //
 // Safe usage:
 //
-//	qb.Select(qb.Expr("COUNT(*)", "total"))           // Aggregation with alias
-//	qb.Select(qb.Expr("UPPER(name)"))                  // Function without alias
-//	qb.Select(qb.Expr("price * quantity", "total"))    // Calculation with alias
+//	expr, err := qb.Expr("COUNT(*)", "total") // Aggregation with alias
+//	if err != nil { return err }
+//	qb.Select(expr)
+//
+//	expr, err = qb.Expr("UPPER(name)") // Function without alias
+//	if err != nil { return err }
+//	qb.Select(expr)
+//
+//	expr, err = qb.Expr("price * quantity", "total") // Calculation with alias
+//	if err != nil { return err }
+//	qb.Select(expr)
 //
 // Unsafe usage (NEVER do this):
 //
 //	userInput := req.Query("column")
-//	qb.Select(qb.Expr(fmt.Sprintf("UPPER(%s)", userInput))) // SQL INJECTION RISK!
+//	expr, err := qb.Expr(fmt.Sprintf("UPPER(%s)", userInput)) // SQL INJECTION RISK!
+//	if err != nil { return err }
+//	qb.Select(expr)
 type RawExpression struct {
 	SQL   string // The raw SQL expression
 	Alias string // Optional alias (AS clause)

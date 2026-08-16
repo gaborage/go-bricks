@@ -75,7 +75,6 @@ func StartOracleContainer(ctx context.Context, t *testing.T, cfg *OracleContaine
 		cfg = DefaultOracleConfig()
 	}
 
-	// Check if Docker is available - skip test if not
 	if !isDockerAvailable(ctx) {
 		t.Skip("Docker is not available - skipping integration test. Install Docker Desktop or ensure Docker daemon is running.")
 		return nil, nil // Never reached due to Skip, but satisfies return

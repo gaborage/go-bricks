@@ -52,11 +52,16 @@ var _ types.QueryBuilderInterface = (*QueryBuilder)(nil)
 //
 // - Vendor() string
 // - JoinFilter() types.JoinFilterFactory
+// - Expr(sql string, alias ...string) (types.RawExpression, error)
+// - MustExpr(sql string, alias ...string) types.RawExpression
+// - Columns(structPtr any) types.Columns
 // - Insert(table string) types.InsertQueryBuilder
 // - InsertWithColumns(table string, columns ...string) types.InsertQueryBuilder
 // - InsertStruct(table string, instance any) types.InsertQueryBuilder
 // - InsertFields(table string, instance any, fields ...string) types.InsertQueryBuilder
 // - BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer
+// - BuildRegex(column, pattern string, caseInsensitive, negated bool) squirrel.Sqlizer
+// - BuildJSONContains(column string, value any) squirrel.Sqlizer
 // - BuildUpsert(table string, conflictColumns []string, insertColumns, updateColumns map[string]any) (query string, args []any, err error)
 // - BuildCurrentTimestamp() string
 // - BuildUUIDGeneration() string

@@ -12,12 +12,12 @@ import (
 // observe context cancellation and higher layers will surface a 503 via the
 // centralized error handler.
 //
-// Why not use Echo's middleware.TimeoutWithConfig?
-// Echo's timeout wraps net/http.TimeoutHandler which swaps the response writer with
-// a timeoutWriter. When timeouts occur, this invalidates Echo's response object
-// (c.Response() returns nil), causing panics in logging/middleware that access
-// response headers/status. By using context-only timeouts, we maintain response
-// validity while still enforcing deadlines.
+// Why not use Echo's middleware.ContextTimeout(WithConfig)?
+// Echo v5 removed the writer-swapping middleware.Timeout/TimeoutWithConfig, replacing
+// them with context-only middleware.ContextTimeout/ContextTimeoutWithConfig (same
+// technique used below). go-bricks keeps its own copy to stay behind the framework's
+// echo-free MiddlewareFunc boundary (ADR-034) rather than exposing echo.MiddlewareFunc
+// on the public surface.
 //
 // The returned MiddlewareFunc is the framework-neutral (echo-free) form; the
 // echo-native logic lives in timeoutEcho, which SetupMiddlewares wires directly on

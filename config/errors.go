@@ -121,7 +121,6 @@ func IsNotConfigured(err error) bool {
 		return false
 	}
 
-	// Check for ErrNotConfigured sentinel
 	if errors.Is(err, ErrNotConfigured) {
 		return true
 	}

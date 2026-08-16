@@ -31,7 +31,10 @@ NOTHING`).
 Forward steps that error transition the job to `StateCleanup`. The
 `Cleanup` step drops partially-provisioned resources (schema, role) and
 unconditionally moves the job to `StateFailed`. `StateReady` and
-`StateFailed` are terminal; calling `Run` on a terminal job is a no-op.
+`StateFailed` are both terminal — no further steps run — but `Run`
+distinguishes them: at `StateReady` it's a true no-op that returns `nil`,
+while at `StateFailed` it returns a formatted error embedding the
+persisted `LastError` on every call.
 
 ## Quick start
 
@@ -120,7 +123,7 @@ Every step **must** be idempotent. The framework's design assumes:
 | Step `X` returned successfully, Transition not yet persisted | Previous state | Re-invokes step `X` (idempotency required) |
 | Transition committed, step `Y` not yet started | New state from `X` | Invokes step `Y` |
 | Cleanup running when crash hits | `StateCleanup` | Re-invokes Cleanup (idempotency required) |
-| At terminal state | `StateReady` or `StateFailed` | No-op |
+| At terminal state | `StateReady` or `StateFailed` | No further steps run; `StateReady` returns `nil`, `StateFailed` returns a formatted error each call |
 
 The "step runs, then state persists" order means crashes can re-invoke
 the side effect. This is deliberate: persisting first and rolling back
@@ -287,7 +290,7 @@ returned statements can include a password literal in clear text — that
 applies here too; don't log the statement slice.
 
 **Why the `ProvisionPGRoles` partial-progress caveat doesn't apply here.**
-`ProvisionPGRoles`'s doc comment (`migration/roles.go:117-120`) warns that
+`ProvisionPGRoles`'s doc comment (`migration/roles.go:139-142`) warns that
 a partial-progress failure can leak intermediate state. That caveat is
 about `ProvisionPGRoles`'s own execution mode: it takes a bare `*sql.DB`
 and calls `db.ExecContext` once per statement with no enclosing

@@ -18,7 +18,7 @@ func isDockerAvailable(ctx context.Context) bool {
 	}
 	defer provider.Close()
 
-	// Try to get Docker info - if this fails, Docker is not available
+	// Try to resolve the Docker daemon host - if this fails, Docker is not available
 	_, err = provider.DaemonHost(ctx)
 	return err == nil
 }

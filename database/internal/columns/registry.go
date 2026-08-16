@@ -63,7 +63,6 @@ func RegisterColumns(vendor string, structPtr any) *ColumnMetadata {
 // Get retrieves column metadata for a struct type, lazily parsing on first use.
 // Subsequent calls with the same type and vendor return the cached metadata.
 func (cr *ColumnRegistry) Get(vendor string, structPtr any) *ColumnMetadata {
-	// Get or create vendor-specific cache
 	cache := cr.getOrCreateVendorCache(vendor)
 
 	// Extract reflect.Type for cache key
@@ -132,7 +131,6 @@ func (cr *ColumnRegistry) getOrCreateVendorCache(vendor string) *vendorCache {
 		return existing
 	}
 
-	// Create new vendor cache
 	cache = &vendorCache{
 		vendor: vendor,
 		cache:  sync.Map{},

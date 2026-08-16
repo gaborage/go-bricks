@@ -459,7 +459,7 @@ func (r *testRow) Scan(dest ...any) error {
 		return fmt.Errorf("scan expects %d values, got %d", len(dest), len(r.values))
 	}
 
-	// Use sql.ConvertAssign for database/sql compatibility
+	// Delegate to convertAssign below, which mirrors database/sql's internal type-coercion rules
 	for i, v := range r.values {
 		if err := convertAssign(dest[i], v); err != nil {
 			return fmt.Errorf("column %d: %w", i, err)

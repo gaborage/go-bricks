@@ -309,6 +309,8 @@ grep "Panic recovered in message handler" logs/app.log
 
 # Handler registration panics
 # → Verify HandlerRegistry passed to RegisterRoutes()
-# → Check for duplicate route paths (Echo will panic)
+# → Check for duplicate route paths — startup fails with "duplicate route
+#   registration (N conflict(s))" naming both registrants (Echo itself
+#   silently overwrites, see wiki/startup_defaults.md#duplicate-route-detection)
 # → Ensure request struct has proper validation tags
 ```

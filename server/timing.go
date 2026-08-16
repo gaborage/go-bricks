@@ -26,8 +26,9 @@ func timingEcho() echo.MiddlewareFunc {
 			err := next(c)
 			duration := time.Since(start)
 
-			// SAFETY: Check if response is still valid (may be nil after timeout)
-			// This middleware runs AFTER the timeout middleware in the chain
+			// Defensive nil-check: this middleware can be composed standalone (e.g. in
+			// tests) without a response set. go-bricks' own Timeout middleware
+			// (server/timeout.go) never swaps or nils the writer.
 			if resp := c.Response(); resp != nil {
 				resp.Header().Set(HeaderXResponseTime, duration.String())
 			}

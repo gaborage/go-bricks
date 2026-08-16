@@ -486,7 +486,6 @@ func (c *Connection) CreateMigrationTable(ctx context.Context) error {
 		return fmt.Errorf("failed to create Oracle migration table: %w", err)
 	}
 
-	// Create index
 	indexQuery := `
 		BEGIN
 			EXECUTE IMMEDIATE 'CREATE INDEX flyway_schema_history_s_idx ON FLYWAY_SCHEMA_HISTORY (success)';

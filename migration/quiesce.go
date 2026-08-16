@@ -36,7 +36,9 @@ const (
 	DefaultQuiesceTable = "quiesce_flags"
 )
 
-// ErrQuiesceNotSet is returned by Clear when no active flag exists.
+// ErrQuiesceNotSet is returned by Clear when no flag has ever been set, or it
+// was already explicitly cleared. An expired-but-uncleared flag is still
+// clearable and does not trigger this error.
 var ErrQuiesceNotSet = errors.New("migration: no active quiesce flag")
 
 // ErrInvalidQuiesceTable is returned by NewPostgresQuiesceController when the
@@ -148,7 +150,9 @@ type QuiesceController interface {
 	Set(ctx context.Context, opts QuiesceSetOptions) (*QuiesceStatus, error)
 	// Clear deactivates the active flag (unconditional operator override; not
 	// keyed on the setter's session, so it works even if the setter died).
-	// Returns ErrQuiesceNotSet when nothing is active.
+	// Returns ErrQuiesceNotSet only when nothing has ever been set or the flag
+	// was already explicitly cleared (an expired-but-uncleared flag is still
+	// clearable).
 	Clear(ctx context.Context, by string) (*QuiesceStatus, error)
 	// CreateTable provisions backing storage idempotently (no-op for the
 	// in-memory controller).

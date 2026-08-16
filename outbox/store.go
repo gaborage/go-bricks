@@ -25,13 +25,13 @@ type Record struct {
 	ID          string     // UUID, generated on insert
 	EventType   string     // Event type for routing
 	AggregateID string     // Aggregate identifier for correlation
-	Payload     []byte     // JSON-encoded event payload
+	Payload     []byte     // Event payload; JSON-encoded unless the caller supplied []byte, which is stored as-is
 	Headers     []byte     // JSON-encoded AMQP headers (nullable)
 	Exchange    string     // Target AMQP exchange
 	RoutingKey  string     // AMQP routing key
 	Status      string     // "pending", "published", or "failed"
-	RetryCount  int        // Number of publish attempts
-	Error       string     // Last error message (empty on success)
+	RetryCount  int        // Number of failed publish attempts so far (not incremented on eventual success)
+	Error       string     // Last recorded failure message; NOT cleared on a later successful publish
 	CreatedAt   time.Time  // When the event was created
 	PublishedAt *time.Time // When the event was successfully published (nil if pending)
 }

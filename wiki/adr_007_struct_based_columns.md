@@ -184,8 +184,7 @@ database/
 
 - **Reflection Dependency**: First-use reflection (~0.6µs per struct type)
 - **Memory Overhead**: ~1-2KB per registered struct type (negligible at scale)
-- **INSERT Friction**: Requires type conversion `[]any` → `[]string` for `InsertWithColumns()`
-  - Mitigated with helper: `toStrings := func(v []any) []string { ... }`
+- **Resolved by v2.4**: `All()`/`Cols()` return `[]string` directly, so `InsertWithColumns()` takes the result with no conversion needed.
 
 **Neutral:**
 

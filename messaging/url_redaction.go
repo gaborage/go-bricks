@@ -20,7 +20,6 @@ const redactedAMQPPlaceholder = "amqp://****:****@<host>:<port>/<vhost>"
 //
 // If the URL cannot be parsed, returns a generic placeholder to avoid leaking credentials.
 func redactAMQPURL(amqpURL string) string {
-	// Empty URL edge case
 	if amqpURL == "" {
 		return redactedAMQPPlaceholder
 	}
@@ -31,7 +30,6 @@ func redactAMQPURL(amqpURL string) string {
 		return redactedAMQPPlaceholder
 	}
 
-	// Validate AMQP scheme
 	if u.Scheme != "amqp" && u.Scheme != "amqps" {
 		// Not an AMQP URL - return placeholder to be safe
 		return redactedAMQPPlaceholder
@@ -49,7 +47,9 @@ func redactAMQPURL(amqpURL string) string {
 	return buildRedactedURL(u, username)
 }
 
-// buildRedactedURL reconstructs the URL with masked credentials while preserving path/query.
+// buildRedactedURL reconstructs the URL with masked credentials, preserving the path but
+// replacing any non-empty query string wholesale with "?<redacted>" (query params can carry
+// tokens/secrets).
 func buildRedactedURL(u *url.URL, username string) string {
 	// Build redacted URL manually to avoid URL encoding of asterisks
 	var userInfo string

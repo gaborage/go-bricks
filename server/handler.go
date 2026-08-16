@@ -302,7 +302,7 @@ func fromEchoMiddleware(em echo.MiddlewareFunc) MiddlewareFunc {
 // RequestBinder handles binding request data to structs with validation.
 type RequestBinder struct{}
 
-// NewRequestBinder creates a new request binder with the given validator.
+// NewRequestBinder creates a new request binder.
 func NewRequestBinder() *RequestBinder { return &RequestBinder{} }
 
 // contextChecker handles context cancellation detection at various stages of request processing.
@@ -506,7 +506,6 @@ func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requ
 func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 	var empty T
 
-	// Allocate request instance
 	request, requestPtr := rp.allocator.allocate()
 
 	// Bind request data from multiple sources (JSON, query, params, headers).
@@ -530,7 +529,6 @@ func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 		request, _ = reflect.ValueOf(requestPtr).Elem().Interface().(T)
 	}
 
-	// Validate not nil (for pointer types)
 	if err := rp.allocator.validateNotNil(request); err != nil {
 		return empty, NewBadRequestError(err.Error())
 	}
@@ -1097,7 +1095,6 @@ func setBoolValue(fieldValue reflect.Value, value string) error {
 
 // parseTime attempts to parse a string into time.Time using common layouts.
 func parseTime(s string) (time.Time, error) {
-	// Try common layouts
 	layouts := []string{
 		time.RFC3339Nano,
 		time.RFC3339,
@@ -1418,7 +1415,6 @@ func ensureTraceParentHeader(c *echo.Context) {
 	if resp == nil {
 		return
 	}
-	// If already set, do nothing
 	if resp.Header().Get(gobrickshttp.HeaderTraceParent) != "" {
 		return
 	}
@@ -1427,7 +1423,6 @@ func ensureTraceParentHeader(c *echo.Context) {
 		resp.Header().Set(gobrickshttp.HeaderTraceParent, tp)
 		return
 	}
-	// Generate new traceparent and set
 	resp.Header().Set(gobrickshttp.HeaderTraceParent, gobrickshttp.GenerateTraceParent())
 }
 
@@ -1466,7 +1461,7 @@ type HandlerRegistry struct {
 	joseObs           *joseObservability // computed lazily on first JOSE registration
 }
 
-// NewHandlerRegistry creates a new handler registry with the given validator and config.
+// NewHandlerRegistry creates a new handler registry with the given config.
 // Optional HandlerRegistryOption values (e.g., WithJOSEResolver) configure additional
 // behaviors. Existing callers passing only cfg are unaffected.
 func NewHandlerRegistry(cfg *config.Config, opts ...HandlerRegistryOption) *HandlerRegistry {
@@ -1505,7 +1500,6 @@ func RegisterHandler[T any, R any](
 		HandlerName:  extractHandlerName(handler),
 	}
 
-	// Apply options
 	for _, opt := range opts {
 		opt(&descriptor)
 	}
@@ -1514,7 +1508,6 @@ func RegisterHandler[T any, R any](
 	// registry's resolver. Panics at startup on any failure (Fail Fast principle).
 	scanRouteJOSE(&descriptor, hr.joseResolver)
 
-	// Register with global registry
 	DefaultRouteRegistry.Register(&descriptor)
 
 	// Lazy-init observability bundle on the first JOSE-tagged route registration so

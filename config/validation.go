@@ -384,7 +384,6 @@ func validateApp(cfg *AppConfig) error {
 		return NewValidationError("app.rate.burst", errMustBeNonNegative)
 	}
 
-	// Apply startup timeout defaults
 	if err := applyStartupDefaults(&cfg.Startup); err != nil {
 		return err
 	}
@@ -1451,18 +1450,15 @@ func validateCache(cfg *CacheConfig, multitenant bool) error {
 		return nil
 	}
 
-	// Apply cache manager defaults
 	if err := applyCacheManagerDefaults(cfg, multitenant); err != nil {
 		return err
 	}
 
-	// Validate cache type
 	validTypes := []string{CacheTypeRedis}
 	if !slices.Contains(validTypes, cfg.Type) {
 		return NewInvalidFieldError("cache.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), validTypes)
 	}
 
-	// Validate Redis-specific settings
 	if cfg.Type == CacheTypeRedis {
 		return validateRedisCache(&cfg.Redis)
 	}
@@ -1543,22 +1539,18 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 		return nil
 	}
 
-	// Validate resolver configuration
 	if err := validateMultitenantResolver(&mt.Resolver); err != nil {
 		return fmt.Errorf("resolver: %w", err)
 	}
 
-	// Validate limits configuration
 	if err := validateMultitenantLimits(&mt.Limits); err != nil {
 		return fmt.Errorf("limits: %w", err)
 	}
 
-	// Validate source type
 	if err := validateSourceConfig(source); err != nil {
 		return fmt.Errorf("source: %w", err)
 	}
 
-	// Validate static tenant configuration
 	if err := validateStaticTenantConfig(source, mt, db, msg); err != nil {
 		return err
 	}

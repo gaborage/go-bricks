@@ -15,7 +15,7 @@ and the first query fails. ADR-047's own Consequences section named this as
 the one shape its widened predicate could not see. Fixes #880.
 
 The issue's original design proposed changing `IsDatabaseConfigured`'s
-signature across its six call sites so it could consult koanf directly. That
+signature across its seven call sites so it could consult koanf directly. That
 turned out to be unnecessary: `config.Load` already stores the koanf instance
 on `cfg.k` *before* calling `Validate`, and `Config.Exists` is nil-safe. A
 validator living inside `Validate` can consult key presence without touching
@@ -65,7 +65,7 @@ Two shapes remain deliberately out of reach, both pre-existing
 
 ## Alternatives considered
 
-- **The issue's original six-call-site signature change.** Rejected: strictly
+- **The issue's original seven-call-site signature change.** Rejected: strictly
   more churn (every `IsDatabaseConfigured` caller now needs a `*Config` in
   scope) for the identical verdict the `Validate`-level seam already reaches
   with zero signature changes.
@@ -88,7 +88,7 @@ Two shapes remain deliberately out of reach, both pre-existing
 - The residual blind spots (hand-built `Config` literals, dynamic-source
   tenant configs) are unchanged from ADR-047 and remain the honest limit of
   what a `Validate`-time, koanf-backed check can see.
-- `IsDatabaseConfigured`'s signature, logic, and all six existing call sites
+- `IsDatabaseConfigured`'s signature, logic, and all seven existing call sites
   are untouched — this is additive at the `Validate` level only.
 
 ## References

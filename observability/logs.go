@@ -27,7 +27,6 @@ func (p *provider) initLogProvider(ctx context.Context) error {
 		return fmt.Errorf(errCreateResourceFmt, err)
 	}
 
-	// Create log exporter
 	exporter, err := p.createLogExporter(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create log exporter: %w", err)
@@ -43,7 +42,6 @@ func (p *provider) initLogProvider(ctx context.Context) error {
 		}
 	}
 
-	// Create logger provider
 	p.loggerProvider = sdklog.NewLoggerProvider(
 		sdklog.WithResource(res),
 		sdklog.WithProcessor(processor),

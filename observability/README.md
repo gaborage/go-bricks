@@ -369,7 +369,7 @@ observability:
 ### Connection Errors
 
 ```text
-Error: failed to initialize trace provider: failed to create trace exporter
+Error: failed to initialize Trace provider: failed to create trace exporter
 ```
 
 **Solutions:**

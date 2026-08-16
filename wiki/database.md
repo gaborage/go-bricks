@@ -380,7 +380,7 @@ connected with the TLS material silently dropped.
 | `pool.keepalive.enabled` | true | TCP keep-alive probes |
 | `pool.keepalive.interval` | 60s | Probe interval (below NAT timeouts) |
 
-> **Idle defaults to max (changed in [ADR-025](adr_025_pool_idle_tracks_max.md)).** Earlier versions defaulted idle to a fixed `2`, which made the pool repeatedly open and close physical connections (TCP+TLS+auth) under sustained load. Idle now defaults to `pool.max.connections` so warm connections are reused. Set a lower `pool.idle.connections` explicitly only when you deliberately want idle connections released back to the database. See [migrations.md](migrations.md#connection-pool-idle-default--tracks-max-adr-025) for the footprint implications.
+> **Idle defaults to max (changed in [ADR-025](adr_025_pool_idle_tracks_max.md)).** Earlier versions defaulted idle to a fixed `2`, which made the pool repeatedly open and close physical connections (TCP+TLS+auth) under sustained load. Idle now defaults to `pool.max.connections` so warm connections are reused. Set a lower `pool.idle.connections` explicitly only when you deliberately want idle connections released back to the database. See [migrations.md](migrations.md#c416-pool-idle-connections-default-now-tracks-poolmaxconnections-was-fixed-2--silent-behavior--when-no-match) for the footprint implications.
 
 **Cloud Provider Idle Timeouts:**
 

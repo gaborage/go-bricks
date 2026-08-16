@@ -6,8 +6,8 @@ import "time"
 const (
 	// defaultShutdownTimeout is the wall-clock budget for in-flight jobs to
 	// complete during graceful shutdown when cfg.Scheduler.Timeout.Shutdown
-	// is unset or non-positive. Per ASSUME-010 the framework assumes ~30s
-	// is "long enough for cleanup, short enough for orchestrators."
+	// is unset or non-positive. The framework assumes ~30s is "long enough
+	// for cleanup, short enough for orchestrators."
 	defaultShutdownTimeout = 30 * time.Second
 
 	// defaultSlowJobThreshold is the duration above which a job execution

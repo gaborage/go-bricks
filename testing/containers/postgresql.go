@@ -85,7 +85,6 @@ func StartPostgreSQLContainer(ctx context.Context, t *testing.T, cfg *PostgreSQL
 
 	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		// Clean up container on error
 		_ = pgContainer.Terminate(ctx)
 		return nil, fmt.Errorf("failed to get PostgreSQL connection string: %w", err)
 	}

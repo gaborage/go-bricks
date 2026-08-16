@@ -96,7 +96,7 @@ if err := debugHandlers.RegisterDebugEndpoints(r); err != nil {
 ```
 
 Almost none exist: the framework calls it from `App.registerDebugHandlers`, and
-`App.prepareRuntime` returns that error to startup untouched — like its six
+`App.prepareRuntime` returns that error to startup untouched — like its seven
 sibling steps, it passes callee errors through, so the message above has to be
 self-describing on its own, and is.
 
