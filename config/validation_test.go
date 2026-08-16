@@ -38,6 +38,7 @@ const (
 	redisPortField               = "cache.redis.port"
 	logLevel                     = "log.level"
 	oracleConnectionIdentifier   = "oracle connection identifier"
+	appStartupTimeoutField       = "app.startup.timeout"
 )
 
 func makeSampleTenants() map[string]TenantEntry {
@@ -52,7 +53,7 @@ func makeSampleTenants() map[string]TenantEntry {
 			},
 			Messaging: TenantMessagingConfig{URL: testAMQPHost},
 			// Cache enabled with only a host: port/poolsize/timeouts are left
-			// at zero values so the shared sample exercises validateMultitenant's
+			// at zero values so the shared sample exercises normalizeMultitenant's
 			// per-tenant cache validation and default-application path. Without
 			// it, every multitenant test would silently skip tenant.Cache and
 			// mask the M6 fast-fail/defaulting behavior.
@@ -1669,9 +1670,8 @@ func TestValidateNamedDatabaseInfersTypeFromConnectionString(t *testing.T) {
 	databases := map[string]DatabaseConfig{
 		"reporting": {ConnectionString: testConnectionString},
 	}
-	mt := MultitenantConfig{Enabled: false}
 
-	err := validateNamedDatabases(databases, &mt)
+	err := normalizeNamedDatabases(databases)
 
 	require.NoError(t, err)
 	assert.Equal(t, PostgreSQL, databases["reporting"].Type)
@@ -2261,8 +2261,8 @@ func TestApplyDatabaseTimezoneInheritsToNamedDatabases(t *testing.T) {
 	// Exercises real propagation through the top-level Validate(*Config) wiring,
 	// not the standalone normalizeDatabaseSection call in isolation. Split into
 	// two scenarios because the framework forbids a root Database alongside
-	// static tenants. Either scenario regressing (e.g. validateNamedDatabases or
-	// validateMultitenantTenants dropping their normalizeDatabaseSection call)
+	// static tenants. Either scenario regressing (e.g. normalizeNamedDatabases or
+	// normalizeMultitenantTenants dropping their normalizeDatabaseSection call)
 	// would fail this test.
 	t.Run("root_explicit_named_defaults", func(t *testing.T) {
 		cfg := createValidFullConfig()
@@ -2324,7 +2324,7 @@ func TestApplyDatabaseTimezoneInheritsToNamedDatabases(t *testing.T) {
 // cache with a host but no port/poolsize is hardened at startup: Redis
 // defaults (port 6379, poolsize 10, timeouts) are applied and persisted back
 // to the tenants map, exactly as already done for tenant.Database. Without the
-// fix, validateMultitenantTenants never touches tenant.Cache, so the raw
+// fix, normalizeMultitenantTenants never touches tenant.Cache, so the raw
 // zero-value Redis config reaches the cache client and fails at first request
 // instead of at startup.
 func TestValidateMultitenantTenantsCacheDefaults(t *testing.T) {
@@ -2964,7 +2964,7 @@ func TestApplyStartupDefaultsNegativeValues(t *testing.T) {
 		{
 			name:          "negative_timeout_rejected",
 			config:        StartupConfig{Timeout: -1 * time.Second},
-			errorContains: "app.startup.timeout",
+			errorContains: appStartupTimeoutField,
 		},
 		{
 			name:          "negative_database_rejected",
@@ -3297,6 +3297,23 @@ func createValidLogConfig() LogConfig {
 	}
 }
 
+// normalizeAndCheckResolver runs both halves of the resolver split in phase
+// order, for tables whose cases need a fill before the rejection they pin.
+func normalizeAndCheckResolver(cfg *ResolverConfig) error {
+	normalizeMultitenantResolver(cfg)
+	return checkMultitenantResolver(cfg)
+}
+
+// normalizeAndCheckNamedDatabases runs both halves of the named-database
+// split in phase order: an incomplete section is normalize's rejection, a bad
+// name or tenant-ID collision is check's.
+func normalizeAndCheckNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantConfig) error {
+	if err := normalizeNamedDatabases(databases); err != nil {
+		return err
+	}
+	return checkNamedDatabases(databases, mt)
+}
+
 // createValidFullConfig returns a complete valid Config for testing
 func createValidFullConfig() *Config {
 	return &Config{
@@ -3385,7 +3402,7 @@ func TestValidateMultitenantDisabled(t *testing.T) {
 	}
 
 	sourceConfig := &SourceConfig{Type: SourceTypeStatic}
-	err := validateMultitenant(mtConfig, dbConfig, msgConfig, sourceConfig)
+	err := checkMultitenant(mtConfig, dbConfig, msgConfig, sourceConfig)
 	assert.NoError(t, err, "Validation should pass when multitenant is disabled")
 }
 
@@ -3538,7 +3555,7 @@ func TestValidateMultitenantSuccess(t *testing.T) {
 			if sourceConfig == nil {
 				sourceConfig = &SourceConfig{Type: SourceTypeStatic}
 			}
-			err := validateMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
+			err := checkMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
 			assert.NoError(t, err)
 		})
 	}
@@ -3725,7 +3742,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 			if sourceConfig == nil {
 				sourceConfig = &SourceConfig{Type: SourceTypeStatic}
 			}
-			err := validateMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
+			err := checkMultitenant(tt.mtConfig, tt.dbConfig, tt.msgConfig, sourceConfig)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -3737,19 +3754,28 @@ func TestValidateMultitenantFailures(t *testing.T) {
 // constructed section path multitenant.tenants.<id>.database would become
 // ambiguous.
 func TestValidateMultitenantTenantsRejectsDottedTenantID(t *testing.T) {
-	tenants := map[string]TenantEntry{
-		"tenant.a": {
-			Database: DatabaseConfig{
-				Type:     PostgreSQL,
-				Host:     testTenantDBHost,
-				Port:     5432,
-				Database: "tenant_a",
-				Username: "tenant_user",
+	// The dotted-ID rule lives in checkMultitenant's tenant loop, which runs
+	// after the resolver/limits checks — so the resolver must be valid on its
+	// own for the rejection under test to be the one that surfaces.
+	mt := &MultitenantConfig{
+		Enabled:  true,
+		Resolver: ResolverConfig{Type: "header", Header: testTenantHeader},
+		Limits:   LimitsConfig{Tenants: 100},
+		Tenants: map[string]TenantEntry{
+			"tenant.a": {
+				Database: DatabaseConfig{
+					Type:     PostgreSQL,
+					Host:     testTenantDBHost,
+					Port:     5432,
+					Database: "tenant_a",
+					Username: "tenant_user",
+				},
 			},
 		},
 	}
+	source := &SourceConfig{Type: SourceTypeStatic}
 
-	err := validateMultitenantTenants(tenants)
+	err := checkMultitenant(mt, &DatabaseConfig{}, &MessagingConfig{}, source)
 	assertValidationError(t, err, "cannot contain '.'")
 }
 
@@ -3760,6 +3786,7 @@ func TestValidateMultitenantResolver(t *testing.T) {
 		expectError    bool
 		errorContains  string
 		expectedHeader string // Check default header is set
+		expectedDomain string // Check the domain was normalized
 	}{
 		{
 			name: "valid_header_resolver",
@@ -3818,9 +3845,19 @@ func TestValidateMultitenantResolver(t *testing.T) {
 			name: "subdomain_domain_without_leading_dot",
 			config: ResolverConfig{
 				Type:   "subdomain",
-				Domain: "api.example.com", // Will be normalized to .api.example.com
+				Domain: "api.example.com",
 			},
-			expectError: false, // Now accepts and normalizes domains without leading dot
+			expectError:    false,
+			expectedDomain: testDomain,
+		},
+		{
+			name: "subdomain_domain_with_surrounding_whitespace",
+			config: ResolverConfig{
+				Type:   "subdomain",
+				Domain: "  api.example.com\t",
+			},
+			expectError:    false,
+			expectedDomain: testDomain,
 		},
 		{
 			name: "subdomain_domain_dot_only_rejected",
@@ -3847,16 +3884,26 @@ func TestValidateMultitenantResolver(t *testing.T) {
 			config: ResolverConfig{
 				Type:   "composite",
 				Header: testTenantHeader,
-				Domain: "api.example.com", // Will be normalized to .api.example.com
+				Domain: "api.example.com",
 				Order:  []string{ResolverTypeSubdomain, ResolverTypeHeader},
 			},
-			expectError: false, // Now accepts and normalizes domains without leading dot
+			expectError:    false,
+			expectedDomain: testDomain,
+		},
+		{
+			name: "header_resolver_stray_domain_left_alone",
+			config: ResolverConfig{
+				Type:   "header",
+				Domain: "api.example.com",
+			},
+			expectError:    false,
+			expectedDomain: "api.example.com",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMultitenantResolver(&tt.config)
+			err := normalizeAndCheckResolver(&tt.config)
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorContains)
@@ -3865,6 +3912,9 @@ func TestValidateMultitenantResolver(t *testing.T) {
 				// Check if default header was set
 				if tt.expectedHeader != "" {
 					assert.Equal(t, tt.expectedHeader, tt.config.Header)
+				}
+				if tt.expectedDomain != "" {
+					assert.Equal(t, tt.expectedDomain, tt.config.Domain)
 				}
 			}
 		})
@@ -3966,7 +4016,7 @@ func TestResolverOrderValidationRejectsUnknown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMultitenantResolver(&tt.config)
+			err := normalizeAndCheckResolver(&tt.config)
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorContains)
@@ -3981,28 +4031,26 @@ func TestResolverOrderValidationRejectsUnknown(t *testing.T) {
 func TestValidateMultitenantLimits(t *testing.T) {
 	t.Run("defaults when zero", func(t *testing.T) {
 		cfg := LimitsConfig{Tenants: 0}
-		err := validateMultitenantLimits(&cfg)
-		assert.NoError(t, err)
+		normalizeMultitenantLimits(&cfg)
 		assert.Equal(t, 100, cfg.Tenants)
 	})
 
 	t.Run("defaults when negative", func(t *testing.T) {
 		cfg := LimitsConfig{Tenants: -1}
-		err := validateMultitenantLimits(&cfg)
-		assert.NoError(t, err)
+		normalizeMultitenantLimits(&cfg)
 		assert.Equal(t, 100, cfg.Tenants)
 	})
 
 	t.Run("supports upper bound", func(t *testing.T) {
 		cfg := LimitsConfig{Tenants: 1000}
-		err := validateMultitenantLimits(&cfg)
+		err := checkMultitenantLimits(&cfg)
 		assert.NoError(t, err)
 		assert.Equal(t, 1000, cfg.Tenants)
 	})
 
 	t.Run("rejects exceeding upper bound", func(t *testing.T) {
 		cfg := LimitsConfig{Tenants: 1001}
-		err := validateMultitenantLimits(&cfg)
+		err := checkMultitenantLimits(&cfg)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "multitenant.limits.tenants cannot exceed 1000")
 	})
@@ -4106,7 +4154,7 @@ func TestValidateMultitenantDynamicSource(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateMultitenant(tt.mtConfig, &DatabaseConfig{}, &MessagingConfig{}, tt.sourceConfig)
+			err := checkMultitenant(tt.mtConfig, &DatabaseConfig{}, &MessagingConfig{}, tt.sourceConfig)
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorText)
@@ -4458,7 +4506,7 @@ func TestValidateNamedDatabasesSuccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateNamedDatabases(tt.databases, &tt.mt)
+			err := checkNamedDatabases(tt.databases, &tt.mt)
 			assert.NoError(t, err)
 		})
 	}
@@ -4568,7 +4616,7 @@ func TestValidateNamedDatabasesFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateNamedDatabases(tt.databases, &tt.mt)
+			err := normalizeAndCheckNamedDatabases(tt.databases, &tt.mt)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.errContains)
 		})
@@ -4590,7 +4638,7 @@ func TestValidateNamedDatabasesRejectsDottedName(t *testing.T) {
 	}
 	mt := MultitenantConfig{Enabled: false}
 
-	err := validateNamedDatabases(databases, &mt)
+	err := checkNamedDatabases(databases, &mt)
 	assertValidationError(t, err, "cannot contain '.'")
 }
 
@@ -4614,7 +4662,7 @@ func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {
 		},
 	}
 
-	err := validateNamedDatabases(databases, &mt)
+	err := checkNamedDatabases(databases, &mt)
 	assert.NoError(t, err, "no conflict when multitenant is disabled")
 }
 
@@ -5612,7 +5660,7 @@ func TestValidateNoDeliveredEmptyDatabaseViaLoad(t *testing.T) {
 		},
 		{
 			// Koanf populates Multitenant.Tenants from YAML regardless of the enabled
-			// flag, but TenantStore, ManagerConfigBuilder and validateMultitenant all
+			// flag, but TenantStore, ManagerConfigBuilder and normalizeMultitenant all
 			// ignore the block in single-tenant mode — so a leftover tenants section is
 			// inert, and aborting startup over it would be a false abort on a config
 			// that runs today.

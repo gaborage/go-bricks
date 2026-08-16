@@ -595,6 +595,10 @@ func validateNoDeliveredEmptyDatabase(cfg *Config) error {
 // values (no koanf instance to consult) and dynamic-source tenant configs
 // (resolved from a remote store, never koanf). TLS material is likewise
 // excluded from this predicate — it identifies no database on its own.
+//
+// The answer must not change across normalizeDatabaseSection: normalization
+// never adds identity to a section that had none, which is what lets check
+// consult this predicate after normalize (validateNoSingleTenantConflict).
 func IsDatabaseConfigured(cfg *DatabaseConfig) bool {
 	return cfg.ConnectionString != "" ||
 		cfg.Type != "" ||
@@ -891,19 +895,30 @@ func validateCIDRList(field string, list []string) error {
 	return nil
 }
 
-func validateNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantConfig) error {
+// normalizeNamedDatabases shapes every databases.* section (opaque; see
+// normalizeDatabaseSection) and writes the result back so the defaults reach
+// downstream consumers such as TenantStore. The map-key rules (empty name,
+// reserved prefix, tenant-ID collision) are check's — see checkNamedDatabases.
+func normalizeNamedDatabases(databases map[string]DatabaseConfig) error {
 	// Sorted, like forEachDatabaseSection: with several malformed entries the
 	// startup error names the same one every run.
 	for _, name := range slices.Sorted(maps.Keys(databases)) {
-		if err := validateNamedDatabaseName(name, mt); err != nil {
-			return err
-		}
 		dbCfg := databases[name]
 		if err := normalizeDatabaseSection(&dbCfg, namedDatabaseSection(name)); err != nil {
 			return err
 		}
-		// Write back so the defaults reach downstream consumers such as TenantStore.
 		databases[name] = dbCfg
+	}
+	return nil
+}
+
+// checkNamedDatabases rejects a databases.* map key without touching its
+// section's content (that is normalizeNamedDatabases' job).
+func checkNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantConfig) error {
+	for _, name := range slices.Sorted(maps.Keys(databases)) {
+		if err := validateNamedDatabaseName(name, mt); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1474,19 +1489,47 @@ func validateRedisCache(cfg *RedisConfig) error {
 	return nil
 }
 
-// validateMultitenant validates multi-tenant configuration and ensures no conflicts
-// with single-tenant settings. When multitenant is enabled, database and messaging
-// configurations must be provided by the tenant config provider.
-func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingConfig, source *SourceConfig) error {
+// normalizeMultitenant shapes the multitenant section: resolver and limits
+// fills, then (static source only) each tenant's database (opaque) and cache.
+// Map-key rules (empty/dotted ID, messaging consistency, single-tenant
+// conflicts) are check's — see checkMultitenant.
+func normalizeMultitenant(mt *MultitenantConfig, source *SourceConfig) error {
 	if !mt.Enabled {
 		return nil
 	}
 
-	if err := validateMultitenantResolver(&mt.Resolver); err != nil {
+	normalizeMultitenantResolver(&mt.Resolver)
+	normalizeMultitenantLimits(&mt.Limits)
+
+	if hasStaticTenants(source, mt) {
+		if err := normalizeMultitenantTenants(mt.Tenants); err != nil {
+			return fmt.Errorf("tenants: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// hasStaticTenants is the phase-shared gate for the static tenant map: dynamic
+// sources load tenants from an external store and never reach it. A delivered
+// but empty static map is not "has tenants" — check rejects that case.
+func hasStaticTenants(source *SourceConfig, mt *MultitenantConfig) bool {
+	return source.Type == SourceTypeStatic && len(mt.Tenants) > 0
+}
+
+// checkMultitenant rejects a normalized multitenant section without changing
+// it: resolver and limits enumerations, source type, and (static source only)
+// the tenant map's key rules and its conflicts with single-tenant config.
+func checkMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingConfig, source *SourceConfig) error {
+	if !mt.Enabled {
+		return nil
+	}
+
+	if err := checkMultitenantResolver(&mt.Resolver); err != nil {
 		return fmt.Errorf("resolver: %w", err)
 	}
 
-	if err := validateMultitenantLimits(&mt.Limits); err != nil {
+	if err := checkMultitenantLimits(&mt.Limits); err != nil {
 		return fmt.Errorf("limits: %w", err)
 	}
 
@@ -1494,28 +1537,35 @@ func validateMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *Messagi
 		return fmt.Errorf("source: %w", err)
 	}
 
-	if err := validateStaticTenantConfig(source, mt, db, msg); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// validateStaticTenantConfig validates static tenant configuration and conflicts
-func validateStaticTenantConfig(source *SourceConfig, mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingConfig) error {
 	// For static sources, validate tenants if provided (optional but must be valid if present)
 	// For dynamic sources, tenants are optional and loaded from external store
 	if source.Type == SourceTypeStatic && mt.Tenants != nil {
 		if len(mt.Tenants) == 0 {
 			return errors.New("tenants: empty map provided - either omit tenants section or provide at least one tenant for static source")
 		}
-		if err := validateMultitenantTenants(mt.Tenants); err != nil {
+
+		if err := checkTenantMessagingConsistency(mt.Tenants); err != nil {
 			return fmt.Errorf("tenants: %w", err)
+		}
+
+		// Sorted, like forEachDatabaseSection: with several malformed tenants the
+		// startup error names the same one every run.
+		for _, tenantID := range slices.Sorted(maps.Keys(mt.Tenants)) {
+			if tenantID == "" {
+				return fmt.Errorf("tenants: %w", NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty"))
+			}
+			// A '.' collides with koanf's path delimiter: the constructed section
+			// path multitenant.tenants.<id>.database becomes ambiguous. Koanf has
+			// no delimiter escaping, so fail fast rather than let a later lookup
+			// consult the wrong flattened key.
+			if strings.Contains(tenantID, ".") {
+				return fmt.Errorf("tenants: %w", NewValidationError(fieldMultitenantTenants,
+					fmt.Sprintf("tenant ID %q cannot contain '.' (the config path delimiter)", tenantID)))
+			}
 		}
 	}
 
-	// For static sources with tenants, ensure no conflict with single-tenant config
-	if source.Type == SourceTypeStatic && mt.Tenants != nil && len(mt.Tenants) > 0 {
+	if hasStaticTenants(source, mt) {
 		return validateNoSingleTenantConflict(db, msg)
 	}
 
@@ -1543,15 +1593,28 @@ func validateNoSingleTenantConflict(db *DatabaseConfig, msg *MessagingConfig) er
 	return nil
 }
 
-// validateMultitenantResolver validates tenant resolver configuration
-func validateMultitenantResolver(cfg *ResolverConfig) error {
+// normalizeMultitenantResolver fills the header default and, when the config
+// builds a subdomain resolver, trims a delivered domain and prefixes it with
+// '.'. An empty domain stays empty for checkMultitenantResolver to reject.
+func normalizeMultitenantResolver(cfg *ResolverConfig) {
+	if cfg.Header == "" {
+		cfg.Header = "X-Tenant-ID"
+	}
+	if buildsSubdomainResolver(cfg) && domainDelivered(cfg.Domain) {
+		cfg.Domain = strings.TrimSpace(cfg.Domain)
+		if !strings.HasPrefix(cfg.Domain, ".") {
+			cfg.Domain = "." + cfg.Domain
+		}
+	}
+}
+
+// checkMultitenantResolver rejects an unknown resolver type, a composite order
+// that is missing or malformed, and the field requirements each type implies
+// (subdomain root domain, path prefix/segment).
+func checkMultitenantResolver(cfg *ResolverConfig) error {
 	validTypes := []string{ResolverTypeHeader, ResolverTypeSubdomain, ResolverTypePath, ResolverTypeComposite}
 	if !slices.Contains(validTypes, cfg.Type) {
 		return NewInvalidFieldError("multitenant.resolver.type", fmt.Sprintf(errNotSupportedFmt, cfg.Type), validTypes)
-	}
-
-	if cfg.Header == "" {
-		cfg.Header = "X-Tenant-ID"
 	}
 
 	if err := validateResolverOrder(cfg); err != nil {
@@ -1603,25 +1666,34 @@ func validateResolverOrder(cfg *ResolverConfig) error {
 }
 
 func validateSubdomainResolverFields(cfg *ResolverConfig) error {
-	if cfg.Type != ResolverTypeSubdomain && cfg.Type != ResolverTypeComposite {
+	if !buildsSubdomainResolver(cfg) {
 		return nil
 	}
-	// A composite whose order excludes subdomain never builds one, so it needs
-	// no root domain. Order is required and validated above, so a composite
-	// reaching this point always has an explicit, non-empty Order.
-	if cfg.Type == ResolverTypeComposite && !slices.Contains(cfg.Order, ResolverTypeSubdomain) {
-		return nil
-	}
-	// A domain of "." (or whitespace around it) strips to "" once the leading
-	// dot is trimmed, and newSubdomainResolver builds nil from that — so reject
-	// it here too, not just the plain-empty case.
-	if strings.TrimPrefix(strings.TrimSpace(cfg.Domain), ".") == "" {
+	if !domainDelivered(cfg.Domain) {
 		return NewMissingFieldError("multitenant.resolver.domain", "MULTITENANT_RESOLVER_DOMAIN", "multitenant.resolver.domain")
 	}
-	if !strings.HasPrefix(cfg.Domain, ".") {
-		cfg.Domain = "." + cfg.Domain
-	}
 	return nil
+}
+
+// buildsSubdomainResolver reports whether the config will construct a
+// subdomain resolver: type subdomain, or a composite whose order includes
+// one. Order is required and checked separately, so a composite reaching
+// the check always has an explicit, non-empty Order.
+func buildsSubdomainResolver(cfg *ResolverConfig) bool {
+	switch cfg.Type {
+	case ResolverTypeSubdomain:
+		return true
+	case ResolverTypeComposite:
+		return slices.Contains(cfg.Order, ResolverTypeSubdomain)
+	default:
+		return false
+	}
+}
+
+// domainDelivered treats "." and whitespace as no domain: once the leading dot
+// is trimmed nothing is left, and newSubdomainResolver builds nil from that.
+func domainDelivered(domain string) bool {
+	return strings.TrimPrefix(strings.TrimSpace(domain), ".") != ""
 }
 
 // validatePathResolverFields enforces path-segment + prefix rules for the path
@@ -1643,42 +1715,32 @@ func validatePathResolverFields(cfg *ResolverConfig) error {
 	return nil
 }
 
-// validateMultitenantLimits validates limits configuration with defaults
-func validateMultitenantLimits(cfg *LimitsConfig) error {
+// normalizeMultitenantLimits fills the tenant-count default. A negative value
+// is treated the same as zero — kept intentionally, not tightened to reject.
+func normalizeMultitenantLimits(cfg *LimitsConfig) {
 	if cfg.Tenants <= 0 {
 		cfg.Tenants = 100 // default
 	}
+}
+
+// checkMultitenantLimits rejects a tenant cap above 1000; zero and negatives
+// were already defaulted by normalizeMultitenantLimits.
+func checkMultitenantLimits(cfg *LimitsConfig) error {
 	if cfg.Tenants > 1000 {
 		return NewValidationError("multitenant.limits.tenants", "cannot exceed 1000")
 	}
 	return nil
 }
 
-// validateMultitenantTenants validates tenant configurations when they are provided
-func validateMultitenantTenants(tenants map[string]TenantEntry) error {
-	if len(tenants) == 0 {
-		return NewValidationError(fieldMultitenantTenants, "at least one tenant must be configured")
-	}
-
-	if err := checkTenantMessagingConsistency(tenants); err != nil {
-		return err
-	}
-
+// normalizeMultitenantTenants shapes each static tenant's database (opaque)
+// and cache, and writes the result back to the map. The tenant-ID rules
+// (empty, dotted) and cross-tenant messaging consistency are check's — see
+// checkMultitenant.
+func normalizeMultitenantTenants(tenants map[string]TenantEntry) error {
 	// Sorted, like forEachDatabaseSection: with several malformed tenants the
 	// startup error names the same one every run.
 	for _, tenantID := range slices.Sorted(maps.Keys(tenants)) {
 		tenant := tenants[tenantID]
-		if tenantID == "" {
-			return NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty")
-		}
-		// A '.' collides with koanf's path delimiter: the constructed section
-		// path multitenant.tenants.<id>.database becomes ambiguous. Koanf has
-		// no delimiter escaping, so fail fast rather than let a later lookup
-		// consult the wrong flattened key.
-		if strings.Contains(tenantID, ".") {
-			return NewValidationError(fieldMultitenantTenants,
-				fmt.Sprintf("tenant ID %q cannot contain '.' (the config path delimiter)", tenantID))
-		}
 
 		if err := normalizeDatabaseSection(&tenant.Database, tenantDatabaseSection(tenantID)); err != nil {
 			return err
@@ -1688,7 +1750,7 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 			return err
 		}
 
-		// Persist defaults back to the map (see validateNamedDatabases for rationale).
+		// Persist defaults back to the map (see normalizeNamedDatabases for rationale).
 		tenants[tenantID] = tenant
 	}
 

@@ -27,8 +27,15 @@ func Validate(cfg *Config) error {
 // normalize shapes cfg: infers what can be inferred, fills documented
 // defaults, and rejects only what it cannot shape — a contradiction, a value a
 // consumer would silently drop, or (for a fill step) a negative where zero
-// means "use the default".
+// means "use the default". Presence rejections precede shaping.
 func normalize(cfg *Config) error {
+	// Presence rejections precede shaping: a section delivered with only empty
+	// identity keys cannot be shaped, and its error must not be replaced by the
+	// generic "incomplete" one that shaping would raise (ADR-051).
+	if err := validateNoDeliveredEmptyDatabase(cfg); err != nil {
+		return fmt.Errorf("database config: %w", err)
+	}
+
 	if err := normalizeApp(&cfg.App); err != nil {
 		return fmt.Errorf("app config: %w", err)
 	}
@@ -37,12 +44,7 @@ func normalize(cfg *Config) error {
 		return fmt.Errorf("scheduler config: %w", err)
 	}
 
-	// The remaining validate* steps still interleave shaping and checks; PR2/PR3 split or move them.
-	if err := validateNoDeliveredEmptyDatabase(cfg); err != nil {
-		return fmt.Errorf("database config: %w", err)
-	}
-
-	if err := validateMultitenant(&cfg.Multitenant, &cfg.Database, &cfg.Messaging, &cfg.Source); err != nil {
+	if err := normalizeMultitenant(&cfg.Multitenant, &cfg.Source); err != nil {
 		return fmt.Errorf("multitenant config: %w", err)
 	}
 
@@ -55,10 +57,11 @@ func normalize(cfg *Config) error {
 		return fmt.Errorf("database config: %w", err)
 	}
 
-	if err := validateNamedDatabases(cfg.Databases, &cfg.Multitenant); err != nil {
+	if err := normalizeNamedDatabases(cfg.Databases); err != nil {
 		return fmt.Errorf("databases config: %w", err)
 	}
 
+	// validateCache and validateMessaging still interleave shaping and checks; PR3 splits them.
 	if err := validateCache(&cfg.Cache, cfg.Multitenant.Enabled); err != nil {
 		return fmt.Errorf("cache config: %w", err)
 	}
@@ -84,6 +87,14 @@ func check(cfg *Config) error {
 
 	if err := checkScheduler(&cfg.Scheduler); err != nil {
 		return fmt.Errorf("scheduler config: %w", err)
+	}
+
+	if err := checkMultitenant(&cfg.Multitenant, &cfg.Database, &cfg.Messaging, &cfg.Source); err != nil {
+		return fmt.Errorf("multitenant config: %w", err)
+	}
+
+	if err := checkNamedDatabases(cfg.Databases, &cfg.Multitenant); err != nil {
+		return fmt.Errorf("databases config: %w", err)
 	}
 
 	if err := checkLog(&cfg.Log); err != nil {
