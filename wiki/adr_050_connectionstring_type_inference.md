@@ -26,7 +26,9 @@
 > Consequences and [migrations.md](migrations.md) `[C59.6]`.
 >
 > **Amended (2026-08-15):** the "two call sites" above are now two *doors* of one
-> module. `config.Validate` (root, named and tenant sections) and
+> module. `config.validateDatabaseWithConnectionString` no longer exists — its
+> body became `normalizeWithConnectionString`, the module's connection-string
+> startup path. `config.Validate` (root, named and tenant sections) and
 > `config.ApplyDatabasePoolDefaults` both call `normalizeDatabaseValues` in
 > `config/database_section.go`; the asymmetry this ADR describes is the module's
 > *strictness* input (`startup` errors on a conflicting explicit `type`,

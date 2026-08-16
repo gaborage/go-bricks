@@ -453,7 +453,7 @@ In `config/validation.go`:
 
 ```go
 func validateNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantConfig) error {
-	for name := range databases {
+	for _, name := range slices.Sorted(maps.Keys(databases)) {
 		if err := validateNamedDatabaseName(name, mt); err != nil {
 			return err
 		}
