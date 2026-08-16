@@ -2465,10 +2465,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   server, so it satisfies the validator yet buys no verification. Nothing
   here is compiler-caught; booting each environment decides for static
   configs — a first connection per dynamic tenant decides for the rest.
-  (x) Grep your service for `app.NewWithConfig` or a direct `app.Builder`
-  chain — `git grep -n 'NewWithConfig\|NewAppBuilder'` — and check every hit
-  handing over a hand-built `*config.Config`, not `config.Load` output; most
-  services construct via `app.New()` and are unaffected. Run that config
+  (x) Grep your service for `app.NewWithConfig`, a direct `app.Builder`
+  chain, or an `Options.ConfigLoader` handed to `app.NewWithOptions` —
+  `git grep -n 'NewWithConfig\|NewAppBuilder\|NewWithOptions'` — and check
+  every hit handing over a hand-built `*config.Config`, not `config.Load`
+  output; most services construct via `app.New()` and are unaffected. Run that config
   through `config.Validate` before the bump: missing `app.name` or
   `app.version`, zero `server.timeout.*` values, and an invalid
   `database.type` now fail construction instead of booting on whatever the
@@ -3088,8 +3089,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C59.12] `app.NewWithConfig` and `app.Builder.WithConfig` validate the config · breaking · when: match
 
-- detect: `git grep -n 'NewWithConfig\|NewAppBuilder'` in your service. Every hit handing over a
-  hand-built `*config.Config` (not `config.Load` output) is in scope — most services construct via
+- detect: `git grep -n 'NewWithConfig\|NewAppBuilder\|NewWithOptions'` in your service. Every hit
+  handing over a hand-built `*config.Config` (not `config.Load` output) is in scope —
+  `NewWithOptions` counts when its `Options.ConfigLoader` returns one — most services construct via
   `app.New()` and are unaffected.
 - scope: `app.Builder.WithConfig` now runs `config.Validate`. The rules are the ones `config.Load`
   always applied; only the bypass is gone (ADR-050 documented the obligation, nothing enforced it).
