@@ -19,10 +19,19 @@ is allowed, and how its errors are addressed.
 _Avoid_: role, kind, level, scope
 
 **Normalization**:
-Turning a database section into the shape a connection can be opened from:
-inferring what can be inferred, filling documented defaults, and rejecting
-what a driver would silently drop.
+Turning a configuration — the whole loaded tree or any one section — into the
+shape it is consumed from: inferring what can be inferred, filling documented
+defaults, and rejecting only what cannot be shaped (a contradiction, or a value
+a consumer would silently drop). A database section is the canonical example:
+after normalization a connection can be opened from it.
 _Avoid_: defaulting, validation (on its own), sanitizing, hydration
+
+**Check**:
+Rejecting a normalized configuration without changing it: required identity
+that is still missing, and rules that span fields or sections. Normalization
+and check together are what `Validate` does; a normalized configuration that
+passes check is valid.
+_Avoid_: validation (for this phase alone), verification, assertion, linting
 
 **Strictness**:
 How normalization treats an explicit value that contradicts an inferred one:
