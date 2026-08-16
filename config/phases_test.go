@@ -3,6 +3,7 @@ package config
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +21,27 @@ func TestValidateRejectsNil(t *testing.T) {
 	require.ErrorIs(t, err, errNilConfig)
 }
 
+// idempotencyMultitenantFixture is a full literal config with static
+// multitenancy: two tenant databases (so the tenant map write-back path is
+// under the pin) and a named database. The root database is left absent — a
+// root database and static tenants both configured is a conflict
+// (validateNoSingleTenantConflict).
+func idempotencyMultitenantFixture() *Config {
+	cfg := createValidFullConfig()
+	cfg.Database = DatabaseConfig{}
+	cfg.Source = SourceConfig{Type: SourceTypeStatic}
+	cfg.Multitenant = MultitenantConfig{
+		Enabled:  true,
+		Resolver: ResolverConfig{Type: ResolverTypeHeader},
+		Tenants: map[string]TenantEntry{
+			"acme":   {Database: createValidDatabaseConfig()},
+			"globex": {Database: createValidDatabaseConfig()},
+		},
+	}
+	cfg.Databases = map[string]DatabaseConfig{"reporting": createValidDatabaseConfig()}
+	return cfg
+}
+
 // TestValidateIsIdempotent pins decision 5 of the normalize/check split design:
 // every construction path calls Validate, some more than once, so a second
 // pass must be a no-op. Two independently built configs are compared rather
@@ -31,6 +53,17 @@ func TestValidateIsIdempotent(t *testing.T) {
 		require.NoError(t, Validate(a))
 
 		b := idempotencyFixture()
+		require.NoError(t, Validate(b))
+		require.NoError(t, Validate(b))
+
+		require.Equal(t, a, b)
+	})
+
+	t.Run("literal_door_multitenant", func(t *testing.T) {
+		a := idempotencyMultitenantFixture()
+		require.NoError(t, Validate(a))
+
+		b := idempotencyMultitenantFixture()
 		require.NoError(t, Validate(b))
 		require.NoError(t, Validate(b))
 
@@ -89,5 +122,100 @@ func TestCheckDoesNotMutate(t *testing.T) {
 
 		require.Error(t, check(a))
 		require.Equal(t, a, b)
+	})
+}
+
+// TestNormalizeDeliveredEmptyWinsOverIncomplete pins the presence step's
+// position at the head of normalize (ADR-051): a root database delivered
+// through koanf with an empty identity key must fail with the delivered-empty
+// error, never the generic incomplete one a later shaping step would raise for
+// the same key. An app-side normalize rejection is planted so the pin fails if
+// the presence step slips below normalizeApp; the sibling proves the plant is
+// live.
+func TestNormalizeDeliveredEmptyWinsOverIncomplete(t *testing.T) {
+	t.Run("presence_wins", func(t *testing.T) {
+		cfg, err := loadDeliveredEmptyFixture(t, "", map[string]string{"DATABASE_HOST": "", "APP_STARTUP_TIMEOUT": "-1s"})
+		require.Error(t, err)
+		assert.Nil(t, cfg)
+		assertDeliveredEmptyError(t, err.Error(), []string{"delivered empty", "database.host"}, []string{"incomplete", appStartupTimeoutField}, nil)
+	})
+
+	t.Run("plant_is_live", func(t *testing.T) {
+		cfg, err := loadDeliveredEmptyFixture(t, "", map[string]string{"APP_STARTUP_TIMEOUT": "-1s"})
+		require.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.Contains(t, err.Error(), appStartupTimeoutField)
+	})
+}
+
+// TestNormalizeLiteralDoorIncompleteSurfaces pins the complementary door: a
+// hand-built Config literal carries no koanf handle, so
+// validateNoDeliveredEmptyDatabase is inert for it (see
+// TestValidateNoDeliveredEmptyDatabaseInertForLiteral) and normalizeDatabaseSection's
+// own rejection must surface instead.
+func TestNormalizeLiteralDoorIncompleteSurfaces(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.Database = DatabaseConfig{Host: "db.internal"}
+
+	err := Validate(cfg)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "delivered empty")
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, errCategoryInvalid, cfgErr.Category)
+	assert.Equal(t, "database.type", cfgErr.Field)
+}
+
+// TestNormalizeManagerDefaultsRootOnly pins that database.manager.* defaults
+// reach the root section only; a named or tenant section carrying a manager
+// block is rejected — pinned through Validate in validation_test.go.
+func TestNormalizeManagerDefaultsRootOnly(t *testing.T) {
+	cfg := idempotencyFixture()
+	require.NoError(t, Validate(cfg))
+
+	assert.Equal(t, defaultDatabaseManagerIdleTTL, cfg.Database.Manager.IdleTTL)
+	assert.Equal(t, defaultDatabaseManagerCleanupInterval, cfg.Database.Manager.CleanupInterval)
+	assert.Equal(t, defaultDatabaseManagerMaxSize, cfg.Database.Manager.MaxSize)
+	assert.Zero(t, cfg.Databases["reporting"].Manager)
+}
+
+// TestCheckSingleTenantConflictAfterNormalize pins the conflict rule through
+// the phase boundary: it now runs after root database and messaging
+// normalization, so a complete root section alongside static tenants must
+// still abort — normalization never adds identity to a section that had none.
+func TestCheckSingleTenantConflictAfterNormalize(t *testing.T) {
+	t.Run("root_database", func(t *testing.T) {
+		cfg := idempotencyMultitenantFixture()
+		cfg.Database = createValidDatabaseConfig()
+
+		err := Validate(cfg)
+		require.Error(t, err)
+		var cfgErr *ConfigError
+		require.ErrorAs(t, err, &cfgErr)
+		assert.Equal(t, fieldDatabase, cfgErr.Field)
+		assert.Contains(t, err.Error(), "not allowed when static tenants are configured")
+	})
+
+	// A static source with no tenant map has no static tenants: the root
+	// database stays legal, so the gate must be "at least one", not "any map".
+	t.Run("no_tenant_map_permits_root_database", func(t *testing.T) {
+		cfg := idempotencyMultitenantFixture()
+		cfg.Multitenant.Tenants = nil
+		cfg.Database = createValidDatabaseConfig()
+
+		require.NoError(t, Validate(cfg))
+	})
+
+	t.Run("root_messaging", func(t *testing.T) {
+		cfg := idempotencyMultitenantFixture()
+		cfg.Messaging.Broker.URL = "amqp://guest:guest@localhost:5672/"
+
+		err := Validate(cfg)
+		require.Error(t, err)
+		var cfgErr *ConfigError
+		require.ErrorAs(t, err, &cfgErr)
+		assert.Equal(t, fieldMessaging, cfgErr.Field)
+		assert.Contains(t, err.Error(), "not allowed when static tenants are configured")
 	})
 }

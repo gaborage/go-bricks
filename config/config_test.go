@@ -658,9 +658,9 @@ func TestEnvOverrideReachesRenamedKeys(t *testing.T) {
 //
 // This stays green without MULTITENANT_ENABLED=true (and thus without a
 // resolver.domain, now required alongside resolver.order for a composite
-// reaching validateMultitenantResolver) only because validateMultitenant
-// short-circuits at `if !mt.Enabled { return nil }` — Load() still calls
-// Validate(), it just never reaches the resolver checks here.
+// reaching checkMultitenantResolver) only because normalizeMultitenant and
+// checkMultitenant both short-circuit at `if !mt.Enabled { return nil }` —
+// Load() still calls Validate(), it just never reaches the resolver checks here.
 func TestEnvOverrideReachesResolverOrder(t *testing.T) {
 	clearEnvironmentVariables()
 	defer clearEnvironmentVariables()
