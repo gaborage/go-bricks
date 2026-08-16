@@ -24,6 +24,17 @@
 > Inference normalizes the config *shape*; only the guard is connector-aware.
 > `ApplyDatabasePoolDefaults` now also runs `validateVendorSpecificFields`. See
 > Consequences and [migrations.md](migrations.md) `[C59.6]`.
+>
+> **Amended (2026-08-15):** the "two call sites" above are now two *doors* of one
+> module. `config.Validate` (root, named and tenant sections) and
+> `config.ApplyDatabasePoolDefaults` both call `normalizeDatabaseValues` in
+> `config/database_section.go`; the asymmetry this ADR describes is the module's
+> *strictness* input (`startup` errors on a conflicting explicit `type`,
+> `connect` tolerates it). The recognized-scheme list still lives only in
+> `inferDatabaseTypeFromConnectionString`. The startup guard in
+> `app.Builder.ConfigureRuntimeHelpers` now reads
+> `config.UntypedDatabaseSections` instead of walking the tree itself; the
+> connector exemption in item 2 is unchanged and stays app-side.
 
 ## Context
 

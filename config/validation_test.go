@@ -2246,8 +2246,9 @@ func TestApplyDatabaseTimezoneRejectsInvalid(t *testing.T) {
 }
 
 func TestApplyDatabaseTimezoneAppliesViaConnectionString(t *testing.T) {
-	// Connection-string path goes through validateDatabaseWithConnectionString,
-	// which must also default Timezone to UTC and validate it.
+	// Connection-string path goes through normalizeWithConnectionString (via
+	// normalizeDatabaseSection), which must also default Timezone to UTC and
+	// validate it.
 	cfg := &DatabaseConfig{
 		ConnectionString: "host=localhost port=5432 dbname=testdb user=testuser",
 	}
@@ -5979,9 +5980,10 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 
 func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
 	// The conflicting case pins a deliberate divergence from
-	// validateDatabaseWithConnectionString, which rejects a Type contradicting the
-	// scheme: this seam runs per connection, so it leaves the explicit Type alone
-	// and lets the vendor dial error be the failure (ADR-050). Do not "fix" it.
+	// normalizeWithConnectionString (startup strictness), which rejects a Type
+	// contradicting the scheme: this seam runs per connection (connect
+	// strictness), so it leaves the explicit Type alone and lets the vendor dial
+	// error be the failure (ADR-050). Do not "fix" it.
 	// The matching-type case is covered by explicit_matching_type_untouched in
 	// databaseTypeInferenceCases, which this seam's table test already runs.
 	conflicting := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}
