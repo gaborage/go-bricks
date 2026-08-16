@@ -1543,7 +1543,7 @@ func TestBuildMessagingDeclarations(t *testing.T) {
 		app := &App{}
 
 		err := app.buildMessagingDeclarations()
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "module registry not initialized")
 	})
 
