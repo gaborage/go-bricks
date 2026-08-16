@@ -148,6 +148,7 @@ const (
 	errDatabaseIncomplete = "database configuration incomplete"
 	portRange             = "1-65535"
 	fieldDatabase         = "database"
+	fieldDatabases        = "databases"
 	fieldDatabasePort     = "database.port"
 	fieldDatabasePassword = "database.password"
 	fieldMessaging        = "messaging"
@@ -969,7 +970,7 @@ func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 	if name == "" {
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    "databases",
+			Field:    fieldDatabases,
 			Message:  "database name cannot be empty",
 			Action:   "provide a non-empty key for each entry in databases section",
 		}
@@ -990,7 +991,7 @@ func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 	if strings.Contains(name, ".") {
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    "databases",
+			Field:    fieldDatabases,
 			Message:  fmt.Sprintf("database name %q cannot contain '.' (the config path delimiter)", name),
 			Action:   "rename the databases entry without dots",
 		}
