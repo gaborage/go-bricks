@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -291,6 +293,14 @@ func mutatePackage(ctx context.Context, engineArgs []string, pkg, reportDir stri
 	dryJSON, err := runEngine(ctx, engineArgs, pkg, reportPathFor(pkg, reportDir)+".dry",
 		[]string{"--dry-run", workersFlag, "1"}, out)
 	if err != nil {
+		// A missing report after a zero exit is gremlins' shape for a package with
+		// no mutatable statements (e.g. constants-only): it prints "No results to
+		// report." and writes nothing. Engine failures surface earlier as
+		// "engine failed" and stay fatal.
+		if errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintf(out, "mutatediff: %s produced no dry-run report (no mutatable statements), skipping\n", pkg)
+			return nil, nil, false, nil
+		}
 		return nil, nil, false, err
 	}
 	onChanged, cErr := countOnChangedLines(dryJSON, pkg, changed)

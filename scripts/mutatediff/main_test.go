@@ -102,6 +102,25 @@ func TestRunNoOpDiffLeavesEnvironmentAlone(t *testing.T) {
 // TestMutatePackageReportsFailureAsNotRun pins the signal the cooldown depends
 // on: a package whose engine never executed mutants generated no load, so the
 // caller must be able to tell it apart from a package that ran.
+// TestMutatePackageSkipsWhenEngineWritesNoDryReport pins the constants-only
+// package case: gremlins exits 0 without writing a report when a package has
+// no mutatable statements, and the gate must skip it rather than abort the
+// whole run. `true` reproduces that shape — zero exit, no report file.
+func TestMutatePackageSkipsWhenEngineWritesNoDryReport(t *testing.T) {
+	var buf bytes.Buffer
+	_, _, ran, err := mutatePackage(t.Context(), []string{"true"}, "./internal/testutil",
+		t.TempDir(), map[string][]lineRange{}, 1, &buf)
+	if err != nil {
+		t.Fatalf("want nil error for a zero-exit engine with no report, got %v", err)
+	}
+	if ran {
+		t.Error("ran = true, want false when no mutants were executed")
+	}
+	if !strings.Contains(buf.String(), "no dry-run report") {
+		t.Errorf("skip reason not reported, output: %q", buf.String())
+	}
+}
+
 func TestMutatePackageReportsFailureAsNotRun(t *testing.T) {
 	var buf bytes.Buffer
 	// An engine that cannot run at all fails before any verdict; the point here is
