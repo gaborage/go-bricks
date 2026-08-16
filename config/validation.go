@@ -142,28 +142,29 @@ const (
 
 // Validation error message constants
 const (
-	errMustBeNonNegative  = "must be non-negative"
-	errMustBePositive     = "must be positive"
-	errNotSupportedFmt    = "'%s' is not supported"
-	errDatabaseIncomplete = "database configuration incomplete"
-	portRange             = "1-65535"
-	fieldDatabase         = "database"
-	fieldDatabases        = "databases"
-	fieldDatabasePort     = "database.port"
-	fieldDatabasePassword = "database.password"
-	fieldMessaging        = "messaging"
-	fieldCache            = "cache"
-	fieldDebug            = "debug"
-	fieldServerPort       = "server.port"
-	fieldLogLevel         = "log.level"
-	fieldAppEnv           = "app.env"
-	fieldAppRateLimit     = "app.rate.limit"
-	fieldCacheRedisDB     = "cache.redis.database"
-	fieldCacheRedisPool   = "cache.redis.poolsize"
-	fieldResolverOrder    = "multitenant.resolver.order"
-	errInvalidField       = "invalid value: %v"
-	databasesFieldPrefix  = "databases.%s"
-	defaultHost           = "localhost"
+	errMustBeNonNegative    = "must be non-negative"
+	errMustBePositive       = "must be positive"
+	errNotSupportedFmt      = "'%s' is not supported"
+	errDatabaseIncomplete   = "database configuration incomplete"
+	portRange               = "1-65535"
+	fieldDatabase           = "database"
+	fieldDatabases          = "databases"
+	fieldMultitenantTenants = "multitenant.tenants"
+	fieldDatabasePort       = "database.port"
+	fieldDatabasePassword   = "database.password"
+	fieldMessaging          = "messaging"
+	fieldCache              = "cache"
+	fieldDebug              = "debug"
+	fieldServerPort         = "server.port"
+	fieldLogLevel           = "log.level"
+	fieldAppEnv             = "app.env"
+	fieldAppRateLimit       = "app.rate.limit"
+	fieldCacheRedisDB       = "cache.redis.database"
+	fieldCacheRedisPool     = "cache.redis.poolsize"
+	fieldResolverOrder      = "multitenant.resolver.order"
+	errInvalidField         = "invalid value: %v"
+	databasesFieldPrefix    = "databases.%s"
+	defaultHost             = "localhost"
 
 	fieldServerTLSCertFile   = "server.tls.certfile"
 	fieldServerTLSCertValue  = "server.tls.certvalue"
@@ -1721,7 +1722,7 @@ func validateMultitenantLimits(cfg *LimitsConfig) error {
 // validateMultitenantTenants validates tenant configurations when they are provided
 func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 	if len(tenants) == 0 {
-		return NewValidationError("multitenant.tenants", "at least one tenant must be configured")
+		return NewValidationError(fieldMultitenantTenants, "at least one tenant must be configured")
 	}
 
 	if err := checkTenantMessagingConsistency(tenants); err != nil {
@@ -1733,14 +1734,14 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 	for _, tenantID := range slices.Sorted(maps.Keys(tenants)) {
 		tenant := tenants[tenantID]
 		if tenantID == "" {
-			return NewValidationError("multitenant.tenants", "tenant ID cannot be empty")
+			return NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty")
 		}
 		// A '.' collides with koanf's path delimiter: the constructed section
 		// path multitenant.tenants.<id>.database becomes ambiguous. Koanf has
 		// no delimiter escaping, so fail fast rather than let a later lookup
 		// consult the wrong flattened key.
 		if strings.Contains(tenantID, ".") {
-			return NewValidationError("multitenant.tenants",
+			return NewValidationError(fieldMultitenantTenants,
 				fmt.Sprintf("tenant ID %q cannot contain '.' (the config path delimiter)", tenantID))
 		}
 
