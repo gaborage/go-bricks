@@ -39,8 +39,8 @@ func (a *App) startMaintenanceLoops() {
 }
 
 // cleanupIntervalTooLate reports whether cleanupInterval sweeps no more often than
-// idleTTL. idleTTL <= 0 returns false: config.Validate defaults IdleTTL
-// unconditionally, so this guard only covers Validate-bypassing callers.
+// idleTTL. idleTTL <= 0 cannot occur on a validated config; the branch defends
+// direct App construction in tests.
 func cleanupIntervalTooLate(cleanupInterval, idleTTL time.Duration) bool {
 	if idleTTL <= 0 {
 		return false

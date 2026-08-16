@@ -11,30 +11,6 @@ import (
 	"github.com/gaborage/go-bricks/messaging"
 )
 
-// Documented operator-configurable defaults. These mirror the values applied by
-// config validation (see config/validation.go: applyMessagingDefaults and
-// applyCacheManagerDefaults) so the builder honors the same documented behavior
-// even when invoked without a fully-validated config (e.g. in unit tests).
-// defaultPublisherIdleTTL (single-tenant) has a third copy: messaging.NewMessagingManager's
-// fallback (messaging/manager.go) for bare callers that bypass this builder — that
-// fallback is single-tenant-only (see its comment), since a bare caller supplies no
-// deployment-mode signal.
-const (
-	defaultPublisherMaxCached = 50
-	defaultPublisherIdleTTL   = 1 * time.Hour // Single-tenant default; see config/validation.go
-	// defaultPublisherIdleTTLMultiTenant mirrors config/validation.go's
-	// defaultPublisherIdleTTLMultiTenant. Kept as a separate copy (not imported) for the
-	// same reason as defaultPublisherIdleTTL above: this builder must honor the documented
-	// default even when constructed directly, bypassing config validation.
-	defaultPublisherIdleTTLMultiTenant = 10 * time.Minute
-	defaultCacheMaxSize                = 100
-	defaultCacheIdleTTL                = 15 * time.Minute
-	defaultCacheCleanupInterval        = 5 * time.Minute
-	defaultDatabaseMaxSize             = 10
-	defaultDatabaseIdleTTL             = 1 * time.Hour    // mirrors config/validation.go
-	defaultDatabaseIdleTTLMultiTenant  = 30 * time.Minute // mirrors config/validation.go
-)
-
 // ManagerConfigBuilder creates configuration options for database and messaging managers
 // based on deployment mode (single-tenant vs multi-tenant).
 type ManagerConfigBuilder struct {
@@ -62,11 +38,9 @@ type ManagerConfigBuilder struct {
 	resendDelay       time.Duration
 	// publisherConfig carries operator-configurable messaging publisher pool
 	// settings (messaging.publisher.*), sourced from validated config by bootstrap.
-	// When unset, documented defaults are applied as fallbacks.
 	publisherConfig config.PublisherPoolConfig
 	// cacheConfig carries operator-configurable cache manager settings
 	// (cache.manager.*), sourced from validated config by bootstrap.
-	// When unset, documented defaults are applied as fallbacks.
 	cacheConfig config.CacheManagerConfig
 	// dbConfig holds database.manager.* settings, set by bootstrap from validated config.
 	dbConfig config.DatabaseManagerConfig
@@ -80,48 +54,29 @@ func NewManagerConfigBuilder(multiTenantEnabled bool, tenantLimit int) *ManagerC
 	}
 }
 
-// resolveMaxSize treats non-positive as unset (not just zero) so a negative from a
-// Validate-bypassing path (a Builder assembled without WithConfig, or a unit test
-// building this type directly) can't skip the mode-aware fallback and reach the
-// managers' own <=0->default coercion (see database/manager.go, messaging/manager.go).
-func (b *ManagerConfigBuilder) resolveMaxSize(operatorValue, singleTenantDefault int) int {
+// resolveMaxSize returns the operator's validated value, or — multi-tenant
+// only — scales a deliberately-preserved zero to the tenant limit (#661).
+// Single-tenant zeros cannot reach here: config.Validate stamps the default.
+func (b *ManagerConfigBuilder) resolveMaxSize(operatorValue int) int {
 	if operatorValue > 0 {
 		return operatorValue
 	}
-	if b.multiTenantEnabled {
-		return b.tenantLimit
-	}
-	return singleTenantDefault
+	return b.tenantLimit
 }
 
-// resolveIdleTTL mirrors resolveMaxSize: the fallback is inert once config.Validate stamps defaults, but load-bearing when Validate is bypassed (a Builder assembled without WithConfig, unit tests).
-func (b *ManagerConfigBuilder) resolveIdleTTL(operatorValue, multiTenantDefault, singleTenantDefault time.Duration) time.Duration {
-	if operatorValue > 0 {
-		return operatorValue
-	}
-	if b.multiTenantEnabled {
-		return multiTenantDefault
-	}
-	return singleTenantDefault
-}
-
-// BuildDatabaseOptions creates database manager options based on deployment mode.
-// Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
-// Single-tenant mode uses smaller fixed limits and longer TTL for stability.
+// BuildDatabaseOptions creates database manager options from validated config.
 func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions {
 	return database.DbManagerOptions{
-		MaxSize: b.resolveMaxSize(b.dbConfig.MaxSize, defaultDatabaseMaxSize),
-		IdleTTL: b.resolveIdleTTL(b.dbConfig.IdleTTL, defaultDatabaseIdleTTLMultiTenant, defaultDatabaseIdleTTL),
+		MaxSize: b.resolveMaxSize(b.dbConfig.MaxSize),
+		IdleTTL: b.dbConfig.IdleTTL,
 	}
 }
 
-// BuildMessagingOptions creates messaging manager options based on deployment mode.
-// Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
-// Single-tenant mode uses smaller fixed limits and a longer TTL (same 1h as the DB pool).
+// BuildMessagingOptions creates messaging manager options from validated config.
 func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions {
 	return messaging.ManagerOptions{
-		MaxPublishers:      b.resolveMaxSize(b.publisherConfig.MaxCached, defaultPublisherMaxCached),
-		IdleTTL:            b.resolveIdleTTL(b.publisherConfig.IdleTTL, defaultPublisherIdleTTLMultiTenant, defaultPublisherIdleTTL),
+		MaxPublishers:      b.resolveMaxSize(b.publisherConfig.MaxCached),
+		IdleTTL:            b.publisherConfig.IdleTTL,
 		ConnectionTimeout:  b.connectionTimeout,
 		MaxPublishAttempts: b.maxPublishAttempts,
 		ReadyTimeout:       b.readyTimeout,
@@ -132,38 +87,22 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 	}
 }
 
-// BuildCacheOptions creates cache manager options based on deployment mode.
-// Multi-tenant mode uses tenant limits and shorter TTL for dynamic scaling.
-// Single-tenant mode uses smaller fixed limits and longer TTL.
+// BuildCacheOptions creates cache manager options from validated config.
 func (b *ManagerConfigBuilder) BuildCacheOptions() cache.ManagerConfig {
-	// Operator config (cache.manager.*) is the source of truth. Mode-specific
-	// values are only fallbacks when the operator left the key unset (zero).
-	// Not resolveMaxSize: cache.NewCacheManager rejects negatives (unlike the
-	// db/messaging managers, which coerce), so a negative must pass through and
+	// Operator config (cache.manager.*) is the source of truth. Multi-tenant zero is
+	// deliberately preserved by config.Validate (#661), so it scales to the tenant
+	// limit here. Not resolveMaxSize: cache.NewCacheManager rejects negatives (unlike
+	// the db/messaging managers, which coerce), so a negative must pass through and
 	// fail loudly there instead of being silently swallowed into a live pool.
 	maxSize := b.cacheConfig.MaxSize
-	if maxSize == 0 {
-		if b.multiTenantEnabled {
-			maxSize = b.tenantLimit
-		} else {
-			maxSize = defaultCacheMaxSize
-		}
-	}
-
-	idleTTL := b.cacheConfig.IdleTTL
-	if idleTTL == 0 {
-		idleTTL = defaultCacheIdleTTL // Documented default (same for both modes)
-	}
-
-	cleanupInterval := b.cacheConfig.CleanupInterval
-	if cleanupInterval == 0 {
-		cleanupInterval = defaultCacheCleanupInterval // Documented default (same for both modes)
+	if maxSize == 0 && b.multiTenantEnabled {
+		maxSize = b.tenantLimit
 	}
 
 	return cache.ManagerConfig{
 		MaxSize:         maxSize,
-		IdleTTL:         idleTTL,
-		CleanupInterval: cleanupInterval,
+		IdleTTL:         b.cacheConfig.IdleTTL,
+		CleanupInterval: b.cacheConfig.CleanupInterval,
 	}
 }
 
