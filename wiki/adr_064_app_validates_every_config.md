@@ -30,9 +30,9 @@ hidden "already validated" state is introduced.
   fails at construction instead of booting on whatever the mirrors papered
   over. Remedy per field is the `ConfigError`'s own action line. See
   [migrations.md](migrations.md) [C59.12].
-- The app-side mirrors become dead weight and are deleted in the follow-up PR
-  (`app/managers.go` default constants, the mode fallbacks in
-  `resolveMaxSize`/`resolveIdleTTL`). `lifecycle.go`'s bypass guard is kept —
+- The app-side mirrors become dead weight and are deleted by the companion
+  refactor in the same stack (`app/managers.go` default constants, the mode
+  fallbacks in `resolveMaxSize`/`resolveIdleTTL`). `lifecycle.go`'s bypass guard is kept —
   only its comment is re-scoped, from describing a Validate bypass to
   describing direct-construction defense-in-depth.
   `messaging.NewMessagingManager` keeps its fallback: it is that standalone
