@@ -6,10 +6,10 @@ Streams are append-only replicated logs: reads are non-destructive, positions ar
 offsets, and the broker itself remembers where a named consumer got to.
 
 Publishing over this lane is **confirmed and synchronous**: `DeclarePublisher`
-returns a `*Publisher` whose `Publish` blocks until the broker confirms the
-message, the context expires, or the publisher closes. Delivery is
-at-least-once — a context expiry does not prove the message failed. See
-[Publishing](#publishing).
+returns a `*Publisher` whose `Publish` blocks until the send resolves — a broker
+confirmation, a client-side failure, the context expiring, or the publisher
+closing. Delivery is at-least-once, and a context expiry leaves the outcome
+**unknown**: the message may still land. See [Publishing](#publishing).
 
 ## Which lane
 
@@ -20,7 +20,7 @@ at-least-once — a context expiry does not prove the message failed. See
 | Offset tracking | client-side, session-local | **server-side, survives restarts** |
 | Single active consumer | no | yes |
 | Super streams | no | yes (RabbitMQ 3.13+) |
-| Publishing | through an exchange bound to the stream queue | **direct and confirmed** (`Publisher.Publish`), partition routing on super streams |
+| Publishing | through an exchange bound to the stream queue, on AMQP publisher confirms | **direct to the stream** (`Publisher.Publish`), one broker confirmation per message, hash-routed across super-stream partitions |
 | Handler concurrency | worker pool (`NumCPU*4`) | **sequential per stream**, one goroutine per partition |
 | Multi-tenant | yes | no — single-tenant only |
 
@@ -273,7 +273,7 @@ func (m *Module) Emit(ctx context.Context, order *Order) error {
 
     return m.payments.Publish(ctx, &streams.PublishMessage{
         Data:       order.PaymentJSON(),
-        RoutingKey: order.CustomerID, // picks the partition; required here
+        RoutingKey: order.CustomerID, // a string key; picks the partition, required here
     })
 }
 ```
@@ -292,46 +292,72 @@ pointer.
 
 ### What the returned error means
 
-**`Publish` blocks until the broker confirms the message**, `ctx` expires, or the
-publisher closes. A `nil` return therefore means the broker acknowledged the
-message — not merely that it was handed to the client. That is the whole reason
-the surface is synchronous: the client's own send is asynchronous and swallows
-write errors, so its `nil` proves nothing and the confirmation is the only truth
-available ([ADR-063](adr_063_streams_native_publishing.md)).
+**`Publish` blocks until the send resolves**: a broker confirmation, a
+client-side failure, `ctx` expiring, or the publisher closing. A `nil` return
+means the broker acknowledged the message — not merely that it was handed to the
+client. That is the whole reason the surface is synchronous: the client's own
+send is asynchronous and swallows write errors, so its `nil` proves nothing and
+the confirmation is the only truth available
+([ADR-063](adr_063_streams_native_publishing.md)).
 
-**An error does not prove the message was not written.** A context expiry in
-particular: the send may still be in flight and may still land. Delivery is
-**at-least-once**, exactly as on the consume side — **consumers must be
-idempotent**, and a retry after a timeout must be safe to receive twice.
+Errors come in two kinds, and only one of them is ambiguous.
 
-### The context is the only bound
+**Rejected before submission — nothing was published.** A nil
+`*PublishMessage`, a `RoutingKey` that does not match the publisher's kind,
+`ErrPublisherNotStarted`, and a publish that arrives once the publisher is
+already closed are all rejected before anything reaches the client. No message
+was sent, so a retry cannot duplicate.
 
-Publishing adds **no configuration keys**. The framework imposes no publish
-timeout of its own: the caller's context bounds the call and nothing else. In an
-HTTP handler that is the request context's 5s default; background work — a
-scheduled job, a consumer handler, a relay — must carry a deadline of its own,
-because `context.Background()` waits as long as the broker takes. See
-[context_deadlines.md](context_deadlines.md).
+**Failed after submission — the outcome is unknown.** Once the send is in the
+client's hands, a context expiry, the client's confirmation timeout, the
+shutdown sweep or a rejected confirmation can each arrive while the message is
+still in flight, and it may still land. The broker's own rejection is a definite
+no, but it reaches the caller in the same shape as the ambiguous cases and
+cannot be told apart from them — so treat every post-submission error as
+**unknown**, not as failure. Delivery is **at-least-once**, exactly as on the
+consume side: retrying is allowed, and **consumers must be idempotent**.
 
-Two client behaviours make that bound load-bearing rather than theoretical:
+`ErrPublisherClosed` is the one sentinel that spans both kinds: it rejects a
+publish that starts after shutdown, and it is also what the close sweep resolves
+an already-submitted publish with. The sentinel alone does not say which
+happened.
 
-- **A reconnect can park a send indefinitely.** While a producer is
-  reconnecting, the client waits on a condition variable with no timeout. The
-  framework runs the send on a goroutine it is willing to abandon and selects
-  against `ctx`, so the caller's deadline is what returns control.
-- **The client's 10s confirmation timeout is not a substitute.** While the
-  producer is connected, the client fails any message left unconfirmed for
-  `ConfirmationTimeOut` (10s, its default), so a longer deadline usually
-  surfaces that error at around ten seconds. That ticker does not run while the
-  producer reconnects, and a send that never reached the client's queue is not
-  tracked by it at all — during an outage only `ctx` or shutdown ends the wait.
+### What bounds a publish
+
+Publishing adds **no configuration keys**, and the framework adds no timeout of
+its own — the caller's `ctx` is the only bound the *framework* applies. The
+client underneath has one of its own, so a publish ends on whichever fires
+first.
+
+In an HTTP handler `ctx` carries the request context's 5s default; background
+work — a scheduled job, a consumer handler, a relay — must set a deadline of its
+own, because a `context.Background()` publish can wait indefinitely while the
+producer reconnects. See [context_deadlines.md](context_deadlines.md).
+
+Two client behaviours decide which bound actually applies:
+
+- **A reconnect can park a send indefinitely, and no client timeout covers
+  it.** While a producer is reconnecting, the client waits on a condition
+  variable with no timeout. The framework runs the send on a goroutine it is
+  willing to abandon and selects against `ctx`, so the caller's deadline — or
+  shutdown — is what returns control.
+- **While connected, the client fails a message left unconfirmed for ~10s.**
+  That is the client's own `ConfirmationTimeOut` default, which GoBricks exposes
+  no key for; a deadline longer than it usually surfaces that error at around
+  ten seconds instead of waiting on the broker. The ticker behind it stops while
+  the producer reconnects, and a send that never reached the client's queue is
+  not tracked by it at all — which is why the first bullet is the unbounded
+  case.
 
 ### Routing keys
 
-`PublishMessage.RoutingKey` selects the partition of a super stream by the
-murmur3 hash of the key, with RabbitMQ's shared seed. That is the cross-client
-default, so a key routed here lands on the same partition the Java, .NET and
-Python clients would compute for it.
+`PublishMessage.RoutingKey` selects the partition of a super stream: the client
+hashes it with murmur3 under RabbitMQ's shared seed and takes the remainder over
+the partition list. That is the cross-client default, so the same key over the
+same partition list lands where the Java, .NET and Python clients would put it.
+The partition count is the divisor, so changing it moves existing keys to
+different partitions — one more reason it is fixed at declaration time (see the
+mismatch trap above).
 
 - On a **super-stream** publisher a non-empty key is **required**. An empty one
   is rejected rather than defaulted: hashing `""` is well defined and would pile
@@ -353,7 +379,8 @@ caller's map is **copied**, never aliased, so publishing does not write into it.
 The framework injects W3C trace context into those properties through its own
 `trace` package — `traceparent`, `tracestate` when the context carries one, and
 `X-Request-ID` — so both messaging lanes write the same header names. A
-`traceparent` the caller put in `Properties` itself is preserved. Extracting
+`traceparent` the caller put in `Properties` itself is preserved, while
+`X-Request-ID` is always overwritten with the trace ID aligned to it. Extracting
 them on the consume side is future work
 ([ADR-059](adr_059_streams_consumption.md)); until then a handler can read them
 off `msg.Properties`.
@@ -361,7 +388,7 @@ off `msg.Properties`.
 ### Readiness, stats and shutdown
 
 Publishers count on the same non-critical `streams` probe as consumers: `/ready`
-reports `not_ready` while any bound publisher is disconnected, and the
+reports `not_ready` unless every bound publisher's connection is open, and the
 `streams_stats` body carries a `publishers` count beside `consumers`. The probe
 exists for a publisher-only service too — the manager is built whenever anything
 was declared.
@@ -391,7 +418,8 @@ a confirmed publish** — a failed or abandoned one is visible as duration with 
 
 `/ready` gains a `streams` component (and `streams_stats`) once anything is
 declared on this lane: `healthy` while every consumer and publisher is
-connected, `not_ready` while any is reconnecting. The probe is **non-critical** —
+connected, `not_ready` whenever one is not — reconnecting, closed, or the
+manager stopped. The probe is **non-critical** —
 the reliable consumers and producers recover on their own, so a broker flap must
 not pull the whole service out of the load
 balancer. Trace-context propagation from AMQP-published messages is not
@@ -424,6 +452,6 @@ opts := streams.ManagerOptions{
 }
 ```
 
-See `messaging/streams/streams_integration_test.go` for the offset-restore,
-skip-on-failure and publish round-trip proofs — the last of those also covers
-super-stream partitioning by routing key.
+See `messaging/streams/streams_integration_test.go` for the offset-restore and
+skip-on-failure proofs, the publish round trip, super-stream partitioning by
+routing key, and publish rejection after a stop.
