@@ -394,10 +394,18 @@ exists for a publisher-only service too — the manager is built whenever anythi
 was declared.
 
 On shutdown the consumers stop first and the publishers close after them,
-because a handler may publish on its way out. Closing then resolves every
-publish still awaiting a confirmation with `ErrPublisherClosed` instead of
-leaving it hanging: a send parked in a reconnect never reached the client's
-queue, so no confirmation would ever arrive for it.
+because a handler may publish on its way out. Closing the producer gives
+in-flight confirmations a last chance to arrive; every publish still awaiting
+one after that is then resolved with `ErrPublisherClosed` rather than left
+hanging, because a send parked in a reconnect never reached the client's queue
+and would never be confirmed at all.
+
+The sweep takes **both** kinds of outstanding send, and the sentinel does not
+tell them apart: the parked one definitely did not land, while one already
+submitted may have been accepted by the broker before the producer closed. So a
+shutdown `ErrPublisherClosed` is an unknown outcome, not proof of non-delivery —
+the [post-submission case](#what-the-returned-error-means) above, with the same
+rule: retry only where consumers are idempotent.
 
 ## Observability
 

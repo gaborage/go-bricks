@@ -3043,7 +3043,8 @@ err := m.pub.Publish(ctx, &streams.PublishMessage{
 err = m.pub.Publish(ctx, &streams.PublishMessage{
 	Data: payload, RoutingKey: strconv.FormatInt(evt.CustomerID, 10),
 })
-// errors.Is(err, streams.ErrPublisherNotStarted) before Start binds it; ErrPublisherClosed after shutdown.
+// errors.Is(err, streams.ErrPublisherNotStarted) before Start binds it; ErrPublisherClosed after
+// shutdown — that one also sweeps in-flight sends, so it is not proof of non-delivery (see above).
 ```
 
 ### Step 3: Implement the Producer (publish messages)
