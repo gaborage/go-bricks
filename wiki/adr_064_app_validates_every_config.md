@@ -32,7 +32,9 @@ hidden "already validated" state is introduced.
   [migrations.md](migrations.md) [C59.12].
 - The app-side mirrors become dead weight and are deleted in the follow-up PR
   (`app/managers.go` default constants, the mode fallbacks in
-  `resolveMaxSize`/`resolveIdleTTL`, `lifecycle.go`'s bypass guard).
+  `resolveMaxSize`/`resolveIdleTTL`). `lifecycle.go`'s bypass guard is kept —
+  only its comment is re-scoped, from describing a Validate bypass to
+  describing direct-construction defense-in-depth.
   `messaging.NewMessagingManager` keeps its fallback: it is that standalone
   package's interface default for bare callers, not a mirror.
 - Test fixtures must be valid configs — a fixture that could not boot in

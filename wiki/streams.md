@@ -53,10 +53,10 @@ messaging:
   dropped.
 - `multitenant.enabled` together with a stream `uri` is a **startup validation
   error**. Per-tenant stream consumption needs one Environment per tenant, which
-  does not exist yet. `config.Validate` enforces this, so a service assembled by
-  hand — `app.NewWithConfig` takes a `*config.Config` and never validates it —
-  would slip past; startup repeats the check before building the manager, and
-  both paths carry the `single-tenant only` marker.
+  does not exist yet. `config.Validate` enforces this, and `app.NewWithConfig`
+  runs `config.Validate` too (ADR-064), so this shape is caught at
+  construction; startup repeats the check before building the manager as
+  defense-in-depth, and both paths carry the `single-tenant only` marker.
 - Plaintext `rabbitmq-stream://` is accepted but **logs a WARN outside
   development**: the URI's credentials cross the network in the clear. There is
   no TLS configuration surface yet (see [ADR-059](adr_059_streams_consumption.md)

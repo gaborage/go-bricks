@@ -24,10 +24,12 @@ server:
 ```
 
 `require: true` registers the middleware even if `enabled` was left `false`, emitting a
-startup WARN that names both keys — otherwise a config assembled in Go and passed to
-`app.NewWithConfig` (which skips `config.Validate`) would serve every request
-unauthenticated while asserting the opposite. On the YAML path `config.Validate` still
-rejects the combination outright, so the WARN only ever appears for programmatic configs.
+startup WARN that names both keys — otherwise a config path that skips `config.Validate`
+entirely (a `Builder` assembled without `WithConfig`, or any `Config` built by hand) would
+serve every request unauthenticated while asserting the opposite. On the YAML and
+`app.NewWithConfig` paths `config.Validate` runs and rejects the combination outright
+(ADR-064), so the WARN only ever appears for configs that bypass `app.Builder.WithConfig`
+altogether.
 
 ## What gets parsed
 
