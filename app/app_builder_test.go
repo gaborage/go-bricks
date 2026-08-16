@@ -74,22 +74,14 @@ func TestAppBuilderWithConfigValidatesHandBuiltConfig(t *testing.T) {
 
 // TestAppBuilderWithConfigStampsDefaultsOnHandBuiltConfig pins that a hand-built
 // config Validate accepts still receives the same defaults config.Load stamps.
-// Connectors are stubbed so pre-initialization never dials a real backing store;
-// only the default-stamping behavior of WithConfig is under test here.
+// WithConfig alone is under test — the stamping happens there, before any later
+// builder stage runs.
 func TestAppBuilderWithConfigStampsDefaultsOnHandBuiltConfig(t *testing.T) {
 	cfg := defaultTestConfig()
 
-	opts := &Options{
-		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-			return &testmocks.MockDatabase{}, nil
-		},
-		MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
-			return testmocks.NewMockAMQPClient()
-		},
-	}
-	_, _, err := NewWithConfig(cfg, opts)
+	result := NewAppBuilder().WithConfig(cfg, &Options{})
 
-	require.NoError(t, err)
+	require.NoError(t, result.err)
 	assert.Equal(t, int32(25), cfg.Database.Pool.Max.Connections, "pool defaults reach hand-built configs")
 	assert.Positive(t, cfg.Messaging.Publisher.IdleTTL, "messaging defaults reach hand-built configs")
 }

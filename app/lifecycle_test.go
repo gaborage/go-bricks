@@ -513,12 +513,8 @@ func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
 		App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
 		Server: config.ServerConfig{
 			Port: 8080,
-			Timeout: config.TimeoutConfig{
-				Read:       15 * time.Second,
-				Write:      30 * time.Second,
-				Middleware: 5 * time.Second,
-				Shutdown:   10 * time.Second,
-			},
+			// The validated timeout floor lives in one fixture; reuse it.
+			Timeout: defaultTestConfig().Server.Timeout,
 		},
 		Multitenant: config.MultitenantConfig{Enabled: false},
 		Log:         config.LogConfig{Level: "info"},

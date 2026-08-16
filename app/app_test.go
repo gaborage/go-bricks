@@ -1496,32 +1496,10 @@ func TestNewWithConfigErrors(t *testing.T) {
 	})
 
 	t.Run("invalid database config causes construction error", func(t *testing.T) {
-		cfg := &config.Config{
-			App: config.AppConfig{
-				Name:    appName,
-				Env:     testName,
-				Version: appVersion,
-			},
-			Server: config.ServerConfig{
-				Port: 8080,
-				Timeout: config.TimeoutConfig{
-					Read:       15 * time.Second,
-					Write:      30 * time.Second,
-					Middleware: 5 * time.Second,
-					Shutdown:   10 * time.Second,
-				},
-			},
-			Log: config.LogConfig{
-				Level:  "info",
-				Pretty: false,
-			},
-			Database: config.DatabaseConfig{
-				Type:     dbTypePostgres,
-				Host:     "", // Invalid empty host
-				Port:     0,  // Invalid port
-				Database: "",
-			},
-		}
+		cfg := defaultTestConfig()
+		cfg.Database.Host = "" // Invalid empty host
+		cfg.Database.Port = 0
+		cfg.Database.Database = ""
 
 		app, log, err := NewWithConfig(cfg, &Options{})
 
