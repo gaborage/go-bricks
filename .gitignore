@@ -42,6 +42,7 @@
 !docs/design/*.md
 !docs/agents/*.md
 !CONTEXT.md
+!.out-of-scope/*.md
 
 !.github/workflows/*.yml
 !.github/workflows/*.yaml
