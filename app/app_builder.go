@@ -228,7 +228,7 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 	// never dispatch (database.NewConnection switches on Type). A custom
 	// Options.DatabaseConnector owns DSN parsing and is exempt.
 	if b.opts == nil || b.opts.DatabaseConnector == nil {
-		if paths := untypedConnectionStringPaths(b.cfg); len(paths) > 0 {
+		if paths := config.UntypedDatabaseSections(b.cfg); len(paths) > 0 {
 			b.err = fmt.Errorf(
 				"database configuration at %v: connectionstring has no resolved database type; "+
 					"run config.Validate or set <path>.type to postgresql or oracle",
@@ -266,38 +266,6 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 	}
 
 	return b
-}
-
-// untypedConnectionStringPaths collects every config path whose database section
-// carries a connection string with an unresolved type. That covers both ways the
-// type can still be empty here: scheme inference (config/validation.go) ran and did
-// not recognize the DSN, or it never ran because the caller handed the builder a
-// hand-built config without config.Validate (app.NewWithConfig).
-// Sorted for deterministic startup errors.
-func untypedConnectionStringPaths(cfg *config.Config) []string {
-	var paths []string
-	if cfg.Database.ConnectionString != "" && cfg.Database.Type == "" {
-		paths = append(paths, "database")
-	}
-	for name := range cfg.Databases {
-		db := cfg.Databases[name]
-		if db.ConnectionString != "" && db.Type == "" {
-			paths = append(paths, "databases."+name)
-		}
-	}
-	// Gated: config.validateMultitenant returns early when multitenancy is
-	// disabled, so tenant DSNs never reach inference. A disabled tenants block is
-	// inert config — policing it would abort startup on DSNs we do recognize.
-	if cfg.Multitenant.Enabled {
-		for id := range cfg.Multitenant.Tenants {
-			t := cfg.Multitenant.Tenants[id]
-			if t.Database.ConnectionString != "" && t.Database.Type == "" {
-				paths = append(paths, "multitenant.tenants."+id+".database")
-			}
-		}
-	}
-	slices.Sort(paths)
-	return paths
 }
 
 // performPreInitialization attempts to establish connections during app startup.

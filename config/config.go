@@ -32,7 +32,7 @@ var configSections = map[string]bool{
 	"app":           true,
 	"server":        true,
 	fieldDatabase:   true,
-	"databases":     true,
+	fieldDatabases:  true,
 	fieldCache:      true,
 	"log":           true,
 	fieldMessaging:  true,

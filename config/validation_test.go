@@ -707,7 +707,7 @@ func TestValidateDatabaseSuccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.cfg)
+			err := normalizeDatabaseSection(&tt.cfg, rootDatabaseSection())
 			assert.NoError(t, err)
 		})
 	}
@@ -851,7 +851,7 @@ func TestValidateDatabaseFailures(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.cfg)
+			err := normalizeDatabaseSection(&tt.cfg, rootDatabaseSection())
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
@@ -1427,7 +1427,7 @@ func TestValidateDatabaseConditionalBehavior(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.config)
+			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			if tt.expectError {
 				assert.Error(t, err)
 				if tt.errorContains != "" {
@@ -1550,7 +1550,7 @@ func TestValidateDatabaseWithConnectionStringEdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.config)
+			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			if tt.expectError {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tt.errorContains)
@@ -1647,7 +1647,7 @@ func TestValidateInfersDatabaseTypeFromConnectionString(t *testing.T) {
 			cfg := tt.config
 			dsn := cfg.ConnectionString
 
-			require.NoError(t, validateDatabase(&cfg))
+			require.NoError(t, normalizeDatabaseSection(&cfg, rootDatabaseSection()))
 
 			assert.Equal(t, tt.expectedType, cfg.Type)
 			assert.Equal(t, dsn, cfg.ConnectionString, "classification tolerates whitespace; the stored DSN stays byte-exact")
@@ -1659,7 +1659,7 @@ func TestValidateInfersDatabaseTypeFromConnectionString(t *testing.T) {
 	t.Run("explicit_type_conflicting_with_scheme_fails", func(t *testing.T) {
 		cfg := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}
 
-		err := validateDatabase(&cfg)
+		err := normalizeDatabaseSection(&cfg, rootDatabaseSection())
 
 		assertValidationError(t, err, "conflicts with the connectionstring scheme")
 	})
@@ -1828,7 +1828,7 @@ func TestApplyDatabasePoolDefaultsEdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.config)
+			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			if tt.expectError {
 				assertValidationError(t, err, tt.errorContains)
 			} else {
@@ -1924,7 +1924,7 @@ func TestApplyDatabasePoolDefaultsKeepAlive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.config)
+			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			assert.NoError(t, err)
 			require.NotNil(t, tt.config.Pool.KeepAlive.Enabled,
 				"KeepAlive.Enabled must be non-nil after defaulting")
@@ -1957,7 +1957,7 @@ func TestApplyDatabasePoolDefaultsKeepAliveExplicitDisableHonored(t *testing.T) 
 		},
 	}
 
-	err := validateDatabase(&cfg)
+	err := normalizeDatabaseSection(&cfg, rootDatabaseSection())
 	require.NoError(t, err)
 
 	require.NotNil(t, cfg.Pool.KeepAlive.Enabled, "explicit enabled should remain set")
@@ -1983,7 +1983,7 @@ func TestApplyDatabasePoolDefaultsKeepAliveNegativeIntervalRejected(t *testing.T
 		},
 	}
 
-	err := validateDatabase(&cfg)
+	err := normalizeDatabaseSection(&cfg, rootDatabaseSection())
 	require.Error(t, err, "a negative keep-alive interval must be rejected, matching the other pool duration fields")
 	assert.Contains(t, err.Error(), "database.pool.keepalive.interval",
 		"error should identify the offending key")
@@ -2115,7 +2115,7 @@ func TestApplyDatabasePoolDefaultsIdleAndLifetime(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.config)
+			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedIdleTime, tt.config.Pool.Idle.Time,
 				"Pool.Idle.Time mismatch")
@@ -2182,7 +2182,7 @@ func TestApplyDatabasePoolDefaultsNegativeValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.config)
+			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			assertValidationError(t, err, tt.errorContains)
 		})
 	}
@@ -2212,7 +2212,7 @@ func TestApplyDatabaseTimezoneDefault(t *testing.T) {
 				Username: "testuser",
 				Timezone: tt.input,
 			}
-			err := validateDatabase(cfg)
+			err := normalizeDatabaseSection(cfg, rootDatabaseSection())
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedTimezone, cfg.Timezone)
 		})
@@ -2239,30 +2239,31 @@ func TestApplyDatabaseTimezoneRejectsInvalid(t *testing.T) {
 				Username: "testuser",
 				Timezone: tt.input,
 			}
-			err := validateDatabase(cfg)
+			err := normalizeDatabaseSection(cfg, rootDatabaseSection())
 			assertValidationError(t, err, "database.timezone")
 		})
 	}
 }
 
 func TestApplyDatabaseTimezoneAppliesViaConnectionString(t *testing.T) {
-	// Connection-string path goes through validateDatabaseWithConnectionString,
-	// which must also default Timezone to UTC and validate it.
+	// Connection-string path goes through normalizeWithConnectionString (via
+	// normalizeDatabaseSection), which must also default Timezone to UTC and
+	// validate it.
 	cfg := &DatabaseConfig{
 		ConnectionString: "host=localhost port=5432 dbname=testdb user=testuser",
 	}
-	err := validateDatabase(cfg)
+	err := normalizeDatabaseSection(cfg, rootDatabaseSection())
 	assert.NoError(t, err)
 	assert.Equal(t, "UTC", cfg.Timezone)
 }
 
 func TestApplyDatabaseTimezoneInheritsToNamedDatabases(t *testing.T) {
 	// Exercises real propagation through the top-level Validate(*Config) wiring,
-	// not the standalone validateDatabase shortcut. Split into two scenarios
-	// because the framework forbids a root Database alongside static tenants.
-	// Either scenario regressing (e.g. validateNamedDatabases or
-	// validateMultitenantTenants dropping their validateDatabase call) would
-	// fail this test.
+	// not the standalone normalizeDatabaseSection call in isolation. Split into
+	// two scenarios because the framework forbids a root Database alongside
+	// static tenants. Either scenario regressing (e.g. validateNamedDatabases or
+	// validateMultitenantTenants dropping their normalizeDatabaseSection call)
+	// would fail this test.
 	t.Run("root_explicit_named_defaults", func(t *testing.T) {
 		cfg := createValidFullConfig()
 		cfg.Database.Timezone = "America/New_York"
@@ -3135,7 +3136,7 @@ func TestValidateOracleFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.config)
+			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			if tt.expectError {
 				assertValidationError(t, err, tt.errorContains)
 			} else {
@@ -3193,7 +3194,7 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateDatabase(&tt.config)
+			err := normalizeDatabaseSection(&tt.config, rootDatabaseSection())
 			if tt.expectError {
 				assertValidationError(t, err, tt.errorContains)
 			} else {
@@ -3206,7 +3207,7 @@ func TestValidateOracleWithConnectionString(t *testing.T) {
 func TestValidateOracleConnectionStringNeedsNoIdentifier(t *testing.T) {
 	cfg := DatabaseConfig{ConnectionString: testOracleConnectionString}
 
-	require.NoError(t, validateDatabase(&cfg))
+	require.NoError(t, normalizeDatabaseSection(&cfg, rootDatabaseSection()))
 
 	assert.Equal(t, Oracle, cfg.Type, "the oracle:// scheme must infer the type")
 	require.Empty(t, cfg.Oracle.Service.Name)
@@ -3217,7 +3218,7 @@ func TestValidateOracleConnectionStringNeedsNoIdentifier(t *testing.T) {
 func TestValidateOracleWithoutConnectionStringStillNeedsIdentifier(t *testing.T) {
 	cfg := DatabaseConfig{Type: Oracle, Host: testOracleHost, Port: 1521, Username: "oracleuser"}
 
-	err := validateDatabase(&cfg)
+	err := normalizeDatabaseSection(&cfg, rootDatabaseSection())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exactly one required",
@@ -3729,6 +3730,27 @@ func TestValidateMultitenantFailures(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.expectedError)
 		})
 	}
+}
+
+// TestValidateMultitenantTenantsRejectsDottedTenantID proves a tenant ID
+// containing '.' is rejected: it collides with koanf's path delimiter, so the
+// constructed section path multitenant.tenants.<id>.database would become
+// ambiguous.
+func TestValidateMultitenantTenantsRejectsDottedTenantID(t *testing.T) {
+	tenants := map[string]TenantEntry{
+		"tenant.a": {
+			Database: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     testTenantDBHost,
+				Port:     5432,
+				Database: "tenant_a",
+				Username: "tenant_user",
+			},
+		},
+	}
+
+	err := validateMultitenantTenants(tenants)
+	assertValidationError(t, err, "cannot contain '.'")
 }
 
 func TestValidateMultitenantResolver(t *testing.T) {
@@ -4551,6 +4573,25 @@ func TestValidateNamedDatabasesFailures(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.errContains)
 		})
 	}
+}
+
+// TestValidateNamedDatabasesRejectsDottedName proves a database name
+// containing '.' is rejected: it collides with koanf's path delimiter, so
+// constructed section paths like databases.<name> would become ambiguous.
+func TestValidateNamedDatabasesRejectsDottedName(t *testing.T) {
+	databases := map[string]DatabaseConfig{
+		"legacy.reporting": {
+			Type:     PostgreSQL,
+			Host:     dbLocalField,
+			Port:     5432,
+			Database: "db",
+			Username: "user",
+		},
+	}
+	mt := MultitenantConfig{Enabled: false}
+
+	err := validateNamedDatabases(databases, &mt)
+	assertValidationError(t, err, "cannot contain '.'")
 }
 
 func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {
@@ -5979,9 +6020,10 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 
 func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
 	// The conflicting case pins a deliberate divergence from
-	// validateDatabaseWithConnectionString, which rejects a Type contradicting the
-	// scheme: this seam runs per connection, so it leaves the explicit Type alone
-	// and lets the vendor dial error be the failure (ADR-050). Do not "fix" it.
+	// normalizeWithConnectionString (startup strictness), which rejects a Type
+	// contradicting the scheme: this seam runs per connection (connect
+	// strictness), so it leaves the explicit Type alone and lets the vendor dial
+	// error be the failure (ADR-050). Do not "fix" it.
 	// The matching-type case is covered by explicit_matching_type_untouched in
 	// databaseTypeInferenceCases, which this seam's table test already runs.
 	conflicting := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}

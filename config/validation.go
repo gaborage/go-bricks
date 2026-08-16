@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
 	"slices"
@@ -141,26 +142,29 @@ const (
 
 // Validation error message constants
 const (
-	errMustBeNonNegative  = "must be non-negative"
-	errMustBePositive     = "must be positive"
-	errNotSupportedFmt    = "'%s' is not supported"
-	portRange             = "1-65535"
-	fieldDatabase         = "database"
-	fieldDatabasePort     = "database.port"
-	fieldDatabasePassword = "database.password"
-	fieldMessaging        = "messaging"
-	fieldCache            = "cache"
-	fieldDebug            = "debug"
-	fieldServerPort       = "server.port"
-	fieldLogLevel         = "log.level"
-	fieldAppEnv           = "app.env"
-	fieldAppRateLimit     = "app.rate.limit"
-	fieldCacheRedisDB     = "cache.redis.database"
-	fieldCacheRedisPool   = "cache.redis.poolsize"
-	fieldResolverOrder    = "multitenant.resolver.order"
-	errInvalidField       = "invalid value: %v"
-	databasesFieldPrefix  = "databases.%s"
-	defaultHost           = "localhost"
+	errMustBeNonNegative    = "must be non-negative"
+	errMustBePositive       = "must be positive"
+	errNotSupportedFmt      = "'%s' is not supported"
+	errDatabaseIncomplete   = "database configuration incomplete"
+	portRange               = "1-65535"
+	fieldDatabase           = "database"
+	fieldDatabases          = "databases"
+	fieldMultitenantTenants = "multitenant.tenants"
+	fieldDatabasePort       = "database.port"
+	fieldDatabasePassword   = "database.password"
+	fieldMessaging          = "messaging"
+	fieldCache              = "cache"
+	fieldDebug              = "debug"
+	fieldServerPort         = "server.port"
+	fieldLogLevel           = "log.level"
+	fieldAppEnv             = "app.env"
+	fieldAppRateLimit       = "app.rate.limit"
+	fieldCacheRedisDB       = "cache.redis.database"
+	fieldCacheRedisPool     = "cache.redis.poolsize"
+	fieldResolverOrder      = "multitenant.resolver.order"
+	errInvalidField         = "invalid value: %v"
+	databasesFieldPrefix    = "databases.%s"
+	defaultHost             = "localhost"
 
 	fieldServerTLSCertFile   = "server.tls.certfile"
 	fieldServerTLSCertValue  = "server.tls.certvalue"
@@ -207,11 +211,11 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("multitenant config: %w", err)
 	}
 
-	if err := validateDatabase(&cfg.Database); err != nil {
+	if err := normalizeDatabaseSection(&cfg.Database, rootDatabaseSection()); err != nil {
 		return fmt.Errorf("database config: %w", err)
 	}
 
-	// Named/tenant DBs share the primary DbManager (see validateNamedDatabaseEntry), so manager defaults apply only here.
+	// Named/tenant DBs share the primary DbManager (see normalizeDatabaseSection), so manager defaults apply only here.
 	if err := applyDatabaseManagerDefaults(&cfg.Database.Manager, cfg.Multitenant.Enabled); err != nil {
 		return fmt.Errorf("database config: %w", err)
 	}
@@ -598,54 +602,26 @@ var pgSSLModes = []string{sslModeDisable, sslModeAllow, sslModePrefer, sslModeRe
 // downgrade it.
 var pgTLSMandatorySSLModes = []string{sslModeRequire, sslModeVerifyCA, sslModeVerifyFull}
 
-// deliveredEmptyDatabaseKeys returns every identity key present in the loaded
-// configuration under base while the decoded section carries zero identity
-// values — the "delivered but empty" shape ADR-047 could not see (ADR-051).
-// All of them, not just the first: the error promises "field(s)", and an
-// operator who clears only the one key named would hit the same abort again.
-// Nil means the section is either genuinely absent or carries a real value
-// (later validators own that).
-func deliveredEmptyDatabaseKeys(cfg *Config, base string, db *DatabaseConfig) []string {
-	if IsDatabaseConfigured(db) {
-		return nil
-	}
-	var keys []string
-	for _, k := range databaseIdentityKeys {
-		key := base + "." + k
-		if cfg.Exists(key) {
-			keys = append(keys, key)
-		}
-	}
-	return keys
-}
-
-// validateNoDeliveredEmptyDatabase fails startup when any database section —
-// root, named, or static-tenant — was delivered with only empty identity
-// fields. Tenant sections are walked only when multitenancy is enabled (see
-// below). Inert for hand-built Config literals (no koanf instance) and for
-// dynamic-source tenant configs (never in koanf). Offending paths are
-// collected sorted so the startup error is deterministic.
+// validateNoDeliveredEmptyDatabase fails startup when any database section the
+// deployment consumes was delivered with only empty identity fields — the shape
+// ADR-047 could not see (ADR-051). Inert for hand-built Config literals (no
+// koanf instance) and for dynamic-source tenant configs (never in koanf). Every
+// offending key is reported, not just the first: the error promises
+// "field(s)", and an operator who clears only the one named would hit the same
+// abort again. Sorted, so the startup error is deterministic.
 func validateNoDeliveredEmptyDatabase(cfg *Config) error {
 	var offending []string
-	collect := func(base string, db *DatabaseConfig) {
-		offending = append(offending, deliveredEmptyDatabaseKeys(cfg, base, db)...)
-	}
-	collect(fieldDatabase, &cfg.Database)
-	for name := range cfg.Databases {
-		db := cfg.Databases[name]
-		collect("databases."+name, &db)
-	}
-	// Koanf populates Multitenant.Tenants from YAML regardless of the enabled flag,
-	// but a leftover block is inert in single-tenant mode: TenantStore skips it
-	// (config/tenant_store.go), ManagerConfigBuilder does not count it
-	// (app/bootstrap.go), and validateMultitenant returns before reaching it.
-	// Walking it anyway would abort startup over config no deployment consumes.
-	if cfg.Multitenant.Enabled {
-		for id := range cfg.Multitenant.Tenants {
-			t := cfg.Multitenant.Tenants[id]
-			collect("multitenant.tenants."+id+".database", &t.Database)
+	_ = forEachDatabaseSection(cfg, func(section dbSection, db *DatabaseConfig) error {
+		if IsDatabaseConfigured(db) {
+			return nil
 		}
-	}
+		for _, k := range databaseIdentityKeys {
+			if key := section.path + "." + k; cfg.Exists(key) {
+				offending = append(offending, key)
+			}
+		}
+		return nil
+	})
 	if len(offending) == 0 {
 		return nil
 	}
@@ -691,67 +667,6 @@ func IsDatabaseConfigured(cfg *DatabaseConfig) bool {
 		// name, so a split config delivering only those is still intent.
 		cfg.Oracle.Service.Name != "" ||
 		cfg.Oracle.Service.SID != ""
-}
-
-func validateDatabase(cfg *DatabaseConfig) error {
-	if !IsDatabaseConfigured(cfg) {
-		return nil
-	}
-
-	if cfg.ConnectionString != "" {
-		return validateDatabaseWithConnectionString(cfg)
-	}
-
-	if err := validateDatabaseType(cfg.Type); err != nil {
-		return err
-	}
-
-	if err := validateDatabaseCoreFields(cfg); err != nil {
-		return err
-	}
-
-	if err := validateVendorSpecificFields(cfg); err != nil {
-		return err
-	}
-
-	return applyDatabasePoolDefaults(cfg)
-}
-
-// validateDatabaseWithConnectionString validates database settings when a connection
-// string is provided. It mutates cfg: pool/session defaults via
-// applyDatabasePoolDefaults, plus ADR-050 Type inference from the DSN scheme (an
-// explicit Type that contradicts the scheme is an error rather than an override).
-func validateDatabaseWithConnectionString(cfg *DatabaseConfig) error {
-	if inferred := inferDatabaseTypeFromConnectionString(cfg.ConnectionString); inferred != "" {
-		if cfg.Type == "" {
-			cfg.Type = inferred
-		} else if cfg.Type != inferred {
-			return NewInvalidFieldError("database.type",
-				fmt.Sprintf("conflicts with the connectionstring scheme (which implies %s)", inferred),
-				[]string{inferred})
-		}
-	}
-
-	if cfg.Type != "" {
-		if err := validateDatabaseType(cfg.Type); err != nil {
-			return err
-		}
-	}
-
-	if err := validateOptionalDatabasePort(cfg.Port); err != nil {
-		return err
-	}
-
-	if err := applyDatabasePoolDefaults(cfg); err != nil {
-		return err
-	}
-
-	// Validate vendor-specific fields even with connection string
-	if err := validateVendorSpecificFields(cfg); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // inferDatabaseTypeFromConnectionString maps a recognized DSN scheme to its vendor.
@@ -873,28 +788,13 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 // because that failure mode is silent and open rather than loud at dial. The
 // asymmetry is deliberate.
 //
-// Normalization happens on a clone that is committed to cfg only after every step
-// succeeds, so a rejected config goes back to its caller completely untouched.
+// It is the connect-strictness door of the database-section normalization
+// module (database_section.go); a rejected config returns untouched.
 func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	if cfg == nil {
 		return NewValidationError("database", "configuration is nil")
 	}
-
-	normalized := *cfg
-	if normalized.Type == "" {
-		normalized.Type = inferDatabaseTypeFromConnectionString(normalized.ConnectionString)
-	}
-
-	if err := validateVendorSpecificFields(&normalized); err != nil {
-		return err
-	}
-
-	if err := applyDatabasePoolDefaults(&normalized); err != nil {
-		return err
-	}
-
-	*cfg = normalized
-	return nil
+	return normalizeDatabaseValues(cfg, dbStrictnessConnect)
 }
 
 // applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.
@@ -1048,42 +948,34 @@ func validateCIDRList(field string, list []string) error {
 	return nil
 }
 
-// validateNamedDatabases validates the named databases configuration.
-// Named databases are optional but when provided:
-// - Each entry must be a valid DatabaseConfig
-// - Names cannot conflict with tenant IDs when multi-tenancy is enabled
-// - Names cannot be empty or contain the "named:" prefix
 func validateNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantConfig) error {
-	if len(databases) == 0 {
-		return nil
-	}
-
-	for name := range databases {
-		dbCfg := databases[name]
-		if err := validateNamedDatabaseEntry(name, &dbCfg, mt); err != nil {
+	// Sorted, like forEachDatabaseSection: with several malformed entries the
+	// startup error names the same one every run.
+	for _, name := range slices.Sorted(maps.Keys(databases)) {
+		if err := validateNamedDatabaseName(name, mt); err != nil {
 			return err
 		}
-		// Persist defaults back to the map. validateNamedDatabaseEntry → validateDatabase
-		// → applyDatabasePoolDefaults mutates the local copy; without this write-back the
-		// defaults (timezone, pool sizes, etc.) never reach downstream consumers like
-		// TenantStore.
+		dbCfg := databases[name]
+		if err := normalizeDatabaseSection(&dbCfg, namedDatabaseSection(name)); err != nil {
+			return err
+		}
+		// Write back so the defaults reach downstream consumers such as TenantStore.
 		databases[name] = dbCfg
 	}
-
 	return nil
 }
 
-// validateNamedDatabaseEntry validates a single named database entry.
-func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *MultitenantConfig) error {
+// validateNamedDatabaseName checks the map key: non-empty, not the reserved
+// prefix, and not colliding with a static tenant ID.
+func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 	if name == "" {
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    "databases",
+			Field:    fieldDatabases,
 			Message:  "database name cannot be empty",
 			Action:   "provide a non-empty key for each entry in databases section",
 		}
 	}
-
 	if strings.HasPrefix(name, NamedDatabasePrefix) {
 		return &ConfigError{
 			Category: errCategoryInvalid,
@@ -1092,7 +984,19 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 			Action:   fmt.Sprintf("rename databases.%s to remove the '%s' prefix", name, NamedDatabasePrefix),
 		}
 	}
-
+	// A '.' collides with koanf's path delimiter: constructed section paths
+	// (databases.<name>, and this name's own error Field above) become
+	// ambiguous, so the bare "databases" Field is used here rather than
+	// fmt.Sprintf(databasesFieldPrefix, name) — embedding the dotted name
+	// would reproduce the same ambiguity in the error itself.
+	if strings.Contains(name, ".") {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldDatabases,
+			Message:  fmt.Sprintf("database name %q cannot contain '.' (the config path delimiter)", name),
+			Action:   "rename the databases entry without dots",
+		}
+	}
 	if mt.Enabled && mt.Tenants != nil {
 		if _, exists := mt.Tenants[name]; exists {
 			return &ConfigError{
@@ -1103,31 +1007,6 @@ func validateNamedDatabaseEntry(name string, dbCfg *DatabaseConfig, mt *Multiten
 			}
 		}
 	}
-
-	if !IsDatabaseConfigured(dbCfg) {
-		return &ConfigError{
-			Category: errCategoryMissing,
-			Field:    fmt.Sprintf(databasesFieldPrefix, name),
-			Message:  "database configuration incomplete",
-			Action:   fmt.Sprintf("add host/type or connectionstring to databases.%s", name),
-		}
-	}
-
-	if err := validateDatabase(dbCfg); err != nil {
-		return fmt.Errorf("databases.%s: %w", name, err)
-	}
-
-	// Named databases share the single primary DbManager; a per-entry manager
-	// block would be silently ignored, so reject it (Fail Fast).
-	if dbCfg.Manager.isSet() {
-		return &ConfigError{
-			Category: errCategoryInvalid,
-			Field:    fmt.Sprintf(databasesFieldPrefix, name) + ".manager",
-			Message:  "database.manager.* is only supported on the primary database",
-			Action:   fmt.Sprintf("remove the manager block from databases.%s; tune the shared pool via database.manager.*", name),
-		}
-	}
-
 	return nil
 }
 
@@ -1843,32 +1722,31 @@ func validateMultitenantLimits(cfg *LimitsConfig) error {
 // validateMultitenantTenants validates tenant configurations when they are provided
 func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 	if len(tenants) == 0 {
-		return NewValidationError("multitenant.tenants", "at least one tenant must be configured")
+		return NewValidationError(fieldMultitenantTenants, "at least one tenant must be configured")
 	}
 
 	if err := checkTenantMessagingConsistency(tenants); err != nil {
 		return err
 	}
 
-	for tenantID := range tenants {
+	// Sorted, like forEachDatabaseSection: with several malformed tenants the
+	// startup error names the same one every run.
+	for _, tenantID := range slices.Sorted(maps.Keys(tenants)) {
 		tenant := tenants[tenantID]
 		if tenantID == "" {
-			return NewValidationError("multitenant.tenants", "tenant ID cannot be empty")
+			return NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty")
+		}
+		// A '.' collides with koanf's path delimiter: the constructed section
+		// path multitenant.tenants.<id>.database becomes ambiguous. Koanf has
+		// no delimiter escaping, so fail fast rather than let a later lookup
+		// consult the wrong flattened key.
+		if strings.Contains(tenantID, ".") {
+			return NewValidationError(fieldMultitenantTenants,
+				fmt.Sprintf("tenant ID %q cannot contain '.' (the config path delimiter)", tenantID))
 		}
 
-		// Validate tenant database configuration
-		if !IsDatabaseConfigured(&tenant.Database) {
-			return NewMultiTenantError(tenantID, fieldDatabase, "configuration required", fmt.Sprintf("add multitenant.tenants.%s.database section", tenantID))
-		}
-		if err := validateDatabase(&tenant.Database); err != nil {
-			return fmt.Errorf("tenant %s database: %w", tenantID, err)
-		}
-
-		// A per-tenant manager block would be silently ignored — tenants share the primary DbManager — so reject it.
-		if tenant.Database.Manager.isSet() {
-			return NewMultiTenantError(tenantID, "database.manager",
-				"database.manager.* is only supported on the primary database",
-				fmt.Sprintf("remove the manager block from multitenant.tenants.%s.database; tune the shared pool via database.manager.*", tenantID))
+		if err := normalizeDatabaseSection(&tenant.Database, tenantDatabaseSection(tenantID)); err != nil {
+			return err
 		}
 
 		if err := validateTenantCache(tenantID, &tenant.Cache); err != nil {
