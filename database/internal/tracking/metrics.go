@@ -83,6 +83,7 @@ func logMetricError(metricName string, err error) {
 // to use a consistent cleanup pattern regardless of whether metrics were successfully registered.
 func noOpCleanup() func() {
 	return func() {
+		// No-op: nothing was registered, so there is nothing to release.
 	}
 }
 
