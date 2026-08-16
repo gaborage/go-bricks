@@ -33,9 +33,11 @@ producer.
 
 ### The surface is synchronous and confirmed, and nothing else
 
-`Publisher.Publish(ctx, *PublishMessage) error` blocks until the broker confirms the message, the
-caller's context expires, or the publisher closes. There is no async callback surface and no
-fire-and-forget mode.
+`Publisher.Publish(ctx, *PublishMessage) error` rejects a malformed call outright — a nil message, a
+routing key that does not match the target kind, a publisher not yet bound or already closed — and
+otherwise blocks until one of four things happens: the broker confirms the message, the client's
+`Send` fails synchronously, the caller's context expires, or the publisher closes. There is no async
+callback surface and no fire-and-forget mode.
 
 That follows directly from the second context point: since a `nil` from the client's `Send` is
 compatible with a write that failed, the **confirmation is the only truth available**. A surface
@@ -53,12 +55,20 @@ Each in-flight send registers a waiter keyed by the `message.StreamMessage` hand
 so pointer identity is a valid correlation key and no framework-side sequence number, header or
 publishing ID is needed.
 
-This holds **only at the client's default `SubEntrySize` of 1**. Sub-entry aggregation would batch
-several messages behind one entry and break the one-to-one mapping, so the production producer
-options are the client's defaults verbatim — no `Name`, no `SubEntrySize`, no compression. That is
-not an oversight to be tuned later: it is a precondition of the correlation, and changing it means
-revisiting this decision. `messaging/streams/manager.go`'s `newReliableProducer` carries the note at
-the call site.
+This holds **only at the client's default `SubEntrySize` of 1** (`producer.go:219`). Sub-entry
+aggregation would batch several messages behind one entry and break the one-to-one mapping, so on the
+plain lane the production producer options are the client's defaults verbatim — no `Name`, no
+`SubEntrySize`, no compression — and `messaging/streams/manager.go`'s `newReliableProducer` carries
+that note at the call site.
+
+The super lane reaches the same guarantee by a different route, which is worth stating because the
+framework cannot state it directly: `SuperStreamProducerOptions` has no `SubEntrySize` field at all,
+and each partition's producer is built inside the client by `SuperStreamProducer.ConnectPartition`,
+which calls `NewProducerOptions()` itself (`super_stream_producer.go:267`). The default therefore
+holds per partition — but it is the client's own construction holding it, not anything this framework
+passes, so a change there would break the correlation with nothing on our side to notice. Either way
+this is not an oversight to be tuned later: it is a precondition of the correlation, and changing it
+means revisiting this decision.
 
 The correlation is proven end to end against a real broker rather than argued
 (`TestStreamsPublisherRoundTripIntegration`): if `GetMessage` ever stopped returning the message
@@ -72,17 +82,21 @@ bound on **how long `Publish` waits** — the framework adds no timeout of its o
 for one. It does not bound the send behind that wait: the goroutine runs on until the client's own
 send path unblocks, whatever the caller's context did.
 
-Abandoning that goroutine leaks it for as long as the reconnect lasts. This is the same trade
+Abandoning that goroutine leaks it until the client's send path releases it: during a reconnect that
+is as long as the reconnect lasts, but on the close path it can be permanent — see the close sweep
+below for why the broadcast that would release it never arrives. This is the same trade
 `Manager.flushOffsetsLocked` already documents and accepts: a leaked goroutine parked on a vendor
 condition variable is cheaper than a handler thread that cannot be interrupted, and the alternative —
 bounding a call that accepts neither context nor deadline — means reimplementing the client.
 
 ### A context expiry tombstones the correlation entry; it never removes it
 
-An entry leaves the map on exactly one of three events: its confirmation arrives, its `Send` returned
-a synchronous error (which the client never confirms), or the close sweep resolves it. **A context
-expiry does none of those.** It marks the waiter done, so the eventual confirmation resolves to a
-no-op, and leaves the entry in place.
+An entry leaves the map on exactly one of four events: its confirmation arrives, its `Send` returned a
+synchronous error (which the client never confirms), the close sweep resolves it, or — in the one race
+the sweep cannot cover — the send sees `closed` at registration and resolves itself, which is what
+stops an entry landing *after* the sweep from sitting outside every removal path. **A context expiry
+does none of those.** It marks the waiter done, so the eventual confirmation resolves to a no-op, and
+leaves the entry in place.
 
 That asymmetry is load-bearing for super streams. `HashRoutingStrategy.Route` is the first statement
 of the inner `SuperStreamProducer.Send`, but `isReadyToSend` parks the goroutine *before* it — so an
@@ -95,10 +109,10 @@ routed yet.
 
 A context-abandoned send holds both its goroutine and its tombstoned entry until the publisher closes,
 and **nothing caps how many of those can accumulate.** The client's `QueueSize` back-pressure does not:
-`isReadyToSend` parks in the `ha` layer (`reliable_common.go:114`) *before* `ReliableProducer.Send`
-delegates to the inner `stream.Producer` where that queue lives (`ha_publisher.go:116-120`), so a
-parked send never occupies queue capacity and never exerts back-pressure. The real bound is the
-caller's publish rate multiplied by the outage duration.
+`isReadyToSend` parks in the `ha` layer on a bare cond wait (`reliable_common.go:114`, the `Wait` at
+`:126`) *before* `ReliableProducer.Send` delegates to the inner `stream.Producer` where that queue
+lives (`ha_publisher.go:116-120`), so a parked send never occupies queue capacity and never exerts
+back-pressure. The real bound is the caller's publish rate multiplied by the outage duration.
 
 This is accepted for v1 rather than solved. The fix is an **outstanding-send limit** — a semaphore
 admitting N in-flight sends and failing the rest fast with a dedicated sentinel — which needs both
@@ -118,10 +132,11 @@ first, publishers close after them, because a handler may publish on its way out
 ### Closing sweeps every outstanding waiter with `ErrPublisherClosed`
 
 `Publisher` close resolves and removes every entry still in the map. This is mandatory, not
-belt-and-braces. The client's `entityClosed` confirmations (`producer.go:381-392`) cover only messages
-that reached its internal queue; a send parked in `isReadyToSend` was never enqueued and gets no
+belt-and-braces. The client's `entityClosed` confirmations (`markUnsentAsUnconfirmed`,
+`producer.go:374-395`) cover only messages that reached its internal queue; a send parked in
+`isReadyToSend` was never enqueued and gets no
 confirmation at all — and the super producer's normal-close path `break`s out of its event loop
-*before* the reconnection broadcast (`ha_super_stream_publisher.go:92-96`), so that goroutine may stay
+*before* the reconnection broadcast (`ha_super_stream_publisher.go:91-94`), so that goroutine may stay
 parked for good. Without the sweep, a `Publish` caller with no deadline of its own hangs across the
 whole shutdown. Resolution is idempotent, so a late `entityClosed` for a swept message is a no-op.
 
@@ -168,8 +183,13 @@ That context bounds how long `Publish` makes its caller wait; it does not bound 
 which is the known limitation above.
 
 **Negative — the wait is only as bounded as the caller's context.** A caller that passes
-`context.Background()` to `Publish` can wait for as long as the broker takes. Handler code inherits
-the HTTP layer's 5 s deadline and is fine; background work must pass a deadline of its own.
+`context.Background()` to `Publish` can wait for as long as the broker takes. Only an HTTP handler
+inherits a deadline for free — `server.timeout.middleware`, 5 s by default. Every other caller this
+lane attracts carries none: a stream consumer handler runs under `consumeContext`
+(`manager.go:249-251`), which is `context.WithCancel(context.WithoutCancel(ctx))` and therefore has no
+deadline at all, and scheduled jobs and relays are the same. A consumer republishing downstream is the
+likeliest publisher on this lane and the one with nothing to inherit, so it must pass a deadline of
+its own.
 
 **Negative — the correlation is a vendor-internal guarantee.** It rests on `ConfirmationStatus`
 returning the exact message pointer at `SubEntrySize = 1`. A client upgrade must re-verify that, and
