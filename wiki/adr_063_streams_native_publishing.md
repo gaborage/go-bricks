@@ -89,9 +89,22 @@ context expiry would answer `""`, hash it, and pile that message onto whichever 
 string lands on. Keeping the entry keeps the caller's partition choice intact for a send that has not
 routed yet.
 
-The cost is bounded and stated: a context-abandoned send whose broker never answers holds its
-tombstoned entry until the publisher closes. The map is otherwise unbounded by design, since the
-client's own `QueueSize` back-pressure bounds how many sends can be in flight.
+### Known limitation: outstanding sends are unbounded during a reconnect
+
+A context-abandoned send holds both its goroutine and its tombstoned entry until the publisher closes,
+and **nothing caps how many of those can accumulate.** The client's `QueueSize` back-pressure does not:
+`isReadyToSend` parks in the `ha` layer (`reliable_common.go:114`) *before* `ReliableProducer.Send`
+delegates to the inner `stream.Producer` where that queue lives (`ha_publisher.go:116-120`), so a
+parked send never occupies queue capacity and never exerts back-pressure. The real bound is the
+caller's publish rate multiplied by the outage duration.
+
+This is accepted for v1 rather than solved. The fix is an **outstanding-send limit** — a semaphore
+admitting N in-flight sends and failing the rest fast with a dedicated sentinel — which needs both
+that new error and a way to configure N, and v1 deliberately adds no configuration keys. It is listed
+under future work below. Until it exists, a service that publishes at high rate on a path with no
+deadline of its own is the shape to watch during a broker outage; the mitigations available today are
+a per-publish deadline (which caps how long each send waits, not how many accumulate) and alerting on
+the publish-error rate.
 
 ### Publishers bind before consumers start
 
@@ -158,14 +171,20 @@ the HTTP layer's 5 s deadline and is fine; background work must pass a deadline 
 returning the exact message pointer at `SubEntrySize = 1`. A client upgrade must re-verify that, and
 the integration round trip is what fails loudly if it ever stops holding.
 
-**Negative — abandoned sends leak a goroutine and hold a map entry.** Both are bounded by the
-publisher's lifetime and both are the accepted price of a vendor call that cannot be interrupted.
+**Negative — abandoned sends leak a goroutine and hold a map entry, with no cap on how many.** Both
+live until the publisher closes, and `QueueSize` does not bound them because a parked send never
+reaches the queue — see the known limitation above. That is the accepted price of a vendor call that
+cannot be interrupted, and an outstanding-send limit is the named follow-up.
 
 **Neutral — one publisher per target per process.** A second declaration on the same stream panics at
 startup, matching the consumer contract: it is a wiring mistake, not a fan-out.
 
 ## Future work
 
+- An **outstanding-send limit**: a semaphore admitting N in-flight sends and failing the rest with a
+  dedicated sentinel, so a broker outage cannot accumulate abandoned goroutines and tombstoned entries
+  without bound. Deferred out of v1 because it needs a new error sentinel and a configuration key, and
+  v1 adds none.
 - Producer-side deduplication, key routing, sub-entry batching and compression (see above).
 - Outbox integration, so transactionally recorded events can be relayed to a stream.
 - Multi-tenant fan-out, which publishing inherits from ADR-059's `single-tenant only` fail-fast.

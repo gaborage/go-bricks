@@ -1284,12 +1284,14 @@ result, and super-stream partitioning reaches the framework surface for the firs
 keys — the client's defaults and the caller's context bound everything. **Watch:** a publish is only
 as bounded as the context passed to it, so background callers must supply a deadline; a context
 timeout is **not** proof of failure, delivery stays at-least-once and consumers must be idempotent;
-an abandoned send leaks a vendor goroutine and holds its map entry until the publisher closes; and the
-correlation rests on a vendor-internal guarantee that a client upgrade must re-verify (the integration
-round trip is what fails loudly if it stops holding). Publisher close sweeps every outstanding waiter
-with `ErrPublisherClosed`, because the client's `entityClosed` confirmations cannot reach a send that
-never enqueued. Deduplication, key routing, sub-entry batching, compression and outbox relay are all
-deferred. See [streams.md](streams.md).
+an abandoned send leaks a vendor goroutine and holds its map entry until the publisher closes, **with
+no cap on how many accumulate** during a reconnect (the client's `QueueSize` cannot bound them — a
+send parked in `isReadyToSend` never reaches the queue), so the growth is publish-rate × outage; and
+the correlation rests on a vendor-internal guarantee that a client upgrade must re-verify (the
+integration round trip is what fails loudly if it stops holding). Publisher close sweeps every
+outstanding waiter with `ErrPublisherClosed`, because the client's `entityClosed` confirmations cannot
+reach a send that never enqueued. An outstanding-send limit, deduplication, key routing, sub-entry
+batching, compression and outbox relay are all deferred. See [streams.md](streams.md).
 
 ---
 

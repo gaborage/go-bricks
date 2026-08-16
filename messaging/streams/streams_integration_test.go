@@ -729,15 +729,116 @@ func hashPartitionIndex(t *testing.T, key string) int {
 	return slices.Index(names, routed[0])
 }
 
+// hashIndexByKey maps each routing key to the partition index the client's own
+// strategy picks for it, and reports how many distinct indices that is.
+func hashIndexByKey(t *testing.T, keys []string) (indexOf map[string]int, distinct int) {
+	t.Helper()
+
+	indexOf = make(map[string]int, len(keys))
+	seen := map[int]bool{}
+	for _, key := range keys {
+		indexOf[key] = hashPartitionIndex(t, key)
+		seen[indexOf[key]] = true
+	}
+	return indexOf, len(seen)
+}
+
+// publishKeyedBodies publishes perKey messages under each routing key and reports
+// the key every published body was sent with.
+func publishKeyedBodies(ctx context.Context, t *testing.T, publisher *Publisher, keys []string, perKey int) map[string]string {
+	t.Helper()
+
+	keyOf := make(map[string]string, len(keys)*perKey)
+	for _, key := range keys {
+		for i := range perKey {
+			body := fmt.Sprintf("%s-%d", key, i)
+			keyOf[body] = key
+
+			// The per-publish deadline is the latency bound: a confirmation that never
+			// arrived, or arrived correlated to the wrong message, surfaces here.
+			publishCtx, cancel := context.WithTimeout(ctx, itWaitTimeout)
+			err := publisher.Publish(publishCtx, &PublishMessage{Data: []byte(body), RoutingKey: key})
+			cancel()
+			require.NoError(t, err, "publish of %q must be confirmed by the broker", body)
+		}
+	}
+	return keyOf
+}
+
+// awaitBodies waits until every body reached the recorder. It gates on the bodies
+// themselves because a raw count is satisfied by duplicates.
+func awaitBodies(t *testing.T, r *recorder, want map[string]string) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		_, arrived := r.snapshot()
+		for body := range want {
+			if !slices.Contains(arrived, body) {
+				return false
+			}
+		}
+		return true
+	}, itWaitTimeout, itPollInterval, "every published message must reach the consumer")
+}
+
+// partitionByKey inverts the per-partition view into the partition each routing
+// key's messages arrived on, and counts how often each body arrived. A key whose
+// messages were split across partitions fails here.
+func partitionByKey(t *testing.T, r *recorder, keyOf map[string]string) (partitionOf map[string]string, arrivals map[string]int) {
+	t.Helper()
+
+	partitionOf = map[string]string{}
+	arrivals = make(map[string]int, len(keyOf))
+	_, perPartition := r.perStream()
+	for partition, bodies := range perPartition {
+		for _, body := range bodies {
+			arrivals[body]++
+			key, published := keyOf[body]
+			require.True(t, published, "an unpublished body arrived: %q", body)
+			if existing, seen := partitionOf[key]; seen {
+				require.Equal(t, existing, partition, "routing key %q was split across partitions", key)
+				continue
+			}
+			partitionOf[key] = partition
+		}
+	}
+	return partitionOf, arrivals
+}
+
+// assertArrivedExactlyOnce pins that the consumer saw each published body once.
+func assertArrivedExactlyOnce(t *testing.T, arrivals map[string]int, want int) {
+	t.Helper()
+
+	require.Len(t, arrivals, want, "every published message arrives")
+	for body, count := range arrivals {
+		assert.Equal(t, 1, count, "%q arrived more than once", body)
+	}
+}
+
+// assertHashGrouping asserts the grouping the broker produced is the grouping the
+// client's hash predicts: keys it sends to one index share a partition, and keys it
+// separates land apart.
+//
+// Comparing the GROUPING is the whole point, and is strictly stronger than "one key
+// lands on one partition": an extractor answering "" would satisfy the weaker check
+// trivially, because piling every message onto a single partition also keeps each
+// key together. It never compares partition NAMES, so it holds whatever order the
+// broker reports partitions in.
+func assertHashGrouping(t *testing.T, keys []string, indexOf map[string]int, partitionOf map[string]string) {
+	t.Helper()
+
+	for _, a := range keys {
+		for _, b := range keys {
+			assert.Equal(t, indexOf[a] == indexOf[b], partitionOf[a] == partitionOf[b],
+				"keys %q and %q are grouped differently than the client's hash routes them", a, b)
+		}
+	}
+}
+
 // TestStreamsSuperStreamPublisherPartitionsIntegration is the super-stream half of
 // the publish proof: every message is confirmed and consumed exactly once, and the
-// partition a message lands on is decided by its RoutingKey.
-//
-// The grouping assertion is what an extractor answering "" would fail — every
-// message would pile onto one partition, so keys the hash separates would stop
-// being separated. It compares which keys share a partition against which keys the
-// client's own strategy sends to one index, never partition names, so it holds
-// whatever order the broker reports partitions in.
+// partition a message lands on is decided by its RoutingKey — see
+// assertHashGrouping for why that last part is asserted as a grouping.
 func TestStreamsSuperStreamPublisherPartitionsIntegration(t *testing.T) {
 	ctx := context.Background()
 	opts := streamsTestEnv(ctx, t)
@@ -763,70 +864,16 @@ func TestStreamsSuperStreamPublisherPartitionsIntegration(t *testing.T) {
 	assert.True(t, m.Ready(), "a bound super-stream publisher counts towards readiness")
 
 	keys := []string{"customer-a", "customer-b", "customer-c", "customer-d", "customer-e", "customer-f"}
-	indexOf := make(map[string]int, len(keys))
-	distinct := map[int]bool{}
-	for _, key := range keys {
-		indexOf[key] = hashPartitionIndex(t, key)
-		distinct[indexOf[key]] = true
-	}
-	require.Greater(t, len(distinct), 1,
+	indexOf, distinct := hashIndexByKey(t, keys)
+	require.Greater(t, distinct, 1,
 		"the chosen routing keys must not all hash to one partition, or routing everything to one would pass")
 
-	const perKey = 3
-	keyOf := make(map[string]string, len(keys)*perKey)
-	for _, key := range keys {
-		for i := range perKey {
-			body := fmt.Sprintf("%s-%d", key, i)
-			keyOf[body] = key
+	keyOf := publishKeyedBodies(ctx, t, publisher, keys, 3)
+	awaitBodies(t, received, keyOf)
 
-			// The per-publish deadline is the latency bound: a confirmation that never
-			// arrived, or arrived correlated to the wrong message, surfaces here.
-			publishCtx, cancel := context.WithTimeout(ctx, itWaitTimeout)
-			err := publisher.Publish(publishCtx, &PublishMessage{Data: []byte(body), RoutingKey: key})
-			cancel()
-			require.NoError(t, err, "publish of %q must be confirmed by the broker", body)
-		}
-	}
-
-	// Gate on the bodies themselves: a raw count is satisfied by duplicates.
-	require.Eventually(t, func() bool {
-		_, arrived := received.snapshot()
-		for body := range keyOf {
-			if !slices.Contains(arrived, body) {
-				return false
-			}
-		}
-		return true
-	}, itWaitTimeout, itPollInterval, "every published message must reach the consumer")
-
-	// Invert the per-partition view into the partition each key's messages arrived on.
-	partitionOf := make(map[string]string, len(keys))
-	arrivals := make(map[string]int, len(keyOf))
-	_, perPartition := received.perStream()
-	for partition, bodies := range perPartition {
-		for _, body := range bodies {
-			arrivals[body]++
-			key, published := keyOf[body]
-			require.True(t, published, "an unpublished body arrived: %q", body)
-			if existing, seen := partitionOf[key]; seen {
-				require.Equal(t, existing, partition, "routing key %q was split across partitions", key)
-				continue
-			}
-			partitionOf[key] = partition
-		}
-	}
-
-	require.Len(t, arrivals, len(keyOf), "every published message arrives")
-	for body, count := range arrivals {
-		assert.Equal(t, 1, count, "%q arrived more than once", body)
-	}
-
-	for _, a := range keys {
-		for _, b := range keys {
-			assert.Equal(t, indexOf[a] == indexOf[b], partitionOf[a] == partitionOf[b],
-				"keys %q and %q are grouped differently than the client's hash routes them", a, b)
-		}
-	}
+	partitionOf, arrivals := partitionByKey(t, received, keyOf)
+	assertArrivedExactlyOnce(t, arrivals, len(keyOf))
+	assertHashGrouping(t, keys, indexOf, partitionOf)
 }
 
 // TestStreamsPublisherRejectedAfterStopIntegration pins the shutdown contract
