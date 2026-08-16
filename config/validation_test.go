@@ -3732,6 +3732,27 @@ func TestValidateMultitenantFailures(t *testing.T) {
 	}
 }
 
+// TestValidateMultitenantTenantsRejectsDottedTenantID proves a tenant ID
+// containing '.' is rejected: it collides with koanf's path delimiter, so the
+// constructed section path multitenant.tenants.<id>.database would become
+// ambiguous.
+func TestValidateMultitenantTenantsRejectsDottedTenantID(t *testing.T) {
+	tenants := map[string]TenantEntry{
+		"tenant.a": {
+			Database: DatabaseConfig{
+				Type:     PostgreSQL,
+				Host:     testTenantDBHost,
+				Port:     5432,
+				Database: "tenant_a",
+				Username: "tenant_user",
+			},
+		},
+	}
+
+	err := validateMultitenantTenants(tenants)
+	assertValidationError(t, err, "cannot contain '.'")
+}
+
 func TestValidateMultitenantResolver(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -4552,6 +4573,25 @@ func TestValidateNamedDatabasesFailures(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.errContains)
 		})
 	}
+}
+
+// TestValidateNamedDatabasesRejectsDottedName proves a database name
+// containing '.' is rejected: it collides with koanf's path delimiter, so
+// constructed section paths like databases.<name> would become ambiguous.
+func TestValidateNamedDatabasesRejectsDottedName(t *testing.T) {
+	databases := map[string]DatabaseConfig{
+		"legacy.reporting": {
+			Type:     PostgreSQL,
+			Host:     dbLocalField,
+			Port:     5432,
+			Database: "db",
+			Username: "user",
+		},
+	}
+	mt := MultitenantConfig{Enabled: false}
+
+	err := validateNamedDatabases(databases, &mt)
+	assertValidationError(t, err, "cannot contain '.'")
 }
 
 func TestValidateNamedDatabasesNoConflictWhenMultitenantDisabled(t *testing.T) {

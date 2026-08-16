@@ -982,6 +982,19 @@ func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 			Action:   fmt.Sprintf("rename databases.%s to remove the '%s' prefix", name, NamedDatabasePrefix),
 		}
 	}
+	// A '.' collides with koanf's path delimiter: constructed section paths
+	// (databases.<name>, and this name's own error Field above) become
+	// ambiguous, so the bare "databases" Field is used here rather than
+	// fmt.Sprintf(databasesFieldPrefix, name) — embedding the dotted name
+	// would reproduce the same ambiguity in the error itself.
+	if strings.Contains(name, ".") {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    "databases",
+			Message:  fmt.Sprintf("database name %q cannot contain '.' (the config path delimiter)", name),
+			Action:   "rename the databases entry without dots",
+		}
+	}
 	if mt.Enabled && mt.Tenants != nil {
 		if _, exists := mt.Tenants[name]; exists {
 			return &ConfigError{
@@ -1720,6 +1733,14 @@ func validateMultitenantTenants(tenants map[string]TenantEntry) error {
 		tenant := tenants[tenantID]
 		if tenantID == "" {
 			return NewValidationError("multitenant.tenants", "tenant ID cannot be empty")
+		}
+		// A '.' collides with koanf's path delimiter: the constructed section
+		// path multitenant.tenants.<id>.database becomes ambiguous. Koanf has
+		// no delimiter escaping, so fail fast rather than let a later lookup
+		// consult the wrong flattened key.
+		if strings.Contains(tenantID, ".") {
+			return NewValidationError("multitenant.tenants",
+				fmt.Sprintf("tenant ID %q cannot contain '.' (the config path delimiter)", tenantID))
 		}
 
 		if err := normalizeDatabaseSection(&tenant.Database, tenantDatabaseSection(tenantID)); err != nil {

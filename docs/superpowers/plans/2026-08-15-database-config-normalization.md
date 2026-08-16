@@ -512,7 +512,7 @@ The `tenants[tenantID] = tenant` write-back and `validateTenantCache` call stay.
 
 - [ ] **Step 4: Migrate the direct `validateDatabase(` tests and run the package**
 
-Run: `sed -i '' -E 's/validateDatabase\(&([A-Za-z_.]+)\)/normalizeDatabaseSection(\&\1, rootDatabaseSection())/g' config/validation_test.go && grep -c 'normalizeDatabaseSection(&' config/validation_test.go`
+Run: `sed -i '' -E 's/validateDatabase\(&([A-Za-z_.]+)\)/normalizeDatabaseSection(\&\1, rootDatabaseSection())/g' config/validation_test.go && grep -c 'normalizeDatabaseSection(&' config/validation_test.go` (BSD sed syntax, as executed on macOS; GNU sed takes `-i` with no argument)
 Expected: 16 replacements, `grep -c 'validateDatabase(' config/validation_test.go` prints `0`.
 
 Run: `go test ./config/ -count=1`
