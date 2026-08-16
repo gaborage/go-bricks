@@ -81,8 +81,9 @@ func NewManagerConfigBuilder(multiTenantEnabled bool, tenantLimit int) *ManagerC
 }
 
 // resolveMaxSize treats non-positive as unset (not just zero) so a negative from a
-// Validate-bypassing path (app.NewWithConfig) can't skip the mode-aware fallback and
-// reach the managers' own <=0->default coercion (see database/manager.go, messaging/manager.go).
+// Validate-bypassing path (a Builder assembled without WithConfig, or a unit test
+// building this type directly) can't skip the mode-aware fallback and reach the
+// managers' own <=0->default coercion (see database/manager.go, messaging/manager.go).
 func (b *ManagerConfigBuilder) resolveMaxSize(operatorValue, singleTenantDefault int) int {
 	if operatorValue > 0 {
 		return operatorValue
@@ -93,7 +94,7 @@ func (b *ManagerConfigBuilder) resolveMaxSize(operatorValue, singleTenantDefault
 	return singleTenantDefault
 }
 
-// resolveIdleTTL mirrors resolveMaxSize: the fallback is inert once config.Validate stamps defaults, but load-bearing when Validate is bypassed (NewWithConfig, unit tests).
+// resolveIdleTTL mirrors resolveMaxSize: the fallback is inert once config.Validate stamps defaults, but load-bearing when Validate is bypassed (a Builder assembled without WithConfig, unit tests).
 func (b *ManagerConfigBuilder) resolveIdleTTL(operatorValue, multiTenantDefault, singleTenantDefault time.Duration) time.Duration {
 	if operatorValue > 0 {
 		return operatorValue
@@ -295,8 +296,9 @@ func (f *ResourceManagerFactory) CreateMessagingManager(
 //
 // It fails closed: a nil manager registers no cache readiness probe, so /ready reports
 // the cache "disabled" and answers 200 — a service that asked for a cache, got none, and
-// joined the rotation anyway. Returning the error instead of logging it matters most on
-// the app.NewWithConfig path, which never runs config.Validate.
+// joined the rotation anyway. Returning the error instead of logging it still matters after
+// WithConfig's config.Validate call (B1): validateCache only checks Manager.MaxSize/IdleTTL
+// when cache.enabled is true, so a negative value on a disabled cache reaches here unvalidated.
 func (f *ResourceManagerFactory) CreateCacheManager(
 	resourceSource TenantStore,
 ) (*cache.CacheManager, error) {

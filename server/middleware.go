@@ -179,8 +179,9 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 	//
 	// Require implies registration: honoring Enabled alone would turn
 	// require=true into a silent no-op on config paths that skip
-	// config.Validate (app.NewWithConfig), serving every request unauthenticated
-	// while the config asserts the opposite.
+	// config.Validate (a Builder assembled without WithConfig, or any Config
+	// built by hand), serving every request unauthenticated while the config
+	// asserts the opposite.
 	fcc := cfg.Server.ForwardedClientCert
 	if fcc.Enabled || fcc.Require {
 		if fcc.Require && !fcc.Enabled {

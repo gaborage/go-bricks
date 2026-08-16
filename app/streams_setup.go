@@ -75,10 +75,10 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 
 // assertStreamsSingleTenant re-asserts the tenancy invariant at runtime.
 //
-// SECURITY: config.Validate already rejects multitenant.enabled beside a stream
-// URI, but app.NewWithConfig takes a hand-built config and never calls it — the
-// documented bypass config.UntypedDatabaseSections guards against for database
-// types. Without this repeat, such a service would boot green and run stream
+// SECURITY: config.Validate already rejects multitenant.enabled beside a stream URI,
+// and Builder.WithConfig now runs it on every app.NewWithConfig call — but an App
+// assembled without going through WithConfig (e.g. a hand-built Builder) reaches here
+// unchecked. Without this repeat, such a service would boot green and run stream
 // handlers against one shared Environment with no tenant in context, which is
 // precisely what the gate exists to prevent.
 func (a *App) assertStreamsSingleTenant() error {

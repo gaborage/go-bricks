@@ -40,6 +40,17 @@ func (b *Builder) WithConfig(cfg *config.Config, opts *Options) *Builder {
 	if b.err != nil {
 		return b
 	}
+	if cfg == nil {
+		b.err = errors.New("configuration required")
+		return b
+	}
+	// Every construction path validates — config.Load output included (Validate
+	// is idempotent, so its second run is a no-op). This is what lets the
+	// managers drop their mirrored defaults: no config reaches them unstamped.
+	if err := config.Validate(cfg); err != nil {
+		b.err = fmt.Errorf("invalid configuration: %w", err)
+		return b
+	}
 
 	b.cfg = cfg
 	b.opts = opts
@@ -231,7 +242,7 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 		if paths := config.UntypedDatabaseSections(b.cfg); len(paths) > 0 {
 			b.err = fmt.Errorf(
 				"database configuration at %v: connectionstring has no resolved database type; "+
-					"run config.Validate or set <path>.type to postgresql or oracle",
+					"set <path>.type to postgresql or oracle, or use a recognized connectionstring scheme",
 				paths)
 			return b
 		}
@@ -346,8 +357,9 @@ func (b *Builder) preInitMessaging(parent context.Context, timeout time.Duration
 }
 
 // startupContext derives one component's pre-init context from parent. A non-positive budget means
-// "no explicit budget", NOT "already expired": config.applyStartupDefaults resolves the three-level
-// fallback for loaded configs, but a hand-built Config reaches NewWithConfig with zero values, and
+// "no explicit budget", NOT "already expired": WithConfig's config.Validate call resolves the
+// three-level fallback (config.applyStartupDefaults) for every config reaching NewWithConfig, but a
+// Builder assembled without WithConfig can still carry a zero-valued Startup, and
 // context.WithTimeout(parent, 0) would hand every component a context that is dead on arrival.
 func startupContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {

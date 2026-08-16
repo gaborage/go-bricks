@@ -510,9 +510,18 @@ func TestPrepareRuntimeAllowsDebugEndpointsWithAccessControl(t *testing.T) {
 // real manager and declaration wiring are in place.
 func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
 	cfg := &config.Config{
-		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
-		Server:      config.ServerConfig{Port: 8080},
+		App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Server: config.ServerConfig{
+			Port: 8080,
+			Timeout: config.TimeoutConfig{
+				Read:       15 * time.Second,
+				Write:      30 * time.Second,
+				Middleware: 5 * time.Second,
+				Shutdown:   10 * time.Second,
+			},
+		},
 		Multitenant: config.MultitenantConfig{Enabled: false},
+		Log:         config.LogConfig{Level: "info"},
 		// No Messaging and no Database block at all.
 	}
 
