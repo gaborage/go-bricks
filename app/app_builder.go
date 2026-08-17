@@ -199,7 +199,6 @@ func (b *Builder) CreateApp() *Builder {
 		messagingManager: b.bundle.messagingManager,
 		cacheManager:     b.bundle.cacheManager,
 		resourceProvider: b.bundle.provider,
-		cacheAbsent:      rootCacheAbsent(b.cfg, b.opts),
 	}
 
 	return b
@@ -400,7 +399,7 @@ func (b *Builder) preInitFatalComponent(
 // failure is logged as a warning without aborting startup — reaching the cache is
 // a runtime concern, distinct from the manager-creation contract, which fails closed.
 func (b *Builder) preInitCache(parent context.Context, timeout time.Duration) {
-	if b.bundle.cacheManager == nil || b.app.cacheAbsent {
+	if b.bundle.cacheManager == nil || rootCacheAbsent(b.cfg, b.opts) {
 		return
 	}
 
@@ -433,7 +432,7 @@ func (b *Builder) CreateHealthProbes() *Builder {
 
 	b.warnIfCacheCriticalityOptOut()
 	b.warnIfQueryParameterLogging()
-	b.app.healthProbes = b.app.createHealthProbes()
+	b.app.healthProbes = b.app.createHealthProbes(probeInputs{cacheAbsent: rootCacheAbsent(b.cfg, b.opts)})
 
 	return b
 }

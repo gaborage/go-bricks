@@ -237,7 +237,7 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 
 	log := &recLogger{}
 	app := &App{cfg: cfg, logger: log, cacheManager: cacheManager}
-	app.healthProbes = app.createHealthProbes()
+	app.healthProbes = app.createHealthProbes(probeInputs{})
 	require.Len(t, app.healthProbes, 3)
 
 	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
@@ -305,7 +305,7 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 
 	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
 	app := &App{cfg: cfg, logger: log, dbManager: dbManager}
-	app.healthProbes = app.createHealthProbes()
+	app.healthProbes = app.createHealthProbes(probeInputs{})
 	require.Len(t, app.healthProbes, 3)
 
 	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)

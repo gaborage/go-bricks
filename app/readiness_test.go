@@ -364,7 +364,7 @@ func TestStreamsProbeNotOpenIsUnhealthy(t *testing.T) {
 func TestCreateHealthProbesAlwaysDescribesTheThreeClassicKinds(t *testing.T) {
 	app := &App{cfg: defaultTestConfig()}
 
-	probes := app.createHealthProbes()
+	probes := app.createHealthProbes(probeInputs{})
 
 	require.Len(t, probes, 3)
 	names := make([]string, 0, len(probes))
@@ -375,6 +375,21 @@ func TestCreateHealthProbesAlwaysDescribesTheThreeClassicKinds(t *testing.T) {
 	for _, p := range probes {
 		assert.Equal(t, disabledStatus, p.Run(context.Background()).Status)
 	}
+}
+
+// TestCreateHealthProbesTakesAbsenceFromItsInputs pins that the cache description's absence
+// arm is driven by the caller's verdict rather than by state stored on App: absence needs
+// Options, which only the Builder holds, so a second copy on App could drift from it. The
+// connector always fails, so the two arms are told apart by whether it was reached at all.
+func TestCreateHealthProbesTakesAbsenceFromItsInputs(t *testing.T) {
+	app := &App{cfg: defaultTestConfig(), cacheManager: createTestCacheManagerWithGetError(t,
+		errors.New("the absent arm must never reach the connector"))}
+
+	absent := app.createHealthProbes(probeInputs{cacheAbsent: true})[2].Run(context.Background())
+	present := app.createHealthProbes(probeInputs{})[2].Run(context.Background())
+
+	assert.Equal(t, notConfiguredStatus, absent.Status, "an absent cache is judged without leasing")
+	assert.Equal(t, unhealthyStatus, present.Status, "a present cache leases and reports the connector's failure")
 }
 
 func TestConvertCacheStatsToMap(t *testing.T) {

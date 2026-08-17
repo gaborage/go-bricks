@@ -504,7 +504,7 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 }
 
 func (f *testAppFixture) rebuildClosersAndHealth() {
-	f.app.healthProbes = f.app.createHealthProbes()
+	f.app.healthProbes = f.app.createHealthProbes(probeInputs{})
 	f.app.closers = nil
 	// Register closers with explicit nil checks to avoid typed nil interface issues
 	if f.app.dbManager != nil {
@@ -810,7 +810,7 @@ func TestCreateHealthProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 			cfg := loadConfigFromYAML(t, minimumValidConfig+tc.cacheYAML)
 			app := &App{cfg: cfg, logger: logger.New("error", false), cacheManager: createTestCacheManager(t)}
 
-			probes := app.createHealthProbes()
+			probes := app.createHealthProbes(probeInputs{})
 			require.Len(t, probes, 3)
 
 			status := probes[2].Run(context.Background())
@@ -839,7 +839,7 @@ func TestCreateHealthProbesCriticalProbesRenderNoRawError(t *testing.T) {
 		cacheManager:     createTestCacheManager(t),
 	}
 
-	probes := app.createHealthProbes()
+	probes := app.createHealthProbes(probeInputs{})
 	require.Len(t, probes, 3)
 
 	criticalSeen := 0
