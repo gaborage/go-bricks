@@ -289,6 +289,10 @@ func (b *Builder) performPreInitialization() {
 	if b.err != nil {
 		return
 	}
+	if len(b.app.slots) == 0 {
+		b.err = errors.New("slots not installed before pre-initialization — CreateApp must run first")
+		return
+	}
 
 	// Single parent context for the whole pre-init phase; each slot derives its own budget
 	// from it via startupContext so all of them share one cancellation lineage. The context

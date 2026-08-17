@@ -294,7 +294,7 @@ construction-time `PING` in `redis.NewClient` is untracked. Do not build the boo
 a cache metric; on that path the signal is the probe result itself. Under the strict default
 the `503` body is trimmed to `status`/`cache`/`error` with no `cache_stats`, so the in-body
 signal is gone and what remains is the external prober, the `Readiness check failed` ERROR line
-`readyCheck` logs with the full error, and the cache slot's pre-init WARN — see [Wiring
+`readyCheck` logs with the full error, and the cache pre-init WARN (`Builder.performPreInitialization`, over the cache slot) — see [Wiring
 Kubernetes probes](#wiring-kubernetes-probes). Under `cache.critical: false` the `200` body
 carries `cache: "unhealthy"` and a climbing `cache_stats.errors` instead, and no readiness
 ERROR is logged — that body is the only in-process signal a warm-pool outage produces, which
@@ -331,7 +331,7 @@ liveness probe does. Do not point liveness at `/ready` to get that. It would tur
 Redis blip into a simultaneous restart of every replica, which is strictly worse than the
 rotation drain described under *Choosing a value* above: restarts also drop in-flight requests
 and can settle into `CrashLoopBackOff`. Nor is this a "refuse to start" switch — the process
-boots either way and simply never reports Ready; the cache slot's pre-init logs a WARN and
+boots either way and simply never reports Ready; the cache pre-init (`Builder.performPreInitialization`, over the cache slot) logs a WARN and
 continues. That covers *reaching* the cache: an unreachable Redis at boot is a runtime
 condition and stays non-fatal. A cache the framework cannot **construct** — a negative
 `cache.manager.maxsize` or `idlettl` — is the other case, and it does abort startup

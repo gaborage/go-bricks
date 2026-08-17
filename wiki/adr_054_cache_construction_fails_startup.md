@@ -81,7 +81,7 @@ The `Warn` is gone. Returning the error *and* logging it would report the same f
 on two channels.
 
 The grade is scoped to construction. Reaching the cache stays best-effort:
-the cache pre-init (`Builder.preInitCache` then; the cache slot's `preInit` since
+the cache pre-init (`Builder.preInitCache` then; `Builder.performPreInitialization` over the cache slot since
 [ADR-067](adr_067_lifecycle_slots.md)) still logs a WARN and continues when Redis is unreachable at boot,
 because that is a runtime condition and the readiness probe is the right instrument for
 it. And a service with `cache.enabled: false` and no stale tuning values never fails

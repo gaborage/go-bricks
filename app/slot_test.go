@@ -141,7 +141,7 @@ func TestSlotWalksCoverEveryKind(t *testing.T) {
 		wantClosers []string
 	}{
 		{
-			name:        "no_managers_probes_three_disabled_kinds_and_closes_nothing",
+			name:        "no_managers_probes_three_classic_kinds_and_closes_nothing",
 			wantProbes:  []string{componentDatabase, componentMessaging, componentCache},
 			wantClosers: []string{},
 		},

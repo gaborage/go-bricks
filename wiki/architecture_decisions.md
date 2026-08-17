@@ -1005,8 +1005,8 @@ these values. Fixes [#818](https://github.com/gaborage/go-bricks/issues/818). Se
 `cache.NewCacheManager` rejected its options — defeating the intent `BuildCacheOptions`
 documents one function away, that a negative `cache.manager.*` value "must pass through and
 fail loudly there instead of being silently swallowed into a live pool". The nil then
-bypassed ADR-046 entirely: `createHealthProbes` registers a cache probe only when the
-manager is non-nil, so with no manager there was no probe, `/ready` reported the cache
+bypassed ADR-046 entirely: the probe walk (`createHealthProbes` then; the cache slot's `probe`
+since ADR-067) registered a cache probe only when the manager was non-nil, so with no manager there was no probe, `/ready` reported the cache
 `disabled`, and the pod answered `200` — a service that asked for a cache, got none, and
 joined the rotation. Two paths reached it, and neither is the obvious one:
 `app.NewWithConfig` with a hand-assembled `*config.Config` (that constructor never runs
@@ -1017,7 +1017,7 @@ deployment with the cache enabled was already caught by `applyCacheManagerDefaul
 `appBootstrap.dependencies` propagates it, and `Builder.ResolveDependencies` records it in
 `b.err`, so startup aborts. Promoting the WARN to a fatal inside the factory was rejected —
 an exported constructor that terminates the process is a worse contract than one that
-returns an error. Reaching the cache stays best-effort: the cache pre-init (now the cache slot's `preInit`, ADR-067) still WARNs and
+returns an error. Reaching the cache stays best-effort: the cache pre-init (now `Builder.performPreInitialization` over the cache slot, ADR-067) still WARNs and
 continues on an unreachable Redis, which is a runtime condition, not a construction one.
 
 **Key Benefits:** A cache misconfiguration fails at boot rather than at the first
@@ -1380,7 +1380,7 @@ interface with four per-kind structs (compiler-checked completeness), phases
 manager-side so `DbManager`/`messaging.Manager` self-start idle cleanup at construction.
 `App` keeps its typed manager fields; the Builder steps keep their names and iterate slots;
 the streams slot exists at build time with a nil manager and constructs in `start`. Ships
-as four stacked PRs — the first deletes the pass-through helpers the slots replace.
+as stacked PRs — the first deletes the pass-through helpers the slots replace.
 
 **Key Benefits:** Adding a resource kind becomes one slot file instead of ten edits, and
 the compiler enforces that every phase was considered. **Watch:** the first PR removes

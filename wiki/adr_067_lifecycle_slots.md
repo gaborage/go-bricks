@@ -55,8 +55,10 @@ A **slot** owns one resource kind's whole application lifecycle.
 5. **Builder steps keep their names.** `CreateHealthProbes` and `RegisterClosers` iterate
    slots instead of hand-listing managers; renaming them belongs to the separate "Builder
    collapse" candidate, not here.
-6. **The streams slot exists at build time with a nil manager** (its probe reads
-   `disabled`) and constructs plus starts its manager in `start`. That removes the
+6. **The streams slot exists at build time with a nil manager** (its probe is *withheld*
+   until the manager exists — registering a `disabled` streams description at build time
+   would add `streams`/`streams_stats` to every service's `/ready` body under ADR-066 rule 5,
+   an atom-worthy change nothing asked for) and constructs plus starts its manager in `start`. That removes the
    runtime-registration exception without moving stream construction earlier than the
    declarations that size it.
 
@@ -65,7 +67,7 @@ manager interface for this — the interface lives in `app/`, where the caller i
 
 ## Delivery
 
-Four stacked PRs, each under ~400 changed LoC and each self-contained:
+Stacked PRs (the slot-interface slice ships as two, probe/pre-init/close then start/stop), each self-contained:
 
 - **PR2 (this ADR's own PR) deletes the pass-through helpers** so the slot work starts from
   a clean surface: `MessagingInitializer` and `ConnectionPreWarmer` fold into unexported

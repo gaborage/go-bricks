@@ -648,7 +648,9 @@ func TestAppBuilderConfigureRuntimeHelpersIgnoresTenantsWhenMultitenantDisabled(
 
 	// Empty bundle: single-tenant static config runs pre-initialization, which no-ops
 	// on nil managers.
-	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: &App{}, bundle: &dependencyBundle{}}
+	app := &App{}
+	app.installSlots(slotInputs{})
+	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: app, bundle: &dependencyBundle{}}
 	result := builder.ConfigureRuntimeHelpers()
 
 	require.NoError(t, result.err)
@@ -1225,6 +1227,11 @@ func TestAppBuilderStepsRequireInstalledSlots(t *testing.T) {
 			name:    "register_closers",
 			step:    (*Builder).RegisterClosers,
 			wantMsg: "slots not installed before registering closers",
+		},
+		{
+			name:    "pre_initialization",
+			step:    func(b *Builder) *Builder { b.performPreInitialization(); return b },
+			wantMsg: "slots not installed before pre-initialization",
 		},
 	}
 

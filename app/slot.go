@@ -15,9 +15,9 @@ import (
 // it (database.DbManager, messaging.Manager, cache.CacheManager, streams.Manager) know
 // nothing about it.
 type resourceSlot interface {
-	// name is the kind's fixed component identifier. SECURITY: the probe description carries
-	// this same string onto the unauthenticated /ready body, so it is never a tenant, host or
-	// database name.
+	// name is the kind's fixed component identifier, used in the startup log lines and the
+	// fatal startup error. The /ready body's name comes from the probe constructors in
+	// readiness.go, which use the same constants — never a tenant, host or database name.
 	name() string
 
 	// probe returns the kind's readiness description and whether it is registered at all.
@@ -108,7 +108,7 @@ func (s *databaseSlot) preInit(ctx context.Context) error {
 	if s.app.dbManager == nil {
 		return nil
 	}
-	return s.app.preInitLease(ctx, componentDatabase,
+	return s.app.preInitLease(ctx, s.name(),
 		config.IsDatabaseConfigured(&s.app.cfg.Database), s.app.cfg.App.Startup.Database,
 		func(ctx context.Context) (func(), error) {
 			_, release, err := s.app.dbManager.Get(ctx, "")
@@ -140,7 +140,7 @@ func (s *messagingSlot) preInit(ctx context.Context) error {
 	if s.app.messagingManager == nil {
 		return nil
 	}
-	return s.app.preInitLease(ctx, componentMessaging,
+	return s.app.preInitLease(ctx, s.name(),
 		config.IsMessagingConfigured(&s.app.cfg.Messaging), s.app.cfg.App.Startup.Messaging,
 		func(ctx context.Context) (func(), error) {
 			_, release, err := s.app.messagingManager.Publisher(ctx, "")
