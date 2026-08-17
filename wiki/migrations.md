@@ -3283,9 +3283,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `database_stats` instead of `db_stats`, read the `database`/`messaging` entries instead of
   the `*_manager` ones, and drop any `overall_status == unknown` alert in favor of
   `degraded`/`critical`.
-- verify: `curl -s localhost:8080/ready | jq '.messaging_stats.status, .cache_stats.status'`
+- verify: capture one 200 response first — `curl -s -o /tmp/ready.json -w '%{http_code}\n' localhost:8080/ready`
+  prints `200` (a `503` carries only `status`/`<name>`/`error`, so the checks below only
+  apply to a 200 body) — then `jq '.messaging_stats.status, .cache_stats.status' /tmp/ready.json`
   never prints a retired string, and
-  `curl -s localhost:8080/ready | jq 'has("database_stats"), has("db_stats")'` prints `true`
+  `jq 'has("database_stats"), has("db_stats")' /tmp/ready.json` prints `true`
   then `false`; with the debug endpoint enabled,
   `curl -s localhost:8080/_sys/health-debug | jq '.data.components | keys'` lists `database`,
   `messaging`, `cache` (and `streams` once declared) and no `*_manager` entry.

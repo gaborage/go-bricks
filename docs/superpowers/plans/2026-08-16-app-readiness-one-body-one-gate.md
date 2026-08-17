@@ -477,7 +477,7 @@ func TestReadinessViews(t *testing.T) {
 				componentStreams:                     healthyStatus,
 				componentStreams + statsSuffix:       withStatus(streamPublic, healthyStatus),
 			},
-			forbidden: []string{"tenant-alpha", "connections", streamKey, "stored_offsets", "4242"},
+			forbidden: []string{"tenant-alpha", jsonKey("connections"), streamKey, "stored_offsets", "4242"}, // jsonKey spells the JSON key form: "connections" alone is a substring of the allowlisted active_connections/max_connections
 			wantComponents: map[string]wantComponent{
 				componentDatabase:  {status: healthyStatus, critical: true, details: withStatus(dbStats, healthyStatus)},
 				componentMessaging: {status: disabledStatus, details: map[string]any{statusKey: disabledStatus}},
@@ -1045,7 +1045,11 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		return c.JSON(http.StatusServiceUnavailable, notReadyBody(&blocking))
 	}
 
-	return c.JSON(http.StatusOK, report.readyBody(&a.cfg.App, time.Now()))
+	app := &config.AppConfig{}
+	if a.cfg != nil { // a directly constructed App may carry no config
+		app = &a.cfg.App
+	}
+	return c.JSON(http.StatusOK, report.readyBody(app, time.Now()))
 }
 ```
 

@@ -2370,7 +2370,8 @@ managerStats := cacheManager.Stats()
 ```
 
 `GET /health` is a liveness-only probe with no component breakdown (`{"status": "ok"}`).
-`GET /ready` reports per-component status (database, messaging, cache) — the cache probe's
+`GET /ready` reports one `<name>` + `<name>_stats` pair per registered kind (database,
+messaging, cache always; streams once streams are declared) — the cache probe's
 result is surfaced as the top-level `cache` and `cache_stats` keys in the `200` body (the
 `503` body carries only `status`/`cache`/`error`; an `App` assembled without a cache manager
 reports `cache: "disabled"` with `cache_stats: {"status":"disabled"}`). The probe leases
