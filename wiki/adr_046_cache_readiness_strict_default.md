@@ -177,7 +177,8 @@ deleted there; the emitted strings are unchanged.
 target for a readiness probe and the right one for liveness. No `degraded` status was
 introduced — `/ready` answers a binary question for a binary consumer, and a third status
 code would be invented vocabulary no orchestrator reads. An *unreachable* cache is still not
-fatal at startup: the process boots, `Builder.preInitCache` logs a WARN, and the pod simply
+fatal at startup: the process boots, the cache pre-init (`Builder.preInitCache` then; the cache
+slot's `preInit` since [ADR-067](adr_067_lifecycle_slots.md)) logs a WARN, and the pod simply
 never reports Ready. A cache that cannot be **constructed** is the other case, and
 [ADR-054](adr_054_cache_construction_fails_startup.md) makes it abort startup rather than
 leave a nil manager behind — with no manager there is no probe at all, which is exactly the

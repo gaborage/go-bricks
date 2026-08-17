@@ -90,12 +90,20 @@ func probeNames(t *testing.T, probes []Prober) []string {
 // names alone would still read correctly.
 func assertCloserIdentity(t *testing.T, a *App) {
 	t.Helper()
-	want := map[string]any{
-		databaseCloserName:  a.dbManager,
-		messagingCloserName: a.messagingManager,
-		cacheCloserName:     a.cacheManager,
-		streamsCloserName:   a.streamsManager,
+	want := map[string]any{}
+	if a.dbManager != nil {
+		want[databaseCloserName] = a.dbManager
 	}
+	if a.messagingManager != nil {
+		want[messagingCloserName] = a.messagingManager
+	}
+	if a.cacheManager != nil {
+		want[cacheCloserName] = a.cacheManager
+	}
+	if a.streamsManager != nil {
+		want[streamsCloserName] = a.streamsManager
+	}
+	require.Len(t, a.closers, len(want), "one closer per built manager, no more, no fewer")
 	for _, c := range a.closers {
 		assert.Same(t, want[c.name], c.closer, "closer %q must be its slot's own manager", c.name)
 	}

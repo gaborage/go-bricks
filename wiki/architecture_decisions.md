@@ -1017,7 +1017,7 @@ deployment with the cache enabled was already caught by `applyCacheManagerDefaul
 `appBootstrap.dependencies` propagates it, and `Builder.ResolveDependencies` records it in
 `b.err`, so startup aborts. Promoting the WARN to a fatal inside the factory was rejected —
 an exported constructor that terminates the process is a worse contract than one that
-returns an error. Reaching the cache stays best-effort: `preInitCache` still WARNs and
+returns an error. Reaching the cache stays best-effort: the cache pre-init (now the cache slot's `preInit`, ADR-067) still WARNs and
 continues on an unreachable Redis, which is a runtime condition, not a construction one.
 
 **Key Benefits:** A cache misconfiguration fails at boot rather than at the first

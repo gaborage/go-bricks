@@ -321,7 +321,7 @@ func (b *Builder) CreateHealthProbes() *Builder {
 		return b
 	}
 
-	if b.app.slots == nil {
+	if len(b.app.slots) == 0 {
 		b.err = errors.New("slots not installed before creating health probes — CreateApp must run first")
 		return b
 	}
@@ -397,7 +397,7 @@ func (b *Builder) RegisterClosers() *Builder {
 		return b
 	}
 
-	if b.app.slots == nil {
+	if len(b.app.slots) == 0 {
 		b.err = errors.New("slots not installed before registering closers — CreateApp must run first")
 		return b
 	}
