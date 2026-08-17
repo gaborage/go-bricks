@@ -349,9 +349,9 @@ func (d *DebugHandlers) handleInfo(c server.HandlerContext) error {
 	// Add app-specific info if available
 	if d.app.cfg != nil {
 		info["app"] = map[string]any{
-			"name":        d.app.cfg.App.Name,
-			"environment": d.app.cfg.App.Env,
-			"version":     d.app.cfg.App.Version,
+			appNameKey:    d.app.cfg.App.Name,
+			appEnvKey:     d.app.cfg.App.Env,
+			appVersionKey: d.app.cfg.App.Version,
 		}
 	}
 
