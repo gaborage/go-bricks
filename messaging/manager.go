@@ -113,6 +113,8 @@ type ManagerOptions struct {
 // NewMessagingManager creates a new messaging manager. The idle-publisher sweep starts here and
 // stops in Close, so callers need not drive it (ADR-067); StartCleanup remains available and
 // idempotent.
+//
+//nolint:gocritic // hugeParam: every manager constructor takes its options by value (shipped signature); it runs once at startup
 func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, opts ManagerOptions, clientFactory ClientFactory) *Manager {
 	if opts.MaxPublishers <= 0 {
 		opts.MaxPublishers = 50 // sensible default
