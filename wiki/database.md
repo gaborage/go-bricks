@@ -432,7 +432,7 @@ database:
     cleanupinterval: 10m
 ```
 
-Each key also binds from the environment (`DATABASE_MANAGER_MAXSIZE`, `DATABASE_MANAGER_IDLETTL`, `DATABASE_MANAGER_CLEANUPINTERVAL`); negative values fail startup naming the key. In multi-tenant mode a zero/unset `maxsize` is **preserved** so the manager keeps scaling the cap to `multitenant.limits.tenants` — set an explicit positive value only to override that scaling.
+Each key also binds from the environment (`DATABASE_MANAGER_MAXSIZE`, `DATABASE_MANAGER_IDLETTL`, `DATABASE_MANAGER_CLEANUPINTERVAL`); negative values fail startup naming the key. In multi-tenant mode a zero/unset `maxsize` is **preserved** so the manager keeps scaling the cap to `multitenant.limits.tenants` — set an explicit positive value only to override that scaling. The sweep starts when the manager is constructed — before the first request — and stops in `DbManager.Close()`; calling `StartCleanup` yourself is not required, and a second call while a loop is already running is a no-op.
 
 These keys are set under the primary `database:` section only, but they govern the **single process-wide manager**, which caches the primary handle, every named `databases.<name>` handle (keyed `named:<name>` via `deps.DBByName`), and per-tenant handles. **Count named databases when sizing `maxsize`**: a single-tenant app with the primary plus 12 named databases needs `maxsize >= 13` to avoid LRU eviction churn. A `manager` sub-block under `databases.<name>` or `multitenant.tenants.<id>.database` is rejected at startup — it would otherwise be silently ignored.
 

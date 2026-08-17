@@ -121,4 +121,5 @@ Five stacked PRs, each self-contained (PR3 ships as two, PR3a then PR3b):
   the shipped `NewWithConfig` chain always runs `ConfigureRuntimeHelpers`.
 - **Watch:** `StartCleanup` becoming idempotent (PR4) means a caller that starts it twice
   no longer leaks a goroutine, but a caller that relied on a *second* call changing the
-  interval must call `StopCleanup` first. That lands with PR4's own atom, not this one.
+  interval must call `StopCleanup` first. PR4 ships that, plus the construction-time start
+  and the five retired cleanup-loop log lines, as [C60.5](migrations.md) — not this ADR's atom.
