@@ -4814,8 +4814,13 @@ func TestValidateKeyStoreMixedEntrySecretPlusPrivate(t *testing.T) {
 	assert.ErrorContains(t, err, "both a symmetric 'secret' and asymmetric")
 }
 
+func TestValidateKeyStoreSecretMinLengthNil(t *testing.T) {
+	cfg := &KeyStoreConfig{}
+	assert.NoError(t, checkKeyStore(cfg), "nil is left for normalize to fill; check must not reject it")
+}
+
 func TestValidateKeyStoreSecretMinLengthNegative(t *testing.T) {
-	cfg := &KeyStoreConfig{SecretMinLength: -1}
+	cfg := &KeyStoreConfig{SecretMinLength: new(-1)}
 	err := checkKeyStore(cfg)
 	assert.ErrorContains(t, err, "keystore.secretminlength")
 	assert.ErrorContains(t, err, "must be non-negative")
@@ -4823,7 +4828,7 @@ func TestValidateKeyStoreSecretMinLengthNegative(t *testing.T) {
 
 func TestValidateKeyStoreSecretMinLengthZeroAllowed(t *testing.T) {
 	cfg := &KeyStoreConfig{
-		SecretMinLength: 0,
+		SecretMinLength: new(0),
 		Keys: map[string]KeyPairConfig{
 			"mac": {Secret: KeySourceConfig{File: "mac.bin"}},
 		},

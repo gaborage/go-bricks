@@ -420,6 +420,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **Role password control chars (ADR-061):** `PGRoleSpec.Validate` rejects CR/LF/NUL in `MigratorPassword`/`RuntimePassword` — match `errors.Is(err, migration.ErrPGRolePasswordHasControlChar)`; trim file-sourced secrets.
 - **Database TLS fail-closed (ADR-062):** `database.tls.mode` must be a valid sslmode; cert/key/ca require `require`/`verify-ca`/`verify-full`; the block is rejected alongside `connectionstring` and (entirely) on Oracle.
 - **App validates every config (ADR-064):** `app.NewWithConfig`/`Builder.WithConfig` run `config.Validate`; hand-built configs that violate it fail construction.
+- **keystore.secretminlength tri-state (ADR-065):** `KeyStoreConfig.SecretMinLength` is `*int` (`new(n)` in Go literals; nil = 32, `0` = off, deprecated); a hand-built config that left it unset now enforces the 32-byte floor.
 
 ## File Organization
 

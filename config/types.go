@@ -856,10 +856,12 @@ type KeyStoreConfig struct {
 	Keys map[string]KeyPairConfig `koanf:"keys" json:"keys" yaml:"keys" toml:"keys" mapstructure:"keys"`
 
 	// SecretMinLength is the minimum byte length enforced for symmetric secret
-	// entries at startup. The default (32) is applied via loadDefaults; an
-	// explicit 0 disables the check (opt-out for callers with a deliberate
-	// reason to allow shorter keys). Negative values are rejected at validation.
-	SecretMinLength int `koanf:"secretminlength" json:"secretminlength" yaml:"secretminlength" toml:"secretminlength" mapstructure:"secretminlength"`
+	// entries at startup — a tri-state setting, see CONTEXT.md. nil means the
+	// default applies (DefaultKeyStoreSecretMinLength, 32), filled by
+	// normalize; an explicit 0 keeps the floor off (deprecated, WARNs at
+	// startup — see #1036); N > 0 sets the floor to N. Negative values are
+	// rejected by check.
+	SecretMinLength *int `koanf:"secretminlength" json:"secretminlength" yaml:"secretminlength" toml:"secretminlength" mapstructure:"secretminlength"`
 }
 
 // KeyPairConfig holds key material for one logical name. An entry is either an

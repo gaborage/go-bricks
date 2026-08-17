@@ -13,7 +13,7 @@
 // Keys are configured in YAML under the "keystore" section:
 //
 //	keystore:
-//	  secretminlength: 32                        # default 32; 0 disables
+//	  secretminlength: 32                        # default 32; explicit 0 disables (deprecated, WARNs — #1036)
 //	  keys:
 //	    signing:
 //	      public:
@@ -57,6 +57,8 @@ import (
 	"bytes"
 	"crypto/rsa"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/internal/keymaterial"
@@ -118,13 +120,24 @@ func (s *store) Secret(name string) ([]byte, error) {
 	return bytes.Clone(kp.secret), nil
 }
 
+// shortSecret names a symmetric secret the store admitted below
+// config.DefaultKeyStoreSecretMinLength because the configured floor allowed
+// it. Never carries the material.
+type shortSecret struct {
+	name string
+	n    int
+}
+
 // newStore creates a KeyStore by loading all configured entries.
-// secretMinLength is the byte floor for symmetric secrets (0 disables it).
-// Fails fast if any entry cannot be loaded, parsed, or fails the floor.
+// secretMinLength is the byte floor for symmetric secrets (0 disables it —
+// deprecated). Fails fast if any entry cannot be loaded, parsed, or fails
+// the floor.
 func newStore(keys map[string]config.KeyPairConfig, secretMinLength int) (*store, error) {
 	parsed := make(map[string]*keyEntry, len(keys))
 
-	for name, kpCfg := range keys {
+	// Sorted so the first error names the same key every run.
+	for _, name := range slices.Sorted(maps.Keys(keys)) {
+		kpCfg := keys[name]
 		entry, err := loadKeyEntry(name, &kpCfg, secretMinLength)
 		if err != nil {
 			return nil, err
@@ -133,6 +146,20 @@ func newStore(keys map[string]config.KeyPairConfig, secretMinLength int) (*store
 	}
 
 	return &store{keys: parsed}, nil
+}
+
+// belowRecommended lists the symmetric secrets shorter than
+// config.DefaultKeyStoreSecretMinLength, sorted by name — the set #1036 will
+// reject once the floor becomes mandatory. Symmetric entries are the ones
+// with material (see keyEntry.secret).
+func (s *store) belowRecommended() []shortSecret {
+	var short []shortSecret
+	for _, name := range slices.Sorted(maps.Keys(s.keys)) {
+		if kp := s.keys[name]; kp.secret != nil && len(kp.secret) < config.DefaultKeyStoreSecretMinLength {
+			short = append(short, shortSecret{name: name, n: len(kp.secret)})
+		}
+	}
+	return short
 }
 
 // loadKeyEntry loads one entry as either a symmetric secret or an RSA pair.

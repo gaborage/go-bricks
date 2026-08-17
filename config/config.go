@@ -232,6 +232,18 @@ func (c *Config) ShouldLogRoutes() bool {
 	return c.App.IsDevelopment()
 }
 
+// SecretFloor is the effective keystore.secretminlength: the documented default
+// when the tri-state pointer is nil, otherwise the configured value (0 = off,
+// deprecated). Validate's normalize fills the pointer with this same answer, so
+// after Validate the two never disagree; the accessor exists for the reader,
+// as IsCacheCritical does for cache.critical.
+func (c *KeyStoreConfig) SecretFloor() int {
+	if c == nil || c.SecretMinLength == nil {
+		return DefaultKeyStoreSecretMinLength
+	}
+	return *c.SecretMinLength
+}
+
 // IsCacheCritical reports whether a failing cache probe should fail /ready with 503.
 // Strict by default: only an explicit cache.critical=false opts out, so an absent key —
 // and a nil receiver, the most absent config there is — stays critical.
@@ -389,8 +401,8 @@ func loadDefaults(k *koanf.Koanf) error {
 		"scheduler.security.trustedproxies": []string{},
 
 		// KeyStore defaults — symmetric secret floor (32 bytes). Set to 0 to
-		// disable the minimum-length check explicitly.
-		"keystore.secretminlength": 32,
+		// disable the minimum-length check explicitly (deprecated, WARNs — #1036).
+		"keystore.secretminlength": DefaultKeyStoreSecretMinLength,
 	}
 
 	return k.Load(confmap.Provider(defaults, "."), nil)

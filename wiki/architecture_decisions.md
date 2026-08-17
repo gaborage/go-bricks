@@ -1317,6 +1317,30 @@ weight and are deleted in a follow-up PR. See [migrations.md](migrations.md) `[C
 
 ---
 
+### [ADR-065: keystore.secretminlength Is a Tri-State Setting](adr_065_keystore_secretminlength_tristate.md)
+
+**Date:** 2026-08-16 | **Status:** Accepted
+
+ADR-064 exposed a pre-existing bug: `KeyStoreConfig.SecretMinLength` was a plain `int`, so a
+hand-built config that never set it booted with the symmetric-secret floor silently off, while the
+same absence through `config.Load` meant 32. The `int` encoding could not tell "explicitly off"
+apart from "never set". `SecretMinLength` becomes `*int` — the same tri-state pattern `cache.critical`
+established (ADR-046): `nil` means "apply the default" (32, the new `config.DefaultKeyStoreSecretMinLength`),
+`0` is an explicit, deprecated opt-out, `N > 0` sets the floor to `N`. `normalizeKeyStore` fills the nil
+case and `KeyStoreConfig.SecretFloor()` reads it (config owns the nil semantics, as `IsCacheCritical` does); `Module.Init` WARNs once when the
+floor is disabled and once per admitted secret under 32 bytes, naming the key and length, never the
+material. Go literals write `new(n)`.
+
+**Key Benefits:** Both configuration doors render one value for "nothing configured", and a hand-built
+config can no longer silently disable the floor by omission. **Watch:** this is **breaking** for Go
+literals only — `SecretMinLength: 0` or `: N` no longer compiles; write `new(0)` / `new(N)`. YAML and
+env config are unchanged. A hand-built config that relied on the absent field meaning "off" now enforces
+32 bytes, so a shorter secret that used to boot now fails startup — the fix, not a regression. The `0`
+opt-out stays but is deprecated; a later ADR is expected to remove it (#1036). See
+[migrations.md](migrations.md) `[C59.13]` and `[C59.14]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -1326,7 +1350,7 @@ weight and are deleted in a follow-up PR. See [migrations.md](migrations.md) `[C
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-064) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-065) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

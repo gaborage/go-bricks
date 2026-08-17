@@ -24,7 +24,7 @@ once at startup and held read-only in memory.
 
 ```yaml
 keystore:
-  secretminlength: 32          # default 32; explicit 0 disables the floor
+  secretminlength: 32          # default 32 when absent; explicit 0 disables the floor (deprecated, WARNs — see #1036)
   keys:
     signing:                     # RSA pair (public required, private optional)
       public:
@@ -53,10 +53,20 @@ a clear `ConfigError`.
 
 ### Minimum-length floor
 
-`keystore.secretminlength` (default **32**) is the byte floor enforced for
-every symmetric secret after decoding. It is a defensive control against
-silently weak HMAC/HKDF keys. Set it to an explicit `0` to opt out (documented,
-deliberate); negative values are rejected at config validation.
+`keystore.secretminlength` is a tri-state setting (ADR-065, see
+[CONTEXT.md](../CONTEXT.md)): **absent** (nil in Go) applies the default of
+**32** bytes; an explicit **`0`** disables the floor entirely (deprecated —
+see below); **`N > 0`** sets the floor to `N`. Negative values are rejected
+at config validation. Go literals set the pointer with `new(n)` —
+`SecretMinLength: new(0)` to disable, `new(48)` to raise it.
+
+The floor is a defensive control against silently weak HMAC/HKDF keys, so
+disabling it is deprecated and admitting a short secret WARNs at startup
+(tracked in [#1036](https://github.com/gaborage/go-bricks/issues/1036), which
+will make the 32-byte floor mandatory): once if the floor itself is `0`
+(`keystore: secret length floor disabled`), and once per admitted secret
+shorter than 32 bytes, naming the key and its byte length — never the
+material.
 
 ## API
 
@@ -141,7 +151,8 @@ the real store so tests exercise the same ownership contract.
   the logical name, key type, and file path only; the framework logger's
   `SensitiveDataFilter` covers any incidental log lines.
 - The minimum-length floor is on by default — keep it on for HMAC/HKDF keys;
-  only disable it (`secretminlength: 0`) with a deliberate, documented reason.
+  only disable it (`secretminlength: 0`) with a deliberate, documented reason,
+  and expect the startup WARN — the opt-out is deprecated and will be removed.
 - Derivation (HKDF expansion, etc.) is left to the consumer — the keystore
   intentionally exposes raw material rather than a built-in derive helper
   (smallest viable surface; can layer on later if demand appears).

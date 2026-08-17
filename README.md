@@ -772,7 +772,7 @@ keystore:
         file: certs/webhook_hmac.key    # Raw bytes; or value: (base64) via env var
 ```
 
-Each key pair has a `public` and `private` source. For required sources, set exactly one of `file:` (DER path) or `value:` (base64-encoded DER, typically referencing an environment variable). For verification-only services, the `private` entry may be omitted. A `secret:` entry supplies raw symmetric material through the same `file:`/`value:` sources; an entry must be either an RSA pair or a secret — mixed entries fail startup, and `keystore.secretminlength` (default 32 bytes, `0` disables) rejects weak material.
+Each key pair has a `public` and `private` source. For required sources, set exactly one of `file:` (DER path) or `value:` (base64-encoded DER, typically referencing an environment variable). For verification-only services, the `private` entry may be omitted. A `secret:` entry supplies raw symmetric material through the same `file:`/`value:` sources; an entry must be either an RSA pair or a secret — mixed entries fail startup, and `keystore.secretminlength` (default 32 bytes; explicit `0` disables — deprecated, WARNs at startup, #1036) rejects weak material.
 
 See [wiki/keystore.md](wiki/keystore.md) for full configuration and API documentation.
 

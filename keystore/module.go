@@ -2,6 +2,7 @@ package keystore
 
 import (
 	"github.com/gaborage/go-bricks/app"
+	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -38,20 +39,37 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 
 	cfg := deps.Config.KeyStore
+	// The floor is deprecated config whether or not keys follow it, so it is
+	// reported before the empty-keys return.
+	floor := cfg.SecretFloor()
+	if floor == 0 {
+		m.logger.Warn().Msg("keystore: secret length floor disabled (keystore.secretminlength: 0) — " +
+			"deprecated, the floor becomes mandatory in a later version (see #1036)")
+	}
+
 	if len(cfg.Keys) == 0 {
 		m.logger.Info().Msg("KeyStore module: no keys configured (keystore.keys is empty)")
 		return nil
 	}
 
-	s, err := newStore(cfg.Keys, cfg.SecretMinLength)
+	s, err := newStore(cfg.Keys, floor)
 	if err != nil {
 		return err
 	}
-
 	m.store = s
 
+	for _, ss := range s.belowRecommended() {
+		// "name", not "key": the logger's SensitiveDataFilter masks any field
+		// whose name contains "key" (see logger.DefaultFilterConfig).
+		m.logger.Warn().
+			Str("name", ss.name).
+			Int("bytes", ss.n).
+			Int("recommended", config.DefaultKeyStoreSecretMinLength).
+			Msg("keystore: secret is below the recommended minimum length — it will fail startup once the 32-byte floor becomes mandatory (see #1036)")
+	}
+
 	m.logger.Info().
-		Int("keys", len(cfg.Keys)).
+		Int("count", len(cfg.Keys)).
 		Msg("KeyStore initialized successfully")
 
 	return nil
