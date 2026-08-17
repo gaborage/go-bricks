@@ -228,6 +228,22 @@ func recordingManager(t *testing.T, fake *fakeEnvironment) (*Manager, *recording
 	return m, log
 }
 
+// twoPartitionSuperConsumer starts m on a fresh fake with the super-stream
+// consumer declared by superConsumerDecls, then delivers offset 11 on partition0
+// and 501 on partition1, leaving both pending — the fixture shared by every test
+// that needs a two-partition super consumer in that state.
+func twoPartitionSuperConsumer(t *testing.T, m *Manager) (*fakeEnvironment, *fakeConsumer) {
+	t.Helper()
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, superConsumerDecls())
+
+	consumer := fake.consumer(testSuperStream)
+	require.NotNil(t, consumer)
+	consumer.deliver(testPartition0, 11, amqpMessage("a"))
+	consumer.deliver(testPartition1, 501, amqpMessage("b"))
+	return fake, consumer
+}
+
 func testManager(t *testing.T) *Manager {
 	t.Helper()
 	return NewManager(ManagerOptions{
@@ -257,13 +273,7 @@ func TestManagerStopConsumersFlushesEveryTrackedStream(t *testing.T) {
 	m := NewManager(ManagerOptions{
 		URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
 	})
-	fake := newFakeEnvironment()
-	startOnFake(t, m, fake, superConsumerDecls())
-
-	consumer := fake.consumer(testSuperStream)
-	require.NotNil(t, consumer)
-	consumer.deliver(testPartition0, 11, amqpMessage("a"))
-	consumer.deliver(testPartition1, 501, amqpMessage("b"))
+	fake, consumer := twoPartitionSuperConsumer(t, m)
 	require.NotContains(t, fake.recorded(), callStoreOffset+":"+testConsumerName+"/"+testPartition0+"=11",
 		"the premise: both offsets are still pending")
 
@@ -349,13 +359,7 @@ func TestManagerStopConsumersAbandonsFlushWhenBudgetSpent(t *testing.T) {
 func TestManagerStopConsumersFlushesWithinBudget(t *testing.T) {
 	log := &recordingLogger{}
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
-	fake := newFakeEnvironment()
-	startOnFake(t, m, fake, superConsumerDecls())
-
-	consumer := fake.consumer(testSuperStream)
-	require.NotNil(t, consumer)
-	consumer.deliver(testPartition0, 11, amqpMessage("a"))
-	consumer.deliver(testPartition1, 501, amqpMessage("b"))
+	fake, consumer := twoPartitionSuperConsumer(t, m)
 
 	m.StopConsumers()
 
@@ -375,13 +379,7 @@ func TestManagerStatsKeysOffsetsByTrackedStream(t *testing.T) {
 	m := NewManager(ManagerOptions{
 		URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
 	})
-	fake := newFakeEnvironment()
-	startOnFake(t, m, fake, superConsumerDecls())
-
-	consumer := fake.consumer(testSuperStream)
-	require.NotNil(t, consumer)
-	consumer.deliver(testPartition0, 11, amqpMessage("a"))
-	consumer.deliver(testPartition1, 501, amqpMessage("b"))
+	twoPartitionSuperConsumer(t, m)
 
 	stats := m.Stats()
 
@@ -651,18 +649,33 @@ func TestManagerStopConsumersIsSilentOnCleanShutdown(t *testing.T) {
 	assert.Empty(t, log.warnMessages(), "a clean shutdown reports nothing to the operator")
 }
 
+// TestManagerStopConsumersCancelsConsumeContext pins the context StopConsumers
+// actually cancels: the one Start built and handed down to the handler, not one
+// a test wires up and assigns to m.cancel itself.
 func TestManagerStopConsumersCancelsConsumeContext(t *testing.T) {
 	m := testManager(t)
 	fake := newFakeEnvironment()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	startOnFake(t, m, fake, oneConsumerDecls())
-	consumeCtx, consumeCancel := consumeContext(ctx)
-	m.cancel = consumeCancel
+
+	var capturedCtx context.Context
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream: testStream, Name: testConsumerName,
+		Handler: func(ctx context.Context, _ *Message) error {
+			capturedCtx = ctx
+			return nil
+		},
+	})
+	startOnFake(t, m, fake, decls)
+
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	consumer.deliver(testStream, 4, amqpMessage("payload"))
+	require.NotNil(t, capturedCtx, "the premise: the handler ran and captured the context it received")
 
 	m.StopConsumers()
 
-	require.ErrorIs(t, consumeCtx.Err(), context.Canceled)
+	require.ErrorIs(t, capturedCtx.Err(), context.Canceled)
 	assert.Nil(t, m.cancel)
 }
 
@@ -1689,17 +1702,19 @@ func TestManagerStartUnwindsAFailedConsumerStart(t *testing.T) {
 // zero-value OffsetNext, and streams have no redelivery to get it back.
 func TestManagerStartResolvesTheAttachPosition(t *testing.T) {
 	tests := []struct {
-		name     string
-		stored   *int64
-		queryErr error
-		start    OffsetStart
-		want     stream.OffsetSpecification
+		name      string
+		stored    int64
+		hasStored bool
+		queryErr  error
+		start     OffsetStart
+		want      stream.OffsetSpecification
 	}{
 		{
-			name:   "stored_offset_resumes_one_past_it",
-			stored: ptrTo(int64(17)),
-			start:  OffsetFirst(),
-			want:   stream.OffsetSpecification{}.Offset(18),
+			name:      "stored_offset_resumes_one_past_it",
+			stored:    17,
+			hasStored: true,
+			start:     OffsetFirst(),
+			want:      stream.OffsetSpecification{}.Offset(18),
 		},
 		{
 			name:  "no_stored_offset_uses_the_declared_start",
@@ -1718,8 +1733,8 @@ func TestManagerStartResolvesTheAttachPosition(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			m := testManager(t)
 			fake := newFakeEnvironment()
-			if tt.stored != nil {
-				fake.setOffset(testConsumerName, testStream, *tt.stored)
+			if tt.hasStored {
+				fake.setOffset(testConsumerName, testStream, tt.stored)
 			}
 			if tt.queryErr != nil {
 				fake.failOn(callQueryOffset, tt.queryErr)
