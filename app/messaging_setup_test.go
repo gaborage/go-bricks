@@ -23,13 +23,14 @@ func (m *simpleTestModule) Name() string             { return "simple-test-modul
 func (m *simpleTestModule) Init(_ *ModuleDeps) error { return nil }
 func (m *simpleTestModule) Shutdown() error          { return nil }
 
-// newConsumerBootstrapApp builds the minimal App prepareRuntimeConsumers reads:
-// the messaging manager it grades, the deployment mode it branches on, and a logger.
-func newConsumerBootstrapApp(log logger.Logger, manager *messaging.Manager, multiTenant bool) *App {
+// newMinimalMessagingApp builds the minimal App shared by the pre-warm and
+// consumer-bootstrap test suites: a logger, the messaging manager under test,
+// and the config each call site cares about.
+func newMinimalMessagingApp(log logger.Logger, manager *messaging.Manager, cfg *config.Config) *App {
 	return &App{
 		logger:           log,
 		messagingManager: manager,
-		cfg:              &config.Config{Multitenant: config.MultitenantConfig{Enabled: multiTenant}},
+		cfg:              cfg,
 	}
 }
 
@@ -95,7 +96,8 @@ func declarationsWithConsumer() *messaging.Declarations {
 func TestPrepareRuntimeConsumersFailsStartupOnEnsureError(t *testing.T) {
 	log := logger.New("debug", true)
 	source := &failingBrokerURLProvider{}
-	a := newConsumerBootstrapApp(log, newFailingConsumerManager(t, log, source), false)
+	a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
+		&config.Config{Multitenant: config.MultitenantConfig{Enabled: false}})
 
 	err := a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer())
 
@@ -112,7 +114,8 @@ func TestPrepareRuntimeConsumersFailsStartupOnEnsureError(t *testing.T) {
 func TestPrepareRuntimeConsumersWarnsOnlyWithoutConsumers(t *testing.T) {
 	log := logger.New("debug", true)
 	source := &failingBrokerURLProvider{}
-	a := newConsumerBootstrapApp(log, newFailingConsumerManager(t, log, source), false)
+	a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
+		&config.Config{Multitenant: config.MultitenantConfig{Enabled: false}})
 
 	require.NoError(t, a.prepareRuntimeConsumers(context.Background(), messaging.NewDeclarations()))
 	assert.Equal(t, 1, source.callCount(), "topology setup must still be attempted")
@@ -124,7 +127,8 @@ func TestPrepareRuntimeConsumersWarnsOnlyWithoutConsumers(t *testing.T) {
 func TestPrepareRuntimeConsumersSkipsEnsureInMultiTenantMode(t *testing.T) {
 	log := logger.New("debug", true)
 	source := &failingBrokerURLProvider{}
-	a := newConsumerBootstrapApp(log, newFailingConsumerManager(t, log, source), true)
+	a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
+		&config.Config{Multitenant: config.MultitenantConfig{Enabled: true}})
 
 	require.NoError(t, a.prepareRuntimeConsumers(context.Background(), messaging.NewDeclarations()))
 	assert.Zero(t, source.callCount(), "multi-tenant mode must not start consumers at startup")
@@ -141,7 +145,7 @@ func TestPrepareRuntimeConsumersSucceedsSingleTenant(t *testing.T) {
 		func(string, logger.Logger) messaging.AMQPClient { return client })
 	defer func() { _ = manager.Close() }()
 
-	a := newConsumerBootstrapApp(log, manager, false)
+	a := newMinimalMessagingApp(log, manager, &config.Config{Multitenant: config.MultitenantConfig{Enabled: false}})
 
 	require.NoError(t, a.prepareRuntimeConsumers(context.Background(), messaging.NewDeclarations()))
 }
@@ -153,13 +157,14 @@ func TestPrepareRuntimeConsumersNoOpsWithoutManagerOrDeclarations(t *testing.T) 
 	log := logger.New("debug", true)
 
 	t.Run("nil_manager", func(t *testing.T) {
-		a := newConsumerBootstrapApp(log, nil, false)
+		a := newMinimalMessagingApp(log, nil, &config.Config{Multitenant: config.MultitenantConfig{Enabled: false}})
 		require.NoError(t, a.prepareRuntimeConsumers(context.Background(), declarationsWithConsumer()))
 	})
 
 	t.Run("nil_declarations", func(t *testing.T) {
 		source := &failingBrokerURLProvider{}
-		a := newConsumerBootstrapApp(log, newFailingConsumerManager(t, log, source), false)
+		a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
+			&config.Config{Multitenant: config.MultitenantConfig{Enabled: false}})
 		require.NoError(t, a.prepareRuntimeConsumers(context.Background(), nil))
 		assert.Zero(t, source.callCount(), "no declarations means nothing to replay")
 	})

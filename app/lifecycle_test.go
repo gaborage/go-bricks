@@ -348,12 +348,25 @@ func (p staticDBConfigProvider) DBConfig(context.Context, string) (*config.Datab
 	return &config.DatabaseConfig{Type: dbTypePostgres}, nil
 }
 
+// newFailingLifecycleDBManager builds a *database.DbManager whose DBConfig resolution
+// returns err (nil for a succeeding manager), wired to close via t.Cleanup. Shared by
+// the pre-warm tests that only need to control whether database resolution fails.
+func newFailingLifecycleDBManager(t *testing.T, log logger.Logger, err error) *database.DbManager {
+	t.Helper()
+	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+		return dbtesting.NewTestDB(dbTypePostgres), nil
+	}
+	dbManager := database.NewDbManager(staticDBConfigProvider{err: err}, log,
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, connector)
+	t.Cleanup(func() { _ = dbManager.Close() })
+	return dbManager
+}
+
 // TestPrepareRuntimeWarnsOnlyWhenPreWarmFails pins both directions of prepareRuntime's
 // pre-warm error check: a failed pre-warm must surface as a WARN carrying the cause,
 // and a clean one must stay silent. Startup succeeds either way — pre-warming is
-// advisory, never fatal. The messaging-only row also pins the pre-warm gate's OR:
-// dbManager stays nil there, so a WARN can only originate from the messagingManager
-// arm — proving that arm alone opens the gate.
+// advisory, never fatal. The messaging-only row pins that a messagingManager failure
+// alone still produces the WARN, with dbManager left nil.
 func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 	tests := []struct {
 		configErr     error
@@ -378,20 +391,13 @@ func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 			wantErrSubstring := preWarmFailureMarker
 
 			if tt.messagingOnly {
-				// dbManager stays nil: this row isolates the pre-warm gate's
-				// messagingManager-only arm (lifecycle.go).
+				// dbManager stays nil: this row isolates the messagingManager-only
+				// pre-warm failure path (attemptMessagingPreWarm in prewarm.go).
 				source := &failingBrokerURLProvider{}
 				a.messagingManager = newFailingConsumerManager(t, rec, source)
 				wantErrSubstring = errBrokerLookupFailed.Error()
 			} else {
-				connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-					return dbtesting.NewTestDB(dbTypePostgres), nil
-				}
-				dbManager := database.NewDbManager(staticDBConfigProvider{err: tt.configErr}, rec,
-					database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, connector)
-				t.Cleanup(func() { _ = dbManager.Close() })
-
-				a.dbManager = dbManager
+				a.dbManager = newFailingLifecycleDBManager(t, rec, tt.configErr)
 			}
 
 			require.NoError(t, a.prepareRuntime(context.Background()),
@@ -421,14 +427,7 @@ func TestPrepareRuntimeSkipsPreWarmInMultiTenantMode(t *testing.T) {
 	rec := &recLogger{}
 	a := newLifecycleCheckAppWithLogger(t, cfg, rec)
 
-	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-		return dbtesting.NewTestDB(dbTypePostgres), nil
-	}
-	dbManager := database.NewDbManager(staticDBConfigProvider{err: errors.New(preWarmFailureMarker)}, rec,
-		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, connector)
-	t.Cleanup(func() { _ = dbManager.Close() })
-
-	a.dbManager = dbManager
+	a.dbManager = newFailingLifecycleDBManager(t, rec, errors.New(preWarmFailureMarker))
 
 	require.NoError(t, a.prepareRuntime(context.Background()))
 

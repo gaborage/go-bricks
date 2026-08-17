@@ -39,20 +39,6 @@ func newPrewarmTestManager(log logger.Logger, client *testmocks.MockAMQPClient) 
 		messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
 }
 
-// newPreWarmApp builds the minimal App the pre-warm pass reads: a logger, the
-// messaging manager under test, and the config its readiness budget comes from.
-func newPreWarmApp(log logger.Logger, manager *messaging.Manager, readyTimeout time.Duration) *App {
-	return &App{
-		logger:           log,
-		messagingManager: manager,
-		cfg: &config.Config{
-			Messaging: config.MessagingConfig{
-				Reconnect: config.ReconnectConfig{ReadyTimeout: readyTimeout},
-			},
-		},
-	}
-}
-
 // TestPreWarmSingleTenantSkipsAbsentManagers pins the absence guard: with neither
 // manager built, pre-warming is a silent no-op and never reports a problem.
 func TestPreWarmSingleTenantSkipsAbsentManagers(t *testing.T) {
@@ -64,7 +50,7 @@ func TestPreWarmSingleTenantSkipsAbsentManagers(t *testing.T) {
 
 func TestAppAwaitPublisherReady(t *testing.T) {
 	log := logger.New("debug", true)
-	a := newPreWarmApp(log, nil, 0)
+	a := newMinimalMessagingApp(log, nil, &config.Config{})
 
 	t.Run("already_ready_returns_immediately", func(t *testing.T) {
 		client := testmocks.NewMockAMQPClient() // defaults to ready
@@ -94,7 +80,9 @@ func TestAppAwaitPublisherReady(t *testing.T) {
 	})
 
 	t.Run("configured_budget_elapses_without_readiness", func(t *testing.T) {
-		short := newPreWarmApp(log, nil, 150*time.Millisecond)
+		short := newMinimalMessagingApp(log, nil, &config.Config{
+			Messaging: config.MessagingConfig{Reconnect: config.ReconnectConfig{ReadyTimeout: 150 * time.Millisecond}},
+		})
 		client := newPrewarmMockClient()
 
 		start := time.Now()
@@ -140,7 +128,7 @@ func TestPreWarmSingleTenantAwaitsPublisherReadiness(t *testing.T) {
 	manager := newPrewarmTestManager(log, client)
 	defer func() { _ = manager.Close() }()
 
-	a := newPreWarmApp(log, manager, 0)
+	a := newMinimalMessagingApp(log, manager, &config.Config{})
 
 	go func() {
 		time.Sleep(150 * time.Millisecond)
@@ -164,7 +152,9 @@ func TestPreWarmSingleTenantContinuesWhenPublisherNeverReady(t *testing.T) {
 
 	// A short operator budget (messaging.reconnect.readytimeout) so the genuine
 	// timeout branch fires without waiting out the 5s fallback.
-	a := newPreWarmApp(log, manager, 200*time.Millisecond)
+	a := newMinimalMessagingApp(log, manager, &config.Config{
+		Messaging: config.MessagingConfig{Reconnect: config.ReconnectConfig{ReadyTimeout: 200 * time.Millisecond}},
+	})
 
 	start := time.Now()
 	err := a.preWarmSingleTenant(context.Background(), nil)
@@ -183,7 +173,7 @@ func TestPreWarmSingleTenantPropagatesContextCancellation(t *testing.T) {
 	manager := newPrewarmTestManager(log, client)
 	defer func() { _ = manager.Close() }()
 
-	a := newPreWarmApp(log, manager, 0)
+	a := newMinimalMessagingApp(log, manager, &config.Config{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()

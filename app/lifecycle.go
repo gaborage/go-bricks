@@ -65,7 +65,9 @@ func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, id
 // prepareRuntime prepares the application for runtime execution. ctx is the
 // startup context: components it starts that outlive startup inherit that
 // context's values rather than beginning from a bare context.Background().
-// The AMQP consumer step is the one exception — see its call site below.
+// AMQP consumers are the one exception: they outlive prepareRuntime itself
+// and are stopped by shutdownConsumers (ADR-029), so they start from a
+// detached context.Background() rather than ctx.
 func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.buildMessagingDeclarations(); err != nil {
 		return err
@@ -88,9 +90,10 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
-	// Single-tenant only, and only when there is something to warm — with neither
-	// manager built the pass has nothing to do and stays silent.
-	if !a.cfg.Multitenant.Enabled && (a.dbManager != nil || a.messagingManager != nil) {
+	// Single-tenant only — preWarmSingleTenant is a safe no-op when neither manager
+	// was built (attemptDatabasePreWarm/attemptMessagingPreWarm nil-check their own
+	// manager and DEBUG-log "unavailable").
+	if !a.cfg.Multitenant.Enabled {
 		if err := a.preWarmSingleTenant(ctx, decls); err != nil {
 			a.logger.Warn().Err(err).Msg("Pre-warming completed with warnings")
 		}
