@@ -198,6 +198,19 @@ func TestKeystoreModuleInitFloorDisabledWarns(t *testing.T) {
 	assert.NotContains(t, out, base64.StdEncoding.EncodeToString(secret), "must never log the encoded secret material")
 }
 
+// TestKeystoreModuleInitFloorDisabledWarnsWithoutKeys pins that the
+// floor-off WARN does not depend on keys following it: keystore.secretminlength: 0
+// with an empty keys map is still deprecated configuration.
+func TestKeystoreModuleInitFloorDisabledWarnsWithoutKeys(t *testing.T) {
+	cfg := config.KeyStoreConfig{SecretMinLength: new(0)}
+
+	out := captureStdout(t, func() {
+		require.NoError(t, NewModule().Init(newTestDepsWithLogger(t, cfg, logger.New("warn", false))))
+	})
+
+	assert.Contains(t, out, "secret length floor disabled")
+}
+
 // TestKeystoreModuleInitNoWarnsAtRecommendedFloor is the negative case: a
 // floor at the recommendation emits neither deprecation WARN.
 func TestKeystoreModuleInitNoWarnsAtRecommendedFloor(t *testing.T) {

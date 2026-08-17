@@ -39,22 +39,25 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
 
 	cfg := deps.Config.KeyStore
+	// The floor is deprecated config whether or not keys follow it, so it is
+	// reported before the empty-keys return.
+	floor := cfg.SecretFloor()
+	if floor == 0 {
+		m.logger.Warn().Msg("keystore: secret length floor disabled (keystore.secretminlength: 0) — " +
+			"deprecated, the floor becomes mandatory in a later version (see #1036)")
+	}
+
 	if len(cfg.Keys) == 0 {
 		m.logger.Info().Msg("KeyStore module: no keys configured (keystore.keys is empty)")
 		return nil
 	}
 
-	floor := cfg.SecretFloor()
 	s, err := newStore(cfg.Keys, floor)
 	if err != nil {
 		return err
 	}
 	m.store = s
 
-	if floor == 0 {
-		m.logger.Warn().Msg("keystore: secret length floor disabled (keystore.secretminlength: 0) — " +
-			"deprecated, the floor becomes mandatory in a later version (see #1036)")
-	}
 	for _, ss := range s.belowRecommended() {
 		// "name", not "key": the logger's SensitiveDataFilter masks any field
 		// whose name contains "key" (see logger.DefaultFilterConfig).

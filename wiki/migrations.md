@@ -3108,8 +3108,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C59.13] `keystore.secretminlength` becomes `*int` (nil = 32, 0 = off, deprecated) · compile-break · when: match
 
-- detect: `git grep -n 'SecretMinLength' -- '*.go'` in your service. Every hit is a Go literal
-  setting the field and is in scope. YAML/env is out of scope for this atom — `keystore.secretminlength: 0`
+- detect: `git grep -n 'SecretMinLength' -- '*.go'` in your service shortlists the files; the hits that
+  assign the field (a literal or a `cfg.KeyStore.SecretMinLength = …`) are in scope, reads and helper
+  code are not. YAML/env is out of scope for this atom — `keystore.secretminlength: 0`
   keeps meaning off (it now WARNs at startup, deprecated per #1036) and `N` keeps meaning a floor of `N`;
   a config that never set the field is [C59.14].
 - scope: the field is now a tri-state pointer: nil applies the default (32), `0` keeps the floor off
@@ -3124,11 +3125,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C59.14] a hand-built config that never set `SecretMinLength` now enforces the 32-byte floor · silent-behavior · when: no-match
 
-- detect: `git grep -n 'NewWithConfig\|NewAppBuilder\|WithConfig(' -- '*.go'` for a hand-built
-  `*config.Config` (not `config.Load` output) whose `KeyStore.Keys` carries a `Secret` entry, and
-  `git grep -n 'SecretMinLength' -- '*.go'` returns nothing for that config. That is the shape this atom
-  is about: before the bump the Go zero `0` disabled the floor silently; nothing in the file says so, so a
-  grep that finds nothing does not clear you.
+- detect: `git grep -n 'NewWithConfig\|NewAppBuilder\|NewWithOptions\|WithConfig(' -- '*.go'`
+  shortlists every hand-built `*config.Config` (not `config.Load` output — `NewWithOptions` counts when
+  its `Options.ConfigLoader` returns one, as in [C59.12]). Then read each one: you are in scope when its
+  `KeyStore.Keys` carries a `Secret` entry and nothing assigns `SecretMinLength` for that config. The grep
+  only shortlists — before the bump the Go zero `0` disabled the floor silently and nothing in the file
+  says so, so a grep that finds nothing does not clear you; only reading the config does.
 - scope: `config.Validate` (which every construction path runs, [C59.12]) now fills the unset field with
   32, and `keystore.Module.Init` rejects any symmetric secret shorter than that at startup — the same
   behavior a YAML config always had. Only the literal-config door changes.
