@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
-	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
@@ -221,21 +220,18 @@ type consumerRunner struct {
 	baseCtx context.Context // NOSONAR S8242: no parameter to pass it through - the vendor callback signature is fixed
 }
 
-// messagesHandler is the callback handed to the stream client. The client invokes
-// it sequentially per STREAM — which for a super stream means per partition, where
-// one runner serves every partition and the client calls this from one goroutine
-// each, concurrently. The framework keeps that shape: handlers run inline with no
-// worker pool, because a stream is an ordered log and parallelism *within* one
-// would break that order and make a committed offset claim messages behind it were
-// handled. Anything reachable from here that is not per-stream state must
-// therefore be safe for concurrent use — the offset book is, precisely because it
-// hands each stream its own tracker.
-func (r *consumerRunner) messagesHandler(consumerContext stream.ConsumerContext, message *amqp.Message) {
-	consumer := consumerContext.Consumer
-	r.deliver(consumer.GetStreamName(), consumer.GetOffset(), message, consumer)
-}
-
 // deliver runs the handler for one message, then applies the commit policy.
+// store is the consumer that delivered it, which is what the in-flight commit
+// goes through.
+//
+// The client invokes this sequentially per STREAM — which for a super stream
+// means per partition, where one runner serves every partition and the client
+// calls it from one goroutine each, concurrently. The framework keeps that shape:
+// handlers run inline with no worker pool, because a stream is an ordered log and
+// parallelism *within* one would break that order and make a committed offset
+// claim messages behind it were handled. Anything reachable from here that is not
+// per-stream state must therefore be safe for concurrent use — the offset book
+// is, precisely because it hands each stream its own tracker.
 func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.Message, store offsetStorer) {
 	ctx, span := r.tracer.Start(r.baseCtx, streamName+" "+spanOperationReceive,
 		trace.WithSpanKind(trace.SpanKindConsumer))

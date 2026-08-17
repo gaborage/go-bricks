@@ -11,7 +11,6 @@ import (
 
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/ha"
-	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/message"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,9 +33,6 @@ func failingStart(*consumerDeclaration) error { return errStartAttempted }
 var errBindAttempted = errors.New("publisher bind attempted")
 
 func failingBind(*publisherDeclaration) error { return errBindAttempted }
-
-// errProducerConstruction is the client constructor's failure, faked.
-var errProducerConstruction = errors.New("producer construction failed")
 
 // fakeHandle stands in for *ha.ReliableConsumer so shutdown bookkeeping is
 // testable without a broker.
@@ -455,6 +451,24 @@ func TestManagerStartWithoutDeclarationsDoesNotDial(t *testing.T) {
 	assert.False(t, m.started)
 }
 
+// TestManagerStartDeclaresThroughTheEnvironmentPort is the whole point of the
+// port: Start's declare phase reaches the broker seam in a unit test. Before the
+// port there was no way in — the phase was only ever reached with a nil
+// environment, by a test that asserted through a panic.
+func TestManagerStartDeclaresThroughTheEnvironmentPort(t *testing.T) {
+	m := testManager(t)
+	fake := newFakeEnvironment()
+	dialFake(m, fake)
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+
+	require.NoError(t, m.Start(context.Background(), decls))
+
+	assert.Equal(t, []string{callDeclareStream + ":" + testStream}, fake.recorded())
+	assert.True(t, m.started)
+}
+
 // The environment is installed alongside the consumer because Start sets it
 // before it sets started; attach alone would leave a state Start never produces.
 // The URI is unreachable so a guard that stopped holding surfaces as a dial
@@ -462,7 +476,7 @@ func TestManagerStartWithoutDeclarationsDoesNotDial(t *testing.T) {
 func TestManagerStartRejectsSecondStart(t *testing.T) {
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
 	attach(m, &fakeHandle{status: ha.StatusOpen}, newOffsetTracker(1, time.Hour, nil))
-	m.env = &stream.Environment{}
+	m.env = newFakeEnvironment()
 
 	decls := NewDeclarations()
 	decls.DeclareStream(testStream, nil)
@@ -1134,7 +1148,7 @@ func TestManagerStartRefusesRestartAfterStopConsumers(t *testing.T) {
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
 	handle := &fakeHandle{status: ha.StatusOpen}
 	attach(m, handle, newOffsetTracker(1000, time.Hour, nil))
-	env := &stream.Environment{}
+	env := newFakeEnvironment()
 	m.env = env
 
 	m.StopConsumers()
@@ -1265,17 +1279,16 @@ func TestBindPublishersStopsAtTheFirstFailure(t *testing.T) {
 	assert.Equal(t, []string{testStream}, attempted, "the fan-out stops at the first failure")
 }
 
-// TestManagerBindPublisherWrapsAConstructionFailure exercises the vendor
-// constructor's failure path through the producerFactory seam: it dials, so this
+// TestManagerBindPublisherWrapsAConstructionFailure exercises the construction
+// failure through the Environment port: against a real broker it dials, so this
 // is the only way a broker-free test can reach it.
 func TestManagerBindPublisherWrapsAConstructionFailure(t *testing.T) {
 	m := testManager(t)
-	m.newProducer = func(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
-		return nil, errProducerConstruction
-	}
+	fake := newFakeEnvironment()
+	fake.failOn(callNewProducer, errProducerConstruction)
 	decl := onePublisherDeclaration(t)
 
-	err := m.bindPublisher(nil, decl)
+	err := m.bindPublisher(fake, decl)
 
 	require.ErrorIs(t, err, errProducerConstruction, "the client's own cause reaches the caller")
 	assert.Contains(t, err.Error(), `failed to start the publisher on stream "`+testStream+`"`)
@@ -1285,23 +1298,16 @@ func TestManagerBindPublisherWrapsAConstructionFailure(t *testing.T) {
 }
 
 // TestManagerBindPublisherTracksAConstructedProducer is the success half: the
-// producer is built for the declared stream, wired to that publisher's own
-// confirmation handler, bound, and tracked.
+// producer is built for the declared stream, bound, and tracked.
 func TestManagerBindPublisherTracksAConstructedProducer(t *testing.T) {
 	m := testManager(t)
-	handle := openProducer()
-	var gotStream string
-	var gotConfirmed ha.ConfirmMessageHandler
-	m.newProducer = func(_ *stream.Environment, streamName string, confirmed ha.ConfirmMessageHandler) (producerHandle, error) {
-		gotStream, gotConfirmed = streamName, confirmed
-		return handle, nil
-	}
+	fake := newFakeEnvironment()
 	decl := onePublisherDeclaration(t)
 
-	require.NoError(t, m.bindPublisher(nil, decl))
+	require.NoError(t, m.bindPublisher(fake, decl))
 
-	assert.Equal(t, testStream, gotStream, "the producer is built for the declared stream")
-	require.NotNil(t, gotConfirmed, "the client is given a confirmation handler")
+	assert.Equal(t, []string{callNewProducer + ":" + testStream}, fake.recorded(),
+		"the producer is built for the declared stream, through the plain constructor")
 	assert.Equal(t, []*Publisher{decl.Publisher}, m.publishers)
 	assert.Equal(t, ha.StatusOpen, decl.Publisher.status(), "the handle is bound to the new producer")
 }
@@ -1335,29 +1341,16 @@ func oneSuperPublisherDeclaration(t *testing.T) *publisherDeclaration {
 	return decls.publishers[0]
 }
 
-// unreachableProducer fails every construction, so a bind reaches its error path
-// without a broker.
-func unreachableProducer(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
-	return nil, errProducerConstruction
-}
-
-// unreachableSuperProducer is its super-stream twin.
-func unreachableSuperProducer(*stream.Environment, string, func(message.StreamMessage) string,
-	ha.PartitionConfirmMessageHandler,
-) (producerHandle, error) {
-	return nil, errProducerConstruction
-}
-
 // TestManagerBindPublisherWrapsASuperConstructionFailure is the super-stream half
 // of the construction-failure path, and pins that the failure names the kind of
 // target the declaration asked for rather than calling every target a stream.
 func TestManagerBindPublisherWrapsASuperConstructionFailure(t *testing.T) {
 	m := testManager(t)
-	m.newProducer = unreachableProducer
-	m.newSuperProducer = unreachableSuperProducer
+	fake := newFakeEnvironment()
+	fake.failOn(callNewSuperProducer, errProducerConstruction)
 	decl := oneSuperPublisherDeclaration(t)
 
-	err := m.bindPublisher(nil, decl)
+	err := m.bindPublisher(fake, decl)
 
 	require.ErrorIs(t, err, errProducerConstruction)
 	assert.Contains(t, err.Error(), `failed to start the publisher on super stream "`+testSuperStream+`"`)
@@ -1365,30 +1358,30 @@ func TestManagerBindPublisherWrapsASuperConstructionFailure(t *testing.T) {
 }
 
 // TestManagerBindPublisherBuildsASuperProducerForASuperTarget pins the dispatch: a
-// super declaration must reach the client's super-stream constructor, with a
-// routing extractor and the per-partition confirmation handler that constructor
-// requires. Binding it through the plain constructor would compile and then fail at
-// the broker, because a super stream is not a stream.
+// super declaration must reach the port's super-stream constructor, with the hash
+// routing strategy that constructor requires and an extractor that answers the key
+// the caller registered. Binding it through the plain constructor would compile and
+// then fail at the broker, because a super stream is not a stream.
 func TestManagerBindPublisherBuildsASuperProducerForASuperTarget(t *testing.T) {
 	m := testManager(t)
-	m.newProducer = unreachableProducer // a plain bind here is the defect under test
-	handle := openProducer()
-	var gotStream string
-	var gotExtractor func(message.StreamMessage) string
-	var gotConfirmed ha.PartitionConfirmMessageHandler
-	m.newSuperProducer = func(_ *stream.Environment, superStream string,
-		routingKeyFor func(message.StreamMessage) string, confirmed ha.PartitionConfirmMessageHandler,
-	) (producerHandle, error) {
-		gotStream, gotExtractor, gotConfirmed = superStream, routingKeyFor, confirmed
-		return handle, nil
-	}
+	fake := newFakeEnvironment()
+	// A plain bind here is the defect under test: it must never be reached.
+	fake.failOn(callNewProducer, errProducerConstruction)
 	decl := oneSuperPublisherDeclaration(t)
 
-	require.NoError(t, m.bindPublisher(nil, decl))
+	require.NoError(t, m.bindPublisher(fake, decl))
 
-	assert.Equal(t, testSuperStream, gotStream, "the producer is built for the declared super stream")
-	require.NotNil(t, gotExtractor, "hash routing needs an extractor")
-	require.NotNil(t, gotConfirmed, "a super stream confirms per partition")
+	assert.Equal(t, []string{callNewSuperProducer + ":" + testSuperStream}, fake.recorded())
+	opts := fake.superProducerOptions(testSuperStream)
+	require.NotNil(t, opts)
+	strategy, ok := opts.RoutingStrategy.(*stream.HashRoutingStrategy)
+	require.True(t, ok, "hash routing is the only strategy offered")
+
+	registered := amqp.NewMessage([]byte(testBody))
+	decl.Publisher.pending.add(registered, testRoutingKey)
+	assert.Equal(t, testRoutingKey, strategy.RoutingKeyExtractor(registered),
+		"the extractor answers the key the caller registered with that exact message")
+
 	assert.Equal(t, []*Publisher{decl.Publisher}, m.publishers)
 	assert.Equal(t, ha.StatusOpen, decl.Publisher.status())
 }
@@ -1397,14 +1390,13 @@ func TestManagerBindPublisherBuildsASuperProducerForASuperTarget(t *testing.T) {
 // that dispatch, and would fail if the two constructors were ever swapped.
 func TestManagerBindPublisherBuildsAPlainProducerForAPlainTarget(t *testing.T) {
 	m := testManager(t)
-	m.newSuperProducer = unreachableSuperProducer // a super bind here is the defect under test
-	handle := openProducer()
-	m.newProducer = func(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
-		return handle, nil
-	}
+	fake := newFakeEnvironment()
+	// A super bind here is the defect under test: it must never be reached.
+	fake.failOn(callNewSuperProducer, errProducerConstruction)
 
-	require.NoError(t, m.bindPublisher(nil, onePublisherDeclaration(t)))
+	require.NoError(t, m.bindPublisher(fake, onePublisherDeclaration(t)))
 
+	assert.Equal(t, []string{callNewProducer + ":" + testStream}, fake.recorded())
 	require.Len(t, m.publishers, 1)
 	assert.Equal(t, ha.StatusOpen, m.publishers[0].status())
 }

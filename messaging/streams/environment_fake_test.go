@@ -1,0 +1,270 @@
+package streams
+
+import (
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/ha"
+	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
+)
+
+// errProducerConstruction is the broker failure a test injects at the port.
+var errProducerConstruction = errors.New("producer construction failed")
+
+// The calls a fakeEnvironment records, in the order it made them. A target is
+// appended after a colon so a test asserts WHICH stream a phase reached, not only
+// that the phase ran. consumer_store and store_offset are deliberately separate:
+// an in-flight commit goes through the consumer that delivered the message, a
+// shutdown flush of a super stream through the Environment port, and a test that
+// could not tell them apart could not catch one turning into the other.
+const (
+	callDeclareStream      = "declare_stream"
+	callDeclareSuperStream = "declare_super_stream"
+	callNewProducer        = "new_producer"
+	callNewSuperProducer   = "new_super_producer"
+	callNewConsumer        = "new_consumer"
+	callNewSuperConsumer   = "new_super_consumer"
+	callQueryOffset        = "query_offset"
+	callStoreOffset        = "store_offset"
+	callConsumerStore      = "consumer_store"
+	callClose              = "close"
+)
+
+// fakeConsumer is one consumer the fake environment handed back: the handle the
+// manager tracks, plus the callbacks a test drives it through.
+type fakeConsumer struct {
+	env *fakeEnvironment
+	// name is the consumer name the manager asked for, which is the key the
+	// broker stores offsets under.
+	name string
+	// handle is what the port returned: a *fakeHandle for a plain stream, because
+	// *ha.ReliableConsumer is an offsetStorer, and a *fakeSuperHandle for a super
+	// stream, because *ha.ReliableSuperStreamConsumer is not.
+	handle consumerHandle
+	// events is that handle's shared event log, so a test asserts store and close
+	// without caring which handle kind it got.
+	events  *fakeHandle
+	handler messageHandler
+	// sac is the promotion callback the manager installed, nil when the
+	// declaration did not ask for single active consumer.
+	sac stream.ConsumerUpdate
+}
+
+// fakeSuperHandle stands in for *ha.ReliableSuperStreamConsumer. It delegates to
+// a fakeHandle rather than embedding one: embedding would promote
+// StoreCustomOffset, and the vendor type has none — that absence is exactly what
+// routes a super stream's shutdown flush through the Environment port.
+type fakeSuperHandle struct{ h *fakeHandle }
+
+func (f *fakeSuperHandle) Close() error   { return f.h.Close() }
+func (f *fakeSuperHandle) GetStatus() int { return f.h.GetStatus() }
+
+// fakeEnvironment is the in-memory adapter behind the Environment port.
+type fakeEnvironment struct {
+	mu sync.Mutex
+
+	calls []string
+	// errs injects one failure per port call, keyed either by method
+	// ("new_producer") or by method and target ("new_producer:orders").
+	errs map[string]error
+	// offsets is the broker's server-side offset store, keyed "<consumer>/<stream>".
+	offsets map[string]int64
+
+	consumers     map[string]*fakeConsumer
+	consumerOpts  map[string]*stream.ConsumerOptions
+	producers     map[string]*fakeProducer
+	superProdOpts map[string]*stream.SuperStreamProducerOptions
+	preparedProds map[string]*fakeProducer
+}
+
+var _ environment = (*fakeEnvironment)(nil)
+
+func newFakeEnvironment() *fakeEnvironment {
+	return &fakeEnvironment{
+		errs:          map[string]error{},
+		offsets:       map[string]int64{},
+		consumers:     map[string]*fakeConsumer{},
+		consumerOpts:  map[string]*stream.ConsumerOptions{},
+		producers:     map[string]*fakeProducer{},
+		superProdOpts: map[string]*stream.SuperStreamProducerOptions{},
+		preparedProds: map[string]*fakeProducer{},
+	}
+}
+
+// failOn makes one port call fail. key is a method name or "<method>:<target>".
+func (f *fakeEnvironment) failOn(key string, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.errs[key] = err
+}
+
+func (f *fakeEnvironment) recorded() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+func (f *fakeEnvironment) superProducerOptions(superStream string) *stream.SuperStreamProducerOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.superProdOpts[superStream]
+}
+
+// recordLocked and errForLocked are called with f.mu held.
+func (f *fakeEnvironment) recordLocked(entry string) { f.calls = append(f.calls, entry) }
+
+func (f *fakeEnvironment) errForLocked(method, target string) error {
+	if err, ok := f.errs[method+":"+target]; ok {
+		return err
+	}
+	return f.errs[method]
+}
+
+func (f *fakeEnvironment) DeclareStream(name string, _ *stream.StreamOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordLocked(callDeclareStream + ":" + name)
+	return f.errForLocked(callDeclareStream, name)
+}
+
+func (f *fakeEnvironment) DeclareSuperStream(name string, _ *stream.PartitionsOptions) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordLocked(callDeclareSuperStream + ":" + name)
+	return f.errForLocked(callDeclareSuperStream, name)
+}
+
+func (f *fakeEnvironment) QueryOffset(consumer, streamName string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	key := consumer + "/" + streamName
+	f.recordLocked(callQueryOffset + ":" + key)
+	if err := f.errForLocked(callQueryOffset, key); err != nil {
+		return 0, err
+	}
+	offset, ok := f.offsets[key]
+	if !ok {
+		// The client answers a name it has never stored with this sentinel, and
+		// offsetSpecFor is the only place that tells it apart from a real failure.
+		return 0, stream.OffsetNotFoundError
+	}
+	return offset, nil
+}
+
+func (f *fakeEnvironment) StoreOffset(consumer, streamName string, offset int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	key := consumer + "/" + streamName
+	f.recordLocked(fmt.Sprintf("%s:%s=%d", callStoreOffset, key, offset))
+	if err := f.errForLocked(callStoreOffset, key); err != nil {
+		return err
+	}
+	f.offsets[key] = offset
+	return nil
+}
+
+func (f *fakeEnvironment) NewConsumer(streamName string, opts *stream.ConsumerOptions,
+	handler messageHandler,
+) (consumerHandle, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.recordLocked(callNewConsumer + ":" + streamName)
+	if err := f.errForLocked(callNewConsumer, streamName); err != nil {
+		return nil, err
+	}
+	events := &fakeHandle{status: ha.StatusOpen}
+	f.consumerOpts[streamName] = opts
+	f.consumers[streamName] = &fakeConsumer{
+		env:     f,
+		name:    opts.ConsumerName,
+		handle:  events,
+		events:  events,
+		handler: handler,
+		sac:     consumerUpdateOf(opts.SingleActiveConsumer),
+	}
+	return events, nil
+}
+
+func (f *fakeEnvironment) NewSuperStreamConsumer(superStream string, opts *stream.SuperStreamConsumerOptions,
+	handler messageHandler,
+) (consumerHandle, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.recordLocked(callNewSuperConsumer + ":" + superStream)
+	if err := f.errForLocked(callNewSuperConsumer, superStream); err != nil {
+		return nil, err
+	}
+	events := &fakeHandle{status: ha.StatusOpen}
+	handle := &fakeSuperHandle{h: events}
+	f.consumers[superStream] = &fakeConsumer{
+		env:     f,
+		name:    opts.ConsumerName,
+		handle:  handle,
+		events:  events,
+		handler: handler,
+		sac:     consumerUpdateOf(opts.SingleActiveConsumer),
+	}
+	return handle, nil
+}
+
+// consumerUpdateOf reads the promotion callback out of either options type's
+// single-active-consumer block, which the client leaves nil when SAC is off.
+func consumerUpdateOf(sac *stream.SingleActiveConsumer) stream.ConsumerUpdate {
+	if sac == nil {
+		return nil
+	}
+	return sac.ConsumerUpdate
+}
+
+func (f *fakeEnvironment) NewProducer(streamName string, _ *stream.ProducerOptions,
+	_ ha.ConfirmMessageHandler,
+) (producerHandle, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.recordLocked(callNewProducer + ":" + streamName)
+	if err := f.errForLocked(callNewProducer, streamName); err != nil {
+		return nil, err
+	}
+	return f.newProducerLocked(streamName), nil
+}
+
+func (f *fakeEnvironment) NewSuperStreamProducer(superStream string, opts *stream.SuperStreamProducerOptions,
+	_ ha.PartitionConfirmMessageHandler,
+) (producerHandle, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.recordLocked(callNewSuperProducer + ":" + superStream)
+	if err := f.errForLocked(callNewSuperProducer, superStream); err != nil {
+		return nil, err
+	}
+	f.superProdOpts[superStream] = opts
+	return f.newProducerLocked(superStream), nil
+}
+
+func (f *fakeEnvironment) newProducerLocked(streamName string) *fakeProducer {
+	p, ok := f.preparedProds[streamName]
+	if !ok {
+		p = openProducer()
+	}
+	f.producers[streamName] = p
+	return p
+}
+
+func (f *fakeEnvironment) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordLocked(callClose)
+	return f.errForLocked(callClose, "")
+}
+
+// dialFake makes m.Start open fake instead of a broker.
+func dialFake(m *Manager, fake *fakeEnvironment) {
+	m.dialEnvironment = func(*stream.EnvironmentOptions) (environment, error) { return fake, nil }
+}

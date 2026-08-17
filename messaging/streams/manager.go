@@ -73,8 +73,8 @@ type consumerHandle interface {
 }
 
 // runningConsumer pairs a live client consumer with the offset bookkeeping its
-// runner owns. The runner itself is retained by the client through the
-// messagesHandler callback, so only the book is kept here.
+// runner owns. The runner itself is retained by the client through the delivery
+// callback, so only the book is kept here.
 type runningConsumer struct {
 	stream string
 	name   string
@@ -101,17 +101,15 @@ type Manager struct {
 	// is already gone.
 	flushBudget time.Duration
 
-	// newProducer and newSuperProducer construct the client producer bindPublisher
-	// installs, one per declaration kind. Held as fields for the same reason as
-	// flushBudget, so a test can make construction fail: they dial, so no
-	// broker-free test could otherwise reach that path. Deliberately not
-	// ManagerOptions fields — an operator has no reason to substitute the client's
-	// own constructors.
-	newProducer      producerFactory
-	newSuperProducer superProducerFactory
+	// dialEnvironment opens the Environment port. A field rather than a direct
+	// call so an in-package test can hand the manager a fake: the dial is the only
+	// thing between Start and every phase it drives. Same seam as the AMQP lane's
+	// amqpDialFunc (messaging/amqp_adapters.go:47), minus the process-global — a
+	// Manager owns its own dialer, so tests need no save-and-restore.
+	dialEnvironment func(*stream.EnvironmentOptions) (environment, error)
 
 	mu         sync.Mutex
-	env        *stream.Environment
+	env        environment
 	consumers  []*runningConsumer
 	publishers []*Publisher
 	started    bool
@@ -137,11 +135,10 @@ func NewManager(opts ManagerOptions) *Manager {
 		opts.OffsetStoreInterval = defaultOffsetStoreInterval
 	}
 	return &Manager{
-		opts:             opts,
-		log:              opts.Logger,
-		flushBudget:      shutdownFlushBudget,
-		newProducer:      newReliableProducer,
-		newSuperProducer: newReliableSuperProducer,
+		opts:            opts,
+		log:             opts.Logger,
+		flushBudget:     shutdownFlushBudget,
+		dialEnvironment: dialVendorEnvironment,
 	}
 }
 
@@ -177,17 +174,8 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 		return errors.New("streams manager already started: Close it before starting again")
 	}
 
-	// NewEnvironment returns a non-nil Environment BESIDE a non-nil error, so the
-	// failure path has something to dispose and `env != nil` is not a success test.
-	// v1.8.3 does tear the locator socket down itself, but only through an internal
-	// `defer client.Close()` it documents nowhere, and Client.connect opens the
-	// socket and starts its read goroutine before authentication — so disposing it
-	// here is what keeps a rejected credential from depending on that detail.
-	env, err := stream.NewEnvironment(m.environmentOptions())
+	env, err := m.dialEnvironment(m.environmentOptions())
 	if err != nil {
-		if env != nil {
-			_ = env.Close()
-		}
 		return fmt.Errorf("failed to connect to stream endpoint %s: %w", redactStreamURI(m.opts.URI), safeEnvError(err))
 	}
 	m.env = env
@@ -270,7 +258,7 @@ func (m *Manager) environmentOptions() *stream.EnvironmentOptions {
 // Each declaration is a blocking broker round trip the client gives no context of
 // its own, so ctx is checked between them: a caller that gave up on startup stops
 // paying for the rest of the fan-out.
-func (m *Manager) declareStreams(ctx context.Context, env *stream.Environment, decls *Declarations) error {
+func (m *Manager) declareStreams(ctx context.Context, env environment, decls *Declarations) error {
 	for _, s := range decls.streams {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("startup canceled before declaring stream %q: %w", s.Name, err)
@@ -287,7 +275,7 @@ func (m *Manager) declareStreams(ctx context.Context, env *stream.Environment, d
 // that already exists with a DIFFERENT partition count or retention is accepted
 // silently — see wiki/streams.md.
 // Like declareStreams, it checks ctx between round trips.
-func (m *Manager) declareSuperStreams(ctx context.Context, env *stream.Environment, decls *Declarations) error {
+func (m *Manager) declareSuperStreams(ctx context.Context, env environment, decls *Declarations) error {
 	for _, s := range decls.superStreams {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("startup canceled before declaring super stream %q: %w", s.Name, err)
@@ -305,9 +293,8 @@ func (m *Manager) declareSuperStreams(ctx context.Context, env *stream.Environme
 // already-started ones for the caller to unwind.
 //
 // start is a parameter rather than a method call because it is the only part that
-// reaches the broker — *stream.Environment is a concrete vendor type with no seam
-// to fake — so keeping it out is what lets this loop's cancellation and fail-fast
-// policy be exercised without one.
+// reaches the broker, so keeping it out is what lets this loop's cancellation and
+// fail-fast policy be exercised on a bare function.
 func startConsumers(ctx context.Context, decls []*consumerDeclaration, start func(*consumerDeclaration) error) error {
 	for _, decl := range decls {
 		if err := ctx.Err(); err != nil {
@@ -322,7 +309,7 @@ func startConsumers(ctx context.Context, decls []*consumerDeclaration, start fun
 
 // startConsumer starts one consumer for a declaration, on the client API its kind
 // requires. env is the caller's snapshot of m.env, taken under m.mu.
-func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
+func (m *Manager) startConsumer(ctx context.Context, env environment, decl *consumerDeclaration) error {
 	if decl.Super {
 		return m.startSuperStreamConsumer(ctx, env, decl)
 	}
@@ -330,7 +317,7 @@ func (m *Manager) startConsumer(ctx context.Context, env *stream.Environment, de
 }
 
 // startStreamConsumer starts one reliable consumer on a plain stream.
-func (m *Manager) startStreamConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
+func (m *Manager) startStreamConsumer(ctx context.Context, env environment, decl *consumerDeclaration) error {
 	runner := m.newRunner(ctx, decl)
 
 	opts := stream.NewConsumerOptions().
@@ -354,19 +341,23 @@ func (m *Manager) startStreamConsumer(ctx context.Context, env *stream.Environme
 			}))
 	}
 
-	consumer, err := ha.NewReliableConsumer(env, decl.Stream, opts, runner.messagesHandler)
+	handle, err := env.NewConsumer(decl.Stream, opts, runner.deliver)
 	if err != nil {
 		return fmt.Errorf("failed to start consumer %q on stream %q: %w", decl.Name, decl.Stream, err)
 	}
 
-	// One stream, so one flush target: the reliable consumer itself.
-	m.trackConsumer(decl, consumer, runner, func(string) offsetStorer { return consumer })
+	// One stream, so one flush target: the reliable consumer itself. The assertion
+	// is what keeps consumerHandle narrower than offset storage — the super-stream
+	// handle has no StoreCustomOffset at all — and a handle that is not a storer
+	// commits nothing rather than panicking (errNoOffsetStorer).
+	storer, _ := handle.(offsetStorer)
+	m.trackConsumer(decl, handle, runner, func(string) offsetStorer { return storer })
 	return nil
 }
 
 // startSuperStreamConsumer starts one reliable consumer across every partition of
 // a super stream. env is the caller's snapshot of m.env, taken under m.mu.
-func (m *Manager) startSuperStreamConsumer(ctx context.Context, env *stream.Environment, decl *consumerDeclaration) error {
+func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment, decl *consumerDeclaration) error {
 	runner := m.newRunner(ctx, decl)
 
 	// Always a single active consumer group. The client attaches every partition
@@ -384,16 +375,16 @@ func (m *Manager) startSuperStreamConsumer(ctx context.Context, env *stream.Envi
 				return m.resolveOffset(env, decl.Name, partition, decl.Start, runner.offsets)
 			}))
 
-	consumer, err := ha.NewReliableSuperStreamConsumer(env, decl.Stream, runner.messagesHandler, opts)
+	handle, err := env.NewSuperStreamConsumer(decl.Stream, opts, runner.deliver)
 	if err != nil {
 		return fmt.Errorf("failed to start consumer %q on super stream %q: %w", decl.Name, decl.Stream, err)
 	}
 
-	// The shutdown flush goes through the environment, per partition:
+	// The shutdown flush goes through the Environment port, per partition:
 	// *ha.ReliableSuperStreamConsumer has no StoreCustomOffset, and the partition
 	// consumer that delivered the last message may already have been replaced by a
 	// reconnect.
-	m.trackConsumer(decl, consumer, runner, func(partition string) offsetStorer {
+	m.trackConsumer(decl, handle, runner, func(partition string) offsetStorer {
 		return envOffsetStorer{env: env, consumer: decl.Name, stream: partition}
 	})
 	return nil
@@ -462,7 +453,7 @@ func bindPublishers(ctx context.Context, decls []*publisherDeclaration, bind fun
 }
 
 // bindPublisher constructs one client producer and hands it to its Publisher.
-func (m *Manager) bindPublisher(env *stream.Environment, decl *publisherDeclaration) error {
+func (m *Manager) bindPublisher(env environment, decl *publisherDeclaration) error {
 	producer, err := m.constructProducer(env, decl)
 	if err != nil {
 		return fmt.Errorf("failed to start the publisher on %s %q: %w", streamKindLabel(decl.Super), decl.Stream, err)
@@ -478,13 +469,23 @@ func (m *Manager) bindPublisher(env *stream.Environment, decl *publisherDeclarat
 	return nil
 }
 
-// constructProducer builds one declaration's client producer, on the client API
-// its kind requires.
-func (m *Manager) constructProducer(env *stream.Environment, decl *publisherDeclaration) (producerHandle, error) {
+// constructProducer builds one declaration's producer through the Environment
+// port, on the API its kind requires.
+//
+// The plain producer options are the client's defaults on purpose: deduplication,
+// sub-entry batching and compression are all deferred, and the default
+// SubEntrySize of 1 is what makes the confirmation's message pointer a valid
+// correlation key. Hash routing is the only strategy offered for a super stream:
+// it is murmur3 with RabbitMQ's shared seed, so a partition assignment made here
+// matches what the Java, .NET and Python clients compute for the same key. Key
+// routing — which asks the broker to resolve a key to partitions — is deferred.
+func (m *Manager) constructProducer(env environment, decl *publisherDeclaration) (producerHandle, error) {
 	if decl.Super {
-		return m.newSuperProducer(env, decl.Stream, m.routingKeyExtractor(decl.Publisher), decl.Publisher.partitionsConfirmed)
+		opts := stream.NewSuperStreamProducerOptions(
+			stream.NewHashRoutingStrategy(m.routingKeyExtractor(decl.Publisher)))
+		return env.NewSuperStreamProducer(decl.Stream, opts, decl.Publisher.partitionsConfirmed)
 	}
-	return m.newProducer(env, decl.Stream, decl.Publisher.confirmed)
+	return env.NewProducer(decl.Stream, stream.NewProducerOptions(), decl.Publisher.confirmed)
 }
 
 // routingKeyExtractor builds the hash-routing extractor of one super-stream
@@ -514,46 +515,10 @@ func (m *Manager) routingKeyExtractor(p *Publisher) func(message.StreamMessage) 
 	}
 }
 
-// producerFactory constructs the client producer one plain-stream publisher sends
-// through.
-//
-// It is the constructor half of the producerHandle seam: producerHandle makes the
-// publish and confirmation policy testable without a broker, and this makes the
-// FAILURE of construction testable too — ha.NewReliableProducer dials, so nothing
-// broker-free could otherwise reach the path where that fails.
-type producerFactory func(env *stream.Environment, streamName string, confirmed ha.ConfirmMessageHandler) (producerHandle, error)
-
-// superProducerFactory is the same seam for a super-stream publisher. It is a
-// separate type because the client's two reliable producers take neither the same
-// options nor the same confirmation shape: this one needs a routing strategy, and
-// confirms per partition.
-type superProducerFactory func(env *stream.Environment, superStream string,
-	routingKeyFor func(message.StreamMessage) string, confirmed ha.PartitionConfirmMessageHandler) (producerHandle, error)
-
-// newReliableProducer is the production factory. The producer options are the
-// client's defaults on purpose: deduplication, sub-entry batching and compression
-// are all deferred, and the default SubEntrySize of 1 is what makes the
-// confirmation's message pointer a valid correlation key.
-func newReliableProducer(env *stream.Environment, streamName string, confirmed ha.ConfirmMessageHandler) (producerHandle, error) {
-	return ha.NewReliableProducer(env, streamName, stream.NewProducerOptions(), confirmed)
-}
-
-// newReliableSuperProducer is the production factory for a super stream. Hash
-// routing is the only strategy offered: it is murmur3 with RabbitMQ's shared seed,
-// so a partition assignment made here matches what the Java, .NET and Python
-// clients compute for the same key. Key routing — which asks the broker to resolve
-// a key to partitions — is deferred.
-func newReliableSuperProducer(env *stream.Environment, superStream string,
-	routingKeyFor func(message.StreamMessage) string, confirmed ha.PartitionConfirmMessageHandler,
-) (producerHandle, error) {
-	opts := stream.NewSuperStreamProducerOptions(stream.NewHashRoutingStrategy(routingKeyFor))
-	return ha.NewReliableSuperStreamProducer(env, superStream, opts, confirmed)
-}
-
-// envOffsetStorer commits one stream's offset through the environment's locator
-// connection instead of through a consumer.
+// envOffsetStorer commits one stream's offset through the Environment port
+// instead of through a consumer.
 type envOffsetStorer struct {
-	env      *stream.Environment
+	env      environment
 	consumer string
 	stream   string
 }
@@ -579,7 +544,7 @@ func (m *Manager) newOffsetBook() *offsetBook {
 // the SAC promotion callback the client invokes from its own goroutine — can read
 // that guarded field without m.mu. m.log is immutable after NewManager, and the
 // book takes only its own lock, so neither is a route back to m.mu.
-func (m *Manager) resolveOffset(env *stream.Environment, consumerName, streamName string, start OffsetStart, committed *offsetBook) stream.OffsetSpecification {
+func (m *Manager) resolveOffset(env environment, consumerName, streamName string, start OffsetStart, committed *offsetBook) stream.OffsetSpecification {
 	stored, err := env.QueryOffset(consumerName, streamName)
 	localOffset, hasLocal := committed.stored()[streamName]
 	m.reportOffsetQuery(err, consumerName, streamName, hasLocal)
