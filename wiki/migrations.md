@@ -3315,7 +3315,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `Options.MessagingClient` were read by no code path at all. The eight debug response
   types describe the JSON of `/_sys/health-debug`, `/_sys/goroutines` and `/_sys/gc`; they
   are unexported with their `json:` tags byte-identical. **No emitted JSON, status code or
-  startup behavior changes** — including the #907 fail-vs-warn consumer grading ([C57.8])
+  startup behavior changes on the shipped `NewWithConfig` chain** — including the #907
+  fail-vs-warn consumer grading ([C57.8])
   and the pre-warm publisher-readiness wait, both of which keep their exact semantics at
   their new unexported home. Three log lines are the exception: `LogDeploymentMode`'s INFO
   (`Messaging initialized for {single,multi}-tenant deployment`) and `LogAvailability`'s
@@ -3323,7 +3324,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   pre-warming`) and `SetupLazyConsumerInit`'s `Unknown resource provider type` WARN (never
   reachable from a shipped `Options`) retire outright with no renamed equivalent — the deployment mode and
   manager availability both remain visible from the surviving `prepareRuntimeConsumers`
-  and pre-warm INFO/DEBUG lines.
+  and pre-warm INFO/DEBUG lines. A hand-composed `Builder` chain that skips `ConfigureRuntimeHelpers` — outside
+  supported use — used to get neither consumer bootstrap nor pre-warm and now gets both
+  whenever the managers exist (ADR-067 §Consequences).
 - gate: match = at least one grep names one of these symbols on the `app` package, or an
   `app.Options` literal sets `Database:` or `MessagingClient:`. no-match = the common case;
   a service that only registers modules and calls `app.New*` never touched any of them.
