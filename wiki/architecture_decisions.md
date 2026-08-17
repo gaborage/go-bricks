@@ -1361,8 +1361,8 @@ ADR-048 sanitized error text). `Prober`/`HealthStatus` are unchanged.
 **Key Benefits:** The next readiness rule lands in one file; adding a kind is one description.
 **Watch:** visible strings move — streams `not_ready` → `unhealthy`, the `details.status`
 sub-strings collapse into the vocabulary, messaging/cache read `per_tenant` in multi-tenant
-deployments, a disabled kind's stats render `{"status":"disabled"}`, and (second slice)
-`db_stats` becomes `database_stats`. No Go API change. See [migrations.md](migrations.md) `[C60.3]`.
+deployments, a disabled kind's stats render `{"status":"disabled"}`, and `db_stats`
+becomes `database_stats`. No Go API change. See [migrations.md](migrations.md) `[C60.3]`.
 
 ---
 

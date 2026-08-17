@@ -189,7 +189,7 @@ When `observability.enabled: true`, cache operations automatically emit:
 503 body only when the cache probe is the one that failed, because a critical database failure
 short-circuits before the cache probe's result is rendered. The 200 body
 carries `cache` (a status string) alongside `cache_stats` (the manager counters), mirroring
-`database`/`db_stats` and `messaging`/`messaging_stats` (abridged below — the `database`,
+`database`/`database_stats` and `messaging`/`messaging_stats` (abridged below — the `database`,
 `messaging`, `time`, and `app` entries are omitted):
 
 ```json
