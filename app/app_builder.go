@@ -454,6 +454,7 @@ func (b *Builder) Build() (*App, logger.Logger, error) {
 	}
 
 	if b.err != nil {
+		b.closeBundleManagers()
 		return nil, log, b.err
 	}
 
@@ -462,6 +463,26 @@ func (b *Builder) Build() (*App, logger.Logger, error) {
 	}
 
 	return b.app, log, nil
+}
+
+// closeBundleManagers stops the background work the bundle's three managers started at
+// construction when a step AFTER ResolveDependencies aborts — the ADR-050 untyped-connectionstring
+// abort in ConfigureRuntimeHelpers, or a fatal slot pre-initialization. Build returns
+// (nil, log, err) there, so no App is ever assembled and the close phase never runs over them:
+// a host that retries app.New after a broker outage would otherwise leak one idle-cleanup sweep
+// per manager per attempt. A no-op when the failure predates the bundle (b.bundle nil), which
+// covers every guard before ResolveDependencies as well as its own failure — that path closes
+// its own partial set (closeManagersOnDependencyError).
+func (b *Builder) closeBundleManagers() {
+	if b.bundle == nil {
+		return
+	}
+	closeManagersOnDependencyError(b.bundle.dbManager, b.bundle.messagingManager)
+	// The cache manager is the third: unlike the ADR-067 pair it has self-started its sweep all
+	// along, so it strands the same way and dependencies() never has one to close.
+	if b.bundle.cacheManager != nil {
+		_ = b.bundle.cacheManager.Close()
+	}
 }
 
 // Error returns any error encountered during the building process.

@@ -73,8 +73,9 @@ func newManagerConfigBuilderFromConfig(cfg *config.Config) *ManagerConfigBuilder
 // closeManagersOnDependencyError stops the idle-cleanup sweep each manager started at
 // construction (ADR-067) when a later manager in the same dependencies() call fails to
 // build. dependencies() returns (nil, err) on that path and the builder never assembles
-// an App, so nothing downstream ever gets a handle to these two — this is the only place
-// that can stop their goroutines. Nil-guarded: the factory never returns a nil
+// an App, so nothing downstream ever gets a handle to these two — this call is all that can
+// stop their goroutines (Builder.closeBundleManagers is the sibling for an abort after the
+// bundle exists, and reuses this). Nil-guarded: the factory never returns a nil
 // *database.DbManager or *messaging.Manager today, but Close on a nil pointer would
 // panic, and this stays correct if that ever changes.
 func closeManagersOnDependencyError(dbManager *database.DbManager, messagingManager *messaging.Manager) {

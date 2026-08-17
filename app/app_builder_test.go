@@ -452,6 +452,61 @@ func TestNewWithConfigFailsClosedOnInvalidCacheConfig(t *testing.T) {
 	assert.ErrorContains(t, err, "maxsize cannot be negative")
 }
 
+// TestBuildClosesBundleManagersWhenALaterStepAborts pins the Builder half of the ADR-067 leak
+// fix: an error raised after ResolveDependencies leaves all three managers built — each owning
+// an idle-cleanup goroutine — and returns no App, so Build is the last hand able to close them.
+// Driven through the real chain by the fatal database pre-initialization verdict; the bundle is
+// read off the builder because Build deliberately hands the caller nothing on this path.
+func TestBuildClosesBundleManagersWhenALaterStepAborts(t *testing.T) {
+	cfg := defaultTestConfig()
+	opts := &Options{
+		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return nil, errors.New("dial tcp 127.0.0.1:5432: connect: connection refused")
+		},
+		MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+		CacheConnector: func(context.Context, string) (cache.Cache, error) {
+			return cachetesting.NewMockCache(), nil
+		},
+	}
+
+	builder := NewAppBuilder()
+	app, log, err := builder.
+		WithConfig(cfg, opts).
+		CreateLogger().
+		CreateBootstrap().
+		ResolveDependencies().
+		CreateApp().
+		InitializeRegistry().
+		ConfigureRuntimeHelpers().
+		CreateHealthProbes().
+		RegisterClosers().
+		RegisterReadyHandler().
+		Build()
+
+	require.Error(t, err, "an unreachable database must abort startup at pre-initialization")
+	assert.ErrorContains(t, err, "connection failed during startup")
+	assert.Nil(t, app)
+	assert.NotNil(t, log)
+
+	bundle := builder.bundle
+	require.NotNil(t, bundle, "the abort must come after the bundle was built, or this pins nothing")
+
+	// Close is the only externally-observable side effect the managers expose: each fails closed
+	// once it has run, and only once — an unclosed manager answers these calls.
+	ctx := context.Background()
+	_, _, dbErr := bundle.dbManager.Get(ctx, "")
+	require.Error(t, dbErr)
+	assert.Contains(t, dbErr.Error(), "manager closed", "the database manager must be closed, not stranded")
+
+	_, _, msgErr := bundle.messagingManager.Publisher(ctx, "")
+	require.ErrorIs(t, msgErr, messaging.ErrManagerClosed, "the messaging manager must be closed, not stranded")
+
+	_, _, cacheErr := bundle.cacheManager.Get(ctx, "")
+	require.ErrorIs(t, cacheErr, cache.ErrManagerClosed, "the cache manager must be closed, not stranded")
+}
+
 func TestAppBuilderCreateAppErrors(t *testing.T) {
 	t.Run("missing dependencies", func(t *testing.T) {
 		builder := NewAppBuilder()
