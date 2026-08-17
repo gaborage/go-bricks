@@ -2372,8 +2372,8 @@ managerStats := cacheManager.Stats()
 `GET /health` is a liveness-only probe with no component breakdown (`{"status": "ok"}`).
 `GET /ready` reports per-component status (database, messaging, cache) — the cache probe's
 result is surfaced as the top-level `cache` and `cache_stats` keys in the `200` body (the
-`503` body carries only `status`/`cache`/`error`; a cache manager that failed to construct
-registers no probe at all and reports `cache: "disabled"` with empty `cache_stats`). The probe leases
+`503` body carries only `status`/`cache`/`error`; an `App` assembled without a cache manager
+reports `cache: "disabled"` with `cache_stats: {"status":"disabled"}`). The probe leases
 an instance from the manager and calls `Cache.Health(ctx)` on it — a Redis `PING` per poll,
 capped at 500ms so a hung Redis reports unhealthy instead of consuming the `/ready` request
 budget — so an outage that starts after the instance was built is reported on the next poll. It fails
