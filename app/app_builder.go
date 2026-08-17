@@ -201,6 +201,10 @@ func (b *Builder) CreateApp() *Builder {
 		resourceProvider: b.bundle.provider,
 	}
 
+	// Slots are installed here, before ConfigureRuntimeHelpers runs pre-initialization over
+	// them. cacheAbsent is the one verdict App cannot re-derive: it reads Options.
+	b.app.installSlots(slotInputs{cacheAbsent: rootCacheAbsent(b.cfg, b.opts)})
+
 	return b
 }
 
@@ -425,7 +429,7 @@ func (b *Builder) CreateHealthProbes() *Builder {
 
 	b.warnIfCacheCriticalityOptOut()
 	b.warnIfQueryParameterLogging()
-	b.app.healthProbes = b.app.createHealthProbes(probeInputs{cacheAbsent: rootCacheAbsent(b.cfg, b.opts)})
+	b.app.healthProbes = b.app.collectProbes()
 
 	return b
 }
@@ -494,16 +498,9 @@ func (b *Builder) RegisterClosers() *Builder {
 		return b
 	}
 
-	// Register closers with explicit nil checks to avoid typed nil interface issues
-	if b.app.dbManager != nil {
-		b.app.registerCloser("database manager", b.app.dbManager)
-	}
-	if b.app.messagingManager != nil {
-		b.app.registerCloser("messaging manager", b.app.messagingManager)
-	}
-	if b.app.cacheManager != nil {
-		b.app.registerCloser("cache manager", b.app.cacheManager)
-	}
+	// Each slot decides whether it has anything to close; the nil checks that avoided typed
+	// nil interfaces now live in the slots' closer methods.
+	b.app.registerSlotClosers()
 	return b
 }
 

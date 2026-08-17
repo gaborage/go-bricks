@@ -19,9 +19,10 @@ const plaintextStreamScheme = "rabbitmq-stream"
 //
 // Everything happens at RUNTIME on purpose: the manager does not exist while the
 // builder runs, so its readiness probe and its closer are both registered here
-// rather than in createHealthProbes or Builder.RegisterClosers, which are
-// snapshotted before prepareRuntime runs. This is safe because prepareRuntime is
-// single-threaded and completes before the server starts serving /ready.
+// rather than by the build-time slot walks (Builder.CreateHealthProbes and
+// Builder.RegisterClosers), which are snapshotted before prepareRuntime runs.
+// This is safe because prepareRuntime is single-threaded and completes before the
+// server starts serving /ready.
 func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	if a.registry == nil {
 		return errors.New("module registry not initialized")

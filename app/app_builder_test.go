@@ -685,9 +685,12 @@ func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			app := &App{cfg: tc.cfg, cacheManager: createTestCacheManager(t)}
+			// CreateApp installs the slots CreateHealthProbes walks; this builder skips it.
+			app.installSlots(slotInputs{})
 			builder := &Builder{
 				logger: logger.New("error", false),
-				app:    &App{cfg: tc.cfg, cacheManager: createTestCacheManager(t)},
+				app:    app,
 			}
 
 			result := builder.CreateHealthProbes()

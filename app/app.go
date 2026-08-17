@@ -89,27 +89,16 @@ type App struct {
 
 	closers      []namedCloser
 	healthProbes []Prober
+
+	// slots is the one per-kind lifecycle list every phase walks, in the fixed order
+	// database → messaging → cache → streams (installSlots, ADR-067).
+	slots []resourceSlot
 }
 
-// probeInputs carries the verdicts createHealthProbes cannot reach from App alone: the
-// cache's absence under the fixed "" key depends on Options (rootCacheAbsent), which the
-// Builder holds and App does not.
-type probeInputs struct {
-	cacheAbsent bool
-}
-
-// createHealthProbes builds the readiness probe set: one description per classic kind, in
-// registration order, a nil manager yielding a disabled one. Criticality and per-tenancy
-// are decided here, once (nil-guarded like Config.IsCacheCritical, since a
-// directly-constructed App may carry no config). The streams description is appended at
-// runtime by prepareStreamConsumers.
-func (a *App) createHealthProbes(inputs probeInputs) []Prober {
-	perTenant := a.cfg != nil && a.cfg.Multitenant.Enabled
-	return []Prober{
-		databaseProbe(a.dbManager, perTenant),
-		messagingProbe(a.messagingManager, perTenant),
-		cacheProbe(a.cacheManager, a.cfg.IsCacheCritical(), inputs.cacheAbsent, perTenant),
-	}
+// multiTenant reports whether this deployment resolves its resources per tenant. Nil-guarded
+// because a directly-constructed App may carry no config.
+func (a *App) multiTenant() bool {
+	return a.cfg != nil && a.cfg.Multitenant.Enabled
 }
 
 func (a *App) buildMessagingDeclarations() error {

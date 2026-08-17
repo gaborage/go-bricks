@@ -487,25 +487,20 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 		opt(fixture)
 	}
 
-	fixture.rebuildClosersAndHealth()
+	fixture.app.installSlots(slotInputs{})
+	fixture.rebuildLifecycle()
 	fixture.server.RegisterReadyHandler(fixture.app.readyCheck)
 
 	return fixture
 }
 
-func (f *testAppFixture) rebuildClosersAndHealth() {
-	f.app.healthProbes = f.app.createHealthProbes(probeInputs{})
+// rebuildLifecycle re-runs the two Builder steps that snapshot the slot walks, after a test
+// has swapped a manager in or out. It calls exactly what Builder.CreateHealthProbes and
+// Builder.RegisterClosers call, so the fixture cannot drift from production wiring.
+func (f *testAppFixture) rebuildLifecycle() {
+	f.app.healthProbes = f.app.collectProbes()
 	f.app.closers = nil
-	// Register closers with explicit nil checks to avoid typed nil interface issues
-	if f.app.dbManager != nil {
-		f.app.registerCloser("database manager", f.app.dbManager)
-	}
-	if f.app.messagingManager != nil {
-		f.app.registerCloser("messaging manager", f.app.messagingManager)
-	}
-	if f.app.cacheManager != nil {
-		f.app.registerCloser("cache manager", f.app.cacheManager)
-	}
+	f.app.registerSlotClosers()
 }
 
 func withSignalHandler(handler SignalHandler) fixtureOption {
@@ -779,10 +774,10 @@ func TestAppUsesProvidedResourceSource(t *testing.T) {
 	assert.Greater(t, resource.msgCalls, 0)
 }
 
-// TestCreateHealthProbesCacheCriticalFromLoadedConfig walks the whole seam a deployment
+// TestCollectProbesCacheCriticalFromLoadedConfig walks the whole seam a deployment
 // walks — YAML through koanf into IsCacheCritical into the probe — because a Go struct
 // literal cannot show that an omitted key survives the load as nil.
-func TestCreateHealthProbesCacheCriticalFromLoadedConfig(t *testing.T) {
+func TestCollectProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 	const cacheEnabled = "\ncache:\n  enabled: true\n  redis:\n    host: localhost\n    port: 6379\n"
 
 	tests := []struct {
@@ -800,7 +795,8 @@ func TestCreateHealthProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 			cfg := loadConfigFromYAML(t, minimumValidConfig+tc.cacheYAML)
 			app := &App{cfg: cfg, logger: logger.New("error", false), cacheManager: createTestCacheManager(t)}
 
-			probes := app.createHealthProbes(probeInputs{})
+			app.installSlots(slotInputs{})
+			probes := app.collectProbes()
 			require.Len(t, probes, 3)
 
 			status := probes[2].Run(context.Background())
@@ -810,14 +806,14 @@ func TestCreateHealthProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 	}
 }
 
-// TestCreateHealthProbesCriticalProbesRenderNoRawError enforces the Prober contract over
+// TestCollectProbesCriticalProbesRenderNoRawError enforces the Prober contract over
 // every probe the app actually wires, rather than probe by probe. SECURITY: readyCheck
 // renders a critical probe's failure into the unauthenticated /ready 503 body, so what
 // matters is the rendered string, not whether the probe remembered to declare one — the
 // assertion drives each probe's status through publicProbeError with an identity-bearing
 // error substituted in. The per-constructor tests pin the probes that exist today; this is
 // the only guard that catches a critical probe added tomorrow.
-func TestCreateHealthProbesCriticalProbesRenderNoRawError(t *testing.T) {
+func TestCollectProbesCriticalProbesRenderNoRawError(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, cfg.IsCacheCritical(), "a zero-value config must leave the cache probe critical, or this test covers only the database probe")
 
@@ -829,7 +825,8 @@ func TestCreateHealthProbesCriticalProbesRenderNoRawError(t *testing.T) {
 		cacheManager:     createTestCacheManager(t),
 	}
 
-	probes := app.createHealthProbes(probeInputs{})
+	app.installSlots(slotInputs{})
+	probes := app.collectProbes()
 	require.Len(t, probes, 3)
 
 	criticalSeen := 0
@@ -927,7 +924,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				// Set messaging manager to nil to simulate disabled messaging
 				f.app.messagingManager = nil
-				f.rebuildClosersAndHealth()
+				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
 			assertBody: func(t *testing.T, body map[string]any) {
@@ -945,7 +942,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
 				f.app.cacheManager = createTestCacheManager(f.t)
-				f.rebuildClosersAndHealth()
+				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
 			assertBody: func(t *testing.T, body map[string]any) {
@@ -970,7 +967,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				require.Nil(f.t, f.app.cfg.Cache.Critical, "the fixture must leave the key absent")
 				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
 					cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
-				f.rebuildClosersAndHealth()
+				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusServiceUnavailable,
 			assertBody: func(t *testing.T, body map[string]any) {
@@ -990,7 +987,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.app.cfg.Cache.Critical = new(false)
 				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
 					cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
-				f.rebuildClosersAndHealth()
+				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
 			assertBody: func(t *testing.T, body map[string]any) {
@@ -1016,7 +1013,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.app.cfg.Cache.Critical = new(true)
 				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
 					cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
-				f.rebuildClosersAndHealth()
+				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusServiceUnavailable,
 			assertBody: func(t *testing.T, body map[string]any) {
@@ -1033,7 +1030,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.messaging.SetReady(true)
 				f.app.cfg.Cache.Critical = new(false)
 				f.app.cacheManager = createWarmCacheManagerWithOutage(f.t)
-				f.rebuildClosersAndHealth()
+				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
 			assertBody: func(t *testing.T, body map[string]any) {
@@ -1053,7 +1050,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.messaging.SetReady(true)
 				f.app.cfg.Cache.Critical = new(true)
 				f.app.cacheManager = createWarmCacheManagerWithOutage(f.t)
-				f.rebuildClosersAndHealth()
+				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusServiceUnavailable,
 			assertBody: func(t *testing.T, body map[string]any) {
@@ -1068,7 +1065,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.db.On(methodHealth, mock.Anything).Return(nil)
 				f.messaging.SetReady(true)
 				f.app.cfg.Cache.Critical = new(true)
-				f.rebuildClosersAndHealth()
+				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
 			assertBody: func(t *testing.T, body map[string]any) {
@@ -1087,7 +1084,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				f.app.cfg.Cache.Critical = new(true)
 				f.app.cacheManager = createTestCacheManagerWithGetError(f.t,
 					config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host"))
-				f.rebuildClosersAndHealth()
+				f.rebuildLifecycle()
 			},
 			expectedStatus: http.StatusOK,
 			assertBody: func(t *testing.T, body map[string]any) {
