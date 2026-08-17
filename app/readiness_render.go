@@ -31,7 +31,7 @@ const (
 // details at all. It copies rather than filtering in place because the debug view renders
 // that same map unredacted.
 func publicProjection(result *HealthStatus, allow []string) map[string]any {
-	public := make(map[string]any, len(allow)+1)
+	public := make(map[string]any, len(allow))
 	for _, key := range allow {
 		if value, ok := result.Details[key]; ok {
 			public[key] = value
@@ -118,7 +118,7 @@ func isReadyEquivalent(status string) bool {
 // readyBody renders the unauthenticated 200 body: the fixed envelope, then every registered
 // kind's status under <name> and its public statistics under <name>_stats.
 func (r readinessReport) readyBody(app *config.AppConfig, now time.Time) map[string]any {
-	body := make(map[string]any, 2*len(r)+3)
+	body := make(map[string]any)
 	body[statusKey] = readyStatus
 	body[timeKey] = now.Unix()
 	body["app"] = map[string]any{
