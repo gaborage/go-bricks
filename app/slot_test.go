@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
@@ -83,6 +85,22 @@ func probeNames(t *testing.T, probes []Prober) []string {
 	return names
 }
 
+// assertCloserIdentity pins that every registered closer is the very manager its own slot
+// holds, so a slot handing over the wrong one fails here instead of at shutdown, where the
+// names alone would still read correctly.
+func assertCloserIdentity(t *testing.T, a *App) {
+	t.Helper()
+	want := map[string]any{
+		databaseCloserName:  a.dbManager,
+		messagingCloserName: a.messagingManager,
+		cacheCloserName:     a.cacheManager,
+		streamsCloserName:   a.streamsManager,
+	}
+	for _, c := range a.closers {
+		assert.Same(t, want[c.name], c.closer, "closer %q must be its slot's own manager", c.name)
+	}
+}
+
 // closerNames reads the registered close list back in FIFO order.
 func closerNames(a *App) []string {
 	names := make([]string, 0, len(a.closers))
@@ -142,6 +160,7 @@ func TestSlotWalksCoverEveryKind(t *testing.T) {
 
 			a.registerSlotClosers()
 			assert.Equal(t, tc.wantClosers, closerNames(a))
+			assertCloserIdentity(t, a)
 		})
 	}
 }
@@ -158,6 +177,7 @@ func TestCacheSlotContributesItsProbeAndCloser(t *testing.T) {
 
 	a.registerSlotClosers()
 	assert.Equal(t, []string{cacheCloserName}, closerNames(a))
+	assertCloserIdentity(t, a)
 }
 
 // TestCollectProbesWithholdsStreamsUntilItsManagerExists pins the one kind whose
@@ -199,6 +219,7 @@ func TestStreamsSlotContributesItsCloserOnceItsManagerExists(t *testing.T) {
 
 	a.registerSlotClosers()
 	assert.Equal(t, []string{streamsCloserName}, closerNames(a))
+	assertCloserIdentity(t, a)
 }
 
 // TestCacheSlotTakesAbsenceFromItsInputs pins that the cache description's absence arm is
@@ -234,4 +255,167 @@ func TestSlotProbesTrackLiveManagers(t *testing.T) {
 	a.messagingManager = nil
 
 	assert.Equal(t, disabledStatus, a.collectProbes()[1].Run(context.Background()).Status)
+}
+
+// TestSlotPreInitFatality pins the classification the spec fixes: database and messaging
+// abort startup, cache is best-effort, streams has no pre-init at all. The table binds each
+// verdict to its kind's name, so a reordered slot list fails here rather than silently
+// swapping two kinds' fatality.
+func TestSlotPreInitFatality(t *testing.T) {
+	a := newSlotTestApp(t, false, false)
+	require.Len(t, a.slots, 4)
+
+	cases := []struct {
+		name  string
+		kind  string
+		why   string
+		index int
+		fatal bool
+	}{
+		{name: "database_is_fatal", index: 0, kind: componentDatabase, fatal: true, why: "a misconfigured database must fail startup"},
+		{name: "messaging_is_fatal", index: 1, kind: componentMessaging, fatal: true, why: "a misconfigured broker must fail startup"},
+		{name: "cache_is_best_effort", index: 2, kind: componentCache, fatal: false, why: "an unreachable cache is a runtime condition"},
+		{name: "streams_is_best_effort", index: 3, kind: componentStreams, fatal: false, why: "streams has no pre-init"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			slot := a.slots[tc.index]
+			require.Equal(t, tc.kind, slot.name())
+			assert.Equal(t, tc.fatal, slot.preInitFatal(), tc.why)
+		})
+	}
+}
+
+// TestDatabaseSlotPreInitSkipsUnconfiguredKind pins the pre-check: an unconfigured database
+// is skipped without ever leasing, so the pool's error counter starts at a true zero.
+func TestDatabaseSlotPreInitSkipsUnconfiguredKind(t *testing.T) {
+	a := newSlotTestApp(t, true, false)
+	a.cfg.Database = config.DatabaseConfig{} // nothing configured
+
+	require.NoError(t, a.slots[0].preInit(context.Background()))
+	assert.Equal(t, 0, statsInt(t, a.dbManager.Stats(), statsActiveConnectionsKey),
+		"the unconfigured arm must never open a connection")
+}
+
+// TestDatabaseSlotPreInitReportsLeaseFailure pins that the raw failure reaches the caller,
+// which is what performPreInitialization turns into the fatal startup error.
+func TestDatabaseSlotPreInitReportsLeaseFailure(t *testing.T) {
+	log := logger.New("error", false)
+	cfg := defaultTestConfig()
+	dbManager := database.NewDbManager(staticDBConfigProvider{err: errNeverReachTheConnector}, log,
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute},
+		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return dbtesting.NewTestDB(dbTypePostgres), nil
+		})
+	t.Cleanup(func() { assert.NoError(t, dbManager.Close()) })
+
+	a := &App{cfg: cfg, logger: log, dbManager: dbManager}
+	a.installSlots(slotInputs{})
+
+	err := a.slots[0].preInit(context.Background())
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errNeverReachTheConnector)
+}
+
+// TestCacheSlotPreInitSkipsAbsentCache pins that the cache is never leased when the fixed ""
+// key can never resolve (rootCacheAbsent), so the pool's errors counter starts at a true
+// zero. Moved here from app_builder_test.go, where it drove the Builder's own cache arm.
+func TestCacheSlotPreInitSkipsAbsentCache(t *testing.T) {
+	newApp := func(t *testing.T, absent bool, calls *atomic.Int32) *App {
+		t.Helper()
+		mgr := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
+			calls.Add(1)
+			return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
+		})
+		t.Cleanup(func() { assert.NoError(t, mgr.Close()) })
+
+		a := &App{cfg: defaultTestConfig(), logger: logger.New("error", false), cacheManager: mgr}
+		a.installSlots(slotInputs{cacheAbsent: absent})
+		return a
+	}
+
+	t.Run("absent_skips_the_connector", func(t *testing.T) {
+		var calls atomic.Int32
+		a := newApp(t, true, &calls)
+
+		require.NoError(t, a.slots[2].preInit(context.Background()))
+
+		assert.Equal(t, int32(0), calls.Load(), "the connector must never be reached")
+	})
+
+	t.Run("present_reaches_the_connector", func(t *testing.T) {
+		var calls atomic.Int32
+		a := newApp(t, false, &calls)
+
+		require.NoError(t, a.slots[2].preInit(context.Background()),
+			"a not-configured lease is a silent skip, not a failure")
+
+		assert.Equal(t, int32(1), calls.Load(), "an unexempt cache must still be probed")
+	})
+}
+
+// TestCacheSlotPreInitSurfacesRealFailures pins the other cache arm: an error that is NOT
+// config.IsNotConfigured reaches the caller, which turns it into the non-fatal WARN.
+func TestCacheSlotPreInitSurfacesRealFailures(t *testing.T) {
+	mgr := createTestCacheManagerWithGetError(t, errNeverReachTheConnector)
+	t.Cleanup(func() { assert.NoError(t, mgr.Close()) })
+
+	a := &App{cfg: defaultTestConfig(), logger: logger.New("error", false), cacheManager: mgr}
+	a.installSlots(slotInputs{})
+
+	assert.ErrorIs(t, a.slots[2].preInit(context.Background()), errNeverReachTheConnector)
+}
+
+// TestStreamsSlotPreInitIsANoop pins that the streams kind contributes nothing to the
+// Builder's pre-initialization pass — its manager does not exist until start.
+func TestStreamsSlotPreInitIsANoop(t *testing.T) {
+	a := newSlotTestApp(t, false, false)
+
+	assert.NoError(t, a.slots[3].preInit(context.Background()))
+}
+
+// recordingSlot is a resourceSlot stand-in that records which phase ran on which kind, so
+// the walks can be pinned on order and short-circuiting without standing up four real
+// managers. Every field defaults to "this phase succeeds and does nothing".
+type recordingSlot struct {
+	order        *[]string
+	preInitErr   error
+	kind         string
+	fatalPreInit bool
+}
+
+func (s *recordingSlot) record(phase string) { *s.order = append(*s.order, phase+":"+s.kind) }
+
+func (s *recordingSlot) name() string { return s.kind }
+
+func (s *recordingSlot) probe() (probeDescription, bool) { return probeDescription{}, false }
+
+func (s *recordingSlot) preInit(context.Context) error {
+	s.record("preinit")
+	return s.preInitErr
+}
+
+func (s *recordingSlot) preInitFatal() bool { return s.fatalPreInit }
+
+func (s *recordingSlot) closer() (namedCloser, bool) { return namedCloser{}, false }
+
+var _ resourceSlot = (*recordingSlot)(nil)
+
+// statsInt reads one integer counter out of a manager's Stats map, whatever width the
+// manager published it as.
+func statsInt(t *testing.T, stats map[string]any, key string) int {
+	t.Helper()
+	switch v := stats[key].(type) {
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	default:
+		t.Fatalf("stats[%q] is %T, not an integer", key, stats[key])
+		return 0
+	}
 }

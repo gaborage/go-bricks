@@ -1,6 +1,11 @@
 package app
 
-import "context"
+import (
+	"context"
+	"time"
+
+	"github.com/gaborage/go-bricks/config"
+)
 
 // A slot is the framework-side module that owns one resource kind's application lifecycle —
 // probe, pre-init, close — so that adding a kind is one slot, not an edit in every place
@@ -97,6 +102,20 @@ func (s *databaseSlot) probe() (probeDescription, bool) {
 
 func (s *databaseSlot) preInitFatal() bool { return true }
 
+// preInit leases the fixed "" key under app.startup.database to verify connectivity, then
+// releases it. A failure is startup-fatal: a misconfigured backing store must not boot green.
+func (s *databaseSlot) preInit(ctx context.Context) error {
+	if s.app.dbManager == nil {
+		return nil
+	}
+	return s.app.preInitLease(ctx, componentDatabase,
+		config.IsDatabaseConfigured(&s.app.cfg.Database), s.app.cfg.App.Startup.Database,
+		func(ctx context.Context) (func(), error) {
+			_, release, err := s.app.dbManager.Get(ctx, "")
+			return release, err
+		})
+}
+
 func (s *databaseSlot) closer() (namedCloser, bool) {
 	if s.app.dbManager == nil {
 		return namedCloser{}, false
@@ -114,6 +133,20 @@ func (s *messagingSlot) probe() (probeDescription, bool) {
 }
 
 func (s *messagingSlot) preInitFatal() bool { return true }
+
+// preInit leases the fixed "" key's publisher under app.startup.messaging to verify
+// connectivity, then releases it. Startup-fatal, for the same reason as the database.
+func (s *messagingSlot) preInit(ctx context.Context) error {
+	if s.app.messagingManager == nil {
+		return nil
+	}
+	return s.app.preInitLease(ctx, componentMessaging,
+		config.IsMessagingConfigured(&s.app.cfg.Messaging), s.app.cfg.App.Startup.Messaging,
+		func(ctx context.Context) (func(), error) {
+			_, release, err := s.app.messagingManager.Publisher(ctx, "")
+			return release, err
+		})
+}
 
 func (s *messagingSlot) closer() (namedCloser, bool) {
 	if s.app.messagingManager == nil {
@@ -137,6 +170,31 @@ func (s *cacheSlot) probe() (probeDescription, bool) {
 }
 
 func (s *cacheSlot) preInitFatal() bool { return false }
+
+// preInit leases the fixed "" key under app.startup.cache, unless that key can never
+// resolve (absent). Best-effort: reaching the cache is a runtime concern, distinct from the
+// manager-creation contract, which already failed closed at CreateCacheManager. A lease that
+// reports not-configured is a silent skip, not a failure.
+func (s *cacheSlot) preInit(ctx context.Context) error {
+	if s.app.cacheManager == nil || s.absent {
+		return nil
+	}
+
+	ctx, cancel := startupContext(ctx, s.app.cfg.App.Startup.Cache)
+	defer cancel()
+
+	_, release, err := s.app.cacheManager.Get(ctx, "")
+	if err != nil {
+		if config.IsNotConfigured(err) {
+			s.app.logger.Debug().Msg("Skipping cache pre-initialization: not configured")
+			return nil
+		}
+		return err
+	}
+	release() // startup probe only verifies connectivity; release the lease immediately
+	s.app.logger.Debug().Msg("Pre-initialized cache connection")
+	return nil
+}
 
 func (s *cacheSlot) closer() (namedCloser, bool) {
 	if s.app.cacheManager == nil {
@@ -174,11 +232,37 @@ func (s *streamsSlot) closer() (namedCloser, bool) {
 	return namedCloser{name: "streams manager", closer: s.app.streamsManager}, true
 }
 
-// The three pre-init bodies below are wired in the next slice; until then nothing calls
-// them, because performPreInitialization still holds its own per-kind call sites.
+// preInitLease is the arm the two startup-fatal kinds share: an unconfigured kind is skipped
+// without leasing, and a configured one leases the fixed "" key under its own budget and
+// releases it at once. It returns the raw lease failure; preInitFatal grades it.
+func (a *App) preInitLease(ctx context.Context, kind string, configured bool, timeout time.Duration,
+	lease func(context.Context) (func(), error),
+) error {
+	if !configured {
+		a.logger.Debug().Msgf("Skipping %s pre-initialization: not configured", kind)
+		return nil
+	}
 
-func (s *databaseSlot) preInit(context.Context) error { return nil }
+	ctx, cancel := startupContext(ctx, timeout)
+	defer cancel()
 
-func (s *messagingSlot) preInit(context.Context) error { return nil }
+	release, err := lease(ctx)
+	if err != nil {
+		return err
+	}
+	release() // startup probe only verifies connectivity; release the lease immediately
+	a.logger.Debug().Msgf("Pre-initialized %s connection", kind)
+	return nil
+}
 
-func (s *cacheSlot) preInit(context.Context) error { return nil }
+// startupContext derives one kind's pre-init context from parent. A non-positive budget means
+// "no explicit budget", NOT "already expired": WithConfig's config.Validate call resolves the
+// three-level fallback (config.applyStartupDefaults) for every config reaching NewWithConfig, but a
+// Builder assembled without WithConfig can still carry a zero-valued Startup, and
+// context.WithTimeout(parent, 0) would hand every kind a context that is dead on arrival.
+func startupContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
+}
