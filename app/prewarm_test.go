@@ -40,13 +40,21 @@ func newPrewarmTestManager(log logger.Logger, client *testmocks.MockAMQPClient) 
 		messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
 }
 
-// TestPreWarmSingleTenantSkipsAbsentManagers pins the absence guard: with neither
-// manager built, pre-warming is a silent no-op and never reports a problem.
-func TestPreWarmSingleTenantSkipsAbsentManagers(t *testing.T) {
-	a := &App{logger: logger.New("debug", true), cfg: &config.Config{}}
+// TestSlotStartSkipsAbsentManagers pins the absence guard: with neither manager built, the
+// start phase is a silent no-op and never reports a problem.
+func TestSlotStartSkipsAbsentManagers(t *testing.T) {
+	log := logger.New("debug", true)
+	cfg := &config.Config{}
+	// The streams kind's "absent" is a registry that declares no stream, so it gets one:
+	// its start delegates to prepareStreamConsumers, which refuses a nil registry outright.
+	a := &App{logger: log, cfg: cfg, registry: NewModuleRegistry(&ModuleDeps{Logger: log, Config: cfg})}
+	a.installSlots(slotInputs{})
 
-	require.NoError(t, a.preWarmSingleTenant(context.Background(), messaging.NewDeclarations()))
-	require.NoError(t, a.preWarmSingleTenant(context.Background(), nil))
+	for _, slot := range a.slots {
+		advisory, fatal := slot.start(context.Background())
+		require.NoError(t, fatal, slot.name())
+		require.NoError(t, advisory, slot.name())
+	}
 }
 
 func TestAppAwaitPublisherReady(t *testing.T) {
@@ -123,7 +131,7 @@ func TestAppPublisherReadinessTimeout(t *testing.T) {
 	}
 }
 
-func TestPreWarmSingleTenantAwaitsPublisherReadiness(t *testing.T) {
+func TestMessagingSlotStartAwaitsPublisherReadiness(t *testing.T) {
 	log := logger.New("debug", true)
 	client := newPrewarmMockClient()
 	manager := newPrewarmTestManager(log, client)
@@ -137,15 +145,16 @@ func TestPreWarmSingleTenantAwaitsPublisherReadiness(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err := a.preWarmSingleTenant(context.Background(), nil)
+	err, fatal := a.slots[1].start(context.Background())
 	elapsed := time.Since(start)
 
+	require.NoError(t, fatal, "pre-warming is never fatal")
 	assert.NoError(t, err)
 	assert.Less(t, elapsed, defaultPreWarmReadinessTimeout,
 		"must return once the client reports ready, not wait out the full budget")
 }
 
-func TestPreWarmSingleTenantContinuesWhenPublisherNeverReady(t *testing.T) {
+func TestMessagingSlotStartContinuesWhenPublisherNeverReady(t *testing.T) {
 	log := logger.New("debug", true)
 	client := newPrewarmMockClient() // never flips ready
 	manager := newPrewarmTestManager(log, client)
@@ -158,17 +167,18 @@ func TestPreWarmSingleTenantContinuesWhenPublisherNeverReady(t *testing.T) {
 	})
 
 	start := time.Now()
-	err := a.preWarmSingleTenant(context.Background(), nil)
+	err, fatal := a.slots[1].start(context.Background())
 	elapsed := time.Since(start)
 
 	// Not-ready-in-time is a WARN, not a startup failure — pre-warm must not
 	// propagate an error; PublishToExchange's own readytimeout pre-flight will
 	// still absorb a slow first publish later.
+	require.NoError(t, fatal, "pre-warming is never fatal")
 	assert.NoError(t, err)
 	assert.Less(t, elapsed, time.Second, "must return once the configured budget elapses, not the 5s fallback")
 }
 
-func TestPreWarmSingleTenantPropagatesContextCancellation(t *testing.T) {
+func TestMessagingSlotStartPropagatesContextCancellation(t *testing.T) {
 	log := logger.New("debug", true)
 	client := newPrewarmMockClient() // never flips ready
 	manager := newPrewarmTestManager(log, client)
@@ -180,11 +190,12 @@ func TestPreWarmSingleTenantPropagatesContextCancellation(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := a.preWarmSingleTenant(ctx, nil)
+	err, fatal := a.slots[1].start(ctx)
 	elapsed := time.Since(start)
 
 	// Cancellation means shutdown/startup abort, not a broker-readiness problem —
 	// it propagates instead of being mislabeled by the generic not-ready WARN.
+	require.NoError(t, fatal, "pre-warming is never fatal")
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, elapsed, time.Second, "must return once ctx expires")
 }

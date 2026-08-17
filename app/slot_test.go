@@ -382,12 +382,174 @@ func TestStreamsSlotPreInitIsANoop(t *testing.T) {
 	assert.NoError(t, a.slots[3].preInit(context.Background()))
 }
 
+// TestStartSlotsRunsEveryKindInRegistrationOrder pins the walk itself: one order for every
+// phase (spec decision 8), with no kind skipped.
+func TestStartSlotsRunsEveryKindInRegistrationOrder(t *testing.T) {
+	order := []string{}
+	a := &App{logger: logger.New("error", false)}
+	a.slots = []resourceSlot{
+		&recordingSlot{kind: componentDatabase, order: &order},
+		&recordingSlot{kind: componentMessaging, order: &order},
+		&recordingSlot{kind: componentCache, order: &order},
+		&recordingSlot{kind: componentStreams, order: &order},
+	}
+
+	require.NoError(t, a.startSlots(context.Background()))
+
+	assert.Equal(t,
+		[]string{"start:database", "start:messaging", "start:cache", "start:streams"},
+		order)
+}
+
+// TestStartSlotsStopsAtTheFirstFatalKind pins that a kind that cannot start aborts startup
+// there: a service that declared streams and cannot start them must not go on to serve HTTP.
+func TestStartSlotsStopsAtTheFirstFatalKind(t *testing.T) {
+	order := []string{}
+	a := &App{logger: logger.New("error", false)}
+	a.slots = []resourceSlot{
+		&recordingSlot{kind: componentMessaging, order: &order, startFatal: assert.AnError},
+		&recordingSlot{kind: componentStreams, order: &order},
+	}
+
+	err := a.startSlots(context.Background())
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{"start:messaging"}, order)
+}
+
+// TestStartSlotsAggregatesAdvisoriesIntoOneWarn pins the pre-warm contract: advisory
+// failures never fail startup and never multiply the operator's WARN count — both kinds'
+// causes arrive under the one line prepareRuntime has always emitted.
+func TestStartSlotsAggregatesAdvisoriesIntoOneWarn(t *testing.T) {
+	order := []string{}
+	rec := &recLogger{}
+	a := &App{logger: rec}
+	a.slots = []resourceSlot{
+		&recordingSlot{kind: componentDatabase, order: &order, startAdvice: errors.New("db-advisory")},
+		&recordingSlot{kind: componentMessaging, order: &order, startAdvice: errors.New("msg-advisory")},
+	}
+
+	require.NoError(t, a.startSlots(context.Background()),
+		"pre-warming trouble is advisory: startup completes either way")
+
+	event, emitted := loggedEvent(rec, preWarmWarnMsg)
+	require.True(t, emitted)
+	assert.Equal(t, "warn", event.level)
+	assert.Contains(t, event.err, "pre-warming issues (non-fatal)")
+	assert.Contains(t, event.err, "db-advisory")
+	assert.Contains(t, event.err, "msg-advisory")
+}
+
+// TestStartSlotsStaysSilentWithoutAdvisories is the negative half.
+func TestStartSlotsStaysSilentWithoutAdvisories(t *testing.T) {
+	order := []string{}
+	rec := &recLogger{}
+	a := &App{logger: rec}
+	a.slots = []resourceSlot{&recordingSlot{kind: componentDatabase, order: &order}}
+
+	require.NoError(t, a.startSlots(context.Background()))
+
+	_, emitted := loggedEvent(rec, preWarmWarnMsg)
+	assert.False(t, emitted, "a clean start must emit no pre-warm WARN")
+}
+
+// TestStopSlotsRunsEveryKindInRegistrationOrder pins the shutdown walk. ADR-029 places it
+// before module Shutdown, which TestShutdownStopsServerBeforeModules covers end to end.
+func TestStopSlotsRunsEveryKindInRegistrationOrder(t *testing.T) {
+	order := []string{}
+	a := &App{logger: logger.New("error", false)}
+	a.slots = []resourceSlot{
+		&recordingSlot{kind: componentMessaging, order: &order},
+		&recordingSlot{kind: componentStreams, order: &order},
+	}
+
+	a.stopSlots(context.Background())
+
+	assert.Equal(t, []string{"stop:messaging", "stop:streams"}, order)
+}
+
+// TestDatabaseSlotStartSkipsMultiTenant pins the deployment-mode check inside the slot:
+// multi-tenant resources resolve per tenant, so the fixed "" key is never warmed. The
+// provider always refuses, so warming it would surface as an advisory error.
+func TestDatabaseSlotStartSkipsMultiTenant(t *testing.T) {
+	log := logger.New("error", false)
+	cfg := defaultTestConfig()
+	cfg.Multitenant.Enabled = true
+	dbManager := database.NewDbManager(staticDBConfigProvider{err: errNeverReachTheConnector}, log,
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute},
+		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return dbtesting.NewTestDB(dbTypePostgres), nil
+		})
+	t.Cleanup(func() { assert.NoError(t, dbManager.Close()) })
+
+	a := &App{cfg: cfg, logger: log, dbManager: dbManager}
+	a.installSlots(slotInputs{})
+
+	advisory, fatal := a.slots[0].start(context.Background())
+
+	assert.NoError(t, fatal)
+	assert.NoError(t, advisory, "multi-tenant startup must not pre-warm the fixed \"\" key")
+}
+
+// TestDatabaseSlotStartReportsPreWarmFailureAsAdvisory pins the other arm: a refused
+// pre-warm is reported, never fatal.
+func TestDatabaseSlotStartReportsPreWarmFailureAsAdvisory(t *testing.T) {
+	log := logger.New("error", false)
+	dbManager := database.NewDbManager(staticDBConfigProvider{err: errNeverReachTheConnector}, log,
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute},
+		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return dbtesting.NewTestDB(dbTypePostgres), nil
+		})
+	t.Cleanup(func() { assert.NoError(t, dbManager.Close()) })
+
+	a := &App{cfg: defaultTestConfig(), logger: log, dbManager: dbManager}
+	a.installSlots(slotInputs{})
+
+	advisory, fatal := a.slots[0].start(context.Background())
+
+	assert.NoError(t, fatal, "pre-warming is never fatal")
+	require.Error(t, advisory)
+	assert.Contains(t, advisory.Error(), "database pre-warming failed")
+	assert.ErrorIs(t, advisory, errNeverReachTheConnector)
+}
+
+// TestStreamsSlotStartRegistersItsCloser pins the half of the runtime registration the slot
+// now owns: prepareStreamConsumers produces the manager, the slot puts it on the FIFO close
+// list. A streams-free service registers nothing.
+func TestStreamsSlotStartRegistersItsCloser(t *testing.T) {
+	t.Run("no_declarations_registers_nothing", func(t *testing.T) {
+		a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
+		a.installSlots(slotInputs{})
+
+		advisory, fatal := a.slots[3].start(context.Background())
+
+		require.NoError(t, fatal)
+		require.NoError(t, advisory)
+		assert.Nil(t, a.streamsManager)
+		assert.Empty(t, a.closers)
+	})
+
+	t.Run("failed_start_registers_nothing", func(t *testing.T) {
+		a := newStreamsApp(t, config.StreamsConfig{URI: unreachableStreamURI},
+			&streamModule{name: "orders", declaration: declareOneConsumer})
+		a.installSlots(slotInputs{})
+
+		_, fatal := a.slots[3].start(context.Background())
+
+		require.Error(t, fatal, "a service that declared streams and cannot start them must abort")
+		assert.Nil(t, a.streamsManager)
+		assert.Empty(t, a.closers)
+	})
+}
+
 // recordingSlot is a resourceSlot stand-in that records which phase ran on which kind, so
 // the walks can be pinned on order and short-circuiting without standing up four real
 // managers. Every field defaults to "this phase succeeds and does nothing".
 type recordingSlot struct {
 	order        *[]string
 	preInitErr   error
+	startAdvice  error
+	startFatal   error
 	kind         string
 	fatalPreInit bool
 }
@@ -404,6 +566,13 @@ func (s *recordingSlot) preInit(context.Context) error {
 }
 
 func (s *recordingSlot) preInitFatal() bool { return s.fatalPreInit }
+
+func (s *recordingSlot) start(context.Context) (advisory, fatal error) {
+	s.record("start")
+	return s.startAdvice, s.startFatal
+}
+
+func (s *recordingSlot) stop(context.Context) { s.record("stop") }
 
 func (s *recordingSlot) closer() (namedCloser, bool) { return namedCloser{}, false }
 

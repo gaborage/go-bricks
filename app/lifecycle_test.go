@@ -241,13 +241,15 @@ func newLifecycleCheckApp(t *testing.T, cfg *config.Config) *App {
 func newLifecycleCheckAppWithLogger(t *testing.T, cfg *config.Config, log logger.Logger) *App {
 	t.Helper()
 	deps := &ModuleDeps{Logger: log, Config: cfg}
-	return &App{
+	a := &App{
 		cfg:      cfg,
 		logger:   log,
 		registry: NewModuleRegistry(deps),
 		server:   newMockServer(),
 		closers:  []namedCloser{},
 	}
+	a.installSlots(slotInputs{})
+	return a
 }
 
 // TestPrepareRuntimeFailsWhenDeclarationsExistAndMessagingUnconfigured guards
@@ -285,7 +287,7 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 type preWarmCtxSentinelKey struct{}
 
 // ctxRecordingDBConfigProvider captures the sentinel carried by the context that
-// reaches DBConfig — the first ctx-aware seam below preWarmSingleTenant.
+// reaches DBConfig — the first ctx-aware seam below databaseSlot.start.
 type ctxRecordingDBConfigProvider struct {
 	mu   sync.Mutex
 	seen any
@@ -299,7 +301,7 @@ func (p *ctxRecordingDBConfigProvider) DBConfig(ctx context.Context, _ string) (
 }
 
 // TestPrepareRuntimePropagatesContextToPreWarm pins that prepareRuntime hands its
-// own ctx to preWarmSingleTenant instead of a fresh context.Background(): a
+// own ctx to the start phase instead of a fresh context.Background(): a
 // sentinel value on the caller's context must survive down to the pre-warm
 // database seam. The value is the right observable because resourcepool detaches
 // cancellation with context.WithoutCancel, which preserves values — so a deadline
@@ -327,7 +329,7 @@ func TestPrepareRuntimePropagatesContextToPreWarm(t *testing.T) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	assert.Equal(t, "from-prepare-runtime", provider.seen,
-		"prepareRuntime must pass its own context to preWarmSingleTenant; context.Background() drops the sentinel")
+		"prepareRuntime must pass its own context to the start phase; context.Background() drops the sentinel")
 }
 
 const (
@@ -338,7 +340,7 @@ const (
 )
 
 // staticDBConfigProvider resolves a usable single-tenant config, or fails with err
-// when set — the two outcomes that make preWarmSingleTenant succeed or return an error.
+// when set — the two outcomes that make the database pre-warm succeed or return an error.
 type staticDBConfigProvider struct{ err error }
 
 func (p staticDBConfigProvider) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
@@ -392,7 +394,7 @@ func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 
 			if tt.messagingOnly {
 				// dbManager stays nil: this row isolates the messagingManager-only
-				// pre-warm failure path (attemptMessagingPreWarm in prewarm.go).
+				// pre-warm failure path (messagingSlot.start in slot.go).
 				source := &failingBrokerURLProvider{}
 				a.messagingManager = newFailingConsumerManager(t, rec, source)
 				wantErrSubstring = errBrokerLookupFailed.Error()

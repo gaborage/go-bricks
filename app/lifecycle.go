@@ -66,37 +66,25 @@ func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, id
 // startup context: components it starts that outlive startup inherit that
 // context's values rather than beginning from a bare context.Background().
 // AMQP consumers are the one exception: they outlive prepareRuntime itself
-// and are stopped by shutdownConsumers (ADR-029), so they inherit only ctx's
-// values, never its cancellation.
+// and are stopped by the messaging slot's stop phase (ADR-029), so they inherit
+// only ctx's values, never its cancellation — see messagingSlot.start.
 func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.buildMessagingDeclarations(); err != nil {
 		return err
 	}
 
-	decls := a.messagingDeclarations
-
-	if err := a.assertMessagingConfiguredIfDeclared(decls); err != nil {
+	if err := a.assertMessagingConfiguredIfDeclared(a.messagingDeclarations); err != nil {
 		return err
 	}
 
-	// Values only, no cancellation: consumers outlive prepareRuntime and are stopped by
-	// shutdownConsumers (ADR-029), never by the startup context.
-	if err := a.prepareRuntimeConsumers(context.WithoutCancel(ctx), decls); err != nil {
+	if err := a.startSlots(ctx); err != nil {
 		return err
 	}
 
-	if err := a.prepareStreamConsumers(ctx); err != nil {
-		return err
-	}
-
-	// Single-tenant only — preWarmSingleTenant is a safe no-op when neither manager
-	// was built (attemptDatabasePreWarm/attemptMessagingPreWarm nil-check their own
-	// manager and DEBUG-log "unavailable").
-	if !a.cfg.Multitenant.Enabled {
-		if err := a.preWarmSingleTenant(ctx, decls); err != nil {
-			a.logger.Warn().Err(err).Msg("Pre-warming completed with warnings")
-		}
-	}
+	// The streams slot only builds its manager in start, so the probe set is collected again
+	// here rather than at build time. Safe because prepareRuntime is single-threaded and
+	// completes before the server starts serving /ready.
+	a.healthProbes = a.collectProbes()
 
 	// Register debug endpoints if enabled
 	if err := a.registerDebugHandlers(); err != nil {
@@ -119,6 +107,38 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	a.startMaintenanceLoops()
 
 	return nil
+}
+
+// startSlots runs every kind's start phase in registration order. A fatal error aborts
+// startup at the kind that reported it, so nothing after it runs. Advisory errors — the
+// best-effort single-tenant pre-warms — are aggregated into the one WARN prepareRuntime has
+// always emitted, and never fail startup.
+func (a *App) startSlots(ctx context.Context) error {
+	var advisories []error
+	for _, slot := range a.slots {
+		advisory, fatal := slot.start(ctx)
+		if fatal != nil {
+			return fatal
+		}
+		if advisory != nil {
+			advisories = append(advisories, advisory)
+		}
+	}
+
+	if len(advisories) > 0 {
+		a.logger.Warn().
+			Err(fmt.Errorf("pre-warming issues (non-fatal): %w", errors.Join(advisories...))).
+			Msg("Pre-warming completed with warnings")
+	}
+	return nil
+}
+
+// stopSlots halts every kind's inbound work in registration order, before modules are torn
+// down (ADR-029). Connections stay open — the close phase, after module Shutdown, owns those.
+func (a *App) stopSlots(ctx context.Context) {
+	for _, slot := range a.slots {
+		slot.stop(ctx)
+	}
 }
 
 // checkRouteConflicts fails startup when two registrations claimed the same
@@ -492,11 +512,10 @@ func (a *App) Shutdown(ctx context.Context) error {
 		}, &errs)
 	}
 
-	// 2. Stop AMQP consumers from accepting new messages (connections are closed later via
-	//    the messaging-manager closer). Done before module shutdown so the framework stops
-	//    delivering fresh messages to modules that are about to be torn down.
-	a.shutdownConsumers()
-	a.shutdownStreamConsumers()
+	// 2. Stop each kind's inbound work (connections are closed later, in step 6, via the
+	//    slots' closers). Done before module shutdown so the framework stops delivering fresh
+	//    messages to modules that are about to be torn down.
+	a.stopSlots(ctx)
 
 	// 3. Shut down modules — no new HTTP requests or AMQP deliveries are admitted at this
 	//    point. AMQP handlers already in flight may still be unwinding after cancellation.
