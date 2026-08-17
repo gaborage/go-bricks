@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -535,116 +534,31 @@ func (a *App) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// dbConnectionsKey is the DbManager.Stats() entry publicDBStats withholds from /ready.
-const dbConnectionsKey = "connections"
-
-// publicDBStats renders db_stats for the unauthenticated /ready body: every scalar counter,
-// never the per-connection array.
-//
-// SECURITY: DbManager.Stats()["connections"] holds one entry per live pooled connection, and
-// each entry's "key" is the resourcepool key — the tenant ID in a multi-tenant deployment,
-// the named-database key otherwise — alongside last_used and idle_duration. /ready carries no
-// authentication and no IP allowlist, and its throttles are two IP-keyed rate limits
-// (app.rate.limit, koanf default 100 rps; app.rate.ippreguard.threshold, koanf default
-// 2000 rps/IP) that a Go-assembled config leaves at zero entirely (ADR-049) — no barrier to
-// enumeration either way — so polling it enumerated which tenants were active and when each
-// was last served.
-//
-// The redaction belongs at this render site and not in DbManager.Stats() or the probe: the
-// access-controlled <debug.pathprefix>/health-debug renders that same details map and
-// operators need the per-key detail there, so this copies rather than mutating the caller's
-// map.
-func publicDBStats(details map[string]any) map[string]any {
-	public := make(map[string]any, len(details))
-	maps.Copy(public, details)
-	delete(public, dbConnectionsKey)
-	return public
-}
-
-// streamsOffsetsKey is the streams.Manager.Stats() entry publicStreamsStats withholds
-// from /ready.
-const streamsOffsetsKey = "stored_offsets"
-
-// publicStreamsStats renders streams_stats for the unauthenticated /ready body: the
-// scalar counters, never the per-consumer offset map.
-//
-// SECURITY: Manager.Stats()["stored_offsets"] is keyed "<stream>/<consumer>" — the
-// declared stream and consumer-group names, which are internal topology and usually
-// name the domain — and its values are live offsets, so differencing two polls of an
-// endpoint with no authentication and no IP allowlist yields the per-stream message
-// rate. Every other component publishes only counters here; this is the one whose
-// stats carry identifiers.
-//
-// Like publicDBStats, the redaction belongs at this render site rather than in
-// Manager.Stats() or the probe: the access-controlled <debug.pathprefix>/health-debug
-// renders the same details map and operators need the offsets there, so this copies
-// rather than mutating the caller's map.
-func publicStreamsStats(details map[string]any) map[string]any {
-	public := make(map[string]any, len(details))
-	maps.Copy(public, details)
-	delete(public, streamsOffsetsKey)
-	return public
-}
-
-// readyCheck handles the health check endpoint
+// readyCheck handles the readiness endpoint: one probe run, one gate, one body (ADR-066).
+// The run stops at the first failing critical kind, so an outage costs the probes ahead of
+// it and no more.
 func (a *App) readyCheck(c server.HandlerContext) error {
 	ctx := c.RequestContext()
+	report, blocking, found := runUntilBlocking(ctx, a.healthProbes)
 
-	componentStatus := make(map[string]HealthStatus, len(a.healthProbes))
-	for _, probe := range a.healthProbes {
-		result := probe.Run(ctx)
-		componentStatus[result.Name] = result
-		if result.Err != nil && result.Critical {
-			// /ready is unauthenticated and the limiters do not exempt it, but they key probes
-			// by client IP (probeSkipper skips tenant resolution, not the limiters), so one
-			// source can still abandon many requests in a row. That IP is derived through the
-			// trusted-proxy chain (ADR-057), so only a caller already inside a default-trusted
-			// range (loopback, link-local, RFC1918, IPv6 ULA) can still choose its own key, and
-			// the budget is per-source either way. An abandoned request — the
-			// caller's own context canceled, and the probe reports that same context.Canceled —
-			// is not a readiness incident, so it logs WARN, not ERROR. The caller's context must
-			// actually be done: a probe that reports context.Canceled while the request is still
-			// live was canceled from inside, which is a genuine incident and stays ERROR.
-			event := a.logger.Error()
-			if errors.Is(ctx.Err(), context.Canceled) && errors.Is(result.Err, context.Canceled) {
-				event = a.logger.Warn()
-			}
-			event.Err(result.Err).Str("component", result.Name).Msg("Readiness check failed")
-			return c.JSON(http.StatusServiceUnavailable, map[string]any{
-				statusKey:   "not ready",
-				result.Name: result.Status,
-				errorKey:    publicProbeError(&result),
-			})
+	if found {
+		// /ready is unauthenticated and the limiters do not exempt it, but they key probes
+		// by client IP (probeSkipper skips tenant resolution, not the limiters), so one
+		// source can still abandon many requests in a row. That IP is derived through the
+		// trusted-proxy chain (ADR-057), so only a caller already inside a default-trusted
+		// range (loopback, link-local, RFC1918, IPv6 ULA) can still choose its own key, and
+		// the budget is per-source either way. An abandoned request — the
+		// caller's own context canceled, and the probe reports that same context.Canceled —
+		// is not a readiness incident, so it logs WARN, not ERROR. The caller's context must
+		// actually be done: a probe that reports context.Canceled while the request is still
+		// live was canceled from inside, which is a genuine incident and stays ERROR.
+		event := a.logger.Error()
+		if errors.Is(ctx.Err(), context.Canceled) && errors.Is(blocking.Err, context.Canceled) {
+			event = a.logger.Warn()
 		}
+		event.Err(blocking.Err).Str("component", blocking.Name).Msg("Readiness check failed")
+		return c.JSON(http.StatusServiceUnavailable, notReadyBody(&blocking))
 	}
 
-	dbStatus, dbRawStats := componentReport(componentStatus, componentDatabase)
-	dbStats := publicDBStats(dbRawStats)
-	messagingStatus, messagingStats := componentReport(componentStatus, componentMessaging)
-	cacheStatus, cacheStats := componentReport(componentStatus, componentCache)
-
-	body := map[string]any{
-		statusKey:          readyStatus,
-		"time":             time.Now().Unix(),
-		componentDatabase:  dbStatus,
-		"db_stats":         dbStats,
-		componentMessaging: messagingStatus,
-		"messaging_stats":  messagingStats,
-		componentCache:     cacheStatus,
-		"cache_stats":      cacheStats,
-		"app": map[string]any{
-			"name":        a.cfg.App.Name,
-			"environment": a.cfg.App.Env,
-			"version":     a.cfg.App.Version,
-		},
-	}
-
-	// Streams are reported only where they exist: the probe is registered at
-	// runtime, so services that declare no streams keep the body they had.
-	if streamsStatus, streamsStats := componentReport(componentStatus, componentStreams); streamsStatus != disabledStatus {
-		body[componentStreams] = streamsStatus
-		body["streams_stats"] = publicStreamsStats(streamsStats)
-	}
-
-	return c.JSON(http.StatusOK, body)
+	return c.JSON(http.StatusOK, report.readyBody(&a.cfg.App, time.Now()))
 }

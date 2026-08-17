@@ -26,20 +26,3 @@ type HealthStatus struct {
 type Prober interface {
 	Run(ctx context.Context) HealthStatus
 }
-
-func getStatsOrEmpty(stats map[string]any) map[string]any {
-	if stats == nil {
-		return map[string]any{}
-	}
-	return stats
-}
-
-// componentReport resolves a component's status and stats for the /ready body,
-// reporting disabled when no probe is registered for it.
-func componentReport(all map[string]HealthStatus, name string) (status string, stats map[string]any) {
-	result := all[name]
-	if result.Status == "" {
-		result.Status = disabledStatus
-	}
-	return result.Status, getStatsOrEmpty(result.Details)
-}

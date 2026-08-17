@@ -26,19 +26,18 @@ const (
 	appVersionKey = "version"
 )
 
-// publicProjection copies the allowlisted counters, plus the mirrored status, out of a
-// kind's details. It copies rather than filtering in place because the debug view renders
+// publicProjection copies the allowlisted counters out of a kind's details and stamps the
+// kind's own status, so <name>_stats mirrors <name> even for a Prober that reports no
+// details at all. It copies rather than filtering in place because the debug view renders
 // that same map unredacted.
-func publicProjection(details map[string]any, allow []string) map[string]any {
+func publicProjection(result *HealthStatus, allow []string) map[string]any {
 	public := make(map[string]any, len(allow)+1)
 	for _, key := range allow {
-		if value, ok := details[key]; ok {
+		if value, ok := result.Details[key]; ok {
 			public[key] = value
 		}
 	}
-	if status, ok := details[statusKey]; ok {
-		public[statusKey] = status
-	}
+	public[statusKey] = result.Status
 	return public
 }
 
@@ -130,7 +129,7 @@ func (r readinessReport) readyBody(app *config.AppConfig, now time.Time) map[str
 	for i := range r {
 		result := &r[i]
 		body[result.status.Name] = result.status.Status
-		body[result.status.Name+statsSuffix] = publicProjection(result.status.Details, result.publicStats)
+		body[result.status.Name+statsSuffix] = publicProjection(&result.status, result.publicStats)
 	}
 	return body
 }

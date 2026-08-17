@@ -884,7 +884,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				assert.Equal(t, readyStatus, body[statusKey])
 				assert.Equal(t, healthyStatus, body[componentDatabase])
-				stats, ok := body["db_stats"].(map[string]any)
+				stats, ok := body["database_stats"].(map[string]any)
 				assert.True(t, ok)
 				assert.Contains(t, stats, "active_connections")
 				assert.Equal(t, healthyStatus, body[componentMessaging])
@@ -892,6 +892,8 @@ func TestReadyCheckScenarios(t *testing.T) {
 				assert.True(t, ok)
 				assert.Contains(t, msgStats, "active_publishers")
 				assert.Equal(t, disabledStatus, body[componentCache])
+				assert.Equal(t, map[string]any{statusKey: disabledStatus}, body[cacheStatsKey],
+					"every registered kind renders both keys, disabled included")
 			},
 		},
 		{
@@ -909,6 +911,9 @@ func TestReadyCheckScenarios(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				assert.Equal(t, readyStatus, body[statusKey])
 				assert.Equal(t, notConfiguredStatus, body[componentDatabase])
+				dbStats, ok := body["database_stats"].(map[string]any)
+				require.True(t, ok, "an absent database still renders database_stats")
+				assert.Equal(t, notConfiguredStatus, dbStats[statusKey])
 				assert.NotContains(t, body, "error")
 			},
 		},

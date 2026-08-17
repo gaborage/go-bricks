@@ -917,44 +917,6 @@ func TestReadyCheckSanitizesCriticalProbeWithoutPublicError(t *testing.T) {
 	assert.Contains(t, event.err, "10.0.0.5:5432")
 }
 
-// TestPublicDBStatsDropsConnectionsOnACopy pins both halves of the render-site redaction:
-// the /ready view loses the per-connection array, and the map it was built from keeps it.
-// The copy is what keeps the redaction local to the unauthenticated body — the same map is
-// what /_sys/health-debug renders as the database component's details.
-func TestPublicDBStatsDropsConnectionsOnACopy(t *testing.T) {
-	details := map[string]any{
-		"active_connections": 2,
-		"max_connections":    25,
-		"idle_ttl_seconds":   3600,
-		statusKey:            healthyStatus,
-		dbConnectionsKey: []map[string]any{
-			{"key": "tenant-alpha", "last_used": "2026-08-05T10:00:00Z", "idle_duration": 4},
-		},
-	}
-
-	public := publicDBStats(details)
-
-	assert.Equal(t, map[string]any{
-		"active_connections": 2,
-		"max_connections":    25,
-		"idle_ttl_seconds":   3600,
-		statusKey:            healthyStatus,
-	}, public, "every scalar counter must survive; only the keyed array is withheld")
-
-	assert.Contains(t, details, dbConnectionsKey,
-		"redacting in place would strip the array from the debug endpoint's view too")
-}
-
-// TestPublicDBStatsPreservesAbsentDatabaseShape guards the published body for a deployment
-// with no database: db_stats {"status":"disabled"} rather than null or a missing key.
-func TestPublicDBStatsPreservesAbsentDatabaseShape(t *testing.T) {
-	assert.Equal(t, map[string]any{statusKey: disabledStatus},
-		publicDBStats(map[string]any{statusKey: disabledStatus}))
-
-	assert.Equal(t, map[string]any{}, publicDBStats(nil),
-		"a nil details map must still render {} — never JSON null")
-}
-
 // runReadyCheck drives readyCheck over httptest and decodes the JSON body.
 func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]any, code int) {
 	t.Helper()
@@ -985,9 +947,10 @@ func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{
 		probeDescription{
-			name:  componentStreams,
-			live:  func(context.Context) error { return nil },
-			stats: func() map[string]any { return map[string]any{"consumers": 2} },
+			name:        componentStreams,
+			publicStats: streamsPublicStats,
+			live:        func(context.Context) error { return nil },
+			stats:       func() map[string]any { return map[string]any{"consumers": 2} },
 		},
 	}}
 
@@ -996,82 +959,4 @@ func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, healthyStatus, body[componentStreams])
 	assert.Equal(t, map[string]any{statusKey: healthyStatus, "consumers": float64(2)}, body["streams_stats"])
-}
-
-// streamsProbeWithOffsets returns a probe whose details carry the identifier-bearing
-// stored_offsets map a real streams.Manager reports.
-func streamsProbeWithOffsets(streamName, consumerName string) Prober {
-	return probeDescription{
-		name: componentStreams,
-		live: func(context.Context) error { return nil },
-		stats: func() map[string]any {
-			return map[string]any{
-				"started":            true,
-				"consumers":          1,
-				streamsOffsetsKey:    map[string]int64{streamName + "/" + consumerName: 4242},
-				"offset_store_count": 500,
-			}
-		},
-	}
-}
-
-// TestReadyCheckWithholdsStreamIdentifiers is the /ready half of the disclosure
-// guard: the unauthenticated body must carry the counters but never the stream or
-// consumer-group names, and never the live offsets that differencing two polls
-// would turn into a per-stream message rate.
-func TestReadyCheckWithholdsStreamIdentifiers(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
-	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{
-		streamsProbeWithOffsets("payments-ledger", "fraud-scoring"),
-	}}
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
-	w := httptest.NewRecorder()
-	require.NoError(t, app.readyCheck(server.NewHandlerContextForTest(w, req, cfg)))
-
-	body := w.Body.String()
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.NotContains(t, body, "payments-ledger", "the declared stream name must not reach an unauthenticated body")
-	assert.NotContains(t, body, "fraud-scoring", "the consumer-group name must not reach an unauthenticated body")
-	assert.NotContains(t, body, streamsOffsetsKey)
-	assert.NotContains(t, body, "4242", "live offsets must not reach an unauthenticated body")
-
-	var decoded map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &decoded))
-	stats, ok := decoded["streams_stats"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, float64(1), stats["consumers"], "the counters survive the filter")
-	assert.Equal(t, true, stats["started"])
-}
-
-// TestHealthDebugRetainsStreamIdentifiers is the other half: the access-controlled
-// debug endpoint still renders the offsets operators need.
-func TestHealthDebugRetainsStreamIdentifiers(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
-	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{
-		streamsProbeWithOffsets("payments-ledger", "fraud-scoring"),
-	}}
-
-	handlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, app.logger)
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
-	w := httptest.NewRecorder()
-	require.NoError(t, handlers.handleHealthDebug(server.NewHandlerContextForTest(w, req, nil)))
-
-	body := w.Body.String()
-	assert.Contains(t, body, streamsOffsetsKey)
-	assert.Contains(t, body, "payments-ledger/fraud-scoring")
-	assert.Contains(t, body, "4242")
-}
-
-func TestPublicStreamsStatsCopiesRatherThanMutates(t *testing.T) {
-	details := map[string]any{
-		statusKey:         healthyStatus,
-		streamsOffsetsKey: map[string]int64{"orders/projector": 7},
-	}
-
-	public := publicStreamsStats(details)
-
-	assert.NotContains(t, public, streamsOffsetsKey)
-	assert.Equal(t, healthyStatus, public[statusKey])
-	assert.Contains(t, details, streamsOffsetsKey, "the caller's map must not be mutated")
 }

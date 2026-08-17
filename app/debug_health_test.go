@@ -457,8 +457,8 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 }
 
 // TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem pins both halves of the
-// db_stats routing contract from a single DbManager. SECURITY: a pooled connection's key is
-// the resourcepool key — the tenant ID in a multi-tenant deployment — so /ready's 200 body
+// database_stats routing contract from a single DbManager. SECURITY: a pooled connection's
+// key is the resourcepool key — the tenant ID in a multi-tenant deployment — so /ready's 200 body
 // used to answer an unauthenticated, unthrottled caller with a live tenant enumeration plus
 // per-tenant timing. It must now carry the scalar counters only, while the access-controlled
 // /health-debug keeps the per-connection detail operators diagnose with. Redacting inside
@@ -486,7 +486,7 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 
 	// The premise the /ready assertions rest on: two distinct keys really are pooled, so
 	// their absence below is a redaction rather than an empty fixture asserting nothing.
-	statsConns, err := json.Marshal(dbManager.Stats()[dbConnectionsKey])
+	statsConns, err := json.Marshal(dbManager.Stats()[connectionsStatsKey])
 	require.NoError(t, err)
 	require.Contains(t, string(statsConns), tenantAlpha, "Stats() must still carry the pool keys")
 	require.Contains(t, string(statsConns), tenantBeta, "Stats() must still carry the pool keys")
@@ -509,13 +509,13 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 	require.NoError(t, json.Unmarshal(readyRec.Body.Bytes(), &readyBody))
 	assert.Equal(t, http.StatusOK, readyRec.Code)
 
-	dbStats, ok := readyBody["db_stats"].(map[string]any)
-	require.True(t, ok, "the 200 body must still carry db_stats")
+	dbStats, ok := readyBody["database_stats"].(map[string]any)
+	require.True(t, ok, "the 200 body must still carry database_stats")
 	assert.Contains(t, dbStats, "active_connections")
 	assert.Contains(t, dbStats, "max_connections")
 	assert.Contains(t, dbStats, "idle_ttl_seconds")
 	assert.Equal(t, healthyStatus, dbStats[statusKey])
-	assert.NotContains(t, dbStats, dbConnectionsKey,
+	assert.NotContains(t, dbStats, connectionsStatsKey,
 		"the per-connection array enumerates tenants on an unauthenticated endpoint")
 	assertReadyBodyOmits(t, readyBody, tenantAlpha, tenantBeta)
 
@@ -528,7 +528,7 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(debugRec.Body.Bytes(), &debugBody))
-	debugConns, err := json.Marshal(debugBody.Data.Components[componentDatabase].Details[dbConnectionsKey])
+	debugConns, err := json.Marshal(debugBody.Data.Components[componentDatabase].Details[connectionsStatsKey])
 	require.NoError(t, err)
 	assert.Contains(t, string(debugConns), tenantAlpha,
 		"/health-debug renders the probe's details; redacting in Stats() or the probe would gut it")

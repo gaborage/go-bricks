@@ -264,9 +264,9 @@ func TestReadinessViews(t *testing.T) {
 			wantSummary: HealthSummary{OverallStatus: healthyStatus, TotalProbes: 1, HealthyCount: 1},
 		},
 		{
-			// A Prober may report no Details at all. Both views must still render an object:
-			// the debug entry's nil guard, and a projection with nothing to carry over.
-			name: "prober_without_details_renders_an_empty_object",
+			// A Prober may report no Details at all. /ready still mirrors its status under
+			// <name>_stats, while the debug entry's nil guard renders an empty object.
+			name: "prober_without_details_mirrors_its_status",
 			probes: []Prober{
 				&foreignProbe{result: HealthStatus{Name: "vault", Status: healthyStatus}},
 			},
@@ -277,7 +277,7 @@ func TestReadinessViews(t *testing.T) {
 				timeKey:               fixedUnix,
 				"app":                 appBody,
 				"vault":               healthyStatus,
-				"vault" + statsSuffix: map[string]any{},
+				"vault" + statsSuffix: map[string]any{statusKey: healthyStatus},
 			},
 			wantComponents: map[string]wantComponent{
 				"vault": {status: healthyStatus, details: map[string]any{}},
@@ -472,7 +472,7 @@ func TestPublicProjectionKeepsOnlyAllowlistedKeys(t *testing.T) {
 		},
 	}
 
-	public := publicProjection(details, databasePublicStats)
+	public := publicProjection(&HealthStatus{Status: healthyStatus, Details: details}, databasePublicStats)
 
 	assert.Equal(t, map[string]any{
 		"active_connections": 2,
@@ -490,13 +490,17 @@ func TestPublicProjectionKeepsOnlyAllowlistedKeys(t *testing.T) {
 // framework, which declares no allowlist and therefore publishes its status alone.
 func TestPublicProjectionWithoutAnAllowlist(t *testing.T) {
 	assert.Equal(t, map[string]any{statusKey: disabledStatus},
-		publicProjection(map[string]any{statusKey: disabledStatus}, nil))
+		publicProjection(&HealthStatus{Status: disabledStatus, Details: map[string]any{statusKey: disabledStatus}}, nil))
 
 	assert.Equal(t, map[string]any{statusKey: healthyStatus},
-		publicProjection(map[string]any{statusKey: healthyStatus, "vault_addr": "10.0.0.9:8200"}, nil))
+		publicProjection(&HealthStatus{
+			Status:  healthyStatus,
+			Details: map[string]any{statusKey: healthyStatus, "vault_addr": "10.0.0.9:8200"},
+		}, nil))
 
-	assert.Equal(t, map[string]any{}, publicProjection(nil, databasePublicStats),
-		"a nil details map must still render {} — never JSON null")
+	assert.Equal(t, map[string]any{statusKey: healthyStatus},
+		publicProjection(&HealthStatus{Status: healthyStatus}, databasePublicStats),
+		"a nil details map must still render the mirrored status — never JSON null")
 }
 
 // TestReadyBodyPinsTheWireFormat is the one assertion whose expected side spells no
