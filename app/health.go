@@ -8,7 +8,11 @@ import (
 type HealthStatus struct {
 	// Name is interpolated into the unauthenticated /ready body by publicProbeError.
 	// Keep it a fixed component identifier — never a tenant, host, or database name.
-	Name    string
+	Name string
+	// Status is one of "healthy", "unhealthy", "not_configured", "disabled", "per_tenant". A
+	// component is failing iff Status == "unhealthy"; /ready answers 503 (and the debug
+	// summary counts an error) on failing && Critical — the gate keys off Status, not Err;
+	// framework probes always set Err alongside "unhealthy".
 	Status  string
 	Details map[string]any
 	Err     error

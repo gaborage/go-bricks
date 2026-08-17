@@ -46,10 +46,6 @@ const (
 	localHost      = "localhost"
 	amqpBrokerURL  = "amqp://broker"
 
-	// Component names (componentDatabase, componentMessaging defined in app.go)
-	messagingStatsKey = "messaging_stats"
-	cacheStatsKey     = "cache_stats"
-
 	// Redis coordinates the sanitized 503 body must never disclose.
 	redisProbePort    = "6379"
 	redisProbeAddress = localHost + ":" + redisProbePort
@@ -888,11 +884,11 @@ func TestReadyCheckScenarios(t *testing.T) {
 				assert.True(t, ok)
 				assert.Contains(t, stats, "active_connections")
 				assert.Equal(t, healthyStatus, body[componentMessaging])
-				msgStats, ok := body[messagingStatsKey].(map[string]any)
+				msgStats, ok := body["messaging_stats"].(map[string]any)
 				assert.True(t, ok)
 				assert.Contains(t, msgStats, "active_publishers")
 				assert.Equal(t, disabledStatus, body[componentCache])
-				assert.Equal(t, map[string]any{statusKey: disabledStatus}, body[cacheStatsKey],
+				assert.Equal(t, map[string]any{statusKey: disabledStatus}, body["cache_stats"],
 					"every registered kind renders both keys, disabled included")
 			},
 		},
@@ -944,7 +940,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				assert.Equal(t, readyStatus, body[statusKey])
 				assert.Equal(t, healthyStatus, body[componentDatabase])
 				assert.Equal(t, "disabled", body[componentMessaging])
-				msgStats, ok := body[messagingStatsKey].(map[string]any)
+				msgStats, ok := body["messaging_stats"].(map[string]any)
 				assert.True(t, ok)
 				assert.Equal(t, map[string]any{statusKey: disabledStatus}, msgStats)
 			},
@@ -961,7 +957,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				assert.Equal(t, readyStatus, body[statusKey])
 				assert.Equal(t, healthyStatus, body[componentCache])
-				cacheStats, ok := body[cacheStatsKey].(map[string]any)
+				cacheStats, ok := body["cache_stats"].(map[string]any)
 				require.True(t, ok, "cache_stats must be present in the ready body")
 				assert.Equal(t, healthyStatus, cacheStats[statusKey])
 				assert.Contains(t, cacheStats, "active_caches")
@@ -1006,7 +1002,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				assert.Equal(t, readyStatus, body[statusKey])
 				assert.Equal(t, unhealthyStatus, body[componentCache])
-				cacheStats, ok := body[cacheStatsKey].(map[string]any)
+				cacheStats, ok := body["cache_stats"].(map[string]any)
 				require.True(t, ok, "cache_stats must be present in the ready body")
 				assert.Equal(t, unhealthyStatus, cacheStats[statusKey])
 				assert.NotContains(t, body, errorKey)
@@ -1049,7 +1045,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				assert.Equal(t, readyStatus, body[statusKey])
 				assert.Equal(t, unhealthyStatus, body[componentCache])
-				cacheStats, ok := body[cacheStatsKey].(map[string]any)
+				cacheStats, ok := body["cache_stats"].(map[string]any)
 				require.True(t, ok, "cache_stats must be present in the ready body")
 				assert.Equal(t, unhealthyStatus, cacheStats[statusKey])
 				assert.NotContains(t, body, errorKey)
@@ -1084,7 +1080,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				assert.Equal(t, readyStatus, body[statusKey])
 				assert.Equal(t, disabledStatus, body[componentCache])
-				cacheStats, ok := body[cacheStatsKey].(map[string]any)
+				cacheStats, ok := body["cache_stats"].(map[string]any)
 				require.True(t, ok, "cache_stats must be present in the ready body")
 				assert.Equal(t, map[string]any{statusKey: disabledStatus}, cacheStats)
 			},

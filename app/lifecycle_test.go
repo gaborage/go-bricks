@@ -954,7 +954,12 @@ func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
 			name:        componentStreams,
 			publicStats: streamsPublicStats,
 			live:        func(context.Context) error { return nil },
-			stats:       func() map[string]any { return map[string]any{"consumers": 2} },
+			stats: func() map[string]any {
+				return map[string]any{
+					"consumers":      2,
+					"stored_offsets": map[string]any{"orders/consumer-a": int64(42)},
+				}
+			},
 		},
 	}}
 
@@ -963,4 +968,5 @@ func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code)
 	assert.Equal(t, healthyStatus, body[componentStreams])
 	assert.Equal(t, map[string]any{statusKey: healthyStatus, "consumers": float64(2)}, body["streams_stats"])
+	assert.NotContains(t, body["streams_stats"], "stored_offsets")
 }
