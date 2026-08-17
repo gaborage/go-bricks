@@ -136,12 +136,12 @@ func TestDetectPotentialLeaks(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		stacks   []GoroutineStack
+		stacks   []goroutineStack
 		expected int // number of leaks detected
 	}{
 		{
 			name: "no leaks",
-			stacks: []GoroutineStack{
+			stacks: []goroutineStack{
 				{ID: 1, State: "running", Function: mainFunctionRef},
 				{ID: 2, State: "running", Function: "runtime.main"},
 			},
@@ -149,11 +149,11 @@ func TestDetectPotentialLeaks(t *testing.T) {
 		},
 		{
 			name: "high function count leak",
-			stacks: func() []GoroutineStack {
-				var stacks []GoroutineStack
+			stacks: func() []goroutineStack {
+				var stacks []goroutineStack
 				// Create 12 goroutines with same function (>10 threshold)
 				for i := 1; i <= 12; i++ {
-					stacks = append(stacks, GoroutineStack{
+					stacks = append(stacks, goroutineStack{
 						ID:       i,
 						State:    "running",
 						Function: workerLoopRef,
@@ -165,7 +165,7 @@ func TestDetectPotentialLeaks(t *testing.T) {
 		},
 		{
 			name: "channel operation leaks",
-			stacks: []GoroutineStack{
+			stacks: []goroutineStack{
 				{ID: 1, State: chanReceive, Function: "worker.receive"},
 				{ID: 2, State: chanSendRef, Function: "worker.send"},
 				{ID: 3, State: "running", Function: mainFunctionRef},
@@ -174,7 +174,7 @@ func TestDetectPotentialLeaks(t *testing.T) {
 		},
 		{
 			name: "select statement leak",
-			stacks: []GoroutineStack{
+			stacks: []goroutineStack{
 				{ID: 1, State: "select", Function: "worker.select"},
 				{ID: 2, State: "running", Function: mainFunctionRef},
 			},
@@ -182,7 +182,7 @@ func TestDetectPotentialLeaks(t *testing.T) {
 		},
 		{
 			name: "network IO leak",
-			stacks: []GoroutineStack{
+			stacks: []goroutineStack{
 				{
 					ID:       1,
 					State:    ioWait,
@@ -208,7 +208,7 @@ func TestCountGoroutinesByFunction(t *testing.T) {
 		logger: logger.New("info", false),
 	}
 
-	stacks := []GoroutineStack{
+	stacks := []goroutineStack{
 		{Function: mainFunctionRef},
 		{Function: workerLoopRef},
 		{Function: workerLoopRef},
@@ -238,12 +238,12 @@ func TestCheckForLeak(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		stack    GoroutineStack
+		stack    goroutineStack
 		expected bool // whether leak is detected
 	}{
 		{
 			name: "high function count",
-			stack: GoroutineStack{
+			stack: goroutineStack{
 				ID:       1,
 				Function: workerLoopRef,
 				State:    "running",
@@ -252,7 +252,7 @@ func TestCheckForLeak(t *testing.T) {
 		},
 		{
 			name: "channel receive",
-			stack: GoroutineStack{
+			stack: goroutineStack{
 				ID:       2,
 				Function: "worker.receive",
 				State:    chanReceive,
@@ -261,7 +261,7 @@ func TestCheckForLeak(t *testing.T) {
 		},
 		{
 			name: "select statement",
-			stack: GoroutineStack{
+			stack: goroutineStack{
 				ID:       3,
 				Function: "worker.select",
 				State:    "select",
@@ -270,7 +270,7 @@ func TestCheckForLeak(t *testing.T) {
 		},
 		{
 			name: "network IO",
-			stack: GoroutineStack{
+			stack: goroutineStack{
 				ID:       4,
 				Function: netListenRef,
 				State:    ioWait,
@@ -280,7 +280,7 @@ func TestCheckForLeak(t *testing.T) {
 		},
 		{
 			name: "normal running goroutine",
-			stack: GoroutineStack{
+			stack: goroutineStack{
 				ID:       5,
 				Function: mainFunctionRef,
 				State:    "running",
@@ -310,13 +310,13 @@ func TestCheckHighFunctionCount(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		stack          GoroutineStack
+		stack          goroutineStack
 		functionCounts map[string]int
 		expectedLeak   bool
 	}{
 		{
 			name: "above threshold",
-			stack: GoroutineStack{
+			stack: goroutineStack{
 				ID:       1,
 				Function: workerLoopRef,
 			},
@@ -325,7 +325,7 @@ func TestCheckHighFunctionCount(t *testing.T) {
 		},
 		{
 			name: "at threshold",
-			stack: GoroutineStack{
+			stack: goroutineStack{
 				ID:       2,
 				Function: workerLoopRef,
 			},
@@ -334,7 +334,7 @@ func TestCheckHighFunctionCount(t *testing.T) {
 		},
 		{
 			name: "below threshold",
-			stack: GoroutineStack{
+			stack: goroutineStack{
 				ID:       3,
 				Function: mainFunctionRef,
 			},
@@ -390,7 +390,7 @@ func TestCheckChannelOperations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stack := GoroutineStack{
+			stack := goroutineStack{
 				ID:       1,
 				Function: testFuncRef,
 				State:    tt.state,
@@ -435,7 +435,7 @@ func TestCheckSelectStatement(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stack := GoroutineStack{
+			stack := goroutineStack{
 				ID:       1,
 				Function: testFuncRef,
 				State:    tt.state,
@@ -490,7 +490,7 @@ func TestCheckNetworkIO(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stack := GoroutineStack{
+			stack := goroutineStack{
 				ID:       1,
 				Function: testFuncRef,
 				State:    tt.state,

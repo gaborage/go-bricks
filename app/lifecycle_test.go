@@ -351,15 +351,19 @@ func (p staticDBConfigProvider) DBConfig(context.Context, string) (*config.Datab
 // TestPrepareRuntimeWarnsOnlyWhenPreWarmFails pins both directions of prepareRuntime's
 // pre-warm error check: a failed pre-warm must surface as a WARN carrying the cause,
 // and a clean one must stay silent. Startup succeeds either way — pre-warming is
-// advisory, never fatal.
+// advisory, never fatal. The messaging-only row also pins the pre-warm gate's OR:
+// dbManager stays nil there, so a WARN can only originate from the messagingManager
+// arm — proving that arm alone opens the gate.
 func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 	tests := []struct {
-		configErr error
-		name      string
-		wantWarn  bool
+		configErr     error
+		name          string
+		wantWarn      bool
+		messagingOnly bool
 	}{
 		{name: "failed_prewarm_warns", configErr: errors.New(preWarmFailureMarker), wantWarn: true},
 		{name: "successful_prewarm_stays_silent", configErr: nil, wantWarn: false},
+		{name: "messaging_manager_alone_still_prewarms", messagingOnly: true, wantWarn: true},
 	}
 
 	for _, tt := range tests {
@@ -371,14 +375,24 @@ func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 			rec := &recLogger{}
 			a := newLifecycleCheckAppWithLogger(t, cfg, rec)
 
-			connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-				return dbtesting.NewTestDB(dbTypePostgres), nil
-			}
-			dbManager := database.NewDbManager(staticDBConfigProvider{err: tt.configErr}, rec,
-				database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, connector)
-			t.Cleanup(func() { _ = dbManager.Close() })
+			wantErrSubstring := preWarmFailureMarker
 
-			a.dbManager = dbManager
+			if tt.messagingOnly {
+				// dbManager stays nil: this row isolates the pre-warm gate's
+				// messagingManager-only arm (lifecycle.go).
+				source := &failingBrokerURLProvider{}
+				a.messagingManager = newFailingConsumerManager(t, rec, source)
+				wantErrSubstring = errBrokerLookupFailed.Error()
+			} else {
+				connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+					return dbtesting.NewTestDB(dbTypePostgres), nil
+				}
+				dbManager := database.NewDbManager(staticDBConfigProvider{err: tt.configErr}, rec,
+					database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, connector)
+				t.Cleanup(func() { _ = dbManager.Close() })
+
+				a.dbManager = dbManager
+			}
 
 			require.NoError(t, a.prepareRuntime(context.Background()),
 				"pre-warming trouble is advisory: startup completes either way")
@@ -388,7 +402,7 @@ func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 				"the pre-warm WARN must track whether pre-warming actually failed")
 			if tt.wantWarn {
 				assert.Equal(t, "warn", event.level)
-				assert.Contains(t, event.err, preWarmFailureMarker,
+				assert.Contains(t, event.err, wantErrSubstring,
 					"the WARN must carry the pre-warm error, not just announce one")
 			}
 		})

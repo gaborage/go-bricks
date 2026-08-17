@@ -10,8 +10,6 @@ import (
 
 // Options contains optional dependencies for creating an App instance
 type Options struct {
-	Database               database.Interface
-	MessagingClient        messaging.Client
 	SignalHandler          SignalHandler
 	TimeoutProvider        TimeoutProvider
 	Server                 ServerRunner

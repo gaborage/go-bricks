@@ -26,13 +26,13 @@ func (d *DebugHandlers) handleGoroutines(c server.HandlerContext) error {
 		return d.handleGoroutinesText(c)
 	}
 
-	goroutineInfo, err := d.analyzeGoroutines(includeStacks, detectLeaks)
+	info, err := d.analyzeGoroutines(includeStacks, detectLeaks)
 	if err != nil {
 		resp := d.newDebugResponse(start, nil, err)
 		return c.JSON(http.StatusInternalServerError, resp)
 	}
 
-	resp := d.newDebugResponse(start, goroutineInfo, nil)
+	resp := d.newDebugResponse(start, info, nil)
 	return c.JSON(http.StatusOK, resp)
 }
 
@@ -49,8 +49,8 @@ func (d *DebugHandlers) handleGoroutinesText(c server.HandlerContext) error {
 }
 
 // analyzeGoroutines performs comprehensive goroutine analysis
-func (d *DebugHandlers) analyzeGoroutines(includeStacks, detectLeaks bool) (*GoroutineInfo, error) {
-	info := &GoroutineInfo{
+func (d *DebugHandlers) analyzeGoroutines(includeStacks, detectLeaks bool) (*goroutineInfo, error) {
+	info := &goroutineInfo{
 		Count:      runtime.NumGoroutine(),
 		ByState:    make(map[string]int),
 		ByFunction: make(map[string]int),
@@ -86,9 +86,9 @@ func (d *DebugHandlers) analyzeGoroutines(includeStacks, detectLeaks bool) (*Gor
 }
 
 // parseGoroutineDump parses the goroutine dump text into structured data
-func (d *DebugHandlers) parseGoroutineDump(dump string) ([]GoroutineStack, error) {
-	var stacks []GoroutineStack
-	var currentStack *GoroutineStack
+func (d *DebugHandlers) parseGoroutineDump(dump string) ([]goroutineStack, error) {
+	var stacks []goroutineStack
+	var currentStack *goroutineStack
 
 	scanner := bufio.NewScanner(strings.NewReader(dump))
 	for scanner.Scan() {
@@ -114,7 +114,7 @@ func (d *DebugHandlers) parseGoroutineDump(dump string) ([]GoroutineStack, error
 }
 
 // processGoroutineHeader processes a goroutine header line and creates a new stack
-func (d *DebugHandlers) processGoroutineHeader(line string, currentStack *GoroutineStack, stacks *[]GoroutineStack) *GoroutineStack {
+func (d *DebugHandlers) processGoroutineHeader(line string, currentStack *goroutineStack, stacks *[]goroutineStack) *goroutineStack {
 	// Save previous stack if exists
 	if currentStack != nil {
 		*stacks = append(*stacks, *currentStack)
@@ -125,7 +125,7 @@ func (d *DebugHandlers) processGoroutineHeader(line string, currentStack *Gorout
 }
 
 // parseGoroutineHeader parses a goroutine header line: "goroutine 123 [running]:"
-func (d *DebugHandlers) parseGoroutineHeader(line string) *GoroutineStack {
+func (d *DebugHandlers) parseGoroutineHeader(line string) *goroutineStack {
 	parts := strings.Fields(line)
 	if len(parts) < 3 {
 		return nil
@@ -148,7 +148,7 @@ func (d *DebugHandlers) parseGoroutineHeader(line string) *GoroutineStack {
 
 	state = d.normalizeGoroutineState(state)
 
-	return &GoroutineStack{
+	return &goroutineStack{
 		ID:    id,
 		State: state,
 		Stack: []string{},
@@ -198,7 +198,7 @@ func (d *DebugHandlers) normalizeGoroutineState(state string) string {
 }
 
 // processStackFrame processes a stack frame line and updates the current stack
-func (d *DebugHandlers) processStackFrame(line string, currentStack *GoroutineStack) {
+func (d *DebugHandlers) processStackFrame(line string, currentStack *goroutineStack) {
 	if currentStack == nil {
 		return
 	}
@@ -214,8 +214,8 @@ func (d *DebugHandlers) processStackFrame(line string, currentStack *GoroutineSt
 }
 
 // detectPotentialLeaks identifies goroutines that might be leaked
-func (d *DebugHandlers) detectPotentialLeaks(stacks []GoroutineStack) []PotentialLeak {
-	var leaks []PotentialLeak
+func (d *DebugHandlers) detectPotentialLeaks(stacks []goroutineStack) []potentialLeak {
+	var leaks []potentialLeak
 	functionCounts := d.countGoroutinesByFunction(stacks)
 
 	for _, stack := range stacks {
@@ -228,7 +228,7 @@ func (d *DebugHandlers) detectPotentialLeaks(stacks []GoroutineStack) []Potentia
 }
 
 // countGoroutinesByFunction counts how many goroutines are running each function
-func (d *DebugHandlers) countGoroutinesByFunction(stacks []GoroutineStack) map[string]int {
+func (d *DebugHandlers) countGoroutinesByFunction(stacks []goroutineStack) map[string]int {
 	functionCounts := make(map[string]int)
 	for _, stack := range stacks {
 		functionCounts[stack.Function]++
@@ -237,7 +237,7 @@ func (d *DebugHandlers) countGoroutinesByFunction(stacks []GoroutineStack) map[s
 }
 
 // checkForLeak checks if a single goroutine shows signs of being leaked
-func (d *DebugHandlers) checkForLeak(stack GoroutineStack, functionCounts map[string]int) *PotentialLeak {
+func (d *DebugHandlers) checkForLeak(stack goroutineStack, functionCounts map[string]int) *potentialLeak {
 	if leak := d.checkHighFunctionCount(stack, functionCounts); leak != nil {
 		return leak
 	}
@@ -254,9 +254,9 @@ func (d *DebugHandlers) checkForLeak(stack GoroutineStack, functionCounts map[st
 }
 
 // checkHighFunctionCount detects when too many goroutines run the same function
-func (d *DebugHandlers) checkHighFunctionCount(stack GoroutineStack, functionCounts map[string]int) *PotentialLeak {
+func (d *DebugHandlers) checkHighFunctionCount(stack goroutineStack, functionCounts map[string]int) *potentialLeak {
 	if functionCounts[stack.Function] > 10 {
-		return &PotentialLeak{
+		return &potentialLeak{
 			ID:       stack.ID,
 			Function: stack.Function,
 			Reason:   "High count of goroutines with same function",
@@ -266,9 +266,9 @@ func (d *DebugHandlers) checkHighFunctionCount(stack GoroutineStack, functionCou
 }
 
 // checkChannelOperations detects goroutines stuck on channel operations
-func (d *DebugHandlers) checkChannelOperations(stack GoroutineStack) *PotentialLeak {
+func (d *DebugHandlers) checkChannelOperations(stack goroutineStack) *potentialLeak {
 	if strings.HasPrefix(stack.State, "chan receive") || strings.HasPrefix(stack.State, "chan send") {
-		return &PotentialLeak{
+		return &potentialLeak{
 			ID:       stack.ID,
 			Function: stack.Function,
 			Reason:   "Potentially stuck on channel operation",
@@ -278,9 +278,9 @@ func (d *DebugHandlers) checkChannelOperations(stack GoroutineStack) *PotentialL
 }
 
 // checkSelectStatement detects goroutines stuck in select statements
-func (d *DebugHandlers) checkSelectStatement(stack GoroutineStack) *PotentialLeak {
+func (d *DebugHandlers) checkSelectStatement(stack goroutineStack) *potentialLeak {
 	if strings.HasPrefix(stack.State, "select") {
-		return &PotentialLeak{
+		return &potentialLeak{
 			ID:       stack.ID,
 			Function: stack.Function,
 			Reason:   "Potentially stuck in select statement",
@@ -290,14 +290,14 @@ func (d *DebugHandlers) checkSelectStatement(stack GoroutineStack) *PotentialLea
 }
 
 // checkNetworkIO detects goroutines stuck on network IO operations
-func (d *DebugHandlers) checkNetworkIO(stack GoroutineStack) *PotentialLeak {
+func (d *DebugHandlers) checkNetworkIO(stack goroutineStack) *potentialLeak {
 	if !strings.HasPrefix(stack.State, "IO wait") {
 		return nil
 	}
 
 	for _, frame := range stack.Stack {
 		if strings.Contains(frame, "net.") {
-			return &PotentialLeak{
+			return &potentialLeak{
 				ID:       stack.ID,
 				Function: stack.Function,
 				Reason:   "Potentially stuck on network IO",
@@ -317,7 +317,7 @@ func (d *DebugHandlers) handleGC(c server.HandlerContext) error {
 	var gcStats debug.GCStats
 	debug.ReadGCStats(&gcStats)
 
-	gcInfo := &GCInfo{
+	info := &gcInfo{
 		Stats:       gcStats,
 		MemBefore:   memBefore.Alloc,
 		HeapObjects: memBefore.HeapObjects,
@@ -325,7 +325,7 @@ func (d *DebugHandlers) handleGC(c server.HandlerContext) error {
 		Forced:      false,
 	}
 
-	resp := d.newDebugResponse(start, gcInfo, nil)
+	resp := d.newDebugResponse(start, info, nil)
 	return c.JSON(http.StatusOK, resp)
 }
 
@@ -344,7 +344,7 @@ func (d *DebugHandlers) handleForceGC(c server.HandlerContext) error {
 	var gcStats debug.GCStats
 	debug.ReadGCStats(&gcStats)
 
-	gcInfo := &GCInfo{
+	info := &gcInfo{
 		Stats:       gcStats,
 		MemBefore:   memBefore.Alloc,
 		MemAfter:    memAfter.Alloc,
@@ -353,6 +353,6 @@ func (d *DebugHandlers) handleForceGC(c server.HandlerContext) error {
 		Forced:      true,
 	}
 
-	resp := d.newDebugResponse(start, gcInfo, nil)
+	resp := d.newDebugResponse(start, info, nil)
 	return c.JSON(http.StatusOK, resp)
 }

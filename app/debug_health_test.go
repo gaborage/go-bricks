@@ -392,7 +392,7 @@ func TestHealthDebugRendersOneEntryPerKind(t *testing.T) {
 				Error   string         `json:"error"`
 				Details map[string]any `json:"details"`
 			} `json:"components"`
-			Summary HealthSummary `json:"summary"`
+			Summary healthSummary `json:"summary"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &decoded))
@@ -403,7 +403,7 @@ func TestHealthDebugRendersOneEntryPerKind(t *testing.T) {
 	assert.Equal(t, errStreamsNotOpen.Error(), decoded.Data.Components[componentStreams].Error)
 	assert.Contains(t, decoded.Data.Components[componentStreams].Details, "stored_offsets",
 		"the access-controlled view keeps what the /ready projection withholds")
-	assert.Equal(t, HealthSummary{
+	assert.Equal(t, healthSummary{
 		OverallStatus: degradedStatus,
 		TotalProbes:   2,
 		HealthyCount:  1,
@@ -434,8 +434,8 @@ func TestHealthDebugRunsEveryProbeBehindAFailingCriticalKind(t *testing.T) {
 
 	var decoded struct {
 		Data struct {
-			Components map[string]ComponentHealth `json:"components"`
-			Summary    HealthSummary              `json:"summary"`
+			Components map[string]componentHealth `json:"components"`
+			Summary    healthSummary              `json:"summary"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &decoded))
@@ -444,11 +444,21 @@ func TestHealthDebugRunsEveryProbeBehindAFailingCriticalKind(t *testing.T) {
 	assert.ElementsMatch(t, []string{componentDatabase, componentCache}, slices.Collect(maps.Keys(decoded.Data.Components)),
 		"the kind behind the failing critical one must still be probed and reported")
 	assert.Equal(t, healthyStatus, decoded.Data.Components[componentCache].Status)
-	assert.Equal(t, HealthSummary{
+	assert.Equal(t, healthSummary{
 		OverallStatus: criticalStatus,
 		TotalProbes:   2,
 		HealthyCount:  1,
 		CriticalCount: 1,
 		ErrorCount:    1,
 	}, decoded.Data.Summary)
+}
+
+// keysOf returns a map's keys, for asserting a decoded JSON object's key set with
+// assert.ElementsMatch regardless of iteration order.
+func keysOf[K comparable, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

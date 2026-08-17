@@ -206,10 +206,12 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 
 	t.Run("options_present_but_filter_nil_uses_config", func(t *testing.T) {
 		// A populated Options struct that doesn't set LoggerFilterConfig must not
-		// short-circuit the config path — typical for apps that configure
-		// Database/Server via Options and masking via YAML.
+		// short-circuit the config path — typical for apps that configure a
+		// messaging factory via Options and masking via YAML.
 		got := resolveLoggerFilterConfig(
-			&Options{Database: nil}, // LoggerFilterConfig left zero
+			&Options{ // LoggerFilterConfig left zero
+				MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient { return nil },
+			},
 			&config.LogConfig{SensitiveFields: []string{"pan"}},
 		)
 		require.NotNil(t, got)

@@ -12,9 +12,10 @@ import (
 
 // defaultPreWarmReadinessTimeout is the fallback readiness budget when
 // messaging.reconnect.readytimeout carries no positive value (a directly
-// constructed App in tests, or a Builder assembled without WithConfig). Mirrors
-// config's defaultReadyTimeout (see config/validation.go) — pre-warm and the
-// first real publish converge on the same "how long is reasonable to wait for a
+// constructed App in tests — Builder.Build always resolves a config, via
+// WithConfig, before prepareRuntime is reachable). Mirrors config's
+// defaultReadyTimeout (see config/validation.go) — pre-warm and the first
+// real publish converge on the same "how long is reasonable to wait for a
 // cold client" budget.
 const defaultPreWarmReadinessTimeout = 5 * time.Second
 
