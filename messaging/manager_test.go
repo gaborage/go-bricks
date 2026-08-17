@@ -862,7 +862,10 @@ func TestNewMessagingManagerClosesCleanlyWithALiveCleanupLoop(t *testing.T) {
 
 // TestNewMessagingManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL pins that the advisory that
 // used to live in App.warnIfCleanupIntervalTooLate now fires from the manager, naming the
-// messaging.publisher keys.
+// messaging.publisher keys. The predicate itself is exhausted in
+// internal/resourcepool/cleanup_warning_test.go, so only what is manager-specific stays here:
+// the non-positive-CleanupInterval default is applied BEFORE the check (a raw 0 would be below
+// any TTL and stay silent), and a genuinely faster sweep still says nothing.
 func TestNewMessagingManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -870,10 +873,7 @@ func TestNewMessagingManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL(t *testing
 		idleTTL         time.Duration
 		wantWarn        bool
 	}{
-		{name: "interval_equals_ttl_warns", cleanupInterval: time.Minute, idleTTL: time.Minute, wantWarn: true},
-		{name: "interval_above_ttl_warns", cleanupInterval: 2 * time.Minute, idleTTL: time.Minute, wantWarn: true},
 		{name: "interval_below_ttl_silent", cleanupInterval: time.Minute, idleTTL: time.Hour, wantWarn: false},
-		{name: "unset_interval_takes_the_default_and_stays_silent", cleanupInterval: 0, idleTTL: time.Hour, wantWarn: false},
 		{name: "unset_interval_takes_the_default_and_warns_against_a_short_ttl", cleanupInterval: 0, idleTTL: time.Minute, wantWarn: true},
 	}
 

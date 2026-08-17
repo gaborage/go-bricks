@@ -215,6 +215,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetMessaging success without declarations", func(t *testing.T) {
 		mockClient := testmocks.NewMockAMQPClient()
+		mockClient.On("Close").Return(nil).Maybe()
 		msgManager := createTestMessagingManagerWithMock(t, mockClient)
 		provider := NewSingleTenantResourceProvider(nil, msgManager, nil, nil)
 
@@ -226,6 +227,7 @@ func TestSingleTenantResourceProvider(t *testing.T) {
 
 	t.Run("GetMessaging success with declarations", func(t *testing.T) {
 		mockClient := testmocks.NewMockAMQPClient()
+		mockClient.On("Close").Return(nil).Maybe()
 		msgManager := createTestMessagingManagerWithMock(t, mockClient)
 		declarations := &messaging.Declarations{}
 		provider := NewSingleTenantResourceProvider(nil, msgManager, nil, declarations)
@@ -526,12 +528,18 @@ func createTestDbManager(t *testing.T) *database.DbManager {
 	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
-	return database.NewDbManager(resourceSource, log,
+	m := database.NewDbManager(resourceSource, log,
 		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Hour},
 		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-			return &testmocks.MockDatabase{}, nil
+			db := &testmocks.MockDatabase{}
+			// The manager's Close (registered below) closes every connection it created, and
+			// the mock panics on an unexpected call. Maybe: a test that leased none closes none.
+			db.On("Close").Return(nil).Maybe()
+			return db, nil
 		},
 	)
+	t.Cleanup(func() { _ = m.Close() })
+	return m
 }
 
 func createTestDbManagerWithMock(t *testing.T, mockDB *testmocks.MockDatabase) *database.DbManager {
@@ -546,12 +554,16 @@ func createTestDbManagerWithMock(t *testing.T, mockDB *testmocks.MockDatabase) *
 	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
-	return database.NewDbManager(resourceSource, log,
+	// See createTestDbManager: the cleanup below closes what the manager created.
+	mockDB.On("Close").Return(nil).Maybe()
+	m := database.NewDbManager(resourceSource, log,
 		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Hour},
 		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
 			return mockDB, nil
 		},
 	)
+	t.Cleanup(func() { _ = m.Close() })
+	return m
 }
 
 func createTestDbManagerWithError(t *testing.T, err error) *database.DbManager {
@@ -566,12 +578,14 @@ func createTestDbManagerWithError(t *testing.T, err error) *database.DbManager {
 	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
-	return database.NewDbManager(resourceSource, log,
+	m := database.NewDbManager(resourceSource, log,
 		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Hour},
 		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
 			return nil, err
 		},
 	)
+	t.Cleanup(func() { _ = m.Close() })
+	return m
 }
 
 func createTestDbManagerWithNamedDBMock(t *testing.T, mockDB *testmocks.MockDatabase, namedDBs map[string]config.DatabaseConfig) *database.DbManager {
@@ -587,12 +601,16 @@ func createTestDbManagerWithNamedDBMock(t *testing.T, mockDB *testmocks.MockData
 	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
-	return database.NewDbManager(resourceSource, log,
+	// See createTestDbManager: the cleanup below closes what the manager created.
+	mockDB.On("Close").Return(nil).Maybe()
+	m := database.NewDbManager(resourceSource, log,
 		database.DbManagerOptions{MaxSize: 10, IdleTTL: time.Hour},
 		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
 			return mockDB, nil
 		},
 	)
+	t.Cleanup(func() { _ = m.Close() })
+	return m
 }
 
 func createTestDbManagerWithNamedDBError(t *testing.T, namedDBs map[string]config.DatabaseConfig, err error) *database.DbManager {
@@ -608,12 +626,14 @@ func createTestDbManagerWithNamedDBError(t *testing.T, namedDBs map[string]confi
 	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
-	return database.NewDbManager(resourceSource, log,
+	m := database.NewDbManager(resourceSource, log,
 		database.DbManagerOptions{MaxSize: 10, IdleTTL: time.Hour},
 		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
 			return nil, err
 		},
 	)
+	t.Cleanup(func() { _ = m.Close() })
+	return m
 }
 
 func createTestMessagingManager(t *testing.T) *messaging.Manager {
@@ -626,14 +646,23 @@ func createTestMessagingManager(t *testing.T) *messaging.Manager {
 	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
-	return messaging.NewMessagingManager(resourceSource, log,
+	m := messaging.NewMessagingManager(resourceSource, log,
 		messaging.ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour},
 		func(string, logger.Logger) messaging.AMQPClient {
-			return testmocks.NewMockAMQPClient()
+			client := testmocks.NewMockAMQPClient()
+			// The manager's Close (registered below) closes every publisher it created, and
+			// the mock panics on an unexpected call. Maybe: a test that leased none closes none.
+			client.On("Close").Return(nil).Maybe()
+			return client
 		},
 	)
+	t.Cleanup(func() { _ = m.Close() })
+	return m
 }
 
+// createTestMessagingManagerWithMock builds a manager whose every key resolves to mockClient.
+// The manager is closed at test end, which closes each publisher it created, so a testify
+// double passed here must allow Close.
 func createTestMessagingManagerWithMock(t *testing.T, mockClient messaging.AMQPClient) *messaging.Manager {
 	t.Helper()
 	cfg := &config.Config{
@@ -644,12 +673,14 @@ func createTestMessagingManagerWithMock(t *testing.T, mockClient messaging.AMQPC
 	resourceSource := config.NewTenantStore(cfg)
 	log := logger.New("debug", true)
 
-	return messaging.NewMessagingManager(resourceSource, log,
+	m := messaging.NewMessagingManager(resourceSource, log,
 		messaging.ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour},
 		func(string, logger.Logger) messaging.AMQPClient {
 			return mockClient
 		},
 	)
+	t.Cleanup(func() { _ = m.Close() })
+	return m
 }
 
 func createTestCacheManager(t *testing.T) *cache.CacheManager {
@@ -670,5 +701,6 @@ func createTestCacheManagerWithConnector(t *testing.T, connector cache.Connector
 		connector,
 	)
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
 	return manager
 }

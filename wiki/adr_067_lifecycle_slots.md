@@ -53,6 +53,9 @@ A **slot** owns one resource kind's whole application lifecycle.
    but stays the single place idle-cleanup eligibility is decided). `StartCleanup` stays
    exported and becomes idempotent, `StopCleanup` stays, and the
    cleanup-interval-vs-idle-TTL WARN moves beside the pool that owns both values.
+   `cache.NewCacheManager` owns the same two values and deliberately stays silent: its
+   shipped signature takes no logger, so giving it the WARN would be an apidiff break for
+   an advisory — the asymmetry is known and accepted.
    `App.startMaintenanceLoops`, `App.warnIfCleanupIntervalTooLate` and
    `App.shutdownManagers` delete.
 5. **Builder steps keep their names.** `CreateHealthProbes` and `RegisterClosers` iterate
