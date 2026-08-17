@@ -181,19 +181,15 @@ func (s *messagingSlot) preInit(ctx context.Context) error {
 // consumer bootstrap, whose failure is fatal once consumers were declared (#907), then the
 // single-tenant pre-warm, which is advisory.
 func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
-	decls := s.app.messagingDeclarations
-
 	// Values only, no cancellation: consumers outlive prepareRuntime and are stopped by
 	// the messaging slot's stop phase (shutdownConsumers, ADR-029), never by the startup
 	// context.
-	if err := s.app.prepareRuntimeConsumers(context.WithoutCancel(ctx), decls); err != nil {
+	if err := s.app.prepareRuntimeConsumers(context.WithoutCancel(ctx), s.app.messagingDeclarations); err != nil {
 		return nil, err
 	}
 
 	return s.app.preWarmKind(ctx, s.name(), componentMessaging,
-		s.app.messagingManager != nil, func(ctx context.Context) error {
-			return s.app.preWarmMessaging(ctx, decls)
-		}), nil
+		s.app.messagingManager != nil, s.app.preWarmMessaging), nil
 }
 
 func (s *messagingSlot) stop(context.Context) { s.app.shutdownConsumers() }

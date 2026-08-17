@@ -203,8 +203,8 @@ func TestMessagingSlotStartPropagatesContextCancellation(t *testing.T) {
 // declaredConsumerFixture returns declarationsWithConsumer() (see
 // messaging_setup_test.go) plus the queue its one consumer references, so
 // Declarations.Validate() — which rejects a consumer pointing at an
-// unregistered queue — accepts it. Shared by both preWarmMessaging tests
-// below, which need a non-nil, non-empty, genuinely valid declaration set.
+// unregistered queue — accepts it. Shared by every call site that needs a
+// non-nil, non-empty, genuinely valid declaration set.
 func declaredConsumerFixture(t *testing.T) *messaging.Declarations {
 	t.Helper()
 	decls := declarationsWithConsumer()
@@ -213,13 +213,24 @@ func declaredConsumerFixture(t *testing.T) *messaging.Declarations {
 	return decls
 }
 
-// TestPreWarmMessagingEnsuresDeclaredConsumers pins the success half of the
-// consumer-ensure branch in preWarmMessaging: a manager whose
-// EnsureConsumers actually succeeds must return nil and log the "Ensured
-// messaging consumers" INFO line before ever reaching the publisher. Negating
-// `err != nil` to `err == nil` there would turn this success into a spurious
-// error and skip the log line — see also the failure-side pin below.
-func TestPreWarmMessagingEnsuresDeclaredConsumers(t *testing.T) {
+// consumerBootstrapAnnouncements counts the app-layer lines announcing a consumer
+// bootstrap: the surviving one prepareRuntimeConsumers emits, plus the retired one
+// preWarmMessaging emitted from its own second EnsureConsumers call. The mock client's
+// ConsumeFromQueue count cannot stand in for it — the manager's replay cache absorbs a
+// duplicate EnsureConsumers silently, so the broker-facing calls read 1 whether the
+// bootstrap ran once or twice.
+func consumerBootstrapAnnouncements(rec *recLogger) int {
+	return loggedCount(rec, "Single-tenant consumers started successfully") +
+		loggedCount(rec, "Ensured messaging consumers")
+}
+
+// TestMessagingSlotStartBootstrapsConsumersOnce pins where the consumer bootstrap lives:
+// once, in prepareRuntimeConsumers. preWarmMessaging used to run EnsureConsumers a second
+// time on the way to the publisher, which announced the same bootstrap twice and left one
+// failure reachable under two different gradings — fatal from the bootstrap, advisory from
+// the pre-warm. The slot's start must now bootstrap exactly once and go straight on to
+// publisher readiness.
+func TestMessagingSlotStartBootstrapsConsumersOnce(t *testing.T) {
 	rec := &recLogger{}
 	client := testmocks.NewMockAMQPClient() // defaults to ready
 	client.ExpectClose(nil)
@@ -230,36 +241,14 @@ func TestPreWarmMessagingEnsuresDeclaredConsumers(t *testing.T) {
 	defer func() { _ = manager.Close() }()
 
 	a := newMinimalMessagingApp(rec, manager, &config.Config{})
+	a.messagingDeclarations = declaredConsumerFixture(t)
 
-	require.NoError(t, a.preWarmMessaging(context.Background(), declaredConsumerFixture(t)))
+	advisory, fatal := slotOf(t, a, componentMessaging).start(context.Background())
 
-	event, emitted := loggedEvent(rec, "Ensured messaging consumers")
-	require.True(t, emitted, "preWarmMessaging must log once EnsureConsumers succeeds")
-	assert.Equal(t, "info", event.level)
-}
-
-// TestPreWarmMessagingWrapsEnsureConsumersFailure pins the failure half of the
-// same branch: a manager whose EnsureConsumers fails must return an error
-// wrapping "failed to ensure consumers" and must never reach the publisher —
-// Publisher() re-resolves the broker URL on a cold key, so a call count stuck
-// at 1 proves it was never invoked. Negating `err != nil` to `err == nil`
-// there would swallow the failure, log the success line anyway, and fall
-// through into Publisher.
-func TestPreWarmMessagingWrapsEnsureConsumersFailure(t *testing.T) {
-	rec := &recLogger{}
-	source := &failingBrokerURLProvider{}
-	manager := newFailingConsumerManager(t, rec, source)
-	defer func() { _ = manager.Close() }()
-
-	a := newMinimalMessagingApp(rec, manager, &config.Config{})
-
-	err := a.preWarmMessaging(context.Background(), declaredConsumerFixture(t))
-
-	require.Error(t, err)
-	assert.ErrorIs(t, err, errBrokerLookupFailed)
-	assert.ErrorContains(t, err, "failed to ensure consumers")
-	assert.Equal(t, 1, source.callCount(), "Publisher must never be reached once EnsureConsumers fails")
-
-	_, emitted := loggedEvent(rec, "Ensured messaging consumers")
-	assert.False(t, emitted, "the success log must not fire when EnsureConsumers fails")
+	require.NoError(t, fatal)
+	require.NoError(t, advisory)
+	assert.Equal(t, 1, consumerBootstrapAnnouncements(rec),
+		"the consumer bootstrap runs once per start, in prepareRuntimeConsumers")
+	assert.Equal(t, 1, loggedCount(rec, "Pre-warmed messaging publisher"),
+		"the pre-warm still reaches the publisher it exists to warm")
 }

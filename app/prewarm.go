@@ -34,17 +34,11 @@ func (a *App) preWarmDatabase(ctx context.Context) error {
 	return nil
 }
 
-// preWarmMessaging ensures consumers for the fixed "" key and waits, bounded, for the
-// publisher to report ready. messagingSlot.start holds the manager nil check and the
-// deployment-mode gate.
-func (a *App) preWarmMessaging(ctx context.Context, decls *messaging.Declarations) error {
-	if decls != nil {
-		if err := a.messagingManager.EnsureConsumers(ctx, "", decls); err != nil {
-			return fmt.Errorf("failed to ensure consumers: %w", err)
-		}
-		a.logger.Info().Msg("Ensured messaging consumers")
-	}
-
+// preWarmMessaging waits, bounded, for the fixed "" key's publisher to report ready. It
+// verifies publisher connectivity only: the consumer bootstrap lives once, in
+// prepareRuntimeConsumers, which the messaging slot's start runs before this.
+// messagingSlot.start holds the manager nil check and the deployment-mode gate.
+func (a *App) preWarmMessaging(ctx context.Context) error {
 	client, release, err := a.messagingManager.Publisher(ctx, "")
 	if err != nil {
 		return fmt.Errorf("failed to get publisher: %w", err)
