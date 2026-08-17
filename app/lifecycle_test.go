@@ -532,7 +532,7 @@ func TestPrepareRuntimeSucceedsWithNoMessagingConfigured(t *testing.T) {
 		}
 	})
 
-	require.True(t, a.messagingInitializer.IsAvailable(),
+	require.NotNil(t, a.messagingManager,
 		"a messaging manager is built even with no broker configured — the premise of this guard")
 
 	require.NoError(t, a.prepareRuntime(context.Background()))

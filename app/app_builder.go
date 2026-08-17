@@ -247,7 +247,6 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 		}
 	}
 
-	b.app.messagingInitializer = NewMessagingInitializer(b.logger, b.app.messagingManager, b.cfg.Multitenant.Enabled)
 	b.app.connectionPreWarmer = NewConnectionPreWarmer(b.logger, b.app.dbManager, b.app.messagingManager)
 	// Thread the operator's readiness budget (messaging.reconnect.readytimeout)
 	// into the pre-warm wait. Set post-construction: NewConnectionPreWarmer is

@@ -76,7 +76,9 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
-	if err := a.prepareMessagingConsumers(decls); err != nil {
+	// context.Background(), not ctx: consumers outlive startup, and this call site has
+	// never inherited the startup context (unchanged by the helper fold).
+	if err := a.prepareRuntimeConsumers(context.Background(), decls); err != nil {
 		return err
 	}
 
@@ -156,25 +158,6 @@ func (a *App) applyGlobalMiddleware() error {
 	reg.RegisterGlobalMiddleware(mws...)
 	a.logger.Info().Int("count", len(mws)).Msg("Registered global middleware")
 	return nil
-}
-
-// prepareMessagingConsumers wires lazy consumer initialization and prepares
-// runtime consumers when a messaging initializer is available and there are
-// declarations to replay. It is a no-op otherwise.
-func (a *App) prepareMessagingConsumers(decls *messaging.Declarations) error {
-	if a.messagingInitializer == nil || !a.messagingInitializer.IsAvailable() || decls == nil {
-		return nil
-	}
-
-	a.messagingInitializer.LogDeploymentMode()
-
-	if a.resourceProvider != nil {
-		if err := a.messagingInitializer.SetupLazyConsumerInit(a.resourceProvider, decls); err != nil {
-			return err
-		}
-	}
-
-	return a.messagingInitializer.PrepareRuntimeConsumers(context.Background(), decls)
 }
 
 // assertMessagingConfiguredIfDeclared fails-fast in single-tenant mode when
