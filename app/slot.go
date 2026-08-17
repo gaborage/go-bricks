@@ -129,25 +129,8 @@ func (s *databaseSlot) preInit(ctx context.Context) error {
 // Advisory only: a cold database is a runtime condition, and pre-init has already made a
 // *misconfigured* one fatal.
 func (s *databaseSlot) start(ctx context.Context) (advisory, fatal error) {
-	if s.app.multiTenant() {
-		return nil, nil
-	}
-	if s.app.dbManager == nil {
-		s.app.logger.Debug().Msg("Skipping single-tenant database pre-warming: manager unavailable")
-		return nil, nil
-	}
-
-	if err := s.app.preWarmDatabase(ctx); err != nil {
-		if config.IsNotConfigured(err) {
-			s.app.logger.Debug().Msg("Skipping single-tenant database pre-warming: not configured")
-			return nil, nil
-		}
-		s.app.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant database connection")
-		return fmt.Errorf("database pre-warming failed: %w", err), nil
-	}
-
-	s.app.logger.Info().Msg("Pre-warmed single-tenant database connection")
-	return nil, nil
+	return s.app.preWarmKind(ctx, s.name(), "database connection",
+		s.app.dbManager != nil, s.app.preWarmDatabase), nil
 }
 
 func (s *databaseSlot) stop(context.Context) {}
@@ -194,25 +177,10 @@ func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
 		return nil, err
 	}
 
-	if s.app.multiTenant() {
-		return nil, nil
-	}
-	if s.app.messagingManager == nil {
-		s.app.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: manager unavailable")
-		return nil, nil
-	}
-
-	if err := s.app.preWarmMessaging(ctx, decls); err != nil {
-		if config.IsNotConfigured(err) {
-			s.app.logger.Debug().Msg("Skipping single-tenant messaging pre-warming: not configured")
-			return nil, nil
-		}
-		s.app.logger.Warn().Err(err).Msg("Failed to pre-warm single-tenant messaging")
-		return fmt.Errorf("messaging pre-warming failed: %w", err), nil
-	}
-
-	s.app.logger.Info().Msg("Pre-warmed single-tenant messaging")
-	return nil, nil
+	return s.app.preWarmKind(ctx, s.name(), componentMessaging,
+		s.app.messagingManager != nil, func(ctx context.Context) error {
+			return s.app.preWarmMessaging(ctx, decls)
+		}), nil
 }
 
 func (s *messagingSlot) stop(context.Context) { s.app.shutdownConsumers() }
@@ -318,6 +286,36 @@ func slotCloser[T any, P interface {
 		return namedCloser{}, false
 	}
 	return namedCloser{name: name, closer: mgr}, true
+}
+
+// preWarmKind is the arm the two single-tenant pre-warming kinds share. subject names the
+// thing warmed in the two operator-facing lines, which is not the kind's own name for the
+// database ("database connection" vs "messaging"); present is the kind's manager-built
+// verdict, which only the slot can read. Multi-tenant deployments resolve per tenant, so
+// the fixed "" key is never warmed; a not-configured kind is a silent skip; anything else
+// is advisory, never fatal.
+func (a *App) preWarmKind(ctx context.Context, kind, subject string, present bool,
+	warm func(context.Context) error,
+) error {
+	if a.multiTenant() {
+		return nil
+	}
+	if !present {
+		a.logger.Debug().Msgf("Skipping single-tenant %s pre-warming: manager unavailable", kind)
+		return nil
+	}
+
+	if err := warm(ctx); err != nil {
+		if config.IsNotConfigured(err) {
+			a.logger.Debug().Msgf("Skipping single-tenant %s pre-warming: not configured", kind)
+			return nil
+		}
+		a.logger.Warn().Err(err).Msgf("Failed to pre-warm single-tenant %s", subject)
+		return fmt.Errorf("%s pre-warming failed: %w", kind, err)
+	}
+
+	a.logger.Info().Msgf("Pre-warmed single-tenant %s", subject)
+	return nil
 }
 
 // preInitLease is the arm the two startup-fatal kinds share: an unconfigured kind is skipped

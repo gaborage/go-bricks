@@ -119,7 +119,8 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 // startSlots runs every kind's start phase in registration order. A fatal error aborts
 // startup at the kind that reported it, so nothing after it runs. Advisory errors — the
 // best-effort single-tenant pre-warms — are aggregated into the one WARN prepareRuntime has
-// always emitted, and never fail startup.
+// always emitted, and never fail startup. A fatal discards advisories already collected;
+// each kind logged its own WARN.
 func (a *App) startSlots(ctx context.Context) error {
 	var advisories []error
 	for _, slot := range a.slots {

@@ -313,6 +313,28 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
+// TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart pins the #907 grading end to
+// end, through the two arms that carry it: messagingSlot.start must return the bootstrap
+// failure as FATAL rather than advisory, and prepareRuntime must abort on it rather than
+// continue. A service that declared consumers and cannot start them would otherwise serve
+// HTTP while consuming nothing. The absent pre-warm WARN is the discriminator: graded as
+// advisory, the failure would be swallowed into that one line and startup would succeed.
+func TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart(t *testing.T) {
+	rec := &recLogger{}
+	a := newLifecycleCheckAppWithLogger(t, defaultTestConfig(), rec)
+	a.messagingManager = newFailingConsumerManager(t, rec, &failingBrokerURLProvider{})
+	a.messagingDeclarations = declaredConsumerFixture(t)
+
+	err := a.prepareRuntime(context.Background())
+
+	require.Error(t, err, "a declared-but-unstartable consumer set must abort startup")
+	assert.Contains(t, err.Error(), "failed to start single-tenant consumers")
+	assert.ErrorIs(t, err, errBrokerLookupFailed)
+
+	_, emitted := loggedEvent(rec, preWarmWarnMsg)
+	assert.False(t, emitted, "a fatal bootstrap aborts startup; it is never demoted to the pre-warm WARN")
+}
+
 // TestPrepareRuntimeReCollectsProbesAfterTheStartPhase pins the re-collect that replaced
 // prepareStreamConsumers' probe append. It starts from an emptied probe list so a deleted
 // re-collect cannot pass on the set the Builder already snapshotted: only the re-collect
