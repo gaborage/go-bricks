@@ -386,6 +386,7 @@ func TestRunInstallsALeaseScopeAndDrainsItAfterTheHandler(t *testing.T) {
 			handle: func(released *bool) Handler {
 				return func(ctx context.Context, _ logger.Logger, _ string) error {
 					leasescope.Register(ctx, func() { *released = true })
+					time.Sleep(2 * time.Millisecond) // outlast Windows' coarse clock so Duration reads > 0
 					return nil
 				}
 			},
@@ -395,6 +396,7 @@ func TestRunInstallsALeaseScopeAndDrainsItAfterTheHandler(t *testing.T) {
 			handle: func(released *bool) Handler {
 				return func(ctx context.Context, _ logger.Logger, _ string) error {
 					leasescope.Register(ctx, func() { *released = true })
+					time.Sleep(2 * time.Millisecond)
 					panic("after borrowing")
 				}
 			},
