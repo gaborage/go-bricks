@@ -112,6 +112,34 @@ func TestShutdownStopsServerBeforeModules(t *testing.T) {
 		"server must shut down before modules")
 }
 
+// TestShutdownStopsSlotsBeforeModules pins that the stop walk is wired into Shutdown at
+// all, and that ADR-029's order survives: every kind's inbound work is halted before any
+// module is torn down, so no module receives fresh work while it is shutting down. The
+// recording slots stand in for the real kinds because the property under test is the ORDER
+// of the two phases, not what either one does.
+func TestShutdownStopsSlotsBeforeModules(t *testing.T) {
+	order := []string{}
+	log := logger.New("error", false)
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	a := &App{
+		cfg:      cfg,
+		logger:   log,
+		registry: NewModuleRegistry(&ModuleDeps{Logger: log, Config: cfg}),
+		closers:  []namedCloser{},
+	}
+	a.slots = []resourceSlot{
+		&recordingSlot{kind: componentMessaging, order: &order},
+		&recordingSlot{kind: componentStreams, order: &order},
+	}
+	require.NoError(t, a.registry.Register(&recordingModule{onShutdown: func() {
+		order = append(order, "modules")
+	}}))
+
+	require.NoError(t, a.Shutdown(context.Background()))
+
+	assert.Equal(t, []string{"stop:messaging", "stop:streams", "modules"}, order)
+}
+
 func TestShutdownTiming(t *testing.T) {
 	// Test that the shutdown process completes within reasonable time
 	cfg := &config.Config{
@@ -199,6 +227,7 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 		server:   mockSrv,
 		closers:  []namedCloser{},
 	}
+	app.installSlots(slotInputs{})
 
 	// Call prepareRuntime
 	err = app.prepareRuntime(context.Background())
@@ -282,6 +311,47 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 	app := newLifecycleCheckApp(t, cfg)
 
 	require.NoError(t, app.prepareRuntime(context.Background()))
+}
+
+// TestPrepareRuntimeReCollectsProbesAfterTheStartPhase pins the re-collect that replaced
+// prepareStreamConsumers' probe append. It starts from an emptied probe list so a deleted
+// re-collect cannot pass on the set the Builder already snapshotted: only the re-collect
+// can put the classic kinds back.
+func TestPrepareRuntimeReCollectsProbesAfterTheStartPhase(t *testing.T) {
+	cfg := &config.Config{
+		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Multitenant: config.MultitenantConfig{Enabled: false},
+	}
+	a := newLifecycleCheckApp(t, cfg)
+	a.healthProbes = nil
+
+	require.NoError(t, a.prepareRuntime(context.Background()))
+
+	assert.Equal(t,
+		[]string{componentDatabase, componentMessaging, componentCache},
+		probeNames(t, a.healthProbes),
+		"the start phase must be followed by a fresh probe collection")
+}
+
+// TestPrepareRuntimeRequiresInstalledSlots pins the fail-fast half of the walk's
+// precondition, mirroring Builder.requireSlots. Without it a slot-less App would start no
+// kind at all and then overwrite its probe list with an empty one — a service booting green
+// with no database, no consumers and a /ready body that reports nothing.
+func TestPrepareRuntimeRequiresInstalledSlots(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	log := logger.New("error", false)
+	a := &App{
+		cfg:      cfg,
+		logger:   log,
+		registry: NewModuleRegistry(&ModuleDeps{Logger: log, Config: cfg}),
+		server:   newMockServer(),
+		closers:  []namedCloser{},
+	} // deliberately no installSlots
+
+	err := a.prepareRuntime(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "slots not installed before prepareRuntime")
 }
 
 type preWarmCtxSentinelKey struct{}
@@ -972,9 +1042,9 @@ func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]
 }
 
 // TestReadyCheckOmitsStreamsWhenNoneDeclared pins that a streams-free probe set renders
-// neither streams key: the kind reaches the body only where prepareStreamConsumers
-// registered its probe. The probe set is the real one, so the classic kinds render and the
-// two assertions below are not passing on an empty body.
+// neither streams key: the kind reaches the body only via the probe re-collect that
+// prepareRuntime runs after the start phase. The probe set is the real one, so the classic
+// kinds render and the two assertions below are not passing on an empty body.
 func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false)}

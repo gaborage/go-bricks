@@ -69,6 +69,13 @@ func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, id
 // and are stopped by the messaging slot's stop phase (ADR-029), so they inherit
 // only ctx's values, never its cancellation — see messagingSlot.start.
 func (a *App) prepareRuntime(ctx context.Context) error {
+	// Mirrors Builder.requireSlots: an empty walk would start no kind at all and then
+	// overwrite the probe list with an empty one, booting a service green with no database,
+	// no consumers and a /ready body that reports nothing.
+	if len(a.slots) == 0 {
+		return errors.New("slots not installed before prepareRuntime — CreateApp must run first")
+	}
+
 	if err := a.buildMessagingDeclarations(); err != nil {
 		return err
 	}
@@ -515,6 +522,8 @@ func (a *App) Shutdown(ctx context.Context) error {
 	// 2. Stop each kind's inbound work (connections are closed later, in step 6, via the
 	//    slots' closers). Done before module shutdown so the framework stops delivering fresh
 	//    messages to modules that are about to be torn down.
+	//    Deliberately unguarded, unlike prepareRuntime: teardown is best-effort and must not
+	//    fail on a hand-built App that never installed slots.
 	a.stopSlots(ctx)
 
 	// 3. Shut down modules — no new HTTP requests or AMQP deliveries are admitted at this

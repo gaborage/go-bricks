@@ -3311,7 +3311,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   internal helpers that happened to be exported. `MessagingInitializer` and
   `ConnectionPreWarmer` held a logger plus manager pointers `app.App` already holds and
   were each driven from a single startup line; they are now unexported `App` methods
-  (`prepareRuntimeConsumers`, `preWarmSingleTenant` and friends). `Options.Database` and
+  (`prepareRuntimeConsumers`, the slots' `start` phase and friends). `Options.Database` and
   `Options.MessagingClient` were read by no code path at all. The eight debug response
   types describe the JSON of `/_sys/health-debug`, `/_sys/goroutines` and `/_sys/gc`; they
   are unexported with their `json:` tags byte-identical. **No emitted JSON, status code or

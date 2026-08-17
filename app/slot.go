@@ -188,7 +188,8 @@ func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
 	decls := s.app.messagingDeclarations
 
 	// Values only, no cancellation: consumers outlive prepareRuntime and are stopped by
-	// shutdownConsumers (ADR-029), never by the startup context.
+	// the messaging slot's stop phase (shutdownConsumers, ADR-029), never by the startup
+	// context.
 	if err := s.app.prepareRuntimeConsumers(context.WithoutCancel(ctx), decls); err != nil {
 		return nil, err
 	}

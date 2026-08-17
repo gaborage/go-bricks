@@ -542,6 +542,69 @@ func TestStreamsSlotStartRegistersItsCloser(t *testing.T) {
 	})
 }
 
+// newStopSlotTestApp builds an App holding BOTH inbound-work managers behind a recording
+// logger. Both are present on purpose: each kind's stop line is then the only thing that
+// tells the two apart, so a slot wired to the other kind's teardown fails here.
+func newStopSlotTestApp(t *testing.T) (*App, *recLogger) {
+	t.Helper()
+
+	rec := &recLogger{}
+	cfg := defaultTestConfig()
+
+	client := testmocks.NewMockAMQPClient()
+	client.ExpectClose(nil)
+	messagingManager := messaging.NewMessagingManager(config.NewTenantStore(cfg), rec,
+		messaging.ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour},
+		func(string, logger.Logger) messaging.AMQPClient { return client })
+	t.Cleanup(func() { assert.NoError(t, messagingManager.Close()) })
+
+	streamsManager := streams.NewManager(streams.ManagerOptions{URI: unreachableStreamURI, Logger: rec})
+	t.Cleanup(func() { _ = streamsManager.Close() })
+
+	a := &App{cfg: cfg, logger: rec, messagingManager: messagingManager, streamsManager: streamsManager}
+	a.installSlots(slotInputs{})
+	return a, rec
+}
+
+// TestSlotStopDrivesItsOwnKindsTeardown pins the slot→teardown mapping the stop walk relies
+// on. Each kind's stop must halt its OWN inbound work and nothing else: with the two bodies
+// swapped, every kind still gets stopped by the full walk, so only running one slot's stop
+// in isolation — and demanding the other kind stayed untouched — tells the wiring apart.
+func TestSlotStopDrivesItsOwnKindsTeardown(t *testing.T) {
+	const (
+		amqpStopLine    = "Stopping messaging consumers"
+		streamsStopLine = "Stopping stream consumers"
+	)
+
+	t.Run("messaging_slot_stops_amqp_consumers_only", func(t *testing.T) {
+		a, rec := newStopSlotTestApp(t)
+
+		a.slots[1].stop(context.Background())
+
+		assert.True(t, loggedMsgContains(rec, amqpStopLine), "the messaging slot must stop AMQP consumers")
+		assert.False(t, loggedMsgContains(rec, streamsStopLine), "it must not reach into the streams kind")
+	})
+
+	t.Run("streams_slot_stops_stream_consumers_only", func(t *testing.T) {
+		a, rec := newStopSlotTestApp(t)
+
+		a.slots[3].stop(context.Background())
+
+		assert.True(t, loggedMsgContains(rec, streamsStopLine), "the streams slot must stop stream consumers")
+		assert.False(t, loggedMsgContains(rec, amqpStopLine), "it must not reach into the AMQP kind")
+	})
+
+	t.Run("database_and_cache_stop_nothing", func(t *testing.T) {
+		a, rec := newStopSlotTestApp(t)
+
+		a.slots[0].stop(context.Background())
+		a.slots[2].stop(context.Background())
+
+		assert.False(t, loggedMsgContains(rec, amqpStopLine))
+		assert.False(t, loggedMsgContains(rec, streamsStopLine))
+	})
+}
+
 // recordingSlot is a resourceSlot stand-in that records which phase ran on which kind, so
 // the walks can be pinned on order and short-circuiting without standing up four real
 // managers. Every field defaults to "this phase succeeds and does nothing".
