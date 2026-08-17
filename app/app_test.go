@@ -462,16 +462,15 @@ func newTestAppFixture(t *testing.T, opts ...fixtureOption) *testAppFixture {
 	srv := newMockServer()
 
 	app := &App{
-		cfg:                 cfg,
-		server:              srv,
-		logger:              log,
-		registry:            NewModuleRegistry(deps),
-		signalHandler:       &OSSignalHandler{},
-		timeoutProvider:     &StandardTimeoutProvider{},
-		dbManager:           dbManager,
-		messagingManager:    messagingManager,
-		resourceProvider:    resourceProvider,
-		connectionPreWarmer: NewConnectionPreWarmer(log, dbManager, messagingManager),
+		cfg:              cfg,
+		server:           srv,
+		logger:           log,
+		registry:         NewModuleRegistry(deps),
+		signalHandler:    &OSSignalHandler{},
+		timeoutProvider:  &StandardTimeoutProvider{},
+		dbManager:        dbManager,
+		messagingManager: messagingManager,
+		resourceProvider: resourceProvider,
 	}
 
 	app.messagingDeclarations = nil

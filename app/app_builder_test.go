@@ -535,18 +535,6 @@ func TestAppBuilderConfigureRuntimeHelpersErrors(t *testing.T) {
 	})
 }
 
-func TestAppBuilderConfigureRuntimeHelpersThreadsReadyTimeout(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Multitenant.Enabled = true // skip pre-initialization; only helper wiring is under test
-	cfg.Messaging.Reconnect.ReadyTimeout = 20 * time.Second
-
-	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: &App{}}
-	result := builder.ConfigureRuntimeHelpers()
-
-	require.NoError(t, result.err)
-	assert.Equal(t, 20*time.Second, result.app.connectionPreWarmer.readinessTimeout)
-}
-
 // TestAppBuilderConfigureRuntimeHelpersRejectsUntypedConnectionString pins ADR-050: with
 // the built-in connector, a connection string whose scheme inference (config/validation.go)
 // didn't recognize it and that carries no explicit type can never dispatch, so the builder

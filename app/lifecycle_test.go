@@ -25,6 +25,7 @@ import (
 
 const (
 	testApp = "test-app"
+	testKey = "test-key"
 )
 
 func TestShutdownTimeouts(t *testing.T) {
@@ -284,7 +285,7 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 type preWarmCtxSentinelKey struct{}
 
 // ctxRecordingDBConfigProvider captures the sentinel carried by the context that
-// reaches DBConfig — the first ctx-aware seam below PreWarmSingleTenant.
+// reaches DBConfig — the first ctx-aware seam below preWarmSingleTenant.
 type ctxRecordingDBConfigProvider struct {
 	mu   sync.Mutex
 	seen any
@@ -298,7 +299,7 @@ func (p *ctxRecordingDBConfigProvider) DBConfig(ctx context.Context, _ string) (
 }
 
 // TestPrepareRuntimePropagatesContextToPreWarm pins that prepareRuntime hands its
-// own ctx to PreWarmSingleTenant instead of a fresh context.Background(): a
+// own ctx to preWarmSingleTenant instead of a fresh context.Background(): a
 // sentinel value on the caller's context must survive down to the pre-warm
 // database seam. The value is the right observable because resourcepool detaches
 // cancellation with context.WithoutCancel, which preserves values — so a deadline
@@ -319,7 +320,6 @@ func TestPrepareRuntimePropagatesContextToPreWarm(t *testing.T) {
 	defer func() { _ = dbManager.Close() }()
 
 	a.dbManager = dbManager
-	a.connectionPreWarmer = NewConnectionPreWarmer(a.logger, dbManager, nil)
 
 	ctx := context.WithValue(context.Background(), preWarmCtxSentinelKey{}, "from-prepare-runtime")
 	require.NoError(t, a.prepareRuntime(ctx))
@@ -327,7 +327,7 @@ func TestPrepareRuntimePropagatesContextToPreWarm(t *testing.T) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	assert.Equal(t, "from-prepare-runtime", provider.seen,
-		"prepareRuntime must pass its own context to PreWarmSingleTenant; context.Background() drops the sentinel")
+		"prepareRuntime must pass its own context to preWarmSingleTenant; context.Background() drops the sentinel")
 }
 
 const (
@@ -338,7 +338,7 @@ const (
 )
 
 // staticDBConfigProvider resolves a usable single-tenant config, or fails with err
-// when set — the two outcomes that make PreWarmSingleTenant succeed or return an error.
+// when set — the two outcomes that make preWarmSingleTenant succeed or return an error.
 type staticDBConfigProvider struct{ err error }
 
 func (p staticDBConfigProvider) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
@@ -379,7 +379,6 @@ func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 			t.Cleanup(func() { _ = dbManager.Close() })
 
 			a.dbManager = dbManager
-			a.connectionPreWarmer = NewConnectionPreWarmer(rec, dbManager, nil)
 
 			require.NoError(t, a.prepareRuntime(context.Background()),
 				"pre-warming trouble is advisory: startup completes either way")
@@ -394,6 +393,33 @@ func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPrepareRuntimeSkipsPreWarmInMultiTenantMode pins the other half of the pre-warm
+// gate. Multi-tenant resources resolve per tenant, so the fixed "" key must never be
+// warmed at startup — a database whose config resolution always fails would emit the
+// pre-warm WARN if it were.
+func TestPrepareRuntimeSkipsPreWarmInMultiTenantMode(t *testing.T) {
+	cfg := &config.Config{
+		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Multitenant: config.MultitenantConfig{Enabled: true},
+	}
+	rec := &recLogger{}
+	a := newLifecycleCheckAppWithLogger(t, cfg, rec)
+
+	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+		return dbtesting.NewTestDB(dbTypePostgres), nil
+	}
+	dbManager := database.NewDbManager(staticDBConfigProvider{err: errors.New(preWarmFailureMarker)}, rec,
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute}, connector)
+	t.Cleanup(func() { _ = dbManager.Close() })
+
+	a.dbManager = dbManager
+
+	require.NoError(t, a.prepareRuntime(context.Background()))
+
+	_, emitted := loggedEvent(rec, preWarmWarnMsg)
+	assert.False(t, emitted, "multi-tenant startup must not pre-warm the fixed \"\" key")
 }
 
 // TestPrepareRuntimeSkipsCheckInMultiTenantMode verifies that the static check

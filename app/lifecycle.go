@@ -88,9 +88,10 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
-	if !a.cfg.Multitenant.Enabled && a.connectionPreWarmer != nil && a.connectionPreWarmer.IsAvailable() {
-		a.connectionPreWarmer.LogAvailability()
-		if err := a.connectionPreWarmer.PreWarmSingleTenant(ctx, decls); err != nil {
+	// Single-tenant only, and only when there is something to warm — with neither
+	// manager built the pass has nothing to do and stays silent.
+	if !a.cfg.Multitenant.Enabled && (a.dbManager != nil || a.messagingManager != nil) {
+		if err := a.preWarmSingleTenant(ctx, decls); err != nil {
 			a.logger.Warn().Err(err).Msg("Pre-warming completed with warnings")
 		}
 	}
