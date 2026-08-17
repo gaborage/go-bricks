@@ -1,5 +1,65 @@
 # Changelog
 
+## [0.59.0](https://github.com/gaborage/go-bricks/compare/v0.58.1...v0.59.0) (2026-08-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config,keystore:** keystore.secretminlength is a tri-state pointer ([#1039](https://github.com/gaborage/go-bricks/issues/1039))
+* **app:** validate the config on every construction path ([#1019](https://github.com/gaborage/go-bricks/issues/1019))
+* **config:** fail closed on database.tls misconfiguration ([#1005](https://github.com/gaborage/go-bricks/issues/1005))
+* **database:** require upsert conflict columns in the insert set ([#996](https://github.com/gaborage/go-bricks/issues/996))
+* **config:** infer type and validate vendor rules on dynamic configs ([#1002](https://github.com/gaborage/go-bricks/issues/1002))
+* **database:** reject conflict columns in the upsert update set on both vendors ([#991](https://github.com/gaborage/go-bricks/issues/991))
+* **migration:** redact role passwords before the newline split ([#989](https://github.com/gaborage/go-bricks/issues/989))
+* **cache:** add CompareAndDelete for safe conditional release ([#977](https://github.com/gaborage/go-bricks/issues/977))
+* **messaging:** consume RabbitMQ stream queues over AMQP 0.9.1 ([#967](https://github.com/gaborage/go-bricks/issues/967))
+* **server:** derive client IP through trusted proxies, not raw XFF ([#965](https://github.com/gaborage/go-bricks/issues/965))
+
+### Added
+
+* **app:** start native stream consumers during prepareRuntime ([#973](https://github.com/gaborage/go-bricks/issues/973)) ([371236a](https://github.com/gaborage/go-bricks/commit/371236afe467e151e58fb15fc8d0609badd7018e))
+* **cache:** add CompareAndDelete for safe conditional release ([#977](https://github.com/gaborage/go-bricks/issues/977)) ([fae813f](https://github.com/gaborage/go-bricks/commit/fae813f115e66c1aa98b6ad8976df65c5a33a856))
+* **config:** add the messaging.streams configuration block ([#972](https://github.com/gaborage/go-bricks/issues/972)) ([058a3a3](https://github.com/gaborage/go-bricks/commit/058a3a37e3d75827319e95e4fe96297dd6254660))
+* **messaging:** add stream declarations and offset positions ([#970](https://github.com/gaborage/go-bricks/issues/970)) ([4d16e36](https://github.com/gaborage/go-bricks/commit/4d16e36be0a0bc85b14da2fcb1bcabc290bc9373))
+* **messaging:** add the native stream consumption manager ([#971](https://github.com/gaborage/go-bricks/issues/971)) ([03c88b2](https://github.com/gaborage/go-bricks/commit/03c88b2bbd156fc5ad5032c976664b5ae43e3750))
+* **messaging:** consume RabbitMQ stream queues over AMQP 0.9.1 ([#967](https://github.com/gaborage/go-bricks/issues/967)) ([574bac6](https://github.com/gaborage/go-bricks/commit/574bac6c36093234f7ed8bca66a3a744866b9533))
+* **streams:** add confirmed native publishing to plain streams ([#1007](https://github.com/gaborage/go-bricks/issues/1007)) ([dcfd3bc](https://github.com/gaborage/go-bricks/commit/dcfd3bc67cf13d3e3e0c030e829913a887ec5548))
+* **streams:** consume super streams as a partitioned group ([#986](https://github.com/gaborage/go-bricks/issues/986)) ([59a3876](https://github.com/gaborage/go-bricks/commit/59a3876e3cb9133d83b4888e15dbd6ec89988b5c))
+* **streams:** declare super streams and their consumers ([#984](https://github.com/gaborage/go-bricks/issues/984)) ([59feb6b](https://github.com/gaborage/go-bricks/commit/59feb6b3a19e794f7b3215c7119b719b09a0326c))
+* **streams:** publish to super streams by routing key ([#1010](https://github.com/gaborage/go-bricks/issues/1010)) ([acbc8d8](https://github.com/gaborage/go-bricks/commit/acbc8d87ab7ddc14def90f6f285f6215c5ef3d7b))
+
+
+### Fixed
+
+* **app:** validate the config on every construction path ([#1019](https://github.com/gaborage/go-bricks/issues/1019)) ([6d9733a](https://github.com/gaborage/go-bricks/commit/6d9733a26ba047b6ba91272ef3b05fa6a5c51155))
+* **config,keystore:** keystore.secretminlength is a tri-state pointer ([#1039](https://github.com/gaborage/go-bricks/issues/1039)) ([b6efcea](https://github.com/gaborage/go-bricks/commit/b6efceafffb81aae0117b96b6e66d136eaf8f03f))
+* **config:** fail closed on database.tls misconfiguration ([#1005](https://github.com/gaborage/go-bricks/issues/1005)) ([f16c35d](https://github.com/gaborage/go-bricks/commit/f16c35d8f331c200ff45c343c9ac028a40120653))
+* **config:** infer type and validate vendor rules on dynamic configs ([#1002](https://github.com/gaborage/go-bricks/issues/1002)) ([b30c2f5](https://github.com/gaborage/go-bricks/commit/b30c2f5f8b9055229ffeafa8fd8a7127f322d559))
+* **database:** match upsert conflict columns by vendor identity ([#1000](https://github.com/gaborage/go-bricks/issues/1000)) ([42ac212](https://github.com/gaborage/go-bricks/commit/42ac212190f5da9953af4ebc81f31979704f7fa3))
+* **database:** reject conflict columns in the upsert update set on both vendors ([#991](https://github.com/gaborage/go-bricks/issues/991)) ([c5ba4df](https://github.com/gaborage/go-bricks/commit/c5ba4df8213ddd9a5a1eb46b4c0e21383d1556ef))
+* **database:** require upsert conflict columns in the insert set ([#996](https://github.com/gaborage/go-bricks/issues/996)) ([d554696](https://github.com/gaborage/go-bricks/commit/d554696ce504d69c556e8598a494c84b0007507b))
+* **deps:** update aws-sdk-go-v2 monorepo ([#961](https://github.com/gaborage/go-bricks/issues/961)) ([510d359](https://github.com/gaborage/go-bricks/commit/510d3594298c9dc4edd598386edf30d9611cccaf))
+* **deps:** update aws-sdk-go-v2 monorepo ([#990](https://github.com/gaborage/go-bricks/issues/990)) ([ee3bac8](https://github.com/gaborage/go-bricks/commit/ee3bac84a0052885ae44c8af6be94111d9ce71e8))
+* **deps:** update module github.com/gaborage/go-bricks to v0.58.1 ([#960](https://github.com/gaborage/go-bricks/issues/960)) ([569eea0](https://github.com/gaborage/go-bricks/commit/569eea0c11e3590eb7198e449a18702b8267b896))
+* **deps:** upgrade integration images and Renovate-manage the pins ([#993](https://github.com/gaborage/go-bricks/issues/993)) ([be321fe](https://github.com/gaborage/go-bricks/commit/be321fe23574b953212842615487c96476172093))
+* **migration:** redact role passwords before the newline split ([#989](https://github.com/gaborage/go-bricks/issues/989)) ([6a0e8d5](https://github.com/gaborage/go-bricks/commit/6a0e8d52fcc34a2e792d9c4d15437a0da23561fa))
+* **mutatediff:** exclude the integration-only containers package ([#969](https://github.com/gaborage/go-bricks/issues/969)) ([93d005b](https://github.com/gaborage/go-bricks/commit/93d005bbc69a6339ebc5257abfeac216bd6ea19e))
+* **mutate:** sandbox gate builds away from shared GOCACHE ([#1008](https://github.com/gaborage/go-bricks/issues/1008)) ([ed76b9a](https://github.com/gaborage/go-bricks/commit/ed76b9a08d35e76e2545d95c969ed82d6c2f071f))
+* **mutate:** skip packages whose dry run yields no report ([#1017](https://github.com/gaborage/go-bricks/issues/1017)) ([f566861](https://github.com/gaborage/go-bricks/commit/f5668617034c0b8e658c968da26701729a735e9e))
+* **server:** derive client IP through trusted proxies, not raw XFF ([#965](https://github.com/gaborage/go-bricks/issues/965)) ([925665d](https://github.com/gaborage/go-bricks/commit/925665de08b6fed3a0696dd968c95154e26a35ab))
+* **streams:** resume from a known position when an offset query fails ([#985](https://github.com/gaborage/go-bricks/issues/985)) ([f2a17aa](https://github.com/gaborage/go-bricks/commit/f2a17aaebdbf572a2a42ffb840fa91679f896dc7))
+* **testing:** permit transient non-exclusive queues in RabbitMQ testcontainer ([#999](https://github.com/gaborage/go-bricks/issues/999)) ([d1943fe](https://github.com/gaborage/go-bricks/commit/d1943feb4b2137b89a7ec08444a5afe2cc936695))
+
+
+### Changed
+
+* **config,app:** delete the mirrored defaults the bypass required ([#1021](https://github.com/gaborage/go-bricks/issues/1021)) ([2112a3a](https://github.com/gaborage/go-bricks/commit/2112a3aeafb9651e021a217b937cab35fc720af1))
+* **config:** one database-section normalization module behind two doors ([#1016](https://github.com/gaborage/go-bricks/issues/1016)) ([0862124](https://github.com/gaborage/go-bricks/commit/0862124247ef8a32162982c89f3280dc5271dc44))
+* **config:** presence step heads normalize; split multitenant and databases ([#1033](https://github.com/gaborage/go-bricks/issues/1033)) ([482db21](https://github.com/gaborage/go-bricks/commit/482db210a235859a4f1d018ca0e2c02e11d00096))
+* **config:** split cache and messaging into normalize and check phases ([#1035](https://github.com/gaborage/go-bricks/issues/1035)) ([8f0b232](https://github.com/gaborage/go-bricks/commit/8f0b232aba307f1873e147316731f5b0ff8ab5fc))
+* **config:** split Validate into normalize and check phases ([#1032](https://github.com/gaborage/go-bricks/issues/1032)) ([3646020](https://github.com/gaborage/go-bricks/commit/3646020146e38f55a15ecfcc4df38954772258e9))
+
 ## [0.58.1](https://github.com/gaborage/go-bricks/compare/v0.58.0...v0.58.1) (2026-08-10)
 
 
