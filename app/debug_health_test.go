@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -199,194 +201,6 @@ func TestGetAppInfo(t *testing.T) {
 	}
 }
 
-func TestCalculateHealthSummary(t *testing.T) {
-	debugHandlers := &DebugHandlers{
-		logger: logger.New("info", false),
-	}
-
-	tests := []struct {
-		name       string
-		components map[string]ComponentHealth
-		expected   HealthSummary
-	}{
-		{
-			name: "all healthy components",
-			components: map[string]ComponentHealth{
-				"db":        {Status: "healthy"},
-				"messaging": {Status: "ready"},
-				"cache":     {Status: "healthy"},
-			},
-			expected: HealthSummary{
-				OverallStatus: "healthy",
-				TotalProbes:   3,
-				HealthyCount:  3,
-				CriticalCount: 0,
-				ErrorCount:    0,
-			},
-		},
-		{
-			name: "mixed health states",
-			components: map[string]ComponentHealth{
-				"db":        {Status: "healthy"},
-				"messaging": {Status: "unhealthy", Error: "connection failed"},
-				"cache":     {Status: "degraded", Critical: false},
-			},
-			expected: HealthSummary{
-				OverallStatus: "degraded",
-				TotalProbes:   3,
-				HealthyCount:  1,
-				CriticalCount: 0,
-				ErrorCount:    1,
-			},
-		},
-		{
-			name: "critical failure",
-			components: map[string]ComponentHealth{
-				"db": {Status: "failed", Critical: true, Error: "database down"},
-			},
-			expected: HealthSummary{
-				OverallStatus: "critical",
-				TotalProbes:   1,
-				HealthyCount:  0,
-				CriticalCount: 1,
-				ErrorCount:    1,
-			},
-		},
-		{
-			name:       "no components",
-			components: map[string]ComponentHealth{},
-			expected: HealthSummary{
-				OverallStatus: unknownStatus,
-				TotalProbes:   0,
-				HealthyCount:  0,
-				CriticalCount: 0,
-				ErrorCount:    0,
-			},
-		},
-		{
-			name: "unknown status",
-			components: map[string]ComponentHealth{
-				unknownStatus: {Status: unknownStatus},
-			},
-			expected: HealthSummary{
-				OverallStatus: unknownStatus,
-				TotalProbes:   1,
-				HealthyCount:  0,
-				CriticalCount: 0,
-				ErrorCount:    0,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			summary := debugHandlers.calculateHealthSummary(tt.components)
-			assert.Equal(t, tt.expected, summary)
-		})
-	}
-}
-
-func TestAddManagerHealth(t *testing.T) {
-	tests := []struct {
-		name          string
-		setupApp      func() *App
-		checkResponse func(t *testing.T, healthInfo *HealthDebugInfo)
-	}{
-		{
-			name: "with database manager",
-			setupApp: func() *App {
-				mockDBManager := &database.DbManager{}
-				return &App{
-					dbManager: mockDBManager,
-					logger:    logger.New("info", false),
-				}
-			},
-			checkResponse: func(t *testing.T, healthInfo *HealthDebugInfo) {
-				dbComponent, exists := healthInfo.Components["database_manager"]
-				assert.True(t, exists)
-				assert.Equal(t, "healthy", dbComponent.Status)
-				assert.NotNil(t, dbComponent.Details["stats"])
-				// Verify timestamp consistency
-				assert.False(t, dbComponent.LastRun.IsZero(), "LastRun should not be zero time")
-				assert.NotEmpty(t, dbComponent.Duration, "Duration should not be empty")
-			},
-		},
-		{
-			name: "with messaging manager",
-			setupApp: func() *App {
-				mockMsgManager := &messaging.Manager{}
-				return &App{
-					messagingManager: mockMsgManager,
-					logger:           logger.New("info", false),
-				}
-			},
-			checkResponse: func(t *testing.T, healthInfo *HealthDebugInfo) {
-				msgComponent, exists := healthInfo.Components["messaging_manager"]
-				assert.True(t, exists)
-				assert.Equal(t, "healthy", msgComponent.Status)
-				assert.NotNil(t, msgComponent.Details["stats"])
-				// Verify timestamp consistency
-				assert.False(t, msgComponent.LastRun.IsZero(), "LastRun should not be zero time")
-				assert.NotEmpty(t, msgComponent.Duration, "Duration should not be empty")
-			},
-		},
-		{
-			name: "with both managers",
-			setupApp: func() *App {
-				mockDBManager := &database.DbManager{}
-				mockMsgManager := &messaging.Manager{}
-				return &App{
-					dbManager:        mockDBManager,
-					messagingManager: mockMsgManager,
-					logger:           logger.New("info", false),
-				}
-			},
-			checkResponse: func(t *testing.T, healthInfo *HealthDebugInfo) {
-				dbComponent, hasDB := healthInfo.Components["database_manager"]
-				msgComponent, hasMsg := healthInfo.Components["messaging_manager"]
-				assert.True(t, hasDB)
-				assert.True(t, hasMsg)
-				// Verify timestamp consistency for both managers
-				assert.False(t, dbComponent.LastRun.IsZero(), "Database manager LastRun should not be zero time")
-				assert.NotEmpty(t, dbComponent.Duration, "Database manager Duration should not be empty")
-				assert.False(t, msgComponent.LastRun.IsZero(), "Messaging manager LastRun should not be zero time")
-				assert.NotEmpty(t, msgComponent.Duration, "Messaging manager Duration should not be empty")
-			},
-		},
-		{
-			name: "with nil managers",
-			setupApp: func() *App {
-				return &App{
-					dbManager:        nil,
-					messagingManager: nil,
-					logger:           logger.New("info", false),
-				}
-			},
-			checkResponse: func(t *testing.T, healthInfo *HealthDebugInfo) {
-				_, hasDB := healthInfo.Components["database_manager"]
-				_, hasMsg := healthInfo.Components["messaging_manager"]
-				assert.False(t, hasDB)
-				assert.False(t, hasMsg)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			app := tt.setupApp()
-			debugConfig := &config.DebugConfig{}
-			debugHandlers := NewDebugHandlers(app, debugConfig, app.logger)
-
-			healthInfo := &HealthDebugInfo{
-				Components: make(map[string]ComponentHealth),
-			}
-
-			debugHandlers.addManagerHealth(healthInfo)
-			tt.checkResponse(t, healthInfo)
-		})
-	}
-}
-
 // Test utilities
 
 type testHealthProbe struct {
@@ -425,7 +239,7 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 
 	log := &recLogger{}
 	app := &App{cfg: cfg, logger: log, cacheManager: cacheManager}
-	app.healthProbes = app.createHealthProbes()
+	app.healthProbes = app.createHealthProbes(probeInputs{})
 	require.Len(t, app.healthProbes, 3)
 
 	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
@@ -457,8 +271,8 @@ func TestHealthDebugKeepsFullCacheErrorWhileReadySanitizes(t *testing.T) {
 }
 
 // TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem pins both halves of the
-// db_stats routing contract from a single DbManager. SECURITY: a pooled connection's key is
-// the resourcepool key — the tenant ID in a multi-tenant deployment — so /ready's 200 body
+// database_stats routing contract from a single DbManager. SECURITY: a pooled connection's
+// key is the resourcepool key — the tenant ID in a multi-tenant deployment — so /ready's 200 body
 // used to answer an unauthenticated, unthrottled caller with a live tenant enumeration plus
 // per-tenant timing. It must now carry the scalar counters only, while the access-controlled
 // /health-debug keeps the per-connection detail operators diagnose with. Redacting inside
@@ -486,14 +300,14 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 
 	// The premise the /ready assertions rest on: two distinct keys really are pooled, so
 	// their absence below is a redaction rather than an empty fixture asserting nothing.
-	statsConns, err := json.Marshal(dbManager.Stats()[dbConnectionsKey])
+	statsConns, err := json.Marshal(dbManager.Stats()[connectionsStatsKey])
 	require.NoError(t, err)
 	require.Contains(t, string(statsConns), tenantAlpha, "Stats() must still carry the pool keys")
 	require.Contains(t, string(statsConns), tenantBeta, "Stats() must still carry the pool keys")
 
 	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
 	app := &App{cfg: cfg, logger: log, dbManager: dbManager}
-	app.healthProbes = app.createHealthProbes()
+	app.healthProbes = app.createHealthProbes(probeInputs{})
 	require.Len(t, app.healthProbes, 3)
 
 	readyReq := httptest.NewRequestWithContext(context.Background(), http.MethodGet, readyEndpoint, http.NoBody)
@@ -509,13 +323,13 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 	require.NoError(t, json.Unmarshal(readyRec.Body.Bytes(), &readyBody))
 	assert.Equal(t, http.StatusOK, readyRec.Code)
 
-	dbStats, ok := readyBody["db_stats"].(map[string]any)
-	require.True(t, ok, "the 200 body must still carry db_stats")
+	dbStats, ok := readyBody["database_stats"].(map[string]any)
+	require.True(t, ok, "the 200 body must still carry database_stats")
 	assert.Contains(t, dbStats, "active_connections")
 	assert.Contains(t, dbStats, "max_connections")
 	assert.Contains(t, dbStats, "idle_ttl_seconds")
 	assert.Equal(t, healthyStatus, dbStats[statusKey])
-	assert.NotContains(t, dbStats, dbConnectionsKey,
+	assert.NotContains(t, dbStats, connectionsStatsKey,
 		"the per-connection array enumerates tenants on an unauthenticated endpoint")
 	assertReadyBodyOmits(t, readyBody, tenantAlpha, tenantBeta)
 
@@ -528,42 +342,113 @@ func TestHealthDebugKeepsPooledConnectionKeysWhileReadyOmitsThem(t *testing.T) {
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(debugRec.Body.Bytes(), &debugBody))
-	debugConns, err := json.Marshal(debugBody.Data.Components[componentDatabase].Details[dbConnectionsKey])
+	debugConns, err := json.Marshal(debugBody.Data.Components[componentDatabase].Details[connectionsStatsKey])
 	require.NoError(t, err)
 	assert.Contains(t, string(debugConns), tenantAlpha,
 		"/health-debug renders the probe's details; redacting in Stats() or the probe would gut it")
 	assert.Contains(t, string(debugConns), tenantBeta)
 }
 
-func TestCalculateHealthSummaryTreatsAbsenceAsHealthy(t *testing.T) {
-	debugHandlers := &DebugHandlers{logger: logger.New("info", false)}
+// TestHealthDebugRendersOneEntryPerKind pins the handler against the one-debug-view rule:
+// the components map carries exactly the registered kinds, keyed by component name, and no
+// separate *_manager entries — a manager's statistics are its kind's details. The summary
+// comes from the same predicate /ready gates on, so a non-critical kind that is not live
+// reads degraded rather than the unknown the two-model split produced.
+func TestHealthDebugRendersOneEntryPerKind(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
+	app := &App{
+		cfg:    cfg,
+		logger: logger.New("error", false),
+		healthProbes: []Prober{
+			probeDescription{
+				name:        componentDatabase,
+				critical:    true,
+				publicStats: databasePublicStats,
+				live:        func(context.Context) error { return nil },
+				stats:       func() map[string]any { return map[string]any{"active_connections": 1} },
+			},
+			probeDescription{
+				name:        componentStreams,
+				publicStats: streamsPublicStats,
+				live:        func(context.Context) error { return errStreamsNotOpen },
+				stats: func() map[string]any {
+					return map[string]any{"stored_offsets": map[string]int64{"orders/projector": 7}}
+				},
+			},
+		},
+		dbManager:        &database.DbManager{},
+		messagingManager: &messaging.Manager{},
+	}
 
-	t.Run("absence_statuses_are_healthy", func(t *testing.T) {
-		// /ready returns 200 for these, so the debug summary must agree — otherwise the
-		// same database-free service reads "ready" on one endpoint and "critical" on
-		// the other.
-		summary := debugHandlers.calculateHealthSummary(map[string]ComponentHealth{
-			"database":  {Status: notConfiguredStatus, Critical: true},
-			"messaging": {Status: disabledStatus},
-			"tenantdb":  {Status: perTenantStatus},
-		})
+	handlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, app.logger)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
+	rec := httptest.NewRecorder()
+	require.NoError(t, handlers.handleHealthDebug(server.NewHandlerContextForTest(rec, req, cfg)))
 
-		assert.Equal(t, 3, summary.HealthyCount)
-		assert.Zero(t, summary.CriticalCount)
-		assert.Equal(t, healthyStatus, summary.OverallStatus)
-	})
+	var decoded struct {
+		Data struct {
+			Components map[string]struct {
+				Status  string         `json:"status"`
+				Error   string         `json:"error"`
+				Details map[string]any `json:"details"`
+			} `json:"components"`
+			Summary HealthSummary `json:"summary"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &decoded))
 
-	t.Run("a_genuinely_unhealthy_critical_component_still_counts", func(t *testing.T) {
-		// Guards the opposite direction: the case list above must not be widened until
-		// it swallows real failures.
-		summary := debugHandlers.calculateHealthSummary(map[string]ComponentHealth{
-			"database": {Status: notConfiguredStatus},
-			"cache":    {Status: unhealthyStatus, Critical: true, Error: "connection refused"},
-		})
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.ElementsMatch(t, []string{componentDatabase, componentStreams},
+		slices.Collect(maps.Keys(decoded.Data.Components)), "one entry per registered kind, and no *_manager entries")
+	assert.Equal(t, errStreamsNotOpen.Error(), decoded.Data.Components[componentStreams].Error)
+	assert.Contains(t, decoded.Data.Components[componentStreams].Details, "stored_offsets",
+		"the access-controlled view keeps what the /ready projection withholds")
+	assert.Equal(t, HealthSummary{
+		OverallStatus: degradedStatus,
+		TotalProbes:   2,
+		HealthyCount:  1,
+		ErrorCount:    1,
+	}, decoded.Data.Summary)
+}
 
-		assert.Equal(t, 1, summary.HealthyCount)
-		assert.Equal(t, 1, summary.CriticalCount)
-		assert.Equal(t, 1, summary.ErrorCount)
-		assert.NotEqual(t, healthyStatus, summary.OverallStatus)
-	})
+// TestHealthDebugRunsEveryProbeBehindAFailingCriticalKind pins the one place the two
+// traversals must differ. /ready stops at the first failing critical kind so an outage costs
+// the probes ahead of it and no more; the debug view is the access-controlled diagnostic, so
+// it reports the kinds behind that outage — which is exactly when an operator needs them.
+// Rendering the debug view from /ready's truncated report would drop them.
+func TestHealthDebugRunsEveryProbeBehindAFailingCriticalKind(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: appName, Env: testName, Version: appVersion}}
+	app := &App{
+		cfg:    cfg,
+		logger: logger.New("error", false),
+		healthProbes: []Prober{
+			describe(componentDatabase, true, errors.New("connection refused"), nil, databasePublicStats),
+			describe(componentCache, true, nil, nil, cachePublicStats),
+		},
+	}
+
+	handlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, app.logger)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/health-debug", http.NoBody)
+	rec := httptest.NewRecorder()
+	require.NoError(t, handlers.handleHealthDebug(server.NewHandlerContextForTest(rec, req, cfg)))
+
+	var decoded struct {
+		Data struct {
+			Components map[string]ComponentHealth `json:"components"`
+			Summary    HealthSummary              `json:"summary"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &decoded))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.ElementsMatch(t, []string{componentDatabase, componentCache}, slices.Collect(maps.Keys(decoded.Data.Components)),
+		"the kind behind the failing critical one must still be probed and reported")
+	assert.Equal(t, healthyStatus, decoded.Data.Components[componentCache].Status)
+	assert.Equal(t, HealthSummary{
+		OverallStatus: criticalStatus,
+		TotalProbes:   2,
+		HealthyCount:  1,
+		CriticalCount: 1,
+		ErrorCount:    1,
+	}, decoded.Data.Summary)
 }

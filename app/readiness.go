@@ -57,6 +57,10 @@ type probeDescription struct {
 	// probe itself pooled is counted (the messaging manager publishes active_publishers: 0
 	// beside a healthy verdict otherwise).
 	stats func() map[string]any
+	// publicStats allowlists the statistics keys this kind may publish on the
+	// unauthenticated /ready body; every other key stays on the access-controlled debug
+	// view. nil means "status only".
+	publicStats []string
 }
 
 // disabledProbe describes a kind whose manager does not exist.
@@ -130,6 +134,85 @@ func (d probeDescription) snapshot() map[string]any {
 // cold-poll caveat.
 const cacheProbePingTimeout = 500 * time.Millisecond
 
+// The statistics key names hoisted into constants where two or more sites must agree on the
+// spelling: a manager's counters rendered into a map here (convertCacheStatsToMap) and the
+// allowlist that admits it, an allowlist reused across kinds, or — despite a single use in
+// this file — a string value goconst (min-occurrences 3) also finds recurring elsewhere in
+// the package. A key with none of those reasons lives inline in its own allowlist instead.
+// These constants say nothing about the managers themselves: database.DbManager,
+// messaging.Manager, and streams.Manager hardcode their own map keys in their own packages,
+// unreachable from here, so it is TestPublicStatsAllowlistsMatchManagerCounters
+// (readiness_test.go) that pins spelling against them.
+const (
+	// Shared across kinds.
+	statsErrorsKey         = "errors"
+	statsEvictionsKey      = "evictions"
+	statsIdleCleanupsKey   = "idle_cleanups"
+	statsIdleTTLSecondsKey = "idle_ttl_seconds"
+	// Database: each used once below, kept because "active_connections" and
+	// "max_connections" also recur across this kind's test fixtures and assertions.
+	statsActiveConnectionsKey = "active_connections"
+	statsMaxConnectionsKey    = "max_connections"
+	// Messaging: statsActivePublishersKey is used once below, like its neighbors
+	// "max_publishers" and "active_consumers" (left inlined — neither appears anywhere else
+	// in the package), but "active_publishers" also recurs across this kind's test fixtures
+	// and assertions, so goconst requires the symbol.
+	statsActivePublishersKey = "active_publishers"
+	// Cache.
+	statsActiveCachesKey = "active_caches"
+	statsTotalCreatedKey = "total_created"
+	statsMaxSizeKey      = "max_size"
+	statsIdleTTLKey      = "idle_ttl"
+	// Streams: each used once below, kept as constants because every value here also
+	// recurs elsewhere in the package — a zerolog field name in ModuleRegistry's
+	// declaration-summary log for "consumers", test fixtures and assertions for the rest.
+	// "ready" is not among them: it reuses readyStatus (app.go) at its allowlist site
+	// instead of a redundant twin constant.
+	statsStartedKey             = "started"
+	statsConsumersKey           = "consumers"
+	statsPublishersKey          = "publishers"
+	statsOffsetStoreCountKey    = "offset_store_count"
+	statsOffsetFlushIntervalKey = "offset_flush_interval"
+)
+
+// The per-kind public-stats allowlists: the only statistics keys that may reach the
+// unauthenticated /ready 200 body. An allowlist and not a denylist, so a counter added to a
+// manager tomorrow stays off that body until someone reviews it.
+//
+// SECURITY: two manager keys are deliberately absent. DbManager.Stats()["connections"] holds
+// one entry per live pooled connection, and each entry's "key" is the resourcepool key — the
+// tenant ID in a multi-tenant deployment, the named-database key otherwise — alongside
+// last_used and idle_duration, so polling /ready enumerated which tenants were active and
+// when each was last served. streams.Manager.Stats()["stored_offsets"] is keyed
+// "<stream>/<consumer>" — declared topology that usually names the domain — with live offsets
+// as values, so differencing two polls yields the per-stream message rate. /ready carries no
+// authentication and no IP allowlist, and its throttles are two IP-keyed rate limits
+// (app.rate.limit, koanf default 100 rps; app.rate.ippreguard.threshold, koanf default
+// 2000 rps/IP) that a Go-assembled config leaves at zero entirely (ADR-049) — no barrier to
+// enumeration either way.
+//
+// The allowlists are declared here, beside the kinds they describe, and applied at the
+// render seam (publicProjection, readiness_render.go) rather than in the managers or the
+// probes: the access-controlled <debug.pathprefix>/health-debug renders the same details
+// map unredacted, and operators need both withheld keys there.
+var (
+	databasePublicStats = []string{
+		statsActiveConnectionsKey, statsMaxConnectionsKey, statsIdleTTLSecondsKey, statsErrorsKey,
+	}
+	messagingPublicStats = []string{
+		statsActivePublishersKey, "max_publishers", "active_consumers", statsIdleTTLSecondsKey,
+		statsEvictionsKey, statsIdleCleanupsKey, statsErrorsKey,
+	}
+	cachePublicStats = []string{
+		statsActiveCachesKey, statsTotalCreatedKey, statsEvictionsKey, statsIdleCleanupsKey,
+		statsErrorsKey, statsMaxSizeKey, statsIdleTTLKey,
+	}
+	streamsPublicStats = []string{
+		statsStartedKey, statsConsumersKey, statsPublishersKey, readyStatus,
+		statsOffsetStoreCountKey, statsOffsetFlushIntervalKey,
+	}
+)
+
 // databaseProbe describes the database kind: critical, leased through the "" key, live when
 // the leased connection's Health passes. perTenant only relabels a not-configured verdict —
 // the lease is always attempted (see probeDescription.perTenant).
@@ -138,9 +221,10 @@ func databaseProbe(m *database.DbManager, perTenant bool) probeDescription {
 		return disabledProbe(componentDatabase)
 	}
 	return probeDescription{
-		name:      componentDatabase,
-		critical:  true,
-		perTenant: perTenant,
+		name:        componentDatabase,
+		critical:    true,
+		perTenant:   perTenant,
+		publicStats: databasePublicStats,
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			conn, release, err := m.Get(ctx, "")
 			if err != nil {
@@ -159,8 +243,9 @@ func messagingProbe(m *messaging.Manager, perTenant bool) probeDescription {
 		return disabledProbe(componentMessaging)
 	}
 	return probeDescription{
-		name:      componentMessaging,
-		perTenant: perTenant,
+		name:        componentMessaging,
+		perTenant:   perTenant,
+		publicStats: messagingPublicStats,
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			client, release, err := m.Publisher(ctx, "")
 			if err != nil {
@@ -185,10 +270,11 @@ func cacheProbe(m *cache.CacheManager, critical, absent, perTenant bool) probeDe
 		return disabledProbe(componentCache)
 	}
 	return probeDescription{
-		name:      componentCache,
-		critical:  critical,
-		absent:    absent,
-		perTenant: perTenant,
+		name:        componentCache,
+		critical:    critical,
+		absent:      absent,
+		perTenant:   perTenant,
+		publicStats: cachePublicStats,
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			instance, release, err := m.Get(ctx, "")
 			if err != nil {
@@ -212,7 +298,8 @@ func streamsProbe(m *streams.Manager) probeDescription {
 		return disabledProbe(componentStreams)
 	}
 	return probeDescription{
-		name: componentStreams,
+		name:        componentStreams,
+		publicStats: streamsPublicStats,
 		live: func(context.Context) error {
 			if !m.Ready() {
 				return errStreamsNotOpen
@@ -226,12 +313,12 @@ func streamsProbe(m *streams.Manager) probeDescription {
 // convertCacheStatsToMap renders cache.ManagerStats as the counters map every kind reports.
 func convertCacheStatsToMap(stats cache.ManagerStats) map[string]any {
 	return map[string]any{
-		"active_caches": stats.ActiveCaches,
-		"total_created": stats.TotalCreated,
-		"evictions":     stats.Evictions,
-		"idle_cleanups": stats.IdleCleanups,
-		"errors":        stats.Errors,
-		"max_size":      stats.MaxSize,
-		"idle_ttl":      stats.IdleTTL,
+		statsActiveCachesKey: stats.ActiveCaches,
+		statsTotalCreatedKey: stats.TotalCreated,
+		statsEvictionsKey:    stats.Evictions,
+		statsIdleCleanupsKey: stats.IdleCleanups,
+		statsErrorsKey:       stats.Errors,
+		statsMaxSizeKey:      stats.MaxSize,
+		statsIdleTTLKey:      stats.IdleTTL,
 	}
 }

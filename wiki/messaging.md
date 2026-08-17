@@ -548,7 +548,7 @@ Size the cap to hold every concurrently-publishing tenant. For **statically-conf
 
 Idle-TTL eviction is sweep-driven: publishers are only checked when the cleanup goroutine wakes every `publisher.cleanupinterval` (default 2m), so an idle publisher can outlive its `publisher.idlettl` by up to one full sweep interval — keep `cleanupinterval` well below `idlettl`.
 
-Eviction churn is observable via counters, not logs: `Manager.Stats()` exposes cumulative `evictions` and `idle_cleanups` counters alongside `active_publishers` (there is no per-event log line for either removal path). The stats map is surfaced as `messaging_stats` in the `GET /ready` response and under the `messaging_manager` component of `GET /_sys/health-debug` (when debug endpoints are enabled). A steadily climbing `evictions` count under normal load is the signature of an undersized cap.
+Eviction churn is observable via counters, not logs: `Manager.Stats()` exposes cumulative `evictions` and `idle_cleanups` counters alongside `active_publishers` (there is no per-event log line for either removal path). The stats map is surfaced as `messaging_stats` in the `GET /ready` response and as the `messaging` component's `details` in `GET /_sys/health-debug` (when debug endpoints are enabled). A steadily climbing `evictions` count under normal load is the signature of an undersized cap.
 
 > Eviction (and idle cleanup) closes the evicted publisher **outside** the manager lock, so a slow `Close()` on an evicted tenant never blocks concurrent `Publisher()` calls for other tenants.
 >

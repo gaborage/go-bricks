@@ -1137,43 +1137,46 @@ func TestPreInitCacheFailureIsNonFatal(t *testing.T) {
 	}
 }
 
-// TestPreInitCacheSkipsAbsentCache pins that preInitCache never leases when
-// App.cacheAbsent is true, so the pool's errors counter starts at a true zero
-// (see rootCacheAbsent).
+// TestPreInitCacheSkipsAbsentCache pins that preInitCache never leases when the cache is
+// absent under the fixed "" key, so the pool's errors counter starts at a true zero (see
+// rootCacheAbsent). The verdict is computed from the Builder's own config and options —
+// App no longer carries a precomputed copy that could drift from them.
 func TestPreInitCacheSkipsAbsentCache(t *testing.T) {
-	t.Run("absent_skips_the_connector", func(t *testing.T) {
-		var connectorCalls atomic.Int32
+	newConnectorCountingManager := func(t *testing.T, calls *atomic.Int32) *cache.CacheManager {
+		t.Helper()
 		mgr := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
-			connectorCalls.Add(1)
+			calls.Add(1)
 			return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
 		})
 		t.Cleanup(func() { assert.NoError(t, mgr.Close()) })
+		return mgr
+	}
 
+	t.Run("absent_skips_the_connector", func(t *testing.T) {
+		var connectorCalls atomic.Int32
 		builder := &Builder{
 			cfg:    &config.Config{},
 			logger: logger.New("error", false),
-			app:    &App{cacheAbsent: true},
-			bundle: &dependencyBundle{cacheManager: mgr},
+			bundle: &dependencyBundle{cacheManager: newConnectorCountingManager(t, &connectorCalls)},
 		}
+		require.True(t, rootCacheAbsent(builder.cfg, builder.opts), "the fixture must model an absent cache")
+
 		builder.preInitCache(context.Background(), time.Second)
+
 		assert.Equal(t, int32(0), connectorCalls.Load(), "the connector must never be reached")
 	})
 
 	t.Run("present_reaches_the_connector", func(t *testing.T) {
 		var connectorCalls atomic.Int32
-		mgr := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
-			connectorCalls.Add(1)
-			return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
-		})
-		t.Cleanup(func() { assert.NoError(t, mgr.Close()) })
-
 		builder := &Builder{
-			cfg:    &config.Config{},
+			cfg:    &config.Config{Cache: config.CacheConfig{Enabled: true}},
 			logger: logger.New("error", false),
-			app:    &App{cacheAbsent: false},
-			bundle: &dependencyBundle{cacheManager: mgr},
+			bundle: &dependencyBundle{cacheManager: newConnectorCountingManager(t, &connectorCalls)},
 		}
+		require.False(t, rootCacheAbsent(builder.cfg, builder.opts), "the fixture must model a present cache")
+
 		builder.preInitCache(context.Background(), time.Second)
+
 		assert.Equal(t, int32(1), connectorCalls.Load(), "an unexempt cache must still be probed")
 	})
 }

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	cachetesting "github.com/gaborage/go-bricks/cache/testing"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
@@ -363,7 +365,7 @@ func TestStreamsProbeNotOpenIsUnhealthy(t *testing.T) {
 func TestCreateHealthProbesAlwaysDescribesTheThreeClassicKinds(t *testing.T) {
 	app := &App{cfg: defaultTestConfig()}
 
-	probes := app.createHealthProbes()
+	probes := app.createHealthProbes(probeInputs{})
 
 	require.Len(t, probes, 3)
 	names := make([]string, 0, len(probes))
@@ -374,6 +376,21 @@ func TestCreateHealthProbesAlwaysDescribesTheThreeClassicKinds(t *testing.T) {
 	for _, p := range probes {
 		assert.Equal(t, disabledStatus, p.Run(context.Background()).Status)
 	}
+}
+
+// TestCreateHealthProbesTakesAbsenceFromItsInputs pins that the cache description's absence
+// arm is driven by the caller's verdict rather than by state stored on App: absence needs
+// Options, which only the Builder holds, so a second copy on App could drift from it. The
+// connector always fails, so the two arms are told apart by whether it was reached at all.
+func TestCreateHealthProbesTakesAbsenceFromItsInputs(t *testing.T) {
+	app := &App{cfg: defaultTestConfig(), cacheManager: createTestCacheManagerWithGetError(t,
+		errors.New("the absent arm must never reach the connector"))}
+
+	absent := app.createHealthProbes(probeInputs{cacheAbsent: true})[2].Run(context.Background())
+	present := app.createHealthProbes(probeInputs{})[2].Run(context.Background())
+
+	assert.Equal(t, notConfiguredStatus, absent.Status, "an absent cache is judged without leasing")
+	assert.Equal(t, unhealthyStatus, present.Status, "a present cache leases and reports the connector's failure")
 }
 
 func TestConvertCacheStatsToMap(t *testing.T) {
@@ -411,6 +428,109 @@ func TestConvertCacheStatsToMap(t *testing.T) {
 		assert.Equal(t, 0, result["max_size"])
 		assert.Equal(t, int64(0), result["idle_ttl"])
 	})
+}
+
+// The two manager keys the allowlists deliberately withhold, spelled out rather than
+// imported so the assertions pin the wire format instead of restating a production value.
+const (
+	connectionsStatsKey   = "connections"
+	storedOffsetsStatsKey = "stored_offsets"
+)
+
+// TestPublicStatsAllowlistsMatchManagerCounters pins every allowlist against the keys the
+// real manager publishes. SECURITY: an allowlist that silently falls behind a manager is
+// how a new identifier-bearing counter reaches the unauthenticated /ready body — this test
+// fails the day a manager gains a key, forcing the "publish or withhold" decision.
+func TestPublicStatsAllowlistsMatchManagerCounters(t *testing.T) {
+	tests := []struct {
+		name     string
+		stats    map[string]any
+		allow    []string
+		withheld []string
+	}{
+		{
+			name:     "database",
+			stats:    (&database.DbManager{}).Stats(),
+			allow:    databasePublicStats,
+			withheld: []string{connectionsStatsKey},
+		},
+		{
+			name:  "messaging",
+			stats: (&messaging.Manager{}).Stats(),
+			allow: messagingPublicStats,
+		},
+		{
+			name:  "cache",
+			stats: convertCacheStatsToMap(cache.ManagerStats{}),
+			allow: cachePublicStats,
+		},
+		{
+			name:     "streams",
+			stats:    (&streams.Manager{}).Stats(),
+			allow:    streamsPublicStats,
+			withheld: []string{storedOffsetsStatsKey},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			published := make([]string, 0, len(tt.stats))
+			for key := range tt.stats {
+				published = append(published, key)
+			}
+			assert.ElementsMatch(t, published, slices.Concat(tt.allow, tt.withheld),
+				"every manager counter is either allowlisted or listed as deliberately withheld")
+			for _, key := range tt.withheld {
+				assert.NotContains(t, tt.allow, key)
+			}
+		})
+	}
+}
+
+// TestProbeConstructorsWireTheirPublicStatsAllowlist pins the other half of the disclosure
+// guard. SECURITY: an allowlist only withholds anything where the constructor carries it —
+// dropping `publicStats:` from one description leaves every body assertion green (the kind
+// simply publishes its status alone) right up until that kind's stats matter, and for
+// streams the dropped line is what puts stored_offsets back on the unauthenticated body.
+func TestProbeConstructorsWireTheirPublicStatsAllowlist(t *testing.T) {
+	streamsManager := streams.NewManager(streams.ManagerOptions{
+		URI:    unreachableStreamURI,
+		Logger: logger.New("error", false),
+	})
+
+	tests := []struct {
+		name        string
+		description probeDescription
+		allow       []string
+	}{
+		{
+			name:        "database",
+			description: databaseProbe(createTestDbManager(t), false),
+			allow:       databasePublicStats,
+		},
+		{
+			name:        "messaging",
+			description: messagingProbe(createTestMessagingManager(t), false),
+			allow:       messagingPublicStats,
+		},
+		{
+			name:        "cache",
+			description: cacheProbe(createTestCacheManager(t), true, false, false),
+			allow:       cachePublicStats,
+		},
+		{
+			name:        "streams",
+			description: streamsProbe(streamsManager),
+			allow:       streamsPublicStats,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.allow, tt.description.publicStats,
+				"the description the app registers must carry its kind's allowlist")
+		})
+	}
 }
 
 // Fixtures used only by the per-kind descriptions above.

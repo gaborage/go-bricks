@@ -8,7 +8,11 @@ import (
 type HealthStatus struct {
 	// Name is interpolated into the unauthenticated /ready body by publicProbeError.
 	// Keep it a fixed component identifier — never a tenant, host, or database name.
-	Name    string
+	Name string
+	// Status is one of "healthy", "unhealthy", "not_configured", "disabled", "per_tenant". A
+	// component is failing iff Status == "unhealthy"; /ready answers 503 (and the debug
+	// summary counts an error) on failing && Critical — the gate keys off Status, not Err;
+	// framework probes always set Err alongside "unhealthy".
 	Status  string
 	Details map[string]any
 	Err     error
@@ -25,21 +29,4 @@ type HealthStatus struct {
 // same constraint binds Name, which the synthesized default interpolates.
 type Prober interface {
 	Run(ctx context.Context) HealthStatus
-}
-
-func getStatsOrEmpty(stats map[string]any) map[string]any {
-	if stats == nil {
-		return map[string]any{}
-	}
-	return stats
-}
-
-// componentReport resolves a component's status and stats for the /ready body,
-// reporting disabled when no probe is registered for it.
-func componentReport(all map[string]HealthStatus, name string) (status string, stats map[string]any) {
-	result := all[name]
-	if result.Status == "" {
-		result.Status = disabledStatus
-	}
-	return result.Status, getStatsOrEmpty(result.Details)
 }

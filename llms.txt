@@ -2370,10 +2370,11 @@ managerStats := cacheManager.Stats()
 ```
 
 `GET /health` is a liveness-only probe with no component breakdown (`{"status": "ok"}`).
-`GET /ready` reports per-component status (database, messaging, cache) — the cache probe's
+`GET /ready` reports one `<name>` + `<name>_stats` pair per registered kind (database,
+messaging, cache always; streams once streams are declared) — the cache probe's
 result is surfaced as the top-level `cache` and `cache_stats` keys in the `200` body (the
-`503` body carries only `status`/`cache`/`error`; a cache manager that failed to construct
-registers no probe at all and reports `cache: "disabled"` with empty `cache_stats`). The probe leases
+`503` body carries only `status`/`cache`/`error`; an `App` assembled without a cache manager
+reports `cache: "disabled"` with `cache_stats: {"status":"disabled"}`). The probe leases
 an instance from the manager and calls `Cache.Health(ctx)` on it — a Redis `PING` per poll,
 capped at 500ms so a hung Redis reports unhealthy instead of consuming the `/ready` request
 budget — so an outage that starts after the instance was built is reported on the next poll. It fails
@@ -4664,7 +4665,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Path | Returns | Probes |
 |---|---|---|
 | `GET /health` | `200` `{"status":"ok"}` always (liveness only — no component probes) | none |
-| `GET /ready` | `200` with per-component status (`database`, `messaging`, `cache`, + `db_stats` / `messaging_stats` / `cache_stats`); `503` when the **database** probe fails, or when the **cache** probe fails unless `cache.critical: false`. The `503` `error` is never the probe's raw error: it is the fixed `<component> unavailable` (`database unavailable`, `cache unavailable`), synthesized for every critical probe and overridable per probe via `HealthStatus.PublicErr` (ADR-048). Messaging is never critical, so it cannot 503 at all. The full error stays on the app log and, where debug is enabled and access-controlled, on `/_sys/health-debug` | DB: lease a connection, then `conn.Health(ctx)` (always critical). Messaging: lease a publisher (never critical). Cache: lease an instance, then `cache.Health(ctx)` (Redis `PING` per probe); critical by default — `cache.critical: false` opts out and WARNs at startup |
+| `GET /ready` | `200` with one `<name>` + `<name>_stats` pair per registered kind (`database`, `messaging`, `cache` always; `streams` once streams are declared); `503` when the **database** probe fails, or when the **cache** probe fails unless `cache.critical: false`. The `503` `error` is never the probe's raw error: it is the fixed `<component> unavailable` (`database unavailable`, `cache unavailable`), synthesized for every critical probe and overridable per probe via `HealthStatus.PublicErr` (ADR-048). Messaging is never critical, so it cannot 503 at all. The full error stays on the app log and, where debug is enabled and access-controlled, on `/_sys/health-debug` | DB: lease a connection, then `conn.Health(ctx)` (always critical). Messaging: lease a publisher (never critical). Cache: lease an instance, then `cache.Health(ctx)` (Redis `PING` per probe); critical by default — `cache.critical: false` opts out and WARNs at startup |
 
 ### Configuration — Layered by Environment
 

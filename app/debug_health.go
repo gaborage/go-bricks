@@ -51,45 +51,20 @@ type Info struct {
 	MemoryUsage uint64    `json:"memory_usage"`
 }
 
-// handleHealthDebug provides comprehensive health debugging information
+// handleHealthDebug renders the access-controlled debug view from one probe run: unlike
+// /ready's gate it runs every registered kind, so the kinds behind an outage are still
+// reported (ADR-066).
 func (d *DebugHandlers) handleHealthDebug(c server.HandlerContext) error {
 	start := time.Now()
 
+	components := runReadinessProbes(c.RequestContext(), d.app.healthProbes).debugComponents()
+
 	healthInfo := &HealthDebugInfo{
-		Components: make(map[string]ComponentHealth),
+		Components: components,
+		Summary:    healthSummary(components),
 		App:        d.getAppInfo(),
 	}
 
-	// Run all health probes and collect detailed information
-	for _, probe := range d.app.healthProbes {
-		probeStart := time.Now()
-		result := probe.Run(c.RequestContext())
-		duration := time.Since(probeStart)
-
-		component := ComponentHealth{
-			Status:   result.Status,
-			Critical: result.Critical,
-			Details:  result.Details,
-			LastRun:  probeStart,
-			Duration: duration.String(),
-		}
-
-		if result.Err != nil {
-			component.Error = result.Err.Error()
-		}
-
-		if component.Details == nil {
-			component.Details = make(map[string]any)
-		}
-
-		healthInfo.Components[result.Name] = component
-	}
-
-	// Add manager-specific health information if available
-	d.addManagerHealth(healthInfo)
-
-	// Summary is computed after addManagerHealth so manager components are included.
-	healthInfo.Summary = d.calculateHealthSummary(healthInfo.Components)
 	resp := d.newDebugResponse(start, healthInfo, nil)
 	return c.JSON(http.StatusOK, resp)
 }
@@ -112,79 +87,4 @@ func (d *DebugHandlers) getAppInfo() Info {
 	}
 
 	return appInfo
-}
-
-// calculateHealthSummary calculates overall health summary
-func (d *DebugHandlers) calculateHealthSummary(components map[string]ComponentHealth) HealthSummary {
-	summary := HealthSummary{
-		TotalProbes: len(components),
-	}
-
-	for _, component := range components {
-		switch component.Status {
-		// not_configured / disabled / per_tenant are absence by design, not failure.
-		// /ready already treats them as ready, so the debug summary must agree — else
-		// the same database-free service reads "ready" on one endpoint and "critical"
-		// on the other.
-		case healthyStatus, readyStatus, notConfiguredStatus, disabledStatus, perTenantStatus:
-			summary.HealthyCount++
-		default:
-			if component.Critical {
-				summary.CriticalCount++
-			}
-			if component.Error != "" {
-				summary.ErrorCount++
-			}
-		}
-	}
-
-	// Determine overall status
-	if summary.CriticalCount > 0 {
-		summary.OverallStatus = "critical"
-	} else if summary.ErrorCount > 0 {
-		summary.OverallStatus = degradedStatus
-	} else if summary.HealthyCount == summary.TotalProbes && summary.TotalProbes > 0 {
-		summary.OverallStatus = healthyStatus
-	} else {
-		summary.OverallStatus = unknownStatus
-	}
-
-	return summary
-}
-
-// addManagerHealth adds detailed information from database and messaging managers
-func (d *DebugHandlers) addManagerHealth(healthInfo *HealthDebugInfo) {
-	// Add database manager information
-	if d.app.dbManager != nil {
-		dbStart := time.Now()
-		stats := d.app.dbManager.Stats()
-		dbDuration := time.Since(dbStart)
-
-		dbHealth := ComponentHealth{
-			Status:   healthyStatus,
-			Details:  make(map[string]any),
-			LastRun:  dbStart,
-			Duration: dbDuration.String(),
-		}
-		dbHealth.Details["stats"] = stats
-
-		healthInfo.Components["database_manager"] = dbHealth
-	}
-
-	// Add messaging manager information
-	if d.app.messagingManager != nil {
-		msgStart := time.Now()
-		stats := d.app.messagingManager.Stats()
-		msgDuration := time.Since(msgStart)
-
-		msgHealth := ComponentHealth{
-			Status:   healthyStatus,
-			Details:  make(map[string]any),
-			LastRun:  msgStart,
-			Duration: msgDuration.String(),
-		}
-		msgHealth.Details["stats"] = stats
-
-		healthInfo.Components["messaging_manager"] = msgHealth
-	}
 }

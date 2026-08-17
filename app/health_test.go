@@ -29,22 +29,6 @@ const (
 	cacheUnavailableBody    = "cache unavailable"
 )
 
-func TestGetStatsOrEmpty(t *testing.T) {
-	t.Run("nil stats", func(t *testing.T) {
-		result := getStatsOrEmpty(nil)
-
-		assert.NotNil(t, result)
-		assert.Empty(t, result)
-	})
-
-	t.Run("non-nil stats", func(t *testing.T) {
-		input := map[string]any{"key": "value"}
-		result := getStatsOrEmpty(input)
-
-		assert.Equal(t, input, result)
-	})
-}
-
 // Manager fixtures shared by the readiness, lifecycle, app and debug-health tests.
 
 // newRealConnectorDBManager builds a DbManager over the REAL config.TenantStore and the
