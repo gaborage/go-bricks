@@ -67,8 +67,9 @@ func (b *ManagerConfigBuilder) resolveMaxSize(operatorValue int) int {
 // BuildDatabaseOptions creates database manager options from validated config.
 func (b *ManagerConfigBuilder) BuildDatabaseOptions() database.DbManagerOptions {
 	return database.DbManagerOptions{
-		MaxSize: b.resolveMaxSize(b.dbConfig.MaxSize),
-		IdleTTL: b.dbConfig.IdleTTL,
+		MaxSize:         b.resolveMaxSize(b.dbConfig.MaxSize),
+		IdleTTL:         b.dbConfig.IdleTTL,
+		CleanupInterval: b.dbConfig.CleanupInterval,
 	}
 }
 

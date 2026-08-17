@@ -270,10 +270,11 @@ func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 
 	t.Run("operator override reaches database options", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 100)
-		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: 33, IdleTTL: 8 * time.Minute}
+		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: 33, IdleTTL: 8 * time.Minute, CleanupInterval: 90 * time.Second}
 		opts := builder.BuildDatabaseOptions()
 		assert.Equal(t, 33, opts.MaxSize, "operator database.manager.maxsize override must reach DbManagerOptions")
 		assert.Equal(t, 8*time.Minute, opts.IdleTTL, "operator database.manager.idlettl override must reach DbManagerOptions")
+		assert.Equal(t, 90*time.Second, opts.CleanupInterval, "operator database.manager.cleanupinterval override must reach DbManagerOptions")
 	})
 
 	t.Run("multi-tenant database MaxSize honors operator override over tenant limit", func(t *testing.T) {

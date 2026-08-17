@@ -792,7 +792,7 @@ func TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval(t *testing.T
 	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
 		return dbtesting.NewTestDB("postgresql"), nil
 	}
-	dbManager := database.NewDbManager(&stubTenantResource{}, log, database.DbManagerOptions{MaxSize: 5, IdleTTL: 10 * time.Millisecond}, connector)
+	dbManager := database.NewDbManager(&stubTenantResource{}, log, database.DbManagerOptions{MaxSize: 5, IdleTTL: 10 * time.Millisecond, CleanupInterval: 20 * time.Millisecond}, connector)
 	defer func() { _ = dbManager.Close() }()
 
 	_, rel, err := dbManager.Get(context.Background(), testKey)
