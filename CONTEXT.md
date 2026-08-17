@@ -50,6 +50,14 @@ A database section that carries no identity field at all. Anything less than
 absence and less than complete is misconfiguration.
 _Avoid_: missing, unconfigured, disabled, empty
 
+**Tri-state setting**:
+A setting whose absence means "the documented default applies", distinct from
+an explicit off and from an explicit value. Encoded as a pointer
+(`cache.critical`, `keystore.secretminlength`) so a hand-built configuration
+cannot conflate absent with off — the koanf door tells them apart by key
+presence, the literal door only by nil.
+_Avoid_: optional, nullable, flag, opt-out (for the setting itself)
+
 **Delivered-but-empty**:
 A database section whose identity keys were delivered but every value is
 empty (an unset envsubst variable, an empty secretKeyRef). Misconfiguration,
