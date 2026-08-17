@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/logger"
+	pipeline "github.com/gaborage/go-bricks/messaging/internal/delivery"
 )
 
 const testQueueOtel = "test-queue"
@@ -35,6 +36,7 @@ func setupTestTracing(t *testing.T) (exporter *tracetest.InMemoryExporter, clean
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
+	pipeline.ResetTracerForTesting() // the delivery pipeline caches its tracer; bind it to tp
 
 	cleanup = func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
@@ -42,6 +44,7 @@ func setupTestTracing(t *testing.T) (exporter *tracetest.InMemoryExporter, clean
 		}
 		otel.SetTracerProvider(originalTP)
 		otel.SetTextMapPropagator(originalPropagator)
+		pipeline.ResetTracerForTesting()
 	}
 
 	return exporter, cleanup

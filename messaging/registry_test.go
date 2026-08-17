@@ -2861,7 +2861,8 @@ func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
 	// 47.0, AFTER = 38.0 allocs/op — fails the old per-delivery WithFields
 	// layer, passes the new per-event stamps with headroom. 38.0 predates
 	// PR2a's tracking collapse, which had already dropped this tree's baseline
-	// to 34.0 before the delivery pipeline (ADR-068) landed at 29.0 allocs/op.
+	// to 34.0 before the delivery pipeline (ADR-068) landed at 29.0 allocs/op
+	// (26.0 once it shared its span options and cached its tracer).
 	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
 }
 
