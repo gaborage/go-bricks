@@ -1553,6 +1553,43 @@ func TestBuildMessagingDeclarations(t *testing.T) {
 	})
 }
 
+// TestBuildMessagingDeclarationsPushesIntoResourceProvider pins the declarationSetter
+// push as the single mechanism that arms a provider: MultiTenantResourceProvider.Messaging
+// skips EnsureConsumers entirely while p.declarations is nil, so dropping the push would
+// leave per-tenant consumers silently never started.
+func TestBuildMessagingDeclarationsPushesIntoResourceProvider(t *testing.T) {
+	newAppWith := func(provider ResourceProvider) *App {
+		log := logger.New(envDebug, true)
+		return &App{
+			logger:           log,
+			registry:         NewModuleRegistry(&ModuleDeps{Logger: log, Config: &config.Config{}}),
+			resourceProvider: provider,
+		}
+	}
+
+	t.Run("single_tenant", func(t *testing.T) {
+		provider := NewSingleTenantResourceProvider(nil, nil, nil, nil)
+		require.Nil(t, provider.declarations, "the push is the only thing that can arm it")
+		a := newAppWith(provider)
+
+		require.NoError(t, a.buildMessagingDeclarations())
+
+		require.NotNil(t, a.messagingDeclarations)
+		assert.Same(t, a.messagingDeclarations, provider.declarations)
+	})
+
+	t.Run("multi_tenant", func(t *testing.T) {
+		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
+		require.Nil(t, provider.declarations, "the push is the only thing that can arm it")
+		a := newAppWith(provider)
+
+		require.NoError(t, a.buildMessagingDeclarations())
+
+		require.NotNil(t, a.messagingDeclarations)
+		assert.Same(t, a.messagingDeclarations, provider.declarations)
+	})
+}
+
 func TestShutdownResource(t *testing.T) {
 	t.Run("successful closure with name", func(t *testing.T) {
 		log := logger.New(envDebug, true)
