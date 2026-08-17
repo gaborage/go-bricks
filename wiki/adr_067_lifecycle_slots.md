@@ -70,7 +70,8 @@ Four stacked PRs, each under ~400 changed LoC and each self-contained:
 - **PR2 (this ADR's own PR) deletes the pass-through helpers** so the slot work starts from
   a clean surface: `MessagingInitializer` and `ConnectionPreWarmer` fold into unexported
   `App` methods, two unread `Options` fields go, and eight debug response types are
-  unexported. No behavior changes.
+  unexported. No behavior change on any supported construction path (see Consequences for
+  the hand-composed `Builder` note and the retired log lines).
 - **PR3** introduces `resourceSlot` and the four structs, and converts pre-init, probe and
   close to slot iteration.
 - **PR4** moves maintenance manager-side (decision 4).
@@ -109,9 +110,12 @@ Four stacked PRs, each under ~400 changed LoC and each self-contained:
   was built inside that step, so skipping the step left the gate nil. After PR2 the gate
   reads `a.dbManager`/`a.messagingManager` directly, both already set by the earlier
   `CreateApp` step, so that same skip now pre-warms where it previously didn't. The skip
-  still skips pre-initialization, which lives in the same step. Pre-warm never fails
-  startup, so this is a behavior note for an unsupported construction path, not a
-  regression.
+  still skips pre-initialization, which lives in the same step. Consumer bootstrap widened
+  the same way: `MessagingInitializer` was built in that step too, so the skip used to
+  no-op the AMQP consumer step, and it now runs `EnsureConsumers` — and unlike pre-warm,
+  which never fails startup, the #907 grading aborts startup when declared consumers cannot
+  start. Both are behavior notes for an unsupported construction path, not regressions;
+  the shipped `NewWithConfig` chain always runs `ConfigureRuntimeHelpers`.
 - **Watch:** `StartCleanup` becoming idempotent (PR4) means a caller that starts it twice
   no longer leaks a goroutine, but a caller that relied on a *second* call changing the
   interval must call `StopCleanup` first. That lands with PR4's own atom, not this one.
