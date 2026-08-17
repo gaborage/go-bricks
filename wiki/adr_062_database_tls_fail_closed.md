@@ -162,7 +162,10 @@ go-bricks passes that DSN through untouched.
   variables still migrates without TLS. That case is now a WARN on every run
   carrying `database.tls`, which is the strongest honest signal available —
   fail-closed would require parsing arbitrary Flyway configuration and would
-  false-positive on URLs assembled outside the conf file.
+  false-positive on URLs assembled outside the conf file. Tracked as #1047; the
+  only option that can actually guarantee TLS is for the framework to construct
+  the JDBC URL and pass `-url=` itself, which takes URL ownership from every
+  consumer and so needs its own ADR.
 - A `database:` block containing **only** `tls.*` fields remains invisible to
   `IsDatabaseConfigured` and is silently ignored, because none of the TLS keys
   is an ADR-047 identity marker. Unchanged by this ADR; a follow-up.

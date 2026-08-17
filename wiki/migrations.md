@@ -3207,7 +3207,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - verify: run `migrate` and read the WARN. The framework does not parse your conf, so it warns
   once per migrator whenever `database.tls` is set, naming the conf path; confirm from the
   database side (`pg_stat_ssl`) that the connection is actually encrypted, since the WARN
-  cannot.
+  cannot. Closing that last gap — so a TLS-configured migration cannot run in cleartext at
+  all — is tracked as #1047.
 - ref: [ADR-062](adr_062_database_tls_fail_closed.md) · [C60.1] · `migration/flyway.go`
 
 ---
