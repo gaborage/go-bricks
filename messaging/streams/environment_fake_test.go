@@ -179,6 +179,7 @@ func (f *fakeEnvironment) blockStoreOn(key string) (entered <-chan struct{}, rel
 	f.blockedStore = key
 	f.storeEntered = make(chan struct{})
 	f.storeRelease = make(chan struct{})
+	f.storeOnce = sync.Once{} // a second hook in one test gets a fresh one-shot
 	return f.storeEntered, f.storeRelease
 }
 

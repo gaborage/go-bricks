@@ -58,7 +58,7 @@ publishing ID is needed.
 This holds **only at the client's default `SubEntrySize` of 1** (`producer.go:219`). Sub-entry
 aggregation would batch several messages behind one entry and break the one-to-one mapping, so on the
 plain lane the production producer options are the client's defaults verbatim — no `Name`, no
-`SubEntrySize`, no compression — and `messaging/streams/manager.go`'s `newReliableProducer` carries
+`SubEntrySize`, no compression — and `messaging/streams/manager.go`'s `constructProducer` carries
 that note at the call site.
 
 The super lane reaches the same guarantee by a different route, which is worth stating because the
@@ -186,7 +186,7 @@ which is the known limitation above.
 `context.Background()` to `Publish` can wait for as long as the broker takes. Only an HTTP handler
 inherits a deadline for free — `server.timeout.middleware`, 5 s by default. Every other caller this
 lane attracts carries none: a stream consumer handler runs under `consumeContext`
-(`manager.go:249-251`), which is `context.WithCancel(context.WithoutCancel(ctx))` and therefore has no
+(`manager.go`'s `consumeContext`), which is `context.WithCancel(context.WithoutCancel(ctx))` and therefore has no
 deadline at all, and scheduled jobs and relays are the same. A consumer republishing downstream is the
 likeliest publisher on this lane and the one with nothing to inherit, so it must pass a deadline of
 its own.
