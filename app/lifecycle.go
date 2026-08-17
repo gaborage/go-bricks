@@ -66,8 +66,8 @@ func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, id
 // startup context: components it starts that outlive startup inherit that
 // context's values rather than beginning from a bare context.Background().
 // AMQP consumers are the one exception: they outlive prepareRuntime itself
-// and are stopped by shutdownConsumers (ADR-029), so they start from a
-// detached context.Background() rather than ctx.
+// and are stopped by shutdownConsumers (ADR-029), so they inherit only ctx's
+// values, never its cancellation.
 func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.buildMessagingDeclarations(); err != nil {
 		return err
@@ -79,10 +79,9 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
-	// Bare context.Background(), not ctx: consumers outlive prepareRuntime and are stopped
-	// by shutdownConsumers (ADR-029), never by the startup context — EnsureConsumers severs
-	// the caller's cancellation internally, so only its values would have carried.
-	if err := a.prepareRuntimeConsumers(context.Background(), decls); err != nil {
+	// Values only, no cancellation: consumers outlive prepareRuntime and are stopped by
+	// shutdownConsumers (ADR-029), never by the startup context.
+	if err := a.prepareRuntimeConsumers(context.WithoutCancel(ctx), decls); err != nil {
 		return err
 	}
 
