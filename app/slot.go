@@ -117,10 +117,7 @@ func (s *databaseSlot) preInit(ctx context.Context) error {
 }
 
 func (s *databaseSlot) closer() (namedCloser, bool) {
-	if s.app.dbManager == nil {
-		return namedCloser{}, false
-	}
-	return namedCloser{name: "database manager", closer: s.app.dbManager}, true
+	return slotCloser("database manager", s.app.dbManager)
 }
 
 // messagingSlot owns the AMQP kind.
@@ -149,10 +146,7 @@ func (s *messagingSlot) preInit(ctx context.Context) error {
 }
 
 func (s *messagingSlot) closer() (namedCloser, bool) {
-	if s.app.messagingManager == nil {
-		return namedCloser{}, false
-	}
-	return namedCloser{name: "messaging manager", closer: s.app.messagingManager}, true
+	return slotCloser("messaging manager", s.app.messagingManager)
 }
 
 // cacheSlot owns the cache kind.
@@ -179,28 +173,20 @@ func (s *cacheSlot) preInit(ctx context.Context) error {
 	if s.app.cacheManager == nil || s.absent {
 		return nil
 	}
-
-	ctx, cancel := startupContext(ctx, s.app.cfg.App.Startup.Cache)
-	defer cancel()
-
-	_, release, err := s.app.cacheManager.Get(ctx, "")
-	if err != nil {
-		if config.IsNotConfigured(err) {
-			s.app.logger.Debug().Msg("Skipping cache pre-initialization: not configured")
-			return nil
-		}
-		return err
+	err := s.app.preInitLease(ctx, s.name(), true, s.app.cfg.App.Startup.Cache,
+		func(ctx context.Context) (func(), error) {
+			_, release, err := s.app.cacheManager.Get(ctx, "")
+			return release, err
+		})
+	if config.IsNotConfigured(err) {
+		s.app.logger.Debug().Msgf("Skipping %s pre-initialization: not configured", s.name())
+		return nil
 	}
-	release() // startup probe only verifies connectivity; release the lease immediately
-	s.app.logger.Debug().Msg("Pre-initialized cache connection")
-	return nil
+	return err
 }
 
 func (s *cacheSlot) closer() (namedCloser, bool) {
-	if s.app.cacheManager == nil {
-		return namedCloser{}, false
-	}
-	return namedCloser{name: "cache manager", closer: s.app.cacheManager}, true
+	return slotCloser("cache manager", s.app.cacheManager)
 }
 
 // streamsSlot owns the native stream-protocol kind. Its manager does not exist until
@@ -226,10 +212,20 @@ func (s *streamsSlot) preInit(context.Context) error { return nil }
 func (s *streamsSlot) preInitFatal() bool { return false }
 
 func (s *streamsSlot) closer() (namedCloser, bool) {
-	if s.app.streamsManager == nil {
+	return slotCloser("streams manager", s.app.streamsManager)
+}
+
+// slotCloser hands a built manager to the FIFO close list. The nil test runs on the concrete
+// pointer, never on a boxed interface, so a nil manager contributes nothing instead of a
+// non-nil interface holding nil.
+func slotCloser[T any, P interface {
+	*T
+	Close() error
+}](name string, mgr P) (namedCloser, bool) {
+	if mgr == nil {
 		return namedCloser{}, false
 	}
-	return namedCloser{name: "streams manager", closer: s.app.streamsManager}, true
+	return namedCloser{name: name, closer: mgr}, true
 }
 
 // preInitLease is the arm the two startup-fatal kinds share: an unconfigured kind is skipped

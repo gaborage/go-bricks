@@ -133,29 +133,28 @@ func TestInstallSlotsCoversEveryKindInRegistrationOrder(t *testing.T) {
 // its manager. It is one table rather than four tests because the point being pinned is
 // that the SET is uniform — a fifth kind added tomorrow lands in it.
 func TestSlotWalksCoverEveryKind(t *testing.T) {
+	// The three classic kinds always describe themselves, with or without a manager (a nil
+	// manager reads disabled); only the closer set follows the managers that were built.
+	classicProbes := []string{componentDatabase, componentMessaging, componentCache}
 	cases := []struct {
 		name        string
 		withDB      bool
 		withMsg     bool
-		wantProbes  []string
 		wantClosers []string
 	}{
 		{
 			name:        "no_managers_probes_three_classic_kinds_and_closes_nothing",
-			wantProbes:  []string{componentDatabase, componentMessaging, componentCache},
 			wantClosers: []string{},
 		},
 		{
 			name:        "database_only",
 			withDB:      true,
-			wantProbes:  []string{componentDatabase, componentMessaging, componentCache},
 			wantClosers: []string{databaseCloserName},
 		},
 		{
 			name:        "database_and_messaging",
 			withDB:      true,
 			withMsg:     true,
-			wantProbes:  []string{componentDatabase, componentMessaging, componentCache},
 			wantClosers: []string{databaseCloserName, messagingCloserName},
 		},
 	}
@@ -164,7 +163,7 @@ func TestSlotWalksCoverEveryKind(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newSlotTestApp(t, tc.withDB, tc.withMsg)
 
-			assert.Equal(t, tc.wantProbes, probeNames(t, a.collectProbes()))
+			assert.Equal(t, classicProbes, probeNames(t, a.collectProbes()))
 
 			a.registerSlotClosers()
 			assert.Equal(t, tc.wantClosers, closerNames(a))
@@ -277,18 +276,17 @@ func TestSlotPreInitFatality(t *testing.T) {
 		name  string
 		kind  string
 		why   string
-		index int
 		fatal bool
 	}{
-		{name: "database_is_fatal", index: 0, kind: componentDatabase, fatal: true, why: "a misconfigured database must fail startup"},
-		{name: "messaging_is_fatal", index: 1, kind: componentMessaging, fatal: true, why: "a misconfigured broker must fail startup"},
-		{name: "cache_is_best_effort", index: 2, kind: componentCache, fatal: false, why: "an unreachable cache is a runtime condition"},
-		{name: "streams_is_best_effort", index: 3, kind: componentStreams, fatal: false, why: "streams has no pre-init"},
+		{name: "database_is_fatal", kind: componentDatabase, fatal: true, why: "a misconfigured database must fail startup"},
+		{name: "messaging_is_fatal", kind: componentMessaging, fatal: true, why: "a misconfigured broker must fail startup"},
+		{name: "cache_is_best_effort", kind: componentCache, fatal: false, why: "an unreachable cache is a runtime condition"},
+		{name: "streams_is_best_effort", kind: componentStreams, fatal: false, why: "streams has no pre-init"},
 	}
 
-	for _, tc := range cases {
+	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			slot := a.slots[tc.index]
+			slot := a.slots[i]
 			require.Equal(t, tc.kind, slot.name())
 			assert.Equal(t, tc.fatal, slot.preInitFatal(), tc.why)
 		})

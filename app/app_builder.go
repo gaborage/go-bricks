@@ -285,12 +285,21 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 // should fail fast), while the cache stays best-effort, because an unreachable cache is a
 // runtime condition — cache *misconfiguration* already aborted earlier, at manager
 // construction (CreateCacheManager).
+// requireSlots is the precondition every slot walk shares: CreateApp installed the slot list.
+// An empty walk would silently register no probe, no closer and pre-initialize nothing.
+func (b *Builder) requireSlots(step string) bool {
+	if len(b.app.slots) == 0 {
+		b.err = fmt.Errorf("slots not installed before %s — CreateApp must run first", step)
+		return false
+	}
+	return true
+}
+
 func (b *Builder) performPreInitialization() {
 	if b.err != nil {
 		return
 	}
-	if len(b.app.slots) == 0 {
-		b.err = errors.New("slots not installed before pre-initialization — CreateApp must run first")
+	if !b.requireSlots("pre-initialization") {
 		return
 	}
 
@@ -325,8 +334,7 @@ func (b *Builder) CreateHealthProbes() *Builder {
 		return b
 	}
 
-	if len(b.app.slots) == 0 {
-		b.err = errors.New("slots not installed before creating health probes — CreateApp must run first")
+	if !b.requireSlots("creating health probes") {
 		return b
 	}
 
@@ -401,8 +409,7 @@ func (b *Builder) RegisterClosers() *Builder {
 		return b
 	}
 
-	if len(b.app.slots) == 0 {
-		b.err = errors.New("slots not installed before registering closers — CreateApp must run first")
+	if !b.requireSlots("registering closers") {
 		return b
 	}
 
