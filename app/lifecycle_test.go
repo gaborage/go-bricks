@@ -945,6 +945,24 @@ func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	assert.NotContains(t, body, "streams_stats")
 }
 
+// TestReadyCheckWithoutConfigRendersAnEmptyAppBlock pins the nil-config guard: an App
+// assembled without a config (as some fixtures are) still answers 200 with an empty app
+// block instead of dereferencing nil, and a configured App renders its identity.
+func TestReadyCheckWithoutConfigRendersAnEmptyAppBlock(t *testing.T) {
+	app := &App{logger: logger.New("error", false)}
+	app.healthProbes = app.createHealthProbes(probeInputs{})
+
+	body, code := runReadyCheck(t, app, &config.Config{})
+
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, map[string]any{"name": "", "environment": "", "version": ""}, body["app"])
+
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	app.cfg = cfg
+	body, _ = runReadyCheck(t, app, cfg)
+	assert.Equal(t, map[string]any{"name": testApp, "environment": "test", "version": "1.0.0"}, body["app"])
+}
+
 // TestReadyCheckReportsStreamsWhenProbed is the other half: once the runtime probe is
 // registered the component and its stats reach the body.
 func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {

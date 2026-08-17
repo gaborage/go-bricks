@@ -1419,7 +1419,7 @@ Update the remaining call sites to `createHealthProbes(probeInputs{})` — the v
 
 Run: `go test ./app/ -count=1`
 
-Expected: `ok  github.com/gaborage/go-bricks/app`. Confirm the field is gone: `grep -rn 'cacheAbsent' --include='*.go' .` must print only the four `rootCacheAbsent` call/definition sites (`app/bootstrap.go`, `app/app_builder.go` ×2, `app/app_builder_test.go` ×2) and none naming `App.cacheAbsent`.
+Expected: `ok  github.com/gaborage/go-bricks/app`. Confirm the field is gone: `grep -rn 'cacheAbsent' --include='*.go' .` must print only `rootCacheAbsent` (definition + callers), `probeInputs.cacheAbsent` (field, its `inputs.cacheAbsent` read, the Builder literal and tests) — and nothing naming `App.cacheAbsent` or `a.cacheAbsent`.
 
 ### Step 5: Commit
 
@@ -1660,7 +1660,7 @@ Expected: no output at all. (`rootCacheAbsent` survives and does not match these
 
 - [ ] **Step 3: Pre-push gates, in order**
 
-`/simplify` → `make check` if it changed code → `/security-audit` → `make check` if it changed code → `/code-review` (CodeRabbit). The security audit should be pointed at the two things this diff moves: the `/ready` public projection (an allowlist replacing two denylists) and the fact that every probe now runs before the gate.
+`/simplify` → `make check` if it changed code → `/security-audit` → `make check` if it changed code → `/code-review` (CodeRabbit). The security audit should be pointed at the two things this diff moves: the `/ready` public projection (an allowlist replacing two denylists) and the two traversals — `/ready` still short-circuits at the first failing critical probe (`runUntilBlocking`), while the debug view runs every probe (`runReadinessProbes`).
 
 - [ ] **Step 4: Mutation gate**
 

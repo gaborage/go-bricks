@@ -560,5 +560,9 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		return c.JSON(http.StatusServiceUnavailable, notReadyBody(&blocking))
 	}
 
-	return c.JSON(http.StatusOK, report.readyBody(&a.cfg.App, time.Now()))
+	app := &config.AppConfig{}
+	if a.cfg != nil {
+		app = &a.cfg.App
+	}
+	return c.JSON(http.StatusOK, report.readyBody(app, time.Now()))
 }
