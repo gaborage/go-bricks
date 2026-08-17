@@ -236,6 +236,19 @@ func testManager(t *testing.T) *Manager {
 	})
 }
 
+// countOf reports how many times want appears in entries. assert.Contains alone
+// cannot see a duplicate: a partition flushed twice still contains its entry
+// once, so the shutdown-flush tests below count occurrences instead.
+func countOf(entries []string, want string) int {
+	n := 0
+	for _, e := range entries {
+		if e == want {
+			n++
+		}
+	}
+	return n
+}
+
 // TestManagerStopConsumersFlushesEveryTrackedStream extends the shutdown flush to
 // a consumer that tracks more than one stream: every partition's pending offset is
 // committed through the storer that reaches it, and only then is the consumer
@@ -256,8 +269,11 @@ func TestManagerStopConsumersFlushesEveryTrackedStream(t *testing.T) {
 
 	m.StopConsumers()
 
-	assert.Contains(t, fake.recorded(), callStoreOffset+":"+testConsumerName+"/"+testPartition0+"=11")
-	assert.Contains(t, fake.recorded(), callStoreOffset+":"+testConsumerName+"/"+testPartition1+"=501")
+	recorded := fake.recorded()
+	assert.Equal(t, 1, countOf(recorded, callStoreOffset+":"+testConsumerName+"/"+testPartition0+"=11"),
+		"partition 0 flushed exactly once")
+	assert.Equal(t, 1, countOf(recorded, callStoreOffset+":"+testConsumerName+"/"+testPartition1+"=501"),
+		"partition 1 flushed exactly once")
 	assert.Equal(t, []string{"close"}, consumer.events.recorded(), "the handle itself stores nothing")
 	assert.Empty(t, m.consumers)
 }
@@ -343,8 +359,11 @@ func TestManagerStopConsumersFlushesWithinBudget(t *testing.T) {
 
 	m.StopConsumers()
 
-	assert.Contains(t, fake.recorded(), callStoreOffset+":"+testConsumerName+"/"+testPartition0+"=11")
-	assert.Contains(t, fake.recorded(), callStoreOffset+":"+testConsumerName+"/"+testPartition1+"=501")
+	recorded := fake.recorded()
+	assert.Equal(t, 1, countOf(recorded, callStoreOffset+":"+testConsumerName+"/"+testPartition0+"=11"),
+		"partition 0 flushed exactly once")
+	assert.Equal(t, 1, countOf(recorded, callStoreOffset+":"+testConsumerName+"/"+testPartition1+"=501"),
+		"partition 1 flushed exactly once")
 	assert.Empty(t, log.warnStreams(msgFlushSkipped), "a flush that lands well inside the budget skips nothing")
 	assert.Equal(t, []string{"close"}, consumer.events.recorded())
 }
@@ -691,10 +710,14 @@ func TestManagerCloseWithoutEnvironmentIsIdempotent(t *testing.T) {
 	require.NoError(t, m.Close())
 }
 
+// TestManagerStats keeps offset_store_count at 9, distinct from the single
+// declared consumer: a threshold of 1 would equal stats["consumers"] and hide a
+// guard that swapped the two keys. Nine deliveries hit that threshold so the
+// last one still commits inline, leaving stored_offsets non-empty below.
 func TestManagerStats(t *testing.T) {
 	m := NewManager(ManagerOptions{
 		URI:                 unreachableTestURI,
-		OffsetStoreCount:    1,
+		OffsetStoreCount:    9,
 		OffsetStoreInterval: 2 * time.Second,
 		Logger:              logger.New("error", false),
 	})
@@ -702,7 +725,9 @@ func TestManagerStats(t *testing.T) {
 	startOnFake(t, m, fake, oneConsumerDecls())
 	consumer := fake.consumer(testStream)
 	require.NotNil(t, consumer)
-	consumer.deliver(testStream, 31, amqpMessage("payload"))
+	for offset := int64(23); offset <= 31; offset++ {
+		consumer.deliver(testStream, offset, amqpMessage("payload"))
+	}
 
 	stats := m.Stats()
 
@@ -710,7 +735,7 @@ func TestManagerStats(t *testing.T) {
 	assert.Equal(t, 1, stats["consumers"])
 	assert.Equal(t, true, stats["ready"])
 	assert.Equal(t, map[string]int64{testStream + "/" + testConsumerName: 31}, stats["stored_offsets"])
-	assert.Equal(t, 1, stats["offset_store_count"])
+	assert.Equal(t, 9, stats["offset_store_count"])
 	assert.Equal(t, "2s", stats["offset_flush_interval"])
 }
 
@@ -1759,6 +1784,10 @@ func TestManagerStartPromotionFallsBackToTheLocalCommit(t *testing.T) {
 	})
 	startOnFake(t, m, fake, decls)
 
+	opts := fake.consumerOptions(testStream)
+	require.NotNil(t, opts)
+	require.NotNil(t, opts.SingleActiveConsumer, "the premise: the SAC block reached the port")
+
 	consumer := fake.consumer(testStream)
 	require.NotNil(t, consumer)
 	consumer.deliver(testStream, 41, amqpMessage("payload"))
@@ -1857,10 +1886,11 @@ func TestManagerStartFlushesPlainThroughTheHandleAndSuperThroughThePort(t *testi
 
 			assert.Equal(t, tt.wantHandle, consumer.events.recorded())
 			portEntry := callStoreOffset + ":" + testConsumerName + "/" + tt.deliverOn + "=7"
+			recorded := fake.recorded()
 			if tt.wantPort {
-				assert.Contains(t, fake.recorded(), portEntry)
+				assert.Equal(t, 1, countOf(recorded, portEntry), "flushed exactly once through the port")
 			} else {
-				assert.NotContains(t, fake.recorded(), portEntry)
+				assert.NotContains(t, recorded, portEntry)
 			}
 		})
 	}
