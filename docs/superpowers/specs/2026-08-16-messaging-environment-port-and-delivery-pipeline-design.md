@@ -66,33 +66,33 @@
 
 ### Delivery pipeline (card 6) — Stack B PR2 (ADR-068 + atom) and PR3 (atom lines)
 
-7. **Location:** new `messaging/internal/delivery` package, importable by both
+1. **Location:** new `messaging/internal/delivery` package, importable by both
    lanes (`messaging/streams` already imports `messaging/internal/tracking`).
-8. **The pipeline owns the per-message context:** trace extraction from a
+2. **The pipeline owns the per-message context:** trace extraction from a
    carrier (`trace.HeaderAccessor` — the streams `propertyAccessor` already
    satisfies it), span (kind consumer), per-message `leasescope.Install`,
    `EnsureTraceID`, handler invocation, panic → error, one `RecordConsume` at
    completion with `error.type`, failure log with lane-supplied fields.
    Outcomes: `succeeded · handlerError · panicked`.
-9. **Settlement is a lane adapter:** AMQP ack / nack(requeue=false) /
+3. **Settlement is a lane adapter:** AMQP ack / nack(requeue=false) /
    nack(requeue=false); streams store-offset / skip / skip (ADR-059: commit only
    after success). "Never requeue" and "commit only on success" stay adapter
    policy. Publisher-side injection is untouched (consume-side only).
-10. **Telemetry values preserved per lane:** each lane supplies an attribute
+4. **Telemetry values preserved per lane:** each lane supplies an attribute
     bundle (span extras, metric attributes, log fields, destination strings);
     the pipeline owns *when* and *once*. The only telemetry that moves is the
     consumed counter — now recorded at completion with `error.type` on failure
     for both lanes.
-11. **Deletions:** exported `StartConsumeSpan` (repo policy: no compat shim;
+5. **Deletions:** exported `StartConsumeSpan` (repo policy: no compat shim;
     zero wiki/llms references; `!` + ADR-068 + atom), the receive-time
     `RecordAMQPConsumeMetrics` path, and the test-only `amqpDeliveryAccessor`
     (`registry.go:919-931`); `tracking` ends with one
     `RecordConsume(ctx, attrs, duration, err)` for both lanes.
-12. **Streams lane on the pipeline (PR3):** trace context extracted from
+6. **Streams lane on the pipeline (PR3):** trace context extracted from
     application properties (the consume span becomes a child of the producer's
     context), lease scope per delivery, unified metric; two atom lines for the
     two behavior changes.
-13. **PRs:** PR1 environment port + fake + in-process `Start` suite; PR2
+7. **PRs:** PR1 environment port + fake + in-process `Start` suite; PR2
     pipeline + AMQP lane + `StartConsumeSpan` removal + ADR-068 + atom; PR3
     streams lane migration.
 

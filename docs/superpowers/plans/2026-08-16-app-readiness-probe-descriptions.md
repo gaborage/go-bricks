@@ -24,10 +24,12 @@
 ### Task 1: The generic probe — `probeDescription` + `judge`
 
 **Files:**
+
 - Create: `app/readiness.go`
 - Test: `app/readiness_test.go`
 
 **Interfaces:**
+
 - Produces: `type probeDescription struct{ name string; critical, absent, perTenant, disabled bool; acquire func(context.Context) (live func(context.Context) error, release func(), err error); live func(context.Context) error; stats func() map[string]any }`, method `(probeDescription) Run(context.Context) HealthStatus` (satisfies `Prober`), helper `disabledProbe(name string) probeDescription`, sentinel errors `errPublisherNotReady`, `errStreamsNotOpen`.
 
 - [ ] **Step 1: Write the failing table test**
@@ -317,6 +319,7 @@ printf 'feat(app): add the generic readiness probe judged from a probe descripti
 ### Task 2: Per-kind descriptions replace the four probe constructors
 
 **Files:**
+
 - Modify: `app/readiness.go` (append the four constructors)
 - Modify: `app/health.go` — delete lines 15-18 (`cacheProbePingTimeout` moves), 43-140 (`healthProbeFunc`, database probe + helpers), 152-273 (messaging/streams/cache probes); keep `HealthStatus`, `Prober`, `componentReport`, `getStatsOrEmpty` (still used by `readyCheck`), move `convertCacheStatsToMap` to readiness.go
 - Modify: `app/app.go:23-44` — delete `notReadyStatus`; `app/app.go:100-121` — `createHealthProbes` builds three descriptions
@@ -324,6 +327,7 @@ printf 'feat(app): add the generic readiness probe judged from a probe descripti
 - Test: `app/readiness_test.go` (per-kind seam pins), `app/health_test.go` (rewrite)
 
 **Interfaces:**
+
 - Consumes: Task 1's `probeDescription`, `disabledProbe`, `errPublisherNotReady`, `errStreamsNotOpen`.
 - Produces: `databaseProbe(m *database.DbManager, perTenant bool) probeDescription`, `messagingProbe(m *messaging.Manager, perTenant bool) probeDescription`, `cacheProbe(m *cache.CacheManager, critical, absent, perTenant bool) probeDescription`, `streamsProbe(m *streams.Manager) probeDescription`; `createHealthProbes` now returns exactly three `Prober`s (database, messaging, cache) in that order.
 
@@ -592,6 +596,7 @@ printf 'refactor(app): judge every readiness kind from one probe description\n\n
 ### Task 3: Gates, docs touch, push
 
 **Files:**
+
 - Modify: `wiki/cache.md` (readiness section mentions the cache probe — confirm wording still true), `llms.txt:4667` (mentions "Messaging is never critical" — still true), no ADR in this PR (PR1b carries ADR-066 and atom C60.3; PR1a's visible changes are listed there).
 
 - [ ] **Step 1: `make check`** (background) — fix lint (importas ordering, unused, gocritic) until green.

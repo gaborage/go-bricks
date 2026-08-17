@@ -95,11 +95,11 @@ in this cluster (#870 #887 #888 #889 #881 #947 #956 #973).
 
 ### Lifecycle slots (card 3) — Stack A PR2–PR5, ADR-067
 
-11. **Slot shape:** unexported `resourceSlot` interface implemented by four
+1. **Slot shape:** unexported `resourceSlot` interface implemented by four
     unexported per-kind structs in `app/` (compiler-checked completeness).
     `App` keeps its typed manager fields for typed access (`ResourceProvider`
     needs concrete types); every lifecycle walk iterates the slot list.
-12. **Phases:** `probe()` → probe description · `preInit(ctx)` with a `fatal`
+2. **Phases:** `probe()` → probe description · `preInit(ctx)` with a `fatal`
     flag (database, messaging fatal; cache best-effort; streams none) ·
     `start(ctx)` in `prepareRuntime` (messaging: ensure consumers + the #907
     fail-vs-warn grading + await publisher ready; streams: `Manager.Start`,
@@ -107,20 +107,20 @@ in this cluster (#870 #887 #888 #889 #881 #947 #956 #973).
     check inside the slot; cache: none) · `stop(ctx)` before module `Shutdown`
     (messaging + streams stop consumers) · `close()` after (all four). No
     maintenance phase.
-13. **Maintenance is manager-side:** `DbManager` and `messaging.Manager`
+3. **Maintenance is manager-side:** `DbManager` and `messaging.Manager`
     self-start idle cleanup at construction when `IdleTTL > 0`, as
     `cache.NewCacheManager` does, and stop it in `Close()`; `StartCleanup`
     stays exported and becomes idempotent, `StopCleanup` stays; the
     cleanup-interval-vs-idle-TTL WARN moves beside the pool that owns both
     values; `startMaintenanceLoops`, `warnIfCleanupIntervalTooLate`,
     `shutdownManagers` delete. Atom line: cleanup now starts at construction.
-14. **Builder steps keep their names** (`CreateHealthProbes`,
+4. **Builder steps keep their names** (`CreateHealthProbes`,
     `RegisterClosers`) and iterate slots; renaming belongs to the "Builder
     collapse" candidate.
-15. **Streams slot** exists at build time with a nil manager (probe `disabled`)
+5. **Streams slot** exists at build time with a nil manager (probe `disabled`)
     and constructs + starts in `start`; ADR-029's shutdown order is preserved by
     the stop/close split.
-16. **PR2 kill list (zero references outside `app/`, zero doc mentions,
+6. **PR2 kill list (zero references outside `app/`, zero doc mentions,
     not consumer surface):** delete `MessagingInitializer`,
     `NewMessagingInitializer`, `CollectDeclarations`, `SetupLazyConsumerInit`,
     `IsAvailable` (both), `LogDeploymentMode`, `PrepareRuntimeConsumers`
@@ -139,7 +139,7 @@ in this cluster (#870 #887 #888 #889 #881 #947 #956 #973).
     `SignalHandler`/`TimeoutProvider` + impls (`Options` fields; keep `Run`
     testable); `IPWhitelist` (ADR-049 surface). ADR-067 + one atom listing every
     removed symbol land with PR2.
-17. **Slices:** PR2 kill dead surface → PR3 slot interface + iterate for
+7. **Slices:** PR2 kill dead surface → PR3 slot interface + iterate for
     pre-init / probe / close → PR4 maintenance manager-side → PR5 streams
     `start` phase folds `streams_setup.go` into the streams slot. Each < ~400
     LoC.
