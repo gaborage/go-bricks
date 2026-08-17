@@ -55,7 +55,8 @@ A setting whose absence means "the documented default applies", distinct from
 an explicit off and from an explicit value. Encoded as a pointer
 (`cache.critical`, `keystore.secretminlength`) so a hand-built configuration
 cannot conflate absent with off — the koanf door tells them apart by key
-presence, the literal door only by nil.
+presence (`cache.critical`) or by a registered default equal to the documented
+one (`keystore.secretminlength`), the literal door only by nil.
 _Avoid_: optional, nullable, flag, opt-out (for the setting itself)
 
 **Delivered-but-empty**:

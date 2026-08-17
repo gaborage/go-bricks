@@ -3501,7 +3501,7 @@ keystore:
 
 # EKS deployment (base64-encoded DER via env vars)
 keystore:
-  secretminlength: 32          # default 32; 0 disables the floor
+  secretminlength: 32          # default 32 when absent; explicit 0 disables the floor (deprecated, WARNs)
   keys:
     signing:
       public:
@@ -3602,8 +3602,9 @@ kstest.AssertKeyNotFound(t, mock, "nonexistent")
 - Symmetric `secret` entries are mutually exclusive with `public`/`private` — a
   mixed entry is a startup config error (structural detection, no discriminator)
 - `Secret(name)` returns a **defensive copy**; the caller owns it and may zeroize
-- `keystore.secretminlength` (default 32) enforces a byte floor at startup; an
-  explicit `0` disables it
+- `keystore.secretminlength` is tri-state (`*int`): absent/nil defaults to 32;
+  explicit `0` disables the floor (deprecated, WARNs, #1036); Go literals use
+  `new(n)`
 - Exactly one source per key: `file` (raw/DER path) or `value` (base64 string)
 - Fails fast at startup if any key cannot be loaded, parsed, or is too short
 - PKCS8 with PKCS1 fallback for private keys (handles legacy formats)

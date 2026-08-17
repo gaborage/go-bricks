@@ -44,6 +44,8 @@ func normalize(cfg *Config) error {
 		return fmt.Errorf("scheduler config: %w", err)
 	}
 
+	normalizeKeyStore(&cfg.KeyStore)
+
 	if err := normalizeMultitenant(&cfg.Multitenant, &cfg.Source); err != nil {
 		return fmt.Errorf("multitenant config: %w", err)
 	}

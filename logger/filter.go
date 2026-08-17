@@ -34,6 +34,8 @@ func DefaultFilterConfig() *FilterConfig {
 	return &FilterConfig{
 		SensitiveFields: []string{
 			sensitiveFieldPassword, "passwd", "pwd",
+			// "key" masks every field whose name contains it — "keys", "tenant_key",
+			// "cache_key" — so name a logical identifier "name" or "id", not "key".
 			sensitiveFieldSecret, "key", sensitiveFieldAPIKey, "apikey",
 			sensitiveFieldToken, "access_token", "refresh_token",
 			"auth", "authorization",

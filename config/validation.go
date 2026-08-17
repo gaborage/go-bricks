@@ -45,6 +45,11 @@ const (
 	// of truth for both the koanf default (loadDefaults) and the server-side
 	// wire-up fallback (server.SetupMiddlewares).
 	DefaultBodyLimitBytes int64 = 10 * 1024 * 1024
+
+	// DefaultKeyStoreSecretMinLength is the byte floor for symmetric keystore
+	// secrets when keystore.secretminlength is absent. Single source of truth for
+	// the koanf default (loadDefaults) and the normalize fill (normalizeKeyStore).
+	DefaultKeyStoreSecretMinLength = 32
 )
 
 // Messaging reconnection defaults
@@ -1300,12 +1305,23 @@ func validateOracleFields(cfg *DatabaseConfig) error {
 	return nil
 }
 
-// checkKeyStore returns nil if no keys are configured. SecretMinLength must be
-// non-negative. Each entry is either an RSA pair (public required with exactly
-// one source, private optional) or a symmetric secret — a mixed entry is
-// rejected.
+// normalizeKeyStore fills the nil default: an unset SecretMinLength becomes
+// DefaultKeyStoreSecretMinLength (32). An explicit 0 or N is left untouched —
+// 0 keeps the floor off (deprecated) and check rejects a negative. Nothing
+// here can fail.
+func normalizeKeyStore(cfg *KeyStoreConfig) {
+	if cfg.SecretMinLength == nil {
+		cfg.SecretMinLength = new(cfg.SecretFloor())
+	}
+}
+
+// checkKeyStore returns nil if no keys are configured. A set SecretMinLength
+// must be non-negative — nil is left alone since white-box tests call
+// checkKeyStore directly, before normalize has filled it. Each entry is
+// either an RSA pair (public required with exactly one source, private
+// optional) or a symmetric secret — a mixed entry is rejected.
 func checkKeyStore(cfg *KeyStoreConfig) error {
-	if cfg.SecretMinLength < 0 {
+	if cfg.SecretMinLength != nil && *cfg.SecretMinLength < 0 {
 		return NewValidationError("keystore.secretminlength", errMustBeNonNegative)
 	}
 

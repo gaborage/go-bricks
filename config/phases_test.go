@@ -181,6 +181,54 @@ func TestNormalizeManagerDefaultsRootOnly(t *testing.T) {
 	assert.Zero(t, cfg.Databases["reporting"].Manager)
 }
 
+// TestNormalizeKeyStoreDefaultsFloor pins the tri-state
+// keystore.secretminlength (ADR-065) on both configuration doors: nil fills
+// DefaultKeyStoreSecretMinLength (32) through normalize, an explicit 0 or N
+// survives untouched, and the koanf door renders the same default when the
+// key is absent.
+func TestNormalizeKeyStoreDefaultsFloor(t *testing.T) {
+	t.Run("literal_door_nil_fills_default", func(t *testing.T) {
+		cfg := createValidFullConfig()
+		require.NoError(t, Validate(cfg))
+		require.NotNil(t, cfg.KeyStore.SecretMinLength)
+		assert.Equal(t, DefaultKeyStoreSecretMinLength, *cfg.KeyStore.SecretMinLength)
+	})
+
+	t.Run("literal_door_explicit_zero_survives", func(t *testing.T) {
+		cfg := createValidFullConfig()
+		cfg.KeyStore.SecretMinLength = new(0)
+		require.NoError(t, Validate(cfg))
+		require.NotNil(t, cfg.KeyStore.SecretMinLength)
+		assert.Equal(t, 0, *cfg.KeyStore.SecretMinLength)
+	})
+
+	t.Run("literal_door_explicit_value_survives", func(t *testing.T) {
+		cfg := createValidFullConfig()
+		cfg.KeyStore.SecretMinLength = new(16)
+		require.NoError(t, Validate(cfg))
+		require.NotNil(t, cfg.KeyStore.SecretMinLength)
+		assert.Equal(t, 16, *cfg.KeyStore.SecretMinLength)
+	})
+
+	t.Run("koanf_door_absent_defaults", func(t *testing.T) {
+		cfg, err := loadDefaultConfig(t)
+		require.NoError(t, err)
+		require.NotNil(t, cfg.KeyStore.SecretMinLength)
+		assert.Equal(t, DefaultKeyStoreSecretMinLength, *cfg.KeyStore.SecretMinLength)
+	})
+
+	t.Run("koanf_door_explicit_zero", func(t *testing.T) {
+		clearEnvironmentVariables()
+		defer clearEnvironmentVariables()
+		t.Setenv("KEYSTORE_SECRETMINLENGTH", "0")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.NotNil(t, cfg.KeyStore.SecretMinLength)
+		assert.Equal(t, 0, *cfg.KeyStore.SecretMinLength)
+	})
+}
+
 // TestCheckSingleTenantConflictAfterNormalize pins the conflict rule through
 // the phase boundary: it now runs after root database and messaging
 // normalization, so a complete root section alongside static tenants must

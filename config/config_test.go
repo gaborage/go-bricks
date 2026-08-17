@@ -385,7 +385,7 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 	assert.Equal(t, "", k.String("log.output.file"))
 
 	// KeyStore symmetric-secret floor defaults to 32 bytes.
-	assert.Equal(t, 32, k.Int("keystore.secretminlength"))
+	assert.Equal(t, DefaultKeyStoreSecretMinLength, k.Int("keystore.secretminlength"))
 
 	// Cache readiness criticality is strict by default, so the key must stay unregistered:
 	// a default would populate the pointer and erase the absent-vs-explicit-false distinction
@@ -398,6 +398,27 @@ func TestLoadDefaultsInternalFunction(t *testing.T) {
 // whether an absent YAML key still reaches IsCacheCritical as nil. The sibling
 // `cache.enabled` assertion proves the block actually parsed, so a case cannot pass on Go's
 // zero value alone.
+func TestKeyStoreSecretFloorTriState(t *testing.T) {
+	var nilCfg *KeyStoreConfig
+	assert.Equal(t, DefaultKeyStoreSecretMinLength, nilCfg.SecretFloor())
+
+	tests := []struct {
+		name string
+		min  *int
+		want int
+	}{
+		{name: "nil_applies_default", min: nil, want: DefaultKeyStoreSecretMinLength},
+		{name: "zero_is_off", min: new(0), want: 0},
+		{name: "explicit_floor", min: new(16), want: 16},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &KeyStoreConfig{SecretMinLength: tt.min}
+			assert.Equal(t, tt.want, cfg.SecretFloor())
+		})
+	}
+}
+
 func TestIsCacheCriticalTriState(t *testing.T) {
 	const yamlEnabled = "cache:\n  enabled: true\n"
 
@@ -648,7 +669,8 @@ func TestEnvOverrideReachesRenamedKeys(t *testing.T) {
 	assert.Equal(t, 250, cfg.Outbox.BatchSize)
 	assert.True(t, cfg.Outbox.AutoCreateTable)
 	assert.Equal(t, 45*time.Second, cfg.Messaging.Reconnect.ConnectionTimeout)
-	assert.Equal(t, 64, cfg.KeyStore.SecretMinLength)
+	require.NotNil(t, cfg.KeyStore.SecretMinLength)
+	assert.Equal(t, 64, *cfg.KeyStore.SecretMinLength)
 	assert.Equal(t, []string{"pan", "cvv2", "otp"}, cfg.Log.SensitiveFields)
 }
 
@@ -1370,6 +1392,7 @@ func TestKoanfDefaultsMatchApplyDefaultsForSharedKeys(t *testing.T) {
 	applied := &Config{}
 	require.NoError(t, applyStartupDefaults(&applied.App.Startup))
 	applyRedisDefaults(&applied.Cache.Redis)
+	normalizeKeyStore(&applied.KeyStore)
 
 	assert.Equal(t, applied.App.Startup.Timeout, loaded.App.Startup.Timeout)
 	assert.Equal(t, applied.Cache.Redis.DialTimeout, loaded.Cache.Redis.DialTimeout)
@@ -1380,4 +1403,7 @@ func TestKoanfDefaultsMatchApplyDefaultsForSharedKeys(t *testing.T) {
 	assert.Equal(t, applied.Cache.Redis.MaxRetryBackoff, loaded.Cache.Redis.MaxRetryBackoff)
 	assert.Equal(t, applied.Cache.Redis.PoolSize, loaded.Cache.Redis.PoolSize)
 	assert.Equal(t, applied.Cache.Redis.Port, loaded.Cache.Redis.Port)
+	require.NotNil(t, loaded.KeyStore.SecretMinLength)
+	require.NotNil(t, applied.KeyStore.SecretMinLength)
+	assert.Equal(t, *applied.KeyStore.SecretMinLength, *loaded.KeyStore.SecretMinLength)
 }
