@@ -212,28 +212,62 @@ func RecordAMQPPublishMetrics(ctx context.Context, exchange, routingKey string, 
 	}
 }
 
-// consumeAttributes assembles the metric attribute set shared by the receive
-// counter and the receive duration histogram.
-func consumeAttributes(delivery *amqp.Delivery, queueName string, err error) []attribute.KeyValue {
+// ConsumeAttributes identifies one consumed message on the receive instruments.
+// A lane builds it once per message through AMQPConsumeAttributes or
+// StreamConsumeAttributes; the delivery pipeline decides when it is recorded.
+type ConsumeAttributes struct {
+	destination string
+	exchange    string
+	routingKey  string
+	queue       string
+}
+
+// AMQPConsumeAttributes identifies a classic-lane delivery: the OTel RabbitMQ
+// consumer destination plus the granular fields metric queries filter on.
+func AMQPConsumeAttributes(exchange, routingKey, queue string) ConsumeAttributes {
+	return ConsumeAttributes{
+		destination: formatDestinationName(exchange, routingKey, queue),
+		exchange:    exchange,
+		routingKey:  routingKey,
+		queue:       queue,
+	}
+}
+
+// StreamConsumeAttributes identifies a streams-lane delivery. The stream itself
+// is the destination: the stream protocol routes to a stream directly, so there
+// is no exchange and no routing key to attribute.
+func StreamConsumeAttributes(streamName string) ConsumeAttributes {
+	return ConsumeAttributes{destination: streamName}
+}
+
+// deliveryAttributes builds the bundle from a delivery, tolerating a nil one
+// for the exported receive-time recorders below.
+func deliveryAttributes(delivery *amqp.Delivery, queueName string) ConsumeAttributes {
 	var exchange, routingKey string
 	if delivery != nil {
 		exchange = delivery.Exchange
 		routingKey = delivery.RoutingKey
 	}
+	return AMQPConsumeAttributes(exchange, routingKey, queueName)
+}
 
-	attrs := []attribute.KeyValue{
+// slice renders the bundle plus the outcome as metric attributes. A granular
+// field the message did not carry is omitted rather than reported empty.
+func (a ConsumeAttributes) slice(err error) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 0, 7)
+	attrs = append(attrs,
 		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
 		attribute.String(attrMessagingOperation, operationReceive),
-		attribute.String(attrMessagingDestination, formatDestinationName(exchange, routingKey, queueName)),
+		attribute.String(attrMessagingDestination, a.destination),
+	)
+	if a.exchange != "" {
+		attrs = append(attrs, attribute.String(attrMessagingRabbitMQExchange, a.exchange))
 	}
-	if exchange != "" {
-		attrs = append(attrs, attribute.String(attrMessagingRabbitMQExchange, exchange))
+	if a.routingKey != "" {
+		attrs = append(attrs, attribute.String(attrMessagingRabbitMQRoutingKey, a.routingKey))
 	}
-	if routingKey != "" {
-		attrs = append(attrs, attribute.String(attrMessagingRabbitMQRoutingKey, routingKey))
-	}
-	if queueName != "" {
-		attrs = append(attrs, attribute.String(attrMessagingRabbitMQQueue, queueName))
+	if a.queue != "" {
+		attrs = append(attrs, attribute.String(attrMessagingRabbitMQQueue, a.queue))
 	}
 	if errorType := extractErrorType(err); errorType != "" {
 		attrs = append(attrs, attribute.String(attrErrorType, errorType))
@@ -241,14 +275,14 @@ func consumeAttributes(delivery *amqp.Delivery, queueName string, err error) []a
 	return attrs
 }
 
-// streamAttributes assembles the attribute set both stream-lane recorders share.
-// The stream itself is the destination: the stream protocol routes to a stream
-// directly, so there is no exchange and no routing key to attribute.
-func streamAttributes(streamName, operation string, err error) []attribute.KeyValue {
+// streamPublishAttributes assembles the attribute set for a stream-protocol
+// publish. The stream itself is the destination, so there is no exchange and no
+// routing key to attribute.
+func streamPublishAttributes(streamName string, err error) []attribute.KeyValue {
 	attrs := make([]attribute.KeyValue, 0, 4)
 	attrs = append(attrs,
 		attribute.String(attrMessagingSystem, messagingSystemRabbitMQ),
-		attribute.String(attrMessagingOperation, operation),
+		attribute.String(attrMessagingOperation, operationPublish),
 		attribute.String(attrMessagingDestination, streamName),
 	)
 	if errorType := extractErrorType(err); errorType != "" {
@@ -271,7 +305,7 @@ func RecordAMQPConsumeMetrics(ctx context.Context, delivery *amqp.Delivery, queu
 		return
 	}
 
-	commonAttrs := consumeAttributes(delivery, queueName, err)
+	commonAttrs := deliveryAttributes(delivery, queueName).slice(err)
 
 	// Record duration histogram (in seconds) - only if duration is > 0
 	if amqpOperationDuration != nil && duration > 0 {
@@ -300,25 +334,22 @@ func RecordAMQPConsumeCompletion(ctx context.Context, delivery *amqp.Delivery, q
 	if amqpOperationDuration == nil || duration <= 0 {
 		return
 	}
-	amqpOperationDuration.Record(ctx, durationToSeconds(duration), metric.WithAttributes(consumeAttributes(delivery, queueName, err)...))
+	amqpOperationDuration.Record(ctx, durationToSeconds(duration), metric.WithAttributes(deliveryAttributes(delivery, queueName).slice(err)...))
 }
 
-// RecordStreamConsume records the metrics for one native stream-protocol
-// delivery, reusing the AMQP instruments so both messaging lanes report under
-// the same names.
+// RecordConsume records one finished delivery on the receive instruments both
+// messaging lanes share: the duration histogram, and the consumed counter,
+// which increments regardless of the outcome — the message WAS consumed —
+// with error.type separating the failures.
 //
-// Unlike the AMQP lane — where StartConsumeSpan counts the delivery at receive
-// time and RecordAMQPConsumeCompletion only times it — a stream delivery is
-// recorded exactly once, after its handler returned. The consumed counter
-// therefore increments regardless of the handler outcome (the message WAS
-// consumed from the stream); error.type separates the failures.
-func RecordStreamConsume(ctx context.Context, streamName string, duration time.Duration, err error) {
+// The delivery pipeline calls this exactly once per message, at completion.
+func RecordConsume(ctx context.Context, attrs ConsumeAttributes, duration time.Duration, err error) {
 	meter := getAMQPMeter()
 	if meter == nil {
 		return
 	}
 
-	attrSet := metric.WithAttributes(streamAttributes(streamName, operationReceive, err)...)
+	attrSet := metric.WithAttributes(attrs.slice(err)...)
 
 	if amqpOperationDuration != nil && duration > 0 {
 		amqpOperationDuration.Record(ctx, durationToSeconds(duration), attrSet)
@@ -340,7 +371,7 @@ func RecordStreamPublish(ctx context.Context, streamName string, duration time.D
 		return
 	}
 
-	attrSet := metric.WithAttributes(streamAttributes(streamName, operationPublish, err)...)
+	attrSet := metric.WithAttributes(streamPublishAttributes(streamName, err)...)
 
 	if amqpOperationDuration != nil && duration > 0 {
 		amqpOperationDuration.Record(ctx, durationToSeconds(duration), attrSet)

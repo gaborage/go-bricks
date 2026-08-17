@@ -253,7 +253,7 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 
 	start := time.Now()
 	err := r.invoke(ctx, msg)
-	tracking.RecordStreamConsume(ctx, streamName, time.Since(start), err)
+	tracking.RecordConsume(ctx, tracking.StreamConsumeAttributes(streamName), time.Since(start), err)
 
 	if err != nil {
 		span.RecordError(err)
