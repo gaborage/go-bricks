@@ -313,6 +313,30 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
+// TestStartSlotsStopsAlreadyStartedKindsOnFatal pins the unwind on a failed start phase.
+// The kinds that came up own live inbound work — the messaging slot's consumers run under
+// context.WithoutCancel, so the aborting startup context never stops them — and Run returns
+// a prepareRuntime failure straight to the caller without calling Shutdown. Without this
+// unwind a service that failed to start would keep consuming after startup gave up.
+func TestStartSlotsStopsAlreadyStartedKindsOnFatal(t *testing.T) {
+	order := []string{}
+	a := &App{logger: logger.New("error", false)}
+	a.slots = []resourceSlot{
+		&recordingSlot{kind: componentDatabase, order: &order},
+		&recordingSlot{kind: componentMessaging, order: &order},
+		&recordingSlot{kind: componentCache, order: &order},
+		&recordingSlot{kind: componentStreams, order: &order, startFatal: assert.AnError},
+	}
+
+	err := a.startSlots(context.Background())
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{
+		"start:database", "start:messaging", "start:cache", "start:streams",
+		"stop:database", "stop:messaging", "stop:cache",
+	}, order, "every kind that started is stopped in registration order; the kind that failed is not")
+}
+
 // TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart pins the #907 grading end to
 // end, through the two arms that carry it: messagingSlot.start must return the bootstrap
 // failure as FATAL rather than advisory, and prepareRuntime must abort on it rather than

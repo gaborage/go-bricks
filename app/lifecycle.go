@@ -113,17 +113,24 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 }
 
 // startSlots runs every kind's start phase in registration order. A fatal error aborts
-// startup at the kind that reported it, so nothing after it runs. Advisory errors — the
-// best-effort single-tenant pre-warms — are aggregated into the one WARN prepareRuntime has
-// always emitted, and never fail startup. A fatal discards advisories already collected;
-// each kind logged its own WARN.
+// startup at the kind that reported it, so nothing after it runs, and the kinds already up
+// are stopped again before it is returned. Advisory errors — the best-effort single-tenant
+// pre-warms — are aggregated into the one WARN prepareRuntime has always emitted, and never
+// fail startup. A fatal discards advisories already collected; each kind logged its own WARN.
 func (a *App) startSlots(ctx context.Context) error {
 	var advisories []error
+	started := make([]resourceSlot, 0, len(a.slots))
 	for _, slot := range a.slots {
 		advisory, fatal := slot.start(ctx)
 		if fatal != nil {
+			// The kinds already up own live inbound work — the messaging slot's consumers run
+			// under context.WithoutCancel, so the aborting startup context never reaches them —
+			// and Run returns a prepareRuntime failure without calling Shutdown. Unwinding here
+			// is the only thing that stops them.
+			stopEach(ctx, started)
 			return fatal
 		}
+		started = append(started, slot)
 		if advisory != nil {
 			advisories = append(advisories, advisory)
 		}
@@ -140,7 +147,13 @@ func (a *App) startSlots(ctx context.Context) error {
 // stopSlots halts every kind's inbound work in registration order, before modules are torn
 // down (ADR-029). Connections stay open — the close phase, after module Shutdown, owns those.
 func (a *App) stopSlots(ctx context.Context) {
-	for _, slot := range a.slots {
+	stopEach(ctx, a.slots)
+}
+
+// stopEach runs the stop phase over slots in the order given. stop never fails, so there is
+// nothing to aggregate.
+func stopEach(ctx context.Context, slots []resourceSlot) {
+	for _, slot := range slots {
 		slot.stop(ctx)
 	}
 }
