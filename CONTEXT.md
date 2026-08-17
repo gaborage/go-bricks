@@ -69,9 +69,9 @@ _Avoid_: blank, partial, half-configured
 
 **Slot**:
 The framework-side module that owns one resource kind's whole application
-lifecycle — probe, pre-init, start, close. There is one slot per kind
-(database, messaging, cache, streams); the application iterates slots and never
-enumerates kinds itself.
+lifecycle — probe, pre-init, start, close — so that adding a kind is one slot,
+not an edit in every place that enumerates kinds. There is one slot per kind
+(database, messaging, cache, streams).
 _Avoid_: resource kind (that is what fills a slot), manager wrapper, component
 
 **Probe description**:

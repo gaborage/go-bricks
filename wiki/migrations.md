@@ -3242,7 +3242,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   You are looking for anything that matches one of the retired sub-status strings, pins a
   disabled kind's `messaging_stats`/`cache_stats` to `{}`, or alerts on the debug summary's
   `overall_status == unknown`.
-- scope: readiness is one module now (ADR-066): every kind is judged by the same
+- scope: this atom covers the first of the two readiness slices (ADR-066 §Delivery); the
+  second extends it with the `db_stats` → `database_stats` rename and the debug-summary
+  changes. Readiness is one module now (ADR-066): every kind is judged by the same
   lease → liveness → status machine from a probe description, so the strings each kind used
   to invent are gone. Status codes do not change for any kind that was ready before —
   `disabled`, `not_configured`, `per_tenant` and `healthy` still answer 200, and only a

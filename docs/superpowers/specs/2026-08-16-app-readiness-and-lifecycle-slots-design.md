@@ -61,6 +61,13 @@ in this cluster (#870 #887 #888 #889 #881 #947 #956 #973).
    per-component `ready` retire; `degraded` stays aggregate-only. The
    `details.status` sub-status strings (`no_active_connections`,
    `connection_failed`, `not_ready`) collapse into the same vocabulary.
+   Precedence in the judge: a kind with no manager is `disabled` (nothing is
+   leased); otherwise an `absent` kind is `not_configured` (or `per_tenant`)
+   without leasing; otherwise a lease that fails as not-configured is
+   `not_configured`/`per_tenant`, any other lease or liveness failure is
+   `unhealthy`, and success is `healthy`. A default-connector cache with
+   `cache.enabled: false` still has a manager, so it reads `not_configured`,
+   never `disabled` (wiki/cache.md's table).
 4. **One gate:** `/ready` answers 503 for the first *failing && critical*
    component; the debug summary counts *failing* as errors and
    *failing && critical* as critical from the same predicate. `not_configured`,
