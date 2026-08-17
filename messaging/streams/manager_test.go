@@ -1101,8 +1101,9 @@ func TestSafeEnvError(t *testing.T) {
 
 // TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the
 // environment was never stored, so Close is a no-op. The post-dial half — where
-// the environment exists and must be disposed — needs a broker and lives in
-// TestStreamsManagerDisposesEnvironmentOnDeclareFailureIntegration.
+// the environment exists and must be disposed — is
+// TestManagerStartUnwindsAFailedDeclaration, in process against the Environment
+// port.
 func TestManagerStartFailedDialLeavesNothingToDispose(t *testing.T) {
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
 	decls := NewDeclarations()
