@@ -1,16 +1,17 @@
 package streams
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
+	"testing"
 
+	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/ha"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
+	"github.com/stretchr/testify/require"
 )
-
-// errProducerConstruction is the broker failure a test injects at the port.
-var errProducerConstruction = errors.New("producer construction failed")
 
 // The calls a fakeEnvironment records, in the order it made them. A target is
 // appended after a colon so a test asserts WHICH stream a phase reached, not only
@@ -31,6 +32,29 @@ const (
 	callClose              = "close"
 )
 
+// errDeclareFailed, errConsumerStart and errProducerConstruction are the broker
+// failures a test injects at the port.
+var (
+	errDeclareFailed        = errors.New("declaration refused")
+	errConsumerStart        = errors.New("consumer start refused")
+	errProducerConstruction = errors.New("producer construction failed")
+)
+
+// deliveryStorer is the commit target the fake hands each delivery, standing in
+// for the *stream.Consumer the client passes its own callback: an in-flight
+// commit goes through the consumer that delivered the message, on ITS connection,
+// never through the Environment port or the reliable handle above it. It writes
+// where QueryOffset answers from, so a committed position is observable.
+type deliveryStorer struct {
+	env      *fakeEnvironment
+	consumer string
+	stream   string
+}
+
+func (s deliveryStorer) StoreCustomOffset(offset int64) error {
+	return s.env.storeFromConsumer(s.consumer, s.stream, offset)
+}
+
 // fakeConsumer is one consumer the fake environment handed back: the handle the
 // manager tracks, plus the callbacks a test drives it through.
 type fakeConsumer struct {
@@ -49,6 +73,19 @@ type fakeConsumer struct {
 	// sac is the promotion callback the manager installed, nil when the
 	// declaration did not ask for single active consumer.
 	sac stream.ConsumerUpdate
+}
+
+// deliver pushes one message through the runner exactly as the client's read
+// loop would, including the delivering consumer it commits through.
+func (c *fakeConsumer) deliver(streamName string, offset int64, msg *amqp.Message) {
+	c.handler(streamName, offset, msg,
+		deliveryStorer{env: c.env, consumer: c.name, stream: streamName})
+}
+
+// promote fires the single-active-consumer promotion callback, which is where a
+// per-partition stored offset is restored.
+func (c *fakeConsumer) promote(streamName string) stream.OffsetSpecification {
+	return c.sac(streamName, true)
 }
 
 // fakeSuperHandle stands in for *ha.ReliableSuperStreamConsumer. It delegates to
@@ -117,10 +154,43 @@ func (f *fakeEnvironment) failOn(key string, err error) {
 	f.errs[key] = err
 }
 
+// setOffset seeds the broker's stored offset for one consumer and stream.
+func (f *fakeEnvironment) setOffset(consumer, streamName string, offset int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.offsets[consumer+"/"+streamName] = offset
+}
+
+// storedOffset reports what the broker holds, whichever path committed it.
+func (f *fakeEnvironment) storedOffset(consumer, streamName string) (int64, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	offset, ok := f.offsets[consumer+"/"+streamName]
+	return offset, ok
+}
+
 func (f *fakeEnvironment) recorded() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
+}
+
+func (f *fakeEnvironment) consumer(streamName string) *fakeConsumer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.consumers[streamName]
+}
+
+func (f *fakeEnvironment) consumerOptions(streamName string) *stream.ConsumerOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.consumerOpts[streamName]
+}
+
+func (f *fakeEnvironment) producer(streamName string) *fakeProducer {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.producers[streamName]
 }
 
 func (f *fakeEnvironment) superProducerOptions(superStream string) *stream.SuperStreamProducerOptions {
@@ -153,6 +223,21 @@ func (f *fakeEnvironment) errForLocked(method, target string) error {
 		return err
 	}
 	return f.errs[method]
+}
+
+// storeFromConsumer records a commit made through a delivering consumer rather
+// than through the port, and writes it where QueryOffset answers from.
+func (f *fakeEnvironment) storeFromConsumer(consumer, streamName string, offset int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	key := consumer + "/" + streamName
+	f.recordLocked(fmt.Sprintf("%s:%s=%d", callConsumerStore, key, offset))
+	if err := f.errForLocked(callConsumerStore, key); err != nil {
+		return err
+	}
+	f.offsets[key] = offset
+	return nil
 }
 
 func (f *fakeEnvironment) DeclareStream(name string, _ *stream.StreamOptions) error {
@@ -304,3 +389,33 @@ func (f *fakeEnvironment) Close() error {
 func dialFake(m *Manager, fake *fakeEnvironment) {
 	m.dialEnvironment = func(*stream.EnvironmentOptions) (environment, error) { return fake, nil }
 }
+
+// startOnFake runs a real Start against fake, so a test asserts on state Start
+// actually produced instead of state a helper fabricated.
+func startOnFake(t *testing.T, m *Manager, fake *fakeEnvironment, decls *Declarations) {
+	t.Helper()
+	dialFake(m, fake)
+	require.NoError(t, m.Start(context.Background(), decls))
+}
+
+// oneConsumerDecls is the plain lane's minimum: one stream, one consumer on it.
+func oneConsumerDecls() *Declarations {
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+	return decls
+}
+
+// superConsumerDecls is the partitioned lane's minimum: one super stream, one
+// consumer across every partition of it.
+func superConsumerDecls() *Declarations {
+	decls := NewDeclarations()
+	decls.DeclareSuperStream(testSuperStream, testPartitions, nil)
+	decls.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+		SuperStream: testSuperStream, Name: testConsumerName, Handler: noopHandler,
+	})
+	return decls
+}
+
+// ptrTo is how a table tells "no stored offset" from "stored offset 0".
+func ptrTo[T any](v T) *T { return &v }

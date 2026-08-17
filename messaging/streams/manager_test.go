@@ -1561,3 +1561,318 @@ func TestManagerRebindRevivesAPublisherAfterAStopCycle(t *testing.T) {
 	publishConfirmed(t, p, second, &PublishMessage{Data: []byte(testBody)})
 	assert.Zero(t, first.sentCount(), "the revived publisher sends through the new producer, not the disposed one")
 }
+
+// TestManagerStartDeclaresBindsThenStarts pins Start's phase order against the
+// port. Publishers bind BEFORE consumers start because a handler may publish from
+// its very first delivery, and an unbound publisher would reject it with
+// ErrPublisherNotStarted; both declare phases come first because neither a
+// producer nor a consumer can attach to a stream that does not exist.
+func TestManagerStartDeclaresBindsThenStarts(t *testing.T) {
+	m := testManager(t)
+	fake := newFakeEnvironment()
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareSuperStream(testSuperStream, testPartitions, nil)
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+
+	startOnFake(t, m, fake, decls)
+
+	assert.Equal(t, []string{
+		callDeclareStream + ":" + testStream,
+		callDeclareSuperStream + ":" + testSuperStream,
+		callNewProducer + ":" + testStream,
+		callQueryOffset + ":" + testConsumerName + "/" + testStream,
+		callNewConsumer + ":" + testStream,
+	}, fake.recorded())
+	assert.True(t, m.started)
+	assert.Len(t, m.consumers, 1)
+	assert.Len(t, m.publishers, 1)
+}
+
+// TestManagerStartUnwindsAFailedDeclaration is abortStartLocked in process: the
+// environment was already dialed, so a caller that treats the error as fatal
+// without calling Close must leak nothing, and a retried Start must not orphan
+// the previous connection pool.
+func TestManagerStartUnwindsAFailedDeclaration(t *testing.T) {
+	m := testManager(t)
+	failing := newFakeEnvironment()
+	failing.failOn(callDeclareStream+":"+testStream, errDeclareFailed)
+	dialFake(m, failing)
+
+	err := m.Start(context.Background(), oneConsumerDecls())
+
+	require.ErrorIs(t, err, errDeclareFailed)
+	assert.Contains(t, err.Error(), `failed to declare stream "`+testStream+`"`)
+	assert.Contains(t, failing.recorded(), callClose, "the dialed environment is disposed by the failed Start itself")
+	assert.Nil(t, m.env)
+	assert.Empty(t, m.consumers)
+	assert.Empty(t, m.publishers)
+	assert.False(t, m.started)
+
+	// The unwind has to leave the manager startable, or a retry would be refused
+	// by the already-started guard for the rest of the process's life.
+	healthy := newFakeEnvironment()
+	startOnFake(t, m, healthy, oneConsumerDecls())
+	assert.True(t, m.started)
+}
+
+// TestManagerStartUnwindsAFailedConsumerStart is the unwind's other entry point,
+// and the one with something to undo: a publisher was already bound, so the
+// unwind has to close it rather than leave a producer attached to an environment
+// it is about to dispose.
+func TestManagerStartUnwindsAFailedConsumerStart(t *testing.T) {
+	m := testManager(t)
+	fake := newFakeEnvironment()
+	fake.failOn(callNewConsumer+":"+testStream, errConsumerStart)
+	dialFake(m, fake)
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+
+	err := m.Start(context.Background(), decls)
+
+	require.ErrorIs(t, err, errConsumerStart)
+	assert.Contains(t, err.Error(), `failed to start consumer "`+testConsumerName+`" on stream "`+testStream+`"`)
+	assert.True(t, fake.producer(testStream).isClosed(), "the publisher bound before the failure is closed")
+	assert.ErrorIs(t, publisher.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}),
+		ErrPublisherClosed)
+	assert.Contains(t, fake.recorded(), callClose)
+	assert.Nil(t, m.env)
+	assert.False(t, m.started)
+}
+
+// TestManagerStartResolvesTheAttachPosition drives resolveOffset through Start.
+// Only a MISSING offset may fall back to the declared start: any other query
+// failure answered with a start position would SKIP, fatally so for the
+// zero-value OffsetNext, and streams have no redelivery to get it back.
+func TestManagerStartResolvesTheAttachPosition(t *testing.T) {
+	tests := []struct {
+		name     string
+		stored   *int64
+		queryErr error
+		start    OffsetStart
+		want     stream.OffsetSpecification
+	}{
+		{
+			name:   "stored_offset_resumes_one_past_it",
+			stored: ptrTo(int64(17)),
+			start:  OffsetFirst(),
+			want:   stream.OffsetSpecification{}.Offset(18),
+		},
+		{
+			name:  "no_stored_offset_uses_the_declared_start",
+			start: OffsetFirst(),
+			want:  stream.OffsetSpecification{}.First(),
+		},
+		{
+			name:     "query_failure_without_a_local_commit_replays_from_first",
+			queryErr: errors.New("boom"),
+			start:    OffsetNext(),
+			want:     stream.OffsetSpecification{}.First(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := testManager(t)
+			fake := newFakeEnvironment()
+			if tt.stored != nil {
+				fake.setOffset(testConsumerName, testStream, *tt.stored)
+			}
+			if tt.queryErr != nil {
+				fake.failOn(callQueryOffset, tt.queryErr)
+			}
+
+			decls := NewDeclarations()
+			decls.DeclareStream(testStream, nil)
+			decls.DeclareConsumer(&ConsumerOptions{
+				Stream: testStream, Name: testConsumerName, Start: tt.start, Handler: noopHandler,
+			})
+			startOnFake(t, m, fake, decls)
+
+			opts := fake.consumerOptions(testStream)
+			require.NotNil(t, opts)
+			assert.Equal(t, tt.want, opts.Offset)
+		})
+	}
+}
+
+// TestManagerStartPromotionResolvesTheOffsetAgain exercises the single active
+// consumer promotion callback the client fires from its own goroutine: another
+// group member may have advanced the offset while this one was passive, so the
+// position is resolved again rather than reused from attach time.
+func TestManagerStartPromotionResolvesTheOffsetAgain(t *testing.T) {
+	m := testManager(t)
+	fake := newFakeEnvironment()
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream: testStream, Name: testConsumerName, SAC: true, Start: OffsetFirst(), Handler: noopHandler,
+	})
+	startOnFake(t, m, fake, decls)
+
+	require.Equal(t, stream.OffsetSpecification{}.First(), fake.consumerOptions(testStream).Offset,
+		"the premise: nothing was stored when the consumer attached")
+
+	// Another member committed while this one was passive.
+	fake.setOffset(testConsumerName, testStream, 41)
+
+	assert.Equal(t, stream.OffsetSpecification{}.Offset(42), fake.consumer(testStream).promote(testStream))
+}
+
+// TestManagerStartPromotionFallsBackToTheLocalCommit is resolveOffset's third
+// branch, which only a promotion can reach: the broker cannot be asked, but this
+// process committed a position for the stream itself, so that is the closest
+// truth available and is no older than the broker's.
+func TestManagerStartPromotionFallsBackToTheLocalCommit(t *testing.T) {
+	m := NewManager(ManagerOptions{
+		URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
+	})
+	fake := newFakeEnvironment()
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream: testStream, Name: testConsumerName, SAC: true, Start: OffsetNext(), Handler: noopHandler,
+	})
+	startOnFake(t, m, fake, decls)
+
+	consumer := fake.consumer(testStream)
+	consumer.deliver(testStream, 41, amqpMessage("payload"))
+	require.Equal(t, map[string]int64{testStream: 41}, m.consumers[0].offsets.stored(),
+		"the premise: this process committed 41")
+
+	fake.failOn(callQueryOffset, errors.New("boom"))
+
+	assert.Equal(t, stream.OffsetSpecification{}.Offset(42), consumer.promote(testStream),
+		"a broker that cannot be asked resumes from the local commit, never from the declared start")
+}
+
+// TestManagerStartCommitsInFlightThroughTheDeliveringConsumer pins the commit
+// path the Environment port must NOT have moved: an in-flight commit goes through
+// the consumer that delivered the message, on its connection — neither through
+// the reliable handle above it nor through the port's locator. Both kinds behave
+// identically here; the asymmetry is the shutdown flush's alone.
+func TestManagerStartCommitsInFlightThroughTheDeliveringConsumer(t *testing.T) {
+	tests := []struct {
+		name        string
+		decls       func() *Declarations
+		trackedName string
+		deliverOn   string
+	}{
+		{name: "plain_stream", decls: oneConsumerDecls, trackedName: testStream, deliverOn: testStream},
+		{name: "super_stream_partition", decls: superConsumerDecls, trackedName: testSuperStream, deliverOn: testPartition0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewManager(ManagerOptions{
+				URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
+			})
+			fake := newFakeEnvironment()
+			startOnFake(t, m, fake, tt.decls())
+
+			consumer := fake.consumer(tt.trackedName)
+			consumer.deliver(tt.deliverOn, 7, amqpMessage("payload"))
+
+			key := testConsumerName + "/" + tt.deliverOn
+			assert.Contains(t, fake.recorded(), callConsumerStore+":"+key+"=7")
+			assert.NotContains(t, fake.recorded(), callStoreOffset+":"+key+"=7",
+				"an in-flight commit never goes through the Environment port")
+			assert.Empty(t, consumer.events.recorded(),
+				"nor through the reliable handle the manager tracks")
+
+			offset, ok := fake.storedOffset(testConsumerName, tt.deliverOn)
+			require.True(t, ok, "the commit reaches the broker's offset store")
+			assert.Equal(t, int64(7), offset)
+			assert.Equal(t, map[string]int64{tt.deliverOn: 7}, m.consumers[0].offsets.stored())
+		})
+	}
+}
+
+// TestManagerStartFlushesPlainThroughTheHandleAndSuperThroughThePort is the
+// offset-storer asymmetry, which lives entirely in the SHUTDOWN flush: a plain
+// consumer's handle is an offsetStorer, while *ha.ReliableSuperStreamConsumer has
+// no StoreCustomOffset at all, so its partitions commit through the port.
+func TestManagerStartFlushesPlainThroughTheHandleAndSuperThroughThePort(t *testing.T) {
+	tests := []struct {
+		name        string
+		decls       func() *Declarations
+		trackedName string
+		deliverOn   string
+		wantHandle  []string
+		wantPort    bool
+	}{
+		{
+			name:  "plain_stream_flushes_through_its_own_handle",
+			decls: oneConsumerDecls, trackedName: testStream, deliverOn: testStream,
+			wantHandle: []string{"store:7", "close"}, wantPort: false,
+		},
+		{
+			name:  "super_stream_flushes_through_the_port",
+			decls: superConsumerDecls, trackedName: testSuperStream, deliverOn: testPartition0,
+			wantHandle: []string{"close"}, wantPort: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A high threshold leaves the delivery pending, so the flush has work.
+			m := NewManager(ManagerOptions{
+				URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
+			})
+			fake := newFakeEnvironment()
+			startOnFake(t, m, fake, tt.decls())
+
+			consumer := fake.consumer(tt.trackedName)
+			consumer.deliver(tt.deliverOn, 7, amqpMessage("payload"))
+			require.Empty(t, consumer.events.recorded(), "the premise: the offset is still pending")
+
+			m.StopConsumers()
+
+			assert.Equal(t, tt.wantHandle, consumer.events.recorded())
+			portEntry := callStoreOffset + ":" + testConsumerName + "/" + tt.deliverOn + "=7"
+			if tt.wantPort {
+				assert.Contains(t, fake.recorded(), portEntry)
+			} else {
+				assert.NotContains(t, fake.recorded(), portEntry)
+			}
+		})
+	}
+}
+
+// TestManagerStartRunsTheHandlerForADeliveredMessage is the delivery path end to
+// end through Start: the port hands the runner a message, the module's handler
+// sees the framework's view of it, and the offset is committed after success.
+func TestManagerStartRunsTheHandlerForADeliveredMessage(t *testing.T) {
+	var got *Message
+	m := NewManager(ManagerOptions{
+		URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
+	})
+	fake := newFakeEnvironment()
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream: testStream, Name: testConsumerName,
+		Handler: func(_ context.Context, msg *Message) error {
+			got = msg
+			return nil
+		},
+	})
+	startOnFake(t, m, fake, decls)
+
+	fake.consumer(testStream).deliver(testStream, 55, amqpMessage("payload"))
+
+	require.NotNil(t, got)
+	assert.Equal(t, []byte("payload"), got.Data)
+	assert.Equal(t, int64(55), got.Offset)
+	assert.Equal(t, testStream, got.Stream)
+	assert.Equal(t, map[string]any{"kind": "test"}, got.Properties)
+	assert.Contains(t, fake.recorded(), callConsumerStore+":"+testConsumerName+"/"+testStream+"=55")
+}
