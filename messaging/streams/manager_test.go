@@ -236,22 +236,6 @@ func testManager(t *testing.T) *Manager {
 	})
 }
 
-// attach wires a fake consumer into a manager as if Start had created it: one
-// stream, whose flush target is the handle itself — the plain lane's shape. Its
-// last caller is a publisher test, retired in the follow-up commit.
-func attach(m *Manager, handle *fakeHandle, tracker *offsetTracker) {
-	book := bookOf(tracker)
-	book.trackerFor(testStream)
-	m.consumers = append(m.consumers, &runningConsumer{
-		stream:    testStream,
-		name:      testConsumerName,
-		handle:    handle,
-		offsets:   book,
-		storerFor: func(string) offsetStorer { return handle },
-	})
-	m.started = true
-}
-
 // TestManagerStopConsumersFlushesEveryTrackedStream extends the shutdown flush to
 // a consumer that tracks more than one stream: every partition's pending offset is
 // committed through the storer that reaches it, and only then is the consumer
@@ -1189,20 +1173,6 @@ func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {
 	assert.Nil(t, m.env)
 }
 
-// attachPublisher wires a fake producer into a manager as if Start had bound it.
-func attachPublisher(m *Manager, handle *fakeProducer) *Publisher {
-	return rebindPublisher(m, newPublisher(testStream, false), handle)
-}
-
-// rebindPublisher binds an EXISTING publisher to a new producer, which is what a
-// second Manager.Start does to the handle a module has held since declaration.
-func rebindPublisher(m *Manager, p *Publisher, handle *fakeProducer) *Publisher {
-	p.bind(handle)
-	m.publishers = append(m.publishers, p)
-	m.started = true
-	return p
-}
-
 // twoPublishers declares a pair so the fan-out has a second iteration to reach —
 // with one declaration, stopping early and running to completion look identical.
 func twoPublishers(t *testing.T) *Declarations {
@@ -1462,13 +1432,19 @@ func TestManagerRoutingKeyExtractorReportsAnUnregisteredMessage(t *testing.T) {
 // the consumers rather than the other way round.
 func TestManagerStopClosesPublishersAfterConsumers(t *testing.T) {
 	m := testManager(t)
+	fake := newFakeEnvironment()
 
 	var order []string
-	consumer := &fakeHandle{status: ha.StatusOpen, onClose: func() { order = append(order, "consumer") }}
-	attach(m, consumer, newOffsetTracker(1000, time.Hour, nil))
 	producer := openProducer()
 	producer.onClose = func() { order = append(order, "publisher") }
-	attachPublisher(m, producer)
+	fake.useProducer(producer)
+
+	decls := oneConsumerDecls()
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	startOnFake(t, m, fake, decls)
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	consumer.events.onClose = func() { order = append(order, "consumer") }
 
 	m.StopConsumers()
 
@@ -1482,8 +1458,13 @@ func TestManagerStopClosesPublishersAfterConsumers(t *testing.T) {
 // sweep the caller would hang for the whole shutdown.
 func TestManagerStopFailsAnInFlightPublish(t *testing.T) {
 	m := testManager(t)
+	fake := newFakeEnvironment()
 	producer := blockingProducer(t)
-	p := attachPublisher(m, producer)
+	fake.useProducer(producer)
+
+	decls := onePublisher(t)
+	startOnFake(t, m, fake, decls)
+	p := decls.publishers[0].Publisher
 
 	done := publishAsync(context.Background(), p, &PublishMessage{Data: []byte(testBody)})
 	waitForSend(t, producer)
@@ -1498,9 +1479,11 @@ func TestManagerStopFailsAnInFlightPublish(t *testing.T) {
 func TestManagerStopReportsAPublisherCloseFailure(t *testing.T) {
 	log := &recordingLogger{}
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	fake := newFakeEnvironment()
 	producer := openProducer()
 	producer.closeErr = errors.New("close failed")
-	attachPublisher(m, producer)
+	fake.useProducer(producer)
+	startOnFake(t, m, fake, onePublisher(t))
 
 	assert.NotPanics(t, m.StopConsumers)
 
@@ -1513,7 +1496,8 @@ func TestManagerStopReportsAPublisherCloseFailure(t *testing.T) {
 func TestManagerStopIsSilentOnACleanPublisherClose(t *testing.T) {
 	log := &recordingLogger{}
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
-	attachPublisher(m, openProducer())
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, onePublisher(t))
 
 	m.StopConsumers()
 
@@ -1536,7 +1520,9 @@ func TestManagerReadyRequiresEveryPublisher(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := testManager(t)
-			attachPublisher(m, &fakeProducer{status: tt.status})
+			fake := newFakeEnvironment()
+			fake.useProducer(&fakeProducer{status: tt.status})
+			startOnFake(t, m, fake, onePublisher(t))
 
 			assert.Equal(t, tt.want, m.Ready())
 		})
@@ -1545,7 +1531,8 @@ func TestManagerReadyRequiresEveryPublisher(t *testing.T) {
 
 func TestManagerStatsCountsPublishers(t *testing.T) {
 	m := testManager(t)
-	attachPublisher(m, openProducer())
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, onePublisher(t))
 
 	stats := m.Stats()
 
@@ -1561,16 +1548,24 @@ func TestManagerStatsCountsPublishers(t *testing.T) {
 // so the rebind has to reopen it or the second Start comes up publishing nothing.
 func TestManagerRebindRevivesAPublisherAfterAStopCycle(t *testing.T) {
 	m := testManager(t)
+	decls := onePublisher(t)
+	p := decls.publishers[0].Publisher
+
+	firstEnv := newFakeEnvironment()
 	first := openProducer()
-	p := attachPublisher(m, first)
+	firstEnv.useProducer(first)
+	startOnFake(t, m, firstEnv, decls)
 
 	m.StopConsumers()
+	require.NoError(t, m.Close())
 
 	require.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}), ErrPublisherClosed)
 	assert.False(t, m.Ready(), "a stopped manager is not ready")
 
+	secondEnv := newFakeEnvironment()
 	second := openProducer()
-	rebindPublisher(m, p, second)
+	secondEnv.useProducer(second)
+	startOnFake(t, m, secondEnv, decls)
 
 	assert.True(t, m.Ready(), "the second start comes up ready")
 	publishConfirmed(t, p, second, &PublishMessage{Data: []byte(testBody)})

@@ -128,7 +128,10 @@ type fakeEnvironment struct {
 	// kept as its own map, keyed the same way, rather than folded into a struct,
 	// so superProdOpts and its existing accessor stay untouched.
 	superProdConfirmed map[string]ha.PartitionConfirmMessageHandler
-	preparedProds      map[string]*fakeProducer
+	// preparedProd is handed back by every producer construction, plain or super,
+	// rather than one per stream: every test that prepares a producer starts a
+	// single publisher. Key it by stream the day one of them starts two.
+	preparedProd *fakeProducer
 
 	// blockedStore parks one StoreOffset key until release closes, standing in for
 	// the client's locator reconnect loop against a broker that is down: it has no
@@ -151,7 +154,6 @@ func newFakeEnvironment() *fakeEnvironment {
 		producerCalls:      map[string]*producerCall{},
 		superProdOpts:      map[string]*stream.SuperStreamProducerOptions{},
 		superProdConfirmed: map[string]ha.PartitionConfirmMessageHandler{},
-		preparedProds:      map[string]*fakeProducer{},
 	}
 }
 
@@ -160,6 +162,15 @@ func (f *fakeEnvironment) failOn(key string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.errs[key] = err
+}
+
+// useProducer makes the fake hand back p instead of a default open producer, so
+// a test can start a manager on a producer that blocks, that refuses to close,
+// or that reports a status of its choosing.
+func (f *fakeEnvironment) useProducer(p *fakeProducer) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.preparedProd = p
 }
 
 func (f *fakeEnvironment) blockStoreOn(key string) (entered <-chan struct{}, release chan<- struct{}) {
@@ -402,8 +413,8 @@ func (f *fakeEnvironment) NewSuperStreamProducer(superStream string, opts *strea
 }
 
 func (f *fakeEnvironment) newProducerLocked(streamName string) *fakeProducer {
-	p, ok := f.preparedProds[streamName]
-	if !ok {
+	p := f.preparedProd
+	if p == nil {
 		p = openProducer()
 	}
 	f.producers[streamName] = p
