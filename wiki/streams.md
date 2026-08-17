@@ -388,7 +388,7 @@ off `msg.Properties`.
 ### Readiness, stats and shutdown
 
 Publishers count on the same non-critical `streams` probe as consumers: `/ready`
-reports `not_ready` unless every bound publisher's connection is open, and the
+reports `unhealthy` unless every bound publisher's connection is open, and the
 `streams_stats` body carries a `publishers` count beside `consumers`. The probe
 exists for a publisher-only service too — the manager is built whenever anything
 was declared.
@@ -426,7 +426,7 @@ a confirmed publish** — a failed or abandoned one is visible as duration with 
 
 `/ready` gains a `streams` component (and `streams_stats`) once anything is
 declared on this lane: `healthy` while every consumer and publisher is
-connected, `not_ready` whenever one is not — reconnecting, closed, or the
+connected, `unhealthy` whenever one is not — reconnecting, closed, or the
 manager stopped. The probe is **non-critical** —
 the reliable consumers and producers recover on their own, so a broker flap must
 not pull the whole service out of the load

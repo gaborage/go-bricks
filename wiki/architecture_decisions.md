@@ -1341,6 +1341,30 @@ opt-out stays but is deprecated; a later ADR is expected to remove it (#1036). S
 
 ---
 
+### [ADR-066: Readiness Is One Module — One Status Vocabulary, One Gate, One Body Rule](adr_066_readiness_one_module.md)
+
+**Date:** 2026-08-16 | **Status:** Accepted
+
+Readiness was written once per kind: three copies of the lease → liveness → status machine in
+`app/health.go`, each inventing its own sub-status strings, plus two different readiness
+*models* reading them — `/ready` gated on `Err != nil && Critical` while the debug summary gated
+on a status list — so a not-ready messaging client or a streams manager with closed consumers
+was 200 on `/ready` and `overall_status: unknown` on the debug view. Readiness becomes one
+module (`app/readiness.go`): every kind hands it a **probe description** (name, criticality
+decided once, absence, per-tenancy, how to lease, how to check liveness, statistics) and one
+machine judges all of them. One status vocabulary (`healthy · unhealthy · not_configured ·
+disabled · per_tenant`, `unhealthy` always with an `Err`), one gate (*failing && critical*)
+shared by `/ready` and the debug summary, one body rule (`<name>` + `<name>_stats` per kind,
+public allowlist, ADR-048 sanitized error text). `Prober`/`HealthStatus` are unchanged.
+
+**Key Benefits:** The next readiness rule lands in one file; adding a kind is one description.
+**Watch:** visible strings move — streams `not_ready` → `unhealthy`, the `details.status`
+sub-strings collapse into the vocabulary, messaging/cache read `per_tenant` in multi-tenant
+deployments, a disabled kind's stats render `{"status":"disabled"}`, and (second slice)
+`db_stats` becomes `database_stats`. No Go API change. See [migrations.md](migrations.md) `[C60.3]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -1350,7 +1374,7 @@ opt-out stays but is deprecated; a later ADR is expected to remove it (#1036). S
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-065) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-066) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

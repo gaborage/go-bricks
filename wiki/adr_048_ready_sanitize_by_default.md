@@ -125,7 +125,10 @@ covers the case this ADR exists for — a critical probe with no `PublicErr`, dr
 **`healthProbeFunc.publicErr` is now set by no framework probe.** The field and its
 `HealthStatus.PublicErr` plumbing are kept as the in-package override seam, exercised by
 `TestHealthProbeFuncRun`. Deleting it would leave an exported `PublicErr` that the
-framework's own `Prober` implementation could not populate.
+framework's own `Prober` implementation could not populate. ([ADR-066](adr_066_readiness_one_module.md)
+later replaced `healthProbeFunc` with a probe description that carries no such field:
+`HealthStatus.PublicErr` stays the exported override seam for consumer-implemented
+`Prober`s — `TestPublicProbeError` pins it — and no framework kind sets it.)
 
 **The generalized rule, which outlives this seam.** Everything `/ready` returns is public at
 **any** status code — the `200` body just as much as the `503` this ADR governs, and the `200`
