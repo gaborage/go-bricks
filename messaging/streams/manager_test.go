@@ -1310,6 +1310,12 @@ func TestManagerBindPublisherTracksAConstructedProducer(t *testing.T) {
 		"the producer is built for the declared stream, through the plain constructor")
 	assert.Equal(t, []*Publisher{decl.Publisher}, m.publishers)
 	assert.Equal(t, ha.StatusOpen, decl.Publisher.status(), "the handle is bound to the new producer")
+
+	call := fake.producerCall(testStream)
+	require.NotNil(t, call, "the port must have captured the plain producer's construction call")
+	assert.NotNil(t, call.opts, "stream.NewProducerOptions() must reach the constructor")
+	assert.NotNil(t, call.confirmed,
+		"the confirmation handler must reach the constructor, or the publisher's sends are never correlated")
 }
 
 // onePublisher declares a single publisher — the shape where a cancellation
@@ -1376,6 +1382,8 @@ func TestManagerBindPublisherBuildsASuperProducerForASuperTarget(t *testing.T) {
 	require.NotNil(t, opts)
 	strategy, ok := opts.RoutingStrategy.(*stream.HashRoutingStrategy)
 	require.True(t, ok, "hash routing is the only strategy offered")
+	assert.NotNil(t, fake.superProducerConfirmed(testSuperStream),
+		"the partition confirmation handler must reach the constructor, or the publisher's sends are never correlated")
 
 	registered := amqp.NewMessage([]byte(testBody))
 	decl.Publisher.pending.add(registered, testRoutingKey)

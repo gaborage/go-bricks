@@ -36,7 +36,13 @@ type environment interface {
 // vendorEnvironment is the production adapter over the stream client.
 type vendorEnvironment struct{ env *stream.Environment }
 
-var _ environment = vendorEnvironment{}
+// A vendor bump that drops StoreCustomOffset from the plain consumer must fail
+// the build here, not silently stop the shutdown flush's runtime assertion in
+// manager.go.
+var (
+	_ environment  = vendorEnvironment{}
+	_ offsetStorer = (*ha.ReliableConsumer)(nil)
+)
 
 // dialVendorEnvironment opens the port against a real broker.
 //

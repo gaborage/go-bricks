@@ -57,6 +57,17 @@ type fakeConsumer struct {
 // routes a super stream's shutdown flush through the Environment port.
 type fakeSuperHandle struct{ h *fakeHandle }
 
+// producerCall captures what the plain producer constructor received for one
+// stream: the options a test asserts stream.NewProducerOptions() reached the
+// port with, and the confirmation handler the publisher bound to correlate its
+// own sends. The super lane captures the same two things in superProdOpts and
+// superProdConfirmed instead, because it already had the options half before
+// this struct existed.
+type producerCall struct {
+	opts      *stream.ProducerOptions
+	confirmed ha.ConfirmMessageHandler
+}
+
 func (f *fakeSuperHandle) Close() error   { return f.h.Close() }
 func (f *fakeSuperHandle) GetStatus() int { return f.h.GetStatus() }
 
@@ -74,21 +85,28 @@ type fakeEnvironment struct {
 	consumers     map[string]*fakeConsumer
 	consumerOpts  map[string]*stream.ConsumerOptions
 	producers     map[string]*fakeProducer
+	producerCalls map[string]*producerCall
 	superProdOpts map[string]*stream.SuperStreamProducerOptions
-	preparedProds map[string]*fakeProducer
+	// superProdConfirmed is superProdOpts' sibling for the confirmation handler:
+	// kept as its own map, keyed the same way, rather than folded into a struct,
+	// so superProdOpts and its existing accessor stay untouched.
+	superProdConfirmed map[string]ha.PartitionConfirmMessageHandler
+	preparedProds      map[string]*fakeProducer
 }
 
 var _ environment = (*fakeEnvironment)(nil)
 
 func newFakeEnvironment() *fakeEnvironment {
 	return &fakeEnvironment{
-		errs:          map[string]error{},
-		offsets:       map[string]int64{},
-		consumers:     map[string]*fakeConsumer{},
-		consumerOpts:  map[string]*stream.ConsumerOptions{},
-		producers:     map[string]*fakeProducer{},
-		superProdOpts: map[string]*stream.SuperStreamProducerOptions{},
-		preparedProds: map[string]*fakeProducer{},
+		errs:               map[string]error{},
+		offsets:            map[string]int64{},
+		consumers:          map[string]*fakeConsumer{},
+		consumerOpts:       map[string]*stream.ConsumerOptions{},
+		producers:          map[string]*fakeProducer{},
+		producerCalls:      map[string]*producerCall{},
+		superProdOpts:      map[string]*stream.SuperStreamProducerOptions{},
+		superProdConfirmed: map[string]ha.PartitionConfirmMessageHandler{},
+		preparedProds:      map[string]*fakeProducer{},
 	}
 }
 
@@ -109,6 +127,22 @@ func (f *fakeEnvironment) superProducerOptions(superStream string) *stream.Super
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.superProdOpts[superStream]
+}
+
+// producerCall reads back what NewProducer received for one stream, or nil if
+// the plain constructor was never reached for it.
+func (f *fakeEnvironment) producerCall(streamName string) *producerCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.producerCalls[streamName]
+}
+
+// superProducerConfirmed is superProducerOptions' sibling for the confirmation
+// handler NewSuperStreamProducer received for one super stream.
+func (f *fakeEnvironment) superProducerConfirmed(superStream string) ha.PartitionConfirmMessageHandler {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.superProdConfirmed[superStream]
 }
 
 // recordLocked and errForLocked are called with f.mu held.
@@ -221,8 +255,8 @@ func consumerUpdateOf(sac *stream.SingleActiveConsumer) stream.ConsumerUpdate {
 	return sac.ConsumerUpdate
 }
 
-func (f *fakeEnvironment) NewProducer(streamName string, _ *stream.ProducerOptions,
-	_ ha.ConfirmMessageHandler,
+func (f *fakeEnvironment) NewProducer(streamName string, opts *stream.ProducerOptions,
+	confirmed ha.ConfirmMessageHandler,
 ) (producerHandle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -231,11 +265,12 @@ func (f *fakeEnvironment) NewProducer(streamName string, _ *stream.ProducerOptio
 	if err := f.errForLocked(callNewProducer, streamName); err != nil {
 		return nil, err
 	}
+	f.producerCalls[streamName] = &producerCall{opts: opts, confirmed: confirmed}
 	return f.newProducerLocked(streamName), nil
 }
 
 func (f *fakeEnvironment) NewSuperStreamProducer(superStream string, opts *stream.SuperStreamProducerOptions,
-	_ ha.PartitionConfirmMessageHandler,
+	confirmed ha.PartitionConfirmMessageHandler,
 ) (producerHandle, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -245,6 +280,7 @@ func (f *fakeEnvironment) NewSuperStreamProducer(superStream string, opts *strea
 		return nil, err
 	}
 	f.superProdOpts[superStream] = opts
+	f.superProdConfirmed[superStream] = confirmed
 	return f.newProducerLocked(superStream), nil
 }
 
