@@ -528,10 +528,10 @@ func assertHasAttribute(t *testing.T, attrs []attribute.KeyValue, key, expectedV
 	t.Errorf("Attribute %s not found", key)
 }
 
-// setupRecordConsume installs a fresh meter provider bound to fresh instruments
+// setupMeter installs a fresh meter provider bound to fresh instruments
 // and returns it. The instruments are package singletons, so the reset must
 // bracket the test on both sides or state leaks into siblings.
-func setupRecordConsume(t *testing.T) *obtest.TestMeterProvider {
+func setupMeter(t *testing.T) *obtest.TestMeterProvider {
 	t.Helper()
 	prev := otel.GetMeterProvider()
 	mp := obtest.NewTestMeterProvider()
@@ -547,9 +547,9 @@ func setupRecordConsume(t *testing.T) *obtest.TestMeterProvider {
 }
 
 func TestRecordConsumeCarriesAMQPAttributes(t *testing.T) {
-	mp := setupRecordConsume(t)
+	mp := setupMeter(t)
 
-	RecordConsume(context.Background(), AMQPConsumeAttributes("events", testRoutingKey, testQueueName), 25*time.Millisecond, nil)
+	RecordConsume(context.Background(), AMQPConsumeAttributes(testExchange, testRoutingKey, testQueueName), 25*time.Millisecond, nil)
 
 	rm := mp.Collect(t)
 
@@ -562,8 +562,8 @@ func TestRecordConsumeCarriesAMQPAttributes(t *testing.T) {
 	attrs := histData.DataPoints[0].Attributes.ToSlice()
 	assertHasAttribute(t, attrs, attrMessagingSystem, messagingSystemRabbitMQ)
 	assertHasAttribute(t, attrs, attrMessagingOperation, operationReceive)
-	assertHasAttribute(t, attrs, attrMessagingDestination, "events:test.key:test-queue")
-	assertHasAttribute(t, attrs, attrMessagingRabbitMQExchange, "events")
+	assertHasAttribute(t, attrs, attrMessagingDestination, "test.exchange:test.key:test-queue")
+	assertHasAttribute(t, attrs, attrMessagingRabbitMQExchange, testExchange)
 	assertHasAttribute(t, attrs, attrMessagingRabbitMQRoutingKey, testRoutingKey)
 	assertHasAttribute(t, attrs, attrMessagingRabbitMQQueue, testQueueName)
 	assertAttributeAbsent(t, attrs, attrErrorType)
@@ -572,7 +572,7 @@ func TestRecordConsumeCarriesAMQPAttributes(t *testing.T) {
 }
 
 func TestRecordConsumeOmitsTheGranularAttributesTheDeliveryDidNotCarry(t *testing.T) {
-	mp := setupRecordConsume(t)
+	mp := setupMeter(t)
 
 	// The default exchange with no routing key: only the queue identifies it.
 	RecordConsume(context.Background(), AMQPConsumeAttributes("", "", testQueueName), time.Millisecond, nil)
@@ -592,7 +592,7 @@ func TestRecordConsumeOmitsTheGranularAttributesTheDeliveryDidNotCarry(t *testin
 }
 
 func TestRecordConsumeUsesTheStreamAsItsOwnDestination(t *testing.T) {
-	mp := setupRecordConsume(t)
+	mp := setupMeter(t)
 
 	RecordConsume(context.Background(), StreamConsumeAttributes(testStreamName), 15*time.Millisecond, nil)
 
@@ -617,7 +617,7 @@ func TestRecordConsumeUsesTheStreamAsItsOwnDestination(t *testing.T) {
 }
 
 func TestRecordConsumeCountsAFailedDeliveryWithItsErrorType(t *testing.T) {
-	mp := setupRecordConsume(t)
+	mp := setupMeter(t)
 
 	RecordConsume(context.Background(), StreamConsumeAttributes(testStreamName), 5*time.Millisecond, errors.New("handler failed"))
 
@@ -642,7 +642,7 @@ func TestRecordConsumeCountsAFailedDeliveryWithItsErrorType(t *testing.T) {
 }
 
 func TestRecordConsumeZeroDurationSkipsHistogram(t *testing.T) {
-	mp := setupRecordConsume(t)
+	mp := setupMeter(t)
 
 	RecordConsume(context.Background(), StreamConsumeAttributes(testStreamName), 0, nil)
 

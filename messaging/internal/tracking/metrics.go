@@ -214,7 +214,7 @@ func RecordAMQPPublishMetrics(ctx context.Context, exchange, routingKey string, 
 
 // ConsumeAttributes identifies one consumed message on the receive instruments.
 // A lane builds it once per message through AMQPConsumeAttributes or
-// StreamConsumeAttributes; the delivery pipeline decides when it is recorded.
+// StreamConsumeAttributes; the lane's consume path decides when it is recorded.
 type ConsumeAttributes struct {
 	destination string
 	exchange    string
@@ -342,7 +342,7 @@ func RecordAMQPConsumeCompletion(ctx context.Context, delivery *amqp.Delivery, q
 // which increments regardless of the outcome — the message WAS consumed —
 // with error.type separating the failures.
 //
-// The delivery pipeline calls this exactly once per message, at completion.
+// Each lane's consume path calls this exactly once per message, at completion.
 func RecordConsume(ctx context.Context, attrs ConsumeAttributes, duration time.Duration, err error) {
 	meter := getAMQPMeter()
 	if meter == nil {
