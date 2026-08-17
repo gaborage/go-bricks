@@ -753,16 +753,12 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 	}
 }
 
-// processMessage runs one delivery through the delivery pipeline and settles it.
-// Settlement is this lane's, not the pipeline's: ack on success, negative
-// acknowledgment WITHOUT requeue on a handler error or a panic, which prevents
-// infinite retry loops. Queues declared with x-dead-letter-exchange route the
-// nacked message to that exchange (retained only if a binding delivers it to a
-// queue); queues without one drop it (logged by logOutcome).
-// DeclareQueueWithDLQ declares that full route in one call.
+// processMessage runs one delivery through the delivery pipeline and settles it
+// by outcome. Settlement is this lane's, not the pipeline's: ack on success,
+// nack on a handler error or a panic.
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
 	res := pipeline.Run(ctx, &pipeline.Request{
-		Carrier:     &amqpHeaderAccessor{headers: delivery.Headers},
+		Carrier:     amqpHeaderAccessor{headers: delivery.Headers},
 		Destination: consumer.Queue,
 		BodySize:    len(delivery.Body),
 		SpanExtras:  consumeSpanExtras(delivery),
@@ -773,15 +769,18 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 			return consumer.Handler.Handle(msgCtx, delivery)
 		},
 		LogOutcome: func(res *pipeline.Result) {
-			r.logOutcome(res, consumer, delivery)
+			logOutcome(res, consumer, delivery)
 		},
 	})
 
+	if consumer.AutoAck {
+		return // No manual ack/nack needed
+	}
 	if res.Outcome == pipeline.Succeeded {
-		r.ackMessage(delivery, consumer.AutoAck, res.Log, res.TraceID)
+		ackMessage(delivery, res.Log, res.TraceID)
 		return
 	}
-	r.nackMessage(delivery, consumer.AutoAck, res.Log, res.TraceID)
+	nackMessage(delivery, res.Log, res.TraceID)
 }
 
 // consumeSpanExtras renders this lane's span attributes, on top of the four the
@@ -790,7 +789,7 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 func consumeSpanExtras(delivery *amqp.Delivery) []attribute.KeyValue {
 	extras := make([]attribute.KeyValue, 0, 4)
 	if delivery.Exchange != "" {
-		extras = append(extras, attribute.String("messaging.rabbitmq.exchange", delivery.Exchange))
+		extras = append(extras, attribute.String(attrMessagingRabbitMQExchange, delivery.Exchange))
 	}
 	if delivery.RoutingKey != "" {
 		extras = append(extras, semconv.MessagingRabbitMQDestinationRoutingKey(delivery.RoutingKey))
@@ -822,7 +821,7 @@ func logProcessing(log logger.Logger, traceID string, delivery *amqp.Delivery) {
 }
 
 // logOutcome writes this lane's line for a finished delivery.
-func (r *Registry) logOutcome(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery) {
+func logOutcome(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery) {
 	switch res.Outcome {
 	case pipeline.Succeeded:
 		res.Log.Info().
@@ -831,11 +830,11 @@ func (r *Registry) logOutcome(res *pipeline.Result, consumer *ConsumerDeclaratio
 			Dur("processing_time", res.Duration).
 			Msg("Message processed successfully")
 	case pipeline.HandlerError:
-		r.buildFailureLogEvent(res.Log, res.TraceID, delivery, consumer, res.Duration).
+		buildFailureLogEvent(res.Log, res.TraceID, delivery, consumer, res.Duration).
 			Err(res.Err).
 			Msg("Message processing failed - discarding without requeue")
 	case pipeline.Panicked:
-		r.buildFailureLogEvent(res.Log, res.TraceID, delivery, consumer, res.Duration).
+		buildFailureLogEvent(res.Log, res.TraceID, delivery, consumer, res.Duration).
 			Interface("panic", res.Panic).
 			Bytes("stack", res.Stack).
 			Msg("Panic recovered in message handler - discarding without requeue")
@@ -844,10 +843,7 @@ func (r *Registry) logOutcome(res *pipeline.Result, consumer *ConsumerDeclaratio
 
 // ackMessage acknowledges a handled message.
 // Logs any ack errors but does not propagate them (robustness over strict error handling).
-func (r *Registry) ackMessage(delivery *amqp.Delivery, autoAck bool, log logger.Logger, traceID string) {
-	if autoAck {
-		return // No manual ack/nack needed
-	}
+func ackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
 	if err := delivery.Ack(false); err != nil {
 		log.Error().
 			Str("correlation_id", traceID).
@@ -857,12 +853,13 @@ func (r *Registry) ackMessage(delivery *amqp.Delivery, autoAck bool, log logger.
 	}
 }
 
-// nackMessage negatively acknowledges a message without requeue.
+// nackMessage negatively acknowledges a message WITHOUT requeue, which prevents
+// infinite retry loops. Queues declared with x-dead-letter-exchange route the
+// nacked message to that exchange (retained only if a binding delivers it to a
+// queue); queues without one drop it (logged by logOutcome).
+// DeclareQueueWithDLQ declares that full route in one call.
 // Logs any nack errors but does not propagate them (robustness over strict error handling).
-func (r *Registry) nackMessage(delivery *amqp.Delivery, autoAck bool, log logger.Logger, traceID string) {
-	if autoAck {
-		return // No manual ack/nack needed
-	}
+func nackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
 	if err := delivery.Nack(false, false); err != nil {
 		log.Error().
 			Str("correlation_id", traceID).
@@ -874,7 +871,7 @@ func (r *Registry) nackMessage(delivery *amqp.Delivery, autoAck bool, log logger
 
 // buildFailureLogEvent creates a structured log event for failed message processing.
 // Provides consistent error logging across panic and error paths.
-func (r *Registry) buildFailureLogEvent(
+func buildFailureLogEvent(
 	log logger.Logger,
 	traceID string,
 	delivery *amqp.Delivery,

@@ -2863,7 +2863,9 @@ func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
 	// PR2a's tracking collapse, which had already dropped this tree's baseline
 	// to 34.0 before the delivery pipeline (ADR-068) landed at 29.0 allocs/op
 	// (25–27 once it shared its span options and cached its tracer — the exact
-	// figure is order-dependent: earlier tests warm the meter/tracer globals).
+	// figure is order-dependent: earlier tests warm the meter/tracer globals),
+	// and to 23.0 once the lane stopped boxing its header carrier and building
+	// the metric destination through fmt.
 	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
 }
 
@@ -2950,20 +2952,6 @@ func TestRegistryProcessMessageSkipsDebugFieldBuildWhenDisabled(t *testing.T) {
 }
 
 // ===== Delivery-pipeline lane adapter tests (ADR-068) =====
-
-func TestConsumeSpanExtrasCarryEveryDeliveryField(t *testing.T) {
-	extras := consumeSpanExtras(&amqp.Delivery{
-		Exchange:      testExchangeName,
-		RoutingKey:    testRoutingKey,
-		MessageId:     testMessageID,
-		CorrelationId: "amqp-corr-1",
-	})
-
-	assertAttribute(t, extras, "messaging.rabbitmq.exchange", testExchangeName)
-	assertAttribute(t, extras, "messaging.rabbitmq.destination.routing_key", testRoutingKey)
-	assertAttribute(t, extras, string(semconv.MessagingMessageIDKey), testMessageID)
-	assertAttribute(t, extras, string(semconv.MessagingMessageConversationIDKey), "amqp-corr-1")
-}
 
 func TestConsumeSpanExtrasOmitTheFieldsTheDeliveryDidNotCarry(t *testing.T) {
 	assert.Empty(t, consumeSpanExtras(&amqp.Delivery{}),

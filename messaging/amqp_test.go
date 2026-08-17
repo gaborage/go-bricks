@@ -179,13 +179,19 @@ func TestAMQPHeaderHardeningVariousTypes(t *testing.T) {
 }
 
 func TestAMQPHeaderAccessorNilSafety(t *testing.T) {
-	// Given a nil headers map, Set should initialize it and Get should work
-	accessor := &amqpHeaderAccessor{headers: nil}
-	gobrickstrace.InjectIntoHeaders(context.Background(), accessor)
-	// Should not panic and should have set headers
-	xid := accessor.Get(gobrickstrace.HeaderXRequestID)
-	require.NotNil(t, xid)
-	assert.NotEmpty(t, gobrickstrace.EnsureTraceID(context.Background()))
+	// A nil table has nowhere to store, so injection must neither panic nor
+	// pretend it wrote — the map it used to allocate was never reachable from
+	// the delivery or the publishing the accessor was built over.
+	nilTable := amqpHeaderAccessor{headers: nil}
+	require.NotPanics(t, func() {
+		gobrickstrace.InjectIntoHeaders(context.Background(), nilTable)
+	})
+	assert.Nil(t, nilTable.Get(gobrickstrace.HeaderXRequestID))
+
+	// The table every production caller does build round-trips the injection.
+	built := amqpHeaderAccessor{headers: amqp.Table{}}
+	gobrickstrace.InjectIntoHeaders(context.Background(), built)
+	assert.NotNil(t, built.Get(gobrickstrace.HeaderXRequestID))
 }
 
 func TestAmqpHeaderAccessorGet(t *testing.T) {

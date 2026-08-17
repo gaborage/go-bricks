@@ -26,17 +26,10 @@ const (
 // This format allows for hierarchical grouping in metrics queries while maintaining
 // compatibility with OpenTelemetry semantic conventions for RabbitMQ.
 func formatDestinationName(exchange, routingKey, queue string) string {
-	if queue != "" {
-		if exchange == "" {
-			return fmt.Sprintf(":%s:%s", routingKey, queue)
-		}
-		return fmt.Sprintf("%s:%s:%s", exchange, routingKey, queue)
+	if queue == "" {
+		return exchange + ":" + routingKey
 	}
-
-	if exchange == "" {
-		return fmt.Sprintf(":%s", routingKey)
-	}
-	return fmt.Sprintf("%s:%s", exchange, routingKey)
+	return exchange + ":" + routingKey + ":" + queue
 }
 
 // extractErrorType extracts the error type name for the error.type attribute.

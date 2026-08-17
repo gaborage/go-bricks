@@ -137,6 +137,9 @@ const (
 	operationPublish        = "publish"
 	contentTypeOctetStream  = "application/octet-stream"
 	eventPublishRetry       = "amqp.publish.retry"
+	// attrMessagingRabbitMQExchange is the exchange attribute both the publish
+	// span and the receive span stamp; semconv ships no helper for it.
+	attrMessagingRabbitMQExchange = "messaging.rabbitmq.exchange"
 )
 
 var (
@@ -321,7 +324,7 @@ func createPublishSpan(ctx context.Context, options PublishOptions, dataLen int,
 		semconv.MessagingMessageBodySize(dataLen),
 	}
 	if options.Exchange != "" {
-		attrs = append(attrs, attribute.String("messaging.rabbitmq.exchange", options.Exchange))
+		attrs = append(attrs, attribute.String(attrMessagingRabbitMQExchange, options.Exchange))
 	}
 	if options.RoutingKey != "" {
 		// Use official semconv helper for RabbitMQ routing key
@@ -345,7 +348,7 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 	}
 
 	// Inject trace headers using centralized trace package
-	accessor := &amqpHeaderAccessor{headers: publishing.Headers}
+	accessor := amqpHeaderAccessor{headers: publishing.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
 	// AMQP-specific: populate CorrelationId and MessageId
@@ -1180,21 +1183,23 @@ func (c *AMQPClientImpl) dispatchConfirms(src <-chan amqp.Confirmation, gen uint
 	}
 }
 
-// amqpHeaderAccessor implements trace.HeaderAccessor for AMQP headers
+// amqpHeaderAccessor implements trace.HeaderAccessor for AMQP headers. The
+// receivers are values on purpose: the single field is a map, which is
+// pointer-shaped, so the accessor rides inside the interface word instead of
+// being heap-allocated once per delivery and once per publish. A nil table
+// reads clean and absorbs writes without panicking; every caller that injects
+// builds the table first (amqp.Publishing always carries an initialized one).
 type amqpHeaderAccessor struct {
 	headers amqp.Table
 }
 
-func (a *amqpHeaderAccessor) Get(key string) any {
-	if a.headers == nil {
-		return nil
-	}
+func (a amqpHeaderAccessor) Get(key string) any {
 	return a.headers[key]
 }
 
-func (a *amqpHeaderAccessor) Set(key string, value any) {
+func (a amqpHeaderAccessor) Set(key string, value any) {
 	if a.headers == nil {
-		a.headers = amqp.Table{}
+		return
 	}
 	a.headers[key] = value
 }
