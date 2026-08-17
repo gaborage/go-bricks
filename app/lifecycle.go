@@ -16,52 +16,6 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// startMaintenanceLoops starts background cleanup processes for managers
-func (a *App) startMaintenanceLoops() {
-	// Start cleanup for unified managers
-	if a.dbManager != nil {
-		a.warnIfCleanupIntervalTooLate("database.manager",
-			a.cfg.Database.Manager.CleanupInterval, a.cfg.Database.Manager.IdleTTL)
-		a.logger.Info().Msg("Starting database manager cleanup loop")
-		// cleanupinterval has no builder fallback (unlike maxsize/idlettl); on a
-		// Validate-bypassing path (a Builder assembled without WithConfig), StartCleanup's
-		// <=0->5m self-default is the only guard.
-		a.dbManager.StartCleanup(a.cfg.Database.Manager.CleanupInterval)
-	}
-	if a.messagingManager != nil {
-		cleanupInterval := a.cfg.Messaging.Publisher.CleanupInterval
-		idleTTL := a.cfg.Messaging.Publisher.IdleTTL
-		a.warnIfCleanupIntervalTooLate("messaging.publisher", cleanupInterval, idleTTL)
-		a.logger.Info().Msg("Starting messaging manager cleanup loop")
-		a.messagingManager.StartCleanup(cleanupInterval)
-	}
-}
-
-// cleanupIntervalTooLate reports whether cleanupInterval sweeps no more often than
-// idleTTL. idleTTL <= 0 cannot occur on a validated config; the branch defends
-// direct App construction in tests.
-func cleanupIntervalTooLate(cleanupInterval, idleTTL time.Duration) bool {
-	if idleTTL <= 0 {
-		return false
-	}
-	return cleanupInterval >= idleTTL
-}
-
-// warnIfCleanupIntervalTooLate WARNs (never fails) when cleanupIntervalTooLate holds.
-// Lives here, not config.Validate, because Validate has no logger.
-func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, idleTTL time.Duration) {
-	if !cleanupIntervalTooLate(cleanupInterval, idleTTL) {
-		return
-	}
-	a.logger.Warn().
-		Str("resource", keyPrefix).
-		Dur("cleanupinterval", cleanupInterval).
-		Dur("idlettl", idleTTL).
-		Msg(keyPrefix + ".cleanupinterval is >= " + keyPrefix + ".idlettl; " +
-			"idle handle eviction will lag by up to one extra cleanup cycle " +
-			"(lower " + keyPrefix + ".cleanupinterval or raise " + keyPrefix + ".idlettl)")
-}
-
 // prepareRuntime prepares the application for runtime execution. ctx is the
 // startup context: components it starts that outlive startup inherit that
 // context's values rather than beginning from a bare context.Background().
@@ -107,7 +61,6 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.checkRouteConflicts(); err != nil {
 		return err
 	}
-	a.startMaintenanceLoops()
 
 	return nil
 }
@@ -456,20 +409,6 @@ func (a *App) shutdownConsumers() {
 	a.messagingManager.StopConsumers()
 }
 
-// shutdownManagers stops cleanup loops for database and messaging managers
-func (a *App) shutdownManagers() {
-	managerStart := time.Now()
-	if a.dbManager != nil {
-		a.logger.Info().Msg("Stopping database manager cleanup loop")
-		a.dbManager.StopCleanup()
-	}
-	if a.messagingManager != nil {
-		a.logger.Info().Msg("Stopping messaging manager cleanup loop")
-		a.messagingManager.StopCleanup()
-	}
-	a.logger.Info().Dur("duration", time.Since(managerStart)).Msg("Manager cleanup loops stopped")
-}
-
 // shutdownObservability flushes and shuts down the observability provider
 func (a *App) shutdownObservability(ctx context.Context, errs *[]error) {
 	if a.observability == nil {
@@ -545,10 +484,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 	// 4. Flush and shutdown observability (export pending telemetry).
 	a.shutdownObservability(ctx, &errs)
 
-	// 5. Stop cleanup loops for managers.
-	a.shutdownManagers()
-
-	// 6. Close remaining resources (DB pools, messaging connections, etc.).
+	// 5. Close remaining resources (DB pools, messaging connections, etc.). Each manager's
+	//    Close stops the idle-cleanup sweep it started (ADR-067), so the loops still stop
+	//    last, in the order ADR-029 fixed.
 	a.shutdownClosers(&errs)
 
 	a.logger.Info().Dur("total_duration", time.Since(shutdownStart)).Msg("Application shutdown complete")

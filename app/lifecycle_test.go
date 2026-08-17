@@ -20,12 +20,10 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/server"
-	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
 const (
 	testApp = "test-app"
-	testKey = "test-key"
 )
 
 func TestShutdownTimeouts(t *testing.T) {
@@ -747,128 +745,6 @@ func TestApplyGlobalMiddlewareNoopWhenNoModulesContribute(t *testing.T) {
 
 	app := &App{server: &mockServer{}, registry: registry, logger: log}
 	require.NoError(t, app.applyGlobalMiddleware(), "no contributing modules → no error even on an unsupporting server")
-}
-
-// TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval now pins that the
-// constructor starts the sweep at the 20ms CleanupInterval directly (ADR-067), so
-// startMaintenanceLoops's StartCleanup call here is the idempotent no-op Task 4 deletes.
-func TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval(t *testing.T) {
-	log := logger.New("error", false)
-
-	client := testmocks.NewMockAMQPClient()
-	client.ExpectClose(nil)
-	factory := func(string, logger.Logger) messaging.AMQPClient { return client }
-	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log,
-		messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond, CleanupInterval: 20 * time.Millisecond}, factory)
-	defer func() { _ = manager.Close() }()
-
-	_, rel, err := manager.Publisher(context.Background(), testKey)
-	require.NoError(t, err)
-	rel()
-
-	cfg := &config.Config{
-		Messaging: config.MessagingConfig{
-			Publisher: config.PublisherPoolConfig{CleanupInterval: 20 * time.Millisecond},
-		},
-	}
-	a := &App{cfg: cfg, logger: log, messagingManager: manager}
-	a.startMaintenanceLoops()
-	defer a.messagingManager.StopCleanup()
-
-	assert.Eventually(t, func() bool {
-		return manager.Stats()["active_publishers"] == 0
-	}, time.Second, 10*time.Millisecond)
-}
-
-// TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval now pins that the
-// constructor starts the sweep at the 20ms CleanupInterval directly (ADR-067), so
-// startMaintenanceLoops's StartCleanup call here is the idempotent no-op Task 4 deletes.
-func TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval(t *testing.T) {
-	log := logger.New("error", false)
-
-	connector := func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-		return dbtesting.NewTestDB("postgresql"), nil
-	}
-	dbManager := database.NewDbManager(&stubTenantResource{}, log, database.DbManagerOptions{MaxSize: 5, IdleTTL: 10 * time.Millisecond, CleanupInterval: 20 * time.Millisecond}, connector)
-	defer func() { _ = dbManager.Close() }()
-
-	_, rel, err := dbManager.Get(context.Background(), testKey)
-	require.NoError(t, err)
-	rel()
-
-	cfg := &config.Config{
-		Database: config.DatabaseConfig{
-			Manager: config.DatabaseManagerConfig{CleanupInterval: 20 * time.Millisecond},
-		},
-	}
-	a := &App{cfg: cfg, logger: log, dbManager: dbManager}
-	a.startMaintenanceLoops()
-	defer a.dbManager.StopCleanup()
-
-	assert.Eventually(t, func() bool {
-		return dbManager.Stats()["active_connections"] == 0
-	}, time.Second, 10*time.Millisecond)
-}
-
-func TestCleanupIntervalTooLate(t *testing.T) {
-	tests := []struct {
-		name            string
-		cleanupInterval time.Duration
-		idleTTL         time.Duration
-		want            bool
-	}{
-		{name: "cleanup_greater_than_idle_warns", cleanupInterval: 15 * time.Minute, idleTTL: 10 * time.Minute, want: true},
-		{name: "cleanup_equals_idle_warns", cleanupInterval: 10 * time.Minute, idleTTL: 10 * time.Minute, want: true},
-		{name: "cleanup_below_idle_ok", cleanupInterval: 2 * time.Minute, idleTTL: 1 * time.Hour, want: false},
-		{name: "zero_idle_ttl_skipped", cleanupInterval: 5 * time.Minute, idleTTL: 0, want: false},
-		{name: "zero_cleanup_below_positive_idle_ok", cleanupInterval: 0, idleTTL: 1 * time.Hour, want: false},
-		{name: "negative_idle_ttl_skipped", cleanupInterval: 5 * time.Minute, idleTTL: -1 * time.Second, want: false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, cleanupIntervalTooLate(tc.cleanupInterval, tc.idleTTL))
-		})
-	}
-}
-
-// TestStartMaintenanceLoopsWarnsOnLateCleanupInterval exercises the WARN path
-// end-to-end through startMaintenanceLoops: a misconfigured cleanupinterval >=
-// idlettl is advisory only, so the cleanup loop must still function normally (an
-// idle publisher is still eventually swept) without panicking. The constructor
-// already started that sweep at the 20ms CleanupInterval (ADR-067), so
-// startMaintenanceLoops's StartCleanup call here is the idempotent no-op Task 4 deletes.
-func TestStartMaintenanceLoopsWarnsOnLateCleanupInterval(t *testing.T) {
-	log := logger.New("error", false)
-
-	client := testmocks.NewMockAMQPClient()
-	client.ExpectClose(nil)
-	factory := func(string, logger.Logger) messaging.AMQPClient { return client }
-	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log,
-		messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond, CleanupInterval: 20 * time.Millisecond}, factory)
-	defer func() { _ = manager.Close() }()
-
-	_, rel, err := manager.Publisher(context.Background(), testKey)
-	require.NoError(t, err)
-	rel()
-
-	cfg := &config.Config{
-		Messaging: config.MessagingConfig{
-			Publisher: config.PublisherPoolConfig{
-				// Misconfigured on purpose: cleanupinterval >= idlettl should WARN, not fail.
-				CleanupInterval: 20 * time.Millisecond,
-				IdleTTL:         10 * time.Millisecond,
-			},
-		},
-	}
-	a := &App{cfg: cfg, logger: log, messagingManager: manager}
-
-	require.NotPanics(t, func() { a.startMaintenanceLoops() })
-	defer a.messagingManager.StopCleanup()
-
-	assert.Eventually(t, func() bool {
-		return manager.Stats()["active_publishers"] == 0
-	}, time.Second, 10*time.Millisecond, "cleanup loop must still run despite the late-cleanupinterval WARN")
 }
 
 // TestCheckRouteConflictsAggregatesAndSkips drives checkRouteConflicts directly against a
