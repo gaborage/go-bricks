@@ -896,23 +896,6 @@ func (r *Registry) buildFailureLogEvent(
 		Dur("processing_time", processingTime)
 }
 
-// amqpDeliveryAccessor implements trace.HeaderAccessor for AMQP delivery headers (read-only)
-type amqpDeliveryAccessor struct {
-	headers amqp.Table
-}
-
-func (a *amqpDeliveryAccessor) Get(key string) any {
-	if a.headers == nil {
-		return nil
-	}
-	return a.headers[key]
-}
-
-func (a *amqpDeliveryAccessor) Set(_ string, _ any) {
-	// Read-only accessor for delivery headers
-	// This is intentionally a no-op as we don't modify incoming message headers
-}
-
 // Publishers returns all registered publishers (for documentation/monitoring)
 func (r *Registry) Publishers() []*PublisherDeclaration {
 	r.mu.RLock()

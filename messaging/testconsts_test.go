@@ -84,7 +84,6 @@ const (
 	lateQueueName     = "late-queue"
 	testKeyName       = "test-key"
 	testValueContent  = "test-value"
-	newKeyName        = "new-key"
 
 	// Description strings
 	descUserCreation = "User creation event"

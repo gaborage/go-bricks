@@ -691,87 +691,6 @@ func TestRegistryBindings(t *testing.T) {
 	assert.NotNil(t, originalBindings[0])
 }
 
-// ===== amqpDeliveryAccessor Tests =====
-
-func TestAmqpDeliveryAccessorGet(t *testing.T) {
-	tests := []struct {
-		name     string
-		headers  amqp.Table
-		key      string
-		expected any
-	}{
-		{
-			name:     "nil headers",
-			headers:  nil,
-			key:      testKeyName,
-			expected: nil,
-		},
-		{
-			name:     "empty headers",
-			headers:  amqp.Table{},
-			key:      testKeyName,
-			expected: nil,
-		},
-		{
-			name: "existing key",
-			headers: amqp.Table{
-				testKeyName: testValueContent,
-			},
-			key:      testKeyName,
-			expected: testValueContent,
-		},
-		{
-			name: "non-existing key",
-			headers: amqp.Table{
-				"other-key": "other-value",
-			},
-			key:      testKeyName,
-			expected: nil,
-		},
-		{
-			name: "multiple headers",
-			headers: amqp.Table{
-				"key1": "value1",
-				"key2": 42,
-				"key3": true,
-			},
-			key:      "key2",
-			expected: 42,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			accessor := &amqpDeliveryAccessor{headers: tt.headers}
-			result := accessor.Get(tt.key)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestAmqpDeliveryAccessorSet(t *testing.T) {
-	// Create accessor with some initial headers
-	headers := amqp.Table{
-		"existing": "value",
-	}
-	accessor := &amqpDeliveryAccessor{headers: headers}
-
-	// Verify initial state
-	assert.Equal(t, "value", accessor.Get("existing"))
-
-	// Call Set - should be a no-op
-	accessor.Set(newKeyName, "new-value")
-	accessor.Set("existing", "modified-value")
-
-	// Verify headers remain unchanged
-	assert.Equal(t, "value", accessor.Get("existing"))
-	assert.Nil(t, accessor.Get(newKeyName))
-
-	// Verify the original headers map wasn't modified
-	assert.Equal(t, "value", headers["existing"])
-	assert.NotContains(t, headers, newKeyName)
-}
-
 // ===== Enhanced DeclareInfrastructure Tests =====
 
 func TestRegistryDeclareInfrastructureQueueDeclarationError(t *testing.T) {
@@ -2320,7 +2239,7 @@ func TestRegistryConsumerSupervisorStopsOnContextCancel(t *testing.T) {
 
 // sleepingCountingHandler wraps countingTestHandler with a fixed sleep before
 // returning, so processMessage observes a non-zero processingTime.
-// RecordAMQPConsumeCompletion skips duration <= 0, and a zero-cost handler
+// tracking.RecordConsume skips duration <= 0, and a zero-cost handler
 // can produce a zero delta on a coarse clock, which would make duration
 // assertions flake.
 type sleepingCountingHandler struct {
@@ -2940,8 +2859,9 @@ func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
 	t.Logf("processMessage allocs/op = %.1f", avg)
 	// Ceiling fixed at 42.0 (advisor resolution 2026-08-09): measured BEFORE =
 	// 47.0, AFTER = 38.0 allocs/op — fails the old per-delivery WithFields
-	// layer, passes the new per-event stamps with headroom. On the delivery
-	// pipeline (ADR-068) = 29.0 allocs/op.
+	// layer, passes the new per-event stamps with headroom. 38.0 predates
+	// PR2a's tracking collapse, which had already dropped this tree's baseline
+	// to 34.0 before the delivery pipeline (ADR-068) landed at 29.0 allocs/op.
 	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
 }
 

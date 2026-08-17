@@ -92,7 +92,7 @@ func TestAMQPTraceExtractionDerivesFromHeaders(t *testing.T) {
 	}}
 
 	// Use centralized trace extraction
-	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
+	accessor := &amqpHeaderAccessor{headers: delivery.Headers}
 	ctx := gobrickstrace.ExtractFromHeaders(base, accessor)
 
 	// Should have traceparent in context
@@ -117,7 +117,7 @@ func TestAMQPTraceExtractionByteSliceHeaders(t *testing.T) {
 	}}
 
 	// Use centralized trace extraction
-	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
+	accessor := &amqpHeaderAccessor{headers: delivery.Headers}
 	ctx := gobrickstrace.ExtractFromHeaders(base, accessor)
 
 	// Should successfully extract trace information from byte slice headers
@@ -188,6 +188,28 @@ func TestAMQPHeaderAccessorNilSafety(t *testing.T) {
 	assert.NotEmpty(t, gobrickstrace.EnsureTraceID(context.Background()))
 }
 
+func TestAmqpHeaderAccessorGet(t *testing.T) {
+	tests := []struct {
+		name     string
+		headers  amqp.Table
+		key      string
+		expected any
+	}{
+		{name: "nil headers", headers: nil, key: testKeyName, expected: nil},
+		{name: "empty headers", headers: amqp.Table{}, key: testKeyName, expected: nil},
+		{name: "existing key", headers: amqp.Table{testKeyName: testValueContent}, key: testKeyName, expected: testValueContent},
+		{name: "non-existing key", headers: amqp.Table{"other-key": "other-value"}, key: testKeyName, expected: nil},
+		{name: "multiple headers", headers: amqp.Table{"key1": "value1", "key2": 42, "key3": true}, key: "key2", expected: 42},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			accessor := &amqpHeaderAccessor{headers: tt.headers}
+			assert.Equal(t, tt.expected, accessor.Get(tt.key))
+		})
+	}
+}
+
 func TestAMQPHeaderHardeningSafeConsumption(t *testing.T) {
 	// Test consuming messages with various header value types
 	delivery := &amqp.Delivery{
@@ -203,7 +225,7 @@ func TestAMQPHeaderHardeningSafeConsumption(t *testing.T) {
 	}
 
 	// Test safe extraction through centralized trace functions
-	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
+	accessor := &amqpHeaderAccessor{headers: delivery.Headers}
 	ctx := gobrickstrace.ExtractFromHeaders(context.Background(), accessor)
 
 	// Verify that all header types were safely processed
@@ -312,7 +334,7 @@ func TestAMQPCentralizedArchitectureExtractAndInject(t *testing.T) {
 		gobrickstrace.HeaderTraceParent: "00-ffeeddccbbaa9988ffeeddccbbaa9988-1122334455667788-01",
 	}}
 
-	deliveryAccessor := &amqpDeliveryAccessor{headers: delivery.Headers}
+	deliveryAccessor := &amqpHeaderAccessor{headers: delivery.Headers}
 	extractedCtx := gobrickstrace.ExtractFromHeaders(context.Background(), deliveryAccessor)
 
 	traceID, ok := gobrickstrace.IDFromContext(extractedCtx)
@@ -325,7 +347,8 @@ func TestAMQPCentralizedArchitectureExtractAndInject(t *testing.T) {
 }
 
 func TestAMQPCentralizedArchitectureConsistentProcessing(t *testing.T) {
-	// Verify that both AMQP client and registry use the same centralized logic
+	// One accessor now serves both directions: the publish path injects through
+	// it and the consume path reads through it as the pipeline's Carrier.
 	headers := amqp.Table{
 		gobrickstrace.HeaderXRequestID:  []byte("consistency-test-id"),
 		gobrickstrace.HeaderTraceParent: []byte("00-abcdef1234567890abcdef1234567890-fedcba0987654321-01"),
@@ -337,7 +360,7 @@ func TestAMQPCentralizedArchitectureConsistentProcessing(t *testing.T) {
 	gobrickstrace.InjectIntoHeaders(context.Background(), pubAccessor)
 
 	// Test registry extraction
-	deliveryAccessor := &amqpDeliveryAccessor{headers: headers}
+	deliveryAccessor := &amqpHeaderAccessor{headers: headers}
 	ctx := gobrickstrace.ExtractFromHeaders(context.Background(), deliveryAccessor)
 
 	// Both should use the same safe string conversion and logic
