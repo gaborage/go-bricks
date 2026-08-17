@@ -1368,7 +1368,7 @@ becomes `database_stats`. No Go API change. See [migrations.md](migrations.md) `
 
 ### [ADR-067: Slots Own the Per-Kind Lifecycle](adr_067_lifecycle_slots.md)
 
-**Date:** 2026-08-17 | **Status:** Accepted
+**Date:** 2026-08-17 | **Status:** Proposed (first slice shipped; Accepted when the last slot slice merges)
 
 Every resource kind's lifecycle facts — construct, expose, pre-init, probe, maintenance,
 close, render — live in about ten `app/` files that each hand-enumerate the kind set, which
