@@ -59,8 +59,15 @@ func tracer() trace.Tracer {
 		return *t
 	}
 	t := otel.Tracer(tracerName)
-	sharedTracer.CompareAndSwap(nil, &t) // the first resolver wins; a loser reads the winner's
-	return *sharedTracer.Load()
+	if sharedTracer.CompareAndSwap(nil, &t) {
+		return t
+	}
+	// A concurrent resolver won; use its tracer — unless a concurrent reset already
+	// cleared it again, in which case this delivery keeps the one it resolved.
+	if winner := sharedTracer.Load(); winner != nil {
+		return *winner
+	}
+	return t
 }
 
 // Outcome names how one delivery ended.

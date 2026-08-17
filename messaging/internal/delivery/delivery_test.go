@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -492,10 +493,13 @@ func TestTracerCacheSurvivesAConcurrentReset(t *testing.T) {
 	setupTelemetry(t)
 
 	var wg sync.WaitGroup
+	var nilTracers atomic.Int64
 	for range 8 {
 		wg.Go(func() {
 			for range 200 {
-				require.NotNil(t, tracer())
+				if tracer() == nil { // no require in the worker: a Goexit there would hide the failure
+					nilTracers.Add(1)
+				}
 			}
 		})
 	}
@@ -503,4 +507,5 @@ func TestTracerCacheSurvivesAConcurrentReset(t *testing.T) {
 		ResetTracerForTesting()
 	}
 	wg.Wait()
+	assert.Zero(t, nilTracers.Load(), "a delivery racing a reset must never see a nil tracer")
 }
