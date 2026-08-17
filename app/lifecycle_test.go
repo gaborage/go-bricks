@@ -839,33 +839,6 @@ func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 	}
 }
 
-// TestPublicProbeError pins both branches of the /ready sanitization switch. A negated
-// condition here would either leak every probe's raw error or force the default onto a
-// probe that declared its own wording, and neither shows up as a compile or type failure.
-func TestPublicProbeError(t *testing.T) {
-	t.Run("public_error_set_overrides_the_default", func(t *testing.T) {
-		result := HealthStatus{
-			Name:      componentDatabase,
-			PublicErr: "database temporarily unavailable",
-			Err:       errors.New(pgconnIdentityError),
-		}
-
-		assert.Equal(t, "database temporarily unavailable", publicProbeError(&result))
-	})
-
-	t.Run("public_error_empty_synthesizes_a_safe_default", func(t *testing.T) {
-		result := HealthStatus{Name: componentDatabase, Err: errors.New(pgconnIdentityError)}
-
-		assert.Equal(t, databaseUnavailableBody, publicProbeError(&result))
-	})
-
-	t.Run("nil_error_renders_without_panicking", func(t *testing.T) {
-		result := HealthStatus{Name: componentCache}
-
-		assert.Equal(t, cacheUnavailableBody, publicProbeError(&result))
-	})
-}
-
 // TestReadyCheckWithholdsDatabaseIdentityFromBody is the end-to-end assertion for #879:
 // /ready is unauthenticated and carries no CIDR gate, so a database outage must not turn
 // its 503 body into a connection-identity oracle. The detail keeps living in the app log

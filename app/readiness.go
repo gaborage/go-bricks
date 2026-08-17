@@ -57,6 +57,10 @@ type probeDescription struct {
 	// probe itself pooled is counted (the messaging manager publishes active_publishers: 0
 	// beside a healthy verdict otherwise).
 	stats func() map[string]any
+	// publicStats allowlists the statistics keys this kind may publish on the
+	// unauthenticated /ready body; every other key stays on the access-controlled debug
+	// view. nil means "status only".
+	publicStats []string
 }
 
 // disabledProbe describes a kind whose manager does not exist.
@@ -130,6 +134,72 @@ func (d probeDescription) snapshot() map[string]any {
 // cold-poll caveat.
 const cacheProbePingTimeout = 500 * time.Millisecond
 
+// The statistics key names, hoisted so a manager's snapshot, the allowlist that admits it
+// and the tests that pin it cannot drift apart on the spelling.
+const (
+	// Shared across kinds.
+	statsErrorsKey         = "errors"
+	statsEvictionsKey      = "evictions"
+	statsIdleCleanupsKey   = "idle_cleanups"
+	statsIdleTTLSecondsKey = "idle_ttl_seconds"
+	// Database.
+	statsActiveConnectionsKey = "active_connections"
+	statsMaxConnectionsKey    = "max_connections"
+	// Messaging.
+	statsActivePublishersKey = "active_publishers"
+	statsMaxPublishersKey    = "max_publishers"
+	statsActiveConsumersKey  = "active_consumers"
+	// Cache.
+	statsActiveCachesKey = "active_caches"
+	statsTotalCreatedKey = "total_created"
+	statsMaxSizeKey      = "max_size"
+	statsIdleTTLKey      = "idle_ttl"
+	// Streams.
+	statsStartedKey             = "started"
+	statsConsumersKey           = "consumers"
+	statsPublishersKey          = "publishers"
+	statsReadyKey               = "ready"
+	statsOffsetStoreCountKey    = "offset_store_count"
+	statsOffsetFlushIntervalKey = "offset_flush_interval"
+)
+
+// The per-kind public-stats allowlists: the only statistics keys that may reach the
+// unauthenticated /ready 200 body. An allowlist and not a denylist, so a counter added to a
+// manager tomorrow stays off that body until someone reviews it.
+//
+// SECURITY: two manager keys are deliberately absent. DbManager.Stats()["connections"] holds
+// one entry per live pooled connection, and each entry's "key" is the resourcepool key — the
+// tenant ID in a multi-tenant deployment, the named-database key otherwise — alongside
+// last_used and idle_duration, so polling /ready enumerated which tenants were active and
+// when each was last served. streams.Manager.Stats()["stored_offsets"] is keyed
+// "<stream>/<consumer>" — declared topology that usually names the domain — with live offsets
+// as values, so differencing two polls yields the per-stream message rate. /ready carries no
+// authentication and no IP allowlist, and its throttles are two IP-keyed rate limits
+// (app.rate.limit, koanf default 100 rps; app.rate.ippreguard.threshold, koanf default
+// 2000 rps/IP) that a Go-assembled config leaves at zero entirely (ADR-049) — no barrier to
+// enumeration either way.
+//
+// The filtering belongs here at the render seam rather than in the managers or the probes:
+// the access-controlled <debug.pathprefix>/health-debug renders the same details map
+// unredacted, and operators need both withheld keys there.
+var (
+	databasePublicStats = []string{
+		statsActiveConnectionsKey, statsMaxConnectionsKey, statsIdleTTLSecondsKey, statsErrorsKey,
+	}
+	messagingPublicStats = []string{
+		statsActivePublishersKey, statsMaxPublishersKey, statsActiveConsumersKey, statsIdleTTLSecondsKey,
+		statsEvictionsKey, statsIdleCleanupsKey, statsErrorsKey,
+	}
+	cachePublicStats = []string{
+		statsActiveCachesKey, statsTotalCreatedKey, statsEvictionsKey, statsIdleCleanupsKey,
+		statsErrorsKey, statsMaxSizeKey, statsIdleTTLKey,
+	}
+	streamsPublicStats = []string{
+		statsStartedKey, statsConsumersKey, statsPublishersKey, statsReadyKey,
+		statsOffsetStoreCountKey, statsOffsetFlushIntervalKey,
+	}
+)
+
 // databaseProbe describes the database kind: critical, leased through the "" key, live when
 // the leased connection's Health passes. perTenant only relabels a not-configured verdict —
 // the lease is always attempted (see probeDescription.perTenant).
@@ -138,9 +208,10 @@ func databaseProbe(m *database.DbManager, perTenant bool) probeDescription {
 		return disabledProbe(componentDatabase)
 	}
 	return probeDescription{
-		name:      componentDatabase,
-		critical:  true,
-		perTenant: perTenant,
+		name:        componentDatabase,
+		critical:    true,
+		perTenant:   perTenant,
+		publicStats: databasePublicStats,
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			conn, release, err := m.Get(ctx, "")
 			if err != nil {
@@ -159,8 +230,9 @@ func messagingProbe(m *messaging.Manager, perTenant bool) probeDescription {
 		return disabledProbe(componentMessaging)
 	}
 	return probeDescription{
-		name:      componentMessaging,
-		perTenant: perTenant,
+		name:        componentMessaging,
+		perTenant:   perTenant,
+		publicStats: messagingPublicStats,
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			client, release, err := m.Publisher(ctx, "")
 			if err != nil {
@@ -185,10 +257,11 @@ func cacheProbe(m *cache.CacheManager, critical, absent, perTenant bool) probeDe
 		return disabledProbe(componentCache)
 	}
 	return probeDescription{
-		name:      componentCache,
-		critical:  critical,
-		absent:    absent,
-		perTenant: perTenant,
+		name:        componentCache,
+		critical:    critical,
+		absent:      absent,
+		perTenant:   perTenant,
+		publicStats: cachePublicStats,
 		acquire: func(ctx context.Context) (func(context.Context) error, func(), error) {
 			instance, release, err := m.Get(ctx, "")
 			if err != nil {
@@ -212,7 +285,8 @@ func streamsProbe(m *streams.Manager) probeDescription {
 		return disabledProbe(componentStreams)
 	}
 	return probeDescription{
-		name: componentStreams,
+		name:        componentStreams,
+		publicStats: streamsPublicStats,
 		live: func(context.Context) error {
 			if !m.Ready() {
 				return errStreamsNotOpen
@@ -226,12 +300,12 @@ func streamsProbe(m *streams.Manager) probeDescription {
 // convertCacheStatsToMap renders cache.ManagerStats as the counters map every kind reports.
 func convertCacheStatsToMap(stats cache.ManagerStats) map[string]any {
 	return map[string]any{
-		"active_caches": stats.ActiveCaches,
-		"total_created": stats.TotalCreated,
-		"evictions":     stats.Evictions,
-		"idle_cleanups": stats.IdleCleanups,
-		"errors":        stats.Errors,
-		"max_size":      stats.MaxSize,
-		"idle_ttl":      stats.IdleTTL,
+		statsActiveCachesKey: stats.ActiveCaches,
+		statsTotalCreatedKey: stats.TotalCreated,
+		statsEvictionsKey:    stats.Evictions,
+		statsIdleCleanupsKey: stats.IdleCleanups,
+		statsErrorsKey:       stats.Errors,
+		statsMaxSizeKey:      stats.MaxSize,
+		statsIdleTTLKey:      stats.IdleTTL,
 	}
 }

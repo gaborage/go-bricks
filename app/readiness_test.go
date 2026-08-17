@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	cachetesting "github.com/gaborage/go-bricks/cache/testing"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
@@ -411,6 +412,106 @@ func TestConvertCacheStatsToMap(t *testing.T) {
 		assert.Equal(t, 0, result["max_size"])
 		assert.Equal(t, int64(0), result["idle_ttl"])
 	})
+}
+
+// The two manager keys the allowlists deliberately withhold, spelled out rather than
+// imported so the assertions pin the wire format instead of restating a production value.
+const (
+	connectionsStatsKey   = "connections"
+	storedOffsetsStatsKey = "stored_offsets"
+)
+
+// TestPublicStatsAllowlistsMatchManagerCounters pins every allowlist against the keys the
+// real manager publishes. SECURITY: an allowlist that silently falls behind a manager is
+// how a new identifier-bearing counter reaches the unauthenticated /ready body — this test
+// fails the day a manager gains a key, forcing the "publish or withhold" decision.
+func TestPublicStatsAllowlistsMatchManagerCounters(t *testing.T) {
+	tests := []struct {
+		name     string
+		stats    map[string]any
+		allow    []string
+		withheld []string
+	}{
+		{
+			name:     "database",
+			stats:    (&database.DbManager{}).Stats(),
+			allow:    databasePublicStats,
+			withheld: []string{connectionsStatsKey},
+		},
+		{
+			name:  "messaging",
+			stats: (&messaging.Manager{}).Stats(),
+			allow: messagingPublicStats,
+		},
+		{
+			name:  "cache",
+			stats: convertCacheStatsToMap(cache.ManagerStats{}),
+			allow: cachePublicStats,
+		},
+		{
+			name:     "streams",
+			stats:    (&streams.Manager{}).Stats(),
+			allow:    streamsPublicStats,
+			withheld: []string{storedOffsetsStatsKey},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			published := make([]string, 0, len(tt.stats))
+			for key := range tt.stats {
+				published = append(published, key)
+			}
+			assert.ElementsMatch(t, published, append(append([]string{}, tt.allow...), tt.withheld...),
+				"every manager counter is either allowlisted or listed as deliberately withheld")
+			for _, key := range tt.withheld {
+				assert.NotContains(t, tt.allow, key)
+			}
+		})
+	}
+}
+
+// TestPublicProjectionKeepsOnlyAllowlistedKeys pins both halves of the render-site filter:
+// the /ready view carries the allowlisted counters plus the mirrored status and nothing
+// else, and the map it was built from is untouched — the access-controlled debug view
+// renders that same map and operators need the withheld keys there.
+func TestPublicProjectionKeepsOnlyAllowlistedKeys(t *testing.T) {
+	details := map[string]any{
+		"active_connections": 2,
+		"max_connections":    25,
+		"idle_ttl_seconds":   3600,
+		"errors":             0,
+		statusKey:            healthyStatus,
+		connectionsStatsKey: []map[string]any{
+			{"key": "tenant-alpha", "last_used": "2026-08-05T10:00:00Z", "idle_duration": 4},
+		},
+	}
+
+	public := publicProjection(details, databasePublicStats)
+
+	assert.Equal(t, map[string]any{
+		"active_connections": 2,
+		"max_connections":    25,
+		"idle_ttl_seconds":   3600,
+		"errors":             0,
+		statusKey:            healthyStatus,
+	}, public, "every allowlisted counter survives; the keyed array is withheld")
+	assert.Contains(t, details, connectionsStatsKey,
+		"filtering in place would strip the array from the debug endpoint's view too")
+}
+
+// TestPublicProjectionWithoutAnAllowlist covers the two shapes with no counters to publish:
+// a disabled kind, whose only detail is its own status, and a Prober from outside the
+// framework, which declares no allowlist and therefore publishes its status alone.
+func TestPublicProjectionWithoutAnAllowlist(t *testing.T) {
+	assert.Equal(t, map[string]any{statusKey: disabledStatus},
+		publicProjection(map[string]any{statusKey: disabledStatus}, nil))
+
+	assert.Equal(t, map[string]any{statusKey: healthyStatus},
+		publicProjection(map[string]any{statusKey: healthyStatus, "vault_addr": "10.0.0.9:8200"}, nil))
+
+	assert.Equal(t, map[string]any{}, publicProjection(nil, databasePublicStats),
+		"a nil details map must still render {} — never JSON null")
 }
 
 // Fixtures used only by the per-kind descriptions above.
