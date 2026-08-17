@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -39,6 +40,24 @@ const (
 	// spanAttrCap is the four common attributes plus the AMQP lane's four extras.
 	spanAttrCap = 8
 )
+
+// consumerSpanOpts is built once and shared read-only by every delivery: a fresh
+// inline variadic would heap-allocate both the slice and the option per message.
+var consumerSpanOpts = []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindConsumer)}
+
+var (
+	sharedTracer     trace.Tracer
+	sharedTracerOnce sync.Once
+)
+
+// tracer returns the one tracer both lanes' deliveries report under. otel.Tracer
+// takes the global provider's lock and re-resolves the scope on every call, so
+// the hot path resolves it once — the streams lane caches its tracer per runner
+// today, and routing it through this seam must not regress that.
+func tracer() trace.Tracer {
+	sharedTracerOnce.Do(func() { sharedTracer = otel.Tracer(tracerName) })
+	return sharedTracer
+}
 
 // Outcome names how one delivery ended.
 type Outcome int
@@ -113,8 +132,7 @@ func Run(ctx context.Context, req *Request) *Result {
 
 	msgCtx := gobrickstrace.ExtractFromHeaders(ctx, req.Carrier)
 
-	msgCtx, span := otel.Tracer(tracerName).Start(msgCtx, req.Destination+" "+spanOperationReceive,
-		trace.WithSpanKind(trace.SpanKindConsumer))
+	msgCtx, span := tracer().Start(msgCtx, req.Destination+" "+spanOperationReceive, consumerSpanOpts...)
 	span.SetAttributes(spanAttributes(req)...)
 
 	// Install the per-message lease scope (ADR-032): per-tenant handles borrowed
