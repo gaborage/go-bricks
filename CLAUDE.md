@@ -422,6 +422,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **App validates every config (ADR-064):** `app.NewWithConfig`/`Builder.WithConfig` run `config.Validate`; hand-built configs that violate it fail construction.
 - **keystore.secretminlength tri-state (ADR-065):** `KeyStoreConfig.SecretMinLength` is `*int` (`new(n)` in Go literals; nil = 32, `0` = off, deprecated); a hand-built config that left it unset now enforces the 32-byte floor.
 - **Dead app lifecycle surface removed (ADR-067):** `MessagingInitializer` and `ConnectionPreWarmer` (constructors and methods included), `Options.Database` and `Options.MessagingClient` are gone; the eight debug response types are unexported with their JSON unchanged.
+- **One delivery pipeline (ADR-068):** `messaging.StartConsumeSpan` is removed — a service driving its own consume loop starts its own span — and the AMQP `messaging.client.consumed.messages` counter is recorded at completion with `error.type` instead of at receive without it.
 
 ## File Organization
 

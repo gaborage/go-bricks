@@ -200,7 +200,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 }
 ```
 
-**Observability:** ERROR logs include `message_id`, `queue`, `event_type`, `correlation_id`, `error`. OpenTelemetry metrics track operation duration with `error.type` attribute.
+**Observability:** ERROR logs include `message_id`, `queue`, `event_type`, `correlation_id`, `error`. Each delivery opens a Consumer-kind span named `"<queue> receive"` and records `messaging.client.operation.duration` plus `messaging.client.consumed.messages` when it finishes — both carrying `error.type` when handling failed, so a failure is separable on the counter as well as the histogram (ADR-068).
 
 **Best Practices:** Thorough handler testing, monitor ERROR logs with alerts, use trace IDs for manual replay.
 
