@@ -416,6 +416,11 @@ func TestRunInstallsALeaseScopeAndDrainsItAfterTheHandler(t *testing.T) {
 				// The lane logs and settles while the lease is still held: a
 				// handle borrowed by the handler must outlive the outcome line.
 				assert.False(t, released, "the scope drained before the lane saw the outcome")
+				// The lane's line reads these, so they must already be filled in
+				// by the time it runs — not after the outcome line.
+				assert.NotEmpty(t, res.TraceID)
+				assert.Positive(t, res.Duration)
+				assert.NotNil(t, res.Log)
 				rec.log(res)
 			}
 

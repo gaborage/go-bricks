@@ -35,6 +35,9 @@ const (
 	messagingSystem      = "rabbitmq"
 
 	panicMessage = "panic in message handler: %v"
+
+	// spanAttrCap is the four common attributes plus the AMQP lane's four extras.
+	spanAttrCap = 8
 )
 
 // Outcome names how one delivery ended.
@@ -101,9 +104,10 @@ type Result struct {
 }
 
 // Run puts one message through the delivery pipeline and returns the outcome for
-// the lane to settle. It never returns nil and never panics: a handler panic
+// the lane to settle. It never returns nil, and a handler panic never escapes: it
 // becomes a Panicked result carrying the recovered value, its stack, and an
-// error.
+// error. A panic in the lane's own LogOutcome or Log is the lane's bug and does
+// propagate — the span still ends and the lease scope still drains, both deferred.
 func Run(ctx context.Context, req *Request) *Result {
 	start := time.Now()
 
@@ -145,7 +149,7 @@ func Run(ctx context.Context, req *Request) *Result {
 
 // spanAttributes renders the four attributes both lanes set, then the lane's own.
 func spanAttributes(req *Request) []attribute.KeyValue {
-	attrs := make([]attribute.KeyValue, 0, 4+len(req.SpanExtras))
+	attrs := make([]attribute.KeyValue, 0, spanAttrCap)
 	attrs = append(attrs,
 		attribute.String(string(semconv.MessagingSystemKey), messagingSystem),
 		semconv.MessagingOperationName(spanOperationReceive),
