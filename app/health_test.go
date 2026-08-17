@@ -107,14 +107,23 @@ func createTestCacheManagerWithGetError(t *testing.T, err error) *cache.CacheMan
 func createWarmCacheManagerWithOutage(t *testing.T) *cache.CacheManager {
 	t.Helper()
 	mc := cachetesting.NewMockCache()
+	manager := warmCacheManager(t, mc)
+
+	// The shape redis.Client.Health actually returns on a live outage — it names the address,
+	// which is what the sanitized /ready body must withhold.
+	mc.WithHealthFailure(cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
+	return manager
+}
+
+// warmCacheManager returns a manager serving mc whose instance is already pooled: one
+// Get+release, so the next probe takes the warm path.
+func warmCacheManager(t *testing.T, mc cache.Cache) *cache.CacheManager {
+	t.Helper()
 	manager := cacheManagerServing(t, mc)
 
 	_, release, err := manager.Get(context.Background(), "")
 	require.NoError(t, err)
 	release()
 
-	// The shape redis.Client.Health actually returns on a live outage — it names the address,
-	// which is what the sanitized /ready body must withhold.
-	mc.WithHealthFailure(cache.NewConnectionError("ping", redisProbeAddress, errors.New(errorRedisDown)))
 	return manager
 }

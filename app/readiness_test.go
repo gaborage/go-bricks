@@ -13,7 +13,6 @@ import (
 	"github.com/gaborage/go-bricks/cache"
 	cachetesting "github.com/gaborage/go-bricks/cache/testing"
 	"github.com/gaborage/go-bricks/config"
-	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
@@ -148,7 +147,7 @@ func TestDatabaseProbeLeasesThenChecksHealth(t *testing.T) {
 	db.On("Health", mock.Anything).Return(nil).Once()
 	db.On("Stats").Return(map[string]any{}, nil).Maybe()
 	db.On("Close").Return(nil).Maybe()
-	m := newDBManagerFor(t, db)
+	m := createTestDbManagerWithMock(t, db)
 
 	got := databaseProbe(m, false).Run(context.Background())
 
@@ -164,7 +163,7 @@ func TestDatabaseProbeUnhealthyWhenHealthFails(t *testing.T) {
 	db.On("Health", mock.Anything).Return(errors.New("pg down")).Once()
 	db.On("Stats").Return(map[string]any{}, nil).Maybe()
 	db.On("Close").Return(nil).Maybe()
-	m := newDBManagerFor(t, db)
+	m := createTestDbManagerWithMock(t, db)
 
 	got := databaseProbe(m, false).Run(context.Background())
 
@@ -272,7 +271,7 @@ func TestMessagingProbeNotReadyIsUnhealthyWithError(t *testing.T) {
 }
 
 func TestMessagingProbeCountsItsOwnPublisher(t *testing.T) {
-	m := createTestMessagingManagerWithReadyClient(t)
+	m := createTestMessagingManager(t)
 
 	got := messagingProbe(m, false).Run(context.Background())
 
@@ -416,26 +415,6 @@ func TestConvertCacheStatsToMap(t *testing.T) {
 
 // Fixtures used only by the per-kind descriptions above.
 
-// newDBManagerFor builds a DbManager whose connector always serves db.
-func newDBManagerFor(t *testing.T, db database.Interface) *database.DbManager {
-	t.Helper()
-	cfg := &config.Config{
-		Database: config.DatabaseConfig{
-			Type: "postgresql",
-			Host: "localhost",
-			Port: 5432,
-		},
-	}
-	manager := database.NewDbManager(config.NewTenantStore(cfg), logger.New("error", false),
-		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Hour},
-		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-			return db, nil
-		},
-	)
-	t.Cleanup(func() { assert.NoError(t, manager.Close()) })
-	return manager
-}
-
 // stubMessagingSource fails every broker-URL resolution with err.
 type stubMessagingSource struct {
 	err error
@@ -456,32 +435,9 @@ func newMessagingManagerWithSourceError(t *testing.T, err error) *messaging.Mana
 	)
 }
 
-// createTestMessagingManagerWithReadyClient creates a messaging manager whose clients report ready.
-func createTestMessagingManagerWithReadyClient(t *testing.T) *messaging.Manager {
-	t.Helper()
-	cfg := &config.Config{
-		Messaging: config.MessagingConfig{
-			Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
-		},
-	}
-
-	return messaging.NewMessagingManager(config.NewTenantStore(cfg), logger.New("error", false),
-		messaging.ManagerOptions{MaxPublishers: 10, IdleTTL: time.Hour},
-		func(string, logger.Logger) messaging.AMQPClient {
-			return testmocks.NewMockAMQPClient()
-		},
-	)
-}
-
 // createWarmCacheManagerWithHungPing returns a manager whose pooled instance answers PING
 // only once the ping context expires — the hung-Redis case the probe's sub-budget bounds.
 func createWarmCacheManagerWithHungPing(t *testing.T) *cache.CacheManager {
 	t.Helper()
-	manager := cacheManagerServing(t, cachetesting.NewMockCache().WithDelay(time.Minute))
-
-	_, release, err := manager.Get(context.Background(), "")
-	require.NoError(t, err)
-	release()
-
-	return manager
+	return warmCacheManager(t, cachetesting.NewMockCache().WithDelay(time.Minute))
 }

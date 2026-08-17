@@ -637,23 +637,15 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		}
 	}
 
-	// Every classic kind now describes itself, so a disabled database reports
-	// {"status":"disabled"} like its siblings; the branch below only covers an App whose
-	// healthProbes were hand-built without a database description at all.
-	dbStatus := componentStatus[componentDatabase]
-	if dbStatus.Status == "" {
-		dbStatus.Status = disabledStatus
-		dbStatus.Details = map[string]any{statusKey: disabledStatus}
-	}
-	dbStats := publicDBStats(dbStatus.Details)
-
+	dbStatus, dbRawStats := componentReport(componentStatus, componentDatabase)
+	dbStats := publicDBStats(dbRawStats)
 	messagingStatus, messagingStats := componentReport(componentStatus, componentMessaging)
 	cacheStatus, cacheStats := componentReport(componentStatus, componentCache)
 
 	body := map[string]any{
 		statusKey:          readyStatus,
 		"time":             time.Now().Unix(),
-		componentDatabase:  dbStatus.Status,
+		componentDatabase:  dbStatus,
 		"db_stats":         dbStats,
 		componentMessaging: messagingStatus,
 		"messaging_stats":  messagingStats,
