@@ -7,6 +7,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/observability"
 )
 
@@ -21,6 +22,12 @@ type appBootstrap struct {
 	// context. Defaults to observability.NewProviderWithContext; overridable
 	// in tests to drive the startup-budget timeout path deterministically.
 	newProvider func(context.Context, *observability.Config) (observability.Provider, error)
+
+	// closeManagers stops dbManager/messagingManager's idle-cleanup sweeps when a later
+	// manager fails to build (see closeManagersOnDependencyError). Defaults to that
+	// function; overridable in tests to observe the exact instances dependencies()
+	// constructed before it discards them on the fail-closed cache path.
+	closeManagers func(*database.DbManager, *messaging.Manager)
 }
 
 // newAppBootstrap creates a new bootstrap helper with the provided configuration.
@@ -63,11 +70,28 @@ func newManagerConfigBuilderFromConfig(cfg *config.Config) *ManagerConfigBuilder
 	return configBuilder
 }
 
+// closeManagersOnDependencyError stops the idle-cleanup sweep each manager started at
+// construction (ADR-067) when a later manager in the same dependencies() call fails to
+// build. dependencies() returns (nil, err) on that path and the builder never assembles
+// an App, so nothing downstream ever gets a handle to these two — this is the only place
+// that can stop their goroutines. Nil-guarded: the factory never returns a nil
+// *database.DbManager or *messaging.Manager today, but Close on a nil pointer would
+// panic, and this stays correct if that ever changes.
+func closeManagersOnDependencyError(dbManager *database.DbManager, messagingManager *messaging.Manager) {
+	if dbManager != nil {
+		_ = dbManager.Close()
+	}
+	if messagingManager != nil {
+		_ = messagingManager.Close()
+	}
+}
+
 // dependencies creates and configures all resource managers and dependencies.
 // Returns a bundle containing the database manager, messaging manager, cache manager, resource provider, and observability.
-// A manager that cannot be constructed from the supplied configuration aborts startup;
-// nothing constructed before that point holds a connection or a background goroutine
-// (pool cleanup starts later, in the app lifecycle), so an early return leaks nothing.
+// dbManager and messagingManager each hold a cleanup goroutine from construction (ADR-067),
+// so a manager that cannot be constructed from the supplied configuration must close
+// whichever of the two already exist before aborting startup; see
+// closeManagersOnDependencyError for why this is the only place that can.
 func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBundle, error) {
 	resolver := NewFactoryResolver(b.opts)
 	configBuilder := newManagerConfigBuilderFromConfig(b.cfg)
@@ -88,6 +112,11 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 	messagingManager := factory.CreateMessagingManager(resourceSource)
 	cacheManager, err := factory.CreateCacheManager(resourceSource)
 	if err != nil {
+		closeManagers := b.closeManagers
+		if closeManagers == nil {
+			closeManagers = closeManagersOnDependencyError
+		}
+		closeManagers(dbManager, messagingManager)
 		return nil, err
 	}
 

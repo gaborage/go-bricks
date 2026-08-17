@@ -46,8 +46,11 @@ A **slot** owns one resource kind's whole application lifecycle.
    phase and by probe order. Close stays FIFO, so ADR-029's shutdown ordering is preserved
    by the stop/close split rather than by a second list.
 4. **Maintenance is manager-side.** `database.DbManager` and `messaging.Manager` self-start
-   their idle-cleanup loop at construction when `IdleTTL > 0`, exactly as
-   `cache.NewCacheManager` already does, and stop it in `Close()`. `StartCleanup` stays
+   their idle-cleanup loop at construction, exactly as `cache.NewCacheManager` already
+   does, and stop it in `Close()`. The `IdleTTL > 0` guard lives one layer down, in
+   `resourcepool.Pool.StartCleanup` itself (both constructors coerce a non-positive
+   `IdleTTL` to a default before the pool is built, so the guard is a no-op in practice
+   but stays the single place idle-cleanup eligibility is decided). `StartCleanup` stays
    exported and becomes idempotent, `StopCleanup` stays, and the
    cleanup-interval-vs-idle-TTL WARN moves beside the pool that owns both values.
    `App.startMaintenanceLoops`, `App.warnIfCleanupIntervalTooLate` and

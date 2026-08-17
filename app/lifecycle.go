@@ -468,7 +468,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 		}, &errs)
 	}
 
-	// 2. Stop each kind's inbound work (connections are closed later, in step 6, via the
+	// 2. Stop each kind's inbound work (connections are closed later, in step 5, via the
 	//    slots' closers). Done before module shutdown so the framework stops delivering fresh
 	//    messages to modules that are about to be torn down.
 	//    Deliberately unguarded, unlike prepareRuntime: teardown is best-effort and must not

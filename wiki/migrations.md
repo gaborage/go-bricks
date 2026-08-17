@@ -3183,7 +3183,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - preflight: if you run `go-bricks-migrate`, `go-bricks-migrate info` per tenant before the bump
   and grep `flyway.conf`/the migration environment for `DB_SSLMODE`/`DB_SSLROOTCERT`/`DB_SSLCERT`/`DB_SSLKEY`
   (C60.1, C60.2); grep dashboards, alerts, synthetic checks and contract fixtures
-  for the retired strings and for `*_stats` objects pinned to `{}` (C60.3)
+  for the retired strings and for `*_stats` objects pinned to `{}` (C60.3); and grep
+  log-based alerts and saved queries for the five retired cleanup-loop lines
+  (`Starting/Stopping database manager cleanup loop`, `Starting/Stopping messaging
+  manager cleanup loop`, `Manager cleanup loops stopped`) — they have no renamed
+  equivalent (C60.5)
 - exit: `go get github.com/gaborage/go-bricks@v0.60.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C60.1] `go-bricks-migrate` validates every resolved database config · breaking · when: match
@@ -3362,12 +3366,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   finds the call sites the second half of `apply` covers.
 - scope: `database.DbManager` and `messaging.Manager` now start their idle-eviction sweep inside
   their constructor and stop it inside `Close()`, exactly as `cache.NewCacheManager` has always
-  done (ADR-067 decision 4). On the framework's own boot path that moves the start a few
-  milliseconds earlier — from the end of `prepareRuntime` to the Builder's manager-construction
-  step — and moves the stop one shutdown phase later, from a dedicated phase to the closers that
-  already ran last. **The wall-clock shutdown order is unchanged**: the closers run after modules
-  and observability either way (ADR-029). Sweep frequency, idle TTL and eviction semantics are
-  untouched, and no HTTP body, status code or metric changes. Three things do change for an
+  done (ADR-067 decision 4). On the framework's own boot path that moves the start earlier —
+  before module `Init()` runs, rather than after (the end of `prepareRuntime` shifts to the
+  Builder's manager-construction step) — and moves the stop one shutdown phase later, from a
+  dedicated phase to the closers that already ran last. **The wall-clock shutdown order is
+  unchanged**: the closers run after modules and observability either way (ADR-029). Sweep
+  frequency, idle TTL and eviction semantics are untouched, and no HTTP body, status code or
+  metric changes. The sweep now runs during module `Init()` and can, in theory, evict the
+  pre-init `""` lease before its first use inside a module's `Init` — inert at the default TTLs
+  (30m database, 1h messaging) against any startup that finishes in that window, but a real
+  effect if `IdleTTL` is tuned low enough. Three things do change for an
   operator: (1) the five INFO lines above retire with no renamed equivalent — the sweep is no
   longer an app-level phase, so there is no phase to announce; (2) the
   `<prefix>.cleanupinterval is >= <prefix>.idlettl` advisory now fires at manager construction
