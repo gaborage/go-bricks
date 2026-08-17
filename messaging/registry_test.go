@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
 	gobrickslogger "github.com/gaborage/go-bricks/logger"
@@ -2427,8 +2428,15 @@ func TestRegistryProcessMessageRecordsConsumeMetricsOnError(t *testing.T) {
 
 	rm := mp.Collect(t)
 
-	// Counter is stamped at receive time, before the handler runs.
-	obtest.AssertMetricValue(t, rm, "messaging.client.consumed.messages", int64(1))
+	// The counter is stamped at completion now (ADR-068), so a failed delivery
+	// is still counted once and carries the error type that failed it.
+	consumed := obtest.FindMetric(rm, "messaging.client.consumed.messages")
+	require.NotNil(t, consumed)
+	sumData, ok := consumed.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, sumData.DataPoints, 1)
+	assert.Equal(t, int64(1), sumData.DataPoints[0].Value)
+	assertAttribute(t, sumData.DataPoints[0].Attributes.ToSlice(), "error.type", "*errors.errorString")
 
 	durationMetric := obtest.FindMetric(rm, "messaging.client.operation.duration")
 	require.NotNil(t, durationMetric)
@@ -2470,6 +2478,7 @@ func TestRegistryProcessMessageCountsExactlyOncePerDelivery(t *testing.T) {
 
 	rm := mp.Collect(t)
 
+	// Two deliveries, two counts — recorded at completion, once each.
 	obtest.AssertMetricValue(t, rm, "messaging.client.consumed.messages", int64(2))
 
 	durationMetric := obtest.FindMetric(rm, "messaging.client.operation.duration")
@@ -2931,7 +2940,8 @@ func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
 	t.Logf("processMessage allocs/op = %.1f", avg)
 	// Ceiling fixed at 42.0 (advisor resolution 2026-08-09): measured BEFORE =
 	// 47.0, AFTER = 38.0 allocs/op — fails the old per-delivery WithFields
-	// layer, passes the new per-event stamps with headroom.
+	// layer, passes the new per-event stamps with headroom. On the delivery
+	// pipeline (ADR-068) = 29.0 allocs/op.
 	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
 }
 
@@ -3015,6 +3025,66 @@ func TestRegistryProcessMessageSkipsDebugFieldBuildWhenDisabled(t *testing.T) {
 
 	infoLine := rec.Line(t, "Message processed successfully")
 	assert.NotEmpty(t, infoLine.Pairs)
+}
+
+// ===== Delivery-pipeline lane adapter tests (ADR-068) =====
+
+func TestConsumeSpanExtrasCarryEveryDeliveryField(t *testing.T) {
+	extras := consumeSpanExtras(&amqp.Delivery{
+		Exchange:      testExchangeName,
+		RoutingKey:    testRoutingKey,
+		MessageId:     testMessageID,
+		CorrelationId: "amqp-corr-1",
+	})
+
+	assertAttribute(t, extras, "messaging.rabbitmq.exchange", testExchangeName)
+	assertAttribute(t, extras, "messaging.rabbitmq.destination.routing_key", testRoutingKey)
+	assertAttribute(t, extras, string(semconv.MessagingMessageIDKey), testMessageID)
+	assertAttribute(t, extras, string(semconv.MessagingMessageConversationIDKey), "amqp-corr-1")
+}
+
+func TestConsumeSpanExtrasOmitTheFieldsTheDeliveryDidNotCarry(t *testing.T) {
+	assert.Empty(t, consumeSpanExtras(&amqp.Delivery{}),
+		"a delivery with no exchange, routing key, message id or correlation id adds no span attribute")
+}
+
+func TestRegistryProcessMessageSpanCarriesEveryDeliveryAttribute(t *testing.T) {
+	exporter, cleanup := setupTestTracing(t)
+	defer cleanup()
+
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   &countingTestHandler{},
+		AutoAck:   false,
+	}
+	delivery := &amqp.Delivery{
+		MessageId:     testMessageID,
+		CorrelationId: "amqp-corr-1",
+		RoutingKey:    testRoutingKey,
+		Exchange:      testExchangeName,
+		DeliveryTag:   123,
+		Body:          []byte(testMessageBody),
+		Headers:       amqp.Table{},
+		Acknowledger:  &mockAcknowledger{},
+	}
+
+	registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	span := spans[0]
+	assert.Equal(t, testQueueName+" receive", span.Name)
+	assert.Equal(t, trace.SpanKindConsumer, span.SpanKind)
+	assertAttribute(t, span.Attributes, string(semconv.MessagingSystemKey), "rabbitmq")
+	assertAttribute(t, span.Attributes, string(semconv.MessagingOperationNameKey), "receive")
+	assertAttribute(t, span.Attributes, string(semconv.MessagingDestinationNameKey), testQueueName)
+	assertAttribute(t, span.Attributes, string(semconv.MessagingMessageBodySizeKey), int64(len(testMessageBody)))
+	assertAttribute(t, span.Attributes, "messaging.rabbitmq.exchange", testExchangeName)
+	assertAttribute(t, span.Attributes, "messaging.rabbitmq.destination.routing_key", testRoutingKey)
+	assertAttribute(t, span.Attributes, string(semconv.MessagingMessageIDKey), testMessageID)
+	assertAttribute(t, span.Attributes, string(semconv.MessagingMessageConversationIDKey), "amqp-corr-1")
 }
 
 // ===== Stream Queue Consumption Tests =====
