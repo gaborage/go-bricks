@@ -749,19 +749,17 @@ func TestApplyGlobalMiddlewareNoopWhenNoModulesContribute(t *testing.T) {
 	require.NoError(t, app.applyGlobalMiddleware(), "no contributing modules → no error even on an unsupporting server")
 }
 
-// TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval proves
-// startMaintenanceLoops passes the operator-configured
-// messaging.publisher.cleanupinterval through to Manager.StartCleanup instead
-// of the old hardcoded 2m literal. A 2m default interval would never fire
-// within this test's window; observing the idle publisher actually get swept
-// proves the short configured interval was used.
+// TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval now pins that the
+// constructor starts the sweep at the 20ms CleanupInterval directly (ADR-067), so
+// startMaintenanceLoops's StartCleanup call here is the idempotent no-op Task 4 deletes.
 func TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval(t *testing.T) {
 	log := logger.New("error", false)
 
 	client := testmocks.NewMockAMQPClient()
 	client.ExpectClose(nil)
 	factory := func(string, logger.Logger) messaging.AMQPClient { return client }
-	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log, messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond}, factory)
+	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log,
+		messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond, CleanupInterval: 20 * time.Millisecond}, factory)
 	defer func() { _ = manager.Close() }()
 
 	_, rel, err := manager.Publisher(context.Background(), testKey)
@@ -836,15 +834,18 @@ func TestCleanupIntervalTooLate(t *testing.T) {
 
 // TestStartMaintenanceLoopsWarnsOnLateCleanupInterval exercises the WARN path
 // end-to-end through startMaintenanceLoops: a misconfigured cleanupinterval >=
-// idlettl is advisory only, so the cleanup loop must still start and function
-// normally (an idle publisher is still eventually swept) without panicking.
+// idlettl is advisory only, so the cleanup loop must still function normally (an
+// idle publisher is still eventually swept) without panicking. The constructor
+// already started that sweep at the 20ms CleanupInterval (ADR-067), so
+// startMaintenanceLoops's StartCleanup call here is the idempotent no-op Task 4 deletes.
 func TestStartMaintenanceLoopsWarnsOnLateCleanupInterval(t *testing.T) {
 	log := logger.New("error", false)
 
 	client := testmocks.NewMockAMQPClient()
 	client.ExpectClose(nil)
 	factory := func(string, logger.Logger) messaging.AMQPClient { return client }
-	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log, messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond}, factory)
+	manager := messaging.NewMessagingManager(&fakeBrokerURLProvider{url: "amqp://localhost"}, log,
+		messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond, CleanupInterval: 20 * time.Millisecond}, factory)
 	defer func() { _ = manager.Close() }()
 
 	_, rel, err := manager.Publisher(context.Background(), testKey)

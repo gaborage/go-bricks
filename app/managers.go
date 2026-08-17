@@ -78,6 +78,7 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 	return messaging.ManagerOptions{
 		MaxPublishers:      b.resolveMaxSize(b.publisherConfig.MaxCached),
 		IdleTTL:            b.publisherConfig.IdleTTL,
+		CleanupInterval:    b.publisherConfig.CleanupInterval,
 		ConnectionTimeout:  b.connectionTimeout,
 		MaxPublishAttempts: b.maxPublishAttempts,
 		ReadyTimeout:       b.readyTimeout,

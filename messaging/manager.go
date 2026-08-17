@@ -81,10 +81,17 @@ type consumerEntry struct {
 	key      string
 }
 
+// defaultPublisherCleanupInterval is the documented idle-sweep frequency
+// (messaging.publisher.cleanupinterval) applied when the caller supplies none.
+const defaultPublisherCleanupInterval = 2 * time.Minute
+
 // ManagerOptions configures the Manager
 type ManagerOptions struct {
 	MaxPublishers int           // Maximum number of publisher clients to keep cached
 	IdleTTL       time.Duration // Time after which idle publishers are evicted
+	// CleanupInterval is how often the idle-publisher sweep runs; <=0 uses the documented
+	// 2-minute default. The manager starts that sweep itself at construction (ADR-067).
+	CleanupInterval time.Duration
 	// ConnectionTimeout is the per-publish broker confirmation timeout applied to
 	// clients created by the default factory. Zero leaves the client default (30s).
 	ConnectionTimeout time.Duration
@@ -103,7 +110,9 @@ type ManagerOptions struct {
 	ResendDelay       time.Duration
 }
 
-// NewMessagingManager creates a new messaging manager
+// NewMessagingManager creates a new messaging manager. The idle-publisher sweep starts here and
+// stops in Close, so callers need not drive it (ADR-067); StartCleanup remains available and
+// idempotent.
 func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, opts ManagerOptions, clientFactory ClientFactory) *Manager {
 	if opts.MaxPublishers <= 0 {
 		opts.MaxPublishers = 50 // sensible default
@@ -114,6 +123,9 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 		// signal. The app path always arrives with IdleTTL already stamped by
 		// config.Validate (ADR-064).
 		opts.IdleTTL = 1 * time.Hour
+	}
+	if opts.CleanupInterval <= 0 {
+		opts.CleanupInterval = defaultPublisherCleanupInterval
 	}
 
 	// Default to real client factory if none provided
@@ -131,7 +143,7 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 		}
 	}
 
-	return &Manager{
+	m := &Manager{
 		logger:         log,
 		resourceSource: resourceSource,
 		clientFactory:  clientFactory,
@@ -146,6 +158,11 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 		consumers:     make(map[string]*consumerEntry),
 		replayedHashs: make(map[string]uint64),
 	}
+
+	resourcepool.WarnIfCleanupIntervalTooLate(log, "messaging.publisher", opts.CleanupInterval, opts.IdleTTL)
+	m.pubPool.StartCleanup(opts.CleanupInterval)
+
+	return m
 }
 
 // EnsureConsumers creates and starts consumers for the given key using the provided declarations.
@@ -406,13 +423,14 @@ func (m *Manager) closeClientOnRollback(client AMQPClient, key, phase string) {
 }
 
 // StartCleanup starts the background cleanup routine for idle publishers. A non-positive
-// interval substitutes the documented 2-minute default.
+// interval substitutes the documented 2-minute default. The constructor already started a
+// sweep, so this is a no-op unless StopCleanup ran first (the pool's loop is single-instance).
 func (m *Manager) StartCleanup(interval time.Duration) {
 	if m.pubPool == nil {
 		return // zero-value manager: nothing to run, consistent with the other nil-pool guards
 	}
 	if interval <= 0 {
-		interval = 2 * time.Minute // default cleanup interval for publishers
+		interval = defaultPublisherCleanupInterval
 	}
 	m.pubPool.StartCleanup(interval)
 }
@@ -443,13 +461,13 @@ func (m *Manager) StopConsumers() {
 	}
 }
 
-// Close closes all clients and stops cleanup. Publisher closes go through the pool (which
-// stops its own cleanup loop and joins every per-publisher close failure); consumer closes
-// are handled directly. A publisher client still borrowed by in-flight work is closed at its
-// final release instead of by this call, and that deferred close failure (if any) is excluded
-// from this return value — it is counted in Stats()["errors"] instead (wiki/migrations.md
-// C581.3). Every failure returned here, from BOTH sides, is surfaced under the historical
-// "errors closing messaging clients" prefix.
+// Close closes all clients and stops the idle-publisher sweep the constructor started. Publisher
+// closes go through the pool (which stops its own cleanup loop and joins every per-publisher
+// close failure); consumer closes are handled directly. A publisher client still borrowed by
+// in-flight work is closed at its final release instead of by this call, and that deferred close
+// failure (if any) is excluded from this return value — it is counted in Stats()["errors"]
+// instead (wiki/migrations.md C581.3). Every failure returned here, from BOTH sides, is surfaced
+// under the historical "errors closing messaging clients" prefix.
 func (m *Manager) Close() error {
 	// Flip closed BEFORE any teardown, matching resourcepool.Close: it establishes the
 	// happens-before that lets ensureConsumersInternal's re-check see the flag once it

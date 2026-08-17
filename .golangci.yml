@@ -193,6 +193,19 @@ linters:
           - importas
         path: cmd/seal-payload/
         text: 'go-jose/go-jose/v4'
+      # NewMessagingManager's opts ManagerOptions crossed gocritic's 80-byte hugeParam
+      # heuristic when ADR-067 added CleanupInterval (messaging.publisher.cleanupinterval),
+      # mirroring the additive field already on database.DbManagerOptions and
+      # cache.ManagerConfig — both stay under threshold only because they carry far fewer
+      # reconnect knobs. All three manager constructors (NewDbManager, NewCacheManager,
+      # NewMessagingManager) deliberately take their options struct by value: each runs
+      # once at startup, never in a hot path, so the copy this check warns about is free.
+      # Switching only this one to a pointer would break that parallel and ripple through
+      # every one of its ~50 call sites for a heuristic that does not apply here.
+      - linters:
+          - gocritic
+        path: messaging/manager\.go
+        text: 'hugeParam: opts is heavy'
     paths:
       - third_party$
       - builtin$

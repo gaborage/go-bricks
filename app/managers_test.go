@@ -239,10 +239,11 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 	t.Run("operator override reaches messaging options", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 100)
-		builder.publisherConfig = config.PublisherPoolConfig{MaxCached: 77, IdleTTL: 3 * time.Minute}
+		builder.publisherConfig = config.PublisherPoolConfig{MaxCached: 77, IdleTTL: 3 * time.Minute, CleanupInterval: 45 * time.Second}
 		opts := builder.BuildMessagingOptions()
 		assert.Equal(t, 77, opts.MaxPublishers, "operator messaging.publisher.maxcached override must reach ManagerOptions")
 		assert.Equal(t, 3*time.Minute, opts.IdleTTL, "operator messaging.publisher.idlettl override must reach ManagerOptions")
+		assert.Equal(t, 45*time.Second, opts.CleanupInterval, "operator messaging.publisher.cleanupinterval override must reach ManagerOptions")
 	})
 
 	t.Run("operator override reaches cache options", func(t *testing.T) {
