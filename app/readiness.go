@@ -68,8 +68,10 @@ func disabledProbe(name string) probeDescription {
 // details.status mirroring the verdict.
 func (d probeDescription) Run(ctx context.Context) HealthStatus {
 	status, stats, err := d.judge(ctx)
-	details := make(map[string]any, len(stats)+1)
-	maps.Copy(details, stats)
+	details := maps.Clone(stats) // never hand the caller the kind's own map
+	if details == nil {
+		details = make(map[string]any, 1)
+	}
 	details[statusKey] = status
 	return HealthStatus{
 		Name:     d.name,
