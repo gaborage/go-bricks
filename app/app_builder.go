@@ -459,6 +459,9 @@ func (b *Builder) Build() (*App, logger.Logger, error) {
 	}
 
 	if b.app == nil {
+		// A hand-driven chain that resolved dependencies but never built the app
+		// strands the same managers as an error does.
+		b.closeBundleManagers()
 		return nil, log, errors.New("app building incomplete")
 	}
 

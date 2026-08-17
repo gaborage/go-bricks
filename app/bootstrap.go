@@ -91,8 +91,8 @@ func closeManagersOnDependencyError(dbManager *database.DbManager, messagingMana
 // Returns a bundle containing the database manager, messaging manager, cache manager, resource provider, and observability.
 // dbManager and messagingManager each hold a cleanup goroutine from construction (ADR-067),
 // so a manager that cannot be constructed from the supplied configuration must close
-// whichever of the two already exist before aborting startup; see
-// closeManagersOnDependencyError for why this is the only place that can.
+// whichever of the two already exist before aborting startup — no bundle exists yet, so
+// Builder.closeBundleManagers cannot reach them (see closeManagersOnDependencyError).
 func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBundle, error) {
 	resolver := NewFactoryResolver(b.opts)
 	configBuilder := newManagerConfigBuilderFromConfig(b.cfg)
