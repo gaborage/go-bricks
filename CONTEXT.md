@@ -64,3 +64,55 @@ A database section whose identity keys were delivered but every value is
 empty (an unset envsubst variable, an empty secretKeyRef). Misconfiguration,
 not absence (ADR-051).
 _Avoid_: blank, partial, half-configured
+
+### Application lifecycle
+
+**Slot**:
+The framework-side module that owns one resource kind's whole application
+lifecycle — probe, pre-init, start, close — so that adding a kind is one slot,
+not an edit in every place that enumerates kinds. There is one slot per kind
+(database, messaging, cache, streams).
+_Avoid_: resource kind (that is what fills a slot), manager wrapper, component
+
+**Probe description**:
+What a slot hands readiness so its kind can be judged: a fixed component name,
+whether the kind is critical, how to lease it, how to check it is live, and
+which of its statistics may appear on the unauthenticated `/ready` body.
+_Avoid_: health check, prober (the exported interface), probe config
+
+**Readiness**:
+The single judgment of whether the application may take traffic, and the two
+views of it — the `/ready` verdict and body, and the debug detail — both
+produced from the same probe descriptions and the same list of statuses that
+count as ready.
+_Avoid_: health (as the noun for this), liveness, ready check
+
+### Messaging
+
+**Delivery pipeline**:
+Everything that happens to one consumed message between "bytes arrived" and
+"outcome recorded", regardless of lane: trace extraction, span, per-message
+lease scope, handler invocation, panic-to-error, duration and count, failure
+log. Yields one outcome — succeeded, handler error, or panicked.
+_Avoid_: consume loop, message processing, worker (that is the concurrency
+shape around the pipeline, not the pipeline)
+
+**Carrier**:
+The header source a lane hands the delivery pipeline so trace context can be
+read from it — AMQP 0.9.1 headers for the classic lane, AMQP 1.0 application
+properties for the streams lane.
+_Avoid_: headers (ambiguous across lanes), propagator, accessor (the code shape)
+
+**Settlement**:
+The lane-specific step that turns a delivery outcome into a broker action:
+ack or nack-without-requeue on the classic lane, commit-offset or skip on the
+streams lane. Policy such as "never requeue" and "commit only after success"
+lives here, not in the pipeline.
+_Avoid_: ack (one lane's word), commit (the other lane's word), completion
+
+**Environment port**:
+The seam through which the streams lane reaches the broker — declaring
+streams, querying and storing offsets, constructing consumers and producers —
+with the vendor environment as its production adapter and an in-memory fake
+for tests.
+_Avoid_: env, client (ambiguous with the AMQP client), connection

@@ -637,23 +637,15 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		}
 	}
 
-	// database seeds its own stats payload: absent-database deployments have always
-	// received db_stats {"status":"disabled"} rather than the empty object the other
-	// components report, and that shape is part of the published /ready body.
-	dbStatus := componentStatus[componentDatabase]
-	if dbStatus.Status == "" {
-		dbStatus.Status = disabledStatus
-		dbStatus.Details = map[string]any{statusKey: disabledStatus}
-	}
-	dbStats := publicDBStats(dbStatus.Details)
-
+	dbStatus, dbRawStats := componentReport(componentStatus, componentDatabase)
+	dbStats := publicDBStats(dbRawStats)
 	messagingStatus, messagingStats := componentReport(componentStatus, componentMessaging)
 	cacheStatus, cacheStats := componentReport(componentStatus, componentCache)
 
 	body := map[string]any{
 		statusKey:          readyStatus,
 		"time":             time.Now().Unix(),
-		componentDatabase:  dbStatus.Status,
+		componentDatabase:  dbStatus,
 		"db_stats":         dbStats,
 		componentMessaging: messagingStatus,
 		"messaging_stats":  messagingStats,

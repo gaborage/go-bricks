@@ -132,7 +132,7 @@ describes only a directly-assembled `App` — and [cache.md](cache.md) records t
 - `app/managers.go` (`CreateCacheManager`, `BuildCacheOptions`)
 - `app/bootstrap.go` (`dependencies`)
 - `app/app_builder.go` (`ResolveDependencies`, `preInitCache`)
-- `app/app.go` (`createHealthProbes`) · `app/health.go` (`cacheManagerHealthProbe`)
+- `app/app.go` (`createHealthProbes`) · `app/readiness.go` (`cacheProbe`; before [ADR-066](adr_066_readiness_one_module.md): `app/health.go`'s `cacheManagerHealthProbe`)
 - `config/validation.go` (`validateCache`, `applyCacheManagerDefaults`)
 - `cache/manager.go` (`NewCacheManager`)
 - [migrations.md](migrations.md) `[C58.3]`

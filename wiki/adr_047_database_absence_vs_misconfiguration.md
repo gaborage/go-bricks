@@ -169,7 +169,7 @@ database-free service.
 
 - `config/tenant_store.go` — `DBConfig`
 - `config/validation.go` — `IsDatabaseConfigured`
-- `app/health.go` — `databaseManagerHealthProbe`, `handleDatabaseConnectionError`
+- `app/readiness.go` — `databaseProbe` (before [ADR-066](adr_066_readiness_one_module.md): `app/health.go`'s `databaseManagerHealthProbe`, `handleDatabaseConnectionError`)
 - `database/factory.go` — `NewConnection`
 - [ADR-003](adr_003_database_by_intent.md) — database by intent
 - [wiki/migrations.md](migrations.md) — C56.14, C56.15

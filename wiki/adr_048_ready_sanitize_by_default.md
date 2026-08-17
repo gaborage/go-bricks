@@ -6,6 +6,12 @@
 ADR-046's `PublicErr` seam and its `cache.critical` decision untouched, and reverses only
 that ADR's "sanitization is per-probe, not a blanket rewrite of the shared branch" scoping.
 
+> **Amended (2026-08-16, [ADR-066](adr_066_readiness_one_module.md)):** `healthProbeFunc`
+> and its `publicErr` field no longer exist — every framework kind is a probe description
+> that carries no such field. `HealthStatus.PublicErr` remains the exported override seam
+> for consumer-implemented `Prober`s (`TestPublicProbeError` pins the synthesized default
+> and the override); no framework kind sets it. The text below is the record as decided.
+
 ## Context
 
 ADR-046 introduced `HealthStatus.PublicErr` so the cache probe could serve a fixed

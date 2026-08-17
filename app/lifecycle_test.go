@@ -818,7 +818,7 @@ func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 			rec := &recLogger{}
 			app := &App{cfg: cfg, logger: rec, cacheManager: createTestCacheManagerWithGetError(t, tc.probeErr)}
 			app.healthProbes = app.createHealthProbes()
-			require.Len(t, app.healthProbes, 1)
+			require.Len(t, app.healthProbes, 3)
 
 			reqCtx := context.Background()
 			if tc.cancelCaller {
@@ -875,12 +875,10 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		cfg := &config.Config{App: config.AppConfig{Name: testApp}}
 		rec := &recLogger{}
 		app := &App{cfg: cfg, logger: rec}
-		app.healthProbes = []Prober{healthProbeFunc{
+		app.healthProbes = []Prober{probeDescription{
 			name:     componentDatabase,
 			critical: true,
-			fn: func(context.Context) (string, map[string]any, error) {
-				return unhealthyStatus, nil, errors.New(pgconnIdentityError)
-			},
+			live:     func(context.Context) error { return errors.New(pgconnIdentityError) },
 		}}
 
 		body, code := runReadyCheck(t, app, cfg)
@@ -897,15 +895,15 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 	})
 
 	t.Run("probe_built_by_the_real_constructor_is_sanitized", func(t *testing.T) {
-		// Same path, but the probe comes from databaseManagerHealthProbe rather than a
-		// hand-built one, so it covers the constructor's own wiring reaching readyCheck.
+		// Same path, but the probe comes from databaseProbe rather than a hand-built
+		// one, so it covers the constructor's own wiring reaching readyCheck.
 		cfg := &config.Config{App: config.AppConfig{Name: testApp}}
 		cfg.Database.Type = "mysql" // resolves as intended, then fails to connect
 		cfg.Database.Host = "control-plane.internal"
 		rec := &recLogger{}
 		app := &App{cfg: cfg, logger: rec, dbManager: newRealConnectorDBManager(cfg)}
 		app.healthProbes = app.createHealthProbes()
-		require.Len(t, app.healthProbes, 1)
+		require.Len(t, app.healthProbes, 3)
 
 		body, code := runReadyCheck(t, app, cfg)
 
@@ -927,12 +925,10 @@ func TestReadyCheckSanitizesCriticalProbeWithoutPublicError(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp}}
 	rec := &recLogger{}
 	app := &App{cfg: cfg, logger: rec}
-	app.healthProbes = []Prober{healthProbeFunc{
+	app.healthProbes = []Prober{probeDescription{
 		name:     "vault",
 		critical: true,
-		fn: func(context.Context) (string, map[string]any, error) {
-			return unhealthyStatus, nil, errors.New(pgconnIdentityError)
-		},
+		live:     func(context.Context) error { return errors.New(pgconnIdentityError) },
 	}}
 
 	body, code := runReadyCheck(t, app, cfg)
@@ -1015,11 +1011,10 @@ func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{
-		healthProbeFunc{
-			name: componentStreams,
-			fn: func(context.Context) (string, map[string]any, error) {
-				return healthyStatus, map[string]any{statusKey: healthyStatus, "consumers": 2}, nil
-			},
+		probeDescription{
+			name:  componentStreams,
+			live:  func(context.Context) error { return nil },
+			stats: func() map[string]any { return map[string]any{"consumers": 2} },
 		},
 	}}
 
@@ -1033,16 +1028,16 @@ func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
 // streamsProbeWithOffsets returns a probe whose details carry the identifier-bearing
 // stored_offsets map a real streams.Manager reports.
 func streamsProbeWithOffsets(streamName, consumerName string) Prober {
-	return healthProbeFunc{
+	return probeDescription{
 		name: componentStreams,
-		fn: func(context.Context) (string, map[string]any, error) {
-			return healthyStatus, map[string]any{
-				statusKey:            healthyStatus,
+		live: func(context.Context) error { return nil },
+		stats: func() map[string]any {
+			return map[string]any{
 				"started":            true,
 				"consumers":          1,
 				streamsOffsetsKey:    map[string]int64{streamName + "/" + consumerName: 4242},
 				"offset_store_count": 500,
-			}, nil
+			}
 		},
 	}
 }

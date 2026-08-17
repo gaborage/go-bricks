@@ -811,9 +811,9 @@ func TestCreateHealthProbesCacheCriticalFromLoadedConfig(t *testing.T) {
 			app := &App{cfg: cfg, logger: logger.New("error", false), cacheManager: createTestCacheManager(t)}
 
 			probes := app.createHealthProbes()
-			require.Len(t, probes, 1)
+			require.Len(t, probes, 3)
 
-			status := probes[0].Run(context.Background())
+			status := probes[2].Run(context.Background())
 			assert.Equal(t, componentCache, status.Name)
 			assert.Equal(t, tc.expectedCritical, status.Critical)
 		})
@@ -941,7 +941,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				assert.Equal(t, "disabled", body[componentMessaging])
 				msgStats, ok := body[messagingStatsKey].(map[string]any)
 				assert.True(t, ok)
-				assert.Len(t, msgStats, 0)
+				assert.Equal(t, map[string]any{statusKey: disabledStatus}, msgStats)
 			},
 		},
 		{
@@ -1003,7 +1003,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				assert.Equal(t, unhealthyStatus, body[componentCache])
 				cacheStats, ok := body[cacheStatsKey].(map[string]any)
 				require.True(t, ok, "cache_stats must be present in the ready body")
-				assert.Equal(t, "connection_failed", cacheStats[statusKey])
+				assert.Equal(t, unhealthyStatus, cacheStats[statusKey])
 				assert.NotContains(t, body, errorKey)
 				assertNoCacheCoordinates(t, body)
 			},
@@ -1081,7 +1081,7 @@ func TestReadyCheckScenarios(t *testing.T) {
 				assert.Equal(t, disabledStatus, body[componentCache])
 				cacheStats, ok := body[cacheStatsKey].(map[string]any)
 				require.True(t, ok, "cache_stats must be present in the ready body")
-				assert.Empty(t, cacheStats)
+				assert.Equal(t, map[string]any{statusKey: disabledStatus}, cacheStats)
 			},
 		},
 		{

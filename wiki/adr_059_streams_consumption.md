@@ -247,7 +247,7 @@ parking exists, a handler that must not lose a message has to persist it itself.
 AMQP lane, with its session-local resume.
 
 **Neutral — the readiness probe is non-critical.** A reconnecting consumer
-reports `not_ready` without failing `/ready`, because the reliable consumers
+reports `not_ready` (`unhealthy` since [ADR-066](adr_066_readiness_one_module.md)) without failing `/ready`, because the reliable consumers
 recover on their own and pulling the instance from the load balancer over a
 broker flap would be worse than the flap.
 
