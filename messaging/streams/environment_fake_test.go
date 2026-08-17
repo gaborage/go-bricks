@@ -129,6 +129,14 @@ type fakeEnvironment struct {
 	// so superProdOpts and its existing accessor stay untouched.
 	superProdConfirmed map[string]ha.PartitionConfirmMessageHandler
 	preparedProds      map[string]*fakeProducer
+
+	// blockedStore parks one StoreOffset key until release closes, standing in for
+	// the client's locator reconnect loop against a broker that is down: it has no
+	// attempt cap and no deadline, so such a commit never returns on its own.
+	blockedStore string
+	storeEntered chan struct{}
+	storeRelease chan struct{}
+	storeOnce    sync.Once
 }
 
 var _ environment = (*fakeEnvironment)(nil)
@@ -152,6 +160,15 @@ func (f *fakeEnvironment) failOn(key string, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.errs[key] = err
+}
+
+func (f *fakeEnvironment) blockStoreOn(key string) (entered <-chan struct{}, release chan<- struct{}) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.blockedStore = key
+	f.storeEntered = make(chan struct{})
+	f.storeRelease = make(chan struct{})
+	return f.storeEntered, f.storeRelease
 }
 
 // setOffset seeds the broker's stored offset for one consumer and stream.
@@ -273,14 +290,29 @@ func (f *fakeEnvironment) QueryOffset(consumer, streamName string) (int64, error
 }
 
 func (f *fakeEnvironment) StoreOffset(consumer, streamName string, offset int64) error {
+	key := consumer + "/" + streamName
+
+	f.mu.Lock()
+	f.recordLocked(fmt.Sprintf("%s:%s=%d", callStoreOffset, key, offset))
+	injected := f.errForLocked(callStoreOffset, key)
+	blocked := f.blockedStore == key
+	entered, release := f.storeEntered, f.storeRelease
+	f.mu.Unlock()
+
+	// Parked OUTSIDE the lock on purpose: the shutdown flush budget exists to walk
+	// away from a commit that cannot finish, and holding this mutex would stall the
+	// consumer behind it on the mutex instead of letting the budget skip it.
+	if blocked {
+		f.storeOnce.Do(func() { close(entered) })
+		<-release
+	}
+
+	if injected != nil {
+		return injected
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
-
-	key := consumer + "/" + streamName
-	f.recordLocked(fmt.Sprintf("%s:%s=%d", callStoreOffset, key, offset))
-	if err := f.errForLocked(callStoreOffset, key); err != nil {
-		return err
-	}
 	f.offsets[key] = offset
 	return nil
 }
