@@ -3048,16 +3048,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `DBConfigProvider` record, at connection acquisition. All four TLS fields are
   `TrimSpace`d once at the dispatch seam, and the trim persists into the DSN. **Not** covered: a
   `connectionstring` whose scheme is unrecognized (the dispatch's `default` arm returns nil, so the
-  block stays inert there). The `tools/migration` CLI was the other gap and is now closed by
-  #1006: it still never calls `config.Validate`, but its `DBConfigProvider` is wrapped in a
-  validator carrying a mirror of these rules, so the same four shapes are rejected there too —
-  per resolved tenant, with the tenant named in the error. Its `quiesce` DSN builder was the
-  real exposure (it forwards `mode`/`ca` as `sslmode`/`sslrootcert`). `database.tls` did not
-  reach Flyway at all before #1006 — only host/port/user/password/database were passed — and
-  now reaches it as `DB_SSLMODE`/`DB_SSLROOTCERT`/`DB_SSLCERT`/`DB_SSLKEY`, which the
-  operator's own `flyway.conf` must interpolate into the JDBC URL for TLS to apply; a run
-  carrying any `database.tls` value WARNs to that effect, since the framework does not parse
-  the conf and cannot confirm it.
+  block stays inert there). The `tools/migration` CLI is the other gap, and **at this hop it
+  is still open**: it never calls `config.Validate`, so every shape below reaches its
+  `quiesce` DSN builder, which forwards `mode`/`ca` as `sslmode`/`sslrootcert` unvalidated.
+  `database.tls` does not reach Flyway at all at this version — only
+  host/port/user/password/database are passed, and the JDBC URL comes from the operator's own
+  `flyway.conf`. Both halves are closed in the next hop by [C60.1] and [C60.2]; on v0.59.0,
+  treat the CLI as unvalidated.
 - gate: match = validation now rejects four shapes that previously booted — at startup for
   static configuration, while a dynamic `DBConfigProvider` record carrying the same shape
   still boots green and is rejected at first connection acquisition (#1002 seam). (1) PG
