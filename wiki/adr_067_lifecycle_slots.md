@@ -67,15 +67,16 @@ manager interface for this — the interface lives in `app/`, where the caller i
 
 ## Delivery
 
-Stacked PRs (the slot-interface slice ships as two, probe/pre-init/close then start/stop), each self-contained:
+Five stacked PRs, each self-contained (PR3 ships as two, PR3a then PR3b):
 
 - **PR2 (this ADR's own PR) deletes the pass-through helpers** so the slot work starts from
   a clean surface: `MessagingInitializer` and `ConnectionPreWarmer` fold into unexported
   `App` methods, two unread `Options` fields go, and eight debug response types are
   unexported. No behavior change on any supported construction path (see Consequences for
   the hand-composed `Builder` note and the retired log lines).
-- **PR3** introduces `resourceSlot` and the four structs, and converts pre-init, probe and
-  close to slot iteration.
+- **PR3a** introduces `resourceSlot` and the four structs, and converts probe, pre-init and
+  close to slot iteration; **PR3b** adds the `start` and `stop` phases and converts
+  `prepareRuntime` and `Shutdown` to slot iteration.
 - **PR4** moves maintenance manager-side (decision 4).
 - **PR5** gives streams its `start` phase, folding `app/streams_setup.go` into the streams
   slot.
