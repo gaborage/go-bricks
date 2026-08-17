@@ -107,8 +107,14 @@ go-bricks-migrate quiesce clear --tenant control-plane --source-config tenants.y
 ### TLS validation (ADR-062)
 
 Every resolved database config — both credentials sources, every tenant — is checked
-against the same `database.tls` rules go-bricks applies at service startup, and a
-rejected config fails the run with the tenant named. The four rejected shapes:
+against the same vendor rules go-bricks applies before it dials, and a rejected config
+fails the run with the tenant named. A config the service would refuse to boot on
+should not pass the migrate CLI either.
+
+The check also infers a missing `database.type` from a recognized `connectionstring`
+scheme, and enforces Oracle's connection-identifier requirement and a loadable
+`database.timezone` — so it can reject configs for reasons unrelated to TLS. The four
+TLS shapes it rejects:
 
 | Shape | Why |
 | --- | --- |

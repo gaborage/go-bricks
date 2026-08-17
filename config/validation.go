@@ -1176,12 +1176,9 @@ func applyStartupDefaults(cfg *StartupConfig) error {
 
 // validateVendorSpecificFields validates database vendor-specific configuration fields
 //
-// The database.tls rules below (and inferDatabaseTypeFromConnectionString, pgSSLModes,
-// pgTLSMandatorySSLModes) are mirrored in tools/migration/internal/commands/dbtls.go —
-// the CLI is a separate module pinning a released go-bricks, so it can reach neither
-// these unexported validators nor a post-release ApplyDatabasePoolDefaults. Keep the two
-// in sync: rule set, check order, and message text. The mirror can be deleted once the
-// CLI's pin carries these rules and it can call ApplyDatabasePoolDefaults instead.
+// Reached from outside the module only through ApplyDatabasePoolDefaults, which the
+// tools/migration CLI calls on every config it resolves — so a rule added here also
+// tightens go-bricks-migrate at its next pin bump, with no separate copy to update.
 func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	// Trim once here so both vendors and the downstream DSN builder see canonical values.
 	cfg.TLS.Mode = strings.TrimSpace(cfg.TLS.Mode)

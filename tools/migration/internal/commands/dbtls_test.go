@@ -12,9 +12,13 @@ import (
 )
 
 const (
-	testCertPath = "/etc/ssl/client.crt"
-	testKeyPath  = "/etc/ssl/client.key"
-	testCAPath   = "/etc/ssl/ca.pem"
+	testCertPath  = "/etc/ssl/client.crt"
+	testKeyPath   = "/etc/ssl/client.key"
+	testCAPath    = "/etc/ssl/ca.pem"
+	testFieldTLS  = "database.tls"
+	testModeFull  = "verify-full"
+	testModeOn    = "require"
+	testTenantKey = "tenant-a"
 )
 
 // pgConfig returns a minimal PostgreSQL config with no TLS material.
@@ -25,235 +29,6 @@ func pgConfig() *config.DatabaseConfig {
 // oracleConfig returns a minimal Oracle config with no TLS material.
 func oracleConfig() *config.DatabaseConfig {
 	return &config.DatabaseConfig{Type: config.Oracle, Host: "db.internal", Database: "PDB1"}
-}
-
-func TestInferDatabaseTypeFromConnectionString(t *testing.T) {
-	tests := []struct {
-		name string
-		cs   string
-		want string
-	}{
-		{name: "postgres_scheme", cs: "postgres://u:p@h:5432/d", want: config.PostgreSQL},
-		{name: "postgresql_scheme", cs: "postgresql://u:p@h:5432/d", want: config.PostgreSQL},
-		{name: "oracle_scheme", cs: "oracle://u:p@h:1521/PDB1", want: config.Oracle},
-		{name: "uppercase_scheme_folds", cs: "POSTGRES://u:p@h/d", want: config.PostgreSQL},
-		{name: "leading_whitespace_trimmed", cs: "  oracle://u:p@h/PDB1", want: config.Oracle},
-		{name: "unrecognized_scheme", cs: "mysql://u:p@h/d", want: ""},
-		{name: "empty", cs: "", want: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, inferDatabaseTypeFromConnectionString(tt.cs))
-		})
-	}
-}
-
-func TestValidateDatabaseTLSTrimsFieldsInPlace(t *testing.T) {
-	cfg := pgConfig()
-	cfg.TLS.Mode = "  require  "
-	cfg.TLS.CertFile = " " + testCertPath + " "
-	cfg.TLS.KeyFile = "\t" + testKeyPath + "\n"
-	cfg.TLS.CAFile = "  " + testCAPath
-
-	require.NoError(t, validateDatabaseTLS(cfg))
-
-	// The DSN builders read these fields directly, so a padded value would reach
-	// the wire as sslmode=%20require%20 without the in-place trim.
-	assert.Equal(t, sslModeRequire, cfg.TLS.Mode)
-	assert.Equal(t, testCertPath, cfg.TLS.CertFile)
-	assert.Equal(t, testKeyPath, cfg.TLS.KeyFile)
-	assert.Equal(t, testCAPath, cfg.TLS.CAFile)
-}
-
-func TestValidateDatabaseTLSRejectsWhitespaceOnlyModeAsUnset(t *testing.T) {
-	// A whitespace-only mode trims to "", which is NOT a mandatory mode — material
-	// alongside it must still be rejected rather than sneaking past the allowlist.
-	cfg := pgConfig()
-	cfg.TLS.Mode = "   "
-	cfg.TLS.CAFile = testCAPath
-
-	err := validateDatabaseTLS(cfg)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "require a mode that guarantees TLS")
-}
-
-func TestValidateDatabaseTLSNilConfig(t *testing.T) {
-	assert.NoError(t, validateDatabaseTLS(nil))
-}
-
-func TestValidateDatabaseTLSDispatchesOnInferredType(t *testing.T) {
-	// Type is empty; only the DSN scheme identifies the vendor. Without inference
-	// this would fall to the default arm and validate nothing.
-	cfg := &config.DatabaseConfig{ConnectionString: "oracle://u:p@h:1521/PDB1"}
-	cfg.TLS.Mode = sslModeRequire
-
-	err := validateDatabaseTLS(cfg)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not supported for Oracle")
-}
-
-func TestValidateDatabaseTLSUnknownVendorIsNotValidated(t *testing.T) {
-	// Mirrors the framework's default arm: an unrecognized vendor is left alone
-	// rather than being judged by PostgreSQL's rules.
-	cfg := &config.DatabaseConfig{Type: "mysql"}
-	cfg.TLS.Mode = "not-a-real-mode"
-
-	assert.NoError(t, validateDatabaseTLS(cfg))
-}
-
-func TestValidatePostgreSQLTLSRejectsTLSAlongsideConnectionString(t *testing.T) {
-	tests := []struct {
-		name  string
-		apply func(*config.DatabaseConfig)
-	}{
-		{name: "mode", apply: func(c *config.DatabaseConfig) { c.TLS.Mode = sslModeRequire }},
-		{name: "cert", apply: func(c *config.DatabaseConfig) { c.TLS.CertFile = testCertPath }},
-		{name: "key", apply: func(c *config.DatabaseConfig) { c.TLS.KeyFile = testKeyPath }},
-		{name: "ca", apply: func(c *config.DatabaseConfig) { c.TLS.CAFile = testCAPath }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.DatabaseConfig{Type: config.PostgreSQL, ConnectionString: "postgres://u:p@h/d"}
-			tt.apply(cfg)
-
-			err := validateDatabaseTLS(cfg)
-
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "ignored when connectionstring is set")
-		})
-	}
-}
-
-func TestValidatePostgreSQLTLSAllowsConnectionStringWithoutTLSBlock(t *testing.T) {
-	cfg := &config.DatabaseConfig{Type: config.PostgreSQL, ConnectionString: "postgres://u:p@h/d?sslmode=verify-full"}
-
-	assert.NoError(t, validateDatabaseTLS(cfg))
-}
-
-func TestValidatePostgreSQLTLSModeAllowlist(t *testing.T) {
-	for _, mode := range pgSSLModes {
-		t.Run("accepts_"+mode, func(t *testing.T) {
-			cfg := pgConfig()
-			cfg.TLS.Mode = mode
-
-			assert.NoError(t, validateDatabaseTLS(cfg))
-		})
-	}
-}
-
-func TestValidatePostgreSQLTLSRejectsUnknownMode(t *testing.T) {
-	cfg := pgConfig()
-	cfg.TLS.Mode = "verify-none"
-
-	err := validateDatabaseTLS(cfg)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "database.tls.mode")
-	assert.Contains(t, err.Error(), "verify-none")
-}
-
-func TestValidatePostgreSQLTLSMaterialRequiresMandatoryMode(t *testing.T) {
-	material := []struct {
-		name  string
-		apply func(*config.DatabaseConfig)
-	}{
-		// CA alone is server authentication with no client certificate — valid under any
-		// TLS-mandatory mode, rejected under the opportunistic ones like every other material.
-		{name: "ca", apply: func(c *config.DatabaseConfig) { c.TLS.CAFile = testCAPath }},
-		{name: "cert_and_key", apply: func(c *config.DatabaseConfig) {
-			c.TLS.CertFile = testCertPath
-			c.TLS.KeyFile = testKeyPath
-		}},
-	}
-	// Every mode pgx accepts but under which it may silently skip or downgrade TLS,
-	// plus the unset mode (which pgx treats as prefer).
-	opportunistic := []string{"", sslModeDisable, sslModeAllow, sslModePrefer}
-
-	for _, m := range material {
-		for _, mode := range opportunistic {
-			t.Run(m.name+"_under_"+modeLabel(mode), func(t *testing.T) {
-				cfg := pgConfig()
-				cfg.TLS.Mode = mode
-				m.apply(cfg)
-
-				err := validateDatabaseTLS(cfg)
-
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "require a mode that guarantees TLS")
-			})
-		}
-		for _, mode := range pgTLSMandatorySSLModes {
-			t.Run(m.name+"_under_"+mode, func(t *testing.T) {
-				cfg := pgConfig()
-				cfg.TLS.Mode = mode
-				m.apply(cfg)
-
-				assert.NoError(t, validateDatabaseTLS(cfg))
-			})
-		}
-	}
-}
-
-func modeLabel(mode string) string {
-	if mode == "" {
-		return "unset"
-	}
-	return mode
-}
-
-func TestValidatePostgreSQLTLSRequiresCertAndKeyTogether(t *testing.T) {
-	tests := []struct {
-		name  string
-		apply func(*config.DatabaseConfig)
-	}{
-		{name: "cert_without_key", apply: func(c *config.DatabaseConfig) { c.TLS.CertFile = testCertPath }},
-		{name: "key_without_cert", apply: func(c *config.DatabaseConfig) { c.TLS.KeyFile = testKeyPath }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := pgConfig()
-			cfg.TLS.Mode = sslModeVerifyFull // mandatory mode, so only the pairing rule can fire
-			tt.apply(cfg)
-
-			err := validateDatabaseTLS(cfg)
-
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "sslcert and sslkey must be configured together")
-		})
-	}
-}
-
-func TestValidatePostgreSQLTLSAcceptsNoTLSBlock(t *testing.T) {
-	assert.NoError(t, validateDatabaseTLS(pgConfig()))
-}
-
-func TestValidateOracleTLSRejectsEveryTLSField(t *testing.T) {
-	tests := []struct {
-		name  string
-		apply func(*config.DatabaseConfig)
-	}{
-		{name: "mode", apply: func(c *config.DatabaseConfig) { c.TLS.Mode = sslModeRequire }},
-		{name: "cert", apply: func(c *config.DatabaseConfig) { c.TLS.CertFile = testCertPath }},
-		{name: "key", apply: func(c *config.DatabaseConfig) { c.TLS.KeyFile = testKeyPath }},
-		{name: "ca", apply: func(c *config.DatabaseConfig) { c.TLS.CAFile = testCAPath }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := oracleConfig()
-			tt.apply(cfg)
-
-			err := validateDatabaseTLS(cfg)
-
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "not supported for Oracle")
-		})
-	}
-}
-
-func TestValidateOracleTLSAcceptsNoTLSBlock(t *testing.T) {
-	assert.NoError(t, validateDatabaseTLS(oracleConfig()))
 }
 
 // stubProvider is a DBConfigProvider whose response is fixed per test.
@@ -268,78 +43,139 @@ func (s *stubProvider) DBConfig(_ context.Context, key string) (*config.Database
 	return s.cfg, s.err
 }
 
+func resolve(t *testing.T, cfg *config.DatabaseConfig, key string) (*config.DatabaseConfig, error) {
+	t.Helper()
+	p := &tlsValidatingProvider{inner: &stubProvider{cfg: cfg}}
+	return p.DBConfig(context.Background(), key)
+}
+
+// The decorator's job is to put the framework's rules in front of every resolved config.
+// These assert the rules actually bite through the seam — not that the seam implements
+// them, which is go-bricks' own test surface.
+func TestTLSValidatingProviderRejectsFrameworkInvalidTLS(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     func() *config.DatabaseConfig
+		wantErr string
+	}{
+		{
+			name: "pg_mode_outside_allowlist",
+			cfg: func() *config.DatabaseConfig {
+				c := pgConfig()
+				c.TLS.Mode = "verify-none"
+				return c
+			},
+			wantErr: "database.tls.mode",
+		},
+		{
+			name: "pg_material_under_unset_mode",
+			cfg: func() *config.DatabaseConfig {
+				c := pgConfig()
+				c.TLS.CAFile = testCAPath
+				return c
+			},
+			wantErr: "require a mode that guarantees TLS",
+		},
+		{
+			name: "pg_lone_cert",
+			cfg: func() *config.DatabaseConfig {
+				c := pgConfig()
+				c.TLS.Mode = testModeFull
+				c.TLS.CertFile = testCertPath
+				return c
+			},
+			wantErr: "sslcert and sslkey must be configured together",
+		},
+		{
+			name: "pg_tls_alongside_connectionstring",
+			cfg: func() *config.DatabaseConfig {
+				c := &config.DatabaseConfig{Type: config.PostgreSQL, ConnectionString: "postgres://u:p@h/d"}
+				c.TLS.Mode = testModeOn
+				return c
+			},
+			wantErr: "ignored when connectionstring is set",
+		},
+		{
+			name: "oracle_any_tls",
+			cfg: func() *config.DatabaseConfig {
+				c := oracleConfig()
+				c.TLS.Mode = testModeOn
+				return c
+			},
+			wantErr: "not supported for Oracle",
+		},
+		{
+			name: "oracle_inferred_from_dsn_scheme",
+			cfg: func() *config.DatabaseConfig {
+				// No Type: only the DSN scheme identifies the vendor. The seam infers it,
+				// so the block is judged rather than silently skipped.
+				c := &config.DatabaseConfig{ConnectionString: "oracle://u:p@h:1521/PDB1"}
+				c.TLS.Mode = testModeOn
+				return c
+			},
+			wantErr: "not supported for Oracle",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolve(t, tt.cfg(), "")
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestTLSValidatingProviderAcceptsCoherentTLS(t *testing.T) {
+	caOnly := pgConfig()
+	caOnly.TLS.Mode = testModeFull
+	caOnly.TLS.CAFile = testCAPath
+
+	paired := pgConfig()
+	paired.TLS.Mode = testModeFull
+	paired.TLS.CertFile = testCertPath
+	paired.TLS.KeyFile = testKeyPath
+
+	for name, cfg := range map[string]*config.DatabaseConfig{
+		"no_tls_block":  pgConfig(),
+		"ca_only":       caOnly,
+		"paired_client": paired,
+		"oracle_no_tls": oracleConfig(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := resolve(t, cfg, "")
+
+			require.NoError(t, err)
+			require.NotNil(t, got)
+		})
+	}
+}
+
 func TestTLSValidatingProviderPassesValidConfigThrough(t *testing.T) {
 	inner := &stubProvider{cfg: pgConfig()}
 	p := &tlsValidatingProvider{inner: inner}
 
-	got, err := p.DBConfig(context.Background(), "tenant-a")
+	got, err := p.DBConfig(context.Background(), testTenantKey)
 
 	require.NoError(t, err)
-	assert.Equal(t, *inner.cfg, *got, "contents must survive the copy unchanged")
-	assert.Equal(t, "tenant-a", inner.lastKey, "the key must reach the inner provider unchanged")
-}
-
-// config.TenantStore returns a cached, shared pointer for the "" and "named:" keys, so
-// trimming the resolved config in place would mutate state other callers hold — and race
-// under --parallel. The decorator must validate a copy and leave the original untouched.
-func TestTLSValidatingProviderDoesNotMutateTheProvidersConfig(t *testing.T) {
-	shared := pgConfig()
-	shared.TLS.Mode = "  require  "
-	p := &tlsValidatingProvider{inner: &stubProvider{cfg: shared}}
-
-	got, err := p.DBConfig(context.Background(), "")
-
-	require.NoError(t, err)
-	assert.NotSame(t, shared, got, "the decorator must not hand back the provider's own pointer")
-	assert.Equal(t, "  require  ", shared.TLS.Mode, "the provider's config must be left untrimmed")
-	assert.Equal(t, sslModeRequire, got.TLS.Mode, "the returned copy carries the canonical value")
-}
-
-// A second resolution of the same shared pointer must behave identically to the first —
-// the guard against a trim that silently persisted into the provider's cached config.
-func TestTLSValidatingProviderIsIdempotentAcrossCalls(t *testing.T) {
-	shared := oracleConfig()
-	shared.TLS.Mode = " require "
-	p := &tlsValidatingProvider{inner: &stubProvider{cfg: shared}}
-
-	original := shared.TLS.Mode
-
-	_, firstErr := p.DBConfig(context.Background(), "tenant-a")
-	_, secondErr := p.DBConfig(context.Background(), "tenant-a")
-
-	require.Error(t, firstErr)
-	require.Error(t, secondErr)
-	assert.Equal(t, firstErr.Error(), secondErr.Error())
-	// Matching errors alone would not prove the invariant: Oracle rejects " require " and
-	// "require" identically, so a trim that leaked into the provider's config would produce
-	// the same two errors. Assert the source value directly.
-	assert.Equal(t, original, shared.TLS.Mode, "the rejected path must not mutate the provider's config either")
-}
-
-func TestTLSValidatingProviderHandlesNilConfig(t *testing.T) {
-	p := &tlsValidatingProvider{inner: &stubProvider{cfg: nil}}
-
-	got, err := p.DBConfig(context.Background(), "")
-
-	require.NoError(t, err)
-	assert.Nil(t, got)
+	assert.Equal(t, config.PostgreSQL, got.Type)
+	assert.Equal(t, testTenantKey, inner.lastKey, "the key must reach the inner provider unchanged")
 }
 
 func TestTLSValidatingProviderPropagatesInnerError(t *testing.T) {
 	sentinel := errors.New("secret fetch failed")
 	p := &tlsValidatingProvider{inner: &stubProvider{err: sentinel}}
 
-	_, err := p.DBConfig(context.Background(), "tenant-a")
+	_, err := p.DBConfig(context.Background(), testTenantKey)
 
 	assert.ErrorIs(t, err, sentinel)
 }
 
 func TestTLSValidatingProviderNamesTenantOnRejection(t *testing.T) {
 	cfg := oracleConfig()
-	cfg.TLS.Mode = sslModeRequire
-	p := &tlsValidatingProvider{inner: &stubProvider{cfg: cfg}}
+	cfg.TLS.Mode = testModeOn
 
-	_, err := p.DBConfig(context.Background(), "tenant-b")
+	_, err := resolve(t, cfg, "tenant-b")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `tenant "tenant-b"`)
@@ -348,22 +184,63 @@ func TestTLSValidatingProviderNamesTenantOnRejection(t *testing.T) {
 	// The wrapped ConfigError must stay reachable so callers can still categorize it.
 	var cfgErr *config.ConfigError
 	require.ErrorAs(t, err, &cfgErr)
-	assert.Equal(t, fieldDatabaseTLS, cfgErr.Field)
+	assert.Equal(t, testFieldTLS, cfgErr.Field)
 }
 
 func TestTLSValidatingProviderOmitsTenantPrefixForSingleTenant(t *testing.T) {
 	cfg := oracleConfig()
 	cfg.TLS.CAFile = testCAPath
-	p := &tlsValidatingProvider{inner: &stubProvider{cfg: cfg}}
 
-	_, err := p.DBConfig(context.Background(), "")
+	_, err := resolve(t, cfg, "")
 
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "tenant", "single-tenant runs have no tenant to name")
 }
 
-// tlsTenantStoreYAML carries a tenant whose TLS block the framework rejects at startup:
-// a CA file under the default (unset) mode, which pgx would silently ignore.
+// config.TenantStore returns a cached, shared pointer for the "" and "named:" keys, and
+// the seam normalizes in place, so validating the original would mutate state other
+// callers hold — and race under --parallel. The decorator must validate a copy.
+func TestTLSValidatingProviderDoesNotMutateTheProvidersConfig(t *testing.T) {
+	shared := pgConfig()
+	p := &tlsValidatingProvider{inner: &stubProvider{cfg: shared}}
+
+	got, err := p.DBConfig(context.Background(), "")
+
+	require.NoError(t, err)
+	assert.NotSame(t, shared, got, "the decorator must not hand back the provider's own pointer")
+	// The seam fills pool and timezone defaults; none of that may reach the provider's copy.
+	assert.Empty(t, shared.Timezone, "the provider's config must be left un-normalized")
+	assert.Equal(t, "UTC", got.Timezone, "the returned copy carries the framework's defaults")
+}
+
+// A second resolution of the same shared pointer must behave identically to the first —
+// the guard against normalization that silently persisted into the provider's config.
+func TestTLSValidatingProviderIsIdempotentAcrossCalls(t *testing.T) {
+	shared := oracleConfig()
+	shared.TLS.Mode = testModeOn
+	p := &tlsValidatingProvider{inner: &stubProvider{cfg: shared}}
+	original := shared.TLS.Mode
+
+	_, firstErr := p.DBConfig(context.Background(), testTenantKey)
+	_, secondErr := p.DBConfig(context.Background(), testTenantKey)
+
+	require.Error(t, firstErr)
+	require.Error(t, secondErr)
+	assert.Equal(t, firstErr.Error(), secondErr.Error())
+	// Matching errors alone would not prove the invariant: the rejected path could still
+	// have normalized the source. Assert the source value directly.
+	assert.Equal(t, original, shared.TLS.Mode, "the rejected path must not mutate the provider's config either")
+}
+
+func TestTLSValidatingProviderHandlesNilConfig(t *testing.T) {
+	got, err := resolve(t, nil, "")
+
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+// tlsTenantStoreYAML carries a tenant whose TLS block the framework rejects: a CA file
+// under the default (unset) mode, which pgx would silently ignore.
 const tlsTenantStoreYAML = `
 multitenant:
   enabled: true
@@ -394,20 +271,9 @@ func TestBuildConfigProviderRejectsInvalidTenantTLS(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
-	_, err = provider.DBConfig(context.Background(), "tenant-a")
+	_, err = provider.DBConfig(context.Background(), testTenantKey)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `tenant "tenant-a"`)
 	assert.Contains(t, err.Error(), "require a mode that guarantees TLS")
-}
-
-func TestTLSValidatingProviderTrimsBeforeHandingConfigBack(t *testing.T) {
-	cfg := pgConfig()
-	cfg.TLS.Mode = "  verify-full  "
-	p := &tlsValidatingProvider{inner: &stubProvider{cfg: cfg}}
-
-	got, err := p.DBConfig(context.Background(), "")
-
-	require.NoError(t, err)
-	assert.Equal(t, sslModeVerifyFull, got.TLS.Mode)
 }

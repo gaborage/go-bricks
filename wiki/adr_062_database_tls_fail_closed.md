@@ -138,11 +138,17 @@ go-bricks passes that DSN through untouched.
   #1006.** `loadTenantStoreFromFile` koanf-unmarshals its source config without
   ever calling `config.Validate`, and `controlPlaneDSN` emits
   `sslmode`/`sslrootcert` from the same `TLSConfig` struct unvalidated. The CLI
-  now wraps its `DBConfigProvider` in a validator carrying a mirror of these
-  rules (`tools/migration/internal/commands/dbtls.go`), because the CLI pins a
-  released go-bricks and can reach neither the unexported validators here nor a
-  post-release `ApplyDatabasePoolDefaults`. The mirror must be kept in sync by
-  hand until the CLI's pin carries these rules.
+  now wraps its `DBConfigProvider` in a validator that calls the exported
+  `config.ApplyDatabasePoolDefaults` (`tools/migration/internal/commands/dbtls.go`),
+  so these rules reach the CLI with no second copy to keep in sync. That seam is
+  deliberately wider than `database.tls`: it also infers a missing `type` from a
+  recognized `connectionstring` scheme and enforces Oracle's connection-identifier
+  rules and `time.LoadLocation` on `database.timezone`. Accepting a config the
+  service would refuse to boot on is the trap being closed, so the wider net is the
+  point. Validation runs on a copy, because `config.TenantStore` returns a cached
+  shared pointer for the single-tenant and `named:` keys and the seam normalizes in
+  place. The CLI pins a released go-bricks, so the rules land at each pin bump
+  rather than at merge.
 
   #1006 also closed the second half of the same gap: `database.tls` used to be
   **inert on the Flyway path**, because `buildEnvironmentVariables` forwarded only
