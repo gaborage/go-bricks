@@ -1366,6 +1366,31 @@ becomes `database_stats`. No Go API change. See [migrations.md](migrations.md) `
 
 ---
 
+### [ADR-067: Slots Own the Per-Kind Lifecycle](adr_067_lifecycle_slots.md)
+
+**Date:** 2026-08-17 | **Status:** Accepted
+
+Every resource kind's lifecycle facts — construct, expose, pre-init, probe, maintenance,
+close, render — live in about ten `app/` files that each hand-enumerate the kind set, which
+is why adding the streams kind touched six files and still needed a runtime-registration
+exception. A **slot** owns one kind's whole lifecycle: an unexported `resourceSlot`
+interface with four per-kind structs (compiler-checked completeness), phases
+`probe · preInit(fatal) · start · stop · close`, one registration order
+`database → messaging → cache → streams` with FIFO close, and maintenance moved
+manager-side so `DbManager`/`messaging.Manager` self-start idle cleanup at construction.
+`App` keeps its typed manager fields; the Builder steps keep their names and iterate slots;
+the streams slot exists at build time with a nil manager and constructs in `start`. Ships
+as four stacked PRs — the first deletes the pass-through helpers the slots replace.
+
+**Key Benefits:** Adding a resource kind becomes one slot file instead of ten edits, and
+the compiler enforces that every phase was considered. **Watch:** the first PR removes
+sixteen `app` symbols nothing outside `app/` referenced (`MessagingInitializer` and
+`ConnectionPreWarmer` and their methods, `Options.Database`, `Options.MessagingClient`) and
+unexports eight debug response types with their JSON unchanged. See
+[migrations.md](migrations.md) `[C60.4]`.
+
+---
+
 ## ADR Lifecycle
 
 - **Proposed**: Under discussion, not yet implemented
@@ -1375,7 +1400,7 @@ becomes `database_stats`. No Go API change. See [migrations.md](migrations.md) `
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-066) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-067) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
