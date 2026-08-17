@@ -72,12 +72,18 @@ rename and the debug-summary changes.
 
 ## Consequences
 
-- **Visible changes** (`[C60.3]`): streams reports `unhealthy` instead of `not_ready`;
-  the `details.status` sub-strings collapse into the vocabulary; messaging and cache
-  report `per_tenant` in multi-tenant deployments where they reported `not_configured`;
-  a disabled kind's stats render `{"status":"disabled"}` instead of `{}`; the 200 body's
-  `db_stats` key becomes `database_stats`; a non-critical kind that is not live now
-  reads `degraded`, not `unknown`, on the debug summary. No Go API changes.
+- **Visible changes, first slice** (`[C60.3]`): streams reports `unhealthy` instead of
+  `not_ready`; the `details.status` sub-strings collapse into the vocabulary; messaging
+  and cache report `per_tenant` in multi-tenant deployments where they reported
+  `not_configured`; a disabled kind's stats render `{"status":"disabled"}` instead of
+  `{}`; the debug view lists every classic kind, and — because `unhealthy` now carries an
+  error — a non-critical kind that is not live reads `degraded`, not `unknown`, on its
+  summary. `/ready`'s body keys and its gate are unchanged in this slice.
+- **Visible changes, second slice** (extends `[C60.3]`): the shared gate
+  (*failing && critical*) drives both views, the 200 body is derived per kind — the
+  `db_stats` key becomes `database_stats` — and the debug view keys one entry per kind
+  (the `database_manager`/`messaging_manager` extras fold in). No Go API changes in
+  either slice.
 - **Locality.** The next readiness rule lands in one file. Adding a kind is one
   description, and it is judged, rendered and summarized without touching the machine.
 - **Test surface.** The machine is tested through descriptions with stub lease and

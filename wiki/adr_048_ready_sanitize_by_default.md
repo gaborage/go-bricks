@@ -6,6 +6,12 @@
 ADR-046's `PublicErr` seam and its `cache.critical` decision untouched, and reverses only
 that ADR's "sanitization is per-probe, not a blanket rewrite of the shared branch" scoping.
 
+> **Amended (2026-08-16, [ADR-066](adr_066_readiness_one_module.md)):** `healthProbeFunc`
+> and its `publicErr` field no longer exist — every framework kind is a probe description
+> that carries no such field. `HealthStatus.PublicErr` remains the exported override seam
+> for consumer-implemented `Prober`s (`TestPublicProbeError` pins the synthesized default
+> and the override); no framework kind sets it. The text below is the record as decided.
+
 ## Context
 
 ADR-046 introduced `HealthStatus.PublicErr` so the cache probe could serve a fixed
@@ -125,10 +131,7 @@ covers the case this ADR exists for — a critical probe with no `PublicErr`, dr
 **`healthProbeFunc.publicErr` is now set by no framework probe.** The field and its
 `HealthStatus.PublicErr` plumbing are kept as the in-package override seam, exercised by
 `TestHealthProbeFuncRun`. Deleting it would leave an exported `PublicErr` that the
-framework's own `Prober` implementation could not populate. ([ADR-066](adr_066_readiness_one_module.md)
-later replaced `healthProbeFunc` with a probe description that carries no such field:
-`HealthStatus.PublicErr` stays the exported override seam for consumer-implemented
-`Prober`s — `TestPublicProbeError` pins it — and no framework kind sets it.)
+framework's own `Prober` implementation could not populate.
 
 **The generalized rule, which outlives this seam.** Everything `/ready` returns is public at
 **any** status code — the `200` body just as much as the `503` this ADR governs, and the `200`

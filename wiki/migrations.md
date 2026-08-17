@@ -3238,7 +3238,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 ### [C60.3] `/ready` and `/_sys/health-debug` speak one status vocabulary · silent-behavior · when: always
 
 - detect: `git grep -n '"/ready"' -- '*_test.go'` and, across dashboards, alerts, synthetic
-  checks and contract fixtures, `git grep -rn 'not_ready\|connection_failed\|no_active_connections\|overall_status' --`.
+  checks and contract fixtures,
+  `git grep -rn 'not_ready\|connection_failed\|no_active_connections\|messaging_stats\|cache_stats\|overall_status\|unknown' --`.
   You are looking for anything that matches one of the retired sub-status strings, pins a
   disabled kind's `messaging_stats`/`cache_stats` to `{}`, or alerts on the debug summary's
   `overall_status == unknown`.

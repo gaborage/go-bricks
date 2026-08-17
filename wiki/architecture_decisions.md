@@ -1353,9 +1353,10 @@ was 200 on `/ready` and `overall_status: unknown` on the debug view. Readiness b
 module (`app/readiness.go`): every kind hands it a **probe description** (name, criticality
 decided once, absence, per-tenancy, how to lease, how to check liveness, statistics) and one
 machine judges all of them. One status vocabulary (`healthy · unhealthy · not_configured ·
-disabled · per_tenant`, `unhealthy` always with an `Err`), one gate (*failing && critical*)
-shared by `/ready` and the debug summary, one body rule (`<name>` + `<name>_stats` per kind,
-public allowlist, ADR-048 sanitized error text). `Prober`/`HealthStatus` are unchanged.
+disabled · per_tenant`, `unhealthy` always with an `Err`) ships with the module; the second
+slice of the same stack lands one gate (*failing && critical*) shared by `/ready` and the
+debug summary and one body rule (`<name>` + `<name>_stats` per kind, public allowlist,
+ADR-048 sanitized error text). `Prober`/`HealthStatus` are unchanged.
 
 **Key Benefits:** The next readiness rule lands in one file; adding a kind is one description.
 **Watch:** visible strings move — streams `not_ready` → `unhealthy`, the `details.status`
