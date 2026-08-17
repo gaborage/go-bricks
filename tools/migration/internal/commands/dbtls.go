@@ -41,7 +41,7 @@ func (p *tlsValidatingProvider) DBConfig(ctx context.Context, key string) (*conf
 		return nil, err
 	}
 	if cfg == nil {
-		return cfg, nil
+		return nil, nil
 	}
 	validated := *cfg
 	if err := config.ApplyDatabasePoolDefaults(&validated); err != nil {
