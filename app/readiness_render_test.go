@@ -264,6 +264,27 @@ func TestReadinessViews(t *testing.T) {
 			wantSummary: HealthSummary{OverallStatus: healthyStatus, TotalProbes: 1, HealthyCount: 1},
 		},
 		{
+			// A Prober may report no Details at all. Both views must still render an object:
+			// the debug entry's nil guard, and a projection with nothing to carry over.
+			name: "prober_without_details_renders_an_empty_object",
+			probes: []Prober{
+				&foreignProbe{result: HealthStatus{Name: "vault", Status: healthyStatus}},
+			},
+			wantCode:      200,
+			wantReadyRuns: 1,
+			wantBody: map[string]any{
+				statusKey:             readyStatus,
+				timeKey:               fixedUnix,
+				"app":                 appBody,
+				"vault":               healthyStatus,
+				"vault" + statsSuffix: map[string]any{},
+			},
+			wantComponents: map[string]wantComponent{
+				"vault": {status: healthyStatus, details: map[string]any{}},
+			},
+			wantSummary: HealthSummary{OverallStatus: healthyStatus, TotalProbes: 1, HealthyCount: 1},
+		},
+		{
 			name: "status_outside_the_vocabulary_reads_unknown",
 			probes: []Prober{
 				&foreignProbe{result: HealthStatus{Name: "vault", Status: "starting", Details: map[string]any{statusKey: "starting"}}},
@@ -335,7 +356,9 @@ func TestReadinessViews(t *testing.T) {
 				assert.Equal(t, want.errText, got.Error)
 				assert.Equal(t, want.details, got.Details, "the debug view carries the full unredacted details")
 				assert.False(t, got.LastRun.IsZero())
-				assert.NotEmpty(t, got.Duration)
+				probeDuration, parseErr := time.ParseDuration(got.Duration)
+				require.NoError(t, parseErr)
+				assert.GreaterOrEqual(t, probeDuration, time.Duration(0))
 			}
 
 			assert.Equal(t, tt.wantSummary, healthSummary(components))
@@ -431,4 +454,75 @@ func TestPublicProbeError(t *testing.T) {
 
 		assert.Equal(t, cacheUnavailableBody, publicProbeError(&result))
 	})
+}
+
+// TestPublicProjectionKeepsOnlyAllowlistedKeys pins both halves of the render-site filter:
+// the /ready view carries the allowlisted counters plus the mirrored status and nothing
+// else, and the map it was built from is untouched — the access-controlled debug view
+// renders that same map and operators need the withheld keys there.
+func TestPublicProjectionKeepsOnlyAllowlistedKeys(t *testing.T) {
+	details := map[string]any{
+		"active_connections": 2,
+		"max_connections":    25,
+		"idle_ttl_seconds":   3600,
+		"errors":             0,
+		statusKey:            healthyStatus,
+		connectionsStatsKey: []map[string]any{
+			{"key": "tenant-alpha", "last_used": "2026-08-05T10:00:00Z", "idle_duration": 4},
+		},
+	}
+
+	public := publicProjection(details, databasePublicStats)
+
+	assert.Equal(t, map[string]any{
+		"active_connections": 2,
+		"max_connections":    25,
+		"idle_ttl_seconds":   3600,
+		"errors":             0,
+		statusKey:            healthyStatus,
+	}, public, "every allowlisted counter survives; the keyed array is withheld")
+	assert.Contains(t, details, connectionsStatsKey,
+		"filtering in place would strip the array from the debug endpoint's view too")
+}
+
+// TestPublicProjectionWithoutAnAllowlist covers the two shapes with no counters to publish:
+// a disabled kind, whose only detail is its own status, and a Prober from outside the
+// framework, which declares no allowlist and therefore publishes its status alone.
+func TestPublicProjectionWithoutAnAllowlist(t *testing.T) {
+	assert.Equal(t, map[string]any{statusKey: disabledStatus},
+		publicProjection(map[string]any{statusKey: disabledStatus}, nil))
+
+	assert.Equal(t, map[string]any{statusKey: healthyStatus},
+		publicProjection(map[string]any{statusKey: healthyStatus, "vault_addr": "10.0.0.9:8200"}, nil))
+
+	assert.Equal(t, map[string]any{}, publicProjection(nil, databasePublicStats),
+		"a nil details map must still render {} — never JSON null")
+}
+
+// TestReadyBodyPinsTheWireFormat is the one assertion whose expected side spells no
+// production constant. The table above builds its expectations from statusKey, timeKey and
+// friends, so renaming a key's value would keep that table green while every consumer of
+// /ready broke; this row is what fails instead.
+func TestReadyBodyPinsTheWireFormat(t *testing.T) {
+	body := runReadinessProbes(context.Background(), []Prober{disabledProbe("cache")}).
+		readyBody(&config.AppConfig{Name: "svc", Env: "test", Version: "1.0.0"}, time.Unix(1755300000, 0))
+
+	encoded, err := json.Marshal(body)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"status":"ready","time":1755300000,"app":{"name":"svc","environment":"test","version":"1.0.0"},"cache":"disabled","cache_stats":{"status":"disabled"}}`, string(encoded))
+}
+
+// TestNotReadyBodyPinsTheWireFormat is the 503 half of the same pin, and doubles as the
+// wire-level proof that the driver's connection identity never reaches the body.
+func TestNotReadyBodyPinsTheWireFormat(t *testing.T) {
+	result := HealthStatus{
+		Name:     componentDatabase,
+		Status:   unhealthyStatus,
+		Critical: true,
+		Err:      errors.New(pgconnIdentityError),
+	}
+
+	encoded, err := json.Marshal(notReadyBody(&result))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"status":"not ready","database":"unhealthy","error":"database unavailable"}`, string(encoded))
 }

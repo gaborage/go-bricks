@@ -179,9 +179,10 @@ const (
 // 2000 rps/IP) that a Go-assembled config leaves at zero entirely (ADR-049) — no barrier to
 // enumeration either way.
 //
-// The filtering belongs here at the render seam rather than in the managers or the probes:
-// the access-controlled <debug.pathprefix>/health-debug renders the same details map
-// unredacted, and operators need both withheld keys there.
+// The allowlists are declared here, beside the kinds they describe, and applied at the
+// render seam (publicProjection, readiness_render.go) rather than in the managers or the
+// probes: the access-controlled <debug.pathprefix>/health-debug renders the same details
+// map unredacted, and operators need both withheld keys there.
 var (
 	databasePublicStats = []string{
 		statsActiveConnectionsKey, statsMaxConnectionsKey, statsIdleTTLSecondsKey, statsErrorsKey,

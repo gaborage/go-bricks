@@ -471,49 +471,6 @@ func TestPublicStatsAllowlistsMatchManagerCounters(t *testing.T) {
 	}
 }
 
-// TestPublicProjectionKeepsOnlyAllowlistedKeys pins both halves of the render-site filter:
-// the /ready view carries the allowlisted counters plus the mirrored status and nothing
-// else, and the map it was built from is untouched — the access-controlled debug view
-// renders that same map and operators need the withheld keys there.
-func TestPublicProjectionKeepsOnlyAllowlistedKeys(t *testing.T) {
-	details := map[string]any{
-		"active_connections": 2,
-		"max_connections":    25,
-		"idle_ttl_seconds":   3600,
-		"errors":             0,
-		statusKey:            healthyStatus,
-		connectionsStatsKey: []map[string]any{
-			{"key": "tenant-alpha", "last_used": "2026-08-05T10:00:00Z", "idle_duration": 4},
-		},
-	}
-
-	public := publicProjection(details, databasePublicStats)
-
-	assert.Equal(t, map[string]any{
-		"active_connections": 2,
-		"max_connections":    25,
-		"idle_ttl_seconds":   3600,
-		"errors":             0,
-		statusKey:            healthyStatus,
-	}, public, "every allowlisted counter survives; the keyed array is withheld")
-	assert.Contains(t, details, connectionsStatsKey,
-		"filtering in place would strip the array from the debug endpoint's view too")
-}
-
-// TestPublicProjectionWithoutAnAllowlist covers the two shapes with no counters to publish:
-// a disabled kind, whose only detail is its own status, and a Prober from outside the
-// framework, which declares no allowlist and therefore publishes its status alone.
-func TestPublicProjectionWithoutAnAllowlist(t *testing.T) {
-	assert.Equal(t, map[string]any{statusKey: disabledStatus},
-		publicProjection(map[string]any{statusKey: disabledStatus}, nil))
-
-	assert.Equal(t, map[string]any{statusKey: healthyStatus},
-		publicProjection(map[string]any{statusKey: healthyStatus, "vault_addr": "10.0.0.9:8200"}, nil))
-
-	assert.Equal(t, map[string]any{}, publicProjection(nil, databasePublicStats),
-		"a nil details map must still render {} — never JSON null")
-}
-
 // Fixtures used only by the per-kind descriptions above.
 
 // stubMessagingSource fails every broker-URL resolution with err.
