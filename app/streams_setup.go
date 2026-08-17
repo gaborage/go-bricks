@@ -68,7 +68,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 
 	a.streamsManager = mgr
 	a.registerCloser("streams manager", mgr)
-	a.healthProbes = append(a.healthProbes, streamsManagerHealthProbe(mgr))
+	a.healthProbes = append(a.healthProbes, streamsProbe(mgr))
 
 	return nil
 }

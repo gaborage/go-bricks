@@ -703,8 +703,8 @@ func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 			result := builder.CreateHealthProbes()
 
 			require.NoError(t, result.err)
-			require.Len(t, result.app.healthProbes, 1)
-			status := result.app.healthProbes[0].Run(context.Background())
+			require.Len(t, result.app.healthProbes, 3)
+			status := result.app.healthProbes[2].Run(context.Background())
 			assert.Equal(t, componentCache, status.Name)
 			assert.Equal(t, tc.expectedCritical, status.Critical)
 		})

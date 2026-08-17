@@ -38,9 +38,7 @@ const (
 	componentMessaging = "messaging"
 	componentCache     = "cache"
 	componentStreams   = "streams"
-	// notReadyStatus marks a component that is reachable but not yet serving.
-	notReadyStatus = "not_ready"
-	errorKey       = "error"
+	errorKey           = "error"
 )
 
 var ErrNoTenantInContext = errors.New("no tenant in context")
@@ -97,27 +95,18 @@ type App struct {
 	healthProbes []Prober
 }
 
-// createHealthProbes builds the readiness probe set from the configured managers.
-// Criticality is resolved from config here and passed per probe, as is whether the
-// database is resolved per tenant (nil-guarded like Config.IsCacheCritical, since a
-// directly-constructed App may carry no config).
+// createHealthProbes builds the readiness probe set: one description per classic kind, in
+// registration order, a nil manager yielding a disabled one. Criticality and per-tenancy
+// are decided here, once (nil-guarded like Config.IsCacheCritical, since a
+// directly-constructed App may carry no config). The streams description is appended at
+// runtime by prepareStreamConsumers.
 func (a *App) createHealthProbes() []Prober {
-	var probes []Prober
-
-	if a.dbManager != nil {
-		dbPerTenant := a.cfg != nil && a.cfg.Multitenant.Enabled
-		probes = append(probes, databaseManagerHealthProbe(a.dbManager, dbPerTenant, a.logger))
+	perTenant := a.cfg != nil && a.cfg.Multitenant.Enabled
+	return []Prober{
+		databaseProbe(a.dbManager, perTenant),
+		messagingProbe(a.messagingManager, perTenant),
+		cacheProbe(a.cacheManager, a.cfg.IsCacheCritical(), a.cacheAbsent, perTenant),
 	}
-
-	if a.messagingManager != nil {
-		probes = append(probes, messagingManagerHealthProbe(a.messagingManager, a.logger))
-	}
-
-	if a.cacheManager != nil {
-		probes = append(probes, cacheManagerHealthProbe(a.cacheManager, a.logger, a.cfg.IsCacheCritical(), a.cacheAbsent))
-	}
-
-	return probes
 }
 
 func (a *App) buildMessagingDeclarations() error {

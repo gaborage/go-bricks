@@ -4,11 +4,17 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/streams"
+	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
 // stubKind drives a probeDescription through every branch of the judge without a manager.
@@ -132,4 +138,141 @@ func TestProbeDescriptionNilStats(t *testing.T) {
 	d := probeDescription{name: "kind", live: func(context.Context) error { return nil }, stats: func() map[string]any { return nil }}
 	got := d.Run(context.Background())
 	assert.Equal(t, map[string]any{statusKey: healthyStatus}, got.Details)
+}
+
+func TestDatabaseProbeLeasesThenChecksHealth(t *testing.T) {
+	db := &testmocks.MockDatabase{}
+	db.On("Health", mock.Anything).Return(nil).Once()
+	db.On("Stats").Return(map[string]any{}, nil).Maybe()
+	db.On("Close").Return(nil).Maybe()
+	m := newDBManagerFor(t, db)
+
+	got := databaseProbe(m, false).Run(context.Background())
+
+	assert.Equal(t, componentDatabase, got.Name)
+	assert.True(t, got.Critical, "the database is always critical")
+	assert.Equal(t, healthyStatus, got.Status)
+	assert.Contains(t, got.Details, "active_connections", "DbManager.Stats() is carried into details")
+	db.AssertExpectations(t)
+}
+
+func TestDatabaseProbeUnhealthyWhenHealthFails(t *testing.T) {
+	db := &testmocks.MockDatabase{}
+	db.On("Health", mock.Anything).Return(errors.New("pg down")).Once()
+	db.On("Stats").Return(map[string]any{}, nil).Maybe()
+	db.On("Close").Return(nil).Maybe()
+	m := newDBManagerFor(t, db)
+
+	got := databaseProbe(m, false).Run(context.Background())
+
+	assert.Equal(t, unhealthyStatus, got.Status)
+	assert.EqualError(t, got.Err, "pg down")
+}
+
+func TestMessagingProbeNotReadyIsUnhealthyWithError(t *testing.T) {
+	m := createTestMessagingManagerWithNotReadyClient(t)
+
+	got := messagingProbe(m, false).Run(context.Background())
+
+	assert.Equal(t, unhealthyStatus, got.Status)
+	assert.ErrorIs(t, got.Err, errPublisherNotReady)
+	assert.False(t, got.Critical, "messaging is never critical")
+}
+
+func TestMessagingProbeCountsItsOwnPublisher(t *testing.T) {
+	m := createTestMessagingManagerWithStats(t, nil)
+
+	got := messagingProbe(m, false).Run(context.Background())
+
+	assert.Equal(t, healthyStatus, got.Status)
+	assert.Equal(t, 1, got.Details["active_publishers"], "stats are read while the probe's own lease is held")
+}
+
+// TestCacheProbeBoundsTheWarmPathPing pins the sub-budget on the warm-path PING: a pooled
+// cache whose Health hangs must report unhealthy within cacheProbePingTimeout rather than
+// consume the caller's whole readiness budget (#860 regression pin).
+func TestCacheProbeBoundsTheWarmPathPing(t *testing.T) {
+	m := createWarmCacheManagerWithHungPing(t)
+
+	start := time.Now()
+	got := cacheProbe(m, true, false, false).Run(context.Background())
+
+	assert.Equal(t, unhealthyStatus, got.Status)
+	assert.Error(t, got.Err)
+	assert.Less(t, time.Since(start), cacheProbePingTimeout+200*time.Millisecond)
+}
+
+func TestCacheProbeAbsentNeverLeases(t *testing.T) {
+	m := createTestCacheManagerWithGetError(t, errors.New("must not be called"))
+
+	got := cacheProbe(m, true, true, false).Run(context.Background())
+
+	assert.Equal(t, notConfiguredStatus, got.Status)
+	assert.NoError(t, got.Err)
+	assert.Contains(t, got.Details, "active_caches", "manager counters still render")
+}
+
+func TestStreamsProbeNotOpenIsUnhealthy(t *testing.T) {
+	m := streams.NewManager(streams.ManagerOptions{URI: unreachableStreamURI, Logger: logger.New("error", false)})
+
+	got := streamsProbe(m).Run(context.Background())
+
+	assert.Equal(t, componentStreams, got.Name)
+	assert.Equal(t, unhealthyStatus, got.Status)
+	assert.ErrorIs(t, got.Err, errStreamsNotOpen)
+	assert.False(t, got.Critical, "a reconnecting stream consumer must not 503 the whole service")
+	assert.Contains(t, got.Details, "stored_offsets")
+}
+
+func TestCreateHealthProbesAlwaysDescribesTheThreeClassicKinds(t *testing.T) {
+	app := &App{cfg: defaultTestConfig()}
+
+	probes := app.createHealthProbes()
+
+	require.Len(t, probes, 3)
+	names := []string{}
+	for _, p := range probes {
+		names = append(names, p.Run(context.Background()).Name)
+	}
+	assert.Equal(t, []string{componentDatabase, componentMessaging, componentCache}, names)
+	for _, p := range probes {
+		assert.Equal(t, disabledStatus, p.Run(context.Background()).Status)
+	}
+}
+
+func TestConvertCacheStatsToMap(t *testing.T) {
+	t.Run("converts all fields correctly", func(t *testing.T) {
+		stats := cache.ManagerStats{
+			ActiveCaches: 5,
+			TotalCreated: 10,
+			Evictions:    2,
+			IdleCleanups: 3,
+			Errors:       1,
+			MaxSize:      100,
+			IdleTTL:      300,
+		}
+
+		result := convertCacheStatsToMap(stats)
+
+		assert.Equal(t, 5, result["active_caches"])
+		assert.Equal(t, 10, result["total_created"])
+		assert.Equal(t, 2, result["evictions"])
+		assert.Equal(t, 3, result["idle_cleanups"])
+		assert.Equal(t, 1, result["errors"])
+		assert.Equal(t, 100, result["max_size"])
+		assert.Equal(t, int64(300), result["idle_ttl"])
+	})
+
+	t.Run("handles zero values", func(t *testing.T) {
+		stats := cache.ManagerStats{}
+		result := convertCacheStatsToMap(stats)
+
+		assert.Equal(t, 0, result["active_caches"])
+		assert.Equal(t, 0, result["total_created"])
+		assert.Equal(t, 0, result["evictions"])
+		assert.Equal(t, 0, result["idle_cleanups"])
+		assert.Equal(t, 0, result["errors"])
+		assert.Equal(t, 0, result["max_size"])
+		assert.Equal(t, int64(0), result["idle_ttl"])
+	})
 }
