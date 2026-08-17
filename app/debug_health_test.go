@@ -452,13 +452,3 @@ func TestHealthDebugRunsEveryProbeBehindAFailingCriticalKind(t *testing.T) {
 		ErrorCount:    1,
 	}, decoded.Data.Summary)
 }
-
-// keysOf returns a map's keys, for asserting a decoded JSON object's key set with
-// assert.ElementsMatch regardless of iteration order.
-func keysOf[K comparable, V any](m map[K]V) []K {
-	keys := make([]K, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}

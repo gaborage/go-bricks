@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -511,14 +513,14 @@ func TestDebugJSONWireShapeIsStable(t *testing.T) {
 
 		var envelope map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
-		assert.ElementsMatch(t, []string{"timestamp", "duration", "data"}, keysOf(envelope),
+		assert.ElementsMatch(t, []string{"timestamp", "duration", "data"}, slices.Collect(maps.Keys(envelope)),
 			"the debug envelope's key set is the wire contract (error is omitempty)")
 
 		var data map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(envelope["data"], &data))
 		assert.ElementsMatch(t,
 			[]string{"stats", "mem_before", "mem_after", "forced", "heap_objects", "heap_size"},
-			keysOf(data))
+			slices.Collect(maps.Keys(data)))
 	})
 
 	t.Run("goroutines_response", func(t *testing.T) {
@@ -530,7 +532,7 @@ func TestDebugJSONWireShapeIsStable(t *testing.T) {
 			Data map[string]json.RawMessage `json:"data"`
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
-		assert.ElementsMatch(t, []string{"count", "by_state", "by_function"}, keysOf(envelope.Data),
+		assert.ElementsMatch(t, []string{"count", "by_state", "by_function"}, slices.Collect(maps.Keys(envelope.Data)),
 			"stacks and potential_leaks are omitempty and absent without ?stacks / ?leaks")
 	})
 }
