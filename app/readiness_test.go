@@ -11,8 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
+	cachetesting "github.com/gaborage/go-bricks/cache/testing"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
@@ -169,6 +172,95 @@ func TestDatabaseProbeUnhealthyWhenHealthFails(t *testing.T) {
 	assert.EqualError(t, got.Err, "pg down")
 }
 
+// TestDatabaseProbeRendersFixedPublicError pins what the database description contributes
+// to the unauthenticated 503 body: it is critical, so readyCheck renders it, and the
+// rendered string is the synthesized default rather than the pgconn identity string
+// (`user=… database=…` plus the resolved host:port). The description declares no
+// publicErr — that it is safe anyway is the whole point of the inverted default.
+func TestDatabaseProbeRendersFixedPublicError(t *testing.T) {
+	st := databaseProbe(newRealConnectorDBManager(&config.Config{}), false).Run(context.Background())
+	require.True(t, st.Critical, "a non-critical probe would never reach the 503 render path")
+
+	st.Err = errors.New(pgconnIdentityError)
+	assert.Equal(t, databaseUnavailableBody, publicProbeError(&st))
+}
+
+// TestDatabaseProbePublicErrorHidesConnectionIdentity pins the split /ready performs: the
+// sanitized string is what the unauthenticated body gets, while the full identity-bearing
+// driver error stays on HealthStatus.Err for the app log and the IP-allowlisted
+// /_sys/health-debug.
+func TestDatabaseProbePublicErrorHidesConnectionIdentity(t *testing.T) {
+	driverErr := errors.New(pgconnIdentityError)
+	probe := probeDescription{
+		name:     componentDatabase,
+		critical: true,
+		live:     func(context.Context) error { return driverErr },
+	}
+
+	result := probe.Run(context.Background())
+
+	assert.Equal(t, databaseUnavailableBody, publicProbeError(&result))
+	// /_sys/health-debug renders Err verbatim and must keep the detail operators need.
+	require.ErrorIs(t, result.Err, driverErr)
+	assert.Contains(t, result.Err.Error(), "user=app")
+}
+
+func TestDatabaseProbeReportsNotConfigured(t *testing.T) {
+	result := databaseProbe(newRealConnectorDBManager(&config.Config{}), false).Run(context.Background())
+
+	assert.Equal(t, notConfiguredStatus, result.Status)
+	assert.NoError(t, result.Err, "an absent database is not a readiness failure")
+	assert.Equal(t, notConfiguredStatus, result.Details[statusKey])
+	// Criticality is retained deliberately: a database that IS configured and down must
+	// still fail readiness. Absence is handled by the status, never by demoting the probe.
+	assert.True(t, result.Critical)
+}
+
+func TestDatabaseProbeStaysUnhealthyForUnsupportedType(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Database.Type = "mysql"
+	cfg.Database.Host = "db.internal"
+
+	result := databaseProbe(newRealConnectorDBManager(cfg), false).Run(context.Background())
+
+	assert.Equal(t, unhealthyStatus, result.Status)
+	require.Error(t, result.Err)
+	// The other half of the fix: a type the operator actually asked for is a
+	// misconfiguration, and must never be softened into "intentionally absent".
+	assert.False(t, config.IsNotConfigured(result.Err))
+}
+
+func TestDatabaseProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Multitenant.Enabled = true // no root database block: tenants carry their own
+
+	result := databaseProbe(newRealConnectorDBManager(cfg), true).Run(context.Background())
+
+	// not_configured would claim the service has no database — false when it has N
+	// tenant databases that this fixed-key probe simply never covered.
+	assert.Equal(t, perTenantStatus, result.Status)
+	assert.Equal(t, perTenantStatus, result.Details[statusKey])
+	assert.NoError(t, result.Err)
+}
+
+func TestDatabaseProbeStillProbesPerTenantControlPlaneDatabase(t *testing.T) {
+	// Multi-tenancy does NOT imply the "" key is unconfigured: a shared-ledger
+	// deployment (outbox.tenancy: shared, ADR-041) resolves a real control-plane
+	// database through exactly that key. Relabeling to per_tenant before resolving
+	// would leave that database unprobed while /ready reported 200 — this test is what
+	// catches that.
+	cfg := &config.Config{}
+	cfg.Multitenant.Enabled = true
+	cfg.Database.Type = "mysql" // resolves, then fails to connect
+	cfg.Database.Host = "control-plane.internal"
+
+	result := databaseProbe(newRealConnectorDBManager(cfg), true).Run(context.Background())
+
+	assert.Equal(t, unhealthyStatus, result.Status, "a resolvable control-plane database must be probed, not relabeled")
+	require.Error(t, result.Err)
+	assert.True(t, result.Critical, "and it must still gate readiness")
+}
+
 func TestMessagingProbeNotReadyIsUnhealthyWithError(t *testing.T) {
 	m := createTestMessagingManagerWithNotReadyClient(t)
 
@@ -180,12 +272,26 @@ func TestMessagingProbeNotReadyIsUnhealthyWithError(t *testing.T) {
 }
 
 func TestMessagingProbeCountsItsOwnPublisher(t *testing.T) {
-	m := createTestMessagingManagerWithStats(t, nil)
+	m := createTestMessagingManagerWithReadyClient(t)
 
 	got := messagingProbe(m, false).Run(context.Background())
 
 	assert.Equal(t, healthyStatus, got.Status)
 	assert.Equal(t, 1, got.Details["active_publishers"], "stats are read while the probe's own lease is held")
+}
+
+// TestMessagingProbeReportsPerTenantWhenDefaultKeyIsUnconfigured pins the widened relabel:
+// per_tenant is no longer a database-only verdict, so a multi-tenant deployment whose ""
+// key resolves no broker reports per_tenant rather than claiming it has no messaging.
+func TestMessagingProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T) {
+	m := newMessagingManagerWithSourceError(t,
+		config.NewNotConfiguredError("messaging", "MESSAGING_BROKER_URL", "messaging.broker.url"))
+
+	got := messagingProbe(m, true).Run(context.Background())
+
+	assert.Equal(t, perTenantStatus, got.Status)
+	assert.Equal(t, perTenantStatus, got.Details[statusKey])
+	assert.NoError(t, got.Err)
 }
 
 // TestCacheProbeBoundsTheWarmPathPing pins the sub-budget on the warm-path PING: a pooled
@@ -212,6 +318,37 @@ func TestCacheProbeAbsentNeverLeases(t *testing.T) {
 	assert.Contains(t, got.Details, "active_caches", "manager counters still render")
 }
 
+// TestCacheProbeReportsPerTenantWhenDefaultKeyIsUnconfigured is the cache half of the
+// widened relabel: the kinds share one rule, so a per-tenant cache reports per_tenant.
+func TestCacheProbeReportsPerTenantWhenDefaultKeyIsUnconfigured(t *testing.T) {
+	m := createTestCacheManagerWithGetError(t,
+		config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host"))
+
+	got := cacheProbe(m, false, false, true).Run(context.Background())
+
+	assert.Equal(t, perTenantStatus, got.Status)
+	assert.Equal(t, perTenantStatus, got.Details[statusKey])
+	assert.NoError(t, got.Err)
+}
+
+// TestCacheProbePingHonorsCallerContext pins that the ping derives from the caller's context:
+// a probe rooted at context.Background() would ignore an already-spent request budget.
+func TestCacheProbePingHonorsCallerContext(t *testing.T) {
+	mc := cachetesting.NewMockCache().WithDelay(10 * time.Millisecond)
+	probe := cacheProbe(cacheManagerServing(t, mc), false, false, false)
+
+	// Warm the pool so the canceled context reaches Health rather than the create path.
+	require.Equal(t, healthyStatus, probe.Run(context.Background()).Status)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := probe.Run(ctx)
+
+	assert.Equal(t, unhealthyStatus, result.Status)
+	assert.ErrorIs(t, result.Err, context.Canceled)
+}
+
 func TestStreamsProbeNotOpenIsUnhealthy(t *testing.T) {
 	m := streams.NewManager(streams.ManagerOptions{URI: unreachableStreamURI, Logger: logger.New("error", false)})
 
@@ -230,7 +367,7 @@ func TestCreateHealthProbesAlwaysDescribesTheThreeClassicKinds(t *testing.T) {
 	probes := app.createHealthProbes()
 
 	require.Len(t, probes, 3)
-	names := []string{}
+	names := make([]string, 0, len(probes))
 	for _, p := range probes {
 		names = append(names, p.Run(context.Background()).Name)
 	}
@@ -275,4 +412,76 @@ func TestConvertCacheStatsToMap(t *testing.T) {
 		assert.Equal(t, 0, result["max_size"])
 		assert.Equal(t, int64(0), result["idle_ttl"])
 	})
+}
+
+// Fixtures used only by the per-kind descriptions above.
+
+// newDBManagerFor builds a DbManager whose connector always serves db.
+func newDBManagerFor(t *testing.T, db database.Interface) *database.DbManager {
+	t.Helper()
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{
+			Type: "postgresql",
+			Host: "localhost",
+			Port: 5432,
+		},
+	}
+	manager := database.NewDbManager(config.NewTenantStore(cfg), logger.New("error", false),
+		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Hour},
+		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return db, nil
+		},
+	)
+	t.Cleanup(func() { assert.NoError(t, manager.Close()) })
+	return manager
+}
+
+// stubMessagingSource fails every broker-URL resolution with err.
+type stubMessagingSource struct {
+	err error
+}
+
+func (s *stubMessagingSource) BrokerURL(_ context.Context, _ string) (string, error) {
+	return "", s.err
+}
+
+// newMessagingManagerWithSourceError creates a messaging manager whose "" key never resolves.
+func newMessagingManagerWithSourceError(t *testing.T, err error) *messaging.Manager {
+	t.Helper()
+	return messaging.NewMessagingManager(&stubMessagingSource{err: err}, logger.New("error", false),
+		messaging.ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour},
+		func(string, logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+	)
+}
+
+// createTestMessagingManagerWithReadyClient creates a messaging manager whose clients report ready.
+func createTestMessagingManagerWithReadyClient(t *testing.T) *messaging.Manager {
+	t.Helper()
+	cfg := &config.Config{
+		Messaging: config.MessagingConfig{
+			Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
+		},
+	}
+
+	return messaging.NewMessagingManager(config.NewTenantStore(cfg), logger.New("error", false),
+		messaging.ManagerOptions{MaxPublishers: 10, IdleTTL: time.Hour},
+		func(string, logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+	)
+}
+
+// createWarmCacheManagerWithHungPing returns a manager whose pooled instance answers PING
+// only once the ping context expires — the hung-Redis case the probe's sub-budget bounds.
+func createWarmCacheManagerWithHungPing(t *testing.T) *cache.CacheManager {
+	t.Helper()
+	manager := cacheManagerServing(t, cachetesting.NewMockCache().WithDelay(time.Minute))
+
+	_, release, err := manager.Get(context.Background(), "")
+	require.NoError(t, err)
+	release()
+
+	return manager
 }

@@ -637,9 +637,9 @@ func (a *App) readyCheck(c server.HandlerContext) error {
 		}
 	}
 
-	// database seeds its own stats payload: absent-database deployments have always
-	// received db_stats {"status":"disabled"} rather than the empty object the other
-	// components report, and that shape is part of the published /ready body.
+	// Every classic kind now describes itself, so a disabled database reports
+	// {"status":"disabled"} like its siblings; the branch below only covers an App whose
+	// healthProbes were hand-built without a database description at all.
 	dbStatus := componentStatus[componentDatabase]
 	if dbStatus.Status == "" {
 		dbStatus.Status = disabledStatus
