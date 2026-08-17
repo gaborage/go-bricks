@@ -62,8 +62,10 @@
   - `type messageHandler func(streamName string, offset int64, msg *amqp.Message, store offsetStorer)`
   - `type environment interface { DeclareStream(name string, opts *stream.StreamOptions) error; DeclareSuperStream(name string, opts *stream.PartitionsOptions) error; QueryOffset(consumer, streamName string) (int64, error); StoreOffset(consumer, streamName string, offset int64) error; NewConsumer(streamName string, opts *stream.ConsumerOptions, handler messageHandler) (consumerHandle, error); NewSuperStreamConsumer(superStream string, opts *stream.SuperStreamConsumerOptions, handler messageHandler) (consumerHandle, error); NewProducer(streamName string, opts *stream.ProducerOptions, confirmed ha.ConfirmMessageHandler) (producerHandle, error); NewSuperStreamProducer(superStream string, opts *stream.SuperStreamProducerOptions, confirmed ha.PartitionConfirmMessageHandler) (producerHandle, error); Close() error }`
   - `Manager.dialEnvironment func(*stream.EnvironmentOptions) (environment, error)`
-  - test helpers: `newFakeEnvironment() *fakeEnvironment`, `dialFake(m *Manager, fake *fakeEnvironment)`, `fakeEnvironment.failOn(key string, err error)`, `fakeEnvironment.setOffset` / `storedOffset` / `recorded` / `consumer` / `consumerOptions` / `producer` / `superProducerOptions` / `useProducer`, `fakeConsumer.deliver(streamName string, offset int64, msg *amqp.Message)`, `fakeConsumer.promote(streamName string) stream.OffsetSpecification`
+  - test helpers: `newFakeEnvironment() *fakeEnvironment`, `dialFake(m *Manager, fake *fakeEnvironment)`, `fakeEnvironment.failOn(key string, err error)`, `fakeEnvironment.setOffset` / `storedOffset` / `recorded` / `consumer` / `consumerOptions` / `producer` / `superProducerOptions` / `useProducer(p *fakeProducer)` (as delivered — Task 3 dropped the redundant stream argument), `fakeConsumer.deliver(streamName string, offset int64, msg *amqp.Message)`, `fakeConsumer.promote(streamName string) stream.OffsetSpecification`
 - Consumes, **unchanged**: `consumerHandle` (`manager.go:70-73`), `producerHandle` (`publisher.go:41-45`), `offsetStorer` (`runner.go:39-41`), `consumerRunner.deliver(streamName string, offset int64, message *amqp.Message, store offsetStorer)` (`runner.go:239`), `fakeHandle` / `fakeProducer` (existing test doubles).
+
+> **As delivered:** `useProducer` takes only the producer (`useProducer(p *fakeProducer)`) and the fake keeps one prepared producer (`preparedProd`) rather than a per-stream map — every test starts one publisher, so `unparam` rejected the stream argument in Task 3. The code blocks below are the plan as written; the tree is the authority.
 
 - [ ] **Step 1: Write the failing test — the manager must dial through a swappable seam**
 
@@ -1902,7 +1904,7 @@ func TestManagerStopClosesPublishersAfterConsumers(t *testing.T) {
 	var order []string
 	producer := openProducer()
 	producer.onClose = func() { order = append(order, "publisher") }
-	fake.useProducer(testStream, producer)
+	fake.useProducer(producer) // as delivered: the fake hands p back for the one publisher a test starts
 
 	decls := oneConsumerDecls()
 	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})

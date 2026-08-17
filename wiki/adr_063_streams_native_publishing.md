@@ -154,8 +154,9 @@ the reason it is the only strategy offered.
 ### Shape follows the consume side
 
 Publishers reach the broker through the same `producerHandle` seam pattern the consumers use, so the
-confirmation-correlation policy is testable without a broker; the vendor constructors sit behind
-factory fields for the same reason. No `ModuleDeps` field is added — a module holds the handle its own
+confirmation-correlation policy is testable without a broker; the vendor constructors are reached
+through the manager's Environment port for the same reason (originally two factory fields, folded
+into the port when it landed). No `ModuleDeps` field is added — a module holds the handle its own
 `DeclareStreams` returned. Publishers count towards `Manager.Ready()` and `Stats()` alongside
 consumers, on the same non-critical probe. Metrics and spans reuse the AMQP lane's instruments and the
 `go-bricks/messaging` tracer, and trace context is injected through the framework's own `trace`
