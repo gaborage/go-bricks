@@ -104,6 +104,73 @@ go-bricks-migrate quiesce clear --tenant control-plane --source-config tenants.y
 | `--credentials-from aws-secrets-manager` (default) | Per-tenant secrets fetched from AWS SM under `--secrets-prefix`. |
 | `--credentials-from config-file` | Per-tenant credentials embedded in the YAML supplied via `--source-config`. |
 
+### TLS validation (ADR-062)
+
+Every resolved database config — both credentials sources, every tenant — is checked
+against the same vendor rules go-bricks applies before it dials, and a rejected config
+fails the run with the tenant named. A config the service would refuse to boot on
+should not pass the migrate CLI either.
+
+The check also infers a missing `database.type` from a recognized `connectionstring`
+scheme, and enforces Oracle's connection-identifier requirement and a loadable
+`database.timezone` — so it can reject configs for reasons unrelated to TLS. The four
+TLS shapes it rejects:
+
+| Shape | Why |
+| --- | --- |
+| PostgreSQL `tls.mode` outside pgx's sslmode set | Fails at connect time otherwise, with a redacted parse error. |
+| `tls.cert`/`key`/`ca` under an unset, `disable`, `allow`, or `prefer` mode | pgx discards the material or downgrades to plaintext; an unset mode means `prefer`. |
+| Lone `tls.cert` or lone `tls.key` | Client-certificate auth needs both. |
+| Any `tls.*` on Oracle, or alongside a `connectionstring` | Oracle tcps/wallet is not implemented; a connection string is used verbatim, so the block is ignored. |
+
+#### Reaching Flyway
+
+PostgreSQL TLS settings are exported to the Flyway subprocess as environment
+variables, unset ones omitted:
+
+| Config key | Environment variable |
+| --- | --- |
+| `database.tls.mode` | `DB_SSLMODE` |
+| `database.tls.ca` | `DB_SSLROOTCERT` |
+| `database.tls.cert` | `DB_SSLCERT` |
+| `database.tls.key` | `DB_SSLKEY` |
+
+**Your `flyway.conf` must reference them** — the JDBC URL is yours, and the framework
+does not parse it, so it cannot confirm the settings are applied. A run with any
+`database.tls` value set logs a WARN saying exactly that. Wire them with Flyway's
+`${env.NAME}` substitution:
+
+Server-certificate verification, which needs `database.tls.mode` and `database.tls.ca`:
+
+```properties
+flyway.url=jdbc:postgresql://${env.DB_HOST}:${env.DB_PORT}/${env.DB_NAME}?sslmode=${env.DB_SSLMODE}&sslrootcert=${env.DB_SSLROOTCERT}
+```
+
+Client-certificate (mTLS) auth, which additionally needs `cert` and `key`:
+
+```properties
+flyway.url=jdbc:postgresql://${env.DB_HOST}:${env.DB_PORT}/${env.DB_NAME}?sslmode=${env.DB_SSLMODE}&sslrootcert=${env.DB_SSLROOTCERT}&sslcert=${env.DB_SSLCERT}&sslkey=${env.DB_SSLKEY}
+```
+
+**Reference only the variables your config actually sets.** Unset fields are not
+exported, so a URL naming `sslrootcert=${env.DB_SSLROOTCERT}` while `database.tls.ca`
+is empty leaves the placeholder unresolved. With `mode` alone, use
+`?sslmode=${env.DB_SSLMODE}` and nothing further.
+
+The `env.` prefix is required — a bare `${DB_SSLMODE}` is Flyway's *placeholder*
+syntax, which resolves from `flyway.placeholders.*` and migration scripts, not from
+the process environment. A conf that never mentions `DB_SSLMODE` runs with whatever
+TLS the URL itself specifies — possibly none — no matter what `database.tls.mode` says.
+
+`DB_SSLKEY` needs one caveat: `database.tls.key` is validated against libpq
+semantics (as pgx uses it), but pgjdbc's `sslkey` expects a PKCS-8 DER file, not PEM.
+Convert the key for the Flyway leg, or leave `sslkey` out and use a mode that does not
+require a client certificate. A format mismatch fails loudly at connect, not silently.
+
+If you already export `DB_SSLMODE` (or the others) from your own environment *and*
+set `database.tls`, the config value now wins: framework variables are appended after
+the inherited environment.
+
 ### Runtime tuning
 
 | Flag | Purpose |

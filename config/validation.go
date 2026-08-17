@@ -1175,6 +1175,10 @@ func applyStartupDefaults(cfg *StartupConfig) error {
 }
 
 // validateVendorSpecificFields validates database vendor-specific configuration fields
+//
+// Reached from outside the module only through ApplyDatabasePoolDefaults, which the
+// tools/migration CLI calls on every config it resolves — so a rule added here also
+// tightens go-bricks-migrate at its next pin bump, with no separate copy to update.
 func validateVendorSpecificFields(cfg *DatabaseConfig) error {
 	// Trim once here so both vendors and the downstream DSN builder see canonical values.
 	cfg.TLS.Mode = strings.TrimSpace(cfg.TLS.Mode)

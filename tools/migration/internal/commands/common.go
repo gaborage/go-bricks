@@ -132,7 +132,22 @@ func buildLister(flags *CommonFlags, fileStore *config.TenantStore) (migration.T
 // buildConfigProvider constructs a database.DBConfigProvider from the supplied
 // flags. fileStore, when non-nil, is reused for the config-file credentials
 // source so the YAML isn't parsed twice per invocation.
+//
+// The provider is wrapped so every resolved config passes the database.tls
+// validation go-bricks applies at startup (ADR-062, mirrored in dbtls.go): the CLI
+// is the first thing a fleet operator runs, and accepting a config the service will
+// refuse to boot on is a worse trap than failing here.
 func buildConfigProvider(ctx context.Context, flags *CommonFlags, fileStore *config.TenantStore) (database.DBConfigProvider, error) {
+	inner, err := resolveConfigProvider(ctx, flags, fileStore)
+	if err != nil {
+		return nil, err
+	}
+	return &tlsValidatingProvider{inner: inner}, nil
+}
+
+// resolveConfigProvider selects the credentials source and returns its raw,
+// unvalidated provider.
+func resolveConfigProvider(ctx context.Context, flags *CommonFlags, fileStore *config.TenantStore) (database.DBConfigProvider, error) {
 	switch flags.CredentialsFrom {
 	case credsSourceAWS:
 		fetcher, err := awssm.NewFetcher(ctx, awssm.Options{

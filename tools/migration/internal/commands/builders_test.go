@@ -16,9 +16,16 @@ import (
 
 func writeTenantStoreYAML(t *testing.T) string {
 	t.Helper()
+	return writeTenantStoreYAMLContent(t, tenantStoreYAML)
+}
+
+// writeTenantStoreYAMLContent writes an arbitrary tenants.yaml body, for tests that need
+// a store shaped differently from the shared fixture.
+func writeTenantStoreYAMLContent(t *testing.T, body string) string {
+	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tenants.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(tenantStoreYAML), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
 }
 
@@ -165,8 +172,9 @@ func TestMaybeLoadFileStoreLoadsForCredsOnly(t *testing.T) {
 	require.NotNil(t, store)
 }
 
-// Sanity: confirm migration.SecretsProvider is still the type buildConfigProvider returns
-// for the AWS path (compile-time check via assertion on a pointer).
+// Sanity: confirm migration.SecretsProvider is still the type the AWS path resolves to.
+// buildConfigProvider now returns it wrapped in the TLS-validating decorator, so the
+// assertion unwraps one layer rather than matching the outer type.
 func TestBuildConfigProviderAWSReturnsSecretsProvider(t *testing.T) {
 	provider, err := buildConfigProvider(context.Background(), &CommonFlags{
 		CredentialsFrom: credsSourceAWS,
@@ -176,8 +184,10 @@ func TestBuildConfigProviderAWSReturnsSecretsProvider(t *testing.T) {
 	// LoadDefaultConfig may succeed without real creds; we only care about the type
 	// when there's no error. If it errors out (e.g., no AWS_REGION), that's fine.
 	if err == nil {
-		_, ok := provider.(*migration.SecretsProvider)
-		assert.True(t, ok, "expected *migration.SecretsProvider, got %T", provider)
+		wrapper, ok := provider.(*tlsValidatingProvider)
+		require.True(t, ok, "expected *tlsValidatingProvider, got %T", provider)
+		_, ok = wrapper.inner.(*migration.SecretsProvider)
+		assert.True(t, ok, "expected *migration.SecretsProvider, got %T", wrapper.inner)
 	}
 }
 

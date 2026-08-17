@@ -134,11 +134,38 @@ go-bricks passes that DSN through untouched.
   `Options.DatabaseConnector` (ADR-050) — plus a `tls:` block still boots with
   the block inert. Closing that needs a rule that does not depend on a resolved
   vendor; tracked as a follow-up.
-- **The `tools/migration` CLI is not covered.** `loadTenantStoreFromFile`
-  koanf-unmarshals its source config without ever calling `config.Validate`, and
-  `controlPlaneDSN` emits `sslmode`/`sslrootcert` from the same `TLSConfig`
-  struct unvalidated. These rules therefore neither protect nor break
-  `go-bricks-migrate` source configs.
+- **The `tools/migration` CLI was not covered at the time of this ADR; closed by
+  #1006.** `loadTenantStoreFromFile` koanf-unmarshals its source config without
+  ever calling `config.Validate`, and `controlPlaneDSN` emits
+  `sslmode`/`sslrootcert` from the same `TLSConfig` struct unvalidated. The CLI
+  now wraps its `DBConfigProvider` in a validator that calls the exported
+  `config.ApplyDatabasePoolDefaults` (`tools/migration/internal/commands/dbtls.go`),
+  so these rules reach the CLI with no second copy to keep in sync. That seam is
+  deliberately wider than `database.tls`: it also infers a missing `type` from a
+  recognized `connectionstring` scheme and enforces Oracle's connection-identifier
+  rules and `time.LoadLocation` on `database.timezone`. Accepting a config the
+  service would refuse to boot on is the trap being closed, so the wider net is the
+  point. Validation runs on a copy, because `config.TenantStore` returns a cached
+  shared pointer for the single-tenant and `named:` keys and the seam normalizes in
+  place. The CLI pins a released go-bricks, so the rules land at each pin bump
+  rather than at merge.
+
+  #1006 also closed the second half of the same gap: `database.tls` used to be
+  **inert on the Flyway path**, because `buildEnvironmentVariables` forwarded only
+  host/port/user/password/database — so a `verify-full` block validated cleanly
+  while the migration ran with whatever TLS the operator's `flyway.conf` URL
+  specified, possibly none. PostgreSQL TLS settings are now exported as
+  `DB_SSLMODE`/`DB_SSLROOTCERT`/`DB_SSLCERT`/`DB_SSLKEY` (unset ones omitted, so a
+  conf interpolating them unconditionally never receives `sslmode=`). The residual
+  boundary is structural and cannot be validated away: the JDBC URL belongs to the
+  operator and the framework does not parse it, so a conf that ignores those
+  variables still migrates without TLS. That case is now a WARN on every run
+  carrying `database.tls`, which is the strongest honest signal available —
+  fail-closed would require parsing arbitrary Flyway configuration and would
+  false-positive on URLs assembled outside the conf file. Tracked as #1047; the
+  only option that can actually guarantee TLS is for the framework to construct
+  the JDBC URL and pass `-url=` itself, which takes URL ownership from every
+  consumer and so needs its own ADR.
 - A `database:` block containing **only** `tls.*` fields remains invisible to
   `IsDatabaseConfigured` and is silently ignored, because none of the TLS keys
   is an ADR-047 identity marker. Unchanged by this ADR; a follow-up.

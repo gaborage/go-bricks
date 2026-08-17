@@ -66,6 +66,10 @@ type FlywayMigrator struct {
 	defaultConfig  func(*FlywayMigrator) *Config
 	validatedPaths sync.Map
 	audit          *auditEmitter
+	// tlsForwardWarn fires the database.tls advisory once per migrator rather than
+	// once per tenant: a fleet run shares one FlywayMigrator across every tenant, and
+	// 200 copies of an identical advisory is what teaches operators to mute it.
+	tlsForwardWarn sync.Once
 }
 
 // Config configuration for migrations
@@ -303,6 +307,23 @@ func (fm *FlywayMigrator) runFor(ctx context.Context, db *config.DatabaseConfig,
 		Str("vendor", vendor).
 		Str("action", verb).
 		Msg("Starting Flyway command")
+
+	// The JDBC URL comes from the operator's flyway.conf, which the framework does not
+	// parse — so it can export DB_SSL* but cannot confirm the URL interpolates them. Say so
+	// rather than letting a verify-full config imply an encrypted migration it may not be
+	// getting. Gated on PostgreSQL because that is the only vendor whose TLS is forwarded:
+	// on Oracle the block is rejected by config validation (ADR-062) and nothing is
+	// exported, so the advisory would name variables that do not exist.
+	if shouldWarnTLSForwarding(vendor, db) {
+		fm.tlsForwardWarn.Do(func() {
+			fm.logger.Warn().
+				Str("vendor", vendor).
+				Str("config_file", cfg.ConfigPath).
+				Msg("database.tls is exported as DB_SSLMODE/DB_SSLROOTCERT/DB_SSLCERT/DB_SSLKEY; " +
+					"the migration is encrypted only if the JDBC URL in this flyway.conf " +
+					"interpolates them as ${env.DB_SSLMODE} etc.")
+		})
+	}
 
 	// Info / validate keep their default pretty-printed output for operators
 	// running them at the CLI; migrate switches to JSON so we can parse a
@@ -582,6 +603,13 @@ func buildEnvironmentVariables(db *config.DatabaseConfig) ([]string, error) {
 			fmt.Sprintf("DB_PASSWORD=%s", db.Password),
 			fmt.Sprintf("DB_NAME=%s", db.Database),
 		)
+		// database.tls reaches Flyway only through these; the JDBC URL is assembled by
+		// the operator's own flyway.conf, which must reference them for TLS to apply.
+		// Empty values are omitted rather than exported blank, so a conf that
+		// interpolates them unconditionally does not receive `sslmode=`.
+		// Oracle has no arm here on purpose: config validation rejects database.tls
+		// outright for Oracle (ADR-062), so there is never anything to forward.
+		envVars = append(envVars, tlsEnvironmentVariables(db)...)
 	case config.Oracle:
 		envVars = append(envVars,
 			fmt.Sprintf("ORACLE_HOST=%s", db.Host),
@@ -600,7 +628,57 @@ const (
 	envFieldUsername = "Username"
 	envFieldPassword = "Password"
 	envFieldDatabase = "Database"
+	envFieldTLSMode  = "TLS.Mode"
+	envFieldTLSCert  = "TLS.CertFile"
+	envFieldTLSKey   = "TLS.KeyFile"
+	envFieldTLSCA    = "TLS.CAFile"
 )
+
+// Environment variable names carrying database.tls to Flyway. An operator's
+// flyway.conf interpolates them as ${env.DB_SSLMODE} and friends.
+const (
+	envVarSSLMode     = "DB_SSLMODE"
+	envVarSSLRootCert = "DB_SSLROOTCERT"
+	envVarSSLCert     = "DB_SSLCERT"
+	envVarSSLKey      = "DB_SSLKEY"
+)
+
+// tlsEnvironmentVariables renders the PostgreSQL TLS settings as libpq-named
+// environment variables, omitting the ones that are unset. Names mirror the libpq
+// keywords an operator writes into a JDBC URL, so a flyway.conf reads
+// `...?sslmode=${env.DB_SSLMODE}&sslrootcert=${env.DB_SSLROOTCERT}`.
+func tlsEnvironmentVariables(db *config.DatabaseConfig) []string {
+	pairs := []struct {
+		name  string
+		value string
+	}{
+		{envVarSSLMode, db.TLS.Mode},
+		{envVarSSLRootCert, db.TLS.CAFile},
+		{envVarSSLCert, db.TLS.CertFile},
+		{envVarSSLKey, db.TLS.KeyFile},
+	}
+	out := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		if p.value != "" {
+			out = append(out, fmt.Sprintf("%s=%s", p.name, p.value))
+		}
+	}
+	return out
+}
+
+// hasTLSSettings reports whether the config asks for TLS at all.
+func hasTLSSettings(db *config.DatabaseConfig) bool {
+	return db != nil &&
+		(db.TLS.Mode != "" || db.TLS.CertFile != "" || db.TLS.KeyFile != "" || db.TLS.CAFile != "")
+}
+
+// shouldWarnTLSForwarding decides whether a run needs the database.tls advisory. Split
+// from the logging call so the vendor gate is testable on its own: PostgreSQL is the only
+// vendor whose TLS is forwarded, so warning on Oracle would name variables that were
+// never exported.
+func shouldWarnTLSForwarding(vendor string, db *config.DatabaseConfig) bool {
+	return vendor == config.PostgreSQL && hasTLSSettings(db)
+}
 
 // validateEnvFields rejects any DatabaseConfig string field that would be
 // formatted into the Flyway subprocess environment if it contains CR, LF, or
@@ -615,6 +693,10 @@ func validateEnvFields(db *config.DatabaseConfig) error {
 		{envFieldUsername, db.Username},
 		{envFieldPassword, db.Password},
 		{envFieldDatabase, db.Database},
+		{envFieldTLSMode, db.TLS.Mode},
+		{envFieldTLSCert, db.TLS.CertFile},
+		{envFieldTLSKey, db.TLS.KeyFile},
+		{envFieldTLSCA, db.TLS.CAFile},
 	}
 	for _, f := range fields {
 		if strings.ContainsAny(f.value, "\r\n\x00") {
