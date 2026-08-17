@@ -13,7 +13,7 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -45,18 +45,22 @@ const (
 // inline variadic would heap-allocate both the slice and the option per message.
 var consumerSpanOpts = []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindConsumer)}
 
-var (
-	sharedTracer     trace.Tracer
-	sharedTracerOnce sync.Once
-)
+// sharedTracer holds the resolved tracer; nil until the first delivery. An
+// atomic pointer keeps the hot path lock-free and lets the test hook reset it
+// safely against a concurrent Run.
+var sharedTracer atomic.Pointer[trace.Tracer]
 
 // tracer returns the one tracer both lanes' deliveries report under. otel.Tracer
 // takes the global provider's lock and re-resolves the scope on every call, so
 // the hot path resolves it once — the streams lane caches its tracer per runner
 // today, and routing it through this seam must not regress that.
 func tracer() trace.Tracer {
-	sharedTracerOnce.Do(func() { sharedTracer = otel.Tracer(tracerName) })
-	return sharedTracer
+	if t := sharedTracer.Load(); t != nil {
+		return *t
+	}
+	t := otel.Tracer(tracerName)
+	sharedTracer.CompareAndSwap(nil, &t) // the first resolver wins; a loser reads the winner's
+	return *sharedTracer.Load()
 }
 
 // Outcome names how one delivery ended.

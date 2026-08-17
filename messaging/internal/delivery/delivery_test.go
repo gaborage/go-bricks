@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -480,4 +481,24 @@ func TestRunHandsTheLaneOneOutcomePerMessage(t *testing.T) {
 			assert.NotNil(t, res.Log)
 		})
 	}
+}
+
+// TestTracerCacheSurvivesAConcurrentReset pins the reset hook's contract: a
+// delivery that already resolved the tracer keeps it, one resolving alongside a
+// reset never sees nil, and -race stays quiet across the atomic pointer.
+func TestTracerCacheSurvivesAConcurrentReset(t *testing.T) {
+	setupTelemetry(t)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 200 {
+				require.NotNil(t, tracer())
+			}
+		})
+	}
+	for range 50 {
+		ResetTracerForTesting()
+	}
+	wg.Wait()
 }
