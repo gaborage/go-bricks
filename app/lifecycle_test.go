@@ -782,10 +782,9 @@ func TestStartMaintenanceLoopsUsesConfiguredPublisherCleanupInterval(t *testing.
 	}, time.Second, 10*time.Millisecond)
 }
 
-// TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval proves the
-// configured 20ms interval reached DbManager.StartCleanup: the 5m hardcoded
-// default would never fire in this test's 1s window, so a swept idle connection
-// is the proof.
+// TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval now pins that the
+// constructor starts the sweep at the 20ms CleanupInterval directly (ADR-067), so
+// startMaintenanceLoops's StartCleanup call here is the idempotent no-op Task 4 deletes.
 func TestStartMaintenanceLoopsUsesConfiguredDatabaseCleanupInterval(t *testing.T) {
 	log := logger.New("error", false)
 

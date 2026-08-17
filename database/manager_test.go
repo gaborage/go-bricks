@@ -390,6 +390,7 @@ func TestNewDbManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL(t *testing.T) {
 		{name: "interval_above_ttl_warns", cleanupInterval: 2 * time.Minute, idleTTL: time.Minute, wantWarn: true},
 		{name: "interval_below_ttl_silent", cleanupInterval: time.Minute, idleTTL: time.Hour, wantWarn: false},
 		{name: "unset_interval_takes_the_default_and_stays_silent", cleanupInterval: 0, idleTTL: time.Hour, wantWarn: false},
+		{name: "unset_interval_takes_the_default_and_warns_against_a_short_ttl", cleanupInterval: 0, idleTTL: time.Minute, wantWarn: true},
 	}
 
 	for _, tc := range tests {
