@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -477,7 +478,7 @@ func TestPublicStatsAllowlistsMatchManagerCounters(t *testing.T) {
 			for key := range tt.stats {
 				published = append(published, key)
 			}
-			assert.ElementsMatch(t, published, append(append([]string{}, tt.allow...), tt.withheld...),
+			assert.ElementsMatch(t, published, slices.Concat(tt.allow, tt.withheld),
 				"every manager counter is either allowlisted or listed as deliberately withheld")
 			for _, key := range tt.withheld {
 				assert.NotContains(t, tt.allow, key)

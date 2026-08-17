@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -397,7 +399,7 @@ func TestHealthDebugRendersOneEntryPerKind(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.ElementsMatch(t, []string{componentDatabase, componentStreams},
-		keysOf(decoded.Data.Components), "one entry per registered kind, and no *_manager entries")
+		slices.Collect(maps.Keys(decoded.Data.Components)), "one entry per registered kind, and no *_manager entries")
 	assert.Equal(t, errStreamsNotOpen.Error(), decoded.Data.Components[componentStreams].Error)
 	assert.Contains(t, decoded.Data.Components[componentStreams].Details, "stored_offsets",
 		"the access-controlled view keeps what the /ready projection withholds")
@@ -439,7 +441,7 @@ func TestHealthDebugRunsEveryProbeBehindAFailingCriticalKind(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &decoded))
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.ElementsMatch(t, []string{componentDatabase, componentCache}, keysOf(decoded.Data.Components),
+	assert.ElementsMatch(t, []string{componentDatabase, componentCache}, slices.Collect(maps.Keys(decoded.Data.Components)),
 		"the kind behind the failing critical one must still be probed and reported")
 	assert.Equal(t, healthyStatus, decoded.Data.Components[componentCache].Status)
 	assert.Equal(t, HealthSummary{
@@ -449,14 +451,4 @@ func TestHealthDebugRunsEveryProbeBehindAFailingCriticalKind(t *testing.T) {
 		CriticalCount: 1,
 		ErrorCount:    1,
 	}, decoded.Data.Summary)
-}
-
-// keysOf returns a map's keys, so a components assertion can name the set rather than
-// checking membership one key at a time.
-func keysOf[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	return keys
 }

@@ -134,31 +134,43 @@ func (d probeDescription) snapshot() map[string]any {
 // cold-poll caveat.
 const cacheProbePingTimeout = 500 * time.Millisecond
 
-// The statistics key names, hoisted so a manager's snapshot, the allowlist that admits it
-// and the tests that pin it cannot drift apart on the spelling.
+// The statistics key names hoisted into constants where two or more sites must agree on the
+// spelling: a manager's counters rendered into a map here (convertCacheStatsToMap) and the
+// allowlist that admits it, an allowlist reused across kinds, or — despite a single use in
+// this file — a string value goconst (min-occurrences 3) also finds recurring elsewhere in
+// the package. A key with none of those reasons lives inline in its own allowlist instead.
+// These constants say nothing about the managers themselves: database.DbManager,
+// messaging.Manager, and streams.Manager hardcode their own map keys in their own packages,
+// unreachable from here, so it is TestPublicStatsAllowlistsMatchManagerCounters
+// (readiness_test.go) that pins spelling against them.
 const (
 	// Shared across kinds.
 	statsErrorsKey         = "errors"
 	statsEvictionsKey      = "evictions"
 	statsIdleCleanupsKey   = "idle_cleanups"
 	statsIdleTTLSecondsKey = "idle_ttl_seconds"
-	// Database.
+	// Database: each used once below, kept because "active_connections" and
+	// "max_connections" also recur across this kind's test fixtures and assertions.
 	statsActiveConnectionsKey = "active_connections"
 	statsMaxConnectionsKey    = "max_connections"
-	// Messaging.
+	// Messaging: statsActivePublishersKey is used once below, like its neighbors
+	// "max_publishers" and "active_consumers" (left inlined — neither appears anywhere else
+	// in the package), but "active_publishers" also recurs across this kind's test fixtures
+	// and assertions, so goconst requires the symbol.
 	statsActivePublishersKey = "active_publishers"
-	statsMaxPublishersKey    = "max_publishers"
-	statsActiveConsumersKey  = "active_consumers"
 	// Cache.
 	statsActiveCachesKey = "active_caches"
 	statsTotalCreatedKey = "total_created"
 	statsMaxSizeKey      = "max_size"
 	statsIdleTTLKey      = "idle_ttl"
-	// Streams.
+	// Streams: each used once below, kept as constants because every value here also
+	// recurs elsewhere in the package — a zerolog field name in ModuleRegistry's
+	// declaration-summary log for "consumers", test fixtures and assertions for the rest.
+	// "ready" is not among them: it reuses readyStatus (app.go) at its allowlist site
+	// instead of a redundant twin constant.
 	statsStartedKey             = "started"
 	statsConsumersKey           = "consumers"
 	statsPublishersKey          = "publishers"
-	statsReadyKey               = "ready"
 	statsOffsetStoreCountKey    = "offset_store_count"
 	statsOffsetFlushIntervalKey = "offset_flush_interval"
 )
@@ -188,7 +200,7 @@ var (
 		statsActiveConnectionsKey, statsMaxConnectionsKey, statsIdleTTLSecondsKey, statsErrorsKey,
 	}
 	messagingPublicStats = []string{
-		statsActivePublishersKey, statsMaxPublishersKey, statsActiveConsumersKey, statsIdleTTLSecondsKey,
+		statsActivePublishersKey, "max_publishers", "active_consumers", statsIdleTTLSecondsKey,
 		statsEvictionsKey, statsIdleCleanupsKey, statsErrorsKey,
 	}
 	cachePublicStats = []string{
@@ -196,7 +208,7 @@ var (
 		statsErrorsKey, statsMaxSizeKey, statsIdleTTLKey,
 	}
 	streamsPublicStats = []string{
-		statsStartedKey, statsConsumersKey, statsPublishersKey, statsReadyKey,
+		statsStartedKey, statsConsumersKey, statsPublishersKey, readyStatus,
 		statsOffsetStoreCountKey, statsOffsetFlushIntervalKey,
 	}
 )

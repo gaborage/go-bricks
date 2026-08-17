@@ -335,12 +335,7 @@ func TestReadinessViews(t *testing.T) {
 			assert.Len(t, report, tt.wantReadyRuns, "/ready must not evaluate past the blocking probe")
 			assert.Equal(t, tt.wantBody, body)
 
-			encoded, err := json.Marshal(body)
-			require.NoError(t, err)
-			for _, forbidden := range tt.forbidden {
-				assert.NotContains(t, string(encoded), forbidden,
-					"the unauthenticated body must not carry %q anywhere", forbidden)
-			}
+			assertReadyBodyOmits(t, body, tt.forbidden...)
 
 			// The debug view's run: every probe, whatever /ready decided.
 			full := runReadinessProbes(context.Background(), tt.probes)
