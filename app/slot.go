@@ -42,7 +42,9 @@ type resourceSlot interface {
 
 	// closer hands over the resource the close phase must Close. ok is false when the kind
 	// has nothing to close yet, which is how an unconfigured kind and a streams manager that
-	// has not started stay out of the FIFO close list.
+	// has not started stay out of the FIFO close list. Builder.RegisterClosers walks every
+	// slot's closer at build time, for the kinds whose manager exists by then; the streams
+	// slot calls its own again from start, once its manager exists.
 	closer() (namedCloser, bool)
 }
 
@@ -72,6 +74,17 @@ func (a *App) installSlots(inputs slotInputs) {
 		&cacheSlot{app: a, absent: inputs.cacheAbsent},
 		&streamsSlot{app: a},
 	}
+}
+
+// requireSlots is the precondition every slot walk shares: CreateApp installed the slot
+// list. An empty walk would silently register no probe, no closer, pre-initialize nothing,
+// and start no kind at all — Builder.requireSlots and prepareRuntime both call this rather
+// than each carrying their own copy of the check.
+func (a *App) requireSlots(step string) error {
+	if len(a.slots) == 0 {
+		return fmt.Errorf("slots not installed before %s — CreateApp must run first", step)
+	}
+	return nil
 }
 
 // collectProbes is the readiness walk: every slot that has a description to register, in
@@ -258,9 +271,8 @@ func (s *streamsSlot) preInit(context.Context) error { return nil }
 func (s *streamsSlot) preInitFatal() bool { return false }
 
 // start builds the stream environment and starts the declared consumers and publishers,
-// then puts the manager on the FIFO close list. A service that declared streams and cannot
-// start them would serve HTTP while consuming nothing and publishing nowhere, so the failure
-// is fatal. PR5 folds prepareStreamConsumers' body in here.
+// then puts the manager on the FIFO close list — see prepareStreamConsumers for why a
+// failure here is fatal. PR5 folds prepareStreamConsumers' body in here.
 func (s *streamsSlot) start(ctx context.Context) (advisory, fatal error) {
 	if err := s.app.prepareStreamConsumers(ctx); err != nil {
 		return nil, err
@@ -288,13 +300,18 @@ func slotCloser[T any, P interface {
 	return namedCloser{name: name, closer: mgr}, true
 }
 
+// preWarmSubject is the operator-facing name of the thing warmed, distinct from kind (a
+// plain string) so a slot's own name() cannot be passed into the subject parameter by
+// mistake — the two would otherwise be interchangeable positional strings.
+type preWarmSubject string
+
 // preWarmKind is the arm the two single-tenant pre-warming kinds share. subject names the
 // thing warmed in the two operator-facing lines, which is not the kind's own name for the
 // database ("database connection" vs "messaging"); present is the kind's manager-built
 // verdict, which only the slot can read. Multi-tenant deployments resolve per tenant, so
 // the fixed "" key is never warmed; a not-configured kind is a silent skip; anything else
 // is advisory, never fatal.
-func (a *App) preWarmKind(ctx context.Context, kind, subject string, present bool,
+func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubject, present bool,
 	warm func(context.Context) error,
 ) error {
 	if a.multiTenant() {

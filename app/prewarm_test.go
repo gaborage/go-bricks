@@ -145,7 +145,7 @@ func TestMessagingSlotStartAwaitsPublisherReadiness(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err, fatal := a.slots[1].start(context.Background())
+	err, fatal := slotOf(t, a, componentMessaging).start(context.Background())
 	elapsed := time.Since(start)
 
 	require.NoError(t, fatal, "pre-warming is never fatal")
@@ -167,7 +167,7 @@ func TestMessagingSlotStartContinuesWhenPublisherNeverReady(t *testing.T) {
 	})
 
 	start := time.Now()
-	err, fatal := a.slots[1].start(context.Background())
+	err, fatal := slotOf(t, a, componentMessaging).start(context.Background())
 	elapsed := time.Since(start)
 
 	// Not-ready-in-time is a WARN, not a startup failure — pre-warm must not
@@ -190,7 +190,7 @@ func TestMessagingSlotStartPropagatesContextCancellation(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err, fatal := a.slots[1].start(ctx)
+	err, fatal := slotOf(t, a, componentMessaging).start(ctx)
 	elapsed := time.Since(start)
 
 	// Cancellation means shutdown/startup abort, not a broker-readiness problem —
@@ -214,7 +214,7 @@ func declaredConsumerFixture(t *testing.T) *messaging.Declarations {
 }
 
 // TestPreWarmMessagingEnsuresDeclaredConsumers pins the success half of the
-// consumer-ensure branch in preWarmMessaging (prewarm.go:104): a manager whose
+// consumer-ensure branch in preWarmMessaging: a manager whose
 // EnsureConsumers actually succeeds must return nil and log the "Ensured
 // messaging consumers" INFO line before ever reaching the publisher. Negating
 // `err != nil` to `err == nil` there would turn this success into a spurious

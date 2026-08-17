@@ -69,11 +69,8 @@ func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, id
 // and are stopped by the messaging slot's stop phase (ADR-029), so they inherit
 // only ctx's values, never its cancellation — see messagingSlot.start.
 func (a *App) prepareRuntime(ctx context.Context) error {
-	// Mirrors Builder.requireSlots: an empty walk would start no kind at all and then
-	// overwrite the probe list with an empty one, booting a service green with no database,
-	// no consumers and a /ready body that reports nothing.
-	if len(a.slots) == 0 {
-		return errors.New("slots not installed before prepareRuntime — CreateApp must run first")
+	if err := a.requireSlots("prepareRuntime"); err != nil {
+		return err
 	}
 
 	if err := a.buildMessagingDeclarations(); err != nil {
@@ -88,9 +85,8 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
-	// The streams slot only builds its manager in start, so the probe set is collected again
-	// here rather than at build time. Safe because prepareRuntime is single-threaded and
-	// completes before the server starts serving /ready.
+	// Re-collected here because the streams slot only builds its manager in start; see
+	// streamsSlot.probe in slot.go.
 	a.healthProbes = a.collectProbes()
 
 	// Register debug endpoints if enabled

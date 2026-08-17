@@ -285,11 +285,11 @@ func (b *Builder) ConfigureRuntimeHelpers() *Builder {
 // should fail fast), while the cache stays best-effort, because an unreachable cache is a
 // runtime condition — cache *misconfiguration* already aborted earlier, at manager
 // construction (CreateCacheManager).
-// requireSlots is the precondition every slot walk shares: CreateApp installed the slot list.
-// An empty walk would silently register no probe, no closer and pre-initialize nothing.
+// requireSlots is the Builder-side half of App.requireSlots: it records the failure on
+// b.err (the Builder's error-accumulation convention) instead of returning it.
 func (b *Builder) requireSlots(step string) bool {
-	if len(b.app.slots) == 0 {
-		b.err = fmt.Errorf("slots not installed before %s — CreateApp must run first", step)
+	if err := b.app.requireSlots(step); err != nil {
+		b.err = err
 		return false
 	}
 	return true
@@ -330,7 +330,9 @@ func (b *Builder) performPreInitialization() {
 	}
 }
 
-// CreateHealthProbes creates health check probes for all managers.
+// CreateHealthProbes creates health check probes for all managers. prepareRuntime
+// re-collects the set after the start phase (streamsSlot.probe, slot.go), so this
+// build-time list is only what an App built but never Run would report.
 func (b *Builder) CreateHealthProbes() *Builder {
 	if b.err != nil {
 		return b

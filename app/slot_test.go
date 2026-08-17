@@ -35,9 +35,15 @@ var errNeverReachTheConnector = errors.New("the absent arm must never reach the 
 // only when asked for, because "absent kind" is half of what these walks decide.
 func newSlotTestApp(t *testing.T, withDB, withMessaging bool) *App {
 	t.Helper()
+	return newSlotTestAppWithLogger(t, logger.New("error", false), withDB, withMessaging)
+}
+
+// newSlotTestAppWithLogger is newSlotTestApp with the logger supplied, so tests can assert
+// on what the slots themselves log.
+func newSlotTestAppWithLogger(t *testing.T, log logger.Logger, withDB, withMessaging bool) *App {
+	t.Helper()
 
 	cfg := defaultTestConfig()
-	log := logger.New("error", false)
 	source := config.NewTenantStore(cfg)
 
 	a := &App{cfg: cfg, logger: log}
@@ -116,6 +122,19 @@ func closerNames(a *App) []string {
 		names = append(names, c.name)
 	}
 	return names
+}
+
+// slotOf returns the installed slot for kind, found by name() rather than a registration-
+// order index that would silently drift if installSlots' order ever changed.
+func slotOf(t *testing.T, a *App, kind string) resourceSlot {
+	t.Helper()
+	for _, s := range a.slots {
+		if s.name() == kind {
+			return s
+		}
+	}
+	require.FailNow(t, "no installed slot for kind "+kind)
+	return nil
 }
 
 // TestInstallSlotsCoversEveryKindInRegistrationOrder is the completeness pin: one slot per
@@ -468,13 +487,16 @@ func TestStopSlotsRunsEveryKindInRegistrationOrder(t *testing.T) {
 	assert.Equal(t, []string{"stop:messaging", "stop:streams"}, order)
 }
 
-// TestDatabaseSlotStartSkipsMultiTenant pins the deployment-mode check inside the slot:
-// multi-tenant resources resolve per tenant, so the fixed "" key is never warmed. The
-// provider always refuses, so warming it would surface as an advisory error.
-func TestDatabaseSlotStartSkipsMultiTenant(t *testing.T) {
+// newRefusingDBSlotApp builds an App wired to a database manager whose provider always
+// refuses the fixed "" key (errNeverReachTheConnector), so any lease attempt surfaces that
+// error. multiTenant sets cfg.Multitenant.Enabled, the one input the two start-phase tests
+// below differ on.
+func newRefusingDBSlotApp(t *testing.T, multiTenant bool) *App {
+	t.Helper()
+
 	log := logger.New("error", false)
 	cfg := defaultTestConfig()
-	cfg.Multitenant.Enabled = true
+	cfg.Multitenant.Enabled = multiTenant
 	dbManager := database.NewDbManager(staticDBConfigProvider{err: errNeverReachTheConnector}, log,
 		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute},
 		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
@@ -484,8 +506,16 @@ func TestDatabaseSlotStartSkipsMultiTenant(t *testing.T) {
 
 	a := &App{cfg: cfg, logger: log, dbManager: dbManager}
 	a.installSlots(slotInputs{})
+	return a
+}
 
-	advisory, fatal := a.slots[0].start(context.Background())
+// TestDatabaseSlotStartSkipsMultiTenant pins the deployment-mode check inside the slot:
+// multi-tenant resources resolve per tenant, so the fixed "" key is never warmed. The
+// provider always refuses, so warming it would surface as an advisory error.
+func TestDatabaseSlotStartSkipsMultiTenant(t *testing.T) {
+	a := newRefusingDBSlotApp(t, true)
+
+	advisory, fatal := slotOf(t, a, componentDatabase).start(context.Background())
 
 	assert.NoError(t, fatal)
 	assert.NoError(t, advisory, "multi-tenant startup must not pre-warm the fixed \"\" key")
@@ -494,18 +524,9 @@ func TestDatabaseSlotStartSkipsMultiTenant(t *testing.T) {
 // TestDatabaseSlotStartReportsPreWarmFailureAsAdvisory pins the other arm: a refused
 // pre-warm is reported, never fatal.
 func TestDatabaseSlotStartReportsPreWarmFailureAsAdvisory(t *testing.T) {
-	log := logger.New("error", false)
-	dbManager := database.NewDbManager(staticDBConfigProvider{err: errNeverReachTheConnector}, log,
-		database.DbManagerOptions{MaxSize: 1, IdleTTL: time.Minute},
-		func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
-			return dbtesting.NewTestDB(dbTypePostgres), nil
-		})
-	t.Cleanup(func() { assert.NoError(t, dbManager.Close()) })
+	a := newRefusingDBSlotApp(t, false)
 
-	a := &App{cfg: defaultTestConfig(), logger: log, dbManager: dbManager}
-	a.installSlots(slotInputs{})
-
-	advisory, fatal := a.slots[0].start(context.Background())
+	advisory, fatal := slotOf(t, a, componentDatabase).start(context.Background())
 
 	assert.NoError(t, fatal, "pre-warming is never fatal")
 	require.Error(t, advisory)
@@ -521,7 +542,7 @@ func TestStreamsSlotStartRegistersItsCloser(t *testing.T) {
 		a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
 		a.installSlots(slotInputs{})
 
-		advisory, fatal := a.slots[3].start(context.Background())
+		advisory, fatal := slotOf(t, a, componentStreams).start(context.Background())
 
 		require.NoError(t, fatal)
 		require.NoError(t, advisory)
@@ -534,7 +555,7 @@ func TestStreamsSlotStartRegistersItsCloser(t *testing.T) {
 			&streamModule{name: "orders", declaration: declareOneConsumer})
 		a.installSlots(slotInputs{})
 
-		_, fatal := a.slots[3].start(context.Background())
+		_, fatal := slotOf(t, a, componentStreams).start(context.Background())
 
 		require.Error(t, fatal, "a service that declared streams and cannot start them must abort")
 		assert.Nil(t, a.streamsManager)
@@ -549,20 +570,11 @@ func newStopSlotTestApp(t *testing.T) (*App, *recLogger) {
 	t.Helper()
 
 	rec := &recLogger{}
-	cfg := defaultTestConfig()
+	a := newSlotTestAppWithLogger(t, rec, false, true)
 
-	client := testmocks.NewMockAMQPClient()
-	client.ExpectClose(nil)
-	messagingManager := messaging.NewMessagingManager(config.NewTenantStore(cfg), rec,
-		messaging.ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour},
-		func(string, logger.Logger) messaging.AMQPClient { return client })
-	t.Cleanup(func() { assert.NoError(t, messagingManager.Close()) })
+	a.streamsManager = streams.NewManager(streams.ManagerOptions{URI: unreachableStreamURI, Logger: rec})
+	t.Cleanup(func() { _ = a.streamsManager.Close() })
 
-	streamsManager := streams.NewManager(streams.ManagerOptions{URI: unreachableStreamURI, Logger: rec})
-	t.Cleanup(func() { _ = streamsManager.Close() })
-
-	a := &App{cfg: cfg, logger: rec, messagingManager: messagingManager, streamsManager: streamsManager}
-	a.installSlots(slotInputs{})
 	return a, rec
 }
 
@@ -579,7 +591,7 @@ func TestSlotStopDrivesItsOwnKindsTeardown(t *testing.T) {
 	t.Run("messaging_slot_stops_amqp_consumers_only", func(t *testing.T) {
 		a, rec := newStopSlotTestApp(t)
 
-		a.slots[1].stop(context.Background())
+		slotOf(t, a, componentMessaging).stop(context.Background())
 
 		assert.True(t, loggedMsgContains(rec, amqpStopLine), "the messaging slot must stop AMQP consumers")
 		assert.False(t, loggedMsgContains(rec, streamsStopLine), "it must not reach into the streams kind")
@@ -588,7 +600,7 @@ func TestSlotStopDrivesItsOwnKindsTeardown(t *testing.T) {
 	t.Run("streams_slot_stops_stream_consumers_only", func(t *testing.T) {
 		a, rec := newStopSlotTestApp(t)
 
-		a.slots[3].stop(context.Background())
+		slotOf(t, a, componentStreams).stop(context.Background())
 
 		assert.True(t, loggedMsgContains(rec, streamsStopLine), "the streams slot must stop stream consumers")
 		assert.False(t, loggedMsgContains(rec, amqpStopLine), "it must not reach into the AMQP kind")
@@ -597,8 +609,8 @@ func TestSlotStopDrivesItsOwnKindsTeardown(t *testing.T) {
 	t.Run("database_and_cache_stop_nothing", func(t *testing.T) {
 		a, rec := newStopSlotTestApp(t)
 
-		a.slots[0].stop(context.Background())
-		a.slots[2].stop(context.Background())
+		slotOf(t, a, componentDatabase).stop(context.Background())
+		slotOf(t, a, componentCache).stop(context.Background())
 
 		assert.False(t, loggedMsgContains(rec, amqpStopLine))
 		assert.False(t, loggedMsgContains(rec, streamsStopLine))

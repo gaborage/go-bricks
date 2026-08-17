@@ -83,10 +83,8 @@ type App struct {
 	// Messaging declarations, collected once at startup and replayed per tenant
 	messagingDeclarations *messaging.Declarations
 
-	// streamsManager is created during prepareRuntime — never at build time — so its
-	// closer is registered by streamsSlot.start (slot.go) and its readiness probe by
-	// prepareRuntime's post-start probe re-collect (lifecycle.go), not by the build-time
-	// slot walks.
+	// streamsManager exists only from prepareRuntime onward; see streamsSlot in slot.go
+	// for why its probe and closer are registered separately from the build-time walks.
 	streamsManager *streams.Manager
 
 	closers      []namedCloser
