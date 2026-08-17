@@ -471,6 +471,52 @@ func TestPublicStatsAllowlistsMatchManagerCounters(t *testing.T) {
 	}
 }
 
+// TestProbeConstructorsWireTheirPublicStatsAllowlist pins the other half of the disclosure
+// guard. SECURITY: an allowlist only withholds anything where the constructor carries it —
+// dropping `publicStats:` from one description leaves every body assertion green (the kind
+// simply publishes its status alone) right up until that kind's stats matter, and for
+// streams the dropped line is what puts stored_offsets back on the unauthenticated body.
+func TestProbeConstructorsWireTheirPublicStatsAllowlist(t *testing.T) {
+	streamsManager := streams.NewManager(streams.ManagerOptions{
+		URI:    unreachableStreamURI,
+		Logger: logger.New("error", false),
+	})
+
+	tests := []struct {
+		name        string
+		description probeDescription
+		allow       []string
+	}{
+		{
+			name:        "database",
+			description: databaseProbe(createTestDbManager(t), false),
+			allow:       databasePublicStats,
+		},
+		{
+			name:        "messaging",
+			description: messagingProbe(createTestMessagingManager(t), false),
+			allow:       messagingPublicStats,
+		},
+		{
+			name:        "cache",
+			description: cacheProbe(createTestCacheManager(t), true, false, false),
+			allow:       cachePublicStats,
+		},
+		{
+			name:        "streams",
+			description: streamsProbe(streamsManager),
+			allow:       streamsPublicStats,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.allow, tt.description.publicStats,
+				"the description the app registers must carry its kind's allowlist")
+		})
+	}
+}
+
 // Fixtures used only by the per-kind descriptions above.
 
 // stubMessagingSource fails every broker-URL resolution with err.

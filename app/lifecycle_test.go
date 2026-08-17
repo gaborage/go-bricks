@@ -928,15 +928,19 @@ func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]
 	return body, w.Code
 }
 
-// TestReadyCheckOmitsStreamsWhenNoneDeclared pins that services without streams keep
-// the /ready body they had: the component is reported only where a probe exists.
+// TestReadyCheckOmitsStreamsWhenNoneDeclared pins that a streams-free probe set renders
+// neither streams key: the kind reaches the body only where prepareStreamConsumers
+// registered its probe. The probe set is the real one, so the classic kinds render and the
+// two assertions below are not passing on an empty body.
 func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
-	app := &App{cfg: cfg, logger: logger.New("error", false), healthProbes: []Prober{}}
+	app := &App{cfg: cfg, logger: logger.New("error", false)}
+	app.healthProbes = app.createHealthProbes()
 
 	body, code := runReadyCheck(t, app, cfg)
 
 	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, disabledStatus, body[componentDatabase])
 	assert.NotContains(t, body, componentStreams)
 	assert.NotContains(t, body, "streams_stats")
 }
