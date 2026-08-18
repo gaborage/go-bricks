@@ -856,7 +856,8 @@ func TestReadyCheckDowngradesCallerCancellationLog(t *testing.T) {
 			cfg := &config.Config{App: config.AppConfig{Name: testApp}}
 			rec := &recLogger{}
 			app := &App{cfg: cfg, logger: rec, cacheManager: createTestCacheManagerWithGetError(t, tc.probeErr)}
-			app.healthProbes = app.createHealthProbes(probeInputs{})
+			app.installSlots(slotInputs{})
+			app.healthProbes = app.collectProbes()
 			require.Len(t, app.healthProbes, 3)
 
 			reqCtx := context.Background()
@@ -914,7 +915,8 @@ func TestReadyCheckWithholdsDatabaseIdentityFromBody(t *testing.T) {
 		cfg.Database.Host = "control-plane.internal"
 		rec := &recLogger{}
 		app := &App{cfg: cfg, logger: rec, dbManager: newRealConnectorDBManager(cfg)}
-		app.healthProbes = app.createHealthProbes(probeInputs{})
+		app.installSlots(slotInputs{})
+		app.healthProbes = app.collectProbes()
 		require.Len(t, app.healthProbes, 3)
 
 		body, code := runReadyCheck(t, app, cfg)
@@ -974,7 +976,8 @@ func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]
 func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false)}
-	app.healthProbes = app.createHealthProbes(probeInputs{})
+	app.installSlots(slotInputs{})
+	app.healthProbes = app.collectProbes()
 
 	body, code := runReadyCheck(t, app, cfg)
 
@@ -989,7 +992,8 @@ func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 // block instead of dereferencing nil, and a configured App renders its identity.
 func TestReadyCheckWithoutConfigRendersAnEmptyAppBlock(t *testing.T) {
 	app := &App{logger: logger.New("error", false)}
-	app.healthProbes = app.createHealthProbes(probeInputs{})
+	app.installSlots(slotInputs{})
+	app.healthProbes = app.collectProbes()
 
 	body, code := runReadyCheck(t, app, &config.Config{})
 

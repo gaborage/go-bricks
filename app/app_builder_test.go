@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -649,7 +648,9 @@ func TestAppBuilderConfigureRuntimeHelpersIgnoresTenantsWhenMultitenantDisabled(
 
 	// Empty bundle: single-tenant static config runs pre-initialization, which no-ops
 	// on nil managers.
-	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: &App{}, bundle: &dependencyBundle{}}
+	app := &App{}
+	app.installSlots(slotInputs{})
+	builder := &Builder{cfg: cfg, logger: logger.New("error", false), app: app, bundle: &dependencyBundle{}}
 	result := builder.ConfigureRuntimeHelpers()
 
 	require.NoError(t, result.err)
@@ -685,9 +686,12 @@ func TestAppBuilderCreateHealthProbesAppliesCacheCritical(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			app := &App{cfg: tc.cfg, cacheManager: createTestCacheManager(t)}
+			// CreateApp installs the slots CreateHealthProbes walks; this builder skips it.
+			app.installSlots(slotInputs{})
 			builder := &Builder{
 				logger: logger.New("error", false),
-				app:    &App{cfg: tc.cfg, cacheManager: createTestCacheManager(t)},
+				app:    app,
 			}
 
 			result := builder.CreateHealthProbes()
@@ -736,10 +740,13 @@ func TestAppBuilderWarnsOnCacheCriticalityOptOut(t *testing.T) {
 			}
 
 			rec := &recLogger{}
+			app := &App{cfg: &config.Config{Cache: tc.cache}, cacheManager: cacheManager}
+			// CreateApp installs the slots CreateHealthProbes walks; this builder skips it.
+			app.installSlots(slotInputs{})
 			builder := &Builder{
 				logger: rec,
 				opts:   tc.opts,
-				app:    &App{cfg: &config.Config{Cache: tc.cache}, cacheManager: cacheManager},
+				app:    app,
 			}
 			require.NoError(t, builder.CreateHealthProbes().err)
 
@@ -811,9 +818,12 @@ func TestAppBuilderWarnsOnQueryParameterLogging(t *testing.T) {
 			cfg.Databases = tc.databases
 
 			rec := &recLogger{}
+			app := &App{cfg: cfg}
+			// CreateApp installs the slots CreateHealthProbes walks; this builder skips it.
+			app.installSlots(slotInputs{})
 			builder := &Builder{
 				logger: rec,
-				app:    &App{cfg: cfg},
+				app:    app,
 			}
 			require.NoError(t, builder.CreateHealthProbes().err)
 
@@ -1127,50 +1137,6 @@ func TestPreInitCacheFailureIsNonFatal(t *testing.T) {
 	}
 }
 
-// TestPreInitCacheSkipsAbsentCache pins that preInitCache never leases when the cache is
-// absent under the fixed "" key, so the pool's errors counter starts at a true zero (see
-// rootCacheAbsent). The verdict is computed from the Builder's own config and options —
-// App no longer carries a precomputed copy that could drift from them.
-func TestPreInitCacheSkipsAbsentCache(t *testing.T) {
-	newConnectorCountingManager := func(t *testing.T, calls *atomic.Int32) *cache.CacheManager {
-		t.Helper()
-		mgr := createTestCacheManagerWithConnector(t, func(context.Context, string) (cache.Cache, error) {
-			calls.Add(1)
-			return nil, config.NewNotConfiguredError("cache", "CACHE_REDIS_HOST", "cache.redis.host")
-		})
-		t.Cleanup(func() { assert.NoError(t, mgr.Close()) })
-		return mgr
-	}
-
-	t.Run("absent_skips_the_connector", func(t *testing.T) {
-		var connectorCalls atomic.Int32
-		builder := &Builder{
-			cfg:    &config.Config{},
-			logger: logger.New("error", false),
-			bundle: &dependencyBundle{cacheManager: newConnectorCountingManager(t, &connectorCalls)},
-		}
-		require.True(t, rootCacheAbsent(builder.cfg, builder.opts), "the fixture must model an absent cache")
-
-		builder.preInitCache(context.Background(), time.Second)
-
-		assert.Equal(t, int32(0), connectorCalls.Load(), "the connector must never be reached")
-	})
-
-	t.Run("present_reaches_the_connector", func(t *testing.T) {
-		var connectorCalls atomic.Int32
-		builder := &Builder{
-			cfg:    &config.Config{Cache: config.CacheConfig{Enabled: true}},
-			logger: logger.New("error", false),
-			bundle: &dependencyBundle{cacheManager: newConnectorCountingManager(t, &connectorCalls)},
-		}
-		require.False(t, rootCacheAbsent(builder.cfg, builder.opts), "the fixture must model a present cache")
-
-		builder.preInitCache(context.Background(), time.Second)
-
-		assert.Equal(t, int32(1), connectorCalls.Load(), "an unexempt cache must still be probed")
-	})
-}
-
 func TestAppBuilderErrorRecovery(t *testing.T) {
 	t.Run("builder state remains consistent after error", func(t *testing.T) {
 		builder := NewAppBuilder()
@@ -1193,4 +1159,115 @@ func TestAppBuilderErrorRecovery(t *testing.T) {
 		assert.NotNil(t, log) // Logger should always be available
 		assert.Equal(t, builder.err, buildErr)
 	})
+}
+
+// TestPerformPreInitializationStopsAtTheFirstFatalKind pins that a fatal pre-init aborts
+// the walk: the messaging and cache slots that follow the database must not be reached, and
+// the error must carry the failing kind's name.
+func TestPerformPreInitializationStopsAtTheFirstFatalKind(t *testing.T) {
+	order := []string{}
+	builder := &Builder{
+		cfg:    defaultTestConfig(),
+		logger: logger.New("error", false),
+		app:    &App{cfg: defaultTestConfig(), logger: logger.New("error", false)},
+	}
+	builder.app.slots = []resourceSlot{
+		&recordingSlot{kind: componentDatabase, order: &order, fatalPreInit: true, preInitErr: assert.AnError},
+		&recordingSlot{kind: componentMessaging, order: &order},
+		&recordingSlot{kind: componentCache, order: &order},
+	}
+
+	builder.performPreInitialization()
+
+	require.Error(t, builder.err)
+	assert.Contains(t, builder.err.Error(), "database connection failed during startup")
+	assert.Equal(t, []string{"preinit:database"}, order,
+		"a fatal pre-init must stop the walk before the next kind")
+}
+
+// TestPerformPreInitializationContinuesPastABestEffortKind is the other half: a non-fatal
+// failure is logged and the walk carries on.
+func TestPerformPreInitializationContinuesPastABestEffortKind(t *testing.T) {
+	order := []string{}
+	rec := &recLogger{}
+	builder := &Builder{
+		cfg:    defaultTestConfig(),
+		logger: rec,
+		app:    &App{cfg: defaultTestConfig(), logger: rec},
+	}
+	builder.app.slots = []resourceSlot{
+		&recordingSlot{kind: componentCache, order: &order, preInitErr: assert.AnError},
+		&recordingSlot{kind: componentStreams, order: &order},
+	}
+
+	builder.performPreInitialization()
+
+	require.NoError(t, builder.err)
+	assert.Equal(t, []string{"preinit:cache", "preinit:streams"}, order)
+	event, emitted := loggedEvent(rec, "Failed to pre-initialize cache connection (non-fatal)")
+	require.True(t, emitted, "a best-effort failure must still be visible")
+	assert.Equal(t, "warn", event.level)
+}
+
+// TestPerformPreInitializationSkipsWhenAppCarriesNoConfig pins the nil-config guard: the
+// slots read cfg for their configured/budget answers, so a Builder whose App never received
+// a config (WithConfig never ran) must skip the walk instead of reaching a slot that would
+// dereference nil.
+func TestPerformPreInitializationSkipsWhenAppCarriesNoConfig(t *testing.T) {
+	order := []string{}
+	builder := &Builder{
+		logger: logger.New("error", false),
+		app:    &App{logger: logger.New("error", false)},
+	}
+	builder.app.slots = []resourceSlot{
+		&recordingSlot{kind: componentDatabase, order: &order},
+	}
+
+	builder.performPreInitialization()
+
+	require.NoError(t, builder.err)
+	assert.Empty(t, order, "no slot pre-init must run without a config")
+}
+
+// TestAppBuilderStepsRequireInstalledSlots pins that the two steps walking App.slots fail
+// fast when CreateApp never installed them: an empty walk would register no probe at all and
+// leave /ready answering an unconditional 200.
+func TestAppBuilderStepsRequireInstalledSlots(t *testing.T) {
+	cases := []struct {
+		step    func(*Builder) *Builder
+		name    string
+		wantMsg string
+	}{
+		{
+			name:    "create_health_probes",
+			step:    (*Builder).CreateHealthProbes,
+			wantMsg: "slots not installed before creating health probes",
+		},
+		{
+			name:    "register_closers",
+			step:    (*Builder).RegisterClosers,
+			wantMsg: "slots not installed before registering closers",
+		},
+		{
+			name:    "pre_initialization",
+			step:    func(b *Builder) *Builder { b.performPreInitialization(); return b },
+			wantMsg: "slots not installed before pre-initialization",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := &Builder{
+				logger: logger.New("error", false),
+				app:    &App{cfg: defaultTestConfig(), cacheManager: createTestCacheManager(t)},
+			}
+
+			result := tc.step(builder)
+
+			require.Error(t, result.err)
+			assert.Contains(t, result.err.Error(), tc.wantMsg)
+			assert.Empty(t, result.app.healthProbes, "a refused step must register nothing")
+			assert.Empty(t, result.app.closers)
+		})
+	}
 }
