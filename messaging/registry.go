@@ -5,18 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"runtime/debug"
 	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/attribute"
+	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 
-	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
+	pipeline "github.com/gaborage/go-bricks/messaging/internal/delivery"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
-	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 // defaultConsumerResubscribeDelay is the wait between consumer re-subscribe
@@ -755,102 +753,135 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 	}
 }
 
-// processMessage processes a single message using the consumer's handler.
+// processMessage runs one delivery through the delivery pipeline and settles it
+// by outcome. Settlement is this lane's, not the pipeline's: ack on success,
+// nack on a handler error or a panic.
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
-	startTime := time.Now()
-
-	// StartConsumeSpan performs the go-bricks header extraction this function
-	// used to do inline, and increments the consumed counter once per
-	// delivery received.
-	msgCtx, span := StartConsumeSpan(ctx, delivery, consumer.Queue)
-
-	// Install the per-message lease scope (ADR-032): per-tenant handles borrowed via
-	// deps.DB/Cache/Messaging while handling this delivery (including inbox ProcessOnce,
-	// which runs inside the handler and inherits msgCtx) are released when the message is
-	// done, so a handle evicted mid-handling is not closed under it. Registered before the
-	// panic-recovery defer so ReleaseAll runs last (even on panic).
-	msgCtx, scope := leasescope.Install(msgCtx)
-	defer scope.ReleaseAll()
-
-	// Registered after ReleaseAll and before the recovery defer, so LIFO order
-	// is recover -> span.End -> ReleaseAll: the panic path stamps span status
-	// before the span closes, and ReleaseAll still runs last.
-	defer span.End()
-
-	contextLog := log.WithContext(msgCtx)
-	traceID := gobrickstrace.EnsureTraceID(msgCtx)
-
-	// Panic recovery: prevents handler panics from crashing the entire service.
-	// This follows the same pattern as HTTP middleware panic recovery.
-	// Panics are treated like errors: logged with stack trace, nacked without requeue, and metrics recorded.
+	// The pipeline recovers handler panics; outcome logging, telemetry and
+	// settlement still run unguarded on this goroutine, and a panic there would
+	// kill the consume loop with the delivery unsettled. Nack before logging so
+	// the fallback holds even when logging is what panicked; the nested recover
+	// keeps the fallback itself from escaping.
+	settling := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			r.handlePanicRecovery(msgCtx, consumer, delivery, startTime, contextLog, traceID, recovered)
+		recovered := recover()
+		if recovered == nil {
+			return
 		}
+		defer func() { _ = recover() }()
+		if !consumer.AutoAck && !settling {
+			_ = delivery.Nack(false, false)
+		}
+		log.Error().
+			Str("queue", consumer.Queue).
+			Uint64("delivery_tag", delivery.DeliveryTag).
+			Msg(fmt.Sprintf("Recovered panic while finishing a delivery: %v; nacked without requeue", recovered))
 	}()
 
-	// Skip the per-field sensitive-data scan when the debug event is dropped.
-	// DEBUG is below WarnLevel, so the adapter's Msg -> trackSeverity hook is a
-	// no-op and skipping Msg on the disabled path changes nothing.
-	if dbg := contextLog.Debug(); dbg.Enabled() {
-		dbg.Str("correlation_id", traceID).
-			Str("message_id", delivery.MessageId).
-			Str("routing_key", delivery.RoutingKey).
-			Str("exchange", delivery.Exchange).
-			Uint64("delivery_tag", delivery.DeliveryTag).
-			Int("body_size", len(delivery.Body)).
-			Msg("Processing message")
+	res := pipeline.Run(ctx, &pipeline.Request{
+		Carrier:     amqpHeaderAccessor{headers: delivery.Headers},
+		Destination: consumer.Queue,
+		BodySize:    len(delivery.Body),
+		SpanExtras:  consumeSpanExtras(delivery),
+		Metrics:     tracking.AMQPConsumeAttributes(delivery.Exchange, delivery.RoutingKey, consumer.Queue),
+		Log:         log,
+		Handle: func(msgCtx context.Context, msgLog logger.Logger, traceID string) error {
+			logProcessing(msgLog, traceID, delivery)
+			return consumer.Handler.Handle(msgCtx, delivery)
+		},
+		LogOutcome: func(res *pipeline.Result) {
+			logOutcome(res, consumer, delivery)
+		},
+	})
+
+	if consumer.AutoAck {
+		return // No manual ack/nack needed
 	}
-
-	err := consumer.Handler.Handle(msgCtx, delivery)
-	processingTime := time.Since(startTime)
-
-	if err != nil {
-		// Enhanced structured logging for failed messages
-		r.buildFailureLogEvent(contextLog, traceID, delivery, consumer, processingTime).
-			Err(err).
-			Msg("Message processing failed - discarding without requeue")
-
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-
-		// Record failed message metrics (duration with error.type attribute)
-		tracking.RecordAMQPConsumeCompletion(msgCtx, delivery, consumer.Queue, processingTime, err)
-
-		// Negative acknowledgment WITHOUT requeue - prevents infinite retry loops.
-		// Queues declared with x-dead-letter-exchange route the message to that
-		// exchange (retained only if a binding delivers it to a queue); queues
-		// without one drop it (logged above).
-		// DeclareQueueWithDLQ declares that full route in one call.
-		r.nackMessage(delivery, consumer.AutoAck, contextLog, traceID)
+	settling = true
+	if res.Outcome == pipeline.Succeeded {
+		ackMessage(delivery, res.Log, res.TraceID)
 		return
 	}
+	nackMessage(delivery, res.Log, res.TraceID)
+}
 
-	contextLog.Info().
-		Str("correlation_id", traceID).
+// consumeSpanExtras renders this lane's span attributes, on top of the four the
+// pipeline sets for both lanes. A field the delivery did not carry is omitted
+// rather than reported empty, which is what the receive span has always done.
+func consumeSpanExtras(delivery *amqp.Delivery) []attribute.KeyValue {
+	extras := make([]attribute.KeyValue, 0, 4)
+	if delivery.Exchange != "" {
+		extras = append(extras, attribute.String(attrMessagingRabbitMQExchange, delivery.Exchange))
+	}
+	if delivery.RoutingKey != "" {
+		extras = append(extras, semconv.MessagingRabbitMQDestinationRoutingKey(delivery.RoutingKey))
+	}
+	if delivery.MessageId != "" {
+		extras = append(extras, semconv.MessagingMessageID(delivery.MessageId))
+	}
+	if delivery.CorrelationId != "" {
+		extras = append(extras, semconv.MessagingMessageConversationID(delivery.CorrelationId))
+	}
+	return extras
+}
+
+// logProcessing writes the per-delivery DEBUG line. The whole field chain is
+// skipped when the event is dropped: DEBUG is below WarnLevel, so the adapter's
+// Msg -> trackSeverity hook is a no-op and skipping Msg changes nothing.
+func logProcessing(log logger.Logger, traceID string, delivery *amqp.Delivery) {
+	dbg := log.Debug()
+	if !dbg.Enabled() {
+		return
+	}
+	dbg.Str("correlation_id", traceID).
 		Str("message_id", delivery.MessageId).
-		Dur("processing_time", processingTime).
-		Msg("Message processed successfully")
+		Str("routing_key", delivery.RoutingKey).
+		Str("exchange", delivery.Exchange).
+		Uint64("delivery_tag", delivery.DeliveryTag).
+		Int("body_size", len(delivery.Body)).
+		Msg("Processing message")
+}
 
-	tracking.RecordAMQPConsumeCompletion(msgCtx, delivery, consumer.Queue, processingTime, nil)
-
-	if !consumer.AutoAck {
-		if ackErr := delivery.Ack(false); ackErr != nil {
-			contextLog.Error().
-				Str("correlation_id", traceID).
-				Err(ackErr).
-				Uint64("delivery_tag", delivery.DeliveryTag).
-				Msg("Failed to ack message")
-		}
+// logOutcome writes this lane's line for a finished delivery.
+func logOutcome(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery) {
+	switch res.Outcome {
+	case pipeline.Succeeded:
+		res.Log.Info().
+			Str("correlation_id", res.TraceID).
+			Str("message_id", delivery.MessageId).
+			Dur("processing_time", res.Duration).
+			Msg("Message processed successfully")
+	case pipeline.HandlerError:
+		buildFailureLogEvent(res.Log, res.TraceID, delivery, consumer, res.Duration).
+			Err(res.Err).
+			Msg("Message processing failed - discarding without requeue")
+	case pipeline.Panicked:
+		buildFailureLogEvent(res.Log, res.TraceID, delivery, consumer, res.Duration).
+			Interface("panic", res.Panic).
+			Bytes("stack", res.Stack).
+			Msg("Panic recovered in message handler - discarding without requeue")
 	}
 }
 
-// nackMessage negatively acknowledges a message without requeue.
-// Logs any nack errors but does not propagate them (robustness over strict error handling).
-func (r *Registry) nackMessage(delivery *amqp.Delivery, autoAck bool, log logger.Logger, traceID string) {
-	if autoAck {
-		return // No manual ack/nack needed
+// ackMessage acknowledges a handled message.
+// Logs any ack errors but does not propagate them (robustness over strict error handling).
+func ackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
+	if err := delivery.Ack(false); err != nil {
+		log.Error().
+			Str("correlation_id", traceID).
+			Err(err).
+			Uint64("delivery_tag", delivery.DeliveryTag).
+			Msg("Failed to ack message")
 	}
+}
+
+// nackMessage negatively acknowledges a message WITHOUT requeue, which prevents
+// infinite retry loops. Queues declared with x-dead-letter-exchange route the
+// nacked message to that exchange (retained only if a binding delivers it to a
+// queue); queues without one drop it (logged by logOutcome).
+// DeclareQueueWithDLQ declares that full route in one call.
+// Logs any nack errors but does not propagate them (robustness over strict error handling).
+func nackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
 	if err := delivery.Nack(false, false); err != nil {
 		log.Error().
 			Str("correlation_id", traceID).
@@ -862,7 +893,7 @@ func (r *Registry) nackMessage(delivery *amqp.Delivery, autoAck bool, log logger
 
 // buildFailureLogEvent creates a structured log event for failed message processing.
 // Provides consistent error logging across panic and error paths.
-func (r *Registry) buildFailureLogEvent(
+func buildFailureLogEvent(
 	log logger.Logger,
 	traceID string,
 	delivery *amqp.Delivery,
@@ -882,54 +913,6 @@ func (r *Registry) buildFailureLogEvent(
 		Str("routing_key", delivery.RoutingKey).
 		Str("exchange", delivery.Exchange).
 		Dur("processing_time", processingTime)
-}
-
-// handlePanicRecovery handles panic recovery for message processing.
-// Logs panic with stack trace, records metrics, and nacks message without requeue.
-func (r *Registry) handlePanicRecovery(
-	msgCtx context.Context,
-	consumer *ConsumerDeclaration,
-	delivery *amqp.Delivery,
-	startTime time.Time,
-	log logger.Logger,
-	traceID string,
-	recovered any,
-) {
-	processingTime := time.Since(startTime)
-	stack := debug.Stack()
-
-	// Log panic with full context and stack trace
-	r.buildFailureLogEvent(log, traceID, delivery, consumer, processingTime).
-		Interface("panic", recovered).
-		Bytes("stack", stack).
-		Msg("Panic recovered in message handler - discarding without requeue")
-
-	// Record failed message metrics
-	panicErr := fmt.Errorf("panic in message handler: %v", recovered)
-	span := trace.SpanFromContext(msgCtx)
-	span.RecordError(panicErr)
-	span.SetStatus(codes.Error, panicErr.Error())
-	tracking.RecordAMQPConsumeCompletion(msgCtx, delivery, consumer.Queue, processingTime, panicErr)
-
-	// Nack without requeue
-	r.nackMessage(delivery, consumer.AutoAck, log, traceID)
-}
-
-// amqpDeliveryAccessor implements trace.HeaderAccessor for AMQP delivery headers (read-only)
-type amqpDeliveryAccessor struct {
-	headers amqp.Table
-}
-
-func (a *amqpDeliveryAccessor) Get(key string) any {
-	if a.headers == nil {
-		return nil
-	}
-	return a.headers[key]
-}
-
-func (a *amqpDeliveryAccessor) Set(_ string, _ any) {
-	// Read-only accessor for delivery headers
-	// This is intentionally a no-op as we don't modify incoming message headers
 }
 
 // Publishers returns all registered publishers (for documentation/monitoring)

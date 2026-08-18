@@ -4640,7 +4640,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Database pool | `db.client.connection.wait_count` / `.timeouts` | Counter | — |
 | Database pool | `db.client.connection.pending_requests` | UpDownCounter | — |
 | Messaging | `messaging.client.operation.duration` | Histogram (s) | `messaging.system`, `messaging.operation.name`, `error.type` |
-| Messaging | `messaging.client.sent.messages` / `consumed.messages` | Counter | `messaging.destination.name` |
+| Messaging | `messaging.client.sent.messages` / `consumed.messages` | Counter | `messaging.destination.name`, `error.type` (consumed only, on failure) |
 | Messaging | `messaging.client.publish.retries` | Counter | `messaging.destination.name` |
 | Messaging | `messaging.connection.create` / `.close` | Counter | — |
 | Messaging | `messaging.channel.create` / `.close` | Counter | — |

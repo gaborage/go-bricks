@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
 	gobrickslogger "github.com/gaborage/go-bricks/logger"
@@ -690,87 +691,6 @@ func TestRegistryBindings(t *testing.T) {
 	assert.NotNil(t, originalBindings[0])
 }
 
-// ===== amqpDeliveryAccessor Tests =====
-
-func TestAmqpDeliveryAccessorGet(t *testing.T) {
-	tests := []struct {
-		name     string
-		headers  amqp.Table
-		key      string
-		expected any
-	}{
-		{
-			name:     "nil headers",
-			headers:  nil,
-			key:      testKeyName,
-			expected: nil,
-		},
-		{
-			name:     "empty headers",
-			headers:  amqp.Table{},
-			key:      testKeyName,
-			expected: nil,
-		},
-		{
-			name: "existing key",
-			headers: amqp.Table{
-				testKeyName: testValueContent,
-			},
-			key:      testKeyName,
-			expected: testValueContent,
-		},
-		{
-			name: "non-existing key",
-			headers: amqp.Table{
-				"other-key": "other-value",
-			},
-			key:      testKeyName,
-			expected: nil,
-		},
-		{
-			name: "multiple headers",
-			headers: amqp.Table{
-				"key1": "value1",
-				"key2": 42,
-				"key3": true,
-			},
-			key:      "key2",
-			expected: 42,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			accessor := &amqpDeliveryAccessor{headers: tt.headers}
-			result := accessor.Get(tt.key)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestAmqpDeliveryAccessorSet(t *testing.T) {
-	// Create accessor with some initial headers
-	headers := amqp.Table{
-		"existing": "value",
-	}
-	accessor := &amqpDeliveryAccessor{headers: headers}
-
-	// Verify initial state
-	assert.Equal(t, "value", accessor.Get("existing"))
-
-	// Call Set - should be a no-op
-	accessor.Set(newKeyName, "new-value")
-	accessor.Set("existing", "modified-value")
-
-	// Verify headers remain unchanged
-	assert.Equal(t, "value", accessor.Get("existing"))
-	assert.Nil(t, accessor.Get(newKeyName))
-
-	// Verify the original headers map wasn't modified
-	assert.Equal(t, "value", headers["existing"])
-	assert.NotContains(t, headers, newKeyName)
-}
-
 // ===== Enhanced DeclareInfrastructure Tests =====
 
 func TestRegistryDeclareInfrastructureQueueDeclarationError(t *testing.T) {
@@ -1072,6 +992,39 @@ func (m *mockAcknowledger) AckCalled() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.ackCalled
+}
+
+// panicEventLogger fails every post-handler log call, so the first outcome log
+// inside the pipeline panics deterministically.
+type panicEventLogger struct{ stubLogger }
+
+func (l *panicEventLogger) Info() gobrickslogger.LogEvent                     { panic("log sink gone") }
+func (l *panicEventLogger) Error() gobrickslogger.LogEvent                    { panic("log sink gone") }
+func (l *panicEventLogger) Warn() gobrickslogger.LogEvent                     { panic("log sink gone") }
+func (l *panicEventLogger) WithContext(_ any) gobrickslogger.Logger           { return l }
+func (l *panicEventLogger) WithFields(_ map[string]any) gobrickslogger.Logger { return l }
+
+// TestRegistryProcessMessagePanicAfterHandlerStillNacks pins the lane-level
+// recovery: a panic past the handler — here from outcome logging — must not
+// escape processMessage, and the manual-ack delivery is nacked without requeue.
+func TestRegistryProcessMessagePanicAfterHandlerStillNacks(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	consumer := &ConsumerDeclaration{
+		Queue: testQueueName, EventType: testEventType,
+		Handler: &countingTestHandler{}, AutoAck: false,
+	}
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		DeliveryTag: 123, Body: []byte(testMessageBody), Acknowledger: acker,
+	}
+
+	require.NotPanics(t, func() {
+		registry.processMessage(context.Background(), consumer, delivery, &panicEventLogger{})
+	})
+
+	assert.True(t, acker.nackCalled, "the fallback must settle the delivery")
+	assert.False(t, acker.nackRequeue, "the fallback nack must not requeue")
+	assert.False(t, acker.ackCalled)
 }
 
 // ===== processMessage Tests =====
@@ -2319,7 +2272,7 @@ func TestRegistryConsumerSupervisorStopsOnContextCancel(t *testing.T) {
 
 // sleepingCountingHandler wraps countingTestHandler with a fixed sleep before
 // returning, so processMessage observes a non-zero processingTime.
-// RecordAMQPConsumeCompletion skips duration <= 0, and a zero-cost handler
+// tracking.RecordConsume skips duration <= 0, and a zero-cost handler
 // can produce a zero delta on a coarse clock, which would make duration
 // assertions flake.
 type sleepingCountingHandler struct {
@@ -2427,8 +2380,15 @@ func TestRegistryProcessMessageRecordsConsumeMetricsOnError(t *testing.T) {
 
 	rm := mp.Collect(t)
 
-	// Counter is stamped at receive time, before the handler runs.
-	obtest.AssertMetricValue(t, rm, "messaging.client.consumed.messages", int64(1))
+	// The counter is stamped at completion now (ADR-068), so a failed delivery
+	// is still counted once and carries the error type that failed it.
+	consumed := obtest.FindMetric(rm, "messaging.client.consumed.messages")
+	require.NotNil(t, consumed)
+	sumData, ok := consumed.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, sumData.DataPoints, 1)
+	assert.Equal(t, int64(1), sumData.DataPoints[0].Value)
+	assertAttribute(t, sumData.DataPoints[0].Attributes.ToSlice(), "error.type", "*errors.errorString")
 
 	durationMetric := obtest.FindMetric(rm, "messaging.client.operation.duration")
 	require.NotNil(t, durationMetric)
@@ -2470,6 +2430,7 @@ func TestRegistryProcessMessageCountsExactlyOncePerDelivery(t *testing.T) {
 
 	rm := mp.Collect(t)
 
+	// Two deliveries, two counts — recorded at completion, once each.
 	obtest.AssertMetricValue(t, rm, "messaging.client.consumed.messages", int64(2))
 
 	durationMetric := obtest.FindMetric(rm, "messaging.client.operation.duration")
@@ -2931,7 +2892,13 @@ func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
 	t.Logf("processMessage allocs/op = %.1f", avg)
 	// Ceiling fixed at 42.0 (advisor resolution 2026-08-09): measured BEFORE =
 	// 47.0, AFTER = 38.0 allocs/op — fails the old per-delivery WithFields
-	// layer, passes the new per-event stamps with headroom.
+	// layer, passes the new per-event stamps with headroom. 38.0 predates
+	// PR2a's tracking collapse, which had already dropped this tree's baseline
+	// to 34.0 before the delivery pipeline (ADR-068) landed at 29.0 allocs/op
+	// (25–27 once it shared its span options and cached its tracer — the exact
+	// figure is order-dependent: earlier tests warm the meter/tracer globals),
+	// and to 23.0 once the lane stopped boxing its header carrier and building
+	// the metric destination through fmt.
 	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
 }
 
@@ -3015,6 +2982,52 @@ func TestRegistryProcessMessageSkipsDebugFieldBuildWhenDisabled(t *testing.T) {
 
 	infoLine := rec.Line(t, "Message processed successfully")
 	assert.NotEmpty(t, infoLine.Pairs)
+}
+
+// ===== Delivery-pipeline lane adapter tests (ADR-068) =====
+
+func TestConsumeSpanExtrasOmitTheFieldsTheDeliveryDidNotCarry(t *testing.T) {
+	assert.Empty(t, consumeSpanExtras(&amqp.Delivery{}),
+		"a delivery with no exchange, routing key, message id or correlation id adds no span attribute")
+}
+
+func TestRegistryProcessMessageSpanCarriesEveryDeliveryAttribute(t *testing.T) {
+	exporter, cleanup := setupTestTracing(t)
+	defer cleanup()
+
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   &countingTestHandler{},
+		AutoAck:   false,
+	}
+	delivery := &amqp.Delivery{
+		MessageId:     testMessageID,
+		CorrelationId: "amqp-corr-1",
+		RoutingKey:    testRoutingKey,
+		Exchange:      testExchangeName,
+		DeliveryTag:   123,
+		Body:          []byte(testMessageBody),
+		Headers:       amqp.Table{},
+		Acknowledger:  &mockAcknowledger{},
+	}
+
+	registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	span := spans[0]
+	assert.Equal(t, testQueueName+" receive", span.Name)
+	assert.Equal(t, trace.SpanKindConsumer, span.SpanKind)
+	assertAttribute(t, span.Attributes, string(semconv.MessagingSystemKey), "rabbitmq")
+	assertAttribute(t, span.Attributes, string(semconv.MessagingOperationNameKey), "receive")
+	assertAttribute(t, span.Attributes, string(semconv.MessagingDestinationNameKey), testQueueName)
+	assertAttribute(t, span.Attributes, string(semconv.MessagingMessageBodySizeKey), int64(len(testMessageBody)))
+	assertAttribute(t, span.Attributes, "messaging.rabbitmq.exchange", testExchangeName)
+	assertAttribute(t, span.Attributes, "messaging.rabbitmq.destination.routing_key", testRoutingKey)
+	assertAttribute(t, span.Attributes, string(semconv.MessagingMessageIDKey), testMessageID)
+	assertAttribute(t, span.Attributes, string(semconv.MessagingMessageConversationIDKey), "amqp-corr-1")
 }
 
 // ===== Stream Queue Consumption Tests =====

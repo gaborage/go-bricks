@@ -135,9 +135,11 @@ const (
 	messagingTracerName     = "go-bricks/messaging"
 	messagingSystemRabbitMQ = "rabbitmq"
 	operationPublish        = "publish"
-	operationReceive        = "receive"
 	contentTypeOctetStream  = "application/octet-stream"
 	eventPublishRetry       = "amqp.publish.retry"
+	// attrMessagingRabbitMQExchange is the exchange attribute both the publish
+	// span and the receive span stamp; semconv ships no helper for it.
+	attrMessagingRabbitMQExchange = "messaging.rabbitmq.exchange"
 )
 
 var (
@@ -322,7 +324,7 @@ func createPublishSpan(ctx context.Context, options PublishOptions, dataLen int,
 		semconv.MessagingMessageBodySize(dataLen),
 	}
 	if options.Exchange != "" {
-		attrs = append(attrs, attribute.String("messaging.rabbitmq.exchange", options.Exchange))
+		attrs = append(attrs, attribute.String(attrMessagingRabbitMQExchange, options.Exchange))
 	}
 	if options.RoutingKey != "" {
 		// Use official semconv helper for RabbitMQ routing key
@@ -346,7 +348,7 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 	}
 
 	// Inject trace headers using centralized trace package
-	accessor := &amqpHeaderAccessor{headers: publishing.Headers}
+	accessor := amqpHeaderAccessor{headers: publishing.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
 	// AMQP-specific: populate CorrelationId and MessageId
@@ -1181,78 +1183,25 @@ func (c *AMQPClientImpl) dispatchConfirms(src <-chan amqp.Confirmation, gen uint
 	}
 }
 
-// amqpHeaderAccessor implements trace.HeaderAccessor for AMQP headers
+// amqpHeaderAccessor implements trace.HeaderAccessor for AMQP headers. The
+// receivers are values on purpose: the single field is a map, which is
+// pointer-shaped, so the accessor rides inside the interface word instead of
+// being heap-allocated once per delivery and once per publish. A nil table
+// reads clean and absorbs writes without panicking; every caller that injects
+// builds the table first (amqp.Publishing always carries an initialized one).
 type amqpHeaderAccessor struct {
 	headers amqp.Table
 }
 
-func (a *amqpHeaderAccessor) Get(key string) any {
-	if a.headers == nil {
-		return nil
-	}
+func (a amqpHeaderAccessor) Get(key string) any {
 	return a.headers[key]
 }
 
-func (a *amqpHeaderAccessor) Set(key string, value any) {
+func (a amqpHeaderAccessor) Set(key string, value any) {
 	if a.headers == nil {
-		a.headers = amqp.Table{}
+		return
 	}
 	a.headers[key] = value
-}
-
-// StartConsumeSpan creates an OpenTelemetry span for message consumption.
-// It extracts the trace context from the delivery headers and creates a child span.
-// This should be called by consumers when processing messages.
-// The returned context should be used for downstream operations, and the span must be ended when done.
-func StartConsumeSpan(ctx context.Context, delivery *amqp.Delivery, queueName string) (context.Context, trace.Span) {
-	tracer := otel.Tracer(messagingTracerName)
-	if delivery == nil {
-		// No delivery, return a no-op span. Span-factory pattern: ownership of the
-		// span is transferred to the caller, which must end it (see doc comment).
-		// spancheck cannot model this cross-function transfer.
-		//nolint:spancheck // span ownership intentionally transferred to caller
-		return tracer.Start(ctx, queueName+" "+operationReceive, trace.WithSpanKind(trace.SpanKindConsumer))
-	}
-	// Extract trace context from message headers
-	accessor := &amqpHeaderAccessor{headers: delivery.Headers}
-	ctx = gobrickstrace.ExtractFromHeaders(ctx, accessor)
-
-	// Create span for consume operation
-	// Uses "receive" operation as this span covers receiving from broker;
-	// application code can create child "process" spans for message handling if needed
-	spanName := queueName + " " + operationReceive
-
-	ctx, span := tracer.Start(ctx, spanName,
-		trace.WithSpanKind(trace.SpanKindConsumer),
-	)
-
-	// Set messaging semantic attributes using semconv v1.32.0 helpers where available
-	attrs := []attribute.KeyValue{
-		attribute.String(string(semconv.MessagingSystemKey), messagingSystemRabbitMQ),
-		semconv.MessagingOperationName(operationReceive),
-		semconv.MessagingDestinationName(queueName),
-		semconv.MessagingMessageBodySize(len(delivery.Body)),
-	}
-	if delivery.Exchange != "" {
-		attrs = append(attrs, attribute.String("messaging.rabbitmq.exchange", delivery.Exchange))
-	}
-	if delivery.RoutingKey != "" {
-		// Use official semconv helper for RabbitMQ routing key
-		attrs = append(attrs, semconv.MessagingRabbitMQDestinationRoutingKey(delivery.RoutingKey))
-	}
-	if delivery.MessageId != "" {
-		attrs = append(attrs, semconv.MessagingMessageID(delivery.MessageId))
-	}
-	if delivery.CorrelationId != "" {
-		attrs = append(attrs, semconv.MessagingMessageConversationID(delivery.CorrelationId))
-	}
-	span.SetAttributes(attrs...)
-
-	// Automatically record consume metrics
-	// Duration is 0 at initial receive time - application can track processing duration separately
-	tracking.RecordAMQPConsumeMetrics(ctx, delivery, queueName, 0, nil)
-
-	return ctx, span
 }
 
 // unsafePublish publishes a message without confirmation handling.

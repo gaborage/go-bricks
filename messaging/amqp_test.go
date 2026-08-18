@@ -26,7 +26,7 @@ func TestAMQPTraceInjectionGeneratesDefaults(t *testing.T) {
 
 	ctx := context.Background()
 	// Use centralized trace injection
-	accessor := &amqpHeaderAccessor{headers: pub.Headers}
+	accessor := amqpHeaderAccessor{headers: pub.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
 	// X-Request-ID present and non-empty
@@ -58,7 +58,7 @@ func TestAMQPTraceInjectionForceAlignment(t *testing.T) {
 
 	ctx := gobrickstrace.WithTraceID(context.Background(), "ctx-trace")
 	// Use centralized trace injection (force mode will align trace ID with traceparent)
-	accessor := &amqpHeaderAccessor{headers: pub.Headers}
+	accessor := amqpHeaderAccessor{headers: pub.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
 	// With force mode, trace ID should be aligned with traceparent
@@ -72,7 +72,7 @@ func TestAMQPTraceInjectionPropagatesFromContext(t *testing.T) {
 
 	ctx := gobrickstrace.WithTraceParent(context.Background(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
 	// Use centralized trace injection
-	accessor := &amqpHeaderAccessor{headers: pub.Headers}
+	accessor := amqpHeaderAccessor{headers: pub.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
 	tp, ok := pub.Headers[gobrickstrace.HeaderTraceParent]
@@ -92,7 +92,7 @@ func TestAMQPTraceExtractionDerivesFromHeaders(t *testing.T) {
 	}}
 
 	// Use centralized trace extraction
-	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
+	accessor := amqpHeaderAccessor{headers: delivery.Headers}
 	ctx := gobrickstrace.ExtractFromHeaders(base, accessor)
 
 	// Should have traceparent in context
@@ -117,7 +117,7 @@ func TestAMQPTraceExtractionByteSliceHeaders(t *testing.T) {
 	}}
 
 	// Use centralized trace extraction
-	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
+	accessor := amqpHeaderAccessor{headers: delivery.Headers}
 	ctx := gobrickstrace.ExtractFromHeaders(base, accessor)
 
 	// Should successfully extract trace information from byte slice headers
@@ -155,7 +155,7 @@ func TestAMQPHeaderHardeningVariousTypes(t *testing.T) {
 	ctx := gobrickstrace.WithTraceID(context.Background(), "context-trace-id")
 
 	// Test the hardened header injection directly
-	accessor := &amqpHeaderAccessor{headers: pub.Headers}
+	accessor := amqpHeaderAccessor{headers: pub.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
 	// AMQP-specific: simulate CorrelationId and unique MessageId semantics
@@ -179,13 +179,41 @@ func TestAMQPHeaderHardeningVariousTypes(t *testing.T) {
 }
 
 func TestAMQPHeaderAccessorNilSafety(t *testing.T) {
-	// Given a nil headers map, Set should initialize it and Get should work
-	accessor := &amqpHeaderAccessor{headers: nil}
-	gobrickstrace.InjectIntoHeaders(context.Background(), accessor)
-	// Should not panic and should have set headers
-	xid := accessor.Get(gobrickstrace.HeaderXRequestID)
-	require.NotNil(t, xid)
-	assert.NotEmpty(t, gobrickstrace.EnsureTraceID(context.Background()))
+	// A nil table has nowhere to store, so injection must neither panic nor
+	// pretend it wrote — the map it used to allocate was never reachable from
+	// the delivery or the publishing the accessor was built over.
+	nilTable := amqpHeaderAccessor{headers: nil}
+	require.NotPanics(t, func() {
+		gobrickstrace.InjectIntoHeaders(context.Background(), nilTable)
+	})
+	assert.Nil(t, nilTable.Get(gobrickstrace.HeaderXRequestID))
+
+	// The table every production caller does build round-trips the injection.
+	built := amqpHeaderAccessor{headers: amqp.Table{}}
+	gobrickstrace.InjectIntoHeaders(context.Background(), built)
+	assert.NotNil(t, built.Get(gobrickstrace.HeaderXRequestID))
+}
+
+func TestAmqpHeaderAccessorGet(t *testing.T) {
+	tests := []struct {
+		name     string
+		headers  amqp.Table
+		key      string
+		expected any
+	}{
+		{name: "nil headers", headers: nil, key: testKeyName, expected: nil},
+		{name: "empty headers", headers: amqp.Table{}, key: testKeyName, expected: nil},
+		{name: "existing key", headers: amqp.Table{testKeyName: testValueContent}, key: testKeyName, expected: testValueContent},
+		{name: "non-existing key", headers: amqp.Table{"other-key": "other-value"}, key: testKeyName, expected: nil},
+		{name: "multiple headers", headers: amqp.Table{"key1": "value1", "key2": 42, "key3": true}, key: "key2", expected: 42},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			accessor := amqpHeaderAccessor{headers: tt.headers}
+			assert.Equal(t, tt.expected, accessor.Get(tt.key))
+		})
+	}
 }
 
 func TestAMQPHeaderHardeningSafeConsumption(t *testing.T) {
@@ -203,7 +231,7 @@ func TestAMQPHeaderHardeningSafeConsumption(t *testing.T) {
 	}
 
 	// Test safe extraction through centralized trace functions
-	accessor := &amqpDeliveryAccessor{headers: delivery.Headers}
+	accessor := amqpHeaderAccessor{headers: delivery.Headers}
 	ctx := gobrickstrace.ExtractFromHeaders(context.Background(), accessor)
 
 	// Verify that all header types were safely processed
@@ -229,7 +257,7 @@ func TestAMQPHeaderHardeningByteSliceInjection(t *testing.T) {
 
 	ctx := context.Background()
 	// Use centralized trace injection (force mode)
-	accessor := &amqpHeaderAccessor{headers: pub.Headers}
+	accessor := amqpHeaderAccessor{headers: pub.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
 	// Force mode should align trace ID with traceparent
@@ -279,7 +307,7 @@ func TestAMQPForceAlignmentConsistency(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			accessor := &amqpHeaderAccessor{headers: pub.Headers}
+			accessor := amqpHeaderAccessor{headers: pub.Headers}
 			gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
 			// Verify force alignment worked as expected
@@ -299,7 +327,7 @@ func TestAMQPCentralizedArchitectureExtractAndInject(t *testing.T) {
 	pub := amqp.Publishing{Headers: amqp.Table{}}
 	ctx := gobrickstrace.WithTraceID(context.Background(), "test-trace-id")
 
-	accessor := &amqpHeaderAccessor{headers: pub.Headers}
+	accessor := amqpHeaderAccessor{headers: pub.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
 	// Should have injected headers
@@ -312,7 +340,7 @@ func TestAMQPCentralizedArchitectureExtractAndInject(t *testing.T) {
 		gobrickstrace.HeaderTraceParent: "00-ffeeddccbbaa9988ffeeddccbbaa9988-1122334455667788-01",
 	}}
 
-	deliveryAccessor := &amqpDeliveryAccessor{headers: delivery.Headers}
+	deliveryAccessor := amqpHeaderAccessor{headers: delivery.Headers}
 	extractedCtx := gobrickstrace.ExtractFromHeaders(context.Background(), deliveryAccessor)
 
 	traceID, ok := gobrickstrace.IDFromContext(extractedCtx)
@@ -325,7 +353,8 @@ func TestAMQPCentralizedArchitectureExtractAndInject(t *testing.T) {
 }
 
 func TestAMQPCentralizedArchitectureConsistentProcessing(t *testing.T) {
-	// Verify that both AMQP client and registry use the same centralized logic
+	// One accessor now serves both directions: the publish path injects through
+	// it and the consume path reads through it as the pipeline's Carrier.
 	headers := amqp.Table{
 		gobrickstrace.HeaderXRequestID:  []byte("consistency-test-id"),
 		gobrickstrace.HeaderTraceParent: []byte("00-abcdef1234567890abcdef1234567890-fedcba0987654321-01"),
@@ -333,11 +362,11 @@ func TestAMQPCentralizedArchitectureConsistentProcessing(t *testing.T) {
 	}
 
 	// Test client injection
-	pubAccessor := &amqpHeaderAccessor{headers: make(amqp.Table)}
+	pubAccessor := amqpHeaderAccessor{headers: make(amqp.Table)}
 	gobrickstrace.InjectIntoHeaders(context.Background(), pubAccessor)
 
 	// Test registry extraction
-	deliveryAccessor := &amqpDeliveryAccessor{headers: headers}
+	deliveryAccessor := amqpHeaderAccessor{headers: headers}
 	ctx := gobrickstrace.ExtractFromHeaders(context.Background(), deliveryAccessor)
 
 	// Both should use the same safe string conversion and logic

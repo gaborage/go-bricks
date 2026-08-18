@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/logger"
+	pipeline "github.com/gaborage/go-bricks/messaging/internal/delivery"
 )
 
 const testQueueOtel = "test-queue"
@@ -35,6 +36,7 @@ func setupTestTracing(t *testing.T) (exporter *tracetest.InMemoryExporter, clean
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
+	pipeline.ResetTracerForTesting() // the delivery pipeline caches its tracer; bind it to tp
 
 	cleanup = func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
@@ -42,6 +44,7 @@ func setupTestTracing(t *testing.T) (exporter *tracetest.InMemoryExporter, clean
 		}
 		otel.SetTracerProvider(originalTP)
 		otel.SetTextMapPropagator(originalPropagator)
+		pipeline.ResetTracerForTesting()
 	}
 
 	return exporter, cleanup
@@ -258,127 +261,6 @@ func TestPublishConfirmationTimeoutRecordsError(t *testing.T) {
 	// Cleanup channels
 	close(fakeConn.notifyCloseCh)
 	close(fakeCh.notifyCloseCh)
-}
-
-func TestStartConsumeSpanCreatesSpanWithAttributes(t *testing.T) {
-	exporter, cleanup := setupTestTracing(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	queueName := testQueueOtel
-	delivery := &amqp.Delivery{
-		Exchange:      testExchange,
-		RoutingKey:    testRoutingKey,
-		MessageId:     "msg-123",
-		CorrelationId: "corr-456",
-		Body:          []byte("message body"),
-		Headers:       amqp.Table{},
-	}
-
-	spanCtx, span := StartConsumeSpan(ctx, delivery, queueName)
-	require.NotNil(t, spanCtx)
-	require.NotNil(t, span)
-	span.End()
-
-	// Verify span was created
-	spans := exporter.GetSpans()
-	require.Len(t, spans, 1)
-
-	consumeSpan := spans[0]
-	assert.Equal(t, testQueueOtel+" receive", consumeSpan.Name)
-	assert.Equal(t, trace.SpanKindConsumer, consumeSpan.SpanKind)
-
-	// Verify attributes
-	attrs := consumeSpan.Attributes
-	assertAttribute(t, attrs, string(semconv.MessagingSystemKey), "rabbitmq")
-	assertAttribute(t, attrs, string(semconv.MessagingOperationNameKey), "receive")
-	assertAttribute(t, attrs, string(semconv.MessagingDestinationNameKey), testQueueOtel)
-	assertAttribute(t, attrs, string(semconv.MessagingMessageBodySizeKey), int64(len(delivery.Body)))
-	assertAttribute(t, attrs, "messaging.rabbitmq.exchange", testExchange)
-	assertAttribute(t, attrs, "messaging.rabbitmq.destination.routing_key", testRoutingKey)
-	assertAttribute(t, attrs, string(semconv.MessagingMessageIDKey), "msg-123")
-	assertAttribute(t, attrs, string(semconv.MessagingMessageConversationIDKey), "corr-456")
-}
-
-func TestStartConsumeSpanExtractsTraceContext(t *testing.T) {
-	exporter, cleanup := setupTestTracing(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	// Create delivery with traceparent header (simulating message from publisher)
-	headers := amqp.Table{
-		"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-	}
-	delivery := &amqp.Delivery{
-		Body:    []byte("message"),
-		Headers: headers,
-	}
-
-	// Start consume span - should extract trace context from headers
-	consumeCtx, consumeSpan := StartConsumeSpan(ctx, delivery, testQueueOtel)
-	require.NotNil(t, consumeCtx)
-	consumeSpan.End()
-
-	// Verify span was created
-	spans := exporter.GetSpans()
-	require.Len(t, spans, 1)
-
-	span := spans[0]
-	assert.Equal(t, testQueueOtel+" receive", span.Name)
-
-	// Verify span has a valid trace ID (extraction happened successfully)
-	// The extraction from headers creates a parent span context, and the tracer
-	// creates a child span. In production, this would preserve the TraceID from
-	// the traceparent header.
-	assert.NotEqual(t, trace.TraceID{}, span.SpanContext.TraceID(), "Span should have a valid TraceID")
-}
-
-func TestConsumeSpanWithMinimalDelivery(t *testing.T) {
-	exporter, cleanup := setupTestTracing(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	delivery := &amqp.Delivery{
-		Body:    []byte("minimal"),
-		Headers: amqp.Table{},
-	}
-
-	spanCtx, span := StartConsumeSpan(ctx, delivery, "minimal-queue")
-	require.NotNil(t, spanCtx)
-	span.End()
-
-	// Verify span created with minimal attributes
-	spans := exporter.GetSpans()
-	require.Len(t, spans, 1)
-
-	consumeSpan := spans[0]
-	assert.Equal(t, "minimal-queue receive", consumeSpan.Name)
-
-	// Verify only required attributes are present
-	attrs := consumeSpan.Attributes
-	assertAttribute(t, attrs, string(semconv.MessagingSystemKey), "rabbitmq")
-	assertAttribute(t, attrs, string(semconv.MessagingDestinationNameKey), "minimal-queue")
-}
-
-func TestStartConsumeSpanNilDelivery(t *testing.T) {
-	exporter, cleanup := setupTestTracing(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	// A nil delivery (e.g. a drained/closed consume channel) must still yield a
-	// usable consumer span whose ownership transfers to the caller to end —
-	// the span-factory no-op branch.
-	spanCtx, span := StartConsumeSpan(ctx, nil, "nil-delivery-queue")
-	require.NotNil(t, spanCtx)
-	require.NotNil(t, span)
-	span.End()
-
-	spans := exporter.GetSpans()
-	require.Len(t, spans, 1)
-	assert.Equal(t, "nil-delivery-queue receive", spans[0].Name)
-	assert.Equal(t, trace.SpanKindConsumer, spans[0].SpanKind)
 }
 
 // Helper functions

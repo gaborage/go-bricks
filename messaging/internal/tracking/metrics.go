@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -240,17 +239,6 @@ func StreamConsumeAttributes(streamName string) ConsumeAttributes {
 	return ConsumeAttributes{destination: streamName}
 }
 
-// deliveryAttributes builds the bundle from a delivery, tolerating a nil one
-// for the exported receive-time recorders below.
-func deliveryAttributes(delivery *amqp.Delivery, queueName string) ConsumeAttributes {
-	var exchange, routingKey string
-	if delivery != nil {
-		exchange = delivery.Exchange
-		routingKey = delivery.RoutingKey
-	}
-	return AMQPConsumeAttributes(exchange, routingKey, queueName)
-}
-
 // slice renders the bundle plus the outcome as metric attributes. A granular
 // field the message did not carry is omitted rather than reported empty.
 func (a ConsumeAttributes) slice(err error) []attribute.KeyValue {
@@ -289,52 +277,6 @@ func streamPublishAttributes(streamName string, err error) []attribute.KeyValue 
 		attrs = append(attrs, attribute.String(attrErrorType, errorType))
 	}
 	return attrs
-}
-
-// RecordAMQPConsumeMetrics records OpenTelemetry metrics for an AMQP consume operation.
-// This function is called automatically when a message is consumed to emit metrics.
-//
-// Metrics recorded:
-// - messaging.client.operation.duration: Histogram of operation durations in seconds
-// - messaging.client.consumed.messages: Counter of messages consumed
-//
-// The function is non-blocking and handles errors gracefully.
-func RecordAMQPConsumeMetrics(ctx context.Context, delivery *amqp.Delivery, queueName string, duration time.Duration, err error) {
-	meter := getAMQPMeter()
-	if meter == nil {
-		return
-	}
-
-	commonAttrs := deliveryAttributes(delivery, queueName).slice(err)
-
-	// Record duration histogram (in seconds) - only if duration is > 0
-	if amqpOperationDuration != nil && duration > 0 {
-		durationSeconds := durationToSeconds(duration)
-		amqpOperationDuration.Record(ctx, durationSeconds, metric.WithAttributes(commonAttrs...))
-	}
-
-	// Record consumed messages counter (only on success)
-	if amqpMessagesConsumed != nil && err == nil {
-		amqpMessagesConsumed.Add(ctx, 1, metric.WithAttributes(commonAttrs...))
-	}
-}
-
-// RecordAMQPConsumeCompletion records the receive duration histogram for a
-// delivery whose handling has finished.
-//
-// It deliberately does NOT touch messaging.client.consumed.messages. That
-// counter has a single owner — StartConsumeSpan, which increments it once per
-// delivery received — so a delivery is counted exactly once regardless of how
-// its handler ended. Incrementing here too would double count every message.
-func RecordAMQPConsumeCompletion(ctx context.Context, delivery *amqp.Delivery, queueName string, duration time.Duration, err error) {
-	meter := getAMQPMeter()
-	if meter == nil {
-		return
-	}
-	if amqpOperationDuration == nil || duration <= 0 {
-		return
-	}
-	amqpOperationDuration.Record(ctx, durationToSeconds(duration), metric.WithAttributes(deliveryAttributes(delivery, queueName).slice(err)...))
 }
 
 // RecordConsume records one finished delivery on the receive instruments both
