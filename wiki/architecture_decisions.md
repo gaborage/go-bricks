@@ -346,6 +346,8 @@ consumers were still delivering — so in-flight handlers ran against already-sh
 (shutdown-window panics). Reordered to stop inbound work first: **server → consumers →
 modules → observability → manager cleanup loops → closers**, with a new additive
 `Manager.StopConsumers()` that quiesces consumers (idempotent) without closing connections.
+Superseded in part by [ADR-067](adr_067_lifecycle_slots.md): the manager-cleanup-loop phase is
+gone — each manager stops its own sweep in `Close()`, which the closers still run last.
 
 **Behavioral change (not an API break):** the framework stops admitting new HTTP requests and
 AMQP deliveries before modules are torn down (consumers are cancelled, not synchronously

@@ -650,7 +650,7 @@ func TestMessagingManagerStatsTracksIdleCleanups(t *testing.T) {
 	manager := NewMessagingManager(
 		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1}},
 		log,
-		ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond},
+		ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond, CleanupInterval: 10 * time.Millisecond},
 		factory,
 	)
 	defer func() { _ = manager.Close() }()
@@ -658,9 +658,6 @@ func TestMessagingManagerStatsTracksIdleCleanups(t *testing.T) {
 	_, rel, err := manager.Publisher(ctx, tenant1ID)
 	require.NoError(t, err)
 	rel() // release so the idle publisher becomes eligible for cleanup
-
-	manager.StartCleanup(10 * time.Millisecond)
-	defer manager.StopCleanup()
 
 	assert.Eventually(t, func() bool {
 		count, _ := manager.Stats()["idle_cleanups"].(int)
@@ -825,6 +822,84 @@ func TestMessagingManagerZeroValueMethodsAreSafe(t *testing.T) {
 	assert.NoError(t, m.Close(), "closing a never-initialized manager is a no-op")
 }
 
+// TestNewMessagingManagerStartsIdleCleanup pins ADR-067 decision 4 for the publisher pool: the
+// sweep starts at construction, with no StartCleanup call from the caller.
+func TestNewMessagingManagerStartsIdleCleanup(t *testing.T) {
+	ctx := context.Background()
+	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond, CleanupInterval: 10 * time.Millisecond},
+		factory,
+	)
+	defer func() { _ = manager.Close() }()
+
+	_, rel, err := manager.Publisher(ctx, tenant1ID)
+	require.NoError(t, err)
+	rel()
+
+	assert.Eventually(t, func() bool {
+		count, _ := manager.Stats()["idle_cleanups"].(int)
+		return count >= 1
+	}, 2*time.Second, 10*time.Millisecond, "the constructor must start the idle-publisher sweep")
+}
+
+// TestNewMessagingManagerClosesCleanlyWithALiveCleanupLoop pins that Close stops the sweep the
+// constructor started, so a caller that never touches StartCleanup/StopCleanup shuts down clean.
+func TestNewMessagingManagerClosesCleanlyWithALiveCleanupLoop(t *testing.T) {
+	factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+	manager := NewMessagingManager(
+		&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1}},
+		logger.New("error", false),
+		ManagerOptions{MaxPublishers: 5, IdleTTL: 10 * time.Millisecond, CleanupInterval: 10 * time.Millisecond},
+		factory,
+	)
+
+	require.NoError(t, manager.Close(), "Close must stop the constructor-started sweep and report success")
+	require.NoError(t, manager.Close(), "Close stays idempotent")
+}
+
+// TestNewMessagingManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL pins that the advisory that
+// used to live in App.warnIfCleanupIntervalTooLate now fires from the manager, naming the
+// messaging.publisher keys. The predicate itself is exhausted in
+// internal/resourcepool/cleanup_warning_test.go, so only what is manager-specific stays here:
+// the non-positive-CleanupInterval default is applied BEFORE the check (a raw 0 would be below
+// any TTL and stay silent), and a genuinely faster sweep still says nothing.
+func TestNewMessagingManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL(t *testing.T) {
+	tests := []struct {
+		name            string
+		cleanupInterval time.Duration
+		idleTTL         time.Duration
+		wantWarn        bool
+	}{
+		{name: "interval_below_ttl_silent", cleanupInterval: time.Minute, idleTTL: time.Hour, wantWarn: false},
+		{name: "unset_interval_takes_the_default_and_warns_against_a_short_ttl", cleanupInterval: 0, idleTTL: time.Minute, wantWarn: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			log := &stubLogger{}
+			factory := func(string, logger.Logger) AMQPClient { return &stubAMQPClient{} }
+			manager := NewMessagingManager(
+				&stubMessagingSource{urls: map[string]string{tenant1ID: amqpURLTenant1}},
+				log,
+				ManagerOptions{MaxPublishers: 5, IdleTTL: tc.idleTTL, CleanupInterval: tc.cleanupInterval},
+				factory,
+			)
+			defer func() { _ = manager.Close() }()
+
+			entries := log.getEntries()
+			if !tc.wantWarn {
+				assert.Empty(t, entries, "a sweep that outpaces the TTL must not WARN")
+				return
+			}
+			require.Len(t, entries, 1, "the advisory must fire exactly once per manager")
+			assert.Contains(t, entries[0], "messaging.publisher.cleanupinterval is >= messaging.publisher.idlettl")
+		})
+	}
+}
+
 // TestMessagingManagerStartCleanupIsIdempotent pins that a second StartCleanup observes the
 // already-running pool cleanup loop and short-circuits, and StopCleanup is a safe no-op when
 // called again. The manager's StartCleanup is a thin passthrough to the pool.
@@ -833,6 +908,10 @@ func TestMessagingManagerStartCleanupIsIdempotent(t *testing.T) {
 	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false),
 		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour}, factory)
 	defer func() { _ = m.Close() }()
+
+	// The constructor already started a loop (ADR-067); stop it so the first call below is the
+	// one that starts a loop and the second is the one that must short-circuit.
+	m.StopCleanup()
 
 	m.StartCleanup(10 * time.Second)
 	require.NotPanics(t, func() { m.StartCleanup(10 * time.Second) })
@@ -849,6 +928,8 @@ func TestMessagingManagerStartCleanupAppliesDefaultForNonPositive(t *testing.T) 
 	m := NewMessagingManager(&stubMessagingSource{}, logger.New("error", false),
 		ManagerOptions{MaxPublishers: 1, IdleTTL: time.Hour}, factory)
 	defer func() { _ = m.Close() }()
+
+	m.StopCleanup()
 
 	require.NotPanics(t, func() { m.StartCleanup(0) })
 	m.StopCleanup()

@@ -1144,6 +1144,37 @@ func TestPoolStartStopCleanupIdempotent(t *testing.T) {
 	})
 }
 
+// TestPoolStartCleanupSecondCallKeepsOneLoop pins that a second StartCleanup spawns no second
+// goroutine. A second loop would have to overwrite cleanupStop/cleanupDone (StartCleanup assigns
+// both), orphaning the first loop with no channel left to stop it — so channel identity across
+// the two calls is the observable proof that exactly one loop exists.
+func TestPoolStartCleanupSecondCallKeepsOneLoop(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(5, 40*time.Millisecond, tr.closer)
+	defer p.Close()
+
+	p.StartCleanup(20 * time.Millisecond)
+	p.cleanupMu.Lock()
+	firstStop, firstDone := p.cleanupStop, p.cleanupDone
+	p.cleanupMu.Unlock()
+	require.NotNil(t, firstStop, "the first StartCleanup must start a loop")
+
+	p.StartCleanup(5 * time.Millisecond)
+	p.cleanupMu.Lock()
+	secondStop, secondDone := p.cleanupStop, p.cleanupDone
+	p.cleanupMu.Unlock()
+
+	assert.Equal(t, firstStop, secondStop, "a second StartCleanup must not replace the running loop's stop channel")
+	assert.Equal(t, firstDone, secondDone, "a second StartCleanup must not replace the running loop's done channel")
+
+	p.StopCleanup()
+	select {
+	case <-firstDone:
+	default:
+		t.Fatal("one StopCleanup must have joined the single running loop")
+	}
+}
+
 // TestPoolStartCleanupNoOpConditions verifies StartCleanup is inert without an idle TTL, with a
 // non-positive interval, or after Close.
 func TestPoolStartCleanupNoOpConditions(t *testing.T) {

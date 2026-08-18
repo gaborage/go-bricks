@@ -19,8 +19,11 @@ import (
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/observability"
+	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
 const (
@@ -930,4 +933,92 @@ func TestWarnIfDatabaseAbsent(t *testing.T) {
 			assert.Equal(t, "warn", got[0].level)
 		})
 	}
+}
+
+// TestCloseManagersOnDependencyErrorStopsCleanup pins the ADR-067 leak fix's building
+// block: Close is the only externally-observable side effect available — DbManager and
+// messaging.Manager expose no Closed() accessor — so this drives both managers through
+// it via Get/Publisher, which fail closed only once Close (and the StopCleanup it
+// joins) has actually run.
+func TestCloseManagersOnDependencyErrorStopsCleanup(t *testing.T) {
+	cfg := &config.Config{
+		Database: config.DatabaseConfig{Type: "postgresql", Host: "localhost", Port: 5432},
+		Messaging: config.MessagingConfig{
+			Broker: config.BrokerConfig{URL: "amqp://guest:guest@localhost:5672/"},
+		},
+	}
+	resourceSource := config.NewTenantStore(cfg)
+	factoryResolver := createTestFactoryResolver(t)
+	log := logger.New("error", false)
+	factory := NewResourceManagerFactory(factoryResolver, NewManagerConfigBuilder(false, 0), log)
+
+	dbManager := factory.CreateDatabaseManager(resourceSource)
+	messagingManager := factory.CreateMessagingManager(resourceSource)
+	require.NotNil(t, dbManager)
+	require.NotNil(t, messagingManager)
+
+	closeManagersOnDependencyError(dbManager, messagingManager)
+
+	ctx := context.Background()
+	_, _, dbErr := dbManager.Get(ctx, "")
+	require.Error(t, dbErr, "Get after the fix must fail closed — proof Close (and the StopCleanup it joins) ran")
+	assert.Contains(t, dbErr.Error(), "manager closed")
+
+	_, _, msgErr := messagingManager.Publisher(ctx, "")
+	require.ErrorIs(t, msgErr, messaging.ErrManagerClosed)
+}
+
+// TestCloseManagersOnDependencyErrorNilSafe pins that a nil manager (defensive: the
+// factory never returns one today) is skipped rather than dereferenced.
+func TestCloseManagersOnDependencyErrorNilSafe(t *testing.T) {
+	assert.NotPanics(t, func() {
+		closeManagersOnDependencyError(nil, nil)
+	})
+}
+
+// TestDependenciesClosesManagersOnCacheConstructionFailure pins the actual wiring
+// (not just the helper in isolation): dependencies()'s ADR-054 fail-closed cache path
+// must close the dbManager/messagingManager it already built, each of which started an
+// idle-cleanup goroutine at construction (ADR-067). dependencies() returns (nil, err)
+// on this path and the bundle carries no manager handles, so the closeManagers seam
+// (mirroring newProvider's test-override pattern) is the only way to capture the exact
+// instances constructed and prove — via Get/Publisher failing closed — that Close ran.
+func TestDependenciesClosesManagersOnCacheConstructionFailure(t *testing.T) {
+	cfg := defaultTestConfig()
+	cfg.Cache.Manager.MaxSize = -1 // ADR-054 fail-closed trigger
+
+	opts := &Options{
+		DatabaseConnector: func(*config.DatabaseConfig, logger.Logger) (database.Interface, error) {
+			return &testmocks.MockDatabase{}, nil
+		},
+		MessagingClientFactory: func(string, logger.Logger) messaging.AMQPClient {
+			return testmocks.NewMockAMQPClient()
+		},
+	}
+	b := newAppBootstrap(cfg, logger.New("error", false), opts)
+
+	var gotDB *database.DbManager
+	var gotMsg *messaging.Manager
+	closeCalls := 0
+	b.closeManagers = func(db *database.DbManager, msg *messaging.Manager) {
+		closeCalls++
+		gotDB, gotMsg = db, msg
+		closeManagersOnDependencyError(db, msg) // exercise the real Close path too
+	}
+
+	bundle, err := b.dependencies(context.Background())
+	require.Error(t, err)
+	assert.Nil(t, bundle)
+	require.Equal(t, 1, closeCalls, "the fail-closed cache path must close the already-built managers exactly once")
+	require.NotNil(t, gotDB)
+	require.NotNil(t, gotMsg)
+
+	ctx := context.Background()
+	_, _, dbErr := gotDB.Get(ctx, "")
+	require.Error(t, dbErr, "dependencies() must have called Close on its dbManager before returning")
+	assert.Contains(t, dbErr.Error(), "manager closed")
+
+	_, _, msgErr := gotMsg.Publisher(ctx, "")
+	require.ErrorIs(t, msgErr, messaging.ErrManagerClosed,
+		"dependencies() must have called Close on its messagingManager before returning")
 }

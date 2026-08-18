@@ -3,6 +3,11 @@
 **Status:** Accepted
 **Date:** 2026-06-10
 
+> **Superseded in part by [ADR-067](adr_067_lifecycle_slots.md) (2026-08-17):** phase 5's separate
+> "manager cleanup loops" step no longer exists. `DbManager` and `messaging.Manager` start idle
+> cleanup at construction and stop it inside their own `Close()`, which the closers run — so the
+> ordering this ADR established is preserved, with one fewer phase to keep in sync.
+
 ## Context
 
 `App.Shutdown` tore phases down in this order:

@@ -46,10 +46,16 @@ A **slot** owns one resource kind's whole application lifecycle.
    phase and by probe order. Close stays FIFO, so ADR-029's shutdown ordering is preserved
    by the stop/close split rather than by a second list.
 4. **Maintenance is manager-side.** `database.DbManager` and `messaging.Manager` self-start
-   their idle-cleanup loop at construction when `IdleTTL > 0`, exactly as
-   `cache.NewCacheManager` already does, and stop it in `Close()`. `StartCleanup` stays
+   their idle-cleanup loop at construction, exactly as `cache.NewCacheManager` already
+   does, and stop it in `Close()`. The `IdleTTL > 0` guard lives one layer down, in
+   `resourcepool.Pool.StartCleanup` itself (both constructors coerce a non-positive
+   `IdleTTL` to a default before the pool is built, so the guard is a no-op in practice
+   but stays the single place idle-cleanup eligibility is decided). `StartCleanup` stays
    exported and becomes idempotent, `StopCleanup` stays, and the
    cleanup-interval-vs-idle-TTL WARN moves beside the pool that owns both values.
+   `cache.NewCacheManager` owns the same two values and deliberately stays silent: its
+   shipped signature takes no logger, so giving it the WARN would be an apidiff break for
+   an advisory — the asymmetry is known and accepted.
    `App.startMaintenanceLoops`, `App.warnIfCleanupIntervalTooLate` and
    `App.shutdownManagers` delete.
 5. **Builder steps keep their names.** `CreateHealthProbes` and `RegisterClosers` iterate
@@ -121,4 +127,5 @@ Five stacked PRs, each self-contained (PR3 ships as two, PR3a then PR3b):
   the shipped `NewWithConfig` chain always runs `ConfigureRuntimeHelpers`.
 - **Watch:** `StartCleanup` becoming idempotent (PR4) means a caller that starts it twice
   no longer leaks a goroutine, but a caller that relied on a *second* call changing the
-  interval must call `StopCleanup` first. That lands with PR4's own atom, not this one.
+  interval must call `StopCleanup` first. PR4 ships that, plus the construction-time start
+  and the five retired cleanup-loop log lines, as [C60.5](migrations.md) — not this ADR's atom.

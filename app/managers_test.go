@@ -239,10 +239,11 @@ func TestManagerConfigBuilderBuildMessagingOptions(t *testing.T) {
 func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 	t.Run("operator override reaches messaging options", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 100)
-		builder.publisherConfig = config.PublisherPoolConfig{MaxCached: 77, IdleTTL: 3 * time.Minute}
+		builder.publisherConfig = config.PublisherPoolConfig{MaxCached: 77, IdleTTL: 3 * time.Minute, CleanupInterval: 45 * time.Second}
 		opts := builder.BuildMessagingOptions()
 		assert.Equal(t, 77, opts.MaxPublishers, "operator messaging.publisher.maxcached override must reach ManagerOptions")
 		assert.Equal(t, 3*time.Minute, opts.IdleTTL, "operator messaging.publisher.idlettl override must reach ManagerOptions")
+		assert.Equal(t, 45*time.Second, opts.CleanupInterval, "operator messaging.publisher.cleanupinterval override must reach ManagerOptions")
 	})
 
 	t.Run("operator override reaches cache options", func(t *testing.T) {
@@ -270,10 +271,11 @@ func TestManagerConfigBuilderHonorsConfigDefaults(t *testing.T) {
 
 	t.Run("operator override reaches database options", func(t *testing.T) {
 		builder := NewManagerConfigBuilder(false, 100)
-		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: 33, IdleTTL: 8 * time.Minute}
+		builder.dbConfig = config.DatabaseManagerConfig{MaxSize: 33, IdleTTL: 8 * time.Minute, CleanupInterval: 90 * time.Second}
 		opts := builder.BuildDatabaseOptions()
 		assert.Equal(t, 33, opts.MaxSize, "operator database.manager.maxsize override must reach DbManagerOptions")
 		assert.Equal(t, 8*time.Minute, opts.IdleTTL, "operator database.manager.idlettl override must reach DbManagerOptions")
+		assert.Equal(t, 90*time.Second, opts.CleanupInterval, "operator database.manager.cleanupinterval override must reach DbManagerOptions")
 	})
 
 	t.Run("multi-tenant database MaxSize honors operator override over tenant limit", func(t *testing.T) {

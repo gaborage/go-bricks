@@ -50,13 +50,21 @@ type DbManager struct {
 	connector      Connector // Injected for testability
 }
 
+// defaultCleanupInterval is the documented idle-sweep frequency (database.manager.cleanupinterval)
+// applied when the caller supplies none.
+const defaultCleanupInterval = 5 * time.Minute
+
 // DbManagerOptions configures the DbManager
 type DbManagerOptions struct {
 	MaxSize int           // Cached-connection cap; <=0 uses a default (not unlimited).
 	IdleTTL time.Duration // Idle-connection lifetime; <=0 uses a default (not disabled).
+	// CleanupInterval is how often the idle sweep runs; <=0 uses the documented 5-minute
+	// default. The manager starts that sweep itself at construction (ADR-067).
+	CleanupInterval time.Duration
 }
 
-// NewDbManager creates a new database manager
+// NewDbManager creates a new database manager. The idle-cleanup sweep starts here and stops in
+// Close, so callers need not drive it (ADR-067); StartCleanup remains available and idempotent.
 func NewDbManager(resourceSource DBConfigProvider, log logger.Logger, opts DbManagerOptions, connector Connector) *DbManager {
 	if opts.MaxSize <= 0 {
 		opts.MaxSize = 100 // sensible default
@@ -64,13 +72,16 @@ func NewDbManager(resourceSource DBConfigProvider, log logger.Logger, opts DbMan
 	if opts.IdleTTL <= 0 {
 		opts.IdleTTL = 30 * time.Minute // sensible default
 	}
+	if opts.CleanupInterval <= 0 {
+		opts.CleanupInterval = defaultCleanupInterval
+	}
 
 	// Default to real connection factory if none provided
 	if connector == nil {
 		connector = NewConnection
 	}
 
-	return &DbManager{
+	m := &DbManager{
 		logger:         log,
 		resourceSource: resourceSource,
 		connector:      connector,
@@ -78,6 +89,11 @@ func NewDbManager(resourceSource DBConfigProvider, log logger.Logger, opts DbMan
 			return conn.Close()
 		}),
 	}
+
+	resourcepool.WarnIfCleanupIntervalTooLate(log, "database.manager", opts.CleanupInterval, opts.IdleTTL)
+	m.pool.StartCleanup(opts.CleanupInterval)
+
+	return m
 }
 
 // Get returns a database connection for the given key plus a ReleaseFunc the caller must
@@ -138,13 +154,14 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (Interface
 }
 
 // StartCleanup starts the background cleanup routine for idle connections. A non-positive
-// interval substitutes the documented 5-minute default.
+// interval substitutes the documented 5-minute default. The constructor already started a
+// sweep, so this is a no-op unless StopCleanup ran first (the pool's loop is single-instance).
 func (m *DbManager) StartCleanup(interval time.Duration) {
 	if m.pool == nil {
 		return // zero-value manager: nothing to run, consistent with the other nil-pool guards
 	}
 	if interval <= 0 {
-		interval = 5 * time.Minute // default cleanup interval
+		interval = defaultCleanupInterval
 	}
 	m.pool.StartCleanup(interval)
 }
@@ -157,8 +174,9 @@ func (m *DbManager) StopCleanup() {
 	m.pool.StopCleanup()
 }
 
-// Close closes all database connections and stops cleanup. A connection still borrowed by
-// in-flight work is closed at its final release instead of by this call (wiki/migrations.md C581.3).
+// Close closes all database connections and stops the idle-cleanup sweep the constructor
+// started. A connection still borrowed by in-flight work is closed at its final release
+// instead of by this call (wiki/migrations.md C581.3).
 func (m *DbManager) Close() error {
 	if m.pool == nil {
 		return nil // zero-value manager (never built via NewDbManager): nothing to close

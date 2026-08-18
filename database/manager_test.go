@@ -340,6 +340,80 @@ func TestDbManagerStatsSurfacesPoolErrors(t *testing.T) {
 	assert.Equal(t, 1, m.Stats()["errors"], "deferred close failure must be counted and surfaced")
 }
 
+// TestNewDbManagerStartsIdleCleanup pins ADR-067 decision 4: the manager starts its own idle
+// sweep at construction, exactly as cache.NewCacheManager does. No StartCleanup call appears
+// in this test — a swept connection is the proof that the constructor started the loop.
+func TestNewDbManagerStartsIdleCleanup(t *testing.T) {
+	src := &stubResourceSource{configs: map[string]*config.DatabaseConfig{
+		tenantA: {Type: "postgresql", Database: tenantA},
+	}}
+	m := NewDbManager(src, newErrorTestLogger(), DbManagerOptions{
+		MaxSize:         5,
+		IdleTTL:         10 * time.Millisecond,
+		CleanupInterval: 10 * time.Millisecond,
+	}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return &stubDB{key: tenantA}, nil })
+	defer func() { _ = m.Close() }()
+
+	_, release, err := m.Get(context.Background(), tenantA)
+	require.NoError(t, err)
+	release()
+
+	assert.Eventually(t, func() bool {
+		return m.Stats()["active_connections"] == 0
+	}, 2*time.Second, 10*time.Millisecond, "the constructor must start the idle-cleanup sweep")
+}
+
+// TestNewDbManagerClosesCleanlyWithALiveCleanupLoop pins the other half of ADR-067 decision 4:
+// the sweep the constructor started is stopped by Close (pool.Close joins the loop), so a
+// caller that never touches StartCleanup/StopCleanup still shuts down cleanly.
+func TestNewDbManagerClosesCleanlyWithALiveCleanupLoop(t *testing.T) {
+	m := NewDbManager(&stubResourceSource{}, newErrorTestLogger(), DbManagerOptions{
+		MaxSize:         5,
+		IdleTTL:         10 * time.Millisecond,
+		CleanupInterval: 10 * time.Millisecond,
+	}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return &stubDB{}, nil })
+
+	require.NoError(t, m.Close(), "Close must stop the constructor-started sweep and report success")
+	require.NoError(t, m.Close(), "Close stays idempotent")
+}
+
+// TestNewDbManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL pins that the advisory that used to
+// live in App.warnIfCleanupIntervalTooLate now fires from the manager that owns the pool, under
+// this manager's keys. The predicate itself is exhausted in
+// internal/resourcepool/cleanup_warning_test.go, so only what is manager-specific stays here:
+// the non-positive-CleanupInterval default is applied BEFORE the check (a raw 0 would be below
+// any TTL and stay silent), and a genuinely faster sweep still says nothing.
+func TestNewDbManagerWarnsWhenCleanupIntervalIsNotBelowIdleTTL(t *testing.T) {
+	tests := []struct {
+		name            string
+		cleanupInterval time.Duration
+		idleTTL         time.Duration
+		wantWarn        bool
+	}{
+		{name: "interval_below_ttl_silent", cleanupInterval: time.Minute, idleTTL: time.Hour, wantWarn: false},
+		{name: "unset_interval_takes_the_default_and_warns_against_a_short_ttl", cleanupInterval: 0, idleTTL: time.Minute, wantWarn: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &warnRecorder{}
+			m := NewDbManager(&stubResourceSource{}, rec, DbManagerOptions{
+				MaxSize:         5,
+				IdleTTL:         tc.idleTTL,
+				CleanupInterval: tc.cleanupInterval,
+			}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return &stubDB{}, nil })
+			defer func() { _ = m.Close() }()
+
+			if !tc.wantWarn {
+				assert.Empty(t, rec.warns, "a sweep that outpaces the TTL must not WARN")
+				return
+			}
+			require.Len(t, rec.warns, 1, "the advisory must fire exactly once per manager")
+			assert.Contains(t, rec.warns[0], "database.manager.cleanupinterval is >= database.manager.idlettl")
+		})
+	}
+}
+
 func TestStartCleanupIsIdempotent(t *testing.T) {
 	m := NewDbManager(&stubResourceSource{}, newTestLogger(), DbManagerOptions{
 		MaxSize: 5,
@@ -347,9 +421,11 @@ func TestStartCleanupIsIdempotent(t *testing.T) {
 	}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return &stubDB{}, nil })
 	defer func() { _ = m.Close() }()
 
+	// The constructor already started a loop (ADR-067); stop it so the first call below is
+	// the one that starts a loop and the second is the one that must short-circuit.
+	m.StopCleanup()
+
 	m.StartCleanup(10 * time.Second)
-	// Second call must observe an already-running cleanup loop and short-circuit rather
-	// than spawning a duplicate goroutine.
 	require.NotPanics(t, func() {
 		m.StartCleanup(10 * time.Second)
 	})
@@ -367,6 +443,8 @@ func TestStartCleanupAppliesDefaultIntervalForNonPositive(t *testing.T) {
 		IdleTTL: time.Hour,
 	}, func(*config.DatabaseConfig, logger.Logger) (Interface, error) { return &stubDB{}, nil })
 	defer func() { _ = m.Close() }()
+
+	m.StopCleanup() // drop the constructor's loop so these calls are the ones that start one
 
 	// Zero substitutes the documented 5-min default; we can't inspect the
 	// ticker directly so the contract is "no panic + clean stop".
