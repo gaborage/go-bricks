@@ -146,7 +146,9 @@ func (s *databaseSlot) start(ctx context.Context) (advisory, fatal error) {
 		s.app.dbManager != nil, s.app.preWarmDatabase), nil
 }
 
-func (s *databaseSlot) stop(context.Context) {}
+func (s *databaseSlot) stop(context.Context) {
+	// no runtime teardown: the pool is released by the FIFO close list, via closer()
+}
 
 func (s *databaseSlot) closer() (namedCloser, bool) {
 	return slotCloser("database manager", s.app.dbManager)
@@ -238,7 +240,9 @@ func (s *cacheSlot) preInit(ctx context.Context) error {
 // preInit already leased the fixed "" key during Builder construction.
 func (s *cacheSlot) start(context.Context) (advisory, fatal error) { return nil, nil }
 
-func (s *cacheSlot) stop(context.Context) {}
+func (s *cacheSlot) stop(context.Context) {
+	// no runtime teardown: the manager is released by the FIFO close list, via closer()
+}
 
 func (s *cacheSlot) closer() (namedCloser, bool) {
 	return slotCloser("cache manager", s.app.cacheManager)
