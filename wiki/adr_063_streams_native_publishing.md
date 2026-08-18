@@ -58,7 +58,7 @@ publishing ID is needed.
 This holds **only at the client's default `SubEntrySize` of 1** (`producer.go:219`). Sub-entry
 aggregation would batch several messages behind one entry and break the one-to-one mapping, so on the
 plain lane the production producer options are the client's defaults verbatim — no `Name`, no
-`SubEntrySize`, no compression — and `messaging/streams/manager.go`'s `newReliableProducer` carries
+`SubEntrySize`, no compression — and `messaging/streams/manager.go`'s `constructProducer` carries
 that note at the call site.
 
 The super lane reaches the same guarantee by a different route, which is worth stating because the
@@ -154,8 +154,9 @@ the reason it is the only strategy offered.
 ### Shape follows the consume side
 
 Publishers reach the broker through the same `producerHandle` seam pattern the consumers use, so the
-confirmation-correlation policy is testable without a broker; the vendor constructors sit behind
-factory fields for the same reason. No `ModuleDeps` field is added — a module holds the handle its own
+confirmation-correlation policy is testable without a broker; the vendor constructors are reached
+through the manager's Environment port for the same reason (originally two factory fields, folded
+into the port when it landed). No `ModuleDeps` field is added — a module holds the handle its own
 `DeclareStreams` returned. Publishers count towards `Manager.Ready()` and `Stats()` alongside
 consumers, on the same non-critical probe. Metrics and spans reuse the AMQP lane's instruments and the
 `go-bricks/messaging` tracer, and trace context is injected through the framework's own `trace`
@@ -186,7 +187,7 @@ which is the known limitation above.
 `context.Background()` to `Publish` can wait for as long as the broker takes. Only an HTTP handler
 inherits a deadline for free — `server.timeout.middleware`, 5 s by default. Every other caller this
 lane attracts carries none: a stream consumer handler runs under `consumeContext`
-(`manager.go:249-251`), which is `context.WithCancel(context.WithoutCancel(ctx))` and therefore has no
+(`manager.go`'s `consumeContext`), which is `context.WithCancel(context.WithoutCancel(ctx))` and therefore has no
 deadline at all, and scheduled jobs and relays are the same. A consumer republishing downstream is the
 likeliest publisher on this lane and the one with nothing to inherit, so it must pass a deadline of
 its own.

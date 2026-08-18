@@ -11,7 +11,6 @@ import (
 
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/ha"
-	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/message"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,9 +33,6 @@ func failingStart(*consumerDeclaration) error { return errStartAttempted }
 var errBindAttempted = errors.New("publisher bind attempted")
 
 func failingBind(*publisherDeclaration) error { return errBindAttempted }
-
-// errProducerConstruction is the client constructor's failure, faked.
-var errProducerConstruction = errors.New("producer construction failed")
 
 // fakeHandle stands in for *ha.ReliableConsumer so shutdown bookkeeping is
 // testable without a broker.
@@ -217,16 +213,35 @@ func (e *recordedEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return 
 func (e *recordedEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
 func (e *recordedEvent) Enabled() bool                                 { return true }
 
-// recordingManager builds a manager with one attached fake consumer whose tracker
-// already has a pending offset, so both shutdown guards are reachable.
-func recordingManager(t *testing.T, handle *fakeHandle) (*Manager, *recordingLogger) {
+// recordingManager starts a manager on fake with one plain consumer that has a
+// pending, uncommitted offset, so both shutdown guards are reachable. The count
+// threshold is deliberately high: the delivery must leave work for the shutdown
+// flush to do rather than commit it inline.
+func recordingManager(t *testing.T, fake *fakeEnvironment) (*Manager, *recordingLogger) {
 	t.Helper()
 	log := &recordingLogger{}
-	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
-	tracker := newOffsetTracker(1000, time.Hour, nil)
-	require.NoError(t, tracker.record(4, nil, &fakeStorer{}))
-	attach(m, handle, tracker)
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
+	startOnFake(t, m, fake, oneConsumerDecls())
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	consumer.deliver(testStream, 4, amqpMessage("payload"))
 	return m, log
+}
+
+// twoPartitionSuperConsumer starts m on a fresh fake with the super-stream
+// consumer declared by superConsumerDecls, then delivers offset 11 on partition0
+// and 501 on partition1, leaving both pending — the fixture shared by every test
+// that needs a two-partition super consumer in that state.
+func twoPartitionSuperConsumer(t *testing.T, m *Manager) (*fakeEnvironment, *fakeConsumer) {
+	t.Helper()
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, superConsumerDecls())
+
+	consumer := fake.consumer(testSuperStream)
+	require.NotNil(t, consumer)
+	consumer.deliver(testPartition0, 11, amqpMessage("a"))
+	consumer.deliver(testPartition1, 501, amqpMessage("b"))
+	return fake, consumer
 }
 
 func testManager(t *testing.T) *Manager {
@@ -237,45 +252,17 @@ func testManager(t *testing.T) *Manager {
 	})
 }
 
-// attach wires a fake consumer into a manager as if Start had created it: one
-// stream, whose flush target is the handle itself — the plain lane's shape.
-func attach(m *Manager, handle *fakeHandle, tracker *offsetTracker) {
-	book := bookOf(tracker)
-	book.trackerFor(testStream)
-	m.consumers = append(m.consumers, &runningConsumer{
-		stream:    testStream,
-		name:      testConsumerName,
-		handle:    handle,
-		offsets:   book,
-		storerFor: func(string) offsetStorer { return handle },
-	})
-	m.started = true
-}
-
-// attachPartitioned wires one consumer that tracks two streams, the shape a super
-// stream produces: one book, one flush target per partition.
-// countBeforeStorage decides whether the two recorded offsets are still pending
-// (a high threshold) or already committed (1).
-func attachPartitioned(t *testing.T, m *Manager, countBeforeStorage int) (handle *fakeHandle, storer0, storer1 *fakeStorer) {
-	t.Helper()
-	handle = &fakeHandle{status: ha.StatusOpen}
-	storer0, storer1 = &fakeStorer{}, &fakeStorer{}
-	book := newOffsetBook(func() *offsetTracker { return newOffsetTracker(countBeforeStorage, time.Hour, nil) })
-	require.NoError(t, book.trackerFor(testPartition0).record(11, nil, storer0))
-	require.NoError(t, book.trackerFor(testPartition1).record(501, nil, storer1))
-
-	m.consumers = append(m.consumers, &runningConsumer{
-		stream:  testSuperStream,
-		name:    testConsumerName,
-		handle:  handle,
-		offsets: book,
-		storerFor: storerByStream(map[string]offsetStorer{
-			testPartition0: storer0,
-			testPartition1: storer1,
-		}),
-	})
-	m.started = true
-	return handle, storer0, storer1
+// countOf reports how many times want appears in entries. assert.Contains alone
+// cannot see a duplicate: a partition flushed twice still contains its entry
+// once, so the shutdown-flush tests below count occurrences instead.
+func countOf(entries []string, want string) int {
+	n := 0
+	for _, e := range entries {
+		if e == want {
+			n++
+		}
+	}
+	return n
 }
 
 // TestManagerStopConsumersFlushesEveryTrackedStream extends the shutdown flush to
@@ -283,36 +270,22 @@ func attachPartitioned(t *testing.T, m *Manager, countBeforeStorage int) (handle
 // committed through the storer that reaches it, and only then is the consumer
 // closed.
 func TestManagerStopConsumersFlushesEveryTrackedStream(t *testing.T) {
-	m := testManager(t)
-	handle, storer0, storer1 := attachPartitioned(t, m, 1000)
-	require.Empty(t, storer0.offsets(), "the premise: both offsets are still pending")
+	m := NewManager(ManagerOptions{
+		URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
+	})
+	fake, consumer := twoPartitionSuperConsumer(t, m)
+	require.NotContains(t, fake.recorded(), callStoreOffset+":"+testConsumerName+"/"+testPartition0+"=11",
+		"the premise: both offsets are still pending")
 
 	m.StopConsumers()
 
-	assert.Equal(t, []int64{11}, storer0.offsets())
-	assert.Equal(t, []int64{501}, storer1.offsets())
-	assert.Equal(t, []string{"close"}, handle.recorded(), "the handle itself stores nothing")
+	recorded := fake.recorded()
+	assert.Equal(t, 1, countOf(recorded, callStoreOffset+":"+testConsumerName+"/"+testPartition0+"=11"),
+		"partition 0 flushed exactly once")
+	assert.Equal(t, 1, countOf(recorded, callStoreOffset+":"+testConsumerName+"/"+testPartition1+"=501"),
+		"partition 1 flushed exactly once")
+	assert.Equal(t, []string{"close"}, consumer.events.recorded(), "the handle itself stores nothing")
 	assert.Empty(t, m.consumers)
-}
-
-// blockingStorer stands in for a commit against a broker that is down. The
-// client's locator reconnect loop has no attempt cap and no deadline, so such a
-// call never returns on its own; release is how the test ends it once the
-// assertions are made.
-type blockingStorer struct {
-	entered chan struct{}
-	release chan struct{}
-	once    sync.Once
-}
-
-func newBlockingStorer() *blockingStorer {
-	return &blockingStorer{entered: make(chan struct{}), release: make(chan struct{})}
-}
-
-func (b *blockingStorer) StoreCustomOffset(int64) error {
-	b.once.Do(func() { close(b.entered) })
-	<-b.release
-	return nil
 }
 
 // TestManagerStopConsumersAbandonsFlushWhenBudgetSpent pins the shutdown flush
@@ -327,33 +300,29 @@ func (b *blockingStorer) StoreCustomOffset(int64) error {
 // already spent, and that both are named at WARN so the replay is not silent.
 func TestManagerStopConsumersAbandonsFlushWhenBudgetSpent(t *testing.T) {
 	log := &recordingLogger{}
-	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
 	m.flushBudget = 50 * time.Millisecond
 
-	blocked := newBlockingStorer()
-	defer close(blocked.release)
+	fake := newFakeEnvironment()
+	entered, release := fake.blockStoreOn(testConsumerName + "/" + testPartition0)
+	defer close(release)
 
-	stuck := &fakeHandle{status: ha.StatusOpen}
-	stuckBook := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, nil) })
-	require.NoError(t, stuckBook.trackerFor(testPartition0).record(11, nil, blocked))
+	decls := NewDeclarations()
+	decls.DeclareSuperStream(testSuperStream, testPartitions, nil)
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+		SuperStream: testSuperStream, Name: testConsumerName, Handler: noopHandler,
+	})
+	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: secondConsumerName, Handler: noopHandler})
+	startOnFake(t, m, fake, decls)
 
-	behind := &fakeHandle{status: ha.StatusOpen}
-	behindStorer := &fakeStorer{}
-	behindBook := newOffsetBook(func() *offsetTracker { return newOffsetTracker(1000, time.Hour, nil) })
-	require.NoError(t, behindBook.trackerFor(testPartition1).record(501, nil, behindStorer))
-	require.Empty(t, behindStorer.offsets(), "the premise: the second consumer's offset is still pending")
-
-	m.consumers = append(m.consumers,
-		&runningConsumer{
-			stream: testSuperStream, name: testConsumerName, handle: stuck, offsets: stuckBook,
-			storerFor: func(string) offsetStorer { return blocked },
-		},
-		&runningConsumer{
-			stream: testStream, name: secondConsumerName, handle: behind, offsets: behindBook,
-			storerFor: func(string) offsetStorer { return behindStorer },
-		},
-	)
-	m.started = true
+	stuck := fake.consumer(testSuperStream)
+	require.NotNil(t, stuck)
+	stuck.deliver(testPartition0, 11, amqpMessage("a"))
+	behind := fake.consumer(testStream)
+	require.NotNil(t, behind)
+	behind.deliver(testStream, 501, amqpMessage("b"))
+	require.Empty(t, behind.events.recorded(), "the premise: the second consumer's offset is still pending")
 
 	returned := make(chan struct{})
 	go func() {
@@ -362,7 +331,7 @@ func TestManagerStopConsumersAbandonsFlushWhenBudgetSpent(t *testing.T) {
 	}()
 
 	select {
-	case <-blocked.entered:
+	case <-entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the blocked commit was never attempted, so this test is not exercising the hang it claims to")
 	}
@@ -373,13 +342,12 @@ func TestManagerStopConsumersAbandonsFlushWhenBudgetSpent(t *testing.T) {
 		t.Fatal("StopConsumers never returned: the flush budget did not bound a commit that cannot finish")
 	}
 
-	assert.Empty(t, behindStorer.offsets(),
+	assert.Equal(t, []string{"close"}, behind.events.recorded(),
 		"a budget already spent must skip the remaining flush outright, not attempt one more")
 	assert.Equal(t, []string{testSuperStream, testStream}, log.warnStreams(msgFlushSkipped),
 		"every skipped flush is reported at WARN, naming its stream")
-	assert.Equal(t, []string{"close"}, stuck.recorded(),
+	assert.Equal(t, []string{"close"}, stuck.events.recorded(),
 		"an abandoned flush must still let its consumer be closed")
-	assert.Equal(t, []string{"close"}, behind.recorded())
 	assert.Empty(t, m.consumers)
 	assert.False(t, m.started)
 }
@@ -390,23 +358,28 @@ func TestManagerStopConsumersAbandonsFlushWhenBudgetSpent(t *testing.T) {
 // abandonment test above.
 func TestManagerStopConsumersFlushesWithinBudget(t *testing.T) {
 	log := &recordingLogger{}
-	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
-	handle, storer0, storer1 := attachPartitioned(t, m, 1000)
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: log})
+	fake, consumer := twoPartitionSuperConsumer(t, m)
 
 	m.StopConsumers()
 
-	assert.Equal(t, []int64{11}, storer0.offsets())
-	assert.Equal(t, []int64{501}, storer1.offsets())
+	recorded := fake.recorded()
+	assert.Equal(t, 1, countOf(recorded, callStoreOffset+":"+testConsumerName+"/"+testPartition0+"=11"),
+		"partition 0 flushed exactly once")
+	assert.Equal(t, 1, countOf(recorded, callStoreOffset+":"+testConsumerName+"/"+testPartition1+"=501"),
+		"partition 1 flushed exactly once")
 	assert.Empty(t, log.warnStreams(msgFlushSkipped), "a flush that lands well inside the budget skips nothing")
-	assert.Equal(t, []string{"close"}, handle.recorded())
+	assert.Equal(t, []string{"close"}, consumer.events.recorded())
 }
 
 // TestManagerStatsKeysOffsetsByTrackedStream pins the /ready body's key: a position
 // is reported under the stream it belongs to, which for a super stream is the
 // partition rather than the declared name.
 func TestManagerStatsKeysOffsetsByTrackedStream(t *testing.T) {
-	m := testManager(t)
-	attachPartitioned(t, m, 1)
+	m := NewManager(ManagerOptions{
+		URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
+	})
+	twoPartitionSuperConsumer(t, m)
 
 	stats := m.Stats()
 
@@ -455,19 +428,32 @@ func TestManagerStartWithoutDeclarationsDoesNotDial(t *testing.T) {
 	assert.False(t, m.started)
 }
 
-// The environment is installed alongside the consumer because Start sets it
-// before it sets started; attach alone would leave a state Start never produces.
-// The URI is unreachable so a guard that stopped holding surfaces as a dial
-// failure the message assertion rejects, rather than as a lucky local broker.
-func TestManagerStartRejectsSecondStart(t *testing.T) {
-	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
-	attach(m, &fakeHandle{status: ha.StatusOpen}, newOffsetTracker(1, time.Hour, nil))
-	m.env = &stream.Environment{}
+// TestManagerStartDeclaresThroughTheEnvironmentPort is the whole point of the
+// port: Start's declare phase reaches the broker seam in a unit test. Before the
+// port there was no way in — the phase was only ever reached with a nil
+// environment, by a test that asserted through a panic.
+func TestManagerStartDeclaresThroughTheEnvironmentPort(t *testing.T) {
+	m := testManager(t)
+	fake := newFakeEnvironment()
+	dialFake(m, fake)
 
 	decls := NewDeclarations()
 	decls.DeclareStream(testStream, nil)
 
-	err := m.Start(context.Background(), decls)
+	require.NoError(t, m.Start(context.Background(), decls))
+
+	assert.Equal(t, []string{callDeclareStream + ":" + testStream}, fake.recorded())
+	assert.True(t, m.started)
+}
+
+// The URI is unreachable so a guard that stopped holding surfaces as a dial
+// failure the message assertion rejects, rather than as a lucky local broker.
+func TestManagerStartRejectsSecondStart(t *testing.T) {
+	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, oneConsumerDecls())
+
+	err := m.Start(context.Background(), oneConsumerDecls())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already started")
@@ -536,14 +522,18 @@ func TestManagerStartupAbortsOnACanceledContext(t *testing.T) {
 	}
 }
 
-// A live context must not short-circuit the fan-out: the nil environment proves
-// the broker call is attempted by panicking, which the guard would have prevented.
+// A live context must not short-circuit the fan-out. Before the Environment port
+// this was asserted by panicking on a nil environment, which proved only that
+// SOMETHING was dereferenced; now it names the call that reached the broker.
 func TestManagerDeclareProceedsOnALiveContext(t *testing.T) {
 	decls := NewDeclarations()
 	decls.DeclareStream(testStream, nil)
 	m := testManager(t)
+	fake := newFakeEnvironment()
 
-	assert.Panics(t, func() { _ = m.declareStreams(context.Background(), nil, decls) })
+	require.NoError(t, m.declareStreams(context.Background(), fake, decls))
+
+	assert.Equal(t, []string{callDeclareStream + ":" + testStream}, fake.recorded())
 }
 
 // twoConsumers declares a pair so the fan-out has a second iteration to reach —
@@ -589,15 +579,18 @@ func TestStartConsumersStopsAtTheFirstFailure(t *testing.T) {
 }
 
 func TestManagerStopConsumersFlushesBeforeClosing(t *testing.T) {
-	m := testManager(t)
-	handle := &fakeHandle{status: ha.StatusOpen}
-	tracker := newOffsetTracker(1000, time.Hour, nil)
-	require.NoError(t, tracker.record(88, nil, &fakeStorer{}))
-	attach(m, handle, tracker)
+	m := NewManager(ManagerOptions{
+		URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
+	})
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, oneConsumerDecls())
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	consumer.deliver(testStream, 88, amqpMessage("payload"))
 
 	m.StopConsumers()
 
-	assert.Equal(t, []string{"store:88", "close"}, handle.recorded(),
+	assert.Equal(t, []string{"store:88", "close"}, consumer.events.recorded(),
 		"a clean shutdown commits the last handled offset before the consumer goes away")
 	assert.False(t, m.started)
 	assert.Empty(t, m.consumers)
@@ -605,13 +598,16 @@ func TestManagerStopConsumersFlushesBeforeClosing(t *testing.T) {
 
 func TestManagerStopConsumersIsIdempotent(t *testing.T) {
 	m := testManager(t)
-	handle := &fakeHandle{status: ha.StatusOpen}
-	attach(m, handle, newOffsetTracker(1000, time.Hour, nil))
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, oneConsumerDecls())
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
 
 	m.StopConsumers()
 	m.StopConsumers()
 
-	assert.Equal(t, []string{"close"}, handle.recorded(), "nothing pending, and no second close")
+	assert.Equal(t, []string{"close"}, consumer.events.recorded(),
+		"nothing pending, and no second close")
 }
 
 // TestManagerStopConsumersToleratesFlushAndCloseErrors pins both shutdown
@@ -619,11 +615,13 @@ func TestManagerStopConsumersIsIdempotent(t *testing.T) {
 // consumer that would not close each surface to the operator with the underlying
 // error attached, and neither aborts the rest of the teardown.
 func TestManagerStopConsumersToleratesFlushAndCloseErrors(t *testing.T) {
-	m, log := recordingManager(t, &fakeHandle{
-		status:   ha.StatusOpen,
-		closeErr: errors.New("close failed"),
-		storeErr: errors.New("store failed"),
-	})
+	fake := newFakeEnvironment()
+	m, log := recordingManager(t, fake)
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	handle := consumer.events
+	handle.closeErr = errors.New("close failed")
+	handle.storeErr = errors.New("store failed")
 
 	assert.NotPanics(t, m.StopConsumers)
 	assert.False(t, m.started)
@@ -640,25 +638,73 @@ func TestManagerStopConsumersToleratesFlushAndCloseErrors(t *testing.T) {
 // TestManagerStopConsumersIsSilentOnCleanShutdown is the other side of the same
 // two guards: a teardown whose flush and close both succeed reports no failure.
 func TestManagerStopConsumersIsSilentOnCleanShutdown(t *testing.T) {
-	handle := &fakeHandle{status: ha.StatusOpen}
-	m, log := recordingManager(t, handle)
+	fake := newFakeEnvironment()
+	m, log := recordingManager(t, fake)
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
 
 	m.StopConsumers()
 
-	assert.Equal(t, []string{"store:4", "close"}, handle.recorded())
+	assert.Equal(t, []string{"store:4", "close"}, consumer.events.recorded())
 	assert.Empty(t, log.warnMessages(), "a clean shutdown reports nothing to the operator")
 }
 
+// startWithCapturedHandlerCtx runs a real Start on parent with one consumer
+// whose handler records the context it receives, delivers one message, and
+// returns that context: the one Start actually built and handed down, not one a
+// test wires up and assigns to m.cancel itself.
+func startWithCapturedHandlerCtx(parent context.Context, t *testing.T, m *Manager, fake *fakeEnvironment) context.Context {
+	t.Helper()
+	var capturedCtx context.Context
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream: testStream, Name: testConsumerName,
+		Handler: func(ctx context.Context, _ *Message) error {
+			capturedCtx = ctx
+			return nil
+		},
+	})
+	dialFake(m, fake)
+	require.NoError(t, m.Start(parent, decls))
+
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	consumer.deliver(testStream, 4, amqpMessage("payload"))
+	require.NotNil(t, capturedCtx, "the premise: the handler ran and captured the context it received")
+	return capturedCtx
+}
+
+// TestManagerStopConsumersCancelsConsumeContext pins the context StopConsumers
+// actually cancels: the one Start built and handed down to the handler.
 func TestManagerStopConsumersCancelsConsumeContext(t *testing.T) {
 	m := testManager(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
-	attach(m, &fakeHandle{status: ha.StatusOpen}, newOffsetTracker(1, time.Hour, nil))
+	fake := newFakeEnvironment()
+	capturedCtx := startWithCapturedHandlerCtx(context.Background(), t, m, fake)
 
 	m.StopConsumers()
 
-	require.Error(t, ctx.Err())
+	require.ErrorIs(t, capturedCtx.Err(), context.Canceled)
 	assert.Nil(t, m.cancel)
+}
+
+// TestManagerStartRefusesACanceledContext pins the pre-dial gate: the dial is a
+// blocking broker round trip the client gives no context for, so a caller that
+// gave up before Start must not pay for it.
+func TestManagerStartRefusesACanceledContext(t *testing.T) {
+	m := testManager(t)
+	dialed := false
+	m.dialEnvironment = func(*stream.EnvironmentOptions) (environment, error) {
+		dialed = true
+		return newFakeEnvironment(), nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := m.Start(ctx, oneConsumerDecls())
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, dialed, "a canceled caller must not pay for the dial")
 }
 
 // TestConsumeContextInheritsValuesWithoutCancellation is the first half of the
@@ -679,20 +725,21 @@ func TestConsumeContextInheritsValuesWithoutCancellation(t *testing.T) {
 }
 
 // TestManagerStopConsumersStopsDetachedConsumeContext is the second half:
-// severing the caller's cancellation must not cost StopConsumers its own.
+// severing the caller's cancellation must not cost StopConsumers its own. The
+// consume context comes out of a real Start on a cancelable parent, so the
+// cancel path under test is the one Start owns.
 func TestManagerStopConsumersStopsDetachedConsumeContext(t *testing.T) {
 	m := testManager(t)
+	fake := newFakeEnvironment()
 	parent, cancelParent := context.WithCancel(context.Background())
-	consumeCtx, cancel := consumeContext(parent)
-	m.cancel = cancel
-	attach(m, &fakeHandle{status: ha.StatusOpen}, newOffsetTracker(1, time.Hour, nil))
+	capturedCtx := startWithCapturedHandlerCtx(parent, t, m, fake)
 
 	cancelParent()
-	require.NoError(t, consumeCtx.Err(), "the premise: the caller's context is canceled first")
+	require.NoError(t, capturedCtx.Err(), "the premise: the caller's cancellation must not reach the consume context")
 
 	m.StopConsumers()
 
-	require.ErrorIs(t, consumeCtx.Err(), context.Canceled)
+	require.ErrorIs(t, capturedCtx.Err(), context.Canceled)
 	assert.Nil(t, m.cancel)
 	assert.False(t, m.started)
 }
@@ -704,16 +751,24 @@ func TestManagerCloseWithoutEnvironmentIsIdempotent(t *testing.T) {
 	require.NoError(t, m.Close())
 }
 
+// TestManagerStats keeps offset_store_count at 9, distinct from the single
+// declared consumer: a threshold of 1 would equal stats["consumers"] and hide a
+// guard that swapped the two keys. Nine deliveries hit that threshold so the
+// last one still commits inline, leaving stored_offsets non-empty below.
 func TestManagerStats(t *testing.T) {
 	m := NewManager(ManagerOptions{
-		URI:                 "rabbitmq-stream://localhost:5552/",
+		URI:                 unreachableTestURI,
 		OffsetStoreCount:    9,
 		OffsetStoreInterval: 2 * time.Second,
 		Logger:              logger.New("error", false),
 	})
-	tracker := newOffsetTracker(1, time.Hour, nil)
-	require.NoError(t, tracker.record(31, nil, &fakeStorer{}))
-	attach(m, &fakeHandle{status: ha.StatusOpen}, tracker)
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, oneConsumerDecls())
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	for offset := int64(23); offset <= 31; offset++ {
+		consumer.deliver(testStream, offset, amqpMessage("payload"))
+	}
 
 	stats := m.Stats()
 
@@ -726,8 +781,14 @@ func TestManagerStats(t *testing.T) {
 }
 
 func TestManagerStatsOmitsUncommittedOffsets(t *testing.T) {
-	m := testManager(t)
-	attach(m, &fakeHandle{status: ha.StatusOpen}, newOffsetTracker(1000, time.Hour, nil))
+	m := NewManager(ManagerOptions{
+		URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
+	})
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, oneConsumerDecls())
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	consumer.deliver(testStream, 31, amqpMessage("payload"))
 
 	stats := m.Stats()
 
@@ -750,7 +811,11 @@ func TestManagerReady(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := testManager(t)
-			attach(m, &fakeHandle{status: tt.status}, newOffsetTracker(1, time.Hour, nil))
+			fake := newFakeEnvironment()
+			startOnFake(t, m, fake, oneConsumerDecls())
+			consumer := fake.consumer(testStream)
+			require.NotNil(t, consumer)
+			consumer.events.status = tt.status
 			m.started = tt.started
 
 			assert.Equal(t, tt.want, m.Ready())
@@ -1077,8 +1142,9 @@ func TestSafeEnvError(t *testing.T) {
 
 // TestManagerStartFailedDialLeavesNothingToDispose is the pre-dial half: the
 // environment was never stored, so Close is a no-op. The post-dial half — where
-// the environment exists and must be disposed — needs a broker and lives in
-// TestStreamsManagerDisposesEnvironmentOnDeclareFailureIntegration.
+// the environment exists and must be disposed — is
+// TestManagerStartUnwindsAFailedDeclaration, in process against the Environment
+// port.
 func TestManagerStartFailedDialLeavesNothingToDispose(t *testing.T) {
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
 	decls := NewDeclarations()
@@ -1094,32 +1160,49 @@ func TestManagerStartFailedDialLeavesNothingToDispose(t *testing.T) {
 // Close leaked it and a second Start orphaned it beyond any later Close.
 func TestManagerAbortStartLockedDisposesEnvironment(t *testing.T) {
 	m := testManager(t)
-	handle := &fakeHandle{status: ha.StatusOpen}
-	attach(m, handle, newOffsetTracker(1000, time.Hour, nil))
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, oneConsumerDecls())
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
 
 	m.abortStartLocked()
 
 	assert.Nil(t, m.env, "the environment is disposed, not just the consumers")
 	assert.Empty(t, m.consumers)
 	assert.False(t, m.started)
-	assert.Equal(t, []string{"close"}, handle.recorded())
+	assert.Equal(t, []string{"close"}, consumer.events.recorded())
+	assert.Contains(t, fake.recorded(), callClose)
 
 	require.NoError(t, m.Close(), "the follow-up Close short-circuits instead of closing twice")
 }
 
 // TestManagerAbortStartLockedReportsOnlyRealDisposalFailures pins the unwind's
-// own guard: nothing was dialed, so closeEnvLocked has nothing to close and
-// returns nil. A guard reading that the wrong way round would tell the operator
-// the environment failed to close on every successful unwind.
+// own guard from both sides: a disposal that succeeded must not be reported as a
+// failure on every successful unwind, and one that failed must reach the operator
+// with its cause attached.
 func TestManagerAbortStartLockedReportsOnlyRealDisposalFailures(t *testing.T) {
-	m, log := recordingManager(t, &fakeHandle{status: ha.StatusOpen})
+	t.Run("successful_disposal_is_silent", func(t *testing.T) {
+		fake := newFakeEnvironment()
+		m, log := recordingManager(t, fake)
 
-	m.abortStartLocked()
+		m.abortStartLocked()
 
-	require.Nil(t, m.env, "the premise: there was no environment to dispose")
-	assert.NotContains(t, log.warnMessages(), msgCloseEnvFailed,
-		"a disposal that succeeded is not reported as a failure")
-	assert.Empty(t, log.warnMessages(), "the whole unwind is silent when every step succeeds")
+		require.Contains(t, fake.recorded(), callClose, "the premise: there was an environment to dispose")
+		assert.Empty(t, log.warnMessages(), "the whole unwind is silent when every step succeeds")
+	})
+
+	t.Run("failed_disposal_is_reported", func(t *testing.T) {
+		fake := newFakeEnvironment()
+		m, log := recordingManager(t, fake)
+		fake.failOn(callClose, errors.New("close failed"))
+
+		m.abortStartLocked()
+
+		assert.Contains(t, log.warnMessages(), msgCloseEnvFailed)
+		closeErr, ok := log.warnError(msgCloseEnvFailed)
+		require.True(t, ok)
+		assert.Equal(t, "close failed", closeErr)
+	})
 }
 
 // TestManagerStartRefusesRestartAfterStopConsumers is the restart variant of the
@@ -1132,24 +1215,21 @@ func TestManagerAbortStartLockedReportsOnlyRealDisposalFailures(t *testing.T) {
 // message assertion below separates from a genuine refusal.
 func TestManagerStartRefusesRestartAfterStopConsumers(t *testing.T) {
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: logger.New("error", false)})
-	handle := &fakeHandle{status: ha.StatusOpen}
-	attach(m, handle, newOffsetTracker(1000, time.Hour, nil))
-	env := &stream.Environment{}
-	m.env = env
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, oneConsumerDecls())
 
 	m.StopConsumers()
 	require.False(t, m.started, "the premise: StopConsumers clears started")
-	require.Same(t, env, m.env, "the premise: StopConsumers leaves the environment for Close")
+	require.Same(t, fake, m.env, "the premise: StopConsumers leaves the environment for Close")
 
-	decls := NewDeclarations()
-	decls.DeclareStream(testStream, nil)
-	err := m.Start(context.Background(), decls)
+	err := m.Start(context.Background(), oneConsumerDecls())
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already started",
 		"the restart is refused by the guard, not by a failed dial")
-	assert.Same(t, env, m.env, "the first environment is still the one Close disposes, not an orphan")
+	assert.Same(t, fake, m.env, "the first environment is still the one Close disposes, not an orphan")
 	assert.False(t, m.started)
+	assert.NotContains(t, fake.recorded(), callClose, "a refused restart disposes nothing")
 }
 
 func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {
@@ -1158,20 +1238,6 @@ func TestManagerCloseEnvLockedIsIdempotent(t *testing.T) {
 	require.NoError(t, m.closeEnvLocked())
 	require.NoError(t, m.closeEnvLocked())
 	assert.Nil(t, m.env)
-}
-
-// attachPublisher wires a fake producer into a manager as if Start had bound it.
-func attachPublisher(m *Manager, handle *fakeProducer) *Publisher {
-	return rebindPublisher(m, newPublisher(testStream, false), handle)
-}
-
-// rebindPublisher binds an EXISTING publisher to a new producer, which is what a
-// second Manager.Start does to the handle a module has held since declaration.
-func rebindPublisher(m *Manager, p *Publisher, handle *fakeProducer) *Publisher {
-	p.bind(handle)
-	m.publishers = append(m.publishers, p)
-	m.started = true
-	return p
 }
 
 // twoPublishers declares a pair so the fan-out has a second iteration to reach —
@@ -1265,17 +1331,16 @@ func TestBindPublishersStopsAtTheFirstFailure(t *testing.T) {
 	assert.Equal(t, []string{testStream}, attempted, "the fan-out stops at the first failure")
 }
 
-// TestManagerBindPublisherWrapsAConstructionFailure exercises the vendor
-// constructor's failure path through the producerFactory seam: it dials, so this
+// TestManagerBindPublisherWrapsAConstructionFailure exercises the construction
+// failure through the Environment port: against a real broker it dials, so this
 // is the only way a broker-free test can reach it.
 func TestManagerBindPublisherWrapsAConstructionFailure(t *testing.T) {
 	m := testManager(t)
-	m.newProducer = func(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
-		return nil, errProducerConstruction
-	}
+	fake := newFakeEnvironment()
+	fake.failOn(callNewProducer, errProducerConstruction)
 	decl := onePublisherDeclaration(t)
 
-	err := m.bindPublisher(nil, decl)
+	err := m.bindPublisher(fake, decl)
 
 	require.ErrorIs(t, err, errProducerConstruction, "the client's own cause reaches the caller")
 	assert.Contains(t, err.Error(), `failed to start the publisher on stream "`+testStream+`"`)
@@ -1285,25 +1350,24 @@ func TestManagerBindPublisherWrapsAConstructionFailure(t *testing.T) {
 }
 
 // TestManagerBindPublisherTracksAConstructedProducer is the success half: the
-// producer is built for the declared stream, wired to that publisher's own
-// confirmation handler, bound, and tracked.
+// producer is built for the declared stream, bound, and tracked.
 func TestManagerBindPublisherTracksAConstructedProducer(t *testing.T) {
 	m := testManager(t)
-	handle := openProducer()
-	var gotStream string
-	var gotConfirmed ha.ConfirmMessageHandler
-	m.newProducer = func(_ *stream.Environment, streamName string, confirmed ha.ConfirmMessageHandler) (producerHandle, error) {
-		gotStream, gotConfirmed = streamName, confirmed
-		return handle, nil
-	}
+	fake := newFakeEnvironment()
 	decl := onePublisherDeclaration(t)
 
-	require.NoError(t, m.bindPublisher(nil, decl))
+	require.NoError(t, m.bindPublisher(fake, decl))
 
-	assert.Equal(t, testStream, gotStream, "the producer is built for the declared stream")
-	require.NotNil(t, gotConfirmed, "the client is given a confirmation handler")
+	assert.Equal(t, []string{callNewProducer + ":" + testStream}, fake.recorded(),
+		"the producer is built for the declared stream, through the plain constructor")
 	assert.Equal(t, []*Publisher{decl.Publisher}, m.publishers)
 	assert.Equal(t, ha.StatusOpen, decl.Publisher.status(), "the handle is bound to the new producer")
+
+	call := fake.producerCall(testStream)
+	require.NotNil(t, call, "the port must have captured the plain producer's construction call")
+	assert.NotNil(t, call.opts, "stream.NewProducerOptions() must reach the constructor")
+	assert.NotNil(t, call.confirmed,
+		"the confirmation handler must reach the constructor, or the publisher's sends are never correlated")
 }
 
 // onePublisher declares a single publisher — the shape where a cancellation
@@ -1335,29 +1399,16 @@ func oneSuperPublisherDeclaration(t *testing.T) *publisherDeclaration {
 	return decls.publishers[0]
 }
 
-// unreachableProducer fails every construction, so a bind reaches its error path
-// without a broker.
-func unreachableProducer(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
-	return nil, errProducerConstruction
-}
-
-// unreachableSuperProducer is its super-stream twin.
-func unreachableSuperProducer(*stream.Environment, string, func(message.StreamMessage) string,
-	ha.PartitionConfirmMessageHandler,
-) (producerHandle, error) {
-	return nil, errProducerConstruction
-}
-
 // TestManagerBindPublisherWrapsASuperConstructionFailure is the super-stream half
 // of the construction-failure path, and pins that the failure names the kind of
 // target the declaration asked for rather than calling every target a stream.
 func TestManagerBindPublisherWrapsASuperConstructionFailure(t *testing.T) {
 	m := testManager(t)
-	m.newProducer = unreachableProducer
-	m.newSuperProducer = unreachableSuperProducer
+	fake := newFakeEnvironment()
+	fake.failOn(callNewSuperProducer, errProducerConstruction)
 	decl := oneSuperPublisherDeclaration(t)
 
-	err := m.bindPublisher(nil, decl)
+	err := m.bindPublisher(fake, decl)
 
 	require.ErrorIs(t, err, errProducerConstruction)
 	assert.Contains(t, err.Error(), `failed to start the publisher on super stream "`+testSuperStream+`"`)
@@ -1365,30 +1416,32 @@ func TestManagerBindPublisherWrapsASuperConstructionFailure(t *testing.T) {
 }
 
 // TestManagerBindPublisherBuildsASuperProducerForASuperTarget pins the dispatch: a
-// super declaration must reach the client's super-stream constructor, with a
-// routing extractor and the per-partition confirmation handler that constructor
-// requires. Binding it through the plain constructor would compile and then fail at
-// the broker, because a super stream is not a stream.
+// super declaration must reach the port's super-stream constructor, with the hash
+// routing strategy that constructor requires and an extractor that answers the key
+// the caller registered. Binding it through the plain constructor would compile and
+// then fail at the broker, because a super stream is not a stream.
 func TestManagerBindPublisherBuildsASuperProducerForASuperTarget(t *testing.T) {
 	m := testManager(t)
-	m.newProducer = unreachableProducer // a plain bind here is the defect under test
-	handle := openProducer()
-	var gotStream string
-	var gotExtractor func(message.StreamMessage) string
-	var gotConfirmed ha.PartitionConfirmMessageHandler
-	m.newSuperProducer = func(_ *stream.Environment, superStream string,
-		routingKeyFor func(message.StreamMessage) string, confirmed ha.PartitionConfirmMessageHandler,
-	) (producerHandle, error) {
-		gotStream, gotExtractor, gotConfirmed = superStream, routingKeyFor, confirmed
-		return handle, nil
-	}
+	fake := newFakeEnvironment()
+	// A plain bind here is the defect under test: it must never be reached.
+	fake.failOn(callNewProducer, errProducerConstruction)
 	decl := oneSuperPublisherDeclaration(t)
 
-	require.NoError(t, m.bindPublisher(nil, decl))
+	require.NoError(t, m.bindPublisher(fake, decl))
 
-	assert.Equal(t, testSuperStream, gotStream, "the producer is built for the declared super stream")
-	require.NotNil(t, gotExtractor, "hash routing needs an extractor")
-	require.NotNil(t, gotConfirmed, "a super stream confirms per partition")
+	assert.Equal(t, []string{callNewSuperProducer + ":" + testSuperStream}, fake.recorded())
+	opts := fake.superProducerOptions(testSuperStream)
+	require.NotNil(t, opts)
+	strategy, ok := opts.RoutingStrategy.(*stream.HashRoutingStrategy)
+	require.True(t, ok, "hash routing is the only strategy offered")
+	assert.NotNil(t, fake.superProducerConfirmed(testSuperStream),
+		"the partition confirmation handler must reach the constructor, or the publisher's sends are never correlated")
+
+	registered := amqp.NewMessage([]byte(testBody))
+	decl.Publisher.pending.add(registered, testRoutingKey)
+	assert.Equal(t, testRoutingKey, strategy.RoutingKeyExtractor(registered),
+		"the extractor answers the key the caller registered with that exact message")
+
 	assert.Equal(t, []*Publisher{decl.Publisher}, m.publishers)
 	assert.Equal(t, ha.StatusOpen, decl.Publisher.status())
 }
@@ -1397,14 +1450,13 @@ func TestManagerBindPublisherBuildsASuperProducerForASuperTarget(t *testing.T) {
 // that dispatch, and would fail if the two constructors were ever swapped.
 func TestManagerBindPublisherBuildsAPlainProducerForAPlainTarget(t *testing.T) {
 	m := testManager(t)
-	m.newSuperProducer = unreachableSuperProducer // a super bind here is the defect under test
-	handle := openProducer()
-	m.newProducer = func(*stream.Environment, string, ha.ConfirmMessageHandler) (producerHandle, error) {
-		return handle, nil
-	}
+	fake := newFakeEnvironment()
+	// A super bind here is the defect under test: it must never be reached.
+	fake.failOn(callNewSuperProducer, errProducerConstruction)
 
-	require.NoError(t, m.bindPublisher(nil, onePublisherDeclaration(t)))
+	require.NoError(t, m.bindPublisher(fake, onePublisherDeclaration(t)))
 
+	assert.Equal(t, []string{callNewProducer + ":" + testStream}, fake.recorded())
 	require.Len(t, m.publishers, 1)
 	assert.Equal(t, ha.StatusOpen, m.publishers[0].status())
 }
@@ -1447,13 +1499,19 @@ func TestManagerRoutingKeyExtractorReportsAnUnregisteredMessage(t *testing.T) {
 // the consumers rather than the other way round.
 func TestManagerStopClosesPublishersAfterConsumers(t *testing.T) {
 	m := testManager(t)
+	fake := newFakeEnvironment()
 
 	var order []string
-	consumer := &fakeHandle{status: ha.StatusOpen, onClose: func() { order = append(order, "consumer") }}
-	attach(m, consumer, newOffsetTracker(1000, time.Hour, nil))
 	producer := openProducer()
 	producer.onClose = func() { order = append(order, "publisher") }
-	attachPublisher(m, producer)
+	fake.useProducer(producer)
+
+	decls := oneConsumerDecls()
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	startOnFake(t, m, fake, decls)
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	consumer.events.onClose = func() { order = append(order, "consumer") }
 
 	m.StopConsumers()
 
@@ -1467,8 +1525,13 @@ func TestManagerStopClosesPublishersAfterConsumers(t *testing.T) {
 // sweep the caller would hang for the whole shutdown.
 func TestManagerStopFailsAnInFlightPublish(t *testing.T) {
 	m := testManager(t)
+	fake := newFakeEnvironment()
 	producer := blockingProducer(t)
-	p := attachPublisher(m, producer)
+	fake.useProducer(producer)
+
+	decls := onePublisher(t)
+	startOnFake(t, m, fake, decls)
+	p := decls.publishers[0].Publisher
 
 	done := publishAsync(context.Background(), p, &PublishMessage{Data: []byte(testBody)})
 	waitForSend(t, producer)
@@ -1483,9 +1546,11 @@ func TestManagerStopFailsAnInFlightPublish(t *testing.T) {
 func TestManagerStopReportsAPublisherCloseFailure(t *testing.T) {
 	log := &recordingLogger{}
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
+	fake := newFakeEnvironment()
 	producer := openProducer()
 	producer.closeErr = errors.New("close failed")
-	attachPublisher(m, producer)
+	fake.useProducer(producer)
+	startOnFake(t, m, fake, onePublisher(t))
 
 	assert.NotPanics(t, m.StopConsumers)
 
@@ -1498,7 +1563,8 @@ func TestManagerStopReportsAPublisherCloseFailure(t *testing.T) {
 func TestManagerStopIsSilentOnACleanPublisherClose(t *testing.T) {
 	log := &recordingLogger{}
 	m := NewManager(ManagerOptions{URI: unreachableTestURI, Logger: log})
-	attachPublisher(m, openProducer())
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, onePublisher(t))
 
 	m.StopConsumers()
 
@@ -1521,7 +1587,9 @@ func TestManagerReadyRequiresEveryPublisher(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := testManager(t)
-			attachPublisher(m, &fakeProducer{status: tt.status})
+			fake := newFakeEnvironment()
+			fake.useProducer(&fakeProducer{status: tt.status})
+			startOnFake(t, m, fake, onePublisher(t))
 
 			assert.Equal(t, tt.want, m.Ready())
 		})
@@ -1530,7 +1598,8 @@ func TestManagerReadyRequiresEveryPublisher(t *testing.T) {
 
 func TestManagerStatsCountsPublishers(t *testing.T) {
 	m := testManager(t)
-	attachPublisher(m, openProducer())
+	fake := newFakeEnvironment()
+	startOnFake(t, m, fake, onePublisher(t))
 
 	stats := m.Stats()
 
@@ -1546,18 +1615,360 @@ func TestManagerStatsCountsPublishers(t *testing.T) {
 // so the rebind has to reopen it or the second Start comes up publishing nothing.
 func TestManagerRebindRevivesAPublisherAfterAStopCycle(t *testing.T) {
 	m := testManager(t)
+	decls := onePublisher(t)
+	p := decls.publishers[0].Publisher
+
+	firstEnv := newFakeEnvironment()
 	first := openProducer()
-	p := attachPublisher(m, first)
+	firstEnv.useProducer(first)
+	startOnFake(t, m, firstEnv, decls)
 
 	m.StopConsumers()
+	require.NoError(t, m.Close())
 
 	require.ErrorIs(t, p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}), ErrPublisherClosed)
 	assert.False(t, m.Ready(), "a stopped manager is not ready")
 
+	secondEnv := newFakeEnvironment()
 	second := openProducer()
-	rebindPublisher(m, p, second)
+	secondEnv.useProducer(second)
+	startOnFake(t, m, secondEnv, decls)
 
 	assert.True(t, m.Ready(), "the second start comes up ready")
 	publishConfirmed(t, p, second, &PublishMessage{Data: []byte(testBody)})
 	assert.Zero(t, first.sentCount(), "the revived publisher sends through the new producer, not the disposed one")
+}
+
+// TestManagerStartDeclaresBindsThenStarts pins Start's phase order against the
+// port. Publishers bind BEFORE consumers start because a handler may publish from
+// its very first delivery, and an unbound publisher would reject it with
+// ErrPublisherNotStarted; both declare phases come first because neither a
+// producer nor a consumer can attach to a stream that does not exist.
+func TestManagerStartDeclaresBindsThenStarts(t *testing.T) {
+	m := testManager(t)
+	fake := newFakeEnvironment()
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareSuperStream(testSuperStream, testPartitions, nil)
+	decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+
+	startOnFake(t, m, fake, decls)
+
+	assert.Equal(t, []string{
+		callDeclareStream + ":" + testStream,
+		callDeclareSuperStream + ":" + testSuperStream,
+		callNewProducer + ":" + testStream,
+		callQueryOffset + ":" + testConsumerName + "/" + testStream,
+		callNewConsumer + ":" + testStream,
+	}, fake.recorded())
+	assert.True(t, m.started)
+	assert.Len(t, m.consumers, 1)
+	assert.Len(t, m.publishers, 1)
+}
+
+// TestManagerStartUnwindsAFailedDeclaration is abortStartLocked in process: the
+// environment was already dialed, so a caller that treats the error as fatal
+// without calling Close must leak nothing, and a retried Start must not orphan
+// the previous connection pool.
+func TestManagerStartUnwindsAFailedDeclaration(t *testing.T) {
+	m := testManager(t)
+	failing := newFakeEnvironment()
+	failing.failOn(callDeclareStream+":"+testStream, errDeclareFailed)
+	dialFake(m, failing)
+
+	err := m.Start(context.Background(), oneConsumerDecls())
+
+	require.ErrorIs(t, err, errDeclareFailed)
+	assert.Contains(t, err.Error(), `failed to declare stream "`+testStream+`"`)
+	assert.Contains(t, failing.recorded(), callClose, "the dialed environment is disposed by the failed Start itself")
+	assert.Nil(t, m.env)
+	assert.Empty(t, m.consumers)
+	assert.Empty(t, m.publishers)
+	assert.False(t, m.started)
+
+	// The unwind has to leave the manager startable, or a retry would be refused
+	// by the already-started guard for the rest of the process's life.
+	healthy := newFakeEnvironment()
+	startOnFake(t, m, healthy, oneConsumerDecls())
+	assert.True(t, m.started)
+}
+
+// TestManagerStartUnwindsAFailedConsumerStart is the unwind's other entry point,
+// and the one with something to undo: a publisher was already bound, so the
+// unwind has to close it rather than leave a producer attached to an environment
+// it is about to dispose.
+func TestManagerStartUnwindsAFailedConsumerStart(t *testing.T) {
+	m := testManager(t)
+	fake := newFakeEnvironment()
+	fake.failOn(callNewConsumer+":"+testStream, errConsumerStart)
+	dialFake(m, fake)
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	publisher := decls.DeclarePublisher(&PublisherOptions{Stream: testStream})
+	decls.DeclareConsumer(&ConsumerOptions{Stream: testStream, Name: testConsumerName, Handler: noopHandler})
+
+	err := m.Start(context.Background(), decls)
+
+	require.ErrorIs(t, err, errConsumerStart)
+	assert.Contains(t, err.Error(), `failed to start consumer "`+testConsumerName+`" on stream "`+testStream+`"`)
+	producer := fake.producer(testStream)
+	require.NotNil(t, producer)
+	assert.True(t, producer.isClosed(), "the publisher bound before the failure is closed")
+	assert.ErrorIs(t, publisher.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)}),
+		ErrPublisherClosed)
+	assert.Contains(t, fake.recorded(), callClose)
+	assert.Nil(t, m.env)
+	assert.False(t, m.started)
+}
+
+// TestManagerStartResolvesTheAttachPosition drives resolveOffset through Start.
+// Only a MISSING offset may fall back to the declared start: any other query
+// failure answered with a start position would SKIP, fatally so for the
+// zero-value OffsetNext, and streams have no redelivery to get it back.
+func TestManagerStartResolvesTheAttachPosition(t *testing.T) {
+	tests := []struct {
+		name      string
+		stored    int64
+		hasStored bool
+		queryErr  error
+		start     OffsetStart
+		want      stream.OffsetSpecification
+	}{
+		{
+			name:      "stored_offset_resumes_one_past_it",
+			stored:    17,
+			hasStored: true,
+			start:     OffsetFirst(),
+			want:      stream.OffsetSpecification{}.Offset(18),
+		},
+		{
+			name:  "no_stored_offset_uses_the_declared_start",
+			start: OffsetFirst(),
+			want:  stream.OffsetSpecification{}.First(),
+		},
+		{
+			name:     "query_failure_without_a_local_commit_replays_from_first",
+			queryErr: errors.New("boom"),
+			start:    OffsetNext(),
+			want:     stream.OffsetSpecification{}.First(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := testManager(t)
+			fake := newFakeEnvironment()
+			if tt.hasStored {
+				fake.setOffset(testConsumerName, testStream, tt.stored)
+			}
+			if tt.queryErr != nil {
+				fake.failOn(callQueryOffset, tt.queryErr)
+			}
+
+			decls := NewDeclarations()
+			decls.DeclareStream(testStream, nil)
+			decls.DeclareConsumer(&ConsumerOptions{
+				Stream: testStream, Name: testConsumerName, Start: tt.start, Handler: noopHandler,
+			})
+			startOnFake(t, m, fake, decls)
+
+			opts := fake.consumerOptions(testStream)
+			require.NotNil(t, opts)
+			assert.Equal(t, tt.want, opts.Offset)
+		})
+	}
+}
+
+// TestManagerStartPromotionResolvesTheOffsetAgain exercises the single active
+// consumer promotion callback the client fires from its own goroutine: another
+// group member may have advanced the offset while this one was passive, so the
+// position is resolved again rather than reused from attach time.
+func TestManagerStartPromotionResolvesTheOffsetAgain(t *testing.T) {
+	m := testManager(t)
+	fake := newFakeEnvironment()
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream: testStream, Name: testConsumerName, SAC: true, Start: OffsetFirst(), Handler: noopHandler,
+	})
+	startOnFake(t, m, fake, decls)
+
+	opts := fake.consumerOptions(testStream)
+	require.NotNil(t, opts)
+	require.NotNil(t, opts.SingleActiveConsumer, "the premise: the SAC block reached the port")
+	require.Equal(t, stream.OffsetSpecification{}.First(), opts.Offset,
+		"the premise: nothing was stored when the consumer attached")
+
+	// Another member committed while this one was passive.
+	fake.setOffset(testConsumerName, testStream, 41)
+
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	assert.Equal(t, stream.OffsetSpecification{}.Offset(42), consumer.promote(testStream))
+}
+
+// TestManagerStartPromotionFallsBackToTheLocalCommit is resolveOffset's third
+// branch, which only a promotion can reach: the broker cannot be asked, but this
+// process committed a position for the stream itself, so that is the closest
+// truth available and is no older than the broker's.
+func TestManagerStartPromotionFallsBackToTheLocalCommit(t *testing.T) {
+	m := NewManager(ManagerOptions{
+		URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
+	})
+	fake := newFakeEnvironment()
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream: testStream, Name: testConsumerName, SAC: true, Start: OffsetNext(), Handler: noopHandler,
+	})
+	startOnFake(t, m, fake, decls)
+
+	opts := fake.consumerOptions(testStream)
+	require.NotNil(t, opts)
+	require.NotNil(t, opts.SingleActiveConsumer, "the premise: the SAC block reached the port")
+
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	consumer.deliver(testStream, 41, amqpMessage("payload"))
+	require.Equal(t, map[string]int64{testStream: 41}, m.consumers[0].offsets.stored(),
+		"the premise: this process committed 41")
+
+	fake.failOn(callQueryOffset, errors.New("boom"))
+
+	assert.Equal(t, stream.OffsetSpecification{}.Offset(42), consumer.promote(testStream),
+		"a broker that cannot be asked resumes from the local commit, never from the declared start")
+}
+
+// TestManagerStartCommitsInFlightThroughTheDeliveringConsumer pins the commit
+// path the Environment port must NOT have moved: an in-flight commit goes through
+// the consumer that delivered the message, on its connection — neither through
+// the reliable handle above it nor through the port's locator. Both kinds behave
+// identically here; the asymmetry is the shutdown flush's alone.
+func TestManagerStartCommitsInFlightThroughTheDeliveringConsumer(t *testing.T) {
+	tests := []struct {
+		name        string
+		decls       func() *Declarations
+		trackedName string
+		deliverOn   string
+	}{
+		{name: "plain_stream", decls: oneConsumerDecls, trackedName: testStream, deliverOn: testStream},
+		{name: "super_stream_partition", decls: superConsumerDecls, trackedName: testSuperStream, deliverOn: testPartition0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewManager(ManagerOptions{
+				URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
+			})
+			fake := newFakeEnvironment()
+			startOnFake(t, m, fake, tt.decls())
+
+			consumer := fake.consumer(tt.trackedName)
+			require.NotNil(t, consumer)
+			consumer.deliver(tt.deliverOn, 7, amqpMessage("payload"))
+
+			key := testConsumerName + "/" + tt.deliverOn
+			assert.Contains(t, fake.recorded(), callConsumerStore+":"+key+"=7")
+			assert.NotContains(t, fake.recorded(), callStoreOffset+":"+key+"=7",
+				"an in-flight commit never goes through the Environment port")
+			assert.Empty(t, consumer.events.recorded(),
+				"nor through the reliable handle the manager tracks")
+
+			offset, ok := fake.storedOffset(testConsumerName, tt.deliverOn)
+			require.True(t, ok, "the commit reaches the broker's offset store")
+			assert.Equal(t, int64(7), offset)
+			assert.Equal(t, map[string]int64{tt.deliverOn: 7}, m.consumers[0].offsets.stored())
+		})
+	}
+}
+
+// TestManagerStartFlushesPlainThroughTheHandleAndSuperThroughThePort is the
+// offset-storer asymmetry, which lives entirely in the SHUTDOWN flush: a plain
+// consumer's handle is an offsetStorer, while *ha.ReliableSuperStreamConsumer has
+// no StoreCustomOffset at all, so its partitions commit through the port.
+func TestManagerStartFlushesPlainThroughTheHandleAndSuperThroughThePort(t *testing.T) {
+	tests := []struct {
+		name        string
+		decls       func() *Declarations
+		trackedName string
+		deliverOn   string
+		wantHandle  []string
+		wantPort    bool
+	}{
+		{
+			name:  "plain_stream_flushes_through_its_own_handle",
+			decls: oneConsumerDecls, trackedName: testStream, deliverOn: testStream,
+			wantHandle: []string{"store:7", "close"}, wantPort: false,
+		},
+		{
+			name:  "super_stream_flushes_through_the_port",
+			decls: superConsumerDecls, trackedName: testSuperStream, deliverOn: testPartition0,
+			wantHandle: []string{"close"}, wantPort: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A high threshold leaves the delivery pending, so the flush has work.
+			m := NewManager(ManagerOptions{
+				URI: unreachableTestURI, OffsetStoreCount: 1000, Logger: logger.New("error", false),
+			})
+			fake := newFakeEnvironment()
+			startOnFake(t, m, fake, tt.decls())
+
+			consumer := fake.consumer(tt.trackedName)
+			require.NotNil(t, consumer)
+			consumer.deliver(tt.deliverOn, 7, amqpMessage("payload"))
+			require.Empty(t, consumer.events.recorded(), "the premise: the offset is still pending")
+
+			m.StopConsumers()
+
+			assert.Equal(t, tt.wantHandle, consumer.events.recorded())
+			portEntry := callStoreOffset + ":" + testConsumerName + "/" + tt.deliverOn + "=7"
+			recorded := fake.recorded()
+			if tt.wantPort {
+				assert.Equal(t, 1, countOf(recorded, portEntry), "flushed exactly once through the port")
+			} else {
+				assert.NotContains(t, recorded, portEntry)
+			}
+		})
+	}
+}
+
+// TestManagerStartRunsTheHandlerForADeliveredMessage is the delivery path end to
+// end through Start: the port hands the runner a message, the module's handler
+// sees the framework's view of it, and the offset is committed after success.
+func TestManagerStartRunsTheHandlerForADeliveredMessage(t *testing.T) {
+	var got *Message
+	m := NewManager(ManagerOptions{
+		URI: unreachableTestURI, OffsetStoreCount: 1, Logger: logger.New("error", false),
+	})
+	fake := newFakeEnvironment()
+
+	decls := NewDeclarations()
+	decls.DeclareStream(testStream, nil)
+	decls.DeclareConsumer(&ConsumerOptions{
+		Stream: testStream, Name: testConsumerName,
+		Handler: func(_ context.Context, msg *Message) error {
+			got = msg
+			return nil
+		},
+	})
+	startOnFake(t, m, fake, decls)
+
+	consumer := fake.consumer(testStream)
+	require.NotNil(t, consumer)
+	consumer.deliver(testStream, 55, amqpMessage("payload"))
+
+	require.NotNil(t, got)
+	assert.Equal(t, []byte("payload"), got.Data)
+	assert.Equal(t, int64(55), got.Offset)
+	assert.Equal(t, testStream, got.Stream)
+	assert.Equal(t, map[string]any{"kind": "test"}, got.Properties)
+	assert.Contains(t, fake.recorded(), callConsumerStore+":"+testConsumerName+"/"+testStream+"=55")
 }

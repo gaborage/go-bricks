@@ -620,12 +620,15 @@ func TestStreamsManagerSingleActiveConsumerIntegration(t *testing.T) {
 		"promotion resolves the stored offset, not the declared start position")
 }
 
-// TestStreamsManagerDisposesEnvironmentOnDeclareFailureIntegration exercises a real
-// post-dial failure: re-declaring an existing stream with different retention makes
-// the broker answer precondition-failed, so Start fails with the environment already
-// dialed. Manager is exported API, so a caller that treats that error as fatal
-// without calling Close must not leak the connection pool.
-func TestStreamsManagerDisposesEnvironmentOnDeclareFailureIntegration(t *testing.T) {
+// TestStreamsManagerRejectsAConflictingRetentionIntegration is what only a broker
+// can answer: re-declaring an existing stream with different retention really is
+// answered with precondition-failed, so Start fails after the dial.
+//
+// The unwind that failure triggers — environment disposed, started false, the
+// caller's follow-up Close a no-op — is asserted in process against the
+// Environment port by TestManagerStartUnwindsAFailedDeclaration, so it is not
+// repeated here.
+func TestStreamsManagerRejectsAConflictingRetentionIntegration(t *testing.T) {
 	ctx := context.Background()
 	opts := streamsTestEnv(ctx, t)
 
@@ -645,9 +648,7 @@ func TestStreamsManagerDisposesEnvironmentOnDeclareFailureIntegration(t *testing
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to declare stream")
-	assert.Nil(t, second.env, "the dialed environment is disposed by the failed Start itself")
-	assert.False(t, second.started)
-	require.NoError(t, second.Close(), "the caller's follow-up Close short-circuits instead of double-closing")
+	require.NoError(t, second.Close())
 }
 
 // TestStreamsPublisherRoundTripIntegration is the proof of the correlation
