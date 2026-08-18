@@ -1403,7 +1403,7 @@ classic lane counted `messaging.client.consumed.messages` at receive with a hard
 streams lane at completion with `error.type`; the streams lane extracted no trace context and
 installed no per-message lease scope; three issues rewrote `processMessage` in a month without
 reaching the streams copy. `messaging/internal/delivery` now owns everything between "bytes arrived"
-and "outcome recorded" — carrier extraction, the Consumer span, the lease scope, `EnsureTraceID`, the
+and "outcome recorded" — the AMQP lane runs on it as shipped, the streams lane in a named follow-up — carrier extraction, the Consumer span, the lease scope, `EnsureTraceID`, the
 handler, panic-to-error, one `RecordConsume`, the lane's outcome line — behind
 `Run(ctx, *Request) *Result`. Settlement stays lane-side, so "never requeue" and ADR-059's "commit
 only after success" do not move.

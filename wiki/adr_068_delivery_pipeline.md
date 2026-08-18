@@ -34,7 +34,8 @@ Consumer-kind span, `leasescope.Install`, `EnsureTraceID`, the handler
 invocation, panic-to-error, one `tracking.RecordConsume` at completion, and a
 call to the lane's own outcome-logging closure. Its entry point is
 `Run(ctx, *Request) *Result` and its outcomes are `Succeeded`, `HandlerError`
-and `Panicked`.
+and `Panicked`. As shipped, the AMQP lane runs on it; the streams lane's
+migration is the follow-up named under Consequences.
 
 ### Settlement stays with the lane
 
@@ -57,9 +58,10 @@ RabbitMQ destination strings — is emitted unchanged.
 ### The consumed counter moves, and that is the only telemetry that does
 
 `messaging.client.consumed.messages` is now incremented at completion on both
-lanes, with `error.type` when the delivery failed. The count per delivery is
-unchanged; what changes is *when* it lands and that failures are now separable
-on the counter as well as on the histogram.
+lanes — the streams lane always did this; the classic lane now matches, through
+the pipeline — with `error.type` when the delivery failed. The count per
+delivery is unchanged; what changes on the classic lane is *when* it lands and
+that failures are now separable on the counter as well as on the histogram.
 
 ### `StartConsumeSpan` is removed, not deprecated
 

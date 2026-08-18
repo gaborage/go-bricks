@@ -994,6 +994,39 @@ func (m *mockAcknowledger) AckCalled() bool {
 	return m.ackCalled
 }
 
+// panicEventLogger fails every post-handler log call, so the first outcome log
+// inside the pipeline panics deterministically.
+type panicEventLogger struct{ stubLogger }
+
+func (l *panicEventLogger) Info() gobrickslogger.LogEvent                     { panic("log sink gone") }
+func (l *panicEventLogger) Error() gobrickslogger.LogEvent                    { panic("log sink gone") }
+func (l *panicEventLogger) Warn() gobrickslogger.LogEvent                     { panic("log sink gone") }
+func (l *panicEventLogger) WithContext(_ any) gobrickslogger.Logger           { return l }
+func (l *panicEventLogger) WithFields(_ map[string]any) gobrickslogger.Logger { return l }
+
+// TestRegistryProcessMessagePanicAfterHandlerStillNacks pins the lane-level
+// recovery: a panic past the handler — here from outcome logging — must not
+// escape processMessage, and the manual-ack delivery is nacked without requeue.
+func TestRegistryProcessMessagePanicAfterHandlerStillNacks(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	consumer := &ConsumerDeclaration{
+		Queue: testQueueName, EventType: testEventType,
+		Handler: &countingTestHandler{}, AutoAck: false,
+	}
+	acker := &mockAcknowledger{}
+	delivery := &amqp.Delivery{
+		DeliveryTag: 123, Body: []byte(testMessageBody), Acknowledger: acker,
+	}
+
+	require.NotPanics(t, func() {
+		registry.processMessage(context.Background(), consumer, delivery, &panicEventLogger{})
+	})
+
+	assert.True(t, acker.nackCalled, "the fallback must settle the delivery")
+	assert.False(t, acker.nackRequeue, "the fallback nack must not requeue")
+	assert.False(t, acker.ackCalled)
+}
+
 // ===== processMessage Tests =====
 
 func TestRegistryProcessMessageSuccess(t *testing.T) {

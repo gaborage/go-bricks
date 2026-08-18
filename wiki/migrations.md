@@ -3150,7 +3150,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ---
 
-## E60 · v0.59.0 → v0.60.0 — `go-bricks-migrate` validates every resolved database config and forwards `database.tls` to Flyway + readiness speaks one status vocabulary + one delivery pipeline for both messaging lanes
+## E60 · v0.59.0 → v0.60.0 — `go-bricks-migrate` validates every resolved database config and forwards `database.tls` to Flyway + readiness speaks one status vocabulary + the AMQP lane moves onto the shared delivery pipeline
 
 - gist: The `go-bricks-migrate` CLI now validates every tenant's resolved database config the
   way the framework does before dialing (C60.1) and forwards `database.tls` to Flyway as
@@ -3179,8 +3179,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `Close()`, as the cache manager already did, so five app-level cleanup-loop
   log lines retire and the cleanup-interval advisory fires earlier; sweep
   frequency, shutdown order and every emitted body are unchanged (C60.5).
-  Both messaging lanes now run one delivery pipeline
-  (`messaging/internal/delivery`, ADR-068): `messaging.StartConsumeSpan` is removed
+  The AMQP lane now runs on the shared delivery pipeline
+  (`messaging/internal/delivery`, ADR-068; the streams lane follows in ADR-068's
+  named follow-up): `messaging.StartConsumeSpan` is removed
   with no replacement export, and the classic lane's
   `messaging.client.consumed.messages` is recorded at completion with `error.type`
   instead of at receive without it (C60.6).
@@ -3436,11 +3437,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   defer span.End()
   ```
 
+  A loop that also wants the consumed counter records
+  `messaging.client.consumed.messages` itself at handler completion (with
+  `error.type` on failure) — the framework's recorder is internal and this
+  release exports no replacement.
   For the telemetry door, split by `error.type` where a query used to assume the counter had none,
   and expect a counter sample to land at handler completion — a query correlating counter and
   histogram timestamps now sees them together instead of a handler-duration apart.
-- verify: `go build ./...` for the code door. For the telemetry door: consume one message whose
-  handler fails and confirm the counter sample carries `error.type`.
+- verify: `go build ./...` for the code door. For the telemetry door: consume one message that
+  succeeds and one whose handler fails — each lands exactly one counter sample after the handler
+  completes, and only the failing one carries `error.type`.
 - ref: [ADR-068](adr_068_delivery_pipeline.md) · `messaging/internal/delivery/delivery.go`
 
 ---

@@ -757,6 +757,27 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 // by outcome. Settlement is this lane's, not the pipeline's: ack on success,
 // nack on a handler error or a panic.
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
+	// The pipeline recovers handler panics; outcome logging, telemetry and
+	// settlement still run unguarded on this goroutine, and a panic there would
+	// kill the consume loop with the delivery unsettled. Nack before logging so
+	// the fallback holds even when logging is what panicked; the nested recover
+	// keeps the fallback itself from escaping.
+	settling := false
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		defer func() { _ = recover() }()
+		if !consumer.AutoAck && !settling {
+			_ = delivery.Nack(false, false)
+		}
+		log.Error().
+			Str("queue", consumer.Queue).
+			Uint64("delivery_tag", delivery.DeliveryTag).
+			Msg(fmt.Sprintf("Recovered panic while finishing a delivery: %v; nacked without requeue", recovered))
+	}()
+
 	res := pipeline.Run(ctx, &pipeline.Request{
 		Carrier:     amqpHeaderAccessor{headers: delivery.Headers},
 		Destination: consumer.Queue,
@@ -776,6 +797,7 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 	if consumer.AutoAck {
 		return // No manual ack/nack needed
 	}
+	settling = true
 	if res.Outcome == pipeline.Succeeded {
 		ackMessage(delivery, res.Log, res.TraceID)
 		return
