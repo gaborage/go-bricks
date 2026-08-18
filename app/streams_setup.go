@@ -57,9 +57,11 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	// A service that declared streams and cannot start them would serve HTTP while
 	// consuming nothing and publishing nowhere, so startup fails rather than
 	// booting green.
-	// The startup context is handed over for its values only — Start severs its
-	// cancellation, so shutdownStreamConsumers stays the thing that stops them.
-	if err := mgr.Start(ctx, decls); err != nil {
+	// The startup context is handed over for its values only: WithoutCancel makes
+	// that literal — the manager's own startup gates honor cancellation for callers
+	// that want it, and this caller does not — so shutdownStreamConsumers stays the
+	// thing that stops the consumers. Same detachment the AMQP lane applies.
+	if err := mgr.Start(context.WithoutCancel(ctx), decls); err != nil {
 		if closeErr := mgr.Close(); closeErr != nil {
 			a.logger.Warn().Err(closeErr).Msg("Failed to close stream environment after a failed start")
 		}

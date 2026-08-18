@@ -649,13 +649,12 @@ func TestManagerStopConsumersIsSilentOnCleanShutdown(t *testing.T) {
 	assert.Empty(t, log.warnMessages(), "a clean shutdown reports nothing to the operator")
 }
 
-// TestManagerStopConsumersCancelsConsumeContext pins the context StopConsumers
-// actually cancels: the one Start built and handed down to the handler, not one
-// a test wires up and assigns to m.cancel itself.
-func TestManagerStopConsumersCancelsConsumeContext(t *testing.T) {
-	m := testManager(t)
-	fake := newFakeEnvironment()
-
+// startWithCapturedHandlerCtx runs a real Start on parent with one consumer
+// whose handler records the context it receives, delivers one message, and
+// returns that context: the one Start actually built and handed down, not one a
+// test wires up and assigns to m.cancel itself.
+func startWithCapturedHandlerCtx(parent context.Context, t *testing.T, m *Manager, fake *fakeEnvironment) context.Context {
+	t.Helper()
 	var capturedCtx context.Context
 	decls := NewDeclarations()
 	decls.DeclareStream(testStream, nil)
@@ -666,17 +665,46 @@ func TestManagerStopConsumersCancelsConsumeContext(t *testing.T) {
 			return nil
 		},
 	})
-	startOnFake(t, m, fake, decls)
+	dialFake(m, fake)
+	require.NoError(t, m.Start(parent, decls))
 
 	consumer := fake.consumer(testStream)
 	require.NotNil(t, consumer)
 	consumer.deliver(testStream, 4, amqpMessage("payload"))
 	require.NotNil(t, capturedCtx, "the premise: the handler ran and captured the context it received")
+	return capturedCtx
+}
+
+// TestManagerStopConsumersCancelsConsumeContext pins the context StopConsumers
+// actually cancels: the one Start built and handed down to the handler.
+func TestManagerStopConsumersCancelsConsumeContext(t *testing.T) {
+	m := testManager(t)
+	fake := newFakeEnvironment()
+	capturedCtx := startWithCapturedHandlerCtx(context.Background(), t, m, fake)
 
 	m.StopConsumers()
 
 	require.ErrorIs(t, capturedCtx.Err(), context.Canceled)
 	assert.Nil(t, m.cancel)
+}
+
+// TestManagerStartRefusesACanceledContext pins the pre-dial gate: the dial is a
+// blocking broker round trip the client gives no context for, so a caller that
+// gave up before Start must not pay for it.
+func TestManagerStartRefusesACanceledContext(t *testing.T) {
+	m := testManager(t)
+	dialed := false
+	m.dialEnvironment = func(*stream.EnvironmentOptions) (environment, error) {
+		dialed = true
+		return newFakeEnvironment(), nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := m.Start(ctx, oneConsumerDecls())
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, dialed, "a canceled caller must not pay for the dial")
 }
 
 // TestConsumeContextInheritsValuesWithoutCancellation is the first half of the
@@ -697,21 +725,21 @@ func TestConsumeContextInheritsValuesWithoutCancellation(t *testing.T) {
 }
 
 // TestManagerStopConsumersStopsDetachedConsumeContext is the second half:
-// severing the caller's cancellation must not cost StopConsumers its own.
+// severing the caller's cancellation must not cost StopConsumers its own. The
+// consume context comes out of a real Start on a cancelable parent, so the
+// cancel path under test is the one Start owns.
 func TestManagerStopConsumersStopsDetachedConsumeContext(t *testing.T) {
 	m := testManager(t)
 	fake := newFakeEnvironment()
 	parent, cancelParent := context.WithCancel(context.Background())
-	startOnFake(t, m, fake, oneConsumerDecls())
-	consumeCtx, cancel := consumeContext(parent)
-	m.cancel = cancel
+	capturedCtx := startWithCapturedHandlerCtx(parent, t, m, fake)
 
 	cancelParent()
-	require.NoError(t, consumeCtx.Err(), "the premise: the caller's context is canceled first")
+	require.NoError(t, capturedCtx.Err(), "the premise: the caller's cancellation must not reach the consume context")
 
 	m.StopConsumers()
 
-	require.ErrorIs(t, consumeCtx.Err(), context.Canceled)
+	require.ErrorIs(t, capturedCtx.Err(), context.Canceled)
 	assert.Nil(t, m.cancel)
 	assert.False(t, m.started)
 }

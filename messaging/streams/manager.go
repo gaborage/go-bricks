@@ -174,6 +174,13 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 		return errors.New("streams manager already started: Close it before starting again")
 	}
 
+	// The dial is a blocking broker round trip the client gives no context for —
+	// the same rule the declare loops below apply between round trips: a caller
+	// that already gave up on startup must not pay for it.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("startup canceled before dialing stream endpoint %s: %w", redactStreamURI(m.opts.URI), err)
+	}
+
 	env, err := m.dialEnvironment(m.environmentOptions())
 	if err != nil {
 		return fmt.Errorf("failed to connect to stream endpoint %s: %w", redactStreamURI(m.opts.URI), safeEnvError(err))
