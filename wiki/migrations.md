@@ -3371,8 +3371,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   Builder's manager-construction step) — and moves the stop one shutdown phase later, from a
   dedicated phase to the closers that already ran last. **The wall-clock shutdown order is
   unchanged**: the closers run after modules and observability either way (ADR-029). Sweep
-  frequency, idle TTL and eviction semantics are untouched, and no HTTP body, status code or
-  metric changes. The sweep now runs during module `Init()` and can, in theory, evict the
+  frequency, idle TTL and eviction semantics are untouched, and the HTTP response schema and
+  status codes are stable; manager statistics and counters can move with the sweep's earlier
+  start. The sweep now runs during module `Init()` and can, in theory, evict the
   pre-init `""` lease before its first use inside a module's `Init` — inert at the default TTLs
   (30m database, 1h messaging) against any startup that finishes in that window, but a real
   effect if `IdleTTL` is tuned low enough. Three things do change for an
@@ -3382,8 +3383,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   instead of at `prepareRuntime`, so it appears earlier in the startup log, with its message and
   its `resource`/`cleanupinterval`/`idlettl` fields byte-identical; and (3) `DbManagerOptions`
   and `messaging.ManagerOptions` gain an additive `CleanupInterval` field — adding a field to an
-  exported struct is `apidiff`-compatible, and an unset field takes the same 5m/2m defaults
-  `StartCleanup` has always applied.
+  exported struct is `apidiff`-compatible but not source-compatible for unkeyed composite
+  literals, which stop compiling with `too few values in struct literal` until the field is
+  added or the literal switches to keyed fields (the form to use); an unset field takes the
+  same 5m/2m defaults `StartCleanup` has always applied.
 - gate: always — every service that configures a database or messaging manager starts its sweep
   at a different moment, whether or not it sets `cleanupinterval`.
 - apply: for the common case (you call `app.New`/`app.NewWithConfig` and let the framework build

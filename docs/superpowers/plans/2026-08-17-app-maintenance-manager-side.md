@@ -14,7 +14,7 @@
 
 Copied verbatim from the task brief. Every task's requirements implicitly include this section.
 
-- No exported API removal (`StartCleanup`/`StopCleanup` stay; if `CleanupInterval` is added to `DbManagerOptions`/`ManagerOptions` it is an additive field — note apidiff: adding a field to an exported struct is compatible); managers self-start exactly like `cache.NewCacheManager`; ADR-045 respected (no manager interface); ADR-029 shutdown order preserved (cleanup stops in `Close`, which the closers run last); camelCase / snake_case; `git commit -F <file>`, never `--no-gpg-sign`; implementers do not run make check/mutate or push.
+- No exported API removal (`StartCleanup`/`StopCleanup` stay; if `CleanupInterval` is added to `DbManagerOptions`/`ManagerOptions` it is an additive field — note apidiff: adding a field to an exported struct is apidiff-compatible, though unkeyed composite literals of it stop compiling with "too few values"; recommend keyed literals); managers self-start exactly like `cache.NewCacheManager`; ADR-045 respected (no manager interface); ADR-029 shutdown order preserved (cleanup stops in `Close`, which the closers run last); camelCase / snake_case; `git commit -F <file>`, never `--no-gpg-sign`; implementers do not run make check/mutate or push.
 
 Additional standing rules for this repo that apply to every task below:
 
@@ -1107,7 +1107,8 @@ Insert this block immediately after the `[C60.4]` atom's `- ref:` line and its f
   step — and moves the stop one shutdown phase later, from a dedicated phase to the closers that
   already ran last. **The wall-clock shutdown order is unchanged**: the closers run after modules
   and observability either way (ADR-029). Sweep frequency, idle TTL and eviction semantics are
-  untouched, and no HTTP body, status code or metric changes. Three things do change for an
+  untouched, and the HTTP response schema and status codes are stable; manager statistics and
+  counters can move with the sweep's earlier start. Three things do change for an
   operator: (1) the five INFO lines above retire with no renamed equivalent — the sweep is no
   longer an app-level phase, so there is no phase to announce; (2) the
   `<prefix>.cleanupinterval is >= <prefix>.idlettl` advisory now fires at manager construction
