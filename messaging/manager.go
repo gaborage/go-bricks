@@ -164,8 +164,8 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 // every waiter. Use t.Errorf and return, as the repo's httptest handlers do.
 func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declarations) error {
 	// Nil declarations would nil-deref in Hash() below — on the caller's goroutine, outside the
-	// closure's recover. app/messaging_setup.go passes its argument through unguarded, so reject
-	// it here rather than relying on every caller to check.
+	// closure's recover. Every current caller already guards decls == nil before calling, but
+	// EnsureConsumers is exported, so reject it here too rather than trust every caller to.
 	if decls == nil {
 		return fmt.Errorf("messaging: nil declarations for key %q", key)
 	}

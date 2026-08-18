@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -494,4 +497,42 @@ func TestRegisterDebugEndpointsAccessControl(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDebugJSONWireShapeIsStable pins the debug endpoints' wire contract by key name
+// only. Decoding into anonymous maps is deliberate: referencing the response types
+// would make this test follow a Go-side rename instead of catching one.
+func TestDebugJSONWireShapeIsStable(t *testing.T) {
+	app := &App{logger: logger.New("info", false)}
+	handlers := NewDebugHandlers(app, &config.DebugConfig{Enabled: true, PathPrefix: "/_debug"}, app.logger)
+
+	t.Run("gc_response", func(t *testing.T) {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/gc", http.NoBody)
+		rec := httptest.NewRecorder()
+		require.NoError(t, handlers.handleGC(server.NewHandlerContextForTest(rec, req, nil)))
+
+		var envelope map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+		assert.ElementsMatch(t, []string{"timestamp", "duration", "data"}, slices.Collect(maps.Keys(envelope)),
+			"the debug envelope's key set is the wire contract (error is omitempty)")
+
+		var data map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(envelope["data"], &data))
+		assert.ElementsMatch(t,
+			[]string{"stats", "mem_before", "mem_after", "forced", "heap_objects", "heap_size"},
+			slices.Collect(maps.Keys(data)))
+	})
+
+	t.Run("goroutines_response", func(t *testing.T) {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/goroutines", http.NoBody)
+		rec := httptest.NewRecorder()
+		require.NoError(t, handlers.handleGoroutines(server.NewHandlerContextForTest(rec, req, nil)))
+
+		var envelope struct {
+			Data map[string]json.RawMessage `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+		assert.ElementsMatch(t, []string{"count", "by_state", "by_function"}, slices.Collect(maps.Keys(envelope.Data)),
+			"stacks and potential_leaks are omitempty and absent without ?stacks / ?leaks")
+	})
 }

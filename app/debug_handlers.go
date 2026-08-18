@@ -15,41 +15,41 @@ import (
 	"github.com/gaborage/go-bricks/server"
 )
 
-// DebugResponse represents a standard debug endpoint response
-type DebugResponse struct {
+// debugResponse represents a standard debug endpoint response
+type debugResponse struct {
 	Timestamp time.Time `json:"timestamp"`
 	Duration  string    `json:"duration"`
 	Data      any       `json:"data"`
 	Error     string    `json:"error,omitempty"`
 }
 
-// GoroutineInfo contains information about goroutines
-type GoroutineInfo struct {
+// goroutineInfo contains information about goroutines
+type goroutineInfo struct {
 	Count      int              `json:"count"`
 	ByState    map[string]int   `json:"by_state"`
 	ByFunction map[string]int   `json:"by_function"`
-	Stacks     []GoroutineStack `json:"stacks,omitempty"`
-	Leaks      []PotentialLeak  `json:"potential_leaks,omitempty"`
+	Stacks     []goroutineStack `json:"stacks,omitempty"`
+	Leaks      []potentialLeak  `json:"potential_leaks,omitempty"`
 }
 
-// GoroutineStack represents a single goroutine's stack trace
-type GoroutineStack struct {
+// goroutineStack represents a single goroutine's stack trace
+type goroutineStack struct {
 	ID       int      `json:"id"`
 	State    string   `json:"state"`
 	Function string   `json:"function"`
 	Stack    []string `json:"stack"`
 }
 
-// PotentialLeak represents a goroutine that might be leaked
-type PotentialLeak struct {
+// potentialLeak represents a goroutine that might be leaked
+type potentialLeak struct {
 	ID       int    `json:"id"`
 	Function string `json:"function"`
 	Duration string `json:"duration"`
 	Reason   string `json:"reason"`
 }
 
-// GCInfo contains garbage collection information
-type GCInfo struct {
+// gcInfo contains garbage collection information
+type gcInfo struct {
 	Stats       debug.GCStats `json:"stats"`
 	MemBefore   uint64        `json:"mem_before"`
 	MemAfter    uint64        `json:"mem_after"`
@@ -316,8 +316,8 @@ func (d *DebugHandlers) authMiddleware(trustedNets []*net.IPNet) server.Middlewa
 }
 
 // newDebugResponse creates a standardized debug response
-func (d *DebugHandlers) newDebugResponse(start time.Time, data any, err error) *DebugResponse {
-	resp := &DebugResponse{
+func (d *DebugHandlers) newDebugResponse(start time.Time, data any, err error) *debugResponse {
+	resp := &debugResponse{
 		Timestamp: start,
 		Duration:  time.Since(start).String(),
 		Data:      data,

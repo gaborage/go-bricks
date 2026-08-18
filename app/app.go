@@ -80,10 +80,8 @@ type App struct {
 	cacheManager     *cache.CacheManager
 	resourceProvider ResourceProvider
 
-	// Messaging declarations/initializer, plus the connection pre-warmer (database + messaging)
+	// Messaging declarations, collected once at startup and replayed per tenant
 	messagingDeclarations *messaging.Declarations
-	messagingInitializer  *MessagingInitializer
-	connectionPreWarmer   *ConnectionPreWarmer
 
 	// streamsManager is created during prepareRuntime — never at build time — so
 	// its readiness probe and closer are registered there too (see streams_setup.go).

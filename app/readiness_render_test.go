@@ -131,7 +131,7 @@ func TestReadinessViews(t *testing.T) {
 		// that is the tail of a published one is spelled with jsonKey.
 		forbidden      []string
 		wantComponents map[string]wantComponent
-		wantSummary    HealthSummary
+		wantSummary    healthSummary
 	}{
 		{
 			name: "every_registered_kind_renders_status_and_stats",
@@ -163,7 +163,7 @@ func TestReadinessViews(t *testing.T) {
 				componentCache:     {status: notConfiguredStatus, critical: true, details: withStatus(cacheStats, notConfiguredStatus)},
 				componentStreams:   {status: healthyStatus, details: withStatus(streamStats, healthyStatus)},
 			},
-			wantSummary: HealthSummary{OverallStatus: healthyStatus, TotalProbes: 4, HealthyCount: 4},
+			wantSummary: healthSummary{OverallStatus: healthyStatus, TotalProbes: 4, HealthyCount: 4},
 		},
 		{
 			name: "first_failing_critical_kind_gates_and_sanitizes",
@@ -183,7 +183,7 @@ func TestReadinessViews(t *testing.T) {
 				componentDatabase: {status: unhealthyStatus, critical: true, errText: driverError, details: withStatus(dbStats, unhealthyStatus)},
 				componentCache:    {status: unhealthyStatus, critical: true, errText: redisAddr + ": connection refused", details: withStatus(cacheStats, unhealthyStatus)},
 			},
-			wantSummary: HealthSummary{OverallStatus: criticalStatus, TotalProbes: 2, CriticalCount: 2, ErrorCount: 2},
+			wantSummary: healthSummary{OverallStatus: criticalStatus, TotalProbes: 2, CriticalCount: 2, ErrorCount: 2},
 		},
 		{
 			name: "non_critical_failure_stays_ready_and_reads_degraded",
@@ -209,7 +209,7 @@ func TestReadinessViews(t *testing.T) {
 			},
 			// The drift decision 4 removes: this used to be `unknown`, because the debug
 			// summary gated on a status list while /ready gated on Err && Critical.
-			wantSummary: HealthSummary{OverallStatus: degradedStatus, TotalProbes: 2, HealthyCount: 1, ErrorCount: 1},
+			wantSummary: healthSummary{OverallStatus: degradedStatus, TotalProbes: 2, HealthyCount: 1, ErrorCount: 1},
 		},
 		{
 			name: "absence_is_ready_equivalent_in_both_views",
@@ -237,7 +237,7 @@ func TestReadinessViews(t *testing.T) {
 				componentMessaging: {status: perTenantStatus, details: map[string]any{statusKey: perTenantStatus}},
 				componentCache:     {status: disabledStatus, details: map[string]any{statusKey: disabledStatus}},
 			},
-			wantSummary: HealthSummary{OverallStatus: healthyStatus, TotalProbes: 3, HealthyCount: 3},
+			wantSummary: healthSummary{OverallStatus: healthyStatus, TotalProbes: 3, HealthyCount: 3},
 		},
 		{
 			name: "foreign_probe_publishes_only_its_status",
@@ -261,7 +261,7 @@ func TestReadinessViews(t *testing.T) {
 			wantComponents: map[string]wantComponent{
 				"vault": {status: healthyStatus, details: map[string]any{statusKey: healthyStatus, "addr": "10.0.0.9:8200"}},
 			},
-			wantSummary: HealthSummary{OverallStatus: healthyStatus, TotalProbes: 1, HealthyCount: 1},
+			wantSummary: healthSummary{OverallStatus: healthyStatus, TotalProbes: 1, HealthyCount: 1},
 		},
 		{
 			// A Prober may report no Details at all. /ready still mirrors its status under
@@ -282,7 +282,7 @@ func TestReadinessViews(t *testing.T) {
 			wantComponents: map[string]wantComponent{
 				"vault": {status: healthyStatus, details: map[string]any{}},
 			},
-			wantSummary: HealthSummary{OverallStatus: healthyStatus, TotalProbes: 1, HealthyCount: 1},
+			wantSummary: healthSummary{OverallStatus: healthyStatus, TotalProbes: 1, HealthyCount: 1},
 		},
 		{
 			name: "status_outside_the_vocabulary_reads_unknown",
@@ -301,7 +301,7 @@ func TestReadinessViews(t *testing.T) {
 			wantComponents: map[string]wantComponent{
 				"vault": {status: "starting", details: map[string]any{statusKey: "starting"}},
 			},
-			wantSummary: HealthSummary{OverallStatus: unknownStatus, TotalProbes: 1},
+			wantSummary: healthSummary{OverallStatus: unknownStatus, TotalProbes: 1},
 		},
 		{
 			name:          "no_probes_renders_the_envelope_alone",
@@ -314,7 +314,7 @@ func TestReadinessViews(t *testing.T) {
 				"app":     appBody,
 			},
 			wantComponents: map[string]wantComponent{},
-			wantSummary:    HealthSummary{OverallStatus: unknownStatus},
+			wantSummary:    healthSummary{OverallStatus: unknownStatus},
 		},
 	}
 
@@ -356,7 +356,7 @@ func TestReadinessViews(t *testing.T) {
 				assert.GreaterOrEqual(t, probeDuration, time.Duration(0))
 			}
 
-			assert.Equal(t, tt.wantSummary, healthSummary(components))
+			assert.Equal(t, tt.wantSummary, summarizeHealth(components))
 		})
 	}
 }

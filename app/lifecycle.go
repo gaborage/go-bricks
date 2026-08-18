@@ -65,6 +65,9 @@ func (a *App) warnIfCleanupIntervalTooLate(keyPrefix string, cleanupInterval, id
 // prepareRuntime prepares the application for runtime execution. ctx is the
 // startup context: components it starts that outlive startup inherit that
 // context's values rather than beginning from a bare context.Background().
+// AMQP consumers are the one exception: they outlive prepareRuntime itself
+// and are stopped by shutdownConsumers (ADR-029), so they inherit only ctx's
+// values, never its cancellation.
 func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.buildMessagingDeclarations(); err != nil {
 		return err
@@ -76,7 +79,9 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
-	if err := a.prepareMessagingConsumers(decls); err != nil {
+	// Values only, no cancellation: consumers outlive prepareRuntime and are stopped by
+	// shutdownConsumers (ADR-029), never by the startup context.
+	if err := a.prepareRuntimeConsumers(context.WithoutCancel(ctx), decls); err != nil {
 		return err
 	}
 
@@ -84,9 +89,11 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
-	if !a.cfg.Multitenant.Enabled && a.connectionPreWarmer != nil && a.connectionPreWarmer.IsAvailable() {
-		a.connectionPreWarmer.LogAvailability()
-		if err := a.connectionPreWarmer.PreWarmSingleTenant(ctx, decls); err != nil {
+	// Single-tenant only — preWarmSingleTenant is a safe no-op when neither manager
+	// was built (attemptDatabasePreWarm/attemptMessagingPreWarm nil-check their own
+	// manager and DEBUG-log "unavailable").
+	if !a.cfg.Multitenant.Enabled {
+		if err := a.preWarmSingleTenant(ctx, decls); err != nil {
 			a.logger.Warn().Err(err).Msg("Pre-warming completed with warnings")
 		}
 	}
@@ -156,25 +163,6 @@ func (a *App) applyGlobalMiddleware() error {
 	reg.RegisterGlobalMiddleware(mws...)
 	a.logger.Info().Int("count", len(mws)).Msg("Registered global middleware")
 	return nil
-}
-
-// prepareMessagingConsumers wires lazy consumer initialization and prepares
-// runtime consumers when a messaging initializer is available and there are
-// declarations to replay. It is a no-op otherwise.
-func (a *App) prepareMessagingConsumers(decls *messaging.Declarations) error {
-	if a.messagingInitializer == nil || !a.messagingInitializer.IsAvailable() || decls == nil {
-		return nil
-	}
-
-	a.messagingInitializer.LogDeploymentMode()
-
-	if a.resourceProvider != nil {
-		if err := a.messagingInitializer.SetupLazyConsumerInit(a.resourceProvider, decls); err != nil {
-			return err
-		}
-	}
-
-	return a.messagingInitializer.PrepareRuntimeConsumers(context.Background(), decls)
 }
 
 // assertMessagingConfiguredIfDeclared fails-fast in single-tenant mode when

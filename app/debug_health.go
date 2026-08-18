@@ -13,15 +13,15 @@ const (
 	unknownStatus = "unknown"
 )
 
-// HealthDebugInfo contains enhanced health information for debugging
-type HealthDebugInfo struct {
-	Components map[string]ComponentHealth `json:"components"`
-	Summary    HealthSummary              `json:"summary"`
+// healthDebugInfo contains enhanced health information for debugging
+type healthDebugInfo struct {
+	Components map[string]componentHealth `json:"components"`
+	Summary    healthSummary              `json:"summary"`
 	App        Info                       `json:"app"`
 }
 
-// ComponentHealth contains detailed health information for a component
-type ComponentHealth struct {
+// componentHealth contains detailed health information for a component
+type componentHealth struct {
 	Status   string         `json:"status"`
 	Critical bool           `json:"critical"`
 	Error    string         `json:"error,omitempty"`
@@ -30,8 +30,8 @@ type ComponentHealth struct {
 	Duration string         `json:"duration"`
 }
 
-// HealthSummary provides overall health summary
-type HealthSummary struct {
+// healthSummary provides overall health summary
+type healthSummary struct {
 	OverallStatus string `json:"overall_status"`
 	TotalProbes   int    `json:"total_probes"`
 	HealthyCount  int    `json:"healthy_count"`
@@ -59,9 +59,9 @@ func (d *DebugHandlers) handleHealthDebug(c server.HandlerContext) error {
 
 	components := runReadinessProbes(c.RequestContext(), d.app.healthProbes).debugComponents()
 
-	healthInfo := &HealthDebugInfo{
+	healthInfo := &healthDebugInfo{
 		Components: components,
-		Summary:    healthSummary(components),
+		Summary:    summarizeHealth(components),
 		App:        d.getAppInfo(),
 	}
 

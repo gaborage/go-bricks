@@ -165,11 +165,11 @@ func publicProbeError(result *HealthStatus) string {
 
 // debugComponents renders the access-controlled debug view: one entry per registered kind,
 // carrying the full unredacted details the /ready projection withholds.
-func (r readinessReport) debugComponents() map[string]ComponentHealth {
-	components := make(map[string]ComponentHealth, len(r))
+func (r readinessReport) debugComponents() map[string]componentHealth {
+	components := make(map[string]componentHealth, len(r))
 	for i := range r {
 		result := &r[i]
-		component := ComponentHealth{
+		component := componentHealth{
 			Status:   result.status.Status,
 			Critical: result.status.Critical,
 			Details:  result.status.Details,
@@ -187,12 +187,12 @@ func (r readinessReport) debugComponents() map[string]ComponentHealth {
 	return components
 }
 
-// healthSummary aggregates the debug view from the predicate /ready gates on, so the two
+// summarizeHealth aggregates the debug view from the predicate /ready gates on, so the two
 // views cannot disagree about what counts as a failure. unknown survives for the two shapes
 // the vocabulary does not cover: no probes at all, and a consumer Prober reporting a status
 // of its own invention.
-func healthSummary(components map[string]ComponentHealth) HealthSummary {
-	summary := HealthSummary{TotalProbes: len(components)}
+func summarizeHealth(components map[string]componentHealth) healthSummary {
+	summary := healthSummary{TotalProbes: len(components)}
 	for _, component := range components {
 		switch {
 		case isFailing(component.Status):
