@@ -492,10 +492,15 @@ func TestRunHandsTheLaneOneOutcomePerMessage(t *testing.T) {
 func TestTracerCacheSurvivesAConcurrentReset(t *testing.T) {
 	setupTelemetry(t)
 
+	// One gate releases workers and resetter together, and the resets run in a
+	// joined goroutine: without both, the scheduler can drain every reset before
+	// the first tracer() call and the test proves nothing about the race.
+	start := make(chan struct{})
 	var wg sync.WaitGroup
 	var nilTracers atomic.Int64
 	for range 8 {
 		wg.Go(func() {
+			<-start
 			for range 200 {
 				if tracer() == nil { // no require in the worker: a Goexit there would hide the failure
 					nilTracers.Add(1)
@@ -503,9 +508,13 @@ func TestTracerCacheSurvivesAConcurrentReset(t *testing.T) {
 			}
 		})
 	}
-	for range 50 {
-		ResetTracerForTesting()
-	}
+	wg.Go(func() {
+		<-start
+		for range 200 {
+			ResetTracerForTesting()
+		}
+	})
+	close(start)
 	wg.Wait()
 	assert.Zero(t, nilTracers.Load(), "a delivery racing a reset must never see a nil tracer")
 }
