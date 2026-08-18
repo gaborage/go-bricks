@@ -17,12 +17,9 @@ const plaintextStreamScheme = "rabbitmq-stream"
 // when there are any, starts the stream-protocol consumers and binds the
 // declared publishers.
 //
-// Everything happens at RUNTIME on purpose: the manager does not exist while the
-// builder runs, so its readiness probe and its closer are both registered here
-// rather than by the build-time slot walks (Builder.CreateHealthProbes and
-// Builder.RegisterClosers), which are snapshotted before prepareRuntime runs.
-// This is safe because prepareRuntime is single-threaded and completes before the
-// server starts serving /ready.
+// Everything happens at RUNTIME on purpose: the manager does not exist until this
+// function produces it — see streamsSlot in slot.go for why its probe and closer are
+// registered separately from the build-time walks.
 func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	if a.registry == nil {
 		return errors.New("module registry not initialized")
@@ -68,8 +65,6 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	}
 
 	a.streamsManager = mgr
-	a.registerCloser("streams manager", mgr)
-	a.healthProbes = append(a.healthProbes, streamsProbe(mgr))
 
 	return nil
 }

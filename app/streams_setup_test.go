@@ -76,7 +76,6 @@ func TestPrepareStreamConsumersWithoutDeclarationsIsNoop(t *testing.T) {
 	require.NoError(t, a.prepareStreamConsumers(context.Background()))
 
 	assert.Nil(t, a.streamsManager)
-	assert.Empty(t, a.healthProbes, "a streams-free service keeps its probe list unchanged")
 	assert.Empty(t, a.closers)
 }
 
@@ -144,8 +143,7 @@ func TestPrepareStreamConsumersFailsWhenBrokerUnreachable(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to start stream consumers")
 	assert.NotContains(t, err.Error(), "guest:guest", "the stream URI's credentials must never reach an error message")
-	assert.Nil(t, a.streamsManager, "a failed start registers neither a probe nor a closer")
-	assert.Empty(t, a.healthProbes)
+	assert.Nil(t, a.streamsManager, "a failed start publishes no manager for the slot to register")
 	assert.Empty(t, a.closers)
 }
 
@@ -227,7 +225,6 @@ func TestPrepareStreamConsumersRejectsMultiTenantBypass(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "single-tenant only")
 	assert.Nil(t, a.streamsManager, "no Environment is built for a multi-tenant service")
-	assert.Empty(t, a.healthProbes)
 	assert.Empty(t, a.closers)
 }
 

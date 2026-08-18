@@ -112,6 +112,34 @@ func TestShutdownStopsServerBeforeModules(t *testing.T) {
 		"server must shut down before modules")
 }
 
+// TestShutdownStopsSlotsBeforeModules pins that the stop walk is wired into Shutdown at
+// all, and that ADR-029's order survives: every kind's inbound work is halted before any
+// module is torn down, so no module receives fresh work while it is shutting down. The
+// recording slots stand in for the real kinds because the property under test is the ORDER
+// of the two phases, not what either one does.
+func TestShutdownStopsSlotsBeforeModules(t *testing.T) {
+	order := []string{}
+	log := logger.New("error", false)
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	a := &App{
+		cfg:      cfg,
+		logger:   log,
+		registry: NewModuleRegistry(&ModuleDeps{Logger: log, Config: cfg}),
+		closers:  []namedCloser{},
+	}
+	a.slots = []resourceSlot{
+		&recordingSlot{kind: componentMessaging, order: &order},
+		&recordingSlot{kind: componentStreams, order: &order},
+	}
+	require.NoError(t, a.registry.Register(&recordingModule{onShutdown: func() {
+		order = append(order, "modules")
+	}}))
+
+	require.NoError(t, a.Shutdown(context.Background()))
+
+	assert.Equal(t, []string{"stop:messaging", "stop:streams", "modules"}, order)
+}
+
 func TestShutdownTiming(t *testing.T) {
 	// Test that the shutdown process completes within reasonable time
 	cfg := &config.Config{
@@ -199,6 +227,7 @@ func TestPrepareRuntimeWithScheduler(t *testing.T) {
 		server:   mockSrv,
 		closers:  []namedCloser{},
 	}
+	app.installSlots(slotInputs{})
 
 	// Call prepareRuntime
 	err = app.prepareRuntime(context.Background())
@@ -241,13 +270,15 @@ func newLifecycleCheckApp(t *testing.T, cfg *config.Config) *App {
 func newLifecycleCheckAppWithLogger(t *testing.T, cfg *config.Config, log logger.Logger) *App {
 	t.Helper()
 	deps := &ModuleDeps{Logger: log, Config: cfg}
-	return &App{
+	a := &App{
 		cfg:      cfg,
 		logger:   log,
 		registry: NewModuleRegistry(deps),
 		server:   newMockServer(),
 		closers:  []namedCloser{},
 	}
+	a.installSlots(slotInputs{})
+	return a
 }
 
 // TestPrepareRuntimeFailsWhenDeclarationsExistAndMessagingUnconfigured guards
@@ -282,10 +313,97 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
+// TestStartSlotsStopsAlreadyStartedKindsOnFatal pins the unwind on a failed start phase.
+// The kinds that came up own live inbound work — the messaging slot's consumers run under
+// context.WithoutCancel, so the aborting startup context never stops them — and Run returns
+// a prepareRuntime failure straight to the caller without calling Shutdown. Without this
+// unwind a service that failed to start would keep consuming after startup gave up.
+func TestStartSlotsStopsAlreadyStartedKindsOnFatal(t *testing.T) {
+	order := []string{}
+	a := &App{logger: logger.New("error", false)}
+	a.slots = []resourceSlot{
+		&recordingSlot{kind: componentDatabase, order: &order},
+		&recordingSlot{kind: componentMessaging, order: &order},
+		&recordingSlot{kind: componentCache, order: &order},
+		&recordingSlot{kind: componentStreams, order: &order, startFatal: assert.AnError},
+	}
+
+	err := a.startSlots(context.Background())
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{
+		"start:database", "start:messaging", "start:cache", "start:streams",
+		"stop:database", "stop:messaging", "stop:cache",
+	}, order, "every kind that started is stopped in registration order; the kind that failed is not")
+}
+
+// TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart pins the #907 grading end to
+// end, through the two arms that carry it: messagingSlot.start must return the bootstrap
+// failure as FATAL rather than advisory, and prepareRuntime must abort on it rather than
+// continue. A service that declared consumers and cannot start them would otherwise serve
+// HTTP while consuming nothing. The absent pre-warm WARN is the discriminator: graded as
+// advisory, the failure would be swallowed into that one line and startup would succeed.
+func TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart(t *testing.T) {
+	rec := &recLogger{}
+	a := newLifecycleCheckAppWithLogger(t, defaultTestConfig(), rec)
+	a.messagingManager = newFailingConsumerManager(t, rec, &failingBrokerURLProvider{})
+	a.messagingDeclarations = declaredConsumerFixture(t)
+
+	err := a.prepareRuntime(context.Background())
+
+	require.Error(t, err, "a declared-but-unstartable consumer set must abort startup")
+	assert.Contains(t, err.Error(), "failed to start single-tenant consumers")
+	assert.ErrorIs(t, err, errBrokerLookupFailed)
+
+	_, emitted := loggedEvent(rec, preWarmWarnMsg)
+	assert.False(t, emitted, "a fatal bootstrap aborts startup; it is never demoted to the pre-warm WARN")
+}
+
+// TestPrepareRuntimeReCollectsProbesAfterTheStartPhase pins the re-collect that replaced
+// prepareStreamConsumers' probe append. It starts from an emptied probe list so a deleted
+// re-collect cannot pass on the set the Builder already snapshotted: only the re-collect
+// can put the classic kinds back.
+func TestPrepareRuntimeReCollectsProbesAfterTheStartPhase(t *testing.T) {
+	cfg := &config.Config{
+		App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
+		Multitenant: config.MultitenantConfig{Enabled: false},
+	}
+	a := newLifecycleCheckApp(t, cfg)
+	a.healthProbes = nil
+
+	require.NoError(t, a.prepareRuntime(context.Background()))
+
+	assert.Equal(t,
+		[]string{componentDatabase, componentMessaging, componentCache},
+		probeNames(t, a.healthProbes),
+		"the start phase must be followed by a fresh probe collection")
+}
+
+// TestPrepareRuntimeRequiresInstalledSlots pins the fail-fast half of the walk's
+// precondition, mirroring Builder.requireSlots. Without it a slot-less App would start no
+// kind at all and then overwrite its probe list with an empty one — a service booting green
+// with no database, no consumers and a /ready body that reports nothing.
+func TestPrepareRuntimeRequiresInstalledSlots(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	log := logger.New("error", false)
+	a := &App{
+		cfg:      cfg,
+		logger:   log,
+		registry: NewModuleRegistry(&ModuleDeps{Logger: log, Config: cfg}),
+		server:   newMockServer(),
+		closers:  []namedCloser{},
+	} // deliberately no installSlots
+
+	err := a.prepareRuntime(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "slots not installed before prepareRuntime")
+}
+
 type preWarmCtxSentinelKey struct{}
 
 // ctxRecordingDBConfigProvider captures the sentinel carried by the context that
-// reaches DBConfig — the first ctx-aware seam below preWarmSingleTenant.
+// reaches DBConfig — the first ctx-aware seam below databaseSlot.start.
 type ctxRecordingDBConfigProvider struct {
 	mu   sync.Mutex
 	seen any
@@ -299,7 +417,7 @@ func (p *ctxRecordingDBConfigProvider) DBConfig(ctx context.Context, _ string) (
 }
 
 // TestPrepareRuntimePropagatesContextToPreWarm pins that prepareRuntime hands its
-// own ctx to preWarmSingleTenant instead of a fresh context.Background(): a
+// own ctx to the start phase instead of a fresh context.Background(): a
 // sentinel value on the caller's context must survive down to the pre-warm
 // database seam. The value is the right observable because resourcepool detaches
 // cancellation with context.WithoutCancel, which preserves values — so a deadline
@@ -327,7 +445,7 @@ func TestPrepareRuntimePropagatesContextToPreWarm(t *testing.T) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	assert.Equal(t, "from-prepare-runtime", provider.seen,
-		"prepareRuntime must pass its own context to preWarmSingleTenant; context.Background() drops the sentinel")
+		"prepareRuntime must pass its own context to the start phase; context.Background() drops the sentinel")
 }
 
 const (
@@ -338,7 +456,7 @@ const (
 )
 
 // staticDBConfigProvider resolves a usable single-tenant config, or fails with err
-// when set — the two outcomes that make preWarmSingleTenant succeed or return an error.
+// when set — the two outcomes that make the database pre-warm succeed or return an error.
 type staticDBConfigProvider struct{ err error }
 
 func (p staticDBConfigProvider) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
@@ -392,7 +510,7 @@ func TestPrepareRuntimeWarnsOnlyWhenPreWarmFails(t *testing.T) {
 
 			if tt.messagingOnly {
 				// dbManager stays nil: this row isolates the messagingManager-only
-				// pre-warm failure path (attemptMessagingPreWarm in prewarm.go).
+				// pre-warm failure path (messagingSlot.start in slot.go).
 				source := &failingBrokerURLProvider{}
 				a.messagingManager = newFailingConsumerManager(t, rec, source)
 				wantErrSubstring = errBrokerLookupFailed.Error()
@@ -970,9 +1088,9 @@ func runReadyCheck(t *testing.T, app *App, cfg *config.Config) (body map[string]
 }
 
 // TestReadyCheckOmitsStreamsWhenNoneDeclared pins that a streams-free probe set renders
-// neither streams key: the kind reaches the body only where prepareStreamConsumers
-// registered its probe. The probe set is the real one, so the classic kinds render and the
-// two assertions below are not passing on an empty body.
+// neither streams key: the kind reaches the body only via the probe re-collect that
+// prepareRuntime runs after the start phase. The probe set is the real one, so the classic
+// kinds render and the two assertions below are not passing on an empty body.
 func TestReadyCheckOmitsStreamsWhenNoneDeclared(t *testing.T) {
 	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
 	app := &App{cfg: cfg, logger: logger.New("error", false)}

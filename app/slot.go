@@ -2,14 +2,15 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/gaborage/go-bricks/config"
 )
 
 // A slot is the framework-side module that owns one resource kind's application lifecycle —
-// probe, pre-init, close — so that adding a kind is one slot, not an edit in every place
-// that enumerates kinds (CONTEXT.md, ADR-067).
+// probe, pre-init, start, stop, close — so that adding a kind is one slot, not an edit in
+// every place that enumerates kinds (CONTEXT.md, ADR-067).
 //
 // ADR-045: the interface lives in app/ and names only what app calls. The managers behind
 // it (database.DbManager, messaging.Manager, cache.CacheManager, streams.Manager) know
@@ -31,9 +32,19 @@ type resourceSlot interface {
 	// preInitFatal reports whether a preInit failure aborts startup.
 	preInitFatal() bool
 
+	// start brings the kind up in prepareRuntime. A non-nil fatal aborts startup at once; a
+	// non-nil advisory is aggregated into the single pre-warm WARN and never fails startup.
+	start(ctx context.Context) (advisory, fatal error)
+
+	// stop halts the kind's inbound work before module Shutdown (ADR-029). It never closes
+	// connections — that is the close phase, which runs after modules are torn down.
+	stop(ctx context.Context)
+
 	// closer hands over the resource the close phase must Close. ok is false when the kind
 	// has nothing to close yet, which is how an unconfigured kind and a streams manager that
-	// has not started stay out of the FIFO close list.
+	// has not started stay out of the FIFO close list. Builder.RegisterClosers walks every
+	// slot's closer at build time, for the kinds whose manager exists by then; the streams
+	// slot calls its own again from start, once its manager exists.
 	closer() (namedCloser, bool)
 }
 
@@ -63,6 +74,17 @@ func (a *App) installSlots(inputs slotInputs) {
 		&cacheSlot{app: a, absent: inputs.cacheAbsent},
 		&streamsSlot{app: a},
 	}
+}
+
+// requireSlots is the precondition every slot walk shares: CreateApp installed the slot
+// list. An empty walk would silently register no probe, no closer, pre-initialize nothing,
+// and start no kind at all — Builder.requireSlots and prepareRuntime both call this rather
+// than each carrying their own copy of the check.
+func (a *App) requireSlots(step string) error {
+	if len(a.slots) == 0 {
+		return fmt.Errorf("slots not installed before %s — CreateApp must run first", step)
+	}
+	return nil
 }
 
 // collectProbes is the readiness walk: every slot that has a description to register, in
@@ -116,6 +138,18 @@ func (s *databaseSlot) preInit(ctx context.Context) error {
 		})
 }
 
+// start pre-warms the single-tenant connection so the first request does not pay the dial.
+// Advisory only: a cold database is a runtime condition, and pre-init has already made a
+// *misconfigured* one fatal.
+func (s *databaseSlot) start(ctx context.Context) (advisory, fatal error) {
+	return s.app.preWarmKind(ctx, s.name(), "database connection",
+		s.app.dbManager != nil, s.app.preWarmDatabase), nil
+}
+
+func (s *databaseSlot) stop(context.Context) {
+	// no runtime teardown: the pool is released by the FIFO close list, via closer()
+}
+
 func (s *databaseSlot) closer() (namedCloser, bool) {
 	return slotCloser("database manager", s.app.dbManager)
 }
@@ -144,6 +178,23 @@ func (s *messagingSlot) preInit(ctx context.Context) error {
 			return release, err
 		})
 }
+
+// start runs the kind's two runtime steps in the order prepareRuntime always ran them: the
+// consumer bootstrap, whose failure is fatal once consumers were declared (#907), then the
+// single-tenant pre-warm, which is advisory.
+func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
+	// Values only, no cancellation: consumers outlive prepareRuntime and are stopped by
+	// the messaging slot's stop phase (shutdownConsumers, ADR-029), never by the startup
+	// context.
+	if err := s.app.prepareRuntimeConsumers(context.WithoutCancel(ctx), s.app.messagingDeclarations); err != nil {
+		return nil, err
+	}
+
+	return s.app.preWarmKind(ctx, s.name(), componentMessaging,
+		s.app.messagingManager != nil, s.app.preWarmMessaging), nil
+}
+
+func (s *messagingSlot) stop(context.Context) { s.app.shutdownConsumers() }
 
 func (s *messagingSlot) closer() (namedCloser, bool) {
 	return slotCloser("messaging manager", s.app.messagingManager)
@@ -185,6 +236,14 @@ func (s *cacheSlot) preInit(ctx context.Context) error {
 	return err
 }
 
+// start is a no-op: the cache has no runtime bootstrap and no single-tenant pre-warm —
+// preInit already leased the fixed "" key during Builder construction.
+func (s *cacheSlot) start(context.Context) (advisory, fatal error) { return nil, nil }
+
+func (s *cacheSlot) stop(context.Context) {
+	// no runtime teardown: the manager is released by the FIFO close list, via closer()
+}
+
 func (s *cacheSlot) closer() (namedCloser, bool) {
 	return slotCloser("cache manager", s.app.cacheManager)
 }
@@ -198,8 +257,8 @@ func (s *streamsSlot) name() string { return componentStreams }
 // probe withholds a description until the manager exists. Registering a disabled one at
 // build time would add "streams" and "streams_stats" to the /ready body of every service in
 // the fleet, the overwhelming majority of which never declared a stream (ADR-066 rule 5
-// renders every registered kind). prepareStreamConsumers registers the description once it
-// has produced the manager, so it appears exactly where the runtime registration put it.
+// renders every registered kind). prepareRuntime re-collects after the start phase, so the
+// description appears exactly where the runtime registration put it.
 func (s *streamsSlot) probe() (probeDescription, bool) {
 	if s.app.streamsManager == nil {
 		return probeDescription{}, false
@@ -210,6 +269,19 @@ func (s *streamsSlot) probe() (probeDescription, bool) {
 func (s *streamsSlot) preInit(context.Context) error { return nil }
 
 func (s *streamsSlot) preInitFatal() bool { return false }
+
+// start builds the stream environment and starts the declared consumers and publishers,
+// then puts the manager on the FIFO close list — see prepareStreamConsumers for why a
+// failure here is fatal. PR5 folds prepareStreamConsumers' body in here.
+func (s *streamsSlot) start(ctx context.Context) (advisory, fatal error) {
+	if err := s.app.prepareStreamConsumers(ctx); err != nil {
+		return nil, err
+	}
+	s.app.registerSlotCloser(s)
+	return nil, nil
+}
+
+func (s *streamsSlot) stop(context.Context) { s.app.shutdownStreamConsumers() }
 
 func (s *streamsSlot) closer() (namedCloser, bool) {
 	return slotCloser("streams manager", s.app.streamsManager)
@@ -226,6 +298,41 @@ func slotCloser[T any, P interface {
 		return namedCloser{}, false
 	}
 	return namedCloser{name: name, closer: mgr}, true
+}
+
+// preWarmSubject is the operator-facing name of the thing warmed, distinct from kind (a
+// plain string) so a slot's own name() cannot be passed into the subject parameter by
+// mistake — the two would otherwise be interchangeable positional strings.
+type preWarmSubject string
+
+// preWarmKind is the arm the two single-tenant pre-warming kinds share. subject names the
+// thing warmed in the two operator-facing lines, which is not the kind's own name for the
+// database ("database connection" vs "messaging"); present is the kind's manager-built
+// verdict, which only the slot can read. Multi-tenant deployments resolve per tenant, so
+// the fixed "" key is never warmed; a not-configured kind is a silent skip; anything else
+// is advisory, never fatal.
+func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubject, present bool,
+	warm func(context.Context) error,
+) error {
+	if a.multiTenant() {
+		return nil
+	}
+	if !present {
+		a.logger.Debug().Msgf("Skipping single-tenant %s pre-warming: manager unavailable", kind)
+		return nil
+	}
+
+	if err := warm(ctx); err != nil {
+		if config.IsNotConfigured(err) {
+			a.logger.Debug().Msgf("Skipping single-tenant %s pre-warming: not configured", kind)
+			return nil
+		}
+		a.logger.Warn().Err(err).Msgf("Failed to pre-warm single-tenant %s", subject)
+		return fmt.Errorf("%s pre-warming failed: %w", kind, err)
+	}
+
+	a.logger.Info().Msgf("Pre-warmed single-tenant %s", subject)
+	return nil
 }
 
 // preInitLease is the arm the two startup-fatal kinds share: an unconfigured kind is skipped

@@ -314,6 +314,21 @@ func loggedMsgContains(rec *recLogger, substr string) bool {
 	return ok
 }
 
+// loggedCount reports how many log lines rec recorded whose message contains
+// substr — the "exactly once" form of loggedEvent, for call sites that must tell
+// one emission of a line apart from two.
+func loggedCount(rec *recLogger, substr string) int {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	n := 0
+	for _, e := range rec.events {
+		if strings.Contains(e.msg, substr) {
+			n++
+		}
+	}
+	return n
+}
+
 // debugProbe is one request issued against a registered debug group: the peer address and
 // Authorization header it carries, and the HTTP status the access-control chain must answer.
 type debugProbe struct {

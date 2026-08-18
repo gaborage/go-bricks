@@ -25,13 +25,16 @@ func (m *simpleTestModule) Shutdown() error          { return nil }
 
 // newMinimalMessagingApp builds the minimal App shared by the pre-warm and
 // consumer-bootstrap test suites: a logger, the messaging manager under test,
-// and the config each call site cares about.
+// and the config each call site cares about, with the slots installed so the
+// start phase is reachable.
 func newMinimalMessagingApp(log logger.Logger, manager *messaging.Manager, cfg *config.Config) *App {
-	return &App{
+	a := &App{
 		logger:           log,
 		messagingManager: manager,
 		cfg:              cfg,
 	}
+	a.installSlots(slotInputs{})
+	return a
 }
 
 // errBrokerLookupFailed stands in for the broker-config and broker-availability

@@ -40,13 +40,21 @@ func newPrewarmTestManager(log logger.Logger, client *testmocks.MockAMQPClient) 
 		messaging.ManagerOptions{MaxPublishers: 5, IdleTTL: time.Hour}, factory)
 }
 
-// TestPreWarmSingleTenantSkipsAbsentManagers pins the absence guard: with neither
-// manager built, pre-warming is a silent no-op and never reports a problem.
-func TestPreWarmSingleTenantSkipsAbsentManagers(t *testing.T) {
-	a := &App{logger: logger.New("debug", true), cfg: &config.Config{}}
+// TestSlotStartSkipsAbsentManagers pins the absence guard: with neither manager built, the
+// start phase is a silent no-op and never reports a problem.
+func TestSlotStartSkipsAbsentManagers(t *testing.T) {
+	log := logger.New("debug", true)
+	cfg := &config.Config{}
+	// The streams kind's "absent" is a registry that declares no stream, so it gets one:
+	// its start delegates to prepareStreamConsumers, which refuses a nil registry outright.
+	a := &App{logger: log, cfg: cfg, registry: NewModuleRegistry(&ModuleDeps{Logger: log, Config: cfg})}
+	a.installSlots(slotInputs{})
 
-	require.NoError(t, a.preWarmSingleTenant(context.Background(), messaging.NewDeclarations()))
-	require.NoError(t, a.preWarmSingleTenant(context.Background(), nil))
+	for _, slot := range a.slots {
+		advisory, fatal := slot.start(context.Background())
+		require.NoError(t, fatal, slot.name())
+		require.NoError(t, advisory, slot.name())
+	}
 }
 
 func TestAppAwaitPublisherReady(t *testing.T) {
@@ -123,7 +131,7 @@ func TestAppPublisherReadinessTimeout(t *testing.T) {
 	}
 }
 
-func TestPreWarmSingleTenantAwaitsPublisherReadiness(t *testing.T) {
+func TestMessagingSlotStartAwaitsPublisherReadiness(t *testing.T) {
 	log := logger.New("debug", true)
 	client := newPrewarmMockClient()
 	manager := newPrewarmTestManager(log, client)
@@ -137,15 +145,16 @@ func TestPreWarmSingleTenantAwaitsPublisherReadiness(t *testing.T) {
 	}()
 
 	start := time.Now()
-	err := a.preWarmSingleTenant(context.Background(), nil)
+	err, fatal := slotOf(t, a, componentMessaging).start(context.Background())
 	elapsed := time.Since(start)
 
+	require.NoError(t, fatal, "pre-warming is never fatal")
 	assert.NoError(t, err)
 	assert.Less(t, elapsed, defaultPreWarmReadinessTimeout,
 		"must return once the client reports ready, not wait out the full budget")
 }
 
-func TestPreWarmSingleTenantContinuesWhenPublisherNeverReady(t *testing.T) {
+func TestMessagingSlotStartContinuesWhenPublisherNeverReady(t *testing.T) {
 	log := logger.New("debug", true)
 	client := newPrewarmMockClient() // never flips ready
 	manager := newPrewarmTestManager(log, client)
@@ -158,17 +167,18 @@ func TestPreWarmSingleTenantContinuesWhenPublisherNeverReady(t *testing.T) {
 	})
 
 	start := time.Now()
-	err := a.preWarmSingleTenant(context.Background(), nil)
+	err, fatal := slotOf(t, a, componentMessaging).start(context.Background())
 	elapsed := time.Since(start)
 
 	// Not-ready-in-time is a WARN, not a startup failure — pre-warm must not
 	// propagate an error; PublishToExchange's own readytimeout pre-flight will
 	// still absorb a slow first publish later.
+	require.NoError(t, fatal, "pre-warming is never fatal")
 	assert.NoError(t, err)
 	assert.Less(t, elapsed, time.Second, "must return once the configured budget elapses, not the 5s fallback")
 }
 
-func TestPreWarmSingleTenantPropagatesContextCancellation(t *testing.T) {
+func TestMessagingSlotStartPropagatesContextCancellation(t *testing.T) {
 	log := logger.New("debug", true)
 	client := newPrewarmMockClient() // never flips ready
 	manager := newPrewarmTestManager(log, client)
@@ -180,11 +190,12 @@ func TestPreWarmSingleTenantPropagatesContextCancellation(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	err := a.preWarmSingleTenant(ctx, nil)
+	err, fatal := slotOf(t, a, componentMessaging).start(ctx)
 	elapsed := time.Since(start)
 
 	// Cancellation means shutdown/startup abort, not a broker-readiness problem —
 	// it propagates instead of being mislabeled by the generic not-ready WARN.
+	require.NoError(t, fatal, "pre-warming is never fatal")
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, elapsed, time.Second, "must return once ctx expires")
 }
@@ -192,8 +203,8 @@ func TestPreWarmSingleTenantPropagatesContextCancellation(t *testing.T) {
 // declaredConsumerFixture returns declarationsWithConsumer() (see
 // messaging_setup_test.go) plus the queue its one consumer references, so
 // Declarations.Validate() — which rejects a consumer pointing at an
-// unregistered queue — accepts it. Shared by both preWarmMessaging tests
-// below, which need a non-nil, non-empty, genuinely valid declaration set.
+// unregistered queue — accepts it. Shared by every call site that needs a
+// non-nil, non-empty, genuinely valid declaration set.
 func declaredConsumerFixture(t *testing.T) *messaging.Declarations {
 	t.Helper()
 	decls := declarationsWithConsumer()
@@ -202,13 +213,24 @@ func declaredConsumerFixture(t *testing.T) *messaging.Declarations {
 	return decls
 }
 
-// TestPreWarmMessagingEnsuresDeclaredConsumers pins the success half of the
-// consumer-ensure branch in preWarmMessaging (prewarm.go:104): a manager whose
-// EnsureConsumers actually succeeds must return nil and log the "Ensured
-// messaging consumers" INFO line before ever reaching the publisher. Negating
-// `err != nil` to `err == nil` there would turn this success into a spurious
-// error and skip the log line — see also the failure-side pin below.
-func TestPreWarmMessagingEnsuresDeclaredConsumers(t *testing.T) {
+// consumerBootstrapAnnouncements counts the app-layer lines announcing a consumer
+// bootstrap: the surviving one prepareRuntimeConsumers emits, plus the retired one
+// preWarmMessaging emitted from its own second EnsureConsumers call. The mock client's
+// ConsumeFromQueue count cannot stand in for it — the manager's replay cache absorbs a
+// duplicate EnsureConsumers silently, so the broker-facing calls read 1 whether the
+// bootstrap ran once or twice.
+func consumerBootstrapAnnouncements(rec *recLogger) int {
+	return loggedCount(rec, "Single-tenant consumers started successfully") +
+		loggedCount(rec, "Ensured messaging consumers")
+}
+
+// TestMessagingSlotStartBootstrapsConsumersOnce pins where the consumer bootstrap lives:
+// once, in prepareRuntimeConsumers. preWarmMessaging used to run EnsureConsumers a second
+// time on the way to the publisher, which announced the same bootstrap twice and left one
+// failure reachable under two different gradings — fatal from the bootstrap, advisory from
+// the pre-warm. The slot's start must now bootstrap exactly once and go straight on to
+// publisher readiness.
+func TestMessagingSlotStartBootstrapsConsumersOnce(t *testing.T) {
 	rec := &recLogger{}
 	client := testmocks.NewMockAMQPClient() // defaults to ready
 	client.ExpectClose(nil)
@@ -219,36 +241,14 @@ func TestPreWarmMessagingEnsuresDeclaredConsumers(t *testing.T) {
 	defer func() { _ = manager.Close() }()
 
 	a := newMinimalMessagingApp(rec, manager, &config.Config{})
+	a.messagingDeclarations = declaredConsumerFixture(t)
 
-	require.NoError(t, a.preWarmMessaging(context.Background(), declaredConsumerFixture(t)))
+	advisory, fatal := slotOf(t, a, componentMessaging).start(context.Background())
 
-	event, emitted := loggedEvent(rec, "Ensured messaging consumers")
-	require.True(t, emitted, "preWarmMessaging must log once EnsureConsumers succeeds")
-	assert.Equal(t, "info", event.level)
-}
-
-// TestPreWarmMessagingWrapsEnsureConsumersFailure pins the failure half of the
-// same branch: a manager whose EnsureConsumers fails must return an error
-// wrapping "failed to ensure consumers" and must never reach the publisher —
-// Publisher() re-resolves the broker URL on a cold key, so a call count stuck
-// at 1 proves it was never invoked. Negating `err != nil` to `err == nil`
-// there would swallow the failure, log the success line anyway, and fall
-// through into Publisher.
-func TestPreWarmMessagingWrapsEnsureConsumersFailure(t *testing.T) {
-	rec := &recLogger{}
-	source := &failingBrokerURLProvider{}
-	manager := newFailingConsumerManager(t, rec, source)
-	defer func() { _ = manager.Close() }()
-
-	a := newMinimalMessagingApp(rec, manager, &config.Config{})
-
-	err := a.preWarmMessaging(context.Background(), declaredConsumerFixture(t))
-
-	require.Error(t, err)
-	assert.ErrorIs(t, err, errBrokerLookupFailed)
-	assert.ErrorContains(t, err, "failed to ensure consumers")
-	assert.Equal(t, 1, source.callCount(), "Publisher must never be reached once EnsureConsumers fails")
-
-	_, emitted := loggedEvent(rec, "Ensured messaging consumers")
-	assert.False(t, emitted, "the success log must not fire when EnsureConsumers fails")
+	require.NoError(t, fatal)
+	require.NoError(t, advisory)
+	assert.Equal(t, 1, consumerBootstrapAnnouncements(rec),
+		"the consumer bootstrap runs once per start, in prepareRuntimeConsumers")
+	assert.Equal(t, 1, loggedCount(rec, "Pre-warmed messaging publisher"),
+		"the pre-warm still reaches the publisher it exists to warm")
 }

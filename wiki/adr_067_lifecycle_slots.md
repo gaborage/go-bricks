@@ -1,6 +1,6 @@
 # ADR-067: Slots Own the Per-Kind Lifecycle
 
-**Status:** Proposed — flips to Accepted when the last slot slice (the streams start phase) merges; the first slice (dead-surface removal, atom `[C60.4]`) is shipped
+**Status:** Proposed — flips to Accepted when the last slot slice (the streams fold, PR5) merges; the first slice (dead-surface removal, atom `[C60.4]`) is shipped
 **Date:** 2026-08-17
 **Builds on:** [ADR-066](adr_066_readiness_one_module.md) (readiness is one module — a
 *probe description* is what a slot hands readiness), [ADR-045](adr_045_no_producer_side_manager_interfaces.md)
