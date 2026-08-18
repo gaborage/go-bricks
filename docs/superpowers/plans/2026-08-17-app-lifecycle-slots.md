@@ -1501,10 +1501,9 @@ func (s *databaseSlot) start(ctx context.Context) (advisory, fatal error) {
 func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
 	decls := s.app.messagingDeclarations
 
-	// Bare context.Background(), not ctx: consumers outlive prepareRuntime and are stopped by
-	// stop() (ADR-029), never by the startup context — EnsureConsumers severs the caller's
-	// cancellation internally, so only its values would have carried.
-	if err := s.app.prepareRuntimeConsumers(context.Background(), decls); err != nil {
+	// Values only, no cancellation: consumers outlive prepareRuntime and are stopped by
+	// stop() (ADR-029), never by the startup context.
+	if err := s.app.prepareRuntimeConsumers(context.WithoutCancel(ctx), decls); err != nil {
 		return nil, err
 	}
 
@@ -1556,7 +1555,8 @@ In `app/lifecycle.go`, replace the head of `prepareRuntime` — everything from 
 // prepareRuntime prepares the application for runtime execution. ctx is the
 // startup context: components it starts that outlive startup inherit that
 // context's values rather than beginning from a bare context.Background().
-// The AMQP consumer step is the one exception — see messagingSlot.start.
+// The AMQP consumer step inherits only ctx's values, never its cancellation —
+// see messagingSlot.start.
 func (a *App) prepareRuntime(ctx context.Context) error {
 	if err := a.buildMessagingDeclarations(); err != nil {
 		return err
@@ -1862,17 +1862,18 @@ make check
 
 Expected: PASS. The linters most likely to fire on this diff are `unused` (an orphaned helper missed in Task 2 or 3), `gci`/`gofumpt` (import ordering in the new `app/slot.go` — `standard`, then third party, then `prefix(github.com/gaborage/go-bricks)`), and `dupl` at threshold 100 (the four slots' `closer` methods are three lines each, well under it, but check the finding rather than assuming). Fix findings; never `//nolint`.
 
-Then, once `make check` is green and nothing further changed:
+Then, once `make check` is green and nothing further changed, the controller runs the
+mutation gate (implementers never do — Global Constraints):
 
 ```bash
-make mutate
+make mutate   # controller-run
 ```
 
 Expected: a summary naming a non-zero mutant count on changed lines and zero survivors. An empty result is **not** a pass — commit first (the scope is `merge-base..HEAD`), and confirm the run printed `(N mutants on changed lines)` with N > 0.
 
 - [ ] **Step 5: Run the pre-push agent gates in order**
 
-`/simplify` → `make check` if it changed code → `/security-audit` → `make check` if it changed code → `/code-review` (CodeRabbit) → `make check` + `make mutate` if it changed code, then `/code-review` again.
+`/simplify` → `make check` if it changed code → `/security-audit` → `make check` if it changed code → `/code-review` (CodeRabbit) → `make check` + the controller re-running `make mutate` if it changed code, then `/code-review` again. (Task 4 is the controller's task; implementers never run `make mutate`.)
 
 The security-relevant surface a reviewer should be pointed at: `probeDescription.name` still reaches the unauthenticated `/ready` body, and every slot's `probe()` feeds it only the four fixed component constants; the public-stats allowlists are untouched; and the `stop` → module `Shutdown` → close ordering (ADR-029) now runs through two loops rather than five explicit calls.
 

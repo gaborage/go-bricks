@@ -1209,6 +1209,26 @@ func TestPerformPreInitializationContinuesPastABestEffortKind(t *testing.T) {
 	assert.Equal(t, "warn", event.level)
 }
 
+// TestPerformPreInitializationSkipsWhenAppCarriesNoConfig pins the nil-config guard: the
+// slots read cfg for their configured/budget answers, so a Builder whose App never received
+// a config (WithConfig never ran) must skip the walk instead of reaching a slot that would
+// dereference nil.
+func TestPerformPreInitializationSkipsWhenAppCarriesNoConfig(t *testing.T) {
+	order := []string{}
+	builder := &Builder{
+		logger: logger.New("error", false),
+		app:    &App{logger: logger.New("error", false)},
+	}
+	builder.app.slots = []resourceSlot{
+		&recordingSlot{kind: componentDatabase, order: &order},
+	}
+
+	builder.performPreInitialization()
+
+	require.NoError(t, builder.err)
+	assert.Empty(t, order, "no slot pre-init must run without a config")
+}
+
 // TestAppBuilderStepsRequireInstalledSlots pins that the two steps walking App.slots fail
 // fast when CreateApp never installed them: an empty walk would register no probe at all and
 // leave /ready answering an unconditional 200.

@@ -302,6 +302,13 @@ func (b *Builder) performPreInitialization() {
 	if !b.requireSlots("pre-initialization") {
 		return
 	}
+	// The slots read cfg for their configured/budget answers, so an App assembled without a
+	// config (WithConfig never ran) has nothing to pre-initialize — skip the walk rather than
+	// let a slot dereference nil.
+	if b.app.cfg == nil {
+		b.logger.Debug().Msg("Skipping pre-initialization: no config")
+		return
+	}
 
 	// Single parent context for the whole pre-init phase; each slot derives its own budget
 	// from it via startupContext so all of them share one cancellation lineage. The context

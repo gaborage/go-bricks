@@ -1005,9 +1005,10 @@ these values. Fixes [#818](https://github.com/gaborage/go-bricks/issues/818). Se
 `cache.NewCacheManager` rejected its options — defeating the intent `BuildCacheOptions`
 documents one function away, that a negative `cache.manager.*` value "must pass through and
 fail loudly there instead of being silently swallowed into a live pool". The nil then
-bypassed ADR-046 entirely: the probe walk (`createHealthProbes` then; the cache slot's `probe`
-since ADR-067) registered a cache probe only when the manager was non-nil, so with no manager there was no probe, `/ready` reported the cache
-`disabled`, and the pod answered `200` — a service that asked for a cache, got none, and
+bypassed ADR-046 entirely: the probe walk of the time (`createHealthProbes`) registered a
+cache probe only when the manager was non-nil, so with no manager there was no probe (since
+ADR-067 the cache slot always registers its probe and a nil manager is the probe's `disabled`
+result), `/ready` reported the cache `disabled`, and the pod answered `200` — a service that asked for a cache, got none, and
 joined the rotation. Two paths reached it, and neither is the obvious one:
 `app.NewWithConfig` with a hand-assembled `*config.Config` (that constructor never runs
 `config.Validate`, so nothing checks the pool values), and `cache.enabled: false` carrying a
