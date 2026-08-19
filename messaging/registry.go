@@ -846,19 +846,15 @@ func logProcessing(log logger.Logger, traceID string, delivery *amqp.Delivery) {
 func logOutcome(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery) {
 	switch res.Outcome {
 	case pipeline.Succeeded:
-		res.Log.Info().
-			Str("correlation_id", res.TraceID).
+		pipeline.AppendOutcome(res.Log.Info(), res).
 			Str("message_id", delivery.MessageId).
-			Dur("processing_time", res.Duration).
 			Msg("Message processed successfully")
 	case pipeline.HandlerError:
-		buildFailureLogEvent(res.Log, res.TraceID, delivery, consumer, res.Duration).
+		buildFailureLogEvent(res, consumer, delivery).
 			Err(res.Err).
 			Msg("Message processing failed - discarding without requeue")
 	case pipeline.Panicked:
-		buildFailureLogEvent(res.Log, res.TraceID, delivery, consumer, res.Duration).
-			Interface("panic", res.Panic).
-			Bytes("stack", res.Stack).
+		buildFailureLogEvent(res, consumer, delivery).
 			Msg("Panic recovered in message handler - discarding without requeue")
 	}
 }
@@ -893,26 +889,15 @@ func nackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
 
 // buildFailureLogEvent creates a structured log event for failed message processing.
 // Provides consistent error logging across panic and error paths.
-func buildFailureLogEvent(
-	log logger.Logger,
-	traceID string,
-	delivery *amqp.Delivery,
-	consumer *ConsumerDeclaration,
-	processingTime time.Duration,
-) logger.LogEvent {
-	// Two correlation_id stamps, deliberately: the trace ID reproduces what the
-	// per-delivery logger used to contribute, the AMQP one is the pre-existing
-	// event field. Order matters — a parser takes the last.
-	return log.Error().
-		Str("correlation_id", traceID).
+func buildFailureLogEvent(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery) logger.LogEvent {
+	return pipeline.AppendOutcome(res.Log.Error(), res).
 		Str("message_id", delivery.MessageId).
 		Str("queue", consumer.Queue).
 		Str("event_type", consumer.EventType).
-		Str("correlation_id", delivery.CorrelationId).
+		Str("amqp_correlation_id", delivery.CorrelationId).
 		Str("consumer_tag", delivery.ConsumerTag).
 		Str("routing_key", delivery.RoutingKey).
-		Str("exchange", delivery.Exchange).
-		Dur("processing_time", processingTime)
+		Str("exchange", delivery.Exchange)
 }
 
 // Publishers returns all registered publishers (for documentation/monitoring)

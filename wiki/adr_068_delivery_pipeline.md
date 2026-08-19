@@ -51,9 +51,10 @@ and `span_id`.
 A lane hands over its span extras, its `tracking.ConsumeAttributes`, its
 destination and its log closure. The pipeline decides that they are emitted
 exactly once, at completion. Every value the classic lane emitted before — span
-name, kind and all eight attributes; four log lines with their exact fields,
-including the two deliberate `correlation_id` stamps on a failure line; the OTel
-RabbitMQ destination strings — is emitted unchanged.
+name, kind and all eight attributes; four log lines with their exact fields and
+message texts; the OTel RabbitMQ destination strings — is emitted unchanged. The
+failure line's second `correlation_id` stamp is renamed `amqp_correlation_id`
+later in the same release, once both lanes share one outcome spine (`[C60.7]`).
 
 ### The consumed counter moves, and that is the only telemetry that does
 

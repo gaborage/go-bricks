@@ -84,7 +84,8 @@ const (
 // Handler invokes the module's handler for one message. The pipeline owns the
 // per-message context, so it hands over the two things derived from it that a
 // lane needs before its own handler runs: the context-bound logger and the
-// trace ID.
+// trace ID. ctx carries the same id (trace.IDFromContext); the parameter is
+// kept so a lane's own hot path does not pay a context lookup for it.
 type Handler func(ctx context.Context, log logger.Logger, traceID string) error
 
 // Request is what one lane hands the pipeline for one message. Handle and
@@ -133,6 +134,18 @@ type Result struct {
 	Stack    []byte
 }
 
+// AppendOutcome stamps the outcome fields both lanes share. The caller creates
+// the event, so the level, the lane's own fields and the message text stay with
+// the lane.
+func AppendOutcome(e logger.LogEvent, res *Result) logger.LogEvent {
+	e = e.Str("correlation_id", res.TraceID).
+		Dur("processing_time", res.Duration)
+	if res.Outcome == Panicked {
+		e = e.Interface("panic", res.Panic).Bytes("stack", res.Stack)
+	}
+	return e
+}
+
 // Run puts one message through the delivery pipeline and returns the outcome for
 // the lane to settle. It never returns nil, and a handler panic never escapes: it
 // becomes a Panicked result carrying the recovered value, its stack, and an
@@ -156,8 +169,16 @@ func Run(ctx context.Context, req *Request) *Result {
 	defer scope.ReleaseAll()
 	defer span.End()
 
+	// EnsureTraceID mints without writing back, so an id it minted must be planted
+	// here or trace.IDFromContext stays empty inside the handler and every later
+	// call mints a different one. ExtractFromHeaders already planted a carried id.
+	traceID, carried := gobrickstrace.IDFromContext(msgCtx)
+	if !carried {
+		traceID = gobrickstrace.EnsureTraceID(msgCtx)
+		msgCtx = gobrickstrace.WithTraceID(msgCtx, traceID)
+	}
+
 	log := req.Log.WithContext(msgCtx)
-	traceID := gobrickstrace.EnsureTraceID(msgCtx)
 
 	res := invoke(msgCtx, log, traceID, req.Handle)
 	res.Duration = time.Since(start)
