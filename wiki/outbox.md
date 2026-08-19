@@ -151,9 +151,10 @@ Consequences worth knowing:
   corruption (undecodable headers, which the framework essentially never produces).
 - **`maxretries` bounds poison only.** Connectivity failures (including a permanently-failing publish)
   retry indefinitely with a climbing `retry_count` — monitor that growth to catch a stuck event.
-- **The persisted error text is bounded to 1 KiB.** A failed attempt records why in the row's
-  `error` column (`error_msg` on Oracle), and that text comes from the broker or driver rather
-  than from the framework. Since a connectivity failure retries forever and rewrites the column
+- **The relay bounds the error text it persists to 1 KiB.** A failed attempt records why in the
+  row's `error` column (`error_msg` on Oracle), and that text comes from the broker or driver
+  rather than from the framework. The bound sits in the relay, not in `Store`, so a hand-rolled
+  relay writing that column directly is responsible for its own. Since a connectivity failure retries forever and rewrites the column
   every cycle, an unbounded message would be unbounded storage per retry on a table a service
   cannot drop. Longer text is **truncated**, not discarded — it is diagnostic and nothing keys
   on it, so a shortened error still says what went wrong — and a truncated value ends in
