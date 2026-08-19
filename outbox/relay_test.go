@@ -589,6 +589,15 @@ func TestBoundPersistedErrorMakesArbitraryTextSafeToStore(t *testing.T) {
 		// PostgreSQL rejects invalid UTF-8 outright: the UPDATE would fail and
 		// retry_count would never advance, retrying forever over text nobody reads.
 		{name: "invalid_utf8_is_dropped", in: "err: " + string([]byte{0xff, 0xfe}) + " tail", wantExact: "err:  tail"},
+		// The pair that matters: invalid BYTES are dropped by ToValidUTF8 above,
+		// so by the time the mapping runs, a U+FFFD is a character the sender
+		// actually wrote. Substituting it would silently discard real content,
+		// and the two cases together pin the seam between the two behaviors.
+		{
+			name:      "a_genuine_replacement_character_survives",
+			in:        "broker said \ufffd here",
+			wantExact: "broker said \ufffd here",
+		},
 		{name: "at_the_cap_is_untouched", in: strings.Repeat("a", maxPersistedErrorBytes), wantExact: strings.Repeat("a", maxPersistedErrorBytes)},
 		{name: "one_over_the_cap_truncates", in: strings.Repeat("a", maxPersistedErrorBytes+1), truncated: true},
 		{name: "pathological_10kb_truncates", in: strings.Repeat("broker unreachable; ", 512), truncated: true},

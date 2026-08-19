@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -353,12 +352,14 @@ const truncationMarker = "...[truncated]"
 //     because the framework could not write down why it failed.
 //   - Control bytes become spaces. This text is read back into logs and
 //     dashboards, and a broker-supplied newline should not be able to forge a
-//     log line there.
-//   - The result is capped, on a rune boundary so the column never receives a
-//     half-encoded character.
+//     log line there. Only control bytes: ToValidUTF8 has already removed every
+//     invalid sequence, so a U+FFFD reaching here is one the sender actually
+//     wrote, and substituting it would drop a character nothing is wrong with.
+//   - The result is capped without leaving a half-encoded character in the
+//     column.
 func boundPersistedError(errMsg string) string {
 	cleaned := strings.Map(func(r rune) rune {
-		if r == utf8.RuneError || unicode.IsControl(r) {
+		if unicode.IsControl(r) {
 			return ' '
 		}
 		return r
