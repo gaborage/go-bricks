@@ -184,10 +184,10 @@ an exemplar resolves to a per-message trace containing that one delivery. That i
 expected, not a gap.
 
 **One configuration is worth naming**, because it fails quietly:
-`observability.enabled: true` with `trace.enabled: false` leaves metrics flowing
-while every exemplar is silently dropped and `trace_id`/`span_id` vanish from log
-lines — leaving `correlation_id` as the only correlation anywhere. Nothing errors
-and nothing warns.
+`observability.enabled: true` with `observability.trace.enabled: false` leaves
+metrics flowing while every exemplar is silently dropped and `trace_id`/`span_id`
+vanish from log lines — leaving `correlation_id` as the only correlation
+anywhere. Nothing errors and nothing warns.
 
 ## Custom Metrics
 
