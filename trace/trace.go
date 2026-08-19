@@ -124,10 +124,16 @@ func ExtractFromHeaders(ctx context.Context, headers HeaderAccessor) context.Con
 	return traceCtx
 }
 
-// extractRequestID extracts X-Request-ID header
+// extractRequestID extracts the X-Request-ID header. Validation runs AFTER
+// coercion, because safeToString renders any AMQP field type — []byte, ints, a
+// nested Table as map[k:v] — and the charset rejects those renderings naturally.
+//
+// A rejected value plants nothing and returns ctx unchanged, which is what opens
+// extractTraceParent's derivation guard so the traceparent-derived id wins
+// instead. Discarding rather than truncating is deliberate: see ValidateRequestID.
 func extractRequestID(ctx context.Context, headers HeaderAccessor) context.Context {
 	if v := headers.Get(HeaderXRequestID); v != nil {
-		if traceID := safeToString(v); traceID != "" {
+		if traceID := ValidateRequestID(safeToString(v)); traceID != "" {
 			return WithTraceID(ctx, traceID)
 		}
 	}
@@ -141,7 +147,11 @@ func extractTraceParent(ctx context.Context, headers HeaderAccessor) context.Con
 		return ctx
 	}
 
-	tp := safeToString(v)
+	// Validate before storing anything: the raw traceparent was previously kept
+	// verbatim and re-emitted on every outbound hop, and forceAlignTraceID
+	// re-emits the raw request id whenever the traceparent is malformed — the one
+	// condition under which a poisoned value escapes onto the next hop.
+	tp := ValidateTraceParent(safeToString(v))
 	if tp == "" {
 		return ctx
 	}
@@ -160,8 +170,16 @@ func extractTraceParent(ctx context.Context, headers HeaderAccessor) context.Con
 
 // extractTraceState extracts tracestate header
 func extractTraceState(ctx context.Context, headers HeaderAccessor) context.Context {
+	// tracestate only means something alongside the traceparent it accompanies.
+	// Storing it without one leaves orphan state that InjectIntoHeaders would
+	// re-emit attached to a freshly generated trace it never belonged to. This
+	// runs after extractTraceParent, so a stored parent means a validated one.
+	if _, hasParent := ParentFromContext(ctx); !hasParent {
+		return ctx
+	}
 	if v := headers.Get(HeaderTraceState); v != nil {
-		if ts := safeToString(v); ts != "" {
+		// Cap only, no grammar — see MaxTraceStateBytes for why.
+		if ts := safeToString(v); ts != "" && len(ts) <= MaxTraceStateBytes {
 			return WithTraceState(ctx, ts)
 		}
 	}

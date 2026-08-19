@@ -993,7 +993,7 @@ the test file is the right home — a framework exporting test-timing values con
 since no production code ever read them.
 
 **Key Benefits:** Three exported symbols leave the public surface along with a comment asserting a
-convention the codebase never followed; nothing behavioural changes, since no framework code read
+convention the codebase never followed; nothing behavioral changes, since no framework code read
 these values. Fixes [#818](https://github.com/gaborage/go-bricks/issues/818). See
 [migrations.md](migrations.md) `[C58.2]`.
 
@@ -1394,6 +1394,24 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-070: Inbound Trace Identifiers Are Validated at the Trace Seam](adr_070_inbound_trace_identifier_validation.md)
+
+**Date:** 2026-08-19 | **Status:** Accepted
+
+`trace.ExtractFromHeaders` stored every inbound identifier verbatim, tested only for non-emptiness.
+That is a remote availability attack on a shared resource: an `X-Request-ID` over 255 bytes reaches
+`amqp.Publishing.CorrelationId`, amqp091's `writeShortstr` refuses it, and amqp091 answers any
+frame-write error by tearing down the whole `Connection` every publisher in the process shares — and
+the outbox persists and replays the poisoned header forever. The validator moves down into `trace`,
+exported, reusing `server`'s `^[A-Za-z0-9_-]{1,128}$` byte-for-byte; `traceparent` gets spec-exact
+validation; `tracestate` gets a cap and deliberately no grammar; and `CorrelationId` is capped again
+at its assignment site because the exported `WithTraceID`/`EnsureTraceID` bypass the seam. A rejected
+id is discarded and regenerated, never truncated — truncation silently forges correlation.
+
+**Key Benefits:** One bound at every door, including the streams door that has no ingress yet.
+**Watch:** previously-accepted identifiers are now discarded — see `[C60.8]`; an upstream gateway
+emitting a long or punctuated request id loses its correlation and gets a framework-minted id.
+
 ### [ADR-069: The Delivery Pipeline Owns Settlement Timing](adr_069_pipeline_owns_settlement_timing.md)
 
 **Date:** 2026-08-18 | **Status:** Accepted | **Supersedes in part:** ADR-068
@@ -1412,7 +1430,7 @@ result, while the broker completion inside that attempt may still fail, time out
 **Key Benefits:** A guarantee owned by a structure instead of stated in prose, and a lane that gains
 it without writing a guard.
 **Watch:** a delivery whose handler SUCCEEDED but whose outcome line panicked is now `Panicked`, so
-it nacks — the same action the classic lane's fallback already performed, and new behaviour for any
+it nacks — the same action the classic lane's fallback already performed, and new behavior for any
 lane that had no fallback.
 
 ### [ADR-068: One Delivery Pipeline for Both Messaging Lanes](adr_068_delivery_pipeline.md)
@@ -1447,7 +1465,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-069) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-070) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
