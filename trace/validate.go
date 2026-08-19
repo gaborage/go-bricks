@@ -24,11 +24,15 @@ const MaxTraceStateBytes = 512
 // door of their own yet.
 var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
-// traceParentPattern matches the four fields every W3C traceparent begins with:
-// two hex version digits, a 32-hex-digit trace-id, a 16-hex-digit parent-id and
-// two hex flag digits. It is deliberately UNANCHORED at the end — see
-// ValidateTraceParent for why a future version may carry more after them.
-var traceParentPattern = regexp.MustCompile(`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}`)
+// traceParentPattern is the W3C traceparent grammar: two hex version digits, a
+// 32-hex-digit trace-id, a 16-hex-digit parent-id, two hex flag digits, and — for
+// a future version — further dash-delimited fields of printable, non-space ASCII.
+// It stays ANCHORED at both
+// ends. An unanchored pattern would accept the four fields it checks and then
+// anything at all after them, which is the unbounded caller-controlled value this
+// whole seam exists to refuse: CR/LF for header injection, kilobytes for storage
+// and re-emission on every outbound hop.
+var traceParentPattern = regexp.MustCompile(`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}(-[!-,.-~]+)*$`)
 
 const (
 	// The all-zero ids, which the spec declares invalid outright.
@@ -45,6 +49,12 @@ const (
 	// value and the prefix of every later one.
 	traceParentV00Len = 55
 )
+
+// MaxTraceParentBytes bounds a future version's additive fields. Forward
+// compatibility is not a reason to accept an unbounded header: the value is
+// stored per delivery and re-emitted on every outbound hop, and 255 is the same
+// ceiling the request id answers to, for the same reason.
+const MaxTraceParentBytes = 255
 
 // ValidateRequestID returns id when it is a safe request identifier, otherwise
 // "". A caller that gets "" must fall back to a trusted source — a
@@ -69,20 +79,24 @@ func ValidateRequestID(id string) string {
 // defines as additive: a receiver parses trace-id, parent-id and flags from the
 // version-00 positions and ignores whatever dash-delimited fields follow. A
 // stricter reader would discard traceparents that later versions consider valid,
-// dropping real upstream traces the day a version 01 appears on the wire. The
-// one structural demand is that the extra fields are actually delimited — a
-// 56-character value whose 56th byte is not a dash is not a longer traceparent,
-// it is a corrupt one.
+// dropping real upstream traces the day a version 01 appears on the wire.
+//
+// Forward compatible is not the same as unbounded, though. Those extra fields
+// must still be dash-delimited hex and the whole value must still fit
+// MaxTraceParentBytes, because everything this seam accepts is stored per
+// delivery and re-emitted on every outbound hop. A future version whose fields
+// fall outside that charset is discarded like any other unparseable traceparent
+// — the delivery continues on a framework-minted id, which is the same outcome
+// this function has always produced for input it cannot vouch for.
 func ValidateTraceParent(tp string) string {
-	if !traceParentPattern.MatchString(tp) {
+	// Length first: cheap, and it caps the input the matcher ever walks.
+	if len(tp) > MaxTraceParentBytes || !traceParentPattern.MatchString(tp) {
 		return ""
 	}
 	switch version := tp[:2]; {
 	case version == forbiddenVersion:
 		return ""
 	case version == versionZero && len(tp) != traceParentV00Len:
-		return ""
-	case len(tp) > traceParentV00Len && tp[traceParentV00Len] != '-':
 		return ""
 	}
 	parts := splitTraceParent(tp)

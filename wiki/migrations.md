@@ -3513,8 +3513,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   for non-emptiness. It now validates: `X-Request-ID` against `^[A-Za-z0-9_-]{1,128}$` (the
   bound the HTTP door has always applied, moved down so every door shares it), `traceparent`
   against the spec grammar with a non-zero trace-id and parent-id (version `00` exactly 55
-  characters; versions `01`–`fe` may carry additional dash-delimited fields, which are
-  ignored; version `ff` rejected), and
+  characters; versions `01`–`fe` may carry additional dash-delimited fields of printable
+  non-space ASCII up to 255 bytes total, which are otherwise ignored; version `ff`
+  rejected), and
   `tracestate` against a 512-byte cap. A value that fails is DISCARDED — never truncated,
   because truncation maps distinct upstream ids onto one and silently forges correlation —
   and the delivery continues with the traceparent-derived id, or a fresh UUID. The delivery
@@ -3530,10 +3531,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   framework substitutes its own id rather than carrying theirs. Fix the emitter, or accept
   that those hops correlate by traceparent instead. If you relied on a `tracestate` larger
   than 512 bytes surviving a hop, it no longer does.
-- verify: publish a message carrying `X-Request-ID: <200 characters>` and confirm the
-  consumer's `correlation_id` is a fresh UUID rather than the sent value, and that the
-  service stays up — before this change a 256-byte value tore down the shared AMQP
-  connection on the next publish.
+- verify: publish a message carrying `X-Request-ID: <300 characters>` and confirm the
+  consumer's `correlation_id` is anything OTHER than the sent value, and that the service
+  stays up — before this change a value this long tore down the shared AMQP connection on
+  the next publish. Do not assert a fresh UUID specifically: the substitute follows a
+  precedence, and a message that also carries a valid `traceparent` — which the framework's
+  own publisher injects — correlates on the traceparent-derived 32-hex id instead. Only a
+  message with no usable traceparent falls all the way through to a UUID.
 - ref: [ADR-070](adr_070_inbound_trace_identifier_validation.md) · `trace/validate.go` ·
   `trace/trace.go` (`extractRequestID`, `extractTraceParent`, `extractTraceState`) ·
   `messaging/amqp_client.go` (`preparePublishing`) · `server/request_utils.go`

@@ -60,10 +60,20 @@ because the spec makes later versions additive. Version `00` is exactly 55
 characters and anything longer is malformed. Versions `01`–`fe` may append
 further dash-delimited fields, which a receiver parses past: trace-id, parent-id
 and flags are read from the version-00 positions and the remainder is ignored,
-subject to the extra fields actually being delimited. Pinning the length at 55
-instead would have been a stricter check that fails the wrong way — it would
-discard genuine upstream traces the day a version `01` appears on the wire, which
-is a correlation outage caused by our own validator rather than by an attacker. This also closes an outbound vector: `forceAlignTraceID`
+subject to the extra fields being delimited, printable non-space ASCII, and the
+whole value fitting `MaxTraceParentBytes` (255). Pinning the length at 55 instead
+would have been a stricter check that fails the wrong way — it would discard
+genuine upstream traces the day a version `01` appears on the wire, which is a
+correlation outage caused by our own validator rather than by an attacker.
+
+The suffix bounds are where this seam deliberately parts company with
+OpenTelemetry's propagator, which accepts any suffix whatsoever. It can afford
+to: it parses the value and discards the remainder. This seam **stores** the raw
+traceparent and re-emits it verbatim on every outbound hop, so accepting an
+unconstrained suffix would turn it into a relay for whatever an upstream caller
+attached — CR/LF into an outbound header, or kilobytes held per delivery. Both
+bounds cost forward compatibility nothing, because no defined field uses a
+character they exclude. This also closes an outbound vector: `forceAlignTraceID`
 re-emits the raw request id whenever the accompanying traceparent is malformed,
 which was the one condition under which a poisoned value escaped onto the next
 hop.

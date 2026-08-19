@@ -74,6 +74,22 @@ func TestValidateTraceParentIsSpecExact(t *testing.T) {
 		// ...but the extra fields must actually be dash-delimited. A 56th byte
 		// that is not a dash means the flags field itself is the wrong width.
 		{name: "future_version_with_undelimited_extra", tp: "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-012"},
+		// Forward compatibility is not a licence to store whatever follows: this
+		// seam re-emits the raw value on every outbound hop, so a suffix carrying
+		// CR/LF would ride into an outbound header, and an unbounded one would be
+		// stored per delivery.
+		{name: "future_version_suffix_with_crlf", tp: "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-a\r\nX-Evil: 1"},
+		{name: "future_version_suffix_with_space", tp: "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-a b"},
+		{name: "future_version_suffix_empty_field", tp: "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-"},
+		{
+			name: "future_version_suffix_over_the_cap",
+			tp:   "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-" + strings.Repeat("a", MaxTraceParentBytes),
+		},
+		{
+			name: "future_version_suffix_at_the_cap",
+			tp:   "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-" + strings.Repeat("a", MaxTraceParentBytes-56),
+			want: "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-" + strings.Repeat("a", MaxTraceParentBytes-56),
+		},
 		{name: "too_short", tp: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"},
 		// Version 00 has no future fields to be forward-compatible with, so the
 		// same trailing bytes that a future version carries are junk here.
