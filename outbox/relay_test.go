@@ -660,3 +660,70 @@ func TestDeadLetterPoisonBoundsTheErrorItPersists(t *testing.T) {
 	assert.LessOrEqual(t, len(store.MarkDeadLetteredLastErr), maxPersistedErrorBytes)
 	assert.True(t, strings.HasSuffix(store.MarkDeadLetteredLastErr, truncationMarker))
 }
+
+// When the ledger write itself fails, the relay's only remaining job is to say
+// so. Nothing is returned and nothing else is stored, so the emitted line is the
+// whole observable — and its absence is how "we could not record why this record
+// failed" becomes silent.
+func TestMarkRecordFailedReportsAFailedLedgerWrite(t *testing.T) {
+	tests := []struct {
+		name      string
+		markErr   error
+		wantLines []string
+	}{
+		{name: "ledger_write_fails", markErr: errors.New("connection reset"), wantLines: []string{"Failed to mark outbox event as failed"}},
+		// The negative half: a successful write says nothing. Without this, a
+		// condition inverted to log on success would still look correct.
+		{name: "ledger_write_succeeds", wantLines: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{MarkFailedErr: tt.markErr}
+			r := newRelayWithFakes(store, newFakeAMQP())
+			log := newRecordingLogger()
+			db := dbtesting.NewTestDB("postgresql")
+
+			r.markRecordFailed(context.Background(), log, db, "evt-1", "boom")
+
+			assert.Equal(t, 1, store.MarkFailedCalls)
+			assert.Equal(t, tt.wantLines, log.messages())
+		})
+	}
+}
+
+// Same shape on the dead-letter path, which additionally reports the failure
+// through its return value: a record that could not be parked is NOT reported as
+// parked, or the relay would claim it had stopped retrying something it had not.
+func TestDeadLetterPoisonReportsAFailedLedgerWrite(t *testing.T) {
+	tests := []struct {
+		name      string
+		markErr   error
+		want      publishOutcome
+		wantLines []string
+	}{
+		{
+			name: "parking_fails", markErr: errors.New("connection reset"),
+			want: outcomeFailed, wantLines: []string{"Failed to dead-letter outbox event"},
+		},
+		{
+			name: "parking_succeeds",
+			want: outcomeDeadLettered, wantLines: []string{"Outbox event dead-lettered after exhausting retries"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{MarkDeadLetteredErr: tt.markErr}
+			r := newRelayWithFakes(store, newFakeAMQP())
+			log := newRecordingLogger()
+			db := dbtesting.NewTestDB("postgresql")
+			rec := &Record{ID: "evt-poison", RetryCount: r.config.MaxRetries}
+
+			got := r.deadLetterPoison(context.Background(), log, db, rec, "bad headers")
+
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantLines, log.messages())
+		})
+	}
+}

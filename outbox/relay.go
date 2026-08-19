@@ -368,12 +368,12 @@ func boundPersistedError(errMsg string) string {
 		return cleaned
 	}
 
+	// Slicing at a byte offset can land mid-rune; ToValidUTF8 drops the partial
+	// tail, so the column never receives a half-encoded character. Doing it this
+	// way rather than walking back to a rune start keeps the boundary out of the
+	// code: there is no index to be off by one on.
 	keep := maxPersistedErrorBytes - len(truncationMarker)
-	// Back off to a rune boundary so a multi-byte character is never split.
-	for keep > 0 && !utf8.RuneStart(cleaned[keep]) {
-		keep--
-	}
-	return cleaned[:keep] + truncationMarker
+	return strings.ToValidUTF8(cleaned[:keep], "") + truncationMarker
 }
 
 // markRecordFailed marks an outbox record as failed, logging any secondary errors.
