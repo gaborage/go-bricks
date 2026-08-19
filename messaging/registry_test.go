@@ -2513,22 +2513,11 @@ func TestRegistryProcessMessagePanicMarksSpanError(t *testing.T) {
 // ===== Per-delivery correlation_id log-shape Tests =====
 
 // recordedLine is one emitted log line: the message plus every field write in
-// emission order. Duplicate keys are preserved — zerolog does not de-duplicate,
-// and this package deliberately emits correlation_id twice on failure lines.
+// emission order. Duplicate keys are preserved — zerolog does not de-duplicate —
+// so Values can pin that correlation_id is stamped exactly once.
 type recordedLine struct {
 	Msg   string
 	Pairs [][2]string
-}
-
-// Last returns the value a JSON parser would keep for key.
-func (l recordedLine) Last(key string) (string, bool) {
-	found, ok := "", false
-	for _, p := range l.Pairs {
-		if p[0] == key {
-			found, ok = p[1], true
-		}
-	}
-	return found, ok
 }
 
 // Values returns every value written under key, in order.
@@ -2692,7 +2681,8 @@ func TestRegistryProcessMessageStampsCorrelationIDOnSuccessLines(t *testing.T) {
 	infoLine := rec.Line(t, "Message processed successfully")
 	require.NotEmpty(t, infoLine.Pairs)
 	assert.Equal(t, [2]string{"correlation_id", wantTraceID}, infoLine.Pairs[0])
-	assert.Equal(t, []string{"message_id", "processing_time"}, pairKeys(infoLine.Pairs[1:]))
+	assert.Equal(t, []string{"processing_time", "message_id"}, pairKeys(infoLine.Pairs[1:]),
+		"the shared delivery spine leads the line, the lane's own fields follow")
 }
 
 // pairKeys extracts just the keys, in order, from a field-pair slice.
@@ -2765,18 +2755,16 @@ func TestRegistryProcessMessageCorrelationIDIsStableAcrossLines(t *testing.T) {
 			lines := rec.Lines()
 			require.GreaterOrEqual(t, len(lines), 3, "expected at least three lines")
 
-			// Use the FIRST correlation_id value, not Last(): the failure/panic
-			// lines deliberately carry a second correlation_id stamp
-			// (delivery.CorrelationId, unset here so it is "") per the log-shape
-			// contract's "first call in the chain" rule. Last() would pick up
-			// that unrelated AMQP field on those lines and always report empty,
-			// masking exactly the traceID-propagation bug this test exists to
-			// catch (Current-state fact 3).
+			// correlation_id means the framework trace ID on every line, and
+			// exactly once: the AMQP message's own CorrelationId is stamped
+			// under amqp_correlation_id. Requiring a single value is what keeps
+			// a second stamp from creeping back and masking the traceID-
+			// propagation bug this test exists to catch (Current-state fact 3).
 			var sharedID string
 			for _, msg := range tt.wantMsgs {
 				line := rec.Line(t, msg)
 				values := line.Values("correlation_id")
-				require.NotEmpty(t, values, "line %q missing correlation_id", msg)
+				require.Len(t, values, 1, "line %q must carry exactly one correlation_id", msg)
 				id := values[0]
 				require.NotEmpty(t, id, "line %q has empty correlation_id", msg)
 				if sharedID == "" {
@@ -2789,7 +2777,7 @@ func TestRegistryProcessMessageCorrelationIDIsStableAcrossLines(t *testing.T) {
 	}
 }
 
-func TestRegistryProcessMessageFailureLineKeepsBothCorrelationIDs(t *testing.T) {
+func TestRegistryProcessMessageFailureLineSeparatesTheTraceAndAMQPCorrelationIDs(t *testing.T) {
 	const wantTraceID = "req-119"
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
@@ -2817,13 +2805,11 @@ func TestRegistryProcessMessageFailureLineKeepsBothCorrelationIDs(t *testing.T) 
 	registry.processMessage(context.Background(), consumer, delivery, rec)
 
 	line := rec.Line(t, "Message processing failed - discarding without requeue")
-	assert.Equal(t, []string{wantTraceID, "amqp-corr-1"}, line.Values("correlation_id"))
-	last, ok := line.Last("correlation_id")
-	require.True(t, ok)
-	assert.Equal(t, "amqp-corr-1", last)
+	assert.Equal(t, []string{wantTraceID}, line.Values("correlation_id"))
+	assert.Equal(t, []string{"amqp-corr-1"}, line.Values("amqp_correlation_id"))
 }
 
-func TestRegistryProcessMessagePanicLineKeepsBothCorrelationIDs(t *testing.T) {
+func TestRegistryProcessMessagePanicLineSeparatesTheTraceAndAMQPCorrelationIDs(t *testing.T) {
 	const wantTraceID = "req-119"
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 
@@ -2853,10 +2839,8 @@ func TestRegistryProcessMessagePanicLineKeepsBothCorrelationIDs(t *testing.T) {
 	})
 
 	line := rec.Line(t, "Panic recovered in message handler - discarding without requeue")
-	assert.Equal(t, []string{wantTraceID, "amqp-corr-1"}, line.Values("correlation_id"))
-	last, ok := line.Last("correlation_id")
-	require.True(t, ok)
-	assert.Equal(t, "amqp-corr-1", last)
+	assert.Equal(t, []string{wantTraceID}, line.Values("correlation_id"))
+	assert.Equal(t, []string{"amqp-corr-1"}, line.Values("amqp_correlation_id"))
 }
 
 // The per-delivery derived logger is invisible to stubLogger (its WithFields

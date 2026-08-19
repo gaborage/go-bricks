@@ -264,7 +264,8 @@ func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {
 // reconstructs the originating trace context from the persisted row headers and
 // publishes with it. Without this, preparePublishing runs under the relay's
 // trace-less background context and stamps the AMQP CorrelationId (which the
-// consumer's failure-path logger and consume span surface as correlation_id)
+// consumer's failure-path logger surfaces as amqp_correlation_id and the
+// consume span as messaging.message.conversation_id)
 // with a freshly generated UUID, breaking continuity precisely on the error path.
 func TestPublishRecordRehydratesTraceContextForPublish(t *testing.T) {
 	store := &fakeStore{}
