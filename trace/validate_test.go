@@ -62,8 +62,22 @@ func TestValidateTraceParentIsSpecExact(t *testing.T) {
 			name: "future_version_is_accepted", tp: "fe-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 			want: "fe-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 		},
+		// The spec defines later versions as ADDITIVE: parse the first four
+		// fields from the version-00 positions and ignore what follows. A reader
+		// that demanded exactly 55 would drop real upstream traces the day a
+		// version 01 reaches the wire.
+		{
+			name: "future_version_with_additive_fields_is_accepted",
+			tp:   "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-vendorfield",
+			want: "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-vendorfield",
+		},
+		// ...but the extra fields must actually be dash-delimited. A 56th byte
+		// that is not a dash means the flags field itself is the wrong width.
+		{name: "future_version_with_undelimited_extra", tp: "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-012"},
 		{name: "too_short", tp: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"},
-		{name: "trailing_junk", tp: validParent + "-extra"},
+		// Version 00 has no future fields to be forward-compatible with, so the
+		// same trailing bytes that a future version carries are junk here.
+		{name: "trailing_junk_on_version_00", tp: validParent + "-extra"},
 		{name: "empty", tp: ""},
 	}
 
@@ -193,4 +207,42 @@ func TestAnOversizedIDNeverSurvivesIntoAnOutboundHeader(t *testing.T) {
 	assert.NotEqual(t, oversized, emitted)
 	assert.LessOrEqual(t, len(emitted), 255, "amqp091 refuses a shortstr over 255 bytes")
 	assert.Equal(t, emitted, ValidateRequestID(emitted), "what is re-emitted is itself valid")
+}
+
+// The gate on tracestate is "did THIS carrier bring a traceparent", not "is
+// there a traceparent in context". Reading the context would fail open on every
+// hop that inherits one from its caller: the carrier's tracestate would be
+// adopted by a traceparent it has no relationship to, and re-emitted under it.
+func TestExtractFromHeadersDiscardsTraceStateWhenTheParentCameFromContext(t *testing.T) {
+	inherited := "00-11111111111111111111111111111111-2222222222222222-01"
+
+	tests := []struct {
+		name    string
+		headers map[string]any
+	}{
+		{name: "carrier_has_no_traceparent", headers: map[string]any{HeaderTraceState: "vendor=a:b"}},
+		{
+			name: "carrier_traceparent_is_malformed",
+			headers: map[string]any{
+				HeaderTraceState:  "vendor=a:b",
+				HeaderTraceParent: "00-zzzz-00f067aa0ba902b7-01",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A caller-supplied context that already holds a valid traceparent.
+			parentCtx := WithTraceParent(context.Background(), inherited)
+
+			ctx := ExtractFromHeaders(parentCtx, &mapAccessor{m: tt.headers})
+
+			_, stored := StateFromContext(ctx)
+			assert.False(t, stored, "the carrier's tracestate is not adopted by an inherited traceparent")
+			// The inherited parent itself is untouched — this discards the
+			// tracestate, it does not clear the context.
+			tp, _ := ParentFromContext(ctx)
+			assert.Equal(t, inherited, tp)
+		})
+	}
 }

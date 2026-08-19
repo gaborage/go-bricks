@@ -48,11 +48,22 @@ a fresh UUID.** This needed no new code — the derivation is already guarded by
 gateway emitting a slightly-off id alongside a good traceparent keeps its
 correlation.
 
-**`traceparent` is validated spec-exactly** — 55 characters,
-`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$`, rejecting the all-zero
-trace-id and parent-id as OpenTelemetry's own `Extract` does. The previous check
-was length-only, which left an attacker 32 arbitrary non-hyphen bytes inside a
-"valid" traceparent. This also closes an outbound vector: `forceAlignTraceID`
+**`traceparent` is validated against the spec's grammar** —
+`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}`, rejecting the all-zero
+trace-id and parent-id as OpenTelemetry's own `Extract` does, and rejecting
+version `ff`, which the spec forbids outright. The previous check was
+length-only, which left an attacker 32 arbitrary non-hyphen bytes inside a
+"valid" traceparent.
+
+Validation is strict on the grammar but **forward-compatible on the version**,
+because the spec makes later versions additive. Version `00` is exactly 55
+characters and anything longer is malformed. Versions `01`–`fe` may append
+further dash-delimited fields, which a receiver parses past: trace-id, parent-id
+and flags are read from the version-00 positions and the remainder is ignored,
+subject to the extra fields actually being delimited. Pinning the length at 55
+instead would have been a stricter check that fails the wrong way — it would
+discard genuine upstream traces the day a version `01` appears on the wire, which
+is a correlation outage caused by our own validator rather than by an attacker. This also closes an outbound vector: `forceAlignTraceID`
 re-emits the raw request id whenever the accompanying traceparent is malformed,
 which was the one condition under which a poisoned value escaped onto the next
 hop.

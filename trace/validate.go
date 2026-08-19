@@ -24,17 +24,26 @@ const MaxTraceStateBytes = 512
 // door of their own yet.
 var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
-// traceParentPattern is the W3C traceparent format, spec-exact: two hex version
-// digits, a 32-hex-digit trace-id, a 16-hex-digit parent-id and two hex flag
-// digits, 55 characters in total.
-var traceParentPattern = regexp.MustCompile(`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$`)
+// traceParentPattern matches the four fields every W3C traceparent begins with:
+// two hex version digits, a 32-hex-digit trace-id, a 16-hex-digit parent-id and
+// two hex flag digits. It is deliberately UNANCHORED at the end — see
+// ValidateTraceParent for why a future version may carry more after them.
+var traceParentPattern = regexp.MustCompile(`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}`)
 
-// The forms the W3C spec declares invalid: the all-zero ids, and version ff,
-// which the spec forbids outright rather than treating as a future version.
 const (
-	zeroTraceID     = "00000000000000000000000000000000"
-	zeroParentID    = "0000000000000000"
-	forbiddenVerson = "ff"
+	// The all-zero ids, which the spec declares invalid outright.
+	zeroTraceID  = "00000000000000000000000000000000"
+	zeroParentID = "0000000000000000"
+
+	// versionZero is the only version defined today, and the only one whose
+	// length is fixed. forbiddenVersion is ff, which the spec forbids rather
+	// than reserving as a future version.
+	versionZero      = "00"
+	forbiddenVersion = "ff"
+
+	// traceParentV00Len is len("00-"+32+"-"+16+"-"+2) — the whole of a version-00
+	// value and the prefix of every later one.
+	traceParentV00Len = 55
 )
 
 // ValidateRequestID returns id when it is a safe request identifier, otherwise
@@ -53,11 +62,27 @@ func ValidateRequestID(id string) string {
 // traceparent, otherwise "". Rejecting the all-zero trace-id and parent-id
 // mirrors OpenTelemetry's own Extract, which treats them as absent rather than
 // as a trace to join.
+//
+// Version handling follows the spec's forward-compatibility rule rather than a
+// flat 55-character match. Version 00 is exactly 55 characters and anything
+// longer is malformed. Versions 01..fe are FUTURE versions, which the spec
+// defines as additive: a receiver parses trace-id, parent-id and flags from the
+// version-00 positions and ignores whatever dash-delimited fields follow. A
+// stricter reader would discard traceparents that later versions consider valid,
+// dropping real upstream traces the day a version 01 appears on the wire. The
+// one structural demand is that the extra fields are actually delimited — a
+// 56-character value whose 56th byte is not a dash is not a longer traceparent,
+// it is a corrupt one.
 func ValidateTraceParent(tp string) string {
 	if !traceParentPattern.MatchString(tp) {
 		return ""
 	}
-	if tp[:2] == forbiddenVerson {
+	switch version := tp[:2]; {
+	case version == forbiddenVersion:
+		return ""
+	case version == versionZero && len(tp) != traceParentV00Len:
+		return ""
+	case len(tp) > traceParentV00Len && tp[traceParentV00Len] != '-':
 		return ""
 	}
 	parts := splitTraceParent(tp)

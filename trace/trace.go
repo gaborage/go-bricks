@@ -116,12 +116,13 @@ func ExtractFromHeaders(ctx context.Context, headers HeaderAccessor) context.Con
 		return ctx
 	}
 
-	traceCtx := ctx
-	traceCtx = extractRequestID(traceCtx, headers)
-	traceCtx = extractTraceParent(traceCtx, headers)
-	traceCtx = extractTraceState(traceCtx, headers)
-
-	return traceCtx
+	traceCtx := extractRequestID(ctx, headers)
+	// carriedParent, not "is there a traceparent in ctx now": this ctx may have
+	// inherited a perfectly valid traceparent from the caller, and the tracestate
+	// on THIS carrier belongs to that one only if THIS carrier also brought the
+	// traceparent it annotates.
+	traceCtx, carriedParent := extractTraceParent(traceCtx, headers)
+	return extractTraceState(traceCtx, headers, carriedParent)
 }
 
 // extractRequestID extracts the X-Request-ID header. Validation runs AFTER
@@ -140,11 +141,13 @@ func extractRequestID(ctx context.Context, headers HeaderAccessor) context.Conte
 	return ctx
 }
 
-// extractTraceParent extracts traceparent header and derives trace ID if needed
-func extractTraceParent(ctx context.Context, headers HeaderAccessor) context.Context {
+// extractTraceParent extracts traceparent header and derives trace ID if needed.
+// It reports whether THIS carrier supplied a valid traceparent, which is what
+// gates the tracestate that accompanies it.
+func extractTraceParent(ctx context.Context, headers HeaderAccessor) (traceCtx context.Context, carried bool) {
 	v := headers.Get(HeaderTraceParent)
 	if v == nil {
-		return ctx
+		return ctx, false
 	}
 
 	// Validate before storing anything: the raw traceparent was previously kept
@@ -153,7 +156,7 @@ func extractTraceParent(ctx context.Context, headers HeaderAccessor) context.Con
 	// condition under which a poisoned value escapes onto the next hop.
 	tp := ValidateTraceParent(safeToString(v))
 	if tp == "" {
-		return ctx
+		return ctx, false
 	}
 
 	ctx = WithTraceParent(ctx, tp)
@@ -165,16 +168,19 @@ func extractTraceParent(ctx context.Context, headers HeaderAccessor) context.Con
 		}
 	}
 
-	return ctx
+	return ctx, true
 }
 
-// extractTraceState extracts tracestate header
-func extractTraceState(ctx context.Context, headers HeaderAccessor) context.Context {
+// extractTraceState extracts tracestate header. carriedParent says whether the
+// SAME carrier supplied a valid traceparent.
+func extractTraceState(ctx context.Context, headers HeaderAccessor, carriedParent bool) context.Context {
 	// tracestate only means something alongside the traceparent it accompanies.
 	// Storing it without one leaves orphan state that InjectIntoHeaders would
-	// re-emit attached to a freshly generated trace it never belonged to. This
-	// runs after extractTraceParent, so a stored parent means a validated one.
-	if _, hasParent := ParentFromContext(ctx); !hasParent {
+	// re-emit attached to a trace it never belonged to. Reading the context here
+	// instead would fail open twice over: a carrier with no traceparent, or with
+	// a malformed one, would have its tracestate adopted by whatever traceparent
+	// the caller's context already held.
+	if !carriedParent {
 		return ctx
 	}
 	if v := headers.Get(HeaderTraceState); v != nil {

@@ -3512,7 +3512,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - scope: `trace.ExtractFromHeaders` stored every inbound identifier verbatim, testing only
   for non-emptiness. It now validates: `X-Request-ID` against `^[A-Za-z0-9_-]{1,128}$` (the
   bound the HTTP door has always applied, moved down so every door shares it), `traceparent`
-  against the spec-exact 55-character form with a non-zero trace-id and parent-id, and
+  against the spec grammar with a non-zero trace-id and parent-id (version `00` exactly 55
+  characters; versions `01`–`fe` may carry additional dash-delimited fields, which are
+  ignored; version `ff` rejected), and
   `tracestate` against a 512-byte cap. A value that fails is DISCARDED — never truncated,
   because truncation maps distinct upstream ids onto one and silently forges correlation —
   and the delivery continues with the traceparent-derived id, or a fresh UUID. The delivery
