@@ -1406,7 +1406,8 @@ and `Run` owns when it runs: the guard is deferred FIRST so it runs LAST, making
 lease drain → settle. A panic anywhere in the tail still settles, as `Panicked`, so the lane nacks
 rather than acks a delivery it could not finish reporting; a panic inside `Settle` is logged and not
 retried. Settlement POLICY stays lane-side exactly as ADR-068 decided — only timing and the
-exactly-once guarantee move.
+at-most-once invocation guarantee move: the pipeline gives the lane exactly one attempt with a decided
+result, while the broker completion inside that attempt may still fail, time out, or panic.
 
 **Key Benefits:** A guarantee owned by a structure instead of stated in prose, and a lane that gains
 it without writing a guard.

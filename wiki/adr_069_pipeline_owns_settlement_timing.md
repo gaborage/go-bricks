@@ -68,7 +68,7 @@ recover.
 
 Settlement POLICY stays lane-side, exactly as ADR-068 decided — ack versus
 commit, nack-without-requeue versus skip, and the AutoAck no-op are the lane's.
-Only the timing and the exactly-once guarantee move.
+Only the timing and the at-most-once invocation guarantee move.
 
 ## Consequences
 
