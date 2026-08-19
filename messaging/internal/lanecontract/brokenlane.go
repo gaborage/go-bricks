@@ -4,8 +4,14 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -24,6 +30,17 @@ const (
 	brokenFailureMsg = "Message processing failed - discarding without requeue"
 	brokenPanicMsg   = "Panic recovered in message handler - discarding without requeue"
 	brokenOutcomeKey = "queue"
+
+	// Telemetry the lane reports, all wrong. The span name, kind and attributes
+	// are wrong rather than absent, and there is exactly ONE span: emitting none
+	// (or three) would trip the family's first gate and leave every assertion
+	// after it unproven.
+	brokenSpanName = "not.the.destination receive"
+
+	// BrokenCarrierTraceID is what a scenario should put on this lane's carrier:
+	// the lane stamps it onto a metric attribute, so a test can prove the
+	// per-message-value check catches it.
+	BrokenCarrierTraceID = "req-broken"
 )
 
 // BrokenLane returns a Lane whose delivery breaks every rule the contract
@@ -89,6 +106,8 @@ func deliverBroken(t *testing.T, scenario Scenario) Observed {
 	}
 	log.Warn().Str("exchange", brokenDestination).Msg(emitted)
 
+	reportBrokenTelemetry()
+
 	// DEFECT 8: settled twice. On a real broker that is a double ack.
 	settles := []string{brokenSettleOnSuccess, brokenSettleOnSuccess}
 	if res.Outcome != delivery.Succeeded {
@@ -127,3 +146,51 @@ func invokeBroken(ctx context.Context, handle func(context.Context) error) (res 
 	}
 	return res, handlerTraceID
 }
+
+// reportBrokenTelemetry emits one span and one consume record, each wrong in a
+// way one telemetry assertion catches. Exactly one span, deliberately: a lane
+// emitting none would fail the family's first gate and short-circuit every
+// assertion after it, proving only that gate.
+func reportBrokenTelemetry() {
+	tracer := otel.Tracer("lanecontract/broken")
+
+	// DEFECT 9: a parent, so the consume span is not a root. A REMOTE parent, so
+	// the lane still exports exactly one span.
+	parented := oteltrace.ContextWithRemoteSpanContext(context.Background(),
+		oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+			TraceID: brokenTraceID, SpanID: brokenSpanID, TraceFlags: oteltrace.FlagsSampled, Remote: true,
+		}))
+
+	// DEFECT 10: the wrong name, the wrong kind, an undeclared attribute, and a
+	// body size that matches no scenario.
+	_, span := tracer.Start(parented, brokenSpanName, oteltrace.WithSpanKind(oteltrace.SpanKindInternal))
+	span.SetAttributes(
+		attribute.String("messaging.system", "not-rabbitmq"),
+		attribute.String("undeclared.attribute", "x"),
+		attribute.Int64("messaging.message.body.size", 9999),
+	)
+	span.End()
+
+	// DEFECT 11: recorded from a DIFFERENT trace, so the exemplar names someone
+	// else's span rather than this delivery's.
+	// DEFECT 12: recorded twice, so the counter says two.
+	// DEFECT 13: never reports the error, so error.type is absent on a failure.
+	elsewhere := oteltrace.ContextWithRemoteSpanContext(context.Background(),
+		oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+			TraceID: brokenOtherTraceID, SpanID: brokenSpanID, TraceFlags: oteltrace.FlagsSampled, Remote: true,
+		}))
+	// DEFECT 14: the routing key carries the per-message trace ID, which is what
+	// blows the SDK's 2000-set cardinality limit in production.
+	attrs := tracking.AMQPConsumeAttributes("", BrokenCarrierTraceID, brokenDestination)
+	for range 2 {
+		tracking.RecordConsume(elsewhere, attrs, time.Millisecond, nil)
+	}
+}
+
+// Two fixed trace IDs: the span's parent, and the unrelated trace the record is
+// taken under.
+var (
+	brokenTraceID      = oteltrace.TraceID{0xb0, 0x0c}
+	brokenOtherTraceID = oteltrace.TraceID{0xe1, 0x5e}
+	brokenSpanID       = oteltrace.SpanID{0x0d, 0xed}
+)

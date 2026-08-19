@@ -7,6 +7,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 	"github.com/gaborage/go-bricks/messaging/internal/lanecontract"
@@ -47,6 +48,13 @@ func classicLane() lanecontract.Lane {
 				Level: lanecontract.LevelError, Msg: "Panic recovered in message handler - discarding without requeue",
 				ExtraKeys: failureKeys,
 			},
+		},
+		// consumeSpanExtras adds these four when the delivery carries them.
+		SpanExtraKeys: []string{
+			"messaging.rabbitmq.exchange",
+			"messaging.rabbitmq.destination.routing_key",
+			"messaging.message.id",
+			"messaging.message.conversation_id",
 		},
 		SettleOnSuccess: "ack",
 		SettleOnFailure: "nack-no-requeue",
@@ -139,6 +147,12 @@ func TestClassicLaneSatisfiesTheIdentityContract(t *testing.T) {
 	lanecontract.RunIdentity(t, &lane)
 }
 
+func TestClassicLaneSatisfiesTheTelemetryContract(t *testing.T) {
+	lane := classicLane()
+
+	lanecontract.RunTelemetry(t, &lane)
+}
+
 // Each delivery mints its own id, and a handler reading twice within one gets
 // the same one — EnsureTraceID mints without writing back, so without the
 // pipeline's write-back neither would hold.
@@ -160,6 +174,14 @@ func TestClassicLaneMintsAFreshStableTraceIDPerDelivery(t *testing.T) {
 		Outcome: delivery.Succeeded,
 	})
 
+	// Assert the precondition both comparisons rest on. If the pipeline stopped
+	// planting an id, first.HandlerTraceID and secondRead would both be "" and
+	// the Equal below would pass while asserting nothing.
+	require.NotEmpty(t, first.HandlerTraceID, "the pipeline plants an id the handler can read")
 	assert.Equal(t, first.HandlerTraceID, secondRead, "two reads in one delivery must agree")
+	// The sibling half: NotEqual also passes when the SECOND delivery mints
+	// nothing, so "each delivery mints its own" would hold vacuously the moment
+	// the second stopped planting an id at all.
+	require.NotEmpty(t, second.HandlerTraceID, "the second delivery plants an id too")
 	assert.NotEqual(t, first.HandlerTraceID, second.HandlerTraceID, "each delivery mints its own")
 }

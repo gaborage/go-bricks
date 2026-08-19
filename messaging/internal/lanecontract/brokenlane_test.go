@@ -14,12 +14,21 @@ import (
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
-const brokenCarrierTraceID = "req-broken"
-
 // runIdentityAgainstBroken drives the broken lane through one scenario and
 // returns every assertion message AssertIdentity produced, without failing this
 // test.
 func runIdentityAgainstBroken(t *testing.T, scenario Scenario) string {
+	t.Helper()
+	return runAgainstBroken(t, scenario, AssertIdentity)
+}
+
+// runTelemetryAgainstBroken is the same for the telemetry family.
+func runTelemetryAgainstBroken(t *testing.T, scenario Scenario) string {
+	t.Helper()
+	return runAgainstBroken(t, scenario, AssertTelemetry)
+}
+
+func runAgainstBroken(t *testing.T, scenario Scenario, family func(T, *Lane, *Scenario, *Observed)) string {
 	t.Helper()
 
 	lane := BrokenLane()
@@ -34,7 +43,7 @@ func runIdentityAgainstBroken(t *testing.T, scenario Scenario) string {
 				}
 			}
 		}()
-		AssertIdentity(&recordingT{out: &failures}, &lane, &scenario, &observed)
+		family(&recordingT{out: &failures}, &lane, &scenario, &observed)
 	}()
 
 	return failures.String()
@@ -59,7 +68,7 @@ var _ T = (*recordingT)(nil)
 func TestBrokenLaneFailsTheTraceIdentityAssertions(t *testing.T) {
 	scenario := Scenario{
 		Name:    "succeeding_handler_with_a_carried_trace_id",
-		Carrier: map[string]any{gobrickstrace.HeaderXRequestID: brokenCarrierTraceID},
+		Carrier: map[string]any{gobrickstrace.HeaderXRequestID: BrokenCarrierTraceID},
 		Handle:  func(context.Context) error { return nil },
 		Outcome: delivery.Succeeded,
 	}
@@ -85,7 +94,7 @@ func TestBrokenLaneFailsTheTraceIdentityAssertions(t *testing.T) {
 func TestBrokenLaneFailsTheOutcomeLineShapeAssertions(t *testing.T) {
 	scenario := Scenario{
 		Name:    "failing_handler",
-		Carrier: map[string]any{gobrickstrace.HeaderXRequestID: brokenCarrierTraceID},
+		Carrier: map[string]any{gobrickstrace.HeaderXRequestID: BrokenCarrierTraceID},
 		Handle:  func(context.Context) error { return assert.AnError },
 		Outcome: delivery.HandlerError,
 	}
@@ -108,7 +117,7 @@ func TestBrokenLaneFailsTheOutcomeLineShapeAssertions(t *testing.T) {
 func TestBrokenLaneFailsThePanicSpineAssertions(t *testing.T) {
 	failures := runIdentityAgainstBroken(t, Scenario{
 		Name:    "panicking_handler",
-		Carrier: map[string]any{gobrickstrace.HeaderXRequestID: brokenCarrierTraceID},
+		Carrier: map[string]any{gobrickstrace.HeaderXRequestID: BrokenCarrierTraceID},
 		Handle:  func(context.Context) error { panic("boom") },
 		Outcome: delivery.Panicked,
 	})
@@ -140,8 +149,38 @@ func TestBrokenLaneStillCarriesTheDefectsOtherFamiliesNeed(t *testing.T) {
 		"installs no lease scope: leasescope.Register releases inline when none is present")
 	assert.Equal(t, []string{lane.SettleOnSuccess, lane.SettleOnSuccess}, observed.Settles,
 		"settles twice")
-	assert.Empty(t, observed.Spans, "opens no span")
-	assert.Empty(t, observed.Metrics.ScopeMetrics, "records no consume")
+}
+
+func TestBrokenLaneFailsEveryTelemetryAssertion(t *testing.T) {
+	failures := runTelemetryAgainstBroken(t, Scenario{
+		Name:    "failing_handler",
+		Carrier: map[string]any{gobrickstrace.HeaderXRequestID: BrokenCarrierTraceID},
+		Body:    []byte("payload"),
+		Handle:  func(context.Context) error { return assert.AnError },
+		Outcome: delivery.HandlerError,
+	})
+
+	require.NotEmpty(t, failures, "the telemetry family must fail against the broken lane")
+	assert.Contains(t, failures, "the span is named <destination> receive on both lanes")
+	assert.Contains(t, failures, "a consume span is Consumer-kind")
+	assert.Contains(t, failures, "the consume span is a root")
+	assert.Contains(t, failures, "span attribute messaging.system has the wrong value")
+	assert.Contains(t, failures, "not-rabbitmq", "the failure names the value the lane actually set")
+	// The broken lane reports 9999 bytes for a seven-byte body. Without this the
+	// body-size comparison could be removed from the family entirely and every
+	// assertion here would still pass: no other line mentions that attribute.
+	assert.Contains(t, failures, "span attribute messaging.message.body.size has the wrong value")
+	// The broken lane sets neither of these, so a correct assertAttr reports them
+	// ABSENT. Matching only a wrong-value message would pass even if assertAttr
+	// matched the wrong key and compared some other attribute's value.
+	assert.Contains(t, failures, "span attribute messaging.operation.name is absent")
+	assert.Contains(t, failures, "span attribute messaging.destination.name is absent")
+	assert.Contains(t, failures, "carries the per-message trace ID")
+	assert.Contains(t, failures, "which the lane did not declare in SpanExtraKeys")
+	assert.Contains(t, failures, "the record counts the delivery once")
+	assert.Contains(t, failures, "error.type is present exactly when the delivery failed")
+	assert.Contains(t, failures, "the exemplar names the delivery's own span, not a sibling in the same trace")
+	assert.Contains(t, failures, "the exemplar names the delivery's own trace")
 }
 
 // The broken lane's DECLARATION is deliberately valid: it is broken by what it

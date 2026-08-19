@@ -493,3 +493,68 @@ func GetMetricHistogramCount(rm metricdata.ResourceMetrics, metricName string) (
 		return 0, fmt.Errorf("metric %s is not a Histogram type", metricName)
 	}
 }
+
+// TB is what the exemplar helpers need from *testing.T. It is an interface so a
+// caller that already abstracts over the test handle can pass its own.
+type TB interface {
+	require.TestingT
+	Helper()
+}
+
+// HistogramExemplars returns the exemplars attached to every data point of a
+// histogram metric.
+func HistogramExemplars[N int64 | float64](t TB, rm metricdata.ResourceMetrics, metricName string) []metricdata.Exemplar[N] {
+	t.Helper()
+	return exemplarsOf(t, rm, metricName, "histogram", histogramExemplars[N])
+}
+
+// SumExemplars is HistogramExemplars for a counter.
+func SumExemplars[N int64 | float64](t TB, rm metricdata.ResourceMetrics, metricName string) []metricdata.Exemplar[N] {
+	t.Helper()
+	return exemplarsOf(t, rm, metricName, "sum", sumExemplars[N])
+}
+
+func histogramExemplars[N int64 | float64](agg metricdata.Aggregation) ([]metricdata.Exemplar[N], bool) {
+	data, ok := agg.(metricdata.Histogram[N])
+	if !ok {
+		return nil, false
+	}
+	var out []metricdata.Exemplar[N]
+	for i := range data.DataPoints {
+		out = append(out, data.DataPoints[i].Exemplars...)
+	}
+	return out, true
+}
+
+func sumExemplars[N int64 | float64](agg metricdata.Aggregation) ([]metricdata.Exemplar[N], bool) {
+	data, ok := agg.(metricdata.Sum[N])
+	if !ok {
+		return nil, false
+	}
+	var out []metricdata.Exemplar[N]
+	for i := range data.DataPoints {
+		out = append(out, data.DataPoints[i].Exemplars...)
+	}
+	return out, true
+}
+
+// exemplarsOf looks the metric up and hands its aggregation to extract. It fails
+// the test when the metric is absent or a different shape, rather than returning
+// empty: a helper that silently yields nothing turns "the exemplar is missing"
+// into "I guessed the shape wrong", and both read as a passing zero-length
+// result at the call site.
+func exemplarsOf[N int64 | float64](
+	t TB,
+	rm metricdata.ResourceMetrics,
+	metricName, shape string,
+	extract func(metricdata.Aggregation) ([]metricdata.Exemplar[N], bool),
+) []metricdata.Exemplar[N] {
+	t.Helper()
+
+	metric := FindMetric(rm, metricName)
+	require.NotNil(t, metric, "metric %s not found", metricName)
+
+	out, ok := extract(metric.Data)
+	require.True(t, ok, "metric %s is %T, not a %s of the requested type", metricName, metric.Data, shape)
+	return out
+}
