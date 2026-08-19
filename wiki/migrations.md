@@ -3461,7 +3461,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   consumer's two failure lines, `Message processing failed - discarding without requeue`
   and `Panic recovered in message handler - discarding without requeue`. If you also parse
   those lines in a contract test or a log shipper's config,
-  `git grep -nE 'correlation_id([^A-Za-z0-9_]|$)' -- '*.go' '*.yaml' '*.yml' '*.json'`
+  `git grep -nE '(^|[^A-Za-z0-9_])correlation_id([^A-Za-z0-9_]|$)' -- '*.go' '*.yaml' '*.yml' '*.json'`
   finds those sites.
 - scope: those two lines stamped `correlation_id` **twice** — the framework trace ID first,
   then the delivery's own AMQP `CorrelationId` — so a JSON parser keeping the last value read
