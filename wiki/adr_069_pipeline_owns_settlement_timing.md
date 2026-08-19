@@ -59,7 +59,7 @@ does with a `Panicked` result.
 **The guarantee is at-most-once INVOCATION of the callback, not exactly-once
 completion at the broker.** `Settle` is called once and never a second time, but
 what happens inside it is the lane's: a broker call that fails, times out, or
-panicks part-way leaves the message in whatever state the broker decided. The
+panics part-way leaves the message in whatever state the broker decided. The
 pipeline guarantees the lane gets exactly one attempt with a decided result, and
 nothing about the attempt's outcome. "Delivery tail" throughout this ADR means
 everything from the handler's return to the end of `RecordConsume` — it does NOT

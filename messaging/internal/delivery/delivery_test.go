@@ -784,8 +784,12 @@ type lineRecorder struct {
 	msgs *[]string
 }
 
-func (l *lineRecorder) WithContext(any) logger.Logger { return l }
-func (l *lineRecorder) Error() logger.LogEvent        { return &recordingLine{msgs: l.msgs} }
+func (l *lineRecorder) WithContext(ctx any) logger.Logger {
+	// Delegate, so a wrapped logger whose binding panics still panics through here.
+	l.Logger.WithContext(ctx)
+	return l
+}
+func (l *lineRecorder) Error() logger.LogEvent { return &recordingLine{msgs: l.msgs} }
 
 type recordingLine struct {
 	logger.LogEvent
@@ -825,4 +829,32 @@ func TestRunLogsNothingWhenSettleSucceeds(t *testing.T) {
 	h.runRequest(req)
 
 	assert.Empty(t, msgs, "a settlement that worked reports nothing")
+}
+
+// The compound failure the logger fallback exists for: the binding panics, so no
+// bound logger was ever assigned, AND the lane's settle path then fails and tries
+// to report it. Without the fallback the settle path nil-derefs, the recovery
+// report is skipped, and the delivery is left unsettled and silent — the exact
+// outcome the recovered tail exists to prevent.
+func TestRunStillSettlesWhenTheBindingPanickedAndSettleAlsoFails(t *testing.T) {
+	h := newHarness(t)
+	var msgs []string
+	settles := 0
+
+	req := h.request(succeedingHandler)
+	req.Log = &lineRecorder{Logger: &panicOnBindLogger{Logger: logger.New("error", false)}, msgs: &msgs}
+	req.Settle = func(res *Result) {
+		settles++
+		// What the classic lane does when its broker call fails: log through the
+		// result's logger. A nil one panics here.
+		res.Log.Error().Interface("panic", "ack failed").Msg("Failed to ack message")
+	}
+
+	require.NotPanics(t, func() { h.runRequest(req) })
+
+	// The discriminators: the settle RAN, and it logged. A mutant that drops the
+	// fallback makes both of those false while still "panicking somewhere".
+	assert.Equal(t, 1, settles, "the delivery is settled exactly once despite the binding panic")
+	assert.Equal(t, []string{"Failed to ack message"}, msgs,
+		"the lane's settle path can log, so a broker failure is reported rather than swallowed")
 }

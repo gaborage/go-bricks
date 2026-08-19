@@ -187,7 +187,7 @@ func Run(ctx context.Context, req *Request) (res *Result) {
 	// unsettled on the broker because the tail of its own delivery crashed.
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			res = panickedResult(res, recovered, start)
+			res = panickedResult(req, res, recovered, start)
 		}
 		settleOnce(req, res)
 	}()
@@ -260,9 +260,18 @@ func invoke(ctx context.Context, log logger.Logger, traceID string, handle Handl
 // is still Panicked here, so it nacks rather than acks: the lane never saw a
 // complete delivery, and acknowledging one it could not finish reporting would
 // lose the message silently.
-func panickedResult(res *Result, recovered any, start time.Time) *Result {
+func panickedResult(req *Request, res *Result, recovered any, start time.Time) *Result {
 	if res == nil {
 		res = &Result{}
+	}
+	if res.Log == nil {
+		// The panic may have come from req.Log.WithContext itself, before the
+		// bound logger was ever assigned. Without this the lane is handed a
+		// Result with a nil logger: settleOnce would skip its recovery report,
+		// and a settle path that logs — the classic lane's ack/nack failure
+		// lines — would nil-deref, leaving the delivery UNSETTLED and silent.
+		// The unbound logger is worse than the bound one and far better than none.
+		res.Log = req.Log
 	}
 	res.Outcome = Panicked
 	res.Panic = recovered
