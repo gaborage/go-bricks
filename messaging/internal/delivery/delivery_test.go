@@ -742,7 +742,16 @@ func TestRunSettlesAfterTheSpanClosedAndTheLeaseDrained(t *testing.T) {
 // itself fails early.
 type panicOnBindLogger struct{ logger.Logger }
 
-func (l *panicOnBindLogger) WithContext(any) logger.Logger { panic("binding blew up") }
+func (l *panicOnBindLogger) WithContext(any) logger.Logger {
+	// Outlast Windows' coarse clock before panicking, matching the idiom at the
+	// lease test above: this path finishes inside a single ~15.6ms timer tick
+	// there, so time.Since reads exactly 0 and the duration assertion below
+	// would be unsound rather than wrong. Sleeping keeps the claim true on every
+	// platform instead of weakening it to >= 0, which would assert nothing — and
+	// would let the `res.Duration == 0` guard's mutant survive.
+	time.Sleep(2 * time.Millisecond)
+	panic("binding blew up")
+}
 
 func TestRunSettlesAPanicRaisedBeforeTheHandlerRan(t *testing.T) {
 	h := newHarness(t)
