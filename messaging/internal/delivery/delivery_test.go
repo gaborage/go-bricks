@@ -679,6 +679,12 @@ func TestRunSettlesEvenWhenTheDeliveryTailPanics(t *testing.T) {
 	req.LogOutcome = func(*Result) { panic("the lane's own line blew up") }
 	req.Settle = settles.settle
 
+	var settleLog logger.Logger
+	req.Settle = func(res *Result) {
+		settles.settle(res)
+		settleLog = res.Log
+	}
+
 	require.NotPanics(t, func() { h.runRequest(req) }, "a tail panic never escapes into the consume loop")
 
 	// The discriminator: a mutant that drops the recover makes the test panic and
@@ -686,6 +692,14 @@ func TestRunSettlesEvenWhenTheDeliveryTailPanics(t *testing.T) {
 	// run returned — is what separates "recovered and settled" from "crashed".
 	assert.Equal(t, []Outcome{Panicked}, settles.outcomes,
 		"a delivery whose tail panicked settles as Panicked, so the lane nacks rather than acks it")
+
+	// The fallback in panickedResult is a fallback, not a replacement: a delivery
+	// that DID get a bound logger keeps it, so the lane's ack/nack failure line
+	// still carries trace_id and span_id. Only a delivery that never got one is
+	// handed the unbound logger instead of nil.
+	require.NotNil(t, h.log.bound)
+	assert.Same(t, h.log.bound, settleLog,
+		"a tail panic settles through the context-bound logger, not the unbound one")
 }
 
 // A panic inside Settle is the lane's own bug on its own broker call. Retrying
