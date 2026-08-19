@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -248,6 +249,27 @@ func TestRunGeneratesATraceIDWhenNoneTraveled(t *testing.T) {
 
 	assert.NotEmpty(t, first.TraceID)
 	assert.NotEqual(t, first.TraceID, second.TraceID)
+}
+
+// The generated-trace-ID path is the one the write-back exists for: without it
+// EnsureTraceID mints a fresh id on every call, so the id the pipeline reports is
+// neither readable from the handler's context nor stable within one delivery.
+func TestRunRebindsAGeneratedTraceIDIntoTheContext(t *testing.T) {
+	h := newHarness(t)
+
+	var fromContext, reEnsured string
+	var found bool
+	req := h.request(func(ctx context.Context, _ logger.Logger, _ string) error {
+		fromContext, found = gobrickstrace.IDFromContext(ctx)
+		reEnsured = gobrickstrace.EnsureTraceID(ctx)
+		return nil
+	})
+
+	res := h.runRequest(req)
+
+	require.True(t, found, "a generated trace ID must be readable from the per-message context")
+	assert.Equal(t, res.TraceID, fromContext)
+	assert.Equal(t, res.TraceID, reEnsured, "EnsureTraceID re-mints when the id was never written back")
 }
 
 func TestRunAcceptsANilCarrier(t *testing.T) {
@@ -517,4 +539,82 @@ func TestTracerCacheSurvivesAConcurrentReset(t *testing.T) {
 	close(start)
 	wg.Wait()
 	assert.Zero(t, nilTracers.Load(), "a delivery racing a reset must never see a nil tracer")
+}
+
+// ===== AppendOutcome Tests =====
+
+// outcomeEvent records every field write in order, so a test can pin the exact
+// shape AppendOutcome stamps — including that it stamps nothing else.
+type outcomeEvent struct {
+	pairs [][2]any
+	msg   string
+}
+
+func (e *outcomeEvent) add(key string, value any) logger.LogEvent {
+	e.pairs = append(e.pairs, [2]any{key, value})
+	return e
+}
+
+func (e *outcomeEvent) Msg(msg string)                          { e.msg = msg }
+func (e *outcomeEvent) Msgf(format string, args ...any)         { e.msg = fmt.Sprintf(format, args...) }
+func (e *outcomeEvent) Err(err error) logger.LogEvent           { return e.add("error", err) }
+func (e *outcomeEvent) Str(k, v string) logger.LogEvent         { return e.add(k, v) }
+func (e *outcomeEvent) Int(k string, v int) logger.LogEvent     { return e.add(k, v) }
+func (e *outcomeEvent) Int64(k string, v int64) logger.LogEvent { return e.add(k, v) }
+func (e *outcomeEvent) Uint64(k string, v uint64) logger.LogEvent {
+	return e.add(k, v)
+}
+func (e *outcomeEvent) Dur(k string, v time.Duration) logger.LogEvent { return e.add(k, v) }
+func (e *outcomeEvent) Interface(k string, v any) logger.LogEvent     { return e.add(k, v) }
+func (e *outcomeEvent) Bytes(k string, v []byte) logger.LogEvent      { return e.add(k, v) }
+func (e *outcomeEvent) Bool(k string, v bool) logger.LogEvent         { return e.add(k, v) }
+func (e *outcomeEvent) Enabled() bool                                 { return true }
+
+var _ logger.LogEvent = (*outcomeEvent)(nil)
+
+func TestAppendOutcomeStampsTheSpine(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome Outcome
+	}{
+		{name: "succeeded", outcome: Succeeded},
+		{name: "handler_error", outcome: HandlerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := &outcomeEvent{}
+			res := &Result{Outcome: tt.outcome, TraceID: testTraceID, Duration: 7 * time.Millisecond}
+
+			got := AppendOutcome(event, res)
+
+			assert.Same(t, event, got, "the lane keeps appending to the same event")
+			assert.Equal(t, [][2]any{
+				{"correlation_id", testTraceID},
+				{"processing_time", 7 * time.Millisecond},
+			}, event.pairs, "panic and stack belong to the Panicked outcome only")
+			assert.Empty(t, event.msg, "the message text is the lane's")
+		})
+	}
+}
+
+func TestAppendOutcomeAddsThePanicAndItsStack(t *testing.T) {
+	event := &outcomeEvent{}
+	stack := []byte("goroutine 1 [running]:")
+	res := &Result{
+		Outcome:  Panicked,
+		TraceID:  testTraceID,
+		Duration: 3 * time.Millisecond,
+		Panic:    "boom",
+		Stack:    stack,
+	}
+
+	AppendOutcome(event, res)
+
+	assert.Equal(t, [][2]any{
+		{"correlation_id", testTraceID},
+		{"processing_time", 3 * time.Millisecond},
+		{"panic", any("boom")},
+		{"stack", stack},
+	}, event.pairs)
 }

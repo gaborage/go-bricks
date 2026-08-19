@@ -4,6 +4,13 @@
 - **Date**: 2026-08-17
 - **Related**: [ADR-059](adr_059_streams_consumption.md) (the streams lane's shape and its "trace-context propagation" future-work item), [ADR-063](adr_063_streams_native_publishing.md) (native publishing — untouched here), [ADR-032](adr_032_lease_refcount_tenant_handles.md) (the per-message lease scope), [ADR-058](adr_058_consumer_scoped_amqp_arguments.md) (the two-lane framing)
 
+> **Amended (2026-08-18, [migrations.md](migrations.md) `[C60.7]`):** the failure and
+> panic lines' second `correlation_id` stamp — the delivery's own AMQP `CorrelationId`
+> — is now stamped `amqp_correlation_id`, so `correlation_id` carries the framework
+> trace ID and nothing else on every line of both lanes; both values are still emitted.
+> The "two deliberate `correlation_id` stamps" the Decision names below are therefore
+> one stamp under each of two names. The text below is the record as decided.
+
 ## Context
 
 Both messaging lanes implemented the same per-message body independently. The
