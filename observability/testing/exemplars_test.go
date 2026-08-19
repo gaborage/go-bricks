@@ -15,7 +15,7 @@ import (
 
 // recordUnderASampledSpan records one counter and one histogram sample inside a
 // sampled span, which is what makes the SDK attach an exemplar at all.
-func recordUnderASampledSpan(t *testing.T) metricdata.ResourceMetrics {
+func recordUnderASampledSpan(t *testing.T) (metricdata.ResourceMetrics, oteltrace.TraceID) {
 	t.Helper()
 
 	tp := obtest.NewTestTraceProvider()
@@ -38,33 +38,36 @@ func recordUnderASampledSpan(t *testing.T) metricdata.ResourceMetrics {
 	histogram.Record(ctx, 0.5, metric.WithAttributes())
 
 	span.End()
-	return mp.Collect(t)
+	// Return the trace the metrics were recorded under. Asserting only that an
+	// exemplar HAS a trace id cannot tell "the right trace" from "a trace".
+	return mp.Collect(t), span.SpanContext().TraceID()
 }
 
 func TestSumExemplarsNamesTheRecordingSpan(t *testing.T) {
-	rm := recordUnderASampledSpan(t)
+	rm, recorded := recordUnderASampledSpan(t)
 
 	exemplars := obtest.SumExemplars[int64](t, rm, "things.counted")
 
 	require.NotEmpty(t, exemplars)
-	assert.NotEmpty(t, exemplars[0].TraceID, "the exemplar carries the trace it was recorded under")
-	assert.Len(t, exemplars[0].TraceID, len(oteltrace.TraceID{}))
+	assert.Equal(t, recorded[:], exemplars[0].TraceID,
+		"the exemplar names the trace it was recorded under, not merely some trace")
 }
 
 func TestHistogramExemplarsNamesTheRecordingSpan(t *testing.T) {
-	rm := recordUnderASampledSpan(t)
+	rm, recorded := recordUnderASampledSpan(t)
 
 	exemplars := obtest.HistogramExemplars[float64](t, rm, "things.timed")
 
 	require.NotEmpty(t, exemplars)
-	assert.NotEmpty(t, exemplars[0].TraceID)
+	assert.Equal(t, recorded[:], exemplars[0].TraceID,
+		"the exemplar names the trace it was recorded under, not merely some trace")
 }
 
 // Both helpers fail loudly rather than returning empty: an assertion helper that
 // yields nothing turns "the exemplar is missing" into "I guessed the shape
 // wrong", and both read as a passing zero-length result at the call site.
 func TestExemplarHelpersFailRatherThanYieldNothing(t *testing.T) {
-	rm := recordUnderASampledSpan(t)
+	rm, _ := recordUnderASampledSpan(t)
 
 	tests := []struct {
 		name string

@@ -179,5 +179,9 @@ func TestClassicLaneMintsAFreshStableTraceIDPerDelivery(t *testing.T) {
 	// the Equal below would pass while asserting nothing.
 	require.NotEmpty(t, first.HandlerTraceID, "the pipeline plants an id the handler can read")
 	assert.Equal(t, first.HandlerTraceID, secondRead, "two reads in one delivery must agree")
+	// The sibling half: NotEqual also passes when the SECOND delivery mints
+	// nothing, so "each delivery mints its own" would hold vacuously the moment
+	// the second stopped planting an id at all.
+	require.NotEmpty(t, second.HandlerTraceID, "the second delivery plants an id too")
 	assert.NotEqual(t, first.HandlerTraceID, second.HandlerTraceID, "each delivery mints its own")
 }
