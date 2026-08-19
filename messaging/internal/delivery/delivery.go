@@ -35,7 +35,8 @@ const (
 	spanOperationReceive = "receive"
 	messagingSystem      = "rabbitmq"
 
-	panicMessage = "panic in message handler: %v"
+	panicMessage       = "panic in message handler: %v"
+	settlePanicMessage = "Panic recovered while settling a delivery; not retried"
 
 	// spanAttrCap is the four common attributes plus the AMQP lane's four extras.
 	spanAttrCap = 8
@@ -119,6 +120,18 @@ type Request struct {
 	// while the span is open and the lease scope still holds, so a handle the
 	// handler borrowed outlives the line.
 	LogOutcome func(*Result)
+
+	// Settle turns the outcome into the lane's broker action: ack or
+	// nack-without-requeue on the classic lane, commit-offset or skip on the
+	// streams lane. The pipeline calls it at most once per delivery, after the
+	// span has closed and the lease scope has drained, so a handle the handler
+	// borrowed is released before the message is acknowledged.
+	//
+	// There is no fallback variant: a panic in the body is recovered and Settle
+	// still runs with a Panicked result, which is the same action a lane's own
+	// fallback performed. Only a panic INSIDE Settle needs different handling,
+	// and its correct response is to log and stop rather than retry.
+	Settle func(*Result)
 }
 
 // Result is what the lane settles on. Panic and Stack are set only when Outcome
@@ -151,7 +164,7 @@ func AppendOutcome(e logger.LogEvent, res *Result) logger.LogEvent {
 // becomes a Panicked result carrying the recovered value, its stack, and an
 // error. A panic in the lane's own LogOutcome or Log is the lane's bug and does
 // propagate — the span still ends and the lease scope still drains, both deferred.
-func Run(ctx context.Context, req *Request) *Result {
+func Run(ctx context.Context, req *Request) (res *Result) {
 	start := time.Now()
 
 	msgCtx := gobrickstrace.ExtractFromHeaders(ctx, req.Carrier)
@@ -166,6 +179,18 @@ func Run(ctx context.Context, req *Request) *Result {
 	// closed under it. Deferred before span.End so the span closes first and
 	// ReleaseAll runs last.
 	msgCtx, scope := leasescope.Install(msgCtx)
+
+	// Deferred FIRST so it runs LAST: the order is span end -> lease drain ->
+	// settle. Everything below this line is inside the guard, so a panic in the
+	// lane's LogOutcome, in the span marking or in the consume record is
+	// recovered and the delivery is still settled — a message is never left
+	// unsettled on the broker because the tail of its own delivery crashed.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			res = panickedResult(res, recovered, start)
+		}
+		settleOnce(req, res)
+	}()
 	defer scope.ReleaseAll()
 	defer span.End()
 
@@ -180,7 +205,7 @@ func Run(ctx context.Context, req *Request) *Result {
 
 	log := req.Log.WithContext(msgCtx)
 
-	res := invoke(msgCtx, log, traceID, req.Handle)
+	res = invoke(msgCtx, log, traceID, req.Handle)
 	res.Duration = time.Since(start)
 	res.TraceID = traceID
 	res.Log = log
@@ -228,4 +253,46 @@ func invoke(ctx context.Context, log logger.Logger, traceID string, handle Handl
 		res.Err = err
 	}
 	return res
+}
+
+// panickedResult turns a panic in the delivery tail into the result the lane
+// settles on. A delivery whose handler succeeded but whose outcome line panicked
+// is still Panicked here, so it nacks rather than acks: the lane never saw a
+// complete delivery, and acknowledging one it could not finish reporting would
+// lose the message silently.
+func panickedResult(res *Result, recovered any, start time.Time) *Result {
+	if res == nil {
+		res = &Result{}
+	}
+	res.Outcome = Panicked
+	res.Panic = recovered
+	res.Stack = debug.Stack()
+	res.Err = fmt.Errorf(panicMessage, recovered)
+	if res.Duration == 0 {
+		res.Duration = time.Since(start)
+	}
+	return res
+}
+
+// settleOnce hands the result to the lane's Settle exactly once, guarded. A
+// panic inside Settle is the lane's own bug on its own broker call: retrying it
+// would panic again, so it is logged and stopped rather than escalated into the
+// consume loop.
+func settleOnce(req *Request, res *Result) {
+	if req.Settle == nil || res == nil {
+		return
+	}
+
+	defer func() {
+		recovered := recover()
+		if recovered == nil || res.Log == nil {
+			return
+		}
+		// The logger is the lane's; if logging the panic panics too, there is
+		// nothing left to report it with.
+		defer func() { _ = recover() }()
+		res.Log.Error().Interface("panic", recovered).Msg(settlePanicMessage)
+	}()
+
+	req.Settle(res)
 }

@@ -41,7 +41,7 @@ type Lane struct {
 	//
 	// It must not call t.Run — the family owns the subtest, so the telemetry
 	// fixture's provider restore is scoped to the family's test, not a nested one.
-	Deliver func(*testing.T, Scenario) Observed
+	Deliver func(*testing.T, *Scenario) Observed
 
 	// SpanExtraKeys are the span attribute keys this lane may add on top of the
 	// four both lanes share.
@@ -77,6 +77,11 @@ type Scenario struct {
 
 	// Handle returns nil to succeed, an error to fail, or panics.
 	Handle func(ctx context.Context) error
+
+	// PanicIn names a LANE-owned closure that must panic for this scenario, so a
+	// family can prove a panic in the delivery tail is contained rather than
+	// escaping into the consume loop. Empty means neither panics.
+	PanicIn string
 
 	// Outcome is what Handle produces. The scenario declares it because it owns
 	// the handler body; a family uses it to pick the OutcomeLine the lane
@@ -143,6 +148,12 @@ const (
 	LevelDebug = "debug"
 	LevelWarn  = "warn"
 	LevelFatal = "fatal"
+)
+
+// The lane-owned closures a scenario can make panic.
+const (
+	PanicInLogOutcome = "log-outcome"
+	PanicInSettle     = "settle"
 )
 
 // LogLine is one emitted log line: its level, its message, and every field write

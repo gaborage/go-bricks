@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 	"github.com/gaborage/go-bricks/messaging/internal/lanecontract"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -82,7 +83,7 @@ func (h *laneHandler) EventType() string { return "orders.created" }
 //
 // Observed.Result is left nil — see that field's doc for why the classic lane
 // cannot fill it yet.
-func deliverClassic(t *testing.T, scenario lanecontract.Scenario) lanecontract.Observed {
+func deliverClassic(t *testing.T, scenario *lanecontract.Scenario) lanecontract.Observed {
 	t.Helper()
 
 	exporter, meter := lanecontract.SetupTelemetry(t)
@@ -107,7 +108,16 @@ func deliverClassic(t *testing.T, scenario lanecontract.Scenario) lanecontract.O
 	}
 
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
-	registry.processMessage(context.Background(), consumer, msg, log)
+	// A scenario can make one of the lane's own closures panic, which is how the
+	// failure family proves a tail panic is contained rather than escaping.
+	deliverLog := logger.Logger(log)
+	if scenario.PanicIn == lanecontract.PanicInLogOutcome {
+		deliverLog = &panicOnOutcomeLogger{RecordingLogger: log}
+	}
+	if scenario.PanicIn == lanecontract.PanicInSettle {
+		acker.panicOnSettle = true
+	}
+	registry.processMessage(context.Background(), consumer, msg, deliverLog)
 
 	return lanecontract.Observed{
 		HandlerTraceID: handler.traceID,
@@ -120,10 +130,14 @@ func deliverClassic(t *testing.T, scenario lanecontract.Scenario) lanecontract.O
 
 // settleRecorder records settlements in the harness's vocabulary, so "settled
 // exactly once" is observable rather than inferred from a pair of booleans.
-type settleRecorder struct{ settles []string }
+type settleRecorder struct {
+	settles       []string
+	panicOnSettle bool
+}
 
 func (s *settleRecorder) Ack(uint64, bool) error {
 	s.settles = append(s.settles, "ack")
+	s.maybePanic()
 	return nil
 }
 
@@ -133,8 +147,38 @@ func (s *settleRecorder) Nack(_ uint64, _, requeue bool) error {
 		action = "nack-requeue"
 	}
 	s.settles = append(s.settles, action)
+	s.maybePanic()
 	return nil
 }
+
+// maybePanic records the settlement first, so a scenario proving "called once
+// and not retried" still has the evidence it needs.
+func (s *settleRecorder) maybePanic() {
+	if s.panicOnSettle {
+		panic("the lane's settle blew up")
+	}
+}
+
+// panicOnOutcomeLogger panics from whichever level the lane's outcome line uses
+// — Info on a success, Error on a failure — which is the realistic shape: the
+// lane's own logging is what fails.
+//
+// WithContext must be overridden too. The pipeline binds the logger to the
+// per-message context and logs through the RESULT of that call, so returning the
+// embedded recorder would hand the lane an unwrapped logger and the panic would
+// never fire.
+type panicOnOutcomeLogger struct{ *lanecontract.RecordingLogger }
+
+func (l *panicOnOutcomeLogger) WithContext(ctx any) logger.Logger {
+	bound, ok := l.RecordingLogger.WithContext(ctx).(*lanecontract.RecordingLogger)
+	if !ok {
+		return l
+	}
+	return &panicOnOutcomeLogger{RecordingLogger: bound}
+}
+
+func (l *panicOnOutcomeLogger) Info() logger.LogEvent  { panic("the lane's outcome line blew up") }
+func (l *panicOnOutcomeLogger) Error() logger.LogEvent { panic("the lane's outcome line blew up") }
 
 func (s *settleRecorder) Reject(uint64, bool) error {
 	s.settles = append(s.settles, "reject")
@@ -160,7 +204,7 @@ func TestClassicLaneMintsAFreshStableTraceIDPerDelivery(t *testing.T) {
 	lane := classicLane()
 	var secondRead string
 
-	first := lane.Deliver(t, lanecontract.Scenario{
+	first := lane.Deliver(t, &lanecontract.Scenario{
 		Name: "nothing_traveled",
 		Handle: func(ctx context.Context) error {
 			secondRead, _ = gobrickstrace.IDFromContext(ctx)
@@ -168,7 +212,7 @@ func TestClassicLaneMintsAFreshStableTraceIDPerDelivery(t *testing.T) {
 		},
 		Outcome: delivery.Succeeded,
 	})
-	second := lane.Deliver(t, lanecontract.Scenario{
+	second := lane.Deliver(t, &lanecontract.Scenario{
 		Name:    "nothing_traveled_again",
 		Handle:  func(context.Context) error { return nil },
 		Outcome: delivery.Succeeded,
@@ -184,4 +228,10 @@ func TestClassicLaneMintsAFreshStableTraceIDPerDelivery(t *testing.T) {
 	// the second stopped planting an id at all.
 	require.NotEmpty(t, second.HandlerTraceID, "the second delivery plants an id too")
 	assert.NotEqual(t, first.HandlerTraceID, second.HandlerTraceID, "each delivery mints its own")
+}
+
+func TestClassicLaneSatisfiesTheFailureContract(t *testing.T) {
+	lane := classicLane()
+
+	lanecontract.RunFailure(t, &lane)
 }

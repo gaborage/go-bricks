@@ -1394,6 +1394,26 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-069: The Delivery Pipeline Owns Settlement Timing](adr_069_pipeline_owns_settlement_timing.md)
+
+**Date:** 2026-08-18 | **Status:** Accepted | **Supersedes in part:** ADR-068
+
+ADR-068 left containment with the lanes, and it drifted immediately: the classic lane grew a
+`settling` flag plus a deferred recover with a nested recover, the streams lane grew nothing — an
+unrecovered panic in its delivery tail terminated the process and stranded up to 500
+handled-but-uncommitted messages per partition. `delivery.Request` now carries `Settle func(*Result)`
+and `Run` owns when it runs: the guard is deferred FIRST so it runs LAST, making the order span end →
+lease drain → settle. A panic anywhere in the tail still settles, as `Panicked`, so the lane nacks
+rather than acks a delivery it could not finish reporting; a panic inside `Settle` is logged and not
+retried. Settlement POLICY stays lane-side exactly as ADR-068 decided — only timing and the
+exactly-once guarantee move.
+
+**Key Benefits:** A guarantee owned by a structure instead of stated in prose, and a lane that gains
+it without writing a guard.
+**Watch:** a delivery whose handler SUCCEEDED but whose outcome line panicked is now `Panicked`, so
+it nacks — the same action the classic lane's fallback already performed, and new behaviour for any
+lane that had no fallback.
+
 ### [ADR-068: One Delivery Pipeline for Both Messaging Lanes](adr_068_delivery_pipeline.md)
 
 **Date:** 2026-08-17 | **Status:** Accepted
@@ -1426,7 +1446,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-068) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-069) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
