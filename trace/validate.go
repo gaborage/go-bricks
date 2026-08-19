@@ -26,13 +26,14 @@ var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // traceParentPattern is the W3C traceparent grammar: two hex version digits, a
 // 32-hex-digit trace-id, a 16-hex-digit parent-id, two hex flag digits, and — for
-// a future version — further dash-delimited fields of printable, non-space ASCII.
+// a future version — further dash-delimited fields of [[:graph:]] — printable ASCII (0x21-0x7e,
+// so no space, no control byte, nothing outside ASCII).
 // It stays ANCHORED at both
 // ends. An unanchored pattern would accept the four fields it checks and then
 // anything at all after them, which is the unbounded caller-controlled value this
 // whole seam exists to refuse: CR/LF for header injection, kilobytes for storage
 // and re-emission on every outbound hop.
-var traceParentPattern = regexp.MustCompile(`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}(-[!-,.-~]+)*$`)
+var traceParentPattern = regexp.MustCompile(`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}(-[[:graph:]]+)*$`)
 
 const (
 	// The all-zero ids, which the spec declares invalid outright.

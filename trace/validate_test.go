@@ -74,7 +74,7 @@ func TestValidateTraceParentIsSpecExact(t *testing.T) {
 		// ...but the extra fields must actually be dash-delimited. A 56th byte
 		// that is not a dash means the flags field itself is the wrong width.
 		{name: "future_version_with_undelimited_extra", tp: "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-012"},
-		// Forward compatibility is not a licence to store whatever follows: this
+		// Forward compatibility is not a license to store whatever follows: this
 		// seam re-emits the raw value on every outbound hop, so a suffix carrying
 		// CR/LF would ride into an outbound header, and an unbounded one would be
 		// stored per delivery.
