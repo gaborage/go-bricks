@@ -158,6 +158,37 @@ Field-name masking is *one* layer. A complete PCI-DSS 3.3/3.4/3.5 posture combin
 - **Removing the in-module wrapper anti-pattern**: if your codebase previously wrapped `deps.Logger` per-module to apply a filter, you can delete that wrapper after migrating to YAML or `Options.LoggerFilterConfig`. The bootstrap-level filter covers every framework subsystem; the per-module wrapper covered only your code.
 - **Upgrading from v0.30.0**: the wiring change is the constructor (`logger.New` → `logger.NewWithFilter` inside `Builder.CreateLogger`). When called with a `nil` filter config, `NewWithFilter` is byte-for-byte equivalent to the legacy `New` — both resolve to `DefaultFilterConfig()`. No flag, no environment variable, no migration step; the observable difference is the widened default list above.
 
+## Correlation Fields and Exemplars
+
+A log line from a consumed message or an HTTP request can carry three different
+identifiers, and they hold **different values by design**:
+
+| field | what it is | when it appears |
+| --- | --- | --- |
+| `correlation_id` | the framework's cross-service id — what travels as `X-Request-ID`, and what both messaging lanes stamp on every outcome line | always |
+| `trace_id` | the OpenTelemetry trace id of the span the line was written under | only when a tracer provider is registered |
+| `span_id` | the OpenTelemetry span id | only when a tracer provider is registered |
+
+`correlation_id` is not the OTel `trace_id` and is not meant to be. The framework
+mints or forwards its own id so correlation survives with tracing switched off;
+the OTel ids exist only while a provider is registered. Inbound identifiers are
+validated before either is used ([ADR-070](adr_070_inbound_trace_identifier_validation.md)):
+a non-conforming one is discarded and replaced, so a value you sent may not be
+the value you see.
+
+**Metric exemplars** link a metric data point back to a trace. The messaging
+consume metrics record inside the delivery span, so their data points carry an
+exemplar naming that span. Note the consume span is a **root** on both lanes:
+re-parenting a consume trace onto its producer is deliberately out of scope, so
+an exemplar resolves to a per-message trace containing that one delivery. That is
+expected, not a gap.
+
+**One configuration is worth naming**, because it fails quietly:
+`observability.enabled: true` with `trace.enabled: false` leaves metrics flowing
+while every exemplar is silently dropped and `trace_id`/`span_id` vanish from log
+lines — leaving `correlation_id` as the only correlation anywhere. Nothing errors
+and nothing warns.
+
 ## Custom Metrics
 
 GoBricks exposes `MeterProvider` via `ModuleDeps` for creating application-specific metrics. When `observability.enabled: false`, a no-op provider is used with zero overhead.

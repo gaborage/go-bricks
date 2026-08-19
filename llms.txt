@@ -2884,6 +2884,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams" // only for the native-stream examples below
+	"github.com/gaborage/go-bricks/trace"             // trace.IDFromContext inside a handler
 )
 
 type Module struct {
@@ -2981,6 +2982,10 @@ func (m *Module) DeclareStreams(decls *streams.Declarations) {
 		Stream: "orders", Name: "order-projector", // Name is the offset-tracking key
 		Start: streams.OffsetFirst(), SAC: true,
 		Handler: func(ctx context.Context, msg *streams.Message) error {
+			// The originating trace ID, extracted from the message's carrier by the
+			// shared delivery pipeline. Same call on the AMQP lane.
+			traceID, _ := trace.IDFromContext(ctx)
+			_ = traceID
 			return m.svc.Project(ctx, msg.Data) // msg.Offset, msg.Stream also available
 		},
 	})

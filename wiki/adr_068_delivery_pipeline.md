@@ -4,6 +4,13 @@
 - **Date**: 2026-08-17
 - **Related**: [ADR-059](adr_059_streams_consumption.md) (the streams lane's shape and its "trace-context propagation" future-work item), [ADR-063](adr_063_streams_native_publishing.md) (native publishing — untouched here), [ADR-032](adr_032_lease_refcount_tenant_handles.md) (the per-message lease scope), [ADR-058](adr_058_consumer_scoped_amqp_arguments.md) (the two-lane framing)
 
+> **Amended (2026-08-19):** the streams lane now runs on this pipeline too, so the
+> "the streams lane in a named follow-up" qualifier below is spent. Its `deliver`
+> builds a `delivery.Request` and its private `invoke`, its own tracer field and its
+> own span are gone. The lane gains carrier extraction, the per-message lease scope
+> and panic containment it never had; it keeps its own settlement policy, which is
+> commit-or-skip through the batching offset tracker.
+>
 > **Superseded in part by [ADR-069](adr_069_pipeline_owns_settlement_timing.md) (2026-08-18):** the
 > containment half of this ADR is reversed. Guarding the delivery tail is no longer each lane's job, and
 > the Consequences text below asserting that a panic in `LogOutcome` terminates the process was never

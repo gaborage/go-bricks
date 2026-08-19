@@ -77,29 +77,41 @@ func TestLaneValidateAcceptsAConformingDeclaration(t *testing.T) {
 func TestLaneValidateRejectsADeclarationAFamilyCannotActOn(t *testing.T) {
 	tests := []struct {
 		name    string
-		mutate  func(Lane)
+		mutate  func(*Lane)
 		wantErr string
 	}{
 		{
 			name:    "level_the_recorder_never_stamps",
-			mutate:  func(l Lane) { l.OutcomeLines[delivery.Succeeded] = OutcomeLine{Level: "trace", Msg: "ok"} },
+			mutate:  func(l *Lane) { l.OutcomeLines[delivery.Succeeded] = OutcomeLine{Level: "trace", Msg: "ok"} },
 			wantErr: `level "trace" is not a level the recorder stamps`,
 		},
 		{
 			name:    "empty_level",
-			mutate:  func(l Lane) { l.OutcomeLines[delivery.Succeeded] = OutcomeLine{Msg: "ok"} },
+			mutate:  func(l *Lane) { l.OutcomeLines[delivery.Succeeded] = OutcomeLine{Msg: "ok"} },
 			wantErr: `level "" is not a level the recorder stamps`,
 		},
 		{
 			name: "extras_but_no_message",
-			mutate: func(l Lane) {
+			mutate: func(l *Lane) {
 				l.OutcomeLines[delivery.Succeeded] = OutcomeLine{Level: LevelInfo, ExtraKeys: []string{"message_id"}}
 			},
 			wantErr: "declares 1 extra keys but no message, so a family cannot locate its line",
 		},
 		{
+			// A SCALAR field alongside an invalidity. With a value receiver the
+			// Name change would not reach the lane under test — only the
+			// OutcomeLines map aliased through the copy — so the error would still
+			// say "classic" and this case would pass while asserting nothing.
+			name: "a_scalar_field_reaches_the_lane_under_test",
+			mutate: func(l *Lane) {
+				l.Name = "renamed"
+				l.OutcomeLines[delivery.Succeeded] = OutcomeLine{Level: "trace", Msg: "ok"}
+			},
+			wantErr: `lane "renamed"`,
+		},
+		{
 			name: "message_duplicated_across_outcomes",
-			mutate: func(l Lane) {
+			mutate: func(l *Lane) {
 				line := l.OutcomeLines[delivery.Succeeded]
 				line.Msg = l.OutcomeLines[delivery.Panicked].Msg
 				l.OutcomeLines[delivery.Succeeded] = line
@@ -111,13 +123,12 @@ func TestLaneValidateRejectsADeclarationAFamilyCannotActOn(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lane := classicLane()
-			tt.mutate(lane)
+			tt.mutate(&lane)
 
 			err := lane.Validate()
 
 			require.Error(t, err, "a declaration a family cannot act on must not validate")
 			assert.Contains(t, err.Error(), tt.wantErr)
-			assert.Contains(t, err.Error(), `lane "classic"`, "the error names the lane")
 		})
 	}
 }

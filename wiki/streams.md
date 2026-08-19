@@ -380,10 +380,14 @@ The framework injects W3C trace context into those properties through its own
 `trace` package — `traceparent`, `tracestate` when the context carries one, and
 `X-Request-ID` — so both messaging lanes write the same header names. A
 `traceparent` the caller put in `Properties` itself is preserved, while
-`X-Request-ID` is always overwritten with the trace ID aligned to it. Extracting
-them on the consume side is future work
-([ADR-059](adr_059_streams_consumption.md)); until then a handler can read them
-off `msg.Properties`.
+`X-Request-ID` is always overwritten with the trace ID aligned to it. The consume
+side now reads them back: this lane runs on the shared delivery pipeline
+([ADR-068](adr_068_delivery_pipeline.md), [ADR-069](adr_069_pipeline_owns_settlement_timing.md)),
+which extracts the carrier into the per-message context, so a handler gets the
+originating trace ID from `trace.IDFromContext(ctx)` rather than parsing
+`msg.Properties` itself. Inbound identifiers are validated at that seam
+([ADR-070](adr_070_inbound_trace_identifier_validation.md)) — a non-conforming
+one is discarded and replaced rather than carried.
 
 ### Readiness, stats and shutdown
 
@@ -430,8 +434,8 @@ connected, `unhealthy` whenever one is not — reconnecting, closed, or the
 manager stopped. The probe is **non-critical** —
 the reliable consumers and producers recover on their own, so a broker flap must
 not pull the whole service out of the load
-balancer. Trace-context propagation from AMQP-published messages is not
-implemented (future work).
+balancer. Trace-context propagation from published messages is read back on the
+consume side, through the shared delivery pipeline.
 
 ## Operations
 

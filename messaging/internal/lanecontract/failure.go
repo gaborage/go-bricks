@@ -54,9 +54,15 @@ func FailureScenarios() []Scenario {
 			Outcome: delivery.Panicked,
 		},
 		{
+			// The handler FAILS here on purpose. A successful delivery writes no
+			// outcome line on the streams lane — a stream is a high-throughput
+			// ordered log — so a success scenario has no line to panic in and
+			// would prove nothing there. What this scenario exists to prove is
+			// that a panic in the lane's own tail still settles, which does not
+			// require the handler to have succeeded.
 			Name:    "the_lanes_outcome_line_panics",
-			Handle:  func(context.Context) error { return nil },
-			Outcome: delivery.Succeeded,
+			Handle:  func(context.Context) error { return errHandlerFailed },
+			Outcome: delivery.HandlerError,
 			PanicIn: PanicInLogOutcome,
 		},
 		{

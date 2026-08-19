@@ -10,7 +10,6 @@ import (
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel"
 
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -89,7 +88,6 @@ func newTestRunnerWithLogger(t *testing.T, handler Handler, tracker *offsetTrack
 		handler: handler,
 		offsets: bookOf(tracker),
 		log:     log,
-		tracer:  otel.Tracer(tracerName),
 		baseCtx: context.Background(),
 	}
 }
@@ -107,7 +105,6 @@ func newTestRunnerWithBook(t *testing.T, handler Handler, book *offsetBook) *con
 		handler: handler,
 		offsets: book,
 		log:     logger.New("error", false),
-		tracer:  otel.Tracer(tracerName),
 		baseCtx: context.Background(),
 	}
 }
@@ -466,17 +463,6 @@ func TestRunnerDeliverRecoversPanicAndContinues(t *testing.T) {
 
 	assert.Equal(t, 2, handled, "the stream continues after a panicking handler")
 	assert.Equal(t, []int64{2}, storer.offsets(), "the panicking message's offset is never committed")
-}
-
-func TestRunnerInvokeWrapsPanicAsError(t *testing.T) {
-	runner := newTestRunner(t, func(context.Context, *Message) error {
-		panic("kaboom")
-	}, newOffsetTracker(1, time.Hour, nil))
-
-	err := runner.invoke(context.Background(), &Message{Stream: testStream, Offset: 3})
-
-	require.Error(t, err)
-	assert.Equal(t, "panic in stream handler: kaboom", err.Error())
 }
 
 // TestRunnerDeliverSurvivesStoreFailure pins the commit guard from the failing
