@@ -757,7 +757,7 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 // this lane's policy — ack on success, nack-without-requeue on a handler error
 // or a panic, nothing under AutoAck — but WHEN it happens is the pipeline's: it
 // calls Settle after the span closed and the lease drained, and it guarantees
-// exactly one call even if the delivery tail panicked (ADR-069).
+// at most one call even if the delivery tail panicked (ADR-069).
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
 	pipeline.Run(ctx, &pipeline.Request{
 		Carrier:     amqpHeaderAccessor{headers: delivery.Headers},

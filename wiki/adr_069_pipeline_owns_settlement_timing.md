@@ -31,7 +31,7 @@ called. The guard is deferred FIRST so it runs LAST:
 
     defer func() {                                  // runs last
         if recovered := recover(); recovered != nil {
-            res = panickedResult(res, recovered, start)
+            res = panickedResult(req, res, recovered, start)
         }
         settleOnce(req, res)
     }()
@@ -57,10 +57,11 @@ own bug on its own broker call; retrying it would panic again. There is no
 does with a `Panicked` result.
 
 **The guarantee is at-most-once INVOCATION of the callback, not exactly-once
-completion at the broker.** `Settle` is called once and never a second time, but
+completion at the broker.** `Settle` is never called twice — and a delivery with no decided result is not
+settled at all — but
 what happens inside it is the lane's: a broker call that fails, times out, or
 panics part-way leaves the message in whatever state the broker decided. The
-pipeline guarantees the lane gets exactly one attempt with a decided result, and
+pipeline guarantees the lane gets at most one attempt with a decided result, and
 nothing about the attempt's outcome. "Delivery tail" throughout this ADR means
 everything from the handler's return to the end of `RecordConsume` — it does NOT
 include `Settle`, which runs outside the guard and carries its own nested

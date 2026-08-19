@@ -5,10 +5,10 @@
 - **Related**: [ADR-059](adr_059_streams_consumption.md) (the streams lane's shape and its "trace-context propagation" future-work item), [ADR-063](adr_063_streams_native_publishing.md) (native publishing — untouched here), [ADR-032](adr_032_lease_refcount_tenant_handles.md) (the per-message lease scope), [ADR-058](adr_058_consumer_scoped_amqp_arguments.md) (the two-lane framing)
 
 > **Superseded in part by [ADR-069](adr_069_pipeline_owns_settlement_timing.md) (2026-08-18):** the
-> containment half of this ADR is reversed. Guarding the delivery tail is no longer each lane's, and
+> containment half of this ADR is reversed. Guarding the delivery tail is no longer each lane's job, and
 > the Consequences text below asserting that a panic in `LogOutcome` terminates the process was never
 > true of the classic lane, which recovered it in this same commit. The pipeline now owns settlement
-> timing and guarantees exactly one Settle after the span closes and the lease drains. Settlement
+> timing and guarantees at most one Settle invocation, after the span closes and the lease drains. Settlement
 > POLICY stays lane-side, as decided here.
 >
 > **Amended (2026-08-18, [migrations.md](migrations.md) `[C60.7]`):** the failure and

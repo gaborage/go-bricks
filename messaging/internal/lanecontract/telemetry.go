@@ -122,6 +122,17 @@ func assertNoPerMessageValue(t T, scenario *Scenario, observed *Observed, attrs 
 	if carried, declared := carriedTraceID(scenario.Carrier); declared {
 		perMessage = carried
 	}
+	if perMessage == "" {
+		// No id exists on this delivery, so none can leak. Skipping is safe rather
+		// than fail-open ONLY because the precondition is asserted elsewhere on the
+		// same deliveries: AssertIdentity requires a non-empty HandlerTraceID for
+		// every scenario in IdentityScenarios, which is the set RunTelemetry walks.
+		// A lane that stopped planting ids fails there, loudly, instead of opting
+		// out of this check quietly. Without the skip, the comparison below fails on
+		// any empty-valued attribute and blames it for carrying a trace ID it does
+		// not carry — a true failure with a false reason.
+		return
+	}
 	for _, kv := range attrs.ToSlice() {
 		assert.NotEqual(t, perMessage, kv.Value.String(),
 			"metric attribute %q carries the per-message trace ID, which would blow the SDK's cardinality limit", kv.Key)
