@@ -77,14 +77,27 @@ type Scenario struct {
 
 	// Handle returns nil to succeed, an error to fail, or panics.
 	Handle func(ctx context.Context) error
+
+	// Outcome is what Handle produces. The scenario declares it because it owns
+	// the handler body; a family uses it to pick the OutcomeLine the lane
+	// declared, and the failure family — not this one — is what checks the lane
+	// actually reported it.
+	Outcome delivery.Outcome
 }
 
 // Observed is everything a lane's delivery produced, in the form the assertion
 // families read it.
 type Observed struct {
 	// Result is captured through the pipeline's LogOutcome hook, so no production
-	// signature gains a test-only parameter.
+	// signature gains a test-only parameter. A lane driving its real settle path
+	// may leave it nil until that path can hand the result back — the classic
+	// lane builds its hook inside processMessage, where a test cannot reach it.
 	Result *delivery.Result
+
+	// HandlerTraceID is trace.IDFromContext read INSIDE the handler. It is the
+	// only place the per-message context is observable, and it is read
+	// independently of anything the lane logs, so the two can be compared.
+	HandlerTraceID string
 
 	// Settles records each settlement in order, in Lane.SettleOnSuccess's
 	// vocabulary. More than one entry means the lane settled twice.
