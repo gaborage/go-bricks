@@ -24,14 +24,32 @@ func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	prev := otel.GetMeterProvider()
 	otel.SetMeterProvider(provider)
 
 	t.Cleanup(func() {
+		// Reinstate the previous provider before shutting this one down: without
+		// it the global keeps pointing at a provider that has been shut down, and
+		// instrument creation against a shut-down provider no-ops silently.
+		otel.SetMeterProvider(prev)
 		_ = provider.Shutdown(context.Background())
 		ResetForTesting()
 	})
 
 	return reader
+}
+
+func TestSetupTestMeterProviderRestoresTheGlobalProvider(t *testing.T) {
+	before := otel.GetMeterProvider()
+
+	t.Run("inner", func(t *testing.T) {
+		setupTestMeterProvider(t)
+		require.NotEqual(t, before, otel.GetMeterProvider(), "the helper installs its own provider")
+	})
+
+	// inner's t.Cleanup has run by the time the subtest returns.
+	require.Equal(t, before, otel.GetMeterProvider(),
+		"the helper must reinstate the previous global, not leave a shut-down provider installed")
 }
 
 func TestRecordCacheOperationDuration(t *testing.T) {
