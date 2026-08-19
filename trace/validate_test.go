@@ -58,8 +58,10 @@ func TestValidateTraceParentIsSpecExact(t *testing.T) {
 		{name: "all_zero_parent_id", tp: "00-4bf92f3577b34da6a3ce929d0e0e4736-" + zeroParentID + "-01"},
 		// The spec forbids version ff outright rather than reserving it.
 		{name: "forbidden_version_ff", tp: "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
-		{name: "future_version_is_accepted", tp: "fe-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-			want: "fe-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+		{
+			name: "future_version_is_accepted", tp: "fe-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+			want: "fe-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		},
 		{name: "too_short", tp: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7"},
 		{name: "trailing_junk", tp: validParent + "-extra"},
 		{name: "empty", tp: ""},
