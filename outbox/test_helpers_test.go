@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -228,3 +229,50 @@ func (f *fakeAMQP) DeclareExchange(_ context.Context, _ *messaging.ExchangeDecla
 }
 func (f *fakeAMQP) BindQueue(_ context.Context, _ *messaging.BindingDeclaration) error { return nil }
 func (f *fakeAMQP) Close() error                                                       { return nil }
+
+// recordingLogger captures the message text of emitted lines. The relay's
+// secondary-error paths — "could not write down why this record failed" — have
+// no return value and no store side effect, so the emitted line is the only
+// observable they have.
+type recordingLogger struct {
+	mu    *sync.Mutex
+	lines *[]string
+}
+
+func newRecordingLogger() *recordingLogger {
+	return &recordingLogger{mu: &sync.Mutex{}, lines: &[]string{}}
+}
+
+func (l *recordingLogger) messages() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), *l.lines...)
+}
+
+func (l *recordingLogger) event() logger.LogEvent                  { return &recordingEvent{owner: l} }
+func (l *recordingLogger) Info() logger.LogEvent                   { return l.event() }
+func (l *recordingLogger) Error() logger.LogEvent                  { return l.event() }
+func (l *recordingLogger) Debug() logger.LogEvent                  { return l.event() }
+func (l *recordingLogger) Warn() logger.LogEvent                   { return l.event() }
+func (l *recordingLogger) Fatal() logger.LogEvent                  { return l.event() }
+func (l *recordingLogger) WithContext(any) logger.Logger           { return l }
+func (l *recordingLogger) WithFields(map[string]any) logger.Logger { return l }
+
+type recordingEvent struct{ owner *recordingLogger }
+
+func (e *recordingEvent) Msg(msg string) {
+	e.owner.mu.Lock()
+	defer e.owner.mu.Unlock()
+	*e.owner.lines = append(*e.owner.lines, msg)
+}
+func (e *recordingEvent) Msgf(format string, args ...any)           { e.Msg(fmt.Sprintf(format, args...)) }
+func (e *recordingEvent) Err(error) logger.LogEvent                 { return e }
+func (e *recordingEvent) Str(_, _ string) logger.LogEvent           { return e }
+func (e *recordingEvent) Int(string, int) logger.LogEvent           { return e }
+func (e *recordingEvent) Int64(string, int64) logger.LogEvent       { return e }
+func (e *recordingEvent) Uint64(string, uint64) logger.LogEvent     { return e }
+func (e *recordingEvent) Dur(string, time.Duration) logger.LogEvent { return e }
+func (e *recordingEvent) Interface(string, any) logger.LogEvent     { return e }
+func (e *recordingEvent) Bytes(string, []byte) logger.LogEvent      { return e }
+func (e *recordingEvent) Bool(string, bool) logger.LogEvent         { return e }
+func (e *recordingEvent) Enabled() bool                             { return true }
