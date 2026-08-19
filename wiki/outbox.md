@@ -151,6 +151,16 @@ Consequences worth knowing:
   corruption (undecodable headers, which the framework essentially never produces).
 - **`maxretries` bounds poison only.** Connectivity failures (including a permanently-failing publish)
   retry indefinitely with a climbing `retry_count` — monitor that growth to catch a stuck event.
+- **The persisted error text is bounded to 1 KiB.** A failed attempt records why in the row's
+  `error` column (`error_msg` on Oracle), and that text comes from the broker or driver rather
+  than from the framework. Since a connectivity failure retries forever and rewrites the column
+  every cycle, an unbounded message would be unbounded storage per retry on a table a service
+  cannot drop. Longer text is **truncated**, not discarded — it is diagnostic and nothing keys
+  on it, so a shortened error still says what went wrong — and a truncated value ends in
+  `...[truncated]` so a reader can tell it from a short one. Control bytes are replaced with
+  spaces (the column is read back into logs and dashboards, and a broker-supplied newline must
+  not be able to forge a line there) and invalid UTF-8 is dropped, which PostgreSQL would
+  otherwise reject outright — failing the UPDATE and leaving `retry_count` un-advanced.
 - **One stuck record cannot starve the batch:** each publish is bounded by `outbox.publishtimeout`
   (default 60s). It **must be ≥ `messaging.reconnect.connectiontimeout`** (default 30s) — the module
   **fails to start** otherwise, because a shorter value truncates every legitimate confirmation into a

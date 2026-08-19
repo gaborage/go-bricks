@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -566,4 +568,95 @@ func TestRelayContinuesBatchWhenNotConnectedButStillReady(t *testing.T) {
 	assert.Equal(t, "evt-2", store.MarkPublishedLastID)
 	assert.Equal(t, 1, store.MarkFailedCalls)
 	assert.Equal(t, "evt-1", store.MarkFailedLastID)
+}
+
+func TestBoundPersistedErrorMakesArbitraryTextSafeToStore(t *testing.T) {
+	tests := []struct {
+		name      string
+		in        string
+		wantExact string
+		truncated bool
+	}{
+		{name: "short_text_passes_through", in: "broker rejected", wantExact: "broker rejected"},
+		{name: "empty_stays_empty", in: "", wantExact: ""},
+		// The column is read back into logs and dashboards, so a broker-supplied
+		// newline must not be able to forge a line there.
+		{
+			name:      "control_bytes_become_spaces",
+			in:        "publish failed\r\nlevel=error msg=\"forged\"\x00",
+			wantExact: "publish failed  level=error msg=\"forged\" ",
+		},
+		// PostgreSQL rejects invalid UTF-8 outright: the UPDATE would fail and
+		// retry_count would never advance, retrying forever over text nobody reads.
+		{name: "invalid_utf8_is_dropped", in: "err: " + string([]byte{0xff, 0xfe}) + " tail", wantExact: "err:  tail"},
+		{name: "at_the_cap_is_untouched", in: strings.Repeat("a", maxPersistedErrorBytes), wantExact: strings.Repeat("a", maxPersistedErrorBytes)},
+		{name: "one_over_the_cap_truncates", in: strings.Repeat("a", maxPersistedErrorBytes+1), truncated: true},
+		{name: "pathological_10kb_truncates", in: strings.Repeat("broker unreachable; ", 512), truncated: true},
+		{name: "multibyte_truncates_on_a_rune_boundary", in: strings.Repeat("日", 5000), truncated: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := boundPersistedError(tt.in)
+
+			assert.LessOrEqual(t, len(got), maxPersistedErrorBytes, "the ledger never receives more than the cap")
+			assert.True(t, utf8.ValidString(got), "invalid UTF-8 would be rejected by PostgreSQL and fail the UPDATE")
+			assert.NotContains(t, got, "\x00")
+			assert.NotContains(t, got, "\n")
+			assert.NotContains(t, got, "\r")
+
+			if tt.truncated {
+				assert.True(t, strings.HasSuffix(got, truncationMarker),
+					"a shortened error says so, or a reader cannot tell it from a short one")
+			} else {
+				assert.Equal(t, tt.wantExact, got)
+			}
+		})
+	}
+}
+
+// The helper being correct is not the property that matters: what matters is that
+// the value REACHING the ledger is bounded. This drives the real failure path and
+// asserts on what the store was handed, so removing the call from the relay fails
+// here even though the helper still passes its own tests.
+func TestPublishRecordBoundsTheErrorItPersists(t *testing.T) {
+	oversized := strings.Repeat("broker unreachable; ", 512) // ~10 KiB
+
+	store := &fakeStore{
+		FetchPendingResult: []Record{{ID: "evt-1", Exchange: "orders", RoutingKey: "created"}},
+	}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{"orders:created": errors.New(oversized)}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	require.NoError(t, r.Execute(ctx))
+
+	require.Equal(t, 1, store.MarkFailedCalls)
+	assert.Greater(t, len(oversized), maxPersistedErrorBytes, "the fixture is actually oversized")
+	assert.LessOrEqual(t, len(store.MarkFailedLastErr), maxPersistedErrorBytes,
+		"the ledger receives the bounded error, not the broker's whole message")
+	assert.True(t, strings.HasSuffix(store.MarkFailedLastErr, truncationMarker))
+	assert.Contains(t, store.MarkFailedLastErr, "broker unreachable",
+		"and it is still diagnostic — truncated, not discarded")
+}
+
+// The dead-letter path writes to the same unbounded column, so bounding only the
+// failure path would leave the invariant untrue on the other half.
+func TestDeadLetterPoisonBoundsTheErrorItPersists(t *testing.T) {
+	oversized := strings.Repeat("x", 9000)
+
+	store := &fakeStore{}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	rec := &Record{ID: "evt-poison", RetryCount: r.config.MaxRetries}
+	r.deadLetterPoison(ctx, ctx.Logger(), db, rec, oversized)
+
+	require.Equal(t, 1, store.MarkDeadLetteredCalls)
+	assert.LessOrEqual(t, len(store.MarkDeadLetteredLastErr), maxPersistedErrorBytes)
+	assert.True(t, strings.HasSuffix(store.MarkDeadLetteredLastErr, truncationMarker))
 }

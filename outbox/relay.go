@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -306,7 +309,7 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 // failures never reach here — they call markRecordFailed directly and are never parked.
 func (r *Relay) deadLetterPoison(ctx context.Context, log logger.Logger, db dbtypes.Interface, record *Record, errMsg string) publishOutcome {
 	if record.RetryCount+1 >= r.config.MaxRetries {
-		if err := r.store.MarkDeadLettered(ctx, db, record.ID, errMsg); err != nil {
+		if err := r.store.MarkDeadLettered(ctx, db, record.ID, boundPersistedError(errMsg)); err != nil {
 			log.Error().Err(err).Str("eventID", record.ID).Msg("Failed to dead-letter outbox event")
 			return outcomeFailed
 		}
@@ -320,9 +323,62 @@ func (r *Relay) deadLetterPoison(ctx context.Context, log logger.Logger, db dbty
 	return outcomeFailed
 }
 
+// maxPersistedErrorBytes bounds the diagnostic text the relay writes to a
+// record's error column. Both ledgers declare that column unbounded (`error
+// TEXT` on PostgreSQL, `error_msg CLOB` on Oracle), and the value written there
+// is not ours: it is err.Error() from a broker or driver, which can carry
+// server-supplied text of any length. A record that keeps failing rewrites the
+// column every cycle, so an unbounded error is unbounded storage per retry, on
+// the one table a service cannot drop.
+//
+// 1 KiB holds a broker error with its context and truncates only the pathological.
+const maxPersistedErrorBytes = 1024
+
+// truncationMarker is appended in place of the bytes dropped, so a reader can
+// tell a short error from a shortened one.
+const truncationMarker = "...[truncated]"
+
+// boundPersistedError makes an arbitrary error string safe to store.
+//
+// Unlike an inbound trace identifier — where truncation silently forges
+// correlation by mapping distinct upstream ids onto one, so a bad value is
+// DISCARDED — this text is diagnostic and nothing keys on it. A truncated error
+// still says what went wrong, while discarding one would throw away the only
+// record of why a record is stuck. So truncation is the right answer here, and
+// the marker keeps it honest.
+//
+// Three things happen, in order:
+//   - Invalid UTF-8 is dropped. PostgreSQL rejects it outright, which would fail
+//     the UPDATE and leave retry_count un-advanced — a record retrying forever
+//     because the framework could not write down why it failed.
+//   - Control bytes become spaces. This text is read back into logs and
+//     dashboards, and a broker-supplied newline should not be able to forge a
+//     log line there.
+//   - The result is capped, on a rune boundary so the column never receives a
+//     half-encoded character.
+func boundPersistedError(errMsg string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if r == utf8.RuneError || unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(errMsg, ""))
+
+	if len(cleaned) <= maxPersistedErrorBytes {
+		return cleaned
+	}
+
+	keep := maxPersistedErrorBytes - len(truncationMarker)
+	// Back off to a rune boundary so a multi-byte character is never split.
+	for keep > 0 && !utf8.RuneStart(cleaned[keep]) {
+		keep--
+	}
+	return cleaned[:keep] + truncationMarker
+}
+
 // markRecordFailed marks an outbox record as failed, logging any secondary errors.
 func (r *Relay) markRecordFailed(ctx context.Context, log logger.Logger, db dbtypes.Interface, eventID, errMsg string) {
-	if markErr := r.store.MarkFailed(ctx, db, eventID, errMsg); markErr != nil {
+	if markErr := r.store.MarkFailed(ctx, db, eventID, boundPersistedError(errMsg)); markErr != nil {
 		log.Error().
 			Err(markErr).
 			Str("eventID", eventID).
