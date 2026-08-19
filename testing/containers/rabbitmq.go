@@ -54,7 +54,7 @@ type RabbitMQContainerConfig struct {
 func DefaultRabbitMQConfig() *RabbitMQContainerConfig {
 	return &RabbitMQContainerConfig{
 		// renovate: datasource=docker depName=rabbitmq
-		ImageTag:       "4.3.4-management-alpine",
+		ImageTag:       "4.3.5-management-alpine",
 		Username:       "guest",
 		Password:       "guest",
 		StartupTimeout: 60 * time.Second,

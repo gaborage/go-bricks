@@ -304,7 +304,7 @@ jobs:
           docker pull gvenzl/oracle-free:23.26.2-slim &
           pids="$pids $!"
           # renovate: datasource=docker depName=rabbitmq
-          docker pull rabbitmq:4.3.4-management-alpine &
+          docker pull rabbitmq:4.3.5-management-alpine &
           pids="$pids $!"
           # renovate: datasource=docker depName=redis
           docker pull redis:8.10.0-alpine &
