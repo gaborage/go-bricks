@@ -513,9 +513,15 @@ type QueryBuilderInterface interface {
 	// column written twice and is rejected, while on PostgreSQL it is two columns
 	// and builds. On Oracle every key of either map, and every conflict column,
 	// must also be a single column name — no qualifier, no function call, no empty
-	// name — because the MERGE names each one as a column alias in its USING
-	// clause, which admits nothing else. PostgreSQL quotes the whole key, so a
-	// dotted one names an unusual but legal column there and still builds.
+	// name, and no quote that ends the identifier early; a quote inside a quoted
+	// name must be doubled, as Oracle spells it. For conflict and insert keys the
+	// MERGE leaves no choice: it names them as column aliases in its USING clause
+	// and in the INSERT list, neither of which admits anything else. Update keys
+	// become UPDATE SET targets, where Oracle would also accept an alias-qualified
+	// one; refusing those is this API's restriction, so that one spelling of a
+	// column works everywhere the call names it. PostgreSQL is unchanged: it splits a
+	// dotted key on the dot and quotes each part, so the key renders as a
+	// qualified reference rather than as a column name, and the call still builds.
 	//
 	// BuildUpsert rejects a column present in both conflictColumns and
 	// updateColumns on every vendor, because Oracle's MERGE cannot update a

@@ -52,21 +52,37 @@ key even though Oracle keeps those columns distinct.
 Two preconditions, checked at `BuildUpsert` alongside the three that precede
 them, in an order that matters.
 
-**First, every column named in an upsert must be a single column name.** On
-Oracle each one becomes a column alias in the MERGE's USING clause — `:1 AS
-<column>` — which admits one identifier and nothing else: no qualifier, no
-function call, no empty name. A key that is not one of those could only ever
-render SQL Oracle refuses to parse, so the failure moves from execution to build
-time. The check runs on all three inputs — conflict, insert and update columns.
+**First, every column named in an upsert must be a single column name** — no
+qualifier, no function call, no empty name, and no quote that ends the identifier
+early. The check runs on all three inputs, for two different reasons. Conflict and
+insert keys have none: they become column aliases in the MERGE's USING clause
+(`:1 AS <column>`) and entries in its INSERT list, and neither position admits
+anything but one identifier. Update keys become UPDATE SET targets, where Oracle
+would also accept `target.<column>`; holding them to the same rule is this API's
+choice, so that one spelling of a column works in every position a call names it.
+
+The last clause is the one that matters most, and it is not a parse-error
+concern. `oracleQuoteIdentifier` wraps a key in quotes **without doubling the
+quotes inside it**, so a key spelled `role" = 'admin', "name` renders as
+`"role" = 'admin', "name"` — valid SQL, and a second SET assignment the caller
+never wrote, in a position no bind parameter guards. A quote inside a quoted
+identifier is legal only doubled, which is exactly what the check tests: strip
+the `""` pairs and refuse any survivor. `a""b` still names one column and still
+builds. The renderer's missing escape is the wider bug — it reaches the table
+argument and PostgreSQL's escaper too, neither of which this ADR touches — and
+is tracked as issue #1104; what this decides is that a key the builder cannot
+render faithfully is refused rather than emitted.
 
 **Second, `insertColumns` and `updateColumns` must each name every column at
 most once**, judged by the same `columnIdentity` the surrounding checks use, and
-reporting both spellings the way `requireUniqueConflictColumns` already does.
+reporting both spellings the way the conflict-column check already did — which is
+now the same helper, generalized to take any of the three column groups.
 
-Ordering is the load-bearing part. Because rendering is settled first, no key
-that reaches `columnIdentity` from `BuildUpsert` can be partially quoted: every
-survivor renders as one whole token, quoted or not, which is exactly the shape
-`HasPrefix` reads correctly. The flawed guard is therefore unreachable from this
+Ordering is the load-bearing part. Because rendering is settled first, a key that
+reaches `columnIdentity` from `BuildUpsert` renders either with no quote at all or
+beginning AND ending with one — the two shapes whose "is this quoted" answer
+`HasPrefix` gets right. The rendering it mishandles, quoted somewhere in between,
+cannot survive the name check. The flawed guard is therefore unreachable from this
 API rather than repaired — which is the point, because repairing it is a
 behavior change to a shipped check and belongs to whoever wants that change,
 with its own atom.
@@ -74,9 +90,12 @@ with its own atom.
 The identity check is vendor-keyed and so is a no-op on PostgreSQL by
 construction: there a key is its own identity, and map keys are unique. The
 single-column-name check is explicitly Oracle-only, self-gated the way
-`columnIdentity` and `quoteOracleColumn` are: PostgreSQL quotes the whole key,
-naming a column that is unusual but legal, so rejecting it there would break
-calls that build correct SQL today.
+`columnIdentity` and `quoteOracleColumn` are. That is not an endorsement of the
+same key on PostgreSQL: its escaper splits a dotted key on the dot and quotes each
+part, so `{"t.name": 1}` renders `"t"."name"` — a qualified reference, and as a
+conflict target an `ON CONFLICT ("t"."name")` its grammar does not accept. It is
+left alone because refusing it there is a second break on a second vendor, one
+that issue #997 neither reported nor evidenced.
 
 ## Alternatives considered
 
@@ -99,9 +118,10 @@ than the two map keys that produced it. The builder holds both spellings and can
 say so.
 
 **Reject qualified and function-shaped keys on both vendors.** Symmetry for its
-own sake. PostgreSQL renders `{"t.name": 1}` as a quoted column named `t.name` —
-legal, and possibly intended. The rejection follows Oracle's MERGE grammar, which
-is the actual constraint.
+own sake, and not symmetric in fact: the two vendors render such a key differently
+and it fails differently, if at all. The evidence in #997 is entirely Oracle's
+MERGE grammar. If PostgreSQL's rendering deserves a precondition, it deserves its
+own issue and its own atom rather than a second break smuggled in on this one.
 
 ## Consequences
 
@@ -111,15 +131,27 @@ scope limit is closed. The exported contract now says what it enforces, and the
 identity fold in `columnIdentity` is unreachable from `BuildUpsert`.
 
 **Negative.** This adds a precondition to a shipped exported API: a call that
-previously returned SQL now returns an error. Every such call was already
-producing SQL Oracle rejects at parse time, so no working call changes — but a
-caller that treats a builder error as control flow sees a new one, and a test
-pinning the old no-error outcome fails. Documented as `[C60.11]`.
+previously returned SQL now returns an error. Nearly every such call was already
+producing SQL Oracle rejects at parse time, so almost nothing that worked changes.
+One shape did work: an update key qualified with the MERGE's own `target` alias —
+`{"target.name": …}` — rendered `UPDATE SET target.name = :3`, which Oracle
+accepts. It is refused anyway, because that spelling depends on an alias
+`buildOracleMerge` hardcodes and no contract publishes, and naming the column
+alone builds the same statement. Beyond that, a caller treating a builder error as
+control flow sees a new one, and a test pinning the old no-error outcome fails.
+Documented as `[C60.11]`.
 
-**Neutral, and stated because the checks do not close the whole class.** A key
-whose rendering carries an unbalanced quote — `a"b` renders `"a"b"` — is still
-accepted and still emits SQL Oracle cannot parse. It does not fold identity, so
-it is outside what this ADR is about, and it is garbage-in either way. In the
+**Neutral, and stated because the upsert path is not the whole surface.** The
+quote rule above closes this builder's upsert entry: no `insertColumns`,
+`updateColumns` or `conflictColumns` key can now carry an undoubled quote into
+the statement. It closes nothing else. `oracleQuoteIdentifier` still fails to
+double embedded quotes for every other caller, `EscapeIdentifier` has the same
+gap on PostgreSQL, and `BuildUpsert`'s `table` argument goes through
+`quoteTableForQuery` with no validation at all — a table name alone can take the
+whole statement over. That is the actual injection boundary in this package and
+it is filed separately; it is reachable only where an application feeds
+request-derived identifiers into a builder, which is a shape worth auditing on
+its own rather than patching through one precondition. Tracked as issue #1104. In the
 other direction, a caller-quoted key containing a dot (`"a.b"`) is now rejected
 even though `SELECT :1 AS "a.b"` would be legal Oracle: `oracleQuoteIdentifier`
 splits on the dot before it notices the surrounding quotes, so the builder cannot

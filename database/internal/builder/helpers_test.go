@@ -276,6 +276,19 @@ func TestBuildUpsertRejectsIdentityCollidingColumnSets(t *testing.T) {
 // caller-quoted key keeps its case on Oracle, so it is a second column and the
 // pairing still builds — the same residual C59.7 and C59.9 carry.
 func TestBuildUpsertKeepsDistinctIdentitiesBuildable(t *testing.T) {
+	t.Run("oracle_keeps_a_doubled_quote_inside_a_quoted_name", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		// A doubled quote is how Oracle spells a quote inside an identifier, so
+		// this names one column and must survive the check that refuses the
+		// undoubled ones.
+		sql, _, err := qb.BuildUpsert("users", []string{"id"},
+			map[string]any{"id": 1, `a""b`: 2}, nil)
+
+		require.NoError(t, err)
+		require.Contains(t, sql, `:1 AS "a""b"`)
+	})
+
 	t.Run("oracle_quoted_and_unquoted_spellings_are_two_columns", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 
@@ -302,9 +315,10 @@ func TestBuildUpsertKeepsDistinctIdentitiesBuildable(t *testing.T) {
 }
 
 // TestBuildUpsertRejectsColumnsOracleMergeCannotName pins the second half of
-// #997. Oracle's MERGE names every upsert column as a column alias in its USING
-// clause, which admits neither a qualifier nor a function call, so these keys
-// could only ever produce SQL Oracle refuses to parse. Rejecting them at build
+// #997. Conflict and insert keys become column aliases in Oracle's MERGE — in its
+// USING clause and its INSERT list — which admit neither a qualifier nor a
+// function call, so those keys could only ever produce SQL Oracle refuses to
+// parse. Update keys are held to the same rule by choice. Rejecting them at build
 // time also makes columnIdentity's quote guard unreachable from BuildUpsert:
 // every key that survives renders as one whole token, so the guard's
 // HasPrefix test can no longer upper-case a rendering through its own quotes.
@@ -329,8 +343,10 @@ func TestBuildUpsertRejectsColumnsOracleMergeCannotName(t *testing.T) {
 			wantErr:         `insert column "t.name" is not a single column name for upsert`,
 		},
 		{
-			// The partially-quoted rendering the identity guard mishandles: it is
-			// quoted, but not at position 0, so HasPrefix missed it.
+			// The rendering the identity guard mishandles — quoted, but not at
+			// position 0, so HasPrefix reads it as unquoted and upper-cases it
+			// through its own quotes. It never gets that far now: the dot in the
+			// rendering is refused here, which is how the fold stays unreachable.
 			name:            "partially_quoted_insert_key",
 			conflictColumns: []string{"id"},
 			insertColumns:   map[string]any{"id": 1, `t."level"`: 2},
@@ -342,6 +358,30 @@ func TestBuildUpsertRejectsColumnsOracleMergeCannotName(t *testing.T) {
 			insertColumns:   map[string]any{"id": 1},
 			updateColumns:   map[string]any{`MAX("a")`: 2},
 			wantErr:         `update column "MAX(\"a\")" is not a single column name for upsert`,
+		},
+		{
+			// The one shape that did build legal SQL: Oracle accepts an
+			// alias-qualified SET target, and `target` is the alias
+			// buildOracleMerge hardcodes. Refused anyway — that spelling depends
+			// on an internal alias the caller has no contract for, and naming the
+			// column alone means the same thing.
+			name:            "alias_qualified_update_key",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "n"},
+			updateColumns:   map[string]any{"target.name": "v"},
+			wantErr:         `update column "target.name" is not a single column name for upsert`,
+		},
+		{
+			// The rendering that is not a column at all: oracleQuoteIdentifier
+			// wraps this key without doubling the quotes inside it, producing
+			// `"role" = 'admin', "name"` — a second SET assignment, in a position
+			// no bind parameter guards. Refusing it is what makes "single column
+			// name" true rather than aspirational.
+			name:            "update_key_whose_rendering_escapes_the_identifier",
+			conflictColumns: []string{"id"},
+			insertColumns:   map[string]any{"id": 1, "name": "n"},
+			updateColumns:   map[string]any{`role" = 'admin', "name`: "n2"},
+			wantErr:         `update column "role\" = 'admin', \"name" is not a single column name for upsert`,
 		},
 		{
 			name:            "whitespace_only_insert_key",
@@ -366,8 +406,10 @@ func TestBuildUpsertRejectsColumnsOracleMergeCannotName(t *testing.T) {
 	t.Run("postgresql_still_builds_a_dotted_key", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		// PostgreSQL quotes the whole key, so it names a column that is unusual
-		// but legal. The rejection is Oracle's MERGE grammar, not a portable rule.
+		// PostgreSQL is unchanged, which is the claim under test — not that the
+		// key is sensible there. Its escaper splits on the dot and quotes each
+		// part, so the key renders as a qualified reference rather than a column
+		// name; refusing it there would be a second breaking change, out of scope.
 		_, _, err := qb.BuildUpsert("users", []string{"id"},
 			map[string]any{"id": 1, "t.name": 2}, nil)
 

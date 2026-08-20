@@ -373,21 +373,34 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 		return "", nil, errConflictColumnsRequired
 	}
 
-	// Rendering is settled before identity: a key Oracle's MERGE cannot name is
-	// reported as such, and no unnameable key reaches the identity comparison.
-	if nameErr := qb.requireSingleColumnNames(conflictColumns, insertColumns, updateColumns); nameErr != nil {
-		return "", nil, nameErr
+	// Rendering is settled first, for every column the statement will name. The
+	// four identity checks below all consult columnIdentity, whose quote test is
+	// only correct for a rendering that is one whole token, so no key that would
+	// defeat it may reach them. This one check is Oracle-specific where the rest
+	// are not — it lives here because that ordering is what it is for.
+	insertKeys, updateKeys := sortedKeys(insertColumns), sortedKeys(updateColumns)
+	for _, group := range []struct {
+		kind    string
+		columns []string
+	}{
+		{kind: "conflict", columns: conflictColumns},
+		{kind: "insert", columns: insertKeys},
+		{kind: "update", columns: updateKeys},
+	} {
+		if nameErr := qb.requireSingleColumnNames(group.kind, group.columns); nameErr != nil {
+			return "", nil, nameErr
+		}
 	}
 
-	if uniqueErr := qb.requireUniqueConflictColumns(conflictColumns); uniqueErr != nil {
+	if uniqueErr := qb.requireDistinctColumnIdentities("conflict", conflictColumns); uniqueErr != nil {
 		return "", nil, uniqueErr
 	}
 
-	if insertDistinctErr := qb.requireDistinctColumnIdentities("insert", insertColumns); insertDistinctErr != nil {
+	if insertDistinctErr := qb.requireDistinctColumnIdentities("insert", insertKeys); insertDistinctErr != nil {
 		return "", nil, insertDistinctErr
 	}
 
-	if updateDistinctErr := qb.requireDistinctColumnIdentities("update", updateColumns); updateDistinctErr != nil {
+	if updateDistinctErr := qb.requireDistinctColumnIdentities("update", updateKeys); updateDistinctErr != nil {
 		return "", nil, updateDistinctErr
 	}
 
