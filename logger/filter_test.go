@@ -940,9 +940,11 @@ func isSensitiveFieldLinearReference(needles []string, fieldName string) bool {
 }
 
 // alphabetSweep enumerates every string of length 0-3 over the given
-// alphabet. Chosen so it spells out all five 3-byte default needles ("otp",
-// "cvv", "cvc", "key", "pwd") and their one-byte-off neighbors, plus a
-// separator and a byte that begins no needle.
+// alphabet. Chosen so it spells out all four 3-byte default needles ("otp",
+// "cvv", "cvc", "pwd") and their one-byte-off neighbors, plus a separator and a
+// byte that begins no needle. It still spells "key", which is no longer a needle
+// (#1037) — the corpus derives from the live list, so the extra coverage costs
+// nothing and pins that "key" stays absent.
 func alphabetSweep(alphabet []byte) []string {
 	n := len(alphabet)
 	out := make([]string, 0, 1+n+n*n+n*n*n)
@@ -1073,6 +1075,89 @@ func TestIsSensitiveFieldDifferentialAgainstLinearReference(t *testing.T) {
 				if got != want {
 					t.Errorf("config %s, input %q: isSensitiveField() = %v, want %v (linear reference)", nc.name, in, got, want)
 				}
+			}
+		})
+	}
+}
+
+// TestDefaultFilterMasksSecretKeyShapesButNotIdentifiers pins both halves of
+// dropping the bare "key" needle (#1037). Matching is case-insensitive substring,
+// so "key" masked every field whose name merely contained it — "keys",
+// "tenant_key", the framework's own "key" identifier — and no consumer could
+// unmask one short of replacing the whole default list. The secret-bearing
+// spellings it incidentally caught are now named explicitly instead.
+func TestDefaultFilterMasksSecretKeyShapesButNotIdentifiers(t *testing.T) {
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	tests := []struct {
+		name       string
+		fieldName  string
+		wantMasked bool
+	}{
+		// Explicit needles, in the two spellings the substring matcher treats as
+		// unrelated: an underscore-separated name does not contain the
+		// concatenated needle, nor the reverse.
+		{name: "api_key", fieldName: "api_key", wantMasked: true},
+		{name: "apikey_concatenated", fieldName: "apikey", wantMasked: true},
+		{name: "apikey_camel", fieldName: "apiKey", wantMasked: true},
+		{name: "private_key", fieldName: "private_key", wantMasked: true},
+		{name: "privatekey_concatenated", fieldName: "privatekey", wantMasked: true},
+		{name: "privatekey_camel", fieldName: "privateKey", wantMasked: true},
+		{name: "signing_key", fieldName: "signing_key", wantMasked: true},
+		{name: "signingkey_concatenated", fieldName: "signingkey", wantMasked: true},
+		{name: "encryption_key", fieldName: "encryption_key", wantMasked: true},
+		{name: "encryptionkey_concatenated", fieldName: "encryptionkey", wantMasked: true},
+		{name: "uppercase_variant", fieldName: "PRIVATE_KEY", wantMasked: true},
+
+		// Hyphenated spellings, which no underscore needle matches. httpclient
+		// logs whole http.Header maps through this filter under LogPayloads, and
+		// a header is spelled this way.
+		{name: "http_header_api_key", fieldName: "X-Api-Key", wantMasked: true},
+		{name: "http_header_api_key_upper", fieldName: "X-API-KEY", wantMasked: true},
+		{name: "hyphenated_private_key", fieldName: "private-key", wantMasked: true},
+		{name: "hyphenated_signing_key", fieldName: "signing-key", wantMasked: true},
+		{name: "hyphenated_encryption_key", fieldName: "encryption-key", wantMasked: true},
+
+		// The hyphen needles name shapes, not the bare word: an identifier
+		// spelled with hyphens stays in clear, exactly as its underscore twin does.
+		{name: "idempotency_key_header", fieldName: "Idempotency-Key", wantMasked: false},
+		{name: "hyphenated_routing_key", fieldName: "routing-key", wantMasked: false},
+		{name: "hyphenated_partition_key", fieldName: "partition-key", wantMasked: false},
+		{name: "embedded_in_a_longer_name", fieldName: "tenant_private_key_pem", wantMasked: true},
+
+		// Carried by the "secret" needle rather than a key-specific one, which is
+		// why neither spelling is listed twice.
+		{name: "secret_key", fieldName: "secret_key", wantMasked: true},
+		{name: "secretkey_concatenated", fieldName: "secretkey", wantMasked: true},
+
+		// Identifiers. Every one of these was masked before.
+		{name: "bare_key", fieldName: "key", wantMasked: false},
+		{name: "plural_keys", fieldName: "keys", wantMasked: false},
+		{name: "tenant_key", fieldName: "tenant_key", wantMasked: false},
+		{name: "cache_key", fieldName: "cache_key", wantMasked: false},
+		{name: "routing_key", fieldName: "routing_key", wantMasked: false},
+		{name: "uppercase_identifier", fieldName: "KEY", wantMasked: false},
+
+		// Untouched by this change, asserted so a needle list edit cannot quietly
+		// drop one on its way past.
+		{name: "password", fieldName: "password", wantMasked: true},
+		{name: "token", fieldName: "token", wantMasked: true},
+		{name: "authorization", fieldName: "authorization", wantMasked: true},
+		{name: "cvv", fieldName: "cvv", wantMasked: true},
+		{name: "plain_name", fieldName: "name", wantMasked: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := filter.isSensitiveField(tt.fieldName); got != tt.wantMasked {
+				t.Errorf("isSensitiveField(%q) = %v, want %v", tt.fieldName, got, tt.wantMasked)
+			}
+
+			// The value path is what a caller actually sees, so assert there too
+			// rather than trusting the predicate alone.
+			gotValue := filter.FilterString(tt.fieldName, "v")
+			if masked := gotValue == DefaultMaskValue; masked != tt.wantMasked {
+				t.Errorf("FilterString(%q, \"v\") = %q, want masked=%v", tt.fieldName, gotValue, tt.wantMasked)
 			}
 		})
 	}

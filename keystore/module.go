@@ -59,8 +59,9 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.store = s
 
 	for _, ss := range s.belowRecommended() {
-		// "name", not "key": the logger's SensitiveDataFilter masks any field
-		// whose name contains "key" (see logger.DefaultFilterConfig).
+		// "name", not "key": what is logged is a keystore entry's logical name,
+		// and "name" says so. The filter no longer masks a bare "key" (ADR-072),
+		// so this is no longer a workaround for one — it is just the right word.
 		m.logger.Warn().
 			Str("name", ss.name).
 			Int("bytes", ss.n).

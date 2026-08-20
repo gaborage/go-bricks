@@ -34,9 +34,27 @@ func DefaultFilterConfig() *FilterConfig {
 	return &FilterConfig{
 		SensitiveFields: []string{
 			sensitiveFieldPassword, "passwd", "pwd",
-			// "key" masks every field whose name contains it — "keys", "tenant_key",
-			// "cache_key" — so name a logical identifier "name" or "id", not "key".
-			sensitiveFieldSecret, "key", sensitiveFieldAPIKey, "apikey",
+			// Key material is named needle by needle, in both spellings: matching is
+			// case-insensitive SUBSTRING, so "api_key" does not contain "apikey" and
+			// neither contains the other. A bare "key" needle used to stand in for
+			// all of them and masked every field merely containing the word —
+			// "keys", "tenant_key", "cache_key", and the framework's own "key"
+			// identifier — with no way to unmask one short of replacing this whole
+			// list (#1037). "secret_key" and "secretkey" need no entry of their own;
+			// the "secret" needle already covers both. The hyphenated spellings are
+			// here because httpclient logs whole http.Header maps through this
+			// filter under LogPayloads, and a header is spelled "X-Api-Key", which
+			// no underscore needle matches. A bare "-key" would cover every such
+			// header and also mask "Idempotency-Key", an identifier consumers send
+			// on every payment POST, so the same rule applies as above: name the
+			// shape, not the word. A
+			// spelling this list does not name — "license_key", "hmac_key",
+			// "Ocp-Apim-Subscription-Key" — logs in clear until a consumer adds it
+			// via log.sensitivefields.
+			sensitiveFieldSecret, sensitiveFieldAPIKey, "apikey", "api-key",
+			"private_key", "privatekey", "private-key",
+			"signing_key", "signingkey", "signing-key",
+			"encryption_key", "encryptionkey", "encryption-key",
 			sensitiveFieldToken, "access_token", "refresh_token",
 			"auth", "authorization",
 			"credential", "credentials",
