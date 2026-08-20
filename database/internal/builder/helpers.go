@@ -194,19 +194,11 @@ func isSingleColumnName(rendered string) bool {
 		// quote character outright.
 		return true
 	}
-	return !hasUnescapedInnerQuote(rendered)
-}
-
-// hasUnescapedInnerQuote reports whether a quoted rendering carries a quote
-// between its outer ones that is not part of a doubled "" escape — the shape
-// that ends the identifier early and turns the remainder into SQL. Stripping the
-// legal pairs and looking for a survivor is the whole test. A rendering that is
-// not wrapped in quotes has no interior to inspect.
-func hasUnescapedInnerQuote(rendered string) bool {
-	if len(rendered) < 2 || rendered[0] != '"' || rendered[len(rendered)-1] != '"' {
-		return false
-	}
-	return hasUnescapedQuote(rendered[1 : len(rendered)-1])
+	// validateSegment's quoted branch has already established both wrapping
+	// quotes and a non-empty interior, so these bounds are exact and need no
+	// guard of their own. A quote surviving between them ends the identifier
+	// early and turns the remainder into SQL.
+	return !hasUnescapedQuote(rendered[1 : len(rendered)-1])
 }
 
 // hasUnescapedQuote reports whether text carries a quote that is not part of a

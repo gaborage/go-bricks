@@ -475,3 +475,56 @@ func TestBuildUpsertRejectsColumnsOracleMergeCannotName(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+// TestUpsertColumnNameNamesTheColumnNotTheSpelling covers the seam directly,
+// because BuildUpsert cannot reach all of it: a rendering the preconditions
+// refuse never arrives here, and the boundary between "wrapped in quotes" and
+// "not" is what decides whether a key is unwrapped or folded.
+func TestUpsertColumnNameNamesTheColumnNotTheSpelling(t *testing.T) {
+	oracle := NewQueryBuilder(dbtypes.Oracle)
+
+	tests := []struct {
+		name   string
+		column string
+		want   string
+	}{
+		// Unquoted renderings fold, which is what Oracle does to them.
+		{name: "unquoted_lowercase", column: "id", want: "ID"},
+		{name: "unquoted_uppercase", column: "ID", want: "ID"},
+		// Quoted ones name their inner text verbatim — this is the pair that
+		// rendering-comparison called two columns and Oracle calls one.
+		{name: "quoted_uppercase", column: `"ID"`, want: "ID"},
+		{name: "quoted_lowercase", column: `"id"`, want: "id"},
+		// A reserved word renders quoted in the case the caller wrote, so the
+		// two spellings stay two columns.
+		{name: "reserved_lowercase", column: "level", want: "level"},
+		{name: "reserved_uppercase", column: "LEVEL", want: "LEVEL"},
+		// A doubled quote is one quote in the name it denotes.
+		{name: "doubled_quote_unwraps", column: `a""b`, want: `a"b`},
+		{name: "already_quoted_doubled_quote", column: `"a""b"`, want: `a"b`},
+		// The empty quoted identifier: two bytes, wrapper and nothing else. The
+		// preconditions refuse it, so this pins the boundary rather than a
+		// reachable BuildUpsert input.
+		{name: "empty_quoted_identifier", column: `""`, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := oracle.upsertColumnName(tt.column); got != tt.want {
+				t.Errorf("upsertColumnName(%q) = %q, want %q", tt.column, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("postgresql_names_the_key_itself", func(t *testing.T) {
+		pg := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		// No folding and no unwrapping: the key is the name, which is why the
+		// distinctness check cannot fire on this vendor.
+		for _, column := range []string{"id", "ID", `"ID"`, "level"} {
+			if got := pg.upsertColumnName(column); got != column {
+				t.Errorf("upsertColumnName(%q) = %q, want it unchanged", column, got)
+			}
+		}
+	})
+}
