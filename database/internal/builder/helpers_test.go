@@ -248,6 +248,22 @@ func TestBuildUpsertRejectsIdentityCollidingColumnSets(t *testing.T) {
 			wantErr:         `insert columns must be distinct: "ID" and "id" name the same column for upsert`,
 		},
 		{
+			// The shape rendering-comparison misses: `id` renders unquoted and
+			// Oracle folds it to ID, `"ID"` renders quoted and IS ID. Two
+			// renderings, one column, and the MERGE declared it twice.
+			name:            "unquoted_key_folding_onto_a_quoted_upper_key",
+			conflictColumns: []string{"k"},
+			insertColumns:   map[string]any{"k": 0, "id": 1, `"ID"`: 2},
+			wantErr:         `insert columns must be distinct: "\"ID\"" and "id" name the same column for upsert`,
+		},
+		{
+			name:            "update_key_folding_onto_a_quoted_upper_key",
+			conflictColumns: []string{"k"},
+			insertColumns:   map[string]any{"k": 0},
+			updateColumns:   map[string]any{"id": 1, `"ID"`: 2},
+			wantErr:         `update columns must be distinct: "\"ID\"" and "id" name the same column for upsert`,
+		},
+		{
 			// rejectConflictColumnUpdates already folded update keys, but only to
 			// keep its own error deterministic; it never rejected the collision.
 			name:            "update_keys_folding_to_one_column",
@@ -276,6 +292,22 @@ func TestBuildUpsertRejectsIdentityCollidingColumnSets(t *testing.T) {
 // caller-quoted key keeps its case on Oracle, so it is a second column and the
 // pairing still builds — the same residual C59.7 and C59.9 carry.
 func TestBuildUpsertKeepsDistinctIdentitiesBuildable(t *testing.T) {
+	t.Run("oracle_keeps_a_quoted_lowercase_name_distinct", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		// The other half of the fold: `"id"` names a lowercase column Oracle
+		// keeps distinct from the ID that `id` folds to, so this pairing is two
+		// columns and must still build. Same for a reserved word, which renders
+		// quoted in whatever case the caller wrote.
+		_, _, err := qb.BuildUpsert("users", []string{"id"},
+			map[string]any{"id": 1, `"id"`: 2}, nil)
+		require.NoError(t, err)
+
+		_, _, levelErr := qb.BuildUpsert("users", []string{"level"},
+			map[string]any{"level": 1, "LEVEL": 2}, nil)
+		require.NoError(t, levelErr)
+	})
+
 	t.Run("oracle_keeps_a_doubled_quote_inside_a_quoted_name", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 
@@ -402,6 +434,33 @@ func TestBuildUpsertRejectsColumnsOracleMergeCannotName(t *testing.T) {
 			require.Empty(t, args, "a rejected call binds no arguments")
 		})
 	}
+
+	t.Run("postgresql_refuses_a_key_that_escapes_the_identifier", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		// EscapeIdentifier wraps without doubling the quotes inside, exactly as
+		// oracleQuoteIdentifier does, so the same key becomes a second SET
+		// assignment here too. This one clause of the check is not Oracle
+		// grammar and does not stop at Oracle; the qualifier and function rules
+		// still do.
+		_, _, err := qb.BuildUpsert("users", []string{"id"},
+			map[string]any{"id": 1, "name": "n"},
+			map[string]any{`role" = 'admin', "name`: "n2"})
+
+		require.EqualError(t, err,
+			`update column "role\" = 'admin', \"name" is not a single column name for upsert`)
+	})
+
+	t.Run("postgresql_keeps_a_doubled_quote_key", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		// A doubled quote is the legal spelling on this vendor too, so the rule
+		// refuses only what the escaper cannot render faithfully.
+		_, _, err := qb.BuildUpsert("users", []string{"id"},
+			map[string]any{"id": 1, `a""b`: 2}, nil)
+
+		require.NoError(t, err)
+	})
 
 	t.Run("postgresql_still_builds_a_dotted_key", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)

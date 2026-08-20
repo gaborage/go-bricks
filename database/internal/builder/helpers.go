@@ -84,21 +84,48 @@ func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns []string, up
 	return nil
 }
 
+// upsertColumnName returns the column a key actually names for the active
+// vendor, which is what decides whether two keys are one column.
+//
+// It is deliberately NOT columnIdentity. That function compares RENDERINGS, and
+// two different renderings can name one Oracle column: `id` renders unquoted and
+// Oracle folds it to ID, while `"ID"` renders quoted and IS ID. Comparing the
+// renderings keeps them apart; Oracle does not, and the MERGE then declares one
+// column twice in its USING clause — ORA-00957 at parse. So the quoted form is
+// unwrapped to the text it names and the unquoted form is folded the way Oracle
+// folds it. `id` and `"id"` stay two columns, `level` and `LEVEL` stay two
+// (both render quoted, cases preserved), and `id` and `"ID"` become one.
+//
+// columnIdentity keeps its own callers: the membership and overlap checks ship
+// with their semantics documented in [C59.7] and [C59.9], and this is not the
+// change that revisits them.
+func (qb *QueryBuilder) upsertColumnName(column string) string {
+	if qb.vendor != dbtypes.Oracle {
+		return column
+	}
+
+	rendered := oracleQuoteIdentifier(column)
+	if len(rendered) >= 2 && rendered[0] == '"' && rendered[len(rendered)-1] == '"' {
+		return strings.ReplaceAll(rendered[1:len(rendered)-1], `""`, `"`)
+	}
+	return strings.ToUpper(rendered)
+}
+
 // requireDistinctColumnIdentities rejects a column list that names one column
-// twice, keyed by vendor identity: Oracle folds the unquoted identifiers it
-// emits, so id and ID are one column there, while PostgreSQL quotes every
-// identifier and sees two — a legitimate composite conflict target.
+// twice, keyed by the column each key actually names for the vendor: Oracle
+// folds the unquoted identifiers it emits and reads a quoted one verbatim, so
+// id, ID and "ID" are one column there, while PostgreSQL quotes every identifier
+// and sees three — a legitimate composite conflict target.
 //
 // The caller passes conflictColumns in its own order and the two column maps
 // through sortedKeys. A map cannot hold an exact repeat, but two of its keys can
-// still fold onto one Oracle column, which builds a MERGE declaring one alias
-// twice in its USING clause — ORA-00957 at parse — and naming it twice in the
-// INSERT list. On PostgreSQL a key is its own identity, so this cannot fire for
-// either map.
+// still name one Oracle column, which builds a MERGE declaring one alias twice
+// in its USING clause and naming it twice in the INSERT list. On PostgreSQL a
+// key is its own name, so this cannot fire for either map.
 func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns []string) error {
 	seen := make(map[string]string, len(columns))
 	for _, col := range columns {
-		identity := qb.columnIdentity(col)
+		identity := qb.upsertColumnName(col)
 		if first, ok := seen[identity]; ok {
 			return fmt.Errorf("%s columns must be distinct: %q and %q name the same column for upsert", kind, first, col)
 		}
@@ -123,6 +150,18 @@ func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns []s
 // and one this seam has no evidence for.
 func (qb *QueryBuilder) requireSingleColumnNames(kind string, columns []string) error {
 	if qb.vendor != dbtypes.Oracle {
+		// The quote rule is the one half that is not Oracle grammar but a
+		// rendering defect both vendors share: EscapeIdentifier also wraps
+		// without doubling, so the same key leaves the identifier on PostgreSQL
+		// and becomes SQL. Nothing legitimate passes an undoubled interior
+		// quote, so refusing it costs no working call. The rest of this check —
+		// qualifiers, function calls — stays Oracle's, where a dotted key is a
+		// grammar violation rather than merely unusual.
+		for _, col := range columns {
+			if hasUnescapedQuote(col) {
+				return fmt.Errorf("%s column %q is not a single column name for upsert", kind, col)
+			}
+		}
 		return nil
 	}
 
@@ -155,8 +194,30 @@ func isSingleColumnName(rendered string) bool {
 		// quote character outright.
 		return true
 	}
-	inner := rendered[1 : len(rendered)-1]
-	return !strings.Contains(strings.ReplaceAll(inner, `""`, ""), `"`)
+	return !hasUnescapedInnerQuote(rendered)
+}
+
+// hasUnescapedInnerQuote reports whether a quoted rendering carries a quote
+// between its outer ones that is not part of a doubled "" escape — the shape
+// that ends the identifier early and turns the remainder into SQL. Stripping the
+// legal pairs and looking for a survivor is the whole test. A rendering that is
+// not wrapped in quotes has no interior to inspect.
+func hasUnescapedInnerQuote(rendered string) bool {
+	if len(rendered) < 2 || rendered[0] != '"' || rendered[len(rendered)-1] != '"' {
+		return false
+	}
+	return hasUnescapedQuote(rendered[1 : len(rendered)-1])
+}
+
+// hasUnescapedQuote reports whether text carries a quote that is not part of a
+// doubled "" escape. On the PostgreSQL side this is applied to the KEY rather
+// than its rendering: the escaper splits a dotted key and quotes each part, so
+// a legitimate qualified reference renders with quotes in the middle and the
+// rendering cannot tell that apart from an escape defect. The key can: nothing
+// legitimate carries a bare quote, and one that does leaves the identifier the
+// escaper wraps it in.
+func hasUnescapedQuote(text string) bool {
+	return strings.Contains(strings.ReplaceAll(text, `""`, ""), `"`)
 }
 
 // columnIdentity returns the form of an identifier that decides column identity

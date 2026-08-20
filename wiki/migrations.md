@@ -3673,15 +3673,19 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   lands `id` and `ID` in one call. Only Oracle can fold at all.
 - scope: `database/internal/builder/` only, as two preconditions at `BuildUpsert` (`helpers.go`:
   `requireDistinctColumnIdentities`, `requireSingleColumnNames`). **First**, `insertColumns` and
-  `updateColumns` must each name every column at most once, keyed by **vendor identity** like the
-  three checks that precede them: Oracle folds the unquoted identifiers it emits, so `{"id": 1,
-  "ID": 2}` is one column written twice and is refused, while PostgreSQL quotes every identifier,
-  making the same pair two columns that still build. Oracle's quoted reserved words stay
-  case-sensitive, and a caller-quoted key keeps its case, so `{"id": 1, "\"id\"": 2}` is two
-  columns there and still builds. **Second**, on Oracle only, every conflict, insert and update
-  key must be a single column name — no qualifier, no function call, no empty name, and no quote
-  that ends the identifier early; a quote inside a quoted name must be doubled, the way Oracle
-  spells it. Conflict and insert keys have no choice: the MERGE names them as column aliases in
+  `updateColumns` must each name every column at most once, keyed by **the column each key
+  actually names** on the vendor: Oracle folds the unquoted identifiers it emits and reads a
+  quoted one verbatim, so `{"id": 1, "ID": 2}` and `{"id": 1, "\"ID\"": 2}` are each one column
+  written twice and both are refused, while PostgreSQL quotes every identifier and sees two
+  columns that still build. Comparing the RENDERINGS would miss the second pair — `id` renders
+  unquoted and `"ID"` renders quoted, but Oracle folds the first onto the second. A caller-quoted
+  key keeps its case, so `{"id": 1, "\"id\"": 2}` is two columns on Oracle and still builds, and
+  so does `{"level": 1, "LEVEL": 2}`, which renders quoted on both sides. **Second**, every conflict, insert and update key must be a
+  single column name. On Oracle that means no qualifier, no function call and no empty name. **On
+  both vendors** it also means no quote that ends the identifier early — a quote inside a name
+  must be doubled — because that half is not Oracle grammar but a rendering defect the two
+  escapers share, and `EscapeIdentifier` wraps without doubling exactly as `oracleQuoteIdentifier`
+  does. Conflict and insert keys have no choice: the MERGE names them as column aliases in
   its USING clause and in the INSERT list. Update keys become UPDATE SET targets, where Oracle
   would accept an alias-qualified one; refusing those is the API's own restriction.
   That last rule refuses a key whose rendering would leave the identifier and become SQL: the
@@ -3699,8 +3703,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   column, or — still on Oracle — any key that is dotted, function-shaped or blank.
   Match as well for any call site that treats a builder error as control flow (a fallback, a
   retry, an alert), and any test pinning the old no-error outcome for one of those shapes.
-  no-match = PostgreSQL only, or every key is already a distinct plain column name — the normal
-  case, and unchanged.
+  no-match = every key is already a distinct plain column name, which is the normal case and
+  unchanged; a PostgreSQL-only deployment is exposed to the quote rule alone. **Not covered by
+  this hop:** the `table` argument, which nothing validates — it is tracked with the rest of the
+  renderer in issue #1104.
 - apply: nothing to change for a call whose keys are distinct single column names. For a folding
   pair, decide which spelling is the column and drop the other; the builder refuses rather than
   deduplicating on your behalf, because the key it discarded would take its **value** with it and

@@ -74,9 +74,21 @@ is tracked as issue #1104; what this decides is that a key the builder cannot
 render faithfully is refused rather than emitted.
 
 **Second, `insertColumns` and `updateColumns` must each name every column at
-most once**, judged by the same `columnIdentity` the surrounding checks use, and
-reporting both spellings the way the conflict-column check already did — which is
-now the same helper, generalized to take any of the three column groups.
+most once**, judged by the column each key actually NAMES rather than by how it
+renders, and reporting both spellings the way the conflict-column check already
+did — which is now the same helper, generalized to take any of the three column
+groups.
+
+That distinction is the whole of it. `columnIdentity`, which the membership and
+overlap checks use, compares renderings: `id` renders unquoted and `"ID"` renders
+quoted, so it calls them two columns. Oracle folds the first onto the second and
+calls them one, and a MERGE naming both declares that column twice — the very
+ORA-00957 this ADR exists to prevent, reached by a second route. So this check
+unwraps a quoted rendering to the text it names and upper-cases an unquoted one.
+`id` and `"id"` stay two columns; `level` and `LEVEL` stay two, both rendering
+quoted with their case intact; `id` and `"ID"` become one. `columnIdentity`
+itself is untouched — the checks that ship with `[C59.7]` and `[C59.9]` semantics
+keep it.
 
 Ordering is the load-bearing part. Because rendering is settled first, a key that
 reaches `columnIdentity` from `BuildUpsert` renders either with no quote at all or
@@ -89,8 +101,15 @@ with its own atom.
 
 The identity check is vendor-keyed and so is a no-op on PostgreSQL by
 construction: there a key is its own identity, and map keys are unique. The
-single-column-name check is explicitly Oracle-only, self-gated the way
-`columnIdentity` and `quoteOracleColumn` are. That is not an endorsement of the
+single-column-name check is Oracle-only in its qualifier and function rules,
+self-gated the way `columnIdentity` and `quoteOracleColumn` are — with one
+deliberate exception: the quote rule runs on both vendors. That clause is not
+Oracle grammar. `EscapeIdentifier` wraps a key in quotes without doubling the
+ones inside it, exactly as `oracleQuoteIdentifier` does, so the same key leaves
+the identifier on PostgreSQL and becomes SQL there too. Nothing legitimate
+carries a bare quote, so refusing it costs no working call on either vendor —
+which is what separates it from the dotted key, where PostgreSQL renders
+something legal and Oracle does not. That is not an endorsement of the
 same key on PostgreSQL: its escaper splits a dotted key on the dot and quotes each
 part, so `{"t.name": 1}` renders `"t"."name"` — a qualified reference, and as a
 conflict target an `ON CONFLICT ("t"."name")` its grammar does not accept. It is
@@ -126,8 +145,9 @@ own issue and its own atom rather than a second break smuggled in on this one.
 ## Consequences
 
 **Positive.** The three repro shapes fail at build time, naming both colliding
-keys, instead of reaching the database as unparseable SQL. `[C59.10]`'s stated
-scope limit is closed. The exported contract now says what it enforces, and the
+keys, instead of reaching the database as unparseable SQL, and so does the fourth
+the reviewers found: a quoted key colliding with the unquoted one Oracle folds
+onto it. `[C59.10]`'s stated scope limit is closed for the column maps it named. The exported contract now says what it enforces, and the
 identity fold in `columnIdentity` is unreachable from `BuildUpsert`.
 
 **Negative.** This adds a precondition to a shipped exported API: a call that
