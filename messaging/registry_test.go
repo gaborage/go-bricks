@@ -1010,7 +1010,7 @@ func (l *panicEventLogger) Warn() gobrickslogger.LogEvent                     { 
 func (l *panicEventLogger) WithContext(_ any) gobrickslogger.Logger           { return l }
 func (l *panicEventLogger) WithFields(_ map[string]any) gobrickslogger.Logger { return l }
 
-// TestRegistryProcessMessagePanicAfterHandlerStillNacks pins the lane-level
+// TestRegistryProcessMessagePanicInTheTailNacksWithoutRequeue pins the lane-level
 // recovery: a panic past the handler — here from outcome logging — must not
 // escape processMessage, and the manual-ack delivery is nacked without requeue.
 // The panic-in-the-tail guarantee moved to the pipeline with ADR-069; see

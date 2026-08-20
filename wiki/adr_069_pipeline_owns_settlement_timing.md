@@ -42,14 +42,15 @@ Three consequences follow from that ordering, and they are the decision:
 
 **Settlement happens after the span closed and the lease drained.** A handle the
 handler borrowed via `deps.DB`/`Cache`/`Messaging` is released BEFORE the
-acknowledgement, so a message is never acked while work it started is still
+acknowledgement, so a message is never settled while work it started is still
 holding a resource.
 
 **A panic anywhere in the delivery tail still settles.** The lane's outcome line,
 the span marking and the consume record all sit inside the guard. A panic there
-produces a `Panicked` result — even when the handler itself succeeded — so the
-lane nacks rather than acks. A delivery the lane could not finish reporting is
-not one it should acknowledge.
+produces a `Panicked` result — even when the handler itself succeeded — and the
+lane settles that result under its own policy: nack-without-requeue on the
+classic lane, skip the offset on the streams lane. A delivery the lane could not
+finish reporting is not one it should accept.
 
 **A panic inside `Settle` is logged and stopped, not retried.** It is the lane's
 own bug on its own broker call; retrying it would panic again. There is no
@@ -102,6 +103,6 @@ is recovered and `Settle` runs normally with a `Panicked` result, which is the
 same action a fallback would take. Only a panic INSIDE `Settle` needs different
 handling, and log-and-stop is not a fallback.
 
-**Settling inside the span, before the lease drains.** Rejected: it acknowledges
-a message while a handle its handler borrowed is still open, which is the failure
+**Settling inside the span, before the lease drains.** Rejected: it settles a
+message while a handle its handler borrowed is still open, which is the failure
 ADR-032 exists to prevent.
