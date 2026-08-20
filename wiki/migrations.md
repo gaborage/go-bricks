@@ -3518,7 +3518,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   characters; versions `01`–`fe` may carry additional dash-delimited fields of printable
   non-space ASCII up to 255 bytes total, which are otherwise ignored; version `ff`
   rejected), and
-  `tracestate` against a 512-byte cap. A value that fails is DISCARDED — never truncated,
+  `tracestate` against a 512-byte cap AND against the carrier that brought its parent —
+  tracestate is kept only when the same carrier supplied a valid `traceparent`, so an
+  orphan one is discarded rather than attached to an inherited parent, and a carrier
+  bringing a parent without a tracestate clears any inherited one. A value that fails is DISCARDED — never truncated,
   because truncation maps distinct upstream ids onto one and silently forges correlation —
   and the delivery continues with the traceparent-derived id, or a fresh UUID. The delivery
   itself is never rejected. `messaging` additionally refuses to copy an invalid id into an
@@ -3575,9 +3578,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   streams log queries that previously had no cross-service id to join on — that is the
   capability this adds. If a dashboard pinned the consume span's exact attribute set, widen
   it by the four shared keys.
-- verify: consume a message whose publisher set `traceparent`, and confirm the consumer's
-  failure line carries a `correlation_id` equal to the publisher's trace id — before this
-  change the streams lane extracted nothing and the field was absent entirely.
+- verify: consume a message whose publisher set `traceparent`, from a handler you have made
+  RETURN AN ERROR — a successful streams delivery logs nothing, so there is no line to read
+  otherwise. Confirm the resulting failure line carries a `correlation_id` equal to the
+  publisher's trace id; before this change the streams lane extracted nothing and the field
+  was absent entirely.
 - ref: [ADR-068](adr_068_delivery_pipeline.md) · [ADR-069](adr_069_pipeline_owns_settlement_timing.md) ·
   [ADR-070](adr_070_inbound_trace_identifier_validation.md) · `messaging/streams/runner.go` (`deliver`,
   `logOutcome`, `commitOffset`)

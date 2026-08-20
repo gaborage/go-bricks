@@ -116,12 +116,13 @@ func ExtractFromHeaders(ctx context.Context, headers HeaderAccessor) context.Con
 		return ctx
 	}
 
-	traceCtx := extractRequestID(ctx, headers)
-	// carriedParent, not "is there a traceparent in ctx now": this ctx may have
-	// inherited a perfectly valid traceparent from the caller, and the tracestate
-	// on THIS carrier belongs to that one only if THIS carrier also brought the
-	// traceparent it annotates.
-	traceCtx, carriedParent := extractTraceParent(traceCtx, headers)
+	// Each step reports whether THIS carrier supplied the value, never whether one
+	// is present in ctx. A ctx arriving with a caller's identifiers is normal, and
+	// mixing those with a carrier's produces a delivery that straddles two traces:
+	// the handler logging under one while the span parent is another, and the
+	// first trace's tracestate re-emitted under the second.
+	traceCtx, carriedID := extractRequestID(ctx, headers)
+	traceCtx, carriedParent := extractTraceParent(traceCtx, headers, carriedID)
 	return extractTraceState(traceCtx, headers, carriedParent)
 }
 
@@ -132,19 +133,19 @@ func ExtractFromHeaders(ctx context.Context, headers HeaderAccessor) context.Con
 // A rejected value plants nothing and returns ctx unchanged, which is what opens
 // extractTraceParent's derivation guard so the traceparent-derived id wins
 // instead. Discarding rather than truncating is deliberate: see ValidateRequestID.
-func extractRequestID(ctx context.Context, headers HeaderAccessor) context.Context {
+func extractRequestID(ctx context.Context, headers HeaderAccessor) (traceCtx context.Context, carried bool) {
 	if v := headers.Get(HeaderXRequestID); v != nil {
 		if traceID := ValidateRequestID(safeToString(v)); traceID != "" {
-			return WithTraceID(ctx, traceID)
+			return WithTraceID(ctx, traceID), true
 		}
 	}
-	return ctx
+	return ctx, false
 }
 
 // extractTraceParent extracts traceparent header and derives trace ID if needed.
 // It reports whether THIS carrier supplied a valid traceparent, which is what
 // gates the tracestate that accompanies it.
-func extractTraceParent(ctx context.Context, headers HeaderAccessor) (traceCtx context.Context, carried bool) {
+func extractTraceParent(ctx context.Context, headers HeaderAccessor, carriedID bool) (traceCtx context.Context, carried bool) {
 	v := headers.Get(HeaderTraceParent)
 	if v == nil {
 		return ctx, false
@@ -161,8 +162,11 @@ func extractTraceParent(ctx context.Context, headers HeaderAccessor) (traceCtx c
 
 	ctx = WithTraceParent(ctx, tp)
 
-	// Derive trace ID from traceparent if not already set
-	if _, hasTraceID := IDFromContext(ctx); !hasTraceID {
+	// Derive the trace ID from THIS carrier's traceparent unless this same carrier
+	// also supplied a valid request id. Testing IDFromContext instead would let an
+	// id inherited from the caller outrank the carrier's own parent, so the handler
+	// would log under the caller's trace while its span hung under the carrier's.
+	if !carriedID {
 		if traceID := extractTraceIDFromParent(tp); traceID != "" {
 			ctx = WithTraceID(ctx, traceID)
 		}
@@ -189,7 +193,11 @@ func extractTraceState(ctx context.Context, headers HeaderAccessor, carriedParen
 			return WithTraceState(ctx, ts)
 		}
 	}
-	return ctx
+	// This carrier brought a traceparent but no usable tracestate. Any tracestate
+	// already in ctx annotates the CALLER's parent, so leaving it would re-emit one
+	// trace's vendor state under another's traceparent. Shadow it with empty:
+	// StateFromContext reports absent for "", so nothing downstream carries it.
+	return WithTraceState(ctx, "")
 }
 
 // InjectIntoHeaders writes the trace context (X-Request-ID, traceparent, and

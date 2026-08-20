@@ -173,3 +173,81 @@ func TestExtractTraceIDAndForceAlign(t *testing.T) {
 	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", forceAlignTraceID("orig", "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"))
 	assert.Equal(t, "orig", forceAlignTraceID("orig", ""))
 }
+
+// A delivery must belong to ONE trace. The hazard is a context that already
+// carries a caller's identifiers meeting a carrier that brings its own: taking
+// the parent from the carrier while keeping the id and tracestate from the
+// context produces a delivery that straddles both, and nothing errors.
+func TestExtractFromHeadersDoesNotMixTraceLineages(t *testing.T) {
+	const (
+		parentA = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1111111111111111-01"
+		traceA  = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		stateA  = "vendorA=alpha"
+		parentB = "00-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-2222222222222222-01"
+		traceB  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+
+	tests := []struct {
+		name       string
+		headers    map[string]any
+		wantID     string
+		wantParent string
+		wantState  string
+	}{
+		{
+			// The reported case: carrier brings a new parent and no usable id, so
+			// the carrier's trace wins outright rather than being half-adopted.
+			name:       "carrier_parent_with_unusable_request_id",
+			headers:    map[string]any{HeaderTraceParent: parentB, HeaderXRequestID: "!!! not valid !!!"},
+			wantID:     traceB,
+			wantParent: parentB,
+		},
+		{
+			name:       "carrier_parent_with_no_request_id_at_all",
+			headers:    map[string]any{HeaderTraceParent: parentB},
+			wantID:     traceB,
+			wantParent: parentB,
+		},
+		{
+			// A carrier id is the caller's explicit choice and outranks derivation,
+			// so it keeps its own id while still adopting the carrier's parent.
+			name:       "carrier_supplies_both",
+			headers:    map[string]any{HeaderTraceParent: parentB, HeaderXRequestID: "req-from-carrier"},
+			wantID:     "req-from-carrier",
+			wantParent: parentB,
+		},
+		{
+			// Nothing on the carrier: the inherited trace is still the live one.
+			name:       "empty_carrier_inherits_everything",
+			headers:    map[string]any{},
+			wantID:     traceA,
+			wantParent: parentA,
+			wantState:  stateA,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithTraceState(WithTraceParent(WithTraceID(context.Background(), traceA), parentA), stateA)
+
+			got := ExtractFromHeaders(ctx, &mapAccessor{m: tt.headers})
+
+			id, _ := IDFromContext(got)
+			tp, _ := ParentFromContext(got)
+			ts, _ := StateFromContext(got)
+			assert.Equal(t, tt.wantID, id, "the trace id must belong to the same trace as the parent")
+			assert.Equal(t, tt.wantParent, tp)
+			assert.Equal(t, tt.wantState, ts,
+				"tracestate annotates ONE parent; it must never survive onto a different carrier's")
+
+			// And the same must hold on the way out — a downstream hop must not
+			// receive one trace's parent carrying another's vendor state.
+			out := &mapAccessor{m: map[string]any{}}
+			InjectIntoHeaders(got, out)
+			assert.Equal(t, tt.wantParent, out.m[HeaderTraceParent])
+			if tt.wantState == "" {
+				assert.NotContains(t, out.m, HeaderTraceState, "no orphan tracestate is emitted")
+			}
+		})
+	}
+}
