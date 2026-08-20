@@ -353,6 +353,14 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 
 	// AMQP-specific: populate CorrelationId and MessageId.
 	//
+	// CorrelationId reads the id back out of the header the injection just wrote
+	// rather than deriving a second one: InjectIntoHeaders aligns the id with the
+	// traceparent it emits and EnsureTraceID does not, so two derivations one call
+	// apart disagreed on every publish out of an HTTP-originated context (#1066).
+	// The aligned id is not itself trusted: it comes from a traceparent the caller
+	// can supply, and the alignment checks that field's length, not its charset —
+	// which is why the guard below still runs on it.
+	//
 	// The validation seam in trace guards the framework's ingress doors, but
 	// WithTraceID and EnsureTraceID are EXPORTED — a consumer can plant any value
 	// the seam never saw. This is defense in depth rather than redundancy: the
@@ -361,7 +369,7 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 	// rejects a CorrelationId over 255 bytes, and it answers any frame-write
 	// error by shutting down the whole Connection every publisher in the process
 	// shares (ADR-070).
-	traceID := gobrickstrace.EnsureTraceID(ctx)
+	traceID, _ := accessor.Get(gobrickstrace.HeaderXRequestID).(string)
 	if publishing.CorrelationId == "" && gobrickstrace.ValidateRequestID(traceID) != "" {
 		publishing.CorrelationId = traceID
 	}

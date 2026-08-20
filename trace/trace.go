@@ -205,6 +205,11 @@ func extractTraceState(ctx context.Context, headers HeaderAccessor, carriedParen
 // any existing values — the trace ID is forced to align with the traceparent
 // so log/metric correlation across services stays consistent.
 //
+// HeaderXRequestID is always written, always as a Go string: a caller needing
+// the outbound trace identity — the AMQP publish path does, for the message's
+// CorrelationId — reads it back from that header rather than deriving its own,
+// which would skip the alignment above.
+//
 // Historically this routed through an InjectIntoHeadersWithOptions variant
 // that supported a Preserve mode (set-if-missing). Preserve mode had zero
 // callers across the framework, tools, and tests, so the mode-selector API
