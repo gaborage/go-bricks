@@ -1381,29 +1381,93 @@ func loadDefaultConfig(t *testing.T) (*Config, error) {
 	return &cfg, nil
 }
 
-// TestKoanfDefaultsMatchApplyDefaultsForSharedKeys pins the two default-rendering
-// mechanisms to one source: koanf defaults (Load path) and apply*Defaults (Validate
-// path) must produce the same values wherever both speak. A new shared default
-// belongs in a constant both sides render.
-func TestKoanfDefaultsMatchApplyDefaultsForSharedKeys(t *testing.T) {
-	loaded, err := loadDefaultConfig(t)
+// TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral is the one-shot equivalence pin for
+// the mechanism change: these ten keys used to be hand-written in loadDefaults and are now
+// rendered by normalize. The expected values are the pre-change literals, so the test fails
+// if derivation moves any default rather than merely relocating where it is written.
+func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
+	want := map[string]any{
+		"app.startup.timeout":         "10s",
+		"cache.redis.port":            6379,
+		"cache.redis.poolsize":        10,
+		"cache.redis.dialtimeout":     "5s",
+		"cache.redis.readtimeout":     "3s",
+		"cache.redis.writetimeout":    "3s",
+		"cache.redis.maxretries":      3,
+		"cache.redis.minretrybackoff": "8ms",
+		"cache.redis.maxretrybackoff": "512ms",
+		"keystore.secretminlength":    32,
+	}
+
+	got, err := derivedDefaults()
+
+	require.NoError(t, err)
+	assert.Equal(t, want, got, "derivation must relocate the defaults, not change them")
+}
+
+// TestDerivedDefaultKeysAreDisjointFromKoanfOnly enforces one mechanism PER KEY: a key
+// written in both maps would have its winner decided by merge order rather than by design.
+func TestDerivedDefaultKeysAreDisjointFromKoanfOnly(t *testing.T) {
+	koanfOnly := koanfOnlyDefaults()
+
+	for _, key := range derivedDefaultKeys {
+		_, collides := koanfOnly[key]
+		assert.False(t, collides, "%q is both derived and hand-written", key)
+	}
+}
+
+// TestDerivedDefaultKeysAreFilledByNormalize keeps the allowlist honest: a key normalize
+// does not actually fill would drop out of the defaults silently, taking the default with it.
+func TestDerivedDefaultKeysAreFilledByNormalize(t *testing.T) {
+	var zero Config
+	require.NoError(t, normalize(&zero))
+
+	flat, err := flattenConfig(&zero)
 	require.NoError(t, err)
 
-	applied := &Config{}
-	require.NoError(t, applyStartupDefaults(&applied.App.Startup))
-	applyRedisDefaults(&applied.Cache.Redis)
-	normalizeKeyStore(&applied.KeyStore)
+	for _, key := range derivedDefaultKeys {
+		assert.Contains(t, flat, key, "normalize does not fill %q", key)
+	}
+}
 
-	assert.Equal(t, applied.App.Startup.Timeout, loaded.App.Startup.Timeout)
-	assert.Equal(t, applied.Cache.Redis.DialTimeout, loaded.Cache.Redis.DialTimeout)
-	assert.Equal(t, applied.Cache.Redis.ReadTimeout, loaded.Cache.Redis.ReadTimeout)
-	assert.Equal(t, applied.Cache.Redis.WriteTimeout, loaded.Cache.Redis.WriteTimeout)
-	assert.Equal(t, applied.Cache.Redis.MaxRetries, loaded.Cache.Redis.MaxRetries)
-	assert.Equal(t, applied.Cache.Redis.MinRetryBackoff, loaded.Cache.Redis.MinRetryBackoff)
-	assert.Equal(t, applied.Cache.Redis.MaxRetryBackoff, loaded.Cache.Redis.MaxRetryBackoff)
-	assert.Equal(t, applied.Cache.Redis.PoolSize, loaded.Cache.Redis.PoolSize)
-	assert.Equal(t, applied.Cache.Redis.Port, loaded.Cache.Redis.Port)
-	require.NotNil(t, loaded.KeyStore.SecretMinLength)
-	require.NotNil(t, applied.KeyStore.SecretMinLength)
-	assert.Equal(t, *applied.KeyStore.SecretMinLength, *loaded.KeyStore.SecretMinLength)
+// TestDerivedDefaultsAreModeInvariant bars a key whose normalized default differs between
+// deployment modes. The manager pool sizes are why this test exists: multi-tenant treats zero
+// as "unlimited", so preloading a koanf default of 10 would overwrite that meaning before
+// anything could read it.
+func TestDerivedDefaultsAreModeInvariant(t *testing.T) {
+	flattenMode := func(multitenant bool) map[string]any {
+		var zero Config
+		zero.Multitenant.Enabled = multitenant
+		require.NoError(t, normalize(&zero))
+		flat, err := flattenConfig(&zero)
+		require.NoError(t, err)
+		return flat
+	}
+
+	singleTenant := flattenMode(false)
+	multiTenant := flattenMode(true)
+
+	for _, key := range derivedDefaultKeys {
+		assert.Equal(t, singleTenant[key], multiTenant[key],
+			"%q differs by deployment mode and cannot be preloaded", key)
+	}
+}
+
+// TestDefaultsPreloadNoDatabaseIdentityKey guards ADR-051 by construction rather than by
+// discipline: its delivered-empty check reads koanf key PRESENCE, so a preloaded identity key
+// would make an empty one look configured and boot the misconfiguration it exists to catch.
+// Full derivation would have done exactly that, which is why the allowlist is narrow.
+func TestDefaultsPreloadNoDatabaseIdentityKey(t *testing.T) {
+	k := koanf.New(".")
+	require.NoError(t, loadDefaults(k))
+
+	for _, key := range databaseIdentityKeys {
+		assert.False(t, k.Exists(fieldDatabase+"."+key), "database.%s must not be preloaded", key)
+		assert.False(t, k.Exists("databases.any."+key), "databases.*.%s must not be preloaded", key)
+	}
+	// debug.allowedips keeps its hand-written loopback default (that is today's koanf
+	// behavior); what must never happen is DERIVING it, which would hand its fail-closed
+	// posture to whatever normalize does or does not fill (ADR-049).
+	assert.NotContains(t, derivedDefaultKeys, "debug.allowedips")
+	assert.True(t, k.Exists("debug.allowedips"), "the hand-written loopback default stands")
 }

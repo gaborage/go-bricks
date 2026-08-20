@@ -94,8 +94,11 @@ the normalize phase for the keys normalize owns.
 
 - Flatten = mapstructure struct→map (tags already present) + `koanf/maps.Flatten`; no new module.
   Durations rendered `.String()` so koanf getter types are unchanged (as #1021's pinning test does).
-- Owned set at #1023 start: `app.startup.timeout`, `cache.redis.*`. `scheduler.timeout.*` and
-  `server.bodylimit` join it only if their drift issues (below) move the fill into normalize first.
+- Owned set at #1023 start: `app.startup.timeout`, `cache.redis.*`, and
+  `keystore.secretminlength` (the tri-state fill landed after this table was written).
+  `scheduler.timeout.*` and `server.bodylimit` join it only if their drift issues (below) move
+  the fill into normalize first — #1029 does exactly that, so those two keys fold into
+  `derivedDefaultKeys` whichever of the two lands second.
 - Q16 pin (8) — named-database name colliding with a static tenant id — was proposed and dropped;
   the existing white-box test on `validateNamedDatabases` covers it.
 

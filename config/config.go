@@ -3,12 +3,15 @@ package config
 import (
 	"errors"
 	"fmt"
+	stdmaps "maps"
 	"os"
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-viper/mapstructure/v2"
+	"github.com/knadh/koanf/maps"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
 	envprovider "github.com/knadh/koanf/providers/env/v2"
@@ -327,8 +330,110 @@ func stringToTrimmedSliceHookFunc(sep string) mapstructure.DecodeHookFunc {
 	}
 }
 
+// derivedDefaultKeys is the allowlist of koanf keys whose default VALUE is rendered by the
+// normalize phase instead of being written again below. One mechanism per key, deliberately
+// not one mechanism for all of them (design doc decision 17): keys that must FAIL on zero —
+// app.name, server.port, server.timeout.*, log.level — stay hand-written in koanfOnlyDefaults,
+// because deriving them would silently turn a required key into a defaulted one.
+//
+// Full derivation is barred for two reasons beyond that. It would hand debug.allowedips to
+// whatever normalize fills, deciding the fail-closed posture ADR-049 depends on somewhere
+// other than the explicit map that states it today. And it would preload the database
+// identity keys, disarming the koanf-presence check ADR-051's delivered-empty rule reads.
+//
+// A key joins this list only when normalize owns its fill AND its value is mode-invariant —
+// a default that differs between single- and multi-tenant (the manager pool sizes, where zero
+// means unlimited) cannot be preloaded without overriding that meaning. Both properties are
+// enforced by test, not by review.
+var derivedDefaultKeys = []string{
+	"app.startup.timeout",
+	"cache.redis.port",
+	"cache.redis.poolsize",
+	"cache.redis.dialtimeout",
+	"cache.redis.readtimeout",
+	"cache.redis.writetimeout",
+	"cache.redis.maxretries",
+	"cache.redis.minretrybackoff",
+	"cache.redis.maxretrybackoff",
+	"keystore.secretminlength",
+}
+
+// derivedDefaults renders the allowlisted keys by normalizing a zero Config and picking them
+// out of the result, so the Go-side constants normalize applies are the single truth for
+// those keys (ADR-064: normalize has to handle a hand-built config anyway).
+//
+// Durations are rendered as strings so a koanf getter sees the same type it saw when these
+// values were literals, and a *int is dereferenced for the same reason.
+func derivedDefaults() (map[string]any, error) {
+	var zero Config
+	if err := normalize(&zero); err != nil {
+		return nil, fmt.Errorf("deriving koanf defaults: %w", err)
+	}
+
+	flat, err := flattenConfig(&zero)
+	if err != nil {
+		return nil, err
+	}
+
+	derived := make(map[string]any, len(derivedDefaultKeys))
+	for _, key := range derivedDefaultKeys {
+		value, ok := flat[key]
+		if !ok {
+			return nil, fmt.Errorf("deriving koanf defaults: normalize does not fill %q", key)
+		}
+		derived[key] = renderDefault(value)
+	}
+	return derived, nil
+}
+
+// flattenConfig turns a Config into the dotted key space koanf stores, using the same koanf
+// tags the loader unmarshals through.
+func flattenConfig(cfg *Config) (map[string]any, error) {
+	var nested map[string]any
+	dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{Result: &nested, TagName: "koanf"})
+	if err != nil {
+		return nil, fmt.Errorf("deriving koanf defaults: %w", err)
+	}
+	if err := dec.Decode(cfg); err != nil {
+		return nil, fmt.Errorf("deriving koanf defaults: %w", err)
+	}
+
+	flat, _ := maps.Flatten(nested, nil, ".") // second return is the key-path index, unused here
+	return flat, nil
+}
+
+// renderDefault matches the type a hand-written literal would have carried.
+func renderDefault(value any) any {
+	switch v := value.(type) {
+	case time.Duration:
+		return v.String()
+	case *int:
+		if v == nil {
+			return nil
+		}
+		return *v
+	default:
+		return value
+	}
+}
+
 func loadDefaults(k *koanf.Koanf) error {
-	defaults := map[string]any{
+	defaults := koanfOnlyDefaults()
+
+	derived, err := derivedDefaults()
+	if err != nil {
+		return err
+	}
+	// Disjoint by construction and pinned by test, so neither side can quietly win.
+	stdmaps.Copy(defaults, derived)
+
+	return k.Load(confmap.Provider(defaults, "."), nil)
+}
+
+// koanfOnlyDefaults are the keys koanf alone declares: the ones that must fail validation
+// when unset, and the ones nothing reads through a normalize-filled struct field.
+func koanfOnlyDefaults() map[string]any {
+	return map[string]any{
 		"app.name":                      "gobricks-service",
 		"app.version":                   "v1.0.0",
 		fieldAppEnv:                     EnvDevelopment,
@@ -338,7 +443,6 @@ func loadDefaults(k *koanf.Koanf) error {
 		"app.rate.burst":                200,
 		"app.rate.ippreguard.enabled":   true,
 		"app.rate.ippreguard.threshold": 2000,
-		"app.startup.timeout":           defaultStartupTimeout.String(),
 
 		"server.host":               "0.0.0.0",
 		fieldServerPort:             8080,
@@ -357,23 +461,13 @@ func loadDefaults(k *koanf.Koanf) error {
 		// Database defaults not provided for deterministic behavior
 		// Database will only be enabled when explicitly configured
 
-		// Cache defaults. Rendered from the same constants applyRedisDefaults uses;
-		// TestKoanfDefaultsMatchApplyDefaultsForSharedKeys pins the equality. koanf
-		// duration defaults are strings, so the time.Duration constants are rendered
-		// via .String().
-		"cache.enabled":               false,
-		"cache.type":                  CacheTypeRedis,
-		"cache.redis.host":            defaultHost,
-		"cache.redis.port":            defaultRedisPort,
-		"cache.redis.password":        "",
-		fieldCacheRedisDB:             0,
-		fieldCacheRedisPool:           defaultRedisPoolSize,
-		"cache.redis.dialtimeout":     defaultRedisDialTimeout.String(),
-		"cache.redis.readtimeout":     defaultRedisReadTimeout.String(),
-		"cache.redis.writetimeout":    defaultRedisWriteTimeout.String(),
-		"cache.redis.maxretries":      defaultRedisMaxRetries,
-		"cache.redis.minretrybackoff": defaultRedisMinRetryBackoff.String(),
-		"cache.redis.maxretrybackoff": defaultRedisMaxRetryBackoff.String(),
+		// Cache defaults. The redis port/pool/timeout/retry keys are DERIVED — see
+		// derivedDefaultKeys — so only the keys normalize does not own are written here.
+		"cache.enabled":        false,
+		"cache.type":           CacheTypeRedis,
+		"cache.redis.host":     defaultHost,
+		"cache.redis.password": "",
+		fieldCacheRedisDB:      0,
 
 		fieldLogLevel:       logger.LevelInfo,
 		"log.pretty":        false,
@@ -402,8 +496,5 @@ func loadDefaults(k *koanf.Koanf) error {
 
 		// KeyStore defaults — symmetric secret floor (32 bytes). Set to 0 to
 		// disable the minimum-length check explicitly (deprecated, WARNs — #1036).
-		"keystore.secretminlength": DefaultKeyStoreSecretMinLength,
 	}
-
-	return k.Load(confmap.Provider(defaults, "."), nil)
 }
