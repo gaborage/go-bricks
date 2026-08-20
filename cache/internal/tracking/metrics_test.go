@@ -47,7 +47,7 @@ func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 	return reader
 }
 
-func TestSetupTestMeterProviderLeavesTheGlobalUsable(t *testing.T) {
+func TestSetupTestMeterProviderLeavesItsProviderUsable(t *testing.T) {
 	before := otel.GetMeterProvider()
 	var reader *sdkmetric.ManualReader
 
@@ -57,32 +57,21 @@ func TestSetupTestMeterProviderLeavesTheGlobalUsable(t *testing.T) {
 	})
 
 	// inner's t.Cleanup has run by the time the subtest returns.
-	require.Equal(t, before, otel.GetMeterProvider(),
-		"the helper reinstates the previous global")
+	require.Equal(t, before, otel.GetMeterProvider(), "the helper reinstates the previous global")
 
-	// Identity is not the property that matters. The global delegates, and its
-	// delegate is bound once per process, so a restored-but-poisoned global has
-	// the RIGHT identity and records nothing. Assert function instead: an
-	// instrument created through the global after cleanup must actually arrive.
-	counter, err := otel.Meter("restore.probe").Int64Counter("restore.probe.counter")
-	require.NoError(t, err)
-	counter.Add(context.Background(), 1)
-
+	// The property that identity cannot see. otel binds its delegator's delegate
+	// once per process (internal/global/state.go, delegateMeterOnce), so restoring
+	// the global does not un-delegate this provider — shutting it down would leave
+	// instrument creation silently returning noop.Int64Counter with a nil error.
+	//
+	// Asserted against THIS helper's own reader rather than against whatever the
+	// process-wide delegator happens to point at. Six tests in this package call
+	// this helper, so which provider won that once-per-process race depends on test
+	// order; the helper's contract — do not leave a dead provider reachable — does
+	// not. A shut-down provider's reader reports "reader is shutdown" here.
 	var rm metricdata.ResourceMetrics
 	require.NoError(t, reader.Collect(context.Background(), &rm),
-		"the provider the global delegates to must still be collectable after cleanup")
-
-	found := false
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			if m.Name == "restore.probe.counter" {
-				found = true
-			}
-		}
-	}
-	require.True(t, found,
-		"a metric recorded through the global after cleanup must reach the reader; "+
-			"if it does not, the global is delegating to a shut-down provider")
+		"cleanup must leave this provider alive; the global still delegates to it")
 }
 
 func TestRecordCacheOperationDuration(t *testing.T) {
