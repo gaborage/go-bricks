@@ -1,34 +1,18 @@
 package server
 
 import (
-	"regexp"
-
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
+
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
-// requestIDPattern matches a safe X-Request-ID value: ASCII alphanumerics,
-// underscores, and hyphens, length 1..128. Caller-supplied values that fail
-// this match are discarded — they flow into log envelopes, JOSE failure
-// records, and rate-limit error bodies, so an attacker who can set the
-// header could poison logs (arbitrary length/charset) or reuse a victim's
-// known request ID to confuse correlation during incident response.
-//
-// The pattern is deliberately strict (no '.', '=', ':', '+', '/') so the
-// framework's request ID surface is always safe to embed in URLs, logs,
-// and structured fields without further escaping. Operators behind upstream
-// gateways that inject wider charsets should either rewrite the header at
-// the proxy or accept the framework-generated UUID.
-var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
-
-// validateRequestID returns id when it matches requestIDPattern, otherwise "".
-// Callers that get "" should fall back to a trusted source (a previously
-// generated UUID in the response header, or a fresh one).
+// validateRequestID returns id when it is a safe request identifier, otherwise
+// "". The rule itself lives in trace, so every ingress door applies the same
+// bound — this one, the messaging lanes, and the exported extractor a consumer
+// can call directly (ADR-070).
 func validateRequestID(id string) string {
-	if requestIDPattern.MatchString(id) {
-		return id
-	}
-	return ""
+	return gobrickstrace.ValidateRequestID(id)
 }
 
 // RequestIDMiddleware reads the inbound X-Request-ID header, validates it

@@ -351,9 +351,18 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 	accessor := amqpHeaderAccessor{headers: publishing.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
-	// AMQP-specific: populate CorrelationId and MessageId
+	// AMQP-specific: populate CorrelationId and MessageId.
+	//
+	// The validation seam in trace guards the framework's ingress doors, but
+	// WithTraceID and EnsureTraceID are EXPORTED — a consumer can plant any value
+	// the seam never saw. This is defense in depth rather than redundancy: the
+	// two checks answer different questions, and the cost of being wrong here is
+	// not a bad log line but a torn-down connection. amqp091's writeShortstr
+	// rejects a CorrelationId over 255 bytes, and it answers any frame-write
+	// error by shutting down the whole Connection every publisher in the process
+	// shares (ADR-070).
 	traceID := gobrickstrace.EnsureTraceID(ctx)
-	if publishing.CorrelationId == "" {
+	if publishing.CorrelationId == "" && gobrickstrace.ValidateRequestID(traceID) != "" {
 		publishing.CorrelationId = traceID
 	}
 	if publishing.MessageId == "" {
