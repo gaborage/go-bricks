@@ -49,7 +49,10 @@ gateway emitting a slightly-off id alongside a good traceparent keeps its
 correlation.
 
 **`traceparent` is validated against the spec's grammar** —
-`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}`, rejecting the all-zero
+`^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}(-[[:graph:]]+)*$`, the
+pattern `trace/validate.go` compiles verbatim: the four version-00 fields, then
+the optional dash-delimited suffix a future version may carry (see below). It
+rejects the all-zero
 trace-id and parent-id as OpenTelemetry's own `Extract` does, and rejecting
 version `ff`, which the spec forbids outright. The previous check was
 length-only, which left an attacker 32 arbitrary non-hyphen bytes inside a
