@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -139,41 +138,35 @@ func TestAMQPTraceExtractionByteSliceHeaders(t *testing.T) {
 // =============================================================================
 
 func TestAMQPHeaderHardeningVariousTypes(t *testing.T) {
-	// Test various header value types that could cause runtime issues
-	pub := amqp.Publishing{
-		Headers: amqp.Table{
-			// Different types that the hardened version should safely handle
+	// Every AMQP field type a caller can put in a header table goes through the
+	// real publish preparation rather than a copy of it: the injection must
+	// neither panic on them nor drop the caller's own entries.
+	pub := preparePublishing(
+		gobrickstrace.WithTraceID(context.Background(), "context-trace-id"),
+		PublishOptions{Headers: map[string]any{
 			gobrickstrace.HeaderXRequestID:  []byte("byte-array-trace-id"),
 			gobrickstrace.HeaderTraceParent: "00-abcdefabcdefabcdefabcdefabcdefab-1234567890123456-01",
-			"custom-header":                 42,       // integer
-			"another-header":                true,     // boolean
-			"nil-header":                    nil,      // nil value
-			"empty-byte-header":             []byte{}, // empty byte slice
-		},
-	}
+			"custom-header":                 42,
+			"another-header":                true,
+			"nil-header":                    nil,
+			"empty-byte-header":             []byte{},
+		}},
+		[]byte(testMessageBody),
+	)
 
-	ctx := gobrickstrace.WithTraceID(context.Background(), "context-trace-id")
-
-	// Test the hardened header injection directly
-	accessor := amqpHeaderAccessor{headers: pub.Headers}
-	gobrickstrace.InjectIntoHeaders(ctx, accessor)
-
-	// AMQP-specific: simulate CorrelationId and unique MessageId semantics
-	traceID := gobrickstrace.EnsureTraceID(ctx)
-	if pub.CorrelationId == "" {
-		pub.CorrelationId = traceID
-	}
-	if pub.MessageId == "" {
-		pub.MessageId = uuid.New().String()
-	}
-
-	// Verify that force alignment worked correctly
-	// The trace ID should be aligned with the traceparent trace-id field
+	// Force alignment outranks both the context id and the inbound header value.
 	assert.Equal(t, "abcdefabcdefabcdefabcdefabcdefab", pub.Headers[gobrickstrace.HeaderXRequestID])
 	assert.Equal(t, "00-abcdefabcdefabcdefabcdefabcdefab-1234567890123456-01", pub.Headers[gobrickstrace.HeaderTraceParent])
 
-	// AMQP-specific fields: CorrelationId uses context trace ID; MessageId is unique
-	assert.Equal(t, "context-trace-id", pub.CorrelationId)
+	// The caller's own entries survive the injection, whatever their type.
+	assert.Equal(t, 42, pub.Headers["custom-header"])
+	assert.Equal(t, true, pub.Headers["another-header"])
+	assert.Nil(t, pub.Headers["nil-header"])
+	assert.Equal(t, []byte{}, pub.Headers["empty-byte-header"])
+
+	// AMQP-specific fields: CorrelationId carries the same aligned id as the
+	// header; MessageId is a separate, unique value.
+	assert.Equal(t, "abcdefabcdefabcdefabcdefabcdefab", pub.CorrelationId)
 	assert.NotEmpty(t, pub.MessageId)
 	assert.NotEqual(t, pub.CorrelationId, pub.MessageId)
 }

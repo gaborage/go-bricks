@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -605,6 +606,110 @@ func TestUnsafePublishSuccessInjectionAndIDs(t *testing.T) {
 	}
 	if ch.lastPublishing.MessageId == "" {
 		t.Fatalf("expected message id set")
+	}
+}
+
+// preparePublishing must derive the X-Request-ID header and the CorrelationId
+// property from ONE value. Two derivations one call apart made them disagree on
+// every publish out of an HTTP-originated context: the injection aligns the id
+// with the traceparent it emits, the property took the raw context id (#1066).
+func TestPreparePublishingAlignsCorrelationIDWithRequestIDHeader(t *testing.T) {
+	const (
+		httpRequestID = "8f14e45f-ea6d-4b7c-9b1e-2c3d4e5f6071"
+		inboundParent = "00-abcdefabcdefabcdefabcdefabcdefab-1234567890123456-01"
+	)
+
+	consumeDerived := gobrickstrace.ExtractFromHeaders(context.Background(), amqpHeaderAccessor{
+		headers: amqp.Table{gobrickstrace.HeaderTraceParent: inboundParent},
+	})
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+	}{
+		{
+			name: "http_ctx_with_inbound_traceparent",
+			ctx:  gobrickstrace.WithTraceParent(gobrickstrace.WithTraceID(context.Background(), httpRequestID), inboundParent),
+		},
+		{name: "http_ctx_without_traceparent", ctx: gobrickstrace.WithTraceID(context.Background(), httpRequestID)},
+		{name: "consume_derived_ctx", ctx: consumeDerived},
+		{name: "bare_ctx", ctx: context.Background()},
+		// The three cases above land on one derivation — no usable traceparent in
+		// ctx, so the injection generates one and its trace-id wins — but each is
+		// a ctx shape a real publisher hands in, and the property must hold for
+		// all of them. This last one adds that an id the seam would refuse is
+		// replaced by the alignment rather than emptying the property; the guard
+		// itself is exercised by TestPreparePublishingRefusesAnUnvalidatedCorrelationID,
+		// which defeats the alignment to reach it.
+		{name: "invalid_ctx_trace_id_replaced_by_alignment", ctx: gobrickstrace.WithTraceID(context.Background(), strings.Repeat("a", 256))},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pub := preparePublishing(tt.ctx, PublishOptions{}, []byte(testMessageBody))
+
+			header, ok := pub.Headers[gobrickstrace.HeaderXRequestID].(string)
+			require.True(t, ok, "injection writes the request id as a string")
+			assert.Equal(t, header, pub.CorrelationId, "header and property carry the same id")
+			assert.Equal(t, pub.CorrelationId, gobrickstrace.ValidateRequestID(pub.CorrelationId),
+				"the shared id is itself a valid request id")
+
+			parent, ok := pub.Headers[gobrickstrace.HeaderTraceParent].(string)
+			require.True(t, ok, "injection writes the traceparent as a string")
+			fields := strings.Split(parent, "-")
+			require.Len(t, fields, 4, "a version-00 traceparent has four fields")
+			assert.Equal(t, fields[1], pub.CorrelationId, "the shared id is the traceparent's trace-id")
+		})
+	}
+}
+
+// ADR-070's guard outlives the single-derivation fix. CorrelationId is an AMQP
+// shortstr and amqp091 answers an oversized one by tearing down the Connection
+// every publisher in the process shares, so the property refuses what the seam
+// refuses while the header, a longstr field, still carries it. Both shapes below
+// reach the guard through the same door: computeTraceParent forwards a
+// caller-supplied traceparent without validating it.
+func TestPreparePublishingRefusesAnUnvalidatedCorrelationID(t *testing.T) {
+	oversized := strings.Repeat("a", 256)
+	nonHexTraceID := strings.Repeat("!", 32)
+
+	tests := []struct {
+		name        string
+		ctxTraceID  string
+		traceparent string
+		wantHeader  string
+	}{
+		// A malformed traceparent yields no trace-id, so the alignment falls back
+		// to the context's own id — here one past the 255-byte shortstr ceiling.
+		{
+			name:        "alignment_falls_back_to_an_oversized_context_id",
+			ctxTraceID:  oversized,
+			traceparent: "00-zzzz-1234567890123456-01",
+			wantHeader:  oversized,
+		},
+		// A trace-id of the right LENGTH but the wrong charset aligns
+		// successfully onto garbage: the extraction checks length, not hex. This
+		// is the shape that keeps the guard from being dead code — the poisoned
+		// value arrives through the aligned path itself, not around it.
+		{
+			name:        "alignment_succeeds_onto_a_non_hex_trace_id",
+			ctxTraceID:  "valid-context-id",
+			traceparent: "00-" + nonHexTraceID + "-1234567890123456-01",
+			wantHeader:  nonHexTraceID,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := gobrickstrace.WithTraceID(context.Background(), tt.ctxTraceID)
+
+			pub := preparePublishing(ctx, PublishOptions{
+				Headers: map[string]any{gobrickstrace.HeaderTraceParent: tt.traceparent},
+			}, []byte(testMessageBody))
+
+			assert.Empty(t, pub.CorrelationId, "an id the seam refuses never reaches the shortstr")
+			assert.Equal(t, tt.wantHeader, pub.Headers[gobrickstrace.HeaderXRequestID])
+		})
 	}
 }
 
