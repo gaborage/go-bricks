@@ -48,9 +48,11 @@ func TestListJobsHandler(t *testing.T) {
 	assert.Equal(t, "Every 10 seconds", metadata.HumanReadable)
 }
 
-// TestListJobsHandlerEmptyScheduler verifies empty job list when no jobs registered
+// TestListJobsHandlerEmptyScheduler verifies empty job list when no jobs registered.
+// The module is initialized but carries no jobs: an uninitialized module never
+// reaches a handler, since routes are registered after Init.
 func TestListJobsHandlerEmptyScheduler(t *testing.T) {
-	module := NewModule()
+	module, _ := newTestScheduler(t, 5*time.Second)
 
 	req := EmptyRequest{}
 	ctx := server.HandlerContext{

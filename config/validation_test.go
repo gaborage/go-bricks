@@ -4887,6 +4887,88 @@ func TestValidateSchedulerTimezoneWiredIntoValidate(t *testing.T) {
 	assert.ErrorContains(t, err, "scheduler.timezone")
 }
 
+func TestNormalizeSchedulerTimeoutDefaults(t *testing.T) {
+	tests := []struct {
+		name             string
+		shutdown         time.Duration
+		slowJob          time.Duration
+		expectedShutdown time.Duration
+		expectedSlowJob  time.Duration
+	}{
+		{
+			name:             "zero_fills_both_defaults",
+			expectedShutdown: 30 * time.Second,
+			expectedSlowJob:  25 * time.Second,
+		},
+		{
+			name:             "explicit_values_preserved",
+			shutdown:         90 * time.Second,
+			slowJob:          2 * time.Second,
+			expectedShutdown: 90 * time.Second,
+			expectedSlowJob:  2 * time.Second,
+		},
+		{
+			name:             "zero_fills_only_the_unset_key",
+			slowJob:          2 * time.Second,
+			expectedShutdown: 30 * time.Second,
+			expectedSlowJob:  2 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &SchedulerConfig{Timeout: SchedulerTimeoutConfig{Shutdown: tt.shutdown, SlowJob: tt.slowJob}}
+
+			require.NoError(t, normalizeScheduler(cfg))
+
+			assert.Equal(t, tt.expectedShutdown, cfg.Timeout.Shutdown)
+			assert.Equal(t, tt.expectedSlowJob, cfg.Timeout.SlowJob)
+		})
+	}
+}
+
+// A negative duration used to be absorbed by the scheduler module's use-time
+// fallback. With that fallback gone it would reach the module verbatim, so
+// normalization rejects it here instead.
+func TestNormalizeSchedulerRejectsNegativeTimeouts(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout SchedulerTimeoutConfig
+		field   string
+	}{
+		{
+			name:    "negative_shutdown",
+			timeout: SchedulerTimeoutConfig{Shutdown: -time.Second},
+			field:   "scheduler.timeout.shutdown",
+		},
+		{
+			name:    "negative_slowjob",
+			timeout: SchedulerTimeoutConfig{SlowJob: -time.Second},
+			field:   "scheduler.timeout.slowjob",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := normalizeScheduler(&SchedulerConfig{Timeout: tt.timeout})
+
+			assertValidationError(t, err, tt.field)
+		})
+	}
+}
+
+// The keys reach hand-built configs through Validate (ADR-064), which is the
+// only path that ever normalized them for a config koanf never loaded.
+func TestValidateFillsSchedulerTimeoutsOnHandBuiltConfig(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.Scheduler.Timeout = SchedulerTimeoutConfig{}
+
+	require.NoError(t, Validate(cfg))
+
+	assert.Equal(t, 30*time.Second, cfg.Scheduler.Timeout.Shutdown)
+	assert.Equal(t, 25*time.Second, cfg.Scheduler.Timeout.SlowJob)
+}
+
 func TestValidatePostgreSQLFieldsRejectsPartialClientCert(t *testing.T) {
 	cases := []struct {
 		name   string
