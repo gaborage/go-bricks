@@ -24,14 +24,54 @@ func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	prev := otel.GetMeterProvider()
 	otel.SetMeterProvider(provider)
 
 	t.Cleanup(func() {
-		_ = provider.Shutdown(context.Background())
+		// Reinstate the previous provider, and do NOT shut this one down.
+		//
+		// otel's global provider delegates, and it binds its delegate exactly once
+		// per process (internal/global/state.go, delegateMeterOnce sync.Once). The
+		// first SetMeterProvider in the binary therefore points that delegator at
+		// `provider` PERMANENTLY. Restoring `prev` restores the delegator, not its
+		// delegate — so shutting `provider` down leaves every later otel.Meter call
+		// routed through a corpse, handing out instruments that record nothing and
+		// report no error. Restoring identity does not restore function.
+		//
+		// Leaving it running costs nothing: a ManualReader has no exporter and no
+		// background goroutine, so an unread provider is inert rather than leaky.
+		otel.SetMeterProvider(prev)
 		ResetForTesting()
 	})
 
 	return reader
+}
+
+func TestSetupTestMeterProviderLeavesItsProviderUsable(t *testing.T) {
+	before := otel.GetMeterProvider()
+	var reader *sdkmetric.ManualReader
+
+	t.Run("inner", func(t *testing.T) {
+		reader = setupTestMeterProvider(t)
+		require.NotEqual(t, before, otel.GetMeterProvider(), "the helper installs its own provider")
+	})
+
+	// inner's t.Cleanup has run by the time the subtest returns.
+	require.Equal(t, before, otel.GetMeterProvider(), "the helper reinstates the previous global")
+
+	// The property that identity cannot see. otel binds its delegator's delegate
+	// once per process (internal/global/state.go, delegateMeterOnce), so restoring
+	// the global does not un-delegate this provider — shutting it down would leave
+	// instrument creation silently returning noop.Int64Counter with a nil error.
+	//
+	// Asserted against THIS helper's own reader rather than against whatever the
+	// process-wide delegator happens to point at. Six tests in this package call
+	// this helper, so which provider won that once-per-process race depends on test
+	// order; the helper's contract — do not leave a dead provider reachable — does
+	// not. A shut-down provider's reader reports "reader is shutdown" here.
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm),
+		"cleanup must leave this provider alive; the global still delegates to it")
 }
 
 func TestRecordCacheOperationDuration(t *testing.T) {
