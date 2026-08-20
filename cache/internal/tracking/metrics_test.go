@@ -28,28 +28,61 @@ func setupTestMeterProvider(t *testing.T) *sdkmetric.ManualReader {
 	otel.SetMeterProvider(provider)
 
 	t.Cleanup(func() {
-		// Reinstate the previous provider before shutting this one down: without
-		// it the global keeps pointing at a provider that has been shut down, and
-		// instrument creation against a shut-down provider no-ops silently.
+		// Reinstate the previous provider, and do NOT shut this one down.
+		//
+		// otel's global provider delegates, and it binds its delegate exactly once
+		// per process (internal/global/state.go, delegateMeterOnce sync.Once). The
+		// first SetMeterProvider in the binary therefore points that delegator at
+		// `provider` PERMANENTLY. Restoring `prev` restores the delegator, not its
+		// delegate — so shutting `provider` down leaves every later otel.Meter call
+		// routed through a corpse, handing out instruments that record nothing and
+		// report no error. Restoring identity does not restore function.
+		//
+		// Leaving it running costs nothing: a ManualReader has no exporter and no
+		// background goroutine, so an unread provider is inert rather than leaky.
 		otel.SetMeterProvider(prev)
-		_ = provider.Shutdown(context.Background())
 		ResetForTesting()
 	})
 
 	return reader
 }
 
-func TestSetupTestMeterProviderRestoresTheGlobalProvider(t *testing.T) {
+func TestSetupTestMeterProviderLeavesTheGlobalUsable(t *testing.T) {
 	before := otel.GetMeterProvider()
+	var reader *sdkmetric.ManualReader
 
 	t.Run("inner", func(t *testing.T) {
-		setupTestMeterProvider(t)
+		reader = setupTestMeterProvider(t)
 		require.NotEqual(t, before, otel.GetMeterProvider(), "the helper installs its own provider")
 	})
 
 	// inner's t.Cleanup has run by the time the subtest returns.
 	require.Equal(t, before, otel.GetMeterProvider(),
-		"the helper must reinstate the previous global, not leave a shut-down provider installed")
+		"the helper reinstates the previous global")
+
+	// Identity is not the property that matters. The global delegates, and its
+	// delegate is bound once per process, so a restored-but-poisoned global has
+	// the RIGHT identity and records nothing. Assert function instead: an
+	// instrument created through the global after cleanup must actually arrive.
+	counter, err := otel.Meter("restore.probe").Int64Counter("restore.probe.counter")
+	require.NoError(t, err)
+	counter.Add(context.Background(), 1)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm),
+		"the provider the global delegates to must still be collectable after cleanup")
+
+	found := false
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == "restore.probe.counter" {
+				found = true
+			}
+		}
+	}
+	require.True(t, found,
+		"a metric recorded through the global after cleanup must reach the reader; "+
+			"if it does not, the global is delegating to a shut-down provider")
 }
 
 func TestRecordCacheOperationDuration(t *testing.T) {
