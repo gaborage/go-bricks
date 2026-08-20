@@ -667,8 +667,8 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			executionStatus = "panic"
 			panicErr := fmt.Errorf("panic: %v", r)
 
-			// Log panic with stack trace
-			m.logger.Error().
+			// Log panic with stack trace, correlated like the summary line below.
+			m.logger.WithContext(ctx).Error().
 				Str("jobID", entry.metadata.JobID).
 				Interface("panic", r).
 				Str("stackTrace", string(debug.Stack())).
@@ -683,7 +683,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 
 			entry.metadata.incrementFailed()
 
-			m.recordMetrics(entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
+			m.recordMetrics(ctx, entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
 
 			// Emit the structured action log so the panic path also gets the
 			// advertised 100% job-execution sampling (the normal-return call
@@ -712,7 +712,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 		}
 
 		entry.metadata.incrementFailed()
-		m.recordMetrics(entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
+		m.recordMetrics(ctx, entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
 	} else {
 		executionStatus = "success"
 
@@ -723,7 +723,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 		}
 
 		entry.metadata.incrementSuccess()
-		m.recordMetrics(entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
+		m.recordMetrics(ctx, entry.metadata.JobID, executionStatus, entry.metadata.ScheduleType, duration)
 	}
 }
 
@@ -737,9 +737,12 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 // - job.panic.total (Counter) - Singular "panic" for consistency
 //
 // Attributes: job.id, job.status (success/failure/panic), job.schedule_type (fixed_rate/daily/weekly/hourly/monthly)
-func (m *Module) recordMetrics(jobID, status, scheduleType string, duration time.Duration) {
+//
+// ctx must be the traced job context: the SDK's default exemplar filter attaches
+// an exemplar only when the recording context carries a sampled span.
+func (m *Module) recordMetrics(ctx context.Context, jobID, status, scheduleType string, duration time.Duration) {
 	if m.executionCounter != nil {
-		m.executionCounter.Add(context.Background(), 1,
+		m.executionCounter.Add(ctx, 1,
 			metric.WithAttributes(
 				attribute.String(jobIDAttr, jobID),
 				attribute.String(jobStatusAttr, status),
@@ -749,7 +752,7 @@ func (m *Module) recordMetrics(jobID, status, scheduleType string, duration time
 	}
 
 	if m.durationHistogram != nil {
-		m.durationHistogram.Record(context.Background(), duration.Seconds(),
+		m.durationHistogram.Record(ctx, duration.Seconds(),
 			metric.WithAttributes(
 				attribute.String(jobIDAttr, jobID),
 				attribute.String(jobStatusAttr, status),
@@ -759,7 +762,7 @@ func (m *Module) recordMetrics(jobID, status, scheduleType string, duration time
 	}
 
 	if status == "panic" && m.panicCounter != nil {
-		m.panicCounter.Add(context.Background(), 1,
+		m.panicCounter.Add(ctx, 1,
 			metric.WithAttributes(
 				attribute.String(jobIDAttr, jobID),
 				attribute.String(jobScheduleTypeAttr, scheduleType),

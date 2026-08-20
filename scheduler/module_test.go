@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/config"
@@ -112,6 +113,102 @@ func TestJobExecutionPanicMetrics(t *testing.T) {
 
 	execMetric := obtest.FindMetric(rm, "job.execution.total")
 	require.NotNil(t, execMetric, "Execution counter metric should be recorded")
+}
+
+// jobExecuteSpan returns the single "job.execute" span recorded so far.
+// AssertCount(1) is load-bearing: "the exemplar names THE job's trace" is only
+// provable while exactly one job span exists.
+func jobExecuteSpan(t *testing.T, tp *obtest.TestTraceProvider) tracetest.SpanStub {
+	t.Helper()
+	spans := obtest.NewSpanCollector(t, tp.Exporter).WithName("job.execute")
+	spans.AssertCount(1)
+	return spans.First()
+}
+
+// runJobOnce runs one job body synchronously, the way the manual trigger does.
+// Driving the body directly pins the span count at one: an interval short enough
+// to observe can fire a second tick before the assertions read.
+func runJobOnce(module *Module, jobID string, job Executor) {
+	module.runJobBody(&jobEntry{
+		job:      job,
+		metadata: &JobMetadata{JobID: jobID, ScheduleType: "fixed-rate"},
+	}, "manual")
+}
+
+// logLineWith returns the single output line carrying message. Asserting on the
+// whole capture cannot tell "this line carries the trace id" from "some other
+// line does".
+func logLineWith(t *testing.T, out, message string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, message) {
+			return line
+		}
+	}
+	t.Fatalf("no log line with message %q in:\n%s", message, out)
+	return ""
+}
+
+// TestJobMetricsCarryExemplarsNamingTheJobSpan verifies the success-path
+// instruments record under the traced job context: the SDK's default
+// TraceBasedFilter attaches an exemplar only when the recording context carries
+// a sampled span, so recording against context.Background() silently drops the
+// metric-to-trace link.
+func TestJobMetricsCarryExemplarsNamingTheJobSpan(t *testing.T) {
+	module, tp, mp := newTracedMeteredScheduler(t)
+
+	runJobOnce(module, "exemplar-job", &slowJob{})
+
+	recorded := jobExecuteSpan(t, tp).SpanContext.TraceID()
+
+	rm := mp.Collect(t)
+
+	durationExemplars := obtest.HistogramExemplars[float64](t, rm, "job.execution.duration")
+	require.NotEmpty(t, durationExemplars, "duration histogram point carries no exemplar")
+	assert.Equal(t, recorded[:], durationExemplars[0].TraceID,
+		"the exemplar names the job.execute trace, not merely some trace")
+
+	execExemplars := obtest.SumExemplars[int64](t, rm, "job.execution.total")
+	require.NotEmpty(t, execExemplars, "execution counter point carries no exemplar")
+	assert.Equal(t, recorded[:], execExemplars[0].TraceID,
+		"the exemplar names the job.execute trace, not merely some trace")
+}
+
+// TestJobPanicMetricCarriesExemplarNamingTheJobSpan covers the deferred recovery
+// path, which reaches the traced context through the rebound ctx variable rather
+// than a parameter.
+func TestJobPanicMetricCarriesExemplarNamingTheJobSpan(t *testing.T) {
+	module, tp, mp := newTracedMeteredScheduler(t)
+
+	runJobOnce(module, "panic-exemplar-job", &panicJob{})
+
+	recorded := jobExecuteSpan(t, tp).SpanContext.TraceID()
+
+	rm := mp.Collect(t)
+
+	panicExemplars := obtest.SumExemplars[int64](t, rm, "job.panic.total")
+	require.NotEmpty(t, panicExemplars, "panic counter point carries no exemplar")
+	assert.Equal(t, recorded[:], panicExemplars[0].TraceID,
+		"the exemplar names the job.execute trace, not merely some trace")
+}
+
+// TestJobPanicLogCarriesTraceCorrelation pins the stack-trace line to the job
+// trace. It is the artifact an operator pivots to from the exemplar, and it used
+// to be the one line in the traced region logged without correlation.
+func TestJobPanicLogCarriesTraceCorrelation(t *testing.T) {
+	var recorded trace.TraceID
+
+	out := captureStdout(t, func() {
+		module, tp, _ := newTracedMeteredScheduler(t)
+
+		runJobOnce(module, "panic-correlation-job", &panicJob{})
+
+		recorded = jobExecuteSpan(t, tp).SpanContext.TraceID()
+	})
+
+	panicLine := logLineWith(t, out, "Job panicked - recovered and marked as failed")
+	assert.Contains(t, panicLine, `"trace_id":"`+recorded.String()+`"`,
+		"the stack-trace line must carry the job's trace, like the summary line does")
 }
 
 // TestJobExecutionPanicEmitsActionLogSummary verifies that a panicking job still emits
@@ -323,13 +420,8 @@ func TestJobExecutionWithTracer(t *testing.T) {
 
 	require.NoError(t, module.Shutdown())
 
-	// Verify span was created
-	collector := obtest.NewSpanCollector(t, tp.Exporter)
-	spans := collector.WithName("job.execute")
-	spans.AssertCount(1)
-
 	// Verify span attributes
-	span := spans.First()
+	span := jobExecuteSpan(t, tp)
 	obtest.AssertSpanAttribute(t, &span, "job.id", "traced-job")
 	obtest.AssertSpanAttribute(t, &span, "job.trigger", "scheduled")
 }
@@ -356,15 +448,11 @@ func TestJobExecutionWithTracerPropagatesContext(t *testing.T) {
 	require.NoError(t, module.Shutdown())
 
 	// Verify both parent and child spans exist
-	collector := obtest.NewSpanCollector(t, tp.Exporter)
-	parentSpans := collector.WithName("job.execute")
-	parentSpans.AssertCount(1)
+	parentSpan := jobExecuteSpan(t, tp)
 
-	childSpans := collector.WithName("child.operation")
+	childSpans := obtest.NewSpanCollector(t, tp.Exporter).WithName("child.operation")
 	childSpans.AssertCount(1)
 
-	// Verify the child span's parent is the "job.execute" span
-	parentSpan := parentSpans.First()
 	childSpan := childSpans.First()
 	assert.Equal(t, parentSpan.SpanContext.TraceID(), childSpan.SpanContext.TraceID(),
 		"Child span should share the same trace ID as the parent")

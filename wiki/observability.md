@@ -181,7 +181,11 @@ consume metrics record inside the delivery span, so their data points carry an
 exemplar naming that span. Note the consume span is a **root** on both lanes:
 re-parenting a consume trace onto its producer is deliberately out of scope, so
 an exemplar resolves to a per-message trace containing that one delivery. That is
-expected, not a gap.
+expected, not a gap. Scheduler job metrics behave the same way: `job.execution.total`,
+`job.execution.duration`, and `job.panic.total` record inside the `job.execute`
+span, which is a root on both the scheduled and the manually-triggered path —
+an exemplar on a hand-triggered job resolves to that job's own trace, not to the
+`POST /_sys/job/:jobId` request's.
 
 **One configuration is worth naming**, because it fails quietly:
 `observability.enabled: true` with `observability.trace.enabled: false` leaves

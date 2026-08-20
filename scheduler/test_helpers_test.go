@@ -14,6 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 // assertWaitGroupDrains fails if module m's in-flight WaitGroup does not reach
@@ -55,6 +56,25 @@ func withSlowJobThreshold(threshold time.Duration) testSchedulerOption {
 
 func withTimezone(tz string) testSchedulerOption {
 	return func(d *app.ModuleDeps) { d.Config.Scheduler.Timezone = tz }
+}
+
+// newTracedMeteredScheduler wires a scheduler with both providers, so a recorded
+// metric point can be matched against the span it was recorded under.
+func newTracedMeteredScheduler(t *testing.T) (*Module, *obtest.TestTraceProvider, *obtest.TestMeterProvider) {
+	t.Helper()
+
+	tp := obtest.NewTestTraceProvider()
+	mp := obtest.NewTestMeterProvider()
+	t.Cleanup(func() {
+		require.NoError(t, tp.Shutdown(context.Background()))
+		require.NoError(t, mp.Shutdown(context.Background()))
+	})
+
+	module, _ := newTestScheduler(t, 5*time.Second,
+		withTracer(tp.Tracer("test-scheduler")),
+		withMeterProvider(mp.MeterProvider))
+
+	return module, tp, mp
 }
 
 // newTestScheduler creates and initializes a scheduler module for testing.
