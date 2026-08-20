@@ -80,30 +80,39 @@ did — which is now the same helper, generalized to take any of the three colum
 groups.
 
 That distinction is the whole of it. `columnIdentity`, which the membership and
-overlap checks use, compares renderings: `id` renders unquoted and `"ID"` renders
-quoted, so it calls them two columns. Oracle folds the first onto the second and
+overlap checks used, compared renderings: `id` renders unquoted and `"ID"` renders
+quoted, so it called them two columns. Oracle folds the first onto the second and
 calls them one, and a MERGE naming both declares that column twice — the very
-ORA-00957 this ADR exists to prevent, reached by a second route. So this check
+ORA-00957 this ADR exists to prevent, reached by a second route. So the new helper
 unwraps a quoted rendering to the text it names and upper-cases an unquoted one.
 `id` and `"id"` stay two columns; `level` and `LEVEL` stay two, both rendering
-quoted with their case intact; `id` and `"ID"` become one. `columnIdentity`
-itself is untouched — the checks that ship with `[C59.7]` and `[C59.9]` semantics
-keep it.
+quoted with their case intact; `id` and `"ID"` become one.
+
+**Third, the membership and overlap checks key on that same named column**, and
+`columnIdentity` is gone. Leaving them on the rendering comparison was the first
+draft of this ADR, and review found it does not hold: the two checks answer
+questions *about the same column set*, so a second identity rule inside one
+`BuildUpsert` call splits one Oracle column in two. `["\"ID\""]` against
+`{"id": 1}` failed membership even though the value IS supplied — the harmless
+polarity — and, with teeth, `["\"ID\""]` against `{"id": 3}` was not seen as an
+overlap, so the builder emitted `ON (target."ID" = source."ID") … UPDATE SET id =
+:3` and Oracle answered ORA-38104 at execution. That is precisely the failure
+`[C59.9]` exists to prevent, reached through the spelling it did not fold. One
+identity rule for all five checks is the only version of this decision that is
+internally consistent.
 
 Ordering is the load-bearing part. Because rendering is settled first, a key that
-reaches `columnIdentity` from `BuildUpsert` renders either with no quote at all or
-beginning AND ending with one — the two shapes whose "is this quoted" answer
-`HasPrefix` gets right. The rendering it mishandles, quoted somewhere in between,
-cannot survive the name check. The flawed guard is therefore unreachable from this
-API rather than repaired — which is the point, because repairing it is a
-behavior change to a shipped check and belongs to whoever wants that change,
-with its own atom.
+reaches the identity helper from `BuildUpsert` renders either with no quote at all
+or beginning AND ending with one — the two shapes whose "is this quoted" answer a
+first-and-last-byte test gets right. The rendering that defeats it, quoted
+somewhere in between, cannot survive the name check.
 
-The identity check is vendor-keyed and so is a no-op on PostgreSQL by
-construction: there a key is its own identity, and map keys are unique. The
-single-column-name check is Oracle-only in its qualifier and function rules,
-self-gated the way `columnIdentity` and `quoteOracleColumn` are — with one
-deliberate exception: the quote rule runs on both vendors. That clause is not
+The identity rule is vendor-keyed and so leaves PostgreSQL exactly as it was:
+there a key is its own identity, map keys are unique, and the membership and
+overlap checks compare the keys themselves, which is what they already did. The
+single-column-name check is Oracle-only in its qualifier, function and empty-name
+rules, self-gated the way `upsertColumnName` and `quoteOracleColumn` are — with
+one deliberate exception: the quote rule runs on both vendors. That clause is not
 Oracle grammar. `EscapeIdentifier` wraps a key in quotes without doubling the
 ones inside it, exactly as `oracleQuoteIdentifier` does, so the same key leaves
 the identifier on PostgreSQL and becomes SQL there too. Nothing legitimate
@@ -118,12 +127,19 @@ that issue #997 neither reported nor evidenced.
 
 ## Alternatives considered
 
-**Narrow `columnIdentity`'s guard to `strings.Contains(rendered, "\"")`.** The
-direct repair, and rejected here on scope rather than on merit. It flips the
-shipped `[C59.7]` outcome — a pairing that is refused today would build — which
-is a behavior change needing its own atom and its own evidence. Rejecting the
-inputs that reach the flaw closes the same hole without touching what any
-currently-accepted call does.
+**Keep `columnIdentity` for the membership and overlap checks and let the new
+rule govern distinctness alone.** The narrower change, and the one this ADR
+originally made. It is wrong: two identity rules inside one call disagree about
+which keys are one column, and the disagreement is not academic — it lets a
+conflict column spelled `"ID"` be updated as `id`, which is ORA-38104 at
+execution and the exact failure `[C59.9]` was written to stop. The flip it
+avoided — a shipped check changing outcome — is documented in `[C60.11]` instead,
+where the rest of this hop's Oracle-identity change already lives.
+
+**Repair `columnIdentity`'s position-0 quote test in place.** Unnecessary once
+every caller keys on the named column: the function has none left, so it is
+deleted rather than fixed. The rendering shape that defeated it is refused by the
+single-column-name check ahead of it either way.
 
 **Deduplicate silently: keep one of the colliding keys.** Whichever key loses
 takes its *value* with it, so an upsert would write a column the caller did not
@@ -147,8 +163,10 @@ own issue and its own atom rather than a second break smuggled in on this one.
 **Positive.** The three repro shapes fail at build time, naming both colliding
 keys, instead of reaching the database as unparseable SQL, and so does the fourth
 the reviewers found: a quoted key colliding with the unquoted one Oracle folds
-onto it. `[C59.10]`'s stated scope limit is closed for the column maps it named. The exported contract now says what it enforces, and the
-identity fold in `columnIdentity` is unreachable from `BuildUpsert`.
+onto it. `[C59.10]`'s stated scope limit is closed for the column maps it named.
+The exported contract now says what it enforces, and one identity rule answers
+every question `BuildUpsert` asks about a column — the rendering comparison that
+disagreed with it is deleted, not merely bypassed.
 
 **Negative.** This adds a precondition to a shipped exported API: a call that
 previously returned SQL now returns an error. Nearly every such call was already
@@ -157,9 +175,14 @@ One shape did work: an update key qualified with the MERGE's own `target` alias 
 `{"target.name": …}` — rendered `UPDATE SET target.name = :3`, which Oracle
 accepts. It is refused anyway, because that spelling depends on an alias
 `buildOracleMerge` hardcodes and no contract publishes, and naming the column
-alone builds the same statement. Beyond that, a caller treating a builder error as
-control flow sees a new one, and a test pinning the old no-error outcome fails.
-Documented as `[C60.11]`.
+alone builds the same statement. Folding membership and overlap onto the same rule
+flips two more Oracle outcomes: a conflict column spelled differently from the
+insert key naming the same column is now accepted where `[C59.7]` refused it, and
+one spelled differently from an *update* key naming the same column is now refused
+where `[C59.9]` let it build — that second call was reaching Oracle and failing
+with ORA-38104, so what changes is where it fails, not whether. Beyond that, a
+caller treating a builder error as control flow sees a new one, and a test pinning
+either old outcome fails. Documented as `[C60.11]`.
 
 **Neutral, and stated because the upsert path is not the whole surface.** The
 quote rule above closes this builder's upsert entry: no `insertColumns`,
@@ -181,6 +204,10 @@ renderer is fixed; accepting it would emit `""a"."b""`.
 ## Migration Impact
 
 Breaking for the calls described above; see `[C60.11]` in
-[migrations.md](migrations.md) for detection, gate and remedy. No change to the
-PostgreSQL upsert path, to `rejectConflictColumnUpdates`'s semantics, or to any
-call whose column keys are already distinct single names.
+[migrations.md](migrations.md) for detection, gate and remedy. Every identity rule
+here is Oracle's: **PostgreSQL is unchanged except for one clause**, the rejection
+of a key carrying an unescaped interior quote, which runs on both vendors because
+`EscapeIdentifier` fails to double those quotes exactly as `oracleQuoteIdentifier`
+does. The qualifier, function-call, empty-name and vendor-identity rules are
+Oracle-only. No change to any call whose column keys are already distinct single
+names.

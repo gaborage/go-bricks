@@ -41,17 +41,17 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 // column's default, so the conflict fires only when that default collides.
 // Rejecting on both makes the caller state the value it is matching on.
 //
-// Membership is keyed by vendor identity, like the two checks around it, so a
-// conflict column that names an inserted column in a different spelling is
-// accepted on Oracle, where both render unquoted and fold to one column.
+// Membership is keyed by the column each key names, like the checks around it,
+// so a conflict column that names an inserted column in a different spelling is
+// accepted on Oracle, where `"ID"` and id are one column.
 func (qb *QueryBuilder) requireConflictColumnsInInsertSet(conflictColumns []string, insertColumns map[string]any) error {
 	insertIdentities := make(map[string]struct{}, len(insertColumns))
 	for col := range insertColumns {
-		insertIdentities[qb.columnIdentity(col)] = struct{}{}
+		insertIdentities[qb.upsertColumnName(col)] = struct{}{}
 	}
 
 	for _, col := range conflictColumns {
-		if _, ok := insertIdentities[qb.columnIdentity(col)]; !ok {
+		if _, ok := insertIdentities[qb.upsertColumnName(col)]; !ok {
 			return fmt.Errorf("conflict column %q must be present in insert columns for upsert", col)
 		}
 	}
@@ -66,18 +66,18 @@ func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns []string, up
 		return nil
 	}
 
-	// Keyed by vendor identity, so a case variant that names the same column
-	// cannot slip past. sortedKeys keeps the reported name deterministic when
-	// two update keys collapse to one identity.
+	// Keyed by the column each key names, so a spelling that names the same
+	// column cannot slip past. sortedKeys keeps the reported name deterministic
+	// when two update keys collapse to one column.
 	byIdentity := make(map[string]string, len(updateColumns))
 	for _, col := range sortedKeys(updateColumns) {
-		if identity := qb.columnIdentity(col); byIdentity[identity] == "" {
+		if identity := qb.upsertColumnName(col); byIdentity[identity] == "" {
 			byIdentity[identity] = col
 		}
 	}
 
 	for _, col := range conflictColumns {
-		if updateCol, ok := byIdentity[qb.columnIdentity(col)]; ok {
+		if updateCol, ok := byIdentity[qb.upsertColumnName(col)]; ok {
 			return fmt.Errorf("update column %q collides with conflict column %q (Oracle MERGE forbids updating ON-clause columns, ORA-38104; rejected on all vendors for parity)", updateCol, col)
 		}
 	}
@@ -85,20 +85,22 @@ func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns []string, up
 }
 
 // upsertColumnName returns the column a key actually names for the active
-// vendor, which is what decides whether two keys are one column.
+// vendor, which is what decides whether two keys are one column. Every upsert
+// precondition keys on it, so all four judge one column the same way.
 //
-// It is deliberately NOT columnIdentity. That function compares RENDERINGS, and
-// two different renderings can name one Oracle column: `id` renders unquoted and
-// Oracle folds it to ID, while `"ID"` renders quoted and IS ID. Comparing the
-// renderings keeps them apart; Oracle does not, and the MERGE then declares one
-// column twice in its USING clause — ORA-00957 at parse. So the quoted form is
-// unwrapped to the text it names and the unquoted form is folded the way Oracle
-// folds it. `id` and `"id"` stay two columns, `level` and `LEVEL` stay two
-// (both render quoted, cases preserved), and `id` and `"ID"` become one.
+// It deliberately does not compare RENDERINGS, because two different renderings
+// can name one Oracle column: `id` renders unquoted and Oracle folds it to ID,
+// while `"ID"` renders quoted and IS ID. Comparing the renderings keeps them
+// apart; Oracle does not, and the MERGE then declares one column twice in its
+// USING clause (ORA-00957 at parse) or updates an ON-clause column it named in
+// the other spelling (ORA-38104 at execution). So the quoted form is unwrapped
+// to the text it names and the unquoted form is folded the way Oracle folds it.
+// `id` and `"id"` stay two columns, `level` and `LEVEL` stay two (both render
+// quoted, cases preserved), and `id` and `"ID"` become one.
 //
-// columnIdentity keeps its own callers: the membership and overlap checks ship
-// with their semantics documented in [C59.7] and [C59.9], and this is not the
-// change that revisits them.
+// The quote test reads the first and last byte, which answers correctly only for
+// a rendering that either carries no quote at all or begins AND ends with one.
+// requireSingleColumnNames rules every other shape out ahead of it.
 func (qb *QueryBuilder) upsertColumnName(column string) string {
 	if qb.vendor != dbtypes.Oracle {
 		return column
@@ -142,7 +144,7 @@ func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns []s
 // goes through the same helper buildOracleMerge uses, so what is judged here is
 // what the statement would carry.
 //
-// Running before the identity checks is what keeps columnIdentity's quote test
+// Running before the identity checks is what keeps upsertColumnName's quote test
 // honest — see its doc for the shape that leaves it correct.
 //
 // PostgreSQL is untouched: a dotted key renders there as a qualified reference
@@ -210,31 +212,6 @@ func isSingleColumnName(rendered string) bool {
 // escaper wraps it in.
 func hasUnescapedQuote(text string) bool {
 	return strings.Contains(strings.ReplaceAll(text, `""`, ""), `"`)
-}
-
-// columnIdentity returns the form of an identifier that decides column identity
-// for the active vendor, so the overlap check sees columns the way the database
-// will. PostgreSQL quotes every identifier, leaving "id" and "ID" distinct.
-// Oracle leaves non-reserved identifiers unquoted and folds them to upper case,
-// so id and ID are one column there; reserved words it quotes stay case-sensitive.
-//
-// The quote test reads position 0, which answers correctly only for a rendering
-// that either carries no quote at all or begins AND ends with one. A rendering
-// quoted somewhere in between — t."level" — is upper-cased through its own
-// quotes, folding two distinct Oracle columns onto one identity.
-// requireSingleColumnNames rules that shape out for every BuildUpsert caller by
-// rejecting, ahead of this, any key whose rendering is empty, holds a dot, or is
-// not one valid segment.
-func (qb *QueryBuilder) columnIdentity(column string) string {
-	if qb.vendor != dbtypes.Oracle {
-		return column
-	}
-
-	rendered := oracleQuoteIdentifier(column)
-	if strings.HasPrefix(rendered, `"`) {
-		return rendered
-	}
-	return strings.ToUpper(rendered)
 }
 
 // escapeIdentifiers returns a new slice containing the escaped form of each identifier using qb.EscapeIdentifier.
