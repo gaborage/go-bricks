@@ -1156,7 +1156,7 @@ func TestDefaultFilterMasksSecretKeyShapesButNotIdentifiers(t *testing.T) {
 			// The value path is what a caller actually sees, so assert there too
 			// rather than trusting the predicate alone.
 			gotValue := filter.FilterString(tt.fieldName, "v")
-			if masked := gotValue == DefaultMaskValue; masked != tt.wantMasked {
+			if (gotValue == DefaultMaskValue) != tt.wantMasked {
 				t.Errorf("FilterString(%q, \"v\") = %q, want masked=%v", tt.fieldName, gotValue, tt.wantMasked)
 			}
 		})
