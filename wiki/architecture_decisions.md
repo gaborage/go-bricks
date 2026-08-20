@@ -1412,7 +1412,8 @@ id is discarded and regenerated, never truncated — truncation silently forges 
 
 **Key Benefits:** One bound at every door, including the streams door that has no ingress yet.
 **Watch:** previously-accepted identifiers are now discarded — see `[C60.8]`; an upstream gateway
-emitting a long or punctuated request id loses its correlation and gets a framework-minted id.
+emitting a long or punctuated request id falls through to the id derived from its `traceparent`,
+and only to a framework-minted one when no valid traceparent accompanies it.
 
 ### [ADR-069: The Delivery Pipeline Owns Settlement Timing](adr_069_pipeline_owns_settlement_timing.md)
 

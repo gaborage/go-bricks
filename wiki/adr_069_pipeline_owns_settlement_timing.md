@@ -5,6 +5,13 @@
 - **Supersedes in part**: [ADR-068](adr_068_delivery_pipeline.md) — it keeps that ADR's "settlement policy stays lane-side" decision and reverses only its containment half, which left each lane to guard its own delivery tail.
 - **Related**: [ADR-032](adr_032_lease_refcount_tenant_handles.md) (the per-message lease scope whose drain must precede settlement), [ADR-059](adr_059_streams_consumption.md) ("commit only after success", untouched)
 
+> **Amended (2026-08-19):** the streams lane has since moved onto the pipeline, so
+> the Consequences sentence below — "the streams lane gains the guarantee it never
+> had, without writing a guard, when it moves onto the pipeline" — describes a
+> completed migration rather than a pending one. It gained that guarantee without
+> gaining a guard, exactly as predicted. The text is left as written at decision
+> time.
+
 ## Context
 
 ADR-068 moved the per-message body into `messaging/internal/delivery` but left

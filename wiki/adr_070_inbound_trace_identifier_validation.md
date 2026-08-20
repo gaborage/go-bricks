@@ -12,6 +12,23 @@
 > to a parent it never accompanied would re-emit it downstream under a trace it
 > does not belong to. The size cap below still applies to whatever survives that
 > scoping.
+>
+> **Amended (2026-08-19, mixed trace lineage):** every step now decides against the
+> CARRIER rather than the surrounding context, so one delivery cannot straddle two
+> traces. The traceparent-derived id is planted unless the SAME carrier also
+> supplied a valid `X-Request-ID` — the Decision below describes the original
+> guard, "is there no id yet", which let an id inherited from the caller outrank
+> the carrier's own `traceparent`, leaving a delivery logging under one trace while
+> its span hung under another. And a carrier that brings a valid `traceparent` but
+> no usable `tracestate` now shadows any inherited `tracestate` with empty, so one
+> trace's vendor state is never re-emitted under another's parent.
+>
+> **Amended (2026-08-19, the fourth door opened):** the Context below says
+> `messaging/streams` "extracts no trace context today and becomes live the moment
+> it routes onto the delivery pipeline". That moment has arrived: the streams lane
+> now runs on the shared pipeline and extracts through this seam, so all four doors
+> are live. Alternatives likewise reasons about covering the streams lane "when that
+> door opens" — it is open. Both read as written at decision time.
 
 ## Context
 

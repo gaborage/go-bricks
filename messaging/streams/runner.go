@@ -3,19 +3,15 @@ package streams
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
-	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 )
 
@@ -24,8 +20,10 @@ const (
 	// one instrumentation scope.
 	tracerName = "go-bricks/messaging"
 
-	spanOperationReceive = "receive"
-	messagingSystem      = "rabbitmq"
+	// The span attributes this lane adds on top of the four the pipeline sets.
+	attrConsumerName = "messaging.consumer.name"
+	attrStreamOffset = "messaging.stream.offset"
+	messagingSystem  = "rabbitmq"
 
 	logFieldStream   = "stream"
 	logFieldConsumer = "consumer"
@@ -213,7 +211,6 @@ type consumerRunner struct {
 	handler Handler
 	offsets *offsetBook
 	log     logger.Logger
-	tracer  trace.Tracer
 
 	// baseCtx is held rather than passed because the client's MessagesHandler
 	// carries no context of its own. The manager cancels it in StopConsumers.
@@ -233,10 +230,6 @@ type consumerRunner struct {
 // per-stream state must therefore be safe for concurrent use — the offset book
 // is, precisely because it hands each stream its own tracker.
 func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.Message, store offsetStorer) {
-	ctx, span := r.tracer.Start(r.baseCtx, streamName+" "+spanOperationReceive,
-		trace.WithSpanKind(trace.SpanKindConsumer))
-	defer span.End()
-
 	msg := &Message{
 		Data:       message.GetData(),
 		Offset:     offset,
@@ -244,51 +237,69 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 		Properties: message.ApplicationProperties,
 	}
 
-	span.SetAttributes(
-		attribute.String(string(semconv.MessagingSystemKey), messagingSystem),
-		semconv.MessagingOperationName(spanOperationReceive),
-		semconv.MessagingDestinationName(streamName),
-		semconv.MessagingMessageBodySize(len(msg.Data)),
-	)
+	delivery.Run(r.baseCtx, &delivery.Request{
+		// The publisher already injects traceparent and X-Request-ID into these
+		// application properties; until now nobody read them back. ExtractFromHeaders
+		// is nil-safe and propertyAccessor is a map type, so a message with no
+		// properties needs no guard.
+		Carrier:     propertyAccessor(message.ApplicationProperties),
+		Destination: streamName,
+		BodySize:    len(msg.Data),
+		SpanExtras: []attribute.KeyValue{
+			attribute.String(attrConsumerName, r.name),
+			attribute.Int64(attrStreamOffset, offset),
+		},
+		Metrics: tracking.StreamConsumeAttributes(streamName),
+		Log:     r.log,
+		Handle: func(msgCtx context.Context, _ logger.Logger, _ string) error {
+			// The handler signature is unchanged (ADR-069 follow-up decision Q1):
+			// a handler reads the trace id from msgCtx via trace.IDFromContext.
+			return r.handler(msgCtx, msg)
+		},
+		LogOutcome: func(res *delivery.Result) {
+			r.logOutcome(res, streamName, offset)
+		},
+		Settle: func(res *delivery.Result) {
+			r.commitOffset(res, streamName, offset, store)
+		},
+	})
+}
 
-	start := time.Now()
-	err := r.invoke(ctx, msg)
-	tracking.RecordConsume(ctx, tracking.StreamConsumeAttributes(streamName), time.Since(start), err)
-
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		r.log.Error().Err(err).
-			Str(logFieldStream, streamName).
-			Str(logFieldConsumer, r.name).
-			Int64(logFieldOffset, offset).
-			Msg("Stream message handling failed - offset not committed")
+// logOutcome writes this lane's line for a finished delivery. A successful
+// delivery stays unlogged: a stream is a high-throughput ordered log consumed
+// inline, and its duration is already on the span and the histogram.
+func (r *consumerRunner) logOutcome(res *delivery.Result, streamName string, offset int64) {
+	if res.Outcome == delivery.Succeeded {
+		return
 	}
 
-	if storeErr := r.offsets.trackerFor(streamName).record(offset, err, store); storeErr != nil {
-		r.log.Warn().Err(storeErr).
+	msg := "Stream message handling failed - offset not committed"
+	if res.Outcome == delivery.Panicked {
+		msg = "Panic recovered in stream handler - offset not committed"
+	}
+
+	event := delivery.AppendOutcome(res.Log.Error(), res).
+		Str(logFieldStream, streamName).
+		Str(logFieldConsumer, r.name).
+		Int64(logFieldOffset, offset)
+	if res.Outcome == delivery.HandlerError {
+		event = event.Err(res.Err)
+	}
+	event.Msg(msg)
+}
+
+// commitOffset is this lane's settlement: record the outcome against the
+// batching tracker, which commits the batch high-water mark only when every
+// message in it succeeded (ADR-059).
+func (r *consumerRunner) commitOffset(res *delivery.Result, streamName string, offset int64, store offsetStorer) {
+	if storeErr := r.offsets.trackerFor(streamName).record(offset, res.Err, store); storeErr != nil {
+		// res.Log, not r.log: the pipeline's context-bound logger carries the
+		// trace_id and span_id a real ZeroLogger contributes, exactly as the
+		// classic lane's ack/nack failure lines do.
+		res.Log.Warn().Err(storeErr).
 			Str(logFieldStream, streamName).
 			Str(logFieldConsumer, r.name).
 			Int64(logFieldOffset, offset).
 			Msg("Failed to store stream offset")
 	}
-}
-
-// invoke calls the module handler, converting a panic into an error so the
-// offset is not committed and consumption continues with the next message.
-func (r *consumerRunner) invoke(ctx context.Context, msg *Message) (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("panic in stream handler: %v", recovered)
-			r.log.Error().
-				Str(logFieldStream, msg.Stream).
-				Str(logFieldConsumer, r.name).
-				Int64(logFieldOffset, msg.Offset).
-				Interface("panic", recovered).
-				Bytes("stack", debug.Stack()).
-				Msg("Panic recovered in stream handler - offset not committed")
-		}
-	}()
-
-	return r.handler(ctx, msg)
 }

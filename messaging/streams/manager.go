@@ -11,7 +11,6 @@ import (
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/ha"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/message"
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
-	"go.opentelemetry.io/otel"
 
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -404,7 +403,6 @@ func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *con
 		handler: decl.Handler,
 		offsets: m.newOffsetBook(),
 		log:     m.log,
-		tracer:  otel.Tracer(tracerName),
 		baseCtx: ctx,
 	}
 }
