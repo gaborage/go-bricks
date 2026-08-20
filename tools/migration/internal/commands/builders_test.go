@@ -98,6 +98,57 @@ func TestTenantDecoderConfigCommaSplitsStringSlice(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, out.Allow)
 }
 
+// TestTenantDecoderConfigRejectsEmptyNumeric proves the CLI decoder carries the framework's
+// delivered-empty numeric guard, so a tenants.yaml key set to "" fails here exactly as it
+// fails a framework Load instead of decoding as a legal 0.
+func TestTenantDecoderConfigRejectsEmptyNumeric(t *testing.T) {
+	type target struct {
+		Port    int    `mapstructure:"port"`
+		MinLen  *int   `mapstructure:"minlen"`
+		Comment string `mapstructure:"comment"`
+	}
+
+	tests := []struct {
+		name    string
+		input   map[string]any
+		wantErr bool
+		assert  func(t *testing.T, got target)
+	}{
+		{name: "empty_int_rejected", input: map[string]any{"port": ""}, wantErr: true},
+		{name: "empty_int_pointer_rejected", input: map[string]any{"minlen": ""}, wantErr: true},
+		{name: "whitespace_int_rejected", input: map[string]any{"port": "  "}, wantErr: true},
+		{
+			name:   "empty_string_target_passes",
+			input:  map[string]any{"comment": ""},
+			assert: func(t *testing.T, got target) { assert.Empty(t, got.Comment) },
+		},
+		{
+			name:   "explicit_value_passes",
+			input:  map[string]any{"port": "5432"},
+			assert: func(t *testing.T, got target) { assert.Equal(t, 5432, got.Port) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out target
+			dc := tenantDecoderConfig()
+			dc.Result = &out
+			dec, err := mapstructure.NewDecoder(dc)
+			require.NoError(t, err)
+
+			err = dec.Decode(tt.input)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "delivered empty")
+				return
+			}
+			require.NoError(t, err)
+			tt.assert(t, out)
+		})
+	}
+}
+
 func TestBuildListerSingleTenantPath(t *testing.T) {
 	lister, err := buildLister(&CommonFlags{Tenant: "only"}, nil)
 	require.NoError(t, err)

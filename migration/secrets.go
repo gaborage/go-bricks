@@ -209,12 +209,15 @@ func parseSecretPayload(raw []byte) (*config.DatabaseConfig, error) {
 
 // decodeSecretConfig maps a JSON-decoded payload into a DatabaseConfig via mapstructure,
 // routing numeric time.Duration fields through the shared guard so a bare JSON number
-// (e.g. keepalive.interval: 60) is rejected, not silently coerced to nanoseconds. TagName
+// (e.g. keepalive.interval: 60) is rejected, not silently coerced to nanoseconds, and empty
+// numeric fields through the delivered-empty guard — a rotated secret rendering
+// {"port": ""} would otherwise dial port 0 (ADR-074). TagName
 // "json" matches the struct's json tags; WeaklyTypedInput handles float64 (JSON's numeric
 // type) -> int and preserves the prior encoding/json numeric-coercion behavior.
 func decodeSecretConfig(payload map[string]any, cfg *config.DatabaseConfig) error {
 	dec, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			configdecode.EmptyStringToNumericGuardHookFunc(),
 			configdecode.NumericToDurationGuardHookFunc(),
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.TextUnmarshallerHookFunc(),

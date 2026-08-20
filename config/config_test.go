@@ -185,6 +185,74 @@ func TestConfigPerTenantJobKeys(t *testing.T) {
 	})
 }
 
+// TestLoadRejectsEmptyNumericEnv pins the delivered-empty rule for numeric keys: a
+// set-but-empty variable used to decode as a legal 0 (defeating ADR-065's tri-state and
+// silently zeroing byte limits), and now fails Load naming the key.
+func TestLoadRejectsEmptyNumericEnv(t *testing.T) {
+	tests := []struct {
+		name    string
+		envVar  string
+		wantKey string
+	}{
+		{name: "keystore_secretminlength", envVar: "KEYSTORE_SECRETMINLENGTH", wantKey: "keystore.secretminlength"},
+		{name: "server_bodylimit", envVar: "SERVER_BODYLIMIT", wantKey: "server.bodylimit"},
+		{name: "server_port", envVar: "SERVER_PORT", wantKey: "server.port"},
+		// database.port is an ADR-051 identity key AND numeric, so the numeric guard
+		// reaches it first: it now fails at decode rather than with the identity error.
+		{name: "database_port_changes_error_class", envVar: "DATABASE_PORT", wantKey: "database.port"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnvironmentVariables()
+			t.Setenv(tt.envVar, "")
+
+			_, err := Load()
+
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantKey)
+			assert.ErrorContains(t, err, "delivered empty")
+		})
+	}
+}
+
+// TestLoadEmptyDurationEnvKeepsItsOwnError pins the guard's one exemption: time.Duration
+// targets fall through to the duration parser, so an empty duration still fails with the
+// parse error rather than the delivered-empty one. Both are loud; this pins which.
+func TestLoadEmptyDurationEnvKeepsItsOwnError(t *testing.T) {
+	clearEnvironmentVariables()
+	t.Setenv("SERVER_TIMEOUT_READ", "")
+
+	_, err := Load()
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid duration")
+	assert.NotContains(t, err.Error(), "delivered empty",
+		"the duration parser owns this target; guarding it here would only change the message")
+}
+
+// TestLoadEmptyNumericYAMLStringRejected covers the same rule arriving through YAML: an
+// empty string takes the identical decode path an empty env var does.
+func TestLoadEmptyNumericYAMLStringRejected(t *testing.T) {
+	_, err := loadDeliveredEmptyFixture(t, "keystore:\n  secretminlength: \"\"\n", nil)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "secretminlength")
+	assert.ErrorContains(t, err, "delivered empty")
+}
+
+// TestLoadYAMLNullNumericKeepsTodaysDecode pins the boundary the guard deliberately does
+// NOT cover: a YAML null is different plumbing — koanf delivers a nil value, not the ""
+// the guard judges — so a null pointer key still decodes as absent and takes its default.
+// Documented in ADR-074; this test exists so the boundary cannot drift unnoticed.
+func TestLoadYAMLNullNumericKeepsTodaysDecode(t *testing.T) {
+	cfg, err := loadDeliveredEmptyFixture(t, "keystore:\n  secretminlength:\n", nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg.KeyStore.SecretMinLength)
+	assert.Equal(t, 32, *cfg.KeyStore.SecretMinLength, "a null key is absence, so the floor still applies")
+}
+
 func TestLoadMultiElementStringSliceEnv(t *testing.T) {
 	clearEnvironmentVariables()
 	t.Setenv("SCHEDULER_SECURITY_CIDRALLOWLIST", "10.0.0.0/8,192.168.0.0/16")

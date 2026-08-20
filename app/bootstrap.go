@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/gaborage/go-bricks/config"
@@ -130,7 +131,18 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 	}
 
 	// Initialize observability provider (no-op if disabled)
-	obsProvider := b.initializeObservability(startupCtx)
+	obsProvider, err := b.initializeObservability(startupCtx)
+	if err != nil {
+		if cacheManager != nil {
+			_ = cacheManager.Close()
+		}
+		closeManagers := b.closeManagers
+		if closeManagers == nil {
+			closeManagers = closeManagersOnDependencyError
+		}
+		closeManagers(dbManager, messagingManager)
+		return nil, err
+	}
 
 	// Enhance logger with OTLP export if enabled
 	// This upgrades the bootstrap logger so all subsequent components share a single
@@ -213,9 +225,19 @@ func (b *appBootstrap) warnIfDatabaseAbsent() {
 		"if this service expects a database, its configuration did not reach the process")
 }
 
+// observabilityConfigKey is the koanf section initializeObservability decodes; its presence
+// separates "no observability configured" from "configured, but undecodable".
+const observabilityConfigKey = "observability"
+
 // initializeObservability creates and configures the observability provider.
-// Returns a no-op provider if observability is disabled or configuration is missing.
-func (b *appBootstrap) initializeObservability(startupCtx context.Context) observability.Provider {
+// Returns a no-op provider when the observability section is absent.
+//
+// A section that IS present but cannot be decoded aborts startup instead: degrading to
+// the no-op provider there turns one bad key into total telemetry loss — no traces, no
+// metrics, no OTLP logs, no migration audit events — announced by a single WARN on the
+// way past. That is exactly the shape a delivered-empty numeric now produces (ADR-074),
+// so the distinction has to be drawn rather than assumed.
+func (b *appBootstrap) initializeObservability(startupCtx context.Context) (observability.Provider, error) {
 	b.log.Debug().Msg("Starting observability initialization")
 
 	// Create observability config
@@ -223,9 +245,12 @@ func (b *appBootstrap) initializeObservability(startupCtx context.Context) obser
 
 	// Try to unmarshal configuration from the "observability" key
 	if err := b.cfg.Unmarshal("observability", &obsCfg); err != nil {
-		// Configuration missing or invalid - use defaults (observability disabled)
-		b.log.Warn().Err(err).Msg("Observability configuration not found or invalid, using no-op provider")
-		return observability.MustNewProvider(&observability.Config{Enabled: false})
+		if b.cfg.Exists(observabilityConfigKey) {
+			return nil, fmt.Errorf("observability configuration is present but invalid: %w", err)
+		}
+		// Section absent — the documented "no observability configured" posture.
+		b.log.Warn().Err(err).Msg("Observability configuration not found, using no-op provider")
+		return observability.MustNewProvider(&observability.Config{Enabled: false}), nil
 	}
 
 	b.log.Debug().
@@ -287,8 +312,10 @@ func (b *appBootstrap) initializeObservability(startupCtx context.Context) obser
 
 	provider, err := construct(ctx, &obsCfg)
 	if err != nil {
+		// Construction failure is an environment problem (unreachable collector, bad
+		// resource probe), not a malformed config: it stays non-fatal, as before.
 		b.log.Warn().Err(err).Msg("Failed to initialize observability, using no-op provider")
-		return observability.MustNewProvider(&observability.Config{Enabled: false})
+		return observability.MustNewProvider(&observability.Config{Enabled: false}), nil
 	}
 
 	if obsCfg.Enabled {
@@ -303,7 +330,7 @@ func (b *appBootstrap) initializeObservability(startupCtx context.Context) obser
 		b.log.Debug().Msg("Observability disabled by configuration")
 	}
 
-	return provider
+	return provider, nil
 }
 
 // enhanceLoggerWithOTel attaches OTLP log export to the logger if observability is enabled.

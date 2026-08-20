@@ -310,7 +310,8 @@ observability:
 	bootstrap := newAppBootstrap(cfg, log, &Options{})
 
 	// Initialize observability
-	obsProvider := bootstrap.initializeObservability(context.Background())
+	obsProvider, err := bootstrap.initializeObservability(context.Background())
+	require.NoError(t, err)
 	require.NotNil(t, obsProvider)
 
 	// Verify tracer provider is initialized
@@ -415,7 +416,8 @@ observability:
 	bootstrap := newAppBootstrap(cfg, log, &Options{})
 
 	// Initialize observability
-	obsProvider := bootstrap.initializeObservability(context.Background())
+	obsProvider, err := bootstrap.initializeObservability(context.Background())
+	require.NoError(t, err)
 	require.NotNil(t, obsProvider)
 
 	// Verify provider is functional (indicates config was loaded successfully)
@@ -497,7 +499,8 @@ observability:
 	bootstrap := newAppBootstrap(cfg, log, &Options{})
 
 	// Initialize observability
-	obsProvider := bootstrap.initializeObservability(context.Background())
+	obsProvider, err := bootstrap.initializeObservability(context.Background())
+	require.NoError(t, err)
 	require.NotNil(t, obsProvider)
 
 	// Should return noop providers
@@ -556,7 +559,8 @@ debug:
 	bootstrap := newAppBootstrap(cfg, log, &Options{})
 
 	// Initialize observability (should fallback to noop provider)
-	obsProvider := bootstrap.initializeObservability(context.Background())
+	obsProvider, err := bootstrap.initializeObservability(context.Background())
+	require.NoError(t, err)
 	require.NotNil(t, obsProvider, "Should return noop provider when config is missing")
 
 	// Should return noop providers
@@ -569,6 +573,53 @@ debug:
 	// Cleanup (should not error)
 	err = obsProvider.Shutdown(context.Background())
 	assert.NoError(t, err)
+}
+
+// TestInitializeObservabilityFailsClosedOnUndecodableSection pins the distinction the
+// no-op fallback used to blur. observability.* is decoded separately from config.Config,
+// so a delivered-empty numeric there passes config.Load and lands here (ADR-074) — and
+// swallowing it took every trace, metric, OTLP log and migration audit event with it,
+// announced by one WARN. A present-but-undecodable section now aborts startup; an ABSENT
+// section keeps the documented no-op posture.
+func TestInitializeObservabilityFailsClosedOnUndecodableSection(t *testing.T) {
+	t.Run("present_but_undecodable_aborts", func(t *testing.T) {
+		cfg := loadConfigFromYAML(t, `
+app:
+  name: "test"
+  version: "1.0.0"
+server:
+  port: 8080
+observability:
+  enabled: true
+  trace:
+    batch:
+      size: ""
+`)
+		bootstrap := newAppBootstrap(cfg, logger.New("info", false), &Options{})
+
+		provider, err := bootstrap.initializeObservability(context.Background())
+
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "present but invalid")
+		assert.ErrorContains(t, err, "delivered empty")
+		assert.Nil(t, provider, "a caller must not receive a silently degraded provider")
+	})
+
+	t.Run("absent_section_stays_no_op", func(t *testing.T) {
+		cfg := loadConfigFromYAML(t, `
+app:
+  name: "test"
+  version: "1.0.0"
+server:
+  port: 8080
+`)
+		bootstrap := newAppBootstrap(cfg, logger.New("info", false), &Options{})
+
+		provider, err := bootstrap.initializeObservability(context.Background())
+
+		require.NoError(t, err)
+		require.NotNil(t, provider)
+	})
 }
 
 // TestInitializeObservabilityThreadsBudgetContext verifies that when
@@ -619,7 +670,8 @@ observability:
 	}
 
 	start := time.Now()
-	got := bootstrap.initializeObservability(context.Background())
+	got, err := bootstrap.initializeObservability(context.Background())
+	require.NoError(t, err)
 
 	assert.Same(t, want, got, "the provider returned by the seam should be installed verbatim")
 	require.NotNil(t, gotCtx, "seam must receive a non-nil context")
@@ -672,7 +724,8 @@ observability:
 	parent, cancel := context.WithCancel(context.Background())
 	cancel() // cancel the parent BEFORE construction
 
-	bootstrap.initializeObservability(parent)
+	_, err := bootstrap.initializeObservability(parent)
+	require.NoError(t, err)
 
 	require.NotNil(t, gotCtx, "seam must receive a non-nil context")
 	require.ErrorIs(t, gotCtx.Err(), context.Canceled,
@@ -715,7 +768,8 @@ observability:
 		return nil, errors.New("exporter dial failed")
 	}
 
-	got := bootstrap.initializeObservability(context.Background())
+	got, err := bootstrap.initializeObservability(context.Background())
+	require.NoError(t, err)
 
 	require.NotNil(t, got, "a no-op provider must be installed on constructor error")
 	assert.NotNil(t, got.TracerProvider(), "no-op provider must expose a tracer provider")

@@ -1479,6 +1479,26 @@ already covers it. See [migrations.md](migrations.md) `[C60.13]`.
 
 ---
 
+### [ADR-074: A Delivered-Empty Numeric Config Value Fails Startup](adr_074_delivered_empty_numeric_config.md)
+
+**Date:** 2026-08-20 | **Status:** Accepted
+
+`FOO=` — an empty `secretKeyRef`, an `envsubst` over an unset variable — delivers a set-but-empty
+string that koanf keeps and mapstructure's `WeaklyTypedInput` rewrites to `0` for any numeric
+target. Measured on `main`: `KEYSTORE_SECRETMINLENGTH=` decoded as `*0` and DISABLED the secret
+floor, defeating ADR-065's tri-state (normalization fills a nil pointer; the decoder handed it a
+non-nil pointer to zero). A decode hook now rejects an empty or whitespace-only string bound to a
+numeric field — pointer targets included — in both decoder seams, so the failure names the key
+instead of booting a config nobody wrote. Pruning empty keys from the koanf tree was rejected: the
+ADR-051 identity check reads key presence, so dropping them boots the very misconfiguration it
+exists to catch. `time.Duration` is exempt (it already fails loudly) and YAML null stays absence.
+
+**Key Benefits:** one rule for every numeric key, instead of a `<= 0` fallback each key must
+remember.
+**Watch:** `FOO=` no longer means `0` — a deployment relying on it, or carrying an empty
+`secretKeyRef` it never noticed, now fails startup; `FOO=0` is unchanged. See `[C60.15]`
+in [migrations.md](migrations.md).
+
 ### [ADR-071: Upsert Column Sets Name Each Column Once, in a Form the Vendor Can Name](adr_071_upsert_column_sets_name_each_column_once.md)
 
 **Date:** 2026-08-20 | **Status:** Accepted

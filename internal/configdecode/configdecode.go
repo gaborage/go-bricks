@@ -5,8 +5,10 @@
 package configdecode
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -55,5 +57,49 @@ func NumericToDurationGuardHookFunc() mapstructure.DecodeHookFunc {
 			"unit-less numeric duration %v — use a duration string with an explicit unit (e.g. \"300s\", \"5m\", \"1h30m\")",
 			data,
 		)
+	}
+}
+
+// EmptyStringToNumericGuardHookFunc rejects an empty (or whitespace-only) string bound to a
+// numeric field. WeaklyTypedInput would otherwise coerce it to 0, so a set-but-empty
+// environment variable (FOO=) or an empty YAML string decodes as a legal zero and boots a
+// config nobody wrote — the tri-state in ADR-065 is defeated exactly this way. Pointer
+// targets are guarded too: the zero arrives as a non-nil *0, which normalization reads as
+// "operator set it".
+//
+// time.Duration is exempt: StringToTimeDurationHookFunc owns that target and already fails
+// loudly on an empty string. Non-numeric targets are untouched — an empty string is a legal
+// string, and the database-identity subset is ADR-051's to judge.
+func EmptyStringToNumericGuardHookFunc() mapstructure.DecodeHookFunc {
+	return func(f, t reflect.Type, data any) (any, error) {
+		if f.Kind() != reflect.String {
+			return data, nil
+		}
+		// No pointer walk: mapstructure recurses into a pointer target and re-runs the
+		// hook chain against the element type, so *int arrives here as int.
+		if t == durationType || !isNumericKind(t.Kind()) {
+			return data, nil
+		}
+		s, ok := data.(string)
+		if !ok || strings.TrimSpace(s) != "" {
+			return data, nil
+		}
+		return nil, errors.New(
+			"numeric value delivered empty — set an explicit value (empty secretKeyRef / unset envsubst variable?) " +
+				"or remove the key entirely to take its default",
+		)
+	}
+}
+
+// isNumericKind reports whether k is one mapstructure's WeaklyTypedInput would fill from a
+// string, i.e. exactly the kinds where "" silently becomes 0.
+func isNumericKind(k reflect.Kind) bool {
+	switch k {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
 	}
 }
