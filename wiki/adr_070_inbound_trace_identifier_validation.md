@@ -12,6 +12,16 @@
 > to a parent it never accompanied would re-emit it downstream under a trace it
 > does not belong to. The size cap below still applies to whatever survives that
 > scoping.
+>
+> **Amended (2026-08-19, mixed trace lineage):** every step now decides against the
+> CARRIER rather than the surrounding context, so one delivery cannot straddle two
+> traces. The traceparent-derived id is planted unless the SAME carrier also
+> supplied a valid `X-Request-ID` — the Decision below describes the original
+> guard, "is there no id yet", which let an id inherited from the caller outrank
+> the carrier's own `traceparent`, leaving a delivery logging under one trace while
+> its span hung under another. And a carrier that brings a valid `traceparent` but
+> no usable `tracestate` now shadows any inherited `tracestate` with empty, so one
+> trace's vendor state is never re-emitted under another's parent.
 
 ## Context
 
@@ -52,12 +62,10 @@ delivery rejected: the messaging lanes have no way to reject one, and the HTTP
 precedent never returned 4xx for a bad request id either.
 
 **A rejected `X-Request-ID` falls through to the traceparent-derived id, then to
-a fresh UUID.** The derivation is guarded on whether THIS carrier supplied a
-valid request id, not on whether the context already holds one. Guarding on the
-context would let an id inherited from the caller outrank the carrier's own
-`traceparent`, so a delivery would log under one trace while its span hung under
-another. A gateway emitting a slightly-off id alongside a good traceparent keeps
-its correlation.
+a fresh UUID.** This needed no new code — the derivation is already guarded by
+"is there no id yet", so not planting the rejected value opens the guard. A
+gateway emitting a slightly-off id alongside a good traceparent keeps its
+correlation.
 
 **`traceparent` is validated against the spec's grammar** —
 `^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}(-[[:graph:]]+)*$`, the
@@ -92,15 +100,7 @@ re-emits the raw request id whenever the accompanying traceparent is malformed,
 which was the one condition under which a poisoned value escaped onto the next
 hop.
 
-**`tracestate` is scoped to the carrier that brought its parent, then capped.**
-It is kept only when the SAME carrier supplied a valid `traceparent`. A
-tracestate annotates one parent, so one that arrives without it — or alongside a
-malformed one — is discarded rather than attached to whatever parent the context
-already held, and a carrier that brings a parent but no usable tracestate shadows
-any inherited one. Otherwise a delivery re-emits one trace's vendor state under
-another trace's `traceparent`.
-
-**Beyond that scoping, `tracestate` gets a length cap and no grammar.** Validating the grammar means
+**`tracestate` gets a length cap and no grammar.** Validating the grammar means
 `go.opentelemetry.io/otel/trace`'s `ParseTraceState`, which would put an
 OpenTelemetry dependency underneath `server`, `messaging` and `outbox` for a
 value this framework only stores and forwards. The cap bounds the real harm —
