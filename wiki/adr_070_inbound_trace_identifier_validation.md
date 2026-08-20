@@ -22,6 +22,13 @@
 > its span hung under another. And a carrier that brings a valid `traceparent` but
 > no usable `tracestate` now shadows any inherited `tracestate` with empty, so one
 > trace's vendor state is never re-emitted under another's parent.
+>
+> **Amended (2026-08-19, the fourth door opened):** the Context below says
+> `messaging/streams` "extracts no trace context today and becomes live the moment
+> it routes onto the delivery pipeline". That moment has arrived: the streams lane
+> now runs on the shared pipeline and extracts through this seam, so all four doors
+> are live. Alternatives likewise reasons about covering the streams lane "when that
+> door opens" — it is open. Both read as written at decision time.
 
 ## Context
 

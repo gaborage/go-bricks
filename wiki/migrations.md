@@ -3536,13 +3536,34 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   framework substitutes its own id rather than carrying theirs. Fix the emitter, or accept
   that those hops correlate by traceparent instead. If you relied on a `tracestate` larger
   than 512 bytes surviving a hop, it no longer does.
-- verify: publish a message carrying `X-Request-ID: <300 characters>` and confirm the
-  consumer's `correlation_id` is anything OTHER than the sent value, and that the service
-  stays up — before this change a value this long tore down the shared AMQP connection on
-  the next publish. Do not assert a fresh UUID specifically: the substitute follows a
-  precedence, and a message that also carries a valid `traceparent` — which the framework's
-  own publisher injects — correlates on the traceparent-derived 32-hex id instead. Only a
-  message with no usable traceparent falls all the way through to a UUID.
+- verify: run all three against a real broker, with a consumer whose handler performs ONE
+  downstream publish, so you exercise both the ingress bound and the re-emission it protects.
+  Publish each message with headers set explicitly (the framework's own publisher injects a
+  valid `traceparent`, so hand-set headers are the only way to feed the seam bad input):
+
+  1. **Oversized `X-Request-ID`.** Header `X-Request-ID` = 300 characters (the bound is
+     `^[A-Za-z0-9_-]{1,128}$`), no `traceparent`. Expect the consumer's `correlation_id` to be
+     a fresh UUID, NOT the sent value, and the outbound publish to carry a short valid id in
+     `X-Request-ID` rather than the 300-character string. Do not expect the logged UUID there
+     verbatim: `InjectIntoHeaders` aligns the outbound id to the outbound `traceparent`, so it
+     emits that traceparent's 32-hex trace-id. The assertion is that the oversized value is
+     gone, not which valid id replaced it. Before this change the oversized value reached
+     `amqp.Publishing.CorrelationId`, which amqp091 refuses over 255 bytes, tearing down the
+     shared connection on the next publish.
+  2. **Malformed `traceparent`.** Header `traceparent` =
+     `00-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-00f067aa0ba902b7-01` (non-hex trace-id), plus a
+     valid `X-Request-ID` such as `probe-2`. Expect `correlation_id` = `probe-2`, and the
+     outbound `traceparent` to be a freshly generated one — the malformed value must appear in
+     no outbound header.
+  3. **Valid `traceparent`, oversized `tracestate`.** A well-formed `traceparent`, plus
+     `tracestate` of 600 characters (the cap is 512). Expect the outbound `traceparent` to
+     match the inbound one and the outbound `tracestate` to be ABSENT — not truncated.
+
+  Across all three: no discarded inbound value appears in any outbound header, every delivery
+  still carries some valid `correlation_id`, and the shared AMQP connection survives — check
+  the broker's connection list, or simply that publishes after the probe still succeed. The
+  substitute follows a precedence, so do not assert a fresh UUID where a valid `traceparent`
+  is present: it correlates on the traceparent-derived 32-hex id instead.
 - ref: [ADR-070](adr_070_inbound_trace_identifier_validation.md) · `trace/validate.go` ·
   `trace/trace.go` (`extractRequestID`, `extractTraceParent`, `extractTraceState`) ·
   `messaging/amqp_client.go` (`preparePublishing`) · `server/request_utils.go`
