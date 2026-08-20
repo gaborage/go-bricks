@@ -373,8 +373,22 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 		return "", nil, errConflictColumnsRequired
 	}
 
+	// Rendering is settled before identity: a key Oracle's MERGE cannot name is
+	// reported as such, and no unnameable key reaches the identity comparison.
+	if nameErr := qb.requireSingleColumnNames(conflictColumns, insertColumns, updateColumns); nameErr != nil {
+		return "", nil, nameErr
+	}
+
 	if uniqueErr := qb.requireUniqueConflictColumns(conflictColumns); uniqueErr != nil {
 		return "", nil, uniqueErr
+	}
+
+	if insertDistinctErr := qb.requireDistinctColumnIdentities("insert", insertColumns); insertDistinctErr != nil {
+		return "", nil, insertDistinctErr
+	}
+
+	if updateDistinctErr := qb.requireDistinctColumnIdentities("update", updateColumns); updateDistinctErr != nil {
+		return "", nil, updateDistinctErr
 	}
 
 	if insertErr := qb.requireConflictColumnsInInsertSet(conflictColumns, insertColumns); insertErr != nil {

@@ -101,11 +101,77 @@ func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns []string, up
 	return nil
 }
 
+// requireDistinctColumnIdentities rejects a column map holding two keys that name
+// one column for the active vendor. A map cannot hold an exact repeat, but Oracle
+// folds the unquoted identifiers it emits, so {"id": 1, "ID": 2} is one column
+// written twice: the MERGE declares one alias twice in its USING clause, which
+// Oracle refuses at parse time (ORA-00957), and names it twice in the INSERT
+// list. On PostgreSQL every identifier is quoted, so a key is its own identity
+// and this can never fire — the same pairing is two columns there.
+func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns map[string]any) error {
+	seen := make(map[string]string, len(columns))
+	// sortedKeys keeps the reported pair deterministic when three or more keys
+	// fold onto one identity.
+	for _, col := range sortedKeys(columns) {
+		identity := qb.columnIdentity(col)
+		if first, ok := seen[identity]; ok {
+			return fmt.Errorf("%s columns must be distinct: %q and %q name the same column for upsert", kind, first, col)
+		}
+		seen[identity] = col
+	}
+	return nil
+}
+
+// requireSingleColumnNames rejects a key Oracle's MERGE has no way to name. Every
+// upsert column becomes a column alias in the USING clause — :1 AS <column> —
+// which admits one identifier and nothing else: no qualifier, no function call,
+// no empty name. Such a key could only ever render SQL Oracle refuses to parse,
+// so the failure moves from execution to build time.
+//
+// It also keeps columnIdentity honest. That guard asks whether a rendering is
+// quoted by testing position 0, which a partially-quoted rendering such as
+// t."level" defeats: it is upper-cased through its own quotes, folding two
+// distinct Oracle columns onto one identity. Every key surviving this check
+// renders as one whole token, quoted or not — the shape the guard reads
+// correctly — so no BuildUpsert call reaches that flaw.
+//
+// PostgreSQL quotes the whole key, naming a column that is unusual but legal, so
+// this is Oracle's MERGE grammar rather than a portable rule.
+func (qb *QueryBuilder) requireSingleColumnNames(conflictColumns []string, insertColumns, updateColumns map[string]any) error {
+	if qb.vendor != dbtypes.Oracle {
+		return nil
+	}
+
+	groups := []struct {
+		kind    string
+		columns []string
+	}{
+		{kind: "conflict", columns: conflictColumns},
+		{kind: "insert", columns: sortedKeys(insertColumns)},
+		{kind: "update", columns: sortedKeys(updateColumns)},
+	}
+
+	for _, group := range groups {
+		for _, col := range group.columns {
+			rendered := oracleQuoteIdentifier(col)
+			if rendered == "" || strings.Contains(rendered, ".") || !validateSegment(rendered) {
+				return fmt.Errorf("%s column %q is not a single column name for upsert", group.kind, col)
+			}
+		}
+	}
+	return nil
+}
+
 // columnIdentity returns the form of an identifier that decides column identity
 // for the active vendor, so the overlap check sees columns the way the database
 // will. PostgreSQL quotes every identifier, leaving "id" and "ID" distinct.
 // Oracle leaves non-reserved identifiers unquoted and folds them to upper case,
 // so id and ID are one column there; reserved words it quotes stay case-sensitive.
+//
+// The quote test reads position 0, so it holds only for a rendering that is one
+// whole token. requireSingleColumnNames is what guarantees that for every
+// BuildUpsert caller: a qualified or function-shaped key renders quoted somewhere
+// other than the front, and is rejected before reaching here.
 func (qb *QueryBuilder) columnIdentity(column string) string {
 	if qb.vendor != dbtypes.Oracle {
 		return column

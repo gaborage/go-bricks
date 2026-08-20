@@ -507,6 +507,16 @@ type QueryBuilderInterface interface {
 	// composite conflict target, and not a match for an insert key spelled
 	// differently.
 	//
+	// insertColumns and updateColumns must each name every column at most once,
+	// judged by that same vendor identity rule. A map cannot hold an exact repeat,
+	// but two keys can still name one column: on Oracle {"id": 1, "ID": 2} is one
+	// column written twice and is rejected, while on PostgreSQL it is two columns
+	// and builds. On Oracle every key of either map, and every conflict column,
+	// must also be a single column name — no qualifier, no function call, no empty
+	// name — because the MERGE names each one as a column alias in its USING
+	// clause, which admits nothing else. PostgreSQL quotes the whole key, so a
+	// dotted one names an unusual but legal column there and still builds.
+	//
 	// BuildUpsert rejects a column present in both conflictColumns and
 	// updateColumns on every vendor, because Oracle's MERGE cannot update a
 	// column referenced in its ON clause (ORA-38104). Identity follows the vendor's
