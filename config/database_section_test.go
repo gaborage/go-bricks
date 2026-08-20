@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -112,8 +113,6 @@ func TestNormalizeDatabaseSectionPlacementRules(t *testing.T) {
 			wantCategory: errCategoryInvalid,
 			wantField:    "multitenant.tenants.t.database.manager",
 		},
-		{name: "named_normalization_error_wrapped_with_path", section: namedDatabaseSection("r"), cfg: DatabaseConfig{Type: "mysql", Host: "h"}, wantErr: "databases.r: "},
-		{name: "tenant_normalization_error_wrapped_with_path", section: tenantDatabaseSection("t"), cfg: DatabaseConfig{Type: "mysql", Host: "h"}, wantErr: "multitenant.tenants.t.database: "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -132,6 +131,157 @@ func TestNormalizeDatabaseSectionPlacementRules(t *testing.T) {
 			assert.Equal(t, tt.wantField, cfgErr.Field)
 		})
 	}
+}
+
+// TestNormalizeDatabaseSectionQualifiesFieldWithSectionPath pins the addressing rule
+// across every placement: a consumer matching on ConfigError.Field must be told WHICH
+// section failed, not the root spelling of a key that belongs to another section.
+func TestNormalizeDatabaseSectionQualifiesFieldWithSectionPath(t *testing.T) {
+	missingIdentity := DatabaseConfig{Type: PostgreSQL, Host: "h", Username: "u"}
+	typeConflict := DatabaseConfig{Type: Oracle, ConnectionString: "postgres://x/y"}
+	tlsMaterial := DatabaseConfig{
+		Type: PostgreSQL, Host: "h", Port: 5432, Database: "d", Username: "u",
+		TLS: TLSConfig{CertFile: "c.pem"},
+	}
+	// The one field the database path names that is not key-shaped.
+	oracleOutlier := DatabaseConfig{Type: Oracle, Host: "h", Port: 1521, Username: "u"}
+
+	tests := []struct {
+		name      string
+		section   dbSection
+		cfg       DatabaseConfig
+		wantField string
+	}{
+		{name: "root_missing_identity", section: rootDatabaseSection(), cfg: missingIdentity, wantField: "database.port"},
+		{name: "root_type_conflict", section: rootDatabaseSection(), cfg: typeConflict, wantField: "database.type"},
+		{name: "root_tls_material", section: rootDatabaseSection(), cfg: tlsMaterial, wantField: "database.tls"},
+		{name: "root_oracle_outlier", section: rootDatabaseSection(), cfg: oracleOutlier, wantField: "oracle connection identifier"},
+
+		{name: "named_missing_identity", section: namedDatabaseSection("reporting"), cfg: missingIdentity, wantField: "databases.reporting.port"},
+		{name: "named_type_conflict", section: namedDatabaseSection("reporting"), cfg: typeConflict, wantField: "databases.reporting.type"},
+		{name: "named_tls_material", section: namedDatabaseSection("reporting"), cfg: tlsMaterial, wantField: "databases.reporting.tls"},
+		{name: "named_oracle_outlier", section: namedDatabaseSection("reporting"), cfg: oracleOutlier, wantField: "databases.reporting.oracle connection identifier"},
+
+		{name: "tenant_missing_identity", section: tenantDatabaseSection("acme"), cfg: missingIdentity, wantField: "multitenant.tenants.acme.database.port"},
+		{name: "tenant_type_conflict", section: tenantDatabaseSection("acme"), cfg: typeConflict, wantField: "multitenant.tenants.acme.database.type"},
+		{name: "tenant_tls_material", section: tenantDatabaseSection("acme"), cfg: tlsMaterial, wantField: "multitenant.tenants.acme.database.tls"},
+		{name: "tenant_oracle_outlier", section: tenantDatabaseSection("acme"), cfg: oracleOutlier, wantField: "multitenant.tenants.acme.database.oracle connection identifier"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+
+			err := normalizeDatabaseSection(&cfg, tt.section)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			if tt.section.placement != dbPlacementRoot {
+				assert.False(t, strings.HasPrefix(err.Error(), tt.section.path+": "),
+					"the path is carried by Field; a wrapper prefix would print it twice")
+				assert.Equal(t, 1, strings.Count(err.Error(), tt.section.path),
+					"and it appears exactly once in the rendered error")
+			}
+		})
+	}
+}
+
+// TestQualifiedFieldMatchesDeliveredEmptySpelling cross-checks the two producers instead of
+// trusting that two hand-typed tables agree: ADR-076's whole point is that a key has ONE
+// spelling per section, and the delivered-empty check (ADR-051) is the other producer of it.
+func TestQualifiedFieldMatchesDeliveredEmptySpelling(t *testing.T) {
+	sections := []dbSection{
+		rootDatabaseSection(),
+		namedDatabaseSection("reporting"),
+		tenantDatabaseSection("acme"),
+	}
+
+	for _, section := range sections {
+		t.Run(section.path, func(t *testing.T) {
+			for _, key := range databaseIdentityKeys {
+				// What validateNoDeliveredEmptyDatabase reports for this key and section.
+				deliveredEmpty := section.path + "." + key
+
+				// What a normalization error against the same key is re-addressed to.
+				qualified := section.qualifyField(fieldDatabase + "." + key)
+
+				assert.Equal(t, deliveredEmpty, qualified, "key %q must have one spelling", key)
+			}
+		})
+	}
+}
+
+// TestNormalizeDatabaseValuesConnectKeepsRootSpelling pins the other half of the seam:
+// the connect door shares these error constructors but has no section to speak of, so it
+// must keep the root spelling rather than inherit a path from the startup door.
+// TestDbSectionQualifyContract exercises the rewriter directly. Its two defensive
+// branches cannot be reached through normalizeDatabaseSection today — every producer on
+// that path returns a *ConfigError with a "database."-shaped field — but they are the
+// module's contract with a future validator, so they are pinned here rather than left as
+// untested code that only looks safe.
+func TestDbSectionQualifyContract(t *testing.T) {
+	named := namedDatabaseSection("reporting")
+
+	t.Run("root_returns_the_error_untouched", func(t *testing.T) {
+		original := NewInvalidFieldError("database.host", "bad", nil)
+
+		got := rootDatabaseSection().qualify(original)
+
+		assert.Same(t, original, got, "the root section has nothing to add")
+	})
+
+	t.Run("non_config_error_keeps_the_path_in_the_message", func(t *testing.T) {
+		got := named.qualify(errors.New("boom"))
+
+		var cfgErr *ConfigError
+		assert.False(t, errors.As(got, &cfgErr))
+		assert.ErrorContains(t, got, "databases.reporting: boom")
+	})
+
+	t.Run("original_error_is_left_alone", func(t *testing.T) {
+		original := NewInvalidFieldError("database.host", "bad", nil)
+
+		got := named.qualify(original)
+
+		var cfgErr *ConfigError
+		require.ErrorAs(t, got, &cfgErr)
+		assert.Equal(t, "databases.reporting.host", cfgErr.Field)
+		assert.Equal(t, "database.host", original.Field,
+			"the connect door shares these constructors and must not inherit a section path")
+	})
+
+	t.Run("field_shapes", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			field string
+			want  string
+		}{
+			{name: "key_under_database", field: "database.host", want: "databases.reporting.host"},
+			{name: "nested_key", field: "database.pool.max.connections", want: "databases.reporting.pool.max.connections"},
+			{name: "bare_database", field: fieldDatabase, want: "databases.reporting"},
+			{name: "empty", field: "", want: "databases.reporting"},
+			{name: "not_key_shaped", field: "oracle connection identifier", want: "databases.reporting.oracle connection identifier"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				assert.Equal(t, tt.want, named.qualifyField(tt.field))
+			})
+		}
+	})
+}
+
+func TestNormalizeDatabaseValuesConnectKeepsRootSpelling(t *testing.T) {
+	cfg := DatabaseConfig{
+		Type: PostgreSQL, Host: "h", Port: 5432, Database: "d", Username: "u",
+		TLS: TLSConfig{CertFile: "c.pem"},
+	}
+
+	err := normalizeDatabaseValues(&cfg, dbStrictnessConnect)
+
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "database.tls", cfgErr.Field)
 }
 
 func TestNormalizeDatabaseSectionRootAbsentLeavesConfigUntouched(t *testing.T) {

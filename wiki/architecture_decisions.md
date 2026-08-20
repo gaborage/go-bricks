@@ -1394,6 +1394,25 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-076: A Database Section's Errors Are Addressed to That Section](adr_076_section_qualified_config_error_field.md)
+
+**Date:** 2026-08-20 | **Status:** Accepted
+
+Root, `databases.<name>`, and `multitenant.tenants.<id>.database` share one normalization module
+and therefore one set of error constructors, all spelling their fields against the root
+(`database.host`). The startup door used to attach the section path by WRAPPING, so the message
+read `databases.reporting: … database.database required` while the `*ConfigError` behind
+`errors.As` still said `Field = "database.database"` — a consumer switching on `Field` could not
+tell which section failed, and the spelling disagreed with the path-qualified keys
+`UntypedDatabaseSections` and ADR-051's delivered-empty check already emit. The path now lives in
+`Field` and nowhere else: `databases.reporting.host`, `multitenant.tenants.acme.database.host`,
+rewritten on a copy so the connect door — which has no section — keeps the root spelling.
+
+**Key Benefits:** one spelling for one key across the package; the typed error names the section.
+**Watch:** `field == "database.host"` matchers break for non-root sections (`errors.As` +
+`strings.HasSuffix` survives), and the message loses its `databases.reporting: ` prefix. See
+`[C60.16]` in [migrations.md](migrations.md).
+
 ### [ADR-075: One Normalized Default per Scheduler Timeout Key](adr_075_scheduler_timeout_single_default.md)
 
 **Date:** 2026-08-20 | **Status:** Accepted
@@ -1510,7 +1529,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-075) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-076) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
