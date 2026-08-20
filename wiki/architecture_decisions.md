@@ -1404,8 +1404,10 @@ That is a remote availability attack on a shared resource: an `X-Request-ID` ove
 frame-write error by tearing down the whole `Connection` every publisher in the process shares — and
 the outbox persists and replays the poisoned header forever. The validator moves down into `trace`,
 exported, reusing `server`'s `^[A-Za-z0-9_-]{1,128}$` byte-for-byte; `traceparent` gets spec-exact
-validation; `tracestate` gets a cap and deliberately no grammar; and `CorrelationId` is capped again
-at its assignment site because the exported `WithTraceID`/`EnsureTraceID` bypass the seam. A rejected
+validation; `tracestate` is kept only when the same carrier supplied a valid `traceparent` — discarded
+otherwise, including when the context holds an inherited one — then capped, with deliberately no
+grammar; and `CorrelationId` is capped again at its assignment site because the exported
+`WithTraceID`/`EnsureTraceID` bypass the seam. A rejected
 id is discarded and regenerated, never truncated — truncation silently forges correlation.
 
 **Key Benefits:** One bound at every door, including the streams door that has no ingress yet.

@@ -4,6 +4,15 @@
 - **Date**: 2026-08-19
 - **Related**: [ADR-068](adr_068_delivery_pipeline.md) and [ADR-069](adr_069_pipeline_owns_settlement_timing.md) (the delivery pipeline both messaging lanes run on, which is where the AMQP door reaches this seam)
 
+> **Amended (2026-08-19):** `tracestate` is scoped to the carrier that brought its
+> parent, in addition to the size cap the Decision describes. It is retained only
+> when the SAME carrier supplied a valid `traceparent`, and discarded otherwise —
+> including when the surrounding context carries an inherited parent of its own.
+> A `tracestate` annotates one `traceparent`; attaching one carrier's vendor state
+> to a parent it never accompanied would re-emit it downstream under a trace it
+> does not belong to. The size cap below still applies to whatever survives that
+> scoping.
+
 ## Context
 
 `trace.ExtractFromHeaders` stored every inbound identifier verbatim. The only
