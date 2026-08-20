@@ -958,6 +958,8 @@ func (h *countingTestHandler) CallCount() int {
 type mockAcknowledger struct {
 	ackCalled    bool
 	nackCalled   bool
+	ackCount     int
+	nackCount    int
 	ackErr       error
 	nackErr      error
 	nackMultiple bool
@@ -969,6 +971,7 @@ func (m *mockAcknowledger) Ack(_ uint64, _ bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ackCalled = true
+	m.ackCount++
 	return m.ackErr
 }
 
@@ -976,6 +979,7 @@ func (m *mockAcknowledger) Nack(_ uint64, multiple, requeue bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.nackCalled = true
+	m.nackCount++
 	m.nackMultiple = multiple
 	m.nackRequeue = requeue
 	return m.nackErr
@@ -1006,10 +1010,13 @@ func (l *panicEventLogger) Warn() gobrickslogger.LogEvent                     { 
 func (l *panicEventLogger) WithContext(_ any) gobrickslogger.Logger           { return l }
 func (l *panicEventLogger) WithFields(_ map[string]any) gobrickslogger.Logger { return l }
 
-// TestRegistryProcessMessagePanicAfterHandlerStillNacks pins the lane-level
+// TestRegistryProcessMessagePanicInTheTailNacksWithoutRequeue pins the lane-level
 // recovery: a panic past the handler — here from outcome logging — must not
 // escape processMessage, and the manual-ack delivery is nacked without requeue.
-func TestRegistryProcessMessagePanicAfterHandlerStillNacks(t *testing.T) {
+// The panic-in-the-tail guarantee moved to the pipeline with ADR-069; see
+// TestRunSettlesEvenWhenTheDeliveryTailPanics. What stays here is the lane's own
+// half: that its Settle closure nacks without requeue on a Panicked result.
+func TestRegistryProcessMessagePanicInTheTailNacksWithoutRequeue(t *testing.T) {
 	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 	consumer := &ConsumerDeclaration{
 		Queue: testQueueName, EventType: testEventType,
@@ -1024,9 +1031,9 @@ func TestRegistryProcessMessagePanicAfterHandlerStillNacks(t *testing.T) {
 		registry.processMessage(context.Background(), consumer, delivery, &panicEventLogger{})
 	})
 
-	assert.True(t, acker.nackCalled, "the fallback must settle the delivery")
-	assert.False(t, acker.nackRequeue, "the fallback nack must not requeue")
-	assert.False(t, acker.ackCalled)
+	assert.Equal(t, 1, acker.nackCount, "the delivery is settled exactly once")
+	assert.Equal(t, 0, acker.ackCount, "a delivery whose tail panicked is never acked")
+	assert.False(t, acker.nackRequeue, "the nack must not requeue")
 }
 
 // ===== processMessage Tests =====

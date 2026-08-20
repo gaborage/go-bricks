@@ -17,18 +17,18 @@ import (
 // runIdentityAgainstBroken drives the broken lane through one scenario and
 // returns every assertion message AssertIdentity produced, without failing this
 // test.
-func runIdentityAgainstBroken(t *testing.T, scenario Scenario) string {
+func runIdentityAgainstBroken(t *testing.T, scenario *Scenario) string {
 	t.Helper()
 	return runAgainstBroken(t, scenario, AssertIdentity)
 }
 
 // runTelemetryAgainstBroken is the same for the telemetry family.
-func runTelemetryAgainstBroken(t *testing.T, scenario Scenario) string {
+func runTelemetryAgainstBroken(t *testing.T, scenario *Scenario) string {
 	t.Helper()
 	return runAgainstBroken(t, scenario, AssertTelemetry)
 }
 
-func runAgainstBroken(t *testing.T, scenario Scenario, family func(T, *Lane, *Scenario, *Observed)) string {
+func runAgainstBroken(t *testing.T, scenario *Scenario, family func(T, *Lane, *Scenario, *Observed)) string {
 	t.Helper()
 
 	lane := BrokenLane()
@@ -43,7 +43,7 @@ func runAgainstBroken(t *testing.T, scenario Scenario, family func(T, *Lane, *Sc
 				}
 			}
 		}()
-		family(&recordingT{out: &failures}, &lane, &scenario, &observed)
+		family(&recordingT{out: &failures}, &lane, scenario, &observed)
 	}()
 
 	return failures.String()
@@ -73,7 +73,7 @@ func TestBrokenLaneFailsTheTraceIdentityAssertions(t *testing.T) {
 		Outcome: delivery.Succeeded,
 	}
 
-	failures := runIdentityAgainstBroken(t, scenario)
+	failures := runIdentityAgainstBroken(t, &scenario)
 
 	// Each of these is one identity assertion proving it bites. If a line stops
 	// appearing, either the assertion was weakened or the broken lane was
@@ -99,7 +99,7 @@ func TestBrokenLaneFailsTheOutcomeLineShapeAssertions(t *testing.T) {
 		Outcome: delivery.HandlerError,
 	}
 
-	failures := runIdentityAgainstBroken(t, scenario)
+	failures := runIdentityAgainstBroken(t, &scenario)
 
 	require.NotEmpty(t, failures)
 	assert.Contains(t, failures, "the outcome line must carry EXACTLY the extra keys the lane declared",
@@ -115,7 +115,7 @@ func TestBrokenLaneFailsTheOutcomeLineShapeAssertions(t *testing.T) {
 // The panic scenario reaches the spine's panic/stack assertions, which no other
 // scenario can: they are asserted present only for Panicked.
 func TestBrokenLaneFailsThePanicSpineAssertions(t *testing.T) {
-	failures := runIdentityAgainstBroken(t, Scenario{
+	failures := runIdentityAgainstBroken(t, &Scenario{
 		Name:    "panicking_handler",
 		Carrier: map[string]any{gobrickstrace.HeaderXRequestID: BrokenCarrierTraceID},
 		Handle:  func(context.Context) error { panic("boom") },
@@ -135,7 +135,7 @@ func TestBrokenLaneStillCarriesTheDefectsOtherFamiliesNeed(t *testing.T) {
 	leaseReleased := false
 	releasedBeforeHandlerReturned := false
 
-	observed := lane.Deliver(t, Scenario{
+	observed := lane.Deliver(t, &Scenario{
 		Name: "borrows_a_handle",
 		Handle: func(ctx context.Context) error {
 			leasescope.Register(ctx, func() { leaseReleased = true })
@@ -152,7 +152,7 @@ func TestBrokenLaneStillCarriesTheDefectsOtherFamiliesNeed(t *testing.T) {
 }
 
 func TestBrokenLaneFailsEveryTelemetryAssertion(t *testing.T) {
-	failures := runTelemetryAgainstBroken(t, Scenario{
+	failures := runTelemetryAgainstBroken(t, &Scenario{
 		Name:    "failing_handler",
 		Carrier: map[string]any{gobrickstrace.HeaderXRequestID: BrokenCarrierTraceID},
 		Body:    []byte("payload"),

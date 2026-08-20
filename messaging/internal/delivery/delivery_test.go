@@ -622,3 +622,253 @@ func TestAppendOutcomeAddsThePanicAndItsStack(t *testing.T) {
 		{"stack", stack},
 	}, event.pairs)
 }
+
+// ===== Settle Tests (ADR-069) =====
+
+var errBoom = errors.New("boom")
+
+// settleRecord captures every Settle call. Counting rather than flagging is what
+// makes "exactly once" provable: a boolean cannot tell one call from two, and
+// double-settling is the defect this guarantee exists to prevent.
+type settleRecord struct{ outcomes []Outcome }
+
+func (s *settleRecord) settle(res *Result) { s.outcomes = append(s.outcomes, res.Outcome) }
+
+func TestRunSettlesEveryOutcomeExactlyOnce(t *testing.T) {
+	tests := []struct {
+		name    string
+		handle  Handler
+		outcome Outcome
+	}{
+		{name: "succeeded", handle: succeedingHandler, outcome: Succeeded},
+		{
+			name:    "handler_error",
+			handle:  func(context.Context, logger.Logger, string) error { return errBoom },
+			outcome: HandlerError,
+		},
+		{
+			name:    "handler_panic",
+			handle:  func(context.Context, logger.Logger, string) error { panic("boom") },
+			outcome: Panicked,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			settles := &settleRecord{}
+
+			req := h.request(tt.handle)
+			req.Settle = settles.settle
+			h.runRequest(req)
+
+			assert.Equal(t, []Outcome{tt.outcome}, settles.outcomes,
+				"the delivery settles exactly once, on its own outcome")
+		})
+	}
+}
+
+// A panic in the lane's own outcome line must not leave the delivery unsettled:
+// the broker would hold it until the consumer's channel closed, and the message
+// would be redelivered with no record of the first attempt.
+func TestRunSettlesEvenWhenTheDeliveryTailPanics(t *testing.T) {
+	h := newHarness(t)
+	settles := &settleRecord{}
+
+	req := h.request(succeedingHandler)
+	req.LogOutcome = func(*Result) { panic("the lane's own line blew up") }
+	req.Settle = settles.settle
+
+	var settleLog logger.Logger
+	req.Settle = func(res *Result) {
+		settles.settle(res)
+		settleLog = res.Log
+	}
+
+	require.NotPanics(t, func() { h.runRequest(req) }, "a tail panic never escapes into the consume loop")
+
+	// The discriminator: a mutant that drops the recover makes the test panic and
+	// records NOTHING, so asserting the recorded outcome — not merely that the
+	// run returned — is what separates "recovered and settled" from "crashed".
+	assert.Equal(t, []Outcome{Panicked}, settles.outcomes,
+		"a delivery whose tail panicked settles as Panicked, so the lane nacks rather than acks it")
+
+	// The fallback in panickedResult is a fallback, not a replacement: a delivery
+	// that DID get a bound logger keeps it, so the lane's ack/nack failure line
+	// still carries trace_id and span_id. Only a delivery that never got one is
+	// handed the unbound logger instead of nil.
+	require.NotNil(t, h.log.bound)
+	assert.Same(t, h.log.bound, settleLog,
+		"a tail panic settles through the context-bound logger, not the unbound one")
+}
+
+// A panic inside Settle is the lane's own bug on its own broker call. Retrying
+// would panic again, so the pipeline logs it and stops — and above all does not
+// let it escape into the consume loop.
+func TestRunDoesNotRetryASettleThatPanics(t *testing.T) {
+	h := newHarness(t)
+	calls := 0
+
+	req := h.request(succeedingHandler)
+	req.Settle = func(*Result) {
+		calls++
+		panic("settle blew up")
+	}
+
+	require.NotPanics(t, func() { h.runRequest(req) })
+
+	assert.Equal(t, 1, calls, "a panicking Settle is called once and not retried")
+}
+
+// Settle is optional: a lane that has not adopted it yet must still deliver.
+func TestRunAcceptsALaneWithNoSettle(t *testing.T) {
+	h := newHarness(t)
+
+	req := h.request(succeedingHandler)
+	req.Settle = nil
+
+	var res *Result
+	require.NotPanics(t, func() { res = h.runRequest(req) })
+	assert.Equal(t, Succeeded, res.Outcome)
+}
+
+// Ordering is the whole point of deferring the guard first: the lane must not
+// settle a message while a handle its handler borrowed is still open.
+func TestRunSettlesAfterTheSpanClosedAndTheLeaseDrained(t *testing.T) {
+	var order []string
+	h := newHarness(t, onEndRecorder{onEnd: func() { order = append(order, "span-end") }})
+
+	req := h.request(func(ctx context.Context, _ logger.Logger, _ string) error {
+		leasescope.Register(ctx, func() { order = append(order, "lease-drain") })
+		return nil
+	})
+	req.Settle = func(*Result) { order = append(order, "settle") }
+
+	h.runRequest(req)
+
+	assert.Equal(t, []string{"span-end", "lease-drain", "settle"}, order,
+		"span end -> lease drain -> settle, so a borrowed handle outlives the acknowledgement")
+}
+
+// panicOnBindLogger panics from WithContext, which Run calls BEFORE invoke. It
+// is the only way to reach the tail guard with no Result yet built, which is the
+// path that decides whether a delivery can be settled at all when the pipeline
+// itself fails early.
+type panicOnBindLogger struct{ logger.Logger }
+
+func (l *panicOnBindLogger) WithContext(any) logger.Logger {
+	// Outlast Windows' coarse clock before panicking, matching the idiom at the
+	// lease test above: this path finishes inside a single ~15.6ms timer tick
+	// there, so time.Since reads exactly 0 and the duration assertion below
+	// would be unsound rather than wrong. Sleeping keeps the claim true on every
+	// platform instead of weakening it to >= 0, which would assert nothing — and
+	// would let the `res.Duration == 0` guard's mutant survive.
+	time.Sleep(2 * time.Millisecond)
+	panic("binding blew up")
+}
+
+func TestRunSettlesAPanicRaisedBeforeTheHandlerRan(t *testing.T) {
+	h := newHarness(t)
+	settles := &settleRecord{}
+	var settled *Result
+
+	req := h.request(succeedingHandler)
+	req.Log = &panicOnBindLogger{Logger: logger.New("error", false)}
+	req.Settle = func(res *Result) {
+		settles.settle(res)
+		settled = res
+	}
+
+	require.NotPanics(t, func() { h.runRequest(req) })
+
+	assert.Equal(t, []Outcome{Panicked}, settles.outcomes,
+		"a panic before the handler ran still settles, so the message is not left in flight")
+	require.NotNil(t, settled, "the lane is handed a result even when none had been built yet")
+	assert.Positive(t, settled.Duration,
+		"a result synthesized by the guard still carries how long the delivery took")
+	assert.NotNil(t, settled.Panic)
+	assert.NotEmpty(t, settled.Stack)
+}
+
+// lineRecorder captures whether the pipeline logged anything, so the settle-panic
+// report is observable. delivery cannot import the lane-contract recorder: that
+// package imports this one.
+type lineRecorder struct {
+	logger.Logger
+	msgs *[]string
+}
+
+func (l *lineRecorder) WithContext(ctx any) logger.Logger {
+	// Delegate, so a wrapped logger whose binding panics still panics through here.
+	l.Logger.WithContext(ctx)
+	return l
+}
+func (l *lineRecorder) Error() logger.LogEvent { return &recordingLine{msgs: l.msgs} }
+
+type recordingLine struct {
+	logger.LogEvent
+	msgs *[]string
+}
+
+func (e *recordingLine) Interface(string, any) logger.LogEvent { return e }
+func (e *recordingLine) Msg(msg string)                        { *e.msgs = append(*e.msgs, msg) }
+
+// A panic inside Settle must be REPORTED, not swallowed: it is the lane's own
+// broker call failing, and an operator with no log line sees a message that
+// simply never settled.
+func TestRunLogsAPanicRaisedInsideSettle(t *testing.T) {
+	h := newHarness(t)
+	var msgs []string
+
+	req := h.request(succeedingHandler)
+	req.Log = &lineRecorder{Logger: logger.New("error", false), msgs: &msgs}
+	req.Settle = func(*Result) { panic("settle blew up") }
+
+	require.NotPanics(t, func() { h.runRequest(req) })
+
+	assert.Equal(t, []string{settlePanicMessage}, msgs,
+		"the settle panic is reported exactly once, under its own message")
+}
+
+// A Settle that returns normally must log nothing: a report on the happy path
+// would make the settle-panic line meaningless as an alert.
+func TestRunLogsNothingWhenSettleSucceeds(t *testing.T) {
+	h := newHarness(t)
+	var msgs []string
+
+	req := h.request(succeedingHandler)
+	req.Log = &lineRecorder{Logger: logger.New("error", false), msgs: &msgs}
+	req.Settle = func(*Result) {}
+
+	h.runRequest(req)
+
+	assert.Empty(t, msgs, "a settlement that worked reports nothing")
+}
+
+// The compound failure the logger fallback exists for: the binding panics, so no
+// bound logger was ever assigned, AND the lane's settle path then fails and tries
+// to report it. Without the fallback the settle path nil-derefs, the recovery
+// report is skipped, and the delivery is left unsettled and silent — the exact
+// outcome the recovered tail exists to prevent.
+func TestRunStillSettlesWhenTheBindingPanickedAndSettleAlsoFails(t *testing.T) {
+	h := newHarness(t)
+	var msgs []string
+	settles := 0
+
+	req := h.request(succeedingHandler)
+	req.Log = &lineRecorder{Logger: &panicOnBindLogger{Logger: logger.New("error", false)}, msgs: &msgs}
+	req.Settle = func(res *Result) {
+		settles++
+		// What the classic lane does when its broker call fails: log through the
+		// result's logger. A nil one panics here.
+		res.Log.Error().Interface("panic", "ack failed").Msg("Failed to ack message")
+	}
+
+	require.NotPanics(t, func() { h.runRequest(req) })
+
+	// The discriminators: the settle RAN, and it logged. A mutant that drops the
+	// fallback makes both of those false while still "panicking somewhere".
+	assert.Equal(t, 1, settles, "the delivery is settled exactly once despite the binding panic")
+	assert.Equal(t, []string{"Failed to ack message"}, msgs,
+		"the lane's settle path can log, so a broker failure is reported rather than swallowed")
+}

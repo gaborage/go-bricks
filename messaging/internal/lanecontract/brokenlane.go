@@ -77,7 +77,7 @@ func BrokenLane() Lane {
 
 // deliverBroken hand-rolls a non-conforming delivery. Each defect is marked so a
 // later reader does not "fix" one and quietly turn the proof into a tautology.
-func deliverBroken(t *testing.T, scenario Scenario) Observed {
+func deliverBroken(t *testing.T, scenario *Scenario) Observed {
 	t.Helper()
 
 	exporter, meter := SetupTelemetry(t)

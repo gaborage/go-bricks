@@ -233,7 +233,7 @@ func RunIdentity(t *testing.T, lane *Lane) {
 
 	for _, scenario := range IdentityScenarios() {
 		t.Run(scenario.Name, func(t *testing.T) {
-			observed := lane.Deliver(t, scenario)
+			observed := lane.Deliver(t, &scenario)
 
 			AssertIdentity(t, lane, &scenario, &observed)
 		})

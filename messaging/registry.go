@@ -753,32 +753,13 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 	}
 }
 
-// processMessage runs one delivery through the delivery pipeline and settles it
-// by outcome. Settlement is this lane's, not the pipeline's: ack on success,
-// nack on a handler error or a panic.
+// processMessage runs one delivery through the delivery pipeline. Settlement is
+// this lane's policy — ack on success, nack-without-requeue on a handler error
+// or a panic, nothing under AutoAck — but WHEN it happens is the pipeline's: it
+// calls Settle after the span closed and the lease drained, and it guarantees
+// at most one call even if the delivery tail panicked (ADR-069).
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
-	// The pipeline recovers handler panics; outcome logging, telemetry and
-	// settlement still run unguarded on this goroutine, and a panic there would
-	// kill the consume loop with the delivery unsettled. Nack before logging so
-	// the fallback holds even when logging is what panicked; the nested recover
-	// keeps the fallback itself from escaping.
-	settling := false
-	defer func() {
-		recovered := recover()
-		if recovered == nil {
-			return
-		}
-		defer func() { _ = recover() }()
-		if !consumer.AutoAck && !settling {
-			_ = delivery.Nack(false, false)
-		}
-		log.Error().
-			Str("queue", consumer.Queue).
-			Uint64("delivery_tag", delivery.DeliveryTag).
-			Msg(fmt.Sprintf("Recovered panic while finishing a delivery: %v; nacked without requeue", recovered))
-	}()
-
-	res := pipeline.Run(ctx, &pipeline.Request{
+	pipeline.Run(ctx, &pipeline.Request{
 		Carrier:     amqpHeaderAccessor{headers: delivery.Headers},
 		Destination: consumer.Queue,
 		BodySize:    len(delivery.Body),
@@ -792,12 +773,17 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		LogOutcome: func(res *pipeline.Result) {
 			logOutcome(res, consumer, delivery)
 		},
+		Settle: func(res *pipeline.Result) {
+			settleDelivery(res, consumer, delivery)
+		},
 	})
+}
 
+// settleDelivery is this lane's broker action for a finished delivery.
+func settleDelivery(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery) {
 	if consumer.AutoAck {
-		return // No manual ack/nack needed
+		return // the broker already considers it delivered
 	}
-	settling = true
 	if res.Outcome == pipeline.Succeeded {
 		ackMessage(delivery, res.Log, res.TraceID)
 		return
