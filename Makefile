@@ -15,7 +15,7 @@ GOVULNCHECK_VERSION := v1.7.0
 GOSEC_VERSION := v2.28.0
 # Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
-GOLANGCI_LINT_VERSION := v2.13.0
+GOLANGCI_LINT_VERSION := v2.13.1
 # renovate: datasource=go depName=github.com/go-gremlins/gremlins
 GREMLINS_VERSION := v0.5.1
 # renovate: datasource=npm depName=markdownlint-cli2
