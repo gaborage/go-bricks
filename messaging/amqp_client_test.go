@@ -158,6 +158,7 @@ func (f *fakeChannel) QueueBind(name, key, exchange string, _ bool, args amqp.Ta
 	f.gotBindingArgs = args
 	return f.bindErr
 }
+
 func (f *fakeChannel) NotifyClose(c chan *amqp.Error) chan *amqp.Error { f.notifyCloseCh = c; return c }
 
 // GetNextPublishSeqNo mimics amqp091.Channel.GetNextPublishSeqNo: returns

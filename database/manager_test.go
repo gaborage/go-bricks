@@ -77,6 +77,7 @@ func (s *stubDB) Begin(_ context.Context) (Tx, error)                     { retu
 func (s *stubDB) BeginTx(_ context.Context, _ *sql.TxOptions) (Tx, error) { return &stubTx{}, nil }
 func (s *stubDB) Health(_ context.Context) error                          { return nil }
 func (s *stubDB) Stats() (map[string]any, error)                          { return map[string]any{"key": s.key}, nil }
+
 func (s *stubDB) Close() error {
 	s.closedMu.Lock()
 	s.closed = true

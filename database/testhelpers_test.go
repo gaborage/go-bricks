@@ -43,6 +43,7 @@ func (e *recordedEvent) Msg(msg string) {
 		e.sink.warns = append(e.sink.warns, msg)
 	}
 }
+
 func (e *recordedEvent) Msgf(format string, args ...any)           { e.Msg(fmt.Sprintf(format, args...)) }
 func (e *recordedEvent) Err(error) logger.LogEvent                 { return e }
 func (e *recordedEvent) Str(_, _ string) logger.LogEvent           { return e }

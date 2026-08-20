@@ -224,11 +224,14 @@ func (f *fakeAMQP) ConsumeFromQueue(_ context.Context, _ messaging.ConsumeOption
 }
 
 func (f *fakeAMQP) DeclareQueue(_ context.Context, _ *messaging.QueueDeclaration) error { return nil }
+
 func (f *fakeAMQP) DeclareExchange(_ context.Context, _ *messaging.ExchangeDeclaration) error {
 	return nil
 }
+
 func (f *fakeAMQP) BindQueue(_ context.Context, _ *messaging.BindingDeclaration) error { return nil }
-func (f *fakeAMQP) Close() error                                                       { return nil }
+
+func (f *fakeAMQP) Close() error { return nil }
 
 // recordingLogger captures the message text of emitted lines. The relay's
 // secondary-error paths — "could not write down why this record failed" — have
@@ -265,6 +268,7 @@ func (e *recordingEvent) Msg(msg string) {
 	defer e.owner.mu.Unlock()
 	*e.owner.lines = append(*e.owner.lines, msg)
 }
+
 func (e *recordingEvent) Msgf(format string, args ...any)           { e.Msg(fmt.Sprintf(format, args...)) }
 func (e *recordingEvent) Err(error) logger.LogEvent                 { return e }
 func (e *recordingEvent) Str(_, _ string) logger.LogEvent           { return e }

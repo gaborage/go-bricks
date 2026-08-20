@@ -23,8 +23,6 @@ const (
 // https://docs.oracle.com/en/database/oracle/oracle-database/19/sqlrf/Oracle-SQL-Reserved-Words.html
 //
 // Note: This list uses struct{} for zero-memory overhead in the map value.
-//
-//nolint:goconst // Literal reserved-word data table; extracting each keyword to a named constant would harm readability and defeat the purpose of a flat lookup set.
 var OracleReservedWords = map[string]struct{}{
 	// Official Oracle 19c reserved words.
 	"ACCESS": {}, "ADD": {}, "ALL": {}, "ALTER": {}, "AND": {}, "ANY": {}, "AS": {}, "ASC": {},

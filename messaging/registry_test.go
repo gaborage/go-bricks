@@ -998,8 +998,10 @@ func (m *mockAcknowledger) AckCalled() bool {
 // inside the pipeline panics deterministically.
 type panicEventLogger struct{ stubLogger }
 
-func (l *panicEventLogger) Info() gobrickslogger.LogEvent                     { panic("log sink gone") }
-func (l *panicEventLogger) Error() gobrickslogger.LogEvent                    { panic("log sink gone") }
+func (l *panicEventLogger) Info() gobrickslogger.LogEvent { panic("log sink gone") }
+
+func (l *panicEventLogger) Error() gobrickslogger.LogEvent { panic("log sink gone") }
+
 func (l *panicEventLogger) Warn() gobrickslogger.LogEvent                     { panic("log sink gone") }
 func (l *panicEventLogger) WithContext(_ any) gobrickslogger.Logger           { return l }
 func (l *panicEventLogger) WithFields(_ map[string]any) gobrickslogger.Logger { return l }
@@ -2618,12 +2620,18 @@ func (e *recordingEvent) add(k string, v any) gobrickslogger.LogEvent {
 	return e
 }
 
-func (e *recordingEvent) Str(k, v string) gobrickslogger.LogEvent               { return e.add(k, v) }
-func (e *recordingEvent) Int(k string, v int) gobrickslogger.LogEvent           { return e.add(k, v) }
-func (e *recordingEvent) Int64(k string, v int64) gobrickslogger.LogEvent       { return e.add(k, v) }
-func (e *recordingEvent) Uint64(k string, v uint64) gobrickslogger.LogEvent     { return e.add(k, v) }
+func (e *recordingEvent) Str(k, v string) gobrickslogger.LogEvent { return e.add(k, v) }
+
+func (e *recordingEvent) Int(k string, v int) gobrickslogger.LogEvent { return e.add(k, v) }
+
+func (e *recordingEvent) Int64(k string, v int64) gobrickslogger.LogEvent { return e.add(k, v) }
+
+func (e *recordingEvent) Uint64(k string, v uint64) gobrickslogger.LogEvent { return e.add(k, v) }
+
 func (e *recordingEvent) Dur(k string, v time.Duration) gobrickslogger.LogEvent { return e.add(k, v) }
-func (e *recordingEvent) Interface(k string, v any) gobrickslogger.LogEvent     { return e.add(k, v) }
+
+func (e *recordingEvent) Interface(k string, v any) gobrickslogger.LogEvent { return e.add(k, v) }
+
 func (e *recordingEvent) Bytes(k string, v []byte) gobrickslogger.LogEvent {
 	return e.add(k, string(v))
 }

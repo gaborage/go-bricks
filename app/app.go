@@ -218,10 +218,10 @@ func NewWithConfig(cfg *config.Config, opts *Options) (*App, logger.Logger, erro
 		RegisterReadyHandler().
 		Build()
 	if err != nil {
-		// Return the logger from builder if available, otherwise create bootstrap logger
-		if log == nil {
-			log = createBootstrapLogger()
-		}
+		// No nil check on log: Build substitutes a bootstrap logger when the
+		// builder never made one, and logger.NewWithFilter cannot return nil, so
+		// the guarantee in this function's doc comment holds by construction
+		// rather than by a fallback here.
 		return nil, log, fmt.Errorf("failed to create app: %w", err)
 	}
 

@@ -763,7 +763,7 @@ jobs:
       - name: golangci-lint (migrate tool, linux)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
         with:
-          version: v2.12.2
+          version: v2.13.0
           working-directory: tools/migration
           args: --timeout=5m
 
@@ -772,7 +772,7 @@ jobs:
         env:
           GOOS: windows
         with:
-          version: v2.12.2
+          version: v2.13.0
           working-directory: tools/migration
           args: --timeout=5m
 
@@ -841,7 +841,7 @@ jobs:
           # consumers actually see.
           GOWORK: "off"
         with:
-          version: v2.12.2
+          version: v2.13.0
           args: --timeout=5m
 
       - name: golangci-lint (framework, windows)
@@ -850,7 +850,7 @@ jobs:
           GOWORK: "off"
           GOOS: windows
         with:
-          version: v2.12.2
+          version: v2.13.0
           args: --timeout=5m
 
   security-framework:
