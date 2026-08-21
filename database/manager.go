@@ -138,7 +138,7 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (Interface
 	cfgCopy := *dbConfig
 	// No wrapping: the seam addresses the error to this key's section itself, and a wrap
 	// naming the key again would print the same identity twice (ADR-076 addendum).
-	if defaultsErr := config.ApplyDatabasePoolDefaults(&cfgCopy, key); defaultsErr != nil {
+	if defaultsErr := config.ApplyDatabasePoolDefaultsForKey(&cfgCopy, key); defaultsErr != nil {
 		return nil, defaultsErr
 	}
 

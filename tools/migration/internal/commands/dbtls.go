@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
@@ -45,9 +46,14 @@ func (p *tlsValidatingProvider) DBConfig(ctx context.Context, key string) (*conf
 		return nil, nil
 	}
 	validated := *cfg
-	// No tenant wrap: the seam addresses the error to this key's section itself.
-	if err := config.ApplyDatabasePoolDefaults(&validated, key); err != nil {
-		return nil, err
+	// Still the root-addressed door, and still wrapping: this module pins a RELEASED
+	// go-bricks, so ApplyDatabasePoolDefaultsForKey does not exist here until the next tag.
+	// Switching to it — and dropping this wrap — rides the pin bump (C60.19).
+	if err := config.ApplyDatabasePoolDefaults(&validated); err != nil {
+		if key == "" {
+			return nil, err
+		}
+		return nil, fmt.Errorf("tenant %q: %w", key, err)
 	}
 	return &validated, nil
 }

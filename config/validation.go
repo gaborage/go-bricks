@@ -750,13 +750,24 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 // It is the connect-strictness door of the database-section normalization
 // module (database_section.go); a rejected config returns untouched.
 //
-// resourceKey is the DBConfigProvider key this config was resolved for, and it decides
-// how the error is addressed: "" is the root database, a NamedDatabasePrefix key is
-// databases.<name>, and anything else is a tenant id. Passing it is what lets a
-// dynamically-resolved tenant report the same multitenant.tenants.<id>.database.<key>
-// field a statically-declared one does, so a consumer routing on ConfigError.Field
-// cannot tell the two doors apart (ADR-076 addendum, C60.19).
-func ApplyDatabasePoolDefaults(cfg *DatabaseConfig, resourceKey string) error {
+// It addresses its errors to the ROOT database section. A caller that knows which section
+// the config came from should use ApplyDatabasePoolDefaultsForKey instead, so a failure
+// names that section rather than the root (ADR-076 addendum, C60.19).
+func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
+	return ApplyDatabasePoolDefaultsForKey(cfg, "")
+}
+
+// ApplyDatabasePoolDefaultsForKey is ApplyDatabasePoolDefaults addressed to the section the
+// config was resolved for. resourceKey is the DBConfigProvider key: "" is the root database,
+// a NamedDatabasePrefix key is databases.<name>, and anything else is a tenant id.
+//
+// Passing it is what lets a dynamically-resolved tenant report the same
+// multitenant.tenants.<id>.database.<key> field a statically-declared one does, so a consumer
+// routing on ConfigError.Field cannot tell the startup and runtime doors apart. It is a
+// separate function rather than a second parameter because tools/migration is a separate
+// module pinned to a RELEASED go-bricks, so an arity change there cannot compile until the
+// next tag — see C60.19.
+func ApplyDatabasePoolDefaultsForKey(cfg *DatabaseConfig, resourceKey string) error {
 	section := sectionForResourceKey(resourceKey)
 	if cfg == nil {
 		return section.qualify(NewValidationError(fieldDatabase, "configuration is nil"))

@@ -5651,7 +5651,7 @@ func TestValidateRejectsManagerBlockOnNamedDatabase(t *testing.T) {
 func TestApplyDatabasePoolDefaultsNilConfig(t *testing.T) {
 	var err error
 	require.NotPanics(t, func() {
-		err = ApplyDatabasePoolDefaults(nil, "")
+		err = ApplyDatabasePoolDefaults(nil)
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "configuration is nil")
@@ -6095,7 +6095,7 @@ func TestApplyDatabasePoolDefaultsInfersTypeFromScheme(t *testing.T) {
 			cfg := tt.config
 			dsn := cfg.ConnectionString
 
-			require.NoError(t, ApplyDatabasePoolDefaults(&cfg, ""))
+			require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
 
 			assert.Equal(t, tt.expectedType, cfg.Type)
 			assert.Equal(t, dsn, cfg.ConnectionString, "classification tolerates whitespace; the stored DSN stays byte-exact")
@@ -6118,7 +6118,7 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 		cfg.TLS.KeyFile = "/etc/certs/client.key"
 		original := cfg
 
-		err := ApplyDatabasePoolDefaults(&cfg, "")
+		err := ApplyDatabasePoolDefaults(&cfg)
 
 		assertValidationError(t, err, "not supported for Oracle")
 		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
@@ -6131,7 +6131,7 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 		cfg.TLS.CertFile = certPath
 		original := cfg
 
-		err := ApplyDatabasePoolDefaults(&cfg, "")
+		err := ApplyDatabasePoolDefaults(&cfg)
 
 		assertValidationError(t, err, "database.tls is ignored when connectionstring is set")
 		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
@@ -6144,7 +6144,7 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 		cfg.TLS.CAFile = "/etc/certs/ca.pem"
 		original := cfg
 
-		err := ApplyDatabasePoolDefaults(&cfg, "")
+		err := ApplyDatabasePoolDefaults(&cfg)
 
 		assertValidationError(t, err, "not supported for Oracle")
 		assert.Equal(t, original, cfg, "a rejected config must go back to its caller completely untouched")
@@ -6159,7 +6159,7 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 		cfg.TLS.CertFile = certPath
 		cfg.TLS.KeyFile = "/etc/certs/client.key"
 
-		require.NoError(t, ApplyDatabasePoolDefaults(&cfg, ""))
+		require.NoError(t, ApplyDatabasePoolDefaults(&cfg))
 		assert.Equal(t, int32(25), cfg.Pool.Max.Connections, "defaults still applied after vendor validation")
 	})
 
@@ -6173,7 +6173,7 @@ func TestApplyDatabasePoolDefaultsRunsVendorValidation(t *testing.T) {
 		cfg.Pool.Idle.Time = -1
 		original := cfg
 
-		err := ApplyDatabasePoolDefaults(&cfg, "")
+		err := ApplyDatabasePoolDefaults(&cfg)
 
 		assertValidationError(t, err, "database.pool.idle.time must be non-negative")
 		assert.Equal(t, original, cfg, "a config rejected after inference must not keep the inferred Type or partial defaults")
@@ -6190,6 +6190,6 @@ func TestApplyDatabasePoolDefaultsKeepsExplicitType(t *testing.T) {
 	// The matching-type case is covered by explicit_matching_type_untouched in
 	// databaseTypeInferenceCases, which this seam's table test already runs.
 	conflicting := DatabaseConfig{Type: Oracle, ConnectionString: testBarePostgresConnString}
-	require.NoError(t, ApplyDatabasePoolDefaults(&conflicting, ""))
+	require.NoError(t, ApplyDatabasePoolDefaults(&conflicting))
 	assert.Equal(t, Oracle, conflicting.Type)
 }

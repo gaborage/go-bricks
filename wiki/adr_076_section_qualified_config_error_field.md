@@ -99,11 +99,19 @@ ever qualified too, this is where to start.
 
 ## Addendum (2026-08-21): the runtime door is addressed too, and the hint follows
 
-`normalizeDatabaseValues` takes the section, as the alternative above described, and
-`ApplyDatabasePoolDefaults` takes the resource key the config was resolved for — `""`
-for the root database, `NamedDatabasePrefix + name` for `databases.<name>`, any other
-string a tenant id. That vocabulary is the manager's own and needed no new concept; the
+`normalizeDatabaseValues` takes the section, as the alternative above described, and a new
+exported `ApplyDatabasePoolDefaultsForKey` takes the resource key the config was resolved
+for — `""` for the root database, `NamedDatabasePrefix + name` for `databases.<name>`, any
+other string a tenant id. That vocabulary is the manager's own and needed no new concept; the
 door translates it with `sectionForResourceKey`.
+
+It is a second exported function rather than a second parameter on the existing one, which
+is the one place this addendum departs from the alternative as written. `tools/migration` is
+a separate module pinned to a RELEASED go-bricks and CI builds it that way, so an arity
+change on a symbol it calls cannot compile until the next tag — the framework and its own
+CLI could not both be correct in one commit. `ApplyDatabasePoolDefaults` therefore keeps its
+signature and its root addressing, delegating with an empty key, and the CLI adopts the new
+door with its pin bump.
 
 Two consequences follow from doing it at that seam rather than at the callers:
 

@@ -3211,7 +3211,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   five of them named keys the loader does not read — `database.connection_string` for
   `connectionstring`, and four `messaging.broker.*` keys that have never existed (ADR-073,
   C60.14).
-- build-caught: C60.4; C60.6; C60.14; C60.19
+- build-caught: C60.4; C60.6; C60.14
 - preflight: if you run `go-bricks-migrate`, `go-bricks-migrate info` per tenant before the bump
   and grep `flyway.conf`/the migration environment for `DB_SSLMODE`/`DB_SSLROOTCERT`/`DB_SSLCERT`/`DB_SSLKEY`
   (C60.1, C60.2); grep dashboards, alerts, synthetic checks and contract fixtures
@@ -3235,8 +3235,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   doubled (C60.11); and if any code compares `config.ConfigError.Field` to a
   literal `database.*` key, switch it to a database-scoped predicate — a non-root section now
   names itself in that field, and a bare suffix match would also catch `cache.redis.host`
-  (C60.16); and pass the resource key to `config.ApplyDatabasePoolDefaults` at every call site
-  the compiler names, then re-point those same `Field` matchers once more — the runtime door
+  (C60.16); and if you resolve per-section database configs yourself, move to the additive
+  `config.ApplyDatabasePoolDefaultsForKey` (the old function still compiles and still answers
+  for the root), then re-point those same `Field` matchers once more — the runtime door
   now addresses a dynamic tenant the way a static one is addressed, the manager and CLI stop
   wrapping the key back in, and a non-root `Action` names its own env var or none (C60.19);
   and grep your log calls for field names containing `key`,
@@ -4060,14 +4061,19 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `tenant "<id>":`, and for `tenant '<id>' ` inside a rendered config error.
 - scope: [C60.16] addressed a database section's errors to that section at the STARTUP doors
   and said plainly that the runtime door stayed root-spelled. It no longer does.
-  `config.ApplyDatabasePoolDefaults` takes a second argument — the `DBConfigProvider`
-  resource key the config was resolved for (`""` root, `config.NamedDatabasePrefix + name`,
-  otherwise a tenant id) — and addresses its errors from it, so a dynamically-resolved
-  tenant reports `multitenant.tenants.acme.database.tls` exactly as a statically-declared one
-  does. **That is a signature change on an exported function: every caller must pass a key.**
-  `database.DbManager` and the CLI's TLS-validating provider correspondingly STOP wrapping —
-  `failed to apply pool defaults for key acme:` and `tenant "acme":` are gone from the
-  rendered text, because the key now lives in `Field`. `Action` is re-pointed with `Field`:
+  A NEW exported function, `config.ApplyDatabasePoolDefaultsForKey`, takes the
+  `DBConfigProvider` resource key the config was resolved for (`""` root,
+  `config.NamedDatabasePrefix + name`, otherwise a tenant id) and addresses its errors from
+  it, so a dynamically-resolved tenant reports `multitenant.tenants.acme.database.tls`
+  exactly as a statically-declared one does. `ApplyDatabasePoolDefaults` is UNCHANGED — same
+  signature, still root-addressed — so nothing you call stops compiling; it now delegates
+  with an empty key. It is a second function rather than a second parameter because
+  `tools/migration` is a separate module pinned to a RELEASED go-bricks, where an arity
+  change cannot compile until the next tag. `database.DbManager` moves to the new door and
+  correspondingly STOPS wrapping: `failed to apply pool defaults for key acme:` is gone from
+  the rendered text, because the key now lives in `Field`. The CLI's TLS-validating provider
+  still uses the root door and still wraps `tenant "acme":`; it adopts the new one with its
+  pin bump. `Action` is re-pointed with `Field`:
   a `databases.reporting` failure now reads `set DATABASES_REPORTING_PORT env var …` where
   it read `set DATABASE_PORT env var …`, which was not merely cosmetic — following the old
   hint on a multitenant config writes a partial root `database` block, which ADR-047 rejects
@@ -4088,14 +4094,17 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   which is a runtime door that still reports `cache.redis.host` with a root
   `CACHE_REDIS_HOST` hint for a dynamically-resolved tenant (#1125). If you route on the
   cache family rather than the database one, that asymmetry is still there.
-- gate: match = you call `config.ApplyDatabasePoolDefaults` yourself (a build break — the
-  compiler names every site), OR your code reads `ConfigError.Field` / `.Action`, OR a
-  dashboard, alert or log-parsing test pins one of the retired strings. no-match = you never
+- gate: match = your code reads `ConfigError.Field` / `.Action`, OR a dashboard, alert or
+  log-parsing test pins one of the retired strings. Calling `config.ApplyDatabasePoolDefaults`
+  is NOT a match on its own — it still compiles and still behaves as it did; you need the new
+  door only if you want your own resolved section named. no-match = you never
   touch the typed error and never parse those messages; the new spellings are then a strictly
   better read for a human and need no action.
-- apply: pass the resource key you already have to `ApplyDatabasePoolDefaults` — `""` if you
-  resolve a single database, `config.NamedDatabasePrefix + name` for a named one, the tenant
-  id for a tenant. Then replace `Field` matchers with a predicate scoped to the key families,
+- apply: if you resolve per-section configs yourself, switch to
+  `ApplyDatabasePoolDefaultsForKey` and pass the key you already hold —
+  `config.NamedDatabasePrefix + name` for a named database, the tenant id for a tenant;
+  `ApplyDatabasePoolDefaults` stays correct for a single root database. Then replace `Field`
+  matchers with a predicate scoped to the key families,
   exactly as [C60.16] teaches — `database.<key>` for the root, and a `databases.` /
   `multitenant.tenants.` prefix before accepting a suffix, since `cache.redis.host` ends in
   `.host` too. That predicate now works for BOTH doors, which is the point of this atom: a
@@ -4112,7 +4121,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - ref: [ADR-076](adr_076_section_qualified_config_error_field.md) (addendum) ·
   [ADR-047](adr_047_database_absence_vs_misconfiguration.md) ·
   `config/database_section.go` (`sectionForResourceKey`, `normalizeDatabaseValues`,
-  `dbSection.qualify`) · `config/validation.go` (`ApplyDatabasePoolDefaults`) ·
+  `dbSection.qualify`) · `config/validation.go` (`ApplyDatabasePoolDefaultsForKey`) ·
   `config/errors.go` (`tenantField`) · `database/manager.go` ·
   `tools/migration/internal/commands/dbtls.go`
 

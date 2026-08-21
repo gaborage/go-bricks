@@ -245,7 +245,7 @@ func TestRuntimeDoorSpellingMatchesStartupDoor(t *testing.T) {
 			startupCfg, runtimeCfg := invalid, invalid
 
 			startupErr := normalizeDatabaseValues(&startupCfg, tt.section, dbStrictnessStartup)
-			runtimeErr := ApplyDatabasePoolDefaults(&runtimeCfg, tt.key)
+			runtimeErr := ApplyDatabasePoolDefaultsForKey(&runtimeCfg, tt.key)
 
 			var startupCfgErr, runtimeCfgErr *ConfigError
 			require.ErrorAs(t, startupErr, &startupCfgErr)
@@ -280,10 +280,10 @@ func TestSectionForResourceKey(t *testing.T) {
 	}
 }
 
-// TestApplyDatabasePoolDefaultsAddressesResourceKey drives the EXPORTED runtime door, the
+// TestApplyDatabasePoolDefaultsForKeyAddressesResourceKey drives the EXPORTED runtime door, the
 // one DbManager and the migrate CLI call, so the key-to-section translation is pinned at the
 // surface a consumer actually sees rather than only at the internal seam.
-func TestApplyDatabasePoolDefaultsAddressesResourceKey(t *testing.T) {
+func TestApplyDatabasePoolDefaultsForKeyAddressesResourceKey(t *testing.T) {
 	tests := []struct {
 		name      string
 		key       string
@@ -301,7 +301,7 @@ func TestApplyDatabasePoolDefaultsAddressesResourceKey(t *testing.T) {
 				TLS: TLSConfig{CertFile: "c.pem"},
 			}
 
-			err := ApplyDatabasePoolDefaults(&cfg, tt.key)
+			err := ApplyDatabasePoolDefaultsForKey(&cfg, tt.key)
 
 			var cfgErr *ConfigError
 			require.ErrorAs(t, err, &cfgErr)
@@ -310,10 +310,10 @@ func TestApplyDatabasePoolDefaultsAddressesResourceKey(t *testing.T) {
 	}
 }
 
-// TestApplyDatabasePoolDefaultsNilConfigAddressesItsSection covers the door's own guard,
+// TestApplyDatabasePoolDefaultsForKeyNilConfigAddressesItsSection covers the door's own guard,
 // which reports before any normalization runs and so has its own qualify call.
-func TestApplyDatabasePoolDefaultsNilConfigAddressesItsSection(t *testing.T) {
-	err := ApplyDatabasePoolDefaults(nil, "acme")
+func TestApplyDatabasePoolDefaultsForKeyNilConfigAddressesItsSection(t *testing.T) {
+	err := ApplyDatabasePoolDefaultsForKey(nil, "acme")
 
 	var cfgErr *ConfigError
 	require.ErrorAs(t, err, &cfgErr)
