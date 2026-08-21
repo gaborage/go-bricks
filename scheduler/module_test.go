@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
@@ -27,10 +28,10 @@ func TestSchedulerModuleName(t *testing.T) {
 }
 
 // TestSchedulerModuleRegisterRoutes verifies route registration (stub for Phase 4)
-func TestSchedulerModuleRegisterRoutes(_ *testing.T) {
-	module := NewModule()
+func TestSchedulerModuleRegisterRoutes(t *testing.T) {
+	module, _ := newTestScheduler(t, 5*time.Second)
 
-	// RegisterRoutes is a stub but should not panic
+	// Nil parameters short-circuit registration rather than panicking
 	module.RegisterRoutes(nil, nil)
 }
 
@@ -385,6 +386,35 @@ func TestSlowJobThresholdWarning(t *testing.T) {
 	assert.Greater(t, job.count(), 0, "Job should have executed")
 }
 
+// TestDetermineJobSeverityUsesConfiguredSlowJobThreshold pins the severity
+// boundary to scheduler.timeout.slowjob. The module no longer carries a
+// use-time default for it, so the configured value is the only threshold.
+func TestDetermineJobSeverityUsesConfiguredSlowJobThreshold(t *testing.T) {
+	module, _ := newTestScheduler(t, 5*time.Second, withSlowJobThreshold(100*time.Millisecond))
+
+	tests := []struct {
+		name     string
+		duration time.Duration
+		err      error
+		level    string
+		code     string
+	}{
+		{name: "failure_is_error", duration: time.Millisecond, err: errors.New("boom"), level: "error", code: "ERROR"},
+		{name: "below_threshold_is_info", duration: 99 * time.Millisecond, level: "info", code: "INFO"},
+		{name: "at_threshold_is_info", duration: 100 * time.Millisecond, level: "info", code: "INFO"},
+		{name: "above_threshold_is_warn", duration: 101 * time.Millisecond, level: "warn", code: "WARN"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			level, code := module.determineJobSeverity(tt.duration, tt.err)
+
+			assert.Equal(t, tt.level, level)
+			assert.Equal(t, tt.code, code)
+		})
+	}
+}
+
 // TestJobExecutionWithoutTracer verifies jobs execute successfully when tracer is nil
 func TestJobExecutionWithoutTracer(t *testing.T) {
 	module, _ := newTestScheduler(t, 5*time.Second)
@@ -591,13 +621,55 @@ func waitFor(t *testing.T, cond func() bool) {
 	require.Eventually(t, cond, time.Second, 10*time.Millisecond)
 }
 
+// TestSchedulerInitRequiresNormalizedConfig pins the invariant every later config
+// read depends on: the module reads scheduler.timeout.* with no use-time
+// fallback, so a ModuleDeps assembled outside app construction fails at Init
+// rather than at shutdown, where a zero budget abandons in-flight jobs.
+func TestSchedulerInitRequiresNormalizedConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     *config.Config
+		wantErr string
+	}{
+		{name: "nil_config", cfg: nil, wantErr: "deps.Config is required"},
+		{
+			name:    "both_timeouts_zero",
+			cfg:     &config.Config{},
+			wantErr: "scheduler.timeout.shutdown must be positive",
+		},
+		{
+			name:    "only_shutdown_set",
+			cfg:     schedulerTimeoutConfig(30*time.Second, 0),
+			wantErr: "scheduler.timeout.slowjob must be positive",
+		},
+		{
+			name:    "only_slowjob_set",
+			cfg:     schedulerTimeoutConfig(0, 25*time.Second),
+			wantErr: "scheduler.timeout.shutdown must be positive",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewModule().Init(&app.ModuleDeps{Logger: logger.New("info", false), Config: tt.cfg})
+
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func schedulerTimeoutConfig(shutdown, slowJob time.Duration) *config.Config {
+	return &config.Config{Scheduler: config.SchedulerConfig{
+		Timeout: config.SchedulerTimeoutConfig{Shutdown: shutdown, SlowJob: slowJob},
+	}}
+}
+
 func TestSchedulerConfiguredTimezone(t *testing.T) {
 	tests := []struct {
 		name     string
 		cfg      *config.Config
 		expected string
 	}{
-		{name: "nil_config_defaults_to_utc", cfg: nil, expected: "UTC"},
 		{name: "empty_defaults_to_utc", cfg: &config.Config{}, expected: "UTC"},
 		{name: "iana_preserved", cfg: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "America/New_York"}}, expected: "America/New_York"},
 		{name: "sentinel_preserved", cfg: &config.Config{Scheduler: config.SchedulerConfig{Timezone: "-"}}, expected: "-"},

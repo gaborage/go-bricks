@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// timeOfDayFormat is the time parsing format used by ParseTime — HH:MM (24h).
+// Matches Go's reference-time pattern (Mon Jan 2 15:04:05 MST 2006).
+const timeOfDayFormat = "15:04"
+
 // ParseTime parses a time string in "HH:MM" format (24-hour) and returns a time.Time.
 // This is a convenience function intended for use in application initialization code
 // when registering scheduled jobs.

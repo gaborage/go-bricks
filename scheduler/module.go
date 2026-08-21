@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -94,6 +95,21 @@ func (m *Module) Name() string {
 // (The module registry, not Init, wires this Module into deps.Scheduler after Init returns,
 // because Module implements JobRegistrar; see app/module_registry.go.)
 func (m *Module) Init(deps *app.ModuleDeps) error {
+	// The module reads scheduler.timeout.* straight from config, which only
+	// carries its defaults after config.Validate. A caller that assembles
+	// ModuleDeps itself (bypassing app construction) fails here rather than at
+	// shutdown, where a zero shutdown budget abandons in-flight jobs to the
+	// teardown of the resources they are still using.
+	if deps.Config == nil {
+		return errors.New("scheduler: deps.Config is required")
+	}
+	if deps.Config.Scheduler.Timeout.Shutdown <= 0 {
+		return errors.New("scheduler: scheduler.timeout.shutdown must be positive; run the config through config.Validate")
+	}
+	if deps.Config.Scheduler.Timeout.SlowJob <= 0 {
+		return errors.New("scheduler: scheduler.timeout.slowjob must be positive; run the config through config.Validate")
+	}
+
 	m.logger = deps.Logger
 	m.config = deps.Config
 	m.tracer = deps.Tracer
@@ -142,18 +158,18 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 // RegisterRoutes implements app.Module
 // Registers system API routes for job listing and manual triggering
 func (m *Module) RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar) {
-	// Skip route registration if parameters are nil (e.g., in tests)
+	// Skip route registration if parameters are nil. Load-bearing rather than
+	// cosmetic: it returns before the config reads below, so a module that never
+	// ran Init can still be called this way (as tests do).
 	if hr == nil || r == nil {
 		return
 	}
 
 	// Create CIDR middleware for /_sys/job endpoints
-	var allowlist []string
-	var trustedProxies []string
-	if m.config != nil {
-		allowlist = m.config.Scheduler.Security.CIDRAllowlist
-		trustedProxies = m.config.Scheduler.Security.TrustedProxies
-	}
+	// Named rather than inlined: both are []string, so a swapped pair compiles and
+	// would widen /_sys/job* to the proxy ranges.
+	allowlist := m.config.Scheduler.Security.CIDRAllowlist
+	trustedProxies := m.config.Scheduler.Security.TrustedProxies
 	cidrMiddleware := CIDRMiddleware(m.logger, allowlist, trustedProxies)
 
 	// Create a group for system endpoints with CIDR protection
@@ -184,11 +200,9 @@ func (m *Module) Shutdown() error {
 
 	m.logger.Info().Msg("Initiating graceful scheduler shutdown")
 
-	// Get shutdown timeout from config (default per ASSUME-010, see constants.go)
-	timeout := defaultShutdownTimeout
-	if m.config != nil && m.config.Scheduler.Timeout.Shutdown > 0 {
-		timeout = m.config.Scheduler.Timeout.Shutdown
-	}
+	// scheduler.timeout.shutdown, normalized by config.Validate: positive on
+	// every config that reached a module.
+	timeout := m.config.Scheduler.Timeout.Shutdown
 
 	// Stop scheduler (prevents new job triggers)
 	if err := scheduler.Shutdown(); err != nil {
@@ -248,11 +262,12 @@ func (m *Module) ensureSchedulerInitialized() error {
 }
 
 // configuredTimezone returns the raw scheduler timezone string from config,
-// defaulting to UTC when config is absent or the field is empty. In production
-// config.Validate() has already normalized this value (default UTC, "-" opt-out,
-// IANA-validated); the fallback only matters for tests that bypass validation.
+// defaulting to UTC when the field is empty. config.Validate() normalizes this
+// value (default UTC, "-" opt-out, IANA-validated), so the fallback only covers
+// a config assembled in code that set the timeouts Init requires but left the
+// zone empty.
 func (m *Module) configuredTimezone() string {
-	if m.config != nil && m.config.Scheduler.Timezone != "" {
+	if m.config.Scheduler.Timezone != "" {
 		return m.config.Scheduler.Timezone
 	}
 	return config.DefaultTimezone // "UTC" — shared framework timezone default
@@ -835,12 +850,8 @@ func (m *Module) determineJobSeverity(duration time.Duration, err error) (logLev
 		return "error", "ERROR"
 	}
 
-	// WARN: Slow job (succeeded but exceeded threshold)
-	threshold := defaultSlowJobThreshold
-	if m.config != nil && m.config.Scheduler.Timeout.SlowJob > 0 {
-		threshold = m.config.Scheduler.Timeout.SlowJob
-	}
-	if threshold > 0 && duration > threshold {
+	// WARN: Slow job (succeeded but exceeded scheduler.timeout.slowjob)
+	if duration > m.config.Scheduler.Timeout.SlowJob {
 		return "warn", "WARN"
 	}
 

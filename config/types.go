@@ -838,12 +838,12 @@ type SchedulerSecurityConfig struct {
 // SchedulerTimeoutConfig holds timeout and threshold settings for scheduler operations.
 type SchedulerTimeoutConfig struct {
 	// Shutdown is the graceful shutdown timeout for in-flight jobs.
-	// Default: 30s.
+	// Zero applies the default; negative is rejected. Default: 30s.
 	Shutdown time.Duration `koanf:"shutdown" json:"shutdown" yaml:"shutdown" toml:"shutdown" mapstructure:"shutdown"`
 
 	// SlowJob is the execution duration threshold for marking jobs as slow.
 	// Jobs exceeding this duration are logged with result_code="WARN" even if successful.
-	// Zero or negative = disabled. Default: 30s.
+	// Zero applies the default; negative is rejected. Default: 25s.
 	SlowJob time.Duration `koanf:"slowjob" json:"slowjob" yaml:"slowjob" toml:"slowjob" mapstructure:"slowjob"`
 }
 

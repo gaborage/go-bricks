@@ -1394,6 +1394,26 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-075: One Normalized Default per Scheduler Timeout Key](adr_075_scheduler_timeout_single_default.md)
+
+**Date:** 2026-08-20 | **Status:** Accepted
+
+`scheduler.timeout.shutdown` and `scheduler.timeout.slowjob` each had two defaults — the koanf
+loader's (30s/25s) and the scheduler module's use-time constants (30s/**30s**) behind `> 0` guards —
+and they had already drifted: a YAML deployment ran a 25s slow-job threshold where a config
+assembled in Go ran 30s. Normalization now owns both keys through `applyNonNegativeDefault` (zero
+applies the default, negative fails validation naming the key), the koanf loader renders those same
+constants, and the module reads the normalized config with no fallback. Trusting the config needs an
+enforced precondition, so `Init` rejects a nil `deps.Config` and the module's two remaining
+`m.config != nil` guards are gone — a nil config was otherwise a panic in `Shutdown` and, in
+`determineJobSeverity`, a recovered panic that reported every SUCCESSFUL job as a panicking failure.
+
+**Key Benefits:** one edit moves a default; the divergence class is removed, not re-set.
+**Watch:** hand-built configs move 30s → 25s for slowjob, a negative value now aborts startup (the
+v0.59 `SlowJob` godoc suggested one, and that disable path was never reachable), and a
+`*config.Config` handed straight to `Module.Init`/`NewModuleRegistry` is never normalized — see
+`[C60.12]`.
+
 ### [ADR-070: Inbound Trace Identifiers Are Validated at the Trace Seam](adr_070_inbound_trace_identifier_validation.md)
 
 **Date:** 2026-08-19 | **Status:** Accepted
@@ -1468,7 +1488,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-070) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-075) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

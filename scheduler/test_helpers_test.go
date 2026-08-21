@@ -87,6 +87,9 @@ func newTestScheduler(t *testing.T, shutdownTimeout time.Duration, opts ...testS
 			Scheduler: config.SchedulerConfig{
 				Timeout: config.SchedulerTimeoutConfig{
 					Shutdown: shutdownTimeout,
+					// Positive threshold, as config normalization guarantees, so
+					// short test jobs are not all WARN-flagged as slow.
+					SlowJob: 25 * time.Second,
 				},
 			},
 		},

@@ -120,6 +120,14 @@ const (
 	defaultStartupObservabilityTimeout = 15 * time.Second // OTLP provider initialization timeout
 )
 
+// Scheduler timeout defaults. Single source: the koanf loader renders these
+// (config.go) and the scheduler module reads the normalized config rather than
+// mirroring them (#1029).
+const (
+	defaultSchedulerShutdownTimeout  = 30 * time.Second // Budget for in-flight jobs during graceful shutdown
+	defaultSchedulerSlowJobThreshold = 25 * time.Second // Successful jobs slower than this log at WARN
+)
+
 // Database type constants
 const (
 	PostgreSQL = "postgresql"
@@ -850,10 +858,19 @@ func applyDatabaseTimezoneDefault(cfg *DatabaseConfig) error {
 	return err
 }
 
-// normalizeScheduler normalizes scheduler.timezone: default "UTC", "-"
-// opt-out for host-local, IANA validation — an invalid zone fails fast at
-// startup.
+// normalizeScheduler normalizes the scheduler section:
+//   - Timeout.Shutdown / Timeout.SlowJob: zero applies the default, negative is invalid.
+//   - Timezone: default "UTC", "-" opt-out for host-local, IANA validation — an
+//     invalid zone fails fast at startup.
 func normalizeScheduler(cfg *SchedulerConfig) error {
+	if err := applyNonNegativeDefault(&cfg.Timeout.Shutdown, defaultSchedulerShutdownTimeout, "scheduler.timeout.shutdown"); err != nil {
+		return err
+	}
+
+	if err := applyNonNegativeDefault(&cfg.Timeout.SlowJob, defaultSchedulerSlowJobThreshold, "scheduler.timeout.slowjob"); err != nil {
+		return err
+	}
+
 	normalized, err := normalizeIANATimezone("scheduler.timezone", cfg.Timezone)
 	cfg.Timezone = normalized
 	return err
