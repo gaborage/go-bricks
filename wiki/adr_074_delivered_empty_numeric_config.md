@@ -6,7 +6,8 @@
 
 ## Context
 
-`FOO=` in a Kubernetes manifest, an empty `secretKeyRef`, an `envsubst` over an unset
+`FOO=` in a Kubernetes manifest, a `secretKeyRef` whose stored value is empty (an
+ABSENT key leaves the variable unset instead), an `envsubst` over an unset
 variable — every one of them delivers a set-but-empty string. koanf keeps the key
 (with its empty value), and mapstructure's `WeaklyTypedInput` rewrites `""` to `0`
 for any numeric target. The result decodes as a legal zero.
@@ -81,7 +82,8 @@ parse — but it keeps one rule for what "delivered empty" means.
 ## Consequences
 
 - `FOO=` no longer means `0` for a numeric key. A deployment that relied on it — or
-  that has an empty `secretKeyRef` it never noticed — fails startup naming the key.
+  whose `secretKeyRef` resolves to an empty value it never noticed — fails startup naming
+  the key.
   For keys where `0` resolves to a default this ends a posture that was working; the
   trade is a loud failure now against an unnoticed one later, and the operator is the
   only one who knows which value was intended.

@@ -3830,9 +3830,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - detect: grep every deployment surface — Helm values, Kustomize overlays, `.env` files,
   Task/Compose definitions, CI secrets — for a go-bricks variable **set to nothing**:
   `grep -rnE '^[[:space:]]*[A-Z0-9_]+=[[:space:]]*$'` over env files, plus any
-  `secretKeyRef`/`configMapKeyRef` whose source key may be absent and any `envsubst`
-  template over a variable that can be unset. A repo grep will not find those last two —
-  read the rendered manifest or `kubectl exec … env | grep '=$'` in a running pod.
+  `secretKeyRef`/`configMapKeyRef` whose source key holds an EMPTY value, and any `envsubst`
+  template over a variable that can be unset. Note which secret shape actually bites: a
+  MISSING key does not produce `FOO=` — with `optional: true` Kubernetes leaves the variable
+  unset, and with `optional: false` the container will not start — so only a present key with
+  an empty payload reaches this rule. A repo grep will not find those last two: read the
+  rendered manifest, or `kubectl exec … env | grep -E '=[[:space:]]*$'` in a running pod
+  (whitespace-aware, because a whitespace-only value is rejected too).
 - scope: a set-but-empty string bound to a NUMERIC config key used to decode as `0`
   (koanf keeps the key; mapstructure's `WeaklyTypedInput` rewrote `""` to `0`). It now
   fails `config.Load` — and the public `Config.Unmarshal` — with an error naming the key
@@ -3859,8 +3863,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   value was BENIGN before this change (`CACHE_REDIS_PORT=` resolved to 6379,
   `OUTBOX_BATCHSIZE=` to its default) and those deployments were healthy. They now fail
   to boot. no-match = every variable is either unset or carries a real value.
-- apply: unset the variable, or give it an explicit value. For a `secretKeyRef`, confirm
-  the referenced key exists in the secret — an absent key renders as empty. For a dynamic
+- apply: unset the variable, or give it an explicit value. For a `secretKeyRef`, fix the
+  stored VALUE rather than the reference: an absent key leaves the variable unset (or blocks
+  the pod), so what reaches this rule is a key whose payload is empty. For a dynamic
   `DBConfigProvider`, check the stored secret payload itself: a rotation that writes `""`
   for a numeric field now fails that tenant's config resolution. In a multi-tenant
   deployment sweep EVERY tenant record (`multitenant.tenants.<key>.*`, `databases.<key>.*`),
@@ -3877,8 +3882,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   that seam, and a delivered-empty value there now ABORTS startup where it previously
   fell back to a no-op provider — telemetry silently off — so that section is worth
   checking first. To confirm the
-  posture before deploying, run `kubectl exec <pod> -- env | grep '=$'` against the
-  current release — every line it prints is a candidate.
+  posture before deploying, run `kubectl exec <pod> -- env | grep -E '=[[:space:]]*$'`
+  against the current release — every line it prints is a candidate, whitespace-only values
+  included, since those are rejected too.
 - ref: [ADR-074](adr_074_delivered_empty_numeric_config.md) ·
   [ADR-051](adr_051_delivered_empty_database_identity.md) ·
   [ADR-065](adr_065_keystore_secretminlength_tristate.md) ·
