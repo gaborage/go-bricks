@@ -1573,9 +1573,10 @@ id is discarded and regenerated, never truncated — truncation silently forges 
 terms — the HTTP ingress `traceparent`/`tracestate` (`enrichTraceContext` read `req.Header`
 directly, bypassing the seam; invalid ⇒ drop-and-mint, never reject), the response reflection
 `ensureTraceParentHeader` performs at six call sites plus the access-log metadata reader, and the
-classic AMQP lane's `CorrelationId`/`MessageId`/`RoutingKey`/`Exchange`, which live in the delivery's
-PROPERTIES where no extractor reaches them. The three properties are resolved once in
-`processMessage` and the one verdict is threaded to every sink; an identifier that fails is omitted
+classic AMQP lane's four delivery identity fields — `CorrelationId` and `MessageId` (content-header
+PROPERTIES) plus `RoutingKey` and `Exchange` (`basic.deliver` ENVELOPE metadata) — none of which a
+header extractor reaches. All four are resolved once in
+`processMessage` and the one verdict is threaded to every sink; a field that fails is omitted
 rather than substituted. The routing key answers to a distinct printable-ASCII rule, because the
 request-id charset would discard every dotted key. Streams lane untouched. See `[C60.17]`.
 

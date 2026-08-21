@@ -407,8 +407,9 @@ func TestTraceContextShadowsAnInheritedTraceState(t *testing.T) {
 
 	// The three inbound-parent shapes that can reach this door. The absent and
 	// invalid cases matter most: those are precisely when a FRESH traceparent gets
-	// minted downstream, so an inherited tracestate surviving here is emitted
-	// annotating a parent that did not exist when it was written.
+	// minted downstream, so an inherited value surviving here is emitted as part of
+	// a trace this request never belonged to. Both keys are asserted, because
+	// clearing only one leaves an inherited parent stripped of its own state.
 	for _, tt := range []struct {
 		name        string
 		traceparent string
@@ -419,7 +420,7 @@ func TestTraceContextShadowsAnInheritedTraceState(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			capturedContext = nil
-			inherited := gobrickshttp.WithTraceState(context.Background(), "inherited=from-another-parent")
+			inherited := gobrickshttp.WithTraceParent(gobrickshttp.WithTraceState(context.Background(), "inherited=from-another-parent"), "00-99999999999999999999999999999999-8888888888888888-01")
 			req := httptest.NewRequestWithContext(inherited, http.MethodGet, "/test", http.NoBody)
 			if tt.traceparent != "" {
 				req.Header.Set(gobrickshttp.HeaderTraceParent, tt.traceparent)
@@ -428,8 +429,15 @@ func TestTraceContextShadowsAnInheritedTraceState(t *testing.T) {
 			e.ServeHTTP(httptest.NewRecorder(), req)
 			require.NotNil(t, capturedContext)
 
-			got, ok := gobrickshttp.TraceStateFromContext(capturedContext)
-			assert.False(t, ok, "an inherited tracestate rode along with a parent it does not annotate: %q", got)
+			gotState, okState := gobrickshttp.TraceStateFromContext(capturedContext)
+			assert.False(t, okState, "an inherited tracestate survived: %q", gotState)
+
+			gotParent, okParent := gobrickshttp.TraceParentFromContext(capturedContext)
+			if tt.traceparent == testTraceparent {
+				assert.Equal(t, testTraceparent, gotParent, "this request's own valid parent must win")
+			} else {
+				assert.False(t, okParent, "an inherited traceparent survived an absent/invalid inbound one: %q", gotParent)
+			}
 		})
 	}
 }
