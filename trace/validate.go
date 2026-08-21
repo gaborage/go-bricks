@@ -69,6 +69,41 @@ func ValidateRequestID(id string) string {
 	return ""
 }
 
+// traceStatePattern is printable ASCII, nothing more. It is NOT the tracestate
+// grammar: the W3C list syntax is deliberately not validated here (see
+// MaxTraceStateBytes), and this charset is a strict superset of it, so it costs
+// no interoperability.
+//
+// What it refuses is a control byte. ADR-070 declined the GRAMMAR because that
+// means OpenTelemetry's ParseTraceState and an OTel dependency underneath server,
+// messaging and outbox. A control-byte check needs no dependency, and the cap
+// alone let one through every door that is not HTTP: Go's own header reader
+// rejects CTL bytes on an inbound HTTP request, but an AMQP longstr carries any
+// byte, so a foreign publisher could plant CR/LF or NUL in a value this framework
+// stores, re-emits on every outbound hop, and persists in outbox rows. Beyond the
+// log-injection surface, such a value is refused by net/http's own header
+// validation on the way out, which turns one cheap message into a client that
+// burns its whole retry budget.
+var traceStatePattern = regexp.MustCompile(`^[[:print:]]+$`)
+
+// ValidateTraceState returns ts when it is a usable tracestate, otherwise "".
+// The rule is the cap plus a control-byte refusal — no grammar; see
+// MaxTraceStateBytes and traceStatePattern.
+//
+// It exists as a function rather than as a bare comparison against the constant
+// so every door applies the SAME rule, not the same number: a door that inlines
+// `len(ts) <= MaxTraceStateBytes` keeps compiling on the day this gains a second
+// clause, and silently stops matching the others. That is the failure mode
+// ADR-070 was written to prevent — and this function having gained exactly such a
+// clause is the demonstration.
+func ValidateTraceState(ts string) string {
+	// Length first: cheap, and it caps the input the matcher ever walks.
+	if ts == "" || len(ts) > MaxTraceStateBytes || !traceStatePattern.MatchString(ts) {
+		return ""
+	}
+	return ts
+}
+
 // ValidateTraceParent returns tp when it is a well-formed, non-zero W3C
 // traceparent, otherwise "". Rejecting the all-zero trace-id and parent-id
 // mirrors OpenTelemetry's own Extract, which treats them as absent rather than
@@ -83,7 +118,8 @@ func ValidateRequestID(id string) string {
 // dropping real upstream traces the day a version 01 appears on the wire.
 //
 // Forward compatible is not the same as unbounded, though. Those extra fields
-// must still be dash-delimited hex and the whole value must still fit
+// must still be dash-delimited printable non-space ASCII — the pattern's
+// [[:graph:]], not hex — and the whole value must still fit
 // MaxTraceParentBytes, because everything this seam accepts is stored per
 // delivery and re-emitted on every outbound hop. A future version whose fields
 // fall outside that charset is discarded like any other unparseable traceparent

@@ -12,14 +12,37 @@ import (
 // any inbound W3C trace headers (traceparent/tracestate) attached, so outbound
 // HTTP clients can propagate them without depending on Echo. Shared by the
 // TraceContext and RequestEnrich middlewares so the enrichment cannot diverge.
+//
+// Both headers are judged by the rules trace.ExtractFromHeaders applies at the
+// messaging and outbox doors (ADR-070). The HTTP door read them raw, which made
+// it the one ingress that stored a caller's bytes verbatim and re-emitted them on
+// every outbound hop. An invalid traceparent is treated as absent — never as a
+// reason to reject the request — so the request continues on a freshly minted
+// one, byte-identical to the path every untraced request already takes.
 func enrichTraceContext(c *echo.Context) context.Context {
 	req := c.Request()
 	ctx := gobrickshttp.WithTraceID(req.Context(), getTraceID(c))
-	if tp := req.Header.Get(gobrickshttp.HeaderTraceParent); tp != "" {
+	// Shadow BOTH inherited W3C keys first, unconditionally. At an ingress the
+	// request defines the trace: anything already on the context arrived from the
+	// server's base context or an earlier middleware, not from this caller, and
+	// leaving it would let InjectIntoHeaders propagate a trace this request is not
+	// part of. Clearing before the branch is what covers the invalid- and
+	// absent-parent paths, which are exactly when a fresh parent gets minted
+	// downstream.
+	//
+	// Both, not one: clearing only the tracestate would keep an inherited parent
+	// while stripping the state that annotates it, which is the mismatched pairing
+	// this rule exists to prevent, merely inverted. ParentFromContext and
+	// StateFromContext both report "" as absent, so this removes the values rather
+	// than propagating empty ones. This is where the HTTP door deliberately parts
+	// from trace.ExtractFromHeaders, which leaves an inherited parent alone: that
+	// seam serves carriers whose surrounding context legitimately holds a caller's
+	// trace, while an HTTP request IS the trace's origin here.
+	ctx = gobrickshttp.WithTraceParent(ctx, "")
+	ctx = gobrickshttp.WithTraceState(ctx, "")
+	if tp := validateTraceParent(req.Header.Get(gobrickshttp.HeaderTraceParent)); tp != "" {
 		ctx = gobrickshttp.WithTraceParent(ctx, tp)
-	}
-	if ts := req.Header.Get(gobrickshttp.HeaderTraceState); ts != "" {
-		ctx = gobrickshttp.WithTraceState(ctx, ts)
+		ctx = gobrickshttp.WithTraceState(ctx, validateTraceState(req.Header.Get(gobrickshttp.HeaderTraceState)))
 	}
 	return ctx
 }

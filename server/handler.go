@@ -1408,18 +1408,29 @@ func getTraceID(c *echo.Context) string {
 }
 
 // ensureTraceParentHeader ensures the response contains a W3C traceparent header.
-// It propagates the inbound header when present, otherwise generates a new one.
+// It propagates the inbound header when it is valid, otherwise generates a new one.
+//
+// The inbound read is validated here rather than inherited from the context: this
+// reads c.Request().Header directly, so the ctx guard in enrichTraceContext does
+// not reach it, and every one of this function's call sites writes the result
+// onto the wire. Reflecting an unvouched value would hand a caller a response
+// header — and, through the access log's response-header read, a log field —
+// carrying their own bytes (ADR-070).
 func ensureTraceParentHeader(c *echo.Context) {
 	// SAFETY: Check if response is still valid (may be nil after timeout)
 	resp := c.Response()
 	if resp == nil {
 		return
 	}
-	if resp.Header().Get(gobrickshttp.HeaderTraceParent) != "" {
+	// The response read is validated too, symmetrically with the access-log reader
+	// and with validateRequestID's two seams: an earlier middleware may have
+	// reflected the inbound value verbatim, and an unvouched value already on the
+	// response is the one this function would leave on the wire.
+	if validateTraceParent(resp.Header().Get(gobrickshttp.HeaderTraceParent)) != "" {
 		return
 	}
 	// Prefer inbound header
-	if tp := c.Request().Header.Get(gobrickshttp.HeaderTraceParent); tp != "" {
+	if tp := validateTraceParent(c.Request().Header.Get(gobrickshttp.HeaderTraceParent)); tp != "" {
 		resp.Header().Set(gobrickshttp.HeaderTraceParent, tp)
 		return
 	}
