@@ -52,12 +52,14 @@ key even though Oracle keeps those columns distinct.
 Two preconditions, checked at `BuildUpsert` alongside the three that precede
 them, in an order that matters.
 
-**First, every column named in an upsert must be a single column name** — no
-qualifier, no function call, no empty name, and no quote that ends the identifier
-early. The check runs on all three inputs, for two different reasons. Conflict and
-insert keys have none: they become column aliases in the MERGE's USING clause
-(`:1 AS <column>`) and entries in its INSERT list, and neither position admits
-anything but one identifier. Update keys become UPDATE SET targets, where Oracle
+**First, every column named in an upsert must be a single column name** — on
+Oracle: no qualifier, no function call, no empty name; and on **both** vendors: no
+quote that ends the identifier early. Only that last clause crosses to PostgreSQL,
+for the reason given below; the three name-shape rules are Oracle grammar and are
+enforced there alone. The check runs on all three inputs, for two different
+reasons. Oracle conflict and insert keys have no choice: they become column
+aliases in the MERGE's USING clause (`:1 AS <column>`) and entries in its INSERT
+list, and neither position admits anything but one identifier. Update keys become UPDATE SET targets, where Oracle
 would also accept `target.<column>`; holding them to the same rule is this API's
 choice, so that one spelling of a column works in every position a call names it.
 
