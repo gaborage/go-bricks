@@ -5,7 +5,6 @@
 package configdecode
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -90,24 +89,24 @@ func EmptyStringToScalarGuardHookFunc() mapstructure.DecodeHookFunc {
 		if strings.TrimSpace(reflect.ValueOf(data).String()) != "" {
 			return data, nil
 		}
-		// Messages stay inline rather than in package vars: the mirror-drift test compares
-		// function bodies, so a message hoisted out of the body would drift unchecked.
+		// The message stays inline rather than in a package var: the mirror-drift test
+		// compares function bodies, so a message hoisted out would drift unchecked. Only
+		// the remedy differs by kind — the part an operator acts on.
+		kind, remedy := "numeric", "an explicit value"
 		if t.Kind() == reflect.Bool {
-			return nil, errors.New(
-				"boolean value delivered empty — set an explicit true/false (empty secretKeyRef / unset envsubst variable?) " +
-					"or remove the key entirely to take its default",
-			)
+			kind, remedy = "boolean", "an explicit true/false"
 		}
-		return nil, errors.New(
-			"numeric value delivered empty — set an explicit value (empty secretKeyRef / unset envsubst variable?) " +
-				"or remove the key entirely to take its default",
+		return nil, fmt.Errorf(
+			"%s value delivered empty — set %s (empty secretKeyRef / unset envsubst variable?) "+
+				"or remove the key entirely to take its default", kind, remedy,
 		)
 	}
 }
 
 // isWeakScalarKind reports whether k is one mapstructure's WeaklyTypedInput would fill from
-// a string, i.e. exactly the kinds where "" silently becomes that kind's zero value — 0 for
-// the numerics, false for a bool.
+// a string, i.e. the SCALAR kinds where "" silently becomes that kind's zero value — 0 for
+// the numerics, false for a bool. Slice and map elements re-enter the hook individually, so
+// they are judged by this same predicate on their element kind.
 func isWeakScalarKind(k reflect.Kind) bool {
 	switch k {
 	case reflect.Bool,

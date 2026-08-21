@@ -86,11 +86,6 @@ func TestEmptyStringToScalarGuardHookFunc(t *testing.T) {
 			assert: func(t *testing.T, got target) { assert.True(t, got.Flag) },
 		},
 		{
-			name:   "explicit_bool_numeric_spelling_passes",
-			input:  map[string]any{"flag": "1"},
-			assert: func(t *testing.T, got target) { assert.True(t, got.Flag) },
-		},
-		{
 			// The damaging shape ADR-077 closes: a non-nil *false reads as an operator
 			// choice, so an explicit one must still reach the target unchanged.
 			name:   "explicit_bool_pointer_false_passes",

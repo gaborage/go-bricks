@@ -288,6 +288,20 @@ func TestLoadExplicitBoolEnvUnchanged(t *testing.T) {
 			"absence is not emptiness: an unset key must still take the default true")
 	})
 
+	// ADR-077 and atom C60.18 promise operators that 1/0 still work; that promise rests
+	// on WeaklyTypedInput staying on in the real decoder, which only a Load can prove.
+	t.Run("numeric_spelling_still_decodes", func(t *testing.T) {
+		clearEnvironmentVariables()
+		t.Setenv("CACHE_CRITICAL", "0")
+		t.Setenv("SERVER_LOGROUTES", "1")
+
+		cfg, err := Load()
+
+		require.NoError(t, err)
+		assert.False(t, cfg.IsCacheCritical())
+		assert.True(t, cfg.ShouldLogRoutes())
+	})
+
 	t.Run("keepalive_explicit_false_honored", func(t *testing.T) {
 		cfg, err := loadDeliveredEmptyFixture(t, keepAliveFixtureYAML,
 			map[string]string{"DATABASE_POOL_KEEPALIVE_ENABLED": "false"})

@@ -41,9 +41,12 @@ injecting a bool got the loud failure; the framework's own keys did not.
 an empty or whitespace-only string bound to a bool fails the decode, pointer and
 non-pointer alike, with mapstructure attaching the key. The predicate behind it,
 `isNumericKind`, becomes `isWeakScalarKind` — the honest description of its members is
-"the kinds `WeaklyTypedInput` fills from a string with a zero value", which is the
-numerics plus bool. The rename is free: the package is `internal/` and the symbol has
-never appeared in a release.
+"the SCALAR kinds `WeaklyTypedInput` fills from a string with a zero value", which is the
+numerics plus bool. Verified against mapstructure v2.5.0: the int/uint/float decoders each
+rewrite `""` to `"0"` and the bool decoder calls `SetBool(false)`, while complex, map and
+struct targets reject a string source loudly. Slice and array ELEMENTS re-enter the hook
+individually, so a `[]bool` element is judged on the same rule. The rename is free: the
+package is `internal/` and the symbol has never appeared in a release.
 
 Nothing else about ADR-074 moves. Numeric behaviour, its message, and its tests are
 unchanged; the bool rejection carries its own message (`boolean value delivered empty
@@ -76,10 +79,15 @@ that boundary for bool as it does for numeric.
   instead of contradicting it.
 - Unset variables, YAML omission, YAML null, and every explicit spelling
   (`true`/`false`, `1`/`0`) behave exactly as before.
-- Still open, and deliberately not closed here: the typed getters
+- Still open, and deliberately not closed here, both at other seams: the typed getters
   `Config.Int`/`Int64`/`Float64`/`Bool` return their default for a present-but-empty key
-  rather than reporting it (#1111). That is a different seam — the getters never reach
-  this decode hook — and it survives this ADR unchanged.
+  rather than reporting it (#1111) — materially milder, since they swallow to the CALLER's
+  stated default rather than the type's zero, so an empty value behaves as absence there;
+  and `[]string`, where the framework's own comma-list hook maps `""` to `[]string{}` and a
+  delivered-empty `debug.allowedips` therefore passes ADR-049's fail-closed gate on a
+  configured bearer token and then silently skips the IP whitelist (#1120). Extending this
+  guard to slices would break the documented comma-list behaviour, so that one needs its own
+  decision.
 
 Migration: [C60.18](migrations.md).
 

@@ -236,11 +236,11 @@ func TestSecretsProviderDBConfigNumericDurationGuard(t *testing.T) {
 	})
 }
 
-// TestSecretsProviderDBConfigEmptyNumericGuard pins the delivered-empty rule at the seam
+// TestSecretsProviderDBConfigEmptyScalarGuard pins the delivered-empty rule at the seam
 // that literally reads secrets: a rotated secret rendering a numeric field as "" used to
 // decode as 0 — port 0, or a tuned pool silently reverted to the framework default —
 // because this provider builds its own decoder (ADR-074).
-func TestSecretsProviderDBConfigEmptyNumericGuard(t *testing.T) {
+func TestSecretsProviderDBConfigEmptyScalarGuard(t *testing.T) {
 	tests := []struct {
 		name    string
 		payload string

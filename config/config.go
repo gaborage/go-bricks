@@ -281,7 +281,7 @@ func tryLoadYAMLFile(k *koanf.Koanf, baseName string) error {
 }
 
 // buildDecoderConfig is the decoder for Load: it replicates koanf's default Unmarshal
-// decoder (knadh/koanf/v2 koanf.go:265-272) plus the delivered-empty numeric guard, the
+// decoder (knadh/koanf/v2 koanf.go:265-272) plus the delivered-empty scalar guard, the
 // numeric-duration guard and the comma-split slice hook (so a single env var can express
 // a []string). koanf fills in
 // Result and TagName at unmarshal time.
@@ -300,7 +300,7 @@ func buildDecoderConfig() *mapstructure.DecoderConfig {
 
 // unmarshalDecoderConfig is the decoder for the public Config.Unmarshal. It mirrors koanf's
 // default Unmarshal decoder (StringToTimeDurationHookFunc + text-unmarshaler + WeaklyTypedInput)
-// plus the delivered-empty numeric guard and the numeric-duration guard — deliberately
+// plus the delivered-empty scalar guard and the numeric-duration guard — deliberately
 // WITHOUT the comma-split slice hook, so
 // string -> []string keeps koanf's default single-element wrap on this public seam instead of
 // silently comma-splitting. (koanf's default uses its own unexported textUnmarshalerHookFunc;
