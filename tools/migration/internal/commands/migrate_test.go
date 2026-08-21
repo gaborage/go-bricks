@@ -15,9 +15,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/migration"
 )
 
 const windowsOS = "windows"
+
+// secretName composes the Secrets Manager key the CLI looks up for a tenant.
+// Derived from the same constant that backs the --secrets-prefix default, so a
+// change to the prefix moves the fixtures with the command instead of silently
+// desynchronising them.
+func secretName(tenantID string) string {
+	return migration.DefaultSecretsPrefix + tenantID
+}
 
 // fakePassword composes a synthetic tenant password. Composing it, rather than
 // writing a literal next to a "password" key, keeps a credential-shaped string
@@ -136,10 +146,10 @@ func TestMigrateCommandSuccessAcrossPagesAndShapes(t *testing.T) {
 
 	smSrv := fakeSecretsManager(t, map[string]string{
 		// Canonical shape
-		"gobricks/migrate/t1": canonicalTenantSecret("h1", "d1", "u1"),
-		"gobricks/migrate/t2": canonicalTenantSecret("h2", "d2", "u2"),
+		secretName("t1"): canonicalTenantSecret("h1", "d1", "u1"),
+		secretName("t2"): canonicalTenantSecret("h2", "d2", "u2"),
 		// RDS rotation fallback
-		"gobricks/migrate/t3": rdsTenantSecret("h3", "d3", "u3"),
+		secretName("t3"): rdsTenantSecret("h3", "d3", "u3"),
 	})
 	defer smSrv.Close()
 
@@ -182,9 +192,9 @@ func TestMigrateCommandFailFastStopsAfterFirstFailure(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		"gobricks/migrate/t1": canonicalTenantSecret("h", "d", "u"),
-		"gobricks/migrate/t2": canonicalTenantSecret("h", "d", "u"),
-		"gobricks/migrate/t3": canonicalTenantSecret("h", "d", "u"),
+		secretName("t1"): canonicalTenantSecret("h", "d", "u"),
+		secretName("t2"): canonicalTenantSecret("h", "d", "u"),
+		secretName("t3"): canonicalTenantSecret("h", "d", "u"),
 	})
 	defer smSrv.Close()
 
@@ -229,8 +239,8 @@ func TestMigrateCommandContinueOnErrorListsAllFailures(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		"gobricks/migrate/t1": canonicalTenantSecret("h", "d", "u"),
-		"gobricks/migrate/t2": canonicalTenantSecret("h", "d", "u"),
+		secretName("t1"): canonicalTenantSecret("h", "d", "u"),
+		secretName("t2"): canonicalTenantSecret("h", "d", "u"),
 	})
 	defer smSrv.Close()
 
@@ -274,7 +284,7 @@ func TestMigrateCommandMalformedSecretMentionsTenant(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		"gobricks/migrate/broken": `not a json`,
+		secretName("broken"): `not a json`,
 	})
 	defer smSrv.Close()
 
@@ -300,7 +310,7 @@ func TestMigrateCommandMalformedSecretMentionsTenant(t *testing.T) {
 	require.Error(t, err)
 	out := stdout.String()
 	assert.Contains(t, out, "broken")
-	assert.Contains(t, out, "gobricks/migrate/broken")
+	assert.Contains(t, out, secretName("broken"))
 }
 
 // flywayConfPath creates an empty flyway.conf in a temp directory and returns its path.

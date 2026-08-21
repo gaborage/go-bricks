@@ -40,7 +40,7 @@ func TestValidateCommandInvokesFlywayValidate(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		"gobricks/migrate/t1": canonicalTenantSecret("h1", "d1", "u1"),
+		secretName("t1"): canonicalTenantSecret("h1", "d1", "u1"),
 	})
 	defer smSrv.Close()
 
