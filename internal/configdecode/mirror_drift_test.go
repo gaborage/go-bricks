@@ -59,14 +59,18 @@ func TestMirroredHooksHaveNotDrifted(t *testing.T) {
 	}
 }
 
-// TestFuncBodyReadsCRLFSource pins the normalization: without it this whole test passes on
-// Linux and fails on Windows, which is a worse failure than the drift it looks for.
-func TestFuncBodyReadsCRLFSource(t *testing.T) {
-	source := "package x\r\n\r\nfunc sample() bool {\r\n\treturn true\r\n}\r\n"
+// TestReadSourceNormalizesCRLF pins the normalization at its own seam — reading a genuinely
+// CRLF-terminated file — because without it the drift test passes on Linux and fails on
+// Windows, which is a worse failure than the drift it looks for.
+func TestReadSourceNormalizesCRLF(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sample.go")
+	require.NoError(t, os.WriteFile(path,
+		[]byte("package x\r\n\r\nfunc sample() bool {\r\n\treturn true\r\n}\r\n"), 0o600))
 
-	body := funcBody(t, strings.ReplaceAll(source, "\r\n", "\n"), "sample")
+	source := readSource(t, path)
 
-	assert.Equal(t, "return true", body)
+	assert.NotContains(t, source, "\r")
+	assert.Equal(t, "return true", funcBody(t, source, "sample"))
 }
 
 func readSource(t *testing.T, path string) string {
