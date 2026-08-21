@@ -1831,7 +1831,10 @@ func checkTenantMessagingConsistency(tenants map[string]TenantEntry) error {
 	if hasAnyMessaging && hasNoMessaging {
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    "multitenant.tenants.messaging",
+			// A wildcard segment, not a literal: this is a whole-map invariant, and
+			// "multitenant.tenants.messaging" would be indistinguishable from a tenant
+			// actually named "messaging" (tenantField's sentinel emits exactly that).
+			Field:    "multitenant.tenants.*.messaging",
 			Message:  "inconsistent configuration",
 			Action:   "either all tenants must have messaging configured or none should",
 		}
@@ -1861,15 +1864,9 @@ func checkTenantCache(tenantID string, cache *CacheConfig) error {
 	if err == nil {
 		return nil
 	}
-	var cfgErr *ConfigError
-	if !errors.As(err, &cfgErr) {
-		return fmt.Errorf("multitenant.tenants.%s.cache: %w", tenantID, err)
-	}
-	qualified := *cfgErr
-	qualified.Field = tenantField(tenantID, cfgErr.Field)
-	qualified.Action = requalifyAction(cfgErr.Action, cfgErr.Field, qualified.Field)
-	qualified.Details = slices.Clone(cfgErr.Details)
-	return &qualified
+	return qualifyConfigError(err, "multitenant.tenants."+tenantID+".cache", func(field string) string {
+		return tenantField(tenantID, field)
+	})
 }
 
 // validateSourceConfig validates the source configuration type

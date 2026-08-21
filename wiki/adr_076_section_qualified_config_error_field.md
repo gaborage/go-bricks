@@ -132,6 +132,15 @@ three now spell `multitenant.tenants.<id>.<key>`.
 
 Root-section errors remain byte-identical, in `Field`, `Action` and rendered text.
 
+Deliberately not covered, and worth naming so this is not read as a finished sweep: the
+per-key CACHE factory (`app/factory_resolver.go`) is a runtime door too, and it still emits
+`cache.redis.host` with a `set CACHE_REDIS_HOST env var` hint even though it holds the
+tenant key. A tenant whose cache is misconfigured is therefore addressed one way when
+declared statically and another when resolved dynamically — the same asymmetry this
+addendum closes for databases, one package over, and the same hint trap, since configuring
+the ROOT cache does not give that tenant one. Tracked as #1125; the database seam's shape
+(`qualifyConfigError` plus a key-to-section mapping) is what it should adopt.
+
 Migration: [C60.19](migrations.md).
 
 **Keep the wrapper and leave `Field` alone.** The status quo: the path is in the

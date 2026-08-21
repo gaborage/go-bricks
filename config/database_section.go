@@ -194,12 +194,24 @@ func (s dbSection) qualify(err error) error {
 	if s.placement == dbPlacementRoot {
 		return err
 	}
+	return qualifyConfigError(err, s.path, s.qualifyField)
+}
+
+// qualifyConfigError re-addresses a ConfigError to a subtree: Field through addressField,
+// Action re-pointed to match, Details cloned so the copy owns them. A non-ConfigError has no
+// field to move, so it is wrapped with path instead — the only place a path is allowed into
+// the message rather than the field.
+//
+// Shared with the per-tenant cache door: the two producers used to carry their own copy of
+// this recipe, and one of them missed the Action step when it was added, which is the same
+// drift C60.19 exists to end.
+func qualifyConfigError(err error, path string, addressField func(string) string) error {
 	var cfgErr *ConfigError
 	if !errors.As(err, &cfgErr) {
-		return fmt.Errorf("%s: %w", s.path, err)
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	qualified := *cfgErr
-	qualified.Field = s.qualifyField(cfgErr.Field)
+	qualified.Field = addressField(cfgErr.Field)
 	qualified.Action = requalifyAction(cfgErr.Action, cfgErr.Field, qualified.Field)
 	qualified.Details = slices.Clone(cfgErr.Details)
 	return &qualified
@@ -219,6 +231,14 @@ func requalifyAction(action, origField, qualifiedField string) string {
 // missingFieldAction is the hint NewMissingFieldError builds for key. The env half is
 // dropped when no variable reaches the key (see envVarForKey), leaving the YAML path,
 // which is always reachable.
+//
+// The guard covers every non-injective case of the transform EXCEPT a dot inside a section
+// or tenant NAME, since the dot is the delimiter the round trip is measured in:
+// multitenant.tenants.acme.corp.database.port round-trips cleanly but unflattens to tenant
+// "acme", sub-key "corp". No producer can reach that today — koanf cannot deliver a map key
+// with an embedded dot, and the connect door raises no missing-field errors — so it is a
+// trap for a future caller rather than a live hole. Suppress the env half explicitly if you
+// ever raise one of these from a free-form key.
 func missingFieldAction(key string) string {
 	if envVar := envVarForKey(key); envVar != "" {
 		return fmt.Sprintf(actionSetEnvOrYAMLPath, envVar, key)

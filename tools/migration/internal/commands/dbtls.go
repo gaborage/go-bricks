@@ -24,8 +24,10 @@ type tlsValidatingProvider struct {
 }
 
 // DBConfig resolves the inner provider's config and fails closed on one the framework
-// would reject. The tenant key is named in the error because a fleet run resolves one
-// config per tenant, and "which tenant" is the operator's first question.
+// would reject. The key is passed to the validating seam rather than wrapped around its
+// error: a fleet run resolves one config per tenant and "which tenant" is the operator's
+// first question, so the answer belongs in ConfigError.Field, where a consumer can match
+// on it (C60.19). Wrapping it back on would print the same identity twice.
 //
 // Validation runs on a COPY. config.TenantStore hands back a cached, shared pointer for
 // the single-tenant key ("" -> its defaultDB) and for "named:" keys, and the seam

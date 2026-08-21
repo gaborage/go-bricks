@@ -4079,10 +4079,15 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   here). Three sibling spellings in the tenant tree join the same rule: a per-tenant CACHE
   failure moves from `cache.redis.host` plus a `tenant <id> cache:` wrapper to
   `multitenant.tenants.<id>.cache.redis.host`; the messaging-consistency error's field
-  `multitenant.tenants messaging` becomes `multitenant.tenants.messaging`; and
+  `multitenant.tenants messaging` becomes `multitenant.tenants.*.messaging` — a WILDCARD
+  segment, because that error is a whole-map invariant and a literal `.messaging` there
+  would be indistinguishable from a tenant actually named `messaging`; and
   `config.NewMultiTenantError`'s field stops being the prose `tenant 'acme' database` and
   becomes `multitenant.tenants.acme.database`. Unchanged: every ROOT-section error, in
-  `Field`, `Action` and rendered text alike.
+  `Field`, `Action` and rendered text alike — and, deliberately, the per-key CACHE factory,
+  which is a runtime door that still reports `cache.redis.host` with a root
+  `CACHE_REDIS_HOST` hint for a dynamically-resolved tenant (#1125). If you route on the
+  cache family rather than the database one, that asymmetry is still there.
 - gate: match = you call `config.ApplyDatabasePoolDefaults` yourself (a build break — the
   compiler names every site), OR your code reads `ConfigError.Field` / `.Action`, OR a
   dashboard, alert or log-parsing test pins one of the retired strings. no-match = you never
