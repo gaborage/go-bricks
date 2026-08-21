@@ -4097,7 +4097,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - gate: match = your code reads `ConfigError.Field` / `.Action`, OR a dashboard, alert or
   log-parsing test pins one of the retired strings. Calling `config.ApplyDatabasePoolDefaults`
   is NOT a match on its own — it still compiles and still behaves as it did; you need the new
-  door only if you want your own resolved section named. no-match = you never
+  door only if you want your own resolved section named. Note which door the `go-bricks-migrate`
+  CLI is on: it still calls the ROOT one and still wraps `tenant "<id>":`, because that module
+  pins a released go-bricks and cannot see `ApplyDatabasePoolDefaultsForKey` until the next
+  tag. The CLI's own errors therefore stay root-spelled for one release; the pin bump adopts
+  the new door. no-match = you never
   touch the typed error and never parse those messages; the new spellings are then a strictly
   better read for a human and need no action.
 - apply: if you resolve per-section configs yourself, switch to
