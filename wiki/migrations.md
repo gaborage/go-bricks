@@ -3701,14 +3701,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   That last rule refuses a key whose rendering would leave the identifier and become SQL: the
   renderer wraps in quotes without doubling the ones inside, so `role" = 'admin', "name` renders
   as `"role" = 'admin', "name"`, a second assignment rather than a column. The renderer's missing
-  escape is wider than this seam — it reaches the `table` argument and PostgreSQL — and is tracked
-  as issue #1104; only the Oracle upsert keys are closed here. On PostgreSQL the interior-quote
-  rule DOES apply — that clause is not Oracle grammar, and a key carrying an undoubled quote is
-  refused on both vendors. What is not rejected on PostgreSQL is the *name-shape* half: a dotted
-  or function-shaped key still builds there, not because such a key is sensible (its escaper
-  splits on the dot and quotes each part, so `{"t.name": 1}` renders `"t"."name"`, a qualified
-  reference) but because refusing it there is a second break on a second vendor, which this
-  change has no evidence for.
+  escape is wider than this seam — it reaches the `table` argument and every other builder path on
+  both vendors — and is tracked as issue #1104; what closes here is the upsert entry alone. Within
+  it the two halves have different reach. The undoubled interior-quote rule applies to upsert keys
+  on **both** vendors, because that clause is not Oracle grammar but a defect both escapers share.
+  The name-shape rules — no qualifier, no function call, no empty name — are **Oracle-only**. So a
+  dotted or function-shaped key is still *rendered* on PostgreSQL, which is not the same as being
+  accepted: `{"t.name": 1}` renders `"t"."name"`, a qualified reference, and as an
+  `ON CONFLICT ("t"."name")` target PostgreSQL's own grammar rejects it at execution. The builder
+  does not refuse it because doing so is a second break on a second vendor, which this change has
+  no evidence for — not because the statement works.
   **Third**, the two checks that already shipped — every conflict column must name an inserted
   column (`[C59.7]`), and no conflict column may also be updated (`[C59.9]`) — now key on that same
   named column instead of on the rendering, and both change outcome on Oracle. A conflict column
