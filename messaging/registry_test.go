@@ -2986,7 +2986,7 @@ func TestRegistryProcessMessageSkipsDebugFieldBuildWhenDisabled(t *testing.T) {
 // ===== Delivery-pipeline lane adapter tests (ADR-068) =====
 
 func TestConsumeSpanExtrasOmitTheFieldsTheDeliveryDidNotCarry(t *testing.T) {
-	assert.Empty(t, consumeSpanExtras(&amqp.Delivery{}, deliveryIdentity{}),
+	assert.Empty(t, consumeSpanExtras(deliveryIdentity{}),
 		"a delivery with no exchange, routing key, message id or correlation id adds no span attribute")
 }
 

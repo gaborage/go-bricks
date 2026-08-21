@@ -763,7 +763,7 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		Carrier:     amqpHeaderAccessor{headers: delivery.Headers},
 		Destination: consumer.Queue,
 		BodySize:    len(delivery.Body),
-		SpanExtras:  consumeSpanExtras(delivery, id),
+		SpanExtras:  consumeSpanExtras(id),
 		Metrics:     consumeMetrics(consumer.Queue, id),
 		Log:         log,
 		Handle: func(msgCtx context.Context, msgLog logger.Logger, traceID string) error {
@@ -795,7 +795,7 @@ func settleDelivery(res *pipeline.Result, consumer *ConsumerDeclaration, deliver
 // pipeline sets for both lanes. A field the delivery did not carry is omitted
 // rather than reported empty, which is what the receive span has always done —
 // see deliveryIdentity for what "did not carry" now includes.
-func consumeSpanExtras(delivery *amqp.Delivery, id deliveryIdentity) []attribute.KeyValue {
+func consumeSpanExtras(id deliveryIdentity) []attribute.KeyValue {
 	extras := make([]attribute.KeyValue, 0, 4)
 	if id.exchange != "" {
 		extras = append(extras, attribute.String(attrMessagingRabbitMQExchange, id.exchange))
