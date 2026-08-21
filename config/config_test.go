@@ -1419,11 +1419,7 @@ func TestDerivedDefaultKeysAreDisjointFromKoanfOnly(t *testing.T) {
 // TestDerivedDefaultKeysAreFilledByNormalize keeps the allowlist honest: a key normalize
 // does not actually fill would drop out of the defaults silently, taking the default with it.
 func TestDerivedDefaultKeysAreFilledByNormalize(t *testing.T) {
-	var zero Config
-	require.NoError(t, normalize(&zero))
-
-	flat, err := flattenConfig(&zero)
-	require.NoError(t, err)
+	flat := flattenNormalizedZero(t, false)
 
 	for _, key := range derivedDefaultKeys {
 		assert.Contains(t, flat, key, "normalize does not fill %q", key)
@@ -1435,22 +1431,39 @@ func TestDerivedDefaultKeysAreFilledByNormalize(t *testing.T) {
 // as "unlimited", so preloading a koanf default of 10 would overwrite that meaning before
 // anything could read it.
 func TestDerivedDefaultsAreModeInvariant(t *testing.T) {
-	flattenMode := func(multitenant bool) map[string]any {
-		var zero Config
-		zero.Multitenant.Enabled = multitenant
-		require.NoError(t, normalize(&zero))
-		flat, err := flattenConfig(&zero)
-		require.NoError(t, err)
-		return flat
-	}
-
-	singleTenant := flattenMode(false)
-	multiTenant := flattenMode(true)
+	singleTenant := flattenNormalizedZero(t, false)
+	multiTenant := flattenNormalizedZero(t, true)
 
 	for _, key := range derivedDefaultKeys {
 		assert.Equal(t, singleTenant[key], multiTenant[key],
 			"%q differs by deployment mode and cannot be preloaded", key)
 	}
+}
+
+// flattenNormalizedZero is what derivedDefaults picks from: a zero Config run through
+// normalize, flattened into koanf's dotted key space.
+func flattenNormalizedZero(t *testing.T, multitenant bool) map[string]any {
+	t.Helper()
+
+	var zero Config
+	zero.Multitenant.Enabled = multitenant
+	require.NoError(t, normalize(&zero))
+
+	flat, err := flattenConfig(&zero)
+	require.NoError(t, err)
+	return flat
+}
+
+// TestRenderDefaultRejectsANilPointer pins the branch normalize is supposed to make
+// unreachable. It is the module's contract with a future normalize regression: writing a nil
+// default would remove the secret-length floor silently, so it has to be an error.
+func TestRenderDefaultRejectsANilPointer(t *testing.T) {
+	var missing *int
+
+	_, err := renderDefault("keystore.secretminlength", missing)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "keystore.secretminlength")
 }
 
 // TestDefaultsPreloadNoDatabaseIdentityKey guards ADR-051 by construction rather than by

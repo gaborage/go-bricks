@@ -365,6 +365,11 @@ var derivedDefaultKeys = []string{
 // Durations are rendered as strings so a koanf getter sees the same type it saw when these
 // values were literals, and a *int is dereferenced for the same reason.
 func derivedDefaults() (map[string]any, error) {
+	// Normalizing the whole zero Config, rather than calling the three functions that own
+	// these keys, is deliberate: the allowlist is meant to grow as sections adopt normalize
+	// (design doc decision 17), and a per-key call list would have to grow with it. The cost
+	// is that every Load now depends on normalize succeeding on a zero Config for EVERY
+	// section, which the tests below pin in both deployment modes.
 	var zero Config
 	if err := normalize(&zero); err != nil {
 		return nil, fmt.Errorf("deriving koanf defaults: %w", err)
@@ -381,7 +386,11 @@ func derivedDefaults() (map[string]any, error) {
 		if !ok {
 			return nil, fmt.Errorf("deriving koanf defaults: normalize does not fill %q", key)
 		}
-		derived[key] = renderDefault(value)
+		rendered, err := renderDefault(key, value)
+		if err != nil {
+			return nil, err
+		}
+		derived[key] = rendered
 	}
 	return derived, nil
 }
@@ -403,17 +412,21 @@ func flattenConfig(cfg *Config) (map[string]any, error) {
 }
 
 // renderDefault matches the type a hand-written literal would have carried.
-func renderDefault(value any) any {
+//
+// A nil pointer is an error rather than a nil default: normalize is supposed to have filled
+// every allowlisted key, and writing nil here would quietly remove a default — for
+// keystore.secretminlength that is the secret-length floor — instead of saying so.
+func renderDefault(key string, value any) (any, error) {
 	switch v := value.(type) {
 	case time.Duration:
-		return v.String()
+		return v.String(), nil
 	case *int:
 		if v == nil {
-			return nil
+			return nil, fmt.Errorf("deriving koanf defaults: normalize left %q nil", key)
 		}
-		return *v
+		return *v, nil
 	default:
-		return value
+		return value, nil
 	}
 }
 
