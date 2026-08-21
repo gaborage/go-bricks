@@ -605,6 +605,30 @@ observability:
 		assert.Nil(t, provider, "a caller must not receive a silently degraded provider")
 	})
 
+	t.Run("absent_section_never_reaches_construction", func(t *testing.T) {
+		cfg := loadConfigFromYAML(t, `
+app:
+  name: "test"
+  version: "1.0.0"
+server:
+  port: 8080
+`)
+		bootstrap := newAppBootstrap(cfg, logger.New("info", false), &Options{})
+		constructed := false
+		bootstrap.newProvider = func(context.Context, *observability.Config) (observability.Provider, error) {
+			constructed = true
+			return observability.MustNewProvider(&observability.Config{Enabled: false}), nil
+		}
+
+		provider, err := bootstrap.initializeObservability(context.Background())
+
+		require.NoError(t, err)
+		require.NotNil(t, provider)
+		assert.False(t, constructed,
+			"an absent section takes the documented no-op branch; koanf returns no error for a "+
+				"missing key, so inferring absence from a decode failure never fires")
+	})
+
 	t.Run("absent_section_stays_no_op", func(t *testing.T) {
 		cfg := loadConfigFromYAML(t, `
 app:

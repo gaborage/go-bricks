@@ -35,6 +35,14 @@ func TestEmptyStringToNumericGuardHookFunc(t *testing.T) {
 		{name: "empty_int_pointer_rejected", input: map[string]any{"minlen": ""}, wantErr: true, errSubstr: "delivered empty"},
 		{name: "whitespace_int_rejected", input: map[string]any{"count": "   "}, wantErr: true, errSubstr: "delivered empty"},
 		{
+			// A named string type has Kind String but is not a string: a concrete type
+			// assertion drops it, and the weak conversion then makes it a zero.
+			name:      "named_string_type_rejected",
+			input:     map[string]any{"count": envName("")},
+			wantErr:   true,
+			errSubstr: "delivered empty",
+		},
+		{
 			name:   "empty_string_target_passes",
 			input:  map[string]any{"name": ""},
 			assert: func(t *testing.T, got target) { assert.Empty(t, got.Name) },
@@ -111,3 +119,7 @@ func TestEmptyStringToNumericGuardNamesTheField(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "secretminlength")
 }
+
+// envName is a named string type, the shape a consumer config field takes when it wants a
+// domain type rather than a bare string.
+type envName string

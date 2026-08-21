@@ -243,14 +243,16 @@ func (b *appBootstrap) initializeObservability(startupCtx context.Context) (obse
 	// Create observability config
 	var obsCfg observability.Config
 
-	// Try to unmarshal configuration from the "observability" key
-	if err := b.cfg.Unmarshal("observability", &obsCfg); err != nil {
-		if b.cfg.Exists(observabilityConfigKey) {
-			return nil, fmt.Errorf("observability configuration is present but invalid: %w", err)
-		}
-		// Section absent — the documented "no observability configured" posture.
-		b.log.Warn().Err(err).Msg("Observability configuration not found, using no-op provider")
+	// Absence is decided BEFORE decoding, not inferred from a decode error: koanf returns no
+	// error for a missing key, so an absent section would otherwise decode to a zero Config
+	// and fall through to construction, leaving the documented no-op branch unreachable.
+	if !b.cfg.Exists(observabilityConfigKey) {
+		b.log.Debug().Msg("No observability configuration, using no-op provider")
 		return observability.MustNewProvider(&observability.Config{Enabled: false}), nil
+	}
+
+	if err := b.cfg.Unmarshal(observabilityConfigKey, &obsCfg); err != nil {
+		return nil, fmt.Errorf("observability configuration is present but invalid: %w", err)
 	}
 
 	b.log.Debug().

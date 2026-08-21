@@ -288,8 +288,10 @@ func emptyStringToNumericGuardHookFunc() mapstructure.DecodeHookFunc {
 		if t == durationType || !isNumericKind(t.Kind()) {
 			return data, nil
 		}
-		s, ok := data.(string)
-		if !ok || strings.TrimSpace(s) != "" {
+		// reflect rather than a concrete type assertion: a named string type (type Env
+		// string) has Kind String but fails data.(string), and passing it through hands it
+		// straight to the weak "" -> 0 conversion this guard exists to stop.
+		if strings.TrimSpace(reflect.ValueOf(data).String()) != "" {
 			return data, nil
 		}
 		return nil, errors.New(
