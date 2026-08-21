@@ -70,9 +70,9 @@
 > belt. An identifier that fails is OMITTED from the sink rather than
 > substituted or truncated — the receive span's own rule for a field the delivery
 > did not carry. The `messaging/streams` lane is untouched because it SURFACES
-> none of these three today — an AMQP 1.0 message does carry `Properties.MessageID`
+> none of these four today — an AMQP 1.0 message does carry `Properties.MessageID`
 > and `Properties.CorrelationID`, so the rule is kept reachable behind a plain
-> string-triple constructor rather than welded to an `*amqp.Delivery`.
+> plain-string constructor rather than welded to an `*amqp.Delivery`.
 >
 > **`tracestate` gains a charset; the grammar is still refused.** The Decision
 > below says `tracestate` gets "a length cap and no grammar", justified by
@@ -101,7 +101,7 @@
 > nothing to search for, and the Consequences below name a log search as the
 > detect. The consume lines stamp `identity_rejected` when a delivery carried a
 > value validation refused — one bounded boolean, not the unbounded value it
-> replaces — and the failure line stamps `delivery_tag`, the one identifier no
+> replaces — and the failure and panic lines stamp `delivery_tag`, the one identifier no
 > publisher supplies, so a delivery whose every vouched field was dropped is still
 > attributable.
 >

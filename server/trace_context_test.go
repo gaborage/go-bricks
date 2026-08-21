@@ -405,15 +405,33 @@ func TestTraceContextShadowsAnInheritedTraceState(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	inherited := gobrickshttp.WithTraceState(context.Background(), "inherited=from-another-parent")
-	req := httptest.NewRequestWithContext(inherited, http.MethodGet, "/test", http.NoBody)
-	req.Header.Set(gobrickshttp.HeaderTraceParent, testTraceparent)
+	// The three inbound-parent shapes that can reach this door. The absent and
+	// invalid cases matter most: those are precisely when a FRESH traceparent gets
+	// minted downstream, so an inherited tracestate surviving here is emitted
+	// annotating a parent that did not exist when it was written.
+	for _, tt := range []struct {
+		name        string
+		traceparent string
+	}{
+		{name: "request_brings_a_valid_parent", traceparent: testTraceparent},
+		{name: "request_brings_an_invalid_parent", traceparent: poisonedTraceParent},
+		{name: "request_brings_no_parent"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			capturedContext = nil
+			inherited := gobrickshttp.WithTraceState(context.Background(), "inherited=from-another-parent")
+			req := httptest.NewRequestWithContext(inherited, http.MethodGet, "/test", http.NoBody)
+			if tt.traceparent != "" {
+				req.Header.Set(gobrickshttp.HeaderTraceParent, tt.traceparent)
+			}
 
-	e.ServeHTTP(httptest.NewRecorder(), req)
-	require.NotNil(t, capturedContext)
+			e.ServeHTTP(httptest.NewRecorder(), req)
+			require.NotNil(t, capturedContext)
 
-	got, ok := gobrickshttp.TraceStateFromContext(capturedContext)
-	assert.False(t, ok, "an inherited tracestate rode along with a parent it does not annotate: %q", got)
+			got, ok := gobrickshttp.TraceStateFromContext(capturedContext)
+			assert.False(t, ok, "an inherited tracestate rode along with a parent it does not annotate: %q", got)
+		})
+	}
 }
 
 // mapHeaders is a trace.HeaderAccessor over a plain map, so a server test can

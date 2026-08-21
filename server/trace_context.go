@@ -22,17 +22,19 @@ import (
 func enrichTraceContext(c *echo.Context) context.Context {
 	req := c.Request()
 	ctx := gobrickshttp.WithTraceID(req.Context(), getTraceID(c))
+	// Shadow any inherited tracestate FIRST, unconditionally. At an ingress the
+	// request defines the trace, so a tracestate already on the context was not
+	// put there by this caller; leaving it would let InjectIntoHeaders emit it
+	// alongside a freshly minted traceparent it never annotated. Clearing before
+	// the branch — rather than only inside it — is what covers the case where
+	// this request brings NO valid parent, which is exactly when a fresh one gets
+	// minted downstream. StateFromContext reports "" as absent, so this removes
+	// the value rather than propagating an empty one.
+	ctx = gobrickshttp.WithTraceState(ctx, "")
 	if tp := validateTraceParent(req.Header.Get(gobrickshttp.HeaderTraceParent)); tp != "" {
 		ctx = gobrickshttp.WithTraceParent(ctx, tp)
-		// Shadow rather than skip, exactly as the messaging door does: an earlier
-		// middleware may have planted a tracestate annotating a DIFFERENT parent,
-		// and StateFromContext reports "" as absent, so nothing downstream carries
-		// one that does not belong to the parent just planted.
 		ctx = gobrickshttp.WithTraceState(ctx, validateTraceState(req.Header.Get(gobrickshttp.HeaderTraceState)))
 	}
-	// No valid parent from this request means no tracestate either — a tracestate
-	// annotates one traceparent, and keeping an orphan would let the outbound hop
-	// attach it to a traceparent it never accompanied.
 	return ctx
 }
 

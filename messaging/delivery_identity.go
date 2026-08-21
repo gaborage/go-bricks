@@ -80,7 +80,7 @@ type deliveryIdentity struct {
 	rejected bool
 }
 
-// identify resolves the three publisher-supplied identifiers, so the eager
+// identify resolves the delivery's four identity fields, so the eager
 // span-attribute seam and the lazy log seams read one decision instead of each
 // re-judging the raw value.
 //

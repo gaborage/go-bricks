@@ -4316,7 +4316,7 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 
 > The "old env var" column never worked (that is the bug ADR-024 fixes); it is shown only to help locate occurrences in existing deployment manifests.
 
-### [C60.17] the HTTP door and the AMQP properties stop emitting unvouched trace identifiers · silent-behavior · when: always
+### [C60.17] the HTTP trace headers and the AMQP delivery identity are validated before any sink · silent-behavior · when: always
 
 - detect: your Go code cannot tell you this either — every offending value comes from a
   caller or a foreign publisher. Search your LOG BACKEND for a `traceparent` field that is

@@ -1573,15 +1573,17 @@ id is discarded and regenerated, never truncated — truncation silently forges 
 terms — the HTTP ingress `traceparent`/`tracestate` (`enrichTraceContext` read `req.Header`
 directly, bypassing the seam; invalid ⇒ drop-and-mint, never reject), the response reflection
 `ensureTraceParentHeader` performs at six call sites plus the access-log metadata reader, and the
-classic AMQP lane's `CorrelationId`/`MessageId`/`RoutingKey`, which live in the delivery's
+classic AMQP lane's `CorrelationId`/`MessageId`/`RoutingKey`/`Exchange`, which live in the delivery's
 PROPERTIES where no extractor reaches them. The three properties are resolved once in
 `processMessage` and the one verdict is threaded to every sink; an identifier that fails is omitted
 rather than substituted. The routing key answers to a distinct printable-ASCII rule, because the
 request-id charset would discard every dotted key. Streams lane untouched. See `[C60.17]`.
 
-**Key Benefits:** One bound shared by every INGRESS door — HTTP, the AMQP classic and streams
-lanes, the outbox relay and the exported extractor — as a function rather than a constant, so a
-later clause cannot reach one door and miss another. The emit side is explicitly not covered:
+**Key Benefits:** The HEADER rules (`ValidateRequestID`, `ValidateTraceParent`,
+`ValidateTraceState`) are shared by every ingress door — HTTP, the AMQP classic and streams lanes,
+the outbox relay and the exported extractor — as functions rather than constants, so a later clause
+cannot reach one door and miss another. The C60.17 delivery-identity checks are narrower: they apply
+to the classic AMQP lane only, since streams surfaces none of those fields today. The emit side is explicitly not covered:
 see `[C60.17]`, `#1121` and `#1123` for what remains.
 **Watch:** previously-accepted identifiers are now discarded — see `[C60.8]` and `[C60.17]`; an
 upstream gateway emitting a long or punctuated request id falls through to the id derived from its
