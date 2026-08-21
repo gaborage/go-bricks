@@ -115,11 +115,12 @@ door with its pin bump.
 
 Two consequences follow from doing it at that seam rather than at the callers:
 
-- **`database.DbManager` and the migrate CLI's `tlsValidatingProvider` stop wrapping.**
-  Both used to add the key back (`failed to apply pool defaults for key %s`,
-  `tenant %q`) precisely because the error did not carry it. Now it does, and a wrap
-  would print the same identity twice — the failure mode the main decision already
-  names.
+- **`database.DbManager` stops wrapping.** It used to add the key back
+  (`failed to apply pool defaults for key %s`) precisely because the error did not carry
+  it. Now it does, and a wrap would print the same identity twice — the failure mode the
+  main decision already names. The migrate CLI's `tlsValidatingProvider` keeps its
+  `tenant %q` wrap for now: it stays on the root-addressed door until the pin bump (see
+  the paragraph above), so its error genuinely does not carry the key yet.
 - **`Action` is re-pointed with `Field`.** A hint is only useful if the variable it
   names comes back to the key that failed, and the root-spelled hint did not: following
   `set DATABASE_PORT env var` on a multitenant config writes a partial root block, which

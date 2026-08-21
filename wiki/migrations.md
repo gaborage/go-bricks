@@ -3238,8 +3238,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   (C60.16); and if you resolve per-section database configs yourself, move to the additive
   `config.ApplyDatabasePoolDefaultsForKey` (the old function still compiles and still answers
   for the root), then re-point those same `Field` matchers once more — the runtime door
-  now addresses a dynamic tenant the way a static one is addressed, the manager and CLI stop
-  wrapping the key back in, and a non-root `Action` names its own env var or none (C60.19);
+  now addresses a dynamic tenant the way a static one is addressed, the MANAGER stops wrapping
+  the key back in — the CLI keeps its `tenant "<id>":` wrap until the pin bump — and a non-root
+  `Action` names its own env var or none (C60.19);
   and grep your log calls for field names containing `key`,
   since the default filter stops masking them (C60.13); and `git grep -nE '(^|[^[:alnum:]_])TestKey[A-Za-z0-9_]*([^[:alnum:]_]|$)' -- '*.go'`, since those
   constants are gone — match the identifier, not the `config.` qualifier, so an aliased or
@@ -4057,8 +4058,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `git grep -nE "tenant '" -- '*.go'`; and the literal `multitenant.tenants messaging`
   (a space, not a dot). For `Action`: anything parsing the env-var name out of the hint,
   `git grep -nE '\.Action' -- '*.go'`. Log-side: grep dashboards and saved queries for the
-  two retired wrapping prefixes, `failed to apply pool defaults for key` and the CLI's
-  `tenant "<id>":`, and for `tenant '<id>' ` inside a rendered config error.
+  ONE retired wrapping prefix, `failed to apply pool defaults for key`, and for
+  `tenant '<id>' ` inside a rendered config error. The CLI's `tenant "<id>":` prefix is NOT
+  retired — `go-bricks-migrate` keeps it until the pin bump — so leave queries matching it
+  alone for now.
 - scope: [C60.16] addressed a database section's errors to that section at the STARTUP doors
   and said plainly that the runtime door stayed root-spelled. It no longer does.
   A NEW exported function, `config.ApplyDatabasePoolDefaultsForKey`, takes the
@@ -4119,9 +4122,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - verify: resolve one dynamic tenant with a deliberately invalid database section (a
   negative `pool.idle.time` is enough) and read the typed error: `Field` must be
   `multitenant.tenants.<id>.database.pool.idle.time`, and the message must NOT contain
-  `failed to apply pool defaults for key`. Then take a real failure's `Action` at its word —
-  set the variable it names and re-boot; it must resolve that failure rather than move it,
-  which is the property the old root-spelled hint failed.
+  `failed to apply pool defaults for key`. Then take a real failure's `Action` at its word,
+  branching on which half it offers: when it names an env var, set THAT variable and re-boot;
+  when it names none — a section or tenant whose name carries `_` or an uppercase letter, where
+  no variable reaches the key — add the YAML key it names instead. Either way the failure must
+  RESOLVE rather than move, which is the property the old root-spelled hint failed: it named a
+  variable that configured a different section. A hint offering no env var is a legitimate
+  shape, so "there was nothing to set" is not a failed verify.
 - ref: [ADR-076](adr_076_section_qualified_config_error_field.md) (addendum) ·
   [ADR-047](adr_047_database_absence_vs_misconfiguration.md) ·
   `config/database_section.go` (`sectionForResourceKey`, `normalizeDatabaseValues`,
