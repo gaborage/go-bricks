@@ -1394,6 +1394,26 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-078: A Delivered-Empty `debug.allowedips` Fails Configuration Resolution](adr_078_delivered_empty_allowedips.md)
+
+**Date:** 2026-08-21 | **Status:** Accepted
+
+`debug.allowedips` is the only list key whose default is a CONTROL (`["127.0.0.1", "::1"]`),
+so an empty value removes protection instead of relaxing it. ADR-049's registration gate is a
+conjunction, so `debug.bearertoken` alone satisfied it and registration then skipped
+`ipWhitelistMiddleware` — a manifest asking for allowlist AND token ran with token only, and
+booted. A validate-phase presence check now rejects the key when its RAW koanf value is an
+empty string (`DEBUG_ALLOWEDIPS=`, `allowedips: ""`), while an empty SEQUENCE
+(`allowedips: []`) stays legal as ADR-049's sanctioned token-only clear — the shape is the
+discriminator because no rendering accident produces a sequence.
+
+**Key Benefits:** the one list key that fails open can no longer be emptied by an unset Helm
+value or an `envsubst` miss. **Watch:** deployments using an empty env var to mean "token
+only" must switch to `allowedips: []`; the error names both routes. ADR-049 carries an
+addendum amending two premises this falsified. See `[C60.20]` in [migrations.md](migrations.md).
+
+---
+
 ### [ADR-077: A Delivered-Empty Bool Config Value Fails Startup](adr_077_delivered_empty_bool_config.md)
 
 **Date:** 2026-08-21 | **Status:** Accepted
@@ -1643,7 +1663,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-077) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-078) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
