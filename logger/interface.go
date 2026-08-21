@@ -27,6 +27,10 @@ type LogEvent interface {
 	Int64(key string, value int64) LogEvent
 	Uint64(key string, value uint64) LogEvent
 	Dur(key string, d time.Duration) LogEvent
+	// Interface adds an arbitrary value. Rendering it can panic — the filter walks
+	// it by reflection and the encoder marshals it — so a call inside a defer that
+	// has already spent its recover() must wrap this in a nested guard, or the
+	// panic escapes that defer and skips whatever the handler had left to do.
 	Interface(key string, i any) LogEvent
 	Bytes(key string, val []byte) LogEvent
 	Bool(key string, value bool) LogEvent

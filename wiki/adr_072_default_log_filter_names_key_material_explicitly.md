@@ -106,3 +106,30 @@ one line of `log.sensitivefields`. Documented as `[C60.13]`.
 
 **Neutral.** Nothing about the matcher changes: still case-insensitive, still
 substring, still applied at the same seam. Only the list moved.
+
+## Addendum (2026-08-21, ADR-079)
+
+The JWKS paragraph above is wrong about the failure mode, and its remedy is
+narrower than it reads.
+
+**It was not a leak — it was a panic.** A JWKS body is `{"keys":[{…}]}`, a JSON
+array of objects. The walk into it did not log the `d` exponent; it crashed the
+log path, because the filter compared two `any` values to decide whether to
+preserve the slice's concrete type and those values are uncomparable. The leak
+this ADR describes is real only for a JWK at the body ROOT, or for a JWKS reached
+through a path that does not go through a slice. Fixed in
+[ADR-079](adr_079_log_filter_walks_slices_without_comparing.md); with the walk
+repaired, the leak this paragraph describes is now the actual behaviour for the
+array shape too.
+
+**`log.sensitivefields: [keys]` fixes one spelling.** It masks a container named
+exactly `keys` and nothing else: a single JWK at the body root has no `keys`
+wrapper, `jwk` is a different name, and every `{"data":[…]}` or `{"items":[…]}`
+envelope carrying key material is untouched. The needle list is the wrong
+instrument for this — the field that matters is `d`, a name too short and too
+common to add — which is why ADR-079 records document-shape recognition
+(JWK/JWKS/PEM/JWT: masking by position and neighbours rather than by name) as a
+separate decision with its own ADR still to be written, rather than folding it in.
+
+The `[C60.13]` atom is unchanged: the un-masking it describes is real, and the
+one-line remedy still applies to the shape it names.

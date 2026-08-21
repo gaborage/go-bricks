@@ -299,12 +299,36 @@ func (e *auditEmitter) deliverToSink(ctx context.Context, ev *AuditEvent) {
 	defer func() {
 		if r := recover(); r != nil {
 			e.recordSinkFailure(ctx, ev)
-			e.logger.Error().
-				Interface("panic", r).
-				Str("stack", string(debug.Stack())).
-				Str("audit_type", string(ev.Type)).
-				Str("target", ev.Target).
-				Msg("audit sink panicked; event dropped")
+			// This defer already spent its recover(), so a panic while rendering r
+			// would escape into consumeSink's bare goroutine and kill the process
+			// (ADR-019, #686). Guard the log call alone.
+			func() {
+				// Nothing downstream of this defer logs, so swallowing outright would
+				// leave a counter tick as the only trace of a dropped audit event.
+				//
+				// SECURITY: only the panic value's TYPE is reported here, never the
+				// value. The primary call above renders it through the sensitive-data
+				// filter, which masks by field name; this fallback would have to use
+				// Str, which masks on the KEY only — so a panic carrying a secret
+				// (`panic(cfg)`) would reach the sink in clear. Same rule as
+				// httpclient's Do recovery. The type plus audit_type and target is
+				// enough to attribute the drop, which is all this line is for.
+				defer func() {
+					if r2 := recover(); r2 != nil {
+						e.logger.Error().
+							Str("panic_type", fmt.Sprintf("%T", r)).
+							Str("audit_type", string(ev.Type)).
+							Str("target", ev.Target).
+							Msg("audit sink panicked; event dropped (value unrenderable)")
+					}
+				}()
+				e.logger.Error().
+					Interface("panic", r).
+					Str("stack", string(debug.Stack())).
+					Str("audit_type", string(ev.Type)).
+					Str("target", ev.Target).
+					Msg("audit sink panicked; event dropped")
+			}()
 		}
 	}()
 

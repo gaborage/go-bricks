@@ -1423,6 +1423,31 @@ those proxies append — identification, not authorization (ADR-043).
 
 ---
 
+### [ADR-079: The Log Filter Decides Slice Passthrough By Type, And Panic Reporting Cannot Panic](adr_079_log_filter_walks_slices_without_comparing.md)
+
+**Date:** 2026-08-21 | **Status:** Accepted
+
+The sensitive-data filter compared each filtered slice element with the original to preserve
+the slice's concrete type. Both sides are `any`, so it panicked on any uncomparable dynamic
+type — which is every `map[string]any` or `[]any` inside a list, i.e. every JSON body shaped
+`{"…":[{…}]}`, at BOTH doors (`.Interface()` and `WithFields`). The decision now reads the
+ELEMENT TYPE before descending. Needle normalization moves into
+`NewSensitiveDataFilter`, so `app.Options.LoggerFilterConfig` — which replaces the whole
+config and bypassed the old normalizer — can no longer ship a single empty needle that masks
+the ENTIRE log stream. And the panic-reporting call in two recovery defers is wrapped in its
+own recover: those defers have already spent theirs, so from `deliverToSink` the escape
+reached a bare goroutine and killed the process, defeating #686's shipped guarantee.
+
+**Key Benefits:** a list-of-objects payload stops crashing the log path; the code-level needle
+door gets the rule the YAML door already had. **Watch:** a slice whose elements the filter
+rewrites now emits as `[]any` (serialized output unchanged — only a type assertion on
+`FilterValue` sees it), and a stray empty needle stops masking everything, so fields that were
+being masked by accident reappear. The guard wraps the reporting CALL, not the handler — a
+whole-handler recover would contain the crash and still skip `incrementFailed`, losing the job
+outcome. See `[C60.21]` in [migrations.md](migrations.md).
+
+---
+
 ### [ADR-078: A Delivered-Empty `debug.allowedips` Fails Configuration Resolution](adr_078_delivered_empty_allowedips.md)
 
 **Date:** 2026-08-21 | **Status:** Accepted

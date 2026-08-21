@@ -77,7 +77,6 @@ func DefaultFilterConfig() *FilterConfig {
 type loweredNeedles struct {
 	fields      []string
 	byFirstByte [256][]string
-	anyEmpty    bool
 }
 
 // SensitiveDataFilter filters sensitive data from logs. Filtering is enforced by the
@@ -85,7 +84,8 @@ type loweredNeedles struct {
 // that would create a bypass path around this filter boundary.
 type SensitiveDataFilter struct {
 	config *FilterConfig
-	// needles is config.SensitiveFields lowercased once at construction. The
+	// needles is config.SensitiveFields normalized once at construction (see
+	// normalizeNeedles: lowercase, trim, drop-empty, de-duplicate). The
 	// list is a snapshot: mutating the caller's FilterConfig.SensitiveFields
 	// after NewSensitiveDataFilter returns has no effect.
 	needles *loweredNeedles
@@ -99,19 +99,36 @@ func NewSensitiveDataFilter(config *FilterConfig) *SensitiveDataFilter {
 	if config.MaskValue == "" {
 		config.MaskValue = DefaultMaskValue
 	}
-	lowered := make([]string, len(config.SensitiveFields))
-	for i, f := range config.SensitiveFields {
-		lowered[i] = strings.ToLower(f)
-	}
+	lowered := normalizeNeedles(config.SensitiveFields)
 	needles := &loweredNeedles{fields: lowered}
 	for _, n := range lowered {
-		if n == "" {
-			needles.anyEmpty = true
-			continue
-		}
 		needles.byFirstByte[n[0]] = append(needles.byFirstByte[n[0]], n)
 	}
 	return &SensitiveDataFilter{config: config, needles: needles}
+}
+
+// normalizeNeedles lowercases and trims a needle list, dropping entries that are
+// empty afterwards and de-duplicating the rest. An empty needle is not a
+// harmless no-op: strings.Contains reports true against it for every field name,
+// so a single one masks the entire log stream. Normalizing here, where a list
+// becomes a filter, is what gives the rule to EVERY construction door — including
+// app.Options.LoggerFilterConfig, which replaces the whole config and therefore
+// reached the matcher un-normalized.
+func normalizeNeedles(fields []string) []string {
+	normalized := make([]string, 0, len(fields))
+	seen := make(map[string]struct{}, len(fields))
+	for _, f := range fields {
+		n := strings.ToLower(strings.TrimSpace(f))
+		if n == "" {
+			continue
+		}
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		normalized = append(normalized, n)
+	}
+	return normalized
 }
 
 // FilterString filters sensitive data from string values
@@ -211,6 +228,29 @@ func (f *SensitiveDataFilter) filterStringMapWithProtection(m map[string]any, vi
 
 // filterSliceOrArrayWithProtection handles slice and array filtering with cycle detection
 func (f *SensitiveDataFilter) filterSliceOrArrayWithProtection(key string, rv reflect.Value, visited map[uintptr]struct{}, maxDepth int) any {
+	// A typed nil slice stays nil, matching the two map branches above: rebuilding
+	// it would emit [] where the log line carried null, which is wire-visible to
+	// anything parsing the output. Arrays cannot be nil, hence the Kind test.
+	if rv.Kind() == reflect.Slice && rv.IsNil() {
+		return rv.Interface()
+	}
+
+	// Decide passthrough-vs-copy from the ELEMENT TYPE, before descending. The
+	// previous form compared each filtered element with the original to detect
+	// changes, which panics the moment an element holds an uncomparable dynamic
+	// type — a map or a slice inside an []any, i.e. every JSON list of objects.
+	// A slice whose elements the walker cannot rewrite is returned as-is, which
+	// is what keeps []string a []string and []byte base64 in the output. Depth
+	// is part of the decision: at maxDepth 1 the elements are masked, and a mask
+	// is a rewrite whatever the element type says. Decided first: the cycle
+	// bookkeeping below never fires for a slice anyway — reflect.ValueOf never
+	// returns an addressable Value, so CanAddr is always false here, and slice
+	// cycles terminate on depth. Struct cycles are caught by the reachable
+	// visited map in filterStructWithProtection.
+	if maxDepth > 1 && !rewritesType(rv.Type().Elem()) {
+		return rv.Interface()
+	}
+
 	// Check if we can get a pointer to track this slice/array for cycles
 	if rv.CanAddr() {
 		ptr := uintptr(unsafe.Pointer(rv.UnsafeAddr()))
@@ -223,36 +263,27 @@ func (f *SensitiveDataFilter) filterSliceOrArrayWithProtection(key string, rv re
 
 	length := rv.Len()
 	filtered := make([]any, length)
-	hasChanges := false
 
 	for i := range length {
-		elemVal := rv.Index(i)
-		elem := elemVal.Interface()
-
-		var filteredElem any
-		if f.isStructType(elemVal.Type()) {
-			filteredElem = f.filterStructWithProtection(elem, visited, maxDepth-1)
-			hasChanges = true // Struct filtering always creates a map
-		} else {
-			filteredElem = f.filterValueWithProtection(key, elem, visited, maxDepth-1)
-			if filteredElem != elem {
-				hasChanges = true
-			}
-		}
-		filtered[i] = filteredElem
-	}
-
-	// If no changes were made, return the original slice to preserve type
-	if !hasChanges {
-		return rv.Interface()
+		filtered[i] = f.filterValueWithProtection(key, rv.Index(i).Interface(), visited, maxDepth-1)
 	}
 
 	return filtered
 }
 
-// isStructType checks if a type is a struct or pointer to struct
-func (f *SensitiveDataFilter) isStructType(t reflect.Type) bool {
-	return t.Kind() == reflect.Struct || (t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.Struct)
+// rewritesType reports whether the walker can rewrite a value of type t into a
+// different shape. Interface elements count because their concrete type is only
+// known per value; pointers count conservatively — rebuilding a slice as []any
+// is always safe, it only loses the concrete slice type. Everything else is a
+// leaf the walker returns untouched.
+func rewritesType(t reflect.Type) bool {
+	switch t.Kind() {
+	case reflect.Interface, reflect.Struct, reflect.Map,
+		reflect.Slice, reflect.Array, reflect.Pointer:
+		return true
+	default:
+		return false
+	}
 }
 
 // FilterFields filters a map of fields for sensitive data
@@ -268,9 +299,6 @@ func (f *SensitiveDataFilter) FilterFields(fields map[string]any) map[string]any
 func (f *SensitiveDataFilter) isSensitiveField(fieldName string) bool {
 	if f.needles == nil {
 		return false
-	}
-	if f.needles.anyEmpty {
-		return true // strings.Contains(x, "") is true for every x, including ""
 	}
 	lower := strings.ToLower(fieldName)
 	for i := range len(lower) {

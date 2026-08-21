@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -708,24 +709,24 @@ func TestCallerMarshalFuncCoverage(t *testing.T) {
 	})
 }
 
-func TestFilterSliceNoChangesPath(t *testing.T) {
+// TestFilterSlicePreservesConcreteType pins that a slice the walker cannot
+// rewrite comes back as itself, concrete type intact. This is the property the
+// old comparison bought at the price of a panic; the element-type decision buys
+// it without one.
+func TestFilterSlicePreservesConcreteType(t *testing.T) {
 	filter := NewSensitiveDataFilter(DefaultFilterConfig())
 
-	// Test slice with no sensitive data to trigger !hasChanges path (line 140-142)
-	t.Run("slice_with_no_changes", func(t *testing.T) {
+	t.Run("slice_of_scalars", func(t *testing.T) {
 		data := []string{"normal", "data", "values"}
 		result := filter.FilterValue("normalField", data)
 
-		// Should return original slice when no changes made
 		assert.Equal(t, data, result)
 	})
 
-	// Test array with no changes
-	t.Run("array_with_no_changes", func(t *testing.T) {
+	t.Run("array_of_scalars", func(t *testing.T) {
 		data := [3]int{1, 2, 3}
 		result := filter.FilterValue("numbers", data)
 
-		// Should return original array when no changes made
 		assert.Equal(t, data, result)
 	})
 }
@@ -1114,4 +1115,24 @@ func createContextWithSpan(t *testing.T, traceIDHex, spanIDHex string) context.C
 	})
 
 	return trace.ContextWithSpanContext(context.Background(), spanCtx)
+}
+
+// TestNewWithFilterWarnsWhenEveryNeedleNormalizesAway pins that the
+// masking-disabled WARN tracks the EFFECTIVE needle list, not the raw slice
+// length. Entries that are empty after trimming are dropped at construction, so
+// a list made only of them leaves nothing masking anything — the same posture as
+// an empty list, and it has to say so.
+func TestNewWithFilterWarnsWhenEveryNeedleNormalizesAway(t *testing.T) {
+	for _, needles := range [][]string{{""}, {"   "}, {"", "  "}} {
+		t.Run(strings.Join(needles, "|"), func(t *testing.T) {
+			var log *ZeroLogger
+			output := captureStdout(t, func() {
+				log = NewWithFilter("info", false, &FilterConfig{SensitiveFields: needles})
+			})
+
+			assertWarnInOutput(t, output, true)
+			assert.False(t, log.filter.isSensitiveField("password"),
+				"a list of only-empty needles must mask nothing, not everything")
+		})
+	}
 }

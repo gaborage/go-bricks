@@ -69,7 +69,10 @@ func NewWithFilter(level string, pretty bool, filterConfig *FilterConfig) *ZeroL
 	filter := NewSensitiveDataFilter(filterConfig)
 
 	zl := &ZeroLogger{zlog: &l, filter: filter, pretty: pretty}
-	if filterConfig != nil && len(filterConfig.SensitiveFields) == 0 {
+	// Judged on the EFFECTIVE needle list, not the raw slice: construction drops
+	// entries that are empty after trimming, so a list made only of those masks
+	// nothing and has to warn like an empty one.
+	if len(filter.needles.fields) == 0 {
 		l.Warn().Msg("sensitive-data masking is DISABLED: FilterConfig.SensitiveFields is empty — " +
 			"if you meant to change only MaskValue, start from logger.DefaultFilterConfig()")
 	}
