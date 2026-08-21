@@ -288,7 +288,7 @@ func tryLoadYAMLFile(k *koanf.Koanf, baseName string) error {
 func buildDecoderConfig() *mapstructure.DecoderConfig {
 	return &mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
-			configdecode.EmptyStringToNumericGuardHookFunc(),
+			configdecode.EmptyStringToScalarGuardHookFunc(),
 			configdecode.NumericToDurationGuardHookFunc(),
 			stringToTrimmedSliceHookFunc(","),
 			mapstructure.StringToTimeDurationHookFunc(),
@@ -309,7 +309,7 @@ func buildDecoderConfig() *mapstructure.DecoderConfig {
 func unmarshalDecoderConfig() *mapstructure.DecoderConfig {
 	return &mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
-			configdecode.EmptyStringToNumericGuardHookFunc(),
+			configdecode.EmptyStringToScalarGuardHookFunc(),
 			configdecode.NumericToDurationGuardHookFunc(),
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.TextUnmarshallerHookFunc(),

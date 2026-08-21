@@ -31,9 +31,9 @@ func TestMirroredHooksHaveNotDrifted(t *testing.T) {
 		mirrorFunc    string
 	}{
 		{
-			name:          "empty_string_to_numeric_guard",
-			canonicalFunc: "EmptyStringToNumericGuardHookFunc",
-			mirrorFunc:    "emptyStringToNumericGuardHookFunc",
+			name:          "empty_string_to_scalar_guard",
+			canonicalFunc: "EmptyStringToScalarGuardHookFunc",
+			mirrorFunc:    "emptyStringToScalarGuardHookFunc",
 		},
 		{
 			name:          "numeric_to_duration_guard",
@@ -41,9 +41,9 @@ func TestMirroredHooksHaveNotDrifted(t *testing.T) {
 			mirrorFunc:    "numericToDurationGuardHookFunc",
 		},
 		{
-			name:          "numeric_kind_predicate",
-			canonicalFunc: "isNumericKind",
-			mirrorFunc:    "isNumericKind",
+			name:          "weak_scalar_kind_predicate",
+			canonicalFunc: "isWeakScalarKind",
+			mirrorFunc:    "isWeakScalarKind",
 		},
 	}
 

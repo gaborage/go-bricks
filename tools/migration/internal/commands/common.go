@@ -216,7 +216,7 @@ var durationType = reflect.TypeOf(time.Duration(0))
 func tenantDecoderConfig() *mapstructure.DecoderConfig {
 	return &mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
-			emptyStringToNumericGuardHookFunc(),
+			emptyStringToScalarGuardHookFunc(),
 			numericToDurationGuardHookFunc(),
 			stringToTrimmedSliceHookFunc(","),
 			mapstructure.StringToTimeDurationHookFunc(),
@@ -270,29 +270,37 @@ func numericToDurationGuardHookFunc() mapstructure.DecodeHookFunc {
 	}
 }
 
-// emptyStringToNumericGuardHookFunc mirrors
-// github.com/gaborage/go-bricks/internal/configdecode.EmptyStringToNumericGuardHookFunc as a
+// emptyStringToScalarGuardHookFunc mirrors
+// github.com/gaborage/go-bricks/internal/configdecode.EmptyStringToScalarGuardHookFunc as a
 // byte-identical local copy, for the reason given on numericToDurationGuardHookFunc above.
-// Keep the two in sync (time.Duration exemption, whitespace trim, message).
-// Reject an empty or whitespace-only string bound to a numeric field: WeaklyTypedInput would
-// coerce it to 0, so a set-but-empty variable decodes as a legal zero and boots a config nobody
-// wrote. time.Duration is exempt (StringToTimeDurationHookFunc already fails loudly on it) and
-// non-numeric targets are untouched.
-func emptyStringToNumericGuardHookFunc() mapstructure.DecodeHookFunc {
+// Keep the two in sync (time.Duration exemption, whitespace trim, both messages).
+// Reject an empty or whitespace-only string bound to a numeric or bool field: WeaklyTypedInput
+// would coerce it to that target's zero value, so a set-but-empty variable decodes as a legal
+// 0 / false and boots a config nobody wrote. time.Duration is exempt
+// (StringToTimeDurationHookFunc already fails loudly on it) and every other target is untouched.
+func emptyStringToScalarGuardHookFunc() mapstructure.DecodeHookFunc {
 	return func(f, t reflect.Type, data any) (any, error) {
 		if f.Kind() != reflect.String {
 			return data, nil
 		}
 		// No pointer walk: mapstructure recurses into a pointer target and re-runs the
 		// hook chain against the element type, so *int arrives here as int.
-		if t == durationType || !isNumericKind(t.Kind()) {
+		if t == durationType || !isWeakScalarKind(t.Kind()) {
 			return data, nil
 		}
 		// reflect rather than a concrete type assertion: a named string type (type Env
 		// string) has Kind String but fails data.(string), and passing it through hands it
-		// straight to the weak "" -> 0 conversion this guard exists to stop.
+		// straight to the weak "" -> zero conversion this guard exists to stop.
 		if strings.TrimSpace(reflect.ValueOf(data).String()) != "" {
 			return data, nil
+		}
+		// Messages stay inline rather than in package vars: the mirror-drift test compares
+		// function bodies, so a message hoisted out of the body would drift unchecked.
+		if t.Kind() == reflect.Bool {
+			return nil, errors.New(
+				"boolean value delivered empty — set an explicit true/false (empty secretKeyRef / unset envsubst variable?) " +
+					"or remove the key entirely to take its default",
+			)
 		}
 		return nil, errors.New(
 			"numeric value delivered empty — set an explicit value (empty secretKeyRef / unset envsubst variable?) " +
@@ -301,11 +309,13 @@ func emptyStringToNumericGuardHookFunc() mapstructure.DecodeHookFunc {
 	}
 }
 
-// isNumericKind reports whether k is one mapstructure's WeaklyTypedInput would fill from a
-// string, i.e. exactly the kinds where "" silently becomes 0.
-func isNumericKind(k reflect.Kind) bool {
+// isWeakScalarKind reports whether k is one mapstructure's WeaklyTypedInput would fill from
+// a string, i.e. exactly the kinds where "" silently becomes that kind's zero value — 0 for
+// the numerics, false for a bool.
+func isWeakScalarKind(k reflect.Kind) bool {
 	switch k {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 		reflect.Float32, reflect.Float64:
 		return true

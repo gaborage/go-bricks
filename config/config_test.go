@@ -216,6 +216,110 @@ func TestLoadRejectsEmptyNumericEnv(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsEmptyBoolEnv pins the delivered-empty rule for bool keys (ADR-077): a
+// set-but-empty variable used to decode as a legal false — non-nil, so the pointer
+// tri-states read it as an operator choice — and now fails Load naming the key.
+func TestLoadRejectsEmptyBoolEnv(t *testing.T) {
+	tests := []struct {
+		name    string
+		envVar  string
+		wantKey string
+	}{
+		// The headline case: keep-alive defaults to TRUE, so an empty value was a
+		// silent default flip, not merely a redundant zero.
+		{name: "database_pool_keepalive_enabled", envVar: "DATABASE_POOL_KEEPALIVE_ENABLED", wantKey: "database.pool.keepalive.enabled"},
+		// ADR-046's strict readiness: *false un-stricts the cache probe, so /ready
+		// answered 200 straight through a Redis outage.
+		{name: "cache_critical", envVar: "CACHE_CRITICAL", wantKey: "cache.critical"},
+		{name: "server_logroutes", envVar: "SERVER_LOGROUTES", wantKey: "server.logroutes"},
+		// A non-pointer bool is guarded too: false is its zero, so the flip is
+		// invisible in the decoded struct either way.
+		{name: "cache_enabled", envVar: "CACHE_ENABLED", wantKey: "cache.enabled"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearEnvironmentVariables()
+			t.Setenv(tt.envVar, "")
+
+			_, err := Load()
+
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantKey)
+			assert.ErrorContains(t, err, "boolean value delivered empty")
+		})
+	}
+}
+
+// keepAliveFixtureYAML is a minimal complete database section, which
+// database.pool.keepalive.enabled needs before normalization fills its default.
+const keepAliveFixtureYAML = `database:
+  type: postgresql
+  host: localhost
+  port: 5432
+  database: appdb
+  username: appuser
+  password: hunter2hunter2
+`
+
+// TestLoadExplicitBoolEnvUnchanged pins the other half of ADR-077: only an EMPTY value is
+// rejected, so every explicit spelling still decodes — including the deliberate opt-outs
+// the rejected value used to counterfeit.
+func TestLoadExplicitBoolEnvUnchanged(t *testing.T) {
+	t.Run("cache_critical_false_still_opts_out", func(t *testing.T) {
+		clearEnvironmentVariables()
+		t.Setenv("CACHE_CRITICAL", "false")
+
+		cfg, err := Load()
+
+		require.NoError(t, err)
+		require.NotNil(t, cfg.Cache.Critical)
+		assert.False(t, cfg.IsCacheCritical(), "an explicit false is still the documented way to un-strict the probe")
+	})
+
+	// Both keep-alive cases need a real database section: nil -> true normalization runs
+	// only for a configured database, so without one IsEnabled reads false either way and
+	// the explicit-false case would pass vacuously.
+	t.Run("keepalive_unset_stays_enabled", func(t *testing.T) {
+		cfg, err := loadDeliveredEmptyFixture(t, keepAliveFixtureYAML, nil)
+
+		require.NoError(t, err)
+		assert.True(t, cfg.Database.Pool.KeepAlive.IsEnabled(),
+			"absence is not emptiness: an unset key must still take the default true")
+	})
+
+	t.Run("keepalive_explicit_false_honored", func(t *testing.T) {
+		cfg, err := loadDeliveredEmptyFixture(t, keepAliveFixtureYAML,
+			map[string]string{"DATABASE_POOL_KEEPALIVE_ENABLED": "false"})
+
+		require.NoError(t, err)
+		require.NotNil(t, cfg.Database.Pool.KeepAlive.Enabled)
+		assert.False(t, cfg.Database.Pool.KeepAlive.IsEnabled())
+	})
+}
+
+// TestLoadEmptyBoolYAMLStringRejected covers the same rule arriving through YAML: an
+// empty string takes the identical decode path an empty env var does.
+func TestLoadEmptyBoolYAMLStringRejected(t *testing.T) {
+	_, err := loadDeliveredEmptyFixture(t, "cache:\n  critical: \"\"\n", nil)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "critical")
+	assert.ErrorContains(t, err, "boolean value delivered empty")
+}
+
+// TestLoadYAMLNullBoolKeepsTodaysDecode pins the boundary ADR-077 deliberately does NOT
+// cover, matching ADR-074's: a YAML null is different plumbing — koanf delivers a nil
+// value, not the "" the guard judges — so the key still decodes as absent and the cache
+// probe stays strict.
+func TestLoadYAMLNullBoolKeepsTodaysDecode(t *testing.T) {
+	cfg, err := loadDeliveredEmptyFixture(t, "cache:\n  critical:\n", nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, cfg.Cache.Critical)
+	assert.True(t, cfg.IsCacheCritical(), "a null key is absence, so the strict default still applies")
+}
+
 // TestLoadEmptyDurationEnvKeepsItsOwnError pins the guard's one exemption: time.Duration
 // targets fall through to the duration parser, so an empty duration still fails with the
 // parse error rather than the delivered-empty one. Both are loud; this pins which.

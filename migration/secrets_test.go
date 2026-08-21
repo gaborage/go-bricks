@@ -258,9 +258,24 @@ func TestSecretsProviderDBConfigEmptyNumericGuard(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			// ADR-077 at the secrets seam: a rotation writing "" here used to turn TCP
+			// keep-alive off for that tenant, silently, on the connection path.
+			name:    "empty_pool_keepalive_enabled_rejected",
+			payload: `{"type":"postgresql","host":"h","username":"u","pool":{"keepalive":{"enabled":""}}}`,
+			wantErr: true,
+		},
+		{
 			name:    "explicit_port_binds",
 			payload: `{"type":"postgresql","host":"h","username":"u","port":5432}`,
 			assert:  func(t *testing.T, got *config.DatabaseConfig) { assert.Equal(t, 5432, got.Port) },
+		},
+		{
+			name:    "explicit_pool_keepalive_enabled_binds",
+			payload: `{"type":"postgresql","host":"h","username":"u","pool":{"keepalive":{"enabled":false}}}`,
+			assert: func(t *testing.T, got *config.DatabaseConfig) {
+				require.NotNil(t, got.Pool.KeepAlive.Enabled)
+				assert.False(t, *got.Pool.KeepAlive.Enabled)
+			},
 		},
 	}
 

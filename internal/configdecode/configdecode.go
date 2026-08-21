@@ -1,5 +1,5 @@
 // Package configdecode holds mapstructure decode hooks shared by the go-bricks config
-// and migration packages, so the numeric-duration guard has a single source of truth
+// and migration packages, so the decode guards have a single source of truth
 // inside the module. The tools/migration CLI is a separate module and cannot import
 // go-bricks/internal, so it keeps a byte-identical local copy in sync with this one.
 package configdecode
@@ -60,31 +60,43 @@ func NumericToDurationGuardHookFunc() mapstructure.DecodeHookFunc {
 	}
 }
 
-// EmptyStringToNumericGuardHookFunc rejects an empty (or whitespace-only) string bound to a
-// numeric field. WeaklyTypedInput would otherwise coerce it to 0, so a set-but-empty
-// environment variable (FOO=) or an empty YAML string decodes as a legal zero and boots a
-// config nobody wrote — the tri-state in ADR-065 is defeated exactly this way. Pointer
-// targets are guarded too: the zero arrives as a non-nil *0, which normalization reads as
+// EmptyStringToScalarGuardHookFunc rejects an empty (or whitespace-only) string bound to a
+// numeric or bool field. WeaklyTypedInput would otherwise coerce it to that target's zero
+// value — 0 for a numeric, false for a bool — so a set-but-empty environment variable
+// (FOO=) or an empty YAML string decodes as a legal zero and boots a config nobody wrote:
+// the tri-states in ADR-065 and ADR-046 are defeated exactly this way, and
+// database.pool.keepalive.enabled flips from its default true to false. Pointer targets are
+// guarded too: the zero arrives as a non-nil *0 / *false, which normalization reads as
 // "operator set it".
 //
 // time.Duration is exempt: StringToTimeDurationHookFunc owns that target and already fails
-// loudly on an empty string. Non-numeric targets are untouched — an empty string is a legal
+// loudly on an empty string. Every other target is untouched — an empty string is a legal
 // string, and the database-identity subset is ADR-051's to judge.
-func EmptyStringToNumericGuardHookFunc() mapstructure.DecodeHookFunc {
+//
+// Mirrored in tools/migration/internal/commands/common.go — keep the two in sync.
+func EmptyStringToScalarGuardHookFunc() mapstructure.DecodeHookFunc {
 	return func(f, t reflect.Type, data any) (any, error) {
 		if f.Kind() != reflect.String {
 			return data, nil
 		}
 		// No pointer walk: mapstructure recurses into a pointer target and re-runs the
 		// hook chain against the element type, so *int arrives here as int.
-		if t == durationType || !isNumericKind(t.Kind()) {
+		if t == durationType || !isWeakScalarKind(t.Kind()) {
 			return data, nil
 		}
 		// reflect rather than a concrete type assertion: a named string type (type Env
 		// string) has Kind String but fails data.(string), and passing it through hands it
-		// straight to the weak "" -> 0 conversion this guard exists to stop.
+		// straight to the weak "" -> zero conversion this guard exists to stop.
 		if strings.TrimSpace(reflect.ValueOf(data).String()) != "" {
 			return data, nil
+		}
+		// Messages stay inline rather than in package vars: the mirror-drift test compares
+		// function bodies, so a message hoisted out of the body would drift unchecked.
+		if t.Kind() == reflect.Bool {
+			return nil, errors.New(
+				"boolean value delivered empty — set an explicit true/false (empty secretKeyRef / unset envsubst variable?) " +
+					"or remove the key entirely to take its default",
+			)
 		}
 		return nil, errors.New(
 			"numeric value delivered empty — set an explicit value (empty secretKeyRef / unset envsubst variable?) " +
@@ -93,11 +105,13 @@ func EmptyStringToNumericGuardHookFunc() mapstructure.DecodeHookFunc {
 	}
 }
 
-// isNumericKind reports whether k is one mapstructure's WeaklyTypedInput would fill from a
-// string, i.e. exactly the kinds where "" silently becomes 0.
-func isNumericKind(k reflect.Kind) bool {
+// isWeakScalarKind reports whether k is one mapstructure's WeaklyTypedInput would fill from
+// a string, i.e. exactly the kinds where "" silently becomes that kind's zero value — 0 for
+// the numerics, false for a bool.
+func isWeakScalarKind(k reflect.Kind) bool {
 	switch k {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+	case reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 		reflect.Float32, reflect.Float64:
 		return true
