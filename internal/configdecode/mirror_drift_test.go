@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,11 +59,24 @@ func TestMirroredHooksHaveNotDrifted(t *testing.T) {
 	}
 }
 
+// TestFuncBodyReadsCRLFSource pins the normalization: without it this whole test passes on
+// Linux and fails on Windows, which is a worse failure than the drift it looks for.
+func TestFuncBodyReadsCRLFSource(t *testing.T) {
+	source := "package x\r\n\r\nfunc sample() bool {\r\n\treturn true\r\n}\r\n"
+
+	body := funcBody(t, strings.ReplaceAll(source, "\r\n", "\n"), "sample")
+
+	assert.Equal(t, "return true", body)
+}
+
 func readSource(t *testing.T, path string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Clean(path))
 	require.NoError(t, err, "the mirror moved; update mirrorPath or resolve #1109")
-	return string(raw)
+	// Normalize line endings: a Windows checkout hands these files back with CRLF, and a
+	// parser that looks for "\n}\n" finds nothing there — the comparison would be
+	// platform-dependent rather than drift-dependent.
+	return strings.ReplaceAll(string(raw), "\r\n", "\n")
 }
 
 // funcBody returns everything between a function's signature and its closing brace, with
