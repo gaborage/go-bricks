@@ -49,8 +49,8 @@ The actual secret lives in the deployment environment (Kubernetes Secret, AWS Se
    # SAFE
    api-key: ${NEW_RELIC_API_KEY}
 
-   # FORBIDDEN — real value committed to git
-   api-key: nrak-ABC123XYZ
+   # FORBIDDEN — a literal key value committed to git
+   api-key: <the actual New Relic ingest key>
    ```
 
 2. **Separate config files per environment** (no secrets in any of them):

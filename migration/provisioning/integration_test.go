@@ -17,6 +17,7 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/migration"
+	testconsts "github.com/gaborage/go-bricks/testing"
 	"github.com/gaborage/go-bricks/testing/containers"
 )
 
@@ -174,9 +175,9 @@ func TestProvisioningCrashRecoveryResumesFromPersistedState(t *testing.T) {
 	spec := &migration.PGRoleSpec{
 		Schema:           schema,
 		MigratorRole:     migratorRole,
-		MigratorPassword: "mig-crash-pw-1234",
+		MigratorPassword: testconsts.FakePassword("mig-crash"),
 		RuntimeRole:      runtimeRole,
-		RuntimePassword:  "rt-crash-pw-1234",
+		RuntimePassword:  testconsts.FakePassword("rt-crash"),
 	}
 
 	steps := env.realRoleProvisioningSteps(t, spec)
@@ -226,9 +227,9 @@ func TestProvisioningCleanupOnFailureDropsArtifacts(t *testing.T) {
 	spec := &migration.PGRoleSpec{
 		Schema:           schema,
 		MigratorRole:     migratorRole,
-		MigratorPassword: "mig-fail-pw-1234",
+		MigratorPassword: testconsts.FakePassword("mig-fail"),
 		RuntimeRole:      runtimeRole,
-		RuntimePassword:  "rt-fail-pw-1234",
+		RuntimePassword:  testconsts.FakePassword("rt-fail"),
 	}
 
 	// CreateSchema succeeds (using the real role provisioner), but Migrate
@@ -280,9 +281,9 @@ func TestProvisioningRerunSameJobIDIsNoOp(t *testing.T) {
 	spec := &migration.PGRoleSpec{
 		Schema:           schema,
 		MigratorRole:     migratorRole,
-		MigratorPassword: "mig-rerun-pw-1234",
+		MigratorPassword: testconsts.FakePassword("mig-rerun"),
 		RuntimeRole:      runtimeRole,
-		RuntimePassword:  "rt-rerun-pw-1234",
+		RuntimePassword:  testconsts.FakePassword("rt-rerun"),
 	}
 
 	var seedCalls int

@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	testconsts "github.com/gaborage/go-bricks/testing"
 )
 
 // TestPGRolesRuntimeRoleRejectedOnDDL verifies the role-separation acceptance
@@ -21,9 +23,9 @@ func TestPGRolesRuntimeRoleRejectedOnDDL(t *testing.T) {
 	spec := &PGRoleSpec{
 		Schema:           "tenant_ddl",
 		MigratorRole:     "mig_ddl",
-		MigratorPassword: "mig-ddl-pw-1234",
+		MigratorPassword: testconsts.FakePassword("mig-ddl"),
 		RuntimeRole:      "rt_ddl",
-		RuntimePassword:  "rt-ddl-pw-1234",
+		RuntimePassword:  testconsts.FakePassword("rt-ddl"),
 	}
 
 	ctx, cancel := testCtx(t)
@@ -71,9 +73,9 @@ func TestPGRolesAlterDefaultPrivilegesAutoGrants(t *testing.T) {
 	spec := &PGRoleSpec{
 		Schema:           "tenant_adp",
 		MigratorRole:     "mig_adp",
-		MigratorPassword: "mig-adp-pw-1234",
+		MigratorPassword: testconsts.FakePassword("mig-adp"),
 		RuntimeRole:      "rt_adp",
-		RuntimePassword:  "rt-adp-pw-1234",
+		RuntimePassword:  testconsts.FakePassword("rt-adp"),
 	}
 
 	ctx, cancel := testCtx(t)
@@ -132,7 +134,7 @@ func TestPGRolesRuntimeRoleHasNoSuperPowers(t *testing.T) {
 		Schema:          "tenant_caps",
 		MigratorRole:    "mig_caps",
 		RuntimeRole:     "rt_caps",
-		RuntimePassword: "rt-caps-pw-1234",
+		RuntimePassword: testconsts.FakePassword("rt-caps"),
 	}
 
 	ctx, cancel := testCtx(t)
@@ -173,9 +175,9 @@ func TestPGRolesProvisioningIsIdempotent(t *testing.T) {
 	spec := &PGRoleSpec{
 		Schema:           "tenant_idem",
 		MigratorRole:     "mig_idem",
-		MigratorPassword: "mig-idem-pw-1234",
+		MigratorPassword: testconsts.FakePassword("mig-idem"),
 		RuntimeRole:      "rt_idem",
-		RuntimePassword:  "rt-idem-pw-1234",
+		RuntimePassword:  testconsts.FakePassword("rt-idem"),
 	}
 
 	ctx, cancel := testCtx(t)
@@ -187,10 +189,10 @@ func TestPGRolesProvisioningIsIdempotent(t *testing.T) {
 
 	// Rotate the runtime password and verify the new credential works while
 	// the old one is rejected.
-	spec.RuntimePassword = "rt-idem-pw-rotated"
+	spec.RuntimePassword = testconsts.FakePassword("rt-idem-rotated")
 	require.NoError(t, ProvisionPGRoles(ctx, admin, spec), "rotate runtime password")
 
-	rotated := env.openAsRole(t, spec.RuntimeRole, "rt-idem-pw-rotated")
+	rotated := env.openAsRole(t, spec.RuntimeRole, spec.RuntimePassword)
 	require.NoError(t, rotated.PingContext(ctx))
 }
 
@@ -209,9 +211,9 @@ func TestPGRolesSearchPathSetOnBothRoles(t *testing.T) {
 	spec := &PGRoleSpec{
 		Schema:           "tenant_sp",
 		MigratorRole:     "mig_sp",
-		MigratorPassword: "mig-sp-pw-1234",
+		MigratorPassword: testconsts.FakePassword("mig-sp"),
 		RuntimeRole:      "rt_sp",
-		RuntimePassword:  "rt-sp-pw-1234",
+		RuntimePassword:  testconsts.FakePassword("rt-sp"),
 	}
 
 	ctx, cancel := testCtx(t)
@@ -262,9 +264,9 @@ func TestPGRolesUnqualifiedResolutionUsesTenantSchema(t *testing.T) {
 	spec := &PGRoleSpec{
 		Schema:           "tenant_unq",
 		MigratorRole:     "mig_unq",
-		MigratorPassword: "mig-unq-pw-1234",
+		MigratorPassword: testconsts.FakePassword("mig-unq"),
 		RuntimeRole:      "rt_unq",
-		RuntimePassword:  "rt-unq-pw-1234",
+		RuntimePassword:  testconsts.FakePassword("rt-unq"),
 	}
 
 	ctx, cancel := testCtx(t)

@@ -22,7 +22,7 @@ func TestInfoCommandInvokesFlywayInfo(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		"gobricks/migrate/t1": `{"type":"postgresql","host":"h1","port":5432,"database":"d1","username":"u1","password":"pw-tenant-1"}`,
+		"gobricks/migrate/t1": canonicalTenantSecret("h1", "d1", "u1"),
 	})
 	defer smSrv.Close()
 

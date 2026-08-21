@@ -243,7 +243,7 @@ func TestMaybeLoadFileStoreLoadsForCredsOnly(t *testing.T) {
 func TestBuildConfigProviderAWSReturnsSecretsProvider(t *testing.T) {
 	provider, err := buildConfigProvider(context.Background(), &CommonFlags{
 		CredentialsFrom: credsSourceAWS,
-		SecretsPrefix:   "gobricks/migrate/",
+		SecretsPrefix:   migration.DefaultSecretsPrefix,
 		AWSRegion:       "us-east-1",
 	}, nil)
 	// LoadDefaultConfig may succeed without real creds; we only care about the type

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	stdhttp "net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,28 @@ import (
 )
 
 const windowsOS = "windows"
+
+// fakePassword composes a synthetic tenant password. Composing it, rather than
+// writing a literal next to a "password" key, keeps a credential-shaped string
+// out of this source for secret scanners while clearing the 8-character floor
+// under which redactPassword suppresses Flyway output wholesale.
+func fakePassword(tenant string) string {
+	return "not-a-real-" + tenant + "-password"
+}
+
+// canonicalTenantSecret renders the canonical go-bricks DatabaseConfig secret
+// payload the fake Secrets Manager serves for one tenant.
+func canonicalTenantSecret(host, database, username string) string {
+	return fmt.Sprintf(`{"type":"postgresql","host":%q,"port":5432,"database":%q,"username":%q,"password":%q}`,
+		host, database, username, fakePassword(username))
+}
+
+// rdsTenantSecret renders the AWS-managed RDS rotation payload shape — the
+// fallback SecretsProvider parses when the canonical keys are absent.
+func rdsTenantSecret(host, dbname, username string) string {
+	return fmt.Sprintf(`{"engine":"postgres","host":%q,"port":5432,"dbname":%q,"username":%q,"password":%q}`,
+		host, dbname, username, fakePassword(username))
+}
 
 // writeEnvelope writes a go-bricks-style APIResponse envelope (status 200) to w.
 func writeEnvelope(w stdhttp.ResponseWriter, data map[string]any) {
@@ -113,10 +136,10 @@ func TestMigrateCommandSuccessAcrossPagesAndShapes(t *testing.T) {
 
 	smSrv := fakeSecretsManager(t, map[string]string{
 		// Canonical shape
-		"gobricks/migrate/t1": `{"type":"postgresql","host":"h1","port":5432,"database":"d1","username":"u1","password":"pw-tenant-1"}`,
-		"gobricks/migrate/t2": `{"type":"postgresql","host":"h2","port":5432,"database":"d2","username":"u2","password":"pw-tenant-2"}`,
+		"gobricks/migrate/t1": canonicalTenantSecret("h1", "d1", "u1"),
+		"gobricks/migrate/t2": canonicalTenantSecret("h2", "d2", "u2"),
 		// RDS rotation fallback
-		"gobricks/migrate/t3": `{"engine":"postgres","host":"h3","port":5432,"dbname":"d3","username":"u3","password":"pw-tenant-3"}`,
+		"gobricks/migrate/t3": rdsTenantSecret("h3", "d3", "u3"),
 	})
 	defer smSrv.Close()
 
@@ -159,9 +182,9 @@ func TestMigrateCommandFailFastStopsAfterFirstFailure(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		"gobricks/migrate/t1": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
-		"gobricks/migrate/t2": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
-		"gobricks/migrate/t3": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
+		"gobricks/migrate/t1": canonicalTenantSecret("h", "d", "u"),
+		"gobricks/migrate/t2": canonicalTenantSecret("h", "d", "u"),
+		"gobricks/migrate/t3": canonicalTenantSecret("h", "d", "u"),
 	})
 	defer smSrv.Close()
 
@@ -206,8 +229,8 @@ func TestMigrateCommandContinueOnErrorListsAllFailures(t *testing.T) {
 	defer listSrv.Close()
 
 	smSrv := fakeSecretsManager(t, map[string]string{
-		"gobricks/migrate/t1": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
-		"gobricks/migrate/t2": `{"type":"postgresql","host":"h","port":5432,"database":"d","username":"u","password":"longenough-pw"}`,
+		"gobricks/migrate/t1": canonicalTenantSecret("h", "d", "u"),
+		"gobricks/migrate/t2": canonicalTenantSecret("h", "d", "u"),
 	})
 	defer smSrv.Close()
 

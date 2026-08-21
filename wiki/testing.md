@@ -48,6 +48,12 @@ func Test_Filter_Eq(t *testing.T) { }
 
 **Exception:** Test case descriptions in table-driven tests use snake_case for readability (e.g., `name: "with_invalid_credentials"`)
 
+## Secret-Shaped Fixtures
+
+A test fixture that *looks* like a credential is flagged by org secret scanners, which costs a manual triage pass on every scan and raises the noise floor real findings have to clear. Never write a contiguous `-----BEGIN <type>-----` block, or a password-shaped literal beside a `password` key, as a source literal. Compose the value at runtime instead — `testconsts.PEMFixture(blockType)` and `testconsts.FakePassword(label)` in [testing/secretfixtures.go](../testing/secretfixtures.go) cover both cases, and `PEMFixture` is byte-identical to the literal it replaces, so parsing tests keep exercising real PEM structure.
+
+`tools/migration` is a separate Go module pinned to a released `go-bricks`, so it keeps its own local copies rather than importing these — new helpers there must not reach across the module boundary until the version it pins ships them.
+
 ## Testing Strategy
 
 - **Unit tests:** testify, `database/testing` (DB mocking), `cache/testing` (cache mocking), `outbox/testing` (outbox mocking), httptest (server), fake adapters (messaging)
