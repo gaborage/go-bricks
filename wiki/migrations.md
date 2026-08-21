@@ -3885,6 +3885,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   posture before deploying, run `kubectl exec <pod> -- env | grep -E '=[[:space:]]*$'`
   against the current release — every line it prints is a candidate, whitespace-only values
   included, since those are rejected too.
+
+  Booting the service only exercises ONE of the four seams. Check the other two that resolve
+  configuration elsewhere: run `go-bricks-migrate info` per tenant to put the CLI's
+  `tenants.yaml` through the same guard, and for a dynamic `DBConfigProvider`, resolve every
+  stored secret payload (acquire a connection per tenant, or call your provider's resolve
+  path directly) — those decode at first use rather than at boot, so a green startup says
+  nothing about them.
 - ref: [ADR-074](adr_074_delivered_empty_numeric_config.md) ·
   [ADR-051](adr_051_delivered_empty_database_identity.md) ·
   [ADR-065](adr_065_keystore_secretminlength_tristate.md) ·
