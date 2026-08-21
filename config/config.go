@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	stdmaps "maps"
 	"os"
 	"reflect"
 	"sort"
@@ -358,12 +357,44 @@ var derivedDefaultKeys = []string{
 	"keystore.secretminlength",
 }
 
+// derivationDeniedPrefixes are key spaces that must never be DERIVED, whatever the allowlist
+// says, because their meaning is built on what the explicit map states rather than on what
+// normalize fills:
+//
+//   - database identity keys — ADR-051's delivered-empty check reads koanf PRESENCE, so a
+//     preloaded key answers a question the operator never answered.
+//   - posture tri-states (cache.critical, server.logroutes, and the keepalive flag under
+//     database.) — nil means "the shipped default", and a derived value writes a concrete
+//     false that silently flips it (ADR-046, ADR-048).
+//   - debug. — its fail-closed check reads the DECODED struct rather than koanf, so deriving
+//     these would hand that posture to whatever normalize fills instead of to the explicit
+//     literals that state it today (which are legitimate and stay).
+var derivationDeniedPrefixes = []string{
+	"database.",
+	"databases",
+	"debug.",
+	"multitenant.tenants",
+	"cache.critical",
+	"server.logroutes",
+}
+
+// preloadDeniedPrefixes are key spaces that must not appear in the loaded defaults AT ALL,
+// from either map. These are the ones whose semantics read koanf presence directly, so a
+// hand-written literal breaks them exactly as a derived value would: ADR-051 would read a
+// preloaded identity key as "configured" and abort every database-free deployment.
+var preloadDeniedPrefixes = []string{
+	"database.",
+	"databases",
+	"multitenant.tenants",
+}
+
 // derivedDefaults renders the allowlisted keys by normalizing a zero Config and picking them
 // out of the result, so the Go-side constants normalize applies are the single truth for
 // those keys (ADR-064: normalize has to handle a hand-built config anyway).
 //
-// Durations are rendered as strings so a koanf getter sees the same type it saw when these
-// values were literals, and a *int is dereferenced for the same reason.
+// Durations are rendered as strings and pointers are dereferenced, so a koanf getter sees
+// the same type it saw when these values were literals.
+
 func derivedDefaults() (map[string]any, error) {
 	// Normalizing the whole zero Config, rather than calling the three functions that own
 	// these keys, is deliberate: the allowlist is meant to grow as sections adopt normalize
@@ -372,7 +403,10 @@ func derivedDefaults() (map[string]any, error) {
 	// section, which the tests below pin in both deployment modes.
 	var zero Config
 	if err := normalize(&zero); err != nil {
-		return nil, fmt.Errorf("deriving koanf defaults: %w", err)
+		// Passing the section error through raw would send an operator editing config that
+		// has not been loaded yet: reaching here means a normalize rule started rejecting an
+		// empty Config, which is a framework defect, not a deployment one.
+		return nil, fmt.Errorf("deriving koanf defaults: framework defect, normalize rejected an empty Config: %w", err)
 	}
 
 	flat, err := flattenConfig(&zero)
@@ -380,11 +414,26 @@ func derivedDefaults() (map[string]any, error) {
 		return nil, err
 	}
 
+	// A key whose normalized value equals its Go zero carries no default at all: preloading
+	// it would write "0s" or 0 where the hand-written literal carried a real value. That is
+	// the shape a key takes when it joins the allowlist BEFORE its fill moves into normalize.
+	bare, err := flattenConfig(&Config{})
+	if err != nil {
+		return nil, err
+	}
+
 	derived := make(map[string]any, len(derivedDefaultKeys))
 	for _, key := range derivedDefaultKeys {
+		if prefix, denied := deniedDerivation(key); denied {
+			return nil, fmt.Errorf("deriving koanf defaults: %q is under %q, which must stay absent unless configured", key, prefix)
+		}
+
 		value, ok := flat[key]
 		if !ok {
 			return nil, fmt.Errorf("deriving koanf defaults: normalize does not fill %q", key)
+		}
+		if reflect.DeepEqual(value, bare[key]) {
+			return nil, fmt.Errorf("deriving koanf defaults: normalize leaves %q at its zero value, so it has no default to derive", key)
 		}
 		rendered, err := renderDefault(key, value)
 		if err != nil {
@@ -393,6 +442,23 @@ func derivedDefaults() (map[string]any, error) {
 		derived[key] = rendered
 	}
 	return derived, nil
+}
+
+// deniedDerivation reports whether key names a value that must not be derived.
+func deniedDerivation(key string) (prefix string, denied bool) {
+	return matchesPrefix(key, derivationDeniedPrefixes)
+}
+
+// matchesPrefix reports the first prefix key falls under, case-insensitively — koanf keys are
+// lowercase, so a mixed-case entry in either list is a mistake that should still be caught.
+func matchesPrefix(key string, prefixes []string) (prefix string, matched bool) {
+	lower := strings.ToLower(key)
+	for _, p := range prefixes {
+		if strings.HasPrefix(lower, p) {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // flattenConfig turns a Config into the dotted key space koanf stores, using the same koanf
@@ -420,13 +486,22 @@ func renderDefault(key string, value any) (any, error) {
 	switch v := value.(type) {
 	case time.Duration:
 		return v.String(), nil
-	case *int:
-		if v == nil {
+	default:
+		rv := reflect.ValueOf(value)
+		if rv.Kind() != reflect.Pointer {
+			return value, nil
+		}
+		// Every pointer type, not just *int — though note which direction actually bites: a
+		// nil written into the defaults map still decodes to nil, so a tri-state survives it;
+		// it is a DEREFERENCED false that erases the absent-vs-explicit-false distinction
+		// ADR-046 and ADR-048 read. Those keys are denied outright above; this branch only
+		// catches a normalize regression on a key that is legitimately derivable.
+		if rv.IsNil() {
 			return nil, fmt.Errorf("deriving koanf defaults: normalize left %q nil", key)
 		}
-		return *v, nil
-	default:
-		return value, nil
+		// Re-enter rather than returning the element directly: a *time.Duration still has to
+		// render as a unit string, and a **T has to reach its value.
+		return renderDefault(key, rv.Elem().Interface())
 	}
 }
 
@@ -437,10 +512,33 @@ func loadDefaults(k *koanf.Koanf) error {
 	if err != nil {
 		return err
 	}
-	// Disjoint by construction and pinned by test, so neither side can quietly win.
-	stdmaps.Copy(defaults, derived)
+	merged, err := mergeDefaults(defaults, derived)
+	if err != nil {
+		return err
+	}
 
-	return k.Load(confmap.Provider(defaults, "."), nil)
+	return k.Load(confmap.Provider(merged, "."), nil)
+}
+
+// mergeDefaults joins the hand-written and derived maps under two rules that hold at load
+// time rather than in review: a key may not be written by both (merge order would silently
+// pick the winner), and no key may fall under a preload-denied prefix, whichever map it came
+// from — a hand-written identity literal breaks ADR-051's presence check exactly as a derived
+// one would.
+func mergeDefaults(handWritten, derived map[string]any) (map[string]any, error) {
+	for key, value := range derived {
+		if _, collides := handWritten[key]; collides {
+			return nil, fmt.Errorf("loading defaults: %q is both derived and hand-written", key)
+		}
+		handWritten[key] = value
+	}
+
+	for key := range handWritten {
+		if prefix, denied := matchesPrefix(key, preloadDeniedPrefixes); denied {
+			return nil, fmt.Errorf("loading defaults: %q is under %q, which must stay absent unless configured", key, prefix)
+		}
+	}
+	return handWritten, nil
 }
 
 // koanfOnlyDefaults are the keys koanf alone declares: the ones that must fail validation
