@@ -1834,9 +1834,9 @@ func checkTenantMessagingConsistency(tenants map[string]TenantEntry) error {
 			// A wildcard segment, not a literal: this is a whole-map invariant, and
 			// "multitenant.tenants.messaging" would be indistinguishable from a tenant
 			// actually named "messaging" (tenantField's sentinel emits exactly that).
-			Field:    "multitenant.tenants.*.messaging",
-			Message:  "inconsistent configuration",
-			Action:   "either all tenants must have messaging configured or none should",
+			Field:   "multitenant.tenants.*.messaging",
+			Message: "inconsistent configuration",
+			Action:  "either all tenants must have messaging configured or none should",
 		}
 	}
 	return nil
