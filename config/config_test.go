@@ -1381,29 +1381,247 @@ func loadDefaultConfig(t *testing.T) (*Config, error) {
 	return &cfg, nil
 }
 
-// TestKoanfDefaultsMatchApplyDefaultsForSharedKeys pins the two default-rendering
-// mechanisms to one source: koanf defaults (Load path) and apply*Defaults (Validate
-// path) must produce the same values wherever both speak. A new shared default
-// belongs in a constant both sides render.
-func TestKoanfDefaultsMatchApplyDefaultsForSharedKeys(t *testing.T) {
-	loaded, err := loadDefaultConfig(t)
+// TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral is the one-shot equivalence pin for
+// the mechanism change: these ten keys used to be hand-written in loadDefaults and are now
+// rendered by normalize. The expected values are the pre-change literals, so the test fails
+// if derivation moves any default rather than merely relocating where it is written.
+func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
+	want := map[string]any{
+		"app.startup.timeout":         "10s",
+		"cache.redis.port":            6379,
+		"cache.redis.poolsize":        10,
+		"cache.redis.dialtimeout":     "5s",
+		"cache.redis.readtimeout":     "3s",
+		"cache.redis.writetimeout":    "3s",
+		"cache.redis.maxretries":      3,
+		"cache.redis.minretrybackoff": "8ms",
+		"cache.redis.maxretrybackoff": "512ms",
+		"keystore.secretminlength":    32,
+	}
+
+	got, err := derivedDefaults()
+
+	require.NoError(t, err)
+	assert.Equal(t, want, got, "derivation must relocate the defaults, not change them")
+}
+
+// TestDerivedDefaultsDecodeToTypedFields keeps the coverage the old drift test carried: the
+// map-level pin proves the VALUES, this proves they still decode to the typed fields through
+// the real decoder — which carries the unit-less-duration guard, so a duration rendered as
+// anything but a unit string would fail here rather than in production. Scoped to defaults +
+// unmarshal rather than a full Load, so a developer's exported CACHE_* cannot flake it.
+func TestDerivedDefaultsDecodeToTypedFields(t *testing.T) {
+	cfg, err := loadDefaultConfig(t)
 	require.NoError(t, err)
 
-	applied := &Config{}
-	require.NoError(t, applyStartupDefaults(&applied.App.Startup))
-	applyRedisDefaults(&applied.Cache.Redis)
-	normalizeKeyStore(&applied.KeyStore)
+	assert.Equal(t, 10*time.Second, cfg.App.Startup.Timeout)
+	assert.Equal(t, 6379, cfg.Cache.Redis.Port)
+	assert.Equal(t, 10, cfg.Cache.Redis.PoolSize)
+	assert.Equal(t, 5*time.Second, cfg.Cache.Redis.DialTimeout)
+	assert.Equal(t, 3*time.Second, cfg.Cache.Redis.ReadTimeout)
+	assert.Equal(t, 3*time.Second, cfg.Cache.Redis.WriteTimeout)
+	assert.Equal(t, 3, cfg.Cache.Redis.MaxRetries)
+	assert.Equal(t, 8*time.Millisecond, cfg.Cache.Redis.MinRetryBackoff)
+	assert.Equal(t, 512*time.Millisecond, cfg.Cache.Redis.MaxRetryBackoff)
+	require.NotNil(t, cfg.KeyStore.SecretMinLength)
+	assert.Equal(t, 32, *cfg.KeyStore.SecretMinLength)
+}
 
-	assert.Equal(t, applied.App.Startup.Timeout, loaded.App.Startup.Timeout)
-	assert.Equal(t, applied.Cache.Redis.DialTimeout, loaded.Cache.Redis.DialTimeout)
-	assert.Equal(t, applied.Cache.Redis.ReadTimeout, loaded.Cache.Redis.ReadTimeout)
-	assert.Equal(t, applied.Cache.Redis.WriteTimeout, loaded.Cache.Redis.WriteTimeout)
-	assert.Equal(t, applied.Cache.Redis.MaxRetries, loaded.Cache.Redis.MaxRetries)
-	assert.Equal(t, applied.Cache.Redis.MinRetryBackoff, loaded.Cache.Redis.MinRetryBackoff)
-	assert.Equal(t, applied.Cache.Redis.MaxRetryBackoff, loaded.Cache.Redis.MaxRetryBackoff)
-	assert.Equal(t, applied.Cache.Redis.PoolSize, loaded.Cache.Redis.PoolSize)
-	assert.Equal(t, applied.Cache.Redis.Port, loaded.Cache.Redis.Port)
-	require.NotNil(t, loaded.KeyStore.SecretMinLength)
-	require.NotNil(t, applied.KeyStore.SecretMinLength)
-	assert.Equal(t, *applied.KeyStore.SecretMinLength, *loaded.KeyStore.SecretMinLength)
+// TestDerivedDefaultKeysAreDisjointFromKoanfOnly enforces one mechanism PER KEY: a key
+// written in both maps would have its winner decided by merge order rather than by design.
+func TestDerivedDefaultKeysAreDisjointFromKoanfOnly(t *testing.T) {
+	koanfOnly := koanfOnlyDefaults()
+
+	for _, key := range derivedDefaultKeys {
+		_, collides := koanfOnly[key]
+		assert.False(t, collides, "%q is both derived and hand-written", key)
+	}
+}
+
+// TestDerivedDefaultKeysAreActuallyFilledByNormalize keeps the allowlist honest. Presence
+// alone proves nothing: the flatten emits EVERY koanf-tagged field whether normalize touched
+// it or not, so a key added to the allowlist before its fill moves into normalize would
+// derive its Go zero — "0s" for a duration — and silently replace a real default. The
+// difference against an un-normalized zero Config is what makes this a gate.
+func TestDerivedDefaultKeysAreActuallyFilledByNormalize(t *testing.T) {
+	normalized := flattenNormalizedZero(t, false)
+	bare, err := flattenConfig(&Config{})
+	require.NoError(t, err)
+
+	for _, key := range derivedDefaultKeys {
+		require.Contains(t, normalized, key, "normalize does not fill %q", key)
+		assert.NotEqual(t, bare[key], normalized[key],
+			"%q is still at its Go zero after normalize, so it has no default to derive", key)
+	}
+}
+
+// TestDerivedDefaultsRejectAZeroValuedKey proves the gate above is enforced at Load, not only
+// in this test binary: the allowlist is meant to grow, and the next key to join it will do so
+// in a PR that does not necessarily re-read the rules.
+func TestDerivedDefaultsRejectAZeroValuedKey(t *testing.T) {
+	original := derivedDefaultKeys
+	t.Cleanup(func() { derivedDefaultKeys = original })
+	// server.responsetime.enabled is flattened but never filled by normalize.
+	derivedDefaultKeys = append(append([]string{}, original...), "server.responsetime.enabled")
+
+	_, err := derivedDefaults()
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "server.responsetime.enabled")
+	assert.ErrorContains(t, err, "zero value")
+}
+
+// TestDerivedDefaultsRejectAFailClosedKeySpace pins the ADR-051 / ADR-049 postures by
+// construction. Both read koanf ABSENCE, so a preloaded key silently answers a question the
+// operator never answered — for database identity that boots the misconfiguration ADR-051
+// exists to catch.
+func TestDerivedDefaultsRejectAFailClosedKeySpace(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "database_identity", key: "database.host"},
+		{name: "debug_allowlist", key: "debug.allowedips"},
+		{name: "tenant_subtree", key: "multitenant.tenants.acme.database.host"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := derivedDefaultKeys
+			t.Cleanup(func() { derivedDefaultKeys = original })
+			derivedDefaultKeys = []string{tt.key}
+
+			_, err := derivedDefaults()
+
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.key)
+			assert.ErrorContains(t, err, "must stay absent")
+		})
+	}
+}
+
+// TestDerivedDefaultsRejectAMissingKey covers the remaining door: a key that is not in the
+// flatten at all, which is what a renamed or removed config field looks like.
+func TestDerivedDefaultsRejectAMissingKey(t *testing.T) {
+	original := derivedDefaultKeys
+	t.Cleanup(func() { derivedDefaultKeys = original })
+	derivedDefaultKeys = []string{"app.startup.nosuchkey"}
+
+	_, err := derivedDefaults()
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "does not fill")
+}
+
+// TestLoadDefaultsCarriesNoPreloadedFailClosedKey runs the PRODUCTION predicate over the real
+// merged map. A hand-written literal under one of these prefixes would read as "configured"
+// to ADR-051's presence check and abort every database-free deployment, and the allowlist is
+// not the only door it can come through.
+func TestLoadDefaultsCarriesNoPreloadedFailClosedKey(t *testing.T) {
+	derived, err := derivedDefaults()
+	require.NoError(t, err)
+
+	merged, err := mergeDefaults(koanfOnlyDefaults(), derived)
+
+	// mergeDefaults itself refuses a denied key, so this is the assertion that matters; the
+	// loop below only names the offender when it fires.
+	require.NoError(t, err)
+	for key := range merged {
+		prefix, denied := matchesPrefix(key, preloadDeniedPrefixes)
+		assert.False(t, denied, "%q is under %q and must stay absent unless configured", key, prefix)
+	}
+
+	// debug.* literals are legitimate and must NOT be caught by this rule — they are the
+	// explicit map ADR-049 reads through the decoded struct.
+	assert.Contains(t, merged, "debug.allowedips")
+}
+
+// TestMergeDefaultsEnforcesItsTwoRules pins the rules that hold at load time. Neither is
+// reachable through derivedDefaultKeys today — a colliding key would fail the zero-value gate
+// first, and no hand-written literal sits under a denied prefix — so they are exercised
+// directly rather than left as branches that only look protective.
+func TestMergeDefaultsEnforcesItsTwoRules(t *testing.T) {
+	t.Run("collision_is_refused", func(t *testing.T) {
+		_, err := mergeDefaults(map[string]any{"app.name": "hand"}, map[string]any{"app.name": "derived"})
+
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "both derived and hand-written")
+	})
+
+	t.Run("denied_prefix_from_either_map_is_refused", func(t *testing.T) {
+		_, err := mergeDefaults(map[string]any{"database.host": "db"}, nil)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "must stay absent")
+
+		_, err = mergeDefaults(map[string]any{}, map[string]any{"multitenant.tenants.acme.database.host": "db"})
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "must stay absent")
+	})
+
+	t.Run("clean_maps_merge", func(t *testing.T) {
+		got, err := mergeDefaults(map[string]any{"app.name": "hand"}, map[string]any{"cache.redis.port": 6379})
+
+		require.NoError(t, err)
+		assert.Equal(t, map[string]any{"app.name": "hand", "cache.redis.port": 6379}, got)
+	})
+}
+
+// TestDerivedDefaultsAreModeInvariant bars a key whose normalized default differs between
+// deployment modes. The manager pool sizes are why this test exists: multi-tenant treats zero
+// as "unlimited", so preloading a koanf default of 10 would overwrite that meaning before
+// anything could read it.
+func TestDerivedDefaultsAreModeInvariant(t *testing.T) {
+	singleTenant := flattenNormalizedZero(t, false)
+	multiTenant := flattenNormalizedZero(t, true)
+
+	for _, key := range derivedDefaultKeys {
+		assert.Equal(t, singleTenant[key], multiTenant[key],
+			"%q differs by deployment mode and cannot be preloaded", key)
+	}
+}
+
+// flattenNormalizedZero is what derivedDefaults picks from: a zero Config run through
+// normalize, flattened into koanf's dotted key space.
+func flattenNormalizedZero(t *testing.T, multitenant bool) map[string]any {
+	t.Helper()
+
+	var zero Config
+	zero.Multitenant.Enabled = multitenant
+	require.NoError(t, normalize(&zero))
+
+	flat, err := flattenConfig(&zero)
+	require.NoError(t, err)
+	return flat
+}
+
+// TestRenderDefaultRejectsANilPointer pins the branch normalize is supposed to make
+// unreachable. It is the module's contract with a future normalize regression: writing a nil
+// default would remove the secret-length floor silently, so it has to be an error.
+func TestRenderDefaultRejectsANilPointer(t *testing.T) {
+	var missing *int
+
+	_, err := renderDefault("keystore.secretminlength", missing)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "keystore.secretminlength")
+}
+
+// TestDefaultsPreloadNoDatabaseIdentityKey guards ADR-051 by construction rather than by
+// discipline: its delivered-empty check reads koanf key PRESENCE, so a preloaded identity key
+// would make an empty one look configured and boot the misconfiguration it exists to catch.
+// Full derivation would have done exactly that, which is why the allowlist is narrow.
+func TestDefaultsPreloadNoDatabaseIdentityKey(t *testing.T) {
+	k := koanf.New(".")
+	require.NoError(t, loadDefaults(k))
+
+	for _, key := range databaseIdentityKeys {
+		assert.False(t, k.Exists(fieldDatabase+"."+key), "database.%s must not be preloaded", key)
+	}
+	assert.False(t, k.Exists(fieldDatabases), "the named-database subtree must not be preloaded")
+	assert.False(t, k.Exists("multitenant.tenants"), "the tenant subtree carries the third ADR-051 section")
+	// debug.allowedips keeps its hand-written loopback default (that is today's koanf
+	// behavior); what must never happen is DERIVING it, which would hand its fail-closed
+	// posture to whatever normalize does or does not fill (ADR-049).
+	assert.NotContains(t, derivedDefaultKeys, "debug.allowedips")
+	assert.True(t, k.Exists("debug.allowedips"), "the hand-written loopback default stands")
 }

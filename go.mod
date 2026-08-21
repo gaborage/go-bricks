@@ -15,6 +15,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/knadh/koanf/maps v0.1.3
 	github.com/knadh/koanf/parsers/yaml v1.1.1
 	github.com/knadh/koanf/providers/confmap v1.0.1
 	github.com/knadh/koanf/providers/env/v2 v2.0.1
@@ -88,7 +89,6 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/klauspost/compress v1.19.2 // indirect
-	github.com/knadh/koanf/maps v0.1.3 // indirect
 	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
 	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
