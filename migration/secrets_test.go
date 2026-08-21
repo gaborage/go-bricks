@@ -236,6 +236,56 @@ func TestSecretsProviderDBConfigNumericDurationGuard(t *testing.T) {
 	})
 }
 
+// TestSecretsProviderDBConfigEmptyNumericGuard pins the delivered-empty rule at the seam
+// that literally reads secrets: a rotated secret rendering a numeric field as "" used to
+// decode as 0 — port 0, or a tuned pool silently reverted to the framework default —
+// because this provider builds its own decoder (ADR-074).
+func TestSecretsProviderDBConfigEmptyNumericGuard(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		wantErr bool
+		assert  func(t *testing.T, got *config.DatabaseConfig)
+	}{
+		{
+			name:    "empty_port_rejected",
+			payload: `{"type":"postgresql","host":"h","username":"u","password":"S3cr3t-P@ss","port":""}`,
+			wantErr: true,
+		},
+		{
+			name:    "empty_pool_max_connections_rejected",
+			payload: `{"type":"postgresql","host":"h","username":"u","pool":{"max":{"connections":""}}}`,
+			wantErr: true,
+		},
+		{
+			name:    "explicit_port_binds",
+			payload: `{"type":"postgresql","host":"h","username":"u","port":5432}`,
+			assert:  func(t *testing.T, got *config.DatabaseConfig) { assert.Equal(t, 5432, got.Port) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(tt.payload)
+			p := &SecretsProvider{Fetch: func(context.Context, string) ([]byte, error) { return payload, nil }}
+
+			got, err := p.DBConfig(context.Background(), "x")
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrSecretMalformed)
+				assert.ErrorContains(t, err, "delivered empty")
+				// The error travels to logs and operator consoles; the payload it was
+				// decoding is secret material, so no value from it may ride along.
+				assert.NotContains(t, err.Error(), "S3cr3t-P@ss")
+				return
+			}
+			require.NoError(t, err)
+			tt.assert(t, got)
+		})
+	}
+}
+
 func TestSecretsProviderContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

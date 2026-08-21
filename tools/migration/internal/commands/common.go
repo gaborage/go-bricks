@@ -216,6 +216,7 @@ var durationType = reflect.TypeOf(time.Duration(0))
 func tenantDecoderConfig() *mapstructure.DecoderConfig {
 	return &mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			emptyStringToNumericGuardHookFunc(),
 			numericToDurationGuardHookFunc(),
 			stringToTrimmedSliceHookFunc(","),
 			mapstructure.StringToTimeDurationHookFunc(),
@@ -226,9 +227,11 @@ func tenantDecoderConfig() *mapstructure.DecoderConfig {
 }
 
 // numericToDurationGuardHookFunc mirrors
-// github.com/gaborage/go-bricks/internal/configdecode.NumericToDurationGuardHookFunc — this is
-// a separate module that cannot import go-bricks/internal, so this is a byte-identical local
-// copy. Keep the two in sync (bool rejection, typed-Duration pass-through, grouped zero test,
+// github.com/gaborage/go-bricks/internal/configdecode.NumericToDurationGuardHookFunc as a
+// byte-identical local copy. The import would in fact compile — Go's internal rule is
+// import-path-prefix based and this module sits under github.com/gaborage/go-bricks/ — but the
+// copy is kept deliberately so the CLI does not bind to a framework package that carries no
+// compatibility guarantee across releases. Keep the two in sync (bool rejection, typed-Duration pass-through, grouped zero test,
 // message). Reject a bare non-zero numeric bound to time.Duration (WeaklyTypedInput would coerce
 // 300 -> 300ns); an explicit zero (incl. -0.0) is the "unset -> use default" idiom and stays
 // exempt; a bool is never a duration; a source already time.Duration passes untouched.
@@ -264,6 +267,50 @@ func numericToDurationGuardHookFunc() mapstructure.DecodeHookFunc {
 			"unit-less numeric duration %v — use a duration string with an explicit unit (e.g. \"300s\", \"5m\", \"1h30m\")",
 			data,
 		)
+	}
+}
+
+// emptyStringToNumericGuardHookFunc mirrors
+// github.com/gaborage/go-bricks/internal/configdecode.EmptyStringToNumericGuardHookFunc as a
+// byte-identical local copy, for the reason given on numericToDurationGuardHookFunc above.
+// Keep the two in sync (time.Duration exemption, whitespace trim, message).
+// Reject an empty or whitespace-only string bound to a numeric field: WeaklyTypedInput would
+// coerce it to 0, so a set-but-empty variable decodes as a legal zero and boots a config nobody
+// wrote. time.Duration is exempt (StringToTimeDurationHookFunc already fails loudly on it) and
+// non-numeric targets are untouched.
+func emptyStringToNumericGuardHookFunc() mapstructure.DecodeHookFunc {
+	return func(f, t reflect.Type, data any) (any, error) {
+		if f.Kind() != reflect.String {
+			return data, nil
+		}
+		// No pointer walk: mapstructure recurses into a pointer target and re-runs the
+		// hook chain against the element type, so *int arrives here as int.
+		if t == durationType || !isNumericKind(t.Kind()) {
+			return data, nil
+		}
+		// reflect rather than a concrete type assertion: a named string type (type Env
+		// string) has Kind String but fails data.(string), and passing it through hands it
+		// straight to the weak "" -> 0 conversion this guard exists to stop.
+		if strings.TrimSpace(reflect.ValueOf(data).String()) != "" {
+			return data, nil
+		}
+		return nil, errors.New(
+			"numeric value delivered empty — set an explicit value (empty secretKeyRef / unset envsubst variable?) " +
+				"or remove the key entirely to take its default",
+		)
+	}
+}
+
+// isNumericKind reports whether k is one mapstructure's WeaklyTypedInput would fill from a
+// string, i.e. exactly the kinds where "" silently becomes 0.
+func isNumericKind(k reflect.Kind) bool {
+	switch k {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
 	}
 }
 
