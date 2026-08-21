@@ -68,13 +68,13 @@ that boundary for bool as it does for numeric.
 - `CACHE_CRITICAL=`, `DATABASE_POOL_KEEPALIVE_ENABLED=`, `SERVER_LOGROUTES=` and every
   other bool key delivered empty now fail startup naming the key. `CACHE_CRITICAL=false`
   still makes a failing cache probe non-fatal on `/ready` — that opt-out is deliberate and
-  documented; what
-  ends is reaching it by accident.
+  documented; what ends is reaching it without an explicit operator choice.
 - A deployment that rendered an empty value into a bool key and was running on the
   resulting `false` fails after the upgrade. For `database.pool.keepalive.enabled` that
   deployment was already degraded, silently; for the non-pointer bools it was on `false`,
   which is also the documented default, so the failure is loud where the behaviour was
-  benign. The trade is ADR-074's: the framework cannot guess which was meant.
+  benign. The trade-off is the same as in ADR-074: the framework cannot guess which value
+  the operator intended.
 - The public `Config.Unmarshal` seam enforces it too, so a consumer's own bool fields
   get the rule without opting in — and `config.Load` now agrees with `InjectInto`
   instead of contradicting it.

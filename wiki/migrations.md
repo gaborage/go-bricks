@@ -3244,7 +3244,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   configuration resolution instead of decoding as `0` — at startup for the service's own config,
   at first use for the CLI's `tenants.yaml` and a dynamic `DBConfigProvider` payload (C60.15);
   and read the same sweep's hits again for BOOL keys, which now fail the same way — the three
-  that changed behaviour rather than restating a zero are `DATABASE_POOL_KEEPALIVE_ENABLED`
+  that changed behaviour rather than restating `false` are `DATABASE_POOL_KEEPALIVE_ENABLED`
   (a default-true → false flip that turned TCP keep-alive off), `CACHE_CRITICAL` (strict
   readiness disabled, so `/ready` answered 200 through a cache outage) and `SERVER_LOGROUTES`
   (C60.18)
@@ -3934,7 +3934,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `*_AUTOCREATETABLE`, `*_PRETTY`, `*_DEBUG`, and the four `DEBUG_ENDPOINTS_*` — plus the
   same `secretKeyRef`/`configMapKeyRef` and `envsubst` sources C60.15 names, which no repo
   grep reaches. THREE of those keys are the ones that actually changed behaviour rather
-  than merely restating a zero: `DATABASE_POOL_KEEPALIVE_ENABLED`, `CACHE_CRITICAL`,
+  than merely restating the default `false`: `DATABASE_POOL_KEEPALIVE_ENABLED`, `CACHE_CRITICAL`,
   `SERVER_LOGROUTES` — grep those three by name first
   (`grep -rnE "(DATABASE_POOL_KEEPALIVE_ENABLED|CACHE_CRITICAL|SERVER_LOGROUTES)"`), and in
   YAML their key paths `database.pool.keepalive.enabled`, `cache.critical`,
@@ -3981,8 +3981,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   on the `Config.Unmarshal` seam it carries the Go field path instead. Then confirm the two
   keys whose DEFAULT you may have been overriding without knowing: after the fix,
   `database.pool.keepalive.enabled` should read `true` unless you set it false on purpose,
-  and `/ready` should answer 503 while the cache backend is down unless `cache.critical` is
-  explicitly `false`. Booting exercises only the two startup seams — run
+  and — on a deployment that actually configures a cache — `/ready` should answer 503 while
+  that backend is down, unless `cache.critical` is explicitly `false`. A cache-free
+  deployment has no such probe, so it has nothing to confirm here. Booting exercises only the two startup seams — run
   `go-bricks-migrate info` per tenant for the CLI's `tenants.yaml`, and resolve every stored
   `DBConfigProvider` payload for the fourth, since those decode at first use.
 - ref: [ADR-077](adr_077_delivered_empty_bool_config.md) ·
