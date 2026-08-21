@@ -34,7 +34,8 @@ empty payload delivers — the same three shapes ADR-074 enumerated.
 
 A key-targeted presence check in the validate phase, beside
 `validateNoDeliveredEmptyDatabase` and in the same step, rejects a listed key whose
-**raw koanf value is a string that trims to empty**.
+**raw koanf value is a delivery that produces no entries** — a string the decoder
+would split into nothing, or a YAML null.
 
 The discriminator has to read the raw tree, and this is the whole subtlety.
 `Exists` cannot tell the cases apart — the key carries a default, so it is always
@@ -45,13 +46,34 @@ present. koanf keeps the shape the source actually delivered:
 | unset | `[]string{"127.0.0.1","::1"}` | default, untouched |
 | `DEBUG_ALLOWEDIPS=` | `""` | **rejected** |
 | `allowedips: ""` | `""` | **rejected** |
+| `DEBUG_ALLOWEDIPS=,` (or `,,,`, `" , "`) | `","` | **rejected** |
+| `allowedips:` / `null` / `~` | `nil` | **rejected** |
 | `allowedips: []` | `[]interface{}{}` | allowed |
+| `allowedips: [""]` | `[]interface{}{""}` | allowed (one entry; fails closed at parse) |
 | `allowedips: ["10.0.0.0/8"]` | `[]interface{}{...}` | allowed |
 
-An empty **string** is a template that rendered nothing. An empty **sequence** is an
-operator writing "no entries" in a spelling no broken template can produce. Rejecting
-the shape rather than the outcome is what keeps ADR-049's sanctioned token-only
-posture expressible — this removes an accident, not a choice.
+The test is the DECODER's rule, not `TrimSpace`. `splitAndTrimList` drops empty parts,
+so a separator-only value trims non-empty and still yields nothing — which is what a
+Helm `join ","` over unset values, or an `envsubst` over `"${A},${B}"`, renders. The
+check calls that same function through the same `listSeparator`, so "no entries" cannot
+be answered one way by the decoder and another by the guard.
+
+**YAML null is where this key parts company with ADR-074 and ADR-077.** There a null
+takes the default and is therefore absence, deliberately out of scope. Here it REPLACES
+the default: unset decodes to the loopback pair, `allowedips:` decodes to nil. The same
+spelling that is harmless for a numeric key removes a control for this one, so it is
+rejected — and a bare `allowedips:` is exactly what
+`allowedips: {{ .Values.debug.allowedIPs }}` renders when the value is unset.
+
+A value that decodes to at least ONE entry is not this check's business, even when the
+entry is junk: `allowedips: [""]` installs the middleware, which then parses no networks
+and denies. That is already fail-closed, and turning it into a startup abort would buy
+nothing.
+
+An empty **sequence** is an operator writing "no entries" in a spelling no broken
+template can produce. Rejecting the shape rather than the outcome is what keeps
+ADR-049's sanctioned token-only posture expressible — this removes an accident, not a
+choice.
 
 The key list (`deliveredEmptyRejectingKeys`) holds `debug.allowedips` and nothing
 else. The mechanism is list-driven so a future key joins by adding a name, but a key

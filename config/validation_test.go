@@ -6335,3 +6335,68 @@ func TestDeliveredEmptyListCheckCoversOnlyAllowedIPs(t *testing.T) {
 		assert.Empty(t, cfg.Multitenant.Resolver.Order)
 	})
 }
+
+// TestLoadRejectsAllowedIPsThatDecodeToNothing covers the shapes the first cut of ADR-078
+// missed. The property is not "the string looks empty" but "the DECODER produces no entries",
+// and those differ: splitAndTrimList drops empty parts, so a separator-only value trims
+// non-empty yet yields nothing. A Helm `join ","` over unset values renders exactly that.
+//
+// YAML null is the second shape, and it is where this key parts company with ADR-074/077.
+// There a null takes the default and is therefore absence; here it REPLACES the default, so
+// the same spelling that is harmless for a numeric key removes a control for this one.
+func TestLoadRejectsAllowedIPsThatDecodeToNothing(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
+	const withToken = "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n"
+
+	tests := []struct {
+		name string
+		yaml string
+		env  map[string]string
+	}{
+		{name: "separator_only", yaml: header + withToken, env: map[string]string{"DEBUG_ALLOWEDIPS": ","}},
+		{name: "repeated_separators", yaml: header + withToken, env: map[string]string{"DEBUG_ALLOWEDIPS": ",,,"}},
+		{name: "separators_and_spaces", yaml: header + withToken, env: map[string]string{"DEBUG_ALLOWEDIPS": " , "}},
+		{name: "yaml_bare_null", yaml: header + "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedips:\n"},
+		{name: "yaml_explicit_null", yaml: header + "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedips: null\n"},
+		{name: "yaml_tilde_null", yaml: header + "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedips: ~\n"},
+		// Precedence: a real YAML list wiped by a null overlay is the same wipe.
+		{name: "env_separator_over_real_yaml_list", yaml: header + "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n  allowedips: [\"10.0.0.0/8\"]\n", env: map[string]string{"DEBUG_ALLOWEDIPS": ","}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadDeliveredEmptyFixture(t, tt.yaml, tt.env)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr, "this delivery decodes to zero entries and must not boot")
+			assert.Equal(t, "debug.allowedips", cfgErr.Field)
+		})
+	}
+}
+
+// TestLoadAllowedIPsEntryShapesStillBoot is the counterweight: a value that decodes to at
+// least one entry is NOT this check's business, even when the entry is junk. Those install
+// the middleware and fail closed at parse time (no networks parsed ⇒ deny), so rejecting them
+// here would move a working fail-closed path into a startup abort for no security gain.
+func TestLoadAllowedIPsEntryShapesStillBoot(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
+	const withToken = "debug:\n  enabled: true\n  bearertoken: sekritsekritsekrit\n"
+
+	tests := []struct {
+		name string
+		yaml string
+		want []string
+	}{
+		{name: "list_of_empty_string", yaml: header + withToken + "  allowedips: [\"\"]\n", want: []string{""}},
+		{name: "list_of_space", yaml: header + withToken + "  allowedips: [\" \"]\n", want: []string{" "}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := loadDeliveredEmptyFixture(t, tt.yaml, nil)
+
+			require.NoError(t, err, "one junk entry still installs the whitelist, which then denies")
+			assert.Equal(t, tt.want, cfg.Debug.AllowedIPs)
+		})
+	}
+}

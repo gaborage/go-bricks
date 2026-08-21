@@ -311,7 +311,7 @@ func buildDecoderConfig() *mapstructure.DecoderConfig {
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
 			configdecode.EmptyStringToScalarGuardHookFunc(),
 			configdecode.NumericToDurationGuardHookFunc(),
-			stringToTrimmedSliceHookFunc(","),
+			stringToTrimmedSliceHookFunc(listSeparator),
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.TextUnmarshallerHookFunc(),
 		),
@@ -338,6 +338,11 @@ func unmarshalDecoderConfig() *mapstructure.DecoderConfig {
 		WeaklyTypedInput: true,
 	}
 }
+
+// listSeparator is the one separator a scalar string uses to express a multi-element list.
+// The decode hook and the delivered-empty check below both read it, so "what counts as no
+// entries" cannot be answered differently by the two.
+const listSeparator = ","
 
 // stringToTrimmedSliceHookFunc splits a scalar string into []string on sep,
 // trimming each element and dropping empties. Scoped to string -> []string only

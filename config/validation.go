@@ -596,8 +596,7 @@ func validateNoDeliveredEmptyList(cfg *Config) error {
 		if !ok {
 			continue
 		}
-		str, isString := raw.(string)
-		if !isString || strings.TrimSpace(str) != "" {
+		if !deliveredEmptyValue(raw) {
 			continue
 		}
 		return &ConfigError{
@@ -608,6 +607,29 @@ func validateNoDeliveredEmptyList(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+// deliveredEmptyValue reports whether a raw koanf value is a delivery that produces NO
+// entries. Two shapes qualify, and neither can be written by an operator who means "no
+// entries" — that spelling is an empty sequence, which reaches here as a slice and is
+// deliberately not matched:
+//
+//   - a STRING the decoder would split into nothing. The test is the decoder's own rule, not
+//     TrimSpace: splitAndTrimList drops empty parts, so "," and ",,," and " , " all decode to
+//     zero entries while trimming non-empty. A Helm `join ","` over unset values, or an
+//     envsubst over "${A},${B}", renders exactly those.
+//   - YAML NULL (`allowedips:`, `null`, `~`), which arrives as nil. This is where the key
+//     departs from ADR-074/077, and deliberately: for a numeric or bool key a null takes the
+//     DEFAULT, so it behaves as absence and is left alone. Here it REPLACES the default —
+//     unset decodes to the loopback pair, null decodes to nil — so the same spelling that is
+//     harmless there removes a control here. A bare `allowedips:` is what
+//     `allowedips: {{ .Values.debug.allowedIPs }}` renders when the value is unset.
+func deliveredEmptyValue(raw any) bool {
+	if raw == nil {
+		return true
+	}
+	str, isString := raw.(string)
+	return isString && len(splitAndTrimList(str, listSeparator)) == 0
 }
 
 // deliveredEmptyListAction names both ways out, in the order an operator wants them: put a

@@ -4160,8 +4160,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `grep -rnE "^[[:space:]]*DEBUG_ALLOWEDIPS=[[:space:]]*(\"[[:space:]]*\"|'[[:space:]]*')?[[:space:]]*(#.*)?$"`
   over env files, and `grep -rnE "DEBUG_ALLOWEDIPS" -A1` over Helm values, Kustomize
   overlays and Compose files where the empty value is structured (`value: ""`). In YAML,
-  `git grep -nE "allowedips:[[:space:]]*(\"\"|'')[[:space:]]*$"` finds the empty-STRING
-  spelling; `allowedips: []` is the empty-LIST spelling and is NOT affected. Also check any
+  `git grep -nE "allowedips:[[:space:]]*(\"\"|''|~|null)?[[:space:]]*$"` finds the
+  empty-STRING and the NULL spellings (a bare `allowedips:` is what an unset template value
+  renders); `allowedips: []` is the empty-LIST spelling and is NOT affected. A
+  SEPARATOR-ONLY value is caught too and no grep for emptiness will show it — check any
+  variable built by joining a list (`{{ join "," … }}`, `"${A},${B}"`) whose elements can all
+  be unset, since `,` decodes to zero entries. Also check any
   `secretKeyRef`/`configMapKeyRef` whose stored value is empty and any `envsubst` template
   over a variable that can be unset — a repo grep reaches neither; read the rendered manifest
   or `kubectl exec <pod> -- env | grep -E '^DEBUG_ALLOWEDIPS=[[:space:]]*$'`.
@@ -4184,7 +4188,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   rendered manifest, `secretKeyRef`, `envsubst`, or a YAML `allowedips: ""`. no-match = the
   key is unset, carries real entries, or is written `[]`. Note which side of the line you are
   on before assuming safety: a deployment relying on `DEBUG_ALLOWEDIPS=` to mean "token only"
-  is a MATCH and will now fail to start.
+  is a MATCH and will now fail to start. The check does NOT consult `debug.enabled`, so a
+  deployment that templates this variable fleet-wide is a match even on services that expose
+  no debug endpoint — the value has no security effect there, but it still aborts startup, so
+  fix the template rather than relying on the endpoint being off.
 - apply: decide what the empty value was meant to say. If it meant "no IP restriction, the
   token is the control", write `debug.allowedips: []` in config.yaml — that is the spelling
   ADR-049 sanctions and the one no rendering accident produces. If it meant "the loopback
