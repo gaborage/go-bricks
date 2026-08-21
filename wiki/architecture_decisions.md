@@ -1436,6 +1436,27 @@ v0.59 `SlowJob` godoc suggested one, and that disable path was never reachable),
 `*config.Config` handed straight to `Module.Init`/`NewModuleRegistry` is never normalized — see
 `[C60.12]`.
 
+### [ADR-073: The `TestKey*` Config-Key Constants Are Removed, Not Corrected](adr_073_test_key_constants_removed.md)
+
+**Date:** 2026-08-20 | **Status:** Accepted
+
+`config/testkeys.go` exported 33 constants naming config keys "to eliminate string literal
+duplication" in tests, and not one had a call site anywhere in the repository. Five named keys
+the loader does not read: `TestKeyDatabaseConnectionString` said `database.connection_string`
+where the koanf tag is `connectionstring`, and the four broker constants named
+`messaging.broker.host`/`.port`/`.username`/`.password`, which have never existed —
+`BrokerConfig` has only ever carried `url` and `virtualhost`. A test written against one of
+those sets a key nothing reads, takes the zero value, and passes. The file is deleted with no
+replacement.
+
+**Key Benefits:** Thirty-three unused exported symbols and five false statements about the
+config schema leave the repository at once. **Watch:** apidiff-INCOMPATIBLE — a consumer
+importing any `config.TestKey*` stops compiling, which is the compiler-caught kind of break.
+The atom carries a correction table so nobody inlines one of the five wrong values on the way
+out. See [migrations.md](migrations.md) `[C60.14]`.
+
+---
+
 ### [ADR-072: The Default Log Filter Names Key Material Explicitly, Not by a Bare "key"](adr_072_default_log_filter_names_key_material_explicitly.md)
 
 **Date:** 2026-08-20 | **Status:** Accepted
