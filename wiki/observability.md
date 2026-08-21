@@ -64,13 +64,16 @@ Every log line emitted via the framework logger passes through a `logger.Sensiti
 
 | Category | Default names |
 | --- | --- |
-| Credentials | `password`, `passwd`, `pwd`, `secret`, `key`, `api_key`, `apikey`, `token`, `access_token`, `refresh_token` |
+| Credentials | `password`, `passwd`, `pwd`, `secret`, `token`, `access_token`, `refresh_token` |
+| Key material | `api_key`, `apikey`, `api-key`, `private_key`, `privatekey`, `private-key`, `signing_key`, `signingkey`, `signing-key`, `encryption_key`, `encryptionkey`, `encryption-key` |
 | Auth headers | `auth`, `authorization` |
 | Generic | `credential`, `credentials` |
 | Connection strings | `broker_url`, `database_url`, `db_url` |
 | Card data (PCI) & PII | `cardholder`, `card_number`, `cardnumber`, `primary_account_number`, `cvv`, `cvc`, `track1`, `track2`, `track_data`, `iban`, `otp` |
 
 A URL value on the sensitive path is masked in full, never structure-preserved — query strings and fragments routinely carry the secret itself. The default mask value is `***`.
+
+Bare `key` is deliberately absent too, and was removed in v0.60.0: it masked every field whose name merely contained the word — `keys`, `tenant_key`, `cache_key`, and the framework's own `key` identifier on tenant and resource log lines — with no way to unmask one short of replacing the whole list. Key material is named needle by needle instead, in both spellings, because substring matching treats them as unrelated: `api_key` does not contain `apikey`, nor the reverse. `secret_key` and `secretkey` need no entry — the `secret` needle already covers both. The hyphenated spellings are there because `httpclient` logs whole `http.Header` maps through this filter under `LogPayloads`, and a header is spelled `X-Api-Key`; a bare `-key` needle would catch every such header and also mask `routing-key`, so the shapes are named instead. A spelling the table does not name — `license_key`, `hmac_key`, `master_key`, `session_key`, or a vendor header like `Ocp-Apim-Subscription-Key` — logs in clear until you add it via `log.sensitivefields`.
 
 Bare `pan`, `card`, `pin`, and `track` are deliberately absent: substring matching would mask `span_id`, `discard_reason`, `pinned_at`, and `tracking_id`, so differently-named PAN fields still need a per-service entry via `log.sensitivefields`. `otp` does over-mask camelCase `…otP…` names (e.g. `snapshotPath`) and that trade is intentional — masking a debugging detail costs less than leaking an OTP. Setting `app.Options.LoggerFilterConfig` (or calling `logger.NewWithFilter` directly) with an explicitly empty `SensitiveFields` now logs a WARN at startup (suppressed at `log.level: error` and above) — an empty YAML `log.sensitivefields` list is not this case: it resolves to `nil` and falls back to the defaults, so it neither disables masking nor warns.
 

@@ -1436,6 +1436,28 @@ v0.59 `SlowJob` godoc suggested one, and that disable path was never reachable),
 `*config.Config` handed straight to `Module.Init`/`NewModuleRegistry` is never normalized — see
 `[C60.12]`.
 
+### [ADR-072: The Default Log Filter Names Key Material Explicitly, Not by a Bare "key"](adr_072_default_log_filter_names_key_material_explicitly.md)
+
+**Date:** 2026-08-20 | **Status:** Accepted
+
+`logger.DefaultFilterConfig` matches field names by case-insensitive SUBSTRING, so its bare
+`key` needle masked every field merely containing the word — `keys`, `tenant_key`, `cache_key`,
+and the plain `key` the framework logs at fifteen of its own sites, all of them tenant or
+resource identifiers. The YAML seam only adds needles, so no consumer could unmask one without
+abandoning the whole default list. Key material is now named needle by needle instead — all three
+of the `api_key`, `apikey` and `api-key` spellings of each, since the matcher relates them not at
+all, and the hyphenated ones because `httpclient` logs whole `http.Header` maps through this
+filter under `LogPayloads` — and the bare needle is gone.
+
+**Key Benefits:** Identifiers log in clear without renaming a single field, and the list states
+its coverage instead of leaning on a word that happens to appear inside secrets.
+**Watch:** this UN-MASKS. A field the new list does not name — `license_key`, `hmac_key`,
+`Ocp-Apim-Subscription-Key`, or the JWKS container `keys` — starts logging in clear on upgrade,
+silently; the remedy is one `log.sensitivefields` entry. `secret_key` needs no needle: `secret`
+already covers it. See [migrations.md](migrations.md) `[C60.13]`.
+
+---
+
 ### [ADR-071: Upsert Column Sets Name Each Column Once, in a Form the Vendor Can Name](adr_071_upsert_column_sets_name_each_column_once.md)
 
 **Date:** 2026-08-20 | **Status:** Accepted
