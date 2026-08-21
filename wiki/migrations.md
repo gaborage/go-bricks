@@ -3658,12 +3658,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C60.12] `scheduler.timeout.*` is normalized in config, not defaulted at use time · breaking · when: match
 
-- detect: `git grep -nE 'config\.Config\{|scheduler\.NewModule\(\)\.Init|NewModuleRegistry' -- '*.go'`
-  — hits mean you assemble config or module dependencies in code rather than letting
-  `app` construction do it, and this applies. Also grep your YAML/env for a negative
-  `scheduler.timeout.shutdown` or `scheduler.timeout.slowjob`; the v0.59 godoc for
-  `SlowJob` read "Zero or negative = disabled", so a `-1` written on that advice is a
-  realistic hit.
+- detect: `git grep -nE 'config\.Config\{|scheduler\.NewModule|NewModuleRegistry|\.Init\(' -- '*.go'`
+  — hits mean you assemble config or module dependencies in code rather than letting `app`
+  construction do it, and this applies. Also grep your YAML/env — and any other configuration
+  source you load from, including ones a repo grep cannot see — for a negative
+  `scheduler.timeout.shutdown` or `scheduler.timeout.slowjob`; the v0.59 godoc for `SlowJob`
+  read "Zero or negative = disabled", so a `-1` written on that advice is a realistic hit.
+  **This grep is a shortlist, not a verdict**: it cannot see a config returned by a helper or
+  factory, an aliased import, or a `Module.Init` reached through an interface. A clean grep
+  means "nothing obvious" — the `verify` step below is what actually clears you, because it
+  tests the behaviour rather than the spelling.
 - scope: the config normalize phase now fills `scheduler.timeout.shutdown` with 30s and
   `scheduler.timeout.slowjob` with 25s when the decoded value is zero, and REJECTS a
   negative value for either, naming the key. The scheduler module's own
@@ -3682,7 +3686,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   off: zero takes the default and negative is rejected. YAML- and env-loaded deployments
   are unchanged — koanf already supplied 30s/25s.
 - gate: match = you build `config.Config` in code, call `Module.Init`/`NewModuleRegistry`
-  yourself, or set either key negative. no-match = nothing to do.
+  yourself, or set either key negative. no-match = nothing to do **only once the verify step
+  passes** — the detect grep alone cannot clear you, since a config reaching `Init` through a
+  helper matches none of its patterns.
 - apply: nothing for YAML deployments. If you depended on the 30s hand-built slow-job
   threshold, set `Scheduler.Timeout.SlowJob` explicitly. Replace any negative value with a
   positive duration. If you drive `Module.Init` directly (a consumer test, a custom

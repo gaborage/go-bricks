@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-20
-- **Related**: [ADR-064](adr_064_app_validates_every_config.md) (every construction path runs `config.Validate`, which is what makes normalization the single place a default can live)
+- **Related**: [ADR-064](adr_064_app_validates_every_config.md) — every APPLICATION construction path (`app.New`, `app.NewWithConfig`, `Builder.WithConfig`) runs `config.Validate`, which is what makes normalization the single place a default can live. It does not cover a `*config.Config` handed straight to `Module.Init` or `app.NewModuleRegistry`; that gap is why Init enforces its own precondition below
 
 ## Context
 
