@@ -1409,8 +1409,10 @@ tell which section failed, and the spelling disagreed with the path-qualified ke
 rewritten on a copy so the connect door — which has no section — keeps the root spelling.
 
 **Key Benefits:** one spelling for one key across the package; the typed error names the section.
-**Watch:** `field == "database.host"` matchers break for non-root sections (`errors.As` +
-`strings.HasSuffix` survives), and the message loses its `databases.reporting: ` prefix. See
+**Watch:** `field == "database.host"` matchers break for non-root sections — replace them with
+a predicate scoped to the `database.` / `databases.` / `multitenant.tenants.` families, since a
+bare suffix match also catches `cache.redis.host` — and the message loses its
+`databases.reporting: ` prefix. See
 `[C60.16]` in [migrations.md](migrations.md).
 
 ### [ADR-075: One Normalized Default per Scheduler Timeout Key](adr_075_scheduler_timeout_single_default.md)

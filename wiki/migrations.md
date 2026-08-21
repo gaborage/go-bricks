@@ -3229,8 +3229,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   differently from the insert or update key naming the same column; and on PostgreSQL, where
   nothing else changes, re-read those same call sites for a key containing a quote that is not
   doubled (C60.11); and if any code compares `config.ConfigError.Field` to a
-  literal `database.*` key, switch it to a suffix match — a non-root section now names itself
-  in that field (C60.16)
+  literal `database.*` key, switch it to a database-scoped predicate — a non-root section now
+  names itself in that field, and a bare suffix match would also catch `cache.redis.host`
+  (C60.16)
 - exit: `go get github.com/gaborage/go-bricks@v0.60.0 && go mod tidy && go build ./... && go test ./...`
 
 ### [C60.1] `go-bricks-migrate` validates every resolved database config · breaking · when: match
@@ -3833,10 +3834,21 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - gate: match = your code reads `ConfigError.Field`, or a log query pins the old message
   prefix. no-match = you only read the rendered error as text and grep for the key, which is
   still in it.
-- apply: replace `field == "database.host"` with a suffix match —
-  `errors.As(err, &cfgErr) && strings.HasSuffix(cfgErr.Field, ".host")` — which matches root
-  and section spellings alike; use `strings.HasPrefix(cfgErr.Field, "databases.")` when you
-  need to know it was a named section. Repoint log queries from the `databases.<name>: `
+- apply: replace `field == "database.host"` with a predicate scoped to the DATABASE field
+  families — a bare suffix match is wrong, because `ConfigError.Field` is not a
+  database-only namespace and `cache.redis.host` ends in `.host` too:
+
+  ```go
+  func isDatabaseField(field, key string) bool {
+      return field == "database."+key || // root
+          (strings.HasPrefix(field, "databases.") && strings.HasSuffix(field, "."+key)) ||
+          (strings.HasPrefix(field, "multitenant.tenants.") &&
+              strings.HasSuffix(field, ".database."+key))
+  }
+  ```
+
+  Then `errors.As(err, &cfgErr) && isDatabaseField(cfgErr.Field, "host")` matches root and
+  section spellings and nothing else; the two prefixes also tell you WHICH family it was. Repoint log queries from the `databases.<name>: `
   prefix to the qualified key. If you route per-tenant failures on that prefix, know it
   matches STATIC tenants only: a dynamic `DBConfigProvider` tenant still reports the root
   spelling, so keep whatever handling you have for that path.

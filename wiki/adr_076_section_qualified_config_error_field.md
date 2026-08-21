@@ -51,8 +51,11 @@ is the one copy.
 ## Consequences
 
 - A consumer matching `ConfigError.Field` against a literal now sees the qualified
-  spelling for non-root sections. `errors.As` plus `strings.HasSuffix(field, ".host")`
-  survives the change; `field == "database.host"` does not.
+  spelling for non-root sections, so `field == "database.host"` stops matching. The
+  replacement has to be scoped to the database field families rather than a bare suffix
+  match: `Field` is not a database-only namespace, and `cache.redis.host` ends in `.host`
+  as well. Match `database.<key>` exactly, and require the `databases.` or
+  `multitenant.tenants.` prefix before accepting a suffix — C60.16 carries the predicate.
 - Root-section errors are unchanged, in both `Field` and rendered text.
 - The rendered message for a non-root section loses its `databases.reporting: `
   prefix and gains the path inside the field instead. Log greps that pinned the old
