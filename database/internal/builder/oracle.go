@@ -373,8 +373,36 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 		return "", nil, errConflictColumnsRequired
 	}
 
-	if uniqueErr := qb.requireUniqueConflictColumns(conflictColumns); uniqueErr != nil {
+	// Rendering is settled first, for every column the statement will name. The
+	// five identity checks below all consult upsertColumnName, whose quote test is
+	// only correct for a rendering that is one whole token, so no key that would
+	// defeat it may reach them. Most of this check is Oracle grammar — a dotted
+	// key or a function call is a MERGE alias Oracle cannot parse — but its
+	// interior-quote clause runs on PostgreSQL too.
+	insertKeys, updateKeys := sortedKeys(insertColumns), sortedKeys(updateColumns)
+	for _, group := range []struct {
+		kind    string
+		columns []string
+	}{
+		{kind: "conflict", columns: conflictColumns},
+		{kind: "insert", columns: insertKeys},
+		{kind: "update", columns: updateKeys},
+	} {
+		if nameErr := qb.requireSingleColumnNames(group.kind, group.columns); nameErr != nil {
+			return "", nil, nameErr
+		}
+	}
+
+	if uniqueErr := qb.requireDistinctColumnIdentities("conflict", conflictColumns); uniqueErr != nil {
 		return "", nil, uniqueErr
+	}
+
+	if insertDistinctErr := qb.requireDistinctColumnIdentities("insert", insertKeys); insertDistinctErr != nil {
+		return "", nil, insertDistinctErr
+	}
+
+	if updateDistinctErr := qb.requireDistinctColumnIdentities("update", updateKeys); updateDistinctErr != nil {
+		return "", nil, updateDistinctErr
 	}
 
 	if insertErr := qb.requireConflictColumnsInInsertSet(conflictColumns, insertColumns); insertErr != nil {

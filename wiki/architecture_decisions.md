@@ -1414,6 +1414,28 @@ v0.59 `SlowJob` godoc suggested one, and that disable path was never reachable),
 `*config.Config` handed straight to `Module.Init`/`NewModuleRegistry` is never normalized — see
 `[C60.12]`.
 
+### [ADR-071: Upsert Column Sets Name Each Column Once, in a Form the Vendor Can Name](adr_071_upsert_column_sets_name_each_column_once.md)
+
+**Date:** 2026-08-20 | **Status:** Accepted
+
+The C59 series taught `BuildUpsert` to judge sameness by vendor identity but stopped at
+`conflictColumns`, and `[C59.10]` recorded the rest of the class rather than closing it: two
+different INSERT or UPDATE keys can still fold to one Oracle column, so the MERGE declared one
+alias twice (ORA-00957 at parse) and the builder returned no error. `BuildUpsert` now requires
+each of `insertColumns` and `updateColumns` to name every column at most once by the column each
+key NAMES, keys its membership and overlap checks on that same rule, and requires every key to be
+a single column name: no qualifier, no function call and no empty name on Oracle, and — on **both**
+vendors — no quote that ends the identifier early, since neither escaper doubles the quotes inside
+a name.
+
+**Key Benefits:** One identity rule answers every question the call asks about a column, so a
+conflict column spelled `"ID"` can no longer be updated as `id` and reach Oracle as ORA-38104.
+**Watch:** PostgreSQL is unchanged apart from that interior-quote rejection; the Oracle-identity
+fold also flips two shipped outcomes, `[C59.7]` accepting a cross-spelling pairing it refused and
+`[C59.9]` refusing one it let through. See [migrations.md](migrations.md) `[C60.11]`.
+
+---
+
 ### [ADR-070: Inbound Trace Identifiers Are Validated at the Trace Seam](adr_070_inbound_trace_identifier_validation.md)
 
 **Date:** 2026-08-19 | **Status:** Accepted

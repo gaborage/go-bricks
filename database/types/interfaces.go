@@ -498,21 +498,40 @@ type QueryBuilderInterface interface {
 	// and whose every entry also names a column of insertColumns, on every vendor;
 	// a call violating any of those returns an error before any SQL is produced.
 	// Both questions — whether two entries are the same column, and whether a
-	// conflict column is among the inserted ones — follow the vendor's identifier
-	// rules. Oracle folds the identifiers it emits unquoted, meaning the
-	// non-reserved ones, so there a case variant of such a column is a duplicate and
-	// also satisfies membership, while the reserved words it quotes stay
-	// case-sensitive and do neither. PostgreSQL quotes every identifier, so a case
-	// variant is never a duplicate there: it is a second column, a legitimate
-	// composite conflict target, and not a match for an insert key spelled
-	// differently.
+	// conflict column is among the inserted ones — are decided by the column each
+	// key NAMES, not by how it is spelled. On Oracle that is the name the database
+	// stores: a key the builder emits unquoted folds to upper case, while one it
+	// emits quoted (a caller-quoted key, or a reserved word) is taken verbatim. So
+	// id, ID and "ID" are one column there — a case variant is a duplicate and also
+	// satisfies membership, and so does a quoted spelling of the same name — while
+	// "id" is a second column and level and LEVEL stay two, both being quoted.
+	// PostgreSQL quotes every identifier, so a case variant is never a duplicate
+	// there: it is a second column, a legitimate composite conflict target, and not
+	// a match for an insert key spelled differently.
+	//
+	// insertColumns and updateColumns must each name every column at most once,
+	// judged by that same vendor identity rule. A map cannot hold an exact repeat,
+	// but two keys can still name one column: on Oracle {"id": 1, "ID": 2} is one
+	// column written twice and is rejected, while on PostgreSQL it is two columns
+	// and builds. On Oracle every key of either map, and every conflict column,
+	// must also be a single column name — no qualifier, no function call, no empty
+	// name. On BOTH vendors a key may not carry a quote that ends the identifier
+	// early: a quote inside a name must be doubled, since neither escaper doubles
+	// it for you and the remainder would otherwise leave the identifier and become
+	// SQL. For conflict and insert keys the
+	// MERGE leaves no choice: it names them as column aliases in its USING clause
+	// and in the INSERT list, neither of which admits anything else. Update keys
+	// become UPDATE SET targets, where Oracle would also accept an alias-qualified
+	// one; refusing those is this API's restriction, so that one spelling of a
+	// column works everywhere the call names it. PostgreSQL is otherwise unchanged: it splits a
+	// dotted key on the dot and quotes each part, so the key renders as a
+	// qualified reference rather than as a column name, and the call still builds.
 	//
 	// BuildUpsert rejects a column present in both conflictColumns and
 	// updateColumns on every vendor, because Oracle's MERGE cannot update a
-	// column referenced in its ON clause (ORA-38104). Identity follows the vendor's
-	// own identifier rules: Oracle folds the unquoted identifiers it emits to upper
-	// case, so id and ID are one column there, while PostgreSQL quotes every
-	// identifier and keeps them distinct. When its update value equals
+	// column referenced in its ON clause (ORA-38104). Identity is the same rule the
+	// checks above use — the column each key names, so on Oracle conflict "ID" and
+	// update id collide, while PostgreSQL keeps every spelling distinct. When its update value equals
 	// its insert value, drop it from updateColumns and no column value changes:
 	// the conflict match pins it on a matched row and the INSERT supplies it on an
 	// unmatched one. Dropping the only update column empties the set, which builds
