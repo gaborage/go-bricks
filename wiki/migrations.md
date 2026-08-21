@@ -3695,10 +3695,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   registry), hand it a config that went through `config.Validate` — or set both
   `Scheduler.Timeout` fields explicitly — and give it a non-nil `Config` at all.
 - verify: run your config through `config.Validate` and print `cfg.Scheduler.Timeout` —
-  zeros come back as 30s and 25s, and both fields must be non-zero before the config
-  reaches a module; a negative value returns a validation error naming
-  `scheduler.timeout.shutdown` or `scheduler.timeout.slowjob`. For a direct-`Init`
-  harness, assert `Init` returns nil — it now names whichever precondition is unmet.
+  zeros come back as 30s and 25s, and both fields must be POSITIVE before the config reaches
+  a module (`Init` demands positive, not merely non-zero, so a negative value fails there
+  too); a negative value in the config itself returns a validation error naming
+  `scheduler.timeout.shutdown` or `scheduler.timeout.slowjob`. For a direct-`Init` harness
+  assert both directions: an error when `deps.Config` is nil or either timeout is
+  non-positive — the message names the unmet precondition — and nil only once you pass a
+  non-nil config with both timeouts positive.
 - ref: [ADR-075](adr_075_scheduler_timeout_single_default.md) ·
   [ADR-064](adr_064_app_validates_every_config.md) · `config/validation.go`
   (`normalizeScheduler`) · `scheduler/module.go` (`Init`, `Shutdown`,
