@@ -3831,11 +3831,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 - detect: grep every deployment surface — Helm values, Kustomize overlays, `.env` files,
   Task/Compose definitions, CI secrets — for a go-bricks variable **set to nothing**:
-  `grep -rnE "^[[:space:]]*[A-Z0-9_]+=[[:space:]]*(\"\"|'')?[[:space:]]*$"` over env files —
-  written to catch the QUOTED spellings too, since `FOO=""` and `FOO=''` deliver the same empty
-  string a bare `FOO=` does — plus `grep -rnE ":[[:space:]]*(\"\"|'')[[:space:]]*$"` over Helm
+  `grep -rnE "^[[:space:]]*[A-Z0-9_]+=[[:space:]]*(\"[[:space:]]*\"|'[[:space:]]*')?[[:space:]]*(#.*)?$"`
+  over env files — written to catch the QUOTED spellings too, since `FOO=""`, `FOO=''` and
+  `FOO="   "` all deliver what this rule rejects: the guard TRIMS, so quoted whitespace is as
+  empty as nothing at all — plus
+  `grep -rnE ":[[:space:]]*(\"[[:space:]]*\"|'[[:space:]]*')[[:space:]]*(#.*)?$"` over Helm
   values, Kustomize overlays and Compose files, where the empty value is structured
-  (`value: ""`, `FOO: ""`) and no `=` appears at all; plus any
+  (`value: ""`, `value: "   "`, `FOO: ''`) and no `=` appears at all. Both tolerate a trailing
+  comment, which is where a deliberately-blanked value tends to be documented
+  (`value: "" # intentionally blank`). Neither matches a bare `key:` with nothing after it —
+  that is YAML **null**, which is absence and still takes the default. Plus any
   `secretKeyRef`/`configMapKeyRef` whose source key holds an EMPTY value, and any `envsubst`
   template over a variable that can be unset. Note which secret shape actually bites: a
   MISSING key does not produce `FOO=` — with `optional: true` Kubernetes leaves the variable
