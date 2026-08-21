@@ -518,12 +518,14 @@ type QueryBuilderInterface interface {
 	// name. On BOTH vendors a key may not carry a quote that ends the identifier
 	// early: a quote inside a name must be doubled, since neither escaper doubles
 	// it for you and the remainder would otherwise leave the identifier and become
-	// SQL. For conflict and insert keys the
-	// MERGE leaves no choice: it names them as column aliases in its USING clause
-	// and in the INSERT list, neither of which admits anything else. Update keys
-	// become UPDATE SET targets, where Oracle would also accept an alias-qualified
-	// one; refusing those is this API's restriction, so that one spelling of a
-	// column works everywhere the call names it. PostgreSQL is otherwise unchanged: it splits a
+	// SQL — that one clause is the only new rejection PostgreSQL sees. The rest of
+	// the single-column-name rule is Oracle's alone, and so is the reason for it:
+	// there, conflict and insert keys have no choice, because the MERGE names them
+	// as column aliases in its USING clause and in the INSERT list, neither of
+	// which admits anything else. Oracle update keys become UPDATE SET targets,
+	// where Oracle itself would also accept an alias-qualified one; refusing those
+	// is this API's restriction, so that one spelling of a column works everywhere
+	// the call names it. PostgreSQL is otherwise unchanged: it splits a
 	// dotted key on the dot and quotes each part, so the key renders as a
 	// qualified reference rather than as a column name, and the call still builds.
 	//
