@@ -1394,6 +1394,28 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-077: A Delivered-Empty Bool Config Value Fails Startup](adr_077_delivered_empty_bool_config.md)
+
+**Date:** 2026-08-21 | **Status:** Accepted
+
+ADR-074 closed `FOO=` for numeric keys and named what it left open: the same empty string
+bound to a **bool** still decoded as a legal `false`, because `WeaklyTypedInput` reaches
+`SetBool(false)` by an explicit branch rather than a parse failure. Measured on `main`,
+that flipped `database.pool.keepalive.enabled` from its default **true** to false, and
+`cache.critical` to a non-nil `*false` that defeated ADR-046's strict readiness — `/ready`
+answering 200 through a Redis outage. `config.Load` also contradicted `InjectInto`, which
+had rejected `""` for a bool all along. The guard now judges bool on ADR-074's exact terms
+across all four decoder seams; `EmptyStringToNumericGuardHookFunc` is renamed
+`EmptyStringToScalarGuardHookFunc` (internal, never released) to match what it guards.
+
+**Key Benefits:** one delivered-empty rule for every target kind `WeaklyTypedInput` fills
+from a string; `Load` and `InjectInto` finally agree. **Watch:** a bool key rendered empty
+now fails startup where it used to boot on `false` — including the keep-alive flip that was
+silently degrading. YAML null is still absence; explicit `true`/`false`/`1`/`0` unchanged.
+See `[C60.18]` in [migrations.md](migrations.md).
+
+---
+
 ### [ADR-076: A Database Section's Errors Are Addressed to That Section](adr_076_section_qualified_config_error_field.md)
 
 **Date:** 2026-08-20 | **Status:** Accepted
@@ -1595,7 +1617,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-076) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-077) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

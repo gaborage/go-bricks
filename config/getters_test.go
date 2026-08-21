@@ -240,6 +240,26 @@ func TestUnmarshalRejectsUnitlessNumericDuration(t *testing.T) {
 	})
 }
 
+// TestUnmarshalRejectsDeliveredEmptyBool pins ADR-077 on the public Config.Unmarshal seam,
+// the one a consumer's own config struct reaches: an empty string bound to a bool fails
+// there too, so a consumer gets the rule without opting in.
+func TestUnmarshalRejectsDeliveredEmptyBool(t *testing.T) {
+	cfg := setupTestConfig(t, map[string]any{
+		"custom.strict":  "",
+		"custom.verbose": "true",
+	})
+	var out struct {
+		Strict  *bool `koanf:"strict"`
+		Verbose bool  `koanf:"verbose"`
+	}
+
+	err := cfg.Unmarshal("custom", &out)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "boolean value delivered empty")
+	assert.ErrorContains(t, err, "strict", "the koanf key reaches the operator, not just the message")
+}
+
 // TestUnmarshalStringToSliceKeepsSingleElementWrap pins the public-seam behavior of
 // Config.Unmarshal: a scalar string bound to a []string field keeps koanf's default
 // single-element wrap ("a,b,c" -> ["a,b,c"]) and is NOT comma-split. Load's env-path

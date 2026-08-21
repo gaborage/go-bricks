@@ -98,13 +98,15 @@ func TestTenantDecoderConfigCommaSplitsStringSlice(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, out.Allow)
 }
 
-// TestTenantDecoderConfigRejectsEmptyNumeric proves the CLI decoder carries the framework's
-// delivered-empty numeric guard, so a tenants.yaml key set to "" fails here exactly as it
-// fails a framework Load instead of decoding as a legal 0.
-func TestTenantDecoderConfigRejectsEmptyNumeric(t *testing.T) {
+// TestTenantDecoderConfigRejectsEmptyScalar proves the CLI decoder carries the framework's
+// delivered-empty guard for both target sets, so a tenants.yaml key set to "" fails here
+// exactly as it fails a framework Load instead of decoding as a legal 0 or false.
+func TestTenantDecoderConfigRejectsEmptyScalar(t *testing.T) {
 	type target struct {
 		Port    int    `mapstructure:"port"`
 		MinLen  *int   `mapstructure:"minlen"`
+		Enabled *bool  `mapstructure:"enabled"`
+		Strict  bool   `mapstructure:"strict"`
 		Comment string `mapstructure:"comment"`
 	}
 
@@ -117,6 +119,9 @@ func TestTenantDecoderConfigRejectsEmptyNumeric(t *testing.T) {
 		{name: "empty_int_rejected", input: map[string]any{"port": ""}, wantErr: true},
 		{name: "empty_int_pointer_rejected", input: map[string]any{"minlen": ""}, wantErr: true},
 		{name: "whitespace_int_rejected", input: map[string]any{"port": "  "}, wantErr: true},
+		{name: "empty_bool_pointer_rejected", input: map[string]any{"enabled": ""}, wantErr: true},
+		{name: "empty_bool_rejected", input: map[string]any{"strict": ""}, wantErr: true},
+		{name: "whitespace_bool_rejected", input: map[string]any{"strict": "  "}, wantErr: true},
 		{
 			name:   "empty_string_target_passes",
 			input:  map[string]any{"comment": ""},
@@ -126,6 +131,15 @@ func TestTenantDecoderConfigRejectsEmptyNumeric(t *testing.T) {
 			name:   "explicit_value_passes",
 			input:  map[string]any{"port": "5432"},
 			assert: func(t *testing.T, got target) { assert.Equal(t, 5432, got.Port) },
+		},
+		{
+			name:  "explicit_bool_passes",
+			input: map[string]any{"enabled": "false", "strict": "true"},
+			assert: func(t *testing.T, got target) {
+				require.NotNil(t, got.Enabled)
+				assert.False(t, *got.Enabled)
+				assert.True(t, got.Strict)
+			},
 		},
 	}
 

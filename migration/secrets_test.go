@@ -236,11 +236,11 @@ func TestSecretsProviderDBConfigNumericDurationGuard(t *testing.T) {
 	})
 }
 
-// TestSecretsProviderDBConfigEmptyNumericGuard pins the delivered-empty rule at the seam
+// TestSecretsProviderDBConfigEmptyScalarGuard pins the delivered-empty rule at the seam
 // that literally reads secrets: a rotated secret rendering a numeric field as "" used to
 // decode as 0 — port 0, or a tuned pool silently reverted to the framework default —
 // because this provider builds its own decoder (ADR-074).
-func TestSecretsProviderDBConfigEmptyNumericGuard(t *testing.T) {
+func TestSecretsProviderDBConfigEmptyScalarGuard(t *testing.T) {
 	tests := []struct {
 		name    string
 		payload string
@@ -258,9 +258,24 @@ func TestSecretsProviderDBConfigEmptyNumericGuard(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			// ADR-077 at the secrets seam: a rotation writing "" here used to turn TCP
+			// keep-alive off for that tenant, silently, on the connection path.
+			name:    "empty_pool_keepalive_enabled_rejected",
+			payload: `{"type":"postgresql","host":"h","username":"u","pool":{"keepalive":{"enabled":""}}}`,
+			wantErr: true,
+		},
+		{
 			name:    "explicit_port_binds",
 			payload: `{"type":"postgresql","host":"h","username":"u","port":5432}`,
 			assert:  func(t *testing.T, got *config.DatabaseConfig) { assert.Equal(t, 5432, got.Port) },
+		},
+		{
+			name:    "explicit_pool_keepalive_enabled_binds",
+			payload: `{"type":"postgresql","host":"h","username":"u","pool":{"keepalive":{"enabled":false}}}`,
+			assert: func(t *testing.T, got *config.DatabaseConfig) {
+				require.NotNil(t, got.Pool.KeepAlive.Enabled)
+				assert.False(t, *got.Pool.KeepAlive.Enabled)
+			},
 		},
 	}
 

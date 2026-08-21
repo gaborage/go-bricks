@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-20
-- **Related**: [ADR-051](adr_051_delivered_empty_database_identity.md) (the delivered-empty rule this extends from database identity keys to numeric keys) · [ADR-065](adr_065_keystore_secretminlength_tristate.md) (the tri-state this silently defeated)
+- **Related**: [ADR-051](adr_051_delivered_empty_database_identity.md) (the delivered-empty rule this extends from database identity keys to numeric keys) · [ADR-065](adr_065_keystore_secretminlength_tristate.md) (the tri-state this silently defeated) · [ADR-077](adr_077_delivered_empty_bool_config.md) (extends the same rule to bool targets; the hook named below is renamed `EmptyStringToScalarGuardHookFunc` there, and the `*bool` gap this ADR left open is closed)
 
 ## Context
 
