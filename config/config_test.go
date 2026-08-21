@@ -1513,19 +1513,27 @@ func TestDerivedDefaultsRejectAMissingKey(t *testing.T) {
 	assert.ErrorContains(t, err, "does not fill")
 }
 
-// TestLoadDefaultsRejectsAPreloadedFailClosedKey pins the rule over the MERGED map: the
-// allowlist is not the only door, and a hand-written literal under one of these prefixes
-// would read as "configured" to ADR-051's presence check, aborting every database-free
-// deployment. Enforced at load rather than in review.
-func TestLoadDefaultsRejectsAPreloadedFailClosedKey(t *testing.T) {
-	for _, prefix := range preloadDeniedPrefixes {
-		assert.NotContains(t, koanfOnlyDefaults(), prefix,
-			"a hand-written default under %q breaks ADR-051's presence check", prefix)
+// TestLoadDefaultsCarriesNoPreloadedFailClosedKey runs the PRODUCTION predicate over the real
+// merged map. A hand-written literal under one of these prefixes would read as "configured"
+// to ADR-051's presence check and abort every database-free deployment, and the allowlist is
+// not the only door it can come through.
+func TestLoadDefaultsCarriesNoPreloadedFailClosedKey(t *testing.T) {
+	derived, err := derivedDefaults()
+	require.NoError(t, err)
+
+	merged, err := mergeDefaults(koanfOnlyDefaults(), derived)
+
+	// mergeDefaults itself refuses a denied key, so this is the assertion that matters; the
+	// loop below only names the offender when it fires.
+	require.NoError(t, err)
+	for key := range merged {
+		prefix, denied := matchesPrefix(key, preloadDeniedPrefixes)
+		assert.False(t, denied, "%q is under %q and must stay absent unless configured", key, prefix)
 	}
 
 	// debug.* literals are legitimate and must NOT be caught by this rule — they are the
 	// explicit map ADR-049 reads through the decoded struct.
-	assert.Contains(t, koanfOnlyDefaults(), "debug.allowedips")
+	assert.Contains(t, merged, "debug.allowedips")
 }
 
 // TestMergeDefaultsEnforcesItsTwoRules pins the rules that hold at load time. Neither is
