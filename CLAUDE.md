@@ -424,6 +424,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **Dead app lifecycle surface removed (ADR-067):** `MessagingInitializer` and `ConnectionPreWarmer` (constructors and methods included), `Options.Database` and `Options.MessagingClient` are gone; the eight debug response types are unexported with their JSON unchanged.
 - **One delivery pipeline (ADR-068):** `messaging.StartConsumeSpan` is removed — a service driving its own consume loop starts its own span — and the AMQP `messaging.client.consumed.messages` counter is recorded at completion with `error.type` instead of at receive without it.
 - **Scheduler timeouts normalize (ADR-075):** `scheduler.timeout.shutdown`/`slowjob` default in `config.Validate` (30s/25s — hand-built configs move 30s → 25s), negatives fail validation, and `scheduler.Module.Init` requires a NORMALIZED `deps.Config` — non-nil, both timeouts positive — so a config assembled outside app construction must go through `config.Validate` first.
+- **Section-qualified config errors (ADR-076):** a non-root database section's `ConfigError.Field` names that section (`databases.reporting.host`, `multitenant.tenants.acme.database.host`); match with a database-scoped predicate, not equality and not a bare suffix — `cache.redis.host` ends in `.host` too. Root and the connect door keep the root spelling.
 
 ## File Organization
 

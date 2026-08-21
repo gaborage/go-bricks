@@ -1,9 +1,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 )
 
 // dbPlacement is where a database section sits in the configuration tree. It
@@ -145,10 +147,7 @@ func normalizeDatabaseSection(db *DatabaseConfig, section dbSection) error {
 	}
 
 	if err := normalizeDatabaseValues(db, dbStrictnessStartup); err != nil {
-		if section.placement == dbPlacementRoot {
-			return err
-		}
-		return fmt.Errorf("%s: %w", section.path, err)
+		return section.qualify(err)
 	}
 
 	if section.placement != dbPlacementRoot && db.Manager.isSet() {
@@ -160,6 +159,47 @@ func normalizeDatabaseSection(db *DatabaseConfig, section dbSection) error {
 		}
 	}
 	return nil
+}
+
+// qualify re-addresses an error raised against the root spelling to this section, so a
+// consumer matching on ConfigError.Field learns WHICH section failed. The root section
+// returns the error untouched; every other placement gets a rewritten copy — the original
+// is left alone because normalization shares its error constructors with the connect door,
+// which has no section path to speak of.
+//
+// The path is carried by Field alone, never also by a wrapping message: printing it in both
+// places is how the same section path ends up in one error twice.
+//
+// Action is deliberately left as the root spelling names it. Rewriting operator hints is a
+// different problem from addressing an error, and it is tracked separately — see ADR-076.
+func (s dbSection) qualify(err error) error {
+	if s.placement == dbPlacementRoot {
+		return err
+	}
+	var cfgErr *ConfigError
+	if !errors.As(err, &cfgErr) {
+		return fmt.Errorf("%s: %w", s.path, err)
+	}
+	qualified := *cfgErr
+	qualified.Field = s.qualifyField(cfgErr.Field)
+	qualified.Details = slices.Clone(cfgErr.Details)
+	return &qualified
+}
+
+// qualifyField rewrites one root-spelled field to this section. A key under the root
+// section swaps its "database" head for the section path, so "database.host" reads
+// "databases.reporting.host" and the tenant spelling keeps its own trailing ".database".
+// A field that is not key-shaped — the Oracle connection-identifier check names one — is
+// prefixed instead, which keeps the offending name rather than dropping it.
+func (s dbSection) qualifyField(field string) string {
+	switch {
+	case field == "" || field == fieldDatabase:
+		return s.path
+	case strings.HasPrefix(field, fieldDatabase+"."):
+		return s.path + strings.TrimPrefix(field, fieldDatabase)
+	default:
+		return s.path + "." + field
+	}
 }
 
 // forEachDatabaseSection visits every database section the deployment
