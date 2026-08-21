@@ -53,7 +53,8 @@ unchanged; the bool rejection carries its own message (`boolean value delivered 
 — set an explicit true/false …`) in the same voice, so an operator reading a log can
 tell which target kind refused.
 
-The rule reaches all four seams ADR-074 named, because all four compose the one hook:
+The rule reaches all four seams ADR-074 named — the three Go seams compose the shared
+hook, and the CLI applies its byte-identical mirror:
 `buildDecoderConfig` (`config.Load`), `unmarshalDecoderConfig` (the public
 `Config.Unmarshal`), `migration.decodeSecretConfig`, and the `tools/migration` CLI's
 `tenantDecoderConfig` — which keeps a byte-identical copy of the hook rather than

@@ -1071,6 +1071,10 @@ func clearEnvironmentVariables() {
 		"LOG_LEVEL", "LOG_PRETTY", "LOG_OUTPUT_FORMAT", "LOG_OUTPUT_FILE",
 		"MESSAGING_BROKER_URL", "MESSAGING_ROUTING_EXCHANGE", "MESSAGING_ROUTING_KEY",
 		"MESSAGING_BROKER_VIRTUALHOST",
+		// Bool keys (ADR-077). The unset-keeps-the-default assertions read absence, so an
+		// ambient value in the developer's or runner's environment would make them pass or
+		// fail for a reason the test never set.
+		"DATABASE_POOL_KEEPALIVE_ENABLED", "CACHE_CRITICAL", "CACHE_ENABLED", "SERVER_LOGROUTES",
 	}
 
 	for _, envVar := range envVars {
