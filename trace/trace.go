@@ -188,8 +188,7 @@ func extractTraceState(ctx context.Context, headers HeaderAccessor, carriedParen
 		return ctx
 	}
 	if v := headers.Get(HeaderTraceState); v != nil {
-		// Cap only, no grammar — see MaxTraceStateBytes for why.
-		if ts := safeToString(v); ts != "" && len(ts) <= MaxTraceStateBytes {
+		if ts := ValidateTraceState(safeToString(v)); ts != "" {
 			return WithTraceState(ctx, ts)
 		}
 	}

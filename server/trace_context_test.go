@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/labstack/echo/v5"
@@ -12,11 +13,15 @@ import (
 
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/internal/testutil"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
-const (
-	testTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-)
+const testTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+// poisonedTraceParent is the #1100 probe: 32 non-hex bytes where the trace-id
+// belongs, which the old length-only check accepted and re-emitted as the
+// outbound X-Request-ID.
+var poisonedTraceParent = "00-" + strings.Repeat("!", 32) + "-00f067aa0ba902b7-01"
 
 func TestTraceContext(t *testing.T) {
 	e := echo.New()
@@ -61,25 +66,6 @@ func TestTraceContext(t *testing.T) {
 		assert.True(t, ok, "Traceparent should be present in context")
 		assert.Equal(t, traceparent, contextTraceparent,
 			"Traceparent should be propagated from request header to context")
-	})
-
-	t.Run("existing_tracestate_propagated", func(t *testing.T) {
-		tracestate := "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7"
-
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-		req.Header.Set(gobrickshttp.HeaderTraceState, tracestate)
-		rec := httptest.NewRecorder()
-
-		e.ServeHTTP(rec, req)
-
-		assert.Equal(t, http.StatusOK, rec.Code)
-		require.NotNil(t, capturedContext)
-
-		// Verify tracestate is propagated to context
-		contextTracestate, ok := gobrickshttp.TraceStateFromContext(capturedContext)
-		assert.True(t, ok, "Tracestate should be present in context")
-		assert.Equal(t, tracestate, contextTracestate,
-			"Tracestate should be propagated from request header to context")
 	})
 
 	t.Run("both_headers_propagated", func(t *testing.T) {
@@ -214,7 +200,13 @@ func TestTraceContextMiddlewareOrder(t *testing.T) {
 		"Context should be replaced by trace context middleware")
 }
 
-func TestTraceContextInvalidHeaders(t *testing.T) {
+// TestTraceContextIngressValidation pins the HTTP door's half of ADR-070: what
+// the middleware plants in the context is what trace.ExtractFromHeaders would
+// plant at the messaging and outbox doors, never the raw request header.
+//
+// Drop-and-mint, not reject: an unusable traceparent leaves the context in
+// exactly the state an untraced request produces, and the request is served.
+func TestTraceContextIngressValidation(t *testing.T) {
 	e := echo.New()
 	e.Use(traceContextEcho())
 
@@ -225,37 +217,70 @@ func TestTraceContextInvalidHeaders(t *testing.T) {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	const validState = "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7"
+
 	tests := []struct {
 		name        string
 		traceparent string
 		tracestate  string
+		wantParent  string
+		wantState   string
 	}{
 		{
-			name:        "invalid_traceparent_format",
+			name:        "valid_traceparent_and_tracestate_propagate_unchanged",
+			traceparent: testTraceparent,
+			tracestate:  validState,
+			wantParent:  testTraceparent,
+			wantState:   validState,
+		},
+		{
+			name:        "unparseable_traceparent_dropped",
 			traceparent: "invalid-trace-parent",
-			tracestate:  "",
 		},
 		{
-			name:        "empty_traceparent",
-			traceparent: "",
-			tracestate:  "congo=t61rcWkgMzE",
+			name:        "non_hex_trace_id_dropped",
+			traceparent: poisonedTraceParent,
 		},
 		{
-			name:        "malformed_traceparent",
+			name:        "short_traceparent_dropped",
 			traceparent: "00-short-trace-01",
-			tracestate:  "",
 		},
 		{
-			name:        "only_tracestate",
-			traceparent: "",
-			tracestate:  "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7",
+			name:        "all_zero_trace_id_dropped",
+			traceparent: "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+		},
+		{
+			name:        "forbidden_version_ff_dropped",
+			traceparent: "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		},
+		{
+			name:        "tracestate_dropped_with_its_invalid_parent",
+			traceparent: poisonedTraceParent,
+			tracestate:  validState,
+		},
+		{
+			name:       "orphan_tracestate_dropped",
+			tracestate: validState,
+		},
+		{
+			name:        "tracestate_at_the_cap_kept",
+			traceparent: testTraceparent,
+			tracestate:  strings.Repeat("a", gobrickstrace.MaxTraceStateBytes),
+			wantParent:  testTraceparent,
+			wantState:   strings.Repeat("a", gobrickstrace.MaxTraceStateBytes),
+		},
+		{
+			name:        "tracestate_one_over_the_cap_dropped",
+			traceparent: testTraceparent,
+			tracestate:  strings.Repeat("a", gobrickstrace.MaxTraceStateBytes+1),
+			wantParent:  testTraceparent,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			capturedContext = nil
 			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
-
 			if tt.traceparent != "" {
 				req.Header.Set(gobrickshttp.HeaderTraceParent, tt.traceparent)
 			}
@@ -264,34 +289,22 @@ func TestTraceContextInvalidHeaders(t *testing.T) {
 			}
 
 			rec := httptest.NewRecorder()
-
 			e.ServeHTTP(rec, req)
 
-			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, http.StatusOK, rec.Code, "an unusable trace header never fails the request")
 			require.NotNil(t, capturedContext)
 
-			// Should still generate a trace ID
-			traceID, okID := gobrickshttp.TraceIDFromContext(capturedContext)
-			assert.True(t, okID, "Should have trace ID even with invalid headers")
-			assert.NotEmpty(t, traceID, "Should generate trace ID even with invalid headers")
+			traceID, okID := gobrickstrace.IDFromContext(capturedContext)
+			assert.True(t, okID, "a trace ID is minted regardless of what the caller sent")
+			assert.NotEmpty(t, traceID)
 
-			// Should propagate headers as-is (no validation in middleware)
-			contextTraceparent, okParent := gobrickshttp.TraceParentFromContext(capturedContext)
-			contextTracestate, okState := gobrickshttp.TraceStateFromContext(capturedContext)
+			// TraceParentFromContext/TraceStateFromContext report ok == (value != ""),
+			// so the value assertions carry the presence claim too.
+			contextParent, _ := gobrickshttp.TraceParentFromContext(capturedContext)
+			assert.Equal(t, tt.wantParent, contextParent)
 
-			if tt.traceparent != "" {
-				assert.True(t, okParent, "Traceparent should be present when provided")
-				assert.Equal(t, tt.traceparent, contextTraceparent)
-			} else {
-				assert.False(t, okParent, "Traceparent should not be present when not provided")
-			}
-
-			if tt.tracestate != "" {
-				assert.True(t, okState, "Tracestate should be present when provided")
-				assert.Equal(t, tt.tracestate, contextTracestate)
-			} else {
-				assert.False(t, okState, "Tracestate should not be present when not provided")
-			}
+			contextState, _ := gobrickshttp.TraceStateFromContext(capturedContext)
+			assert.Equal(t, tt.wantState, contextState)
 		})
 	}
 }
@@ -375,4 +388,73 @@ func TestTraceContextConcurrentRequests(t *testing.T) {
 	// All trace IDs should be unique
 	assert.Equal(t, 10, len(receivedTraceIDs),
 		"All requests should have unique trace IDs")
+}
+
+// TestTraceContextShadowsAnInheritedTraceState covers the one case the header
+// table cannot reach: a tracestate already in the request context, planted by an
+// earlier middleware, annotates a DIFFERENT traceparent. A request bringing its
+// own valid parent must not adopt it — the outbound hop would re-emit one trace's
+// vendor state under another's parent (ADR-070, amended).
+func TestTraceContextShadowsAnInheritedTraceState(t *testing.T) {
+	e := echo.New()
+	e.Use(traceContextEcho())
+
+	var capturedContext context.Context
+	e.GET("/test", func(c *echo.Context) error {
+		capturedContext = c.Request().Context()
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	inherited := gobrickshttp.WithTraceState(context.Background(), "inherited=from-another-parent")
+	req := httptest.NewRequestWithContext(inherited, http.MethodGet, "/test", http.NoBody)
+	req.Header.Set(gobrickshttp.HeaderTraceParent, testTraceparent)
+
+	e.ServeHTTP(httptest.NewRecorder(), req)
+	require.NotNil(t, capturedContext)
+
+	got, ok := gobrickshttp.TraceStateFromContext(capturedContext)
+	assert.False(t, ok, "an inherited tracestate rode along with a parent it does not annotate: %q", got)
+}
+
+// mapHeaders is a trace.HeaderAccessor over a plain map, so a server test can
+// drive the same injection the AMQP publish path drives.
+type mapHeaders map[string]any
+
+func (m mapHeaders) Get(key string) any        { return m[key] }
+func (m mapHeaders) Set(key string, value any) { m[key] = value }
+
+// TestTraceContextIngressYieldsAPublishableIdentity walks the #1100 probe from
+// the HTTP door to the publish seam. Before the ingress guard, the poisoned
+// traceparent reached the context, forceAlignTraceID aligned X-Request-ID onto
+// its 32 non-hex bytes, and the publish-side charset guard then refused that id
+// and shipped an EMPTY CorrelationId (the C60.10 symptom) — remote-triggerable
+// and free. The minted identity has to be publishable end to end.
+func TestTraceContextIngressYieldsAPublishableIdentity(t *testing.T) {
+	e := echo.New()
+	e.Use(traceContextEcho())
+
+	var capturedContext context.Context
+	e.GET("/test", func(c *echo.Context) error {
+		capturedContext = c.Request().Context()
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+	req.Header.Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+	e.ServeHTTP(httptest.NewRecorder(), req)
+	require.NotNil(t, capturedContext)
+
+	out := mapHeaders{}
+	gobrickstrace.InjectIntoHeaders(capturedContext, out)
+
+	traceparent, _ := out[gobrickstrace.HeaderTraceParent].(string)
+	requestID, _ := out[gobrickstrace.HeaderXRequestID].(string)
+
+	assert.NotEqual(t, poisonedTraceParent, traceparent, "the poisoned value escaped onto the next hop")
+	assert.Equal(t, traceparent, gobrickstrace.ValidateTraceParent(traceparent),
+		"the outbound traceparent must be spec-exact")
+	assert.Equal(t, traceparent[3:35], requestID,
+		"X-Request-ID must align onto the minted traceparent's trace-id")
+	assert.Equal(t, requestID, gobrickstrace.ValidateRequestID(requestID),
+		"the publish-side guard must accept the aligned id, so CorrelationId is populated rather than blank")
 }

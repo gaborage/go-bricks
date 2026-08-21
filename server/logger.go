@@ -317,13 +317,15 @@ func extractRequestMetadata(c *echo.Context) requestMetadata {
 	// SAFETY: Try response headers first (may be transformed by middleware),
 	// fall back to request headers if response is nil or headers empty.
 	// This handles middleware ordering and timeout scenarios.
-	// X-Request-ID is validated at every read — both the response and request
-	// headers can carry caller-controlled bytes (the response header is normally
-	// set by RequestIDMiddleware to a validated value, but defense in depth here
-	// closes the gap if any earlier middleware reflects the inbound value verbatim).
+	// X-Request-ID and traceparent are validated at every read — both the response
+	// and request headers can carry caller-controlled bytes (the response header is
+	// normally set by RequestIDMiddleware and ensureTraceParentHeader to a validated
+	// value, but defense in depth here closes the gap if any earlier middleware
+	// reflects the inbound value verbatim). The request-header read is the one that
+	// needs it outright: it is a raw inbound value on its way into a log field.
 	if resp := c.Response(); resp != nil {
 		requestID = validateRequestID(resp.Header().Get(echo.HeaderXRequestID))
-		traceparent = resp.Header().Get(gobrickshttp.HeaderTraceParent)
+		traceparent = validateTraceParent(resp.Header().Get(gobrickshttp.HeaderTraceParent))
 	}
 
 	// Fallback to request headers (always available, source of truth)
@@ -331,7 +333,7 @@ func extractRequestMetadata(c *echo.Context) requestMetadata {
 		requestID = validateRequestID(c.Request().Header.Get(echo.HeaderXRequestID))
 	}
 	if traceparent == "" {
-		traceparent = c.Request().Header.Get(gobrickshttp.HeaderTraceParent)
+		traceparent = validateTraceParent(c.Request().Header.Get(gobrickshttp.HeaderTraceParent))
 	}
 
 	return requestMetadata{

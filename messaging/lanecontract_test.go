@@ -25,12 +25,17 @@ const (
 
 // classicLane describes the AMQP lane to the harness. The declared shapes are
 // read off logOutcome and buildFailureLogEvent: the success line adds message_id
-// alone, the failure line adds seven fields plus "error" from the chained
-// .Err(res.Err), and the panic line is the same seven without it.
+// alone, the failure line adds eight fields plus "error" from the chained
+// .Err(res.Err), and the panic line is the same eight without it.
+//
+// The harness drives valid identifiers, so the four vouched fields are all
+// present and identity_rejected is absent — the omission shapes are pinned in
+// delivery_identity_test.go instead, since this contract asserts an EXACT key set
+// and cannot express "present only sometimes".
 func classicLane() lanecontract.Lane {
 	failureKeys := []string{
 		"message_id", "queue", "event_type", "amqp_correlation_id",
-		"consumer_tag", "routing_key", "exchange",
+		"consumer_tag", "routing_key", "exchange", "delivery_tag",
 	}
 	return lanecontract.Lane{
 		Name:        "classic",

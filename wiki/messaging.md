@@ -200,7 +200,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
 }
 ```
 
-**Observability:** ERROR logs include `message_id`, `queue`, `event_type`, `error`, `correlation_id` (the framework trace ID) and `amqp_correlation_id` (the delivery's own AMQP field). Each delivery opens a Consumer-kind span named `"<queue> receive"` and records `messaging.client.operation.duration` plus `messaging.client.consumed.messages` when it finishes — both carrying `error.type` when handling failed, so a failure is separable on the counter as well as the histogram (ADR-068).
+**Observability:** ERROR logs include `message_id`, `queue`, `event_type`, `error`, `correlation_id` (the framework trace ID) and `amqp_correlation_id` (the delivery's own AMQP field). The publisher-supplied identifiers — `amqp_correlation_id`, `message_id`, `routing_key` and `exchange` — are validated once per delivery and OMITTED from every log field, span attribute and metric attribute when they fail, since no header extractor reaches an AMQP property; a line that dropped one carries `identity_rejected: true`, and the failure and panic lines carry `delivery_tag` so the delivery stays identifiable. The handler still sees the raw `*amqp.Delivery` (ADR-070, C60.17). Each delivery opens a Consumer-kind span named `"<queue> receive"` and records `messaging.client.operation.duration` plus `messaging.client.consumed.messages` when it finishes — both carrying `error.type` when handling failed, so a failure is separable on the counter as well as the histogram (ADR-068).
 
 **Best Practices:** Thorough handler testing, monitor ERROR logs with alerts, use trace IDs for manual replay.
 

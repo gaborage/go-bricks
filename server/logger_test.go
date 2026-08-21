@@ -30,11 +30,15 @@ const (
 	otelHTTPMethod     = "http.request.method"
 
 	// Test data constants (prevent SonarQube duplication warnings)
-	testAPIUsersPath       = "/api/users"
-	testAPITestPath        = "/api/test"
-	testTraceSpan01        = "00-trace-span-01"
-	testTraceSpan02        = "00-response-trace-span-02"
-	testRequestTraceSpan01 = "00-request-trace-span-01"
+	testAPIUsersPath = "/api/users"
+	testAPITestPath  = "/api/test"
+	// Spec-exact traceparents: the access-log metadata reader validates every
+	// traceparent it reads (ADR-070), so a placeholder-shaped value is discarded
+	// and would pin nothing. They differ only in the parent-id so the
+	// response-vs-request precedence assertions stay legible.
+	testTraceSpan01        = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba90201-01"
+	testTraceSpan02        = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba90202-01"
+	testRequestTraceSpan01 = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba90211-01"
 	testUserAgent          = "comprehensive-test/2.0"
 	testReqFromRequest     = "req-from-request"
 	testFallbackMessage    = "Should fallback to request header when response header empty"
@@ -889,7 +893,7 @@ func TestExtractRequestMetadataAllFields(t *testing.T) {
 	c := e.NewContext(req, rec)
 	c.SetPath("/api/resource")
 	c.Response().Header().Set(echo.HeaderXRequestID, "all-fields-123")
-	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, "00-aabbcc-ddeeff-01")
+	c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan01)
 
 	metadata := extractRequestMetadata(c)
 
@@ -1416,4 +1420,38 @@ func TestExtractRequestMetadataMissingBothRequestAndResponseHeaders(t *testing.T
 	assert.Equal(t, "/api/no-headers", metadata.URI)
 	assert.Equal(t, "", metadata.RequestID, "Should return empty string when headers missing everywhere")
 	assert.Equal(t, "", metadata.Traceparent, "Should return empty string when headers missing everywhere")
+}
+
+// TestExtractRequestMetadataDropsAnInvalidTraceparent pins the access-log door of
+// ADR-070: the traceparent lands in a log field, and both reads it can come from
+// — the response header and the raw request header it falls back to — are
+// caller-reachable. An unvouched value is dropped, never logged.
+func TestExtractRequestMetadataDropsAnInvalidTraceparent(t *testing.T) {
+	t.Run("from_the_request_header_fallback", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
+		req.Header.Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+		c := e.NewContext(req, httptest.NewRecorder())
+
+		assert.Empty(t, extractRequestMetadata(c).Traceparent)
+	})
+
+	t.Run("from_the_response_header", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
+		c := e.NewContext(req, httptest.NewRecorder())
+		c.Response().Header().Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+
+		assert.Empty(t, extractRequestMetadata(c).Traceparent)
+	})
+
+	t.Run("a_valid_response_header_still_wins_over_an_invalid_request_one", func(t *testing.T) {
+		e := echo.New()
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, testAPITestPath, http.NoBody)
+		req.Header.Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+		c := e.NewContext(req, httptest.NewRecorder())
+		c.Response().Header().Set(gobrickshttp.HeaderTraceParent, testTraceSpan02)
+
+		assert.Equal(t, testTraceSpan02, extractRequestMetadata(c).Traceparent)
+	})
 }

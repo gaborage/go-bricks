@@ -14,7 +14,6 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	pipeline "github.com/gaborage/go-bricks/messaging/internal/delivery"
-	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 )
 
 // defaultConsumerResubscribeDelay is the wait between consumer re-subscribe
@@ -759,19 +758,20 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 // calls Settle after the span closed and the lease drained, and it guarantees
 // at most one call even if the delivery tail panicked (ADR-069).
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
+	id := identifyDelivery(delivery)
 	pipeline.Run(ctx, &pipeline.Request{
 		Carrier:     amqpHeaderAccessor{headers: delivery.Headers},
 		Destination: consumer.Queue,
 		BodySize:    len(delivery.Body),
-		SpanExtras:  consumeSpanExtras(delivery),
-		Metrics:     tracking.AMQPConsumeAttributes(delivery.Exchange, delivery.RoutingKey, consumer.Queue),
+		SpanExtras:  consumeSpanExtras(delivery, id),
+		Metrics:     consumeMetrics(consumer.Queue, id),
 		Log:         log,
 		Handle: func(msgCtx context.Context, msgLog logger.Logger, traceID string) error {
-			logProcessing(msgLog, traceID, delivery)
+			logProcessing(msgLog, traceID, delivery, id)
 			return consumer.Handler.Handle(msgCtx, delivery)
 		},
 		LogOutcome: func(res *pipeline.Result) {
-			logOutcome(res, consumer, delivery)
+			logOutcome(res, consumer, delivery, id)
 		},
 		Settle: func(res *pipeline.Result) {
 			settleDelivery(res, consumer, delivery)
@@ -793,20 +793,21 @@ func settleDelivery(res *pipeline.Result, consumer *ConsumerDeclaration, deliver
 
 // consumeSpanExtras renders this lane's span attributes, on top of the four the
 // pipeline sets for both lanes. A field the delivery did not carry is omitted
-// rather than reported empty, which is what the receive span has always done.
-func consumeSpanExtras(delivery *amqp.Delivery) []attribute.KeyValue {
+// rather than reported empty, which is what the receive span has always done —
+// see deliveryIdentity for what "did not carry" now includes.
+func consumeSpanExtras(delivery *amqp.Delivery, id deliveryIdentity) []attribute.KeyValue {
 	extras := make([]attribute.KeyValue, 0, 4)
-	if delivery.Exchange != "" {
-		extras = append(extras, attribute.String(attrMessagingRabbitMQExchange, delivery.Exchange))
+	if id.exchange != "" {
+		extras = append(extras, attribute.String(attrMessagingRabbitMQExchange, id.exchange))
 	}
-	if delivery.RoutingKey != "" {
-		extras = append(extras, semconv.MessagingRabbitMQDestinationRoutingKey(delivery.RoutingKey))
+	if id.routingKey != "" {
+		extras = append(extras, semconv.MessagingRabbitMQDestinationRoutingKey(id.routingKey))
 	}
-	if delivery.MessageId != "" {
-		extras = append(extras, semconv.MessagingMessageID(delivery.MessageId))
+	if id.messageID != "" {
+		extras = append(extras, semconv.MessagingMessageID(id.messageID))
 	}
-	if delivery.CorrelationId != "" {
-		extras = append(extras, semconv.MessagingMessageConversationID(delivery.CorrelationId))
+	if id.correlationID != "" {
+		extras = append(extras, semconv.MessagingMessageConversationID(id.correlationID))
 	}
 	return extras
 }
@@ -814,33 +815,33 @@ func consumeSpanExtras(delivery *amqp.Delivery) []attribute.KeyValue {
 // logProcessing writes the per-delivery DEBUG line. The whole field chain is
 // skipped when the event is dropped: DEBUG is below WarnLevel, so the adapter's
 // Msg -> trackSeverity hook is a no-op and skipping Msg changes nothing.
-func logProcessing(log logger.Logger, traceID string, delivery *amqp.Delivery) {
+func logProcessing(log logger.Logger, traceID string, delivery *amqp.Delivery, id deliveryIdentity) {
 	dbg := log.Debug()
 	if !dbg.Enabled() {
 		return
 	}
-	dbg.Str("correlation_id", traceID).
-		Str("message_id", delivery.MessageId).
-		Str("routing_key", delivery.RoutingKey).
-		Str("exchange", delivery.Exchange).
-		Uint64("delivery_tag", delivery.DeliveryTag).
+	dbg = dbg.Str("correlation_id", traceID)
+	dbg = strIfSet(dbg, "message_id", id.messageID)
+	dbg = strIfSet(dbg, "routing_key", id.routingKey)
+	dbg = strIfSet(dbg, "exchange", id.exchange)
+	dbg = flagRejected(dbg, id)
+	dbg.Uint64("delivery_tag", delivery.DeliveryTag).
 		Int("body_size", len(delivery.Body)).
 		Msg("Processing message")
 }
 
 // logOutcome writes this lane's line for a finished delivery.
-func logOutcome(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery) {
+func logOutcome(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery, id deliveryIdentity) {
 	switch res.Outcome {
 	case pipeline.Succeeded:
-		pipeline.AppendOutcome(res.Log.Info(), res).
-			Str("message_id", delivery.MessageId).
-			Msg("Message processed successfully")
+		e := strIfSet(pipeline.AppendOutcome(res.Log.Info(), res), "message_id", id.messageID)
+		flagRejected(e, id).Msg("Message processed successfully")
 	case pipeline.HandlerError:
-		buildFailureLogEvent(res, consumer, delivery).
+		buildFailureLogEvent(res, consumer, delivery, id).
 			Err(res.Err).
 			Msg("Message processing failed - discarding without requeue")
 	case pipeline.Panicked:
-		buildFailureLogEvent(res, consumer, delivery).
+		buildFailureLogEvent(res, consumer, delivery, id).
 			Msg("Panic recovered in message handler - discarding without requeue")
 	}
 }
@@ -875,15 +876,18 @@ func nackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
 
 // buildFailureLogEvent creates a structured log event for failed message processing.
 // Provides consistent error logging across panic and error paths.
-func buildFailureLogEvent(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery) logger.LogEvent {
-	return pipeline.AppendOutcome(res.Log.Error(), res).
-		Str("message_id", delivery.MessageId).
-		Str("queue", consumer.Queue).
-		Str("event_type", consumer.EventType).
-		Str("amqp_correlation_id", delivery.CorrelationId).
-		Str("consumer_tag", delivery.ConsumerTag).
-		Str("routing_key", delivery.RoutingKey).
-		Str("exchange", delivery.Exchange)
+func buildFailureLogEvent(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *amqp.Delivery, id deliveryIdentity) logger.LogEvent {
+	e := pipeline.AppendOutcome(res.Log.Error(), res)
+	e = strIfSet(e, "message_id", id.messageID)
+	e = e.Str("queue", consumer.Queue).Str("event_type", consumer.EventType)
+	e = strIfSet(e, "amqp_correlation_id", id.correlationID)
+	e = e.Str("consumer_tag", delivery.ConsumerTag)
+	e = strIfSet(e, "routing_key", id.routingKey)
+	e = strIfSet(e, "exchange", id.exchange)
+	// delivery_tag is the one identifier no publisher supplies, so it is what keeps
+	// this line attributable to ONE delivery when every vouched field was dropped.
+	e = e.Uint64("delivery_tag", delivery.DeliveryTag)
+	return flagRejected(e, id)
 }
 
 // Publishers returns all registered publishers (for documentation/monitoring)

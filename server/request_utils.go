@@ -15,6 +15,21 @@ func validateRequestID(id string) string {
 	return gobrickstrace.ValidateRequestID(id)
 }
 
+// validateTraceParent returns tp when it is a spec-exact, non-zero W3C
+// traceparent, otherwise "". Every server-side read of an INBOUND traceparent
+// goes through here, so the HTTP door applies the bound the messaging lanes and
+// the outbox relay already apply (ADR-070).
+func validateTraceParent(tp string) string {
+	return gobrickstrace.ValidateTraceParent(tp)
+}
+
+// validateTraceState returns ts when it is within the tracestate cap, otherwise
+// "". Shared with the messaging door as a function, not as a constant: see
+// trace.ValidateTraceState.
+func validateTraceState(ts string) string {
+	return gobrickstrace.ValidateTraceState(ts)
+}
+
 // RequestIDMiddleware reads the inbound X-Request-ID header, validates it
 // against requestIDPattern, and sets the response header to either the
 // validated value or a freshly generated UUID. It MUST replace Echo's

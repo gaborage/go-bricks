@@ -262,3 +262,33 @@ func TestExtractFromHeadersDiscardsTraceStateWhenTheParentCameFromContext(t *tes
 		})
 	}
 }
+
+func TestValidateTraceState(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+		want  string
+	}{
+		{name: "vendor_list", state: "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7", want: "congo=t61rcWkgMzE,rojo=00f067aa0ba902b7"},
+		{name: "empty", state: ""},
+		{name: "at_the_cap", state: strings.Repeat("a", MaxTraceStateBytes), want: strings.Repeat("a", MaxTraceStateBytes)},
+		{name: "one_over_the_cap", state: strings.Repeat("a", MaxTraceStateBytes+1)},
+		// The grammar is deliberately not checked — see MaxTraceStateBytes.
+		{name: "ungrammatical_but_short_is_kept", state: "not a tracestate at all", want: "not a tracestate at all"},
+		// Control bytes ARE checked: an AMQP longstr carries any byte, and this value
+		// is stored, re-emitted on every outbound hop and persisted by the outbox.
+		{name: "carriage_return", state: "vendor=a\rinjected=1"},
+		{name: "line_feed", state: "vendor=a\ninjected=1"},
+		{name: "nul", state: "vendor=a\x00b"},
+		{name: "ansi_escape", state: "vendor=\x1b[31m"},
+		{name: "del", state: "vendor=a\x7f"},
+		{name: "obs_text_high_byte", state: "vendor=a\x80b"},
+		{name: "non_ascii", state: "vendor=café"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, ValidateTraceState(tt.state))
+		})
+	}
+}

@@ -29,6 +29,93 @@
 > now runs on the shared pipeline and extracts through this seam, so all four doors
 > are live. Alternatives likewise reasons about covering the streams lane "when that
 > door opens" — it is open. Both read as written at decision time.
+>
+> **Amended (2026-08-20, the doors this ADR did not reach):** the Decision below
+> says "Only the HTTP door validated, via a private `validateRequestID` in
+> `server`". That sentence was true of the request id and of nothing else. Three
+> seams reached a framework sink without passing this validator at all, and all
+> three are now closed on the same terms.
+>
+> **The HTTP ingress traceparent and tracestate.** `enrichTraceContext` read
+> `req.Header` directly, so the seam this ADR built never saw the HTTP door's
+> `traceparent`. It is now validated with `ValidateTraceParent` before it is
+> planted, and the accompanying `tracestate` gets the carrier scoping the first two
+> amendments describe plus the cap — the latter through a new exported
+> `ValidateTraceState`, so both doors share the RULE and not merely the constant.
+> The HTTP door also shadows an inherited `tracestate` with empty, as the messaging
+> door does, rather than resting on a premise about which middleware ran first. The failure mode is
+> drop-and-mint, never reject: an unusable traceparent leaves the context in
+> exactly the state an untraced request produces, which every request without the
+> header already exercises.
+>
+> **The response reflection.** `ensureTraceParentHeader` echoed the raw request
+> header back onto the response from six call sites. It reads `c.Request().Header`
+> itself, so validating at the context seam does not reach it; it validates its own
+> read now. The access-log metadata reader does the same, at both the response and
+> the request header, for the same reason `validateRequestID` already ran at both.
+>
+> **The AMQP properties and envelope.** `ExtractFromHeaders` guards a delivery's
+> `headers` TABLE. `CorrelationId` and `MessageId` are content-header PROPERTIES;
+> `RoutingKey` and `Exchange` are `basic.deliver` ENVELOPE metadata. No header
+> extractor reaches either kind, which is why no amount of header validation was
+> ever going to cover them, and the classic consume path read all four raw into
+> log fields, span attributes and metric attributes. They are now
+> resolved once per delivery, in `processMessage`, and the one verdict is threaded
+> to every sink — re-judging per sink is how one of them stays open. `CorrelationId`
+> and `MessageId` answer to `ValidateRequestID`; the routing key answers to a
+> distinct rule, printable ASCII up to the 255-byte shortstr ceiling, because the
+> request-id charset would discard the dotted key of essentially every real
+> deployment. The charset is the load-bearing half: a CONSUMED routing key arrives
+> through amqp091's `readShortstr` and is already ≤255 bytes, so the length half is
+> belt. An identifier that fails is OMITTED from the sink rather than
+> substituted or truncated — the receive span's own rule for a field the delivery
+> did not carry. The `messaging/streams` lane is untouched because it SURFACES
+> none of these three today — an AMQP 1.0 message does carry `Properties.MessageID`
+> and `Properties.CorrelationID`, so the rule is kept reachable behind a plain
+> string-triple constructor rather than welded to an `*amqp.Delivery`.
+>
+> **`tracestate` gains a charset; the grammar is still refused.** The Decision
+> below says `tracestate` gets "a length cap and no grammar", justified by
+> refusing an OpenTelemetry dependency underneath `server`, `messaging` and
+> `outbox`. That argument covers `ParseTraceState`. It does not cover a
+> control-byte check, which needs no dependency — and the cap alone let CR/LF, NUL
+> and ESC through every door that is not HTTP, since Go's own header reader
+> rejects those on an inbound HTTP request but an AMQP longstr carries any byte. A
+> value this framework stores, re-emits on every outbound hop and persists in
+> outbox rows must not be one `net/http` will later refuse to write, which turns a
+> single cheap message into a client that burns its whole retry budget.
+> `ValidateTraceState` is therefore the cap plus printable ASCII — a strict
+> superset of the W3C list syntax, so it costs no interoperability, and still not
+> the grammar.
+>
+> **The vouched set includes `Exchange`.** It is not publisher-controlled in the
+> direct way the other three are — a consumer sees only exchanges bound to its own
+> queue, and creating one needs configure permission — but that is a property of
+> the deployment, not a guarantee the code holds, and RabbitMQ bounds an exchange
+> name by length and the `amq.` reservation, not by charset. It reaches the same
+> three sinks under the same rule, so it is judged by the rule rather than by an
+> assumption about who holds which permission on a shared vhost. `ConsumerTag`
+> stays out: it is the tag this process handed to `basic.consume`.
+>
+> **Omission is now visible.** Discarding a value silently would leave the operator
+> nothing to search for, and the Consequences below name a log search as the
+> detect. The consume lines stamp `identity_rejected` when a delivery carried a
+> value validation refused — one bounded boolean, not the unbounded value it
+> replaces — and the failure line stamps `delivery_tag`, the one identifier no
+> publisher supplies, so a delivery whose every vouched field was dropped is still
+> attributable.
+>
+> What is deliberately NOT extended: the emit side. `computeTraceParent` still
+> prefers a `traceparent` already in the outgoing header map and takes it verbatim,
+> and `extractTraceIDFromParent` still checks the trace-id's length rather than its
+> charset. Ingress validation closes that transitively for values the framework
+> itself put there, which leaves first-party code hand-setting the header map and
+> outbox rows persisted before this change — neither remote-triggerable, and the
+> second bounded by the backlog draining once. A guard on the publish path
+> constrains a caller-facing capability rather than refusing attacker input, so it
+> is a decision of its own rather than a belt to this one:
+> [#1121](https://github.com/gaborage/go-bricks/issues/1121). Widening
+> `ValidateRequestID`'s charset stays refused.
 
 ## Context
 

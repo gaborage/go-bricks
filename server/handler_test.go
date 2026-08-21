@@ -20,6 +20,7 @@ import (
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/multitenant"
+	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
 const (
@@ -3406,4 +3407,78 @@ func TestWrapHandlerNamedStringSliceHeaderReturns200(t *testing.T) {
 	require.NoError(t, h(e.NewContext(req, rec)))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, []auditScope{"read", "write"}, seen.Scopes)
+}
+
+// TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue covers the
+// response-reflection door of ADR-070. ensureTraceParentHeader reads
+// c.Request().Header directly, so the context guard in enrichTraceContext does
+// not reach it: every one of its six call sites would otherwise echo a caller's
+// bytes straight back onto the wire. The table drives all six.
+func TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue(t *testing.T) {
+	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+
+	respond := map[string]func(c *echo.Context) error{
+		"formatSuccessResponse": func(c *echo.Context) error {
+			return formatSuccessResponse(c, helloResp{Message: "ok"})
+		},
+		"formatSuccessEnvelopeWithStatus": func(c *echo.Context) error {
+			return formatSuccessEnvelopeWithStatus(c, helloResp{Message: "ok"}, http.StatusCreated, nil, nil, nil)
+		},
+		"formatErrorResponse": func(c *echo.Context) error {
+			return formatErrorResponse(c, NewBadRequestError("nope"), cfg)
+		},
+		"formatRawSuccessResponse": func(c *echo.Context) error {
+			return formatRawSuccessResponse(c, helloResp{Message: "ok"})
+		},
+		"formatRawSuccessResponseWithStatus": func(c *echo.Context) error {
+			return formatRawSuccessResponseWithStatus(c, helloResp{Message: "ok"}, http.StatusAccepted, nil)
+		},
+		"formatRawErrorResponse": func(c *echo.Context) error {
+			return formatRawErrorResponse(c, NewBadRequestError("nope"), cfg)
+		},
+	}
+
+	for name, respondWith := range respond {
+		t.Run(name+"_mints_over_an_invalid_inbound_traceparent", func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+			req.Header.Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+			rec := httptest.NewRecorder()
+
+			require.NoError(t, respondWith(e.NewContext(req, rec)))
+
+			got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+			assert.NotEqual(t, poisonedTraceParent, got, "the raw inbound value reached the response header")
+			assert.Equal(t, got, gobrickstrace.ValidateTraceParent(got),
+				"the minted replacement must itself be spec-exact")
+		})
+
+		t.Run(name+"_mints_over_an_invalid_value_already_on_the_response", func(t *testing.T) {
+			// The early return reads the response header, which an earlier middleware
+			// may have populated by reflecting the inbound value verbatim. That read
+			// is validated too, symmetrically with the access-log reader.
+			e := echo.New()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+			rec := httptest.NewRecorder()
+			c := e.NewContext(req, rec)
+			c.Response().Header().Set(gobrickshttp.HeaderTraceParent, poisonedTraceParent)
+
+			require.NoError(t, respondWith(c))
+
+			got := rec.Result().Header.Get(gobrickshttp.HeaderTraceParent)
+			assert.NotEqual(t, poisonedTraceParent, got, "an unvouched response header was left on the wire")
+			assert.Equal(t, got, gobrickstrace.ValidateTraceParent(got))
+		})
+
+		t.Run(name+"_still_reflects_a_valid_inbound_traceparent", func(t *testing.T) {
+			e := echo.New()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+			req.Header.Set(gobrickshttp.HeaderTraceParent, testTraceparent)
+			rec := httptest.NewRecorder()
+
+			require.NoError(t, respondWith(e.NewContext(req, rec)))
+
+			assert.Equal(t, testTraceparent, rec.Result().Header.Get(gobrickshttp.HeaderTraceParent))
+		})
+	}
 }
