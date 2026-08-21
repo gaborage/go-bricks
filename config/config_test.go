@@ -259,7 +259,7 @@ const keepAliveFixtureYAML = `database:
   port: 5432
   database: appdb
   username: appuser
-  password: hunter2hunter2
+  password: not-a-real-password
 `
 
 // TestLoadExplicitBoolEnvUnchanged pins the other half of ADR-077: only an EMPTY value is
