@@ -67,7 +67,8 @@ that boundary for bool as it does for numeric.
 
 - `CACHE_CRITICAL=`, `DATABASE_POOL_KEEPALIVE_ENABLED=`, `SERVER_LOGROUTES=` and every
   other bool key delivered empty now fail startup naming the key. `CACHE_CRITICAL=false`
-  still un-stricts the readiness probe — that opt-out is deliberate and documented; what
+  still makes a failing cache probe non-fatal on `/ready` — that opt-out is deliberate and
+  documented; what
   ends is reaching it by accident.
 - A deployment that rendered an empty value into a bool key and was running on the
   resulting `false` fails after the upgrade. For `database.pool.keepalive.enabled` that

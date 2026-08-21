@@ -228,7 +228,7 @@ func TestLoadRejectsEmptyBoolEnv(t *testing.T) {
 		// The headline case: keep-alive defaults to TRUE, so an empty value was a
 		// silent default flip, not merely a redundant zero.
 		{name: "database_pool_keepalive_enabled", envVar: "DATABASE_POOL_KEEPALIVE_ENABLED", wantKey: "database.pool.keepalive.enabled"},
-		// ADR-046's strict readiness: *false un-stricts the cache probe, so /ready
+		// ADR-046's strict readiness: *false makes a failing cache probe non-fatal, so /ready
 		// answered 200 straight through a Redis outage.
 		{name: "cache_critical", envVar: "CACHE_CRITICAL", wantKey: "cache.critical"},
 		{name: "server_logroutes", envVar: "SERVER_LOGROUTES", wantKey: "server.logroutes"},
@@ -274,7 +274,7 @@ func TestLoadExplicitBoolEnvUnchanged(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, cfg.Cache.Critical)
-		assert.False(t, cfg.IsCacheCritical(), "an explicit false is still the documented way to un-strict the probe")
+		assert.False(t, cfg.IsCacheCritical(), "an explicit false is still the documented way to make the probe non-fatal")
 	})
 
 	// Both keep-alive cases need a real database section: nil -> true normalization runs
