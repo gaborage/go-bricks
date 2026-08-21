@@ -355,6 +355,8 @@ var derivedDefaultKeys = []string{
 	"cache.redis.minretrybackoff",
 	"cache.redis.maxretrybackoff",
 	"keystore.secretminlength",
+	"scheduler.timeout.shutdown",
+	"scheduler.timeout.slowjob",
 }
 
 // derivationDeniedPrefixes are key spaces that must never be DERIVED, whatever the allowlist
@@ -599,13 +601,9 @@ func koanfOnlyDefaults() map[string]any {
 		// Source configuration defaults
 		"source.type": SourceTypeStatic,
 
-		// Scheduler defaults
-		"scheduler.timeout.shutdown":        defaultSchedulerShutdownTimeout.String(),
-		"scheduler.timeout.slowjob":         defaultSchedulerSlowJobThreshold.String(),
+		// Scheduler defaults. The timeout keys are DERIVED — see derivedDefaultKeys — so only
+		// the keys normalize does not own are written here.
 		"scheduler.security.cidrallowlist":  []string{},
 		"scheduler.security.trustedproxies": []string{},
-
-		// KeyStore defaults — symmetric secret floor (32 bytes). Set to 0 to
-		// disable the minimum-length check explicitly (deprecated, WARNs — #1036).
 	}
 }

@@ -47,8 +47,9 @@ const (
 	DefaultBodyLimitBytes int64 = 10 * 1024 * 1024
 
 	// DefaultKeyStoreSecretMinLength is the byte floor for symmetric keystore
-	// secrets when keystore.secretminlength is absent. Single source of truth for
-	// the koanf default (loadDefaults) and the normalize fill (normalizeKeyStore).
+	// secrets when keystore.secretminlength is absent. Single source of truth: the
+	// normalize fill applies it (normalizeKeyStore) and the koanf default derives
+	// from that fill rather than rendering it a second time (derivedDefaultKeys).
 	DefaultKeyStoreSecretMinLength = 32
 )
 
@@ -120,9 +121,10 @@ const (
 	defaultStartupObservabilityTimeout = 15 * time.Second // OTLP provider initialization timeout
 )
 
-// Scheduler timeout defaults. Single source: the koanf loader renders these
-// (config.go) and the scheduler module reads the normalized config rather than
-// mirroring them (#1029).
+// Scheduler timeout defaults. Single source in the strict sense now: normalize applies
+// these, the koanf loader DERIVES its values from that (derivedDefaultKeys in config.go)
+// rather than rendering them a second time, and the scheduler module reads the normalized
+// config rather than mirroring them (#1029, #1023).
 const (
 	defaultSchedulerShutdownTimeout  = 30 * time.Second // Budget for in-flight jobs during graceful shutdown
 	defaultSchedulerSlowJobThreshold = 25 * time.Second // Successful jobs slower than this log at WARN

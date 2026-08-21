@@ -1382,7 +1382,7 @@ func loadDefaultConfig(t *testing.T) (*Config, error) {
 }
 
 // TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral is the one-shot equivalence pin for
-// the mechanism change: these ten keys used to be hand-written in loadDefaults and are now
+// the mechanism change: these keys used to be hand-written in loadDefaults and are now
 // rendered by normalize. The expected values are the pre-change literals, so the test fails
 // if derivation moves any default rather than merely relocating where it is written.
 func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
@@ -1397,6 +1397,8 @@ func TestDerivedDefaultsRenderTheSameValuesAsTheOldLiteral(t *testing.T) {
 		"cache.redis.minretrybackoff": "8ms",
 		"cache.redis.maxretrybackoff": "512ms",
 		"keystore.secretminlength":    32,
+		"scheduler.timeout.shutdown":  "30s",
+		"scheduler.timeout.slowjob":   "25s",
 	}
 
 	got, err := derivedDefaults()
@@ -1425,6 +1427,8 @@ func TestDerivedDefaultsDecodeToTypedFields(t *testing.T) {
 	assert.Equal(t, 512*time.Millisecond, cfg.Cache.Redis.MaxRetryBackoff)
 	require.NotNil(t, cfg.KeyStore.SecretMinLength)
 	assert.Equal(t, 32, *cfg.KeyStore.SecretMinLength)
+	assert.Equal(t, 30*time.Second, cfg.Scheduler.Timeout.Shutdown)
+	assert.Equal(t, 25*time.Second, cfg.Scheduler.Timeout.SlowJob)
 }
 
 // TestDerivedDefaultKeysAreDisjointFromKoanfOnly enforces one mechanism PER KEY: a key
