@@ -326,26 +326,36 @@ func isWeakScalarKind(k reflect.Kind) bool {
 
 // stringToTrimmedSliceHookFunc splits a scalar string into []string on sep, trimming each
 // element and dropping empties. Scoped to string -> []string only, so []byte, other slices,
-// and YAML sequences are untouched. Local copy of config.stringToTrimmedSliceHookFunc /
-// splitAndTrimList (github.com/gaborage/go-bricks config/) — keep in sync.
+// and YAML sequences are untouched. Local copy of config.stringToTrimmedSliceHookFunc
+// (github.com/gaborage/go-bricks config/) — keep in sync.
+//
+// The split itself lives in splitAndTrimList below, mirroring the framework's own division,
+// so TestMirroredHooksHaveNotDrifted can compare each half against its counterpart. Inlining
+// it here is what let this pair drift unchecked (ADR-078's rider).
 func stringToTrimmedSliceHookFunc(sep string) mapstructure.DecodeHookFunc {
-	return func(f, t reflect.Type, data any) (any, error) {
+	return func(f reflect.Type, t reflect.Type, data any) (any, error) {
 		if f.Kind() != reflect.String || t != reflect.TypeOf([]string(nil)) {
 			return data, nil
 		}
-		raw := reflect.ValueOf(data).String()
-		if strings.TrimSpace(raw) == "" {
-			return []string{}, nil
-		}
-		parts := strings.Split(raw, sep)
-		out := make([]string, 0, len(parts))
-		for _, p := range parts {
-			if p = strings.TrimSpace(p); p != "" {
-				out = append(out, p)
-			}
-		}
-		return out, nil
+		// reflect.Value.String() (not data.(string)) so named string types don't panic.
+		return splitAndTrimList(reflect.ValueOf(data).String(), sep), nil
 	}
+}
+
+// splitAndTrimList mirrors github.com/gaborage/go-bricks/config.splitAndTrimList — keep in
+// sync. An all-whitespace input yields an empty slice, not a one-element slice of "".
+func splitAndTrimList(raw, sep string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return []string{}
+	}
+	parts := strings.Split(raw, sep)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // validateConfigPath rejects paths with shell metacharacters or traversal

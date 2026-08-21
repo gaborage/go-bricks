@@ -170,7 +170,8 @@ which is fail-closed and breaks no deploy. Rejected because the two keys do not
 start from the same place: `scheduler.security.allowedips` has no loopback
 default, so an empty value there is simply "unset", while `debug.allowedips`
 *defaults* to `["127.0.0.1", "::1"]` — an empty value is something an operator
-had to write. Silently re-imposing localhost would overwrite that stated
+had to write. **(That last clause is false; see the addendum below —
+ADR-078.)** Silently re-imposing localhost would overwrite that stated
 intent with a guess, and would leave the deployment believing it had opened the
 endpoint when it had not. The abort forces the decision to be made explicitly;
 `allowedips: ["0.0.0.0/0"]` is the honest spelling of what the empty list was
@@ -194,7 +195,8 @@ to `validateDebug` — which would surface the error before the broker and datab
 are dialed, and put it beside `debug.trustedproxies`, the sibling rule on the same
 config block that already fails at `config.Load` — is a worthwhile follow-up,
 deliberately not taken here so that this change ships one new failure path rather
-than two.
+than two. **Taken in ADR-078, at the presence step rather than in `validateDebug`;
+see the addendum below.**
 
 **Leave the WARN, raise it to ERROR.** Rejected on the same grounds as the WARN
 itself: severity is not a control.
@@ -207,3 +209,33 @@ itself: severity is not a control.
 - [migrations.md](migrations.md) `[C57.7]`
 - [ADR-038](adr_038_cors_dev_wildcard_opt_in.md) — dev CORS wildcard opt-in
 - [ADR-046](adr_046_cache_readiness_strict_default.md) — cache readiness strict by default
+
+---
+
+## Addendum (2026-08-21, ADR-078): one premise was false, and one objection went stale
+
+This ADR's gate is a conjunction — `len(exposed) > 0 && len(AllowedIPs) == 0 &&
+!bearerTokenConfigured()` — so a configured bearer token satisfies it on its own, and
+registration then skips `ipWhitelistMiddleware` because `len(AllowedIPs) > 0` is false.
+A deployment that asked for allowlist AND token therefore runs with token only. The
+hole is real and was probe-confirmed (#1120).
+
+**"An empty value is something an operator had to write" is false.** It was true of
+YAML, which is what this ADR had in view. It is not true of environment delivery:
+`DEBUG_ALLOWEDIPS=` is what an unset Helm value renders, what `envsubst` over an
+undefined variable produces, and what a `secretKeyRef` with an empty payload delivers.
+Nobody wrote it, and the reasoning built on that premise — that re-imposing a default
+would "overwrite stated intent" — does not apply to a value no one stated. ADR-074 and
+ADR-077 had already found the same thing for numeric and bool keys.
+
+**The config-layer objection is stale.** It was framed as "a programmatically assembled
+config never calls `config.Validate`". Since ADR-064, `app.NewWithConfig` and
+`Builder.WithConfig` run `config.Validate`, so that gap has narrowed to hand-built
+configs that bypass app construction entirely. The `app`-layer refusal is still
+load-bearing for those, and ADR-078 keeps it — as a **second** seam, which is the
+ADR-043 / ADR-050 both-halves pattern this ADR itself cites.
+
+What ADR-078 does **not** disturb: the token-only posture stays sanctioned and
+expressible, now spelled `allowedips: []` — an empty sequence, which no rendering
+accident produces. The alternatives this ADR rejected (deny-all, silently re-imposing
+localhost) stay rejected, on their original reasoning.

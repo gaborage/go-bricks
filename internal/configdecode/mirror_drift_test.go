@@ -25,8 +25,12 @@ func TestMirroredHooksHaveNotDrifted(t *testing.T) {
 	canonical := readSource(t, "configdecode.go")
 	mirror := readSource(t, mirrorPath)
 
+	// canonicalPath is per-row because not every mirrored function lives in this package:
+	// the slice hook's canonical copy is in config/, and leaving it out of this table is what
+	// let it drift unchecked (ADR-078's rider).
 	tests := []struct {
 		name          string
+		canonicalPath string // "" = this package's configdecode.go
 		canonicalFunc string
 		mirrorFunc    string
 	}{
@@ -45,11 +49,30 @@ func TestMirroredHooksHaveNotDrifted(t *testing.T) {
 			canonicalFunc: "isWeakScalarKind",
 			mirrorFunc:    "isWeakScalarKind",
 		},
+		{
+			// The comma-split hook. Its canonical half lives in config/, and the CLI carried
+			// an INLINED copy of the split until ADR-078 split it back out — which is why
+			// this row could not exist before and why the pair could drift silently.
+			name:          "string_to_trimmed_slice_hook",
+			canonicalPath: "../../config/config.go",
+			canonicalFunc: "stringToTrimmedSliceHookFunc",
+			mirrorFunc:    "stringToTrimmedSliceHookFunc",
+		},
+		{
+			name:          "split_and_trim_list",
+			canonicalPath: "../../config/converters.go",
+			canonicalFunc: "splitAndTrimList",
+			mirrorFunc:    "splitAndTrimList",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			want := funcBody(t, canonical, tt.canonicalFunc)
+			src := canonical
+			if tt.canonicalPath != "" {
+				src = readSource(t, tt.canonicalPath)
+			}
+			want := funcBody(t, src, tt.canonicalFunc)
 			got := funcBody(t, mirror, tt.mirrorFunc)
 
 			require.Equal(t, want, got,

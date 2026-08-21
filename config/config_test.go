@@ -1075,6 +1075,8 @@ func clearEnvironmentVariables() {
 		// ambient value in the developer's or runner's environment would make them pass or
 		// fail for a reason the test never set.
 		"DATABASE_POOL_KEEPALIVE_ENABLED", "CACHE_CRITICAL", "CACHE_ENABLED", "SERVER_LOGROUTES",
+		// ADR-078: the unset-keeps-the-loopback-default assertion reads absence.
+		"DEBUG_ALLOWEDIPS",
 	}
 
 	for _, envVar := range envVars {
