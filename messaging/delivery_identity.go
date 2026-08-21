@@ -49,7 +49,7 @@ var routingKeyPattern = regexp.MustCompile(`^[[:print:]]{1,255}$`)
 // publisher's CorrelationId is validated at its assignment site — can put any
 // bytes the wire format accepts in them.
 //
-// A field that fails is "" and every sink OMITS it rather than reporting it
+// A field that fails is "" and every FRAMEWORK sink OMITS it rather than reporting it
 // empty, which is what the receive span has always done for a field the delivery
 // did not carry. Nothing is substituted and nothing is truncated: a truncated
 // identifier is a plausible identifier, so it forges correlation silently

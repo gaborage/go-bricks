@@ -1576,7 +1576,7 @@ directly, bypassing the seam; invalid ⇒ drop-and-mint, never reject), the resp
 classic AMQP lane's four delivery identity fields — `CorrelationId` and `MessageId` (content-header
 PROPERTIES) plus `RoutingKey` and `Exchange` (`basic.deliver` ENVELOPE metadata) — none of which a
 header extractor reaches. All four are resolved once in
-`processMessage` and the one verdict is threaded to every sink; a field that fails is omitted
+`processMessage` and the one verdict is threaded to every FRAMEWORK sink; a field that fails is omitted
 rather than substituted. The routing key answers to a distinct printable-ASCII rule, because the
 request-id charset would discard every dotted key. Streams lane untouched. See `[C60.17]`.
 

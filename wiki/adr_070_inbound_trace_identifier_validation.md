@@ -61,7 +61,10 @@
 > ever going to cover them, and the classic consume path read all four raw into
 > log fields, span attributes and metric attributes. They are now
 > resolved once per delivery, in `processMessage`, and the one verdict is threaded
-> to every sink — re-judging per sink is how one of them stays open. `CorrelationId`
+> to every framework sink — re-judging per sink is how one of them stays open. The
+> guarantee stops at the framework's own sinks: a handler still receives the raw
+> `*amqp.Delivery` by design, and the emit side still trusts a caller-populated
+> header map (#1121). `CorrelationId`
 > and `MessageId` answer to `ValidateRequestID`; the routing key answers to a
 > distinct rule, printable ASCII up to the 255-byte shortstr ceiling, because the
 > request-id charset would discard the dotted key of essentially every real

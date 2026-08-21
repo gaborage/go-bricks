@@ -4316,7 +4316,7 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 
 > The "old env var" column never worked (that is the bug ADR-024 fixes); it is shown only to help locate occurrences in existing deployment manifests.
 
-### [C60.17] the HTTP trace headers and the AMQP delivery identity are validated before any sink · silent-behavior · when: always
+### [C60.17] the HTTP trace headers and the AMQP delivery identity are validated before every FRAMEWORK sink · silent-behavior · when: always
 
 - detect: your Go code cannot tell you this either — every offending value comes from a
   caller or a foreign publisher. Search your LOG BACKEND for a `traceparent` field that is
@@ -4367,7 +4367,7 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   `ExtractFromHeaders` reads the `headers` table alone — but it is why no amount of header
   validation was ever going to cover them. The classic consume
   lane read all four raw into log fields, span attributes and metric attributes. They are resolved once per
-  delivery now and the one verdict is threaded to every sink. `Exchange` answers the
+  delivery now and the one verdict is threaded to every framework sink. `Exchange` answers the
   same rule as the routing key. `CorrelationId` and
   `MessageId` answer to `^[A-Za-z0-9_-]{1,128}$`, the request-id charset — note that a
   dotted or `urn:uuid:`-shaped value from a foreign publisher fails it. `RoutingKey`
@@ -4407,6 +4407,14 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   backlog drains. Neither is remote-triggerable. Tracked in
   [#1121](https://github.com/gaborage/go-bricks/issues/1121); do not read this atom as
   closing them.
+  **The guarantee covers FRAMEWORK sinks only** — the log lines, span attributes and metric
+  attributes this framework emits. It is not a guarantee that a raw value is unreachable.
+  Your own code still sees the unvalidated bytes in two places by design: a handler receives
+  the raw `*amqp.Delivery` (that is deliberate, so a legitimate foreign shape the charset
+  refuses is still available to you), and an outgoing header map you pre-populate is taken
+  verbatim on the emit side ([#1121](https://github.com/gaborage/go-bricks/issues/1121)). If
+  you copy either into your OWN log, span, metric or outbound header, validate it there —
+  `trace.ValidateRequestID` and `trace.ValidateTraceParent` are exported for exactly that.
 - gate: always — every service serving HTTP, and every service consuming classic AMQP,
   emits at least one of these fields.
 - apply: nothing to change in your code — no request is rejected, no delivery is rejected,
@@ -4427,11 +4435,17 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   `message_id != ""` is the shape most likely to have depended on the empty stamp.
 - verify: three probes against a running service; the third is broker-dependent.
 
-  1. **HTTP ingress and response.** Send a request with
+  1. **HTTP ingress and response.** Run this DIFFERENTIALLY, because validating a
+     `traceparent` does not decide a status code — an arbitrary handler legitimately answers
+     201, 204, 4xx or 5xx, so a bare "expect 200" would fail on a healthy service. Send the
+     same request to the same endpoint twice: once WITHOUT the header, to establish that
+     endpoint's baseline status, and once with
      `traceparent: 00-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-00f067aa0ba902b7-01` (32 non-hex bytes
-     where the trace-id belongs — the shape the old length-only check accepted) to any
-     handler. Expect HTTP 200 and a RESPONSE `traceparent` that is spec-exact and NOT the
-     value you sent. That much is runnable by every HTTP service, with or without a broker.
+     where the trace-id belongs — the shape the old length-only check accepted). Expect the
+     status to be UNCHANGED between the two, which is the claim that matters: an unusable
+     traceparent is treated as absent and never changes how the request is answered. Then
+     expect the RESPONSE `traceparent` on the second call to be spec-exact and NOT the value
+     you sent. That much is runnable by every HTTP service, with or without a broker.
 
      If the service also publishes, point the request at a handler that performs one
      downstream publish and additionally expect a published message whose `traceparent` is
