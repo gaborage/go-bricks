@@ -97,7 +97,7 @@ func Load() (*Config, error) {
 	// a sub-path at fresh leaves, so they bypass guard 1 and merge normally under guard 2.
 	if err := k.Load(envprovider.Provider(".", envprovider.Opt{
 		TransformFunc: func(k, v string) (string, any) {
-			k = strings.ReplaceAll(strings.ToLower(k), "_", ".")
+			k = envVarToKey(k)
 			// Drop a bare top-level section name (no sub-key); see SECURITY (M4) above.
 			if configSections[k] {
 				return "", nil
@@ -150,6 +150,27 @@ func resolveEnvOverlaySuffix(k *koanf.Koanf) string {
 // (UPPER_SNAKE), the inverse of the env provider's TransformFunc in Load.
 func keyToEnvVar(key string) string {
 	return strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
+}
+
+// envVarToKey is the transform Load applies to every environment variable name. It is the
+// half of the pair that actually decides which key a variable reaches, so keyToEnvVar is
+// only the inverse where the two round-trip; see envVarForKey.
+func envVarToKey(name string) string {
+	return strings.ReplaceAll(strings.ToLower(name), "_", ".")
+}
+
+// envVarForKey returns the environment variable that reaches key, or "" when none does.
+// The blanket underscore-to-dot transform is not injective: a section or tenant name
+// carrying "_" (nothing forbids one) makes keyToEnvVar emit a variable that lands on a
+// DIFFERENT key — DATABASES_REPORT_DB_PORT reaches databases.report.db.port, not
+// databases.report_db.port — so a hint naming it would send an operator to manufacture a
+// second failure. Round-tripping is the check: no round-trip, no hint.
+func envVarForKey(key string) string {
+	envVar := keyToEnvVar(key)
+	if envVarToKey(envVar) != key {
+		return ""
+	}
+	return envVar
 }
 
 // skipScalarOverMapMerge is a koanf.WithMergeFunc used for the environment-variable load.

@@ -136,8 +136,10 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (Interface
 	}
 	// Shallow-clone before defaulting: providers may return long-lived shared configs.
 	cfgCopy := *dbConfig
-	if err = config.ApplyDatabasePoolDefaults(&cfgCopy); err != nil {
-		return nil, fmt.Errorf("failed to apply pool defaults for key %s: %w", key, err)
+	// No wrapping: the seam addresses the error to this key's section itself, and a wrap
+	// naming the key again would print the same identity twice (ADR-076 addendum).
+	if err = config.ApplyDatabasePoolDefaults(&cfgCopy, key); err != nil {
+		return nil, err
 	}
 
 	conn, err := m.connector(&cfgCopy, m.logger)

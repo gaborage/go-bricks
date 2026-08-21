@@ -32,7 +32,7 @@ func TestNormalizeDatabaseValuesStartupRejectsTypeContradictingScheme(t *testing
 	cfg := DatabaseConfig{ConnectionString: "postgres://u:p@h:5432/d", Type: Oracle}
 	before := cfg
 
-	err := normalizeDatabaseValues(&cfg, dbStrictnessStartup)
+	err := normalizeDatabaseValues(&cfg, rootDatabaseSection(), dbStrictnessStartup)
 
 	assertValidationError(t, err, "conflicts with the connectionstring scheme")
 	assert.Equal(t, before, cfg, "clone-commit: a rejected config must come back untouched")
@@ -41,7 +41,7 @@ func TestNormalizeDatabaseValuesStartupRejectsTypeContradictingScheme(t *testing
 func TestNormalizeDatabaseValuesConnectToleratesTypeContradictingScheme(t *testing.T) {
 	cfg := DatabaseConfig{ConnectionString: "postgres://u:p@h:5432/d", Type: Oracle}
 
-	require.NoError(t, normalizeDatabaseValues(&cfg, dbStrictnessConnect))
+	require.NoError(t, normalizeDatabaseValues(&cfg, rootDatabaseSection(), dbStrictnessConnect))
 
 	assert.Equal(t, Oracle, cfg.Type, "connect strictness keeps the explicit type; the dial reports the conflict")
 	assert.Equal(t, defaultPoolMaxConnections, cfg.Pool.Max.Connections, "defaults are still applied")
@@ -52,8 +52,8 @@ func TestNormalizeDatabaseValuesConnectSkipsIdentityChecks(t *testing.T) {
 	// database name to the user); startup would reject this, connect must not.
 	cfg := DatabaseConfig{Type: PostgreSQL, Host: "h", Port: 5432, Username: "u"}
 
-	require.NoError(t, normalizeDatabaseValues(&cfg, dbStrictnessConnect))
-	require.Error(t, normalizeDatabaseValues(&DatabaseConfig{Type: PostgreSQL, Host: "h", Port: 5432, Username: "u"}, dbStrictnessStartup))
+	require.NoError(t, normalizeDatabaseValues(&cfg, rootDatabaseSection(), dbStrictnessConnect))
+	require.Error(t, normalizeDatabaseValues(&DatabaseConfig{Type: PostgreSQL, Host: "h", Port: 5432, Username: "u"}, rootDatabaseSection(), dbStrictnessStartup))
 }
 
 func TestNormalizeDatabaseValuesStartupPreservesPathOrder(t *testing.T) {
@@ -71,7 +71,7 @@ func TestNormalizeDatabaseValuesStartupPreservesPathOrder(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidationError(t, normalizeDatabaseValues(&tt.cfg, dbStrictnessStartup), tt.want)
+			assertValidationError(t, normalizeDatabaseValues(&tt.cfg, rootDatabaseSection(), dbStrictnessStartup), tt.want)
 		})
 	}
 }
@@ -180,8 +180,14 @@ func TestNormalizeDatabaseSectionQualifiesFieldWithSectionPath(t *testing.T) {
 			if tt.section.placement != dbPlacementRoot {
 				assert.False(t, strings.HasPrefix(err.Error(), tt.section.path+": "),
 					"the path is carried by Field; a wrapper prefix would print it twice")
-				assert.Equal(t, 1, strings.Count(err.Error(), tt.section.path),
-					"and it appears exactly once in the rendered error")
+				// The error proper names the path once. An Action may name it a second
+				// time on purpose — a hint has to say WHICH key to set, and a hint stuck
+				// on the root spelling is what C60.19 fixes — so the hint's occurrences
+				// are discounted rather than counted as duplication.
+				rendered := strings.Count(err.Error(), tt.section.path)
+				inAction := strings.Count(cfgErr.Action, tt.section.path)
+				assert.Equal(t, 1, rendered-inAction,
+					"and outside its hint it appears exactly once in the rendered error")
 			}
 		})
 	}
@@ -212,9 +218,48 @@ func TestQualifiedFieldMatchesDeliveredEmptySpelling(t *testing.T) {
 	}
 }
 
-// TestNormalizeDatabaseValuesConnectKeepsRootSpelling pins the other half of the seam:
-// the connect door shares these error constructors but has no section to speak of, so it
-// must keep the root spelling rather than inherit a path from the startup door.
+// TestRuntimeDoorSpellingMatchesStartupDoor is the C60.19 half of the check above: the two
+// doors are reached by different callers and used to disagree, so comparing them against
+// each other — rather than each against a literal — is what keeps them from drifting apart
+// again. Every section is addressed identically whichever door raised the error.
+func TestRuntimeDoorSpellingMatchesStartupDoor(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     string
+		section dbSection
+	}{
+		{name: "root", key: "", section: rootDatabaseSection()},
+		{name: "named", key: NamedDatabasePrefix + "reporting", section: namedDatabaseSection("reporting")},
+		{name: "tenant", key: "acme", section: tenantDatabaseSection("acme")},
+	}
+
+	// TLS material on PostgreSQL without a mode is rejected by BOTH strictnesses, so one
+	// config exercises both doors and the comparison is like-for-like.
+	invalid := DatabaseConfig{
+		Type: PostgreSQL, Host: "h", Port: 5432, Database: "d", Username: "u",
+		TLS: TLSConfig{CertFile: "c.pem"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			startupCfg, runtimeCfg := invalid, invalid
+
+			startupErr := normalizeDatabaseValues(&startupCfg, tt.section, dbStrictnessStartup)
+			runtimeErr := ApplyDatabasePoolDefaults(&runtimeCfg, tt.key)
+
+			var startupCfgErr, runtimeCfgErr *ConfigError
+			require.ErrorAs(t, startupErr, &startupCfgErr)
+			require.ErrorAs(t, runtimeErr, &runtimeCfgErr)
+			assert.Equal(t, startupCfgErr.Field, runtimeCfgErr.Field,
+				"the door a failure came through must not change how it is addressed")
+		})
+	}
+}
+
+// TestNormalizeDatabaseValuesConnectAddressesItsSection pins the half C60.19 changed. The
+// connect door used to keep the root spelling on the reasoning that it "has no section to
+// speak of"; it does — the resource key it was asked for names one — so it now addresses
+// its errors like the startup doors, and a consumer cannot tell the doors apart.
 // TestDbSectionQualifyContract exercises the rewriter directly. Its two defensive
 // branches cannot be reached through normalizeDatabaseSection today — every producer on
 // that path returns a *ConfigError with a "database."-shaped field — but they are the
@@ -271,17 +316,97 @@ func TestDbSectionQualifyContract(t *testing.T) {
 	})
 }
 
-func TestNormalizeDatabaseValuesConnectKeepsRootSpelling(t *testing.T) {
-	cfg := DatabaseConfig{
+func TestNormalizeDatabaseValuesConnectAddressesItsSection(t *testing.T) {
+	tlsMaterial := DatabaseConfig{
 		Type: PostgreSQL, Host: "h", Port: 5432, Database: "d", Username: "u",
 		TLS: TLSConfig{CertFile: "c.pem"},
 	}
 
-	err := normalizeDatabaseValues(&cfg, dbStrictnessConnect)
+	tests := []struct {
+		name      string
+		section   dbSection
+		wantField string
+	}{
+		{name: "root", section: rootDatabaseSection(), wantField: "database.tls"},
+		{name: "named", section: namedDatabaseSection("reporting"), wantField: "databases.reporting.tls"},
+		{name: "tenant", section: tenantDatabaseSection("acme"), wantField: "multitenant.tenants.acme.database.tls"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tlsMaterial
+
+			err := normalizeDatabaseValues(&cfg, tt.section, dbStrictnessConnect)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+		})
+	}
+}
+
+// TestSectionForResourceKey pins the key vocabulary the runtime door translates. It is the
+// manager's, unchanged — "" single-tenant, NamedDatabasePrefix for a named database, any
+// other string a tenant id — and getting it wrong would address a real failure to a section
+// that does not exist.
+func TestSectionForResourceKey(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		want dbSection
+	}{
+		{name: "empty_is_root", key: "", want: rootDatabaseSection()},
+		{name: "named_prefix", key: NamedDatabasePrefix + "reporting", want: namedDatabaseSection("reporting")},
+		{name: "bare_is_tenant", key: "acme", want: tenantDatabaseSection("acme")},
+		// A tenant id that merely CONTAINS the prefix is not a named database.
+		{name: "prefix_mid_string_is_tenant", key: "co-named:x", want: tenantDatabaseSection("co-named:x")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sectionForResourceKey(tt.key))
+		})
+	}
+}
+
+// TestApplyDatabasePoolDefaultsAddressesResourceKey drives the EXPORTED runtime door, the
+// one DbManager and the migrate CLI call, so the key-to-section translation is pinned at the
+// surface a consumer actually sees rather than only at the internal seam.
+func TestApplyDatabasePoolDefaultsAddressesResourceKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		key       string
+		wantField string
+	}{
+		{name: "single_tenant", key: "", wantField: "database.tls"},
+		{name: "named_database", key: NamedDatabasePrefix + "reporting", wantField: "databases.reporting.tls"},
+		{name: "dynamic_tenant", key: "acme", wantField: "multitenant.tenants.acme.database.tls"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DatabaseConfig{
+				Type: PostgreSQL, Host: "h", Port: 5432, Database: "d", Username: "u",
+				TLS: TLSConfig{CertFile: "c.pem"},
+			}
+
+			err := ApplyDatabasePoolDefaults(&cfg, tt.key)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+		})
+	}
+}
+
+// TestApplyDatabasePoolDefaultsNilConfigAddressesItsSection covers the door's own guard,
+// which reports before any normalization runs and so has its own qualify call.
+func TestApplyDatabasePoolDefaultsNilConfigAddressesItsSection(t *testing.T) {
+	err := ApplyDatabasePoolDefaults(nil, "acme")
 
 	var cfgErr *ConfigError
 	require.ErrorAs(t, err, &cfgErr)
-	assert.Equal(t, "database.tls", cfgErr.Field)
+	assert.Equal(t, "multitenant.tenants.acme.database", cfgErr.Field)
 }
 
 func TestNormalizeDatabaseSectionRootAbsentLeavesConfigUntouched(t *testing.T) {
@@ -373,4 +498,90 @@ func TestUntypedDatabaseSectionsIsNilWhenEveryDSNIsTyped(t *testing.T) {
 	cfg := &Config{}
 	cfg.Database = DatabaseConfig{ConnectionString: "postgres://u:p@h/d", Type: PostgreSQL}
 	assert.Nil(t, UntypedDatabaseSections(cfg))
+}
+
+// TestQualifiedActionNamesAReachableEnvVar drives the hint through a real Load, because the
+// property under test is a round trip through Load's OWN transform: a hint is only useful if
+// the variable it names comes back to the key that failed. Before C60.19 every section was
+// told to set DATABASE_PORT, and following that on a multitenant config writes a partial
+// root block, which ADR-047 then rejects — the hint manufactured a second failure.
+func TestQualifiedActionNamesAReachableEnvVar(t *testing.T) {
+	const header = "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n"
+
+	tests := []struct {
+		name        string
+		yaml        string
+		wantField   string
+		wantEnvVar  string // "" = the hint must name no variable at all
+		wantYAMLKey string
+	}{
+		{
+			name:        "named_section",
+			yaml:        header + "databases:\n  reporting:\n    type: postgresql\n    host: h\n    username: u\n",
+			wantField:   "databases.reporting.port",
+			wantEnvVar:  "DATABASES_REPORTING_PORT",
+			wantYAMLKey: "databases.reporting.port",
+		},
+		{
+			name: "tenant_section",
+			yaml: header + "multitenant:\n  enabled: true\n  resolver:\n    type: header\n  tenants:\n    acme:\n" +
+				"      database:\n        type: postgresql\n        host: h\n        username: u\n",
+			wantField:   "multitenant.tenants.acme.database.port",
+			wantEnvVar:  "MULTITENANT_TENANTS_ACME_DATABASE_PORT",
+			wantYAMLKey: "multitenant.tenants.acme.database.port",
+		},
+		{
+			// The round-trip guard. DATABASES_REPORT_DB_PORT reaches
+			// databases.report.db.port, a DIFFERENT key, so naming it would send an
+			// operator to configure a section that does not exist. No hint beats a
+			// wrong one; the YAML path still works and is still qualified.
+			name:        "underscore_in_section_name_suppresses_the_env_half",
+			yaml:        header + "databases:\n  report_db:\n    type: postgresql\n    host: h\n    username: u\n",
+			wantField:   "databases.report_db.port",
+			wantEnvVar:  "",
+			wantYAMLKey: "databases.report_db.port",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadDeliveredEmptyFixture(t, tt.yaml, nil)
+
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.Contains(t, cfgErr.Action, tt.wantYAMLKey, "the YAML half is always reachable")
+			if tt.wantEnvVar == "" {
+				assert.NotContains(t, cfgErr.Action, "env var",
+					"a variable that lands on another key must not be suggested at all")
+				return
+			}
+			assert.Contains(t, cfgErr.Action, tt.wantEnvVar)
+			// Anchored on the leading "set ": the qualified variables END with
+			// DATABASE_PORT, so a bare substring check passes for the wrong reason.
+			assert.NotContains(t, cfgErr.Action, "set DATABASE_PORT env var",
+				"the root spelling must not survive into a non-root section's hint")
+		})
+	}
+}
+
+// TestQualifiedActionEnvVarActuallyReachesTheKey closes the loop the test above only
+// asserts about: it SETS the suggested variable and shows the failure goes away, which is
+// the operator's actual experience and the only proof the hint is correct.
+func TestQualifiedActionEnvVarActuallyReachesTheKey(t *testing.T) {
+	yaml := "app:\n  name: a\n  version: v1\nserver:\n  port: 8080\n" +
+		"databases:\n  reporting:\n    type: postgresql\n    host: h\n    username: u\n"
+
+	_, err := loadDeliveredEmptyFixture(t, yaml, nil)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	require.Contains(t, cfgErr.Action, "DATABASES_REPORTING_PORT")
+
+	cfg, err := loadDeliveredEmptyFixture(t, yaml, map[string]string{
+		"DATABASES_REPORTING_PORT": "5432",
+		"DATABASES_REPORTING_DATABASE": "d",
+	})
+
+	require.NoError(t, err, "following the hint must resolve the failure, not move it")
+	assert.Equal(t, 5432, cfg.Databases["reporting"].Port)
 }

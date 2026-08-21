@@ -1437,6 +1437,15 @@ bare suffix match also catches `cache.redis.host` — and the message loses its
 `databases.reporting: ` prefix. See
 `[C60.16]` in [migrations.md](migrations.md).
 
+**Addendum (2026-08-21, `[C60.19]`):** the two deferrals above are closed.
+`normalizeDatabaseValues` takes the section and `ApplyDatabasePoolDefaults` takes the
+`DBConfigProvider` resource key — a signature change — so the RUNTIME door addresses a
+dynamic tenant exactly as a static one, and `database.DbManager` and the migrate CLI stop
+wrapping the key back in. `Action` is re-pointed with `Field`, emitted only when the variable
+round-trips to the same key: the old root-spelled hint sent operators to write a partial root
+block that ADR-047 then rejected. Three sibling tenant-tree spellings join the rule.
+Closes #1113 and #1114; unreachable underscore names are #1124.
+
 ### [ADR-075: One Normalized Default per Scheduler Timeout Key](adr_075_scheduler_timeout_single_default.md)
 
 **Date:** 2026-08-20 | **Status:** Accepted

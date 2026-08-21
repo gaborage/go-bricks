@@ -631,10 +631,14 @@ func TestDbManagerDynamicConfigInvalidPoolRejected(t *testing.T) {
 
 	_, _, err := manager.Get(ctx, "tenant")
 	require.Error(t, err)
-	require.ErrorContains(t, err, "failed to apply pool defaults for key")
 	var cfgErr *config.ConfigError
-	require.ErrorAs(t, err, &cfgErr, "wraps the underlying config validation error")
-	assert.ErrorContains(t, err, "database.pool.idle.time")
+	require.ErrorAs(t, err, &cfgErr, "the config validation error reaches the caller typed")
+	// C60.19: a dynamically-resolved tenant is addressed exactly as a statically-declared
+	// one, so a consumer routing on Field cannot tell the two doors apart. The manager no
+	// longer wraps, because the key is already inside the field.
+	assert.Equal(t, "multitenant.tenants.tenant.database.pool.idle.time", cfgErr.Field)
+	assert.NotContains(t, err.Error(), "failed to apply pool defaults for key",
+		"the seam addresses the error; a wrap would print the key twice")
 	assert.False(t, connectorCalled, "connector must not run with an invalid pool config")
 }
 

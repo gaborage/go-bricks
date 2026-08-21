@@ -66,9 +66,17 @@ func (e *ConfigError) Unwrap() error {
 	return nil
 }
 
+// Hint templates for the two halves of a "where do I set this?" Action. dbSection.qualify
+// rebuilds a hint from these to recognize one it may re-point, so they must stay the single
+// spelling of that sentence.
+const (
+	actionSetEnvOrYAMLPath = "set %s env var or add %s to config.yaml"
+	actionAddYAMLPath      = "add %s to config.yaml"
+)
+
 // NewMissingFieldError creates an error for a required missing configuration field.
 func NewMissingFieldError(field, envVar, yamlPath string) *ConfigError {
-	action := fmt.Sprintf("set %s env var or add %s to config.yaml", envVar, yamlPath)
+	action := fmt.Sprintf(actionSetEnvOrYAMLPath, envVar, yamlPath)
 	return &ConfigError{
 		Category: errCategoryMissing,
 		Field:    field,
@@ -136,13 +144,24 @@ func IsNotConfigured(err error) bool {
 
 // NewMultiTenantError creates an error specific to multi-tenant configuration.
 func NewMultiTenantError(tenantID, field, message, action string) *ConfigError {
-	fullField := fmt.Sprintf("tenant '%s' %s", tenantID, field)
 	return &ConfigError{
 		Category: errCategoryMissing,
-		Field:    fullField,
+		Field:    tenantField(tenantID, field),
 		Message:  message,
 		Action:   action,
 	}
+}
+
+// tenantField addresses one key to a tenant's subtree, the spelling every other producer in
+// the tenant tree uses (C60.19). It replaces a prose Field — "tenant 'acme' database" — that
+// no consumer could match against the keys it sits beside. The bare "tenant" sentinel names
+// the tenant entry itself rather than a key under it.
+func tenantField(tenantID, field string) string {
+	base := "multitenant.tenants." + tenantID
+	if field == "" || field == "tenant" {
+		return base
+	}
+	return base + "." + field
 }
 
 // NewValidationError creates a general validation error with custom message.

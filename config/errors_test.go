@@ -319,7 +319,7 @@ func TestNewMultiTenantError(t *testing.T) {
 			field:     databaseHost,
 			message:   "not configured",
 			action:    "add multitenant.tenants.tenant-a.database.host",
-			wantField: "tenant 'tenant-a' database.host",
+			wantField: "multitenant.tenants.tenant-a.database.host",
 		},
 		{
 			name:      "tenant messaging config missing",
@@ -327,7 +327,7 @@ func TestNewMultiTenantError(t *testing.T) {
 			field:     "messaging.url",
 			message:   "required",
 			action:    "configure messaging for tenant",
-			wantField: "tenant 'tenant-b' messaging.url",
+			wantField: "multitenant.tenants.tenant-b.messaging.url",
 		},
 	}
 

@@ -2,7 +2,6 @@ package commands
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/database"
@@ -44,11 +43,9 @@ func (p *tlsValidatingProvider) DBConfig(ctx context.Context, key string) (*conf
 		return nil, nil
 	}
 	validated := *cfg
-	if err := config.ApplyDatabasePoolDefaults(&validated); err != nil {
-		if key == "" {
-			return nil, err
-		}
-		return nil, fmt.Errorf("tenant %q: %w", key, err)
+	// No tenant wrap: the seam addresses the error to this key's section itself.
+	if err := config.ApplyDatabasePoolDefaults(&validated, key); err != nil {
+		return nil, err
 	}
 	return &validated, nil
 }
