@@ -49,12 +49,27 @@ func tenantDatabaseSection(id string) dbSection {
 	return dbSection{path: "multitenant.tenants." + id + ".database", placement: dbPlacementTenant}
 }
 
+// sectionForResourceKey maps a DBConfigProvider resource key onto the database section it
+// resolves, so the runtime door addresses its errors the way the startup doors do. The key
+// vocabulary is the manager's, unchanged: "" is the root (single-tenant) database, a
+// NamedDatabasePrefix key is databases.<name>, and anything else is a tenant id.
+func sectionForResourceKey(key string) dbSection {
+	switch {
+	case key == "":
+		return rootDatabaseSection()
+	case strings.HasPrefix(key, NamedDatabasePrefix):
+		return namedDatabaseSection(strings.TrimPrefix(key, NamedDatabasePrefix))
+	default:
+		return tenantDatabaseSection(key)
+	}
+}
+
 // normalizeDatabaseValues turns a database section into the shape a connection
 // can be opened from. It works on a clone and commits only when every step
 // succeeds, so a rejected section returns untouched. The per-strictness step
 // order is what the two doors ran before they shared this module — kept as is,
 // because it decides which error a doubly-wrong section reports first.
-func normalizeDatabaseValues(db *DatabaseConfig, strictness dbStrictness) error {
+func normalizeDatabaseValues(db *DatabaseConfig, section dbSection, strictness dbStrictness) error {
 	normalized := *db
 
 	var err error
@@ -67,7 +82,9 @@ func normalizeDatabaseValues(db *DatabaseConfig, strictness dbStrictness) error 
 		err = normalizeWithFields(&normalized)
 	}
 	if err != nil {
-		return err
+		// Addressed here rather than at each door: the constructors below share the root
+		// spelling with the connect door, and this is the one seam every door crosses.
+		return section.qualify(err)
 	}
 
 	*db = normalized
@@ -146,8 +163,8 @@ func normalizeDatabaseSection(db *DatabaseConfig, section dbSection) error {
 		}
 	}
 
-	if err := normalizeDatabaseValues(db, dbStrictnessStartup); err != nil {
-		return section.qualify(err)
+	if err := normalizeDatabaseValues(db, section, dbStrictnessStartup); err != nil {
+		return err
 	}
 
 	if section.placement != dbPlacementRoot && db.Manager.isSet() {
@@ -170,20 +187,63 @@ func normalizeDatabaseSection(db *DatabaseConfig, section dbSection) error {
 // The path is carried by Field alone, never also by a wrapping message: printing it in both
 // places is how the same section path ends up in one error twice.
 //
-// Action is deliberately left as the root spelling names it. Rewriting operator hints is a
-// different problem from addressing an error, and it is tracked separately — see ADR-076.
+// Action is re-pointed with Field: a hint naming DATABASE_PORT for a databases.reporting
+// failure sends an operator to write a partial root block, which ADR-047 then rejects as an
+// incomplete section — a second failure manufactured by the hint itself (ADR-076 addendum).
 func (s dbSection) qualify(err error) error {
 	if s.placement == dbPlacementRoot {
 		return err
 	}
+	return qualifyConfigError(err, s.path, s.qualifyField)
+}
+
+// qualifyConfigError re-addresses a ConfigError to a subtree: Field through addressField,
+// Action re-pointed to match, Details cloned so the copy owns them. A non-ConfigError has no
+// field to move, so it is wrapped with path instead — the only place a path is allowed into
+// the message rather than the field.
+//
+// Shared with the per-tenant cache door: the two producers used to carry their own copy of
+// this recipe, and one of them missed the Action step when it was added, which is the same
+// drift C60.19 exists to end.
+func qualifyConfigError(err error, path string, addressField func(string) string) error {
 	var cfgErr *ConfigError
 	if !errors.As(err, &cfgErr) {
-		return fmt.Errorf("%s: %w", s.path, err)
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	qualified := *cfgErr
-	qualified.Field = s.qualifyField(cfgErr.Field)
+	qualified.Field = addressField(cfgErr.Field)
+	qualified.Action = requalifyAction(cfgErr.Action, cfgErr.Field, qualified.Field)
 	qualified.Details = slices.Clone(cfgErr.Details)
 	return &qualified
+}
+
+// requalifyAction re-points a generated "set X env var or add Y to config.yaml" hint at the
+// qualified key. It rewrites only a hint this package generated FOR THE ORIGINAL FIELD,
+// recognized by rebuilding that hint and comparing — so a hand-written Action, and one
+// naming some other key, are both left exactly as they are.
+func requalifyAction(action, origField, qualifiedField string) string {
+	if action == "" || action != missingFieldAction(origField) {
+		return action
+	}
+	return missingFieldAction(qualifiedField)
+}
+
+// missingFieldAction is the hint NewMissingFieldError builds for key. The env half is
+// dropped when no variable reaches the key (see envVarForKey), leaving the YAML path,
+// which is always reachable.
+//
+// The guard covers every non-injective case of the transform EXCEPT a dot inside a section
+// or tenant NAME, since the dot is the delimiter the round trip is measured in:
+// multitenant.tenants.acme.corp.database.port round-trips cleanly but unflattens to tenant
+// "acme", sub-key "corp". No producer can reach that today — koanf cannot deliver a map key
+// with an embedded dot, and the connect door raises no missing-field errors — so it is a
+// trap for a future caller rather than a live hole. Suppress the env half explicitly if you
+// ever raise one of these from a free-form key.
+func missingFieldAction(key string) string {
+	if envVar := envVarForKey(key); envVar != "" {
+		return fmt.Sprintf(actionSetEnvOrYAMLPath, envVar, key)
+	}
+	return fmt.Sprintf(actionAddYAMLPath, key)
 }
 
 // qualifyField rewrites one root-spelled field to this section. A key under the root

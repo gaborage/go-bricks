@@ -749,11 +749,30 @@ func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
 //
 // It is the connect-strictness door of the database-section normalization
 // module (database_section.go); a rejected config returns untouched.
+//
+// It addresses its errors to the ROOT database section. A caller that knows which section
+// the config came from should use ApplyDatabasePoolDefaultsForKey instead, so a failure
+// names that section rather than the root (ADR-076 addendum, C60.19).
 func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
+	return ApplyDatabasePoolDefaultsForKey(cfg, "")
+}
+
+// ApplyDatabasePoolDefaultsForKey is ApplyDatabasePoolDefaults addressed to the section the
+// config was resolved for. resourceKey is the DBConfigProvider key: "" is the root database,
+// a NamedDatabasePrefix key is databases.<name>, and anything else is a tenant id.
+//
+// Passing it is what lets a dynamically-resolved tenant report the same
+// multitenant.tenants.<id>.database.<key> field a statically-declared one does, so a consumer
+// routing on ConfigError.Field cannot tell the startup and runtime doors apart. It is a
+// separate function rather than a second parameter because tools/migration is a separate
+// module pinned to a RELEASED go-bricks, so an arity change there cannot compile until the
+// next tag — see C60.19.
+func ApplyDatabasePoolDefaultsForKey(cfg *DatabaseConfig, resourceKey string) error {
+	section := sectionForResourceKey(resourceKey)
 	if cfg == nil {
-		return NewValidationError("database", "configuration is nil")
+		return section.qualify(NewValidationError(fieldDatabase, "configuration is nil"))
 	}
-	return normalizeDatabaseValues(cfg, dbStrictnessConnect)
+	return normalizeDatabaseValues(cfg, section, dbStrictnessConnect)
 }
 
 // applyDatabasePoolDefaults sets production-safe defaults and validates database pool/query/session settings.
@@ -1823,9 +1842,12 @@ func checkTenantMessagingConsistency(tenants map[string]TenantEntry) error {
 	if hasAnyMessaging && hasNoMessaging {
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    "multitenant.tenants messaging",
-			Message:  "inconsistent configuration",
-			Action:   "either all tenants must have messaging configured or none should",
+			// A wildcard segment, not a literal: this is a whole-map invariant, and
+			// "multitenant.tenants.messaging" would be indistinguishable from a tenant
+			// actually named "messaging" (tenantField's sentinel emits exactly that).
+			Field:   "multitenant.tenants.*.messaging",
+			Message: "inconsistent configuration",
+			Action:  "either all tenants must have messaging configured or none should",
 		}
 	}
 	return nil
@@ -1844,12 +1866,18 @@ func normalizeTenantCache(cache *CacheConfig) error {
 	return normalizeCache(cache, true)
 }
 
-// checkTenantCache is checkCache with the tenant named in the error.
+// checkTenantCache is checkCache addressed to the tenant. The tenant travels in Field, not
+// in a wrapping message: a consumer matching on ConfigError.Field could not otherwise tell
+// which tenant's cache failed, and the database sections next door already spell it this
+// way (C60.19).
 func checkTenantCache(tenantID string, cache *CacheConfig) error {
-	if err := checkCache(cache); err != nil {
-		return fmt.Errorf("tenant %s cache: %w", tenantID, err)
+	err := checkCache(cache)
+	if err == nil {
+		return nil
 	}
-	return nil
+	return qualifyConfigError(err, "multitenant.tenants."+tenantID+".cache", func(field string) string {
+		return tenantField(tenantID, field)
+	})
 }
 
 // validateSourceConfig validates the source configuration type

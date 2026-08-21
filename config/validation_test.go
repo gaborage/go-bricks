@@ -3751,7 +3751,7 @@ func TestValidateMultitenantFailures(t *testing.T) {
 			},
 			dbConfig:      &DatabaseConfig{},
 			msgConfig:     &MessagingConfig{},
-			expectedError: "multitenant.tenants messaging",
+			expectedError: "multitenant.tenants.*.messaging",
 		},
 	}
 

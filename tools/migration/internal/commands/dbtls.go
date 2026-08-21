@@ -25,8 +25,10 @@ type tlsValidatingProvider struct {
 }
 
 // DBConfig resolves the inner provider's config and fails closed on one the framework
-// would reject. The tenant key is named in the error because a fleet run resolves one
-// config per tenant, and "which tenant" is the operator's first question.
+// would reject. The key is passed to the validating seam rather than wrapped around its
+// error: a fleet run resolves one config per tenant and "which tenant" is the operator's
+// first question, so the answer belongs in ConfigError.Field, where a consumer can match
+// on it (C60.19). Wrapping it back on would print the same identity twice.
 //
 // Validation runs on a COPY. config.TenantStore hands back a cached, shared pointer for
 // the single-tenant key ("" -> its defaultDB) and for "named:" keys, and the seam
@@ -44,6 +46,9 @@ func (p *tlsValidatingProvider) DBConfig(ctx context.Context, key string) (*conf
 		return nil, nil
 	}
 	validated := *cfg
+	// Still the root-addressed door, and still wrapping: this module pins a RELEASED
+	// go-bricks, so ApplyDatabasePoolDefaultsForKey does not exist here until the next tag.
+	// Switching to it — and dropping this wrap — rides the pin bump (C60.19).
 	if err := config.ApplyDatabasePoolDefaults(&validated); err != nil {
 		if key == "" {
 			return nil, err
