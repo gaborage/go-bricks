@@ -61,15 +61,18 @@ different plumbing — koanf delivers a nil value, not `""` — and it already b
 absence: the key takes its default rather than a silent zero. A test pins that
 boundary so it cannot drift unnoticed.
 
-Three seams carry the hook: the two above plus `migration.decodeSecretConfig`, which
-builds its own decoder for a dynamic `DBConfigProvider` payload — the seam that
+Four seams carry the hook: the two above, `migration.decodeSecretConfig`, and the
+`tools/migration` CLI's `tenantDecoderConfig`. The third builds its own decoder for a
+dynamic `DBConfigProvider` payload — the seam that
 literally reads secrets, where a rotated secret rendering `{"port": ""}` would dial
 port 0 and `{"pool":{"max":{"connections":""}}}` would silently revert a tuned pool to
-the framework default. The `tools/migration` CLI keeps a byte-identical local copy of
+the framework default. The fourth is the CLI's, which keeps a byte-identical local copy of
 the hook rather than importing it. The import would in fact compile — Go's internal
 rule is import-path-prefix based and the CLI sits under `github.com/gaborage/go-bricks/`
 — but a copy keeps that separately-released binary off a package that carries no
-compatibility guarantee. The copies must be kept in sync by hand; nothing gates it (#1109).
+compatibility guarantee. The copies must be kept in sync by hand, and a source-comparison test in
+`internal/configdecode` now fails when they diverge — a gate that holds whichever way #1109
+decides, since it neither imports the package nor assumes the copy stays.
 
 An empty string is judged after trimming, so a whitespace-only value is rejected too.
 That one is a message change rather than a new failure — `"   "` already failed to
