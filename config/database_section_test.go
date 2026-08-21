@@ -578,7 +578,7 @@ func TestQualifiedActionEnvVarActuallyReachesTheKey(t *testing.T) {
 	require.Contains(t, cfgErr.Action, "DATABASES_REPORTING_PORT")
 
 	cfg, err := loadDeliveredEmptyFixture(t, yaml, map[string]string{
-		"DATABASES_REPORTING_PORT": "5432",
+		"DATABASES_REPORTING_PORT":     "5432",
 		"DATABASES_REPORTING_DATABASE": "d",
 	})
 

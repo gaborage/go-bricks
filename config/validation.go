@@ -1872,7 +1872,6 @@ func checkTenantCache(tenantID string, cache *CacheConfig) error {
 	return &qualified
 }
 
-
 // validateSourceConfig validates the source configuration type
 func validateSourceConfig(cfg *SourceConfig) error {
 	if cfg.Type != SourceTypeStatic && cfg.Type != SourceTypeDynamic {
