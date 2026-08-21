@@ -4433,7 +4433,7 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   `*amqp.Delivery`, so read the property yourself if you need the foreign shape. Repair any
   saved query or alert that treats one of these fields as always present; a query asserting
   `message_id != ""` is the shape most likely to have depended on the empty stamp.
-- verify: three probes against a running service; the third is broker-dependent.
+- verify: four probes against a running service; the fourth is broker-dependent.
 
   1. **HTTP ingress and response.** Run this DIFFERENTIALLY, because validating a
      `traceparent` does not decide a status code — an arbitrary handler legitimately answers
@@ -4455,15 +4455,33 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 
      Repeat both with a valid `traceparent` and confirm it propagates end to end unchanged.
   2. **AMQP delivery identity.** Publish to a consumed queue with `correlation_id` set to
-     `urn:uuid:0b8a...` (or any value carrying `:` or `.`) and a routing key containing a
-     newline, and make the handler fail so the failure line is emitted. Expect the failure
-     line to carry no `amqp_correlation_id` and no `routing_key`, to carry
-     `identity_rejected: true` and a `delivery_tag`, and the receive span to carry neither
-     `messaging.message.conversation_id` nor
-     `messaging.rabbitmq.destination.routing_key`. Repeat with `correlation_id: probe-2` and
-     routing key `user.created` and confirm both are present, unchanged, and that
-     `identity_rejected` is ABSENT — a marker that fired on clean traffic would be no signal.
-  3. **Exchange.** Broker-dependent, and either outcome is a pass. Try to
+     `urn:uuid:0b8a...` (or any value carrying `:` or `.`), `message_id` set to the same
+     shape, and a routing key containing a newline, and make the handler fail so the failure
+     line is emitted. Expect the failure line to carry no `amqp_correlation_id`, no
+     `message_id` and no `routing_key`, to carry `identity_rejected: true` and a
+     `delivery_tag`, and the receive span to carry none of
+     `messaging.message.conversation_id`, `messaging.message.id` or
+     `messaging.rabbitmq.destination.routing_key`. Repeat with `correlation_id: probe-2`,
+     `message_id: probe-2-msg` and routing key `user.created` and confirm all three are
+     present, unchanged, and that `identity_rejected` is ABSENT — a marker that fired on
+     clean traffic would be no signal.
+
+     Then run BOTH of those again with a handler that SUCCEEDS, because the guarantee is not
+     failure-scoped: `message_id` reaches the success line too, so expect it present on a
+     clean delivery and absent — with `identity_rejected: true` beside it — on the poisoned
+     one. If your handlers can panic, force one as well: the panic line is built by the same
+     helper as the failure line and carries the same fields, `delivery_tag` included.
+  3. **`tracestate` control bytes.** This one needs a NON-HTTP carrier, because Go's own
+     header reader already rejects control bytes on an inbound HTTP request — the door this
+     probe exercises is the AMQP one, where a longstr carries any byte. Publish to a consumed
+     queue with a valid `traceparent` header and a `tracestate` header containing CR, LF, NUL
+     or ESC, and have the handler perform one downstream publish. Expect the outbound message
+     to carry the inbound `traceparent` and NO `tracestate` at all — dropped, not truncated
+     and not emptied. Repeat with a clean `tracestate` such as `vendor=probe` and confirm it
+     propagates unchanged, and once more with a clean `tracestate` but NO `traceparent`,
+     where it must again be absent outbound: a tracestate with no parent to annotate is an
+     orphan, and the carrier scoping drops it rather than attaching it to a minted parent.
+  4. **Exchange.** Broker-dependent, and either outcome is a pass. Try to
      `exchange.declare` a name carrying a byte outside printable ASCII and bind your
      consumed queue to it. If your broker REFUSES the declare, that is the answer: the field
      cannot reach the sink from that broker, and nothing changes for you. If it accepts,
