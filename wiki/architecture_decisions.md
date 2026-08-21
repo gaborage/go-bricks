@@ -1402,8 +1402,9 @@ unexports eight debug response types with their JSON unchanged. See
 loader's (30s/25s) and the scheduler module's use-time constants (30s/**30s**) behind `> 0` guards —
 and they had already drifted: a YAML deployment ran a 25s slow-job threshold where a config
 assembled in Go ran 30s. Normalization now owns both keys through `applyNonNegativeDefault` (zero
-applies the default, negative fails validation naming the key), the koanf loader renders those same
-constants, and the module reads the normalized config with no fallback. Trusting the config needs an
+applies the default, negative fails validation naming the key), the koanf loader DERIVES its default
+from that fill rather than rendering the constants a second time, and the module reads the normalized
+config with no fallback. Trusting the config needs an
 enforced precondition, so `Init` rejects a nil `deps.Config` and the module's two remaining
 `m.config != nil` guards are gone — a nil config was otherwise a panic in `Shutdown` and, in
 `determineJobSeverity`, a recovered panic that reported every SUCCESSFUL job as a panicking failure.
