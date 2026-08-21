@@ -42,9 +42,9 @@ func assertAPIErrorStatus(t *testing.T, err error, wantStatus int) {
 
 // TestIPWhitelistMiddlewareTrustedProxy verifies that the debug-endpoint IP allowlist
 // cannot be bypassed by spoofing X-Forwarded-For. The allowlist is evaluated against the
-// trusted-proxy-aware client IP (server.ClientIP): X-Forwarded-For / X-Real-IP are honored
-// only when the immediate peer is a configured trusted proxy, mirroring the scheduler's
-// CIDR middleware. Regression test for the High audit finding that a direct attacker could
+// trusted-proxy-aware client IP (server.ClientIP). X-Forwarded-For is honored only when
+// the immediate peer is a configured trusted proxy; X-Real-IP is not honored at all
+// (ADR-057, completed by ADR-080). Mirrors the scheduler's CIDR middleware. Regression test for the High audit finding that a direct attacker could
 // send "X-Forwarded-For: 127.0.0.1" to satisfy a localhost-only allowlist.
 func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
 	app := &App{logger: logger.New("info", false)}
@@ -55,6 +55,7 @@ func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
 		trustedProxies []string
 		remoteAddr     string
 		xff            string
+		xRealIP        string
 		wantStatus     int
 	}{
 		{
@@ -87,6 +88,28 @@ func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
 			wantStatus:     http.StatusOK,
 		},
 		{
+			// The reproduced bypass, at this door. A trusted proxy set covering every
+			// address (which config now refuses, but which shipped as accepted) makes a
+			// DIRECT attacker a trusted peer, so their own X-Real-IP used to become the
+			// address the allowlist judged. No transit required — that is what made this
+			// P0 rather than P2.
+			name:           "direct_attacker_cannot_spoof_allowlisted_ip_via_x_real_ip",
+			allowedIPs:     []string{"127.0.0.1", "::1"},
+			trustedProxies: []string{"0.0.0.0/0"},
+			remoteAddr:     "203.0.113.9:5555",
+			xRealIP:        "127.0.0.1",
+			wantStatus:     http.StatusForbidden,
+		},
+		{
+			// Same door, the X-Forwarded-For half.
+			name:           "direct_attacker_cannot_spoof_allowlisted_ip_via_xff",
+			allowedIPs:     []string{"127.0.0.1", "::1"},
+			trustedProxies: []string{"0.0.0.0/0"},
+			remoteAddr:     "203.0.113.9:5555",
+			xff:            "127.0.0.1",
+			wantStatus:     http.StatusForbidden,
+		},
+		{
 			name:           "trusted_proxy_forwards_disallowed_client_is_denied",
 			allowedIPs:     []string{"127.0.0.1"},
 			trustedProxies: []string{"10.0.0.0/8"},
@@ -112,6 +135,9 @@ func TestIPWhitelistMiddlewareTrustedProxy(t *testing.T) {
 			req.RemoteAddr = tc.remoteAddr
 			if tc.xff != "" {
 				req.Header.Set("X-Forwarded-For", tc.xff)
+			}
+			if tc.xRealIP != "" {
+				req.Header.Set("X-Real-IP", tc.xRealIP)
 			}
 
 			nextCalled, err := invokeDebugMiddleware(mw, req)

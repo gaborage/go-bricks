@@ -873,3 +873,52 @@ func TestServerIPExtractorRejectsTrustWideningFromUnvalidatedConfig(t *testing.T
 		})
 	}
 }
+
+// TestTrustedProxyOptionsDropsSetsThatTrustEveryone pins the THIRD enforcement point.
+// config.Validate rejects a total-coverage list at startup and ParseCIDRs rejects one
+// handed to it directly, but trustedProxyOptions is what actually builds the extractor
+// echo installs, and its per-entry loop cannot see that a SET trusts everyone. Asserted
+// through that extractor rather than the return value: when the list is dropped a
+// spoofed X-Forwarded-For loses to the observed peer, and the third case proves the
+// mechanism can still hand back an XFF value, so the first two are not vacuous.
+func TestTrustedProxyOptionsDropsSetsThatTrustEveryone(t *testing.T) {
+	log := logger.New("disabled", false)
+	for _, tc := range []struct {
+		name       string
+		cidrs      []string
+		remoteAddr string
+		spoof      string
+		wantIP     string
+	}{
+		{
+			name:       "ipv4_covered_by_two_halves",
+			cidrs:      []string{"0.0.0.0/1", "128.0.0.0/1"},
+			remoteAddr: "203.0.113.9:41234",
+			spoof:      "198.51.100.7",
+			wantIP:     "203.0.113.9",
+		},
+		{
+			name:       "ipv6_covered_by_two_halves",
+			cidrs:      []string{"::/1", "8000::/1"},
+			remoteAddr: "[2001:db8::1]:41234",
+			spoof:      "2001:db8::bad",
+			wantIP:     "2001:db8::1",
+		},
+		{
+			name:       "specific_range_is_still_honored",
+			cidrs:      []string{"203.0.113.0/24"},
+			remoteAddr: "203.0.113.9:41234",
+			spoof:      "198.51.100.7",
+			wantIP:     "198.51.100.7",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			extract := echo.ExtractIPFromXFFHeader(trustedProxyOptions(tc.cidrs, log)...)
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
+			require.NoError(t, err)
+			req.RemoteAddr = tc.remoteAddr
+			req.Header.Set(HeaderXForwardedFor, tc.spoof)
+			assert.Equal(t, tc.wantIP, extract(req))
+		})
+	}
+}
