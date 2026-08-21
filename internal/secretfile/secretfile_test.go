@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	testconsts "github.com/gaborage/go-bricks/testing"
 )
 
 // ed25519KeyPEM returns a PKCS#8 Ed25519 key: the compact shape whose DER is
@@ -156,7 +158,7 @@ func TestLoadPEM(t *testing.T) {
 	t.Run("file_path_reads", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "material.pem")
-		want := []byte("-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----\n")
+		want := testconsts.PEMFixture("CERTIFICATE")
 		require.NoError(t, os.WriteFile(path, want, 0o600))
 
 		got, err := LoadPEM("test: prefix:", path, "", "cert")
@@ -171,7 +173,7 @@ func TestLoadPEM(t *testing.T) {
 		// DER/key-shape detection is already pinned by
 		// TestLooksLikeKeyMaterialDetection and
 		// TestLooksLikeKeyMaterialDetectsKeysNotPaths.
-		asFile := "-----BEGIN PRIVATE KEY-----\nZm9v\n-----END PRIVATE KEY-----\n"
+		asFile := string(testconsts.PEMFixture("PRIVATE KEY"))
 
 		_, err := LoadPEM("test: prefix:", asFile, "", "key")
 		require.Error(t, err)

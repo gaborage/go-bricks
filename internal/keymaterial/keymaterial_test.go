@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	testconsts "github.com/gaborage/go-bricks/testing"
 )
 
 // syntheticSecret is a fixed, non-real 32-byte fixture — never key material
@@ -68,7 +70,7 @@ func TestLoadBytes(t *testing.T) {
 	})
 
 	t.Run("inline_material_as_path_rejected", func(t *testing.T) {
-		asFile := "-----BEGIN PRIVATE KEY-----\nZm9v\n-----END PRIVATE KEY-----\n"
+		asFile := string(testconsts.PEMFixture("PRIVATE KEY"))
 
 		_, err := LoadBytes(asFile, "")
 		require.Error(t, err)
@@ -107,7 +109,7 @@ func TestLoadSecretBytes(t *testing.T) {
 	})
 
 	t.Run("pem_in_file_field_rejected_echo_free", func(t *testing.T) {
-		asFile := "-----BEGIN PRIVATE KEY-----\nZm9v\n-----END PRIVATE KEY-----\n"
+		asFile := string(testconsts.PEMFixture("PRIVATE KEY"))
 
 		_, err := LoadSecretBytes(asFile, "")
 		require.Error(t, err)
