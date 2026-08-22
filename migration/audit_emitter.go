@@ -307,8 +307,8 @@ func (e *auditEmitter) deliverToSink(ctx context.Context, ev *AuditEvent) {
 				// leave a counter tick as the only trace of a dropped audit event.
 				//
 				// SECURITY: only the panic value's TYPE is reported here, never the
-				// value. The primary call above renders it through the sensitive-data
-				// filter, which masks by field name; this fallback would have to use
+				// value. The primary call BELOW — which runs first — renders it through the
+				// sensitive-data filter, which masks by field name; this fallback uses
 				// Str, which masks on the KEY only — so a panic carrying a secret
 				// (`panic(cfg)`) would reach the sink in clear. Same rule as
 				// httpclient's Do recovery. The type plus audit_type and target is

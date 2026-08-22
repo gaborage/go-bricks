@@ -4309,9 +4309,14 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `AuditRecorder` and then reported it with a log call — inside a defer that had already
   spent its `recover()`. Rendering a slice-bearing panic value hit the walk defect above,
   so the second panic escaped into `consumeSink`'s bare goroutine and killed the process,
-  defeating the guarantee #686 shipped. The reporting call is now guarded, and reports the
-  panic value's TYPE rather than the value; a value that cannot be rendered falls back to a
-  second message naming `audit_type` and `target`, so a dropped event stays attributable.
+  defeating the guarantee #686 shipped. The reporting call is now guarded, and there are TWO
+  paths with different disclosure: the PRIMARY still logs the recovered value via
+  `Interface("panic", r)`, so it goes through the sensitive-data filter and is masked by
+  field name exactly as any other logged value; only the FALLBACK — reached when rendering
+  that value panics — drops to `Str("panic_type", …)`, reporting the value's TYPE and not the
+  value, because `Str` masks on the key alone. So the value is not withheld in general; it is
+  withheld only on the path where it could not be rendered safely. Both messages name
+  `audit_type` and `target`, so a dropped event stays attributable either way.
 
   **The masking-disabled WARN.** It judged the RAW `SensitiveFields` length, so a list whose
   entries all normalize away (`[""]`, `["  "]`) would have masked nothing while staying
@@ -4337,10 +4342,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   whose shape changes (a new `panic_type` field, and a second possible message,
   `audit sink panicked; event dropped (value unrenderable)`, when the value cannot be
   rendered).
-  no-match = you log only scalars and typed structs, nothing downstream depends on the
-  concrete type of `FilterValue`'s result — by assertion, type switch, reflection or any
-  other route — your needle lists are literal and clean, you have no scheduler alert on the
-  panic summary, you register no `AuditRecorder`, and you log no pre-encoded JSON. Note (a) is the common case and its old behaviour was a
+  no-match = ALL of the following hold. (1) Every value you log is a scalar, or a struct whose
+  fields are scalars recursively. **A typed struct is not automatically outside this atom**: a
+  map, slice, array, pointer or `any` field anywhere inside it is rewritten by the walk
+  exactly as a top-level one is. (2) Nothing downstream depends on the concrete type of
+  `FilterValue`'s result, by assertion, type switch, reflection or any other route.
+  (3) Your needle lists are literal and clean. (4) You have no scheduler alert on the panic
+  summary. (5) You register no `AuditRecorder`. (6) You log no pre-encoded JSON. Note (a) is the common case and its old behaviour was a
   crash, so matching it alone is good news, not work — but check (e) before concluding that:
   one shape inside (a) went the other way, from crash to silent leak, and it is the only
   branch here that leaves you worse off than before the upgrade.
@@ -4393,8 +4401,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   entry that matches everything. If your list is one that normalizes away entirely, confirm
   the masking-disabled WARN now appears at startup — it is the only signal that the config
   masks nothing, and it is suppressed at `log.level: error` and above.
-  For (e), log the offending payload in staging and read the output: the secret inside the
-  pre-encoded bytes must no longer appear. Decoding to `map[string]any` first is the remedy
+  For (e), **use a synthetic secret and a disposable staging sink** — the whole point of the
+  probe is that you do not yet know whether the value is masked, so assume it is not: a real
+  credential put through it lands in the log in clear, and a log you cannot delete is a
+  rotation, not a test. A literal such as `not-a-real-secret-0000` proves the same thing. Log
+  the payload and read the output: the synthetic secret inside the pre-encoded bytes must no
+  longer appear. Decoding to `map[string]any` first is the remedy
   that puts it back under the filter — confirm the field is masked, not merely absent,
   because "absent" can also mean you dropped the wrong field.
   If you matched (d), make a scheduler job panic in staging and read two things off the
