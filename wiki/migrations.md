@@ -4568,7 +4568,7 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   `trace/validate.go` (`ValidateTraceState`, new — the tracestate cap is shared as a
   function so a second clause cannot reach one door and miss the other)
 
-### [C60.22] the client IP is derived from observed hops only, and a trusted-proxy default route fails startup · breaking · when: match
+### [C60.22] the client IP is derived from observed hops only, and a trusted-proxy list covering an address family fails startup · breaking · when: match
 
 - detect: `git grep -nE 'trustedproxies' -- '*.yaml' '*.yml' '*.json' '*.toml'` and the same
   sweep over your deployment surfaces (Helm values, Kustomize overlays, `.env` files,
@@ -4588,8 +4588,8 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   that were ALLOWED and whose recorded client IP does not match the peer you expect —
   particularly any allowed request carrying `X-Real-IP`, which is no longer consulted.
 - class note: this atom is `breaking`, not `silent-behavior`, because half of it fails
-  startup outright — a default route in either lenient key aborts the process, which no
-  operator can discover from a log search. The derivation change IS silent, and the hop row
+  startup outright — a list trusting an entire address family aborts the process on ANY of
+  the three keys, which no operator can discover from a log search. The derivation change IS silent, and the hop row
   lists this atom under both categories for that reason; the header takes the louder of the
   two so a reader triaging by class does not skip a startup failure.
 - scope: `server.ClientIP` derives the address for the framework's two IP-based
@@ -4650,10 +4650,12 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   be denied and now works. Refusing to read a shape a documented load-balancer toggle
   emits would have been this framework exporting a parser limitation to operators as an
   incident, which is why it is parsed rather than warned about.
-- gate: match — you are affected if you set `debug.trustedproxies` or
-  `scheduler.security.trustedproxies` at all, or if either access-control path runs behind
-  a proxy. A deployment that sets neither key is unaffected by the behavior change, because
-  headers were never consulted for it.
+- gate: match — you are affected if you set ANY of the three trusted-proxy keys,
+  `server.trustedproxies` included: its per-entry rule was already strict, but the
+  set-coverage and v4-mapped rules are new to it too, so a list it accepted yesterday can
+  abort startup today. You are also affected if either access-control path runs behind a
+  proxy. A deployment that sets none of the three is unaffected by the behavior change,
+  because headers were never consulted for it.
 - apply: three NEW startup failures, all of them naming the key and the remedy. A trust
   list covering an entire address family (see scope) now aborts, as does a
   `debug.allowedips` entry that is neither an IP nor a CIDR, or one with host bits set
@@ -4662,17 +4664,26 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   `debug.allowedips` is validated **even when `debug.enabled: false`**: a block you wrote
   must be valid whether or not it is registered, so a typo surfaces at deploy time rather
   than during the incident in which someone flips it on.
-  Then remove any default route from the two trusted-proxy keys and list the specific
-  proxy ranges instead — that is the startup error's own instruction, and it is the fix for
+  Then remove the total-coverage list from whichever of the THREE trusted-proxy keys holds
+  one — a literal default route, a set covering a family between its entries, or the
+  v4-mapped form — and list the specific proxy ranges instead — that is the startup error's own instruction, and it is the fix for
   the exposure, not a formality. If you relied on `X-Real-IP` reaching either access-control
   check, switch the proxy to append to `X-Forwarded-For`; there is no configuration that
   restores the old behavior, deliberately. If a legitimate client was being denied because
   your proxy brackets IPv6 XFF entries, that now works.
+  Only `config.Validate` ABORTS. The two runtime doors refuse the same lists without an
+  error: `server.New` installs no trust options and logs, and `server.ParseCIDRs` returns
+  nil nets with every trimmed entry reported invalid. A service built without
+  `config.Validate` therefore BOOTS trusting nobody rather than failing — same security
+  outcome, no crash to alert on, so check the log line rather than waiting for a restart.
 - verify: three probes against a running service.
 
   1. **Startup.** Set `debug.trustedproxies: ["0.0.0.0/0"]` and start. Expect a startup
      failure naming `debug.trustedproxies` and saying it "trusts every address". Repeat for
-     `scheduler.security.trustedproxies`. Then set `debug.allowedips: ["0.0.0.0/0"]` and
+     `scheduler.security.trustedproxies` AND `server.trustedproxies`. Then repeat all three
+     with `["0.0.0.0/1","128.0.0.0/1"]` and with `["::ffff:0.0.0.0/96"]` — those are the
+     shapes no per-entry rule catches, so a probe using only `0.0.0.0/0` passes without
+     testing the rule this atom is about. Then set `debug.allowedips: ["0.0.0.0/0"]` and
      confirm it still starts — the allowlist exemption is deliberate, and a failure there
      would be a regression.
   2. **The bypass, at the debug door.** With a legitimate `debug.trustedproxies` (a real

@@ -1,4 +1,4 @@
-# ADR-080: `server.ClientIP` answers from observed hops only, and trusted-proxy lists refuse a default route
+# ADR-080: `server.ClientIP` answers from observed hops only, and trusted-proxy lists refuse total address-family coverage
 
 - **Status**: Accepted
 - **Date**: 2026-08-21
@@ -92,9 +92,11 @@ defect 4. That premise held only while defect 4 was open. Once the `X-Real-IP` f
 and the whitespace fall-through are closed, the left-most fallback is the *last* remaining
 path that returns a caller-influenced value, so it goes with them.
 
-**Trusted-proxy lists refuse a default route on all three keys.** `debug.trustedproxies`
-and `scheduler.security.trustedproxies` now reject `0.0.0.0/0` and `::/0` with the message
-`server.trustedproxies` has always used. The lenient partial-invalid tolerance is
+**Trusted-proxy lists refuse total address-family coverage on all three keys.**
+`debug.trustedproxies` and `scheduler.security.trustedproxies` now reject `0.0.0.0/0` and
+`::/0` with the message `server.trustedproxies` has always used, and all three additionally
+reject a set that covers a family between its entries or the v4-mapped spelling (see the
+coverage rule below). The lenient partial-invalid tolerance is
 deliberately preserved on those two keys: a single typo must not silently disable the
 whole trusted set, so this adds one refusal rather than tightening the syntax.
 

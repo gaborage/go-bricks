@@ -1394,7 +1394,7 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
-### [ADR-080: `server.ClientIP` Answers From Observed Hops Only, and Trusted-Proxy Lists Refuse a Default Route](adr_080_client_ip_answers_only_from_observed_hops.md)
+### [ADR-080: `server.ClientIP` Answers From Observed Hops Only, and Trusted-Proxy Lists Refuse Total Address-Family Coverage](adr_080_client_ip_answers_only_from_observed_hops.md)
 
 **Date**: 2026-08-21 | **Status**: Accepted | **Completes**: ADR-057
 
