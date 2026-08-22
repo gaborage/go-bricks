@@ -1418,7 +1418,8 @@ trust key rather than one of three.
 **Watch:** a default route in `debug.trustedproxies` or
 `scheduler.security.trustedproxies` now FAILS STARTUP — see `[C60.22]`. Allowlists are
 deliberately exempt (`["0.0.0.0/0"]` on `debug.allowedips` stays valid; ADR-049 recommends
-it). Residual: `["0.0.0.0/1","128.0.0.0/1"]` covers all of IPv4 and passes unchanged.
+it). Residual: a trust list that correctly describes its topology still believes whatever
+those proxies append — identification, not authorization (ADR-043).
 
 ---
 
