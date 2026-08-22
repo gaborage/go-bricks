@@ -35,7 +35,7 @@ const (
 	spanOperationReceive = "receive"
 	messagingSystem      = "rabbitmq"
 
-	panicMessage       = "panic in message handler: %v"
+	panicMessage       = "panic in message handler (type: %T)"
 	settlePanicMessage = "Panic recovered while settling a delivery; not retried"
 
 	// spanAttrCap is the four common attributes plus the AMQP lane's four extras.
@@ -134,8 +134,8 @@ type Request struct {
 	Settle func(*Result)
 }
 
-// Result is what the lane settles on. Panic and Stack are set only when Outcome
-// is Panicked; Err is nil only when Outcome is Succeeded. A pointer, not a
+// Result is what the lane settles on. PanicType and Stack are set only when
+// Outcome is Panicked; Err is nil only when Outcome is Succeeded. A pointer, not a
 // value, so the lane's LogOutcome does not copy it per message.
 type Result struct {
 	Outcome  Outcome
@@ -143,8 +143,14 @@ type Result struct {
 	Duration time.Duration
 	TraceID  string
 	Log      logger.Logger
-	Panic    any
-	Stack    []byte
+	// PanicType is the Go type of the value a panicking handler produced, never
+	// the value (ADR-081). The raw value is deliberately NOT retained: this struct
+	// crosses both messaging lanes, and a field holding it would let any lane —
+	// or a future AppendOutcome variant — log a consumer-chosen value. Storing the
+	// rendering instead of the source makes that unrepresentable rather than
+	// merely discouraged.
+	PanicType string
+	Stack     []byte
 }
 
 // AppendOutcome stamps the outcome fields both lanes share. The caller creates
@@ -154,14 +160,21 @@ func AppendOutcome(e logger.LogEvent, res *Result) logger.LogEvent {
 	e = e.Str("correlation_id", res.TraceID).
 		Dur("processing_time", res.Duration)
 	if res.Outcome == Panicked {
-		e = e.Interface("panic", res.Panic).Bytes("stack", res.Stack)
+		// SECURITY: the panic value's TYPE only (ADR-081) — and Result carries only
+		// the type, so there is no value here to leak. The field would be `panic`,
+		// which is no needle, so the sensitive-data filter could not mask it: a
+		// handler panicking with a bare string put that string in the log verbatim,
+		// and a map key the needle list does not name went the same way.
+		// The stack stays: debug.Stack() renders the panic frame as `panic({0x...})`
+		// and carries no value.
+		e = e.Str("panic_type", res.PanicType).Bytes("stack", res.Stack)
 	}
 	return e
 }
 
 // Run puts one message through the delivery pipeline and returns the outcome for
 // the lane to settle. It never returns nil, and a handler panic never escapes: it
-// becomes a Panicked result carrying the recovered value, its stack, and an
+// becomes a Panicked result carrying the recovered value's TYPE, its stack, and an
 // error. A panic in the lane's own LogOutcome or Log is the lane's bug, but it does
 // NOT escape either: the guard installed below covers everything after it, so such
 // a panic becomes a Panicked result and the message is still settled. The span
@@ -244,7 +257,7 @@ func invoke(ctx context.Context, log logger.Logger, traceID string, handle Handl
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			res.Outcome = Panicked
-			res.Panic = recovered
+			res.PanicType = fmt.Sprintf("%T", recovered)
 			res.Stack = debug.Stack()
 			res.Err = fmt.Errorf(panicMessage, recovered)
 		}
@@ -276,7 +289,7 @@ func panickedResult(req *Request, res *Result, recovered any, start time.Time) *
 		res.Log = req.Log
 	}
 	res.Outcome = Panicked
-	res.Panic = recovered
+	res.PanicType = fmt.Sprintf("%T", recovered)
 	res.Stack = debug.Stack()
 	res.Err = fmt.Errorf(panicMessage, recovered)
 	if res.Duration == 0 {
@@ -301,8 +314,11 @@ func settleOnce(req *Request, res *Result) {
 		}
 		// The logger is the lane's; if logging the panic panics too, there is
 		// nothing left to report it with.
+		//
+		// SECURITY: the panic value's TYPE only (ADR-081) — same rule and same
+		// reason as AppendOutcome above.
 		defer func() { _ = recover() }()
-		res.Log.Error().Interface("panic", recovered).Msg(settlePanicMessage)
+		res.Log.Error().Str("panic_type", fmt.Sprintf("%T", recovered)).Msg(settlePanicMessage)
 	}()
 
 	req.Settle(res)

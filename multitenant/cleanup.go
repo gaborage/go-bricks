@@ -58,7 +58,7 @@ func cleanupTenant(
 ) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%s cleanup: tenant %q: panic: %v", name, tenantID, r)
+			err = fmt.Errorf("%s cleanup: tenant %q: panic (type: %T)", name, tenantID, r)
 		}
 	}()
 

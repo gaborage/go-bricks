@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -1075,4 +1076,37 @@ func (r *recordingMetricExporter) Shutdown(ctx context.Context) error {
 
 func (r *recordingMetricExporter) ShutdownCalled() bool {
 	return r.shutdownCalled.Load()
+}
+
+// TestTracerProviderDoesNotRecordPanicValues pins ADR-081 at the provider seam.
+// The OTel SDK's own span.End() calls recover() and stamps
+// semconv.ExceptionMessage(fmt.Sprint(recovered)) — the VALUE — on any span that
+// unwinds with a live panic, then re-raises. That reaches four framework
+// `defer span.End()` sites with no first-party recover at all, so no call-site
+// convention can cover it; only the provider option can.
+func TestTracerProviderDoesNotRecordPanicValues(t *testing.T) {
+	const secret = "not-a-real-secret-9021"
+
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		append(FrameworkTracerProviderOptions(), sdktrace.WithSyncer(exporter))...,
+	)
+	_, span := tp.Tracer("panic-recording").Start(context.Background(), "unwinding")
+
+	func() {
+		defer func() { _ = recover() }()
+		defer span.End() // runs first, sees the live panic
+		panic(secret)
+	}()
+
+	for _, s := range exporter.GetSpans() {
+		for _, ev := range s.Events {
+			assert.NotEqual(t, "exception", ev.Name,
+				"the SDK recorded an exception event for an unwinding panic")
+			for _, attr := range ev.Attributes {
+				assert.NotContains(t, attr.Value.String(), secret,
+					"span attribute %q discloses the panic value", attr.Key)
+			}
+		}
+	}
 }

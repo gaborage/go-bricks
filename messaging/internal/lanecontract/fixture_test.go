@@ -62,7 +62,7 @@ func TestRecordingLoggerCapturesEveryFieldTypeInEmissionOrder(t *testing.T) {
 		Int64("offset", 7).
 		Uint64("delivery_tag", 123).
 		Dur("processing_time", 3*time.Millisecond).
-		Interface("panic", "boom").
+		Str("panic_type", "string").
 		Bytes("stack", []byte("goroutine 1")).
 		Bool("redelivered", true).
 		Err(errors.New("handler failed")).
@@ -77,7 +77,7 @@ func TestRecordingLoggerCapturesEveryFieldTypeInEmissionOrder(t *testing.T) {
 		{"offset", "7"},
 		{"delivery_tag", "123"},
 		{"processing_time", "3ms"},
-		{"panic", "boom"},
+		{"panic_type", "string"},
 		{"stack", "goroutine 1"},
 		{"redelivered", "true"},
 		{"error", "handler failed"},

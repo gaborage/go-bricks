@@ -210,7 +210,7 @@ func (m *Manager) EnsureConsumers(ctx context.Context, key string, decls *Declar
 		// blast radius and improves on it: collapsed callers get an error, not a re-raised panic.
 		defer func() {
 			if r := recover(); r != nil {
-				err = fmt.Errorf("messaging: panic during consumer setup for key %q: %v", key, r)
+				err = fmt.Errorf("messaging: panic during consumer setup for key %q (type: %T)", key, r)
 			}
 		}()
 		return nil, m.ensureConsumersInternal(ctx, key, decls, declHash)

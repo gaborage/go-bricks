@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,7 +178,7 @@ func TestRunReportsSucceededForAHandlerThatReturnsNil(t *testing.T) {
 	require.NotNil(t, res)
 	assert.Equal(t, Succeeded, res.Outcome)
 	assert.NoError(t, res.Err)
-	assert.Nil(t, res.Panic)
+	assert.Empty(t, res.PanicType)
 	assert.Nil(t, res.Stack)
 	assert.GreaterOrEqual(t, res.Duration, time.Millisecond)
 }
@@ -191,7 +193,7 @@ func TestRunReportsHandlerErrorAndCarriesTheError(t *testing.T) {
 
 	assert.Equal(t, HandlerError, res.Outcome)
 	assert.Same(t, handlerErr, res.Err)
-	assert.Nil(t, res.Panic)
+	assert.Empty(t, res.PanicType)
 }
 
 func TestRunConvertsAPanicIntoAnError(t *testing.T) {
@@ -207,8 +209,8 @@ func TestRunConvertsAPanicIntoAnError(t *testing.T) {
 	assert.Equal(t, Panicked, res.Outcome)
 	require.Error(t, res.Err)
 	// The classic lane's wording, now both lanes'.
-	assert.Equal(t, "panic in message handler: handler exploded", res.Err.Error())
-	assert.Equal(t, "handler exploded", res.Panic)
+	assert.Equal(t, "panic in message handler (type: string)", res.Err.Error())
+	assert.Equal(t, "string", res.PanicType)
 	assert.NotEmpty(t, res.Stack)
 }
 
@@ -342,7 +344,7 @@ func TestRunMarksTheSpanFailedForEveryFailingOutcome(t *testing.T) {
 		{
 			name:    "panicked",
 			handle:  func(context.Context, logger.Logger, string) error { panic("nope") },
-			wantMsg: "panic in message handler: nope",
+			wantMsg: "panic in message handler (type: string)",
 		},
 	}
 
@@ -602,15 +604,15 @@ func TestAppendOutcomeStampsTheSpine(t *testing.T) {
 	}
 }
 
-func TestAppendOutcomeAddsThePanicAndItsStack(t *testing.T) {
+func TestAppendOutcomeAddsThePanicTypeAndItsStack(t *testing.T) {
 	event := &outcomeEvent{}
 	stack := []byte("goroutine 1 [running]:")
 	res := &Result{
-		Outcome:  Panicked,
-		TraceID:  testTraceID,
-		Duration: 3 * time.Millisecond,
-		Panic:    "boom",
-		Stack:    stack,
+		Outcome:   Panicked,
+		TraceID:   testTraceID,
+		Duration:  3 * time.Millisecond,
+		PanicType: "string",
+		Stack:     stack,
 	}
 
 	AppendOutcome(event, res)
@@ -618,7 +620,7 @@ func TestAppendOutcomeAddsThePanicAndItsStack(t *testing.T) {
 	assert.Equal(t, [][2]any{
 		{"correlation_id", testTraceID},
 		{"processing_time", 3 * time.Millisecond},
-		{"panic", any("boom")},
+		{"panic_type", "string"},
 		{"stack", stack},
 	}, event.pairs)
 }
@@ -786,7 +788,7 @@ func TestRunSettlesAPanicRaisedBeforeTheHandlerRan(t *testing.T) {
 	require.NotNil(t, settled, "the lane is handed a result even when none had been built yet")
 	assert.Positive(t, settled.Duration,
 		"a result synthesized by the guard still carries how long the delivery took")
-	assert.NotNil(t, settled.Panic)
+	assert.NotEmpty(t, settled.PanicType)
 	assert.NotEmpty(t, settled.Stack)
 }
 
@@ -811,6 +813,7 @@ type recordingLine struct {
 }
 
 func (e *recordingLine) Interface(string, any) logger.LogEvent { return e }
+func (e *recordingLine) Str(string, string) logger.LogEvent    { return e }
 func (e *recordingLine) Msg(msg string)                        { *e.msgs = append(*e.msgs, msg) }
 
 // A panic inside Settle must be REPORTED, not swallowed: it is the lane's own
@@ -871,4 +874,265 @@ func TestRunStillSettlesWhenTheBindingPanickedAndSettleAlsoFails(t *testing.T) {
 	assert.Equal(t, 1, settles, "the delivery is settled exactly once despite the binding panic")
 	assert.Equal(t, []string{"Failed to ack message"}, msgs,
 		"the lane's settle path can log, so a broker failure is reported rather than swallowed")
+}
+
+// capturingLogger hands out one recording event so a test can read what a
+// reporting call actually stamped. Embeds logger.Logger so only the methods the
+// path under test uses need defining.
+type capturingLogger struct {
+	logger.Logger
+	event *outcomeEvent
+}
+
+func (l *capturingLogger) Error() logger.LogEvent        { return l.event }
+func (l *capturingLogger) WithContext(any) logger.Logger { return l }
+
+const deliveryPanicSecret = "not-a-real-secret-0002"
+
+// TestAppendOutcomeNeverDisclosesThePanicValue pins that the lane's outcome line
+// carries the panic's TYPE, not the value. The field is `panic`, which is not a
+// needle, so the sensitive-data filter cannot mask it — a handler panicking with a
+// bare string put that string in the log verbatim. The STACK stays: measured,
+// debug.Stack() renders the panic frame as `panic({0x...})` and does not contain
+// the value.
+func TestAppendOutcomeNeverDisclosesThePanicValue(t *testing.T) {
+	// Drive the REAL conversion rather than hand-building a Result: since Result
+	// carries only PanicType, a hand-built fixture cannot hold the value and the
+	// test would pass by construction.
+	res := invoke(context.Background(), logger.New("disabled", true), testTraceID,
+		func(context.Context, logger.Logger, string) error { panic(deliveryPanicSecret) })
+	require.Equal(t, Panicked, res.Outcome)
+
+	event := &outcomeEvent{}
+	AppendOutcome(event, res)
+
+	for _, pair := range event.pairs {
+		assert.NotEqual(t, any(deliveryPanicSecret), pair[1],
+			"the panic value must not be stamped onto the outcome line")
+	}
+	assert.Contains(t, event.pairs, [2]any{"panic_type", "string"},
+		"the panic's type must be reported instead")
+
+	// Structural, not incidental: no field of the Result a real panic produces may
+	// contain the value. This fails if anyone re-adds a field that retains it.
+	//
+	// Rendering is deliberately shape-independent. A guard that only checked
+	// `%v` would be conditional on the value's shape — the same weakness this
+	// ADR condemns in the sensitive-data filter: `Stack []byte` renders as
+	// `[110 111 …]` and a `*string` renders as an address, so both would hide a
+	// secret in plain sight. renderDeep DEREFERENCES rather than formatting:
+	// `%#v` on a *string prints the address, not the pointee, so it would hide
+	// exactly what it is meant to find — established by probe, not assumed.
+	// CanInterface keeps an unexported field from panicking the loop with a
+	// message naming neither the field nor the leak.
+	rv := reflect.ValueOf(*res)
+	for i := range rv.NumField() {
+		name := rv.Type().Field(i).Name
+		f := rv.Field(i)
+		require.True(t, f.CanInterface(),
+			"Result field %q is unexported, so this guard cannot inspect it — "+
+				"make it exported or assert it here explicitly", name)
+		assert.NotContains(t, renderDeep(f), deliveryPanicSecret,
+			"Result field %q retains the panic value", name)
+	}
+}
+
+// TestSettlePanicNeverDisclosesThePanicValue pins the same rule on the settle
+// recovery path, which reports through a different call.
+func TestSettlePanicNeverDisclosesThePanicValue(t *testing.T) {
+	h := newHarness(t)
+	rec := &outcomeEvent{}
+
+	req := h.request(succeedingHandler)
+	req.Log = &capturingLogger{event: rec}
+	req.Settle = func(*Result) { panic(deliveryPanicSecret) }
+
+	require.NotPanics(t, func() { h.runRequest(req) })
+
+	for _, pair := range rec.pairs {
+		assert.NotEqual(t, any(deliveryPanicSecret), pair[1],
+			"the settle panic value must not reach the log")
+	}
+}
+
+// panickingReportLogger's event panics when the settle-panic report is written,
+// keyed on `panic_type` — the field only that report uses. Aimed at that call
+// specifically: a double that panicked on every call would take out the lane's
+// ordinary logging instead, a surface this guard has nothing to do with.
+type panickingReportLogger struct{ logger.Logger }
+
+func (l *panickingReportLogger) Error() logger.LogEvent        { return &panickingReportEvent{} }
+func (l *panickingReportLogger) WithContext(any) logger.Logger { return l }
+
+type panickingReportEvent struct {
+	logger.LogEvent
+	reporting bool
+}
+
+func (e *panickingReportEvent) Str(key, _ string) logger.LogEvent {
+	if key == "panic_type" {
+		e.reporting = true
+	}
+	return e
+}
+func (e *panickingReportEvent) Interface(string, any) logger.LogEvent { return e }
+
+func (e *panickingReportEvent) Msg(string) {
+	if e.reporting {
+		panic("logger write failed")
+	}
+}
+
+// TestSettlePanicReportSurvivesAPanickingLogger pins settleOnce's terminal
+// swallow. The report runs inside a defer that has already spent its recover(),
+// so a panic in the logger — which is the lane's, i.e. consumer-supplied —
+// escapes Run entirely unless the swallow catches it. Deleting that one line left
+// this package green before this test existed; no mutation operator removes a
+// defer, so neither the suite nor `make mutate` covered it.
+func TestSettlePanicReportSurvivesAPanickingLogger(t *testing.T) {
+	h := newHarness(t)
+
+	req := h.request(succeedingHandler)
+	req.Log = &panickingReportLogger{}
+	req.Settle = func(*Result) { panic("settle blew up") }
+
+	require.NotPanics(t, func() { h.runRequest(req) },
+		"a panic while reporting a settle panic must not escape Run")
+}
+
+// TestRunKeepsAPanicValueOutOfTheSpan pins the property ADR-081 states: a value
+// a consumer's handler chose to panic with must not reach the tracing backend.
+// The span is the sink that leaves the platform, and both lanes deliberately
+// withhold res.Err from the log on the panicked branch, so this is the only
+// sink left to guard — and the one no log-field assertion covers.
+func TestRunKeepsAPanicValueOutOfTheSpan(t *testing.T) {
+	h := newHarness(t)
+	h.run(func(context.Context, logger.Logger, string) error {
+		panic(deliveryPanicSecret)
+	})
+
+	spans := h.exporter.GetSpans()
+	require.Len(t, spans, 1)
+
+	assert.NotContains(t, spans[0].Status.Description, deliveryPanicSecret,
+		"span status description discloses the panic value")
+	assert.Contains(t, spans[0].Status.Description, "string",
+		"span status description should name the panic value's TYPE")
+
+	require.Len(t, spans[0].Events, 1)
+	for _, attr := range spans[0].Events[0].Attributes {
+		assert.NotContains(t, attr.Value.String(), deliveryPanicSecret,
+			"span exception attribute %q discloses the panic value", attr.Key)
+	}
+}
+
+// renderDeep renders v so a secret cannot hide behind a shape. A guard
+// conditional on the value's shape is the weakness ADR-081 condemns in the
+// field-name filter, so this one must not be. Each helper below closes one
+// blind spot that a probe caught in an earlier version of this guard — the
+// names are the documentation of what was missed and why.
+func renderDeep(v reflect.Value) string {
+	if text, ok := renderSelfDescribing(v); ok {
+		return text
+	}
+	v, addressable := derefToValue(v)
+	if !addressable {
+		return "<nil>"
+	}
+	if !v.CanInterface() {
+		return ""
+	}
+	if text, ok := renderByteSequence(v); ok {
+		return text
+	}
+	return renderComposite(v)
+}
+
+// renderSelfDescribing asks the value to render ITSELF, before any structural
+// walk. An error or Stringer carries its text in unexported fields —
+// `*errors.errorString` and `*fmt.wrapError` both do — so a struct walk sees
+// nothing it can read and returns empty. Result.Err is the field actually
+// derived from the panic value, so that blind spot sat over the one field that
+// matters most. Runs before dereferencing, because the method set belongs to
+// the pointer.
+func renderSelfDescribing(v reflect.Value) (string, bool) {
+	if !v.CanInterface() {
+		return "", false
+	}
+	switch x := v.Interface().(type) {
+	case error:
+		if x != nil {
+			return x.Error(), true
+		}
+	case fmt.Stringer:
+		if x != nil {
+			return x.String(), true
+		}
+	}
+	return "", false
+}
+
+// derefToValue follows pointers and interfaces to the value they hold. Without
+// it `%v`/`%#v` on a *string prints an address, which hides exactly what this
+// guard exists to find.
+func derefToValue(v reflect.Value) (out reflect.Value, ok bool) {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return v, false
+		}
+		v = v.Elem()
+	}
+	return v, true
+}
+
+// renderByteSequence reads any byte sequence as TEXT, array included.
+// reflect.Value.Bytes cannot serve the array case — it panics with
+// "unaddressable byte array" on a [N]byte reached through reflect.ValueOf(*res)
+// — but letting arrays fall through to the element walk renders `0x6e 0x6f …`
+// and finds nothing, which is a blind guard rather than a panicking one.
+// Neither is acceptable, so the array is copied into a slice and read as text.
+func renderByteSequence(v reflect.Value) (string, bool) {
+	kind := v.Kind()
+	if kind != reflect.Slice && kind != reflect.Array {
+		return "", false
+	}
+	if v.Type().Elem().Kind() != reflect.Uint8 {
+		return "", false
+	}
+	if kind == reflect.Slice {
+		return string(v.Bytes()), true
+	}
+	b := make([]byte, v.Len())
+	for i := range b {
+		b[i] = byte(v.Index(i).Uint())
+	}
+	return string(b), true
+}
+
+// renderComposite walks the members of a non-byte composite, and falls back to
+// %#v for a scalar.
+func renderComposite(v reflect.Value) string {
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array:
+		return renderMembers(v.Len(), v.Index)
+	case reflect.Struct:
+		return renderMembers(v.NumField(), v.Field)
+	default:
+		return fmt.Sprintf("%#v", v.Interface())
+	}
+}
+
+// renderMembers renders n members obtained by at, skipping any the reflect
+// package will not let us read rather than panicking on them.
+func renderMembers(n int, at func(int) reflect.Value) string {
+	var sb strings.Builder
+	for i := range n {
+		member := at(i)
+		if !member.CanInterface() {
+			continue
+		}
+		sb.WriteString(renderDeep(member))
+		sb.WriteByte(' ')
+	}
+	return sb.String()
 }

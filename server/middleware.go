@@ -1,6 +1,8 @@
 package server
 
 import (
+	"fmt"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -110,8 +112,17 @@ func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, obser
 		SlowRequestThreshold: 1 * time.Second,
 	}))
 
-	// Recovery
-	e.Use(middleware.Recover())
+	// Recovery. DisableStackAll keeps the capture to the panicking goroutine:
+	// PanicStackError.Error() concatenates the stack, and that string becomes the
+	// OTel span's status description on every 500, so the default all-goroutine
+	// dump puts up to 4 KB of unrelated stacks on a hot-path attribute. The
+	// panicking goroutine is the one that identifies the site.
+	e.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{DisableStackAll: true}))
+
+	e.Use(sanitizePanicValue())
+
+	// Registered AFTER Recover, so it sits INSIDE it and sees the raw recovered
+	// value. Order matters and is the whole point — see sanitizePanicValue.
 
 	// Security headers
 	e.Use(middleware.SecureWithConfig(middleware.SecureConfig{
@@ -303,4 +314,62 @@ func buildCompositeTenantResolver(tenantRegex *regexp.Regexp, subs ...multitenan
 		return nil
 	}
 	return &multitenant.CompositeResolver{Resolvers: resolvers, TenantRegex: tenantRegex}
+}
+
+// panicTypeError names a recovered panic's TYPE and carries nothing else.
+// It deliberately implements `error` so Echo's Recover adopts it verbatim
+// (`recover.go` does `tmpErr, ok := r.(error)`) instead of rendering it.
+type panicTypeError struct{ typ string }
+
+func (e *panicTypeError) Error() string { return "panic (type: " + e.typ + ")" }
+
+// sanitizePanicValue replaces a panic's VALUE with its TYPE before anything can
+// render it (ADR-081).
+//
+// SECURITY: the OTel middleware is OUTER to Recover, so it reads whatever error
+// Recover produces and puts it in the span's status description — off-platform,
+// on every panicking request, regardless of App.Debug. Echo builds that error
+// with its own `fmt.Errorf("%v", r)`, so a handler's `panic("secret")` shipped
+// the secret to the tracing backend verbatim.
+//
+// It must run INSIDE Recover rather than outside it, because Echo destroys the
+// information this needs: by the time Recover hands anyone a PanicStackError it
+// has already wrapped a non-error panic in `fmt.Errorf`, so the value's own type
+// is gone and every panic would report `*errors.errorString`. Recovering here
+// and re-panicking with a type-only error is what preserves the true type while
+// leaving Recover's stack capture, its PanicStackError shape, and the
+// `errors.As` in the HTTP error handler all working unchanged.
+//
+// A value that is ALREADY an error gets the same treatment: Echo would adopt it
+// verbatim with no rendering at all, so `panic(fmt.Errorf("secret=%s", s))`
+// would otherwise walk straight through untouched.
+func sanitizePanicValue() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			defer func() {
+				r := recover()
+				if r == nil {
+					return
+				}
+				// net/http's abort contract: this sentinel must reach the server
+				// unchanged, exactly as Echo's own Recover re-panics it.
+				//
+				// SECURITY: identity, not errors.Is, and the difference matters.
+				// This is a BYPASS gate — whatever matches skips sanitizing — so
+				// breadth here is a defect. errors.Is also matches a WRAPPED
+				// sentinel, and `panic(fmt.Errorf("%s: %w", secret,
+				// http.ErrAbortHandler))` would then be re-panicked unsanitized;
+				// Echo adopts an error verbatim, so the payload would reach the
+				// span status and the action log. Only the exact sentinel carries
+				// no data, and net/http honors only the exact sentinel too, so
+				// identity is both the safe comparison and the faithful one.
+				//nolint:errorlint // sentinel bypass: see above, breadth is the bug
+				if r == http.ErrAbortHandler {
+					panic(r)
+				}
+				panic(&panicTypeError{typ: fmt.Sprintf("%T", r)})
+			}()
+			return next(c)
+		}
+	}
 }
