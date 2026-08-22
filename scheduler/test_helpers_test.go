@@ -50,6 +50,10 @@ func withMessaging(fn func(context.Context) (messaging.AMQPClient, error)) testS
 	return func(d *app.ModuleDeps) { d.Messaging = fn }
 }
 
+func withLogger(l logger.Logger) testSchedulerOption {
+	return func(d *app.ModuleDeps) { d.Logger = l }
+}
+
 func withSlowJobThreshold(threshold time.Duration) testSchedulerOption {
 	return func(d *app.ModuleDeps) { d.Config.Scheduler.Timeout.SlowJob = threshold }
 }

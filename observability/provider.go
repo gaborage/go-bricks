@@ -330,9 +330,11 @@ func (p *provider) initTraceProvider(ctx context.Context) error {
 	debugLogger.Printf("Creating TracerProvider with sampler rate=%.2f", sampleRate)
 
 	p.tracerProvider = sdktrace.NewTracerProvider(
-		sdktrace.WithResource(res),
-		sdktrace.WithSpanProcessor(processor),
-		sdktrace.WithSampler(sampler),
+		append(FrameworkTracerProviderOptions(),
+			sdktrace.WithResource(res),
+			sdktrace.WithSpanProcessor(processor),
+			sdktrace.WithSampler(sampler),
+		)...,
 	)
 
 	return nil
@@ -621,5 +623,29 @@ func warnIfZeroSampleRate(cfg *Config) {
 			debugLogger.Println("         This means NO SPANS will be recorded or exported")
 			debugLogger.Println("         If this is unintentional, remove 'trace.sample.rate: 0.0' from your config")
 		}
+	}
+}
+
+// FrameworkTracerProviderOptions returns the provider policy every GoBricks
+// TracerProvider carries, separated from the instance-specific resource,
+// processor and sampler so a test can assert the policy without rebuilding the
+// exporter stack. Exported so a consumer building its own TracerProvider for a
+// test reproduces production behavior rather than the SDK default — without it
+// a test asserting "no panic value reaches a span" passes or fails for reasons
+// unrelated to the code under test.
+//
+// SECURITY: WithoutPanicRecording stops the SDK disclosing a panic VALUE
+// (ADR-081). The SDK's span.End() calls recover() itself and stamps
+// semconv.ExceptionMessage(fmt.Sprint(recovered)) before re-raising, so any
+// `defer span.End()` that unwinds with a live panic ships a consumer-chosen
+// value to the tracing backend — off-platform, and past every first-party
+// guard. Four of the framework's six such sites have no recover() of their
+// own, so no call-site convention reaches them; only this option does. The
+// cost is accepted deliberately: an unwinding panic no longer produces an
+// exception event at all, and a panic's diagnostic worth is its type and its
+// stack, both of which the framework's own reporting retains.
+func FrameworkTracerProviderOptions() []sdktrace.TracerProviderOption {
+	return []sdktrace.TracerProviderOption{
+		sdktrace.WithoutPanicRecording(),
 	}
 }

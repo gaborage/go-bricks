@@ -1394,6 +1394,39 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-081: A Recovered Panic Value Is Reported By Type, Never By Value](adr_081_recovered_panic_values_reported_by_type.md)
+
+**Date:** 2026-08-22 | **Status:** Accepted | **Corrects:** ADR-079
+
+ADR-079 reported a recovered panic value through the sensitive-data filter and called it
+"masked by field name exactly as any other logged value". The filter matches FIELD names and
+the field is `panic`, which is no needle — so a bare `panic("secret")` was emitted in clear,
+as was a map key the needle list does not name, while a key it names was masked. Protection
+varied with the shape of a value chosen by consumer code. All four recovery sites — `migration/audit_emitter.go`,
+`scheduler/module.go`, and `messaging/internal/delivery`'s `AppendOutcome` and `settleOnce` —
+now report the value's TYPE only. `AppendOutcome` is the delivery spine shared by both
+messaging lanes, so the rename reaches every consumer whose message handler panics.
+The audit emitter's two-tier report collapses to one, its fallback having existed solely
+because rendering the value could panic.
+
+**Key Benefits:** no consumer-chosen value reaches any sink from a FRAMEWORK recovery site,
+whatever its shape — log field, span exception, span status and returned error alike. The
+qualifier is exact: Echo's `middleware.Recover` renders the value with its own `%v` and the
+request logger stamps it on the action line, a path with no first-party `recover()` and a
+separate fix, tracked apart from this change. Getting
+there took a second class of site the first draft missed: three paths rendered `recover()`'s
+value with `%v` into an ERROR that later reached a span (`delivery.go:38`'s shared
+`panicMessage`, `multitenant/cleanup.go:61`, `messaging/manager.go:213`), so a guard installed
+on the panic path never saw them. **The rule binds at the point of CONVERSION**, wherever a
+recovered value becomes an error — `httpclient/client.go:750,812` is the model and had it
+first. **Watch:** the `panic` log field becomes `panic_type` on all five lines, the
+`(value unrenderable)` message is retired, AND both messaging lanes' `exception.message` and
+span status description change text — a span-based alert breaks even if no log-based one does.
+All of it breaks SILENTLY. The stack trace is retained, so the panic site is still identified. See
+`[C60.23]` in [migrations.md](migrations.md).
+
+---
+
 ### [ADR-080: `server.ClientIP` Answers From Observed Hops Only, and Trusted-Proxy Lists Refuse Total Address-Family Coverage](adr_080_client_ip_answers_only_from_observed_hops.md)
 
 **Date**: 2026-08-21 | **Status**: Accepted | **Completes**: ADR-057
@@ -1717,7 +1750,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-080) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-081) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

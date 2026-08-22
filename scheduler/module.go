@@ -684,20 +684,25 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			// filter does not touch, and the worse one leaves the platform:
 			// span.RecordError ships it to the tracing backend as an exception
 			// event, with that vendor's retention, access model and export path.
-			// The summary line's Err() is the second. A job panicking with its own
-			// config would put a secret in both. The value itself is reported by
-			// the guarded Interface call below, which DOES run it through the
-			// filter. Same rule, and the same reason, as httpclient's Do recovery.
-			panicErr := fmt.Errorf("panic (type: %T)", r)
+			// The summary line's Err() is the second, and the guarded report below is
+			// the third — running it through the sensitive-data filter is NOT
+			// protection, because that filter masks by FIELD NAME and the field is
+			// `panic`, which is no needle. A bare `panic("secret")` has no inner
+			// field name to match, and a map key the needle list does not name is
+			// emitted in clear. So every one of the three reports names the TYPE.
+			// Same rule, and the same reason, as httpclient's Do recovery.
+			panicType := fmt.Sprintf("%T", r)
+			panicErr := fmt.Errorf("panic (type: %s)", panicType)
 
-			// This defer already spent its recover(), so a panic while rendering r
-			// would escape it and skip the accounting below — leaving the job
-			// counted as neither success nor failure. Guard the log call alone.
+			// The logger is consumer-supplied and its write can panic; `%T` cannot.
+			// This defer has already spent its recover(), so guard the log call
+			// alone — otherwise that panic escapes and skips the accounting below,
+			// leaving the job counted as neither success nor failure.
 			func() {
 				defer func() { _ = recover() }()
 				m.logger.WithContext(ctx).Error().
 					Str("jobID", entry.metadata.JobID).
-					Interface("panic", r).
+					Str("panic_type", panicType).
 					Str("stackTrace", string(debug.Stack())).
 					Msg("Job panicked - recovered and marked as failed")
 			}()

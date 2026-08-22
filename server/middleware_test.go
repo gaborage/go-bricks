@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,8 +11,12 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
@@ -803,3 +809,150 @@ func TestForwardedClientCertRequireImpliedWarn(t *testing.T) {
 }
 
 // testHeaderResolver validates header resolver properties
+
+// TestRecoveredPanicNeverReachesTheSpan pins ADR-081 on the HTTP lane. The OTel
+// middleware is OUTER to Recover, so it reads the error Recover produces and puts
+// it in the span status description — off-platform, on every panicking request,
+// in production posture. Echo builds that error with its own `fmt.Errorf("%v", r)`,
+// or uses the panic value verbatim when it is already an error, so both shapes
+// must be covered: testing only panic("string") would pass while missing the
+// panic(fmt.Errorf(...)) case entirely.
+func TestRecoveredPanicNeverReachesTheSpan(t *testing.T) {
+	tests := []struct {
+		name     string
+		panicVal any
+		wantType string
+	}{
+		{name: "bare_string", panicVal: recoverProbeSecret, wantType: "string"},
+		// fmt.Errorf WITHOUT %w yields *errors.errorString; the point of the case is
+		// that Echo adopts an error panic verbatim and renders nothing, so the value
+		// would walk through untouched without a first-party %T.
+		{name: "plain_error", panicVal: fmt.Errorf("boom: %s", recoverProbeSecret), wantType: "*errors.errorString"},
+		{name: "wrapped_error", panicVal: fmt.Errorf("boom: %w", errors.New(recoverProbeSecret)), wantType: "*fmt.wrapError"},
+		// The decisive case: a consumer's own error type. Anything that reads the
+		// type off Echo's WRAPPED error reports *errors.errorString here and loses
+		// the only diagnostic ADR-081 trades the value for.
+		{name: "domain_error", panicVal: &probeDomainError{}, wantType: "*server.probeDomainError"},
+		{name: "struct_value", panicVal: struct{ Token string }{recoverProbeSecret}, wantType: "struct { Token string }"},
+		{name: "map_value", panicVal: map[string]string{"token": recoverProbeSecret}, wantType: "map[string]string"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exporter := tracetest.NewInMemoryExporter()
+			tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+			otel.SetTracerProvider(tp)
+
+			cfg := &config.Config{}
+			cfg.App.Name = "panic-span"
+			cfg.App.Env = "production"
+
+			e := echo.New()
+			SetupMiddlewares(e, logger.New("disabled", true), cfg, true, "/health", "/ready")
+			e.GET("/boom", func(*echo.Context) error { panic(tt.panicVal) })
+
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
+			require.NoError(t, tp.ForceFlush(t.Context()))
+
+			spans := exporter.GetSpans()
+			require.NotEmpty(t, spans, "the OTel middleware must have produced a span")
+			for _, s := range spans {
+				assert.NotContains(t, s.Status.Description, recoverProbeSecret,
+					"span status description discloses the panic value")
+				assert.Contains(t, s.Status.Description, tt.wantType,
+					"span status description should name the panic value's TYPE")
+				for _, ev := range s.Events {
+					for _, attr := range ev.Attributes {
+						assert.NotContains(t, attr.Value.String(), recoverProbeSecret,
+							"span event attribute %q discloses the panic value", attr.Key)
+					}
+				}
+			}
+			assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		})
+	}
+}
+
+// recoverProbeSecret stands in for anything sensitive a handler might panic with.
+const recoverProbeSecret = "not-a-real-secret-5512"
+
+// probeDomainError stands in for a consumer's own error type.
+type probeDomainError struct{}
+
+func (*probeDomainError) Error() string { return "domain failure: " + recoverProbeSecret }
+
+// TestSanitizePanicValuePreservesTheAbortContract pins net/http's sentinel: it
+// must reach the server untouched, exactly as Echo's own Recover re-panics it.
+// Sanitizing it would swallow a connection abort into a 500.
+func TestSanitizePanicValuePreservesTheAbortContract(t *testing.T) {
+	mw := sanitizePanicValue()
+	h := mw(func(*echo.Context) error { panic(http.ErrAbortHandler) })
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = h(nil)
+	}()
+
+	assert.Equal(t, http.ErrAbortHandler, recovered,
+		"the abort sentinel must propagate unchanged, not become a panicTypeError")
+}
+
+// TestSanitizePanicValueStillYieldsAPanicStackError pins the dependency the HTTP
+// error handler has on Echo's shape: server.New does errors.As(&*PanicStackError)
+// to emit its structured "Panic recovered" line with the stack. Sanitizing must
+// not break that, or the panic log silently stops.
+func TestSanitizePanicValueStillYieldsAPanicStackError(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{}
+	cfg.App.Name = "panic-shape"
+	SetupMiddlewares(e, logger.New("disabled", true), cfg, false, "/health", "/ready")
+
+	var seen error
+	e.HTTPErrorHandler = func(_ *echo.Context, err error) { seen = err }
+	e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
+	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
+
+	var pse *middleware.PanicStackError
+	require.True(t, errors.As(seen, &pse), "server.New's errors.As branch must still match")
+	assert.NotEmpty(t, pse.Stack, "the stack must survive — it identifies the panic site")
+	assert.NotContains(t, seen.Error(), recoverProbeSecret)
+	assert.Contains(t, seen.Error(), "panic (type: string)")
+
+	// Pins the ONE assumption this design makes about Echo: that Recover adopts an
+	// error panic verbatim (`tmpErr, ok := r.(error)`) instead of rendering it. If a
+	// future Echo renders instead, Unwrap stops being our type and every panic
+	// collapses to *errors.errorString — the exact degradation this design exists to
+	// avoid — while the message text above still reads correctly. Assert the TYPE, or
+	// the regression is silent.
+	var typed *panicTypeError
+	assert.True(t, errors.As(pse.Unwrap(), &typed),
+		"Echo must adopt the sanitized error verbatim; if it renders it instead, the true panic type is lost")
+}
+
+// TestSanitizePanicValueKeepsTheOriginalFrameInTheStack pins diagnostics, not
+// secrecy. Re-panicking means Echo's runtime.Stack runs at ITS recover point,
+// after unwinding began — if the original frames were lost the stack would name
+// only the sanitizer, and a test that merely checks the secret is absent would
+// pass while the panic site had become unfindable.
+func TestSanitizePanicValueKeepsTheOriginalFrameInTheStack(t *testing.T) {
+	e := echo.New()
+	cfg := &config.Config{}
+	cfg.App.Name = "panic-stack"
+	SetupMiddlewares(e, logger.New("disabled", true), cfg, false, "/health", "/ready")
+
+	var seen error
+	e.HTTPErrorHandler = func(_ *echo.Context, err error) { seen = err }
+	e.GET("/boom", theOriginalPanickingHandler)
+	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
+
+	var pse *middleware.PanicStackError
+	require.True(t, errors.As(seen, &pse))
+	assert.Contains(t, string(pse.Stack), "theOriginalPanickingHandler",
+		"the stack must still name the function that panicked, not just the sanitizer")
+	assert.NotContains(t, string(pse.Stack), recoverProbeSecret)
+}
+
+// theOriginalPanickingHandler is named distinctly so its frame is unambiguous.
+func theOriginalPanickingHandler(*echo.Context) error { panic(recoverProbeSecret) }

@@ -1117,7 +1117,10 @@ func TestEnsureConsumersCollapsedWaiterHonorsOwnContext(t *testing.T) {
 // is reachable from a project's own mistake.
 func TestEnsureConsumersRecoversPanicFromSetup(t *testing.T) {
 	log := logger.New("error", false)
-	factory := func(string, logger.Logger) AMQPClient { panic("bad broker config") }
+	// A per-tenant broker configuration is exactly where a credential lives, so the
+	// panic value here stands in for one (ADR-081).
+	const setupPanicSecret = "not-a-real-secret-3390"
+	factory := func(string, logger.Logger) AMQPClient { panic(setupPanicSecret) }
 	manager := NewMessagingManager(
 		&stubMessagingSource{urls: map[string]string{testTenantID: amqpHost}},
 		log,
@@ -1131,6 +1134,11 @@ func TestEnsureConsumersRecoversPanicFromSetup(t *testing.T) {
 	err := manager.EnsureConsumers(context.Background(), testTenantID, decls)
 	require.Error(t, err, "a panicking setup must surface as an error, not escape the process")
 	require.ErrorContains(t, err, "panic during consumer setup")
+	// ADR-081: the error is returned to the caller and reaches its logs; report the
+	// panic value's type, never the value.
+	require.ErrorContains(t, err, "(type: string)")
+	require.NotContains(t, err.Error(), setupPanicSecret,
+		"the setup panic value must not ride along in the returned error")
 
 	// A failed pass must not install anything, so the next caller retries and fails the same way
 	// rather than inheriting a stale success.

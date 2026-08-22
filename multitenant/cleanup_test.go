@@ -59,16 +59,25 @@ func TestFanOutRetentionCleanupRecoversPerTenantPanic(t *testing.T) {
 		tid, _ := GetTenant(ctx)
 		seen = append(seen, tid)
 		if tid == "boom" {
-			panic("kaboom")
+			panic(cleanupPanicSecret)
 		}
 		return 0, nil
 	}
 
 	err := FanOutRetentionCleanup(context.Background(), log, []string{"boom", "ok"}, getDB, time.Hour, "outbox", del)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `outbox cleanup: tenant "boom": panic: kaboom`)
+	assert.Contains(t, err.Error(), `outbox cleanup: tenant "boom": panic (type: string)`)
+	// ADR-081: this error is returned to the scheduler, which reports it on the
+	// job's span (RecordError, SetStatus) and its summary line. A value the
+	// consumer's callback panicked with must not ride along to any of them.
+	assert.NotContains(t, err.Error(), cleanupPanicSecret,
+		"the panic value must not reach the error the scheduler logs and records")
 	assert.Equal(t, []string{"boom", "ok"}, seen, "a panicking tenant must not abort the remaining tenants")
 }
+
+// cleanupPanicSecret stands in for anything sensitive a consumer's RetentionDelete
+// callback might panic with; no assertion may ever find it in a reported error.
+const cleanupPanicSecret = "not-a-real-secret-4471"
 
 func TestFanOutRetentionCleanupReportsDBUnavailable(t *testing.T) {
 	log := logger.New("disabled", true)
