@@ -758,3 +758,92 @@ func TestSchedulerDefaultsToUTCTimezoneForJobs(t *testing.T) {
 
 	assert.Equal(t, "UTC", nextRun.Location().String())
 }
+
+// unloggableValue renders nothing: encoding it panics. It stands for any value a
+// job can panic with that the panic-reporting log call itself cannot render.
+type unloggableValue string
+
+func (unloggableValue) MarshalJSON() ([]byte, error) {
+	panic("encoding the recovered value panicked")
+}
+
+// unloggablePanicJob panics with a value that cannot be logged.
+type unloggablePanicJob struct{}
+
+func (*unloggablePanicJob) Execute(_ JobContext) error {
+	panic(unloggableValue("job exploded"))
+}
+
+// TestJobExecutionPanicWithUnloggableValueStillMarksJobFailed pins that the
+// panic-reporting log call cannot take the rest of the recovery block with it.
+// That block reports the panic FIRST and only then increments the failure
+// counter, records the span error and emits the summary — so a panic while
+// rendering the recovered value leaves the job silently not-failed, and escapes
+// a defer that has already spent its recover().
+func TestJobExecutionPanicWithUnloggableValueStillMarksJobFailed(t *testing.T) {
+	module, _ := newTestScheduler(t, 5*time.Second)
+	defer func() { _ = module.Shutdown() }()
+
+	entry := &jobEntry{
+		job:      &unloggablePanicJob{},
+		metadata: &JobMetadata{JobID: "unloggable-panic-job", ScheduleType: "fixed-rate"},
+	}
+
+	require.NotPanics(t, func() {
+		module.runJobBody(entry, "manual")
+	})
+
+	snapshot := entry.metadata.snapshot()
+	assert.Equal(t, int64(1), snapshot.FailureCount, "a panicking job must be counted as failed")
+	// A recovered panic is reported as "failure" in the /_sys/job payload —
+	// "panic" is the metrics-only execution status.
+	assert.Equal(t, "failure", snapshot.LastExecutionStatus)
+	assert.Equal(t, int64(1), snapshot.TotalExecutions)
+}
+
+// secretBearingPanic carries a secret under a masked field name alongside plain
+// data, so a test can tell which reporting path applied the filter.
+type secretBearingPanic struct {
+	JobRef   string `json:"jobRef"`
+	Password string `json:"password"`
+}
+
+type secretPanicJob struct{}
+
+func (*secretPanicJob) Execute(_ JobContext) error {
+	panic(secretBearingPanic{JobRef: "nightly-sync", Password: schedulerPanicSecret})
+}
+
+const schedulerPanicSecret = "test_password_123"
+
+// TestJobExecutionPanicDoesNotLeakValueThroughSummary pins that a job's panic
+// value reaches the sink ONLY through the filtered reporting call. panicErr feeds
+// span.RecordError and the summary line's Err(), neither of which the
+// sensitive-data filter touches, so rendering the value into it would emit a
+// secret the reporting call one line earlier had just masked.
+func TestJobExecutionPanicDoesNotLeakValueThroughSummary(t *testing.T) {
+	var entry *jobEntry
+
+	// zerolog binds os.Stdout at CONSTRUCTION, so the scheduler must be built
+	// inside the capture — building it outside yields an empty capture and a test
+	// that looks like it proved absence. This applies to every stdout-capture test
+	// in the repo, not just this one.
+	out := captureStdout(t, func() {
+		module, _ := newTestScheduler(t, 5*time.Second)
+		defer func() { _ = module.Shutdown() }()
+
+		entry = &jobEntry{
+			job:      &secretPanicJob{},
+			metadata: &JobMetadata{JobID: "secret-panic-job", ScheduleType: "fixed-rate"},
+		}
+		module.runJobBody(entry, "manual")
+	})
+
+	assert.NotContains(t, out, schedulerPanicSecret,
+		"the panic value must reach the sink only through the filtered reporting call")
+	assert.Contains(t, out, "nightly-sync",
+		"non-sensitive fields of the panic value should still be reported")
+	assert.Contains(t, out, "secretBearingPanic",
+		"the summary line should name the panic's type")
+	assert.Equal(t, int64(1), entry.metadata.snapshot().FailureCount)
+}

@@ -680,14 +680,27 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 
 		if r := recover(); r != nil {
 			executionStatus = "panic"
-			panicErr := fmt.Errorf("panic: %v", r)
+			// SECURITY: the panic value's TYPE only. panicErr reaches two sinks the
+			// filter does not touch, and the worse one leaves the platform:
+			// span.RecordError ships it to the tracing backend as an exception
+			// event, with that vendor's retention, access model and export path.
+			// The summary line's Err() is the second. A job panicking with its own
+			// config would put a secret in both. The value itself is reported by
+			// the guarded Interface call below, which DOES run it through the
+			// filter. Same rule, and the same reason, as httpclient's Do recovery.
+			panicErr := fmt.Errorf("panic (type: %T)", r)
 
-			// Log panic with stack trace, correlated like the summary line below.
-			m.logger.WithContext(ctx).Error().
-				Str("jobID", entry.metadata.JobID).
-				Interface("panic", r).
-				Str("stackTrace", string(debug.Stack())).
-				Msg("Job panicked - recovered and marked as failed")
+			// This defer already spent its recover(), so a panic while rendering r
+			// would escape it and skip the accounting below — leaving the job
+			// counted as neither success nor failure. Guard the log call alone.
+			func() {
+				defer func() { _ = recover() }()
+				m.logger.WithContext(ctx).Error().
+					Str("jobID", entry.metadata.JobID).
+					Interface("panic", r).
+					Str("stackTrace", string(debug.Stack())).
+					Msg("Job panicked - recovered and marked as failed")
+			}()
 
 			// Record panic in span (if span exists)
 			if span != nil {

@@ -1,10 +1,17 @@
 package logger
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -1045,7 +1052,11 @@ func TestIsSensitiveFieldDifferentialAgainstLinearReference(t *testing.T) {
 	configs := []namedConfig{
 		{name: "default_config", config: DefaultFilterConfig()},
 		{name: "default_plus_mixed_case_multibyte_extras", config: defaultWithExtras},
-		{name: "single_empty_needle", config: &FilterConfig{SensitiveFields: []string{""}}},
+		// A mixed list: the empty entry is dropped at construction, so the bucket
+		// index and the linear oracle must still agree on the surviving needle.
+		// A list of ONLY empty entries would normalize to nothing and make both
+		// sides unconditionally false — the same vacuous case as no_needles.
+		{name: "empty_needle_beside_a_real_one", config: &FilterConfig{SensitiveFields: []string{"", sensitiveFieldPassword}}},
 		{name: "no_needles", config: &FilterConfig{SensitiveFields: []string{}}},
 	}
 
@@ -1158,6 +1169,277 @@ func TestDefaultFilterMasksSecretKeyShapesButNotIdentifiers(t *testing.T) {
 			gotValue := filter.FilterString(tt.fieldName, "v")
 			if (gotValue == DefaultMaskValue) != tt.wantMasked {
 				t.Errorf("FilterString(%q, \"v\") = %q, want masked=%v", tt.fieldName, gotValue, tt.wantMasked)
+			}
+		})
+	}
+}
+
+// newFilteredEventLogger builds a logger whose events are filtered by config and
+// whose output lands in a buffer, so a document can be observed exactly as a
+// consumer's log sink receives it.
+func newFilteredEventLogger(t *testing.T, config *FilterConfig) (*ZeroLogger, *bytes.Buffer) {
+	t.Helper()
+	var buf bytes.Buffer
+	zl := zerolog.New(&buf)
+	return &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(config)}, &buf
+}
+
+// loggedField decodes the captured line and returns the named top-level field.
+func loggedField(t *testing.T, buf *bytes.Buffer, key string) any {
+	t.Helper()
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &line), "log line should be valid JSON")
+	value, ok := line[key]
+	require.True(t, ok, "log line should carry field %q", key)
+	return value
+}
+
+// walkerUser is a typed struct element, the shape the walker's struct branch
+// already handled and must keep handling.
+type walkerUser struct {
+	Name     string `json:"name"`
+	Password string `json:"password"`
+}
+
+// filterDocumentCase pins what the filter emits for one document shape. Every
+// expected value is hand-written from the JSON the shape stands for, never
+// produced by running the walker over the input.
+type filterDocumentCase struct {
+	name     string
+	document any
+	wantJSON string
+}
+
+// filterDocumentCases enumerates the document shapes that reach the walker from
+// a real HTTP or broker payload. Everything below the top level is []any of
+// map[string]any — the shape encoding/json always produces — which no typed
+// struct fixture exercises.
+func filterDocumentCases() []filterDocumentCase {
+	return []filterDocumentCase{
+		{
+			name:     "slice_of_maps",
+			document: map[string]any{"data": []any{map[string]any{"name": testNameJohn, "password": testPassword}}},
+			wantJSON: `{"data":[{"name":"john","password":"***"}]}`,
+		},
+		{
+			name:     "root_slice_of_maps",
+			document: []any{map[string]any{"name": testNameJohn, "password": testPassword}},
+			wantJSON: `[{"name":"john","password":"***"}]`,
+		},
+		{
+			name:     "nested_slices",
+			document: map[string]any{"items": []any{[]any{1}, []any{2}}},
+			wantJSON: `{"items":[[1],[2]]}`,
+		},
+		{
+			name:     "slice_of_scalars",
+			document: map[string]any{"ids": []any{"a", "b"}},
+			wantJSON: `{"ids":["a","b"]}`,
+		},
+		{
+			name:     "typed_string_slice",
+			document: map[string]any{"ids": []string{"a", "b"}},
+			wantJSON: `{"ids":["a","b"]}`,
+		},
+		{
+			name:     "typed_struct_slice",
+			document: map[string]any{"users": []walkerUser{{Name: testNameJohn, Password: testPassword}}},
+			wantJSON: `{"users":[{"name":"john","password":"***"}]}`,
+		},
+		{
+			name:     "needle_inside_slice_element",
+			document: map[string]any{"keys": []any{map[string]any{"kid": "k1", "private_key": testAPIKey}}},
+			wantJSON: `{"keys":[{"kid":"k1","private_key":"***"}]}`,
+		},
+		{
+			// A typed nil slice is null on the wire, and stays null. The walker
+			// preserves this for maps already; a rebuilt slice would emit [].
+			name:     "nil_any_slice",
+			document: map[string]any{"data": []any(nil)},
+			wantJSON: `{"data":null}`,
+		},
+		{
+			name:     "nil_struct_slice",
+			document: map[string]any{"users": []walkerUser(nil)},
+			wantJSON: `{"users":null}`,
+		},
+		{
+			name:     "nil_nested_slice",
+			document: map[string]any{"items": [][]int(nil)},
+			wantJSON: `{"items":null}`,
+		},
+		{
+			name:     "empty_non_nil_any_slice",
+			document: map[string]any{"data": []any{}},
+			wantJSON: `{"data":[]}`,
+		},
+		{
+			name:     "needle_below_a_slice_of_maps_of_slices",
+			document: map[string]any{"data": []any{map[string]any{"nested": []any{map[string]any{"password": testPassword}}}}},
+			wantJSON: `{"data":[{"nested":[{"password":"***"}]}]}`,
+		},
+	}
+}
+
+// assertLoggedFieldJSON re-marshals the captured field and compares it with a
+// hand-written JSON literal.
+func assertLoggedFieldJSON(t *testing.T, buf *bytes.Buffer, key, wantJSON string) {
+	t.Helper()
+	got, err := json.Marshal(loggedField(t, buf, key))
+	require.NoError(t, err)
+	assert.JSONEq(t, wantJSON, string(got))
+}
+
+// TestFilterValueDocumentShapesThroughInterface drives every shape through the
+// .Interface() door.
+func TestFilterValueDocumentShapesThroughInterface(t *testing.T) {
+	for _, tc := range filterDocumentCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			require.NotPanics(t, func() {
+				log.Info().Interface("body", tc.document).Msg("payload")
+			})
+			assertLoggedFieldJSON(t, buf, "body", tc.wantJSON)
+		})
+	}
+}
+
+// TestFilterValueDocumentShapesThroughWithFields drives every shape through the
+// second door, WithFields -> FilterFields, which reaches the same walker by a
+// different call path.
+func TestFilterValueDocumentShapesThroughWithFields(t *testing.T) {
+	for _, tc := range filterDocumentCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			require.NotPanics(t, func() {
+				log.WithFields(map[string]any{"body": tc.document}).Info().Msg("payload")
+			})
+			assertLoggedFieldJSON(t, buf, "body", tc.wantJSON)
+		})
+	}
+}
+
+// TestNewSensitiveDataFilterDropsEmptyNeedles pins that a needle list carrying an
+// empty or whitespace-only entry masks exactly the fields it names, and not the
+// whole log stream. strings.Contains(x, "") is true for every x, so one such
+// entry reaching the matcher masks every field there is.
+func TestNewSensitiveDataFilterDropsEmptyNeedles(t *testing.T) {
+	for _, needles := range [][]string{
+		{sensitiveFieldPassword, ""},
+		{sensitiveFieldPassword, "   "},
+		{"", sensitiveFieldPassword},
+	} {
+		t.Run(strings.Join(needles, "|"), func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, &FilterConfig{SensitiveFields: needles})
+
+			log.Info().Interface("body", map[string]any{
+				"name":     testNameJohn,
+				"password": testPassword,
+			}).Msg("payload")
+
+			assertLoggedFieldJSON(t, buf, "body", `{"name":"john","password":"***"}`)
+		})
+	}
+}
+
+// TestNewSensitiveDataFilterTrimsAndDedupsNeedles pins the other half of
+// construction-time normalization, which moved here from app.resolveLoggerFilterConfig
+// so that every construction door gets it. Without trimming, "  cvv  " never
+// matches the field "cvv" — strings.Contains("cvv", "  cvv  ") is false — and an
+// operator pasting from a CSV would see silent NON-masking, the failure this
+// filter exists to prevent.
+func TestNewSensitiveDataFilterTrimsAndDedupsNeedles(t *testing.T) {
+	filter := NewSensitiveDataFilter(&FilterConfig{
+		SensitiveFields: []string{"  cvv  ", "\tPAN\n", "pan", "PAN"},
+	})
+
+	assert.True(t, filter.isSensitiveField("cvv"), "a padded needle must match the field it names")
+	assert.True(t, filter.isSensitiveField("pan"), "a padded needle must match regardless of case")
+	assert.False(t, filter.isSensitiveField("name"), "an unrelated field must not match")
+	// Independent count: four entries naming two distinct needles.
+	assert.Equal(t, []string{"cvv", "pan"}, filter.needles.fields)
+}
+
+// TestFilterSlicePassthroughMasksAtExhaustedDepth pins the depth half of the
+// passthrough decision. Elements receive maxDepth-1 and are masked at 0, so a
+// slice reached with maxDepth 1 must be rebuilt as masks even though its element
+// type is one the walker never rewrites. Relaxing the guard to `maxDepth > 0`
+// passes every other test in this package and logs the values unmasked.
+// The public door cannot reach depth 1 without eight levels of nesting.
+func TestFilterSlicePassthroughMasksAtExhaustedDepth(t *testing.T) {
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	atExhausted := filter.filterValueWithProtection("tags", []string{"a"}, map[uintptr]struct{}{}, 1)
+	assert.Equal(t, []any{DefaultMaskValue}, atExhausted,
+		"a slice one step from the depth limit must emit masks, not its values")
+
+	withBudget := filter.filterValueWithProtection("tags", []string{"a"}, map[uintptr]struct{}{}, 2)
+	assert.Equal(t, []string{"a"}, withBudget,
+		"with budget to spare the concrete slice type survives untouched")
+}
+
+// TestRewritesTypeHasNoFalseNegatives pins the invariant that keeps rewritesType
+// honest. It is a static kind table restating what the walker decides at
+// runtime, and nothing links the two: adding a rewriting arm to
+// filterByTypeWithProtection without extending the table would silently stop
+// masking inside slices of that kind.
+//
+// The property is ONE-DIRECTIONAL on purpose. A false positive is safe — the
+// slice is rebuilt as []any when it need not have been, costing a copy. A false
+// negative is the leak: the slice is passed through and its elements are never
+// filtered. So: if the walker changes a value, rewritesType MUST say so.
+// Each case carries a sensitive field where its kind can hold one, because a
+// value the walker has no reason to touch proves nothing about whether it would.
+func TestRewritesTypeHasNoFalseNegatives(t *testing.T) {
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	cases := []struct {
+		name string
+		// typ is the type a SLICE would carry for this element, given explicitly
+		// because reflect.TypeOf on an `any` always yields the DYNAMIC type and can
+		// therefore never produce Kind Interface — the arm that matters most, since
+		// []any is what encoding/json produces for every JSON list of objects.
+		typ      reflect.Type
+		value    any
+		leafKind bool // the walker returns these untouched; rewritesType must say false
+	}{
+		{
+			name: "interface_element", typ: reflect.TypeOf([]any{}).Elem(),
+			value: map[string]any{"password": testPassword},
+		},
+		{name: "string", value: "plain", leafKind: true},
+		{name: "int", value: 7, leafKind: true},
+		{name: "bool", value: true, leafKind: true},
+		{name: "float64", value: 1.5, leafKind: true},
+		{name: "byte", value: byte(3), leafKind: true},
+		{name: "struct_with_needle", value: walkerUser{Password: testPassword}},
+		{name: "pointer_to_struct_with_needle", value: &walkerUser{Password: testPassword}},
+		{name: "map_string_any_with_needle", value: map[string]any{"password": testPassword}},
+		{name: "map_string_string_with_needle", value: map[string]string{"password": testPassword}},
+		{name: "slice_with_needle", value: []any{map[string]any{"password": testPassword}}},
+		{name: "array_with_needle", value: [1]any{map[string]any{"password": testPassword}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before, err := json.Marshal(tc.value)
+			require.NoError(t, err)
+			filtered := filter.filterValueWithProtection("plain", tc.value, map[uintptr]struct{}{}, DefaultMaxDepth)
+			after, err := json.Marshal(filtered)
+			require.NoError(t, err)
+
+			typ := tc.typ
+			if typ == nil {
+				typ = reflect.TypeOf(tc.value)
+			}
+			predicted := rewritesType(typ)
+			if !bytes.Equal(before, after) {
+				assert.True(t, predicted,
+					"the walker rewrote %s but rewritesType says it cannot — a slice of these would pass through unfiltered", tc.name)
+			}
+			if tc.leafKind {
+				assert.False(t, predicted, "%s is a leaf the walker returns untouched", tc.name)
+				assert.Equal(t, string(before), string(after), "test premise: a leaf must come back unchanged")
 			}
 		})
 	}

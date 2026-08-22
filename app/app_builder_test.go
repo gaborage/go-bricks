@@ -1,8 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -219,70 +222,21 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		assert.Contains(t, got.SensitiveFields, "password")
 	})
 
-	t.Run("empty_string_entries_are_dropped", func(t *testing.T) {
-		// An empty string in cfg.SensitiveFields would make strings.Contains
-		// return true for every field name, silently masking the entire log
-		// stream. The normalizer must drop empty (and whitespace-only) entries.
-		defaultsLen := len(logger.DefaultFilterConfig().SensitiveFields)
-		got := resolveLoggerFilterConfig(
-			nil,
-			&config.LogConfig{SensitiveFields: []string{"pan", "", "   ", "cvv2"}},
-		)
+	t.Run("config_entries_are_appended_verbatim", func(t *testing.T) {
+		// This function only MERGES. Trimming, dropping empties and dedup happen
+		// in logger.NewSensitiveDataFilter, so they apply to the Options
+		// replace-door too — which bypasses this function entirely. What is
+		// pinned here is that nothing is lost on the way: every default survives
+		// and every configured entry arrives.
+		defaults := logger.DefaultFilterConfig().SensitiveFields
+		entries := []string{"pan", "", "   ", "  ssn  ", "PAN", "password"}
+		got := resolveLoggerFilterConfig(nil, &config.LogConfig{SensitiveFields: entries})
 		require.NotNil(t, got)
-		assert.NotContains(t, got.SensitiveFields, "")
-		assert.NotContains(t, got.SensitiveFields, "   ")
-		assert.Contains(t, got.SensitiveFields, "pan")
-		assert.Contains(t, got.SensitiveFields, "cvv2")
-		// Only the two non-empty entries are appended on top of defaults.
-		assert.Equal(t, defaultsLen+2, len(got.SensitiveFields))
-	})
 
-	t.Run("whitespace_padded_entries_are_trimmed", func(t *testing.T) {
-		// Without trimming, "  cvv  " would never match field name "cvv"
-		// because strings.Contains("cvv", "  cvv  ") is false. Operators
-		// pasting from CSV/comments would see silent non-masking — exactly
-		// the failure mode the filter is supposed to prevent.
-		got := resolveLoggerFilterConfig(
-			nil,
-			&config.LogConfig{SensitiveFields: []string{"  ssn  ", "\tpan\n"}},
-		)
-		require.NotNil(t, got)
-		assert.Contains(t, got.SensitiveFields, "ssn")
-		assert.Contains(t, got.SensitiveFields, "pan")
-		assert.NotContains(t, got.SensitiveFields, "  ssn  ")
-		assert.NotContains(t, got.SensitiveFields, "\tpan\n")
-	})
-
-	t.Run("case_insensitive_dedup_within_config", func(t *testing.T) {
-		// PAN/Pan/pan are the same field — emit one entry. Substring matching
-		// would still work for all variants if we appended duplicates, but the
-		// dedup keeps the slice tight (less work per logged field).
-		defaultsLen := len(logger.DefaultFilterConfig().SensitiveFields)
-		got := resolveLoggerFilterConfig(
-			nil,
-			&config.LogConfig{SensitiveFields: []string{"PAN", "Pan", "pan", "PAN "}},
-		)
-		require.NotNil(t, got)
-		// First occurrence wins, preserving its case.
-		assert.Contains(t, got.SensitiveFields, "PAN")
-		assert.NotContains(t, got.SensitiveFields, "Pan")
-		assert.NotContains(t, got.SensitiveFields, "pan")
-		assert.Equal(t, defaultsLen+1, len(got.SensitiveFields))
-	})
-
-	t.Run("config_entry_already_in_defaults_is_skipped", func(t *testing.T) {
-		// "password" already covered by DefaultFilterConfig; re-listing it in
-		// YAML must not produce a duplicate entry.
-		defaultsLen := len(logger.DefaultFilterConfig().SensitiveFields)
-		got := resolveLoggerFilterConfig(
-			nil,
-			&config.LogConfig{SensitiveFields: []string{"password", "PASSWORD", "pan"}},
-		)
-		require.NotNil(t, got)
-		// Defaults still contain "password" (case from DefaultFilterConfig).
-		assert.Contains(t, got.SensitiveFields, "password")
-		// Only "pan" is genuinely new; "password"/"PASSWORD" collapse to the default.
-		assert.Equal(t, defaultsLen+1, len(got.SensitiveFields))
+		for _, defaultField := range defaults {
+			assert.Contains(t, got.SensitiveFields, defaultField, "default field %q must survive merge", defaultField)
+		}
+		assert.Equal(t, append(append([]string{}, defaults...), entries...), got.SensitiveFields)
 	})
 }
 
@@ -309,6 +263,85 @@ func TestAppBuilderCreateLoggerWithFilterConfig(t *testing.T) {
 		assert.Nil(t, result.err)
 		assert.NotNil(t, result.logger)
 	})
+
+	t.Run("yaml_filter_with_empty_needle_does_not_mask_everything", func(t *testing.T) {
+		// The other config door. This one used to be normalized by a loop in
+		// resolveLoggerFilterConfig; that loop is gone and the rule now lives in
+		// the filter constructor, so this asserts the property survived the move
+		// rather than merely that the merge still happens.
+		cfg := defaultTestConfig()
+		cfg.Log.SensitiveFields = []string{"pan", "", "   "}
+
+		var buildErr error
+		output := captureAppStdout(t, func() {
+			result := NewAppBuilder().WithConfig(cfg, &Options{}).CreateLogger()
+			if buildErr = result.err; buildErr != nil {
+				return
+			}
+			result.logger.Info().Interface("body", map[string]any{
+				"name": "john",
+				"pan":  "4111111111111111",
+			}).Msg("payload")
+		})
+		require.NoError(t, buildErr)
+
+		assert.Contains(t, output, `"name":"john"`, "a non-sensitive field must survive")
+		assert.Contains(t, output, `"pan":"***"`, "the named needle must still mask")
+	})
+
+	t.Run("options_filter_with_empty_needle_does_not_mask_everything", func(t *testing.T) {
+		// The replace-door hands a FilterConfig straight to the logger, so an
+		// empty needle in it reaches the matcher. strings.Contains is true
+		// against "" for every field name, which masks the whole log stream —
+		// a config typo turning into total loss of log content.
+		cfg := defaultTestConfig()
+		opts := &Options{
+			LoggerFilterConfig: &logger.FilterConfig{
+				SensitiveFields: []string{"pan", ""},
+				MaskValue:       "***",
+			},
+		}
+		var buildErr error
+		output := captureAppStdout(t, func() {
+			result := NewAppBuilder().WithConfig(cfg, opts).CreateLogger()
+			if buildErr = result.err; buildErr != nil {
+				return
+			}
+			result.logger.Info().Interface("body", map[string]any{
+				"name": "john",
+				"pan":  "4111111111111111",
+			}).Msg("payload")
+		})
+		require.NoError(t, buildErr)
+
+		require.Contains(t, output, `"body":`)
+		assert.Contains(t, output, `"name":"john"`, "a non-sensitive field must survive")
+		assert.Contains(t, output, `"pan":"***"`, "the named needle must still mask")
+	})
+}
+
+// captureAppStdout redirects os.Stdout for the duration of fn and returns
+// everything written to it. The framework logger writes there directly, so this
+// is how a built logger's output is observed.
+func captureAppStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	// Restored via defer: a require failure inside fn calls Goexit, and without
+	// this every later test in the package would write into a dangling pipe.
+	defer func() { os.Stdout = original }()
+	defer r.Close()
+	os.Stdout = w
+
+	fn()
+
+	require.NoError(t, w.Close())
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+	return buf.String()
 }
 
 func TestOtlpLogsActive(t *testing.T) {
