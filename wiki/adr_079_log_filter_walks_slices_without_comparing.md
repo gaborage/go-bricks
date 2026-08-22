@@ -248,9 +248,13 @@ a side effect of this one.
   or any branch keyed on the type. The type switch is the quiet one: its arm stops
   being selected and falls through to `default` rather than failing. A typed **nil** slice is the one case where rebuilding WOULD have
   been wire-visible (`[]` where the line carried `null`), so it is preserved
-  explicitly, matching the two typed-nil map guards the walker already had. Slices of scalars, `[]byte`, and typed struct slices are
-  unchanged, and there is no longer any input for which the emitted type depends
-  on whether a needle happened to match.
+  explicitly, matching the two typed-nil map guards the walker already had. Slices
+  of SCALARS and `[]byte` keep their concrete type; a non-nil slice of typed
+  STRUCTS does not — `rewritesType` answers true for `reflect.Struct`, so
+  `[]MyStruct` is rebuilt and emitted as `[]any`, with the serialized output
+  identical (`[{"name":"john"}]`). Measured, not inferred. What is preserved for
+  struct slices is the output, not the type. There is no longer any input for
+  which the emitted type depends on whether a needle happened to match.
 - **Consumer-visible:** a needle list containing an empty, whitespace-only or
   duplicate entry is normalized rather than taken literally. A deployment that
   was masking everything because of a stray empty entry starts logging its

@@ -4283,9 +4283,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `[]any` element and never fired. The decision now reads the ELEMENT TYPE before descending:
   a slice the walker cannot rewrite is returned untouched, anything else is rebuilt as
   `[]any`. Both doors are covered — `.Interface()` on a log event, and
-  `Logger.WithFields`. Slices of scalars, `[]byte` (still base64, not an array of numbers)
-  and typed struct slices emit exactly as before; a slice whose elements ARE rewritten now
-  emits as `[]any` rather than its concrete type. Serialized output is identical either way,
+  `Logger.WithFields`. Slices of scalars and `[]byte` (still base64, not an array of
+  numbers) keep their concrete type. A non-nil slice of typed STRUCTS does NOT — struct
+  elements are rewritten, so `[]MyStruct` comes back as `[]any`. Its serialized output is
+  identical, which is why it is easy to miss: the change is visible only to code reading the
+  concrete type. Serialized output is identical either way,
   including a typed NIL slice, which stays `null` rather than becoming `[]`.
   **The needle list.** Trim, drop-empty and de-duplicate moved from
   `app.resolveLoggerFilterConfig` into `logger.NewSensitiveDataFilter`, so they now apply to
@@ -4382,10 +4384,17 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   break is silent: the query stops matching and the alert simply never fires again, which
   reads as "no job panics" rather than as a broken alert. For (e) there IS work, and it is the one branch of
   this atom where the change makes a call site worse rather than better — that shape used to
-  crash and now logs in clear. Three remedies, in order of preference: decode the payload to
-  `map[string]any` before logging it, which puts it back under the filter and masks by name
-  as usual; or log a size and a digest instead of the content, which keeps the diagnostic
-  without the secret; or drop the field from the log call. Do NOT reach for a needle — the
+  crash and now logs in clear. The remedy depends on the payload's SHAPE, and the
+  obvious form does not cover all three. Decoding into `map[string]any` works only for a
+  top-level OBJECT: an array payload (`[{"password":"pw"}]`) fails to unmarshal into it
+  entirely, so the decode errors and the raw bytes get logged anyway — a remedy that appears
+  applied and changes nothing. **Decode into `any` instead** (or into the payload's known
+  type): measured, that masks both `{"password":"pw"}` and `[{"password":"pw"}]`, because
+  the walk reaches inside array elements. Verify that it does — mask INSIDE the element, not
+  merely that the line changed. A top-level SCALAR payload (`"pw"`) cannot be fixed this
+  way at all: there is no field name for the filter to match, and it still emits `"pw"`
+  after decoding. For that shape use a size and a digest instead of the content, or drop the
+  field from the log call — those are the only options, not a lesser preference. Do NOT reach for a needle — the
   filter matches field NAMES and the secret here is a key inside opaque bytes, so no entry in
   `log.sensitivefields` can reach it. Tracked as
   [#1133](https://github.com/gaborage/go-bricks/issues/1133). For (f), repoint whatever keys
@@ -4412,8 +4421,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   credential put through it lands in the log in clear, and a log you cannot delete is a
   rotation, not a test. A literal such as `not-a-real-secret-0000` proves the same thing. Log
   the payload and read the output: the synthetic secret inside the pre-encoded bytes must no
-  longer appear. Decoding to `map[string]any` first is the remedy
-  that puts it back under the filter — confirm the field is masked, not merely absent,
+  longer appear. Decoding into `any` first is the remedy
+  that puts an object OR array payload back under the filter — confirm the field is masked, not merely absent,
   because "absent" can also mean you dropped the wrong field.
   If you matched (d), make a scheduler job panic in staging and read two things off the
   result: the summary line's `error` must read `panic (type: …)` and carry NO field value
