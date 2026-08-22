@@ -116,3 +116,30 @@ streams, querying and storing offsets, constructing consumers and producers —
 with the vendor environment as its production adapter and an in-memory fake
 for tests.
 _Avoid_: env, client (ambiguous with the AMQP client), connection
+
+### Query building
+
+**Identifier argument**:
+A caller-supplied string that becomes SQL _syntax_ — a table, a column, or an
+alias. A method may take one beside a bound value, and then only the value is
+placeheld: `f.Eq(column, value)` binds the value and writes the identifier into
+the statement. Because it becomes syntax, an identifier argument is safe only
+where its door validates it against the grammar of its identifier context
+first.
+_Avoid_: column name, field, parameter, identifier (unqualified)
+
+**Bound value**:
+A caller-supplied value that reaches the database as a placeholder and never as
+syntax. Naming it apart from an identifier argument is what keeps "this API
+parameterizes its values" from being read as "this API is safe" — a method that
+does the first for one argument may do neither for the other.
+_Avoid_: argument, parameter (on its own), binding
+
+**Identifier context**:
+Which grammar an identifier argument is validated against at a given door:
+`table` (one optional inline alias), `identifier` (bare or qualified), and
+`clause` (plus a bounded direction grammar). The context belongs to the door,
+not to the caller, so a door that takes a predicate rather than an identifier
+has no identifier context and is a raw-SQL door instead. A door whose shape no
+existing context describes earns a new one rather than the nearest fit.
+_Avoid_: validation mode, identifier type, grammar level
