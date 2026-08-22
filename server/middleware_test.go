@@ -841,6 +841,17 @@ func TestRecoveredPanicNeverReachesTheSpan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			exporter := tracetest.NewInMemoryExporter()
 			tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+
+			// Restore the process-wide provider and shut this one down, following
+			// the precedent in messaging/internal/delivery/delivery_test.go: the
+			// OTel middleware caches the provider at SETUP time, so a provider left
+			// installed — or left running — outlives this test and silently changes
+			// what every later test in the binary records.
+			prevTP := otel.GetTracerProvider()
+			t.Cleanup(func() {
+				otel.SetTracerProvider(prevTP)
+				_ = tp.Shutdown(context.Background())
+			})
 			otel.SetTracerProvider(tp)
 
 			cfg := &config.Config{}
@@ -956,3 +967,31 @@ func TestSanitizePanicValueKeepsTheOriginalFrameInTheStack(t *testing.T) {
 
 // theOriginalPanickingHandler is named distinctly so its frame is unambiguous.
 func theOriginalPanickingHandler(*echo.Context) error { panic(recoverProbeSecret) }
+
+// TestSanitizePanicValueRefusesAWrappedAbortSentinel pins the bypass gate's
+// WIDTH, not its correctness. The abort branch re-panics the value unsanitized,
+// so anything that satisfies it escapes the type-only rule entirely. errors.Is
+// matches a WRAPPED sentinel, which lets `panic(fmt.Errorf("%s: %w", secret,
+// http.ErrAbortHandler))` carry a payload straight through to Echo — which
+// adopts an error verbatim — and on to the span status and the action log.
+// net/http only honors the exact sentinel, so identity is both the safe and the
+// faithful comparison here: breadth in a bypass gate is a defect, not leniency.
+func TestSanitizePanicValueRefusesAWrappedAbortSentinel(t *testing.T) {
+	wrapped := fmt.Errorf("carrier %s: %w", recoverProbeSecret, http.ErrAbortHandler)
+
+	mw := sanitizePanicValue()
+	h := mw(func(*echo.Context) error { panic(wrapped) })
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = h(nil)
+	}()
+
+	require.NotNil(t, recovered)
+	assert.NotContains(t, fmt.Sprintf("%v", recovered), recoverProbeSecret,
+		"a wrapped abort sentinel must NOT take the bypass — it carries a payload")
+	var typed *panicTypeError
+	require.True(t, errors.As(recovered.(error), &typed),
+		"only the exact sentinel bypasses sanitizing")
+}

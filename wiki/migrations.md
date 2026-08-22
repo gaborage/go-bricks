@@ -4808,6 +4808,26 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   and no scheduled jobs:
   `git grep -nE '(^|[^_a-zA-Z])panic([^_a-zA-Z]|$)|panic_type|audit sink panicked|Job panicked|Panic recovered' -- '*.json' '*.yaml' '*.yml' '*.tf'`.
   `Panic recovered` is the prefix both messaging lines share.
+
+  **Then run a SECOND, DIFFERENT command over your Go and Markdown** — the gate mentions
+  log-parsing tests and runbooks, and neither lives in the config globs above:
+  `git grep -nE 'panic_type|audit sink panicked|Job panicked|Panic recovered|panic in message handler|PANIC RECOVER|"panic"|panic !=|\[panic' -- '*_test.go' '*.md'`.
+
+  **These are two commands with two patterns on purpose; do not merge them.** Adding
+  `'*.go'` to the config sweep above turns it from 2 hits into 647 across 137 files in
+  this repository, because its bare-word `panic` arm matches every ordinary `panic(`
+  call in Go source — and a detect step returning several hundred lines is one an
+  operator abandons, which is the same failure as returning too few. The source sweep
+  therefore drops the bare-word arm and keeps only the field and message spellings: the
+  quoted JSON field, the `panic != ""` query form, the `fields: [panic` list form, and
+  the four message texts.
+
+  Two things to expect from it. **A log-LEVEL enumeration is the common false positive**
+  — `[]string{"debug", "info", "warn", "error", "fatal", "panic"}` matches `"panic"` and
+  has nothing to do with this atom — so skim for the field in a log or query context
+  rather than the bare word. And if you run it inside a go-bricks CHECKOUT rather than
+  your own service, it also matches the framework's own tests and docs; that flood is
+  expected and is not your exposure.
   The word-boundary alternation is load-bearing: a pattern matching only the QUOTED
   `"panic"` misses `panic != ""` and a bare field list `fields: [panic, stack]`, which is how
   most query languages name a field. Verified against a fixture holding all four spellings

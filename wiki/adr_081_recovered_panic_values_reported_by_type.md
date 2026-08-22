@@ -41,13 +41,23 @@ inconsistency was that the third was not.
 ## Decision
 
 **Every FRAMEWORK report of a recovered panic value names its TYPE and never the
-value** — see Consequences for the one path this does not reach, Echo's own
-`Recover` middleware — across seven sites in five packages, and the rule covers two kinds of site that a
-single search does not: the four that report a recovered value directly —
-`migration/audit_emitter.go`, `scheduler/module.go`, and `messaging/internal/delivery`'s
-`AppendOutcome` and `settleOnce` — and the three that RENDER it into an error which
-later reaches a sink: `delivery.go:38`'s shared `panicMessage` (used by both `invoke`
-and `panickedResult`), `multitenant/cleanup.go:61` and `messaging/manager.go:213`.
+value**, across eight sites in six packages. The rule covers three kinds of site,
+and only the first is what a search for logging calls finds:
+
+1. **Four report the value directly** to a log field — `migration/audit_emitter.go`,
+   `scheduler/module.go`, and `messaging/internal/delivery`'s `AppendOutcome` and
+   `settleOnce`.
+2. **Three RENDER it into an error** that later reaches a sink — `delivery.go:38`'s
+   shared `panicMessage` (used by both `invoke` and `panickedResult`),
+   `multitenant/cleanup.go:61` and `messaging/manager.go:213`.
+3. **One replaces the value before a third party can render it at all** —
+   `server`'s `sanitizePanicValue`, covering the HTTP lane.
+
+**The HTTP lane IS covered**; an earlier draft of this ADR called it "the one path
+this does not reach", which was true when written and is now exactly the kind of
+sentence that licenses a reader to stop auditing. Echo's `Recover` still runs its
+own `fmt.Errorf("%v", r)`, and that is harmless here precisely because the value it
+receives has already been replaced by its type — the `%v` renders `panic (type: T)`.
 `AppendOutcome` is the delivery SPINE, shared by the classic AMQP lane and the
 streams lane, so the rename lands on every consumer whose message handler panics,
 not only on those running scheduled jobs or an `AuditRecorder`. The stack trace is

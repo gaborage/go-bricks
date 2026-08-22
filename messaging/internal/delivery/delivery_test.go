@@ -1026,73 +1026,113 @@ func TestRunKeepsAPanicValueOutOfTheSpan(t *testing.T) {
 	}
 }
 
-// renderDeep renders v so a secret cannot hide behind a shape. It follows
-// pointers and interfaces to the value, reads []byte as text, and walks
-// composites — a guard conditional on the value's shape is the weakness
-// ADR-081 condemns in the field-name filter, so this one must not be.
+// renderDeep renders v so a secret cannot hide behind a shape. A guard
+// conditional on the value's shape is the weakness ADR-081 condemns in the
+// field-name filter, so this one must not be. Each helper below closes one
+// blind spot that a probe caught in an earlier version of this guard — the
+// names are the documentation of what was missed and why.
 func renderDeep(v reflect.Value) string {
-	// Ask the value to render ITSELF first, before any structural walk. An error
-	// or Stringer carries its text in unexported fields — `*errors.errorString`
-	// and `*fmt.wrapError` both do — so the struct branch below sees nothing it
-	// can read and returns empty. Result.Err is the field actually derived from
-	// the panic value, so that blind spot would be over the one field that
-	// matters most. Checked before dereferencing, because the method set belongs
-	// to the pointer.
-	if v.CanInterface() {
-		switch x := v.Interface().(type) {
-		case error:
-			if x != nil {
-				return x.Error()
-			}
-		case fmt.Stringer:
-			if x != nil {
-				return x.String()
-			}
-		}
+	if text, ok := renderSelfDescribing(v); ok {
+		return text
 	}
-	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
-		if v.IsNil() {
-			return "<nil>"
-		}
-		v = v.Elem()
+	v, addressable := derefToValue(v)
+	if !addressable {
+		return "<nil>"
 	}
 	if !v.CanInterface() {
 		return ""
 	}
+	if text, ok := renderByteSequence(v); ok {
+		return text
+	}
+	return renderComposite(v)
+}
+
+// renderSelfDescribing asks the value to render ITSELF, before any structural
+// walk. An error or Stringer carries its text in unexported fields —
+// `*errors.errorString` and `*fmt.wrapError` both do — so a struct walk sees
+// nothing it can read and returns empty. Result.Err is the field actually
+// derived from the panic value, so that blind spot sat over the one field that
+// matters most. Runs before dereferencing, because the method set belongs to
+// the pointer.
+func renderSelfDescribing(v reflect.Value) (string, bool) {
+	if !v.CanInterface() {
+		return "", false
+	}
+	switch x := v.Interface().(type) {
+	case error:
+		if x != nil {
+			return x.Error(), true
+		}
+	case fmt.Stringer:
+		if x != nil {
+			return x.String(), true
+		}
+	}
+	return "", false
+}
+
+// derefToValue follows pointers and interfaces to the value they hold. Without
+// it `%v`/`%#v` on a *string prints an address, which hides exactly what this
+// guard exists to find.
+func derefToValue(v reflect.Value) (out reflect.Value, ok bool) {
+	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return v, false
+		}
+		v = v.Elem()
+	}
+	return v, true
+}
+
+// renderByteSequence reads any byte sequence as TEXT, array included.
+// reflect.Value.Bytes cannot serve the array case — it panics with
+// "unaddressable byte array" on a [N]byte reached through reflect.ValueOf(*res)
+// — but letting arrays fall through to the element walk renders `0x6e 0x6f …`
+// and finds nothing, which is a blind guard rather than a panicking one.
+// Neither is acceptable, so the array is copied into a slice and read as text.
+func renderByteSequence(v reflect.Value) (string, bool) {
+	kind := v.Kind()
+	if kind != reflect.Slice && kind != reflect.Array {
+		return "", false
+	}
+	if v.Type().Elem().Kind() != reflect.Uint8 {
+		return "", false
+	}
+	if kind == reflect.Slice {
+		return string(v.Bytes()), true
+	}
+	b := make([]byte, v.Len())
+	for i := range b {
+		b[i] = byte(v.Index(i).Uint())
+	}
+	return string(b), true
+}
+
+// renderComposite walks the members of a non-byte composite, and falls back to
+// %#v for a scalar.
+func renderComposite(v reflect.Value) string {
 	switch v.Kind() {
 	case reflect.Slice, reflect.Array:
-		// Read any byte sequence as TEXT, array included. v.Bytes() cannot be
-		// used for the array case — it panics with "unaddressable byte array"
-		// on a [N]byte reached through reflect.ValueOf(*res) — but falling back
-		// to the element walk would render `0x6e 0x6f …` and find nothing, which
-		// is a blind guard rather than a panicking one. Neither is acceptable, so
-		// the array is copied into a slice and read as text.
-		if v.Type().Elem().Kind() == reflect.Uint8 {
-			if v.Kind() == reflect.Slice {
-				return string(v.Bytes())
-			}
-			b := make([]byte, v.Len())
-			for i := range b {
-				b[i] = byte(v.Index(i).Uint())
-			}
-			return string(b)
-		}
-		var sb strings.Builder
-		for i := range v.Len() {
-			sb.WriteString(renderDeep(v.Index(i)))
-			sb.WriteByte(' ')
-		}
-		return sb.String()
+		return renderMembers(v.Len(), v.Index)
 	case reflect.Struct:
-		var sb strings.Builder
-		for i := range v.NumField() {
-			if v.Field(i).CanInterface() {
-				sb.WriteString(renderDeep(v.Field(i)))
-				sb.WriteByte(' ')
-			}
-		}
-		return sb.String()
+		return renderMembers(v.NumField(), v.Field)
 	default:
 		return fmt.Sprintf("%#v", v.Interface())
 	}
+}
+
+// renderMembers renders n members obtained by at, skipping any the reflect
+// package will not let us read rather than panicking on them.
+func renderMembers(n int, at func(int) reflect.Value) string {
+	var sb strings.Builder
+	for i := range n {
+		member := at(i)
+		if !member.CanInterface() {
+			continue
+		}
+		sb.WriteString(renderDeep(member))
+		sb.WriteByte(' ')
+	}
+	return sb.String()
 }

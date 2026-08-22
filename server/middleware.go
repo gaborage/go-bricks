@@ -1,7 +1,6 @@
 package server
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -353,10 +352,19 @@ func sanitizePanicValue() echo.MiddlewareFunc {
 					return
 				}
 				// net/http's abort contract: this sentinel must reach the server
-				// unchanged, exactly as Echo's own Recover re-panics it. The
-				// original value is re-panicked, not the unwrapped one, so Echo's
-				// own `==` check downstream sees precisely what it would have.
-				if abortErr, ok := r.(error); ok && errors.Is(abortErr, http.ErrAbortHandler) {
+				// unchanged, exactly as Echo's own Recover re-panics it.
+				//
+				// SECURITY: identity, not errors.Is, and the difference matters.
+				// This is a BYPASS gate — whatever matches skips sanitizing — so
+				// breadth here is a defect. errors.Is also matches a WRAPPED
+				// sentinel, and `panic(fmt.Errorf("%s: %w", secret,
+				// http.ErrAbortHandler))` would then be re-panicked unsanitized;
+				// Echo adopts an error verbatim, so the payload would reach the
+				// span status and the action log. Only the exact sentinel carries
+				// no data, and net/http honors only the exact sentinel too, so
+				// identity is both the safe comparison and the faithful one.
+				//nolint:errorlint // sentinel bypass: see above, breadth is the bug
+				if r == http.ErrAbortHandler {
 					panic(r)
 				}
 				panic(&panicTypeError{typ: fmt.Sprintf("%T", r)})
