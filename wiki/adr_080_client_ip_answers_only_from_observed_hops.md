@@ -164,9 +164,11 @@ Two changes close it, and both are needed:
   mask so the exported per-entry parser refuses a v4-mapped default route on its own, and
   `server.trustedProxyOptions` re-applies the set check at runtime for a `server.New` that
   never passes `config.Validate`. A re-audit caught this: the first fix closed the two
-  lenient keys and three artifacts — this ADR, the atom, and a test named
-  `...RejectDefaultRouteOnEveryKey` that only called two of the three — asserted it had
-  closed all of them.
+  lenient keys and three artifacts — this ADR, the atom, and a test whose name claimed
+  every key while calling only two of the three — asserted it had closed all of them.
+  That test now says what it runs: `TestLenientTrustedProxyKeysRejectEveryDefaultRouteSpelling`
+  covers the per-entry spellings at the two lenient keys, and
+  `TestEveryTrustedProxyKeyRejectsDefaultRoute` drives all three through `config.Validate`.
 
 - **`ClientIP` never answers with a non-routable hop.** Loopback, unspecified and
   link-local entries are what an attacker writes to impersonate a local caller, and they

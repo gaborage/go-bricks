@@ -4696,8 +4696,13 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   `validateIPOrCIDRList`)
 - residual: an earlier draft of this atom recorded `["0.0.0.0/1","128.0.0.0/1"]` as
   passing unchanged, with a union-coverage check named as a follow-up. That is obsolete:
-  the check SHIPPED here, and that list is now refused at all three keys, at `server.New`
-  and at `server.ParseCIDRs`. What remains is posture, not parsing — a trust list that
+  the check SHIPPED here, and the three doors answer it in two different ways.
+  `config.Validate` FAILS STARTUP on such a list at any of the three keys. The two runtime
+  doors do not fail, they DROP: `server.New` installs no trust options and logs an error,
+  and `server.ParseCIDRs` returns no error at all — it hands back no trust nets plus every
+  trimmed entry as invalid, so the caller's own WARN names them. Either way the list ends
+  up trusting nobody rather than everybody. What remains is posture, not parsing — a trust
+  list that
   correctly describes its topology still believes whatever those proxies append, which is
   identification and not authorization ([ADR-043](adr_043_forwarded_client_cert.md)).
 
