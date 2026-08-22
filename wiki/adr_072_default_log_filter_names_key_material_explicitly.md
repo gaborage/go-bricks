@@ -122,10 +122,13 @@ through a path that does not go through a slice. Fixed in
 repaired, the leak this paragraph describes is now the actual behaviour for the
 array shape too.
 
-**`log.sensitivefields: [keys]` fixes one spelling.** It masks a container named
-exactly `keys` and nothing else: a single JWK at the body root has no `keys`
-wrapper, `jwk` is a different name, and every `{"data":[…]}` or `{"items":[…]}`
-envelope carrying key material is untouched. The needle list is the wrong
+**`log.sensitivefields: [keys]` fixes one spelling.** Matching stays what this ADR
+says it is — case-insensitive SUBSTRING — so that needle covers `keys`, `KEYS`,
+`api_keys`, `public_keys` and, incidentally, `monkeys`. What it does not reach is
+the shape that matters: a single JWK at the body root has no `keys` wrapper,
+`jwk` is a different name, and every `{"data":[…]}` or `{"items":[…]}` envelope
+carrying key material is untouched. The remedy is generous about spellings of one
+container name and blind to every other container. The needle list is the wrong
 instrument for this — the field that matters is `d`, a name too short and too
 common to add — which is why ADR-079 records document-shape recognition
 (JWK/JWKS/PEM/JWT: masking by position and neighbours rather than by name) as a

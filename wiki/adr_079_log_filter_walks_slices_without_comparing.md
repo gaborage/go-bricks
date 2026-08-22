@@ -107,7 +107,7 @@ guard loses nothing there. Nothing marks that as a requirement, and neither of
 the two sites fixed here satisfies it. That site deliberately keeps the older
 shape in this change: converting it is behaviour-identical, so no test can go red
 on it, and it would put changed lines in a fourth package for a latent hazard.
-Moving all three to the narrow shape is tracked as a follow-up.
+Moving all three to the narrow shape is tracked as [#1134](https://github.com/gaborage/go-bricks/issues/1134).
 
 The class was swept rather than assumed: `git grep -nE 'Interface\("panic"'`
 over non-test Go returns four hits. Three are the class — a recovered value
@@ -115,8 +115,9 @@ logged from a defer that has already spent its `recover()`: `delivery.go:303`
 (already guarded, the precedent), `audit_emitter.go` and `scheduler/module.go`
 (both guarded here). The fourth, `delivery.go`'s `AppendOutcome`, is an ordinary
 helper on the lane's outcome line, not a defer, and `Run`'s outer guard catches
-it deliberately — `Run`'s doc comment says a panic in the lane's `LogOutcome`
-"is the lane's bug and does propagate" to that guard. So: three sites in the class, all three
+it deliberately — `Run` installs its recover at `delivery.go:190-191`, before
+`req.LogOutcome` runs at `:215`, and converts a panic there into a
+`panickedResult` that is still settled. So: three sites in the class, all three
 addressed.
 
 The sweep is complete rather than lucky, and the reason is worth stating: every
@@ -220,7 +221,8 @@ unmade decision rather than an oversight: field-name masking cannot help when th
 key is `error`, so closing it needs value-shaped redaction, the same family as
 `redactURLForLog` and the deferred document-shape work. The framework handles it
 per-site today (migration's password redaction, the database error scrubbing).
-Filed as a follow-up scoped to both sinks.
+Filed as [#1132](https://github.com/gaborage/go-bricks/issues/1132), scoped to both
+sinks.
 
 One compensating control is worth naming because it is level-gated: the
 masking-disabled WARN is emitted on the already-level-filtered logger, so at
@@ -306,9 +308,10 @@ Deliberately **not** done here, each because it is a different decision:
   innocuous field like `body`. No needle finds it without parsing, and a heuristic
   masking any raw payload whose bytes merely contain a sensitive-looking key would
   mask legitimate payloads on a substring coincidence. Parsing is the
-  document-shape decision deferred above; re-encoding a consumer's byte-exact
-  payload is its own decision, since byte-exactness may be why it is a
-  `RawMessage` at all.
+  document-shape decision deferred above, tracked as
+  [#1133](https://github.com/gaborage/go-bricks/issues/1133); re-encoding a
+  consumer's byte-exact payload is its own decision, since byte-exactness may be
+  why it is a `RawMessage` at all.
 
   `**T` to a struct is never followed either (the pointer arm requires
   `Elem().Kind() == Struct`). That one is unchanged in both directions.

@@ -314,6 +314,13 @@ func (e *auditEmitter) deliverToSink(ctx context.Context, ev *AuditEvent) {
 				// httpclient's Do recovery. The type plus audit_type and target is
 				// enough to attribute the drop, which is all this line is for.
 				defer func() {
+					// Terminal swallow. The fallback below is itself a log call on a
+					// consumer-supplied logger, and a panic there would escape this
+					// closure, the already-spent outer defer, and consumeSink's bare
+					// goroutine — the same defect one level deeper. At this point the
+					// event is counted and there is genuinely nothing left to report
+					// with, so stopping here is the whole remedy.
+					defer func() { _ = recover() }()
 					if r2 := recover(); r2 != nil {
 						e.logger.Error().
 							Str("panic_type", fmt.Sprintf("%T", r)).

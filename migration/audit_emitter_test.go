@@ -155,3 +155,83 @@ func captureMigrationStdout(t *testing.T, fn func()) string {
 	require.NoError(t, err)
 	return buf.String()
 }
+
+// panickingLogger is a logger.Logger whose events panic when written. It stands
+// for a consumer-supplied logger or writer that fails during output — the one
+// thing the fallback report cannot assume works, since the fallback IS a log
+// call and it runs after the guard has already spent its recover.
+type panickingLogger struct{ logger.Logger }
+
+func (l *panickingLogger) Error() logger.LogEvent { return &panickingEvent{} }
+func (l *panickingLogger) Info() logger.LogEvent  { return &panickingEvent{} }
+func (l *panickingLogger) Warn() logger.LogEvent  { return &panickingEvent{} }
+func (l *panickingLogger) Debug() logger.LogEvent { return &panickingEvent{} }
+func (l *panickingLogger) Fatal() logger.LogEvent { return &panickingEvent{} }
+func (l *panickingLogger) WithContext(_ any) logger.Logger {
+	return l
+}
+
+func (l *panickingLogger) WithFields(_ map[string]any) logger.Logger { return l }
+
+type panickingEvent struct{ reporting bool }
+
+// Msg panics only for the two panic-REPORTING calls, identified by keys only they
+// use. DO NOT "simplify" this to panic on every call: a fault-injection double
+// has to be aimed at the exact call the defect travels through, or it tests a
+// different failure entirely. Panicking on everything takes out Emit's own
+// structured log on the CALLER's goroutine — a surface deliverToSink's escape
+// route cannot reach — so the test would pass a fix that does nothing here and
+// fail one that works. The tell is a failure surfacing somewhere the defect
+// could not have reached.
+func (e *panickingEvent) Msg(string) {
+	if e.reporting {
+		panic("logger write failed")
+	}
+}
+
+func (e *panickingEvent) Msgf(string, ...any)       { e.Msg("") }
+func (e *panickingEvent) Err(error) logger.LogEvent { return e }
+func (e *panickingEvent) Str(key, _ string) logger.LogEvent {
+	if key == "panic_type" { // the fallback report
+		e.reporting = true
+	}
+	return e
+}
+func (e *panickingEvent) Int(string, int) logger.LogEvent           { return e }
+func (e *panickingEvent) Int64(string, int64) logger.LogEvent       { return e }
+func (e *panickingEvent) Uint64(string, uint64) logger.LogEvent     { return e }
+func (e *panickingEvent) Dur(string, time.Duration) logger.LogEvent { return e }
+func (e *panickingEvent) Interface(key string, _ any) logger.LogEvent {
+	if key == "panic" { // the primary report
+		e.reporting = true
+	}
+	return e
+}
+func (e *panickingEvent) Bytes(string, []byte) logger.LogEvent { return e }
+func (e *panickingEvent) Bool(string, bool) logger.LogEvent    { return e }
+func (e *panickingEvent) Enabled() bool                        { return true }
+
+// TestEmitterSinkPanicSurvivesAPanickingLogger pins the terminal swallow. Both
+// reporting calls fail here — the primary one and the fallback — which is the
+// state the guard exists for: nothing is left to report with. The consumer
+// goroutine must still survive, and the accounting that ran BEFORE the reporting
+// must still have happened, so the drop is not lost entirely.
+func TestEmitterSinkPanicSurvivesAPanickingLogger(t *testing.T) {
+	setupTestTracer(t)
+	mp := setupTestMeter(t) // BEFORE newAuditEmitter: counters bind at construction
+	sink := newUnloggablePanicSink()
+	emitter := newAuditEmitter(&panickingLogger{}, sink)
+	t.Cleanup(func() { _ = emitter.Close(context.Background()) })
+
+	require.NotPanics(t, func() {
+		emitter.Emit(context.Background(), baseEvent())
+		emitter.Emit(context.Background(), baseEvent())
+		sink.waitForFirst(t, time.Second)
+	})
+
+	// The consumer goroutine survived both failed reports.
+	require.Len(t, sink.snapshot(), 1, "second event should be delivered after the panic")
+	// And the accounting that precedes the reporting still ran.
+	rm := mp.Collect(t)
+	obtest.AssertMetricValue(t, rm, "migration.audit.sink_failures", int64(1))
+}

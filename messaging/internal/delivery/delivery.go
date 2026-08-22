@@ -162,8 +162,10 @@ func AppendOutcome(e logger.LogEvent, res *Result) logger.LogEvent {
 // Run puts one message through the delivery pipeline and returns the outcome for
 // the lane to settle. It never returns nil, and a handler panic never escapes: it
 // becomes a Panicked result carrying the recovered value, its stack, and an
-// error. A panic in the lane's own LogOutcome or Log is the lane's bug and does
-// propagate — the span still ends and the lease scope still drains, both deferred.
+// error. A panic in the lane's own LogOutcome or Log is the lane's bug, but it does
+// NOT escape either: the guard installed below covers everything after it, so such
+// a panic becomes a Panicked result and the message is still settled. The span
+// still ends and the lease scope still drains, both deferred.
 func Run(ctx context.Context, req *Request) (res *Result) {
 	start := time.Now()
 
