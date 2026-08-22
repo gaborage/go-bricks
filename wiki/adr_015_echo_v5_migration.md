@@ -28,7 +28,7 @@ Echo v5.1.0 changed `RealIP()` to only return `request.RemoteAddr` by default �
 
 **Future hardening:** Replace `LegacyIPExtractor()` with trusted-proxy-aware extractors (`ExtractIPFromXFFHeader()` / `ExtractIPFromRealIPHeader()`) in a follow-up change.
 
-> **Shipped.** That follow-up landed as [ADR-057](adr_057_trusted_proxy_ip_extraction.md): the shim is gone, `echo.ExtractIPFromXFFHeader()` walks the chain right-to-left to the first untrusted hop, and the new `server.trustedproxies` CIDR list adds trust for a proxy on a public address. `X-Real-IP` is no longer honored on this rate-limiting/logging path (`ctx.RealIP()` / `e.IPExtractor`) — the separate `server.ClientIP` helper used by the debug-endpoint allowlist and the scheduler's CIDR middleware still falls back to it when the peer is a trusted proxy.
+> **Shipped.** That follow-up landed as [ADR-057](adr_057_trusted_proxy_ip_extraction.md): the shim is gone, `echo.ExtractIPFromXFFHeader()` walks the chain right-to-left to the first untrusted hop, and the new `server.trustedproxies` CIDR list adds trust for a proxy on a public address. `X-Real-IP` is no longer honored on this rate-limiting/logging path (`ctx.RealIP()` / `e.IPExtractor`). The separate `server.ClientIP` helper — used by the debug-endpoint allowlist and the scheduler's CIDR middleware — kept falling back to it for a further interval; [ADR-080](adr_080_client_ip_answers_only_from_observed_hops.md) removed that fallback, so no path in the framework honors `X-Real-IP` any more. This line recorded the survival without ever justifying it, which is how the gap outlived the decision that should have closed it.
 
 ## Breaking Changes for Downstream Users
 

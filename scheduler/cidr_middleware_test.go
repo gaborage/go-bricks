@@ -167,7 +167,8 @@ func TestCIDRMiddlewareAllowlistMode(t *testing.T) {
 	}
 }
 
-// TestCIDRMiddlewareProxyHeaders verifies X-Forwarded-For and X-Real-IP handling
+// TestCIDRMiddlewareProxyHeaders verifies X-Forwarded-For handling and the deliberate
+// refusal to consult X-Real-IP (ADR-057, completed by ADR-080).
 func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -181,21 +182,49 @@ func TestCIDRMiddlewareProxyHeaders(t *testing.T) {
 		description    string
 	}{
 		{
+			// The reproduced bypass at /_sys/job, X-Real-IP door, against the SHIPPED
+			// empty allowlist (localhost-only). A trusted-proxy list covering every
+			// address made a direct attacker a trusted peer, so the address they wrote
+			// became the one the guard judged.
+			name:           "direct_attacker_cannot_reach_sys_job_via_x_real_ip",
+			allowlist:      []string{},
+			trustedProxies: []string{"0.0.0.0/0"},
+			remoteAddr:     "203.0.113.9:5555",
+			xRealIP:        "127.0.0.1",
+			expectAllowed:  false,
+			expectMessage:  "Access denied: localhost-only",
+		},
+		{
+			// Same door, X-Forwarded-For half.
+			name:           "direct_attacker_cannot_reach_sys_job_via_xff",
+			allowlist:      []string{},
+			trustedProxies: []string{"0.0.0.0/0"},
+			remoteAddr:     "203.0.113.9:5555",
+			xForwardedFor:  "127.0.0.1",
+			expectAllowed:  false,
+			expectMessage:  "Access denied: localhost-only",
+		},
+		{
 			name:           "uses_xff_when_present_and_peer_is_trusted",
 			allowlist:      []string{testPrivateNetCIDR},
 			trustedProxies: []string{testAllowList}, // Trust the proxy network
 			remoteAddr:     testPrivateAddr,
 			xForwardedFor:  "192.168.1.100, 10.0.0.5",
 			expectAllowed:  true,
-			description:    "Should use first IP from X-Forwarded-For when peer is trusted",
+			description:    "Should use the first UNTRUSTED hop walking right-to-left when peer is trusted",
 		},
 		{
-			name:           "uses_xrealip_when_xff_absent_and_peer_is_trusted",
+			// X-Real-IP is no longer consulted (ADR-057, completed by ADR-080), so this
+			// request is judged on its PEER address 10.0.0.1, which the 192.168.1.0/24
+			// allowlist does not contain. This is the bypass itself, at this door: the
+			// caller wrote 192.168.1.100 into a header and it used to satisfy the guard.
+			name:           "ignores_xrealip_and_judges_the_peer_which_the_allowlist_denies",
 			allowlist:      []string{testPrivateNetCIDR},
 			trustedProxies: []string{testAllowList},
 			remoteAddr:     testPrivateAddr,
 			xRealIP:        testIPAddress,
-			expectAllowed:  true,
+			expectAllowed:  false,
+			expectMessage:  "Access denied: IP not in allowlist",
 		},
 		{
 			name:           "uses_remoteaddr_when_no_proxy_headers",

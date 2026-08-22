@@ -9,7 +9,7 @@ package server
 // Usage:
 //
 //	resp.Header().Set(HeaderXResponseTime, duration.String())
-//	clientIP := req.Header.Get(HeaderXRealIP)
+//	clientIP := req.Header.Get(HeaderXForwardedFor)
 
 const (
 	// HeaderXResponseTime is used to report request processing duration.
@@ -18,7 +18,9 @@ const (
 	HeaderXResponseTime = "X-Response-Time"
 
 	// HeaderXRealIP contains the client's real IP address when behind a proxy.
-	// Used by rate limiting and IP-based access control.
+	// NOTHING in this framework honors it: neither the rate-limiting/logging extractor
+	// (ADR-057) nor server.ClientIP, which the debug allowlist and the scheduler CIDR
+	// middleware use (ADR-080). It remains exported for consumers that read it themselves.
 	HeaderXRealIP = "X-Real-IP"
 
 	// HeaderXForwardedFor contains a comma-separated list of IPs from proxies.

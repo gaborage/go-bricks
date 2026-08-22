@@ -14,7 +14,8 @@ import (
 // Non-empty allowlist = restrict to matching IP ranges only.
 //
 // trustedProxies: CIDR ranges of reverse proxies that can be trusted to provide
-// X-Forwarded-For/X-Real-IP headers. If empty, proxy headers are IGNORED to prevent spoofing.
+// X-Forwarded-For headers. If empty, proxy headers are IGNORED to prevent spoofing.
+// X-Real-IP is never honored (ADR-057, completed by ADR-080).
 //
 // Invalid CIDR entries in either list are skipped (not fatal). The supplied logger
 // receives a WARN with the invalid entries so operators see misconfigurations rather

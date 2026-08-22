@@ -1394,6 +1394,35 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-080: `server.ClientIP` Answers From Observed Hops Only, and Trusted-Proxy Lists Refuse Total Address-Family Coverage](adr_080_client_ip_answers_only_from_observed_hops.md)
+
+**Date**: 2026-08-21 | **Status**: Accepted | **Completes**: ADR-057
+
+`debug.trustedproxies: ["0.0.0.0/0"]` was accepted where the same value on
+`server.trustedproxies` aborts startup — the first two keys routed to the lenient CIDR
+parser, the third to the strict one. Trusting every address makes every peer a trusted
+proxy, so a caller connecting DIRECTLY had their forwarding headers believed: `RemoteAddr:
+203.0.113.9:5555` plus `X-Real-IP: 127.0.0.1` returned `127.0.0.1` and satisfied the
+shipped `debug.allowedips` default. Reproduced against `/_sys/job` too, on both doors, with
+the shipped empty (localhost-only) allowlist. No proxy transit is required, which is what
+makes it P0 rather than a hardening item. `server.ClientIP` now answers with either an
+identified untrusted hop or the peer it observed, never a caller-written value: every XFF
+field line is read, brackets are stripped, an unparseable hop stops the walk, an
+all-trusted chain yields the peer, and `X-Real-IP` is not consulted at all — which is what
+ADR-057 already decided and this function never implemented. All three trusted-proxy keys
+reject a default route; `debug.allowedips` gains CIDR-syntax validation accepting bare
+addresses.
+
+**Key Benefits:** One rule for the whole walk, and the same default-route refusal on every
+trust key rather than one of three.
+**Watch:** a default route in `debug.trustedproxies` or
+`scheduler.security.trustedproxies` now FAILS STARTUP — see `[C60.22]`. Allowlists are
+deliberately exempt (`["0.0.0.0/0"]` on `debug.allowedips` stays valid; ADR-049 recommends
+it). Residual: a trust list that correctly describes its topology still believes whatever
+those proxies append — identification, not authorization (ADR-043).
+
+---
+
 ### [ADR-078: A Delivered-Empty `debug.allowedips` Fails Configuration Resolution](adr_078_delivered_empty_allowedips.md)
 
 **Date:** 2026-08-21 | **Status:** Accepted
@@ -1663,7 +1692,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-078) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-080) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

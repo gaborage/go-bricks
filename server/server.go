@@ -92,6 +92,7 @@ func (s *Server) buildFullPath(route string) string {
 // additive, so dropping one can only narrow trust, and the ERROR log makes it visible.
 func trustedProxyOptions(trustedProxies []string, log logger.Logger) []echo.TrustOption {
 	opts := make([]echo.TrustOption, 0, len(trustedProxies))
+	nets := make([]*net.IPNet, 0, len(trustedProxies))
 	for _, entry := range trustedProxies {
 		ipNet, err := config.ParseTrustedProxyCIDR(entry)
 		if err != nil {
@@ -99,7 +100,21 @@ func trustedProxyOptions(trustedProxies []string, log logger.Logger) []echo.Trus
 				Msg("Ignoring invalid server.trustedproxies entry; its proxy will be treated as an untrusted client")
 			continue
 		}
+		nets = append(nets, ipNet)
 		opts = append(opts, echo.TrustIPRange(ipNet))
+	}
+
+	// Per-entry vetting cannot see that a SET trusts everyone: ["0.0.0.0/1","128.0.0.0/1"]
+	// is two properly-masked entries covering all of IPv4 between them. Trusting every
+	// address hands the extractor back the caller-authored left-most X-Forwarded-For value,
+	// which is the spoofing this re-vet exists to prevent, so the whole list is dropped
+	// (ADR-080).
+	for _, bits := range []int{net.IPv4len * 8, net.IPv6len * 8} {
+		if config.CoversAddressFamily(nets, bits) {
+			log.Error().Str("cidrs", strings.Join(trustedProxies, ",")).
+				Msg("Ignoring server.trustedproxies entirely: the entries together trust every address, which would restore X-Forwarded-For spoofing")
+			return nil
+		}
 	}
 	return opts
 }

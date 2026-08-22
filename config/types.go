@@ -639,8 +639,10 @@ type DebugConfig struct {
 	Enabled    bool     `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`                // Enable debug endpoints
 	PathPrefix string   `koanf:"pathprefix" json:"pathprefix" yaml:"pathprefix" toml:"pathprefix" mapstructure:"pathprefix"` // URL path prefix for debug endpoints
 	AllowedIPs []string `koanf:"allowedips" json:"allowedips" yaml:"allowedips" toml:"allowedips" mapstructure:"allowedips"` // List of allowed IP addresses/CIDRs
-	// TrustedProxies holds CIDR ranges of reverse proxies trusted to set X-Forwarded-For /
-	// X-Real-IP. When empty (the default), proxy headers are IGNORED and the immediate peer
+	// TrustedProxies holds CIDR ranges of reverse proxies trusted to set X-Forwarded-For.
+	// X-Real-IP is never honored (ADR-057, completed by ADR-080), and a default route is
+	// rejected at startup.
+	// When empty (the default), proxy headers are IGNORED and the immediate peer
 	// IP is used for the AllowedIPs check — so the allowlist cannot be bypassed by spoofing
 	// X-Forwarded-For. Only set this to the CIDRs of proxies actually in front of the service.
 	TrustedProxies []string             `koanf:"trustedproxies" json:"trustedproxies" yaml:"trustedproxies" toml:"trustedproxies" mapstructure:"trustedproxies"`
@@ -830,8 +832,9 @@ type SchedulerSecurityConfig struct {
 	CIDRAllowlist []string `koanf:"cidrallowlist" json:"cidrallowlist" yaml:"cidrallowlist" toml:"cidrallowlist" mapstructure:"cidrallowlist"`
 
 	// TrustedProxies holds CIDR ranges of trusted reverse proxies.
-	// X-Forwarded-For and X-Real-IP headers are ONLY honored if the immediate peer
-	// matches one of these CIDR ranges. Empty list = do not trust any proxy headers.
+	// X-Forwarded-For is ONLY honored if the immediate peer matches one of these CIDR
+	// ranges. Empty list = do not trust any proxy headers. X-Real-IP is never honored
+	// (ADR-057, completed by ADR-080). A default route is rejected at startup.
 	TrustedProxies []string `koanf:"trustedproxies" json:"trustedproxies" yaml:"trustedproxies" toml:"trustedproxies" mapstructure:"trustedproxies"`
 }
 

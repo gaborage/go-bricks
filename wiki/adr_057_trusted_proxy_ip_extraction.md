@@ -4,6 +4,37 @@
 - **Date**: 2026-08-10
 - **Related**: [ADR-015](adr_015_echo_v5_migration.md) (recorded this follow-up), [ADR-043](adr_043_forwarded_client_cert.md) (named the anti-pattern), [migrations.md](migrations.md) `[C59.1]`
 
+> **Amended (2026-08-21, by [ADR-080](adr_080_client_ip_answers_only_from_observed_hops.md)):**
+> two things below are no longer true, and one was never as broad as it reads.
+>
+> **The three-row defect table under "Promoting `server.ClientIP`" is retired.** It
+> tabulates `server.ClientIP` against `echo.ExtractIPFromXFFHeader` on repeated
+> `X-Forwarded-For` lines, an entry that fails to parse, and IPv6 in brackets, and closes
+> with "Fixing its defects is a separate finding." That finding is ADR-080, and it fixed
+> all three: every field line is read and joined, an unparseable entry stops the walk and
+> yields the peer, and brackets are stripped per entry. Read those rows as history — they
+> describe what `ClientIP` did until 2026-08-21, not what it does.
+>
+> **"`X-Real-IP` is not honored at all… No fallback is added" was function-scoped, and a
+> reader could reasonably have taken it as repo-wide.** It was true of
+> `ExtractIPFromXFFHeader`, the function this ADR was about, and of the rate-limiting and
+> logging path it governs. It was NOT true of `server.ClientIP`, which retained an
+> `X-Real-IP` fallback for the entire interval between this decision and ADR-080. That is
+> the honest content of "ADR-080 completes ADR-057": this ADR decided the rule, one
+> function was never brought into line with it, and the two are consistent only now. The
+> claim was not wrong; its scope was narrower than its wording suggested.
+>
+> **The reason given for keeping `server.ClientIP` rather than delegating to
+> `echo.ExtractIPFromXFFHeader` is imprecise, and should not be inherited.** This ADR
+> says the two consumers "take a raw `*http.Request` outside echo's extractor seam".
+> `echo.IPExtractor` is `func(*http.Request) string` (`echo/v5@v5.3.1/ip.go:203`), which is
+> exactly what both consumers hold — there is no seam in the way. The reasons that DO hold
+> are semantic: echo's checker hardcodes `trustLoopback`, `trustLinkLocal` and
+> `trustPrivateNet` (`ip.go:174-175`), so delegating would widen an operator-opted-in
+> allowlist to trust every RFC1918 peer; and echo returns the left-most, caller-authored
+> entry when every hop is trusted (`ip.go:264-265`), which ADR-080 deliberately does not.
+> ADR-080 records both.
+
 ## Context
 
 Echo v5.1.0 changed `RealIP()` to return `request.RemoteAddr` only — it stopped reading
