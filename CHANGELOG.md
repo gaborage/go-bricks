@@ -1,5 +1,80 @@
 # Changelog
 
+## [0.60.0](https://github.com/gaborage/go-bricks/compare/v0.59.0...v0.60.0) (2026-08-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **logger,app:** walk JSON arrays without comparing uncomparable values ([#1131](https://github.com/gaborage/go-bricks/issues/1131))
+* **server,config:** derive the client IP only from observed hops ([#1135](https://github.com/gaborage/go-bricks/issues/1135))
+* **config:** a delivered-empty debug.allowedips fails configuration resolution ([#1130](https://github.com/gaborage/go-bricks/issues/1130))
+* **server,messaging,trace:** validate trace identifiers at every door ([#1128](https://github.com/gaborage/go-bricks/issues/1128))
+* **config,database:** address tenant-tree errors and hints to their section ([#1127](https://github.com/gaborage/go-bricks/issues/1127))
+* **config:** a delivered-empty bool config value fails startup ([#1122](https://github.com/gaborage/go-bricks/issues/1122))
+* **config,app:** a delivered-empty numeric config value fails startup ([#1112](https://github.com/gaborage/go-bricks/issues/1112))
+* **config:** delete the unused TestKey* constant surface ([#1108](https://github.com/gaborage/go-bricks/issues/1108))
+* **logger:** name key material instead of a bare "key" needle ([#1106](https://github.com/gaborage/go-bricks/issues/1106))
+* **config:** address a database section's errors to that section ([#1115](https://github.com/gaborage/go-bricks/issues/1115))
+* **database:** upsert column sets must name each column once ([#1105](https://github.com/gaborage/go-bricks/issues/1105))
+* **config,scheduler:** one default per scheduler timeout key ([#1107](https://github.com/gaborage/go-bricks/issues/1107))
+* **streams:** run the streams lane on the delivery pipeline ([#1082](https://github.com/gaborage/go-bricks/issues/1082))
+* **trace:** validate inbound trace identifiers at one seam ([#1081](https://github.com/gaborage/go-bricks/issues/1081))
+* **messaging:** the pipeline contains its own tail and invokes settlement ([#1080](https://github.com/gaborage/go-bricks/issues/1080))
+* **messaging:** run the AMQP lane on the delivery pipeline ([#1058](https://github.com/gaborage/go-bricks/issues/1058))
+* **app:** idle-cleanup maintenance moves into the managers ([#1055](https://github.com/gaborage/go-bricks/issues/1055))
+* **app:** fold the dead lifecycle helpers into App and unexport the debug JSON types ([#1045](https://github.com/gaborage/go-bricks/issues/1045))
+
+### Added
+
+* **messaging:** add the delivery pipeline both consume lanes will share ([#1053](https://github.com/gaborage/go-bricks/issues/1053)) ([92d63e0](https://github.com/gaborage/go-bricks/commit/92d63e0e4ad0197ad1ec3bc4ad853020e7876f4e))
+* **messaging:** add the fixture that drives the lane contract ([#1073](https://github.com/gaborage/go-bricks/issues/1073)) ([7776004](https://github.com/gaborage/go-bricks/commit/77760045d3a0dce1f44be8ee47301105ac745a56))
+* **messaging:** add the identity family and its counter-example lane ([#1075](https://github.com/gaborage/go-bricks/issues/1075)) ([5695f6f](https://github.com/gaborage/go-bricks/commit/5695f6f8047bb4c0724d9d5d641d3a0968f5fc1e))
+* **messaging:** add the telemetry family to the lane contract ([#1076](https://github.com/gaborage/go-bricks/issues/1076)) ([9924b1f](https://github.com/gaborage/go-bricks/commit/9924b1f346382ae4346dec0e87459bed2953e21b))
+* **messaging:** declare the lane contract both messaging lanes must satisfy ([#1072](https://github.com/gaborage/go-bricks/issues/1072)) ([4ab8fdb](https://github.com/gaborage/go-bricks/commit/4ab8fdb05740f15bbfc13f6e836d1ae28fbd1be8))
+* **messaging:** the pipeline contains its own tail and invokes settlement ([#1080](https://github.com/gaborage/go-bricks/issues/1080)) ([c508779](https://github.com/gaborage/go-bricks/commit/c508779a617329208896696d89df91bda4779ac3))
+
+
+### Fixed
+
+* **config,app:** a delivered-empty numeric config value fails startup ([#1112](https://github.com/gaborage/go-bricks/issues/1112)) ([daefb32](https://github.com/gaborage/go-bricks/commit/daefb32832970dff3b7417b14c5543bf6a738556))
+* **config,database:** address tenant-tree errors and hints to their section ([#1127](https://github.com/gaborage/go-bricks/issues/1127)) ([0cd0f68](https://github.com/gaborage/go-bricks/commit/0cd0f68758af7f63cc7aa1526a6b42029aa1d097))
+* **config,scheduler:** one default per scheduler timeout key ([#1107](https://github.com/gaborage/go-bricks/issues/1107)) ([9e2fc87](https://github.com/gaborage/go-bricks/commit/9e2fc871f968292f664dd330d2439b31d8c9b313))
+* **config:** a delivered-empty bool config value fails startup ([#1122](https://github.com/gaborage/go-bricks/issues/1122)) ([1cede38](https://github.com/gaborage/go-bricks/commit/1cede3896fbffd7fdd134e19e0999c58d155f954))
+* **config:** a delivered-empty debug.allowedips fails configuration resolution ([#1130](https://github.com/gaborage/go-bricks/issues/1130)) ([aa97155](https://github.com/gaborage/go-bricks/commit/aa971558b0c6c2a58b1a828635833ddf354aa063))
+* **config:** address a database section's errors to that section ([#1115](https://github.com/gaborage/go-bricks/issues/1115)) ([c383588](https://github.com/gaborage/go-bricks/commit/c383588b2a81e81364c94b25e22b0ccc069e193d))
+* **config:** delete the unused TestKey* constant surface ([#1108](https://github.com/gaborage/go-bricks/issues/1108)) ([f6b8016](https://github.com/gaborage/go-bricks/commit/f6b80161dfda5ba31ea56beaa83d3ec96e849f9b))
+* **database:** upsert column sets must name each column once ([#1105](https://github.com/gaborage/go-bricks/issues/1105)) ([443d12b](https://github.com/gaborage/go-bricks/commit/443d12b6d672409207a0b5f80403e56d6bbfed1e))
+* **deps:** update module github.com/fxamacker/cbor/v2 to v2.9.3 ([#1060](https://github.com/gaborage/go-bricks/issues/1060)) ([e996b13](https://github.com/gaborage/go-bricks/commit/e996b131ee0bf1edc30316c6d36fd0b8b58e8ee8))
+* **deps:** update module github.com/rabbitmq/amqp091-go to v1.14.0 ([#1062](https://github.com/gaborage/go-bricks/issues/1062)) ([0848188](https://github.com/gaborage/go-bricks/commit/084818802d6f36738dbb8241b2be3b1541f34188))
+* **deps:** update module github.com/stretchr/testify to v1.12.0 ([#1046](https://github.com/gaborage/go-bricks/issues/1046)) ([9243568](https://github.com/gaborage/go-bricks/commit/924356892409fa4613e8e034e2cbd3aa2cfdb2f1))
+* **deps:** update module google.golang.org/grpc to v1.83.1 ([#1085](https://github.com/gaborage/go-bricks/issues/1085)) ([53f3408](https://github.com/gaborage/go-bricks/commit/53f3408b8964293998816954d6e3d69c8d7dd2ce))
+* **logger,app:** walk JSON arrays without comparing uncomparable values ([#1131](https://github.com/gaborage/go-bricks/issues/1131)) ([71c1255](https://github.com/gaborage/go-bricks/commit/71c1255157f96814620daf99a5d448d667ce9cc1))
+* **logger:** name key material instead of a bare "key" needle ([#1106](https://github.com/gaborage/go-bricks/issues/1106)) ([71a7df9](https://github.com/gaborage/go-bricks/commit/71a7df997b5da6adaa0b0ba065da9a0fcb1738bd))
+* **messaging:** align published CorrelationId with X-Request-ID ([#1099](https://github.com/gaborage/go-bricks/issues/1099)) ([db54b50](https://github.com/gaborage/go-bricks/commit/db54b507840e4a44843f468ddb42c465f60d580f))
+* **messaging:** re-bind the trace ID, share one outcome-log spine ([#1068](https://github.com/gaborage/go-bricks/issues/1068)) ([03e7c5f](https://github.com/gaborage/go-bricks/commit/03e7c5f9e1f8e430728a400fb7075b72a956b78f))
+* **migration:** validate and forward database.tls in the migrate CLI ([#1041](https://github.com/gaborage/go-bricks/issues/1041)) ([a8df861](https://github.com/gaborage/go-bricks/commit/a8df86165127faeb7466b8ab3873e01bfd2f76b4))
+* **outbox:** bound the error text the relay persists ([#1084](https://github.com/gaborage/go-bricks/issues/1084)) ([cbd2d9e](https://github.com/gaborage/go-bricks/commit/cbd2d9eb2aff2767cfa4a8b09ee86252d680764b))
+* **scheduler:** record job metrics under the traced context ([#1102](https://github.com/gaborage/go-bricks/issues/1102)) ([8c0afcd](https://github.com/gaborage/go-bricks/commit/8c0afcdc26e95b7689b54e88efeff3bac03c7ba2))
+* **server,config:** derive the client IP only from observed hops ([#1135](https://github.com/gaborage/go-bricks/issues/1135)) ([da02570](https://github.com/gaborage/go-bricks/commit/da0257063321e9c7590950c38e8cb3201f110ee9))
+* **server,messaging,trace:** validate trace identifiers at every door ([#1128](https://github.com/gaborage/go-bricks/issues/1128)) ([d715a7c](https://github.com/gaborage/go-bricks/commit/d715a7c5aab9fd0e03b87aa5c0e1036f492a8e94))
+* **trace:** validate inbound trace identifiers at one seam ([#1081](https://github.com/gaborage/go-bricks/issues/1081)) ([27acbf6](https://github.com/gaborage/go-bricks/commit/27acbf6ddf051aac5bf2dbdc9f1f9de870f8335e))
+
+
+### Changed
+
+* **app:** each resource kind owns a slot for probe, pre-init and close ([#1048](https://github.com/gaborage/go-bricks/issues/1048)) ([ccb6889](https://github.com/gaborage/go-bricks/commit/ccb6889d1c13bc77b7f434f81ece75ba88f0c669))
+* **app:** fold the dead lifecycle helpers into App and unexport the debug JSON types ([#1045](https://github.com/gaborage/go-bricks/issues/1045)) ([fceb4b8](https://github.com/gaborage/go-bricks/commit/fceb4b8ac6101a4292e9ae2726b4255d515c6660))
+* **app:** idle-cleanup maintenance moves into the managers ([#1055](https://github.com/gaborage/go-bricks/issues/1055)) ([db8dfe7](https://github.com/gaborage/go-bricks/commit/db8dfe716619553ac90511cc318d903ae640bbe9))
+* **app:** judge every readiness kind from one probe description ([#1042](https://github.com/gaborage/go-bricks/issues/1042)) ([65e243b](https://github.com/gaborage/go-bricks/commit/65e243b7857d9f62ab24c28d8a229ae2651fcaac))
+* **app:** render /ready and the debug view from the readiness module ([#1043](https://github.com/gaborage/go-bricks/issues/1043)) ([c3fb714](https://github.com/gaborage/go-bricks/commit/c3fb7144b3e59b5f1408b1dd367c9373e1afb35e))
+* **app:** run the start and stop phases through the slots ([#1052](https://github.com/gaborage/go-bricks/issues/1052)) ([5e3d951](https://github.com/gaborage/go-bricks/commit/5e3d951c95410542b405e3e5ca4842aa15398451))
+* **config:** derive the owned koanf defaults from normalize ([#1116](https://github.com/gaborage/go-bricks/issues/1116)) ([4c94c8f](https://github.com/gaborage/go-bricks/commit/4c94c8f20b44c8124b9d005fd74dd0c2d266e0c5))
+* **config:** fold scheduler timeout defaults into the derived set ([#1117](https://github.com/gaborage/go-bricks/issues/1117)) ([c0104aa](https://github.com/gaborage/go-bricks/commit/c0104aac62595ce8f9965222f765a37675c71d13))
+* **messaging:** one consume recorder for both lanes ([#1050](https://github.com/gaborage/go-bricks/issues/1050)) ([41d919f](https://github.com/gaborage/go-bricks/commit/41d919fc4641e6fe0d442d77f029037109001b83))
+* **messaging:** run the AMQP lane on the delivery pipeline ([#1058](https://github.com/gaborage/go-bricks/issues/1058)) ([5d6f100](https://github.com/gaborage/go-bricks/commit/5d6f100c59d783876309b54c01ec729c002f3e27))
+* **streams:** route the manager through an unexported Environment port ([#1049](https://github.com/gaborage/go-bricks/issues/1049)) ([d8c3b63](https://github.com/gaborage/go-bricks/commit/d8c3b63fb57ff530561e189a2c35c99df9c69fe6))
+* **streams:** run the streams lane on the delivery pipeline ([#1082](https://github.com/gaborage/go-bricks/issues/1082)) ([ef35baa](https://github.com/gaborage/go-bricks/commit/ef35baad9ff32dd3f2ab6eafabbce5cc64234039))
+
 ## [0.59.0](https://github.com/gaborage/go-bricks/compare/v0.58.1...v0.59.0) (2026-08-17)
 
 
