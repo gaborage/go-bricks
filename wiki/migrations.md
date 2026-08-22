@@ -4342,10 +4342,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   whose shape changes (a new `panic_type` field, and a second possible message,
   `audit sink panicked; event dropped (value unrenderable)`, when the value cannot be
   rendered).
-  no-match = ALL of the following hold. (1) Every value you log is a scalar, or a struct whose
-  fields are scalars recursively. **A typed struct is not automatically outside this atom**: a
-  map, slice, array, pointer or `any` field anywhere inside it is rewritten by the walk
-  exactly as a top-level one is. (2) Nothing downstream depends on the concrete type of
+  no-match = ALL of the following hold. (1) Nothing you log contains a map, slice, array,
+  pointer or `any` — at the top level or nested inside a struct, at any depth. **A typed
+  struct is not automatically outside this atom**: the walk descends into its fields, so one
+  non-scalar field anywhere inside puts that value in scope. In scope means CHECK, not
+  "will change": what the walk emits for a non-scalar depends on its element type and on
+  nesting depth — a `[]byte` stays base64 and a typed nil slice stays `null`, but the same
+  `[]byte` seven levels of nesting down comes back as `["***", …]`, because past the depth budget
+  everything is masked regardless of type. So there is no shortcut from "it is a `[]byte`"
+  or "it is a struct" to "unaffected"; the shortcut runs the other way, from "everything I
+  log is a scalar" to no-match. (2) Nothing downstream depends on the concrete type of
   `FilterValue`'s result, by assertion, type switch, reflection or any other route.
   (3) Your needle lists are literal and clean. (4) You have no scheduler alert on the panic
   summary. (5) You register no `AuditRecorder`. (6) You log no pre-encoded JSON. Note (a) is the common case and its old behaviour was a
