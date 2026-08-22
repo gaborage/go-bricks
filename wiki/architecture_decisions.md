@@ -1440,7 +1440,7 @@ reached a bare goroutine and killed the process, defeating #686's shipped guaran
 
 **Key Benefits:** a list-of-objects payload stops crashing the log path; the code-level needle
 door gets the rule the YAML door already had. **Watch:** a slice whose elements the filter
-rewrites now emits as `[]any` (serialized output unchanged — only a type assertion on
+rewrites now emits as `[]any` (serialized output unchanged — only code keyed on the concrete type of
 `FilterValue` sees it), and a stray empty needle stops masking everything, so fields that were
 being masked by accident reappear. The guard wraps the reporting CALL, not the handler — a
 whole-handler recover would contain the crash and still skip `incrementFailed`, losing the job

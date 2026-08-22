@@ -243,8 +243,10 @@ a side effect of this one.
   lost log line and a failed request or job.
 - **Consumer-visible, and why this is a breaking change:** a slice whose elements
   the walker rewrites is now emitted as `[]any`. Serialized output is unchanged —
-  this is only observable to a consumer type-asserting the result of the public
-  `FilterValue`. A typed **nil** slice is the one case where rebuilding WOULD have
+  this is observable only to a consumer whose code depends on the CONCRETE TYPE of
+  the public `FilterValue`'s result — a type assertion, a type switch, reflection,
+  or any branch keyed on the type. The type switch is the quiet one: its arm stops
+  being selected and falls through to `default` rather than failing. A typed **nil** slice is the one case where rebuilding WOULD have
   been wire-visible (`[]` where the line carried `null`), so it is preserved
   explicitly, matching the two typed-nil map guards the walker already had. Slices of scalars, `[]byte`, and typed struct slices are
   unchanged, and there is no longer any input for which the emitted type depends

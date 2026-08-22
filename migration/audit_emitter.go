@@ -321,7 +321,7 @@ func (e *auditEmitter) deliverToSink(ctx context.Context, ev *AuditEvent) {
 					// event is counted and there is genuinely nothing left to report
 					// with, so stopping here is the whole remedy.
 					defer func() { _ = recover() }()
-					if r2 := recover(); r2 != nil {
+					if recover() != nil {
 						e.logger.Error().
 							Str("panic_type", fmt.Sprintf("%T", r)).
 							Str("audit_type", string(ev.Type)).
