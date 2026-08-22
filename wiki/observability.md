@@ -56,7 +56,7 @@ Span helpers: `AssertSpanName`, `AssertSpanAttribute`, `AssertSpanStatus`, `Asse
 
 ## Sensitive Data Filtering
 
-Every log line emitted via the framework logger passes through a `logger.SensitiveDataFilter` that masks values whose **field names** match an allowlist (case-insensitive substring). The filter is applied uniformly — including in the framework's own request/response middleware, AMQP consumer panic recovery, slow-request warnings, scheduler job traces, and any module-level `log.Info()/Error()/...` call. There is no opt-in surface to wrap "after the fact" — the filter is wired into the logger before any subsystem captures a reference to it.
+Every log line emitted via the framework logger passes through a `logger.SensitiveDataFilter` that masks values whose **field names** match an allowlist (case-insensitive substring). The filter is applied uniformly — including in the framework's own request/response middleware, AMQP consumer panic recovery, slow-request warnings, scheduler job traces, and any module-level `log.Info()/Error()/...` call. **It never protected a recovered panic's VALUE**, which is why [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) reports those by type instead: the filter matches FIELD names, the field was `panic` — no needle — and a bare `panic("secret")` has no inner field name to match at all. There is no opt-in surface to wrap "after the fact" — the filter is wired into the logger before any subsystem captures a reference to it.
 
 ### Default field list
 

@@ -85,11 +85,14 @@ one line above emitted the value in clear.
 
 ## Consequences
 
-- **Log content changes on five lines across four packages**, which this repo
-  treats as breaking (precedent: `[C60.7]`, `[C60.13]`). The `panic` field becomes
+- **Log and span content changes on every surface `[C60.23]` enumerates**, which this
+  repo treats as breaking (precedent: `[C60.7]`, `[C60.13]`). The `panic` field becomes
   `panic_type` on the audit sink-failure line, the scheduler job-panic line, the
   delivery settle line, and the shared delivery outcome line on both messaging
-  lanes. The delivery spine's key set is itself asserted by
+  lanes. The HTTP surfaces carry no `panic` field at all and change anyway (see the
+  `appendErrorDetail` consequence below). The migration atom owns the surface-by-surface
+  table and is the one place to maintain it — the eight sites counted in the Decision are
+  where the RULE WAS APPLIED, which is a different question and a different number. The delivery spine's key set is itself asserted by
   `messaging/internal/lanecontract`, so a consumer with an equivalent lane-shape
   test sees the same break. A saved
   query, alert or log-parsing test matching the old field or its value stops
@@ -180,6 +183,25 @@ one line above emitted the value in clear.
   panic value is an arbitrary object chosen by code that was, by definition, not
   working correctly at the time. A reader comparing the two should find that stated
   rather than infer an inconsistency.
+
+  **That line's own output changes here even though its code does not.** `server/server.go`
+  is untouched by this decision, but both inputs to its `Panic recovered` line move:
+  `sanitizePanicValue` makes `panicErr.Unwrap()` a `*panicTypeError` instead of the value's
+  own error type — `*errors.errorString` where Echo's `fmt.Errorf("%v", r)` rendered a
+  non-error, the concrete type where the code panicked with an error — so `error_type` reads
+  the CONSTANT `*server.panicTypeError` in production posture and the `App.Debug` `error`
+  field stops carrying the value; and `DisableStackAll: true` shrinks that line's `stack` to the
+  panicking goroutine. The same is true of the `unhandled error` line below it, whose
+  `app.debug` rendering carries the value — its production `error_type` is the wrapper
+  `*middleware.PanicStackError` and does not move. These are reporting surfaces the rule
+  reaches without editing them.
+
+- **The rendered type name is a consumer-visible string, and no gate protects it.**
+  `server/middleware.go`'s `panicTypeError` is unexported, so `apidiff` cannot see it, yet
+  `[C60.23]` instructs operators to repoint dashboards on the literal `*server.panicTypeError`.
+  Renaming that type is free by every gate this repo runs and would silently break every
+  repointed dashboard — exactly the failure class this decision exists to prevent. Rename it
+  only with a migration atom.
 
 - **Getting to an unqualified framework-side claim took three more sites.** An
   earlier draft asserted it while three live paths falsified it. All three shared
