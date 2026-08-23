@@ -869,14 +869,20 @@ func TestRecoveredPanicNeverReachesTheSpan(t *testing.T) {
 			spans := exporter.GetSpans()
 			require.NotEmpty(t, spans, "the OTel middleware must have produced a span")
 			for _, s := range spans {
-				assert.NotContains(t, s.Status.Description, recoverProbeSecret,
+				// SECURITY: panic value - synthetic constant, and rendering it IS the
+				// assertion that proves absence. assert.False so a FAILURE does not
+				// print the container and disclose the payload it is asserting is gone.
+				// This is a test asserting the rule, not a site subject to it.
+				assert.False(t, strings.Contains(s.Status.Description, recoverProbeSecret),
 					"span status description discloses the panic value")
 				assert.Contains(t, s.Status.Description, tt.wantType,
 					"span status description should name the panic value's TYPE")
 				for _, ev := range s.Events {
 					for _, attr := range ev.Attributes {
-						assert.NotContains(t, attr.Value.String(), recoverProbeSecret,
-							"span event attribute %q discloses the panic value", attr.Key)
+						// SECURITY: panic value - see above; assert.False keeps the
+						// payload out of failure output.
+						assert.False(t, strings.Contains(attr.Value.String(), recoverProbeSecret),
+							fmt.Sprintf("span event attribute %q discloses the panic value", attr.Key))
 					}
 				}
 			}
@@ -928,7 +934,10 @@ func TestSanitizePanicValueStillYieldsAPanicStackError(t *testing.T) {
 	var pse *middleware.PanicStackError
 	require.True(t, errors.As(seen, &pse), "server.New's errors.As branch must still match")
 	assert.NotEmpty(t, pse.Stack, "the stack must survive — it identifies the panic site")
-	assert.NotContains(t, seen.Error(), recoverProbeSecret)
+	// SECURITY: panic value - see the span assertions above; assert.False keeps the
+	// payload out of failure output.
+	assert.False(t, strings.Contains(seen.Error(), recoverProbeSecret),
+		"the rendered error discloses the panic value")
 	assert.Contains(t, seen.Error(), "panic (type: string)")
 
 	// Pins the ONE assumption this design makes about Echo: that Recover adopts an
@@ -962,7 +971,10 @@ func TestSanitizePanicValueKeepsTheOriginalFrameInTheStack(t *testing.T) {
 	require.True(t, errors.As(seen, &pse))
 	assert.Contains(t, string(pse.Stack), "theOriginalPanickingHandler",
 		"the stack must still name the function that panicked, not just the sanitizer")
-	assert.NotContains(t, string(pse.Stack), recoverProbeSecret)
+	// SECURITY: panic value - see the span assertions above; assert.False keeps the
+	// payload out of failure output.
+	assert.False(t, strings.Contains(string(pse.Stack), recoverProbeSecret),
+		"the stack discloses the panic value")
 }
 
 // theOriginalPanickingHandler is named distinctly so its frame is unambiguous.
@@ -989,7 +1001,13 @@ func TestSanitizePanicValueRefusesAWrappedAbortSentinel(t *testing.T) {
 	}()
 
 	require.NotNil(t, recovered)
-	assert.NotContains(t, fmt.Sprintf("%v", recovered), recoverProbeSecret,
+	// SECURITY: panic value - synthetic constant, and rendering it IS the assertion
+	// that proves absence: a type check alone would pass for a *panicTypeError whose
+	// own field carried the payload, so this half is load-bearing and stays.
+	// assert.False so a FAILURE does not print the rendering and disclose it.
+	// This is a test asserting the rule, not a site subject to it.
+	rendered := fmt.Sprintf("%v", recovered)
+	assert.False(t, strings.Contains(rendered, recoverProbeSecret),
 		"a wrapped abort sentinel must NOT take the bypass — it carries a payload")
 	var typed *panicTypeError
 	require.True(t, errors.As(recovered.(error), &typed),

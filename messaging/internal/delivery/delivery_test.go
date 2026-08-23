@@ -1026,12 +1026,51 @@ func TestRunKeepsAPanicValueOutOfTheSpan(t *testing.T) {
 	}
 }
 
+// nilProbeError is a typed nil carrier: `(*nilProbeError)(nil)` asserted to `error`
+// compares NON-nil, because the interface header holds a type.
+type nilProbeError struct{ text string }
+
+func (e *nilProbeError) Error() string { return e.text }
+
+type nilStringerProbe struct{ text string }
+
+func (s *nilStringerProbe) String() string { return s.text }
+
+// TestRenderDeepSurvivesATypedNil pins the case the interface `!= nil` guard could
+// not see. Before the reflect-level nil test, renderSelfDescribing called Error()
+// on a nil pointer here and the guard panicked instead of rendering — the guard
+// exists to render arbitrary panic values, and a nil is among the likeliest to
+// reach it. Reverting renderSelfDescribing to `if x != nil` turns this test RED
+// with a nil pointer dereference.
+func TestRenderDeepSurvivesATypedNil(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		val  any
+	}{
+		{name: "typed_nil_error", val: (*nilProbeError)(nil)},
+		{name: "typed_nil_stringer", val: (*nilStringerProbe)(nil)},
+		{name: "untyped_nil", val: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.NotPanics(t, func() {
+				_ = renderDeep(reflect.ValueOf(tc.val))
+			}, "the guard must render a typed nil, not panic on it")
+		})
+	}
+}
+
 // renderDeep renders v so a secret cannot hide behind a shape. A guard
 // conditional on the value's shape is the weakness ADR-081 condemns in the
 // field-name filter, so this one must not be. Each helper below closes one
 // blind spot that a probe caught in an earlier version of this guard — the
 // names are the documentation of what was missed and why.
 func renderDeep(v reflect.Value) string {
+	// An untyped nil reaches here as the ZERO reflect.Value, whose Kind is Invalid
+	// and on which CanInterface panics. Guard once at the entry rather than in each
+	// helper below.
+	if !v.IsValid() {
+		return "<nil>"
+	}
 	if text, ok := renderSelfDescribing(v); ok {
 		return text
 	}
@@ -1059,15 +1098,31 @@ func renderSelfDescribing(v reflect.Value) (string, bool) {
 	if !v.CanInterface() {
 		return "", false
 	}
+	// A TYPED NIL passes `x != nil`: the interface header holds a type, so the
+	// comparison is false only for a nil interface, and `(*E)(nil)` asserted to
+	// `error` compares non-nil while `x.Error()` dereferences and panics. Test it
+	// at the reflect level instead, the way derefToValue below already does — a
+	// guard whose whole job is rendering arbitrary panic values must not panic on
+	// the nil case, which is among the likeliest values to reach it.
+	for v.Kind() == reflect.Interface {
+		if v.IsNil() {
+			return "", false
+		}
+		v = v.Elem()
+	}
+	if !v.CanInterface() {
+		return "", false
+	}
+	if (v.Kind() == reflect.Pointer || v.Kind() == reflect.Map ||
+		v.Kind() == reflect.Slice || v.Kind() == reflect.Func ||
+		v.Kind() == reflect.Chan) && v.IsNil() {
+		return "", false
+	}
 	switch x := v.Interface().(type) {
 	case error:
-		if x != nil {
-			return x.Error(), true
-		}
+		return x.Error(), true
 	case fmt.Stringer:
-		if x != nil {
-			return x.String(), true
-		}
+		return x.String(), true
 	}
 	return "", false
 }
