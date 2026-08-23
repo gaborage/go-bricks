@@ -1395,27 +1395,31 @@ func TestBuildUpsertOracleRejectsConflictColumnInUpdateSet(t *testing.T) {
 	}
 }
 
-// TestOracleRenderingDoublesInteriorQuotes drives the Oracle renderer through
-// the public builder: a column carrying a quote must reach the statement as one
-// escaped identifier, never as a name plus trailing SQL. Observed as emitted SQL
-// rather than against oracleQuoteIdentifier, so the assertion survives a move of
-// where the quoting happens.
+// TestOracleRenderingDoublesInteriorQuotes drives the Oracle renderer directly.
+//
+// It used to go through qb.Select, then through f.Eq when Select began validating
+// its columns. Both doors validate now, so neither will carry an injection-shaped
+// identifier to the renderer — which is the whole point of ADR-082, and leaves
+// EscapeIdentifier as the renderer's last public observation point. The escaping
+// itself is still worth pinning: validation is what stops these reaching the
+// renderer, and the escape is what makes the renderer safe if one ever does.
 func TestOracleRenderingDoublesInteriorQuotes(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
-	f := qb.Filter()
 	for _, tt := range identifierEscapeCases {
 		t.Run(tt.name, func(t *testing.T) {
-			// Driven through a Filter column rather than Select: Select validates
-			// its column list now, so it refuses these payloads before the renderer
-			// ever sees them, which is the point of that change but leaves no way
-			// to observe the escaping through it. The Filter column doors are the
-			// remaining public path to the renderer until they validate too, at
-			// which point EscapeIdentifier's own test carries this alone.
-			sql, _, err := qb.Select("id").From("users").Where(f.Eq(tt.identifier, 1)).ToSQL()
-			require.NoError(t, err)
-			require.Equal(t, `SELECT id FROM users WHERE `+tt.escaped+` = :1`, sql)
+			require.Equal(t, tt.escaped, qb.EscapeIdentifier(tt.identifier))
 		})
 	}
+
+	t.Run("the_validating_doors_refuse_these_outright", func(t *testing.T) {
+		f := qb.Filter()
+		_, _, err := qb.Select("id").From("users").
+			Where(f.Eq(`role" = 'admin', "name`, 1)).ToSQL()
+		require.Error(t, err, "a Filter column must not reach the renderer at all")
+
+		_, _, err = qb.Select(`role" = 'admin', "name`).From("users").ToSQL()
+		require.Error(t, err, "a Select column must not reach the renderer at all")
+	})
 }
 
 // TestBuildUpsertValidatesTable covers the argument #1104 calls the worse half:

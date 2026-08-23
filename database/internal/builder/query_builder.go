@@ -504,17 +504,26 @@ func (qb *QueryBuilder) Delete(table string) dbtypes.DeleteQueryBuilder {
 func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.Sqlizer {
 	likeValue := "%" + value + "%"
 
+	// Rendered once, before the vendor switch. Two of these three branches used to
+	// use the caller's column verbatim as a squirrel map key, reaching SQL without
+	// even the vendor quoting — so this door bypassed the funnel entirely rather
+	// than merely forgetting to check. A fallible funnel makes the compiler
+	// enumerate every door that CALLS it; it cannot point at one that does not.
+	quotedColumn, err := qb.quoteColumnForQuery(column)
+	if err != nil {
+		return errorSqlizer{err: err}
+	}
+
 	switch qb.vendor {
 	case dbtypes.PostgreSQL:
 		// PostgreSQL uses ILIKE operator
-		return squirrel.ILike{column: likeValue}
+		return squirrel.ILike{quotedColumn: likeValue}
 	case dbtypes.Oracle:
 		// Oracle requires UPPER() for case-insensitive matching and quoted column names
-		quotedColumn := qb.quoteColumnForQuery(column)
 		return squirrel.Like{"UPPER(" + quotedColumn + ")": strings.ToUpper(likeValue)}
 	default:
 		// Default to standard LIKE
-		return squirrel.Like{column: likeValue}
+		return squirrel.Like{quotedColumn: likeValue}
 	}
 }
 
@@ -528,7 +537,10 @@ func (qb *QueryBuilder) BuildCaseInsensitiveLike(column, value string) squirrel.
 // extended POSIX); callers writing vendor-portable regexes should stick to
 // the common subset (anchors, character classes, quantifiers).
 func (qb *QueryBuilder) BuildRegex(column, pattern string, caseInsensitive, negated bool) squirrel.Sqlizer {
-	quotedColumn := qb.quoteColumnForQuery(column)
+	quotedColumn, err := qb.quoteColumnForQuery(column)
+	if err != nil {
+		return errorSqlizer{err: err}
+	}
 
 	switch qb.vendor {
 	case dbtypes.PostgreSQL:
@@ -574,7 +586,10 @@ func (qb *QueryBuilder) BuildJSONContains(column string, value any) squirrel.Sql
 		if err != nil {
 			return errorSqlizer{err: fmt.Errorf("JSONContains: %w", err)}
 		}
-		quotedColumn := qb.quoteColumnForQuery(column)
+		quotedColumn, quoteErr := qb.quoteColumnForQuery(column)
+		if quoteErr != nil {
+			return errorSqlizer{err: quoteErr}
+		}
 		return squirrel.Expr(quotedColumn+" @> ?::jsonb", jsonStr)
 	case dbtypes.Oracle:
 		return errorSqlizer{err: errors.New("JSONContains: Oracle support not implemented; see https://github.com/gaborage/go-bricks/issues/341")}
@@ -703,13 +718,27 @@ func (qb *QueryBuilder) quoteColumnsForDML(columns ...string) []string {
 	}
 }
 
-// quoteColumnForQuery handles vendor-specific column name quoting for query conditions
-func (qb *QueryBuilder) quoteColumnForQuery(column string) string {
+// quoteColumnForQuery validates a column identifier and renders it for the vendor.
+//
+// It returns an error rather than a bare string because it is the single point
+// every column argument reaches before becoming SQL — the Filter and JoinFilter
+// doors, the comparison helpers, and UPDATE's SET targets all funnel here. Making
+// the funnel fallible is what stops a door from forgetting: a new one cannot
+// interpolate a column without handling the failure, where a per-door guard is
+// something a reviewer has to notice is missing (ADR-082).
+//
+// The check matters most on PostgreSQL, where the default branch renders the
+// column verbatim, so an unvalidated argument was interpolated as written.
+func (qb *QueryBuilder) quoteColumnForQuery(column string) (string, error) {
+	if err := validateIdentifier("column", column); err != nil {
+		return "", err
+	}
+	trimmed := strings.TrimSpace(column)
 	switch qb.vendor {
 	case dbtypes.Oracle:
-		return qb.quoteOracleColumn(column)
+		return qb.quoteOracleColumn(trimmed), nil
 	default:
-		return column
+		return trimmed, nil
 	}
 }
 
@@ -781,39 +810,57 @@ func (qb *QueryBuilder) quoteIdentifierForClause(identifier string) string {
 }
 
 // Eq creates an equality condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) Eq(column string, value any) squirrel.Eq {
-	quotedColumn := qb.quoteColumnForQuery(column)
-	return squirrel.Eq{quotedColumn: value}
+func (qb *QueryBuilder) Eq(column string, value any) (squirrel.Eq, error) {
+	quotedColumn, err := qb.quoteColumnForQuery(column)
+	if err != nil {
+		return nil, err
+	}
+	return squirrel.Eq{quotedColumn: value}, nil
 }
 
 // NotEq creates a not-equal condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) NotEq(column string, value any) squirrel.NotEq {
-	quotedColumn := qb.quoteColumnForQuery(column)
-	return squirrel.NotEq{quotedColumn: value}
+func (qb *QueryBuilder) NotEq(column string, value any) (squirrel.NotEq, error) {
+	quotedColumn, err := qb.quoteColumnForQuery(column)
+	if err != nil {
+		return nil, err
+	}
+	return squirrel.NotEq{quotedColumn: value}, nil
 }
 
 // Lt creates a less-than condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) Lt(column string, value any) squirrel.Lt {
-	quotedColumn := qb.quoteColumnForQuery(column)
-	return squirrel.Lt{quotedColumn: value}
+func (qb *QueryBuilder) Lt(column string, value any) (squirrel.Lt, error) {
+	quotedColumn, err := qb.quoteColumnForQuery(column)
+	if err != nil {
+		return nil, err
+	}
+	return squirrel.Lt{quotedColumn: value}, nil
 }
 
 // LtOrEq creates a less-than-or-equal condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) LtOrEq(column string, value any) squirrel.LtOrEq {
-	quotedColumn := qb.quoteColumnForQuery(column)
-	return squirrel.LtOrEq{quotedColumn: value}
+func (qb *QueryBuilder) LtOrEq(column string, value any) (squirrel.LtOrEq, error) {
+	quotedColumn, err := qb.quoteColumnForQuery(column)
+	if err != nil {
+		return nil, err
+	}
+	return squirrel.LtOrEq{quotedColumn: value}, nil
 }
 
 // Gt creates a greater-than condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) Gt(column string, value any) squirrel.Gt {
-	quotedColumn := qb.quoteColumnForQuery(column)
-	return squirrel.Gt{quotedColumn: value}
+func (qb *QueryBuilder) Gt(column string, value any) (squirrel.Gt, error) {
+	quotedColumn, err := qb.quoteColumnForQuery(column)
+	if err != nil {
+		return nil, err
+	}
+	return squirrel.Gt{quotedColumn: value}, nil
 }
 
 // GtOrEq creates a greater-than-or-equal condition with proper column quoting for the database vendor
-func (qb *QueryBuilder) GtOrEq(column string, value any) squirrel.GtOrEq {
-	quotedColumn := qb.quoteColumnForQuery(column)
-	return squirrel.GtOrEq{quotedColumn: value}
+func (qb *QueryBuilder) GtOrEq(column string, value any) (squirrel.GtOrEq, error) {
+	quotedColumn, err := qb.quoteColumnForQuery(column)
+	if err != nil {
+		return nil, err
+	}
+	return squirrel.GtOrEq{quotedColumn: value}, nil
 }
 
 // ========== SelectQueryBuilder Methods ==========
@@ -1205,17 +1252,10 @@ func (sqb *SelectQueryBuilder) ToSQL() (sql string, args []any, err error) {
 // interpolation; anything else surfaces as a ToSQL() error. The value side is
 // parameterized. See ADR-031.
 func (uqb *UpdateQueryBuilder) Set(column string, value any) dbtypes.UpdateQueryBuilder {
-	// Validate the SET target identifier BEFORE interpolation (all vendors) so the
-	// column name cannot be used as a SQL injection vector (M9). The value side is
-	// already parameterized by squirrel.
-	if err := validateIdentifier("Set column", column); err != nil {
-		if uqb.err == nil {
-			uqb.err = err
-		}
-		return uqb
-	}
-	quotedColumn := uqb.qb.quoteColumnForQuery(column)
-	uqb.updateBuilder = uqb.updateBuilder.Set(quotedColumn, value)
+	// The validation lives in the column funnel setColumn goes through, so there is
+	// no separate pre-check here: a second validateIdentifier on the same string
+	// could never fail once the funnel's had passed.
+	uqb.setColumn(column, value)
 	return uqb
 }
 
@@ -1228,14 +1268,15 @@ func (uqb *UpdateQueryBuilder) Set(column string, value any) dbtypes.UpdateQuery
 func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQueryBuilder {
 	quotedClauses := make(map[string]any, len(clauses))
 	for k, v := range clauses {
-		// Validate each SET target identifier BEFORE interpolation (all vendors, M9).
-		if err := validateIdentifier("SetMap column", k); err != nil {
+		// Validated by the column funnel, as every other column door is.
+		quoted, quoteErr := uqb.qb.quoteColumnForQuery(k)
+		if quoteErr != nil {
 			if uqb.err == nil {
-				uqb.err = err
+				uqb.err = quoteErr
 			}
 			return uqb
 		}
-		quotedClauses[uqb.qb.quoteColumnForQuery(k)] = v
+		quotedClauses[quoted] = v
 	}
 	uqb.updateBuilder = uqb.updateBuilder.SetMap(quotedClauses)
 	return uqb
@@ -1259,6 +1300,21 @@ func (uqb *UpdateQueryBuilder) SetMap(clauses map[string]any) dbtypes.UpdateQuer
 //	// UPDATE users SET name = ?, status = ? WHERE id = ?
 //
 // Panics if instance is not a struct or any field name is invalid.
+// setColumn renders one SET target through the column funnel and records it,
+// reporting whether the caller may continue. Hoisted out of SetStruct's two
+// branches so neither has to nest the funnel's failure inside its own loop.
+func (uqb *UpdateQueryBuilder) setColumn(column string, value any) (ok bool) {
+	quoted, err := uqb.qb.quoteColumnForQuery(column)
+	if err != nil {
+		if uqb.err == nil {
+			uqb.err = err
+		}
+		return false
+	}
+	uqb.updateBuilder = uqb.updateBuilder.Set(quoted, value)
+	return true
+}
+
 func (uqb *UpdateQueryBuilder) SetStruct(instance any, fields ...string) dbtypes.UpdateQueryBuilder {
 	cols := uqb.qb.Columns(instance)
 	fieldMap := cols.FieldMap(instance)
@@ -1270,13 +1326,15 @@ func (uqb *UpdateQueryBuilder) SetStruct(instance any, fields ...string) dbtypes
 			if !ok {
 				panic(fmt.Sprintf("field %q not found in struct", fieldName))
 			}
-			quotedCol := uqb.qb.quoteColumnForQuery(col)
-			uqb.updateBuilder = uqb.updateBuilder.Set(quotedCol, val)
+			if !uqb.setColumn(col, val) {
+				return uqb
+			}
 		}
 	} else {
 		for col, val := range fieldMap {
-			quotedCol := uqb.qb.quoteColumnForQuery(col)
-			uqb.updateBuilder = uqb.updateBuilder.Set(quotedCol, val)
+			if !uqb.setColumn(col, val) {
+				return uqb
+			}
 		}
 	}
 

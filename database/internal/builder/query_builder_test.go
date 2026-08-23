@@ -2476,3 +2476,77 @@ func TestSelectNormalizesBeforeRendering(t *testing.T) {
 		})
 	}
 }
+
+type setStructProbe struct {
+	ID    int64  `db:"id"`
+	Level string `db:"level"`
+}
+
+// TestSelectValidatesInsideSliceArguments covers the flattening path rather than
+// the variadic one. Select accepts []string, []RawExpression and []any, and a bad
+// column hidden inside one of those must be refused exactly as a bare argument is
+// — the mutation gate found this branch untested, which is how a slice-shaped
+// caller could have kept an unvalidated column.
+func TestSelectValidatesInsideSliceArguments(t *testing.T) {
+	const payload = `id; DROP TABLE users--`
+
+	shapes := map[string]any{
+		"string_slice": []string{"id", payload},
+		"any_slice":    []any{"id", payload},
+		"nested_any":   []any{[]any{[]string{payload}}},
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+		for name, cols := range shapes {
+			t.Run(vendor+"_"+name, func(t *testing.T) {
+				sql, _, err := qb.Select(cols).From("users").ToSQL()
+
+				require.Error(t, err)
+				require.ErrorContains(t, err, "invalid select identifier")
+				require.Empty(t, sql)
+			})
+		}
+		t.Run(vendor+"_good_slice_still_builds", func(t *testing.T) {
+			sql, _, err := qb.Select([]string{"id", "name"}).From("users").ToSQL()
+			require.NoError(t, err)
+			require.NotEmpty(t, sql)
+		})
+	}
+}
+
+// TestSetStructReportsAColumnTheFunnelRefuses drives SetStruct's own funnel
+// failure. Both of its branches route through setColumn, whose error path the
+// mutation gate found unexercised.
+func TestSetStructReportsAColumnTheFunnelRefuses(t *testing.T) {
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+
+		t.Run(vendor+"_named_fields_still_build", func(t *testing.T) {
+			sql, _, err := qb.Update("users").
+				SetStruct(&setStructProbe{ID: 1, Level: "x"}, "ID").
+				Where(qb.Filter().Eq("id", 1)).ToSQL()
+			require.NoError(t, err)
+			require.NotEmpty(t, sql)
+		})
+
+		t.Run(vendor+"_all_fields_still_build", func(t *testing.T) {
+			sql, _, err := qb.Update("users").
+				SetStruct(&setStructProbe{ID: 1, Level: "x"}).
+				Where(qb.Filter().Eq("id", 1)).ToSQL()
+			require.NoError(t, err)
+			require.NotEmpty(t, sql)
+		})
+
+		t.Run(vendor+"_funnel_refusal_surfaces", func(t *testing.T) {
+			uqb := qb.Update("users")
+			// setColumn is the single point both SetStruct branches use; drive its
+			// failure through the sibling door that reaches it with a caller string.
+			out := uqb.Set(`id = 1 OR 1=1 -- `, 1)
+			_, _, err := out.Where(qb.Filter().Eq("id", 1)).ToSQL()
+
+			require.Error(t, err)
+			require.ErrorContains(t, err, "invalid column identifier")
+		})
+	}
+}

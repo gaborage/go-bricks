@@ -73,48 +73,60 @@ func (cc columnComparison) ToSql() (sql string, args []any, err error) {
 //
 //	jf.EqColumn("users.id", "profiles.user_id")  // users.id = profiles.user_id
 func (jff *JoinFilterFactory) EqColumn(leftColumn, rightColumn string) dbtypes.JoinFilter {
-	left := jff.qb.quoteColumnForQuery(leftColumn)
-	right := jff.qb.quoteColumnForQuery(rightColumn)
+	left, right, err := jff.columnPair(leftColumn, rightColumn)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	return JoinFilter{sqlizer: columnComparison{left, "=", right}}
 }
 
 // NotEqColumn creates an inequality join condition (leftColumn != rightColumn).
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) NotEqColumn(leftColumn, rightColumn string) dbtypes.JoinFilter {
-	left := jff.qb.quoteColumnForQuery(leftColumn)
-	right := jff.qb.quoteColumnForQuery(rightColumn)
+	left, right, err := jff.columnPair(leftColumn, rightColumn)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	return JoinFilter{sqlizer: columnComparison{left, "!=", right}}
 }
 
 // LtColumn creates a less-than join condition (leftColumn < rightColumn).
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) LtColumn(leftColumn, rightColumn string) dbtypes.JoinFilter {
-	left := jff.qb.quoteColumnForQuery(leftColumn)
-	right := jff.qb.quoteColumnForQuery(rightColumn)
+	left, right, err := jff.columnPair(leftColumn, rightColumn)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	return JoinFilter{sqlizer: columnComparison{left, "<", right}}
 }
 
 // LteColumn creates a less-than-or-equal join condition (leftColumn <= rightColumn).
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) LteColumn(leftColumn, rightColumn string) dbtypes.JoinFilter {
-	left := jff.qb.quoteColumnForQuery(leftColumn)
-	right := jff.qb.quoteColumnForQuery(rightColumn)
+	left, right, err := jff.columnPair(leftColumn, rightColumn)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	return JoinFilter{sqlizer: columnComparison{left, "<=", right}}
 }
 
 // GtColumn creates a greater-than join condition (leftColumn > rightColumn).
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) GtColumn(leftColumn, rightColumn string) dbtypes.JoinFilter {
-	left := jff.qb.quoteColumnForQuery(leftColumn)
-	right := jff.qb.quoteColumnForQuery(rightColumn)
+	left, right, err := jff.columnPair(leftColumn, rightColumn)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	return JoinFilter{sqlizer: columnComparison{left, ">", right}}
 }
 
 // GteColumn creates a greater-than-or-equal join condition (leftColumn >= rightColumn).
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.JoinFilter {
-	left := jff.qb.quoteColumnForQuery(leftColumn)
-	right := jff.qb.quoteColumnForQuery(rightColumn)
+	left, right, err := jff.columnPair(leftColumn, rightColumn)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	return JoinFilter{sqlizer: columnComparison{left, ">=", right}}
 }
 
@@ -130,7 +142,10 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 //	expr, _ := qb.Expr("TO_NUMBER(amount_str)")
 //	jf.Eq("amount", expr)                              // amount = TO_NUMBER(amount_str) (expression, no bound placeholder)
 func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
@@ -145,7 +160,10 @@ func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) NotEq(column string, value any) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
@@ -160,7 +178,10 @@ func (jff *JoinFilterFactory) NotEq(column string, value any) dbtypes.JoinFilter
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Lt(column string, value any) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
@@ -175,7 +196,10 @@ func (jff *JoinFilterFactory) Lt(column string, value any) dbtypes.JoinFilter {
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Lte(column string, value any) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
@@ -190,7 +214,10 @@ func (jff *JoinFilterFactory) Lte(column string, value any) dbtypes.JoinFilter {
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Gt(column string, value any) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
@@ -205,7 +232,10 @@ func (jff *JoinFilterFactory) Gt(column string, value any) dbtypes.JoinFilter {
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 
 	if expr, ok := value.(dbtypes.RawExpression); ok {
 		// Expression - no placeholder
@@ -225,7 +255,10 @@ func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
 //	jf.In("status", []string{"active", "pending"})  // IN with multiple values
 //	jf.In("status", "active")                       // IN with single value (wrapped automatically)
 func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	normalized := normalizeToSlice(values)
 	// Empty slice special case: generate "1=0" to ensure no matches
 	if s, ok := normalized.([]any); ok && len(s) == 0 {
@@ -243,7 +276,10 @@ func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 //	jf.NotIn("status", []string{"deleted", "banned"})  // NOT IN with multiple values
 //	jf.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (jff *JoinFilterFactory) NotIn(column string, values any) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	normalized := normalizeToSlice(values)
 	if s, ok := normalized.([]any); ok && len(s) == 0 {
 		return JoinFilter{sqlizer: squirrel.Expr("(1=1)")} // Empty NOT IN list - always true
@@ -262,21 +298,30 @@ func (jff *JoinFilterFactory) NotIn(column string, values any) dbtypes.JoinFilte
 //
 //	jf.Like("name", "%Smith%")  // name LIKE ?
 func (jff *JoinFilterFactory) Like(column, pattern string) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" LIKE ?", pattern)}
 }
 
 // Null creates an IS NULL condition.
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) Null(column string) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	return JoinFilter{sqlizer: squirrel.Eq{quotedColumn: nil}}
 }
 
 // NotNull creates an IS NOT NULL condition.
 // Column names are automatically quoted according to database vendor rules.
 func (jff *JoinFilterFactory) NotNull(column string) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	return JoinFilter{sqlizer: squirrel.NotEq{quotedColumn: nil}}
 }
 
@@ -291,7 +336,10 @@ func (jff *JoinFilterFactory) NotNull(column string) dbtypes.JoinFilter {
 //	hi, _ := qb.Expr("65")
 //	jf.Between("age", lo, hi)                        // age BETWEEN 18 AND 65 (expressions)
 func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any) dbtypes.JoinFilter {
-	quotedColumn := jff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 
 	lowerIsExpr := false
 	upperIsExpr := false
@@ -421,4 +469,24 @@ func (jff *JoinFilterFactory) Or(filters ...dbtypes.JoinFilter) dbtypes.JoinFilt
 //	jf.Raw(`ST_Distance(users.location, stores.location) < 1000`)
 func (jff *JoinFilterFactory) Raw(condition string, args ...any) dbtypes.JoinFilter {
 	return JoinFilter{sqlizer: squirrel.Expr(condition, args...)}
+}
+
+// columnPair renders both sides of a column-to-column join condition, reporting the
+// FIRST failure so the error names the left column when both are bad. Both sides are
+// identifier arguments — a JOIN condition compares two names and binds no value, so
+// neither side has a placeholder to hide behind.
+func (jff *JoinFilterFactory) columnPair(leftColumn, rightColumn string) (left, right string, err error) {
+	if left, err = jff.qb.quoteColumnForQuery(leftColumn); err != nil {
+		return "", "", err
+	}
+	if right, err = jff.qb.quoteColumnForQuery(rightColumn); err != nil {
+		return "", "", err
+	}
+	return left, right, nil
+}
+
+// joinFilterErr wraps a column-validation failure as the deferred-error JoinFilter
+// that ToSQL() surfaces. One place to change the shape, rather than eighteen.
+func joinFilterErr(err error) dbtypes.JoinFilter {
+	return JoinFilter{sqlizer: errorSqlizer{err: err}}
 }

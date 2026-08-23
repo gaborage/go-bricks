@@ -137,13 +137,22 @@ type JoinFilterFactory interface {
 // SelectQueryBuilder defines the interface for enhanced SELECT query building with type safety.
 // This interface extends basic squirrel.SelectBuilder functionality with additional methods
 // for composable filters, JOIN operations, and vendor-specific query features.
-// SECURITY: The string-identifier arguments of From, the JOIN table methods
-// (JoinOn/LeftJoinOn/RightJoinOn/InnerJoinOn/CrossJoinOn), OrderBy, and GroupBy
-// must be developer-controlled, not user input. They are validated against a safe
-// identifier grammar on ALL vendors BEFORE interpolation; values outside that
-// grammar surface as a ToSQL() error. Route dynamic/computed expressions through
-// qb.Expr()/Raw() (which require an explicit security annotation) and pass user
-// values through the parameterized Filter API. See ADR-031.
+// SECURITY: Every identifier argument on this builder — From and the JOIN table
+// methods (JoinOn/LeftJoinOn/RightJoinOn/InnerJoinOn/CrossJoinOn), OrderBy,
+// GroupBy, the Select column list, and every Filter/JoinFilter column — must be
+// developer-controlled, not user input. All are validated against a safe
+// identifier grammar on ALL vendors BEFORE interpolation; a value outside that
+// grammar surfaces as a ToSQL() error. Route dynamic or computed expressions
+// through qb.Expr()/Raw(), which require an explicit security annotation.
+//
+// Having is NOT in that list. It takes a predicate rather than an identifier, so
+// no identifier grammar can judge it, and its argument is interpolated as written
+// — treat it as a raw-SQL slot. Prefix, Suffix and Options on the INSERT builder
+// are the same shape.
+//
+// The Filter API parameterizes its VALUES; that is a separate property from
+// validating its COLUMNS, and reading the first as the second is what left the
+// column doors open between ADR-031 and ADR-082. See ADR-031 and ADR-082.
 type SelectQueryBuilder interface {
 	// Core SELECT builder methods
 	// From accepts either string table names or *TableRef instances with optional aliases.

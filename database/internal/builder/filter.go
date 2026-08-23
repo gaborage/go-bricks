@@ -72,37 +72,37 @@ func newFilterFactory(qb *QueryBuilder) *FilterFactory {
 // Eq creates an equality filter (column = value).
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Eq(column string, value any) dbtypes.Filter {
-	return Filter{sqlizer: ff.qb.Eq(column, value)}
+	return filterOf(ff.qb.Eq(column, value))
 }
 
 // NotEq creates a not-equal filter (column <> value).
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) NotEq(column string, value any) dbtypes.Filter {
-	return Filter{sqlizer: ff.qb.NotEq(column, value)}
+	return filterOf(ff.qb.NotEq(column, value))
 }
 
 // Lt creates a less-than filter (column < value).
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
-	return Filter{sqlizer: ff.qb.Lt(column, value)}
+	return filterOf(ff.qb.Lt(column, value))
 }
 
 // Lte creates a less-than-or-equal filter (column <= value).
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
-	return Filter{sqlizer: ff.qb.LtOrEq(column, value)}
+	return filterOf(ff.qb.LtOrEq(column, value))
 }
 
 // Gt creates a greater-than filter (column > value).
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
-	return Filter{sqlizer: ff.qb.Gt(column, value)}
+	return filterOf(ff.qb.Gt(column, value))
 }
 
 // Gte creates a greater-than-or-equal filter (column >= value).
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
-	return Filter{sqlizer: ff.qb.GtOrEq(column, value)}
+	return filterOf(ff.qb.GtOrEq(column, value))
 }
 
 // normalizeToSlice ensures the value is a slice for IN/NOT IN operations.
@@ -136,7 +136,10 @@ func normalizeToSlice(value any) any {
 //	f.In("status", []string{"active", "pending"})  // IN with multiple values
 //	f.In("status", "active")                       // IN with single value (wrapped automatically)
 func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
-	quotedColumn := ff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return Filter{sqlizer: errorSqlizer{err: err}}
+	}
 	normalized := normalizeToSlice(values)
 	// Empty slice special case: generate "1=0" to ensure no matches
 	if s, ok := normalized.([]any); ok && len(s) == 0 {
@@ -154,7 +157,10 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 //	f.NotIn("status", []string{"deleted", "banned"})  // NOT IN with multiple values
 //	f.NotIn("status", "deleted")                      // NOT IN with single value (wrapped automatically)
 func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
-	quotedColumn := ff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return Filter{sqlizer: errorSqlizer{err: err}}
+	}
 	normalized := normalizeToSlice(values)
 	if s, ok := normalized.([]any); ok && len(s) == 0 {
 		return Filter{sqlizer: squirrel.Expr("(1=1)")} // Empty NOT IN list - always true
@@ -218,21 +224,30 @@ func (ff *FilterFactory) JSONContains(column string, value any) dbtypes.Filter {
 // Null creates an IS NULL filter.
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Null(column string) dbtypes.Filter {
-	quotedColumn := ff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return Filter{sqlizer: errorSqlizer{err: err}}
+	}
 	return Filter{sqlizer: squirrel.Eq{quotedColumn: nil}}
 }
 
 // NotNull creates an IS NOT NULL filter.
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) NotNull(column string) dbtypes.Filter {
-	quotedColumn := ff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return Filter{sqlizer: errorSqlizer{err: err}}
+	}
 	return Filter{sqlizer: squirrel.NotEq{quotedColumn: nil}}
 }
 
 // Between creates a BETWEEN filter (column BETWEEN lowerBound AND upperBound).
 // Column names are automatically quoted according to database vendor rules.
 func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbtypes.Filter {
-	quotedColumn := ff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return Filter{sqlizer: errorSqlizer{err: err}}
+	}
 	condition := squirrel.And{
 		squirrel.GtOrEq{quotedColumn: lowerBound},
 		squirrel.LtOrEq{quotedColumn: upperBound},
@@ -482,16 +497,19 @@ func (ff *FilterFactory) InSubquery(column string, subquery dbtypes.SelectQueryB
 	}
 
 	// Quote column name for vendor-specific rules (e.g., Oracle reserved words)
-	quotedColumn := ff.qb.quoteColumnForQuery(column)
+	quotedColumn, err := ff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return Filter{sqlizer: errorSqlizer{err: err}}
+	}
 
 	// Render the subquery with question-mark placeholders and embed the raw SQL so the
 	// outer query's single final placeholder pass numbers everything consistently (see
 	// buildExistsFilter for the rationale — passing the SelectBuilder directly causes
 	// duplicate placeholder numbers when combined with other parameterized filters).
 	if sqb, ok := subquery.(*SelectQueryBuilder); ok {
-		subSQL, subArgs, err := sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
-		if err != nil {
-			return Filter{sqlizer: errorSqlizer{err: err}}
+		subSQL, subArgs, renderErr := sqb.buildSelectBuilder().PlaceholderFormat(squirrel.Question).ToSql()
+		if renderErr != nil {
+			return Filter{sqlizer: errorSqlizer{err: renderErr}}
 		}
 		return Filter{sqlizer: &inSubqueryFilter{
 			sqlizer: squirrel.Expr(quotedColumn+" IN ("+subSQL+")", subArgs...),
@@ -506,4 +524,16 @@ func (ff *FilterFactory) InSubquery(column string, subquery dbtypes.SelectQueryB
 	return Filter{sqlizer: &inSubqueryFilter{
 		sqlizer: squirrel.Expr(quotedColumn+" IN ("+sql+")", args...),
 	}}
+}
+
+// filterOf lifts a (sqlizer, error) pair into a Filter, turning a column-validation
+// failure into the deferred-error Filter that ToSQL() surfaces. Written to take the
+// pair directly so each factory method stays one line — `return filterOf(ff.qb.Eq(...))`
+// — which makes the whole column surface reviewable as one shape rather than as
+// thirty hand-written guards (ADR-082).
+func filterOf(sqlizer squirrel.Sqlizer, err error) dbtypes.Filter {
+	if err != nil {
+		return Filter{sqlizer: errorSqlizer{err: err}}
+	}
+	return Filter{sqlizer: sqlizer}
 }

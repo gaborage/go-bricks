@@ -57,7 +57,7 @@ var validClauseIdentifierPattern = regexp.MustCompile(
 // whole token or the trailing segment of an otherwise-qualified name. A function
 // or computed expression is still not an identifier and goes through qb.Expr().
 var validSelectIdentifierPattern = regexp.MustCompile(
-	`^(?:\*|` + qualified + `(?:\.\*)?)$`,
+	fmt.Sprintf(`^(?:\*|%s(?:\.\*)?)$`, qualified),
 )
 
 // validTableNamePattern extends validIdentifierPattern with an optional trailing

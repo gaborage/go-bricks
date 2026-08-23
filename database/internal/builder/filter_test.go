@@ -1220,3 +1220,70 @@ func TestFilterJSONContainsInWhereClause(t *testing.T) {
 	assert.Equal(t, "SELECT id FROM users WHERE metadata @> $1::jsonb", sql)
 	assert.Equal(t, []any{`{"role":"admin"}`}, args)
 }
+
+// TestFilterColumnsValidateIdentifiers closes ADR-082's last and widest stage.
+// Until now a Filter column was interpolated with no grammar check — verbatim on
+// PostgreSQL, where quoteColumnForQuery is the identity function, so a filter
+// column was a live tautology-injection slot for any caller routing request text
+// into one.
+func TestFilterColumnsValidateIdentifiers(t *testing.T) {
+	payloads := []struct{ name, column string }{
+		{name: "boolean_bypass", column: `id = 1 OR 1=1 -- `},
+		{name: "quote_breakout", column: `x" = 1 OR 1=1 --`},
+		{name: "paren_breakout", column: `id) OR 1=1 --`},
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+		f := qb.Filter()
+		jf := qb.JoinFilter()
+
+		single := map[string]func(column string) dbtypes.Filter{
+			"Eq":      func(c string) dbtypes.Filter { return f.Eq(c, 1) },
+			"NotEq":   func(c string) dbtypes.Filter { return f.NotEq(c, 1) },
+			"Lt":      func(c string) dbtypes.Filter { return f.Lt(c, 1) },
+			"Lte":     func(c string) dbtypes.Filter { return f.Lte(c, 1) },
+			"Gt":      func(c string) dbtypes.Filter { return f.Gt(c, 1) },
+			"Gte":     func(c string) dbtypes.Filter { return f.Gte(c, 1) },
+			"In":      func(c string) dbtypes.Filter { return f.In(c, []any{1, 2}) },
+			"NotIn":   func(c string) dbtypes.Filter { return f.NotIn(c, []any{1, 2}) },
+			"Like":    func(c string) dbtypes.Filter { return f.Like(c, "x%") },
+			"Null":    func(c string) dbtypes.Filter { return f.Null(c) },
+			"NotNull": func(c string) dbtypes.Filter { return f.NotNull(c) },
+			"Between": func(c string) dbtypes.Filter { return f.Between(c, 1, 2) },
+		}
+
+		joins := map[string]func(column string) dbtypes.JoinFilter{
+			"EqColumn":    func(c string) dbtypes.JoinFilter { return jf.EqColumn(c, "b.id") },
+			"NotEqColumn": func(c string) dbtypes.JoinFilter { return jf.NotEqColumn(c, "b.id") },
+			"jf.Eq":       func(c string) dbtypes.JoinFilter { return jf.Eq(c, 1) },
+			"jf.Null":     func(c string) dbtypes.JoinFilter { return jf.Null(c) },
+		}
+
+		for _, p := range payloads {
+			for name, build := range single {
+				t.Run(vendor+"_"+name+"_rejects_"+p.name, func(t *testing.T) {
+					_, _, err := qb.Select("id").From("users").Where(build(p.column)).ToSQL()
+					require.Error(t, err)
+					require.ErrorContains(t, err, "identifier",
+						"rejected, but not because of the column identifier")
+				})
+			}
+			for name, build := range joins {
+				t.Run(vendor+"_"+name+"_rejects_"+p.name, func(t *testing.T) {
+					_, _, err := qb.Select("id").From("a").JoinOn("b", build(p.column)).ToSQL()
+					require.Error(t, err)
+					require.ErrorContains(t, err, "identifier",
+						"rejected, but not because of the column identifier")
+				})
+			}
+		}
+
+		t.Run(vendor+"_legitimate_columns_still_build", func(t *testing.T) {
+			sql, _, err := qb.Select("id").From("users").
+				Where(f.And(f.Eq("status", "active"), f.Gt("u.age", 18), f.Null(`"level"`))).ToSQL()
+			require.NoError(t, err)
+			require.NotEmpty(t, sql)
+		})
+	}
+}

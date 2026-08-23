@@ -92,9 +92,9 @@ arbitrary SQL. That is a cost of keeping the grammar honest about what an
 identifier is, not an argument that a constant is one.
 
 The decision lands in stages, each shipping alone: the renderer escape and the
-table arguments first (this change, closing #1104), then the `select` context and
-the remaining `Select`/`Insert` column doors, then the Filter and JoinFilter
-column arguments (#1143). A census of the tracked tree found 1027 Filter call
+table arguments first (closing #1104), then the `select` context and the
+remaining `Select`/`Insert` column doors, then the Filter and JoinFilter column
+arguments on a fallible funnel (#1143). A census of the tracked tree found 1027 Filter call
 sites with a literal column and **zero** outside the grammar, so that last stage —
 the widest — breaks nothing.
 
@@ -123,14 +123,22 @@ SQL the grammar refuses, which is the point of having it. Neither is an oversigh
 both would be, if unstated.
 
 **The later stages must not be thirty hand-written guards.** A per-door guard is
-the right shape for this change — it is auditable in a minute and revertible on
-its own — but it does not scale to the ~30 Filter and JoinFilter methods, and a
-door added later is a door whose guard someone must remember. Both funnels
-already exist: every table reaches SQL through `quoteTableForQuery` and every
-column through `quoteColumnForQuery`. Giving those two `(string, error)` is an
-internal-package change with no apidiff cost, and it makes "a door that forgot"
-stop being expressible rather than merely absent. Whichever stage carries it must
-come *before* the Filter sweep, or the guards it would delete get written first.
+the right shape for the first stage — auditable in a minute, revertible on its
+own — but it does not scale to the 36 Filter and JoinFilter column doors, and a
+door added later is a door whose guard someone must remember. So the final stage
+makes `quoteColumnForQuery` — the single point every column argument passes
+through before becoming SQL — return `(string, error)`. It is an internal-package
+change with no apidiff cost, and the compiler then enumerates all 43 call sites
+rather than a reviewer noticing which one is missing.
+
+**What that buys, and what it does not.** A fallible funnel points at every door
+that CALLS the funnel. It cannot point at one that bypasses it.
+`BuildCaseInsensitiveLike` did exactly that: on PostgreSQL and in its default
+branch it used the caller's column verbatim as a `squirrel` map key, never
+touching `quoteColumnForQuery` at all. The signature change did not flag it —
+a test did. So the funnel is worth having and is not a proof: the remaining
+question for any identifier door is not "does it handle the error" but "does it
+go through the funnel", and only reading the renderers answers that.
 
 **Not decided here:** whether a column identifier should become a distinct type
 rather than a `string`. `Col()` returns a plain `string` today, so nothing in any
@@ -148,6 +156,11 @@ its own ADR rather than being welded to a security fix.
 - `BuildUpsert` refuses the same argument, but reports it as its own third return
   value rather than through `ToSQL()` — it builds a statement directly and has no
   deferred-error builder to carry one.
+- Every `FilterFactory` and `JoinFilterFactory` column argument is validated, so a
+  filter column that is not a bare or qualified identifier fails at `ToSQL()`. On
+  PostgreSQL this closes a live hole rather than a latent one: the renderer's
+  default branch emitted the column verbatim, so `f.Eq("id = 1 OR 1=1 -- ", v)`
+  built `WHERE id = 1 OR 1=1 -- = $1`.
 - `Select` refuses a string column that is not an identifier or a wildcard, and
   `InsertWithColumns`, `InsertQueryBuilder.Columns` and `InsertQueryBuilder.SetMap`
   refuse one that is not an identifier. Expressions move to `qb.Expr()`.

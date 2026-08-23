@@ -610,17 +610,17 @@ func TestQueryBuilderWhereClauseHelpers(t *testing.T) {
 			var condition map[string]any
 			switch tt.method {
 			case "Eq":
-				condition = map[string]any(qb.Eq(tt.column, tt.value))
+				condition = map[string]any(mustSqlizer(qb.Eq(tt.column, tt.value)))
 			case "NotEq":
-				condition = map[string]any(qb.NotEq(tt.column, tt.value))
+				condition = map[string]any(mustSqlizer(qb.NotEq(tt.column, tt.value)))
 			case "Gt":
-				condition = map[string]any(qb.Gt(tt.column, tt.value))
+				condition = map[string]any(mustSqlizer(qb.Gt(tt.column, tt.value)))
 			case "Lt":
-				condition = map[string]any(qb.Lt(tt.column, tt.value))
+				condition = map[string]any(mustSqlizer(qb.Lt(tt.column, tt.value)))
 			case "GtOrEq":
-				condition = map[string]any(qb.GtOrEq(tt.column, tt.value))
+				condition = map[string]any(mustSqlizer(qb.GtOrEq(tt.column, tt.value)))
 			case "LtOrEq":
-				condition = map[string]any(qb.LtOrEq(tt.column, tt.value))
+				condition = map[string]any(mustSqlizer(qb.LtOrEq(tt.column, tt.value)))
 			}
 
 			assert.Equal(t, tt.expected, condition)
@@ -920,4 +920,14 @@ func TestPostgreSQLOrderBySQLInjection(t *testing.T) {
 		"generated SQL must not contain the injected statement")
 	assert.NotContains(t, sql, "--",
 		"generated SQL must not contain the injected comment sequence")
+}
+
+// mustSqlizer unwraps the (sqlizer, error) pair the comparison helpers return now
+// that the column funnel is fallible. These cases all pass legitimate columns, so
+// an error here is a test bug rather than an expected outcome.
+func mustSqlizer[T any](sqlizer T, err error) T {
+	if err != nil {
+		panic("unexpected column validation error in test: " + err.Error())
+	}
+	return sqlizer
 }
