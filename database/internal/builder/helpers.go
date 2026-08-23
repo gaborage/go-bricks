@@ -152,13 +152,17 @@ func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns []s
 // and one this seam has no evidence for.
 func (qb *QueryBuilder) requireSingleColumnNames(kind string, columns []string) error {
 	if qb.vendor != dbtypes.Oracle {
-		// The quote rule is the one half that is not Oracle grammar but a
-		// rendering defect both vendors share: EscapeIdentifier also wraps
-		// without doubling, so the same key leaves the identifier on PostgreSQL
-		// and becomes SQL. Nothing legitimate passes an undoubled interior
-		// quote, so refusing it costs no working call. The rest of this check —
-		// qualifiers, function calls — stays Oracle's, where a dotted key is a
-		// grammar violation rather than merely unusual.
+		// The quote rule is the one half that is not Oracle grammar. It was
+		// written when both escapers wrapped without doubling, so the same key
+		// left the identifier on PostgreSQL too; ADR-082 fixed the renderers, and
+		// the rule is kept because nothing legitimate passes a bare interior
+		// quote, so refusing it still costs no working call. Note this branch is
+		// STRICTER than the Oracle one: it refuses a well-formed quoted key
+		// (`"a""b"`) that keyEscapesIdentifier exempts. That divergence pre-dates
+		// ADR-082 and is left standing rather than widened inside a security fix;
+		// it is tracked with the other upsert-acceptance question. The rest of
+		// this check — qualifiers, function calls — stays Oracle's, where a
+		// dotted key is a grammar violation rather than merely unusual.
 		for _, col := range columns {
 			if hasUnescapedQuote(col) {
 				return fmt.Errorf("%s column %q is not a single column name for upsert", kind, col)
@@ -168,25 +172,42 @@ func (qb *QueryBuilder) requireSingleColumnNames(kind string, columns []string) 
 	}
 
 	for i, rendered := range qb.quoteOracleColumnsForDML(columns...) {
-		if !isSingleColumnName(rendered) {
+		if !isSingleColumnName(rendered) || keyEscapesIdentifier(columns[i]) {
 			return fmt.Errorf("%s column %q is not a single column name for upsert", kind, columns[i])
 		}
 	}
 	return nil
 }
 
+// keyEscapesIdentifier reports whether a caller's key carries a quote that is
+// neither half of a doubled escape nor the wrapper of a well-formed quoted
+// identifier.
+//
+// It reads the KEY because the rendering no longer betrays it. The renderers now
+// double an interior quote, so `role" = 'admin', "name` renders as one (absurd)
+// column rather than as a second assignment, and the rendering-side test that
+// used to catch it passes. Refusing the key keeps ADR-071's rule that the builder
+// names only what the caller can have meant, and keeps this change from widening
+// what an upsert accepts while it is closing an injection. Whether such a key
+// should be accepted now that it renders correctly is tracked separately.
+func keyEscapesIdentifier(key string) bool {
+	return !isQuotedIdentifier(key) && hasUnescapedQuote(key)
+}
+
 // isSingleColumnName reports whether a rendered identifier is one column name
 // and nothing else: not empty, not qualified, a valid segment, and — when
 // quoted — carrying no quote that ends the identifier early.
 //
-// That last test is the one with teeth. oracleQuoteIdentifier wraps a key in
-// quotes without doubling the ones inside it, so a key spelled
-// `role" = 'admin', "name` renders as `"role" = 'admin', "name"`: not a column,
-// but a second assignment the caller never asked for, in a position no bind
-// parameter guards. A quote inside a quoted identifier is legal only doubled,
-// which is what stripping the "" pairs and looking for a survivor tests. The
-// renderer's own missing escape is the wider bug and is tracked separately;
-// this refuses to name what it cannot render.
+// That last test used to be the one with teeth, back when oracleQuoteIdentifier
+// wrapped a key without doubling the quotes inside it and `role" = 'admin', "name`
+// rendered as `"role" = 'admin', "name"` — not a column, but a second assignment
+// in a position no bind parameter guards. The renderer escapes now, so no
+// rendering it produces should reach this with an early-ending quote, and the
+// rule that refuses such a key has moved to keyEscapesIdentifier, which reads the
+// key itself. The quote test is kept rather than deleted: it is one comparison
+// standing between a future renderer change and an injected assignment, and this
+// is not the seam to economize on. Its other clauses — empty, qualified, not a
+// valid segment — remain load-bearing on their own.
 func isSingleColumnName(rendered string) bool {
 	if rendered == "" || strings.Contains(rendered, ".") || !validateSegment(rendered) {
 		return false
@@ -212,6 +233,34 @@ func isSingleColumnName(rendered string) bool {
 // escaper wraps it in.
 func hasUnescapedQuote(text string) bool {
 	return strings.Contains(strings.ReplaceAll(text, `""`, ""), `"`)
+}
+
+// isQuotedIdentifier reports whether text is ALREADY a well-formed quoted
+// identifier: wrapped in quotes with every interior quote doubled. Re-quoting
+// one of these would change the name it denotes, which is why the renderers pass
+// it through. Wrapping alone does not qualify — `role" = 'admin', "name` is
+// wrapped and is two SQL tokens.
+func isQuotedIdentifier(text string) bool {
+	return isQuotedString(text) && !hasUnescapedQuote(text[1:len(text)-1])
+}
+
+// quoteIdentifierLiteral wraps text in quotes with every interior quote doubled,
+// which is how Oracle and PostgreSQL both spell a quote inside a name. A quote
+// left undoubled ends the identifier early, so the remainder is parsed as SQL.
+//
+// Collapsing precedes doubling because a key arrives in escaped form: `a""b`
+// already denotes the one-quote name `a"b`, the reading upsertColumnName applies
+// to it. Doubling blind would rename that column. Collapsing first makes the
+// pass idempotent — an already-escaped key survives unchanged, and a lone quote
+// is the only thing that gains a partner.
+func quoteIdentifierLiteral(text string) string {
+	if !strings.ContainsRune(text, '"') {
+		// The overwhelming case, and the hot one: one scan, one allocation, the
+		// same cost this had before it learned to escape.
+		return `"` + text + `"`
+	}
+	collapsed := strings.ReplaceAll(text, `""`, `"`)
+	return `"` + strings.ReplaceAll(collapsed, `"`, `""`) + `"`
 }
 
 // escapeIdentifiers returns a new slice containing the escaped form of each identifier using qb.EscapeIdentifier.
