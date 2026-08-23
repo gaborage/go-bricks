@@ -256,6 +256,20 @@ func (qb *QueryBuilder) Select(columns ...any) *SelectQueryBuilder {
 // consistent with Select/Update/Delete builders.
 // Table names are automatically quoted according to database vendor rules to handle reserved words.
 func (qb *QueryBuilder) Insert(table string) dbtypes.InsertQueryBuilder {
+	return qb.newInsertBuilder("Insert", table)
+}
+
+// newInsertBuilder starts an INSERT on table, validating the table identifier
+// BEFORE interpolation — the same M9 guard From/Update/Delete apply, since
+// quoteTableForQuery returns the name verbatim on PostgreSQL and a table sits
+// first in the statement, where a trailing comment takes the rest of it. A
+// violation is deferred to ToSQL(), so a caller that keeps building on the
+// returned builder still fails there; the callers below stop early only to avoid
+// mutating a builder that carries no statement.
+func (qb *QueryBuilder) newInsertBuilder(context, table string) *InsertQueryBuilder {
+	if err := validateTableName(table); err != nil {
+		return &InsertQueryBuilder{err: fmt.Errorf("%s: %w", context, err)}
+	}
 	return &InsertQueryBuilder{insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table))}
 }
 
@@ -263,9 +277,12 @@ func (qb *QueryBuilder) Insert(table string) dbtypes.InsertQueryBuilder {
 // It applies vendor-specific column quoting to the provided column list.
 // Table names are automatically quoted according to database vendor rules to handle reserved words.
 func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtypes.InsertQueryBuilder {
-	return &InsertQueryBuilder{
-		insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).Columns(qb.quoteColumnsForDML(columns...)...),
+	iqb := qb.newInsertBuilder("InsertWithColumns", table)
+	if iqb.err != nil {
+		return iqb
 	}
+	iqb.insertBuilder = iqb.insertBuilder.Columns(qb.quoteColumnsForDML(columns...)...)
+	return iqb
 }
 
 // InsertStruct creates an INSERT query by extracting all fields from a struct instance.
@@ -303,11 +320,14 @@ func (qb *QueryBuilder) InsertStruct(table string, instance any) dbtypes.InsertQ
 		values = append(values, val)
 	}
 
-	return &InsertQueryBuilder{
-		insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).
-			Columns(qb.quoteColumnsForDML(columns...)...).
-			Values(values...),
+	iqb := qb.newInsertBuilder("InsertStruct", table)
+	if iqb.err != nil {
+		return iqb
 	}
+	iqb.insertBuilder = iqb.insertBuilder.
+		Columns(qb.quoteColumnsForDML(columns...)...).
+		Values(values...)
+	return iqb
 }
 
 // InsertFields creates an INSERT query by extracting only specified fields from a struct instance.
@@ -339,11 +359,14 @@ func (qb *QueryBuilder) InsertFields(table string, instance any, fields ...strin
 		values = append(values, val)
 	}
 
-	return &InsertQueryBuilder{
-		insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).
-			Columns(qb.quoteColumnsForDML(columns...)...).
-			Values(values...),
+	iqb := qb.newInsertBuilder("InsertFields", table)
+	if iqb.err != nil {
+		return iqb
 	}
+	iqb.insertBuilder = iqb.insertBuilder.
+		Columns(qb.quoteColumnsForDML(columns...)...).
+		Values(values...)
+	return iqb
 }
 
 // extractTerminalIdentifier extracts the final identifier from a column name,
@@ -598,12 +621,13 @@ func (qb *QueryBuilder) BuildBooleanValue(value bool) any {
 func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
 	parts := strings.Split(identifier, ".")
 	for i, part := range parts {
-		if len(part) >= 2 && part[0] == '"' && part[len(part)-1] == '"' {
-			// Already quoted, skip
+		if isQuotedIdentifier(part) {
+			// Already a well-formed quoted identifier; re-quoting would rename it.
 			continue
 		}
-		// All vendors now preserve case for quoted identifiers
-		parts[i] = `"` + part + `"`
+		// All vendors now preserve case for quoted identifiers, and an interior
+		// quote is doubled so it cannot end the identifier early.
+		parts[i] = quoteIdentifierLiteral(part)
 	}
 
 	return strings.Join(parts, ".")

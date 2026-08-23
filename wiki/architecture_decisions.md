@@ -1394,6 +1394,33 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-082: Identifier Arguments Are Validated At Every Door, and the Renderer Escapes Wherever It Quotes](adr_082_identifier_arguments_validated_at_every_door.md)
+
+**Date:** 2026-08-23 | **Status:** Accepted (decision); implementation staged — the renderer and table
+arguments ship here, the `Select`/`Insert` column and Filter/JoinFilter stages are tracked in #1143 |
+**Supersedes:** the Filter exclusion in ADR-031
+
+ADR-031 closed the M9 identifier-injection class on `From`, the JOIN family, `OrderBy`,
+`GroupBy`, `Set`/`SetMap` and `DeleteQueryBuilder.OrderBy`, and excluded the Filter API
+because "those are already parameterized". `f.Eq(column, value)` takes TWO arguments: the
+value is parameterized, the column is interpolated — verbatim on PostgreSQL. One sentence
+excluded thirty methods, and is why database.md lists the guarded doors and is silent on the
+rest. Separately both renderers wrapped an identifier without doubling the quotes inside it
+(#1104), so `role" = 'admin', "name` rendered as a second assignment rather than a name. The
+decision is BOTH remedies: validate every identifier argument at its door, and double
+interior quotes wherever the renderer already quotes — narrow, since quoting a bare
+PostgreSQL identifier would refold its case (ADR-007/M7). Table arguments join the rule on
+all five INSERT and upsert doors. `Having` takes a predicate, not an identifier, so it is
+documented as a raw-SQL door instead (#1146) rather than validated against a grammar no real
+call could satisfy. Lands in stages; the remaining doors are #1143.
+
+**Key Benefits:** one rule at every door instead of a per-method accident; a renderer that is correct for
+every shape except the function-shaped pass-through it documents as a known gap; and a glossary that now names identifier
+argument and bound value apart, so the conflation cannot be restated without contradicting
+it. **Migration:** [migrations.md](migrations.md) `[C60.24]`, `[C60.25]`.
+
+---
+
 ### [ADR-081: A Recovered Panic Value Is Reported By Type, Never By Value](adr_081_recovered_panic_values_reported_by_type.md)
 
 **Date:** 2026-08-22 | **Status:** Accepted | **Corrects:** ADR-079
@@ -1757,7 +1784,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-081) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-082) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

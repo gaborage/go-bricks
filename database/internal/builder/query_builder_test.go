@@ -2236,3 +2236,133 @@ func TestAllFieldsWithAlias(t *testing.T) {
 	assert.Contains(t, aliasedVals, int64(456))
 	assert.Contains(t, aliasedVals, allFieldsTest)
 }
+
+// TestEscapeIdentifierDoublesInteriorQuotes pins the escape rule the renderer
+// owes every caller: a quote inside a quoted identifier is legal only doubled,
+// and one left alone ends the identifier early so the remainder is parsed as
+// SQL. Both vendors run it — the gap is not Oracle grammar, it is a rendering
+// defect the two escapers share (#1104).
+func TestEscapeIdentifierDoublesInteriorQuotes(t *testing.T) {
+	// The qualified case belongs to EscapeIdentifier alone: it quotes every dot
+	// segment, while the Oracle renderer quotes only the segments that need it,
+	// so this one has no shared golden to derive a rendering from.
+	tests := append([]identifierEscapeCase{}, identifierEscapeCases...)
+	tests = append(tests, identifierEscapeCase{
+		name: "qualified_name_escapes_each_part", identifier: `a"b.c`, escaped: `"a""b"."c"`,
+	})
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+		for _, tt := range tests {
+			t.Run(vendor+"_"+tt.name, func(t *testing.T) {
+				require.Equal(t, tt.escaped, qb.EscapeIdentifier(tt.identifier))
+			})
+		}
+	}
+}
+
+type identifierEscapeCase struct {
+	name       string
+	identifier string
+	escaped    string
+}
+
+// identifierEscapeCases are the escaping goldens shared by this file's
+// EscapeIdentifier test and oracle_test.go's rendering test. They are shared
+// rather than typed twice because the Oracle expectation IS this escaped form
+// wrapped in a SELECT — two copies would let one be updated and the other left
+// stale, which is the drift class this whole change is about.
+var identifierEscapeCases = []identifierEscapeCase{
+	{name: "lone_interior_quote_is_doubled", identifier: `a"b`, escaped: `"a""b"`},
+	{name: "already_doubled_quote_survives", identifier: `a""b`, escaped: `"a""b"`},
+	{name: "well_formed_quoted_passes_through", identifier: `"level"`, escaped: `"level"`},
+	{
+		// The exploit shape from #1104: wrapped, but two SQL tokens. It must
+		// render as one absurd column name, never as a second assignment.
+		name:       "assignment_payload_becomes_one_name",
+		identifier: `role" = 'admin', "name`, escaped: `"role"" = 'admin', ""name"`,
+	},
+}
+
+type insertTableProbe struct {
+	ID int64 `db:"id"`
+}
+
+// TestInsertDoorsValidateTable holds the four INSERT entry points to the rule
+// Update, Delete and From already follow. A table name is interpolated — verbatim
+// on PostgreSQL — and sits first in the statement, so a trailing comment takes
+// the rest of it.
+func TestInsertDoorsValidateTable(t *testing.T) {
+	const payload = `users; DROP TABLE users--`
+	probe := &insertTableProbe{ID: 1}
+
+	doors := map[string]func(qb *QueryBuilder, table string) dbtypes.InsertQueryBuilder{
+		"Insert": func(qb *QueryBuilder, table string) dbtypes.InsertQueryBuilder {
+			return qb.Insert(table).Columns("id").Values(1)
+		},
+		"InsertWithColumns": func(qb *QueryBuilder, table string) dbtypes.InsertQueryBuilder {
+			return qb.InsertWithColumns(table, "id").Values(1)
+		},
+		"InsertStruct": func(qb *QueryBuilder, table string) dbtypes.InsertQueryBuilder {
+			return qb.InsertStruct(table, probe)
+		},
+		"InsertFields": func(qb *QueryBuilder, table string) dbtypes.InsertQueryBuilder {
+			return qb.InsertFields(table, probe, "ID")
+		},
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+		for door, build := range doors {
+			t.Run(vendor+"_"+door+"_rejects_payload", func(t *testing.T) {
+				sql, args, err := build(qb, payload).ToSQL()
+
+				require.Error(t, err)
+				require.ErrorContains(t, err, "invalid table identifier",
+					"rejected the call, but not because of the table identifier")
+				require.ErrorContains(t, err, door, "the error should name the door it came from")
+				require.Empty(t, sql, "a rejected call emits no SQL")
+				require.Empty(t, args, "a rejected call binds no arguments")
+			})
+
+			t.Run(vendor+"_"+door+"_accepts_bare_name", func(t *testing.T) {
+				sql, _, err := build(qb, "users").ToSQL()
+
+				require.NoError(t, err)
+				require.NotEmpty(t, sql)
+			})
+		}
+	}
+}
+
+// TestEscapeIdentifierTreatsInputAsEscapedForm pins the convention that makes
+// quoteIdentifierLiteral collapse before it doubles, because the convention is
+// otherwise implicit and reads like a defect: `a"b` and `a""b` render to the SAME
+// identifier.
+//
+// That is intended. This codebase reads an unquoted key as ALREADY escaped — a
+// doubled quote is one quote in the name it denotes — which is asserted by
+// upsertColumnName's own test (`doubled_quote_unwraps`: `a""b` names `a"b`) and
+// relied on by TestBuildUpsertKeepsDistinctIdentitiesBuildable. Doubling blind
+// instead would render `a""b` as `"a""""b"`, a different column than the caller
+// asked for, and both of those pre-existing tests fail.
+//
+// The cost is that the mapping is not injective: a lone quote and its escaped
+// spelling normalise to one name. Under this convention a lone quote is a
+// malformed spelling of that name, so normalising is the defined behavior rather
+// than a collision.
+func TestEscapeIdentifierTreatsInputAsEscapedForm(t *testing.T) {
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+		t.Run(vendor+"_lone_and_escaped_spellings_name_one_column", func(t *testing.T) {
+			require.Equal(t, qb.EscapeIdentifier(`a""b`), qb.EscapeIdentifier(`a"b`),
+				"both spellings denote the one-quote name a\"b")
+			require.Equal(t, `"a""b"`, qb.EscapeIdentifier(`a"b`))
+		})
+		t.Run(vendor+"_escaping_is_idempotent", func(t *testing.T) {
+			once := qb.EscapeIdentifier(`a"b`)
+			require.Equal(t, once, qb.EscapeIdentifier(once),
+				"re-escaping an already-escaped identifier must not rename it")
+		})
+	}
+}

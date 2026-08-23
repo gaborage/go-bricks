@@ -1394,3 +1394,66 @@ func TestBuildUpsertOracleRejectsConflictColumnInUpdateSet(t *testing.T) {
 		})
 	}
 }
+
+// TestOracleRenderingDoublesInteriorQuotes drives the Oracle renderer through
+// the public builder: a column carrying a quote must reach the statement as one
+// escaped identifier, never as a name plus trailing SQL. Observed as emitted SQL
+// rather than against oracleQuoteIdentifier, so the assertion survives a move of
+// where the quoting happens.
+func TestOracleRenderingDoublesInteriorQuotes(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	for _, tt := range identifierEscapeCases {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, _, err := qb.Select(tt.identifier).From("users").ToSQL()
+			require.NoError(t, err)
+			// The rendering is the shared escaped golden, in statement position.
+			require.Equal(t, `SELECT `+tt.escaped+` FROM users`, sql)
+		})
+	}
+}
+
+// TestBuildUpsertValidatesTable covers the argument #1104 calls the worse half:
+// the table sits first in both vendors' templates, so a trailing comment takes
+// the rest of the statement and no column precondition ever runs.
+func TestBuildUpsertValidatesTable(t *testing.T) {
+	const mergeTakeover = `users" target USING (SELECT 1 AS "x" FROM dual) source ON (1=1) ` +
+		`WHEN NOT MATCHED THEN INSERT ("a") VALUES (1) --`
+
+	rejected := []struct{ name, table string }{
+		{name: "merge_takeover", table: mergeTakeover},
+		{name: "stacked_statement", table: `users; DROP TABLE users--`},
+		{name: "trailing_comment", table: `users--`},
+	}
+
+	accepted := []struct{ name, table string }{
+		{name: "bare_name", table: "users"},
+		{name: "qualified_name", table: "app.users"},
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+		for _, tt := range rejected {
+			t.Run(vendor+"_rejects_"+tt.name, func(t *testing.T) {
+				sql, args, err := qb.BuildUpsert(tt.table, []string{"id"},
+					map[string]any{"id": 1, "name": "n"}, map[string]any{"name": "n2"})
+
+				require.Error(t, err)
+				// Attribution: the call must fail at the table door, not because
+				// some column precondition happened to trip on the same input.
+				require.ErrorContains(t, err, "invalid table identifier",
+					"rejected the call, but not because of the table identifier")
+				require.Empty(t, sql, "a rejected call emits no SQL")
+				require.Empty(t, args, "a rejected call binds no arguments")
+			})
+		}
+		for _, tt := range accepted {
+			t.Run(vendor+"_accepts_"+tt.name, func(t *testing.T) {
+				sql, _, err := qb.BuildUpsert(tt.table, []string{"id"},
+					map[string]any{"id": 1, "name": "n"}, map[string]any{"name": "n2"})
+
+				require.NoError(t, err)
+				require.NotEmpty(t, sql)
+			})
+		}
+	}
+}

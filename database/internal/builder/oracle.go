@@ -271,16 +271,16 @@ func oracleQuoteIdentifier(column string) string {
 		return strings.Join(parts, ".")
 	}
 
-	if len(trimmed) >= 2 && trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"' {
+	if isQuotedIdentifier(trimmed) {
 		return trimmed
 	}
 
-	if sqllex.IsOracleReservedWord(trimmed) {
-		return `"` + trimmed + `"`
-	}
-
-	if oracleNeedsQuoting(trimmed) {
-		return `"` + trimmed + `"`
+	// No separate test for a quote is needed here: oracleNeedsQuoting allows only
+	// [A-Za-z0-9_$#], so a name carrying one already fails it and reaches the
+	// escaping branch. What changed is the branch — it escapes now instead of
+	// wrapping, so a quote can no longer end the identifier early.
+	if sqllex.IsOracleReservedWord(trimmed) || oracleNeedsQuoting(trimmed) {
+		return quoteIdentifierLiteral(trimmed)
 	}
 
 	return trimmed
@@ -367,6 +367,14 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 	// such, rather than as a precondition failure for an upsert it cannot build.
 	if qb.vendor != dbtypes.Oracle && qb.vendor != dbtypes.PostgreSQL {
 		return "", nil, fmt.Errorf("upsert not supported for database vendor: %s", qb.vendor)
+	}
+
+	// The table is settled before any column rule, because it sits first in both
+	// vendors' templates: an unvalidated name ends the statement with a trailing
+	// comment and takes the rest of it, which no column precondition can catch
+	// (#1104). Same grammar From/Update/Delete apply.
+	if err := validateTableName(table); err != nil {
+		return "", nil, fmt.Errorf("BuildUpsert: %w", err)
 	}
 
 	if len(conflictColumns) == 0 {
