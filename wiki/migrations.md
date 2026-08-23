@@ -5092,8 +5092,11 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   `Expr`, not part of the SQL. `qb.Select("*")` is unaffected.
 - verify: both directions. Assert the columns you intend to ship still build (`err == nil` from
   `ToSQL()`), then feed one known-bad column (`id; DROP TABLE users--`) to the same door and assert
-  `err != nil`, reading `invalid select identifier` or `invalid insert column identifier`. Checking
-  only that good columns still build passes whether or not the validation runs.
+  `err != nil`. The message names the door, and the three spellings differ — `invalid select
+  identifier` from `Select`, `invalid insert column identifier` from `InsertWithColumns` and
+  `.Columns`, and `invalid SetMap column identifier` from `.SetMap` — so match on
+  `invalid ` and the identifier itself rather than on one fixed phrase. Checking only that good
+  columns still build passes whether or not the validation runs.
 - ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issue #1143
 
 ---
