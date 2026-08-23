@@ -44,4 +44,4 @@ Valid identifiers on PostgreSQL remain **unquoted** (no case-folding change). Co
 - The Filter API (`f.Eq`, `f.In`, …) and parameterized values are unaffected.
 - PostgreSQL identifier quoting behavior is unchanged (valid identifiers stay unquoted).
 
-See [database.md](database.md#identifier-validation-adr-031) for the developer-facing grammar and [migrations.md](migrations.md) for the upgrade note.
+See [database.md](database.md#identifier-validation-adr-031-adr-082) for the developer-facing grammar and [migrations.md](migrations.md) for the upgrade note.

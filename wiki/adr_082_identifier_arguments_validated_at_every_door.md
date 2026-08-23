@@ -193,5 +193,5 @@ builder; internal paths that have already validated and already rendered must no
 re-enter it.
 
 See [migrations.md](migrations.md) for the atoms and
-[database.md](database.md#identifier-validation-adr-031) for the developer-facing
+[database.md](database.md#identifier-validation-adr-031-adr-082) for the developer-facing
 grammar.
