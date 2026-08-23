@@ -2515,10 +2515,19 @@ func TestSelectValidatesInsideSliceArguments(t *testing.T) {
 	}
 }
 
-// TestSetStructReportsAColumnTheFunnelRefuses drives SetStruct's own funnel
-// failure. Both of its branches route through setColumn, whose error path the
-// mutation gate found unexercised.
-func TestSetStructReportsAColumnTheFunnelRefuses(t *testing.T) {
+// TestSetStructBuildsAndSetColumnRefuses covers what is actually reachable here.
+//
+// SetStruct's own funnel-failure branch cannot be driven from a struct: its
+// columns come from `db` tags, and validateDBTag (columns/parser.go) is STRICTLY
+// NARROWER than the identifier grammar — its pattern is identifierSegment
+// anchored, plus a denylist for quotes and comment markers — so a tag that would
+// fail the funnel panics at qb.Columns() registration long before SetStruct runs.
+// Verified: `db:"a = 1 OR 1=1 -- "` panics with `invalid db tag … contains
+// dangerous SQL characters "--"`.
+//
+// So this pins SetStruct's success paths, and drives setColumn's refusal through
+// Set, the one door that reaches it with a caller-supplied string.
+func TestSetStructBuildsAndSetColumnRefuses(t *testing.T) {
 	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
 		qb := NewQueryBuilder(vendor)
 
@@ -2538,10 +2547,10 @@ func TestSetStructReportsAColumnTheFunnelRefuses(t *testing.T) {
 			require.NotEmpty(t, sql)
 		})
 
-		t.Run(vendor+"_funnel_refusal_surfaces", func(t *testing.T) {
+		t.Run(vendor+"_set_refusal_surfaces", func(t *testing.T) {
 			uqb := qb.Update("users")
-			// setColumn is the single point both SetStruct branches use; drive its
-			// failure through the sibling door that reaches it with a caller string.
+			// setColumn is the single point both SetStruct branches use; Set is the
+			// only door that reaches it with a caller-supplied string.
 			out := uqb.Set(`id = 1 OR 1=1 -- `, 1)
 			_, _, err := out.Where(qb.Filter().Eq("id", 1)).ToSQL()
 

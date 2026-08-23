@@ -1239,25 +1239,51 @@ func TestFilterColumnsValidateIdentifiers(t *testing.T) {
 		jf := qb.JoinFilter()
 
 		single := map[string]func(column string) dbtypes.Filter{
-			"Eq":      func(c string) dbtypes.Filter { return f.Eq(c, 1) },
-			"NotEq":   func(c string) dbtypes.Filter { return f.NotEq(c, 1) },
-			"Lt":      func(c string) dbtypes.Filter { return f.Lt(c, 1) },
-			"Lte":     func(c string) dbtypes.Filter { return f.Lte(c, 1) },
-			"Gt":      func(c string) dbtypes.Filter { return f.Gt(c, 1) },
-			"Gte":     func(c string) dbtypes.Filter { return f.Gte(c, 1) },
-			"In":      func(c string) dbtypes.Filter { return f.In(c, []any{1, 2}) },
-			"NotIn":   func(c string) dbtypes.Filter { return f.NotIn(c, []any{1, 2}) },
-			"Like":    func(c string) dbtypes.Filter { return f.Like(c, "x%") },
-			"Null":    func(c string) dbtypes.Filter { return f.Null(c) },
-			"NotNull": func(c string) dbtypes.Filter { return f.NotNull(c) },
-			"Between": func(c string) dbtypes.Filter { return f.Between(c, 1, 2) },
+			"Eq":       func(c string) dbtypes.Filter { return f.Eq(c, 1) },
+			"NotEq":    func(c string) dbtypes.Filter { return f.NotEq(c, 1) },
+			"Lt":       func(c string) dbtypes.Filter { return f.Lt(c, 1) },
+			"Lte":      func(c string) dbtypes.Filter { return f.Lte(c, 1) },
+			"Gt":       func(c string) dbtypes.Filter { return f.Gt(c, 1) },
+			"Gte":      func(c string) dbtypes.Filter { return f.Gte(c, 1) },
+			"In":       func(c string) dbtypes.Filter { return f.In(c, []any{1, 2}) },
+			"NotIn":    func(c string) dbtypes.Filter { return f.NotIn(c, []any{1, 2}) },
+			"Like":     func(c string) dbtypes.Filter { return f.Like(c, "x%") },
+			"Null":     func(c string) dbtypes.Filter { return f.Null(c) },
+			"NotNull":  func(c string) dbtypes.Filter { return f.NotNull(c) },
+			"Between":  func(c string) dbtypes.Filter { return f.Between(c, 1, 2) },
+			"Regex":    func(c string) dbtypes.Filter { return f.Regex(c, "^x") },
+			"RegexI":   func(c string) dbtypes.Filter { return f.RegexI(c, "^x") },
+			"NotRegex": func(c string) dbtypes.Filter { return f.NotRegex(c, "^x") },
 		}
 
+		// Every column-taking JoinFilter door, and for the six two-column forms
+		// BOTH sides — a pair door validating only its left argument would pass a
+		// left-only matrix while leaving the right side wide open.
 		joins := map[string]func(column string) dbtypes.JoinFilter{
-			"EqColumn":    func(c string) dbtypes.JoinFilter { return jf.EqColumn(c, "b.id") },
-			"NotEqColumn": func(c string) dbtypes.JoinFilter { return jf.NotEqColumn(c, "b.id") },
-			"jf.Eq":       func(c string) dbtypes.JoinFilter { return jf.Eq(c, 1) },
-			"jf.Null":     func(c string) dbtypes.JoinFilter { return jf.Null(c) },
+			"EqColumn_left":     func(c string) dbtypes.JoinFilter { return jf.EqColumn(c, "b.id") },
+			"EqColumn_right":    func(c string) dbtypes.JoinFilter { return jf.EqColumn("a.id", c) },
+			"NotEqColumn_left":  func(c string) dbtypes.JoinFilter { return jf.NotEqColumn(c, "b.id") },
+			"NotEqColumn_right": func(c string) dbtypes.JoinFilter { return jf.NotEqColumn("a.id", c) },
+			"LtColumn_left":     func(c string) dbtypes.JoinFilter { return jf.LtColumn(c, "b.id") },
+			"LtColumn_right":    func(c string) dbtypes.JoinFilter { return jf.LtColumn("a.id", c) },
+			"LteColumn_left":    func(c string) dbtypes.JoinFilter { return jf.LteColumn(c, "b.id") },
+			"LteColumn_right":   func(c string) dbtypes.JoinFilter { return jf.LteColumn("a.id", c) },
+			"GtColumn_left":     func(c string) dbtypes.JoinFilter { return jf.GtColumn(c, "b.id") },
+			"GtColumn_right":    func(c string) dbtypes.JoinFilter { return jf.GtColumn("a.id", c) },
+			"GteColumn_left":    func(c string) dbtypes.JoinFilter { return jf.GteColumn(c, "b.id") },
+			"GteColumn_right":   func(c string) dbtypes.JoinFilter { return jf.GteColumn("a.id", c) },
+			"jf.Eq":             func(c string) dbtypes.JoinFilter { return jf.Eq(c, 1) },
+			"jf.NotEq":          func(c string) dbtypes.JoinFilter { return jf.NotEq(c, 1) },
+			"jf.Lt":             func(c string) dbtypes.JoinFilter { return jf.Lt(c, 1) },
+			"jf.Lte":            func(c string) dbtypes.JoinFilter { return jf.Lte(c, 1) },
+			"jf.Gt":             func(c string) dbtypes.JoinFilter { return jf.Gt(c, 1) },
+			"jf.Gte":            func(c string) dbtypes.JoinFilter { return jf.Gte(c, 1) },
+			"jf.In":             func(c string) dbtypes.JoinFilter { return jf.In(c, []any{1, 2}) },
+			"jf.NotIn":          func(c string) dbtypes.JoinFilter { return jf.NotIn(c, []any{1, 2}) },
+			"jf.Like":           func(c string) dbtypes.JoinFilter { return jf.Like(c, "x%") },
+			"jf.Null":           func(c string) dbtypes.JoinFilter { return jf.Null(c) },
+			"jf.NotNull":        func(c string) dbtypes.JoinFilter { return jf.NotNull(c) },
+			"jf.Between":        func(c string) dbtypes.JoinFilter { return jf.Between(c, 1, 2) },
 		}
 
 		for _, p := range payloads {
