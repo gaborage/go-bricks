@@ -1396,7 +1396,9 @@ unexports eight debug response types with their JSON unchanged. See
 
 ### [ADR-082: Identifier Arguments Are Validated At Every Door, and the Renderer Escapes Wherever It Quotes](adr_082_identifier_arguments_validated_at_every_door.md)
 
-**Date:** 2026-08-23 | **Status:** Accepted | **Supersedes:** the Filter exclusion in ADR-031
+**Date:** 2026-08-23 | **Status:** Accepted (decision); implementation staged — the renderer and table
+arguments ship here, the `Select`/`Insert` column and Filter/JoinFilter stages are tracked in #1143 |
+**Supersedes:** the Filter exclusion in ADR-031
 
 ADR-031 closed the M9 identifier-injection class on `From`, the JOIN family, `OrderBy`,
 `GroupBy`, `Set`/`SetMap` and `DeleteQueryBuilder.OrderBy`, and excluded the Filter API

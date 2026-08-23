@@ -2334,3 +2334,35 @@ func TestInsertDoorsValidateTable(t *testing.T) {
 		}
 	}
 }
+
+// TestEscapeIdentifierTreatsInputAsEscapedForm pins the convention that makes
+// quoteIdentifierLiteral collapse before it doubles, because the convention is
+// otherwise implicit and reads like a defect: `a"b` and `a""b` render to the SAME
+// identifier.
+//
+// That is intended. This codebase reads an unquoted key as ALREADY escaped — a
+// doubled quote is one quote in the name it denotes — which is asserted by
+// upsertColumnName's own test (`doubled_quote_unwraps`: `a""b` names `a"b`) and
+// relied on by TestBuildUpsertKeepsDistinctIdentitiesBuildable. Doubling blind
+// instead would render `a""b` as `"a""""b"`, a different column than the caller
+// asked for, and both of those pre-existing tests fail.
+//
+// The cost is that the mapping is not injective: a lone quote and its escaped
+// spelling normalise to one name. Under this convention a lone quote is a
+// malformed spelling of that name, so normalising is the defined behavior rather
+// than a collision.
+func TestEscapeIdentifierTreatsInputAsEscapedForm(t *testing.T) {
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+		t.Run(vendor+"_lone_and_escaped_spellings_name_one_column", func(t *testing.T) {
+			require.Equal(t, qb.EscapeIdentifier(`a""b`), qb.EscapeIdentifier(`a"b`),
+				"both spellings denote the one-quote name a\"b")
+			require.Equal(t, `"a""b"`, qb.EscapeIdentifier(`a"b`))
+		})
+		t.Run(vendor+"_escaping_is_idempotent", func(t *testing.T) {
+			once := qb.EscapeIdentifier(`a"b`)
+			require.Equal(t, once, qb.EscapeIdentifier(once),
+				"re-escaping an already-escaped identifier must not rename it")
+		})
+	}
+}

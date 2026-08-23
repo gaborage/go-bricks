@@ -115,9 +115,12 @@ its own ADR rather than being welded to a security fix.
 
 **Breaking (intended):**
 
-- `Insert`, `InsertWithColumns`, `InsertStruct`, `InsertFields` and `BuildUpsert`
-  return a `ToSQL()` error for a table argument that is not a bare or qualified
-  identifier with at most one alias. Previously interpolated unchecked.
+- `Insert`, `InsertWithColumns`, `InsertStruct` and `InsertFields` return a
+  `ToSQL()` error for a table argument that is not a bare or qualified identifier
+  with at most one alias. Previously interpolated unchecked.
+- `BuildUpsert` refuses the same argument, but reports it as its own third return
+  value rather than through `ToSQL()` — it builds a statement directly and has no
+  deferred-error builder to carry one.
 - An upsert column key carrying a quote that is neither half of a doubled escape
   nor the wrapper of a well-formed quoted identifier is still refused. ADR-071
   refused it because the renderer could not render it; the renderer can now, so

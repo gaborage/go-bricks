@@ -3750,16 +3750,17 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   so does `{"level": 1, "LEVEL": 2}`, which renders quoted on both sides. **Second**, every conflict, insert and update key must be a
   single column name. On Oracle that means no qualifier, no function call and no empty name. **On
   both vendors** it also means no quote that ends the identifier early — a quote inside a name
-  must be doubled — because that half is not Oracle grammar but a rendering defect the two
-  escapers share, and `EscapeIdentifier` wraps without doubling exactly as `oracleQuoteIdentifier`
-  does. Conflict and insert keys have no choice: the MERGE names them as column aliases in
+  must be doubled. That half was written when the two escapers shared a rendering defect; `[C60.25]`
+  later in this same hop fixed both, so the rule now stands as builder VALIDATION of the key rather
+  than as compensation for a renderer that could not escape it. Conflict and insert keys have no choice: the MERGE names them as column aliases in
   its USING clause and in the INSERT list. Update keys become UPDATE SET targets, where Oracle
   would accept an alias-qualified one; refusing those is the API's own restriction.
-  That last rule refuses a key whose rendering would leave the identifier and become SQL: the
-  renderer wraps in quotes without doubling the ones inside, so `role" = 'admin', "name` renders
-  as `"role" = 'admin', "name"`, a second assignment rather than a column. The renderer's missing
-  escape is wider than this seam — it reaches the `table` argument and every other builder path on
-  both vendors — and is tracked as issue #1104; what closes here is the upsert entry alone. Within
+  That last rule refuses a key that, before `[C60.25]`, rendered as SQL rather than as a name:
+  `role" = 'admin', "name` came out as `"role" = 'admin', "name"`, a second assignment rather than
+  a column. `[C60.25]` fixes both renderers so that key now renders as one (absurd) column, and
+  `[C60.24]` closes the `table` argument the same hop — but the key is still refused here, because
+  rendering it correctly is not the same as it being a column name the caller can have meant. Read
+  the two together: `[C60.11]` is what the upsert ACCEPTS, `[C60.25]` is what the renderer EMITS. Within
   it the two halves have different reach. The undoubled interior-quote rule applies to upsert keys
   on **both** vendors, because that clause is not Oracle grammar but a defect both escapers share.
   The name-shape rules — no qualifier, no function call, no empty name — are **Oracle-only**. So a
@@ -5086,9 +5087,12 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   code owns — map the caller's value to one of a fixed set before it reaches the builder — since
   the builder will not accept a computed one. A table plus alias stays legal (`"users u"`), and
   `Table("users").As("u")` is unchanged.
-- verify: call each affected site once and assert `err == nil`; a violation surfaces from
-  `ToSQL()`, or as `BuildUpsert`'s third return value, reading
-  `invalid table identifier "…": must be a simple or qualified identifier with an optional alias`.
+- verify: two directions, because one of them is what the atom is for. Call each affected site
+  with the name you intend to ship and assert it still builds — `err == nil` from `ToSQL()`, or a
+  nil third return value from `BuildUpsert`. Then feed one KNOWN-BAD name (`users; DROP TABLE x--`)
+  to the same site and assert the opposite: `err != nil`, reading `invalid table identifier "…":
+  must be a simple or qualified identifier with an optional alias`. A suite that only checks the
+  first direction passes unchanged whether or not the validation runs at all.
 - ref: [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md) · issues #1104, #1143
 
 ---
@@ -5097,8 +5101,10 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 
 - detect: `git grep -nE 'EscapeIdentifier\(' -- '*.go'` for the exported helper, then search your
   schema for a column or table whose NAME contains a double quote — `information_schema.columns`
-  on PostgreSQL, `ALL_TAB_COLUMNS` on Oracle, `WHERE column_name LIKE '%"%'`. If that query
-  returns nothing, this atom cannot affect you.
+  on PostgreSQL, `ALL_TAB_COLUMNS` on Oracle, `WHERE column_name LIKE '%"%'`. A clean catalog is
+  NOT the whole answer: an ALIAS exists only in the statement that names it and appears in no
+  catalog, so also `git grep -nE '\bAs\(|" [A-Za-z_]"' -- '*.go'` over your own builder calls for
+  an alias carrying a quote. Both clean means this atom cannot affect you.
 - scope: `oracleQuoteIdentifier` and `QueryBuilder.EscapeIdentifier` wrapped a name in quotes
   without doubling the quotes inside it, so a name carrying one ended the identifier early and
   the remainder was parsed as SQL rather than as part of the name. Both now double it, which is
