@@ -1099,14 +1099,30 @@ func TestTracerProviderDoesNotRecordPanicValues(t *testing.T) {
 		panic(secret)
 	}()
 
-	for _, s := range exporter.GetSpans() {
+	spans := exporter.GetSpans()
+	// Without this the whole check is vacuous: an unexported span makes every
+	// assertion below unreachable and the test passes having proven nothing.
+	require.NotEmpty(t, spans, "the unwinding span never reached the exporter")
+
+	for _, s := range spans {
+		eventNames := make([]string, 0, len(s.Events))
 		for _, ev := range s.Events {
-			assert.NotEqual(t, "exception", ev.Name,
-				"the SDK recorded an exception event for an unwinding panic")
+			eventNames = append(eventNames, ev.Name)
 			for _, attr := range ev.Attributes {
 				assert.NotContains(t, attr.Value.String(), secret,
-					"span attribute %q discloses the panic value", attr.Key)
+					"event attribute %q discloses the panic value", attr.Key)
 			}
+		}
+		// Asserted over the COLLECTED names rather than inside the loop above:
+		// WithoutPanicRecording leaves no events at all on the passing path, so a
+		// per-event assertion only ever runs once the property is already broken.
+		assert.NotContains(t, eventNames, "exception",
+			"the SDK recorded an exception event for an unwinding panic")
+		assert.NotContains(t, s.Status.Description, secret,
+			"span status description discloses the panic value")
+		for _, attr := range s.Attributes {
+			assert.NotContains(t, attr.Value.String(), secret,
+				"span attribute %q discloses the panic value", attr.Key)
 		}
 	}
 }

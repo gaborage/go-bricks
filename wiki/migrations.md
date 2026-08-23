@@ -4867,7 +4867,7 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   | --- | --- | --- | --- | --- | --- |
   | 1 | audit sink-failure line (`migration`) | `panic` → `panic_type` | the value | the Go type | `stack` |
   | 2 | scheduler job-panic line (`scheduler`) | `panic` → `panic_type` | the value | the Go type | `stackTrace` — different name |
-  | 3 | delivery settle line (`messaging/internal/delivery`) | `panic_type` | the value | the Go type | none — `panic_type` only |
+  | 3 | delivery settle line (`messaging/internal/delivery`) | `panic` → `panic_type` | the value | the Go type | none — `panic_type` only |
   | 4 | delivery outcome line, classic lane (`messaging`) | `panic` → `panic_type` | the value | the Go type | `stack` |
   | 5 | delivery outcome line, streams lane (`messaging/streams`) | `panic` → `panic_type` | the value | the Go type | `stack` |
   | 6 | HTTP action line (`server`) | `error` | `[PANIC RECOVER] <value> <stack>` | `[PANIC RECOVER] panic (type: T) <stack>` | inside the rendered `error`, not a field |
@@ -4984,11 +4984,25 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   spread panics across concrete error types now shows one bucket; and row 8 changes under
   `app.debug: true` ONLY, so a production-posture shop can skip it entirely.
 
-  **Read this if you handle a disclosure question.** Before this hop, a handler that panicked
-  with anything sensitive put that value in your TRACING backend — off-platform — on every
-  panicking HTTP request and on every panicking delivery on both lanes. That is now closed, but it was open in every prior
-  release. If your handlers can panic with credentials or PII, treat the historical span
-  data as exposed and audit it separately; upgrading stops the bleeding and does not clean
+  **Read this if you handle a disclosure question. Audit TWO backends, and only one of the
+  three exposures was gated on `app.debug`.**
+
+  1. **Your TRACING backend — the worst half, and ungated.** Before this hop a handler that
+     panicked with anything sensitive put that value off-platform on every panicking HTTP
+     request and on every panicking delivery on both lanes, in every deployment posture.
+  2. **Your LOG backend, via the HTTP action line (row 6) — also UNGATED.** That line's
+     `error` field carried Echo's rendering of the raw panic value in every posture,
+     production included: `server/logger.go`'s `Err()` has no `app.debug` condition, and
+     `LogEvent.Err` applies no filtering at all, so the sensitive-data filter never saw it.
+     Do not skip your log backend because you run production posture.
+  3. **Your LOG backend, via rows 7 and 8 — `app.debug: true` ONLY.** In production posture
+     those two lines carried a TYPE (`error_type`), never the value, so a deployment that
+     never set `app.debug: true` has no exposure from them. Check whether any environment
+     you run — staging and ad-hoc debugging sessions included — ever did.
+
+  All three are now closed, and all three were open in every prior release. If your handlers
+  can panic with credentials or PII, treat the historical span data AND the historical log
+  data as exposed and audit both separately; upgrading stops the bleeding and does not clean
   up what already shipped.
 - verify: for (a), in staging make an `AuditRecorder.Record` panic with a synthetic secret
   (`panic("not-a-real-secret-0000")`) and make a scheduler job panic the same way. **Use a
@@ -5114,16 +5128,17 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   `server.trustedproxies` included: its per-entry rule was already strict, but the
   set-coverage and v4-mapped rules are new to it too, so a list it accepted yesterday can
   abort startup today. You are also affected if either access-control path runs behind a
-  proxy. A deployment that sets none of the three is unaffected by the behavior change,
-  because headers were never consulted for it.
+  proxy — and **setting none of the three keys does NOT make you unaffected**. Echo trusts
+  loopback, link-local and RFC1918 ranges by DEFAULT (`server/server.go`), so an in-VPC
+  service behind a load balancer consults `X-Forwarded-For` with no configuration at all, and
+  the derivation change reaches it. Only a deployment whose immediate peer is outside those
+  default ranges AND which sets none of the three keys is unaffected, because no hop it
+  observes is trusted and the headers are never consulted for it.
 - apply: three NEW startup failures, all of them naming the key and the remedy. A trust
   list covering an entire address family (see scope) now aborts, as does a
   `debug.allowedips` entry that is neither an IP nor a CIDR, or one with host bits set
   (`192.168.1.55/16` silently admitted 65,536 hosts where one address was written — the
   same widening the proxy keys already refuse, now in the same words). Note
-  Probe the host-bits rule on its own — set `debug.allowedips: ["192.168.1.55/16"]` and
-  confirm startup ABORTS naming the key; a probe using only a syntactically broken entry
-  passes without testing the rule that parses cleanly and widens. Note
   `debug.allowedips` is validated **even when `debug.enabled: false`**: a block you wrote
   must be valid whether or not it is registered, so a typo surfaces at deploy time rather
   than during the incident in which someone flips it on.
@@ -5146,7 +5161,10 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
      `scheduler.security.trustedproxies` AND `server.trustedproxies`. Then repeat all three
      with `["0.0.0.0/1","128.0.0.0/1"]` and with `["::ffff:0.0.0.0/96"]` — those are the
      shapes no per-entry rule catches, so a probe using only `0.0.0.0/0` passes without
-     testing the rule this atom is about. Then set `debug.allowedips: ["0.0.0.0/0"]` and
+     testing the rule this atom is about. Probe the `debug.allowedips` host-bits rule on its
+     own too — set `debug.allowedips: ["192.168.1.55/16"]` and expect a startup failure naming
+     the key; an entry that is merely unparseable exercises the other rule, not this one, which
+     parses cleanly and widens. Then set `debug.allowedips: ["0.0.0.0/0"]` and
      confirm it still starts — the allowlist exemption is deliberate, and a failure there
      would be a regression.
   2. **The bypass, at the debug door.** With a legitimate `debug.trustedproxies` (a real
