@@ -4,7 +4,7 @@
 [ADR-082](adr_082_identifier_arguments_validated_at_every_door.md)
 **Date:** 2026-06-16
 
-> **Editorial note (added with ADR-082).** Two statements below are no longer
+> **Amendment — 2026-08-23 (ADR-082).** Two statements below are no longer
 > current, and are left in place because the reasoning is the historical record
 > rather than because it still holds:
 >
