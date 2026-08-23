@@ -85,11 +85,14 @@ surface is three shapes, not one: the `EXISTS` idiom `Select("1")`, bare functio
 strings such as `Select("COUNT(*)")`, and any function-with-alias string. Each
 moves to `qb.Expr(...)`, and `Select("*")` continues to build untouched.
 
-One consequence worth stating rather than discovering: `qb.Expr` is also the
-escape hatch that carries a security-annotation expectation, so a caller writing
-`SELECT 1` in an `EXISTS` subquery now reaches for the same tool as one writing
-arbitrary SQL. That is a cost of keeping the grammar honest about what an
-identifier is, not an argument that a constant is one.
+One consequence worth stating rather than discovering: a caller writing `SELECT 1`
+in an `EXISTS` subquery now reaches for the same tool as one writing a computed
+expression. `qb.Expr` carries a security WARNING in its own godoc — never
+interpolate user input into it — but not the `// SECURITY:` annotation
+requirement, which names `f.Raw()`, `jf.Raw()` and `database.Raw()` and covers
+those three alone. The cost here is the reach for a hatch at all, not an audit
+obligation, and it is a cost of keeping the grammar honest about what an
+identifier is rather than an argument that a constant is one.
 
 The decision lands in stages, each shipping alone: the renderer escape and the
 table arguments first (closing #1104), then the `select` context and the
