@@ -5103,7 +5103,7 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   schema for a column or table whose NAME contains a double quote — `information_schema.columns`
   on PostgreSQL, `ALL_TAB_COLUMNS` on Oracle, `WHERE column_name LIKE '%"%'`. A clean catalog is
   NOT the whole answer: an ALIAS exists only in the statement that names it and appears in no
-  catalog, so also `git grep -nE '\bAs\(|" [A-Za-z_]"' -- '*.go'` over your own builder calls for
+  catalog, so also `git grep -nE '\.As\(|" [A-Za-z_]"' -- '*.go'` over your own builder calls for
   an alias carrying a quote. Both clean means this atom cannot affect you.
 - scope: `oracleQuoteIdentifier` and `QueryBuilder.EscapeIdentifier` wrapped a name in quotes
   without doubling the quotes inside it, so a name carrying one ended the identifier early and
