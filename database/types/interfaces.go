@@ -143,7 +143,11 @@ type JoinFilterFactory interface {
 // developer-controlled, not user input. All are validated against a safe
 // identifier grammar on ALL vendors BEFORE interpolation; a value outside that
 // grammar surfaces as a ToSQL() error. Route dynamic or computed expressions
-// through qb.Expr()/Raw(), which require an explicit security annotation.
+// through qb.Expr()/MustExpr(). The annotation rule is narrower than that and
+// names three functions: f.Raw(), jf.Raw() and database.Raw() each require an
+// inline "// SECURITY: Manual SQL review completed - <rationale>" comment at
+// every call site, because each admits arbitrary SQL rather than an expression
+// the builder still places. qb.Expr() does not carry that requirement.
 //
 // Having is NOT in that list. It takes a predicate rather than an identifier, so
 // no identifier grammar can judge it, and its argument is interpolated as written
