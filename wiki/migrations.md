@@ -5083,7 +5083,10 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   judged. Filter and JoinFilter column arguments are NOT in this hop — they follow in #1143.
 - gate: match = any `Select` argument is a string that is not a bare/qualified identifier or a
   wildcard, OR any INSERT column list carries a non-identifier. no-match = every column is a plain
-  name, a `cols.Col(...)` lookup, or already a `qb.Expr(...)`.
+  or qualified name, a wildcard (`*`, `t.*`), a `cols.Col(...)`/`cols.Cols(...)` lookup, or already a
+  `qb.Expr(...)`/`MustExpr(...)`. The wildcards are called out because they are the most common
+  argument in a SELECT list and they are NOT bare identifiers — a gate that omits them leaves the
+  single most frequent call shape unclassifiable.
 - apply: move the expression into `qb.Expr(...)`. Three shapes break, and only the first is obvious:
   the `EXISTS` idiom `qb.Select("1")` becomes `qb.Select(qb.MustExpr("1"))`; a bare function string
   `qb.Select("COUNT(*)")` becomes `qb.Select(qb.MustExpr("COUNT(*)"))`; and a function carrying an
