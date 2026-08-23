@@ -1411,18 +1411,25 @@ because rendering the value could panic.
 
 **Key Benefits:** no consumer-chosen value reaches any sink from a FRAMEWORK recovery site,
 whatever its shape — log field, span exception, span status and returned error alike. The
-qualifier is exact: Echo's `middleware.Recover` renders the value with its own `%v` and the
-request logger stamps it on the action line, a path with no first-party `recover()` and a
-separate fix, tracked apart from this change. Getting
+qualifier is exact — and the HTTP lane is INSIDE it, not carved out: Echo's `middleware.Recover`
+renders the value with its own `%v` and the request logger stamps it on the action line, a path
+with no first-party `recover()` of its own, so `sanitizePanicValue` is registered immediately
+INSIDE Recover to catch the raw value before Echo can render it. That closes the action line, the
+error handler's own lines and the server span here rather than deferring them. Getting
 there took a second class of site the first draft missed: three paths rendered `recover()`'s
 value with `%v` into an ERROR that later reached a span (`delivery.go:38`'s shared
 `panicMessage`, `multitenant/cleanup.go:61`, `messaging/manager.go:213`), so a guard installed
 on the panic path never saw them. **The rule binds at the point of CONVERSION**, wherever a
 recovered value becomes an error — `httpclient/client.go:750,812` is the model and had it
-first. **Watch:** the `panic` log field becomes `panic_type` on all five lines, the
-`(value unrenderable)` message is retired, AND both messaging lanes' `exception.message` and
-span status description change text — a span-based alert breaks even if no log-based one does.
-All of it breaks SILENTLY. The stack trace is retained, so the panic site is still identified. See
+first. **Watch:** `[C60.23]`'s `scope` table is the surface-by-surface list, and the RULE rather than any
+total is the contract — the count grew three times while that atom was written. The `panic` log
+field becomes `panic_type` on the audit, scheduler, settle and both delivery-outcome lines; the
+`(value unrenderable)` message is retired; both messaging lanes' `exception.message` and span
+status description change text; and the HTTP lane changes on every service, which is the half a
+messaging-focused reading misses. A span-based alert breaks even if no log-based one does, and
+two consumer classes break with no text change at all — a changed `error_type` VALUE, and SDK
+exception EVENTS that stop being emitted. The stack trace is retained wherever it was emitted
+before, though not under a uniform field name. All of it breaks SILENTLY. See
 `[C60.23]` in [migrations.md](migrations.md).
 
 ---

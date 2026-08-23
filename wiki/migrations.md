@@ -4811,7 +4811,15 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   streams spelling is its own constant (`messaging/streams/runner.go`). It fires for any
   consumer whose MESSAGE HANDLER panics, which needs no `AuditRecorder`
   and no scheduled jobs:
-  `git grep -nE '(^|[^_a-zA-Z])panic([^_a-zA-Z]|$)|panic_type|audit sink panicked|Job panicked|Panic recovered|PANIC RECOVER' -- '*.json' '*.yaml' '*.yml' '*.tf'`.
+  `git grep -nE '(^|[^_a-zA-Z])panic([^_a-zA-Z]|$)|panic_type|error_type|exception\.type|exception\.stacktrace|"exception"|audit sink panicked|Job panicked|Panic recovered|PANIC RECOVER' -- '*.json' '*.yaml' '*.yml' '*.tf'`.
+  Two of those arms cover consumers no message-text or `panic`-field pattern can reach.
+  **`error_type`** is rows 7 and 8: row 7's production value flips from the panicking value's own
+  error type to the CONSTANT `*server.panicTypeError`, so anything GROUPING, faceting or filtering
+  on that value silently collapses to one bucket or stops matching. **`exception`** is the SDK
+  event itself: `WithoutPanicRecording()` means an unwinding panic emits no exception event at
+  all, so a rule keyed on the event NAME, on `exception.type` or on `exception.stacktrace` drops
+  to zero hits and never fires again. Neither is a rename you can grep for by its new spelling —
+  one is a changed VALUE and the other is an ABSENCE.
   **Do not use `Panic recovered` to tell the lanes apart.** At least four lines share that
   prefix — the delivery settle line, the classic outcome line, the streams outcome line
   (`Panic recovered in stream handler - offset not committed`) and the HTTP error handler's
@@ -4822,10 +4830,16 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
 
   **Then run a SECOND, DIFFERENT command over your Go and Markdown** — the gate mentions
   log-parsing tests and runbooks, and neither lives in the config globs above:
-  `git grep -nE 'panic_type|audit sink panicked|Job panicked|Panic recovered|panic in message handler|PANIC RECOVER|"panic"|panic !=|\[panic' -- '*_test.go' '*.md'`.
+  `git grep -nE 'panic_type|error_type|exception\.type|exception\.stacktrace|"exception"|audit sink panicked|Job panicked|Panic recovered|panic in message handler|PANIC RECOVER|"panic"|panic !=|\[panic' -- '*_test.go' '*.md' ':!wiki/migrations.md' ':!wiki/adr_*.md'`.
+  **The `panic_type` arm stays, and the two pathspec exclusions are why.** `panic_type` is NOT a
+  post-bump-only spelling — `[C60.21]` put it on the audit line's `(value unrenderable)` fallback
+  in this same hop's predecessor, so a consumer's repo can legitimately hold it BEFORE the bump
+  and dropping the arm would miss them. What it must not match is THIS runbook and these ADRs,
+  which discuss the field on every page: run inside a go-bricks checkout without the exclusions
+  and the arm selects `when: match` off nothing but our own prose.
 
   **These are two commands with two patterns on purpose; do not merge them.** Adding
-  `'*.go'` to the config sweep above turns it from 2 hits into several hundred across the
+  `'*.go'` to the config sweep above turns it from 4 hits into several hundred across the
   tree, because its bare-word `panic` arm matches every ordinary `panic(`
   call in Go source — and a detect step returning several hundred lines is one an
   operator abandons, which is the same failure as returning too few. The source sweep
@@ -4852,7 +4866,10 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   the HTTP SERVER span's status description, which changes on every panicking request in
   any service that serves HTTP at all — and grep alert and SLO definitions
   for `exception.message`:
-  `git grep -nE 'exception\.message|otel\.status_description|panic in message handler' -- '*.json' '*.yaml' '*.yml' '*.tf'`.
+  `git grep -nE 'exception\.message|exception\.type|exception\.stacktrace|"exception"|otel\.status_description|panic in message handler' -- '*.json' '*.yaml' '*.yml' '*.tf'`.
+  The three `exception` arms beyond `.message` are the EVENT-existence consumers: an alert that
+  counts exception events, or matches their name or stacktrace, sees a silent drop to zero rather
+  than changed text, which no message-shape pattern detects.
   This one deliberately omits `PANIC RECOVER`: it shares the config sweep's globs, so that arm
   would only re-return hits you already triaged. Read the `PANIC RECOVER` hits from the first
   sweep TWICE — once as the HTTP action line (row 6), once as the server span (row 11).
@@ -4875,7 +4892,7 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   | 7 | HTTP error handler's `Panic recovered` line (`server`) | `error_type` in production posture; `error` under `app.debug` | the panicking value's own error type — `*errors.errorString` where Echo rendered a non-error, the concrete type where it panicked with one | `*server.panicTypeError` (a CONSTANT); `panic (type: T)` in debug | `stack` — name unchanged, CONTENT shrinks to the panicking goroutine |
   | 8 | HTTP `unhandled error` line (`server`) | `error` — **`app.debug: true` ONLY** | `[PANIC RECOVER] <value> <stack>` | `[PANIC RECOVER] panic (type: T) <stack>` | inside `error`. In production posture this line is UNCHANGED: its `error_type` is the wrapper `*middleware.PanicStackError` either way |
   | 9 | messaging consume span, BOTH lanes | `exception.message` + status description | `panic in message handler: <value>` | `panic in message handler (type: T)` | n/a |
-  | 10 | scheduler job span (incl. `multitenant` cleanup) | `exception.message` + status description | carries the value | `panic (type: T)` | n/a |
+  | 10 | scheduler job span (incl. `multitenant` cleanup) | `exception.message` ONLY | carries the value | `panic (type: T)` | n/a — its status description is the literal `"panic"` (`scheduler/module.go`) before AND after, so do not repoint that |
   | 11 | HTTP server span | status description | `[PANIC RECOVER] <value> <stack>` | `[PANIC RECOVER] panic (type: T) <stack>` | n/a |
 
   Rows 6-8 are on the HTTP lane and need no messaging, scheduler or `AuditRecorder` usage —
@@ -4927,7 +4944,13 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   - nothing you own reads any log row of the `scope` table — its changed field or its message
     text — including the HTTP rows 6, 7 and 8;
   - you have no lane-shape test pinning the delivery spine's key set;
-  - nothing reads `exception.message` or the span status description on rows 9, 10 or 11;
+  - nothing reads `exception.message` or the span status description on rows 9, 10 or 11
+    (row 10's status description is unchanged — its `exception.message` is the part that moves);
+  - nothing GROUPS, facets or filters on the `error_type` VALUE of rows 7 or 8 — that value
+    becomes a constant, so a rule keyed on the old one stops matching without erroring;
+  - nothing counts SDK `exception` EVENTS, or matches `exception.type` / `exception.stacktrace`,
+    on a panicking span — `WithoutPanicRecording()` means those events stop being emitted at all,
+    which reads as "no panics" rather than as a broken rule;
   - no runbook depends on the panic value being present.
 
   **An HTTP-only service does NOT reach no-match.** Running no scheduled jobs, registering no

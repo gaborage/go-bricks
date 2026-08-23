@@ -226,10 +226,15 @@ fresh judgement. Both carried the panic value in clear
 while the reporting call immediately above them emitted the SAME value masked —
 observable in one capture as `"panic":{"jobRef":"nightly-sync","password":"***"}`
 followed by `"error":"panic: {nightly-sync test_password_123}"`. The summary line
-and the span now name the type. The one filtered route this ADR left the value — the
-`panic` field itself — was closed in turn by
-[ADR-081](adr_081_recovered_panic_values_reported_by_type.md), so the log line, the span
-and the summary all report the type and no sink `[C60.23]` enumerates carries the value.
+and the span now name the type; the value keeps its one filtered route.
+
+> **Corrected by [ADR-081](adr_081_recovered_panic_values_reported_by_type.md).**
+> This ADR left the panic value one surviving route — the `panic` log field itself,
+> on the reporting call above the guard — on the reasoning that the sensitive-data
+> filter covered it there. It did not: the filter matches FIELD names, `panic` is
+> not a needle, and the value's protection therefore varied with its shape. ADR-081
+> closed that route too, so the log line, the span and the summary all name the
+> type, and no sink `[C60.23]` enumerates carries the value.
 
 The broader gap this sits in is NOT closed here, and it spans **both** sinks:
 `LogEvent.Err` applies no filtering at all, and neither does `span.RecordError`.
