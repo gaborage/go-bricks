@@ -10,15 +10,19 @@ import (
 // when update columns are provided, or DO NOTHING otherwise.
 // Its preconditions are enforced by BuildUpsert, the only caller.
 func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []string, insertColumns, updateKeys map[string]any) (query string, args []any, err error) {
-	// Build the base INSERT statement using the public API for consistency.
-	insertQuery := qb.Insert(table)
-
-	// Create deterministic column order for consistent SQL generation
+	// Built directly rather than through qb.Insert(): BuildUpsert has already
+	// validated this table, and the columns below are ESCAPED renderings rather
+	// than raw names — `a""b` renders as `"a""b"`, which the identifier grammar
+	// rightly refuses as an argument. Re-entering the public door would judge the
+	// builder's own output by the rule meant for a caller's input, and would
+	// validate the table a second time.
 	orderedCols := sortedKeys(insertColumns)
 	vals := valuesByKeyOrder(insertColumns, orderedCols)
 	cols := qb.escapeIdentifiers(orderedCols)
 
-	insertQuery = insertQuery.Columns(cols...).Values(vals...)
+	insertBuilder := qb.statementBuilder.Insert(qb.quoteTableForQuery(table)).
+		Columns(cols...).
+		Values(vals...)
 
 	// Build ON CONFLICT clause with deterministic order
 	cc := make([]string, len(conflictColumns))
@@ -49,7 +53,7 @@ func (qb *QueryBuilder) buildPostgreSQLUpsert(table string, conflictColumns []st
 	}
 
 	// Generate the final SQL with conflict resolution
-	sql, args, err := insertQuery.ToSQL()
+	sql, args, err := insertBuilder.ToSql()
 	if err != nil {
 		return "", nil, err
 	}

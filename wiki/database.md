@@ -205,7 +205,7 @@ productCols := qb.Columns(&Product{})
 
 p := productCols.As("p")
 
-subquery := qb.Select("1").From("reviews").
+subquery := qb.Select(qb.MustExpr("1")).From("reviews").
     Where(f.And(
         f.Eq("reviews."+reviewCols.Col("ProductID"), qb.MustExpr(p.Col("ID"))),
         f.Eq(reviewCols.Col("Rating"), 5),

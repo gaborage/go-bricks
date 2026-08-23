@@ -707,7 +707,7 @@ func TestFilterNotExists(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 		f := qb.Filter()
 
-		subquery := qb.Select("1").
+		subquery := qb.Select(qb.MustExpr("1")).
 			From("orders").
 			Where(f.Eq("orders.status", "pending"))
 
@@ -898,7 +898,7 @@ func TestFilterNestedSubqueries(t *testing.T) {
 		// joins on literal qualified column identifiers; no user input, no identifiers requiring
 		// vendor quoting (PostgreSQL fixture).
 		// Inner EXISTS: check for reviews
-		reviewSubquery := qb.Select("1").
+		reviewSubquery := qb.Select(qb.MustExpr("1")).
 			From("reviews").
 			Where(f.And(
 				f.Raw("reviews.order_id = o.id"), // Column comparison in WHERE clause
@@ -906,7 +906,7 @@ func TestFilterNestedSubqueries(t *testing.T) {
 			))
 
 		// Middle EXISTS: check for orders with reviews
-		orderSubquery := qb.Select("1").
+		orderSubquery := qb.Select(qb.MustExpr("1")).
 			From(dbtypes.MustTable("orders").MustAs("o")).
 			Where(f.And(
 				f.Raw("o.customer_id = c.id"), // Column comparison in WHERE clause
@@ -964,7 +964,7 @@ func TestFilterSubqueryCombinedWithOtherFilters(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.Oracle)
 		f := qb.Filter()
 
-		subquery := qb.Select("1").
+		subquery := qb.Select(qb.MustExpr("1")).
 			From("premium_users").
 			Where(f.Eq("tier", "gold"))
 

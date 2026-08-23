@@ -199,12 +199,22 @@ func (qb *QueryBuilder) Columns(structPtr any) dbtypes.Columns {
 	return colreg.RegisterColumns(qb.vendor, structPtr)
 }
 
-func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) {
+// appendSelectColumn flattens one Select argument into the rendered column list.
+// A string is an identifier argument and is validated against the select grammar
+// before it is interpolated; a RawExpression is the sanctioned escape hatch and
+// passes through untouched. Panics stay reserved for a genuine programming error
+// — an unsupported TYPE — while bad identifier CONTENT is returned as an error
+// and deferred to ToSQL(), the split ADR-031 established.
+func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) error {
 	switch v := col.(type) {
 	case nil:
 		panic("nil column in Select")
 	case string:
-		*processed = append(*processed, qb.quoteColumnsForSelect(v)...)
+		normalized, err := validateSelectIdentifier(v)
+		if err != nil {
+			return err
+		}
+		*processed = append(*processed, qb.quoteColumnsForSelect(normalized)...)
 	case dbtypes.RawExpression:
 		if v.Alias != "" {
 			*processed = append(*processed, fmt.Sprintf("%s AS %s", v.SQL, v.Alias))
@@ -212,20 +222,27 @@ func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) {
 			*processed = append(*processed, v.SQL)
 		}
 	case []string:
-		for _, item := range v {
-			qb.appendSelectColumn(processed, item)
-		}
+		return appendSelectColumnsOf(qb, processed, v)
 	case []dbtypes.RawExpression:
-		for _, item := range v {
-			qb.appendSelectColumn(processed, item)
-		}
+		return appendSelectColumnsOf(qb, processed, v)
 	case []any:
-		for _, item := range v {
-			qb.appendSelectColumn(processed, item)
-		}
+		return appendSelectColumnsOf(qb, processed, v)
 	default:
 		panic(fmt.Sprintf("unsupported column type in Select: %T (must be string or RawExpression)", col))
 	}
+	return nil
+}
+
+// appendSelectColumnsOf flattens a slice of Select arguments, stopping at the first
+// violation so the error a caller sees names the first bad column rather than the
+// last — the same first-violation-wins rule the fluent builders follow.
+func appendSelectColumnsOf[T any](qb *QueryBuilder, processed *[]string, cols []T) error {
+	for _, item := range cols {
+		if err := qb.appendSelectColumn(processed, item); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Select creates a SELECT query builder with vendor-specific column quoting.
@@ -240,14 +257,22 @@ func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) {
 func (qb *QueryBuilder) Select(columns ...any) *SelectQueryBuilder {
 	processedColumns := make([]string, 0, len(columns))
 
+	var firstErr error
 	for _, col := range columns {
-		qb.appendSelectColumn(&processedColumns, col)
+		// Stop at the first violation, matching appendSelectColumnsOf one level
+		// down: the builder is already doomed to return this error, so quoting the
+		// remaining columns is work whose output nothing reads.
+		if err := qb.appendSelectColumn(&processedColumns, col); err != nil {
+			firstErr = err
+			break
+		}
 	}
 
 	selectBuilder := qb.statementBuilder.Select(processedColumns...)
 	return &SelectQueryBuilder{
 		qb:            qb,
 		selectBuilder: selectBuilder,
+		err:           firstErr,
 	}
 }
 
@@ -281,8 +306,24 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtyp
 	if iqb.err != nil {
 		return iqb
 	}
+	if err := validateIdentifiers("insert column", columns); err != nil {
+		iqb.err = err
+		return iqb
+	}
 	iqb.insertBuilder = iqb.insertBuilder.Columns(qb.quoteColumnsForDML(columns...)...)
 	return iqb
+}
+
+// validateIdentifiers checks a column list against the identifier grammar,
+// reporting the FIRST violation so the error names the first bad column rather
+// than the last — the same first-violation-wins rule the fluent builders follow.
+func validateIdentifiers(context string, columns []string) error {
+	for _, col := range columns {
+		if err := validateIdentifier(context, col); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // InsertStruct creates an INSERT query by extracting all fields from a struct instance.
@@ -1303,6 +1344,14 @@ func (dqb *DeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
 // ========== InsertQueryBuilder Methods ==========
 
 func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBuilder {
+	// Validate each column identifier BEFORE interpolation (all vendors, M9), the
+	// same guard UpdateQueryBuilder.SetMap has applied since ADR-031.
+	if err := validateIdentifiers("insert column", columns); err != nil {
+		if iqb.err == nil {
+			iqb.err = err
+		}
+		return iqb
+	}
 	iqb.insertBuilder = iqb.insertBuilder.Columns(columns...)
 	return iqb
 }
@@ -1313,6 +1362,16 @@ func (iqb *InsertQueryBuilder) Values(values ...any) dbtypes.InsertQueryBuilder 
 }
 
 func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQueryBuilder {
+	// Mirrors UpdateQueryBuilder.SetMap, which has validated its keys since
+	// ADR-031. That the two disagreed is the defect ADR-082 names: one shape, two
+	// builders, opposite safety, nothing in either signature to tell them apart.
+	// sortedKeys keeps the reported column deterministic when several are invalid.
+	if err := validateIdentifiers("SetMap column", sortedKeys(clauses)); err != nil {
+		if iqb.err == nil {
+			iqb.err = err
+		}
+		return iqb
+	}
 	iqb.insertBuilder = iqb.insertBuilder.SetMap(clauses)
 	return iqb
 }
