@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
@@ -1075,4 +1076,53 @@ func (r *recordingMetricExporter) Shutdown(ctx context.Context) error {
 
 func (r *recordingMetricExporter) ShutdownCalled() bool {
 	return r.shutdownCalled.Load()
+}
+
+// TestTracerProviderDoesNotRecordPanicValues pins ADR-081 at the provider seam.
+// The OTel SDK's own span.End() calls recover() and stamps
+// semconv.ExceptionMessage(fmt.Sprint(recovered)) — the VALUE — on any span that
+// unwinds with a live panic, then re-raises. That reaches four framework
+// `defer span.End()` sites with no first-party recover at all, so no call-site
+// convention can cover it; only the provider option can.
+func TestTracerProviderDoesNotRecordPanicValues(t *testing.T) {
+	const secret = "not-a-real-secret-9021"
+
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		append(FrameworkTracerProviderOptions(), sdktrace.WithSyncer(exporter))...,
+	)
+	_, span := tp.Tracer("panic-recording").Start(context.Background(), "unwinding")
+
+	func() {
+		defer func() { _ = recover() }()
+		defer span.End() // runs first, sees the live panic
+		panic(secret)
+	}()
+
+	spans := exporter.GetSpans()
+	// Without this the whole check is vacuous: an unexported span makes every
+	// assertion below unreachable and the test passes having proven nothing.
+	require.NotEmpty(t, spans, "the unwinding span never reached the exporter")
+
+	for _, s := range spans {
+		eventNames := make([]string, 0, len(s.Events))
+		for _, ev := range s.Events {
+			eventNames = append(eventNames, ev.Name)
+			for _, attr := range ev.Attributes {
+				assert.NotContains(t, attr.Value.String(), secret,
+					"event attribute %q discloses the panic value", attr.Key)
+			}
+		}
+		// Asserted over the COLLECTED names rather than inside the loop above:
+		// WithoutPanicRecording leaves no events at all on the passing path, so a
+		// per-event assertion only ever runs once the property is already broken.
+		assert.NotContains(t, eventNames, "exception",
+			"the SDK recorded an exception event for an unwinding panic")
+		assert.NotContains(t, s.Status.Description, secret,
+			"span status description discloses the panic value")
+		for _, attr := range s.Attributes {
+			assert.NotContains(t, attr.Value.String(), secret,
+				"span attribute %q discloses the panic value", attr.Key)
+		}
+	}
 }

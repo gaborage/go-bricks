@@ -28,13 +28,13 @@ type T interface {
 const (
 	fieldCorrelationID  = "correlation_id"
 	fieldProcessingTime = "processing_time"
-	fieldPanic          = "panic"
+	fieldPanicType      = "panic_type"
 	fieldStack          = "stack"
 )
 
 // spineKeys is the whole spine, in one place: extraKeys strips it, and the
 // no-declared-line branch asserts a lane emits none of it.
-var spineKeys = []string{fieldCorrelationID, fieldProcessingTime, fieldPanic, fieldStack}
+var spineKeys = []string{fieldCorrelationID, fieldProcessingTime, fieldPanicType, fieldStack}
 
 // errHandlerFailed is the handler error the scenarios raise.
 var errHandlerFailed = errors.New("handler failed")
@@ -114,11 +114,12 @@ func assertSpine(t T, outcome delivery.Outcome, line *LogLine) {
 		"the shared spine stamps processing_time on every outcome line")
 
 	if outcome == delivery.Panicked {
-		assert.NotEmpty(t, line.Values(fieldPanic), "a panicked delivery must log the recovered value")
+		assert.NotEmpty(t, line.Values(fieldPanicType),
+			"a panicked delivery must log the recovered value's TYPE — never the value (ADR-081)")
 		assert.NotEmpty(t, line.Values(fieldStack), "a panicked delivery must log its stack")
 		return
 	}
-	assert.Empty(t, line.Values(fieldPanic), "panic belongs to the Panicked outcome only")
+	assert.Empty(t, line.Values(fieldPanicType), "panic_type belongs to the Panicked outcome only")
 	assert.Empty(t, line.Values(fieldStack), "stack belongs to the Panicked outcome only")
 }
 

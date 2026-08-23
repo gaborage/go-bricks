@@ -35,6 +35,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/gaborage/go-bricks/observability"
 )
 
 const (
@@ -70,8 +72,14 @@ type TestTraceProvider struct {
 //	spans := tp.Exporter.GetSpans()
 func NewTestTraceProvider() *TestTraceProvider {
 	exporter := tracetest.NewInMemoryExporter()
+	// Same provider policy as production (observability.FrameworkTracerProviderOptions),
+	// so a test written against this seam observes what the service will do. Without
+	// it the SDK's default panic recording applies here and not in production, and a
+	// test asserting a panic value never reaches a span would disagree with reality.
 	provider := sdktrace.NewTracerProvider(
-		sdktrace.WithSyncer(exporter),
+		append(observability.FrameworkTracerProviderOptions(),
+			sdktrace.WithSyncer(exporter),
+		)...,
 	)
 
 	return &TestTraceProvider{

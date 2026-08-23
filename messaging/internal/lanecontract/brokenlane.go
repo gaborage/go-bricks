@@ -133,7 +133,7 @@ func invokeBroken(ctx context.Context, handle func(context.Context) error) (res 
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			res.Outcome = delivery.Panicked
-			res.Err = fmt.Errorf("panic in message handler: %v", recovered)
+			res.Err = fmt.Errorf("panic in message handler (type: %T)", recovered)
 			// Panic and Stack are deliberately left unset — DEFECT 4.
 		}
 	}()

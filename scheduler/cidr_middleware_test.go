@@ -561,11 +561,22 @@ func captureStdout(t *testing.T, fn func()) string {
 	require.NoError(t, err)
 	os.Stdout = wp
 	defer func() { os.Stdout = old }()
+	defer rp.Close()
+
+	// Drain CONCURRENTLY: a panic report carries debug.Stack(), which can exceed
+	// the pipe buffer and block the writer forever if read only after fn returns —
+	// the test would hang rather than fail.
+	var data []byte
+	readDone := make(chan error, 1)
+	go func() {
+		var readErr error
+		data, readErr = io.ReadAll(rp)
+		readDone <- readErr
+	}()
 
 	fn()
 
 	require.NoError(t, wp.Close())
-	data, readErr := io.ReadAll(rp)
-	require.NoError(t, readErr)
+	require.NoError(t, <-readDone)
 	return string(data)
 }

@@ -299,38 +299,24 @@ func (e *auditEmitter) deliverToSink(ctx context.Context, ev *AuditEvent) {
 	defer func() {
 		if r := recover(); r != nil {
 			e.recordSinkFailure(ctx, ev)
-			// This defer already spent its recover(), so a panic while rendering r
-			// would escape into consumeSink's bare goroutine and kill the process
-			// (ADR-019, #686). Guard the log call alone.
+			// SECURITY: the panic value's TYPE only, never the value. Reporting it
+			// through the sensitive-data filter is NOT protection — that filter masks
+			// by FIELD NAME, and the field here is `panic`, which is not a needle. A
+			// bare `panic("secret")` has no inner field name to match at all, and a
+			// map carrying a key the needle list does not name (`licenseKey`) is
+			// emitted in clear. Protection would be conditional on the panic value's
+			// shape, which the framework cannot constrain. Same rule as httpclient's
+			// Do recovery; the type plus audit_type and target is all this line needs
+			// to make the drop attributable.
 			func() {
-				// Nothing downstream of this defer logs, so swallowing outright would
-				// leave a counter tick as the only trace of a dropped audit event.
-				//
-				// SECURITY: only the panic value's TYPE is reported here, never the
-				// value. The primary call BELOW — which runs first — renders it through the
-				// sensitive-data filter, which masks by field name; this fallback uses
-				// Str, which masks on the KEY only — so a panic carrying a secret
-				// (`panic(cfg)`) would reach the sink in clear. Same rule as
-				// httpclient's Do recovery. The type plus audit_type and target is
-				// enough to attribute the drop, which is all this line is for.
-				defer func() {
-					// Terminal swallow. The fallback below is itself a log call on a
-					// consumer-supplied logger, and a panic there would escape this
-					// closure, the already-spent outer defer, and consumeSink's bare
-					// goroutine — the same defect one level deeper. At this point the
-					// event is counted and there is genuinely nothing left to report
-					// with, so stopping here is the whole remedy.
-					defer func() { _ = recover() }()
-					if recover() != nil {
-						e.logger.Error().
-							Str("panic_type", fmt.Sprintf("%T", r)).
-							Str("audit_type", string(ev.Type)).
-							Str("target", ev.Target).
-							Msg("audit sink panicked; event dropped (value unrenderable)")
-					}
-				}()
+				// Terminal swallow. The report below is a log call on a
+				// consumer-supplied logger, and a panic there would escape this
+				// closure, the already-spent outer defer, and consumeSink's bare
+				// goroutine — the same defect one level deeper. At this point the
+				// event is counted and there is nothing left to report with.
+				defer func() { _ = recover() }()
 				e.logger.Error().
-					Interface("panic", r).
+					Str("panic_type", fmt.Sprintf("%T", r)).
 					Str("stack", string(debug.Stack())).
 					Str("audit_type", string(ev.Type)).
 					Str("target", ev.Target).

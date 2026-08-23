@@ -82,7 +82,9 @@ shipped. #686 added `deliverToSink`'s recover precisely so that *"a faulty
 don't abort — panics must behave the same)"*. But the escape route runs
 `deliverToSink` → `consumeSink`, which has no guard of its own and runs as a bare
 `go e.consumeSink(consumerCtx)` — a goroutine panic, which is the process.
-Confirmed by execution: the escape is attributed `audit_emitter.go:303` →
+Confirmed by execution — line numbers below are a captured stack from the run that
+proved it, at the commit that preceded the fix, and are NOT current: the escape is
+attributed `audit_emitter.go:303` →
 `:311` → `consumeSink:280` → the `go` statement at `:172`, and it killed the test
 binary.
 
@@ -111,12 +113,12 @@ Moving all three to the narrow shape is tracked as [#1134](https://github.com/ga
 
 The class was swept rather than assumed: `git grep -nE 'Interface\("panic"'`
 over non-test Go returns four hits. Three are the class — a recovered value
-logged from a defer that has already spent its `recover()`: `delivery.go:303`
-(already guarded, the precedent), `audit_emitter.go` and `scheduler/module.go`
+logged from a defer that has already spent its `recover()`: `settleOnce`'s report
+in `delivery.go` (already guarded, the precedent), `audit_emitter.go` and `scheduler/module.go`
 (both guarded here). The fourth, `delivery.go`'s `AppendOutcome`, is an ordinary
 helper on the lane's outcome line, not a defer, and `Run`'s outer guard catches
-it deliberately — `Run` installs its recover at `delivery.go:190-191`, before
-`req.LogOutcome` runs at `:215`, and converts a panic there into a
+it deliberately — `Run` installs its recover in the deferred settle guard at the top
+of its body, before `req.LogOutcome` runs, and converts a panic there into a
 `panickedResult` that is still settled. So: three sites in the class, all three
 addressed.
 
@@ -126,6 +128,13 @@ or renders it through `fmt.Errorf("%v", r)`, and `fmt` catches panics in
 `String()`/`Error()` and emits `%!v(PANIC=…)` instead of propagating.
 `LogEvent.Interface` is the only renderer in the tree that is not panic-safe,
 which is why grepping for it finds the whole class.
+
+**That completeness holds for THIS question only.** The class here is "can panic
+while reporting"; `%v` sites are outside it because `%v` is panic-safe. For the
+different question of which sites can DISCLOSE a panic value, the excluded set is
+the answer — `%v` is panic-safe and value-printing both. [ADR-081](adr_081_recovered_panic_values_reported_by_type.md)
+reused this sweep across that change of question and drew a false conclusion from
+it; do not reuse it without re-deriving the boundary.
 
 ## Decision
 
@@ -189,14 +198,21 @@ narrow guard fixes both halves. It also makes neither site depend on the log cal
 happening to be last, which is the only reason the precedent is safe where it
 stands.
 
-The fallback reports the panic's **type**, never its value. The primary call
-renders the value through this very filter, which masks by field name; the
-fallback can only use `Str`, which masks on the KEY — so `%v`-ing the value there
-would emit a secret the primary path would have masked, into a field no needle
-reaches. An audit sink panicking with its own config (`panic(cfg)`) is exactly
-the shape that costs. `httpclient`'s `Do` recovery already carries this rule and
-its reasoning; the type plus `audit_type` and `target` is all the line needs to
-make a dropped event attributable.
+The report names the panic's **type**, never its value.
+
+> **Corrected by [ADR-081](adr_081_recovered_panic_values_reported_by_type.md).**
+> This ADR originally reported the value on the primary path and described it as
+> "masked by field name exactly as any other logged value". That was wrong: the
+> filter matches FIELD names, the field is `panic` — not a needle — and a bare
+> `panic("secret")` has no inner field name to match, while a map key the needle
+> list does not name is emitted verbatim. Protection was conditional on the
+> value's shape. Both sites now report the type only, and the two-tier
+> primary/fallback structure collapsed to one report, since its fallback existed
+> only because rendering the value could panic.
+
+`httpclient`'s `Do` recovery already carries this rule and its reasoning; the
+type plus `audit_type` and `target` is all the line needs to make a dropped event
+attributable.
 
 The same rule is applied to the scheduler's `panicErr`, one line above its
 guard, because ADR text that says "type, never the value" while a sibling line
@@ -211,6 +227,14 @@ while the reporting call immediately above them emitted the SAME value masked �
 observable in one capture as `"panic":{"jobRef":"nightly-sync","password":"***"}`
 followed by `"error":"panic: {nightly-sync test_password_123}"`. The summary line
 and the span now name the type; the value keeps its one filtered route.
+
+> **Corrected by [ADR-081](adr_081_recovered_panic_values_reported_by_type.md).**
+> This ADR left the panic value one surviving route — the `panic` log field itself,
+> on the reporting call above the guard — on the reasoning that the sensitive-data
+> filter covered it there. It did not: the filter matches FIELD names, `panic` is
+> not a needle, and the value's protection therefore varied with its shape. ADR-081
+> closed that route too, so the log line, the span and the summary all name the
+> type, and no sink `[C60.23]` enumerates carries the value.
 
 The broader gap this sits in is NOT closed here, and it spans **both** sinks:
 `LogEvent.Err` applies no filtering at all, and neither does `span.RecordError`.
