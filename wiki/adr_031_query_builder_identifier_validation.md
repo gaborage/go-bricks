@@ -1,7 +1,22 @@
 # ADR-031: Validate Direct-String Identifier Arguments in the Query Builder (Close M9 SQL Injection)
 
-**Status:** Accepted
+**Status:** Accepted — partially superseded by
+[ADR-082](adr_082_identifier_arguments_validated_at_every_door.md)
 **Date:** 2026-06-16
+
+> **Amendment — 2026-08-23 (ADR-082).** Two statements below are no longer
+> current, and are left in place because the reasoning is the historical record
+> rather than because it still holds:
+>
+> - The Filter API exclusion — "those are already parameterized" in Context, and
+>   "the Filter API … and parameterized values are unaffected" in Consequences —
+>   was wrong. `f.Eq(column, value)` parameterizes the VALUE and interpolates the
+>   COLUMN. ADR-082 validates every Filter and JoinFilter column; the claim about
+>   parameterized values remains true and is a different property.
+> - The Decision section says computed expressions go through `qb.Expr()`/`Raw()`,
+>   "which already carry an explicit `// SECURITY:` annotation requirement". That
+>   requirement names `f.Raw()`, `jf.Raw()` and `database.Raw()` only. `qb.Expr()`
+>   carries a security warning in its godoc, not an annotation obligation.
 
 ## Context
 
@@ -44,4 +59,4 @@ Valid identifiers on PostgreSQL remain **unquoted** (no case-folding change). Co
 - The Filter API (`f.Eq`, `f.In`, …) and parameterized values are unaffected.
 - PostgreSQL identifier quoting behavior is unchanged (valid identifiers stay unquoted).
 
-See [database.md](database.md#identifier-validation-adr-031) for the developer-facing grammar and [migrations.md](migrations.md) for the upgrade note.
+See [database.md](database.md#identifier-validation-adr-031-adr-082) for the developer-facing grammar and [migrations.md](migrations.md) for the upgrade note.

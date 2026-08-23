@@ -235,25 +235,73 @@ qb.MustExpr("COUNT(*)", "total")                  // SAFE
 qb.MustExpr(fmt.Sprintf("UPPER(%s)", userInput))  // SQL INJECTION
 ```
 
-Use WHERE with placeholders for dynamic values: `qb.Select("*").From("users").Where(f.Eq(userColumn, userValue))`.
+Use WHERE with placeholders for dynamic **values**: `qb.Select("*").From("users").Where(f.Eq(cols.Col("Status"), userValue))`. Note the column is a struct-tag lookup, not a variable: the value is parameterized, the column is interpolated, and only the value may come from the caller.
 
-## Identifier Validation (ADR-031)
+## Identifier Validation (ADR-031, ADR-082)
 
-The string-identifier arguments of `From`, the JOIN family (`JoinOn`/`LeftJoinOn`/`RightJoinOn`/`InnerJoinOn`/`CrossJoinOn`), `OrderBy`, `GroupBy`, `Set`, `SetMap`, and `DeleteQueryBuilder.OrderBy` must be **developer-controlled, not user input**. As of ADR-031 these arguments are validated against a safe identifier grammar on **all vendors** (PostgreSQL and Oracle) *before* interpolation:
+Every **identifier argument** — a caller-supplied string that becomes SQL *syntax*
+rather than a bound value — must be developer-controlled, not user input. All of
+them are validated against a safe identifier grammar on **both vendors** before
+interpolation, and a value outside the grammar is refused.
 
-- **Table args** (`From`, JOIN tables): a simple or qualified identifier — `col`, `table.col`, `schema.table.col` — plus an optional inline alias (`"users u"`). A `*TableRef` from `Table("users").As("u")` validates its name and alias separately.
-- **Identifier args** (`Set`, `SetMap` columns): a simple or qualified identifier plus the framework's own quoted reserved-word output (`"level"`).
-- **Clause args** (`OrderBy`, `GroupBy`, `DeleteQueryBuilder.OrderBy`): the above plus an optional bounded direction — `col ASC|DESC [NULLS FIRST|LAST]`.
+Where it surfaces depends on the shape of the call. The fluent builders cannot
+return an error mid-chain, so the violation is deferred and comes back from
+`ToSQL()`; they never panic on bad identifier content. `BuildUpsert` is the
+exception — it builds a statement directly and returns the error as its own third
+value, so a caller checking only `ToSQL()` would look in the wrong place.
 
-Anything outside the grammar — quotes used for injection, embedded whitespace, semicolons, `--` / `/* */` comment sequences, function calls, or extra tokens — is **rejected as a `ToSQL()` error** (the fluent methods cannot return errors, so the violation is deferred to `ToSQL()`; they never panic on bad identifier content). This closes the injection vector where `.OrderBy(userInput)` with a value like `"name; DROP TABLE users--"` was previously interpolated verbatim on PostgreSQL.
+| Door | Grammar |
+| --- | --- |
+| `From`, the JOIN family, `Insert`/`InsertWithColumns`/`InsertStruct`/`InsertFields`, `BuildUpsert` — table args | simple or qualified identifier plus one optional inline alias (`users u`) |
+| `Set`, `SetMap`, `InsertWithColumns`/`.Columns`/`.SetMap` — column args | simple or qualified identifier, plus the framework's own quoted reserved-word output (`"level"`) |
+| `OrderBy`, `GroupBy`, `DeleteQueryBuilder.OrderBy` | the above plus a bounded direction — `col ASC\|DESC [NULLS FIRST\|LAST]` |
+| `Select` column list | the above plus the wildcard — `*`, `t.*` |
+| **Every `Filter` and `JoinFilter` column** — `f.Eq`, `f.In`, `f.Like`, `f.Between`, `jf.EqColumn`, … | simple or qualified identifier |
 
 ```go
-qb.Select("*").From("users").OrderBy("name ASC")                 // SAFE
-qb.Select("*").From("users").OrderBy("COUNT(*) DESC")            // REJECTED → use qb.MustExpr("COUNT(*) DESC")
-qb.Select("*").From("users").OrderBy(req.Query("sort"))          // REJECTED if the value isn't a bare column+direction
+qb.Select("*").From("users").OrderBy("name ASC")          // SAFE
+qb.Select("*").From("users").OrderBy("COUNT(*) DESC")     // REJECTED → qb.MustExpr("COUNT(*) DESC")
+qb.Select("*").From("users").OrderBy(req.Query("sort"))   // REJECTED unless it is a bare column+direction
+qb.Select("COUNT(*)")                                     // REJECTED → qb.MustExpr("COUNT(*)")
+qb.Select("1")                                            // REJECTED → qb.MustExpr("1")
+f.Eq(req.Query("field"), value)                           // REJECTED unless it is a bare column
 ```
 
-Valid identifiers on PostgreSQL are left **unquoted** (PG folds unquoted identifiers to lowercase; quoting would change which physical column is referenced). Complex or computed expressions must go through `qb.Expr()`/`Raw()`, which carry an explicit `// SECURITY:` annotation. Pass user **values** through the parameterized Filter API (`f.Eq`, etc.).
+### The Filter API parameterizes values; that is not the same as validating columns
+
+`f.Eq(column, value)` takes **two** arguments. The value becomes a placeholder.
+The column becomes syntax. Reading the first property as the second is exactly
+what left the column doors unvalidated between ADR-031 and ADR-082 — on
+PostgreSQL, where identifiers render unquoted, `f.Eq("id = 1 OR 1=1 -- ", v)`
+built `WHERE id = 1 OR 1=1 -- = $1`. Both halves are guarded now, but they are
+guarded by different mechanisms, and only the value side is safe *because* it is
+user input.
+
+For a genuinely dynamic column — a sortable table, a "filter by field" endpoint —
+map the caller's value to one of a fixed set your own code owns before it reaches
+the builder. The grammar will not accept a computed one.
+
+### What is not an identifier door
+
+- **`Having`** takes a *predicate*, not an identifier, so no identifier grammar
+  can judge it and its argument is interpolated as written. Treat it as raw SQL.
+  `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape.
+- **`qb.Expr()` / `MustExpr()`** are the declared expression hatches: they exist
+  to carry SQL the grammar refuses, and the builder still places what they
+  produce. They carry no annotation requirement.
+- **`f.Raw()`, `jf.Raw()` and `database.Raw()`** do. Each admits arbitrary SQL —
+  the first two a WHERE/JOIN fragment, `database.Raw` the whole statement — and
+  each requires an inline `// SECURITY: Manual SQL review completed - <rationale>`
+  comment at every call site, which is what makes them grep-discoverable.
+- **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
+  than to this grammar — a stricter question ("is this one column this vendor can
+  name in a MERGE"), enforced by escaping plus `requireSingleColumnNames`.
+
+Valid identifiers on PostgreSQL are left **unquoted**: PostgreSQL folds unquoted
+identifiers to lowercase, so quoting a valid one would change which physical
+column is referenced. Where a renderer does quote, an interior quote is doubled,
+so a name carrying one renders as that name instead of ending the identifier
+early.
 
 ## Database-Free Services and Readiness (ADR-047)
 
