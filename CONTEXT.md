@@ -140,8 +140,8 @@ Which grammar an identifier argument is validated against at a given door:
 `table` (one optional inline alias), `identifier` (bare or qualified), and
 `clause` (plus a bounded direction grammar). The context belongs to the door,
 not to the caller, so a door that takes a predicate rather than an identifier
-has no identifier context and is a raw-SQL door instead — every raw-SQL call
-site carries the inline `// SECURITY: Manual SQL review completed - <rationale>`
+has no identifier context and is a raw-SQL door instead — such a door's call
+sites carry the inline `// SECURITY: Manual SQL review completed - <rationale>`
 annotation (CLAUDE.md, Security Guidelines). A door whose shape no existing
 context describes earns a new one rather than the nearest fit.
 _Avoid_: validation mode, identifier type, grammar level
