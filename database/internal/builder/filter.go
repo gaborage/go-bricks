@@ -407,7 +407,7 @@ func (f *inSubqueryFilter) ToSQL() (sql string, args []any, err error) {
 //
 // For correlated subqueries (referencing outer query columns), use JoinFilter methods:
 //
-//	subquery := qb.Select("1").From("reviews").Where(jf.And(
+//	subquery := qb.Select(qb.MustExpr("1")).From("reviews").Where(jf.And(
 //	    jf.EqColumn("reviews.product_id", "p.id"),
 //	    f.Eq("reviews.rating", 5),
 //	))
@@ -421,7 +421,7 @@ func (ff *FilterFactory) Exists(subquery dbtypes.SelectQueryBuilder) dbtypes.Fil
 //
 // Example:
 //
-//	subquery := qb.Select("1").From("orders").Where(f.Eq("orders.status", "pending"))
+//	subquery := qb.Select(qb.MustExpr("1")).From("orders").Where(f.Eq("orders.status", "pending"))
 //	query := qb.Select("*").From("customers").Where(f.NotExists(subquery))
 //	// SQL: SELECT * FROM customers WHERE NOT EXISTS (SELECT 1 FROM orders WHERE orders.status = :1)
 func (ff *FilterFactory) NotExists(subquery dbtypes.SelectQueryBuilder) dbtypes.Filter {

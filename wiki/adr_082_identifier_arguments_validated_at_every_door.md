@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-08-23
 **Supersedes:** the Filter exclusion in [ADR-031](adr_031_query_builder_identifier_validation.md)
-**Related:** [ADR-071](adr_071_upsert_column_sets_name_each_column_once.md) · issues #1104, #1143, #1149, #1150
+**Related:** [ADR-071](adr_071_upsert_column_sets_name_each_column_once.md) · issues #1104, #1143, #1149, #1150, #1151, #1153, #1154
 
 ## Context
 
@@ -71,8 +71,25 @@ and the missing `qb.Expr` path it needs first is #1147.
 
 **`Select` gains a fourth identifier context.** `table`, `identifier` and `clause`
 are ADR-031's; `select` is those plus a wildcard production (`*`, `table.*`),
-because `Select("*")` is the documented idiom. `Select("1")` is a constant rather
-than an identifier and moves to `qb.Expr("1")`.
+because `Select("*")` is the documented idiom. Everything else a caller wants in
+a SELECT list — a function, a cast, an alias, a bare constant — is not an
+identifier and goes through `qb.Expr()`, which is where ADR-031 already sends
+`OrderBy("COUNT(*) DESC")`.
+
+That breaks more than the wildcard census suggested. A grep for out-of-grammar
+`Select` string arguments finds `*` and `1` and reads as a small change; it misses
+every multi-argument call, which is where the function strings live —
+`Select("department", "COUNT(*)")`, `Select(colID, colName, "COUNT(o.id) AS
+order_count")`. Running the validation is what enumerates them. So the breaking
+surface is three shapes, not one: the `EXISTS` idiom `Select("1")`, bare function
+strings such as `Select("COUNT(*)")`, and any function-with-alias string. Each
+moves to `qb.Expr(...)`, and `Select("*")` continues to build untouched.
+
+One consequence worth stating rather than discovering: `qb.Expr` is also the
+escape hatch that carries a security-annotation expectation, so a caller writing
+`SELECT 1` in an `EXISTS` subquery now reaches for the same tool as one writing
+arbitrary SQL. That is a cost of keeping the grammar honest about what an
+identifier is, not an argument that a constant is one.
 
 The decision lands in stages, each shipping alone: the renderer escape and the
 table arguments first (this change, closing #1104), then the `select` context and
@@ -94,6 +111,16 @@ function-shaped one. Constraining `isSQLFunction` is not a free tightening —
 `SUM(amount) AS revenue` and `COUNT(o.id) AS order_count` pass through it today
 and are legitimate — so what counts as a function expression is its own decision,
 tracked separately (#1149) rather than settled here.
+
+**"Every door" means every door that takes an identifier ARGUMENT.** Two shapes sit
+outside the rule and are named here rather than left for a reader to notice.
+`BuildUpsert`'s three column maps are not checked against the identifier grammar —
+they answer to the upsert's own preconditions instead (`requireSingleColumnNames`,
+`requireDistinctColumnIdentities`), which ask a stricter question: not merely "is
+this an identifier" but "is this one column this vendor can name in a MERGE".
+And `qb.Expr()`/`RawExpression` is the declared escape hatch: it is meant to carry
+SQL the grammar refuses, which is the point of having it. Neither is an oversight;
+both would be, if unstated.
 
 **The later stages must not be thirty hand-written guards.** A per-door guard is
 the right shape for this change — it is auditable in a minute and revertible on
@@ -121,6 +148,9 @@ its own ADR rather than being welded to a security fix.
 - `BuildUpsert` refuses the same argument, but reports it as its own third return
   value rather than through `ToSQL()` — it builds a statement directly and has no
   deferred-error builder to carry one.
+- `Select` refuses a string column that is not an identifier or a wildcard, and
+  `InsertWithColumns`, `InsertQueryBuilder.Columns` and `InsertQueryBuilder.SetMap`
+  refuse one that is not an identifier. Expressions move to `qb.Expr()`.
 - An upsert column key carrying a quote that is neither half of a doubled escape
   nor the wrapper of a well-formed quoted identifier is still refused. ADR-071
   refused it because the renderer could not render it; the renderer can now, so
@@ -139,6 +169,15 @@ its own ADR rather than being welded to a security fix.
 - Bare, qualified and framework-quoted identifiers, inline table aliases, and
   every already-escaped key render exactly as before.
 - PostgreSQL identifier quoting is unchanged: valid identifiers stay unquoted.
+
+One thing the staging surfaced, worth recording because it is easy to repeat: the
+PostgreSQL upsert built its INSERT through the PUBLIC `qb.Insert(table).Columns(...)`
+door "for consistency". Once that door validates, the builder was judging its own
+ESCAPED output — `"a""b"` — by the grammar meant for a caller's raw input, and
+refusing it. It now builds the statement directly, which also stops it validating
+the same table twice. A validating door is for arguments crossing INTO the
+builder; internal paths that have already validated and already rendered must not
+re-enter it.
 
 See [migrations.md](migrations.md) for the atoms and
 [database.md](database.md#identifier-validation-adr-031) for the developer-facing

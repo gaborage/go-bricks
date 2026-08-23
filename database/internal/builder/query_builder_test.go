@@ -629,7 +629,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "GroupBy",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("department", countClause).From(tableUsers).GroupBy("department").ToSQL()
+				sql, _, _ := qb.Select("department", qb.MustExpr(countClause)).From(tableUsers).GroupBy("department").ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT department, COUNT(*) FROM users GROUP BY department`,
@@ -637,7 +637,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "Having",
 			setupQuery: func(qb *QueryBuilder) string {
-				sql, _, _ := qb.Select("department", countClause).From(tableUsers).GroupBy("department").Having(countClause+" > ?", 5).ToSQL()
+				sql, _, _ := qb.Select("department", qb.MustExpr(countClause)).From(tableUsers).GroupBy("department").Having(countClause+" > ?", 5).ToSQL()
 				return sql
 			},
 			expectedSQL: `SELECT department, COUNT(*) FROM users GROUP BY department HAVING COUNT(*) > $1`,
@@ -926,7 +926,7 @@ func TestTableAliasMultipleJoins(t *testing.T) {
 		jf := qb.JoinFilter()
 		f := qb.Filter()
 
-		query := qb.Select(colUserID, colUserName, "COUNT(o.id) AS order_count").
+		query := qb.Select(colUserID, colUserName, qb.MustExpr("COUNT(o.id)", "order_count")).
 			From(dbtypes.MustTable(tableUsers).MustAs(aliasU)).
 			LeftJoinOn(dbtypes.MustTable(tableOrders).MustAs("o"), jf.EqColumn(colUserID, "o.user_id")).
 			Where(f.Eq(colUserStatus, statusActive)).
@@ -2363,6 +2363,116 @@ func TestEscapeIdentifierTreatsInputAsEscapedForm(t *testing.T) {
 			once := qb.EscapeIdentifier(`a"b`)
 			require.Equal(t, once, qb.EscapeIdentifier(once),
 				"re-escaping an already-escaped identifier must not rename it")
+		})
+	}
+}
+
+// TestSelectValidatesColumnIdentifiers extends ADR-031's grammar to the SELECT
+// column list. The `select` context is the identifier grammar plus a wildcard
+// production: `*` and `table.*` are the documented idiom and must keep building,
+// while anything that is not an identifier is refused with the same remedy the
+// other doors offer.
+func TestSelectValidatesColumnIdentifiers(t *testing.T) {
+	rejected := []struct{ name, column string }{
+		{name: "boolean_bypass_with_comment", column: `id = 1 OR 1=1 -- `},
+		{name: "quote_breakout", column: `x" = 1 OR 1=1 --`},
+		{name: "stacked_statement", column: `id; DROP TABLE users--`},
+		{name: "cross_table_subquery", column: `name, (SELECT password FROM admins LIMIT 1)`},
+	}
+
+	accepted := []struct{ name, column string }{
+		{name: "wildcard", column: `*`},
+		{name: "qualified_wildcard", column: `u.*`},
+		{name: "bare_column", column: `id`},
+		{name: "qualified_column", column: `u.id`},
+		{name: "framework_quoted_reserved_word", column: `"level"`},
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+		for _, tt := range rejected {
+			t.Run(vendor+"_rejects_"+tt.name, func(t *testing.T) {
+				sql, args, err := qb.Select(tt.column).From("users").ToSQL()
+
+				require.Error(t, err)
+				require.ErrorContains(t, err, "invalid select identifier",
+					"rejected the query, but not because of the column identifier")
+				require.Empty(t, sql, "a rejected call emits no SQL")
+				require.Empty(t, args, "a rejected call binds no arguments")
+			})
+		}
+		for _, tt := range accepted {
+			t.Run(vendor+"_accepts_"+tt.name, func(t *testing.T) {
+				sql, _, err := qb.Select(tt.column).From("users").ToSQL()
+				require.NoError(t, err)
+				require.NotEmpty(t, sql)
+			})
+		}
+	}
+}
+
+// TestInsertColumnDoorsValidateIdentifiers closes the INSERT column lists. These
+// sat beside the table argument ADR-082 already guards and were interpolated
+// unchecked; InsertQueryBuilder.SetMap is the sharpest case, because
+// UpdateQueryBuilder.SetMap — the same shape on the sibling builder — has
+// validated its keys since ADR-031.
+func TestInsertColumnDoorsValidateIdentifiers(t *testing.T) {
+	const payload = `a, b) VALUES (1,2)--`
+
+	doors := map[string]func(qb *QueryBuilder, column string) dbtypes.InsertQueryBuilder{
+		"InsertWithColumns": func(qb *QueryBuilder, column string) dbtypes.InsertQueryBuilder {
+			return qb.InsertWithColumns("users", column).Values(1)
+		},
+		"Columns": func(qb *QueryBuilder, column string) dbtypes.InsertQueryBuilder {
+			return qb.Insert("users").Columns(column).Values(1)
+		},
+		"SetMap": func(qb *QueryBuilder, column string) dbtypes.InsertQueryBuilder {
+			return qb.Insert("users").SetMap(map[string]any{column: 1})
+		},
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		qb := NewQueryBuilder(vendor)
+		for door, build := range doors {
+			t.Run(vendor+"_"+door+"_rejects_payload", func(t *testing.T) {
+				sql, args, err := build(qb, payload).ToSQL()
+
+				require.Error(t, err)
+				require.ErrorContains(t, err, "identifier",
+					"rejected the call, but not because of the column identifier")
+				require.Empty(t, sql, "a rejected call emits no SQL")
+				require.Empty(t, args, "a rejected call binds no arguments")
+			})
+
+			t.Run(vendor+"_"+door+"_accepts_bare_column", func(t *testing.T) {
+				sql, _, err := build(qb, "id").ToSQL()
+				require.NoError(t, err)
+				require.NotEmpty(t, sql)
+			})
+		}
+	}
+}
+
+// TestSelectNormalizesBeforeRendering pins that the select door renders the value
+// it validated. The validator trims; the renderer's wildcard bypass is a suffix
+// test, so a padded wildcard used to pass validation and then render as a quoted
+// column on Oracle — `t.* ` became `t."*"`, which Oracle rejects at execution.
+func TestSelectNormalizesBeforeRendering(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+	cases := map[string]string{
+		"bare":           "*",
+		"tab_padded":     "\t*\t",
+		"space_padded":   " * ",
+		"qualified":      "t.*",
+		"trailing_space": "t.* ",
+		"surrounded":     " t.* ",
+	}
+	for name, column := range cases {
+		t.Run(name+"_renders_bare", func(t *testing.T) {
+			sql, _, err := qb.Select(column).From("users").ToSQL()
+
+			require.NoError(t, err)
+			require.NotContains(t, sql, `"*"`, "the wildcard must not be quoted as a column name")
 		})
 	}
 }

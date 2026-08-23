@@ -87,18 +87,6 @@ func TestQueryBuilderSelect(t *testing.T) {
 			expected: `SELECT id, "number"`,
 		},
 		{
-			name:     "oracle_count_function",
-			vendor:   Oracle,
-			columns:  []string{"COUNT(*)"},
-			expected: "SELECT COUNT(*)",
-		},
-		{
-			name:     "oracle_mixed_columns_and_functions",
-			vendor:   Oracle,
-			columns:  []string{"id", "COUNT(*)", "number", "SUM(balance)"},
-			expected: `SELECT id, COUNT(*), "number", SUM(balance)`,
-		},
-		{
 			name:     "postgresql_single_column",
 			vendor:   PostgreSQL,
 			columns:  []string{"*"},
@@ -122,6 +110,32 @@ func TestQueryBuilderSelect(t *testing.T) {
 			assert.Contains(t, sql, tt.expected)
 		})
 	}
+}
+
+// TestQueryBuilderSelectFunctionsGoThroughExpr carries what the two function
+// cases in TestQueryBuilderSelect used to assert. A function is not an identifier,
+// so a bare function STRING is now refused by the select grammar; the behavior
+// those cases actually pinned — that Oracle does not quote a function the way it
+// quotes a reserved word — belongs to the qb.Expr path, and is asserted there.
+func TestQueryBuilderSelectFunctionsGoThroughExpr(t *testing.T) {
+	qb := NewQueryBuilder(Oracle)
+
+	t.Run("bare_function_string_is_refused", func(t *testing.T) {
+		_, _, err := qb.Select("COUNT(*)").From("users").ToSQL()
+
+		require.Error(t, err)
+		require.ErrorContains(t, err, "invalid select identifier")
+		require.ErrorContains(t, err, "qb.Expr()", "the error should name the remedy")
+	})
+
+	t.Run("expr_builds_unquoted_beside_a_quoted_reserved_word", func(t *testing.T) {
+		sql, _, err := qb.Select("id", qb.MustExpr("COUNT(*)"), "number", qb.MustExpr("SUM(balance)")).
+			From("users").ToSQL()
+
+		require.NoError(t, err)
+		// "number" is an Oracle reserved word and is quoted; the functions are not.
+		assert.Contains(t, sql, `SELECT id, COUNT(*), "number", SUM(balance)`)
+	})
 }
 
 func TestQueryBuilderInsert(t *testing.T) {

@@ -1402,12 +1402,18 @@ func TestBuildUpsertOracleRejectsConflictColumnInUpdateSet(t *testing.T) {
 // where the quoting happens.
 func TestOracleRenderingDoublesInteriorQuotes(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
+	f := qb.Filter()
 	for _, tt := range identifierEscapeCases {
 		t.Run(tt.name, func(t *testing.T) {
-			sql, _, err := qb.Select(tt.identifier).From("users").ToSQL()
+			// Driven through a Filter column rather than Select: Select validates
+			// its column list now, so it refuses these payloads before the renderer
+			// ever sees them, which is the point of that change but leaves no way
+			// to observe the escaping through it. The Filter column doors are the
+			// remaining public path to the renderer until they validate too, at
+			// which point EscapeIdentifier's own test carries this alone.
+			sql, _, err := qb.Select("id").From("users").Where(f.Eq(tt.identifier, 1)).ToSQL()
 			require.NoError(t, err)
-			// The rendering is the shared escaped golden, in statement position.
-			require.Equal(t, `SELECT `+tt.escaped+` FROM users`, sql)
+			require.Equal(t, `SELECT id FROM users WHERE `+tt.escaped+` = :1`, sql)
 		})
 	}
 }

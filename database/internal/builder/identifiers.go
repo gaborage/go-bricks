@@ -50,6 +50,16 @@ var validClauseIdentifierPattern = regexp.MustCompile(
 	`^` + qualified + `( (?i:ASC|DESC))?( (?i:NULLS) (?i:FIRST|LAST))?$`,
 )
 
+// validSelectIdentifierPattern extends validIdentifierPattern with the SELECT
+// wildcard: `*` selects every column and `table.*` (or `schema.table.*`) every
+// column of one table. Both are the documented idiom, neither is an identifier
+// under the base grammar, and neither can carry a payload — the wildcard is the
+// whole token or the trailing segment of an otherwise-qualified name. A function
+// or computed expression is still not an identifier and goes through qb.Expr().
+var validSelectIdentifierPattern = regexp.MustCompile(
+	`^(?:\*|` + qualified + `(?:\.\*)?)$`,
+)
+
 // validTableNamePattern extends validIdentifierPattern with an optional trailing
 // table alias ("users u", "schema.users u") — the inline-alias form the From/JOIN
 // string APIs already accept alongside the explicit Table("users").As("u") helper.
@@ -82,6 +92,25 @@ func validateTableName(identifier string) error {
 			identifier)
 	}
 	return nil
+}
+
+// validateSelectIdentifier rejects SELECT column arguments that fall outside the
+// safe identifier grammar plus the wildcard. A computed or function expression is
+// not an identifier and must go through qb.Expr(), the same as for ORDER BY.
+//
+// It returns the NORMALIZED identifier, and callers must interpolate that rather
+// than their own input. Validating a trimmed value while rendering the untrimmed
+// one lets the two disagree: the renderer's wildcard bypass is a suffix test, so
+// `t.* ` passed validation and then rendered as `t."*"` on Oracle — a blessed
+// input the renderer mangles.
+func validateSelectIdentifier(identifier string) (normalized string, err error) {
+	trimmed := strings.TrimSpace(identifier)
+	if !validSelectIdentifierPattern.MatchString(trimmed) {
+		return "", fmt.Errorf("invalid select identifier %q: must be a simple or qualified identifier, "+
+			"or a wildcard (\"*\", \"t.*\") — use qb.Expr()/Raw() for expressions and aliases",
+			identifier)
+	}
+	return trimmed, nil
 }
 
 // validateClauseIdentifier rejects ORDER BY / GROUP BY arguments that fall
