@@ -44,50 +44,6 @@ func isQuotedString(s string) bool {
 	return len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"'
 }
 
-// isBalancedParentheses checks if parentheses are properly balanced in a string
-func isBalancedParentheses(s string) bool {
-	count := 0
-	for _, c := range s {
-		switch c {
-		case '(':
-			count++
-		case ')':
-			count--
-			if count < 0 {
-				return false // More closing than opening
-			}
-		}
-	}
-	return count == 0 // Must have equal opening and closing
-}
-
-// extractFunctionNameAndArgs splits a potential function call into name and validates parentheses structure
-func extractFunctionNameAndArgs(s string) (name string, hasValidStructure bool) {
-	// Find first opening parenthesis
-	parenIndex := strings.IndexByte(s, '(')
-	if parenIndex <= 0 {
-		return "", false
-	}
-
-	// Check for balanced parentheses in the entire string
-	if !isBalancedParentheses(s) {
-		return "", false
-	}
-
-	// Must have closing parenthesis after the opening one
-	if !strings.Contains(s[parenIndex:], ")") {
-		return "", false
-	}
-
-	// Extract and validate function name part
-	functionName := strings.TrimSpace(s[:parenIndex])
-	if functionName == "" {
-		return "", false
-	}
-
-	return functionName, true
-}
-
 // isValidOracleIdentifierStart checks if a character can start an Oracle identifier
 // Oracle identifiers must start with a letter (A-Z, a-z)
 func isValidOracleIdentifierStart(c byte) bool {
@@ -130,6 +86,21 @@ func isValidQuotedSegment(segment string) bool {
 
 	// Content inside quotes must not be empty
 	return segment[1:len(segment)-1] != ""
+}
+
+// splitIdentifierSegments splits a qualified identifier on the dots that
+// SEPARATE segments, leaving a dot inside a quoted segment where it belongs:
+// `"my.col"` is one column, not two (#1151). Both identifier renderers compose
+// it the same way, so the fallback rule lives here once rather than at each.
+//
+// A string parseQualifiedIdentifier rejects — unbalanced quotes — comes back as
+// a single segment. Rendering fewer segments than the caller wrote would be the
+// silent variant; one whole (escaped) identifier is not.
+func splitIdentifierSegments(identifier string) []string {
+	if segments, ok := parseQualifiedIdentifier(identifier); ok {
+		return segments
+	}
+	return []string{identifier}
 }
 
 // parseQualifiedIdentifier splits a qualified identifier into segments and validates them
@@ -219,56 +190,13 @@ func validateSegment(segment string) bool {
 	return isValidIdentifierSegment(segment)
 }
 
-// isSQLFunction checks if the given string is a SQL function call
-func isSQLFunction(s string) bool {
-	if s == "" {
-		return false
-	}
-
-	// Quoted strings are identifiers, not functions
-	if isQuotedString(s) {
-		return false
-	}
-
-	// Extract function name and validate structure
-	functionName, hasValidStructure := extractFunctionNameAndArgs(s)
-	if !hasValidStructure {
-		return false
-	}
-
-	// Parse and validate the function name (may be qualified)
-	segments, valid := parseQualifiedIdentifier(functionName)
-	if !valid {
-		return false
-	}
-
-	// Validate each segment
-	for _, segment := range segments {
-		if !validateSegment(segment) {
-			return false
-		}
-	}
-
-	return true
-}
-
 func oracleQuoteIdentifier(column string) string {
 	trimmed := strings.TrimSpace(column)
 	if trimmed == "" {
 		return trimmed
 	}
 
-	// Don't quote SQL functions like COUNT(*), SUM(column), etc.
-	if isSQLFunction(trimmed) {
-		return trimmed
-	}
-
-	// Split quote-aware, so a dot INSIDE a quoted segment stays part of the name:
-	// `"my.col"` is one column Oracle accepts, not two. parseQualifiedIdentifier
-	// is the walker isSQLFunction already used; a string it rejects (unbalanced
-	// quotes) is rendered as a single identifier rather than silently losing
-	// segments — unreachable from any validated door, but total either way.
-	if segments, ok := parseQualifiedIdentifier(trimmed); ok && len(segments) > 1 {
+	if segments := splitIdentifierSegments(trimmed); len(segments) > 1 {
 		for i, segment := range segments {
 			segments[i] = oracleQuoteIdentifier(segment)
 		}

@@ -692,13 +692,14 @@ func (qb *QueryBuilder) BuildBooleanValue(value bool) any {
 func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
 	// Quote-aware split: a dot inside a quoted segment belongs to the name, so
 	// `"my.col"` is one identifier and must not be torn into `"my` and `col"`
-	// and quoted half by half (#1151). parseQualifiedIdentifier is the existing
-	// walker; a string it rejects is treated as a single identifier so nothing
-	// is silently dropped.
-	parts, ok := parseQualifiedIdentifier(identifier)
-	if !ok {
-		parts = []string{identifier}
-	}
+	// and quoted half by half (#1151).
+	//
+	// This function is EXPORTED — consumers call it to quote a dynamic identifier
+	// before embedding it in raw SQL — so unlike the internal renderer it is a
+	// trust boundary, not a post-validation step: a malformed identifier is a
+	// live input here, not an unreachable branch. It stays safe by escaping, and
+	// splitIdentifierSegments hands back the whole string when it cannot parse it.
+	parts := splitIdentifierSegments(identifier)
 	for i, part := range parts {
 		if isQuotedIdentifier(part) {
 			// Already a well-formed quoted identifier; re-quoting would rename it.
