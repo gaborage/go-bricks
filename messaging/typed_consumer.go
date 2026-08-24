@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,9 +88,13 @@ func (jsonCodec) summarize(err error, fieldPathIsSchema bool) string {
 	return ""
 }
 
-// jsonUnmarshaler is the interface a payload type can use to take decoding into
-// its own hands, and with it the field path the decoder reports.
-var jsonUnmarshaler = reflect.TypeFor[json.Unmarshaler]()
+// The two interfaces a payload type can use to take decoding into its own
+// hands, and with it the field path the decoder reports. encoding/json calls
+// UnmarshalText for a JSON string whose destination implements only the second.
+var (
+	jsonUnmarshaler = reflect.TypeFor[json.Unmarshaler]()
+	textUnmarshaler = reflect.TypeFor[encoding.TextUnmarshaler]()
+)
 
 // fieldPathIsSchema reports whether a decoder's field path can be trusted to
 // name destination schema only. The answer depends on the registered payload
@@ -103,9 +108,12 @@ func fieldPathIsSchema(t reflect.Type) bool {
 //
 //   - a map, whose path segment IS the input key;
 //   - an interface, which decodes into map[string]any;
-//   - a json.Unmarshaler, which decodes into whatever it likes — a map into a
-//     local variable is invisible to this walk, and the error it returns is
-//     reported against ITS field, so the path reads "k", not "inner".
+//   - a json.Unmarshaler or an encoding.TextUnmarshaler, which decode into
+//     whatever they like — a map into a local variable is invisible to this
+//     walk, and the error they return is reported against THEIR field, so the
+//     path reads "k", not "inner". The text door is not even 1.27-specific: a
+//     TextUnmarshaler returning its own UnmarshalTypeError already renders
+//     "inner.<input>" on Go 1.26.
 //
 // seen stops a self-referential type from recursing forever.
 func reachesInputPath(t reflect.Type, seen map[reflect.Type]bool) bool {
@@ -116,8 +124,11 @@ func reachesInputPath(t reflect.Type, seen map[reflect.Type]bool) bool {
 
 	// Both forms: json.Unmarshal takes a pointer, so a pointer-receiver
 	// UnmarshalJSON is reached for an addressable value of the bare type.
-	if t.Implements(jsonUnmarshaler) || reflect.PointerTo(t).Implements(jsonUnmarshaler) {
-		return true
+	ptr := reflect.PointerTo(t)
+	for _, iface := range []reflect.Type{jsonUnmarshaler, textUnmarshaler} {
+		if t.Implements(iface) || ptr.Implements(iface) {
+			return true
+		}
 	}
 
 	switch t.Kind() {

@@ -887,6 +887,21 @@ type wrapsCustomUnmarshaler struct {
 	Inner customUnmarshaler `json:"inner"`
 }
 
+// textOnlyUnmarshaler implements encoding.TextUnmarshaler and NOT
+// json.Unmarshaler: encoding/json hands it the JSON string's contents, it
+// decodes them itself, and the error surfaces against its own field.
+type textOnlyUnmarshaler struct{ N int }
+
+func (t *textOnlyUnmarshaler) UnmarshalText(b []byte) error {
+	var m map[string]int
+
+	return json.Unmarshal(b, &m)
+}
+
+type wrapsTextUnmarshaler struct {
+	Inner textOnlyUnmarshaler `json:"inner"`
+}
+
 // timePayload is the everyday shape that pays the fail-closed price: time.Time
 // carries an UnmarshalJSON, so a payload with a timestamp renders no field path.
 type timePayload struct {
@@ -911,6 +926,8 @@ func TestFieldPathIsSchema(t *testing.T) {
 		{name: "interface_field", typ: reflect.TypeFor[interfacePayload]()},
 		{name: "nested_custom_unmarshaler", typ: reflect.TypeFor[wrapsCustomUnmarshaler]()},
 		{name: "custom_unmarshaler_itself", typ: reflect.TypeFor[customUnmarshaler]()},
+		{name: "nested_text_unmarshaler", typ: reflect.TypeFor[wrapsTextUnmarshaler]()},
+		{name: "text_unmarshaler_itself", typ: reflect.TypeFor[textOnlyUnmarshaler]()},
 		{name: "stdlib_unmarshaler_field", typ: reflect.TypeFor[timePayload]()},
 		{name: "self_referential_without_map", typ: reflect.TypeFor[selfRefNoMap](), want: true},
 		{name: "self_referential_with_map", typ: reflect.TypeFor[selfRefWithMap]()},
@@ -942,6 +959,15 @@ func TestTypedHandlerGatesFieldPathOnPayloadType(t *testing.T) {
 	customHandler := NewTypedHandler(orderEventType, func(_ context.Context, _ wrapsCustomUnmarshaler) error { return nil })
 	err = customHandler.Handle(t.Context(), &amqp.Delivery{
 		Body: fmt.Appendf(nil, `{"inner":{%q:"notanint"}}`, payloadMarker),
+	})
+	require.ErrorIs(t, err, ErrPayloadUndecodable)
+	assert.NotContains(t, err.Error(), "at field")
+	assert.NotContains(t, err.Error(), payloadMarker)
+
+	// A text unmarshaler is the same class through the other door.
+	textHandler := NewTypedHandler(orderEventType, func(_ context.Context, _ wrapsTextUnmarshaler) error { return nil })
+	err = textHandler.Handle(t.Context(), &amqp.Delivery{
+		Body: fmt.Appendf(nil, `{"inner":%q}`, fmt.Sprintf(`{%q:"notanint"}`, payloadMarker)),
 	})
 	require.ErrorIs(t, err, ErrPayloadUndecodable)
 	assert.NotContains(t, err.Error(), "at field")

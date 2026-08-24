@@ -291,8 +291,8 @@ offending **input** map key for a map destination (`limits.<key>`), and the inne
 key alone for a field with its own `UnmarshalJSON`, where Go 1.26 reported the
 destination field. That is why the framework's decode summary drops the field
 path entirely for a payload type from which a map, an `any`, or a
-`json.Unmarshaler` is reachable — `time.Time` included — and reports only the
-wanted type and byte offset:
+`json.Unmarshaler` or `encoding.TextUnmarshaler` is reachable — `time.Time`
+included — and reports only the wanted type and byte offset:
 
 ```text
 messaging: decode failed for event "LimitsUpdated": json: type mismatch (want int, offset 47)
