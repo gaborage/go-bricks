@@ -20,7 +20,7 @@ A grep of `cfg.App.Env` usage across the framework shows only **6 behavior-switc
 
 | Site | Logic |
 | --- | --- |
-| `server/server.go` × 2 | `SetCaptureStackTraces(isDevelopmentEnv(env))`; error details, which since #1140 also require `app.debug` |
+| `server/server.go` × 2 | `SetCaptureStackTraces(isDevelopmentEnv(env))`; the 5xx `details.error`, which since #1140 also requires `app.debug` (ADR-084 extends that pairing to the whole details map) |
 | `server/handler.go` × 1 | Error details on enveloped + raw responses, which since ADR-084 require `app.debug` too, at every status |
 | `server/cors.go` × 1 | Strict CORS when `APP_ENV == production` |
 | `migration/flyway.go` × 1 | Auto-migrate in development |
@@ -63,7 +63,7 @@ Two-part design:
 2. **Behavior switches go through predicates** with documented alias sets:
    - `func config.IsDevelopment(env string) bool` + `(*AppConfig).IsDevelopment()` — accepts `{development, dev, local}`.
    - `func config.IsProduction(env string) bool` + `(*AppConfig).IsProduction()` — accepts `{production, prod, prd}`.
-   - Any value not in either alias set is **neutral**: treated as non-dev (no dev conveniences like stack-trace capture or error-detail leakage) and non-prod (fail-closed CORS — no `Access-Control-Allow-Origin` is emitted unless `CORS_ORIGINS` is set explicitly). Examples: `staging`, `stg`, `tst`, `qa`, `uat`, `production-eu` — all receive fail-closed CORS behavior, identical to production aliases.
+   - Any value not in either alias set is **neutral**: treated as non-dev (no dev conveniences like stack-trace capture or error-detail leakage — and since [ADR-084](adr_084_response_error_details_carry_no_request_input.md) a development alias does not leak details on its own either: every response detail map requires `app.debug: true` as well) and non-prod (fail-closed CORS — no `Access-Control-Allow-Origin` is emitted unless `CORS_ORIGINS` is set explicitly). Examples: `staging`, `stg`, `tst`, `qa`, `uat`, `production-eu` — all receive fail-closed CORS behavior, identical to production aliases.
 
 **Chosen because:**
 
@@ -159,7 +159,7 @@ Rejects: empty, `Production` (uppercase), `prd eu` (space), `1prod` (leading dig
 **Breaking change:** Yes, but only for two narrow categories of behavior:
 
 1. **`APP_ENV=prd` / `APP_ENV=prod`** now triggers production-strict CORS in `server.CORS()`. Previously only literal `production` did. If an existing deployment relies on `APP_ENV=prd` *not* triggering strict CORS (unlikely — it would have been a misconfiguration), that environment will start enforcing `CORS_ORIGINS`. Action: set `CORS_ORIGINS` explicitly in those environments.
-2. **`APP_ENV=dev` / `APP_ENV=local`** now enable framework dev conveniences (stack traces in errors, raw error details exposed in responses — the framework's own `details.error` on an unhandled 5xx additionally requires `app.debug: true` since #1140) and trigger auto-migrate in `migration.FlywayMigrator.RunMigrationsAtStartup`. Previously only literal `development` did. Consumers using these aliases should expect dev behavior, which is the intent.
+2. **`APP_ENV=dev` / `APP_ENV=local`** now enable framework dev conveniences (stack-trace capture, error details in responses) and trigger auto-migrate in `migration.FlywayMigrator.RunMigrationsAtStartup`. Previously only literal `development` did. Consumers using these aliases should expect dev behavior, which is the intent. The details half of that is gated twice over: since [ADR-084](adr_084_response_error_details_carry_no_request_input.md) a response's `error.details` map is rendered only when `app.debug: true` AND `app.env` is a development alias — at EVERY status, on both the enveloped and the raw renderer, covering the whole map rather than the unhandled-5xx `details.error` that #1140 alone gated. A development alias running with debug off therefore exposes no details at any status.
 
 **Non-breaking for** the documented canonical names — `development`, `staging`, `production` continue to behave identically.
 
