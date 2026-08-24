@@ -316,3 +316,26 @@ much when the type and stack are what a reader of a panic report actually uses.
 The argument for withholding is identical at both, the scheduler already withheld
 it on two of its three sinks, and a per-site rule is one an author has to
 rediscover each time.
+
+## Addendum (2026-08-23): the response-body sink shares the debug gate
+
+This ADR reasoned about the sinks that RENDER a recovered panic — the log line,
+the span status, the audit record — and left one out: the HTTP response body.
+`classifyError` attached the recovered error's text to `details.error` under
+`cfg.App.IsDevelopment()` alone, while the two log paths withheld the same text
+under `cfg.App.Debug`. The type-only rule held on both — `sanitizePanicValue`
+runs a frame lower, so what the body carried was already `panic (type: T)` and
+never the value — but the GATES disagreed, and they disagreed in the direction
+that costs the most: an operator who turned `app.debug` off while `app.env`
+stayed a development alias silenced the copy they read and kept shipping the
+copy the caller reads, which is the less trusted of the two audiences.
+
+The body now requires both keys, `cfg.App.Debug && cfg.App.IsDevelopment()`, so
+the stricter of the two always wins and the two sinks cannot diverge. The log
+paths are unchanged, and the debug rendering keeps carrying the type and the
+stack — the documented debug opt-in this ADR already accepts. The rule this adds
+is narrower than "report by type": **a sink's gate is a claim about who may read
+it, so two sinks reporting the same thing must not be gated on different keys.**
+The one that reaches the least trusted audience takes the stricter gate.
+
+Migration: [C60.30](migrations.md) · issue #1140.

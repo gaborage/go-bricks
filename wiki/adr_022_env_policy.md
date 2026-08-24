@@ -20,7 +20,7 @@ A grep of `cfg.App.Env` usage across the framework shows only **6 behavior-switc
 
 | Site | Logic |
 | --- | --- |
-| `server/server.go` × 2 | `SetCaptureStackTraces(isDevelopmentEnv(env))`; dev-only error details |
+| `server/server.go` × 2 | `SetCaptureStackTraces(isDevelopmentEnv(env))`; error details, which since #1140 also require `app.debug` |
 | `server/handler.go` × 2 | Dev-only error details on enveloped + raw responses |
 | `server/cors.go` × 1 | Strict CORS when `APP_ENV == production` |
 | `migration/flyway.go` × 1 | Auto-migrate in development |
@@ -159,7 +159,7 @@ Rejects: empty, `Production` (uppercase), `prd eu` (space), `1prod` (leading dig
 **Breaking change:** Yes, but only for two narrow categories of behavior:
 
 1. **`APP_ENV=prd` / `APP_ENV=prod`** now triggers production-strict CORS in `server.CORS()`. Previously only literal `production` did. If an existing deployment relies on `APP_ENV=prd` *not* triggering strict CORS (unlikely — it would have been a misconfiguration), that environment will start enforcing `CORS_ORIGINS`. Action: set `CORS_ORIGINS` explicitly in those environments.
-2. **`APP_ENV=dev` / `APP_ENV=local`** now enable framework dev conveniences (stack traces in errors, raw error details exposed in responses) and trigger auto-migrate in `migration.FlywayMigrator.RunMigrationsAtStartup`. Previously only literal `development` did. Consumers using these aliases should expect dev behavior, which is the intent.
+2. **`APP_ENV=dev` / `APP_ENV=local`** now enable framework dev conveniences (stack traces in errors, raw error details exposed in responses — the framework's own `details.error` on an unhandled 5xx additionally requires `app.debug: true` since #1140) and trigger auto-migrate in `migration.FlywayMigrator.RunMigrationsAtStartup`. Previously only literal `development` did. Consumers using these aliases should expect dev behavior, which is the intent.
 
 **Non-breaking for** the documented canonical names — `development`, `staging`, `production` continue to behave identically.
 
