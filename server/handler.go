@@ -1258,6 +1258,10 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 // The IAPIError interface does not guarantee Details() returns a copy
 // (BaseAPIError happens to, but user-defined error types may not), so we always
 // copy before injecting stackTrace to avoid mutating caller-owned state.
+// devDetails stays gated on the environment ALONE, unlike classifyError's
+// details["error"] which also requires app.debug (#1140): what it renders is either
+// author-chosen (a handler's own WithDetails entry) or already dev-gated at capture
+// (SetCaptureStackTraces), never driver-supplied text a field-name filter cannot scrub.
 func devDetails(apiErr IAPIError) map[string]any {
 	src := apiErr.Details()
 	st, hasStack := apiErr.(StackTracer)

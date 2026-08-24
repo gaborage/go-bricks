@@ -922,3 +922,118 @@ func TestTrustedProxyOptionsDropsSetsThatTrustEveryone(t *testing.T) {
 		})
 	}
 }
+
+// --- response-body error-detail gate (issue #1140) ---
+
+const (
+	detailGatePanicRoute = "/detail-gate/panic"
+	detailGateErrorRoute = "/detail-gate/error"
+	detailGateErrorText  = "unhandled-detail-gate-boom"
+	detailGatePanicType  = "panic (type: string)"
+)
+
+// newDetailGateServer builds a server for one cell of the env × debug matrix and
+// registers a panicking route and a route returning an unhandled 500.
+func newDetailGateServer(env string, debug bool) (*Server, *testLogger) {
+	cfg := newTestConfig("", "", "")
+	cfg.App.Env = env
+	cfg.App.Debug = debug
+	log := &testLogger{}
+	srv := New(cfg, log)
+	srv.echo.GET(detailGatePanicRoute, func(*echo.Context) error {
+		panic("detail-gate-panic-value")
+	})
+	srv.echo.GET(detailGateErrorRoute, func(*echo.Context) error {
+		return errors.New(detailGateErrorText)
+	})
+	return srv, log
+}
+
+// detailGateResponseDetail serves route and returns the decoded details["error"] entry
+// (empty string plus false when absent).
+func detailGateResponseDetail(t *testing.T, srv *Server, route string) (string, bool) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, route, http.NoBody)
+	srv.echo.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "body: %s", rec.Body.String())
+	require.NotNil(t, resp.Error)
+	raw, ok := resp.Error.Details["error"]
+	if !ok {
+		return "", false
+	}
+	detail, isString := raw.(string)
+	require.True(t, isString, "details.error should be a string, got %T", raw)
+	return detail, true
+}
+
+// TestErrorDetailGateRequiresDebugAndDevelopment pins the response-body sink to the
+// SAME key the log sinks use: raw error detail ships only when app.debug is on AND
+// app.env is a development alias. Turning app.debug off in a dev environment used to
+// silence the log while the body kept shipping the detail to the caller (#1140).
+func TestErrorDetailGateRequiresDebugAndDevelopment(t *testing.T) {
+	tests := []struct {
+		name         string
+		env          string
+		debug        bool
+		expectDetail bool
+	}{
+		{name: "development_debug_on", env: config.EnvDevelopment, debug: true, expectDetail: true},
+		{name: "development_debug_off", env: config.EnvDevelopment, debug: false, expectDetail: false},
+		{name: "production_debug_on", env: config.EnvProduction, debug: true, expectDetail: false},
+		{name: "production_debug_off", env: config.EnvProduction, debug: false, expectDetail: false},
+	}
+
+	routes := []struct {
+		name     string
+		route    string
+		expected string
+	}{
+		{name: "panic", route: detailGatePanicRoute, expected: detailGatePanicType},
+		{name: "unhandled_error", route: detailGateErrorRoute, expected: detailGateErrorText},
+	}
+
+	for _, tt := range tests {
+		for _, rt := range routes {
+			t.Run(tt.name+"_"+rt.name, func(t *testing.T) {
+				srv, _ := newDetailGateServer(tt.env, tt.debug)
+				detail, present := detailGateResponseDetail(t, srv, rt.route)
+				if !tt.expectDetail {
+					assert.False(t, present, "details.error must be absent unless app.debug AND a development env")
+					return
+				}
+				require.True(t, present, "details.error must be present in development with app.debug on")
+				assert.Contains(t, detail, rt.expected)
+			})
+		}
+	}
+}
+
+// TestErrorDetailGateLogsTypeOnlyWithDebugOff proves the log sink is unchanged by the
+// body-gate fix: with app.debug off in development both 5xx paths still record
+// error_type and never the raw error field.
+func TestErrorDetailGateLogsTypeOnlyWithDebugOff(t *testing.T) {
+	tests := []struct {
+		name  string
+		route string
+		msg   string
+	}{
+		{name: "panic", route: detailGatePanicRoute, msg: "Panic recovered"},
+		{name: "unhandled_error", route: detailGateErrorRoute, msg: "unhandled error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, log := newDetailGateServer(config.EnvDevelopment, false)
+			_, _ = detailGateResponseDetail(t, srv, tt.route)
+
+			entry := findLogEntry(log.logEntries(), tt.msg)
+			require.NotNil(t, entry, "expected a %q log entry", tt.msg)
+			assert.Contains(t, entry.fields, "error_type")
+			assert.NotContains(t, entry.fields, "error")
+		})
+	}
+}

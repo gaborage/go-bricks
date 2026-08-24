@@ -5356,6 +5356,45 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   correctly describes its topology still believes whatever those proxies append, which is
   identification and not authorization ([ADR-043](adr_043_forwarded_client_cert.md)).
 
+---
+
+### [C60.30] the 5xx response body's error detail requires `app.debug` AND a development env · silent-behavior · when: match
+
+- detect: grep every deployment surface — YAML, `.env` files, Helm values, Kustomize overlays,
+  rendered manifests — for `app.env`/`APP_ENV` set to a development alias (`development`, `dev`,
+  `local`; the comparison lowercases and trims, so `Dev ` counts) held together with
+  `app.debug`/`APP_DEBUG` set to `false` or left unset. That pairing is the only one whose
+  emitted body changes. A deployment whose `app.env` is not a development alias was already
+  clean, and one that runs `app.debug: true` in a development environment is unchanged.
+- scope: `classifyError` attached `details.error` — the raw `err.Error()` of an unhandled 5xx,
+  or Echo's `[PANIC RECOVER] …` string with the captured stack for a recovered panic — to the
+  response body under `cfg.App.IsDevelopment()` alone, while both LOG sinks withheld the same
+  text under `cfg.App.Debug`. The two sinks could therefore disagree, and they disagreed in the
+  wrong direction: an operator who turned `app.debug` off while `app.env` stayed a development
+  alias silenced the copy they could read and kept shipping the copy the CALLER reads. The body
+  now shares the log gate and adds the environment requirement on top — `cfg.App.Debug &&
+  cfg.App.IsDevelopment()` — so the stricter of the two keys wins and the sinks cannot diverge.
+  Nothing about the LOG paths changes, and the debug rendering still carries what ADR-081
+  leaves it: the panic's TYPE, never its value, since `sanitizePanicValue` has already replaced
+  the value one frame lower. The `details` map itself is not otherwise touched — a development
+  build still renders a handler-supplied `details` entry and the captured stack frames under
+  the environment gate alone.
+- gate: match = `app.env` is a development alias AND `app.debug` is false or unset.
+  no-match = any other pairing, including every production posture.
+- apply: nothing to change if the loss of that detail is what you wanted. If you were reading
+  `details.error` off a development service's 500 responses — a smoke test, a local debugging
+  script, a contract fixture pinning the key's presence — set `app.debug: true` in that
+  environment to get it back, or read the framework log's `error` field instead, which the same
+  key has always gated.
+- verify: against a service running `app.env: development` with `app.debug: false`, make a
+  handler panic and make another return a plain error. Both responses must decode to an
+  `error.details` map with NO `error` key, where the panic response previously carried
+  `[PANIC RECOVER] panic (type: string)` plus the stack. Then flip `app.debug: true` and repeat:
+  the key is back on both. Check BOTH routes — the panic path and the unhandled-error path reach
+  the same sink but through different middleware, and a probe of one does not answer for the other.
+- ref: [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) (addendum: the response-body
+  sink shares the debug gate) · `server/server.go` (`classifyError`) · issue #1140
+
 ## Observability Config Keys — Flat-Smushed Rename (#554)
 
 ADR-024 audited only the `koanf`-tagged keys in `config/types.go`. The `observability` config tree (`observability/config.go`) is tagged with `mapstructure` and loaded via a separate `config.Config.Unmarshal("observability", …)` path that binds by koanf tag or the case-insensitive Go field name and **never honors the `mapstructure` tag**. Four compound-word keys there carried underscores and so bound from neither YAML (the underscored key matched no field name) **nor** env (the loader maps `_`→`.`). [Issue #554](https://github.com/gaborage/go-bricks/issues/554) flat-smushed them to the same convention. Go field names are unchanged.

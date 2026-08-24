@@ -407,8 +407,14 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 
 	code := statusToErrorCode(status)
 	base := NewBaseAPIError(code, msg, status)
-	// Include raw error details in development
-	if cfg.App.IsDevelopment() {
+	// SECURITY: the response body is the LESS trusted of the two error sinks, so it
+	// shares the log sinks' app.debug gate and adds the development requirement on top
+	// — the stricter of the two keys wins (#1140). Gating on the environment alone let
+	// an operator who turned app.debug off in a dev environment silence the log while
+	// the body kept shipping raw error detail to the caller. The IsDevelopment half
+	// restates what devDetails' own render gate already requires, deliberately: this
+	// site must be safe on its own, so neither gate is the sole one.
+	if cfg.App.Debug && cfg.App.IsDevelopment() {
 		_ = base.WithDetails("error", err.Error())
 	}
 
