@@ -160,3 +160,19 @@ sites carry the inline `// SECURITY: Manual SQL review completed - <rationale>`
 annotation (CLAUDE.md, Security Guidelines). A door whose shape no existing
 context describes earns a new one rather than the nearest fit.
 _Avoid_: validation mode, identifier type, grammar level
+
+### Build
+
+**Language floor**:
+The `go` directive: the oldest Go a consumer may build the framework with, and
+the language version its code is written to. Raising it is a deliberate hop
+for every consumer and carries an ADR; a standard-library behavior change
+reaches a consumer through THEIR toolchain, never through ours.
+_Avoid_: Go version (unqualified), required Go, minimum Go
+
+**Toolchain pin**:
+The `toolchain` directive: the exact Go this module's own CI, contributors and
+released binaries build with. Invisible to consumers, so a routine dependency
+bump may move it — after the suite is green under the new toolchain, and never
+by loosening the test that went red.
+_Avoid_: Go version (unqualified), build Go, CI Go
