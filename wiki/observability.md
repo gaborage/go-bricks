@@ -150,6 +150,8 @@ fw, _, err = app.NewWithOptions(&app.Options{
 `FilterConfig.ErrorRedactor func(error) string` is the one seam that sees error *content*. When it is non-nil, every `LogEvent.Err(err)` call — the framework's own included — writes its return value under the `error` field instead of `err.Error()`. That matters because the framework calls `Err(err)` with consumer-authored errors at dozens of sites (handler failures, job failures, message-handler failures), which no service-layer scrub helper can reach.
 
 ```go
+var panRegexp = regexp.MustCompile(`\d{13,19}`) // package level: compile once
+
 base := logger.DefaultFilterConfig()
 base.ErrorRedactor = func(err error) string {
     return panRegexp.ReplaceAllString(err.Error(), "****")
@@ -162,6 +164,7 @@ fw, _, err := app.NewWithOptions(&app.Options{LoggerFilterConfig: base})
 - **Nil is the default.** With no redactor, `Err` output is byte-identical to zerolog's own. The framework ships no scrubbing pattern.
 - **Scoped to `Err`.** A nil error still emits nothing and never reaches the redactor. `Interface`, `WithFields` and `Msgf` are unchanged — an error logged through those goes through field-name masking only. Recovered panic values are governed by ADR-081 (reported by type, never by value) and are not routed here.
 - **Runs inside the log call**, so a panicking redactor is covered by the same guards that already wrap framework log calls in deferred paths.
+- **Covers the OTLP sink too.** The OTel log bridge is an `io.Writer` over zerolog's emitted JSON, so the redacted string is what the log exporter receives — the raw message never reaches it.
 
 ### Defense in depth (recommended for PCI workloads)
 
