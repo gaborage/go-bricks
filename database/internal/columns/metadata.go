@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -64,10 +65,15 @@ type ColumnMetadata struct {
 //	p.Col("ID")    // "p.id"
 //	cols.Col("ID") // "id" (original unaffected)
 //
-// Panics if alias is empty (fail-fast for development-time errors).
+// The alias becomes SQL syntax — every Col/Cols/All rendering emits
+// alias + "." + column — so it is validated against the same bare-identifier
+// grammar the table argument applies to the alias half of "users u" (ADR-082).
+// Anything else, an empty alias included, panics with a *dbtypes.InvalidAliasError:
+// As has no error channel, and an alias is a developer constant, so a violation is
+// a programming error surfaced at construction rather than a deferred query error.
 func (cm *ColumnMetadata) As(alias string) dbtypes.Columns {
-	if alias == "" {
-		panic("alias cannot be empty")
+	if !sqllex.IsBareIdentifier(alias) {
+		panic(&dbtypes.InvalidAliasError{Alias: alias})
 	}
 	return &ColumnMetadata{
 		TypeName:       cm.TypeName,

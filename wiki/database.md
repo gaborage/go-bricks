@@ -246,9 +246,11 @@ interpolation, and a value outside the grammar is refused.
 
 Where it surfaces depends on the shape of the call. The fluent builders cannot
 return an error mid-chain, so the violation is deferred and comes back from
-`ToSQL()`; they never panic on bad identifier content. `BuildUpsert` is the
-exception — it builds a statement directly and returns the error as its own third
-value, so a caller checking only `ToSQL()` would look in the wrong place.
+`ToSQL()`. Two doors answer elsewhere. `BuildUpsert` builds a statement directly
+and returns the error as its own third value, so a caller checking only `ToSQL()`
+would look in the wrong place. `cols.As(alias)` returns a `Columns`, not a
+builder, so it has no error channel at all and **panics** with a
+`*dbtypes.InvalidAliasError` — at the `As` call, before any statement is built.
 
 | Door | Grammar |
 | --- | --- |
@@ -257,6 +259,7 @@ value, so a caller checking only `ToSQL()` would look in the wrong place.
 | `OrderBy`, `GroupBy`, `DeleteQueryBuilder.OrderBy` | the above plus a bounded direction — `col ASC\|DESC [NULLS FIRST\|LAST]` |
 | `Select` column list | the above plus the wildcard — `*`, `t.*` |
 | **Every `Filter` and `JoinFilter` column** — `f.Eq`, `f.In`, `f.Like`, `f.Between`, `jf.EqColumn`, … | simple or qualified identifier |
+| `cols.As(alias)` — the table alias that qualifies the columns | a single bare identifier (`u`), or the framework's own quoted form (`"level"`) — **panics**, see above |
 
 ```go
 qb.Select("*").From("users").OrderBy("name ASC")          // SAFE
@@ -265,6 +268,8 @@ qb.Select("*").From("users").OrderBy(req.Query("sort"))   // REJECTED unless it 
 qb.Select("COUNT(*)")                                     // REJECTED → qb.MustExpr("COUNT(*)")
 qb.Select("1")                                            // REJECTED → qb.MustExpr("1")
 f.Eq(req.Query("field"), value)                           // REJECTED unless it is a bare column
+cols.As("u")                                              // SAFE
+cols.As("id FROM secrets--")                              // PANICS at the As call
 ```
 
 ### The Filter API parameterizes values; that is not the same as validating columns

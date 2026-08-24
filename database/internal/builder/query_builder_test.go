@@ -2718,3 +2718,35 @@ func TestClauseDoorsStopAtFirstDeferredError(t *testing.T) {
 		assert.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
 	})
 }
+
+// TestColumnAliasValidationReachesTheStatement pins the ADR-082 contract end to
+// end on both vendors: a bare alias still qualifies the column in the rendered
+// SQL, and an alias carrying SQL never produces a statement at all.
+func TestColumnAliasValidationReachesTheStatement(t *testing.T) {
+	vendors := []struct {
+		name        string
+		vendor      dbtypes.Vendor
+		expectedSQL string
+	}{
+		{name: "postgresql", vendor: dbtypes.PostgreSQL, expectedSQL: "SELECT u.id FROM users"},
+		{name: "oracle", vendor: dbtypes.Oracle, expectedSQL: "SELECT u.id FROM users"},
+	}
+
+	for _, v := range vendors {
+		t.Run(v.name, func(t *testing.T) {
+			columns.ClearGlobalRegistry()
+			defer columns.ClearGlobalRegistry()
+
+			qb := NewQueryBuilder(v.vendor)
+			cols := qb.Columns(&IntegrationUser{})
+
+			sql, _, err := qb.Select(cols.As(aliasU).Col(fieldID)).From(tableUsers).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, v.expectedSQL, sql)
+
+			assert.Panics(t, func() {
+				qb.Select(cols.As(`id FROM secrets--`).Col(fieldID)).From(tableUsers)
+			}, "a malicious alias must never reach a rendered statement")
+		})
+	}
+}

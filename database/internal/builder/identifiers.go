@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
 )
 
 // SQL identifier grammar used to validate the direct-string builder APIs
@@ -11,26 +13,13 @@ import (
 // SQL string. Validation runs on ALL vendors so these APIs cannot be used as a
 // SQL injection vector (M9 / ADR-031). Complex expressions must go through
 // qb.Expr() / Raw(), which carry an explicit security annotation.
+// The segment productions are owned by sqllex: the columns package validates
+// aliases and db tags against the same grammar and cannot import this package
+// (builder imports columns).
 const (
-	// identifierSegment is a single unquoted identifier: a leading letter or
-	// underscore followed by letters, digits, underscore, $ or # — the same
-	// alphabet enforced for db-tag struct fields by the columns package.
-	identifierSegment = `[A-Za-z_][A-Za-z0-9_$#]*`
-
-	// quotedSegment is a single double-quoted identifier with NO embedded quotes
-	// or escapes. This is exactly the shape the framework's own vendor quoting
-	// emits for reserved words (e.g. Oracle "level"); allowing it lets the
-	// type-safe Columns()/cols.Col() output flow through Set/Where unchanged while
-	// still rejecting attacker-supplied quote payloads (which would contain spaces,
-	// additional quotes, semicolons, or comment markers).
-	quotedSegment = `"` + identifierSegment + `"`
-
-	// segment matches either form.
-	segment = `(?:` + identifierSegment + `|` + quotedSegment + `)`
-
 	// qualified matches a simple or dot-qualified identifier: "col", "table.col",
 	// "schema.table.col", and the quoted variants ("schema"."number", u."level").
-	qualified = segment + `(\.` + segment + `)*`
+	qualified = sqllex.Segment + `(\.` + sqllex.Segment + `)*`
 )
 
 // validIdentifierPattern matches a simple or qualified identifier.
@@ -66,7 +55,7 @@ var validSelectIdentifierPattern = regexp.MustCompile(
 // The alias is a bare identifier; anything beyond a single trailing identifier is
 // rejected so the table argument cannot smuggle additional SQL.
 var validTableNamePattern = regexp.MustCompile(
-	`^` + qualified + `( ` + segment + `)?$`,
+	`^` + qualified + `( ` + sqllex.Segment + `)?$`,
 )
 
 // validateIdentifier rejects identifier arguments (column names, table names/
@@ -77,7 +66,7 @@ func validateIdentifier(context, identifier string) error {
 	trimmed := strings.TrimSpace(identifier)
 	if !validIdentifierPattern.MatchString(trimmed) {
 		return fmt.Errorf("invalid %s identifier %q: must be a simple or qualified identifier "+
-			"matching %s — use qb.Expr()/Raw() for complex expressions", context, identifier, identifierSegment)
+			"matching %s — use qb.Expr()/Raw() for complex expressions", context, identifier, sqllex.IdentifierSegment)
 	}
 	return nil
 }

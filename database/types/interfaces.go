@@ -392,6 +392,13 @@ type Columns interface {
 	//   u.Col("ID")  // "u.id"
 	//   p.Col("ID")  // "p.id"
 	//   cols.Col("ID") // "id" (original unaffected)
+	//
+	// The alias becomes SQL syntax, so it is validated against the same
+	// bare-identifier grammar the table argument applies to the alias half of
+	// "users u" (ADR-082). Anything else, an empty alias included, panics with a
+	// *InvalidAliasError: As has no error channel, and an alias is a developer
+	// constant, so a violation is a programming error surfaced at construction
+	// rather than a deferred ToSQL() error.
 	As(alias string) Columns
 
 	// Alias returns the current table alias, or empty string if unaliased.
