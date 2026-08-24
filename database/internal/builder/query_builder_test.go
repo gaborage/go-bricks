@@ -2775,3 +2775,76 @@ func TestColumnAliasValidationReachesTheStatement(t *testing.T) {
 		})
 	}
 }
+
+func TestInsertQueryBuilderColumnsQuoting(t *testing.T) {
+	t.Run("oracle_quotes_reserved_words", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		sql, args, err := qb.Insert(tableAccounts).Columns(colID, colLevel).Values(1, 3).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, `INSERT INTO accounts (id,"level") VALUES (:1,:2)`, sql)
+		assert.Equal(t, []any{1, 3}, args)
+	})
+
+	t.Run("oracle_leaves_non_reserved_mixed_case_verbatim", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		sql, _, err := qb.Insert(tableAccounts).Columns("accountRef").Values(1).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, `INSERT INTO accounts (accountRef) VALUES (:1)`, sql)
+	})
+
+	t.Run("postgresql_is_byte_identical", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, _, err := qb.Insert(tableAccounts).Columns(colID, colLevel).Values(1, 3).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "INSERT INTO accounts (id,level) VALUES ($1,$2)", sql)
+	})
+
+	t.Run("invalid_identifier_still_fails_validation", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		_, _, err := qb.Insert(tableAccounts).Columns("id = 1 OR 1=1 -- ").Values(1).ToSQL()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "insert column")
+	})
+}
+
+func TestInsertQueryBuilderSetMapQuoting(t *testing.T) {
+	t.Run("oracle_quotes_reserved_words", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		// "id" sorts before "level", so the emitted order pins that the keys are
+		// sorted BEFORE quoting: sorting the quoted forms would put the leading
+		// quote of "level" first and render ("level",id).
+		sql, args, err := qb.Insert(tableAccounts).SetMap(map[string]any{colLevel: 3, colID: 1}).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, `INSERT INTO accounts (id,"level") VALUES (:1,:2)`, sql)
+		assert.Equal(t, []any{1, 3}, args)
+	})
+
+	t.Run("postgresql_is_byte_identical", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, args, err := qb.Insert(tableAccounts).SetMap(map[string]any{colLevel: 3, colID: 1}).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "INSERT INTO accounts (id,level) VALUES ($1,$2)", sql)
+		assert.Equal(t, []any{1, 3}, args)
+	})
+
+	t.Run("invalid_identifier_still_fails_validation", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.Oracle)
+
+		_, _, err := qb.Insert(tableAccounts).SetMap(map[string]any{"id); DROP TABLE users --": 1}).ToSQL()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "SetMap column")
+	})
+}

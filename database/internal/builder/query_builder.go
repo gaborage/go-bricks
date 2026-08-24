@@ -50,6 +50,13 @@ var _ dbtypes.SelectQueryBuilder = (*SelectQueryBuilder)(nil)
 // All chaining methods return the dbtypes.InsertQueryBuilder interface so users
 // see a consistent ToSQL()-based surface across SELECT/INSERT/UPDATE/DELETE.
 type InsertQueryBuilder struct {
+	// qb is the owning builder, held for the vendor's column quoting: Columns and
+	// SetMap have to reach the same funnel InsertWithColumns uses, and the insert
+	// builder carries no vendor of its own — which is why the doors diverged
+	// (#1154). Set on BOTH newInsertBuilder branches, the failure one included:
+	// Columns and SetMap re-check only the identifiers just handed to them, so a
+	// builder whose TABLE failed validation still reaches this field.
+	qb            *QueryBuilder
 	insertBuilder squirrel.InsertBuilder
 	err           error // deferred error surfaced by ToSQL()
 }
@@ -299,9 +306,9 @@ func (qb *QueryBuilder) Insert(table string) dbtypes.InsertQueryBuilder {
 // mutating a builder that carries no statement.
 func (qb *QueryBuilder) newInsertBuilder(context, table string) *InsertQueryBuilder {
 	if err := validateTableName(table); err != nil {
-		return &InsertQueryBuilder{err: fmt.Errorf("%s: %w", context, err)}
+		return &InsertQueryBuilder{qb: qb, err: fmt.Errorf("%s: %w", context, err)}
 	}
-	return &InsertQueryBuilder{insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table))}
+	return &InsertQueryBuilder{qb: qb, insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table))}
 }
 
 // InsertWithColumns creates an INSERT query builder with pre-specified columns.
@@ -1450,7 +1457,7 @@ func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBui
 		}
 		return iqb
 	}
-	iqb.insertBuilder = iqb.insertBuilder.Columns(columns...)
+	iqb.insertBuilder = iqb.insertBuilder.Columns(iqb.qb.quoteColumnsForDML(columns...)...)
 	return iqb
 }
 
@@ -1464,13 +1471,20 @@ func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQuer
 	// ADR-031. That the two disagreed is the defect ADR-082 names: one shape, two
 	// builders, opposite safety, nothing in either signature to tell them apart.
 	// sortedKeys keeps the reported column deterministic when several are invalid.
-	if err := validateIdentifiers("SetMap column", sortedKeys(clauses)); err != nil {
+	keys := sortedKeys(clauses)
+	if err := validateIdentifiers("SetMap column", keys); err != nil {
 		if iqb.err == nil {
 			iqb.err = err
 		}
 		return iqb
 	}
-	iqb.insertBuilder = iqb.insertBuilder.SetMap(clauses)
+	// Not squirrel's SetMap: it sorts the keys it is handed, so quoting first
+	// would order Oracle's columns by the leading quote ("level" ahead of id)
+	// rather than by name. Sorting the caller's names first and quoting in that
+	// order keeps the column order both vendors emit today.
+	iqb.insertBuilder = iqb.insertBuilder.
+		Columns(iqb.qb.quoteColumnsForDML(keys...)...).
+		Values(valuesByKeyOrder(clauses, keys)...)
 	return iqb
 }
 
