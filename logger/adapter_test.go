@@ -952,6 +952,26 @@ func TestLogEventAdapterErrNilErrorSkipsRedactor(t *testing.T) {
 	assert.NotContains(t, line, zerolog.ErrorFieldName, "a nil error must emit no error field")
 }
 
+func TestLogEventAdapterErrDisabledLevelSkipsRedactor(t *testing.T) {
+	// zerolog drops the field anyway at a disabled level; a redactor is
+	// unbounded consumer code, so it must not run to produce a dropped value.
+	calls := 0
+	config := DefaultFilterConfig()
+	config.ErrorRedactor = func(error) string {
+		calls++
+		return "[redacted]"
+	}
+
+	var buf bytes.Buffer
+	zl := zerolog.New(&buf).Level(zerolog.WarnLevel)
+	log := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(config)}
+
+	log.Debug().Err(errors.New(testutil.TestError)).Msg("dropped")
+
+	assert.Zero(t, calls, "a disabled event must not reach the redactor")
+	assert.Empty(t, buf.String(), "a disabled event must emit nothing")
+}
+
 func TestLogEventAdapterErrRedactorLeavesOtherDoorsUnchanged(t *testing.T) {
 	// The hook is scoped to the Err seam: Interface, WithFields and Msgf keep
 	// rendering an error exactly as they do with no redactor configured.

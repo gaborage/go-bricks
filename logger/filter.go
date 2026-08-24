@@ -118,6 +118,17 @@ func NewSensitiveDataFilter(config *FilterConfig) *SensitiveDataFilter {
 	return &SensitiveDataFilter{config: config, needles: needles}
 }
 
+// redactError applies the configured ErrorRedactor, reporting whether one ran.
+// The decision lives on the filter, next to FilterString and FilterValue, so the
+// adapter never reads FilterConfig's fields itself. Nil-receiver safe: a logger
+// built without a filter has no redactor.
+func (f *SensitiveDataFilter) redactError(err error) (string, bool) {
+	if f == nil || f.config.ErrorRedactor == nil {
+		return "", false
+	}
+	return f.config.ErrorRedactor(err), true
+}
+
 // normalizeNeedles lowercases and trims a needle list, dropping entries that are
 // empty afterwards and de-duplicating the rest. An empty needle is not a
 // harmless no-op: strings.Contains reports true against it for every field name,

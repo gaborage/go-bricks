@@ -158,6 +158,7 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		custom := &logger.FilterConfig{
 			SensitiveFields: []string{"pan"},
 			MaskValue:       "XXX",
+			ErrorRedactor:   func(error) string { return "[redacted]" },
 		}
 		got := resolveLoggerFilterConfig(
 			&Options{LoggerFilterConfig: custom},
@@ -167,6 +168,8 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		assert.Same(t, custom, got, "options config should be returned verbatim")
 		assert.Equal(t, []string{"pan"}, got.SensitiveFields)
 		assert.Equal(t, "XXX", got.MaskValue)
+		require.NotNil(t, got.ErrorRedactor)
+		assert.Equal(t, "[redacted]", got.ErrorRedactor(assert.AnError))
 	})
 
 	t.Run("options_filter_can_opt_out_entirely", func(t *testing.T) {
@@ -206,18 +209,6 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		got := resolveLoggerFilterConfig(nil, &config.LogConfig{SensitiveFields: []string{"pan"}})
 		require.NotNil(t, got)
 		assert.Nil(t, got.ErrorRedactor)
-	})
-
-	t.Run("options_error_redactor_is_returned_verbatim", func(t *testing.T) {
-		custom := logger.DefaultFilterConfig()
-		custom.ErrorRedactor = func(error) string { return "[redacted]" }
-		got := resolveLoggerFilterConfig(
-			&Options{LoggerFilterConfig: custom},
-			&config.LogConfig{SensitiveFields: []string{"cvv2"}},
-		)
-		require.NotNil(t, got)
-		require.NotNil(t, got.ErrorRedactor)
-		assert.Equal(t, "[redacted]", got.ErrorRedactor(assert.AnError))
 	})
 
 	t.Run("empty_config_sensitive_fields_returns_nil", func(t *testing.T) {

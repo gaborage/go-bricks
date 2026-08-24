@@ -43,12 +43,18 @@ func (lea *LogEventAdapter) Msgf(format string, args ...any) {
 // Err adds an error to the log event
 func (lea *LogEventAdapter) Err(err error) LogEvent {
 	// A nil err emits nothing (zerolog's own behavior) and never reaches the
-	// redactor. Redaction writes the returned string under the same field name
-	// zerolog's Err would have used, bypassing FilterString: the value is
-	// already the consumer's redacted rendering, not raw field content.
-	if err != nil && lea.filter != nil && lea.filter.config.ErrorRedactor != nil {
-		lea.event = lea.event.Str(zerolog.ErrorFieldName, lea.filter.config.ErrorRedactor(err))
-		return lea
+	// redactor. Neither does a disabled level: zerolog hands back a nil *Event
+	// there and drops the field, but a redactor is unbounded consumer code, so
+	// the framework checks before paying for it rather than after — unlike the
+	// bounded needle lookups the other typed methods run. Redaction writes the
+	// returned string under the same field name zerolog's Err would have used,
+	// bypassing FilterString: the value is already the consumer's redacted
+	// rendering, not raw field content.
+	if err != nil && lea.event != nil {
+		if redacted, ok := lea.filter.redactError(err); ok {
+			lea.event = lea.event.Str(zerolog.ErrorFieldName, redacted)
+			return lea
+		}
 	}
 	lea.event = lea.event.Err(err)
 	return lea
