@@ -117,6 +117,21 @@ with the vendor environment as its production adapter and an in-memory fake
 for tests.
 _Avoid_: env, client (ambiguous with the AMQP client), connection
 
+### Observability
+
+**Sink**:
+A place a framework-reported value ends up: a log field, a span exception
+event, a span status description, an audit event. A value the framework reports
+once may reach several sinks, and each sink is judged on its own.
+_Avoid_: destination, backend, exporter, output
+
+**Off-platform sink**:
+A sink whose retention, access model and export path the operator does not
+control — today, span exception events and span status descriptions, which
+leave with the tracing exporter. A log field is on-platform: the operator owns
+its retention and the sensitive-data filter sees it.
+_Avoid_: external, third-party, remote
+
 ### Query building
 
 **Identifier argument**:
