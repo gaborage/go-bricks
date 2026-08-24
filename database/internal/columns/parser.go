@@ -10,7 +10,9 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-var validDBTagPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$#]*$`)
+// validDBTagPattern judges a db tag against the same alphabet every identifier
+// door validates against, sourced from sqllex rather than spelled again here.
+var validDBTagPattern = regexp.MustCompile(`^` + sqllex.IdentifierSegment + `$`)
 
 // oracleQuoteIdentifier applies Oracle-specific quoting rules to an identifier.
 // Reserved words are quoted with double quotes using the canonical list from sqllex package.

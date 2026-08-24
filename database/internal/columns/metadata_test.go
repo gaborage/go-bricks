@@ -389,18 +389,6 @@ func TestColumnMetadataMultipleAliasesPanic(t *testing.T) {
 	})
 }
 
-// TestAsPanicsOnEmptyAlias pins the documented fail-fast behavior: the
-// As() helper panics rather than returning an unaliased clone, so a
-// caller passing an empty string sees the bug at development time.
-func TestAsPanicsOnEmptyAlias(t *testing.T) {
-	cm, err := parseStruct(dbtypes.PostgreSQL, &ValidUser{})
-	require.NoError(t, err)
-
-	assert.PanicsWithValue(t, "alias cannot be empty", func() {
-		cm.As("")
-	})
-}
-
 func TestAliasReturnsEmptyWhenUnaliased(t *testing.T) {
 	cm, err := parseStruct(dbtypes.PostgreSQL, &ValidUser{})
 	require.NoError(t, err)
@@ -526,4 +514,68 @@ func TestExtractStructValuePanicsOnTypeMismatch(t *testing.T) {
 	assert.Panics(t, func() {
 		cm.FieldMap(&NoDBTags{})
 	}, "passing a different struct type must panic with a type-mismatch error")
+}
+
+// TestAsRejectsAliasesOutsideTheIdentifierGrammar pins the ADR-082 contract at
+// the As door: the alias becomes SQL syntax, so it is validated against the same
+// bare-identifier grammar the table argument applies to the alias half of
+// "users u". A violation panics with a typed error, never a rendered statement.
+func TestAsRejectsAliasesOutsideTheIdentifierGrammar(t *testing.T) {
+	cm, err := parseStruct(dbtypes.PostgreSQL, &ValidUser{})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		alias string
+	}{
+		{name: "empty", alias: ""},
+		{name: "table_swap_via_comment", alias: `id FROM secrets--`},
+		{name: "qualified", alias: "u.x"},
+		{name: "two_tokens", alias: "u x"},
+		{name: "statement_terminator", alias: "u;"},
+		{name: "interior_quote", alias: `u"x`},
+		{name: "unbalanced_quote", alias: `"u`},
+		{name: "leading_space", alias: " u"},
+		{name: "trailing_space", alias: "u "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var recovered any
+			func() {
+				defer func() { recovered = recover() }()
+				cm.As(tt.alias)
+			}()
+
+			require.NotNil(t, recovered, "As(%q) must panic", tt.alias)
+			var invalid *dbtypes.InvalidAliasError
+			require.ErrorAs(t, recovered.(error), &invalid, "panic value must be a typed error")
+			assert.Equal(t, tt.alias, invalid.Alias)
+		})
+	}
+}
+
+// TestAsAcceptsBareAndFrameworkQuotedAliases pins the accepted half of the same
+// grammar: a bare identifier and the framework's own quoted reserved-word form
+// both qualify columns exactly as before.
+func TestAsAcceptsBareAndFrameworkQuotedAliases(t *testing.T) {
+	cm, err := parseStruct(dbtypes.PostgreSQL, &ValidUser{})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		alias    string
+		expected string
+	}{
+		{name: "single_letter", alias: "u", expected: "u.id"},
+		{name: "underscore_lead", alias: "_u1", expected: "_u1.id"},
+		{name: "dollar_and_hash", alias: "u$1#a", expected: "u$1#a.id"},
+		{name: "framework_quoted", alias: `"level"`, expected: `"level".id`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, cm.As(tt.alias).Col("ID"))
+		})
+	}
 }

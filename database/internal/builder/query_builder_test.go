@@ -2660,36 +2660,51 @@ func TestRawExpressionLiteralRendersLikeMustExpr(t *testing.T) {
 func TestClauseDoorsStopAtFirstDeferredError(t *testing.T) {
 	badExpr := dbtypes.RawExpression{SQL: ""}
 
+	// clauseGrammarPrefix is what validateClauseIdentifier returns for a string
+	// outside the grammar. It has no sentinel, so the door is pinned by the
+	// message's leading, value-bearing part rather than by a substring that the
+	// trailing float could also satisfy.
+	const clauseGrammarPrefix = `invalid orderBy identifier "id; DROP TABLE users--":`
+
 	doors := []struct {
-		name  string
-		build func(qb *QueryBuilder) dbtypes.SelectQueryBuilder
+		name string
+		// wantErr is the sentinel the door must report first; wantPrefix is used
+		// instead where the door returns a formatted error with no sentinel.
+		wantErr    error
+		wantPrefix string
+		build      func(qb *QueryBuilder) dbtypes.SelectQueryBuilder
 	}{
 		{
-			name: "order_by_variadic",
+			name:    "order_by_variadic",
+			wantErr: dbtypes.ErrEmptyExpressionSQL,
 			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
 				return qb.Select("id").From("users").OrderBy(badExpr, 3.14)
 			},
 		},
 		{
-			name: "group_by_variadic",
+			name:    "group_by_variadic",
+			wantErr: dbtypes.ErrEmptyExpressionSQL,
 			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
 				return qb.Select("id").From("users").GroupBy(badExpr, 3.14)
 			},
 		},
 		{
-			name: "order_by_slice",
+			name:    "order_by_slice",
+			wantErr: dbtypes.ErrEmptyExpressionSQL,
 			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
 				return qb.Select("id").From("users").OrderBy([]any{badExpr, 3.14})
 			},
 		},
 		{
-			name: "group_by_slice",
+			name:    "group_by_slice",
+			wantErr: dbtypes.ErrEmptyExpressionSQL,
 			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
 				return qb.Select("id").From("users").GroupBy([]any{badExpr, 3.14})
 			},
 		},
 		{
-			name: "order_by_bad_string_then_float",
+			name:       "order_by_bad_string_then_float",
+			wantPrefix: clauseGrammarPrefix,
 			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
 				return qb.Select("id").From("users").OrderBy("id; DROP TABLE users--", 3.14)
 			},
@@ -2707,6 +2722,16 @@ func TestClauseDoorsStopAtFirstDeferredError(t *testing.T) {
 			require.Error(t, err)
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
+
+			// Assert WHICH error, not merely that one came back: a later
+			// unsupported-type error replacing this door's first validation
+			// failure would otherwise pass unnoticed.
+			if door.wantErr != nil {
+				assert.ErrorIs(t, err, door.wantErr)
+			} else {
+				assert.True(t, strings.HasPrefix(err.Error(), door.wantPrefix),
+					"error %q must start with %q", err.Error(), door.wantPrefix)
+			}
 		})
 	}
 
@@ -2717,4 +2742,36 @@ func TestClauseDoorsStopAtFirstDeferredError(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
 	})
+}
+
+// TestColumnAliasValidationReachesTheStatement pins the ADR-082 contract end to
+// end on both vendors: a bare alias still qualifies the column in the rendered
+// SQL, and an alias carrying SQL never produces a statement at all.
+func TestColumnAliasValidationReachesTheStatement(t *testing.T) {
+	vendors := []struct {
+		name        string
+		vendor      dbtypes.Vendor
+		expectedSQL string
+	}{
+		{name: "postgresql", vendor: dbtypes.PostgreSQL, expectedSQL: "SELECT u.id FROM users"},
+		{name: "oracle", vendor: dbtypes.Oracle, expectedSQL: "SELECT u.id FROM users"},
+	}
+
+	for _, v := range vendors {
+		t.Run(v.name, func(t *testing.T) {
+			columns.ClearGlobalRegistry()
+			defer columns.ClearGlobalRegistry()
+
+			qb := NewQueryBuilder(v.vendor)
+			cols := qb.Columns(&IntegrationUser{})
+
+			sql, _, err := qb.Select(cols.As(aliasU).Col(fieldID)).From(tableUsers).ToSQL()
+			require.NoError(t, err)
+			assert.Equal(t, v.expectedSQL, sql)
+
+			assert.Panics(t, func() {
+				qb.Select(cols.As(`id FROM secrets--`).Col(fieldID)).From(tableUsers)
+			}, "a malicious alias must never reach a rendered statement")
+		})
+	}
 }

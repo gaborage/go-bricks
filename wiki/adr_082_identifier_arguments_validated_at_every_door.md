@@ -43,7 +43,84 @@ input by contract.
 
 See `[C60.29]` in [migrations.md](migrations.md).
 
+## Addendum (2026-08-23): `Columns.As` is a validated door, and it panics
+
+`ColumnMetadata.As(alias)` checked only that the alias was non-empty, then every
+`Col`/`Cols`/`All`/`FieldMap`/`AllFields` rendering emitted `alias + "." + column`
+verbatim. As filed, an alias of `id FROM secrets--` produced
+`SELECT id FROM secrets--.id FROM users` on PostgreSQL, which executes as
+`SELECT id FROM secrets` — a working table swap; Oracle quoted the alias and
+contained it (#1150).
+
+**What the earlier stages already changed about that repro, measured rather than
+assumed.** By the time this door lands, `Select` refuses the RENDERED string
+`id FROM secrets--.id` on both vendors, and so do the Filter columns and the
+INSERT column lists. So the filed repro no longer builds. What survives is the
+shape of the refusal: the alias is caught LATE, by whichever door the rendered
+column happens to reach, and only if that door validates. `Having` does not and
+is not meant to — it is a raw-SQL door (#1146), and
+`Having(u.Col("ID"))` still carries the alias into the statement unexamined, as
+does anything a consumer renders into its own SQL. Validating at `As` is what
+makes the door that OWNS the alias refuse it, rather than leaving the outcome to
+where the string later lands.
+
+The door was missed by the census that produced this ADR because the sweep was
+scoped by *name*: `As` is not a `FilterFactory` method, not a `Select` column, and
+not a table argument. That an alias is an identifier argument is what the
+`CONTEXT.md` glossary says; that no sweep asked the glossary's question is the
+gap. **An identifier context belongs to the door, not to the door's package** —
+the alias half of `"users u"` and the alias handed to `As` are the same production
+whether or not one grep finds both.
+
+**`As` validates against the ADR-031 bare-identifier grammar and panics on a
+violation.** It returns a `Columns`, not a builder, so it has no deferred-error
+channel and cannot join the `ToSQL()` route the rest of this ADR uses; giving it
+one would change the `Columns` interface. A panic is also what the door already
+did for an empty alias, so the contract widens rather than changes shape: an
+alias is a developer constant, and a violation is a programming error at
+construction.
+
+**One guard covers five renderings because it sits on the only writer.** `Col`,
+`Cols`, `All`, `FieldMap` and `AllFields` each concatenate `alias + "." + column`,
+and none of them is guarded. They do not need to be: `alias` is an unexported
+field, and the package constructs a `ColumnMetadata` in exactly two places — the
+parser, which sets it to `""`, and `As`. So no value reaches those five sites
+without passing the door. That is the property to re-check before adding a
+third constructor or an exported setter, not the five render sites themselves —
+this ADR's funnel argument applies to doors that take an argument, and here there
+is only one.
+
+**The panic value is a typed error, `*dbtypes.InvalidAliasError`, not a string.**
+ADR-081 requires a recovery site to report a recovered value by TYPE; a bare
+string reports as `string`, which names nothing, and rendering it by value would
+put the refused alias — the one caller-derived thing in the frame — into a log
+line. The type carries the alias in a field a caller can read deliberately via
+`errors.As`, and says nothing when reported by `%T`.
+
+**The grammar moved rather than being copied.** The predicate now lives in
+`database/internal/sqllex`, and every judge inside `database/` imports it: the
+builder cannot own it because the columns package cannot import the builder (the
+builder imports the columns package), and a second copy of an injection-boundary
+grammar is the defect this ADR exists to stop. The move also collapsed a copy that
+predates this door — the columns package's own `validDBTagPattern`, which spelled
+the same alphabet a third time for `db` tags. One copy remains and cannot be
+collapsed: `internal/sqlid` sits outside `database/`, so Go's internal-package
+visibility forbids it importing `database/internal/sqllex` at all. Naming that
+here is the point — an uncollapsible copy that nobody has written down is how the
+two drift. `As` deliberately does NOT trim its argument before
+matching — validating a trimmed value while rendering the untrimmed one is the
+disagreement `validateSelectIdentifier` documents above, so `As(" u ")` is
+refused rather than silently accepted and rendered with its spaces.
+
+**Consequence (breaking):** `cols.As(alias)` panics for any alias that is not a
+single bare or framework-quoted identifier. The empty-alias panic value changes
+from the string `"alias cannot be empty"` to `*dbtypes.InvalidAliasError`, so a
+test asserting the old value fails. See `[C60.28]`.
+
 ## Context
+
+*Context, Decision and Consequences below are the record as accepted; the
+addendum above amends them.*
 
 ADR-031 closed the M9 identifier-injection class on `From`, the JOIN table family,
 `OrderBy`, `GroupBy`, `UpdateQueryBuilder.Set`/`SetMap` and

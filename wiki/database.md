@@ -246,9 +246,11 @@ interpolation, and a value outside the grammar is refused.
 
 Where it surfaces depends on the shape of the call. The fluent builders cannot
 return an error mid-chain, so the violation is deferred and comes back from
-`ToSQL()`; they never panic on bad identifier content. `BuildUpsert` is the
-exception — it builds a statement directly and returns the error as its own third
-value, so a caller checking only `ToSQL()` would look in the wrong place.
+`ToSQL()`. Two doors answer elsewhere. `BuildUpsert` builds a statement directly
+and returns the error as its own third value, so a caller checking only `ToSQL()`
+would look in the wrong place. `cols.As(alias)` returns a `Columns`, not a
+builder, so it has no error channel at all and **panics** with a
+`*dbtypes.InvalidAliasError` — at the `As` call, before any statement is built.
 
 | Door | Grammar |
 | --- | --- |
@@ -257,6 +259,7 @@ value, so a caller checking only `ToSQL()` would look in the wrong place.
 | `OrderBy`, `GroupBy`, `DeleteQueryBuilder.OrderBy` | the above plus a bounded direction — `col ASC\|DESC [NULLS FIRST\|LAST]` |
 | `Select` column list | the above plus the wildcard — `*`, `t.*` |
 | **Every `Filter` and `JoinFilter` column** — `f.Eq`, `f.In`, `f.Like`, `f.Between`, `jf.EqColumn`, … | simple or qualified identifier |
+| `cols.As(alias)` — the table alias that qualifies the columns | a single bare identifier (`u`), or the framework's own quoted form (`"level"`) — **panics**, see above |
 
 ```go
 qb.Select("*").From("users").OrderBy("name ASC")          // SAFE
@@ -265,6 +268,8 @@ qb.Select("*").From("users").OrderBy(req.Query("sort"))   // REJECTED unless it 
 qb.Select("COUNT(*)")                                     // REJECTED → qb.MustExpr("COUNT(*)")
 qb.Select("1")                                            // REJECTED → qb.MustExpr("1")
 f.Eq(req.Query("field"), value)                           // REJECTED unless it is a bare column
+cols.As("u")                                              // SAFE
+cols.As("id FROM secrets--")                              // PANICS at the As call
 ```
 
 ### The Filter API parameterizes values; that is not the same as validating columns
@@ -288,11 +293,12 @@ the builder. The grammar will not accept a computed one.
   `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape.
 - **`qb.Expr()` / `MustExpr()`** are the declared expression hatches: they exist
   to carry SQL the grammar refuses, and the builder still places what they
-  produce. They carry no annotation requirement. Their SQL is never validated,
-  but the rest of a `RawExpression` is — a struct literal built without the
-  constructor is validated where it is consumed, so an empty SQL body or an alias
-  carrying `;`, `'`, `"`, `--`, `/*` or `*/` fails from `ToSQL()` (ADR-082
-  addendum).
+  produce. They carry no annotation requirement. The builder judges neither the
+  syntax nor the semantics of the SQL they carry — it does reject an empty or
+  whitespace-only body — and the rest of a `RawExpression` is validated too: a
+  struct literal built without the constructor is checked where it is consumed,
+  so an empty SQL body or an alias carrying `;`, `'`, `"`, `--`, `/*` or `*/`
+  fails from `ToSQL()` (ADR-082 addendum).
 - **`f.Raw()`, `jf.Raw()` and `database.Raw()`** do. Each admits arbitrary SQL —
   the first two a WHERE/JOIN fragment, `database.Raw` the whole statement — and
   each requires an inline `// SECURITY: Manual SQL review completed - <rationale>`
