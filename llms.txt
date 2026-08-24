@@ -4980,6 +4980,15 @@ log.Fatal(fw.Run())
 fw, _, err = app.NewWithOptions(&app.Options{
     LoggerFilterConfig: &logger.FilterConfig{SensitiveFields: nil},
 })
+
+// Redact error MESSAGES (field-name masking cannot see inside them). Applies to
+// every LogEvent.Err(err) call, the framework's own included. Nil (the default)
+// keeps Err output unchanged; there is no YAML door, the value is a function.
+base = logger.DefaultFilterConfig()
+base.ErrorRedactor = func(err error) string {
+    return panRegexp.ReplaceAllString(err.Error(), "****")
+}
+fw, _, err = app.NewWithOptions(&app.Options{LoggerFilterConfig: base})
 ```
 
 **Matching semantics:**
@@ -4988,7 +4997,7 @@ fw, _, err = app.NewWithOptions(&app.Options{
 - URL values whose key is masked get the password stripped but path/host preserved: `https://user:pwd@host/path?token=x` → `https://user:***@host/path?token=x`.
 
 **What this does *not* do:**
-- It does not scan string values for PAN-shaped digit sequences (no Luhn detection). Defense-in-depth value scrubbing belongs in application code.
+- It does not scan string values for PAN-shaped digit sequences (no Luhn detection). Defense-in-depth value scrubbing belongs in application code; for `Err(err)` messages specifically, set `FilterConfig.ErrorRedactor`.
 - It does not cover per-tenant policies — the filter is configured once at bootstrap and applied to every log line uniformly.
 
 ### Dual-Mode Logging — Action vs Trace Logs

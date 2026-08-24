@@ -27,6 +27,17 @@ type FilterConfig struct {
 	SensitiveFields []string
 	// MaskValue is the value used to replace sensitive data (default: "***")
 	MaskValue string
+	// ErrorRedactor, when non-nil, replaces the message written by
+	// LogEvent.Err(err) with its return value. Field-name masking cannot see
+	// inside an error message, and the framework calls Err with
+	// consumer-authored errors at dozens of sites, so a consumer-side scrub
+	// helper never reaches those lines without this seam. Nil (the default,
+	// and what DefaultFilterConfig returns) keeps Err byte-identical to
+	// zerolog's own rendering. Code door only: app.Options.LoggerFilterConfig,
+	// which replaces the whole config — start from DefaultFilterConfig() and
+	// set this field. The YAML log.sensitivefields merge path leaves it nil,
+	// the value being a function.
+	ErrorRedactor func(error) string
 }
 
 // DefaultFilterConfig returns a default configuration with common sensitive field names

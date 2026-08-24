@@ -1444,3 +1444,9 @@ func TestRewritesTypeHasNoFalseNegatives(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultFilterConfigHasNoErrorRedactor(t *testing.T) {
+	// The framework ships no scrubbing pattern of its own: the seam is inert
+	// until a consumer sets it.
+	assert.Nil(t, DefaultFilterConfig().ErrorRedactor)
+}

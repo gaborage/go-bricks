@@ -199,6 +199,27 @@ func TestResolveLoggerFilterConfig(t *testing.T) {
 		assert.Equal(t, len(defaults)+3, len(got.SensitiveFields))
 	})
 
+	t.Run("yaml_merge_path_leaves_error_redactor_nil", func(t *testing.T) {
+		// The redactor is a function, so it has no YAML door: the merge path
+		// must hand the logger a config whose redactor is nil, keeping Err
+		// output unchanged for every consumer who never opted in from code.
+		got := resolveLoggerFilterConfig(nil, &config.LogConfig{SensitiveFields: []string{"pan"}})
+		require.NotNil(t, got)
+		assert.Nil(t, got.ErrorRedactor)
+	})
+
+	t.Run("options_error_redactor_is_returned_verbatim", func(t *testing.T) {
+		custom := logger.DefaultFilterConfig()
+		custom.ErrorRedactor = func(error) string { return "[redacted]" }
+		got := resolveLoggerFilterConfig(
+			&Options{LoggerFilterConfig: custom},
+			&config.LogConfig{SensitiveFields: []string{"cvv2"}},
+		)
+		require.NotNil(t, got)
+		require.NotNil(t, got.ErrorRedactor)
+		assert.Equal(t, "[redacted]", got.ErrorRedactor(assert.AnError))
+	})
+
 	t.Run("empty_config_sensitive_fields_returns_nil", func(t *testing.T) {
 		// An empty slice is treated the same as no override — caller falls
 		// through to DefaultFilterConfig via NewWithFilter(nil).
@@ -318,6 +339,37 @@ func TestAppBuilderCreateLoggerWithFilterConfig(t *testing.T) {
 		assert.Contains(t, output, `"name":"john"`, "a non-sensitive field must survive")
 		assert.Contains(t, output, `"pan":"***"`, "the named needle must still mask")
 	})
+}
+
+func TestAppBuilderErrorRedactorReachesFrameworkErrSites(t *testing.T) {
+	// End-to-end through the builder: a redactor set on the code door must
+	// govern an Err(err) call the framework itself makes, which is the whole
+	// point of the seam — a consumer-side scrub helper never reaches those.
+	const badIP = "not-an-ip"
+
+	cfg := defaultTestConfig()
+	opts := &Options{LoggerFilterConfig: redactingFilterConfig()}
+
+	var buildErr error
+	output := captureAppStdout(t, func() {
+		result := NewAppBuilder().WithConfig(cfg, opts).CreateLogger()
+		if buildErr = result.err; buildErr != nil {
+			return
+		}
+		NewIPWhitelist([]string{badIP}, result.logger)
+	})
+	require.NoError(t, buildErr)
+
+	assert.Contains(t, output, `"error":"[redacted]"`)
+	assert.NotContains(t, output, "invalid CIDR address", "the raw error message must not reach the sink")
+}
+
+// redactingFilterConfig is the documented code-door shape: start from the
+// defaults, then set the redactor.
+func redactingFilterConfig() *logger.FilterConfig {
+	base := logger.DefaultFilterConfig()
+	base.ErrorRedactor = func(error) string { return "[redacted]" }
+	return base
 }
 
 // captureAppStdout redirects os.Stdout for the duration of fn and returns

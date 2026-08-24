@@ -42,6 +42,14 @@ func (lea *LogEventAdapter) Msgf(format string, args ...any) {
 
 // Err adds an error to the log event
 func (lea *LogEventAdapter) Err(err error) LogEvent {
+	// A nil err emits nothing (zerolog's own behavior) and never reaches the
+	// redactor. Redaction writes the returned string under the same field name
+	// zerolog's Err would have used, bypassing FilterString: the value is
+	// already the consumer's redacted rendering, not raw field content.
+	if err != nil && lea.filter != nil && lea.filter.config.ErrorRedactor != nil {
+		lea.event = lea.event.Str(zerolog.ErrorFieldName, lea.filter.config.ErrorRedactor(err))
+		return lea
+	}
 	lea.event = lea.event.Err(err)
 	return lea
 }
