@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -737,32 +738,44 @@ func TestJSONCodecSummarize(t *testing.T) {
 	syntaxOffset := int64(1)
 
 	tests := []struct {
-		name        string
-		err         error
-		want        string
-		notContains string
+		name              string
+		err               error
+		fieldPathIsSchema bool
+		want              string
+		notContains       string
 	}{
 		{
-			name:        "unmarshal_type_error",
+			name:              "unmarshal_type_error",
+			err:               typeErr,
+			fieldPathIsSchema: true,
+			want:              `json: type mismatch at field "amount" (want int64, offset 18)`,
+			notContains:       numericMarker,
+		},
+		{
+			// Same error, gate off: the field path goes, the schema facts stay.
+			name:        "unmarshal_type_error_field_path_gated_off",
 			err:         typeErr,
-			want:        `json: type mismatch at field "amount" (want int64, offset 18)`,
-			notContains: numericMarker,
+			want:        "json: type mismatch (want int64, offset 18)",
+			notContains: "amount",
 		},
 		{
-			name:        "wrapped_unmarshal_type_error",
-			err:         fmt.Errorf("decode: %w", typeErr),
-			want:        `json: type mismatch at field "amount" (want int64, offset 18)`,
-			notContains: numericMarker,
+			name:              "wrapped_unmarshal_type_error",
+			err:               fmt.Errorf("decode: %w", typeErr),
+			fieldPathIsSchema: true,
+			want:              `json: type mismatch at field "amount" (want int64, offset 18)`,
+			notContains:       numericMarker,
 		},
 		{
-			name: "unmarshal_type_error_without_field",
-			err:  fieldlessTypeError(t),
-			want: "json: type mismatch (want messaging.orderPayload, offset 3)",
+			name:              "unmarshal_type_error_without_field",
+			err:               fieldlessTypeError(t),
+			fieldPathIsSchema: true,
+			want:              "json: type mismatch (want messaging.orderPayload, offset 3)",
 		},
 		{
-			name: "unmarshal_type_error_without_type",
-			err:  &json.UnmarshalTypeError{Value: "object", Offset: 2},
-			want: "json: type mismatch (want unknown, offset 2)",
+			name:              "unmarshal_type_error_without_type",
+			err:               &json.UnmarshalTypeError{Value: "object", Offset: 2},
+			fieldPathIsSchema: true,
+			want:              "json: type mismatch (want unknown, offset 2)",
 		},
 		{
 			name: "syntax_error",
@@ -789,7 +802,7 @@ func TestJSONCodecSummarize(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := jsonCodec{}.summarize(tc.err)
+			got := jsonCodec{}.summarize(tc.err, tc.fieldPathIsSchema)
 			assert.Equal(t, tc.want, got)
 			if tc.notContains != "" {
 				assert.NotContains(t, got, tc.notContains)
@@ -828,4 +841,114 @@ func syntaxError(t *testing.T, wantOffset int64) *json.SyntaxError {
 	require.Equal(t, wantOffset, syntaxErr.Offset)
 
 	return syntaxErr
+}
+
+// selfRefNoMap and selfRefWithMap pin that the walk terminates on a cycle
+// rather than recursing forever, in both answers.
+type selfRefNoMap struct {
+	Name string        `json:"name"`
+	Next *selfRefNoMap `json:"next"`
+}
+
+type selfRefWithMap struct {
+	Next   *selfRefWithMap `json:"next"`
+	Limits map[string]int  `json:"limits"`
+}
+
+type sliceElemPayload struct {
+	Rows []mapKeyPayload `json:"rows"`
+}
+
+type embeddedMapPayload struct {
+	mapKeyPayload
+	Name string `json:"name"`
+}
+
+type arrayElemPayload struct {
+	Rows [2]mapKeyPayload `json:"rows"`
+}
+
+type interfacePayload struct {
+	Extra any `json:"extra"`
+}
+
+// customUnmarshaler decodes into a map of its own, which no type walk can see;
+// the decoder reports the failure against ITS field, so the path carries the
+// input key.
+type customUnmarshaler struct{ N int }
+
+func (c *customUnmarshaler) UnmarshalJSON(b []byte) error {
+	var m map[string]int
+
+	return json.Unmarshal(b, &m)
+}
+
+type wrapsCustomUnmarshaler struct {
+	Inner customUnmarshaler `json:"inner"`
+}
+
+// timePayload is the everyday shape that pays the fail-closed price: time.Time
+// carries an UnmarshalJSON, so a payload with a timestamp renders no field path.
+type timePayload struct {
+	At     time.Time `json:"at"`
+	Amount int64     `json:"amount"`
+}
+
+func TestFieldPathIsSchema(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  reflect.Type
+		want bool
+	}{
+		{name: "map_free_struct", typ: reflect.TypeFor[orderPayload](), want: true},
+		{name: "map_at_top_level", typ: reflect.TypeFor[map[string]int]()},
+		{name: "map_field", typ: reflect.TypeFor[mapKeyPayload]()},
+		{name: "map_behind_pointer", typ: reflect.TypeFor[*mapKeyPayload]()},
+		{name: "map_inside_slice_element_struct", typ: reflect.TypeFor[sliceElemPayload]()},
+		{name: "map_inside_array_element_struct", typ: reflect.TypeFor[arrayElemPayload]()},
+		{name: "map_as_map_value_type", typ: reflect.TypeFor[map[string]orderPayload]()},
+		{name: "embedded_struct_carrying_a_map", typ: reflect.TypeFor[embeddedMapPayload]()},
+		{name: "interface_field", typ: reflect.TypeFor[interfacePayload]()},
+		{name: "nested_custom_unmarshaler", typ: reflect.TypeFor[wrapsCustomUnmarshaler]()},
+		{name: "custom_unmarshaler_itself", typ: reflect.TypeFor[customUnmarshaler]()},
+		{name: "stdlib_unmarshaler_field", typ: reflect.TypeFor[timePayload]()},
+		{name: "self_referential_without_map", typ: reflect.TypeFor[selfRefNoMap](), want: true},
+		{name: "self_referential_with_map", typ: reflect.TypeFor[selfRefWithMap]()},
+		{name: "nil_type", typ: nil, want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, fieldPathIsSchema(tc.typ))
+		})
+	}
+}
+
+// The gate has to reach the rendered error through the handler, not just exist:
+// drive both answers through Handle with a body a real decoder rejects.
+func TestTypedHandlerGatesFieldPathOnPayloadType(t *testing.T) {
+	mapHandler := NewTypedHandler(orderEventType, func(_ context.Context, _ mapKeyPayload) error { return nil })
+	err := mapHandler.Handle(t.Context(), &amqp.Delivery{
+		Body: fmt.Appendf(nil, `{"limits":{%q:"notanint"}}`, payloadMarker),
+	})
+	require.ErrorIs(t, err, ErrPayloadUndecodable)
+	assert.Contains(t, err.Error(), "type mismatch (want")
+	assert.NotContains(t, err.Error(), "at field")
+	assert.NotContains(t, err.Error(), payloadMarker)
+
+	// A custom UnmarshalJSON decodes into whatever it likes, so the path the
+	// decoder reports against its field is input-derived: "inner.<key>" on
+	// Go 1.26, the bare key on Go 1.27.
+	customHandler := NewTypedHandler(orderEventType, func(_ context.Context, _ wrapsCustomUnmarshaler) error { return nil })
+	err = customHandler.Handle(t.Context(), &amqp.Delivery{
+		Body: fmt.Appendf(nil, `{"inner":{%q:"notanint"}}`, payloadMarker),
+	})
+	require.ErrorIs(t, err, ErrPayloadUndecodable)
+	assert.NotContains(t, err.Error(), "at field")
+	assert.NotContains(t, err.Error(), payloadMarker)
+
+	structHandler := NewTypedHandler(orderEventType, func(_ context.Context, _ orderPayload) error { return nil })
+	err = structHandler.Handle(t.Context(), &amqp.Delivery{Body: []byte(`{"amount":"notanint"}`)})
+	require.ErrorIs(t, err, ErrPayloadUndecodable)
+	assert.Contains(t, err.Error(), `type mismatch at field "amount"`)
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -34,7 +35,11 @@ type codec interface {
 	// summarize renders a decode failure with NO payload bytes in it. Returning
 	// "" means the shape was not audited; the PayloadError constructor
 	// substitutes the fail-closed phrase, so a codec never spells it out.
-	summarize(err error) string
+	//
+	// fieldPathIsSchema tells the codec whether a field path the decoder reports
+	// can be trusted as schema-only. The caller decides it from the destination
+	// type, once per registration; a codec must never infer it from the error.
+	summarize(err error, fieldPathIsSchema bool) string
 }
 
 // jsonCodec is the only codec today: AMQP bodies are JSON on every path the
@@ -48,19 +53,26 @@ func (jsonCodec) Unmarshal(data []byte, v any) error {
 // summarize renders a decode failure without any payload bytes.
 // json.UnmarshalTypeError.Value carries the raw literal ("number 1234.56") and
 // json.SyntaxError's message quotes the offending byte, so neither error's own
-// text may be rendered. Field, Type and Offset are destination-schema
-// facts: encoding/json builds Field from the matched destination field's json
-// tag and never from an input key (map keys never enter its FieldStack).
-// Anything else — including json.Decoder.DisallowUnknownFields, which names the
-// partner's key — falls through to a phrase that reveals nothing.
-func (jsonCodec) summarize(err error) string {
+// text may be rendered. Type and Offset are destination-schema facts and always
+// render. Anything else — including json.Decoder.DisallowUnknownFields, which
+// names the partner's key — falls through to a phrase that reveals nothing.
+//
+// SECURITY: Field is schema-only for SOME destination types, not for all.
+// Through Go 1.26 encoding/json built it from the matched destination field's
+// json tag and map keys never entered its FieldStack; the json/v2 decoder
+// behind Go 1.27 reports "limits.<input key>" for a map destination, dotted
+// like a nested struct path, so a hostile or PII-shaped key would reach every
+// sink of the error. The caller's fieldPathIsSchema gate — computed from the
+// destination type, never from this string — is what keeps the two apart. A
+// gated-off summary still carries the wanted type and byte offset.
+func (jsonCodec) summarize(err error, fieldPathIsSchema bool) string {
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) {
 		wantType := "unknown"
 		if typeErr.Type != nil {
 			wantType = typeErr.Type.String()
 		}
-		if typeErr.Field != "" {
+		if fieldPathIsSchema && typeErr.Field != "" {
 			return fmt.Sprintf("json: type mismatch at field %q (want %s, offset %d)", typeErr.Field, wantType, typeErr.Offset)
 		}
 
@@ -73,6 +85,57 @@ func (jsonCodec) summarize(err error) string {
 	}
 
 	return ""
+}
+
+// jsonUnmarshaler is the interface a payload type can use to take decoding into
+// its own hands, and with it the field path the decoder reports.
+var jsonUnmarshaler = reflect.TypeFor[json.Unmarshaler]()
+
+// fieldPathIsSchema reports whether a decoder's field path can be trusted to
+// name destination schema only. The answer depends on the registered payload
+// type alone, so it is computed once per handler, not per delivery.
+func fieldPathIsSchema(t reflect.Type) bool {
+	return !reachesInputPath(t, map[reflect.Type]bool{})
+}
+
+// reachesInputPath walks struct fields, pointers, slices and arrays looking for
+// a type whose decode can put input text into the reported field path:
+//
+//   - a map, whose path segment IS the input key;
+//   - an interface, which decodes into map[string]any;
+//   - a json.Unmarshaler, which decodes into whatever it likes — a map into a
+//     local variable is invisible to this walk, and the error it returns is
+//     reported against ITS field, so the path reads "k", not "inner".
+//
+// seen stops a self-referential type from recursing forever.
+func reachesInputPath(t reflect.Type, seen map[reflect.Type]bool) bool {
+	if t == nil || seen[t] {
+		return false
+	}
+	seen[t] = true
+
+	// Both forms: json.Unmarshal takes a pointer, so a pointer-receiver
+	// UnmarshalJSON is reached for an addressable value of the bare type.
+	if t.Implements(jsonUnmarshaler) || reflect.PointerTo(t).Implements(jsonUnmarshaler) {
+		return true
+	}
+
+	switch t.Kind() {
+	case reflect.Map, reflect.Interface:
+		return true
+	case reflect.Pointer, reflect.Slice, reflect.Array:
+		return reachesInputPath(t.Elem(), seen)
+	case reflect.Struct:
+		for i := range t.NumField() {
+			if reachesInputPath(t.Field(i).Type, seen) {
+				return true
+			}
+		}
+	default:
+		// Every remaining kind is a leaf: no element or field to descend into.
+	}
+
+	return false
 }
 
 // Metadata exposes read-only delivery facts to a typed consumer without
@@ -123,7 +186,21 @@ func (m Metadata) Redelivered() bool {
 type typedHandler[T any] struct {
 	eventType string
 	codec     codec
-	fn        func(context.Context, T, Metadata) error
+	// fieldPathIsSchema is the decode-summary gate for T, decided once here
+	// because it depends on T alone. See the function of the same name.
+	fieldPathIsSchema bool
+	fn                func(context.Context, T, Metadata) error
+}
+
+// newTypedHandler is the single construction point, so the field-path gate
+// cannot be forgotten on one of the two exported entry points.
+func newTypedHandler[T any](eventType string, fn func(context.Context, T, Metadata) error) *typedHandler[T] {
+	return &typedHandler[T]{
+		eventType:         eventType,
+		codec:             jsonCodec{},
+		fieldPathIsSchema: fieldPathIsSchema(reflect.TypeFor[T]()),
+		fn:                fn,
+	}
 }
 
 // NewTypedHandler adapts a typed function to the MessageHandler contract:
@@ -144,11 +221,7 @@ func NewTypedHandler[T any](eventType string, fn func(context.Context, T) error)
 		panic("messaging: NewTypedHandler requires a non-nil handler function (event_type=" + eventType + ")")
 	}
 
-	return &typedHandler[T]{
-		eventType: eventType,
-		codec:     jsonCodec{},
-		fn:        func(ctx context.Context, payload T, _ Metadata) error { return fn(ctx, payload) },
-	}
+	return newTypedHandler(eventType, func(ctx context.Context, payload T, _ Metadata) error { return fn(ctx, payload) })
 }
 
 func (h *typedHandler[T]) Handle(ctx context.Context, delivery *amqp.Delivery) error {
@@ -159,7 +232,7 @@ func (h *typedHandler[T]) Handle(ctx context.Context, delivery *amqp.Delivery) e
 	// A fresh payload per delivery: workers share the handler, not the value.
 	var payload T
 	if err := h.codec.Unmarshal(delivery.Body, &payload); err != nil {
-		return newPayloadDecodeError(h.eventType, err, h.codec.summarize(err))
+		return newPayloadDecodeError(h.eventType, err, h.codec.summarize(err, h.fieldPathIsSchema))
 	}
 
 	// A non-struct T reaches this with a *validator.InvalidValidationError, which
@@ -230,7 +303,7 @@ func NewTypedHandlerWithMeta[T any](eventType string, fn func(context.Context, T
 	if fn == nil {
 		panic("messaging: NewTypedHandlerWithMeta requires a non-nil handler function (event_type=" + eventType + ")")
 	}
-	return &typedHandler[T]{eventType: eventType, codec: jsonCodec{}, fn: fn}
+	return newTypedHandler(eventType, fn)
 }
 
 // DeclareTypedConsumerWithMeta is DeclareTypedConsumer for a metadata-aware
