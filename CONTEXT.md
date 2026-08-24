@@ -161,6 +161,16 @@ annotation (CLAUDE.md, Security Guidelines). A door whose shape no existing
 context describes earns a new one rather than the nearest fit.
 _Avoid_: validation mode, identifier type, grammar level
 
+### Testing
+
+**Tripwire guard**:
+A test asserting a pinned measurement to catch one specific structural change
+(the alloc guards catching a flat-adapter conversion, ADR-026). Its margin
+absorbs environment noise and must stay smaller than the signal it exists to
+catch; when the environment shifts — a toolchain bump — the pin is re-measured
+and re-pinned, never widened.
+_Avoid_: perf test, benchmark assertion, alloc test (as the concept)
+
 ### Build
 
 **Language floor**:

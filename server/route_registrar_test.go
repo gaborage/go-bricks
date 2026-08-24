@@ -293,14 +293,21 @@ func BenchmarkMiddlewareAdapter(b *testing.B) {
 	})
 }
 
-// defaultMiddlewareChainMaxAllocs locks the allocation count of the FULL default middleware
-// chain (registered echo-native via e.Use inside SetupMiddlewares). It is the measured
-// baseline plus a small margin for noise. It will fail if a future change routes the default
-// chain through adaptMiddleware (the flat adapter), which would add one baton allocation per
-// middleware layer (~10 middlewares ⇒ a clearly detectable jump) — the ADR-026 invariant.
-// Measured baseline: 53 allocs/op; the +7 margin still sits below the ~63 a full flat-adapter
-// conversion would produce.
-const defaultMiddlewareChainMaxAllocs = 60
+// Tripwire guard (CONTEXT.md § Testing): re-pin the baseline on a toolchain shift, never
+// widen the margin, which must stay below the ~+10 flat-adapter signal. Locks the
+// allocation count of the FULL default middleware chain (registered echo-native via e.Use
+// inside SetupMiddlewares); it fails if a future change routes the default chain through
+// adaptMiddleware (the flat adapter), which would add one baton allocation per middleware
+// layer (~10 middlewares ⇒ a clearly detectable jump) — the ADR-026 invariant. Measured
+// baseline: 62 allocs/op on go1.27.0 (59 on go1.26.6; the +3 was a uniform toolchain
+// shift, #1177); the +7 margin keeps the ceiling below the ~72 a full flat-adapter
+// conversion would produce from 62. NOTE: 59 on the pinned toolchain vs ADR-026's
+// original 53 is accumulated in-ceiling growth, tracked separately (#1179).
+const (
+	defaultMiddlewareChainBaselineAllocs = 62
+	defaultMiddlewareChainAllocsMargin   = 7
+	defaultMiddlewareChainMaxAllocs      = defaultMiddlewareChainBaselineAllocs + defaultMiddlewareChainAllocsMargin
+)
 
 // TestDefaultMiddlewareChainAllocsStable drives a request through the full default chain of a
 // server built via New (SetupMiddlewares) and asserts allocs/op stays at or below the locked
