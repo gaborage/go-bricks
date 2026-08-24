@@ -66,7 +66,7 @@ func validateIdentifier(context, identifier string) error {
 	trimmed := strings.TrimSpace(identifier)
 	if !validIdentifierPattern.MatchString(trimmed) {
 		return fmt.Errorf("invalid %s identifier %q: must be a simple or qualified identifier "+
-			"matching %s — use qb.Expr()/Raw() for complex expressions", context, identifier, sqllex.IdentifierSegment)
+			"matching %s — use qb.Expr()/Raw() for complex expressions", context, identifier, sqllex.Segment)
 	}
 	return nil
 }
