@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,10 +28,6 @@ type limitsRequest struct {
 type mapFreeRequest struct {
 	Amount int64  `json:"amount"`
 	Name   string `json:"name" validate:"required"`
-}
-
-type ratioRequest struct {
-	Ratio float64 `query:"ratio"`
 }
 
 func devDebugConfig() *config.Config {
@@ -90,12 +87,7 @@ func sortedKeys(m map[string]any) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	// Two keys at most; an insertion sort keeps the helper dependency-free.
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
+	slices.Sort(keys)
 
 	return keys
 }
@@ -134,27 +126,6 @@ func TestBindDetailsKeepFieldPathForMapFreeType(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, status)
 }
 
-// TestBindDetailsNameQueryParameterByTag covers the non-JSON binding sources,
-// whose causes are strconv errors quoting the rejected input.
-func TestBindDetailsNameQueryParameterByTag(t *testing.T) {
-	e := echo.New()
-	e.Validator = NewValidator()
-	handler := func(req ratioRequest, _ HandlerContext) (ratioRequest, IAPIError) { return req, nil }
-	h := WrapHandler(handler, NewRequestBinder(), devDebugConfig())
-
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
-		"/things?ratio="+panShapedKey+"x", http.NoBody)
-	rec := httptest.NewRecorder()
-	require.NoError(t, h(e.NewContext(req, rec)))
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-
-	var resp APIResponse
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	assert.Equal(t, `failed to bind query param "ratio"`, requireDetailString(t, resp))
-	assert.NotContains(t, rec.Body.String(), panShapedKey, "the rejected input must not reach the body")
-	assert.NotContains(t, rec.Body.String(), "ParseFloat", "the strconv cause must not reach the body")
-}
-
 func requireDetailString(t *testing.T, resp APIResponse) string {
 	t.Helper()
 
@@ -166,22 +137,24 @@ func requireDetailString(t *testing.T, resp APIResponse) string {
 	return detail
 }
 
+// detailsGateQuadrants is shared by both renderers' gate tests, so the matrix
+// cannot drift between the enveloped and the raw-mode assertion.
+var detailsGateQuadrants = []struct {
+	name        string
+	env         string
+	debug       bool
+	wantDetails bool
+}{
+	{name: "debug_on_development", env: config.EnvDevelopment, debug: true, wantDetails: true},
+	{name: "debug_off_development", env: config.EnvDevelopment},
+	{name: "debug_on_production", env: config.EnvProduction, debug: true},
+	{name: "debug_off_production", env: config.EnvProduction},
+}
+
 // TestResponseDetailsGateQuadrants walks all four debug × environment
 // combinations: details render for exactly one of them.
 func TestResponseDetailsGateQuadrants(t *testing.T) {
-	tests := []struct {
-		name        string
-		env         string
-		debug       bool
-		wantDetails bool
-	}{
-		{name: "debug_on_development", env: config.EnvDevelopment, debug: true, wantDetails: true},
-		{name: "debug_off_development", env: config.EnvDevelopment},
-		{name: "debug_on_production", env: config.EnvProduction, debug: true},
-		{name: "debug_off_production", env: config.EnvProduction},
-	}
-
-	for _, tc := range tests {
+	for _, tc := range detailsGateQuadrants {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.Config{App: config.AppConfig{Env: tc.env, Debug: tc.debug}}
 			resp, _, status := postJSON(t, cfg, echoLimits, `{"limits":{"a":1}}`)
@@ -201,19 +174,7 @@ func TestResponseDetailsGateQuadrants(t *testing.T) {
 // TestRawResponseDetailsGateQuadrants pins the same gate on the raw-mode
 // renderer, which shares devDetails.
 func TestRawResponseDetailsGateQuadrants(t *testing.T) {
-	tests := []struct {
-		name        string
-		env         string
-		debug       bool
-		wantDetails bool
-	}{
-		{name: "debug_on_development", env: config.EnvDevelopment, debug: true, wantDetails: true},
-		{name: "debug_off_development", env: config.EnvDevelopment},
-		{name: "debug_on_production", env: config.EnvProduction, debug: true},
-		{name: "debug_off_production", env: config.EnvProduction},
-	}
-
-	for _, tc := range tests {
+	for _, tc := range detailsGateQuadrants {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.Config{App: config.AppConfig{Env: tc.env, Debug: tc.debug}}
 			e := echo.New()
@@ -254,4 +215,27 @@ func TestBindErrorKeepsRawCauseForLogs(t *testing.T) {
 
 	assert.Contains(t, err.Error(), panShapedKey, "Error() keeps the cause for logging")
 	assert.Equal(t, `failed to bind query param "ratio"`, bindSummary(err))
+}
+
+// TestValidationFieldSurvivesNamespaceTruncation is the regression guard for the
+// bypass the redaction's first shape had: validator stores FieldError.Field's
+// length in a uint8 and slices the namespace by it, so a key long enough to push
+// the namespace past 255 bytes made Field() return a bracket-free suffix of the
+// key itself — which any bracket-based rule copies through verbatim. The key
+// length is the caller's, so the cut lands wherever the caller wants it.
+func TestValidationFieldSurvivesNamespaceTruncation(t *testing.T) {
+	// 250 filler bytes plus the PAN puts the cut inside the key for the shape
+	// that read Field(); the assertion below is on the emitted bytes.
+	key := strings.Repeat("A", 250) + panShapedKey
+	resp, raw, status := postJSON(t, devDebugConfig(), echoLimits,
+		`{"limits":{"`+key+`":1}}`)
+
+	require.Equal(t, http.StatusBadRequest, status)
+	require.NotNil(t, resp.Error)
+	require.Contains(t, resp.Error.Details, "validationErrors",
+		"precondition: the validation failure actually happened")
+
+	assert.Contains(t, raw, "Limits[*]", "the field must still read as a redacted span")
+	assert.NotContains(t, raw, panShapedKey, "the input map key must not reach the response body")
+	assert.NotContains(t, raw, "AAAA", "no run of the key may reach the response body")
 }

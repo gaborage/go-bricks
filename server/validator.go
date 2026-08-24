@@ -63,7 +63,9 @@ type ValidationError struct {
 // absent — FieldError reaches the 400 response body, which no log filter sees,
 // and the value is request input for ANY failed tag. Field and Message name a
 // dive-validated map's element through a redacted span (Limits[*]), because
-// validator interpolates the input map key into the namespace verbatim.
+// validator interpolates the input map key into the namespace verbatim — and
+// the redaction reads the NAMESPACE, not validator's Field(), whose uint8
+// length wraps on a namespace over 255 bytes and returns a suffix of the key.
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
@@ -80,7 +82,7 @@ func NewValidationError(errs validator.ValidationErrors) *ValidationError {
 	fieldErrors := make([]FieldError, 0, len(errs))
 
 	for _, err := range errs {
-		field := saferender.RedactNamespace(err.Field())
+		field := saferender.RedactLeafField(err.Namespace())
 		fieldErrors = append(fieldErrors, FieldError{
 			Field:   field,
 			Message: getErrorMessage(err, field),

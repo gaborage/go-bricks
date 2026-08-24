@@ -45,6 +45,42 @@ func RedactNamespace(namespace string) string {
 	return namespace[:open] + RedactedIndex + tail
 }
 
+// RedactLeafField returns a validator namespace's last field segment with every
+// bracketed span redacted, e.g. "CreateReq.Limits[4111…]" -> "Limits[*]".
+//
+// SECURITY: it takes the NAMESPACE, never validator's own FieldError.Field().
+// validator stores that field's length in a uint8 and slices the namespace by
+// it, so a namespace over 255 bytes wraps and Field() returns an arbitrary
+// suffix of the namespace — for a dived map, a suffix of the caller's own map
+// key, carrying no '[' for a bracket rule to find. The key is caller-sized, so
+// the caller chooses where that cut lands. Namespace() does no such arithmetic.
+func RedactLeafField(namespace string) string {
+	open := strings.IndexByte(namespace, '[')
+	if open < 0 {
+		return lastSegment(namespace)
+	}
+
+	// Anything past the last ']' is outside every bracket, so it is schema.
+	rest := namespace[open+1:]
+	tail := ""
+	if end := strings.LastIndexByte(rest, ']'); end >= 0 {
+		tail = rest[end+1:]
+	}
+
+	return lastSegment(namespace[:open]) + RedactedIndex + tail
+}
+
+// lastSegment returns the text after the final '.', which is the leaf field name
+// of a dot-joined namespace prefix. The prefix passed here is always the part
+// BEFORE the first '[', so no map key can have put a '.' in it.
+func lastSegment(s string) string {
+	if i := strings.LastIndexByte(s, '.'); i >= 0 {
+		return s[i+1:]
+	}
+
+	return s
+}
+
 // The two interfaces a destination type can use to take decoding into its own
 // hands, and with it the field path the decoder reports. encoding/json calls
 // UnmarshalText for a JSON string whose destination implements only the second.

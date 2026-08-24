@@ -503,6 +503,7 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 	// nothing else — no strconv text, no rejected input (ADR-084).
 	assert.Equal(t, `failed to bind query param "ratio"`, detail)
 	assert.NotContains(t, rec.Body.String(), "not-a-number")
+	assert.NotContains(t, rec.Body.String(), "ParseFloat", "the strconv cause must not reach the body")
 }
 
 func TestEnsureTraceParentHeaderPreservesExistingResponseHeader(t *testing.T) {

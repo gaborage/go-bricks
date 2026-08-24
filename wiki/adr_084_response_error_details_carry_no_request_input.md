@@ -50,8 +50,16 @@ consume, and the rules cannot drift between the two.
 **`FieldError` loses `Value` entirely** rather than gaining a redaction. The
 value is request input for every tag, so there is no shape-based rule that keeps
 it and stays safe — the field is the defect, not its rendering. `Field` and the
-message it feeds are both built from `RedactNamespace(err.Field())`, so a dived
-map's element reads `Limits[*]` in both.
+message it feeds are both built from `RedactLeafField(err.Namespace())`, so a
+dived map's element reads `Limits[*]` in both.
+
+The name is derived from the NAMESPACE, not from validator's own `Field()`.
+validator stores that field's length in a `uint8` and slices the namespace by it
+(`validator/v10` `errors.go`), so a namespace longer than 255 bytes wraps and
+`Field()` returns an arbitrary suffix of the namespace — for a dived map, a
+suffix of the caller's own key, carrying no `[` for any bracket rule to find. The
+key is caller-sized, so the caller picks where that cut lands: a 250-byte filler
+plus a PAN returned the PAN in clear. `Namespace()` does no such arithmetic.
 
 **Bind failures render a summary, never the cause.** A `*bindError` pairs the
 raw cause with a payload-free summary: for a JSON body, `JSONDecodeSummary`
@@ -65,7 +73,10 @@ that is not a `*bindError`.
 **The details gate is `Debug && IsDevelopment`, at `devDetails`.** Both response
 renderers — the standard envelope and raw mode — already funnel through it, so
 the predicate lives there once and applies to every status rather than only the
-5xx path `[C60.30]` reached.
+5xx path `[C60.30]` reached. The JOSE envelope is the third renderer and stays
+ungated here: it is encrypted to an authenticated peer, and unifying the three
+is #1163's job. What this ADR guarantees for that path is the content — a
+`FieldError` and a bind summary that hold nothing to leak in the first place.
 
 ## Consequences
 
