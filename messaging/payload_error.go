@@ -44,7 +44,10 @@ var (
 // renders the wrapped cause verbatim, because every producer in reach echoes
 // payload bytes in at least one shape:
 //   - json.UnmarshalTypeError.Value carries the raw literal ("number 1234.56")
-//     and, for integer-keyed maps, the raw key.
+//     and, for integer-keyed maps, the raw key; its Field is schema-only for a
+//     map-free destination and carries the input key for a map one — or for a
+//     field decoding itself — which is why the summary's field path is gated
+//     on the payload type.
 //   - json.SyntaxError quotes the offending payload byte.
 //   - json.Decoder.DisallowUnknownFields reports the partner-supplied key verbatim.
 //   - validator namespaces interpolate map keys verbatim ("Limits[4111...]"),

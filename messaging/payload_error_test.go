@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/go-playground/validator/v10"
@@ -134,6 +135,15 @@ func TestPayloadErrorMessageComposition(t *testing.T) {
 	assert.Empty(t, decodeErr.Fields(), "decode failures carry no field list")
 }
 
+// renderDecodeError renders a decode failure exactly as the typed handler does:
+// the field-path gate comes from the destination type the body was decoded into,
+// so a test cannot pass by choosing a friendlier gate than production would.
+func renderDecodeError(cause error, dest any) string {
+	summary := jsonCodec{}.summarize(cause, fieldPathIsSchema(reflect.TypeOf(dest)))
+
+	return newPayloadDecodeError(orderEventType, cause, summary).Error()
+}
+
 // Each subtest drives the marker through a REAL producer — encoding/json or the
 // framework validator — so it proves the rendering, not a hand-built literal.
 // Each also asserts a positive premise, so NotContains cannot pass by the error
@@ -150,38 +160,36 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.Error(t, decodeErr)
 		require.Contains(t, decodeErr.Error(), numericMarker, "premise: the raw cause leaks the amount")
 
-		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
-		require.Contains(t, rendered, "type mismatch at field", "premise: a decode summary was rendered")
+		rendered := renderDecodeError(decodeErr, payload)
+		assert.Contains(t, rendered, `type mismatch at field "amount"`,
+			"a map-free payload type keeps the schema field path")
 		assert.NotContains(t, rendered, numericMarker)
 	})
 
 	t.Run("decode_hostile_map_key_stays_out_of_field", func(t *testing.T) {
-		// decodeSummary renders UnmarshalTypeError.Field unsanitized, which is
-		// only safe because encoding/json builds Field from the destination
-		// schema and never admits an input key to its FieldStack. Assert Field
-		// equals the schema name, not merely that it lacks the marker: the
-		// marker never reaches this error's text at all today, so a NotContains
-		// check here would pass no matter what Field held. A Go release that
-		// admitted the key would make Field "limits[MARKER…]" and break this.
+		// UnmarshalTypeError.Field is schema-only for a map-free destination and
+		// input-derived for a map one: through Go 1.26 it read "limits", from
+		// Go 1.27 it reads "limits.<input key>". The summary must therefore drop
+		// the field path for this type rather than judge the string — asserting
+		// only the marker's absence would pass on 1.26 no matter what the gate
+		// did, so pin that no field path was rendered at all.
 		body := fmt.Appendf(nil, `{"limits":{%q:"notanint"}}`, payloadMarker)
 
 		var payload mapKeyPayload
 		decodeErr := json.Unmarshal(body, &payload)
 		require.Error(t, decodeErr)
+		require.ErrorAs(t, decodeErr, new(*json.UnmarshalTypeError), "premise: the body produced an UnmarshalTypeError")
 
-		var typeErr *json.UnmarshalTypeError
-		require.ErrorAs(t, decodeErr, &typeErr, "premise: the body produced an UnmarshalTypeError")
-		assert.Equal(t, "limits", typeErr.Field, "Field must name the destination field only")
-
-		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
-		require.Contains(t, rendered, "type mismatch at field", "premise: a decode summary was rendered")
+		rendered := renderDecodeError(decodeErr, payload)
+		require.Contains(t, rendered, "type mismatch (want", "premise: a decode summary was rendered")
+		assert.NotContains(t, rendered, "at field", "a map-bearing payload type renders no field path")
 		assert.NotContains(t, rendered, payloadMarker)
 	})
 
 	t.Run("decode_integer_keyed_map_key", func(t *testing.T) {
 		// The second way UnmarshalTypeError.Value turns payload-bearing: for an
 		// integer-keyed map encoding/json parses the KEY, so a rejected key lands
-		// in Value. Field still names only the destination.
+		// in Value — and from Go 1.27 in Field too.
 		body := fmt.Appendf(nil, `{"limits":{%q:1}}`, payloadMarker)
 
 		var payload intKeyPayload
@@ -189,12 +197,11 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.Error(t, decodeErr)
 		require.Contains(t, decodeErr.Error(), payloadMarker, "premise: the raw cause leaks the map key")
 
-		var typeErr *json.UnmarshalTypeError
-		require.ErrorAs(t, decodeErr, &typeErr, "premise: the body produced an UnmarshalTypeError")
-		assert.Equal(t, "limits", typeErr.Field, "Field must name the destination field only")
+		require.ErrorAs(t, decodeErr, new(*json.UnmarshalTypeError), "premise: the body produced an UnmarshalTypeError")
 
-		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
-		require.Contains(t, rendered, "type mismatch at field", "premise: a decode summary was rendered")
+		rendered := renderDecodeError(decodeErr, payload)
+		require.Contains(t, rendered, "type mismatch (want", "premise: a decode summary was rendered")
+		assert.NotContains(t, rendered, "at field", "a map-bearing payload type renders no field path")
 		assert.NotContains(t, rendered, payloadMarker)
 	})
 
@@ -207,7 +214,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.ErrorAs(t, decodeErr, new(*json.SyntaxError), "premise: the body produced a SyntaxError")
 		require.Contains(t, decodeErr.Error(), syntaxMarker, "premise: the raw cause quotes the offending byte")
 
-		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
+		rendered := renderDecodeError(decodeErr, payload)
 		require.Contains(t, rendered, "syntax error at offset", "premise: a decode summary was rendered")
 		assert.NotContains(t, rendered, syntaxMarker)
 	})
@@ -223,7 +230,7 @@ func TestPayloadErrorNeverRendersPayloadValues(t *testing.T) {
 		require.Error(t, decodeErr)
 		require.Contains(t, decodeErr.Error(), payloadMarker, "premise: the raw cause leaks the key")
 
-		rendered := newPayloadDecodeError(orderEventType, decodeErr, jsonCodec{}.summarize(decodeErr)).Error()
+		rendered := renderDecodeError(decodeErr, payload)
 		require.Contains(t, rendered, "cause withheld", "premise: the generic fallback rendered")
 		assert.NotContains(t, rendered, payloadMarker)
 	})

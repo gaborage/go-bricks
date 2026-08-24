@@ -277,6 +277,31 @@ grep "Multiple consumers registered for same queue" logs/app.log
 grep "Panic recovered in message handler" logs/app.log
 ```
 
+### Decode errors read differently on a Go 1.27 build
+
+`encoding/json` is backed by the v2 decoder from Go 1.27. It keeps v1 *acceptance*
+semantics — duplicate object keys are still accepted (a struct destination merges
+the two objects field by field, a map destination keeps the last value), invalid
+UTF-8 is still replaced with U+FFFD, so a body that decoded before still decodes.
+`encoding/json/v2` rejects duplicate names unless a caller opts back in. What does change is the error detail
+a rejected body produces, so never match on a decode error's string.
+
+`json.UnmarshalTypeError.Field` is the case that matters here: it carries the
+offending **input** map key for a map destination (`limits.<key>`), and the inner
+key alone for a field with its own `UnmarshalJSON`, where Go 1.26 reported the
+destination field. That is why the framework's decode summary drops the field
+path entirely for a payload type from which a map, an interface (including
+`any`), or a `json.Unmarshaler` or `encoding.TextUnmarshaler` is reachable —
+`time.Time` included — and reports only the wanted type and byte offset:
+
+```text
+messaging: decode failed for event "LimitsUpdated": json: type mismatch (want int, offset 47)
+```
+
+Which toolchain applies is **yours**, not the framework's: a service built on Go
+1.26 keeps the 1.26 error text even against a GoBricks release built and tested
+on 1.27.
+
 ## Outbox Issues
 
 ```bash
