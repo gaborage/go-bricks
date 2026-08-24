@@ -20,6 +20,7 @@ import (
 
 	"github.com/gaborage/go-bricks/config"
 	gobrickshttp "github.com/gaborage/go-bricks/httpclient"
+	"github.com/gaborage/go-bricks/internal/saferender"
 	"github.com/gaborage/go-bricks/jose"
 	"github.com/gaborage/go-bricks/logger"
 )
@@ -472,7 +473,10 @@ type requestProcessor[T any] struct {
 	binder    *RequestBinder
 	cfg       *config.Config
 	plan      []boundField
-	isStruct  bool
+	// fieldPathIsSchema is the JSON decode-summary gate for T, decided once here
+	// because it depends on T alone. See saferender.FieldPathIsSchema.
+	fieldPathIsSchema bool
+	isStruct          bool
 }
 
 // newRequestProcessor creates a new request processor for type T. The tag-binding plan
@@ -493,11 +497,12 @@ func newRequestProcessor[T any](binder *RequestBinder, cfg *config.Config) *requ
 	}
 
 	return &requestProcessor[T]{
-		allocator: allocator,
-		binder:    binder,
-		cfg:       cfg,
-		plan:      plan,
-		isStruct:  isStruct,
+		allocator:         allocator,
+		binder:            binder,
+		cfg:               cfg,
+		plan:              plan,
+		isStruct:          isStruct,
+		fieldPathIsSchema: saferender.FieldPathIsSchema(structType),
 	}
 }
 
@@ -514,12 +519,13 @@ func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 	// request-time NumField() panic stays exactly where it is today.
 	var bindErr error
 	if rp.isStruct {
-		bindErr = rp.binder.bindRequestPlanned(c, requestPtr, rp.plan)
+		bindErr = rp.binder.bindRequestPlanned(c, requestPtr, rp.plan, rp.fieldPathIsSchema)
 	} else {
-		bindErr = rp.binder.bindRequest(c, requestPtr)
+		bindErr = rp.binder.bindRequest(c, requestPtr, rp.fieldPathIsSchema)
 	}
 	if bindErr != nil {
-		return empty, NewBadRequestError("Invalid request data").WithDetails("error", bindErr.Error())
+		// SECURITY: bindErr renders request input; only the summary may be echoed.
+		return empty, NewBadRequestError("Invalid request data").WithDetails("error", bindSummary(bindErr))
 	}
 
 	// For value types, we need to get the bound value back from the pointer
@@ -540,7 +546,10 @@ func (rp *requestProcessor[T]) process(c *echo.Context) (T, IAPIError) {
 		if errors.As(err, &ve) {
 			_ = vErr.WithDetails("validationErrors", ve.Errors)
 		} else {
-			_ = vErr.WithDetails("error", err.Error())
+			// SECURITY: a non-ValidationError cause is the validator's own
+			// InvalidValidationError shape; it is not audited for request
+			// content, so it renders as a fixed phrase.
+			_ = vErr.WithDetails("error", unauditedValidationSummary)
 		}
 		return empty, vErr
 	}
@@ -749,12 +758,12 @@ func wrapHandlerWithJOSE[T any, R any](
 // non-struct types, and that panic must stay exactly there. Struct T never reaches this
 // path — it uses bindRequestPlanned instead. It binds body-then-tags in the same order,
 // so the source-precedence note on bindRequestPlanned applies here too.
-func (rb *RequestBinder) bindRequest(c *echo.Context, target any) error {
+func (rb *RequestBinder) bindRequest(c *echo.Context, target any, fieldPathIsSchema bool) error {
 	targetValue := reflect.ValueOf(target).Elem()
 	targetType := targetValue.Type()
 
 	// Bind JSON body if present
-	if err := rb.bindJSONBody(c, target); err != nil {
+	if err := rb.bindJSONBody(c, target, fieldPathIsSchema); err != nil {
 		return err
 	}
 
@@ -770,8 +779,8 @@ func (rb *RequestBinder) bindRequest(c *echo.Context, target any) error {
 // binds first, then param/query/header overlay on top, so a non-empty URL value wins over a
 // conflicting body value for a dual-tagged field. This overlay is deliberate — echo's own
 // binder binds the body last and would otherwise let the body win. Do not reorder or drop it.
-func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []boundField) error {
-	if err := rb.bindJSONBody(c, target); err != nil {
+func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []boundField, fieldPathIsSchema bool) error {
+	if err := rb.bindJSONBody(c, target, fieldPathIsSchema); err != nil {
 		return err
 	}
 	if len(plan) == 0 {
@@ -799,8 +808,10 @@ func (rb *RequestBinder) bindRequestPlanned(c *echo.Context, target any, plan []
 	return nil
 }
 
-// bindJSONBody binds JSON request body if Content-Type indicates JSON
-func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any) error {
+// bindJSONBody binds JSON request body if Content-Type indicates JSON.
+// fieldPathIsSchema is the decode-summary gate for the request type, decided once
+// per route by newRequestProcessor.
+func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any, fieldPathIsSchema bool) error {
 	ct := c.Request().Header.Get(echo.HeaderContentType)
 	if ct == "" {
 		return nil
@@ -809,7 +820,7 @@ func (rb *RequestBinder) bindJSONBody(c *echo.Context, target any) error {
 	mt, _, _ := mime.ParseMediaType(ct)
 	if mt == echo.MIMEApplicationJSON || strings.HasSuffix(mt, "+json") {
 		if err := c.Bind(target); err != nil {
-			return fmt.Errorf("failed to bind JSON body: %w", err)
+			return newJSONBindError(err, fieldPathIsSchema)
 		}
 	}
 	return nil
@@ -861,7 +872,7 @@ func (rb *RequestBinder) bindParamValue(c *echo.Context, paramName string, field
 	value := c.Param(paramName)
 	if value != "" {
 		if err := setFieldValue(fieldValue, value); err != nil {
-			return fmt.Errorf("failed to set path param %s: %w", paramName, err)
+			return newFieldBindError(bindSourceParam, paramName, err)
 		}
 	}
 	return nil
@@ -887,7 +898,7 @@ func (rb *RequestBinder) bindQueryValue(c *echo.Context, queryName string, isSli
 	value := c.QueryParam(queryName)
 	if value != "" {
 		if err := setFieldValue(fieldValue, value); err != nil {
-			return fmt.Errorf("failed to set query param %s: %w", queryName, err)
+			return newFieldBindError(bindSourceQuery, queryName, err)
 		}
 	}
 	return nil
@@ -929,7 +940,7 @@ func (rb *RequestBinder) bindHeaderValue(c *echo.Context, headerName string, isS
 	}
 
 	if err := setFieldValue(fieldValue, values[0]); err != nil {
-		return fmt.Errorf("failed to set header %s: %w", headerName, err)
+		return newFieldBindError(bindSourceHeader, headerName, err)
 	}
 	return nil
 }
@@ -1236,9 +1247,7 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 		Message: apiErr.Message(),
 	}
 
-	if cfg.App.IsDevelopment() {
-		errorResp.Details = devDetails(apiErr)
-	}
+	errorResp.Details = devDetails(apiErr, cfg)
 
 	// Default (non-merge) error path: encode via the typed frameworkEnvelope to skip the
 	// meta map allocation. Wire shape is identical to APIResponse{Error, Meta:map} —
@@ -1258,11 +1267,17 @@ func formatErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Config) 
 // The IAPIError interface does not guarantee Details() returns a copy
 // (BaseAPIError happens to, but user-defined error types may not), so we always
 // copy before injecting stackTrace to avoid mutating caller-owned state.
-// devDetails stays gated on the environment ALONE, unlike classifyError's
-// details["error"] which also requires app.debug (#1140): what it renders is either
-// author-chosen (a handler's own WithDetails entry) or already dev-gated at capture
-// (SetCaptureStackTraces), never driver-supplied text a field-name filter cannot scrub.
-func devDetails(apiErr IAPIError) map[string]any {
+// SECURITY: devDetails is the single gate on every response detail map, and it
+// requires app.debug AND a development environment — the posture #1161 set for
+// the 500 path, now applied to every status (ADR-084). Response bodies never pass
+// through the logger's SensitiveDataFilter, so a detail entry that turns out to
+// carry request text is exposed to the caller verbatim; the framework's own
+// entries are payload-free by construction, and the gate bounds a handler's.
+func devDetails(apiErr IAPIError, cfg *config.Config) map[string]any {
+	if !cfg.App.Debug || !cfg.App.IsDevelopment() {
+		return nil
+	}
+
 	src := apiErr.Details()
 	st, hasStack := apiErr.(StackTracer)
 	var frames []string
@@ -1372,9 +1387,7 @@ func formatRawErrorResponse(c *echo.Context, apiErr IAPIError, cfg *config.Confi
 		Message: apiErr.Message(),
 	}
 
-	if cfg.App.IsDevelopment() {
-		payload.Details = devDetails(apiErr)
-	}
+	payload.Details = devDetails(apiErr, cfg)
 
 	ensureTraceParentHeader(c)
 	return c.JSON(apiErr.HTTPStatus(), payload)

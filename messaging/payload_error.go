@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/go-playground/validator/v10"
+
+	"github.com/gaborage/go-bricks/internal/saferender"
 )
 
 // PayloadStage names the half of the typed-payload pipeline that failed.
@@ -17,9 +19,6 @@ const (
 	PayloadStageDecode   PayloadStage = "decode"
 	PayloadStageValidate PayloadStage = "validate"
 )
-
-// redactedIndex replaces the contents of every bracketed namespace segment.
-const redactedIndex = "[*]"
 
 // unauditedDecoderSummary is the fail-closed rendering for a decode error whose
 // shape has not been audited for payload content.
@@ -133,7 +132,7 @@ func (e *PayloadError) Fields() []string {
 
 	sanitized := make([]string, len(e.fields))
 	for i, ns := range e.fields {
-		sanitized[i] = sanitizeNamespace(ns)
+		sanitized[i] = saferender.RedactNamespace(ns)
 	}
 
 	return sanitized
@@ -185,32 +184,4 @@ func (e *PayloadError) Is(target error) bool {
 	default:
 		return false
 	}
-}
-
-// sanitizeNamespace redacts everything from a namespace's first '[' to its last
-// ']'. validator interpolates map keys verbatim, so Limits[4111111111111111]
-// would otherwise carry a PAN — and a key may itself contain '[', ']' or '.',
-// so no per-segment parse of the flat string is unambiguous. Redacting the whole
-// bracketed span is the only rule a hostile key cannot walk out of: a key of
-// "]4111111111111111" defeats a depth counter, which returns to zero at the
-// key's own ']' and then copies the digits straight through.
-//
-// Numeric indices go too — a digits-only exemption looks safe but is not, since
-// a card number is all digits. A namespace with several bracketed segments
-// collapses to the first, losing the trailing field path; Unwrap() still carries
-// the namespace unredacted.
-func sanitizeNamespace(namespace string) string {
-	open := strings.IndexByte(namespace, '[')
-	if open < 0 {
-		return namespace
-	}
-
-	// Anything past the last ']' is outside every bracket, so it is schema.
-	rest := namespace[open+1:]
-	tail := ""
-	if end := strings.LastIndexByte(rest, ']'); end >= 0 {
-		tail = rest[end+1:]
-	}
-
-	return namespace[:open] + redactedIndex + tail
 }

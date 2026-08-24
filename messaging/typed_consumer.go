@@ -2,7 +2,6 @@ package messaging
 
 import (
 	"context"
-	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/gaborage/go-bricks/internal/saferender"
 	"github.com/gaborage/go-bricks/internal/validation"
 )
 
@@ -51,102 +51,10 @@ func (jsonCodec) Unmarshal(data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 
-// summarize renders a decode failure without any payload bytes.
-// json.UnmarshalTypeError.Value carries the raw literal ("number 1234.56") and
-// json.SyntaxError's message quotes the offending byte, so neither error's own
-// text may be rendered. Type and Offset are destination-schema facts and always
-// render. Anything else — including json.Decoder.DisallowUnknownFields, which
-// names the partner's key — falls through to a phrase that reveals nothing.
-//
-// SECURITY: Field is schema-only for SOME destination types, not for all.
-// Through Go 1.26 encoding/json built it from the matched destination field's
-// json tag and map keys never entered its FieldStack; the json/v2 decoder
-// behind Go 1.27 reports "limits.<input key>" for a map destination, dotted
-// like a nested struct path, so a hostile or PII-shaped key would reach every
-// sink of the error. The caller's fieldPathIsSchema gate — computed from the
-// destination type, never from this string — is what keeps the two apart. A
-// gated-off summary still carries the wanted type and byte offset.
+// summarize delegates to the shared safe-rendering seam; see
+// saferender.JSONDecodeSummary for the rules and their rationale.
 func (jsonCodec) summarize(err error, fieldPathIsSchema bool) string {
-	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &typeErr) {
-		wantType := "unknown"
-		if typeErr.Type != nil {
-			wantType = typeErr.Type.String()
-		}
-		if fieldPathIsSchema && typeErr.Field != "" {
-			return fmt.Sprintf("json: type mismatch at field %q (want %s, offset %d)", typeErr.Field, wantType, typeErr.Offset)
-		}
-
-		return fmt.Sprintf("json: type mismatch (want %s, offset %d)", wantType, typeErr.Offset)
-	}
-
-	var syntaxErr *json.SyntaxError
-	if errors.As(err, &syntaxErr) {
-		return fmt.Sprintf("json: syntax error at offset %d", syntaxErr.Offset)
-	}
-
-	return ""
-}
-
-// The two interfaces a payload type can use to take decoding into its own
-// hands, and with it the field path the decoder reports. encoding/json calls
-// UnmarshalText for a JSON string whose destination implements only the second.
-var (
-	jsonUnmarshaler = reflect.TypeFor[json.Unmarshaler]()
-	textUnmarshaler = reflect.TypeFor[encoding.TextUnmarshaler]()
-)
-
-// fieldPathIsSchema reports whether a decoder's field path can be trusted to
-// name destination schema only. The answer depends on the registered payload
-// type alone, so it is computed once per handler, not per delivery.
-func fieldPathIsSchema(t reflect.Type) bool {
-	return !reachesInputPath(t, map[reflect.Type]bool{})
-}
-
-// reachesInputPath walks struct fields, pointers, slices and arrays looking for
-// a type whose decode can put input text into the reported field path:
-//
-//   - a map, whose path segment IS the input key;
-//   - an interface, which decodes into map[string]any;
-//   - a json.Unmarshaler or an encoding.TextUnmarshaler, which decode into
-//     whatever they like — a map into a local variable is invisible to this
-//     walk, and the error they return is reported against THEIR field, so the
-//     path reads "k", not "inner". The text door is not even 1.27-specific: a
-//     TextUnmarshaler returning its own UnmarshalTypeError already renders
-//     "inner.<input>" on Go 1.26.
-//
-// seen stops a self-referential type from recursing forever.
-func reachesInputPath(t reflect.Type, seen map[reflect.Type]bool) bool {
-	if t == nil || seen[t] {
-		return false
-	}
-	seen[t] = true
-
-	// Both forms: json.Unmarshal takes a pointer, so a pointer-receiver
-	// UnmarshalJSON is reached for an addressable value of the bare type.
-	ptr := reflect.PointerTo(t)
-	for _, iface := range []reflect.Type{jsonUnmarshaler, textUnmarshaler} {
-		if t.Implements(iface) || ptr.Implements(iface) {
-			return true
-		}
-	}
-
-	switch t.Kind() {
-	case reflect.Map, reflect.Interface:
-		return true
-	case reflect.Pointer, reflect.Slice, reflect.Array:
-		return reachesInputPath(t.Elem(), seen)
-	case reflect.Struct:
-		for i := range t.NumField() {
-			if reachesInputPath(t.Field(i).Type, seen) {
-				return true
-			}
-		}
-	default:
-		// Every remaining kind is a leaf: no element or field to descend into.
-	}
-
-	return false
+	return saferender.JSONDecodeSummary(err, fieldPathIsSchema)
 }
 
 // Metadata exposes read-only delivery facts to a typed consumer without
@@ -209,7 +117,7 @@ func newTypedHandler[T any](eventType string, fn func(context.Context, T, Metada
 	return &typedHandler[T]{
 		eventType:         eventType,
 		codec:             jsonCodec{},
-		fieldPathIsSchema: fieldPathIsSchema(reflect.TypeFor[T]()),
+		fieldPathIsSchema: saferender.FieldPathIsSchema(reflect.TypeFor[T]()),
 		fn:                fn,
 	}
 }

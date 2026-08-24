@@ -45,7 +45,7 @@ func TestWrapHandlerSuccessDefaultStatus(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -77,7 +77,7 @@ func TestWrapHandlerSuccessCustomStatusWithResult(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req helloReq, _ HandlerContext) (Result[helloResp], IAPIError) {
 		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
@@ -104,7 +104,7 @@ func TestWrapHandlerValidationError(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -160,7 +160,7 @@ func TestRequestBinderAdvancedBinding(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
 		return req, nil
@@ -207,7 +207,7 @@ func TestRequestBinderPrecedencePathParamOverridesBody(t *testing.T) {
 	v := NewValidator()
 	e.Validator = v
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	var seen advancedBindReq
 	handler := func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -238,7 +238,7 @@ func TestRequestBinderPrecedenceQueryParamOverridesBody(t *testing.T) {
 	v := NewValidator()
 	e.Validator = v
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	var seen numericRequest
 	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
@@ -266,7 +266,7 @@ func TestRequestBinderPrecedenceHeaderOverridesBody(t *testing.T) {
 	v := NewValidator()
 	e.Validator = v
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	var seen advancedBindReq
 	handler := func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -298,7 +298,7 @@ func TestRequestBinderPrecedenceAbsentQueryParamKeepsBody(t *testing.T) {
 	v := NewValidator()
 	e.Validator = v
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	var seen numericRequest
 	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
@@ -328,7 +328,7 @@ func TestRequestBinderPrecedenceEmptyPathSegmentKeepsBody(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	var seen advancedBindReq
 	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -353,7 +353,7 @@ func TestRequestBinderPrecedenceEmptyQueryParamKeepsBody(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	var seen numericRequest
 	h := WrapHandler(func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
@@ -377,7 +377,7 @@ func TestRequestBinderPrecedenceAbsentHeaderKeepsBody(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	var seen advancedBindReq
 	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -406,7 +406,7 @@ func TestRequestBinderPrecedenceEmptyHeaderClearsSliceField(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	var seen advancedBindReq
 	h := WrapHandler(func(req advancedBindReq, _ HandlerContext) (advancedBindReq, IAPIError) {
@@ -432,7 +432,7 @@ func TestRequestBinderBindsUnsignedAndFloatValues(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
 		return req, nil
@@ -471,7 +471,7 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req numericRequest, _ HandlerContext) (numericRequest, IAPIError) {
 		return req, nil
@@ -499,7 +499,10 @@ func TestRequestBinderInvalidFloatReturnsError(t *testing.T) {
 	require.NotNil(t, resp.Error.Details)
 	detail, ok := resp.Error.Details["error"].(string)
 	require.True(t, ok)
-	assert.True(t, strings.Contains(detail, "ParseFloat"))
+	// SECURITY: the summary names the query parameter by its struct tag and
+	// nothing else — no strconv text, no rejected input (ADR-084).
+	assert.Equal(t, `failed to bind query param "ratio"`, detail)
+	assert.NotContains(t, rec.Body.String(), "not-a-number")
 }
 
 func TestEnsureTraceParentHeaderPreservesExistingResponseHeader(t *testing.T) {
@@ -523,7 +526,7 @@ func TestTraceParentResponseHeaderPropagateWhenPresent(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: "ok"}, nil
@@ -554,7 +557,7 @@ func TestTraceParentResponseHeaderGenerateWhenMissing(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: "ok"}, nil
@@ -646,7 +649,7 @@ func TestWrapHandlerValidateOtherErrorInDevIncludesErrorDetail(t *testing.T) {
 	e.Validator = failingValidator{err: errors.New("boom")} // not a ValidationError
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -672,7 +675,7 @@ func TestWrapHandlerValidateOtherErrorInDevIncludesErrorDetail(t *testing.T) {
 	assert.False(t, hasValidationErrors)
 	got, ok := resp.Error.Details["error"].(string)
 	require.True(t, ok)
-	assert.Equal(t, "boom", got)
+	assert.Equal(t, unauditedValidationSummary, got)
 }
 
 func TestWrapHandlerNoContentResult(t *testing.T) {
@@ -681,7 +684,7 @@ func TestWrapHandlerNoContentResult(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	// Handler returns explicit NoContent result
 	handler := func(_ helloReq, _ HandlerContext) (NoContentResult, IAPIError) {
@@ -721,7 +724,7 @@ func TestWrapHandlerResultAddsHeaders(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req helloReq, _ HandlerContext) (Result[helloResp], IAPIError) {
 		r := NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name})
@@ -750,7 +753,7 @@ func TestWrapHandlerSuccessMetaTimestampAndTraceIdFromResponseHeader(t *testing.
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: "ok"}, nil
@@ -788,7 +791,7 @@ func TestWrapHandlerErrorMetaTimestampAndTraceIdFromResponseHeader(t *testing.T)
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: "ok"}, nil
@@ -823,7 +826,7 @@ func TestWrapHandlerErrorMetaTimestampAndTraceIdFromResponseHeader(t *testing.T)
 }
 
 func TestHandlerRegistryRegistersRoutes(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	hr := NewHandlerRegistry(cfg)
 	require.NotNil(t, hr)
 
@@ -1100,7 +1103,7 @@ func TestWrapHandlerPointerRequestType(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req *pointerReq, _ HandlerContext) (helloResp, IAPIError) {
 		// Verify we received a non-nil pointer
@@ -1139,7 +1142,7 @@ func TestWrapHandlerPointerRequestTypeWithQueryParams(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	type ptrQueryReq struct {
 		Name string `query:"name" validate:"required"`
@@ -1178,7 +1181,7 @@ func TestWrapHandlerPointerResponseType(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req helloReq, _ HandlerContext) (*pointerResp, IAPIError) {
 		// Return pointer to large response (avoids copy)
@@ -1218,7 +1221,7 @@ func TestWrapHandlerBothPointerTypes(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req *pointerReq, _ HandlerContext) (*pointerResp, IAPIError) {
 		require.NotNil(t, req)
@@ -1258,7 +1261,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 		e.Validator = v
 
 		binder := NewRequestBinder()
-		cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+		cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 		handler := func(req *pointerReq, _ HandlerContext) (helloResp, IAPIError) {
 			require.NotNil(t, req)
@@ -1284,7 +1287,7 @@ func TestWrapHandlerMixedPointerValue(t *testing.T) {
 		e.Validator = v
 
 		binder := NewRequestBinder()
-		cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+		cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 		handler := func(req helloReq, _ HandlerContext) (*helloResp, IAPIError) {
 			return &helloResp{Message: testResponse + req.Name}, nil
@@ -1309,7 +1312,7 @@ func TestWrapHandlerLargePayloadPointer(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	type largeBulkReq struct {
 		Records []string `json:"records"` // Simulates bulk data import
@@ -1364,7 +1367,7 @@ func TestWrapHandlerPointerRequestValidationError(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req *pointerReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -1396,7 +1399,7 @@ func TestWrapHandlerPointerRequestWithResult(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req *pointerReq, _ HandlerContext) (Result[pointerResp], IAPIError) {
 		require.NotNil(t, req)
@@ -1430,7 +1433,7 @@ func TestWrapHandlerPointerFieldsInStruct(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	type reqWithPointerFields struct {
 		Name   *string `json:"name" validate:"omitempty,min=3"`
@@ -1496,7 +1499,7 @@ func TestWrapHandlerNilPointerRejection(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req *pointerReq, _ HandlerContext) (helloResp, IAPIError) {
 		// In normal operation, this should never receive nil due to our check
@@ -1529,7 +1532,7 @@ func TestWrapHandlerEmptyJSONPointerRequest(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	type optionalFieldsReq struct {
 		Name  string `json:"name"`
@@ -1577,7 +1580,7 @@ func TestWrapHandlerRawResponseSuccess(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -1617,7 +1620,7 @@ func TestWrapHandlerRawResponseWithResult(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req helloReq, _ HandlerContext) (Result[helloResp], IAPIError) {
 		return NewResult(http.StatusCreated, helloResp{Message: testResponse + req.Name}), nil
@@ -1645,7 +1648,7 @@ func TestWrapHandlerRawResponseError(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(_ helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{}, NewNotFoundError("User")
@@ -1680,7 +1683,7 @@ func TestWrapHandlerRawResponseValidationError(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(req helloReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: testResponse + req.Name}, nil
@@ -1713,7 +1716,7 @@ func TestWrapHandlerRawResponseNoContent(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(_ helloReq, _ HandlerContext) (NoContentResult, IAPIError) {
 		return NoContent(), nil
@@ -1798,7 +1801,7 @@ func TestWrapHandlerMergesEnvelopeMeta(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
 		return ResultWithMeta[helloResp]{
@@ -1883,7 +1886,7 @@ func TestWrapHandlerEnvelopeMetaReservedKeyOverwriteAndWarn(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	rec := &levelRecLogger{}
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
@@ -1941,7 +1944,7 @@ func TestWrapHandlerEnvelopeMetaReservedKeyNilLoggerSilentlyDrops(t *testing.T) 
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
 		return ResultWithMeta[helloResp]{
@@ -1970,7 +1973,7 @@ func TestWrapHandlerEnvelopeMetaPropagatesHeadersAndStatus(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
 		r := ResultWithMeta[helloResp]{
@@ -1997,7 +2000,7 @@ func TestWrapHandlerRawResponseDropsEnvelopeMeta(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	rec := &recLogger{}
 
 	handler := func(_ helloReq, _ HandlerContext) (ResultWithMeta[helloResp], IAPIError) {
@@ -2038,7 +2041,7 @@ func TestWrapHandlerRawResponseDropsEnvelopeMeta(t *testing.T) {
 
 func TestWithLoggerOptionSetsField(t *testing.T) {
 	rec := &recLogger{}
-	hr := NewHandlerRegistry(&config.Config{App: config.AppConfig{Env: "development"}}, WithLogger(rec))
+	hr := NewHandlerRegistry(&config.Config{App: config.AppConfig{Env: "development", Debug: true}}, WithLogger(rec))
 	assert.Same(t, rec, hr.log.(*recLogger))
 }
 
@@ -2165,7 +2168,7 @@ func TestFrameworkEnvelopeWireParity(t *testing.T) {
 		c := e.NewContext(req, rec)
 		c.Response().Header().Set(echo.HeaderXRequestID, fixedTraceID)
 
-		cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+		cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 		apiErr := NewBadRequestError("boom")
 		require.NoError(t, formatErrorResponse(c, apiErr, cfg))
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -2194,7 +2197,7 @@ func TestFrameworkEnvelopeWireParity(t *testing.T) {
 // newHandlerContext so path params can be seeded.
 func TestHandlerContextAccessors(t *testing.T) {
 	e := echo.New()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/widgets/42?q=hello", http.NoBody)
 	req.Header.Set("X-Foo", "bar")
@@ -2230,7 +2233,7 @@ func TestHandlerContextAccessors(t *testing.T) {
 
 // TestHandlerContextJSONAndString verifies the response-writer convenience methods.
 func TestHandlerContextJSONAndString(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	t.Run("json", func(t *testing.T) {
 		rec := httptest.NewRecorder()
@@ -2260,7 +2263,7 @@ func TestHandlerContextSetRequestContextPropagation(t *testing.T) {
 	type ctxKey string
 	const key ctxKey = "principal"
 
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := NewHandlerContextForTest(rec, req, cfg)
@@ -2277,7 +2280,7 @@ func TestHandlerContextSetRequestContextPropagation(t *testing.T) {
 
 // TestHandlerContextSetRequest verifies SetRequest swaps the underlying *http.Request.
 func TestHandlerContextSetRequest(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/orig", http.NoBody)
 	rec := httptest.NewRecorder()
 	c := NewHandlerContextForTest(rec, req, cfg)
@@ -2296,7 +2299,7 @@ func TestHandlerContextSetRequest(t *testing.T) {
 func withGroupRoutedHandlerContext(t *testing.T, groupPrefix, routePath, requestURL string, fn func(c HandlerContext)) {
 	t.Helper()
 	e := echo.New()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	handlerRan := false
 	handler := func(ec *echo.Context) error {
 		handlerRan = true
@@ -2333,7 +2336,7 @@ type unmatchedRouteObservation struct {
 // request resolved to the given sentinel route name.
 func observeUnmatchedRoute(e *echo.Echo, sentinelRouteName string) *unmatchedRouteObservation {
 	obs := &unmatchedRouteObservation{}
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ec *echo.Context) error {
 			if ec.RouteInfo().Name == sentinelRouteName {
@@ -2367,7 +2370,7 @@ func TestHandlerContextRouteTemplate(t *testing.T) {
 	})
 
 	t.Run("empty_on_unrouted_context", func(t *testing.T) {
-		cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+		cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/anything", http.NoBody)
 		c := NewHandlerContextForTest(httptest.NewRecorder(), req, cfg)
 		assert.Empty(t, c.RouteTemplate())
@@ -2381,7 +2384,7 @@ func TestHandlerContextRouteTemplate(t *testing.T) {
 // an external consumer reaches. (The zero-option / unrouted-empty case is covered by
 // TestHandlerContextRouteTemplate's empty_on_unrouted_context subtest.)
 func TestNewHandlerContextForTestWithOptionsWithRouteTemplate(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	t.Run("option_seeds_route_template", func(t *testing.T) {
 		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/api/orders/42", http.NoBody)
@@ -2514,7 +2517,7 @@ func TestHandlerContextSetPathParams(t *testing.T) {
 		e.Validator = v
 
 		binder := NewRequestBinder()
-		cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+		cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 		var bound setPathParamsBindReq
 		handler := func(req setPathParamsBindReq, _ HandlerContext) (setPathParamsBindReq, IAPIError) {
@@ -2576,7 +2579,7 @@ func TestNewHandlerContextForTestSmoke(t *testing.T) {
 // its own response.
 func TestAdaptHandlerRoundTrip(t *testing.T) {
 	e := echo.New()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	eh := adaptHandler(func(c HandlerContext) error {
 		return c.String(http.StatusTeapot, "brewed")
@@ -2593,7 +2596,7 @@ func TestAdaptHandlerRoundTrip(t *testing.T) {
 // runs its logic and chains to the wrapped handler.
 func TestAdaptMiddlewareChainsThrough(t *testing.T) {
 	e := echo.New()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	em := adaptMiddleware(func(c HandlerContext, next func() error) error {
 		c.ResponseWriter().Header().Set("X-MW", "ran")
@@ -2618,7 +2621,7 @@ func TestAdaptMiddlewareChainsThrough(t *testing.T) {
 // IAPIError WITHOUT calling next aborts the chain and the error flows to the standard
 // error handler (producing the usual envelope).
 func TestAdaptMiddlewareAbortPropagatesError(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	e := echo.New()
 	e.HTTPErrorHandler = func(c *echo.Context, err error) { customErrorHandler(c, err, cfg, &testLogger{}) }
 
@@ -2649,7 +2652,7 @@ func TestAdaptMiddlewareAbortPropagatesError(t *testing.T) {
 // middleware exposed as a flat MiddlewareFunc still runs its echo logic and chains.
 func TestFromEchoMiddlewareRunsAndChains(t *testing.T) {
 	e := echo.New()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	flat := fromEchoMiddleware(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
@@ -2678,7 +2681,7 @@ func TestPublicMiddlewareConstructorsReturnFlatForm(t *testing.T) {
 	t.Setenv("CORS_DEV_WILDCARD", "true")
 
 	e := echo.New()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	rg := newRouteGroup(e.Group(""), "", cfg)
 
 	// Every constructor below MUST return server.MiddlewareFunc for these to compile.
@@ -2736,7 +2739,7 @@ type fallbackProbeResp struct {
 // invoked, round-trip through HandlerContext.echoContext() and run the full typed
 // pipeline, producing the standard data/meta envelope.
 func TestRegisterHandlerFallbackForNonEchoRegistrar(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	hr := NewHandlerRegistry(cfg)
 	cr := &capturingRegistrar{}
 
@@ -2756,7 +2759,7 @@ func TestRegisterHandlerFallbackForNonEchoRegistrar(t *testing.T) {
 
 func TestPublicTenantMiddlewareReturnsFlatForm(t *testing.T) {
 	e := echo.New()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	rg := newRouteGroup(e.Group(""), "", cfg)
 
 	resolver := &multitenant.HeaderResolver{HeaderName: HeaderXTenantID}
@@ -2803,7 +2806,7 @@ func newTypedPathServer(tb testing.TB) (*echo.Echo, *http.Request) {
 	tb.Helper()
 	e := echo.New()
 	e.Validator = NewValidator()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	hr := NewHandlerRegistry(cfg)
 	rg := newRouteGroup(e.Group(""), "", cfg)
 	GET(hr, rg, "/bench", func(_ EmptyRequest, _ HandlerContext) (helloResp, IAPIError) {
@@ -2859,7 +2862,7 @@ func TestTypedHandlerPathAllocsStable(t *testing.T) {
 // Method == echo.RouteNotFound, so PathParams/RouteTemplate must key on Method: dropping
 // that clause regresses the unmatched cases to a phantom "*" param and the "/api/*" template.
 func TestHandlerContextGroupCatchAllUnmatched(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	obs := &unmatchedRouteObservation{}
 
 	e := echo.New()
@@ -2944,7 +2947,7 @@ func TestHandlerContextGroupCatchAllUnmatched(t *testing.T) {
 // NARROW guard (empty only for a group catch-all): on a top-level 405 RouteTemplate() must
 // still report the engine's best-match template, while PathParams() is empty.
 func TestHandlerContextGlobalUnmatchedTemplate(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	obs := &unmatchedRouteObservation{}
 
 	e := echo.New()
@@ -3002,7 +3005,7 @@ func TestBindJSONBodyTrailingContent(t *testing.T) {
 	e.Validator = v
 
 	binder := NewRequestBinder()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	handler := func(req trailingBytesReq, _ HandlerContext) (helloResp, IAPIError) {
 		return helloResp{Message: req.Name}, nil
 	}
@@ -3062,7 +3065,7 @@ const wideJSONOnlyRequestBody = `{"f1":"a","f2":"b","f3":"c","f4":"d","f5":"e","
 func BenchmarkBindRequestJSONOnlyWideStruct(b *testing.B) {
 	e := echo.New()
 	e.Validator = NewValidator()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	hr := NewHandlerRegistry(cfg)
 	rg := newRouteGroup(e.Group(""), "", cfg)
 	POST(hr, rg, "/bench", func(_ wideJSONOnlyRequest, _ HandlerContext) (helloResp, IAPIError) {
@@ -3163,7 +3166,7 @@ func TestBindingPlanMatchesLegacyBehavior(t *testing.T) {
 			c.SetPathValues(echo.PathValues{{Name: "id", Value: "9"}})
 
 			var got planBindingPinReq
-			err := binder.bindRequestPlanned(c, &got, plan)
+			err := binder.bindRequestPlanned(c, &got, plan, true)
 			require.NoError(t, err)
 			tc.assert(t, got)
 		})
@@ -3205,12 +3208,12 @@ func TestBuildBindingPlanWithinFieldOrderAndLastWriteWins(t *testing.T) {
 	binder := NewRequestBinder()
 
 	var planned dualTagRequest
-	require.NoError(t, binder.bindRequestPlanned(newCtx(), &planned, plan))
+	require.NoError(t, binder.bindRequestPlanned(newCtx(), &planned, plan, true))
 	assert.Equal(t, "Q", planned.Val, "query is applied after param, so it wins")
 	assert.Equal(t, "H", planned.Triple, "header is applied last, so it wins")
 
 	var legacy dualTagRequest
-	require.NoError(t, binder.bindRequest(newCtx(), &legacy))
+	require.NoError(t, binder.bindRequest(newCtx(), &legacy, true))
 	assert.Equal(t, planned, legacy, "legacy and planned binding must be byte-identical")
 }
 
@@ -3239,10 +3242,10 @@ func TestLegacyBindPathMatchesPlanned(t *testing.T) {
 	}
 
 	var planned planBindingPinReq
-	require.NoError(t, binder.bindRequestPlanned(newCtx(), &planned, plan))
+	require.NoError(t, binder.bindRequestPlanned(newCtx(), &planned, plan, true))
 
 	var legacy planBindingPinReq
-	require.NoError(t, binder.bindRequest(newCtx(), &legacy))
+	require.NoError(t, binder.bindRequest(newCtx(), &legacy, true))
 
 	assert.Equal(t, planned, legacy, "legacy and planned binding must agree across all three sources")
 }
@@ -3252,7 +3255,7 @@ func TestLegacyBindPathMatchesPlanned(t *testing.T) {
 // than moving the panic to registration time), and the bind still panics at request time
 // via the legacy path's NumField call — byte-identical to pre-refactor behavior.
 func TestNonStructRequestTypePreservesF26Panic(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	binder := NewRequestBinder()
 
 	var rp *requestProcessor[string]
@@ -3264,7 +3267,7 @@ func TestNonStructRequestTypePreservesF26Panic(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/x", http.NoBody)
 	c := e.NewContext(req, httptest.NewRecorder())
-	assert.Panics(t, func() { _ = binder.bindRequest(c, new(string)) },
+	assert.Panics(t, func() { _ = binder.bindRequest(c, new(string), true) },
 		"non-struct T still panics at request time (F26 remains open by design)")
 }
 
@@ -3291,10 +3294,12 @@ func BenchmarkBindRequestPlannedVsLegacy(b *testing.B) {
 	}
 
 	b.Run("planned", func(b *testing.B) {
-		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error { return binder.bindRequestPlanned(c, d, plan) })
+		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error {
+			return binder.bindRequestPlanned(c, d, plan, true)
+		})
 	})
 	b.Run("legacy", func(b *testing.B) {
-		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error { return binder.bindRequest(c, d) })
+		run(b, func(c *echo.Context, d *wideJSONOnlyRequest) error { return binder.bindRequest(c, d, true) })
 	})
 }
 
@@ -3375,11 +3380,11 @@ func TestBindNamedStringSliceElementType(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var planned namedSliceReq
-			require.NoError(t, binder.bindRequestPlanned(newCtx(tc.setup), &planned, plan))
+			require.NoError(t, binder.bindRequestPlanned(newCtx(tc.setup), &planned, plan, true))
 			assert.Equal(t, tc.want, planned, "planned path must bind the named element type")
 
 			var legacy namedSliceReq
-			require.NoError(t, binder.bindRequest(newCtx(tc.setup), &legacy))
+			require.NoError(t, binder.bindRequest(newCtx(tc.setup), &legacy, true))
 			assert.Equal(t, tc.want, legacy, "legacy and planned paths must agree")
 		})
 	}
@@ -3391,7 +3396,7 @@ func TestBindNamedStringSliceElementType(t *testing.T) {
 func TestWrapHandlerNamedStringSliceHeaderReturns200(t *testing.T) {
 	e := echo.New()
 	e.Validator = NewValidator()
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 	binder := NewRequestBinder()
 
 	var seen namedSliceReq
@@ -3415,7 +3420,7 @@ func TestWrapHandlerNamedStringSliceHeaderReturns200(t *testing.T) {
 // not reach it: every one of its six call sites would otherwise echo a caller's
 // bytes straight back onto the wire. The table drives all six.
 func TestEnsureTraceParentHeaderNeverReflectsAnInvalidInboundValue(t *testing.T) {
-	cfg := &config.Config{App: config.AppConfig{Env: "development"}}
+	cfg := &config.Config{App: config.AppConfig{Env: "development", Debug: true}}
 
 	respond := map[string]func(c *echo.Context) error{
 		"formatSuccessResponse": func(c *echo.Context) error {

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/internal/saferender"
 	"github.com/gaborage/go-bricks/internal/validation"
 )
 
@@ -139,7 +140,7 @@ func TestPayloadErrorMessageComposition(t *testing.T) {
 // the field-path gate comes from the destination type the body was decoded into,
 // so a test cannot pass by choosing a friendlier gate than production would.
 func renderDecodeError(cause error, dest any) string {
-	summary := jsonCodec{}.summarize(cause, fieldPathIsSchema(reflect.TypeOf(dest)))
+	summary := jsonCodec{}.summarize(cause, saferender.FieldPathIsSchema(reflect.TypeOf(dest)))
 
 	return newPayloadDecodeError(orderEventType, cause, summary).Error()
 }
@@ -392,7 +393,7 @@ func TestSanitizeNamespace(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, sanitizeNamespace(tc.input))
+			assert.Equal(t, tc.want, saferender.RedactNamespace(tc.input))
 		})
 	}
 }

@@ -319,15 +319,15 @@ func TestValidationErrorError(t *testing.T) {
 		{
 			name: "single_error",
 			errors: []FieldError{
-				{Field: "Name", Message: "Name is required", Value: ""},
+				{Field: "Name", Message: "Name is required"},
 			},
 			expected: "validation failed: Name is required",
 		},
 		{
 			name: "multiple_errors",
 			errors: []FieldError{
-				{Field: "Name", Message: "Name is required", Value: ""},
-				{Field: "Email", Message: "Email must be valid", Value: "invalid"},
+				{Field: "Name", Message: "Name is required"},
+				{Field: "Email", Message: "Email must be valid"},
 			},
 			expected: "validation failed: 2 errors",
 		},
@@ -344,8 +344,8 @@ func TestValidationErrorError(t *testing.T) {
 func TestValidationErrorJSON(t *testing.T) {
 	ve := &ValidationError{
 		Errors: []FieldError{
-			{Field: "Name", Message: "Name is required", Value: ""},
-			{Field: "Email", Message: "Email must be valid", Value: "invalid-email"},
+			{Field: "Name", Message: "Name is required"},
+			{Field: "Email", Message: "Email must be valid"},
 		},
 	}
 
@@ -359,10 +359,8 @@ func TestValidationErrorJSON(t *testing.T) {
 	assert.Len(t, result.Errors, 2)
 	assert.Equal(t, "Name", result.Errors[0].Field)
 	assert.Equal(t, "Name is required", result.Errors[0].Message)
-	assert.Equal(t, "", result.Errors[0].Value)
 	assert.Equal(t, "Email", result.Errors[1].Field)
 	assert.Equal(t, "Email must be valid", result.Errors[1].Message)
-	assert.Equal(t, "invalid-email", result.Errors[1].Value)
 }
 
 func TestValidatorMCCCodeRule(t *testing.T) {
@@ -584,7 +582,7 @@ func TestNewValidationError(t *testing.T) {
 	// Should have errors for Name (required), Email (email), and MerchantCode (mcc_code)
 	assert.Len(t, validationErr.Errors, 3)
 
-	// Check that field names and values are correctly set
+	// Check that field names are correctly set
 	fieldErrors := make(map[string]FieldError)
 	for _, fieldErr := range validationErr.Errors {
 		fieldErrors[fieldErr.Field] = fieldErr
@@ -594,9 +592,12 @@ func TestNewValidationError(t *testing.T) {
 	assert.Contains(t, fieldErrors, "Email")
 	assert.Contains(t, fieldErrors, "MerchantCode")
 
-	assert.Equal(t, "", fieldErrors["Name"].Value)
-	assert.Equal(t, "invalid", fieldErrors["Email"].Value)
-	assert.Equal(t, "abc", fieldErrors["MerchantCode"].Value)
+	// SECURITY: the rejected value is gone from the wire shape (ADR-084); the
+	// marshaled JSON below is the falsifiable half of that claim.
+	encoded, err := json.Marshal(validationErr)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "invalid", "rejected email value must not be echoed")
+	assert.NotContains(t, string(encoded), "abc", "rejected merchant code must not be echoed")
 }
 
 func TestValidatorEdgeCases(t *testing.T) {

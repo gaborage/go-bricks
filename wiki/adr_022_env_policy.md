@@ -21,7 +21,7 @@ A grep of `cfg.App.Env` usage across the framework shows only **6 behavior-switc
 | Site | Logic |
 | --- | --- |
 | `server/server.go` × 2 | `SetCaptureStackTraces(isDevelopmentEnv(env))`; error details, which since #1140 also require `app.debug` |
-| `server/handler.go` × 2 | Dev-only error details on enveloped + raw responses |
+| `server/handler.go` × 1 | Error details on enveloped + raw responses, which since ADR-084 require `app.debug` too, at every status |
 | `server/cors.go` × 1 | Strict CORS when `APP_ENV == production` |
 | `migration/flyway.go` × 1 | Auto-migrate in development |
 

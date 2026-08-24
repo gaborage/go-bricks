@@ -1394,6 +1394,28 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-084: Response Error Details Carry No Request Input](adr_084_response_error_details_carry_no_request_input.md)
+
+**Date:** 2026-08-24 | **Status:** Accepted | **Breaking:** `server.FieldError.Value` removed
+
+The framework's own 400 details echoed caller text twice: `FieldError.Value` was the rejected
+input for any failed tag, and `FieldError.Field` carried a `dive`-validated map's input key
+verbatim (`Limits[4111111111111111-SECRET]`), as did the message built from it. A bind failure
+rendered `bindErr.Error()` — the JSON decoder's field path, or a strconv error quoting the
+rejected value. All of it was gated on `IsDevelopment()` alone, and response bodies never pass
+through the log path's `SensitiveDataFilter`. The decision moves messaging's safe-rendering
+primitives into `internal/saferender` unchanged, removes `Value` rather than redacting it,
+redacts the bracketed namespace span at both doors, renders bind failures as a summary naming
+the binding source and the destination field by struct tag, and puts every response detail map
+behind `Debug && IsDevelopment` at the single `devDetails` funnel — the `[C60.30]` posture, now
+at every status and on both renderers.
+
+**Key Benefits:** one owner for a rule two transports need; a `FieldError` that cannot leak
+because it holds nothing to leak; and a bind summary whose inputs are all author-written.
+**Migration:** [migrations.md](migrations.md) `[C61.1]`, `[C61.2]`.
+
+---
+
 ### [ADR-082: Identifier Arguments Are Validated At Every Door, and the Renderer Escapes Wherever It Quotes](adr_082_identifier_arguments_validated_at_every_door.md)
 
 **Date:** 2026-08-23 | **Status:** Accepted (decision); implementation staged — the renderer and table
@@ -1784,7 +1806,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-082) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-084) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
