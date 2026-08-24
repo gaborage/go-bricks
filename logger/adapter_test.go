@@ -890,3 +890,115 @@ func TestLogEventAdapterFilterCoverage(t *testing.T) {
 		assert.Contains(t, output, "visible_secret")
 	})
 }
+
+func TestLogEventAdapterErrNilRedactorIsUnchanged(t *testing.T) {
+	// Golden: with no redactor configured the whole line must be what zerolog
+	// itself writes for Err, byte for byte — the seam is opt-in.
+	testErr := errors.New(testutil.TestError)
+
+	var golden bytes.Buffer
+	goldenLogger := zerolog.New(&golden)
+	goldenLogger.Error().Err(testErr).Msg("error occurred")
+
+	filtered, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	filtered.Error().Err(testErr).Msg("error occurred")
+
+	assert.Equal(t, golden.String(), buf.String())
+}
+
+func TestLogEventAdapterErrRedactorReplacesMessage(t *testing.T) {
+	config := DefaultFilterConfig()
+	config.ErrorRedactor = func(error) string { return "[redacted]" }
+
+	log, buf := newFilteredEventLogger(t, config)
+	log.Error().Err(errors.New("card 4111111111111111 declined")).Msg("error occurred")
+
+	assert.Equal(t, "[redacted]", loggedField(t, buf, zerolog.ErrorFieldName))
+	assert.NotContains(t, buf.String(), "4111111111111111", "the raw error message must not reach the sink")
+	assert.Equal(t, "error occurred", loggedField(t, buf, zerolog.MessageFieldName))
+}
+
+func TestLogEventAdapterErrRedactorReceivesTheError(t *testing.T) {
+	testErr := errors.New(testutil.TestError)
+	var got error
+
+	config := DefaultFilterConfig()
+	config.ErrorRedactor = func(err error) string {
+		got = err
+		return "seen"
+	}
+
+	log, buf := newFilteredEventLogger(t, config)
+	log.Error().Err(testErr).Msg("error occurred")
+
+	assert.Same(t, testErr, got, "the redactor must receive the error it is redacting")
+	assert.Equal(t, "seen", loggedField(t, buf, zerolog.ErrorFieldName))
+}
+
+func TestLogEventAdapterErrNilErrorSkipsRedactor(t *testing.T) {
+	calls := 0
+	config := DefaultFilterConfig()
+	config.ErrorRedactor = func(error) string {
+		calls++
+		return "[redacted]"
+	}
+
+	log, buf := newFilteredEventLogger(t, config)
+	log.Error().Err(nil).Msg("error occurred")
+
+	assert.Zero(t, calls, "a nil error must not reach the redactor")
+	var line map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &line))
+	assert.NotContains(t, line, zerolog.ErrorFieldName, "a nil error must emit no error field")
+}
+
+func TestLogEventAdapterErrDisabledLevelSkipsRedactor(t *testing.T) {
+	// zerolog drops the field anyway at a disabled level; a redactor is
+	// unbounded consumer code, so it must not run to produce a dropped value.
+	calls := 0
+	config := DefaultFilterConfig()
+	config.ErrorRedactor = func(error) string {
+		calls++
+		return "[redacted]"
+	}
+
+	var buf bytes.Buffer
+	zl := zerolog.New(&buf).Level(zerolog.WarnLevel)
+	log := &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(config)}
+
+	log.Debug().Err(errors.New(testutil.TestError)).Msg("dropped")
+
+	assert.Zero(t, calls, "a disabled event must not reach the redactor")
+	assert.Empty(t, buf.String(), "a disabled event must emit nothing")
+}
+
+func TestLogEventAdapterErrRedactorLeavesOtherDoorsUnchanged(t *testing.T) {
+	// The hook is scoped to the Err seam: Interface, WithFields and Msgf keep
+	// rendering an error exactly as they do with no redactor configured.
+	const raw = "card 4111111111111111 declined"
+
+	config := DefaultFilterConfig()
+	config.ErrorRedactor = func(error) string { return "[redacted]" }
+
+	// Interface and WithFields hand the error to zerolog's JSON encoder, which
+	// renders *errors.errorString as an empty object — unchanged by the hook,
+	// and the reason a redactor is not a substitute for not logging errors as
+	// values.
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, config)
+		log.Error().Interface("failure", errors.New(raw)).Msg("m")
+		assert.Equal(t, map[string]any{}, loggedField(t, buf, "failure"))
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, config)
+		log.WithFields(map[string]any{"failure": errors.New(raw)}).Error().Msg("m")
+		assert.Equal(t, map[string]any{}, loggedField(t, buf, "failure"))
+	})
+
+	t.Run("msgf", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, config)
+		log.Error().Msgf("failed: %v", errors.New(raw))
+		assert.Equal(t, "failed: "+raw, loggedField(t, buf, zerolog.MessageFieldName))
+	})
+}

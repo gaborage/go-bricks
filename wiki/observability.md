@@ -141,9 +141,30 @@ fw, _, err = app.NewWithOptions(&app.Options{
 
 ### What this does *not* do
 
-- **No content-pattern scanning.** A PAN embedded in a free-text error message (e.g., `errors.New("card 4111111111111111 failed")` logged via `log.Err(err)`) is *not* caught. Build a `sensitive.Scrub(...)` helper in your service layer if you need this.
+- **No content-pattern scanning.** A PAN embedded in a free-text error message (e.g., `errors.New("card 4111111111111111 failed")` logged via `log.Err(err)`) is *not* caught by field-name masking. For the `Err(err)` seam specifically, wire an error redactor (see *Redacting error messages*, below); elsewhere, build a `sensitive.Scrub(...)` helper in your service layer.
 - **No per-tenant policies.** The filter is configured once at bootstrap and applied uniformly to every log line, regardless of tenant context. If different tenants have different masking requirements, you need either separate deployments or a custom logger wrapper at the handler layer.
 - **No metric/trace masking.** The filter only intercepts log records. OTel span attributes and metric labels go through different code paths. Treat span attributes as "would I publish this on a dashboard?" — never put a PAN in a span attribute.
+
+### Redacting error messages
+
+`FilterConfig.ErrorRedactor func(error) string` is the one seam that sees error *content*. When it is non-nil, every `LogEvent.Err(err)` call — the framework's own included — writes its return value under the `error` field instead of `err.Error()`. That matters because the framework calls `Err(err)` with consumer-authored errors at dozens of sites (handler failures, job failures, message-handler failures), which no service-layer scrub helper can reach.
+
+```go
+var panRegexp = regexp.MustCompile(`\d{13,19}`) // package level: compile once
+
+base := logger.DefaultFilterConfig()
+base.ErrorRedactor = func(err error) string {
+    return panRegexp.ReplaceAllString(err.Error(), "****")
+}
+
+fw, _, err := app.NewWithOptions(&app.Options{LoggerFilterConfig: base})
+```
+
+- **Code door only.** `Options.LoggerFilterConfig` replaces the whole config, so start from `logger.DefaultFilterConfig()` and set the field — a bare struct literal drops the default needle list. There is no YAML key: the value is a function, so the `log.sensitivefields` merge path always leaves the redactor nil.
+- **Nil is the default.** With no redactor, `Err` output is byte-identical to zerolog's own. The framework ships no scrubbing pattern.
+- **Scoped to `Err`.** A nil error still emits nothing and never reaches the redactor. `Interface`, `WithFields` and `Msgf` are unchanged — an error logged through those goes through field-name masking only. Recovered panic values are governed by ADR-081 (reported by type, never by value) and are not routed here.
+- **Runs inside the log call**, so a panicking redactor is covered by the same guards that already wrap framework log calls in deferred paths.
+- **Covers the OTLP sink too.** The OTel log bridge is an `io.Writer` over zerolog's emitted JSON, so the redacted string is what the log exporter receives — the raw message never reaches it.
 
 ### Defense in depth (recommended for PCI workloads)
 
