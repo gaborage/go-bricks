@@ -5443,8 +5443,10 @@ Per [ADR-024](adr_024_config_key_flatsmush.md), 21 snake_case config keys were r
   outside tests and `Expr()` itself.
 - apply: build expressions through `qb.Expr(sql, alias)` — it returns the same error, at construction,
   where the stack still names your code. A request-derived alias needs an allowlist your own code
-  owns, mapping the caller's value to one of a fixed set before it reaches the builder; the builder
-  will not accept a computed one. `MustExpr` keeps panicking, so reserve it for static initialization.
+  owns, mapping the caller's value to one of a fixed set before it reaches the builder; passing it
+  through the builder does not make it safe, because the check is a denylist and an alias avoiding the
+  six sequences is accepted (see `residual:` below). `MustExpr` keeps panicking, so reserve it for
+  static initialization.
 - verify: both directions. Assert the expressions you intend to ship still build (`err == nil` from
   `ToSQL()`, and the SQL is byte-identical to what the same expression rendered before), then feed one
   known-bad literal (`RawExpression{SQL: "1", Alias: "x--"}`) to the same door and assert

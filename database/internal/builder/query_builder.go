@@ -1149,44 +1149,70 @@ func (sqb *SelectQueryBuilder) GroupBy(groupBys ...any) dbtypes.SelectQueryBuild
 	return sqb
 }
 
+// failClause records the FIRST violation and leaves any later one alone — the
+// deferred-error rule ADR-031 established. The builder is doomed from here, which
+// is why every clause door consults sqb.err before reading the next value.
+func (sqb *SelectQueryBuilder) failClause(err error) {
+	if sqb.err == nil {
+		sqb.err = err
+	}
+}
+
+// appendClauseString validates an identifier argument (with its optional
+// ASC/DESC [NULLS …] direction) BEFORE quoting/interpolation on ALL vendors, so a
+// crafted clause argument cannot inject a second statement or comment (M9). Use
+// qb.Expr() for complex expressions that legitimately need raw SQL.
+func (sqb *SelectQueryBuilder) appendClauseString(processed *[]string, value, clauseName string, stringFormatter func(string) string) {
+	if err := validateClauseIdentifier(clauseName, value); err != nil {
+		sqb.failClause(err)
+		return
+	}
+	*processed = append(*processed, stringFormatter(value))
+}
+
+// appendClauseExpr runs the same consumption-time check Select applies: a
+// RawExpression struct literal never passed through Expr() (#1153).
+func (sqb *SelectQueryBuilder) appendClauseExpr(processed *[]string, expr dbtypes.RawExpression) {
+	if err := expr.Validate(); err != nil {
+		sqb.failClause(err)
+		return
+	}
+	*processed = append(*processed, expr.SQL)
+}
+
+// appendClauseValuesOf flattens a slice of clause arguments. The per-value guard
+// in appendClauseValue stops the walk at the first violation.
+func appendClauseValuesOf[T any](sqb *SelectQueryBuilder, processed *[]string, values []T, clauseName string, stringFormatter func(string) string) {
+	for _, item := range values {
+		sqb.appendClauseValue(processed, item, clauseName, stringFormatter)
+	}
+}
+
+// appendClauseValue flattens one GroupBy/OrderBy argument into the rendered
+// clause list. A violation is deferred to ToSQL() rather than panicked, the split
+// ADR-031 established; panics stay reserved for a programming error — an
+// unsupported TYPE. Once an error is deferred the builder returns early for every
+// later value: the statement is already lost, so a trailing bad argument must
+// surface as that deferred error rather than as a panic from this function's
+// default branch.
 func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any, clauseName string, stringFormatter func(string) string) {
+	if sqb.err != nil {
+		return
+	}
+
 	switch v := value.(type) {
 	case nil:
 		panic(fmt.Sprintf("nil %s in %s", clauseName, clauseName))
 	case string:
-		// Validate the identifier (with its optional ASC/DESC [NULLS …] direction)
-		// BEFORE quoting/interpolation on ALL vendors so a crafted clause argument
-		// cannot inject a second statement or comment (M9). Use qb.Expr() for
-		// complex expressions that legitimately need raw SQL.
-		if err := validateClauseIdentifier(clauseName, v); err != nil {
-			if sqb.err == nil {
-				sqb.err = err
-			}
-			return
-		}
-		*processed = append(*processed, stringFormatter(v))
+		sqb.appendClauseString(processed, v, clauseName, stringFormatter)
 	case dbtypes.RawExpression:
-		// Same consumption-time check as Select: a literal skips Expr(). First
-		// violation wins, the deferred-error split ADR-031 established.
-		if err := v.Validate(); err != nil {
-			if sqb.err == nil {
-				sqb.err = err
-			}
-			return
-		}
-		*processed = append(*processed, v.SQL)
+		sqb.appendClauseExpr(processed, v)
 	case []string:
-		for _, item := range v {
-			sqb.appendClauseValue(processed, item, clauseName, stringFormatter)
-		}
+		appendClauseValuesOf(sqb, processed, v, clauseName, stringFormatter)
 	case []dbtypes.RawExpression:
-		for _, item := range v {
-			sqb.appendClauseValue(processed, item, clauseName, stringFormatter)
-		}
+		appendClauseValuesOf(sqb, processed, v, clauseName, stringFormatter)
 	case []any:
-		for _, item := range v {
-			sqb.appendClauseValue(processed, item, clauseName, stringFormatter)
-		}
+		appendClauseValuesOf(sqb, processed, v, clauseName, stringFormatter)
 	default:
 		panic(fmt.Sprintf("unsupported %s type: %T (must be string or RawExpression)", clauseName, value))
 	}

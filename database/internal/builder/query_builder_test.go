@@ -2651,3 +2651,70 @@ func TestRawExpressionLiteralRendersLikeMustExpr(t *testing.T) {
 		})
 	}
 }
+
+// TestClauseDoorsStopAtFirstDeferredError locks in the first-violation-wins rule
+// for GroupBy/OrderBy: once a value defers an error the statement is already
+// lost, so a LATER value must not be interpolated — and must not reach the
+// unsupported-type panic either. Before the fix `OrderBy(RawExpression{SQL: ""},
+// 3.14)` recorded the error and then panicked on the float.
+func TestClauseDoorsStopAtFirstDeferredError(t *testing.T) {
+	badExpr := dbtypes.RawExpression{SQL: ""}
+
+	doors := []struct {
+		name  string
+		build func(qb *QueryBuilder) dbtypes.SelectQueryBuilder
+	}{
+		{
+			name: "order_by_variadic",
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return qb.Select("id").From("users").OrderBy(badExpr, 3.14)
+			},
+		},
+		{
+			name: "group_by_variadic",
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return qb.Select("id").From("users").GroupBy(badExpr, 3.14)
+			},
+		},
+		{
+			name: "order_by_slice",
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return qb.Select("id").From("users").OrderBy([]any{badExpr, 3.14})
+			},
+		},
+		{
+			name: "group_by_slice",
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return qb.Select("id").From("users").GroupBy([]any{badExpr, 3.14})
+			},
+		},
+		{
+			name: "order_by_bad_string_then_float",
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return qb.Select("id").From("users").OrderBy("id; DROP TABLE users--", 3.14)
+			},
+		},
+	}
+
+	for _, door := range doors {
+		t.Run(door.name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+			var builder dbtypes.SelectQueryBuilder
+			require.NotPanics(t, func() { builder = door.build(qb) })
+
+			sql, args, err := builder.ToSQL()
+			require.Error(t, err)
+			assert.Empty(t, sql)
+			assert.Empty(t, args)
+		})
+	}
+
+	t.Run("first_violation_is_the_one_reported", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		_, _, err := qb.Select("id").From("users").OrderBy(badExpr, 3.14).ToSQL()
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
+	})
+}
