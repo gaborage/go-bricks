@@ -263,12 +263,16 @@ func oracleQuoteIdentifier(column string) string {
 		return trimmed
 	}
 
-	if strings.Contains(trimmed, ".") {
-		parts := strings.Split(trimmed, ".")
-		for i, part := range parts {
-			parts[i] = oracleQuoteIdentifier(part)
+	// Split quote-aware, so a dot INSIDE a quoted segment stays part of the name:
+	// `"my.col"` is one column Oracle accepts, not two. parseQualifiedIdentifier
+	// is the walker isSQLFunction already used; a string it rejects (unbalanced
+	// quotes) is rendered as a single identifier rather than silently losing
+	// segments — unreachable from any validated door, but total either way.
+	if segments, ok := parseQualifiedIdentifier(trimmed); ok && len(segments) > 1 {
+		for i, segment := range segments {
+			segments[i] = oracleQuoteIdentifier(segment)
 		}
-		return strings.Join(parts, ".")
+		return strings.Join(segments, ".")
 	}
 
 	if isQuotedIdentifier(trimmed) {

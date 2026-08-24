@@ -2226,13 +2226,29 @@ func TestAllFieldsWithAlias(t *testing.T) {
 // SQL. Both vendors run it — the gap is not Oracle grammar, it is a rendering
 // defect the two escapers share (#1104).
 func TestEscapeIdentifierDoublesInteriorQuotes(t *testing.T) {
-	// The qualified case belongs to EscapeIdentifier alone: it quotes every dot
+	// The qualified cases belong to EscapeIdentifier alone: it quotes every dot
 	// segment, while the Oracle renderer quotes only the segments that need it,
-	// so this one has no shared golden to derive a rendering from.
+	// so these have no shared golden to derive a rendering from.
 	tests := append([]identifierEscapeCase{}, identifierEscapeCases...)
-	tests = append(tests, identifierEscapeCase{
-		name: "qualified_name_escapes_each_part", identifier: `a"b.c`, escaped: `"a""b"."c"`,
-	})
+	tests = append(tests,
+		identifierEscapeCase{
+			name: "qualified_name_escapes_each_part", identifier: `a.c`, escaped: `"a"."c"`,
+		},
+		// An unbalanced quote makes the whole string unparseable as a qualified
+		// name, so it renders as ONE escaped identifier rather than being split
+		// on a dot the parser never reached (#1151). Fully escaped either way;
+		// no validated door admits it, since ADR-082 rejects the quote first.
+		identifierEscapeCase{
+			name: "unparseable_name_renders_as_one_identifier", identifier: `a"b.c`, escaped: `"a""b.c"`,
+		},
+		// A dot INSIDE a quoted segment is part of the name: one column, not two.
+		identifierEscapeCase{
+			name: "dotted_quoted_name_stays_one_identifier", identifier: `"my.col"`, escaped: `"my.col"`,
+		},
+		identifierEscapeCase{
+			name: "qualified_dotted_quoted_second_segment", identifier: `t."my.col"`, escaped: `"t"."my.col"`,
+		},
+	)
 
 	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
 		qb := NewQueryBuilder(vendor)

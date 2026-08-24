@@ -773,6 +773,13 @@ func TestParseQualifiedIdentifier(t *testing.T) {
 		{"mixed_quoted", `"SCHEMA".PKG."FUNC"`, []string{`"SCHEMA"`, "PKG", `"FUNC"`}, true},
 		{"all_quoted", `"SCHEMA"."PKG"."FUNC"`, []string{`"SCHEMA"`, `"PKG"`, `"FUNC"`}, true},
 
+		// Doubled quotes inside a quoted segment. The walker is a production
+		// renderer path since #1151, so its escape handling is load-bearing:
+		// these two inputs are what distinguish reading the character AFTER the
+		// quote from reading the one before it.
+		{"quoted_empty_segment", `"".x`, []string{`""`, "x"}, true},
+		{"segment_ends_with_doubled_quote", `"a""".b`, []string{`"a"""`, "b"}, true},
+
 		// Edge cases
 		{"single_dot", ".", nil, false},
 		{"empty_string", "", []string{""}, false},   // Will have empty segment
@@ -1465,5 +1472,28 @@ func TestBuildUpsertValidatesTable(t *testing.T) {
 				require.NotEmpty(t, sql)
 			})
 		}
+	}
+}
+
+func TestOracleQuoteIdentifierDottedQuotedNames(t *testing.T) {
+	tests := []struct {
+		name       string
+		identifier string
+		want       string
+	}{
+		{name: "dotted_quoted_name_stays_one_identifier", identifier: `"my.col"`, want: `"my.col"`},
+		{name: "qualified_second_segment_stays_intact", identifier: `t."my.col"`, want: `t."my.col"`},
+		{name: "qualified_plain_name_splits", identifier: `t.level`, want: `t."level"`},
+		{name: "already_quoted_segments_pass_through", identifier: `"a"."b"`, want: `"a"."b"`},
+		// Unbalanced quotes: unparseable as a qualified name, so it renders as one
+		// escaped identifier rather than splitting on a dot the parser never
+		// reached. No validated door admits it — ADR-082 rejects the quote first.
+		{name: "unparseable_name_renders_as_one_identifier", identifier: `a"b.c`, want: `"a""b.c"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, oracleQuoteIdentifier(tt.identifier))
+		})
 	}
 }

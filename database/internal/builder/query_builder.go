@@ -690,7 +690,15 @@ func (qb *QueryBuilder) BuildBooleanValue(value bool) any {
 
 // EscapeIdentifier escapes a database identifier (table/column name) according to vendor rules
 func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
-	parts := strings.Split(identifier, ".")
+	// Quote-aware split: a dot inside a quoted segment belongs to the name, so
+	// `"my.col"` is one identifier and must not be torn into `"my` and `col"`
+	// and quoted half by half (#1151). parseQualifiedIdentifier is the existing
+	// walker; a string it rejects is treated as a single identifier so nothing
+	// is silently dropped.
+	parts, ok := parseQualifiedIdentifier(identifier)
+	if !ok {
+		parts = []string{identifier}
+	}
 	for i, part := range parts {
 		if isQuotedIdentifier(part) {
 			// Already a well-formed quoted identifier; re-quoting would rename it.
