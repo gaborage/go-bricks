@@ -4629,7 +4629,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C61.1] `server.FieldError.Value` is removed · breaking · when: always
 
-- detect: `git grep -nE '\.Value\b' -- '*.go'` over your handlers, error middleware and tests,
+- detect: `git grep -nE '[.]Value([^A-Za-z0-9_]|$)' -- '*.go'` over your handlers, error middleware and tests,
   and read the hits whose receiver is a `server.FieldError` — the name is common enough that the
   grep alone does not decide. Then grep your RESPONSE fixtures and contract tests for a `value`
   key inside a `validationErrors` entry (`git grep -n '"value"' -- '*.json' '*.yaml' '*_test.go'`);
