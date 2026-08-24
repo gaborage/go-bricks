@@ -1037,3 +1037,44 @@ func TestErrorDetailGateLogsTypeOnlyWithDebugOff(t *testing.T) {
 		})
 	}
 }
+
+// TestClassifyErrorWithholdsDetailOutsideDevelopment pins the PRODUCER half of the
+// #1140 gate independently of the renderer. formatErrorResponse gates devDetails on
+// the environment too, so the HTTP matrix above cannot observe classifyError's own
+// IsDevelopment conjunct — dropping it changes no response body. This asserts the
+// site is safe standalone, which is what its SECURITY comment claims.
+func TestClassifyErrorWithholdsDetailOutsideDevelopment(t *testing.T) {
+	tests := []struct {
+		name         string
+		env          string
+		debug        bool
+		expectDetail bool
+	}{
+		{name: "development_debug_on", env: config.EnvDevelopment, debug: true, expectDetail: true},
+		{name: "development_debug_off", env: config.EnvDevelopment, debug: false, expectDetail: false},
+		{name: "production_debug_on", env: config.EnvProduction, debug: true, expectDetail: false},
+		{name: "production_debug_off", env: config.EnvProduction, debug: false, expectDetail: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := newTestConfig("", "", "")
+			cfg.App.Env = tt.env
+			cfg.App.Debug = tt.debug
+
+			e := echo.New()
+			req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/test", http.NoBody)
+			c := e.NewContext(req, httptest.NewRecorder())
+
+			apiErr := classifyError(errors.New(detailGateErrorText), c, cfg, &testLogger{})
+			detail, present := apiErr.Details()["error"]
+
+			if !tt.expectDetail {
+				assert.False(t, present, "classifyError must not attach details.error unless app.debug AND a development env")
+				return
+			}
+			require.True(t, present, "classifyError must attach details.error in development with app.debug on")
+			assert.Contains(t, detail, detailGateErrorText)
+		})
+	}
+}
