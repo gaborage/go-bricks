@@ -17,6 +17,16 @@ go test -race -run TestSpecificFailing ./package
 LINT_CLEAN=1 make lint
 ```
 
+### Alloc guards fail after a toolchain change
+
+The ADR-026 alloc guards (`make test-alloc`, run inside `make check`) are
+tripwire guards (CONTEXT.md § Testing). A Go toolchain change can shift the
+measurement uniformly (go1.26.6 → go1.27.0 was +3 on every request
+path, #1177); the fix is to re-measure under the new toolchain and re-pin
+the baseline constants in the bump's own PR. Locally, remember `GOTOOLCHAIN=auto`
+lets a newer installed Go outrank the go.mod pin, so a guard that fails only
+on your machine usually means your toolchain, not the code.
+
 ### Faster local Oracle integration runs (`GO_BRICKS_ORACLE_CONTAINER`)
 
 Since ADR-020, the Oracle integration suite provisions one container per `go test` invocation (~18.5s cold-start) and runs every test in an isolated schema. For tight local iteration where you re-run the suite many times in a row, a long-lived developer container saves the 18.5s on each invocation.

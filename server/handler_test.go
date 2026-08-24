@@ -2825,11 +2825,16 @@ func BenchmarkTypedHandlerPath(b *testing.B) {
 	}
 }
 
-// typedHandlerPathMaxAllocs locks in the typed request path's allocation count so a future
-// change to newHandlerContext, the HandlerContext accessors, or the addEcho seam that adds
-// per-request allocations is caught (ADR-026). The ceiling is the measured baseline plus a
-// tiny margin for cross-platform/Go-version noise. Measured baseline: 20 allocs/op.
-const typedHandlerPathMaxAllocs = 23
+// Tripwire guard (CONTEXT.md § Testing): re-pin the baseline on a toolchain shift, never
+// widen the margin. Locks the typed request path's allocation count so a future change to
+// newHandlerContext, the HandlerContext accessors, or the addEcho seam that adds
+// per-request allocations is caught (ADR-026). Measured baseline: 23 allocs/op on
+// go1.27.0 (20 on go1.26.6; the +3 was a uniform toolchain shift, #1177).
+const (
+	typedHandlerPathBaselineAllocs = 23
+	typedHandlerPathAllocsMargin   = 3
+	typedHandlerPathMaxAllocs      = typedHandlerPathBaselineAllocs + typedHandlerPathAllocsMargin
+)
 
 // TestTypedHandlerPathAllocsStable asserts the typed request path's allocs/op stays at or
 // below the locked baseline — proving newHandlerContext + accessors + the addEcho seam add
