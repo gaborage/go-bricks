@@ -457,18 +457,21 @@ func TestFlywayMigratorDryRunRunsValidate(t *testing.T) {
 	}
 }
 
-// createCommandCapturingStub builds a flyway-stub that writes the verbatim
-// arg list to capturePath, then optionally emits stdoutPayload on stdout
-// before exiting 0. Pass an empty stdoutPayload for the args-only variant.
-// Path interpolations are shell-quoted so the script survives $TMPDIR values
-// containing spaces or other shell-metacharacters.
+// createCommandCapturingStub builds a flyway-stub that appends the verbatim
+// arg list to capturePath as one line per invocation, then optionally emits
+// stdoutPayload on stdout before exiting 0. Pass an empty stdoutPayload for the
+// args-only variant. Appending (not truncating) is what lets a multi-invocation
+// run — a MigrateAll fleet pass — be read back one line per tenant; each caller
+// gets a fresh t.TempDir(), so a single-invocation test sees exactly one line
+// either way. Path interpolations are shell-quoted so the script survives
+// $TMPDIR values containing spaces or other shell-metacharacters.
 func createCommandCapturingStub(t *testing.T, stdoutPayload string) (stubPath, capturePath string) {
 	t.Helper()
 	dir := t.TempDir()
 	stubPath = filepath.Join(dir, "flyway-stub.sh")
 	capturePath = filepath.Join(dir, "captured_command")
 
-	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" > %q\n", capturePath)
+	script := fmt.Sprintf("#!/bin/sh\necho \"$@\" >> %q\n", capturePath)
 	if stdoutPayload != "" {
 		payloadPath := filepath.Join(dir, "payload")
 		require.NoError(t, os.WriteFile(payloadPath, []byte(stdoutPayload), 0o644))
@@ -822,7 +825,10 @@ func TestBuildEnvironmentVariablesRejectsControlChars(t *testing.T) {
 	})
 }
 
-func TestBuildEnvironmentVariablesForwardsPostgreSQLTLS(t *testing.T) {
+// TLS no longer reaches Flyway through the environment: ADR-085 puts sslmode and
+// sslrootcert on the framework-built JDBC URL, so an exported DB_SSL* would be a
+// silent second, unread channel.
+func TestBuildEnvironmentVariablesExportsNoTLS(t *testing.T) {
 	db := &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Username: "u", Password: "p", Database: "d"}
 	db.TLS.Mode = "verify-full"
 	db.TLS.CAFile = "/etc/ssl/ca.pem"
@@ -832,94 +838,7 @@ func TestBuildEnvironmentVariablesForwardsPostgreSQLTLS(t *testing.T) {
 	envVars, err := buildEnvironmentVariables(db)
 
 	require.NoError(t, err)
-	assertEnvVarsContain(t, envVars, []string{
-		"DB_SSLMODE=verify-full",
-		"DB_SSLROOTCERT=/etc/ssl/ca.pem",
-		"DB_SSLCERT=/etc/ssl/client.crt",
-		"DB_SSLKEY=/etc/ssl/client.key",
-	})
-}
-
-func TestBuildEnvironmentVariablesOmitsUnsetTLSFields(t *testing.T) {
-	db := &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Username: "u", Password: "p", Database: "d"}
-	db.TLS.Mode = "require"
-
-	envVars, err := buildEnvironmentVariables(db)
-
-	require.NoError(t, err)
-	assert.Contains(t, envVars, envVarSSLMode+"=require")
-	// A conf that interpolates ${env.DB_SSLROOTCERT} unconditionally must not receive a
-	// blank value it would paste into the URL as `sslrootcert=`. Prefix-matching on the
-	// key (not slice membership) also catches a stray non-empty value.
-	assertEnvVarsLackPrefixes(t, envVars, []string{envVarSSLRootCert, envVarSSLCert, envVarSSLKey})
-}
-
-func TestBuildEnvironmentVariablesEmitsNoTLSWithoutConfig(t *testing.T) {
-	db := &config.DatabaseConfig{Type: "postgresql", Host: "h", Port: 5432, Username: "u", Password: "p", Database: "d"}
-
-	envVars, err := buildEnvironmentVariables(db)
-
-	require.NoError(t, err)
-	assertEnvVarsLackPrefixes(t, envVars, tlsEnvVarNames)
-}
-
-func TestBuildEnvironmentVariablesOracleCarriesNoTLS(t *testing.T) {
-	// config validation rejects database.tls on Oracle (ADR-062), so even a config that
-	// somehow carries it must not have TLS forwarded into an Oracle Flyway run.
-	db := &config.DatabaseConfig{Type: "oracle", Host: "h", Port: 1521, Username: "u", Password: "p", Database: "PDB1"}
-	db.TLS.Mode = "require"
-	db.TLS.CAFile = "/etc/ssl/ca.pem"
-
-	envVars, err := buildEnvironmentVariables(db)
-
-	require.NoError(t, err)
-	assertEnvVarsLackPrefixes(t, envVars, tlsEnvVarNames)
-}
-
-// tlsEnvVarNames are the keys buildEnvironmentVariables may export for TLS; tests assert
-// against the whole set so a newly added one cannot slip past an outdated literal list.
-var tlsEnvVarNames = []string{envVarSSLMode, envVarSSLRootCert, envVarSSLCert, envVarSSLKey}
-
-func TestShouldWarnTLSForwarding(t *testing.T) {
-	withTLS := &config.DatabaseConfig{}
-	withTLS.TLS.Mode = "require"
-
-	// PostgreSQL is the only vendor whose TLS is forwarded, so it is the only one whose
-	// JDBC URL can fail to consume it — the whole point of the advisory.
-	assert.True(t, shouldWarnTLSForwarding(config.PostgreSQL, withTLS))
-
-	// Oracle exports nothing, so an advisory naming DB_SSL* would describe variables that
-	// do not exist. ADR-062 rejects database.tls on Oracle, but a dynamic provider can
-	// still deliver this shape.
-	assert.False(t, shouldWarnTLSForwarding(config.Oracle, withTLS),
-		"Oracle forwards no TLS, so it must not claim it did")
-	assert.False(t, shouldWarnTLSForwarding("", withTLS))
-
-	// No TLS configured means nothing to advise about, on any vendor.
-	assert.False(t, shouldWarnTLSForwarding(config.PostgreSQL, &config.DatabaseConfig{}))
-	assert.False(t, shouldWarnTLSForwarding(config.PostgreSQL, nil))
-}
-
-func TestHasTLSSettings(t *testing.T) {
-	assert.False(t, hasTLSSettings(nil))
-	assert.False(t, hasTLSSettings(&config.DatabaseConfig{}))
-
-	tests := []struct {
-		name  string
-		apply func(*config.DatabaseConfig)
-	}{
-		{name: "mode", apply: func(c *config.DatabaseConfig) { c.TLS.Mode = "require" }},
-		{name: "cert", apply: func(c *config.DatabaseConfig) { c.TLS.CertFile = "/c" }},
-		{name: "key", apply: func(c *config.DatabaseConfig) { c.TLS.KeyFile = "/k" }},
-		{name: "ca", apply: func(c *config.DatabaseConfig) { c.TLS.CAFile = "/a" }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db := &config.DatabaseConfig{}
-			tt.apply(db)
-			assert.True(t, hasTLSSettings(db))
-		})
-	}
+	assertEnvVarsLackPrefixes(t, envVars, []string{"DB_SSL"})
 }
 
 func assertEnvVarsContain(t *testing.T, envVars, expected []string) {

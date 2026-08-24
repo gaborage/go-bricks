@@ -37,6 +37,10 @@ const (
 	envPipelineRunID = "GOBRICKS_MIGRATE_PIPELINE_RUN_ID"
 
 	jsonKeyTenants = "tenants"
+
+	// migrateCLIAppName is reported as the built JDBC URL's application_name, so a
+	// migration run by this CLI is identifiable in pg_stat_activity.
+	migrateCLIAppName = "go-bricks-migrate"
 )
 
 // resolveFlags applies env-var fallbacks and validates flags in place.
@@ -440,8 +444,12 @@ func runAction(cmd *cobra.Command, flags *CommonFlags, action migration.Action) 
 	log := newCLILogger(flags)
 
 	// Construct a minimal *config.Config to satisfy FlywayMigrator's needs.
-	// Per-tenant DatabaseConfig is supplied via MigrateAll.
-	migCfg := &config.Config{App: config.AppConfig{Env: "production"}}
+	// Per-tenant DatabaseConfig is supplied via MigrateAll. App.Name becomes the
+	// built JDBC URL's application_name (ADR-085), so a DBA watching
+	// pg_stat_activity sees which tool is migrating; left empty the parameter is
+	// omitted entirely, which is worse than the hand-carried value in the
+	// flyway.conf URLs this replaces.
+	migCfg := &config.Config{App: config.AppConfig{Name: migrateCLIAppName, Env: "production"}}
 	migrator := migration.NewFlywayMigrator(migCfg, log)
 
 	out := cmd.OutOrStdout()

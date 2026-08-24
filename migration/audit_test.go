@@ -494,9 +494,15 @@ func TestAuditTargetFallsBackToMigratorDatabaseWhenAllElseEmpty(t *testing.T) {
 
 	// MigrateFor with an empty per-call db.Database forces the 2nd fallback
 	// to also fail; only the migrator's config.Database.Database remains.
+	// Delivered as a connectionstring config: ADR-085 rejects a PostgreSQL
+	// block that names a URL target (host/port) but no database as a broken
+	// target, so the discrete-field spelling of this fixture no longer reaches
+	// the audit emission this test is about. A connectionstring is one of the
+	// documented conf-owned shapes, so it still gets there with Database empty.
 	emptyDB := &config.DatabaseConfig{
-		Type: "postgresql", Host: "h", Port: 15432,
-		Username: "user", Password: "longenough-pw",
+		Type:             "postgresql",
+		ConnectionString: "postgres://user@h:15432/",
+		Username:         "user", Password: "longenough-pw",
 		Database: "", // empty — middle fallback yields nothing
 	}
 	_, err := fm.MigrateFor(context.Background(), emptyDB, mcfg)

@@ -1,0 +1,213 @@
+package migration
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/gaborage/go-bricks/config"
+)
+
+// jdbcPostgresScheme prefixes every framework-built PostgreSQL JDBC URL.
+const jdbcPostgresScheme = "jdbc:postgresql://"
+
+// URL query parameters the framework sets on the built JDBC URL. These are
+// pgjdbc's spellings: `sslmode` and `sslrootcert` match libpq, but the
+// application name does NOT — pgjdbc's property is `ApplicationName`
+// (PGProperty.APPLICATION_NAME), and its startup-parameter assembly reads a
+// WHITELIST of known PGProperty keys, so a libpq-spelled `application_name` in
+// the URL is silently dropped rather than forwarded. The server-side column it
+// ends up in is still named `application_name`.
+const (
+	urlParamApplicationName = "ApplicationName"
+	urlParamSSLMode         = "sslmode"
+	urlParamSSLRootCert     = "sslrootcert"
+)
+
+// safeMigrationHostname is the DNS-name grammar a host may use when it is not an
+// IP literal: dot-separated labels of letters, digits, hyphen and underscore.
+// What it excludes is the point — `/ ? # & = @ : [ ]`, percent-encoding and
+// whitespace are the characters that would let a host value escape the URL
+// authority. Underscore is admitted deliberately though RFC 1123 omits it: it is
+// not a URL delimiter, so it cannot escape anything, and internal DNS and Docker
+// hostnames use it, so rejecting it would break real deployments for no gain.
+var safeMigrationHostname = regexp.MustCompile(`^[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9_])?(\.[A-Za-z0-9_]([A-Za-z0-9_-]*[A-Za-z0-9_])?)*\.?$`)
+
+// ErrInvalidMigrationHost rejects a database.host that is neither an IP literal
+// nor a plain DNS name. The host is the one URL component that cannot be
+// percent-encoded (it must stay a routable address), so it is validated instead:
+// unescaped, a value like `h/?sslmode=disable&x=` ends the authority early and
+// pgjdbc reads the injected parameters, turning a verify-full config into a
+// cleartext connection to a host of the value's choosing. The error names the
+// field but never echoes it — a misconfigured host can hold a whole DSN,
+// password included. Match with errors.Is.
+var ErrInvalidMigrationHost = errors.New("migration: database.host is not a valid hostname or IP address")
+
+// ErrIncompleteMigrationTarget rejects a PostgreSQL config the framework cannot
+// build a URL from when deferring to the conf would lose a guarantee: either the
+// block is PARTIALLY filled (some identity field set, but not a usable host AND
+// database — a target broken in transit, e.g. a tenant whose host arrived blank
+// from a secret store), or database.tls is set and would silently fail to reach
+// the connection, which is the whole of #1047. A block naming NO identity field
+// and no TLS is conf-owned by construction and still defers. The error names the
+// fields but never echoes a value; the per-tenant caller pairs it with
+// TenantResult.TenantID. Match with errors.Is.
+var ErrIncompleteMigrationTarget = errors.New(
+	"migration: PostgreSQL requires database.host and database.database (or database.connectionstring) " +
+		"so the framework can build the Flyway JDBC URL; a partially filled database block, or any " +
+		"database.tls setting the framework cannot put on a URL, is rejected rather than silently " +
+		"deferring to the URL in flyway.conf, which the framework does not read")
+
+// hasTLSSettings reports whether the config asks for TLS at all.
+func hasTLSSettings(db *config.DatabaseConfig) bool {
+	return db != nil &&
+		(db.TLS.Mode != "" || db.TLS.CertFile != "" || db.TLS.KeyFile != "" || db.TLS.CAFile != "")
+}
+
+// namesURLTarget reports whether the block names a connection TARGET — exactly the
+// three fields that become the URL (host, port, database). A block carrying none
+// of them is conf-owned by construction (ADR-085's third boundary); one carrying
+// some but not a usable host AND database is partially filled, which is a broken
+// target rather than a deliberate hand-off.
+//
+// Username and password are deliberately NOT counted, though ADR-047 treats them
+// as identity markers for the different question of whether a database is intended
+// at all. They never appear in the URL — they are env-delivered — so credentials
+// beside a conf-owned URL say nothing about where the migration points, and
+// counting them would reject the long-standing shape of a config that supplies only
+// a password (and perhaps postgresql.schema) while flyway.conf owns the target.
+func namesURLTarget(db *config.DatabaseConfig) bool {
+	return db != nil &&
+		(db.Host != "" || db.Database != "" || db.Port != 0)
+}
+
+// validateMigrationHost accepts an IP literal (bracketed or bare) or a plain DNS
+// name, and rejects everything else.
+func validateMigrationHost(host string) error {
+	bare := unbracket(host)
+	if bare == "" {
+		return ErrInvalidMigrationHost
+	}
+	if net.ParseIP(bare) != nil {
+		return nil
+	}
+	if safeMigrationHostname.MatchString(host) {
+		return nil
+	}
+	return ErrInvalidMigrationHost
+}
+
+// ErrMigrationMTLSUnsupported rejects a migration whose config asks for
+// PostgreSQL client-certificate authentication. `database.tls.keyfile` is
+// validated as a libpq PEM (atom C60.2), which pgjdbc cannot load. Match with
+// errors.Is.
+var ErrMigrationMTLSUnsupported = errors.New(
+	"migration: PostgreSQL client-certificate TLS (database.tls.certfile/keyfile) is not supported for Flyway migrations: " +
+		"pgjdbc's sslkey requires a PKCS-8 DER key while database.tls.keyfile is a libpq PEM; " +
+		"use database.tls.mode + cafile for server-authenticated TLS, or migrate outside the framework")
+
+// usesFrameworkOwnedURL reports whether this run gets a framework-built `-url=`.
+// Only PostgreSQL discrete-field configs qualify. Oracle is excluded because it
+// has no `database.tls` at all (ADR-062) and no JDBC URL builder here; a
+// `connectionstring` config is excluded because the framework does not parse
+// DSNs. Both keep the conf-owned URL.
+func usesFrameworkOwnedURL(db *config.DatabaseConfig, vendor string) bool {
+	return db != nil &&
+		vendor == config.PostgreSQL &&
+		db.ConnectionString == "" &&
+		db.Host != "" &&
+		db.Database != ""
+}
+
+// buildPostgresJDBCURL assembles the JDBC URL Flyway connects with. It carries
+// only the connection target, TLS material, and application_name — never the
+// username or password, which stay env-delivered, because argv is world-readable
+// in the process list.
+func buildPostgresJDBCURL(db *config.DatabaseConfig, appName string) (string, error) {
+	if db.TLS.CertFile != "" || db.TLS.KeyFile != "" {
+		return "", ErrMigrationMTLSUnsupported
+	}
+
+	jdbcURL := jdbcPostgresScheme + urlAuthority(db.Host, db.Port) + "/" + url.PathEscape(db.Database)
+
+	params := url.Values{}
+	if appName != "" {
+		params.Set(urlParamApplicationName, appName)
+	}
+	if db.TLS.Mode != "" {
+		params.Set(urlParamSSLMode, db.TLS.Mode)
+	}
+	if db.TLS.CAFile != "" {
+		params.Set(urlParamSSLRootCert, db.TLS.CAFile)
+	}
+	if encoded := params.Encode(); encoded != "" {
+		jdbcURL += "?" + encoded
+	}
+
+	return jdbcURL, nil
+}
+
+// urlAuthority renders host[:port], bracketing an IPv6 literal so the colons in
+// the address are not read as the port separator. Brackets are stripped first and
+// re-added once: a config may spell the literal either way, and net.JoinHostPort
+// brackets anything containing a colon, so passing an already-bracketed host
+// straight through would emit `[[::1]]:5432`.
+func urlAuthority(host string, port int) string {
+	host = unbracket(host)
+	if port > 0 {
+		return net.JoinHostPort(host, strconv.Itoa(port))
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
+}
+
+// unbracket removes one matched pair of surrounding brackets from an IPv6 literal.
+func unbracket(host string) string {
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		return host[1 : len(host)-1]
+	}
+	return host
+}
+
+// urlArgs returns the `-url=` flag for runs the framework owns the URL for, or
+// nil for the documented conf-owned cases (Oracle, connectionstring). Host and
+// database reach argv from here, so validateEnvFields runs before they do — the
+// same guard buildEnvironmentVariables applies to the subprocess environment.
+func urlArgs(db *config.DatabaseConfig, vendor, appName string) ([]string, error) {
+	if !usesFrameworkOwnedURL(db, vendor) {
+		// A partially filled block is a broken target, and any TLS setting must reach the
+		// connection or fail loudly. A block naming nothing at all is the conf-owned
+		// third boundary and still defers.
+		if vendor == config.PostgreSQL && db != nil && db.ConnectionString == "" &&
+			(namesURLTarget(db) || hasTLSSettings(db)) {
+			return nil, ErrIncompleteMigrationTarget
+		}
+		return nil, nil
+	}
+	if err := validateEnvFields(db); err != nil {
+		return nil, err
+	}
+	if err := validateMigrationHost(db.Host); err != nil {
+		return nil, err
+	}
+	jdbcURL, err := buildPostgresJDBCURL(db, appName)
+	if err != nil {
+		return nil, fmt.Errorf("build flyway jdbc url: %w", err)
+	}
+	return []string{flagURL + jdbcURL}, nil
+}
+
+// appName is the value the built URL sends as ApplicationName, so a DBA watching
+// pg_stat_activity sees the migrating service by name in its application_name.
+func (fm *FlywayMigrator) appName() string {
+	if fm.config == nil {
+		return ""
+	}
+	return fm.config.App.Name
+}

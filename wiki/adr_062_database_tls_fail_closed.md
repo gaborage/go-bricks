@@ -166,6 +166,16 @@ go-bricks passes that DSN through untouched.
   only option that can actually guarantee TLS is for the framework to construct
   the JDBC URL and pass `-url=` itself, which takes URL ownership from every
   consumer and so needs its own ADR.
+
+  **Resolved by [ADR-085](adr_085_framework_owned_flyway_url.md)** (#1047): the
+  framework now builds the JDBC URL from `database.*` and passes `-url=` for every
+  PostgreSQL discrete-field config, which outranks the conf. The WARN and the whole
+  `DB_SSL*` export described above are removed; `mode` and `cafile` ride the URL as
+  `sslmode`/`sslrootcert`, and a `certfile`/`keyfile` migration fails closed rather
+  than downgrading, since pgjdbc's `sslkey` cannot read the libpq PEM this ADR
+  validates. Oracle and `connectionstring` configs keep the conf-owned URL — for
+  Oracle because this ADR rejects `database.tls` there outright, so there is no
+  guarantee to make. `[C61.4]`.
 - A `database:` block containing **only** `tls.*` fields remains invisible to
   `IsDatabaseConfigured` and is silently ignored, because none of the TLS keys
   is an ADR-047 identity marker. Unchanged by this ADR; a follow-up.
