@@ -208,6 +208,18 @@ type assertAnError struct{}
 
 func (assertAnError) Error() string { return "raw cause with " + panShapedKey }
 
+// TestBindErrorNilSafety pins the guards: a nil receiver and a nil cause are
+// both reachable from a hand-built value and must not panic.
+func TestBindErrorNilSafety(t *testing.T) {
+	var nilErr *bindError
+
+	assert.Equal(t, unauditedBindSummary, nilErr.Error())
+	assert.NoError(t, nilErr.Unwrap())
+	assert.Equal(t, unauditedBindSummary, (&bindError{}).Error())
+	assert.NoError(t, (&bindError{}).Unwrap())
+	assert.Equal(t, assertAnError{}, (&bindError{err: assertAnError{}}).Unwrap())
+}
+
 // TestBindErrorKeepsRawCauseForLogs pins the split: the response reads the
 // summary, the log path still reads the cause (#1168 owns that seam).
 func TestBindErrorKeepsRawCauseForLogs(t *testing.T) {

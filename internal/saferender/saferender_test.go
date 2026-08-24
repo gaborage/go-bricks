@@ -61,6 +61,12 @@ func TestRedactLeafField(t *testing.T) {
 		{name: "key_contains_dot", input: "Req.Limits[a.b]", want: "Limits[*]"},
 		{name: "unterminated_bracket", input: "Req.Limits[" + panMarker, want: "Limits[*]"},
 		{name: "leading_bracket", input: "[" + panMarker + "]", want: "[*]"},
+		// An empty key puts the closing bracket first in the remainder, so the
+		// trailing field path survives only if the search is relative to it.
+		{name: "empty_key_keeps_trailing_path", input: "Req.Limits[].Amount", want: "Limits[*].Amount"},
+		// A leading '.' puts the separator at index 0, the boundary an
+		// off-by-one in the leaf search would wave through.
+		{name: "leading_dot", input: ".Amount", want: "Amount"},
 		{name: "empty_input", input: "", want: ""},
 	}
 
