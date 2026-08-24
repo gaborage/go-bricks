@@ -63,31 +63,47 @@ type RawExpression struct {
 // SECURITY WARNING: Never interpolate user input directly into the sql parameter.
 // This function does NOT sanitize SQL - you are responsible for ensuring safety.
 func Expr(sql string, alias ...string) (RawExpression, error) {
-	if strings.TrimSpace(sql) == "" {
-		return RawExpression{}, ErrEmptyExpressionSQL
-	}
-
 	if len(alias) > 1 {
 		return RawExpression{}, fmt.Errorf("%w: got %d", ErrTooManyAliases, len(alias))
 	}
 
-	var aliasStr string
+	expr := RawExpression{SQL: sql}
 	if len(alias) == 1 {
-		aliasStr = alias[0]
-
-		// Validate alias doesn't contain dangerous characters (SQL injection patterns)
-		dangerousChars := []string{";", "'", "\"", "--", "/*", "*/"}
-		for _, char := range dangerousChars {
-			if strings.Contains(aliasStr, char) {
-				return RawExpression{}, fmt.Errorf("%w '%s': %s", ErrDangerousAlias, char, aliasStr)
-			}
-		}
+		expr.Alias = alias[0]
 	}
 
-	return RawExpression{
-		SQL:   sql,
-		Alias: aliasStr,
-	}, nil
+	if err := expr.Validate(); err != nil {
+		return RawExpression{}, err
+	}
+	return expr, nil
+}
+
+// dangerousAliasChars are the SQL metacharacters an alias may never contain: an
+// alias is interpolated verbatim after AS, so any of them turns the rest of the
+// statement into caller-controlled syntax.
+var dangerousAliasChars = []string{";", "'", "\"", "--", "/*", "*/"}
+
+// Validate reports why this expression may not be interpolated, or nil.
+//
+// RawExpression is a plain struct, so a caller can build one directly and never
+// reach Expr(). This is the single funnel both paths share: Expr() calls it at
+// construction, and every builder door that interpolates an expression calls it
+// again at consumption, where a struct literal is indistinguishable from a
+// constructed one (#1153, ADR-082).
+//
+// The SQL itself is NOT validated — it is the sanctioned raw-SQL escape hatch,
+// and the caller owns its safety. Only its emptiness and the alias are checked.
+func (e RawExpression) Validate() error {
+	if strings.TrimSpace(e.SQL) == "" {
+		return ErrEmptyExpressionSQL
+	}
+
+	for _, char := range dangerousAliasChars {
+		if strings.Contains(e.Alias, char) {
+			return fmt.Errorf("%w '%s': %s", ErrDangerousAlias, char, e.Alias)
+		}
+	}
+	return nil
 }
 
 // MustExpr is like Expr but panics on error.

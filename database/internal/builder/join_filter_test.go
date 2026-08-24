@@ -682,3 +682,36 @@ func TestJoinFilterInFullQuery(t *testing.T) {
 		assert.Equal(t, []any{"active"}, args)
 	})
 }
+
+// TestJoinFilterRejectsRawExpressionLiteral covers the #1153 class on the
+// JoinFilter value doors: they interpolate expr.SQL verbatim, so a struct
+// literal that never reached Expr() is validated here.
+func TestJoinFilterRejectsRawExpressionLiteral(t *testing.T) {
+	empty := dbtypes.RawExpression{SQL: "  "}
+
+	tests := []struct {
+		name   string
+		filter func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter
+	}{
+		{name: "eq", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Eq("amount", empty) }},
+		{name: "not_eq", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.NotEq("amount", empty) }},
+		{name: "lt", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Lt("amount", empty) }},
+		{name: "lte", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Lte("amount", empty) }},
+		{name: "gt", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Gt("amount", empty) }},
+		{name: "gte", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Gte("amount", empty) }},
+		{name: "between_lower", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Between("age", empty, 65) }},
+		{name: "between_upper", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Between("age", 18, empty) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+			sql, args, err := tt.filter(qb.JoinFilter()).ToSQL()
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
+			assert.Empty(t, sql)
+			assert.Empty(t, args)
+		})
+	}
+}

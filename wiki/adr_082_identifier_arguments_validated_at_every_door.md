@@ -5,6 +5,44 @@
 **Supersedes:** the Filter exclusion in [ADR-031](adr_031_query_builder_identifier_validation.md)
 **Related:** [ADR-071](adr_071_upsert_column_sets_name_each_column_once.md) · issues #1104, #1143, #1149, #1150, #1151, #1153, #1154
 
+## Addendum (2026-08-23): the escape hatch validates at consumption too
+
+`RawExpression` is a plain exported struct, so `qb.Expr()` was a door a caller
+could walk around: `dbtypes.RawExpression{SQL: "1", Alias: "x FROM users; DROP
+TABLE t--"}` reached `Select` carrying an alias the constructor refuses, and
+`Select` interpolated it as `AS <alias>` verbatim (#1153). The decision above says
+identifier arguments are validated at the door that interpolates them; this
+extends the same rule to the escape hatch's own metadata, which the ADR had left
+with a construction-time-only guard.
+
+**The funnel is `RawExpression.Validate() error`**, exported on the type in
+`database/types/expression.go`. `Expr()` calls it at construction and returns what
+it returns; `QueryBuilder.Select`, `SelectQueryBuilder.GroupBy`,
+`SelectQueryBuilder.OrderBy` and the `JoinFilterFactory` value doors (`Eq`,
+`NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, and both bounds of `Between`) call it again at
+consumption, where a struct literal is indistinguishable from a constructed value.
+One copy of the denylist, two call sites for it.
+
+What it checks is unchanged and deliberately narrow: empty-or-whitespace SQL, and
+an alias containing `;`, `'`, `"`, `--`, `/*` or `*/`. **The SQL body is still not
+validated** — that is what the hatch is for, and validating it would repeat this
+ADR's own root cause the way `Having` would.
+
+A consumer records the violation on the builder's existing deferred error, first
+violation wins, and never panics — the ADR-031 split, unchanged. The struct keeps
+its exported fields: a literal still compiles, it just no longer renders.
+
+**Residual, recorded rather than closed.** The alias check is a DENYLIST, not a
+grammar: an alias carrying none of the six sequences still reaches the SELECT
+list verbatim, so `Alias: "a, (SELECT password FROM users) b"` renders. Making
+the alias an identifier — the grammar treatment `Select`'s string columns got
+above — is a separate, larger break, and #1153 asked only that the two
+construction paths converge. They now do: whatever `Expr()` refuses, a literal
+refuses. What `Expr()` accepts is unchanged and remains developer-controlled
+input by contract.
+
+See `[C60.29]` in [migrations.md](migrations.md).
+
 ## Context
 
 ADR-031 closed the M9 identifier-injection class on `From`, the JOIN table family,

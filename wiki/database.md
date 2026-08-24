@@ -288,7 +288,11 @@ the builder. The grammar will not accept a computed one.
   `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape.
 - **`qb.Expr()` / `MustExpr()`** are the declared expression hatches: they exist
   to carry SQL the grammar refuses, and the builder still places what they
-  produce. They carry no annotation requirement.
+  produce. They carry no annotation requirement. Their SQL is never validated,
+  but the rest of a `RawExpression` is — a struct literal built without the
+  constructor is validated where it is consumed, so an empty SQL body or an alias
+  carrying `;`, `'`, `"`, `--`, `/*` or `*/` fails from `ToSQL()` (ADR-082
+  addendum).
 - **`f.Raw()`, `jf.Raw()` and `database.Raw()`** do. Each admits arbitrary SQL —
   the first two a WHERE/JOIN fragment, `database.Raw` the whole statement — and
   each requires an inline `// SECURITY: Manual SQL review completed - <rationale>`
