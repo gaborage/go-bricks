@@ -216,6 +216,12 @@ func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) error {
 		}
 		*processed = append(*processed, qb.quoteColumnsForSelect(normalized)...)
 	case dbtypes.RawExpression:
+		// A struct literal never passed through Expr(), so the alias denylist and
+		// the empty-SQL check run here too — the door is where the value is
+		// interpolated, and the two construction paths converge only if it does.
+		if err := v.Validate(); err != nil {
+			return err
+		}
 		if v.Alias != "" {
 			*processed = append(*processed, fmt.Sprintf("%s AS %s", v.SQL, v.Alias))
 		} else {
@@ -1160,6 +1166,14 @@ func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any,
 		}
 		*processed = append(*processed, stringFormatter(v))
 	case dbtypes.RawExpression:
+		// Same consumption-time check as Select: a literal skips Expr(). First
+		// violation wins, the deferred-error split ADR-031 established.
+		if err := v.Validate(); err != nil {
+			if sqb.err == nil {
+				sqb.err = err
+			}
+			return
+		}
 		*processed = append(*processed, v.SQL)
 	case []string:
 		for _, item := range v {

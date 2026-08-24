@@ -130,6 +130,27 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 	return JoinFilter{sqlizer: columnComparison{left, ">=", right}}
 }
 
+// compare renders `<column> <op> <value>`: a RawExpression is interpolated
+// verbatim with no placeholder, any other value is bound. The expression is
+// validated HERE, not only in Expr() — RawExpression is a plain struct, so a
+// caller can hand this door a literal that never passed through the
+// constructor (#1153).
+func (jff *JoinFilterFactory) compare(column, op string, value any) dbtypes.JoinFilter {
+	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
+	if err != nil {
+		return joinFilterErr(err)
+	}
+
+	if expr, ok := value.(dbtypes.RawExpression); ok {
+		if err := expr.Validate(); err != nil {
+			return joinFilterErr(err)
+		}
+		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " " + op + " " + expr.SQL)}
+	}
+
+	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" "+op+" ?", value)}
+}
+
 // ========== Column-to-Value Comparison Operators ==========
 
 // Eq creates an equality condition (column = value).
@@ -142,108 +163,42 @@ func (jff *JoinFilterFactory) GteColumn(leftColumn, rightColumn string) dbtypes.
 //	expr, _ := qb.Expr("TO_NUMBER(amount_str)")
 //	jf.Eq("amount", expr)                              // amount = TO_NUMBER(amount_str) (expression, no bound placeholder)
 func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-
-	if expr, ok := value.(dbtypes.RawExpression); ok {
-		// Expression - no placeholder
-		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " = " + expr.SQL)}
-	}
-
-	// Regular value - use placeholder
-	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" = ?", value)}
+	return jff.compare(column, "=", value)
 }
 
 // NotEq creates an inequality condition (column != value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) NotEq(column string, value any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-
-	if expr, ok := value.(dbtypes.RawExpression); ok {
-		// Expression - no placeholder
-		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " != " + expr.SQL)}
-	}
-
-	// Regular value - use placeholder
-	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" != ?", value)}
+	return jff.compare(column, "!=", value)
 }
 
 // Lt creates a less-than condition (column < value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Lt(column string, value any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-
-	if expr, ok := value.(dbtypes.RawExpression); ok {
-		// Expression - no placeholder
-		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " < " + expr.SQL)}
-	}
-
-	// Regular value - use placeholder
-	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" < ?", value)}
+	return jff.compare(column, "<", value)
 }
 
 // Lte creates a less-than-or-equal condition (column <= value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Lte(column string, value any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-
-	if expr, ok := value.(dbtypes.RawExpression); ok {
-		// Expression - no placeholder
-		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " <= " + expr.SQL)}
-	}
-
-	// Regular value - use placeholder
-	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" <= ?", value)}
+	return jff.compare(column, "<=", value)
 }
 
 // Gt creates a greater-than condition (column > value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Gt(column string, value any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-
-	if expr, ok := value.(dbtypes.RawExpression); ok {
-		// Expression - no placeholder
-		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " > " + expr.SQL)}
-	}
-
-	// Regular value - use placeholder
-	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" > ?", value)}
+	return jff.compare(column, ">", value)
 }
 
 // Gte creates a greater-than-or-equal condition (column >= value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) Gte(column string, value any) dbtypes.JoinFilter {
-	quotedColumn, err := jff.qb.quoteColumnForQuery(column)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-
-	if expr, ok := value.(dbtypes.RawExpression); ok {
-		// Expression - no placeholder
-		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " >= " + expr.SQL)}
-	}
-
-	// Regular value - use placeholder
-	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" >= ?", value)}
+	return jff.compare(column, ">=", value)
 }
 
 // In creates an IN condition (column IN (values...)).
@@ -345,11 +300,19 @@ func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any)
 	upperIsExpr := false
 	var lowerExpr, upperExpr dbtypes.RawExpression
 
+	// A bound that is an expression is interpolated verbatim, so it is validated
+	// at this door for the same reason compare() validates its value (#1153).
 	if expr, ok := lowerBound.(dbtypes.RawExpression); ok {
+		if err := expr.Validate(); err != nil {
+			return joinFilterErr(err)
+		}
 		lowerIsExpr = true
 		lowerExpr = expr
 	}
 	if expr, ok := upperBound.(dbtypes.RawExpression); ok {
+		if err := expr.Validate(); err != nil {
+			return joinFilterErr(err)
+		}
 		upperIsExpr = true
 		upperExpr = expr
 	}

@@ -2559,3 +2559,95 @@ func TestSetStructBuildsAndSetColumnRefuses(t *testing.T) {
 		})
 	}
 }
+
+// TestRawExpressionLiteralValidatedAtConsumption locks in #1153: a RawExpression
+// built as a struct literal skips Expr(), so every door that interpolates one
+// validates it again. The alias is the injection vector — Select renders it as
+// `AS <alias>` verbatim — and empty SQL renders a syntactically broken clause.
+func TestRawExpressionLiteralValidatedAtConsumption(t *testing.T) {
+	const dangerousAlias = "x FROM users; DROP TABLE t--"
+
+	doors := []struct {
+		name  string
+		build func(qb *QueryBuilder, expr dbtypes.RawExpression) dbtypes.SelectQueryBuilder
+	}{
+		{
+			name: "select",
+			build: func(qb *QueryBuilder, expr dbtypes.RawExpression) dbtypes.SelectQueryBuilder {
+				return qb.Select(expr).From("users")
+			},
+		},
+		{
+			name: "select_slice",
+			build: func(qb *QueryBuilder, expr dbtypes.RawExpression) dbtypes.SelectQueryBuilder {
+				return qb.Select([]dbtypes.RawExpression{expr}).From("users")
+			},
+		},
+		{
+			name: "group_by",
+			build: func(qb *QueryBuilder, expr dbtypes.RawExpression) dbtypes.SelectQueryBuilder {
+				return qb.Select("id").From("users").GroupBy(expr)
+			},
+		},
+		{
+			name: "order_by",
+			build: func(qb *QueryBuilder, expr dbtypes.RawExpression) dbtypes.SelectQueryBuilder {
+				return qb.Select("id").From("users").OrderBy(expr)
+			},
+		},
+	}
+
+	cases := []struct {
+		name    string
+		expr    dbtypes.RawExpression
+		wantErr error
+	}{
+		{
+			name:    "dangerous_alias",
+			expr:    dbtypes.RawExpression{SQL: "1", Alias: dangerousAlias},
+			wantErr: dbtypes.ErrDangerousAlias,
+		},
+		{
+			name:    "empty_sql",
+			expr:    dbtypes.RawExpression{SQL: "   "},
+			wantErr: dbtypes.ErrEmptyExpressionSQL,
+		},
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		for _, door := range doors {
+			for _, tc := range cases {
+				t.Run(vendor+"_"+door.name+"_"+tc.name, func(t *testing.T) {
+					qb := NewQueryBuilder(vendor)
+					sql, args, err := door.build(qb, tc.expr).ToSQL()
+
+					require.Error(t, err)
+					assert.ErrorIs(t, err, tc.wantErr)
+					assert.Empty(t, sql)
+					assert.Empty(t, args)
+				})
+			}
+		}
+	}
+}
+
+// TestRawExpressionLiteralRendersLikeMustExpr keeps the two construction paths
+// convergent: validating at consumption must not change what a legal expression
+// renders to.
+func TestRawExpressionLiteralRendersLikeMustExpr(t *testing.T) {
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		t.Run(vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(vendor)
+
+			viaCtor, ctorArgs, err := qb.Select(qb.MustExpr("COUNT(*)", "total")).From("users").ToSQL()
+			require.NoError(t, err)
+
+			viaLiteral, literalArgs, err := qb.Select(dbtypes.RawExpression{SQL: "COUNT(*)", Alias: "total"}).From("users").ToSQL()
+			require.NoError(t, err)
+
+			assert.Equal(t, "SELECT COUNT(*) AS total FROM users", viaLiteral)
+			assert.Equal(t, viaCtor, viaLiteral)
+			assert.Equal(t, ctorArgs, literalArgs)
+		})
+	}
+}
