@@ -21,6 +21,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
+	"github.com/gaborage/go-bricks/observability"
 	"github.com/gaborage/go-bricks/server"
 )
 
@@ -34,6 +35,7 @@ import (
 const (
 	jobIDAttr           = "job.id"
 	jobStatusAttr       = "job.status"
+	jobPanicTypeAttr    = "job.panic_type"
 	jobScheduleTypeAttr = "job.schedule_type"
 
 	// Error message for job type validation
@@ -682,7 +684,7 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 			executionStatus = "panic"
 			// SECURITY: the panic value's TYPE only. panicErr reaches two sinks the
 			// filter does not touch, and the worse one leaves the platform:
-			// span.RecordError ships it to the tracing backend as an exception
+			// the span sink ships it to the tracing backend as an exception
 			// event, with that vendor's retention, access model and export path.
 			// The summary line's Err() is the second, and the guarded report below is
 			// the third — running it through the sensitive-data filter is NOT
@@ -709,9 +711,14 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 
 			// Record panic in span (if span exists)
 			if span != nil {
-				span.RecordError(panicErr)
+				observability.RecordErrorByType(span, panicErr)
+				// panicErr is framework-built, so its own Go type says nothing;
+				// panicType is the datum, and it is already %T-rendered.
 				span.SetStatus(codes.Error, "panic")
-				span.SetAttributes(attribute.String(jobStatusAttr, "panic"))
+				span.SetAttributes(
+					attribute.String(jobStatusAttr, "panic"),
+					attribute.String(jobPanicTypeAttr, panicType),
+				)
 			}
 
 			entry.metadata.incrementFailed()
@@ -739,8 +746,9 @@ func (m *Module) executeJob(entry *jobEntry, ctx *jobContextImpl) {
 
 		// Record error in span (if span exists)
 		if span != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+			// SECURITY: a consumer job's error may carry anything it read — type
+			// only on both span sinks; the summary line keeps the message (ADR-083).
+			observability.RecordErrorByType(span, err)
 			span.SetAttributes(attribute.String(jobStatusAttr, "failure"))
 		}
 

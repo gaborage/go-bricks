@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	pipeline "github.com/gaborage/go-bricks/messaging/internal/delivery"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 const testQueueOtel = "test-queue"
@@ -155,7 +157,8 @@ func TestPublishErrorRecordsSpanError(t *testing.T) {
 
 	span := spans[0]
 	assert.Equal(t, codes.Error, span.Status.Code)
-	assert.Contains(t, span.Status.Description, "context canceled")
+	// ADR-083: the span sinks carry the error's Go type, never its message.
+	assert.Equal(t, "*errors.errorString", span.Status.Description)
 
 	// Verify error event recorded
 	require.Len(t, span.Events, 1)
@@ -165,6 +168,87 @@ func TestPublishErrorRecordsSpanError(t *testing.T) {
 	// Cleanup channels
 	close(fakeConn.notifyCloseCh)
 	close(fakeCh.notifyCloseCh)
+}
+
+// TestRecordPublishFailureKeepsTheErrorMessageOffTheSpan pins ADR-083 on the
+// AMQP publish path: whatever the broker or a wrapped cause put in the message,
+// the span reports the error's Go type only.
+func TestRecordPublishFailureKeepsTheErrorMessageOffTheSpan(t *testing.T) {
+	exporter, cleanup := setupTestTracing(t)
+	defer cleanup()
+
+	ctx, span := otel.Tracer("publish-failure-test").Start(context.Background(), "publish")
+	client := &AMQPClientImpl{}
+	publishErr := errors.New("NACK from broker: " + obtest.LeakCanary)
+
+	got := client.recordPublishFailure(ctx, PublishOptions{Exchange: "events", RoutingKey: "orders"}, time.Now(), span, publishErr)
+	span.End()
+
+	require.ErrorIs(t, got, publishErr)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	recorded := spans[0]
+
+	assert.Equal(t, codes.Error, recorded.Status.Code)
+	assert.Equal(t, "*errors.errorString", recorded.Status.Description)
+	obtest.AssertExceptionTypeOnly(t, &recorded, "*errors.errorString")
+	obtest.AssertNoSpanMarkers(t, &recorded, obtest.LeakCanary)
+}
+
+// TestPublishRetryEventCarriesNoErrorMessage covers the publish.retry span
+// event, which is an off-platform sink like the terminal status: a broker error's
+// Reason is server-authored, so the event names the error's Go TYPE (ADR-083).
+// The terminal-status test above drives recordPublishFailure and never reaches
+// this event, so without this the retry attribute would be unasserted.
+func TestPublishRetryEventCarriesNoErrorMessage(t *testing.T) {
+	exporter, cleanup := setupTestTracing(t)
+	defer cleanup()
+
+	ch := &fakeChannel{publishErr: errors.New("NOT_FOUND - no exchange: " + obtest.LeakCanary)}
+	c := newClientWithFakeChannel(t, ch)
+	c.resendDelay = time.Millisecond
+	c.maxPublishAttempts = 2
+
+	err := c.PublishToExchange(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
+	require.ErrorIs(t, err, ErrPublishRetriesExhausted)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	span := spans[0]
+
+	var retries int
+	for i := range span.Events {
+		if span.Events[i].Name != eventPublishRetry {
+			continue
+		}
+		retries++
+		assertAttributeValue(t, span.Events[i].Attributes, "error.type", "*errors.errorString")
+		assertNoAttributeKey(t, span.Events[i].Attributes, "error")
+	}
+	require.Positive(t, retries, "the publish must have retried, or this test asserts nothing")
+
+	obtest.AssertNoSpanMarkers(t, &span, obtest.LeakCanary)
+}
+
+// assertAttributeValue requires key to be present with want.
+func assertAttributeValue(t *testing.T, attrs []attribute.KeyValue, key, want string) {
+	t.Helper()
+	for _, kv := range attrs {
+		if string(kv.Key) == key {
+			assert.Equal(t, want, kv.Value.AsString(), "attribute %s", key)
+			return
+		}
+	}
+	t.Errorf("attribute %s not found", key)
+}
+
+// assertNoAttributeKey requires key to be absent.
+func assertNoAttributeKey(t *testing.T, attrs []attribute.KeyValue, key string) {
+	t.Helper()
+	for _, kv := range attrs {
+		assert.NotEqual(t, key, string(kv.Key), "attribute %s should be absent", key)
+	}
 }
 
 func TestPublishNotReadyRecordsError(t *testing.T) {
@@ -193,7 +277,7 @@ func TestPublishNotReadyRecordsError(t *testing.T) {
 
 	span := spans[0]
 	assert.Equal(t, codes.Error, span.Status.Code)
-	assert.Contains(t, span.Status.Description, "not connected")
+	assert.Equal(t, "*errors.errorString", span.Status.Description)
 
 	// Cleanup channels
 	close(fakeConn.notifyCloseCh)
@@ -230,7 +314,7 @@ func TestPublishConfirmationTimeoutRecordsError(t *testing.T) {
 
 	span := spans[0]
 	assert.Equal(t, codes.Error, span.Status.Code)
-	assert.Contains(t, span.Status.Description, "deadline exceeded")
+	assert.Equal(t, "*fmt.wrapErrors", span.Status.Description)
 
 	// Verify retry events were recorded
 	require.NotEmpty(t, span.Events, "Expected retry events to be recorded")

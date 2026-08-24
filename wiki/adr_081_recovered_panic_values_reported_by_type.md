@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-22
-- **Related**: [ADR-079](adr_079_log_filter_walks_slices_without_comparing.md) (guarded these reporting calls and stated the protection this ADR corrects) · [ADR-072](adr_072_default_log_filter_names_key_material_explicitly.md) (the field-name matcher whose reach is the whole issue) · [ADR-019](adr_019_migration_audit_delivery.md)
+- **Related**: [ADR-083](adr_083_span_sinks_record_errors_by_type.md) (generalizes this rule to every error a framework span sink records) · [ADR-079](adr_079_log_filter_walks_slices_without_comparing.md) (guarded these reporting calls and stated the protection this ADR corrects) · [ADR-072](adr_072_default_log_filter_names_key_material_explicitly.md) (the field-name matcher whose reach is the whole issue) · [ADR-019](adr_019_migration_audit_delivery.md)
 
 ## Context
 

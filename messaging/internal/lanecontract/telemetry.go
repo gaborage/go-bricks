@@ -29,6 +29,11 @@ const (
 	attrErrorType   = "error.type"
 
 	spanOperation = "receive"
+
+	// HandlerErrorMarker is the secret-shaped text errHandlerFailed carries. A
+	// handler error is consumer-authored, so ADR-083 keeps its message off both
+	// span sinks; this marker is what proves it.
+	HandlerErrorMarker = obtest.LeakCanary
 )
 
 // AssertTelemetry checks what one delivery reported to OpenTelemetry: one
@@ -52,6 +57,7 @@ func AssertTelemetry(t T, lane *Lane, scenario *Scenario, observed *Observed) {
 		"the consume span is a root: re-parenting onto the producer is out of scope, so its exemplar names an orphan trace")
 
 	assertSpanAttributes(t, lane, scenario, &span)
+	assertSpanErrorByType(t, scenario, &span)
 	assertConsumeRecord(t, scenario, observed, &span)
 }
 
@@ -76,6 +82,23 @@ func assertSpanAttributes(t T, lane *Lane, scenario *Scenario, span *sdktrace.Sp
 		assert.Contains(t, lane.SpanExtraKeys, key,
 			"the span carries attribute %q, which the lane did not declare in SpanExtraKeys", key)
 	}
+}
+
+// assertSpanErrorByType pins ADR-083 on both lanes: a failed delivery records one
+// exception event carrying the error's Go TYPE and nothing else, and the handler's
+// message reaches no span sink.
+func assertSpanErrorByType(t T, scenario *Scenario, span *sdktrace.SpanStub) {
+	t.Helper()
+
+	if scenario.Outcome == delivery.Succeeded {
+		obtest.AssertNoExceptionEvent(t, span)
+		return
+	}
+
+	obtest.AssertExceptionTypeOnly(t, span, "*errors.errorString")
+	assert.Equal(t, "*errors.errorString", span.Status.Description,
+		"the status description is the error's Go type, never its message")
+	obtest.AssertNoSpanMarkers(t, span, HandlerErrorMarker)
 }
 
 // assertConsumeRecord pins one record at completion, error.type iff the delivery

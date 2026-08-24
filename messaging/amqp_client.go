@@ -19,6 +19,7 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	"github.com/gaborage/go-bricks/observability"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -450,8 +451,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 				Str("exchange", options.Exchange).
 				Str("routing_key", options.RoutingKey).
 				Msg("AMQP client not ready, message not published")
-			span.RecordError(errNotConnected)
-			span.SetStatus(codes.Error, errNotConnected.Error())
+			observability.RecordErrorByType(span, errNotConnected)
 			// BREAKING CHANGE: previously returned nil, silently dropping the message.
 			// Returning the error gives callers a chance to retry, log, or escalate
 			// instead of believing publish succeeded.
@@ -481,9 +481,12 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 
 			tracking.RecordPublishRetry(ctx, options.Exchange, options.RoutingKey, "publish_error")
 
+			// SECURITY: the event's attributes are an off-platform sink, and a
+			// broker error's Reason is server-authored — type only, like every
+			// other span sink (ADR-083). The WARN above keeps the message.
 			span.AddEvent(eventPublishRetry, trace.WithAttributes(
 				attribute.String("reason", "publish error"),
-				attribute.String("error", err.Error()),
+				attribute.String("error.type", fmt.Sprintf("%T", err)),
 				attribute.Int("retry_count", retryCount),
 			))
 			if termErr := c.retryBackoff(ctx, options, publishStart, span, retryCount, lastCause, c.resendDelay); termErr != nil {
@@ -599,8 +602,7 @@ func (c *AMQPClientImpl) publishPreflight(ctx context.Context, options PublishOp
 			Str("routing_key", options.RoutingKey).
 			Dur("ready_timeout", c.readyTimeout).
 			Msg("AMQP client still not ready after waiting, message not published")
-		span.RecordError(errNotConnected)
-		span.SetStatus(codes.Error, errNotConnected.Error())
+		observability.RecordErrorByType(span, errNotConnected)
 		return errNotConnected
 	}
 	return c.publishAbort(ctx, options, startTime, span, err, nil)
@@ -719,8 +721,9 @@ func (c *AMQPClientImpl) retryBackoff(ctx context.Context, options PublishOption
 // they build err.
 func (c *AMQPClientImpl) recordPublishFailure(ctx context.Context, options PublishOptions, startTime time.Time, span trace.Span, err error) error {
 	tracking.RecordAMQPPublishMetrics(ctx, options.Exchange, options.RoutingKey, time.Since(startTime), err)
-	span.RecordError(err)
-	span.SetStatus(codes.Error, err.Error())
+	// SECURITY: type only on both span sinks; the log line keeps the message
+	// (ADR-083).
+	observability.RecordErrorByType(span, err)
 	return err
 }
 
