@@ -4958,6 +4958,8 @@ Use this when you need a custom `MaskValue`, want to opt out of every default fi
 
 ```go
 import (
+    "regexp"
+
     "github.com/gaborage/go-bricks/app"
     "github.com/gaborage/go-bricks/logger"
 )
@@ -4984,7 +4986,6 @@ fw, _, err = app.NewWithOptions(&app.Options{
 // Redact error MESSAGES (field-name masking cannot see inside them). Applies to
 // every LogEvent.Err(err) call, the framework's own included. Nil (the default)
 // keeps Err output unchanged; there is no YAML door, the value is a function.
-// import "regexp"
 var panRegexp = regexp.MustCompile(`\d{13,19}`)
 
 base = logger.DefaultFilterConfig()
