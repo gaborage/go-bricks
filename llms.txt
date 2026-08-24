@@ -5598,7 +5598,7 @@ type IAPIError interface {
 | `NewInternalServerError(msg)` | 500 | `INTERNAL_ERROR` | Unexpected server errors |
 | `NewServiceUnavailableError(msg)` | 503 | `SERVICE_UNAVAILABLE` | Dependency down, maintenance |
 
-All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). In development mode (`app.env: development`), details are included in responses for all HTTP status codes. In production (non-development mode), details are hidden for every error response regardless of status code. The framework's OWN `details.error` entry — the raw error text it attaches to an unhandled 500 or a recovered panic — needs BOTH `app.debug: true` and a development `app.env`, so it cannot outlive the log detail the same `app.debug` key gates (#1140).
+All types embed `*BaseAPIError` which provides `WithDetails(key, value)` for adding metadata (chainable). Details are included in responses only when `app.debug: true` AND `app.env` is a development alias — for every HTTP status code, on both the enveloped and the raw renderer (ADR-084). Any other pairing, production included, hides the whole `details` map. The framework's own entries carry no request input: a validation `FieldError` is `{field, message}` with the bracketed namespace span redacted (`Limits[*]`) and no rejected value, and a bind failure's `details.error` is a payload-free summary, never the decoder's or strconv's own text.
 
 ### Step 1: Define Domain Errors
 

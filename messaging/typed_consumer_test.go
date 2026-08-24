@@ -17,6 +17,8 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/internal/saferender"
 )
 
 // errBusiness stands in for a consumer's own sentinel: the adapter must return
@@ -936,7 +938,7 @@ func TestFieldPathIsSchema(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, fieldPathIsSchema(tc.typ))
+			assert.Equal(t, tc.want, saferender.FieldPathIsSchema(tc.typ))
 		})
 	}
 }

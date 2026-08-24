@@ -9,8 +9,14 @@ import (
 
 	"github.com/go-playground/validator/v10"
 
+	"github.com/gaborage/go-bricks/internal/saferender"
 	"github.com/gaborage/go-bricks/internal/validation"
 )
+
+// unauditedValidationSummary is the fail-closed rendering for a validation
+// failure that is not a validator.ValidationErrors — it has no field list, and
+// its text is not audited for request content.
+const unauditedValidationSummary = "cause withheld (unaudited validation failure)"
 
 // Validator wraps go-playground/validator with custom validation logic.
 // It provides request validation functionality with custom validators.
@@ -52,11 +58,17 @@ type ValidationError struct {
 }
 
 // FieldError represents a validation error for a specific field.
-// It includes the field name, error message, and the invalid value.
+//
+// SECURITY: it carries schema facts only. The rejected value is deliberately
+// absent — FieldError reaches the 400 response body, which no log filter sees,
+// and the value is request input for ANY failed tag. Field and Message name a
+// dive-validated map's element through a redacted span (Limits[*]), because
+// validator interpolates the input map key into the namespace verbatim — and
+// the redaction reads the NAMESPACE, not validator's Field(), whose uint8
+// length wraps on a namespace over 255 bytes and returns a suffix of the key.
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
-	Value   string `json:"value,omitempty"`
 }
 
 // Error implements the error interface.
@@ -70,10 +82,10 @@ func NewValidationError(errs validator.ValidationErrors) *ValidationError {
 	fieldErrors := make([]FieldError, 0, len(errs))
 
 	for _, err := range errs {
+		field := saferender.RedactLeafField(err.Namespace())
 		fieldErrors = append(fieldErrors, FieldError{
-			Field:   err.Field(),
-			Message: getErrorMessage(err),
-			Value:   fmt.Sprintf("%v", err.Value()),
+			Field:   field,
+			Message: getErrorMessage(err, field),
 		})
 	}
 
@@ -92,22 +104,25 @@ func (ve *ValidationError) Error() string {
 	return fmt.Sprintf("validation failed: %d errors", len(ve.Errors))
 }
 
-func getErrorMessage(fe validator.FieldError) string {
+// getErrorMessage renders the human-readable half of a FieldError. field is the
+// ALREADY-redacted name: fe.Field() carries the input map key for a dived map,
+// so reading it again here would reopen the leak the caller just closed.
+func getErrorMessage(fe validator.FieldError, field string) string {
 	switch fe.Tag() {
 	case "required":
-		return fmt.Sprintf("%s is required", fe.Field())
+		return fmt.Sprintf("%s is required", field)
 	case "min":
-		return fmt.Sprintf("%s must be at least %s characters", fe.Field(), fe.Param())
+		return fmt.Sprintf("%s must be at least %s characters", field, fe.Param())
 	case "max":
-		return fmt.Sprintf("%s must be at most %s characters", fe.Field(), fe.Param())
+		return fmt.Sprintf("%s must be at most %s characters", field, fe.Param())
 	case "len":
-		return fmt.Sprintf("%s must be exactly %s characters", fe.Field(), fe.Param())
+		return fmt.Sprintf("%s must be exactly %s characters", field, fe.Param())
 	case "url":
-		return fmt.Sprintf("%s must be a valid URL", fe.Field())
+		return fmt.Sprintf("%s must be a valid URL", field)
 	// mcc_code is registered in internal/validation.New, not here.
 	case "mcc_code":
-		return fmt.Sprintf("%s must be a valid 4-digit MCC code", fe.Field())
+		return fmt.Sprintf("%s must be a valid 4-digit MCC code", field)
 	default:
-		return fmt.Sprintf("%s failed validation", fe.Field())
+		return fmt.Sprintf("%s failed validation", field)
 	}
 }

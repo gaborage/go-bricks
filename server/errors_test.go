@@ -153,7 +153,7 @@ func TestStackTraceInErrorResponse(t *testing.T) {
 		e := echo.New()
 		e.HTTPErrorHandler = func(c *echo.Context, err error) {
 			customErrorHandler(c, err, &config.Config{
-				App: config.AppConfig{Env: config.EnvDevelopment},
+				App: config.AppConfig{Env: config.EnvDevelopment, Debug: true},
 			}, &testLogger{})
 		}
 		e.GET("/boom", func(_ *echo.Context) error {
@@ -196,7 +196,7 @@ func TestStackTraceInErrorResponse(t *testing.T) {
 		require.NotContains(t, before, stackTraceDetailKey,
 			"precondition: caller details should not contain stackTrace yet")
 
-		out := devDetails(err)
+		out := devDetails(err, &config.Config{App: config.AppConfig{Env: config.EnvDevelopment, Debug: true}})
 		require.NotNil(t, out)
 		require.Contains(t, out, stackTraceDetailKey, "render output should include stackTrace")
 
