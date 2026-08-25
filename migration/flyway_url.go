@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -115,6 +116,45 @@ func validateMigrationHost(host string) error {
 // error names the field but never echoes the value. Match with errors.Is.
 var ErrInvalidMigrationPort = errors.New("migration: database.port must be between 1 and 65535, or 0 for the driver default")
 
+// supportedMigrationTLSModes mirrors config's unexported pgSSLModes — the libpq
+// sslmode set, which is what ADR-062 validates database.tls.mode against. The
+// list is shared rather than coincidental: pgx accepts these six and so does
+// pgjdbc, which is the driver on the other end of the URL built here, so
+// mirroring the runtime's set is correct for a JDBC URL and not merely close
+// enough. The mirror extends to the NORMALIZATION, not just the set:
+// validateVendorSpecificFields TrimSpaces the mode before its own exact match,
+// so ` require` is a config the runtime accepts. Rejecting it here would make
+// the migrator stricter than the thing it claims to mirror — a real config,
+// whitespace off a templated secret, failing only its migration. Case is NOT
+// folded on either side, so `Require` is rejected in both.
+var supportedMigrationTLSModes = []string{"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+
+// ErrInvalidMigrationTLSMode rejects a database.tls.mode that is not one of the
+// libpq set once surrounding whitespace is trimmed.
+// buildPostgresJDBCURL copies the mode onto the URL verbatim, so an unsupported
+// one reached Flyway and failed inside the driver — or, worse, was ignored by it
+// — instead of failing here as a typed error. config.Validate already refuses it
+// (ADR-062); this is the migrator's own copy, for the per-tenant configs from a
+// dynamic DBConfigProvider or the CLI's tenants.yaml that never passed it, the
+// same reason the host, port and connectionstring rules have one. The offending
+// MODE is echoed — it is a fixed keyword, not caller data — but nothing else
+// from the config is, since a database block carries a password and a DSN.
+// Match with errors.Is.
+var ErrInvalidMigrationTLSMode = errors.New("migration: database.tls.mode is not a supported sslmode")
+
+// validateMigrationTLSMode accepts an unset mode and any of the libpq six, and
+// returns the mode trimmed — the spelling that must reach the URL, since an
+// untrimmed one would percent-encode its padding into the sslmode parameter.
+// Returning the normalized value follows the query builder's identifier
+// validators, which hand back what validation actually judged.
+func validateMigrationTLSMode(mode string) (string, error) {
+	trimmed := strings.TrimSpace(mode)
+	if trimmed == "" || slices.Contains(supportedMigrationTLSModes, trimmed) {
+		return trimmed, nil
+	}
+	return "", fmt.Errorf("%w: %q (supported: %s)", ErrInvalidMigrationTLSMode, trimmed, strings.Join(supportedMigrationTLSModes, ", "))
+}
+
 // validateMigrationPort accepts the unset zero and any port in the TCP range.
 func validateMigrationPort(port int) error {
 	if port < 0 || port > 65535 {
@@ -166,7 +206,7 @@ func usesFrameworkOwnedURL(db *config.DatabaseConfig, vendor string) bool {
 // only the connection target, TLS material, and application_name — never the
 // username or password, which stay env-delivered, because argv is world-readable
 // in the process list.
-func buildPostgresJDBCURL(db *config.DatabaseConfig, appName string) (string, error) {
+func buildPostgresJDBCURL(db *config.DatabaseConfig, appName, tlsMode string) (string, error) {
 	if db.TLS.CertFile != "" || db.TLS.KeyFile != "" {
 		return "", ErrMigrationMTLSUnsupported
 	}
@@ -177,8 +217,8 @@ func buildPostgresJDBCURL(db *config.DatabaseConfig, appName string) (string, er
 	if appName != "" {
 		params.Set(urlParamApplicationName, appName)
 	}
-	if db.TLS.Mode != "" {
-		params.Set(urlParamSSLMode, db.TLS.Mode)
+	if tlsMode != "" {
+		params.Set(urlParamSSLMode, tlsMode)
 	}
 	if db.TLS.CAFile != "" {
 		params.Set(urlParamSSLRootCert, db.TLS.CAFile)
@@ -247,7 +287,11 @@ func urlArgs(db *config.DatabaseConfig, vendor, appName string) ([]string, error
 	if err := validateMigrationPort(db.Port); err != nil {
 		return nil, err
 	}
-	jdbcURL, err := buildPostgresJDBCURL(db, appName)
+	tlsMode, err := validateMigrationTLSMode(db.TLS.Mode)
+	if err != nil {
+		return nil, err
+	}
+	jdbcURL, err := buildPostgresJDBCURL(db, appName, tlsMode)
 	if err != nil {
 		return nil, fmt.Errorf("build flyway jdbc url: %w", err)
 	}

@@ -3,6 +3,7 @@ package migration
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,7 +32,7 @@ func TestBuildPostgresJDBCURLCarriesTLSParams(t *testing.T) {
 	db.TLS.Mode = "verify-full"
 	db.TLS.CAFile = "/etc/ssl/ca.pem"
 
-	got, err := buildPostgresJDBCURL(db, testAppName)
+	got, err := buildPostgresJDBCURL(db, testAppName, db.TLS.Mode)
 
 	require.NoError(t, err)
 	assert.Equal(t,
@@ -40,7 +41,7 @@ func TestBuildPostgresJDBCURLCarriesTLSParams(t *testing.T) {
 }
 
 func TestBuildPostgresJDBCURLWithoutTLS(t *testing.T) {
-	got, err := buildPostgresJDBCURL(pgURLConfig(), testAppName)
+	got, err := buildPostgresJDBCURL(pgURLConfig(), testAppName, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "jdbc:postgresql://db.internal:5432/billing?ApplicationName=billing-api", got)
@@ -49,14 +50,14 @@ func TestBuildPostgresJDBCURLWithoutTLS(t *testing.T) {
 }
 
 func TestBuildPostgresJDBCURLEncodesApplicationName(t *testing.T) {
-	got, err := buildPostgresJDBCURL(pgURLConfig(), "billing api/v2 & co")
+	got, err := buildPostgresJDBCURL(pgURLConfig(), "billing api/v2 & co", "")
 
 	require.NoError(t, err)
 	assert.Contains(t, got, "ApplicationName=billing+api%2Fv2+%26+co")
 }
 
 func TestBuildPostgresJDBCURLOmitsApplicationNameWhenUnset(t *testing.T) {
-	got, err := buildPostgresJDBCURL(pgURLConfig(), "")
+	got, err := buildPostgresJDBCURL(pgURLConfig(), "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "jdbc:postgresql://db.internal:5432/billing", got)
@@ -70,7 +71,7 @@ func TestBuildPostgresJDBCURLCarriesNoCredentials(t *testing.T) {
 	db.Password = "sup3r-secret-password"
 	db.TLS.Mode = "require"
 
-	got, err := buildPostgresJDBCURL(db, testAppName)
+	got, err := buildPostgresJDBCURL(db, testAppName, db.TLS.Mode)
 
 	require.NoError(t, err)
 	assert.NotContains(t, got, db.Password)
@@ -96,7 +97,7 @@ func TestBuildPostgresJDBCURLRejectsMTLS(t *testing.T) {
 			db.TLS.Mode = "verify-full"
 			tt.apply(db)
 
-			_, err := buildPostgresJDBCURL(db, testAppName)
+			_, err := buildPostgresJDBCURL(db, testAppName, db.TLS.Mode)
 
 			require.ErrorIs(t, err, ErrMigrationMTLSUnsupported)
 			// The message must name the ACTIONABLE fact — that the framework does not
@@ -129,7 +130,7 @@ func TestBuildPostgresJDBCURLAuthority(t *testing.T) {
 			db := pgURLConfig()
 			db.Host, db.Port = tt.host, tt.port
 
-			got, err := buildPostgresJDBCURL(db, "")
+			got, err := buildPostgresJDBCURL(db, "", db.TLS.Mode)
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
@@ -181,6 +182,119 @@ func TestURLArgsRejectsPortOutsideTCPRange(t *testing.T) {
 	})
 }
 
+// buildPostgresJDBCURL copied the mode onto the URL verbatim, so an unsupported
+// one reached Flyway instead of failing here. The six accepted are the libpq set
+// config.Validate uses, compared exactly — no trimming, no case folding.
+func TestURLArgsValidatesTLSMode(t *testing.T) {
+	for _, mode := range []string{"disable", "allow", "prefer", "require", "verify-ca", "verify-full"} {
+		t.Run("accepts_"+mode, func(t *testing.T) {
+			db := pgURLConfig()
+			db.TLS.Mode = mode
+
+			args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+			require.NoError(t, err)
+			require.Len(t, args, 1)
+			assert.Contains(t, args[0], urlParamSSLMode+"="+url.QueryEscape(mode))
+		})
+	}
+
+	// An unset mode is not a rejected one — it simply puts no sslmode on the URL.
+	t.Run("accepts_unset_and_omits_the_param", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.Mode = ""
+
+		args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+		require.NoError(t, err)
+		assert.NotContains(t, args[0], urlParamSSLMode+"=")
+	})
+
+	// Whitespace is TRIMMED, not rejected: validateVendorSpecificFields trims the
+	// mode before its own exact match, so ` require` is a config the runtime
+	// accepts — rejecting it here would make the migrator stricter than the thing
+	// it mirrors. The trimmed spelling is what must reach the URL, since an
+	// untrimmed one would percent-encode its padding into the sslmode parameter.
+	for _, mode := range []string{" require", "require ", "\tverify-full\t"} {
+		t.Run("trims_"+strings.TrimSpace(mode), func(t *testing.T) {
+			db := pgURLConfig()
+			db.TLS.Mode = mode
+
+			args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+			require.NoError(t, err)
+			assert.Contains(t, args[0], urlParamSSLMode+"="+url.QueryEscape(strings.TrimSpace(mode)))
+			assert.NotContains(t, args[0], "+"+strings.TrimSpace(mode))
+			assert.NotContains(t, args[0], "%20")
+		})
+	}
+
+	// A mode carrying CR/LF is rejected by validateEnvFields, which runs first and
+	// owns that class for every field formatted into argv — not by the mode rule.
+	t.Run("newline_belongs_to_the_env_field_guard", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.Mode = "require\n"
+
+		_, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+		require.ErrorIs(t, err, ErrEnvFieldHasControlChar)
+		assert.NotErrorIs(t, err, ErrInvalidMigrationTLSMode)
+	})
+
+	// Whitespace-only trims to unset, which is legal and simply omits the param.
+	t.Run("whitespace_only_is_unset", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.Mode = "   "
+
+		args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+		require.NoError(t, err)
+		assert.NotContains(t, args[0], urlParamSSLMode+"=")
+	})
+
+	// Case is NOT folded on either side, so these stay rejected.
+	rejected := []struct{ name, mode string }{
+		{name: "bogus", mode: "bogus"},
+		{name: "case_variant", mode: "Require"},
+		{name: "upper", mode: "VERIFY-FULL"},
+		{name: "padded_case_variant", mode: " Require "},
+		// pgjdbc splits the query at the first `?`, so a mode smuggling its own
+		// separators must not reach the URL either.
+		{name: "param_injection", mode: "disable&sslrootcert=/tmp/evil"},
+	}
+	for _, tt := range rejected {
+		t.Run("rejects_"+tt.name, func(t *testing.T) {
+			db := pgURLConfig()
+			db.TLS.Mode = tt.mode
+
+			args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+			require.ErrorIs(t, err, ErrInvalidMigrationTLSMode)
+			assert.Nil(t, args)
+			// The mode is a fixed keyword and is echoed to make the error actionable;
+			// nothing else from the config may ride along.
+			assert.Contains(t, err.Error(), strings.TrimSpace(tt.mode))
+			assert.NotContains(t, err.Error(), db.Password)
+			assert.NotContains(t, err.Error(), db.Host)
+		})
+	}
+}
+
+func TestMigrateForRefusesUnsupportedTLSMode(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+
+	for _, mode := range []string{"bogus", "Require", " Require "} {
+		t.Run(mode, func(t *testing.T) {
+			db := pgURLConfig()
+			db.TLS.Mode = mode
+
+			require.ErrorIs(t, runMigrateExpectingRefusal(t, db), ErrInvalidMigrationTLSMode)
+		})
+	}
+}
+
 func TestMigrateForRefusesPortOutsideTCPRange(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
@@ -200,7 +314,7 @@ func TestBuildPostgresJDBCURLEscapesDatabaseName(t *testing.T) {
 	db := pgURLConfig()
 	db.Database = "bill ing?x"
 
-	got, err := buildPostgresJDBCURL(db, "")
+	got, err := buildPostgresJDBCURL(db, "", db.TLS.Mode)
 
 	require.NoError(t, err)
 	assert.Equal(t, "jdbc:postgresql://db.internal:5432/bill%20ing%3Fx", got)
