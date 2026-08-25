@@ -5074,9 +5074,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   pointer — so `f.Lt(col, (*int)(nil))` still renders `col < ?` where `jf.Lt` now errors. That
   divergence is tracked in #1205, not closed here.
   There is no rendering for either, and the previous one silently matched nothing.
-- gate: match = a `jf.Eq`/`jf.NotEq` call whose operand can be nil or a slice (it starts working),
-  or a `jf.Lt`/`Lte`/`Gt`/`Gte` call whose operand can be nil or a slice (it starts erroring).
-  no-match = every JoinFilter operand is a scalar.
+- gate: match = a `jf.Eq`/`jf.NotEq` call whose operand can be any of the NON-SCALAR forms (it
+  starts working), or a `jf.Lt`/`Lte`/`Gt`/`Gte` call whose operand can be one of them (it starts
+  erroring). Those forms are: `nil`; a slice; an ARRAY (`[3]int{1,2,3}` is a list operand exactly
+  as `[]int{1,2,3}` is); a typed nil pointer (`(*int)(nil)`); and a `driver.Valuer` reporting NULL
+  (`sql.NullString{}`) — the last two because both doors resolve the operand before classifying it.
+  no-match = every JoinFilter operand is a scalar, `[]byte` and a Valuer HOLDING a value included.
 - apply: for equality, nothing — the new rendering is what the call always meant; if you worked
   around it by spelling `jf.In`/`jf.Null` explicitly, that spelling is still the clearer one and
   needs no change. For ordering, handle the error: a nil operand there was a bug that returned no
