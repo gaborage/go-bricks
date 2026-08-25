@@ -1008,12 +1008,13 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   # ============================================================================
-  # Exported-API compatibility gate (apidiff — delta over origin/main)
+  # Exported-API compatibility gate (apidiff — delta over the PR's base branch)
   # ----------------------------------------------------------------------------
   # Diffs the PR head's exported API surface (root module only — internal/ is
   # auto-ignored by apidiff and GOWORK=off excludes the separately-versioned
   # tools/migration submodule) against the latest release tag, then SUBTRACTS
-  # the incompatible changes origin/main already carries. The gate fails only on
+  # the incompatible changes the PR's BASE BRANCH already carries — origin/main
+  # for an ordinary PR, the link below for a stacked one. The gate fails only on
   # the DELTA — breaks THIS PR introduces — not acknowledged-but-unreleased
   # breaks already merged to main (those would otherwise false-fail every later
   # PR until the next release). FAILS on a NEW INCOMPATIBLE change UNLESS the
@@ -1091,17 +1092,20 @@ jobs:
           ( cd /tmp/apidiff-base \
             && GOWORK=off apidiff -m -w /tmp/apidiff-base.snapshot github.com/gaborage/go-bricks )
 
-      - name: Build origin/main API snapshot (unreleased baseline)
+      - name: Build base-branch API snapshot (unreleased baseline)
         if: steps.baseline.outputs.skip != 'true'
         env:
           GOWORK: "off"
+          # The PR's base: main, or the branch below in a stack. Passed as env, not
+          # inline ${{ }}, so a crafted branch name is read as data.
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           # Defensive pre-clean, matching the base-snapshot step.
           git worktree remove --force /tmp/apidiff-main 2>/dev/null || true
           rm -rf /tmp/apidiff-main
-          git fetch --quiet origin main
-          git worktree add --detach /tmp/apidiff-main origin/main
+          git fetch --quiet origin "$BASE_REF"
+          git worktree add --detach /tmp/apidiff-main "origin/$BASE_REF"
           ( cd /tmp/apidiff-main \
             && GOWORK=off apidiff -m -w /tmp/apidiff-main.snapshot github.com/gaborage/go-bricks )
 
@@ -1134,7 +1138,7 @@ jobs:
           echo "::endgroup::"
 
           # Incompatible changes the PR head has vs the release tag, and the set
-          # origin/main already has vs the same tag. NO `|| true`: under `set -e`
+          # the base branch already has vs the same tag. NO `|| true`: under `set -e`
           # a tool error aborts the step, so the gate fails CLOSED.
           incompat_head="$(GOWORK=off apidiff -incompatible -m \
             /tmp/apidiff-base.snapshot /tmp/apidiff-head.snapshot)"
@@ -1153,12 +1157,12 @@ jobs:
             <(printf '%s\n' "$incompat_main" | grep -v '^[[:space:]]*$' | sort -u))"
 
           if [ -z "$delta" ]; then
-            echo "✅ No NEW incompatible exported-API changes vs origin/main (delta over already-merged breaks)."
-            echo "   (Any breaks vs $BASE_TAG are already acknowledged on main and pending release.)"
+            echo "✅ No NEW incompatible exported-API changes vs the base branch (delta over breaks it already carries)."
+            echo "   (Any breaks vs $BASE_TAG are already acknowledged on the base branch and pending release.)"
             exit 0
           fi
 
-          echo "::warning::NEW incompatible exported-API changes introduced by this PR vs origin/main (delta over already-merged breaks):"
+          echo "::warning::NEW incompatible exported-API changes introduced by this PR vs the base branch (delta over already-merged breaks):"
           printf '%s\n' "$delta"
 
           # ---- Escape hatch (only evaluated when a break exists) ----
@@ -1175,7 +1179,7 @@ jobs:
             exit 0
           fi
 
-          echo "::error::Incompatible exported-API change shipped without acknowledgement (delta vs origin/main, over already-merged breaks)."
+          echo "::error::Incompatible exported-API change shipped without acknowledgement (delta vs the base branch, over already-merged breaks)."
           echo "Retitle the squash PR with a '!' breaking marker (e.g. 'feat!: …' /"
           echo "'fix(scope)!: …') so release-please bumps correctly, or add the"
           echo "'breaking-approved' label if the break is intentional and reviewed."
