@@ -4632,7 +4632,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   query builders deterministic: `InsertStruct` and a field-list-free `SetStruct` ranged over a Go
   map, so identical input emitted a different column order per process (C61.5). Both identifier
   renderers recognize a whole quoted identifier before splitting on dots, so `"my.col"` is one
-  column rather than three (C61.7).
+  column rather than two (C61.7).
 
 ---
 
