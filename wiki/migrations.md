@@ -5100,7 +5100,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   nil. squirrel asserts the interface before it tests the pointer and PANICS (expr.go:168), and
   `jf` used to panic with it; `jf` now settles the nil pointer FIRST and renders `IS NULL`, so
   `f.Eq(col, (*sql.NullString)(nil))` still panics where `jf.Eq` no longer does. `jf.In`,
-  `jf.NotIn` and `jf.Between` hand the operand to squirrel untouched and panic too.
+  `jf.NotIn` and `jf.Between` hand the operand to squirrel untouched and panic too; tracked in
+  #1209, not closed here.
   JoinFilter refuses because IT has no rendering
   for those three — the `col op ?` it used to emit for them silently matched nothing, and the error
   replaces that. Do not read the absence as universal: Filter renders what #1205 documents.
