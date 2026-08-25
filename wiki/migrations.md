@@ -4838,10 +4838,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C61.7] a quoted identifier carrying a dot renders as one name · silent-behavior · when: match
 
-- detect: `git grep -nE '"[A-Za-z0-9_$#]+\.' -- '*.go'` over the identifiers your code hands the
-  builder — a caller-quoted name with a dot inside it (`"my.col"`), most often a column an
-  external system named. Also grep for an UNQUOTED upsert key carrying a parenthesis
-  (`COUNT(`, not `"COUNT("`): those are refused now.
+- detect: `git grep -nE '"[^"]*\.[^"]*"' -- '*.go'` over the identifiers your code hands the
+  builder — any caller-quoted segment carrying a dot, most often a column an external system
+  named. The pattern is deliberately quote-aware rather than charset-based: a quoted name is
+  free to hold spaces and punctuation, so `"my col.name"` and `"my-col.name"` are exactly the
+  shapes a charset pattern would miss. Separately, `git grep -n 'EscapeIdentifier(' -- '*.go'`
+  — it is exported, and its rendering of an unparseable identifier changes too. And grep for an
+  UNQUOTED upsert key carrying a parenthesis (`COUNT(`, not `"COUNT("`): those are refused now.
 - scope: both identifier renderers split on `.` BEFORE asking whether the whole string was
   already a well-formed quoted identifier, so `"my.col"` was torn into `"my` and `col"` and each
   half quoted separately. Both now split through the package's quote-aware walker: a dot inside a
