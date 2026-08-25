@@ -18,12 +18,23 @@ var (
 	ErrNilTableRef = errors.New("table reference cannot be nil")
 
 	// ErrOrderingOperandNotComparable is returned when an ordering comparison
-	// (<, <=, >, >=) is given a nil or slice operand. There is no rendering for
-	// either — `col < NULL` is never true whatever the data, and a slice has no
-	// ordinal meaning — so the door refuses instead of emitting SQL that silently
-	// matches nothing. It lives here rather than in the builder because the
-	// builder is an internal package: a sentinel a consumer cannot import is a
-	// sentinel a consumer cannot match.
+	// (<, <=, >, >=) is given an operand that is not a scalar. There is no
+	// rendering for one — `col < NULL` is never true whatever the data, and a set
+	// has no ordinal meaning — so the door refuses instead of emitting SQL that
+	// silently matches nothing.
+	//
+	// The refused forms are judged AFTER the operand is resolved, so they are
+	// wider than their surface spelling: nil; a slice; an array (`[3]int{…}`,
+	// which the builder classifies as a list exactly as it does a slice); a typed
+	// nil pointer (`(*int)(nil)`, the ordinary spelling of an optional field),
+	// which is dereferenced to nil; and a `driver.Valuer` whose Value() resolves
+	// to NULL (`sql.NullString{}`). A `[]byte` and a Valuer HOLDING a value stay
+	// scalars and are compared normally. A Valuer whose Value() FAILS is a
+	// different error: that cause is reported wrapped, not as this sentinel.
+	//
+	// It lives here rather than in the builder because the builder is an internal
+	// package: a sentinel a consumer cannot import is a sentinel a consumer
+	// cannot match.
 	ErrOrderingOperandNotComparable = errors.New("ordering comparison requires a scalar operand")
 
 	// ErrEmptyExpressionSQL is returned when Expr() is called with empty SQL.

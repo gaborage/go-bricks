@@ -2,6 +2,8 @@ package builder
 
 import (
 	dbsql "database/sql"
+	"database/sql/driver"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -819,14 +821,13 @@ func TestJoinFilterScalarRenderingUnchanged(t *testing.T) {
 		{name: "not_eq_scalar", filter: jf.NotEq("u.id", 42), wantSQL: "u.id != ?", wantArg: 42},
 		{name: "eq_byte_slice", filter: jf.Eq("u.id", []byte("raw")), wantSQL: "u.id = ?", wantArg: []byte("raw")},
 		// A Valuer that HOLDS a value is a scalar, so it takes the placeholder
-		// path and is passed through unresolved — database/sql calls Value() at
-		// bind time, which is what a Valuer is for. f.Eq resolves it earlier and
-		// binds 5; both send the same value to the driver.
+		// path — and it binds the value the door ALREADY resolved to classify it,
+		// so database/sql is never asked for a second, possibly different one.
 		{
-			name:    "eq_set_valuer_binds_unresolved",
+			name:    "eq_set_valuer_binds_resolved",
 			filter:  jf.Eq("u.id", dbsql.NullInt64{Int64: 5, Valid: true}),
 			wantSQL: "u.id = ?",
-			wantArg: dbsql.NullInt64{Int64: 5, Valid: true},
+			wantArg: int64(5),
 		},
 		{name: "not_eq_byte_slice", filter: jf.NotEq("u.id", []byte("raw")), wantSQL: "u.id != ?", wantArg: []byte("raw")},
 	}
@@ -904,4 +905,114 @@ func TestJoinFilterOrderingRefusesNilAndSlices(t *testing.T) {
 		assert.Equal(t, "u.id < ?", sql)
 		assert.Equal(t, []any{[]byte("raw")}, args)
 	})
+}
+
+// countingValuer records how many times database/sql's Value() contract is
+// exercised, and answers the same way every time.
+type countingValuer struct {
+	value any
+	calls int
+}
+
+func (c *countingValuer) Value() (driver.Value, error) {
+	c.calls++
+	return c.value, nil
+}
+
+// erroringValuer refuses to produce a value, the way a Valuer over a corrupt or
+// out-of-range field does.
+type erroringValuer struct{ err error }
+
+func (e erroringValuer) Value() (driver.Value, error) { return nil, e.err }
+
+// statefulValuer answers NULL once and a value thereafter — the shape that makes
+// a second resolution observable.
+type statefulValuer struct{ calls int }
+
+func (s *statefulValuer) Value() (driver.Value, error) {
+	s.calls++
+	if s.calls == 1 {
+		return nil, nil
+	}
+	return int64(42), nil
+}
+
+// TestJoinFilterResolvesValuerExactlyOnce pins the single-resolution contract:
+// the door classifies and binds ONE resolution, so nothing downstream — squirrel
+// or database/sql at bind time — has to ask the operand again.
+func TestJoinFilterResolvesValuerExactlyOnce(t *testing.T) {
+	jf := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter()
+
+	tests := []struct {
+		name    string
+		value   any
+		door    func(string, any) dbtypes.JoinFilter
+		wantSQL string
+	}{
+		{name: "eq_scalar_valuer", value: int64(5), door: jf.Eq, wantSQL: "u.id = ?"},
+		{name: "eq_null_valuer", value: nil, door: jf.Eq, wantSQL: "u.id IS NULL"},
+		{name: "not_eq_null_valuer", value: nil, door: jf.NotEq, wantSQL: "u.id IS NOT NULL"},
+		{name: "lt_scalar_valuer", value: int64(5), door: jf.Lt, wantSQL: "u.id < ?"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			operand := &countingValuer{value: tt.value}
+
+			sql, _, err := tt.door("u.id", operand).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, 1, operand.calls, "Value() must be resolved exactly once")
+		})
+	}
+}
+
+// TestJoinFilterValuerErrorSurfacesCause pins that a Valuer failure travels by
+// identity instead of being flattened into the ordering sentinel, which is what
+// discarded the cause: a Valuer that cannot answer says nothing about whether
+// the operand is comparable.
+func TestJoinFilterValuerErrorSurfacesCause(t *testing.T) {
+	errBoom := errors.New("valuer exploded")
+	operand := erroringValuer{err: errBoom}
+	jf := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter()
+
+	doors := []struct {
+		name string
+		fn   func(string, any) dbtypes.JoinFilter
+	}{
+		{name: "eq", fn: jf.Eq},
+		{name: "not_eq", fn: jf.NotEq},
+		{name: "lt", fn: jf.Lt},
+		{name: "lte", fn: jf.Lte},
+		{name: "gt", fn: jf.Gt},
+		{name: "gte", fn: jf.Gte},
+	}
+
+	for _, door := range doors {
+		t.Run(door.name, func(t *testing.T) {
+			sql, args, err := door.fn("u.id", operand).ToSQL()
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, errBoom)
+			assert.NotErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+			assert.Empty(t, sql)
+			assert.Empty(t, args)
+		})
+	}
+}
+
+// TestJoinFilterRendersFirstResolutionOfStatefulValuer pins the half a counter
+// cannot see: when a second resolution WOULD differ, the rendering is the one
+// the door classified. Asking twice used to render `u.id = ?` bound to the
+// SECOND answer under a classification made from the first.
+func TestJoinFilterRendersFirstResolutionOfStatefulValuer(t *testing.T) {
+	operand := &statefulValuer{}
+
+	sql, args, err := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter().Eq("u.id", operand).ToSQL()
+
+	require.NoError(t, err)
+	assert.Equal(t, "u.id IS NULL", sql)
+	assert.Empty(t, args)
+	assert.Equal(t, 1, operand.calls)
 }
