@@ -54,7 +54,8 @@ var ErrInvalidMigrationHost = errors.New("migration: database.host is not a vali
 // from a secret store), or database.tls is set and would silently fail to reach
 // the connection, which is the whole of #1047. It covers the DISCRETE-FIELD shapes
 // only: a database.tls block beside a connectionstring loses the same guarantee but
-// has its own remedy — move the settings into the DSN — so it gets its own sentinel,
+// has its own remedy — the DSN for the runtime, flyway.conf for the migration —
+// so it gets its own sentinel,
 // ErrMigrationTLSWithConnectionString. A block naming NO identity field and no TLS
 // is conf-owned by construction and still defers. The error names the fields but
 // never echoes a value; the per-tenant caller pairs it with TenantResult.TenantID.
@@ -104,6 +105,24 @@ func validateMigrationHost(host string) error {
 	return ErrInvalidMigrationHost
 }
 
+// ErrInvalidMigrationPort rejects a database.port outside the TCP range. Zero is
+// the documented "unset" case — urlAuthority omits the port and the driver takes
+// its default — but a NEGATIVE port took that same branch, so a config that
+// clearly meant a port silently connected to pgjdbc's 5432 instead, and nothing
+// observed a port above 65535 either. config.validateOptionalDatabasePort applies
+// the same `< 0 || > 65535` rule with the same zero-is-unset carve-out; this is
+// the migrator's own copy, for the per-tenant configs that never passed it. The
+// error names the field but never echoes the value. Match with errors.Is.
+var ErrInvalidMigrationPort = errors.New("migration: database.port must be between 1 and 65535, or 0 for the driver default")
+
+// validateMigrationPort accepts the unset zero and any port in the TCP range.
+func validateMigrationPort(port int) error {
+	if port < 0 || port > 65535 {
+		return ErrInvalidMigrationPort
+	}
+	return nil
+}
+
 // ErrMigrationMTLSUnsupported rejects a migration whose config asks for
 // PostgreSQL client-certificate authentication. The limit is OURS, not pgjdbc's:
 // the framework does not forward `database.tls.cert`/`key` as the JDBC
@@ -125,12 +144,14 @@ var ErrMigrationMTLSUnsupported = errors.New(
 // its own rather than trusting the caller to have validated. Match with errors.Is.
 var ErrMigrationTLSWithConnectionString = errors.New(
 	"migration: database.tls is set alongside database.connectionstring: the framework does not parse DSNs, " +
-		"so the TLS settings cannot reach the migration connection; put sslmode/sslrootcert/sslcert/sslkey in the " +
-		"connection string itself and remove the database.tls block")
+		"so the TLS settings cannot reach the migration connection; remove the database.tls block, putting its " +
+		"settings in the connection string for the RUNTIME pool, and set the migration's own TLS parameters on " +
+		"the JDBC url in flyway.conf, which owns the migration connection for a connectionstring config")
 
 // usesFrameworkOwnedURL reports whether this run gets a framework-built `-url=`.
 // Only PostgreSQL discrete-field configs qualify. Oracle is excluded because it
-// has no `database.tls` at all (ADR-062) and no JDBC URL builder here; a
+// has no SUPPORTED `database.tls` — the shared config carries the field and
+// validation rejects it for Oracle (ADR-062) — and no JDBC URL builder here; a
 // `connectionstring` config is excluded because the framework does not parse
 // DSNs. Both keep the conf-owned URL.
 func usesFrameworkOwnedURL(db *config.DatabaseConfig, vendor string) bool {
@@ -169,8 +190,10 @@ func buildPostgresJDBCURL(db *config.DatabaseConfig, appName string) (string, er
 	return jdbcURL, nil
 }
 
-// urlAuthority renders host[:port], bracketing an IPv6 literal so the colons in
-// the address are not read as the port separator. Brackets are stripped first and
+// urlAuthority renders host[:port], omitting the port when it is zero so the
+// driver takes its default. It runs downstream of validateMigrationPort, so a
+// non-positive port here is zero and never a negative one. It brackets an IPv6
+// literal so the colons in the address are not read as the port separator. Brackets are stripped first and
 // re-added once: a config may spell the literal either way, and net.JoinHostPort
 // brackets anything containing a colon, so passing an already-bracketed host
 // straight through would emit `[[::1]]:5432`.
@@ -219,6 +242,9 @@ func urlArgs(db *config.DatabaseConfig, vendor, appName string) ([]string, error
 		return nil, err
 	}
 	if err := validateMigrationHost(db.Host); err != nil {
+		return nil, err
+	}
+	if err := validateMigrationPort(db.Port); err != nil {
 		return nil, err
 	}
 	jdbcURL, err := buildPostgresJDBCURL(db, appName)

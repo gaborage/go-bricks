@@ -2,9 +2,11 @@ package migration
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +133,65 @@ func TestBuildPostgresJDBCURLAuthority(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// A negative port took urlAuthority's zero branch and silently connected to
+// pgjdbc's default 5432; nothing observed a port above the TCP range either.
+// Zero stays the documented unset case.
+func TestURLArgsRejectsPortOutsideTCPRange(t *testing.T) {
+	for _, port := range []int{-1, -5432, 65536, 99999} {
+		t.Run(fmt.Sprintf("port_%d", port), func(t *testing.T) {
+			db := pgURLConfig()
+			db.Port = port
+
+			args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+			require.ErrorIs(t, err, ErrInvalidMigrationPort)
+			assert.Nil(t, args)
+			assert.NotContains(t, err.Error(), strconv.Itoa(port),
+				"the error names the field, never the value")
+		})
+	}
+
+	// The boundaries that must still pass, so the comparison cannot be widened
+	// without a test noticing.
+	for _, port := range []int{0, 1, 65535} {
+		t.Run(fmt.Sprintf("accepts_port_%d", port), func(t *testing.T) {
+			db := pgURLConfig()
+			db.Port = port
+
+			args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+			require.NoError(t, err)
+			require.Len(t, args, 1)
+		})
+	}
+
+	// Zero is unset, not "port 0": the authority carries no port at all.
+	t.Run("zero_omits_the_port", func(t *testing.T) {
+		db := pgURLConfig()
+		db.Port = 0
+
+		args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+		require.NoError(t, err)
+		assert.Contains(t, args[0], jdbcPostgresScheme+"db.internal/billing")
+	})
+}
+
+func TestMigrateForRefusesPortOutsideTCPRange(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+
+	for _, port := range []int{-1, 65536} {
+		t.Run(fmt.Sprintf("port_%d", port), func(t *testing.T) {
+			db := pgURLConfig()
+			db.Port = port
+
+			require.ErrorIs(t, runMigrateExpectingRefusal(t, db), ErrInvalidMigrationPort)
 		})
 	}
 }
