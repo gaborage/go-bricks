@@ -52,10 +52,13 @@ var ErrInvalidMigrationHost = errors.New("migration: database.host is not a vali
 // block is PARTIALLY filled (some identity field set, but not a usable host AND
 // database — a target broken in transit, e.g. a tenant whose host arrived blank
 // from a secret store), or database.tls is set and would silently fail to reach
-// the connection, which is the whole of #1047. A block naming NO identity field
-// and no TLS is conf-owned by construction and still defers. The error names the
-// fields but never echoes a value; the per-tenant caller pairs it with
-// TenantResult.TenantID. Match with errors.Is.
+// the connection, which is the whole of #1047. It covers the DISCRETE-FIELD shapes
+// only: a database.tls block beside a connectionstring loses the same guarantee but
+// has its own remedy — move the settings into the DSN — so it gets its own sentinel,
+// ErrMigrationTLSWithConnectionString. A block naming NO identity field and no TLS
+// is conf-owned by construction and still defers. The error names the fields but
+// never echoes a value; the per-tenant caller pairs it with TenantResult.TenantID.
+// Match with errors.Is.
 var ErrIncompleteMigrationTarget = errors.New(
 	"migration: PostgreSQL requires database.host and database.database (or database.connectionstring) " +
 		"so the framework can build the Flyway JDBC URL; a partially filled database block, or any " +
@@ -111,6 +114,19 @@ var ErrMigrationMTLSUnsupported = errors.New(
 		"the framework does not forward them as the JDBC sslcert/sslkey parameters, so it refuses rather than " +
 		"migrating without the client certificate; use database.tls.mode + database.tls.ca for server-authenticated TLS, " +
 		"or migrate outside the framework")
+
+// ErrMigrationTLSWithConnectionString rejects a PostgreSQL config that sets both
+// `database.connectionstring` and `database.tls.*`. The framework does not parse
+// DSNs, so it cannot lift the TLS material onto a URL it builds; deferring to the
+// conf would run the migration on the DSN with the configured TLS silently
+// dropped. config.Validate already refuses this shape (ADR-062), but a per-tenant
+// DatabaseConfig can reach MigrateFor without ever passing through it — a dynamic
+// DBConfigProvider, or the CLI's tenants.yaml — so the migrator fails closed on
+// its own rather than trusting the caller to have validated. Match with errors.Is.
+var ErrMigrationTLSWithConnectionString = errors.New(
+	"migration: database.tls is set alongside database.connectionstring: the framework does not parse DSNs, " +
+		"so the TLS settings cannot reach the migration connection; put sslmode/sslrootcert/sslcert/sslkey in the " +
+		"connection string itself and remove the database.tls block")
 
 // usesFrameworkOwnedURL reports whether this run gets a framework-built `-url=`.
 // Only PostgreSQL discrete-field configs qualify. Oracle is excluded because it
@@ -178,17 +194,24 @@ func unbracket(host string) string {
 }
 
 // urlArgs returns the `-url=` flag for runs the framework owns the URL for, or
-// nil for the documented conf-owned cases (Oracle, connectionstring). Host and
+// nil for the documented conf-owned cases (Oracle, bare connectionstring). Host and
 // database reach argv from here, so validateEnvFields runs before they do — the
 // same guard buildEnvironmentVariables applies to the subprocess environment.
 func urlArgs(db *config.DatabaseConfig, vendor, appName string) ([]string, error) {
 	if !usesFrameworkOwnedURL(db, vendor) {
-		// A partially filled block is a broken target, and any TLS setting must reach the
-		// connection or fail loudly. A block naming nothing at all is the conf-owned
-		// third boundary and still defers.
-		if vendor == config.PostgreSQL && db != nil && db.ConnectionString == "" &&
-			(namesURLTarget(db) || hasTLSSettings(db)) {
-			return nil, ErrIncompleteMigrationTarget
+		// Two ways a conf-owned PostgreSQL run still fails rather than defers. A DSN
+		// carries its own TLS, so a database.tls block beside one cannot reach the
+		// connection; and a partially filled block is a broken target. Everything else
+		// — Oracle, a bare DSN, a block naming no target and no TLS — defers.
+		if vendor == config.PostgreSQL && db != nil {
+			switch {
+			case db.ConnectionString != "":
+				if hasTLSSettings(db) {
+					return nil, ErrMigrationTLSWithConnectionString
+				}
+			case namesURLTarget(db) || hasTLSSettings(db):
+				return nil, ErrIncompleteMigrationTarget
+			}
 		}
 		return nil, nil
 	}

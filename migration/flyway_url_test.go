@@ -281,22 +281,19 @@ func TestMigrateForOmitsURLForConfConfigs(t *testing.T) {
 	})
 }
 
-func TestMigrateForRefusesMTLS(t *testing.T) {
-	if runtime.GOOS == windowsOS {
-		t.Skip("shell script stub not supported on windows CI")
-	}
-
+// runMigrateExpectingRefusal drives the per-tenant door with an empty conf and
+// returns the error MigrateFor refuses with. The point of going through
+// MigrateFor rather than urlArgs is that this door takes a *config.DatabaseConfig
+// straight from a dynamic DBConfigProvider or the CLI's tenants.yaml, so it never
+// necessarily passed config.Validate.
+func runMigrateExpectingRefusal(t *testing.T, db *config.DatabaseConfig) error {
+	t.Helper()
 	stub, _ := createCommandCapturingStub(t, minimalMigrateSuccessJSON)
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "flyway.conf")
 	migrationPath := filepath.Join(tempDir, "migrations")
 	require.NoError(t, os.WriteFile(configPath, []byte(""), 0o644))
 	require.NoError(t, os.MkdirAll(migrationPath, 0o755))
-
-	db := pgURLConfig()
-	db.TLS.Mode = "verify-full"
-	db.TLS.CertFile = "/etc/ssl/client.crt"
-	db.TLS.KeyFile = "/etc/ssl/client.key"
 
 	_, err := newURLTestMigrator(t).MigrateFor(context.Background(), db, &Config{
 		FlywayPath:    stub,
@@ -305,8 +302,87 @@ func TestMigrateForRefusesMTLS(t *testing.T) {
 		Timeout:       10 * time.Second,
 		Environment:   "test",
 	})
+	return err
+}
 
-	require.ErrorIs(t, err, ErrMigrationMTLSUnsupported)
+func TestMigrateForRefusesMTLS(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+
+	db := pgURLConfig()
+	db.TLS.Mode = "verify-full"
+	db.TLS.CertFile = "/etc/ssl/client.crt"
+	db.TLS.KeyFile = "/etc/ssl/client.key"
+
+	require.ErrorIs(t, runMigrateExpectingRefusal(t, db), ErrMigrationMTLSUnsupported)
+}
+
+// tlsWithConnectionStringShapes are the database.tls spellings that must not
+// reach a DSN-owned migration silently. Each field is isolated so a flipped
+// disjunct in hasTLSSettings is caught rather than masked by its neighbors.
+// dsnConfigWithTLS is the shape both connectionstring+TLS suites drive: a valid
+// PostgreSQL block whose discrete fields are overridden by a DSN, plus one TLS
+// spelling from the table.
+func dsnConfigWithTLS(apply func(*config.DatabaseConfig)) *config.DatabaseConfig {
+	db := pgURLConfig()
+	db.ConnectionString = "postgres://migrator@db.internal:5432/billing"
+	apply(db)
+	return db
+}
+
+var tlsWithConnectionStringShapes = []struct {
+	name  string
+	apply func(*config.DatabaseConfig)
+}{
+	{name: "mode_only", apply: func(c *config.DatabaseConfig) { c.TLS.Mode = "verify-full" }},
+	{name: "ca_only", apply: func(c *config.DatabaseConfig) { c.TLS.CAFile = "/etc/ssl/ca.pem" }},
+	{name: "cert_only", apply: func(c *config.DatabaseConfig) { c.TLS.CertFile = "/etc/ssl/client.crt" }},
+	{name: "key_only", apply: func(c *config.DatabaseConfig) { c.TLS.KeyFile = "/etc/ssl/client.key" }},
+	{name: "cert_and_key", apply: func(c *config.DatabaseConfig) {
+		c.TLS.CertFile = "/etc/ssl/client.crt"
+		c.TLS.KeyFile = "/etc/ssl/client.key"
+	}},
+}
+
+// config.Validate already refuses database.tls beside a connectionstring
+// (ADR-062), but urlArgs must not depend on the caller having run it: the
+// per-tenant configs are caller-supplied. Without this the pair fell through to
+// the conf-owned deferral and Flyway ran on the DSN with the TLS fields dropped.
+func TestURLArgsRejectsTLSWithConnectionString(t *testing.T) {
+	for _, tt := range tlsWithConnectionStringShapes {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := urlArgs(dsnConfigWithTLS(tt.apply), config.PostgreSQL, testAppName)
+
+			require.ErrorIs(t, err, ErrMigrationTLSWithConnectionString)
+			assert.Nil(t, args)
+		})
+	}
+
+	// The unchanged boundary: a DSN with no database.tls block still defers to the
+	// conf-owned URL rather than failing.
+	t.Run("connection_string_alone_defers", func(t *testing.T) {
+		db := dsnConfigWithTLS(func(*config.DatabaseConfig) {})
+
+		args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+		require.NoError(t, err)
+		assert.Nil(t, args)
+	})
+}
+
+func TestMigrateForRefusesTLSWithConnectionString(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+
+	for _, tt := range tlsWithConnectionStringShapes {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runMigrateExpectingRefusal(t, dsnConfigWithTLS(tt.apply))
+
+			require.ErrorIs(t, err, ErrMigrationTLSWithConnectionString)
+		})
+	}
 }
 
 // Per-tenant URL construction: the runner hands each tenant its own
@@ -453,12 +529,13 @@ func TestURLArgsFailsClosedOnIncompleteTarget(t *testing.T) {
 		assert.Nil(t, args)
 	})
 
-	// The two originally documented conf-owned shapes keep deferring, TLS or not.
-	t.Run("connectionstring_defers", func(t *testing.T) {
+	// A DSN with no database.tls block is conf-owned and defers, even with the
+	// discrete host blanked. With a TLS block it does NOT — see
+	// TestURLArgsRejectsTLSWithConnectionString.
+	t.Run("connectionstring_without_tls_defers", func(t *testing.T) {
 		db := pgURLConfig()
 		db.ConnectionString = "postgres://u:p@h:5432/d"
 		db.Host = ""
-		db.TLS.Mode = "verify-full"
 
 		args, err := urlArgs(db, config.PostgreSQL, testAppName)
 
