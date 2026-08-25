@@ -5076,20 +5076,23 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   reading `ToSQL`'s args back, a golden file or a contract test, can see it.
   "Nil" is decided after the same resolution the underlying builder performs: a `driver.Valuer`
   reporting NULL (`sql.NullString{}`) and a typed nil pointer (`(*int)(nil)`) are nil at both
-  doors, which is what an optional column read from a nullable field usually is.
+  EQUALITY doors, `f.Eq` and `jf.Eq` alike, which is what an optional column read from a nullable
+  field usually is. The ordering doors are where the two diverge, immediately below.
   The JOINFILTER ORDERING doors (`<`, `<=`, `>`, `>=`) now REFUSE a nil, slice or array operand with
   `dbtypes.ErrOrderingOperandNotComparable` — exported from `database/types`, so consumer code can
   match it — surfaced through the JoinFilter error channel at `ToSQL`. The FILTER ordering doors
   are unchanged and are NOT the same rule: they delegate to the underlying builder, which refuses
   nil, slices and a Valuer reporting NULL with its own messages, but does not dereference a
   pointer — so `f.Lt(col, (*int)(nil))` still renders `col < ?` where `jf.Lt` now errors. That
-  divergence is tracked in #1205, not closed here.
-  There is no rendering for either, and the previous one silently matched nothing.
+  divergence is tracked in #1205, not closed here. JoinFilter refuses because IT has no rendering
+  for those three — the `col op ?` it used to emit for them silently matched nothing, and the error
+  replaces that. Do not read the absence as universal: Filter renders what #1205 documents.
 - gate: match = a `jf.Eq`/`jf.NotEq` call whose operand can be any of the NON-SCALAR forms (it
   starts working), or a `jf.Lt`/`Lte`/`Gt`/`Gte` call whose operand can be one of them (it starts
   erroring). Those forms are: `nil`; a slice; an ARRAY (`[3]int{1,2,3}` is a list operand exactly
   as `[]int{1,2,3}` is); a typed nil pointer (`(*int)(nil)`); and a `driver.Valuer` reporting NULL
-  (`sql.NullString{}`) — the last two because both doors resolve the operand before classifying it.
+  (`sql.NullString{}`) — the last two because the JoinFilter doors resolve the operand before
+  classifying it.
   A `driver.Valuer` HOLDING a value matches too, at ALL six doors, but for the argument only: the
   SQL stays `col op ?` and the bound value becomes the resolved one.
   no-match = every JoinFilter operand is a scalar and none of them is a `driver.Valuer`; a `[]byte`
