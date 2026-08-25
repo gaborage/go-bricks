@@ -637,6 +637,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "Having",
 			setupQuery: func(qb *QueryBuilder) string {
+				// SECURITY: Manual SQL review completed - countClause is a test constant, not input; the value side is parameterized.
 				sql, _, _ := qb.Select("department", qb.MustExpr(countClause)).From(tableUsers).GroupBy("department").Having(countClause+" > ?", 5).ToSQL()
 				return sql
 			},
@@ -1136,6 +1137,7 @@ func TestGroupByExpressions(t *testing.T) {
 		).
 			From(tableOrders).
 			GroupBy(qb.MustExpr(testExpr)).
+			// SECURITY: Manual SQL review completed - constant aggregate predicate; the value side is parameterized.
 			Having("COUNT(*) > ?", 10)
 
 		sql, args, err := query.ToSQL()
@@ -1252,6 +1254,7 @@ func TestComplexExpressionQueries(t *testing.T) {
 			From(tableProducts).
 			Where(f.Eq(colStatus, statusActive)).
 			GroupBy(colCategory).
+			// SECURITY: Manual SQL review completed - constant aggregate predicate; the value side is parameterized.
 			Having("COUNT(*) > ?", 5).
 			OrderBy(qb.MustExpr("COUNT(*) DESC"))
 
@@ -1322,6 +1325,7 @@ func TestComplexExpressionQueries(t *testing.T) {
 			From(tableOrders).
 			Where(f.Gte("created_at", testDate)).
 			GroupBy(qb.MustExpr(testExpr)).
+			// SECURITY: Manual SQL review completed - constant aggregate predicate; the value side is parameterized.
 			Having("SUM(total_amount) > ?", 1000).
 			OrderBy(qb.MustExpr("DATE(created_at) DESC"))
 
