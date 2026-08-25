@@ -1407,7 +1407,7 @@ only signal was a once-per-migrator WARN. The decision has the framework build
 `database.*` and pass it as `-url=`, which outranks the conf, for every PostgreSQL
 discrete-field config — TLS configured or not, with no escape hatch. Credentials stay
 environment-delivered (argv is world-readable); the WARN and the whole `DB_SSL*` export are
-removed; `certfile`/`keyfile` fail closed on `ErrMigrationMTLSUnsupported` rather than
+removed; `database.tls.cert`/`key` fail closed on `ErrMigrationMTLSUnsupported` rather than
 connecting without the client certificate pgjdbc cannot load from a libpq PEM. Oracle and
 `connectionstring` configs keep the conf-owned URL.
 

@@ -1,7 +1,27 @@
 # ADR-062: Fail Closed on `database.tls` Misconfiguration (Mode Allowlist + Material/Mode Coherence)
 
-**Status:** Accepted
+**Status:** Accepted (amended 2026-08-24)
 **Date:** 2026-08-14
+
+## Amendment — 2026-08-24: the Flyway leg is no longer conf-owned (ADR-085, #1047)
+
+The Consequences entry below describing `database.tls` reaching Flyway as
+`DB_SSLMODE`/`DB_SSLROOTCERT`/`DB_SSLCERT`/`DB_SSLKEY`, and the once-per-migrator WARN that
+accompanied it, is **superseded and marked historical**. That export and that WARN are gone.
+
+[ADR-085](adr_085_framework_owned_flyway_url.md) has the framework build the PostgreSQL JDBC
+URL from `database.*` and pass it as `-url=`, which outranks the operator's `flyway.conf`, for
+every PostgreSQL discrete-field config. `database.tls.mode` and `database.tls.ca` ride that URL
+as `sslmode` and `sslrootcert`, so the residual "a conf that ignores those variables still
+migrates without TLS" gap this ADR could only warn about is closed rather than advised.
+
+A `database.tls.cert`/`database.tls.key` migration now FAILS (`ErrMigrationMTLSUnsupported`)
+instead of downgrading: pgjdbc's `sslkey` wants a PKCS-8 DER key while this ADR validates
+`database.tls.key` as a libpq PEM. Oracle and `database.connectionstring` keep the conf-owned
+URL — for Oracle because this ADR rejects `database.tls` there outright, so there is no
+guarantee to make. See `[C61.4]`.
+
+The Context and Decision sections below are the original record and are unchanged.
 
 ## Context
 
@@ -150,7 +170,8 @@ go-bricks passes that DSN through untouched.
   place. The CLI pins a released go-bricks, so the rules land at each pin bump
   rather than at merge.
 
-  #1006 also closed the second half of the same gap: `database.tls` used to be
+  **[HISTORICAL — superseded by the 2026-08-24 amendment above.]** #1006 also
+  closed the second half of the same gap: `database.tls` used to be
   **inert on the Flyway path**, because `buildEnvironmentVariables` forwarded only
   host/port/user/password/database — so a `verify-full` block validated cleanly
   while the migration ran with whatever TLS the operator's `flyway.conf` URL
@@ -167,15 +188,6 @@ go-bricks passes that DSN through untouched.
   the JDBC URL and pass `-url=` itself, which takes URL ownership from every
   consumer and so needs its own ADR.
 
-  **Resolved by [ADR-085](adr_085_framework_owned_flyway_url.md)** (#1047): the
-  framework now builds the JDBC URL from `database.*` and passes `-url=` for every
-  PostgreSQL discrete-field config, which outranks the conf. The WARN and the whole
-  `DB_SSL*` export described above are removed; `mode` and `cafile` ride the URL as
-  `sslmode`/`sslrootcert`, and a `certfile`/`keyfile` migration fails closed rather
-  than downgrading, since pgjdbc's `sslkey` cannot read the libpq PEM this ADR
-  validates. Oracle and `connectionstring` configs keep the conf-owned URL — for
-  Oracle because this ADR rejects `database.tls` there outright, so there is no
-  guarantee to make. `[C61.4]`.
 - A `database:` block containing **only** `tls.*` fields remains invisible to
   `IsDatabaseConfigured` and is silently ignored, because none of the TLS keys
   is an ADR-047 identity marker. Unchanged by this ADR; a follow-up.

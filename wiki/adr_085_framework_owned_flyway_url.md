@@ -38,14 +38,15 @@ PostgreSQL discrete-field config.** A command-line flag outranks the conf; the
 jdbc:postgresql://<host>[:<port>]/<database>?ApplicationName=…[&sslmode=…][&sslrootcert=…]
 ```
 
-Not gated on TLS being configured: the target-drift half of the gap is present in every PG
-deployment, TLS or not, so every PG deployment gets the framework's URL.
+Not gated on TLS being configured: the target-drift half of the gap is present in every
+PostgreSQL discrete-field config, TLS or not, so every such config gets the framework's URL.
+The two conf-owned shapes below, and a config naming no URL-target fields, are the exceptions.
 
 **No escape hatch.** No config key restores a conf-owned URL. An opt-out reopens both
 failure modes on precisely the deployments that would set it, and the migration would then
 be un-auditable from `database.*` alone.
 
-**`database.tls.mode` → `sslmode`, `cafile` → `sslrootcert`,** as URL query parameters. The
+**`database.tls.mode` → `sslmode`, `ca` → `sslrootcert`,** as URL query parameters. The
 WARN and its `sync.Once` guard, and the whole `DB_SSL*` export, are removed: a second,
 unread channel for the same setting is a drift source, not a fallback.
 
@@ -60,12 +61,12 @@ from a whitelist of known `PGProperty` keys (`PGProperty.APPLICATION_NAME` is
 `"ApplicationName"`), so a libpq-spelled parameter is silently dropped rather than
 forwarded. It still lands in the server's `application_name` column.
 
-**PostgreSQL client-certificate migrations fail closed.** With `database.tls.certfile` or
-`keyfile` set, any PostgreSQL run the framework builds a URL for — `migrate`, `validate` and
+**PostgreSQL client-certificate migrations fail closed.** With `database.tls.cert` or
+`database.tls.key` set, any PostgreSQL run the framework builds a URL for — `migrate`, `validate` and
 `info` alike — returns `ErrMigrationMTLSUnsupported` naming the pgjdbc limitation:
-pgjdbc's `sslkey` requires a PKCS-8 DER file, while `database.tls.keyfile` is
+pgjdbc's `sslkey` requires a PKCS-8 DER file, while `database.tls.key` is
 validated as a libpq PEM (`[C60.2]`). The framework does not convert — that means writing
-key material to a temp file. Server-authenticated TLS (`mode` + `cafile`) is fully
+key material to a temp file. Server-authenticated TLS (`mode` + `ca`) is fully
 supported, and runtime mTLS is untouched. Connecting without the client certificate the
 config asked for would be the silent-downgrade this ADR exists to remove.
 
@@ -98,7 +99,8 @@ rejects any config carrying `database.tls.*` that cannot produce a URL: there is
 shape in which a TLS setting silently fails to reach the connection, which is the
 whole of #1047.
 
-A block naming NO identity field and no TLS is the **third documented boundary**,
+A block naming no URL-TARGET field (`host`, `port`, `database`) and no TLS is the
+**third documented boundary**,
 alongside Oracle and `connectionstring`: it is conf-owned by construction — there
 is nothing to build a URL from, and no TLS guarantee to lose. ADR-047 already
 rejects a type-only `database:` block at application startup, so this shape exists
@@ -113,7 +115,7 @@ or databases gets a distinct URL per tenant, from the same source the runtime us
 - **Breaking**: a `flyway.url` in a `flyway.conf` is now **silently outranked** for
   PostgreSQL discrete-field configs. Flyway does not warn about a flag beating a conf key.
   Delete the URL from the conf, or accept that it has no effect. `[C61.4]`.
-- **Breaking**: a PostgreSQL migration with `database.tls.certfile`/`keyfile` set now fails
+- **Breaking**: a PostgreSQL migration with `database.tls.cert`/`key` set now fails
   instead of running. Match with `errors.Is(err, migration.ErrMigrationMTLSUnsupported)`.
   `[C61.4]`.
 - `DB_SSLMODE`/`DB_SSLROOTCERT`/`DB_SSLCERT`/`DB_SSLKEY` are no longer exported. A conf
@@ -127,7 +129,8 @@ or databases gets a distinct URL per tenant, from the same source the runtime us
 - **`database.connectionstring` deployments keep the conf-owned URL.** The framework does
   not parse DSNs, and `tls.*` alongside a connection string is already rejected (ADR-062),
   so no guarantee is lost.
-- **A `database:` block carrying only `type` keeps the conf-owned URL.** Nothing to build a
+- **A `database:` block naming no URL-target field keeps the conf-owned URL** (`type` alone is
+  still an ADR-047 identity marker — what is missing is a target to build a URL from). Nothing to build a
   URL from, so no guarantee is offered — and with TLS set it fails rather than deferring.
 - The control-character check that guarded the subprocess environment now also runs before
   the URL is built, because the same fields are formatted into argv.

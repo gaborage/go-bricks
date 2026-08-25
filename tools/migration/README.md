@@ -159,8 +159,10 @@ component that cannot be percent-encoded — it has to stay routable — so it i
 instead. Left unescaped, a host like `db.internal/?sslmode=disable&x=` would end the URL
 authority early and pgjdbc would read the injected parameters, connecting in cleartext to
 a host of the value's choosing. Letters, digits, hyphen, underscore and dots are accepted
-(underscore because internal DNS and Docker hostnames use it); anything else, including a
-host carrying its own `:port`, fails with `ErrInvalidMigrationHost`. The error never
+(underscore because internal DNS and Docker hostnames use it), as is an IPv6 literal in
+EITHER spelling — bare (`::1`) or bracketed (`[::1]`), which the URL builder normalizes to
+exactly one pair of brackets. Anything else, including a host carrying its own `:port`,
+fails with `ErrInvalidMigrationHost`. The error never
 echoes the value, since a misconfigured host can hold a whole DSN.
 
 **A partially filled block fails rather than falling back.** If `host`, `port`, or

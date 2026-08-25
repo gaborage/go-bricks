@@ -3357,7 +3357,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 > WARN — "confirm from the database side that the connection is actually encrypted, since the WARN
 > cannot" — is closed outright there: the framework builds the JDBC URL and passes `-url=`, so the
 > conf can no longer drop the TLS parameters. The `DB_SSL*` variables below are **no longer
-> exported** as of v0.61.0, and a PostgreSQL `certfile`/`keyfile` migration now fails rather than
+> exported** as of v0.61.0, and a PostgreSQL `cert`/`key` migration now fails rather than
 > needing the PKCS-8 conversion this atom suggests. Read this atom only if you are landing on
 > v0.60.x; going straight to v0.61.0, apply `[C61.4]` instead.
 
@@ -4837,26 +4837,26 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   per-environment ones. Then check every PostgreSQL `host` value your fleet can deliver —
   static YAML, `tenants.yaml`, and whatever your `DBConfigProvider` returns — for anything
   that is not a bare hostname or IP (a `host` carrying a port, a URL, a DSN, or a stray path
-  or query fragment now fails), and for any TLS-configured tenant whose `host` or `database`
+  or query fragment now fails; an IPv6 literal is fine in EITHER spelling, `::1` or `[::1]`), and for any TLS-configured tenant whose `host` or `database`
   can arrive empty. Then read your `database:` block (or your `DBConfigProvider`'s per-tenant
   configs) for `type: postgresql` with discrete `host`/`port`/`database` fields, and separately for
-  `tls.certfile`/`tls.keyfile`. Also `grep -rn 'DB_SSLMODE\|DB_SSLROOTCERT\|DB_SSLCERT\|DB_SSLKEY'`
+  `tls.cert`/`tls.key`. Also `grep -rn 'DB_SSLMODE\|DB_SSLROOTCERT\|DB_SSLCERT\|DB_SSLKEY'`
   over the confs and any wrapper script that exported them.
 - scope: for a PostgreSQL config using discrete fields, the framework now builds
   `jdbc:postgresql://<host>[:<port>]/<database>?ApplicationName=<app.name>[&sslmode=…][&sslrootcert=…]`
   from `database.*` and appends `-url=<that>` to the Flyway argv. A command-line flag outranks a
   conf key and **Flyway does not warn about it**, so a `flyway.url` in your conf is silently
   ignored — including one pointing at a different host or database. `database.tls.mode` becomes
-  `sslmode` and `database.tls.cafile` becomes `sslrootcert`; the once-per-migrator WARN and the
+  `sslmode` and `database.tls.ca` becomes `sslrootcert`; the once-per-migrator WARN and the
   whole `DB_SSLMODE`/`DB_SSLROOTCERT`/`DB_SSLCERT`/`DB_SSLKEY` export are removed, closing the
   residual gap `[C60.2]` documented. `ApplicationName` is set from `app.name`, URL-encoded, with
   no new config key — pgjdbc's spelling, not libpq's `application_name`, which pgjdbc drops
   because it builds startup parameters from a whitelist of known keys; it still lands in the
   server's `application_name` column. Credentials are NOT on the URL — `DB_USER`/`DB_PASSWORD` stay
   environment-delivered, because argv is world-readable in the process list. With
-  `database.tls.certfile` or `keyfile` set, a PostgreSQL run now FAILS with
+  `database.tls.cert` or `database.tls.key` set, a PostgreSQL run now FAILS with
   `migration.ErrMigrationMTLSUnsupported` — `validate` and `info` too, not just `migrate` — rather than connecting without the client certificate:
-  pgjdbc's `sslkey` wants PKCS-8 DER while `database.tls.keyfile` is a libpq PEM, and the framework
+  pgjdbc's `sslkey` wants PKCS-8 DER while `database.tls.key` is a libpq PEM, and the framework
   will not convert key material through a temp file. Two further shapes now fail rather than
   run: a `database.host` that is not an IP literal or a plain DNS name
   (`migration.ErrInvalidMigrationHost` — the host is the one URL component that must stay a
@@ -4895,8 +4895,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   than forwarded — so deleting the line loses nothing you actually had.
 
   For a PostgreSQL mTLS migration there is no in-framework path: drop to server-authenticated TLS
-  (`database.tls.mode` + `cafile`) for the migration leg, or run Flyway outside the framework with
-  your own PKCS-8 DER key. Runtime mTLS is unaffected — `database.tls.certfile`/`keyfile` still work
+  (`database.tls.mode` + `database.tls.ca`) for the migration leg, or run Flyway outside the framework with
+  your own PKCS-8 DER key. Runtime mTLS is unaffected — `database.tls.cert`/`key` still work
   for the service's own connections.
 - verify: point a throwaway tenant's `host` at `h/?sslmode=disable&x=` and confirm the migrate
   refuses with `ErrInvalidMigrationHost` rather than connecting; blank that tenant's `host`
