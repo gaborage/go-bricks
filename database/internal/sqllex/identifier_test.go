@@ -68,6 +68,12 @@ func TestIsBareIdentifierRejectsEverythingElse(t *testing.T) {
 
 // TestIsUnquotedIdentifierAcceptsOneUnquotedSegment pins the narrower language:
 // the same unquoted segment IsBareIdentifier takes, and nothing quoted.
+//
+// Subtest names are the raw INPUT rather than the repo's usual snake_case labels,
+// matching the IsBareIdentifier tables above: the input IS the case here, so a
+// label would restate it less precisely — `u$1#a` says exactly which alphabet
+// member is under test, `dollar_and_hash` does not, and a failure names the
+// offending string directly.
 func TestIsUnquotedIdentifierAcceptsOneUnquotedSegment(t *testing.T) {
 	accepted := []string{"u", "_", "_u1", "users", "u$1#a", "U", "total_count"}
 
@@ -83,6 +89,8 @@ func TestIsUnquotedIdentifierAcceptsOneUnquotedSegment(t *testing.T) {
 // the doors that take caller-supplied text (an expression alias) must not.
 // Asserting BOTH predicates keeps the divergence pinned — a change that collapsed
 // one into the other would pass a test that only checked the new one.
+//
+// Subtest names are the raw input here too, for the same reason.
 func TestIsUnquotedIdentifierRejectsQuotedForm(t *testing.T) {
 	for _, s := range []string{`"level"`, `"_u1"`, `"users"`} {
 		t.Run(s, func(t *testing.T) {
