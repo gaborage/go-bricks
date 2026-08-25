@@ -4768,10 +4768,17 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `exception.message` or a message-bearing span status description on one of the spans above.
   no-match = you group and alert on `exception.type`, `error.type`, the span status CODE, or your
   logs.
-- apply: repoint those queries at `exception.type` (a Go type name, e.g. `*url.Error`,
-  `*fmt.wrapError`) or at the log line, which still carries the full message at every one of these
-  sites. A job-panic alert that matched `panic (type: T)` in `exception.message` repoints at the
-  `job.panic_type` span attribute instead — the type is still exported, under its own key. There is
+- apply: the replacement is NOT one value for every path — repoint each query at what ITS span
+  actually emits, or at the log line, which still carries the full message everywhere.
+  `exception.message` on a job, handler, HTTP-client or publish failure becomes `exception.type`
+  (a Go type name, e.g. `*url.Error`, `*fmt.wrapError`). A STATUS DESCRIPTION matched by text
+  depends on the path: the HTTP client keeps its classification (`transport_error`,
+  `interceptor_failed`, …) and `HTTP <code>` on a 5xx, so those queries need no change; the
+  scheduler panic path keeps `panic`, and the recovered value's type — previously
+  `panic (type: T)` inside `exception.message` — is now the `job.panic_type` span ATTRIBUTE; only
+  the paths with no framework classification fall back to the Go type. A `publish.retry` query
+  reading that EVENT's `error` attribute moves to the same event's `error.type`, NOT to
+  `exception.type`, which the retry event does not carry. There is
   no framework switch that restores the message: the removal is the decision. A
   span you start yourself is yours — `observability.RecordErrorByType` is offered for it, and
   nothing stops you calling `span.RecordError` in your own code.
