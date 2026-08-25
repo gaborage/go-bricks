@@ -1050,3 +1050,63 @@ func TestJoinFilterEqArrayRendersIn(t *testing.T) {
 		assert.Equal(t, []any{1, 2, 3}, args)
 	})
 }
+
+// panickingPtrValuer implements driver.Valuer on a POINTER receiver and reads a
+// field without a nil guard, so calling Value() on a nil one panics — the same
+// way `sql.NullString`'s VALUE receiver does through an implicit dereference.
+// Both receiver kinds must therefore be classified as nil WITHOUT being asked.
+type panickingPtrValuer struct{ v driver.Value }
+
+func (p *panickingPtrValuer) Value() (driver.Value, error) { return p.v, nil }
+
+// TestJoinFilterNilValuerPointerIsNullNotPanic pins the overlap between "is a
+// pointer" and "is a driver.Valuer": a nil `*sql.NullString` satisfies the
+// interface through NullString's value receiver, so asserting the interface
+// before testing the pointer dereferences nil and panics inside ToSQL. The
+// operand is nil, and the door must say so without asking it anything.
+//
+// squirrel still panics here (expr.go:168 asserts the Valuer first), so `f.Eq`
+// and `jf.Eq` DIVERGE on this shape: `jf` renders IS NULL where `f` panics.
+func TestJoinFilterNilValuerPointerIsNullNotPanic(t *testing.T) {
+	operands := map[string]any{
+		"value_receiver_valuer":   (*dbsql.NullString)(nil),
+		"pointer_receiver_valuer": (*panickingPtrValuer)(nil),
+	}
+
+	for name, operand := range operands {
+		jf := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter()
+
+		t.Run("eq_"+name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				sql, args, err := jf.Eq("u.id", operand).ToSQL()
+
+				require.NoError(t, err)
+				assert.Equal(t, "u.id IS NULL", sql)
+				assert.Empty(t, args)
+			})
+		})
+
+		t.Run("not_eq_"+name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				sql, args, err := jf.NotEq("u.id", operand).ToSQL()
+
+				require.NoError(t, err)
+				assert.Equal(t, "u.id IS NOT NULL", sql)
+				assert.Empty(t, args)
+			})
+		})
+
+		for doorName, door := range map[string]func(string, any) dbtypes.JoinFilter{
+			"lt": jf.Lt, "lte": jf.Lte, "gt": jf.Gt, "gte": jf.Gte,
+		} {
+			t.Run(doorName+"_"+name, func(t *testing.T) {
+				require.NotPanics(t, func() {
+					_, _, err := door("u.id", operand).ToSQL()
+
+					require.Error(t, err)
+					assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				})
+			})
+		}
+	}
+}

@@ -40,14 +40,27 @@ const (
 // to it: a Valuer failure says nothing about comparability, and reporting it as
 // ErrOrderingOperandNotComparable is what discarded the cause before.
 func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
+	r := reflect.ValueOf(value)
+	// A NIL pointer is nil whatever it points at, and it is settled HERE, before
+	// the Valuer assertion, because the two overlap: a `*sql.NullString` satisfies
+	// driver.Valuer through NullString's VALUE receiver, so asking a nil one for
+	// its value dereferences nil and panics inside ToSQL. squirrel asserts first
+	// and panics for exactly that reason (expr.go:168), which is why this door
+	// cannot simply mirror its order.
+	if r.Kind() == reflect.Pointer && r.IsNil() {
+		return nil, true, nil
+	}
+
 	if v, isValuer := value.(driver.Valuer); isValuer {
 		got, valuerErr := v.Value()
 		if valuerErr != nil {
 			return nil, false, valuerErr
 		}
 		value = got
+		r = reflect.ValueOf(value)
 	}
-	r := reflect.ValueOf(value)
+	// A non-nil pointer is dereferenced the way squirrel's prologue does; the
+	// IsNil arm still stands because Value() may itself have returned a pointer.
 	if r.Kind() == reflect.Pointer {
 		if r.IsNil() {
 			return nil, true, nil
