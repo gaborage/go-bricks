@@ -18,7 +18,10 @@ import (
 	"github.com/gaborage/go-bricks/config"
 )
 
-const testAppName = "billing-api"
+const (
+	testAppName   = "billing-api"
+	testTLSCAPath = "/etc/ssl/ca.pem"
+)
 
 func pgURLConfig() *config.DatabaseConfig {
 	return &config.DatabaseConfig{
@@ -32,7 +35,7 @@ func TestBuildPostgresJDBCURLCarriesTLSParams(t *testing.T) {
 	db.TLS.Mode = "verify-full"
 	db.TLS.CAFile = "/etc/ssl/ca.pem"
 
-	got, err := buildPostgresJDBCURL(db, testAppName, db.TLS.Mode)
+	got, err := buildPostgresJDBCURL(db, testAppName, db.TLS.Mode, db.TLS.CAFile)
 
 	require.NoError(t, err)
 	assert.Equal(t,
@@ -41,7 +44,7 @@ func TestBuildPostgresJDBCURLCarriesTLSParams(t *testing.T) {
 }
 
 func TestBuildPostgresJDBCURLWithoutTLS(t *testing.T) {
-	got, err := buildPostgresJDBCURL(pgURLConfig(), testAppName, "")
+	got, err := buildPostgresJDBCURL(pgURLConfig(), testAppName, "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "jdbc:postgresql://db.internal:5432/billing?ApplicationName=billing-api", got)
@@ -50,14 +53,14 @@ func TestBuildPostgresJDBCURLWithoutTLS(t *testing.T) {
 }
 
 func TestBuildPostgresJDBCURLEncodesApplicationName(t *testing.T) {
-	got, err := buildPostgresJDBCURL(pgURLConfig(), "billing api/v2 & co", "")
+	got, err := buildPostgresJDBCURL(pgURLConfig(), "billing api/v2 & co", "", "")
 
 	require.NoError(t, err)
 	assert.Contains(t, got, "ApplicationName=billing+api%2Fv2+%26+co")
 }
 
 func TestBuildPostgresJDBCURLOmitsApplicationNameWhenUnset(t *testing.T) {
-	got, err := buildPostgresJDBCURL(pgURLConfig(), "", "")
+	got, err := buildPostgresJDBCURL(pgURLConfig(), "", "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, "jdbc:postgresql://db.internal:5432/billing", got)
@@ -71,7 +74,7 @@ func TestBuildPostgresJDBCURLCarriesNoCredentials(t *testing.T) {
 	db.Password = "sup3r-secret-password"
 	db.TLS.Mode = "require"
 
-	got, err := buildPostgresJDBCURL(db, testAppName, db.TLS.Mode)
+	got, err := buildPostgresJDBCURL(db, testAppName, db.TLS.Mode, db.TLS.CAFile)
 
 	require.NoError(t, err)
 	assert.NotContains(t, got, db.Password)
@@ -97,7 +100,7 @@ func TestBuildPostgresJDBCURLRejectsMTLS(t *testing.T) {
 			db.TLS.Mode = "verify-full"
 			tt.apply(db)
 
-			_, err := buildPostgresJDBCURL(db, testAppName, db.TLS.Mode)
+			_, err := buildPostgresJDBCURL(db, testAppName, db.TLS.Mode, db.TLS.CAFile)
 
 			require.ErrorIs(t, err, ErrMigrationMTLSUnsupported)
 			// The message must name the ACTIONABLE fact — that the framework does not
@@ -130,7 +133,7 @@ func TestBuildPostgresJDBCURLAuthority(t *testing.T) {
 			db := pgURLConfig()
 			db.Host, db.Port = tt.host, tt.port
 
-			got, err := buildPostgresJDBCURL(db, "", db.TLS.Mode)
+			got, err := buildPostgresJDBCURL(db, "", db.TLS.Mode, db.TLS.CAFile)
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
@@ -280,6 +283,157 @@ func TestURLArgsValidatesTLSMode(t *testing.T) {
 	}
 }
 
+// pgjdbc reads sslrootcert ONLY under verify-ca/verify-full — require, allow and
+// prefer all use a non-validating socket factory, and an unset mode is prefer —
+// so a CA named under any of those was emitted onto the URL and then ignored,
+// leaving the migration unauthenticated while the config read as if it pinned a CA.
+func TestURLArgsRequiresVerifyModeForTLSCA(t *testing.T) {
+	for _, mode := range []string{"", "disable", "allow", "prefer", "require"} {
+		name := mode
+		if name == "" {
+			name = "unset"
+		}
+		t.Run("rejects_ca_with_"+name, func(t *testing.T) {
+			db := pgURLConfig()
+			db.TLS.Mode = mode
+			db.TLS.CAFile = testTLSCAPath
+
+			args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+			require.ErrorIs(t, err, ErrMigrationTLSCARequiresVerify)
+			assert.Nil(t, args)
+			assert.NotContains(t, err.Error(), db.Password)
+		})
+	}
+
+	// `require` is the deliberate divergence from config.Validate, which admits it
+	// beside a ca because pgx treats require+ca as verify-ca (a libpq inheritance).
+	// pgjdbc does not, and this door answers for pgjdbc.
+	t.Run("require_is_stricter_here_than_at_config_validation", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.Mode = "require"
+		db.TLS.CAFile = testTLSCAPath
+
+		_, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+		require.ErrorIs(t, err, ErrMigrationTLSCARequiresVerify)
+
+		// Prove the divergence rather than asserting it in prose: the same config
+		// passes config's own TLS validation. ApplyDatabasePoolDefaults is the
+		// exported door onto validateVendorSpecificFields — the very function
+		// config.Validate reaches for this rule — so it judges require+ca
+		// identically. If config ever tightens to match, this line fails and the
+		// divergence comment above needs revisiting.
+		validated := *db
+		require.NoError(t, config.ApplyDatabasePoolDefaults(&validated),
+			"config still accepts require+ca; the migrate door is deliberately stricter for pgjdbc")
+	})
+
+	for _, mode := range []string{"verify-ca", "verify-full"} {
+		t.Run("accepts_ca_with_"+mode, func(t *testing.T) {
+			db := pgURLConfig()
+			db.TLS.Mode = mode
+			db.TLS.CAFile = testTLSCAPath
+
+			args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+			require.NoError(t, err)
+			assert.Contains(t, args[0], urlParamSSLRootCert+"="+url.QueryEscape(testTLSCAPath))
+		})
+	}
+
+	// A verifying mode with no CA is untouched — pgjdbc falls back to its own default.
+	t.Run("verify_without_ca_is_unaffected", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.Mode = "verify-full"
+
+		args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+		require.NoError(t, err)
+		assert.NotContains(t, args[0], urlParamSSLRootCert)
+	})
+
+	// The CA is trimmed like the mode: padding would percent-encode into the URL
+	// and name a different file.
+	t.Run("trims_the_ca_path", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.Mode = "verify-full"
+		db.TLS.CAFile = "  " + testTLSCAPath + "  "
+
+		args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+		require.NoError(t, err)
+		assert.Contains(t, args[0], urlParamSSLRootCert+"="+url.QueryEscape(testTLSCAPath))
+		assert.NotContains(t, args[0], "%20")
+	})
+}
+
+// `ca: system` is a libpq/pgx sentinel for the platform trust store. pgjdbc's
+// LibPQFactory special-cases nothing and treats sslrootcert as a file path
+// (verified against REL42.7.12), so the value named a nonexistent file — and
+// under an unset mode was not read at all, leaving a plaintext-capable
+// connection. Rejected outright rather than remapped, because the JVM's cacerts
+// is a different trust set from the one pgx consults.
+func TestURLArgsRejectsTLSCASystemSentinel(t *testing.T) {
+	for _, mode := range []string{"", "require", "verify-ca", "verify-full"} {
+		name := mode
+		if name == "" {
+			name = "unset"
+		}
+		t.Run("with_mode_"+name, func(t *testing.T) {
+			db := pgURLConfig()
+			db.TLS.Mode = mode
+			db.TLS.CAFile = "system"
+
+			args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+			require.ErrorIs(t, err, ErrMigrationTLSCASystemUnsupported)
+			assert.Nil(t, args)
+		})
+	}
+
+	// A path that merely ENDS in "system" is a real file, not the sentinel.
+	t.Run("a_path_named_system_is_not_the_sentinel", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.Mode = "verify-full"
+		db.TLS.CAFile = "/etc/ssl/system"
+
+		args, err := urlArgs(db, config.PostgreSQL, testAppName)
+
+		require.NoError(t, err)
+		assert.Contains(t, args[0], urlParamSSLRootCert+"="+url.QueryEscape("/etc/ssl/system"))
+	})
+}
+
+func TestMigrateForRefusesTLSCAWithoutVerifyMode(t *testing.T) {
+	if runtime.GOOS == windowsOS {
+		t.Skip("shell script stub not supported on windows CI")
+	}
+
+	t.Run("ca_with_require", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.Mode = "require"
+		db.TLS.CAFile = testTLSCAPath
+
+		require.ErrorIs(t, runMigrateExpectingRefusal(t, db), ErrMigrationTLSCARequiresVerify)
+	})
+
+	t.Run("ca_with_unset_mode", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.CAFile = testTLSCAPath
+
+		require.ErrorIs(t, runMigrateExpectingRefusal(t, db), ErrMigrationTLSCARequiresVerify)
+	})
+
+	t.Run("ca_system", func(t *testing.T) {
+		db := pgURLConfig()
+		db.TLS.Mode = "verify-full"
+		db.TLS.CAFile = "system"
+
+		require.ErrorIs(t, runMigrateExpectingRefusal(t, db), ErrMigrationTLSCASystemUnsupported)
+	})
+}
+
 func TestMigrateForRefusesUnsupportedTLSMode(t *testing.T) {
 	if runtime.GOOS == windowsOS {
 		t.Skip("shell script stub not supported on windows CI")
@@ -314,7 +468,7 @@ func TestBuildPostgresJDBCURLEscapesDatabaseName(t *testing.T) {
 	db := pgURLConfig()
 	db.Database = "bill ing?x"
 
-	got, err := buildPostgresJDBCURL(db, "", db.TLS.Mode)
+	got, err := buildPostgresJDBCURL(db, "", db.TLS.Mode, db.TLS.CAFile)
 
 	require.NoError(t, err)
 	assert.Equal(t, "jdbc:postgresql://db.internal:5432/bill%20ing%3Fx", got)

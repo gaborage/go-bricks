@@ -127,7 +127,12 @@ var ErrInvalidMigrationPort = errors.New("migration: database.port must be betwe
 // the migrator stricter than the thing it claims to mirror — a real config,
 // whitespace off a templated secret, failing only its migration. Case is NOT
 // folded on either side, so `Require` is rejected in both.
-var supportedMigrationTLSModes = []string{"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+const (
+	sslModeVerifyCA   = "verify-ca"
+	sslModeVerifyFull = "verify-full"
+)
+
+var supportedMigrationTLSModes = []string{"disable", "allow", "prefer", "require", sslModeVerifyCA, sslModeVerifyFull}
 
 // ErrInvalidMigrationTLSMode rejects a database.tls.mode that is not one of the
 // libpq set once surrounding whitespace is trimmed.
@@ -186,7 +191,63 @@ var ErrMigrationTLSWithConnectionString = errors.New(
 	"migration: database.tls is set alongside database.connectionstring: the framework does not parse DSNs, " +
 		"so the TLS settings cannot reach the migration connection; remove the database.tls block, putting its " +
 		"settings in the connection string for the RUNTIME pool, and set the migration's own TLS parameters on " +
-		"the JDBC url in flyway.conf, which owns the migration connection for a connectionstring config")
+		"the JDBC url in flyway.conf, which owns the migration connection for a connectionstring config; that " +
+		"url must also name the same host and database as the connection string, or the migration is encrypted " +
+		"but applied to the wrong target")
+
+// ErrMigrationTLSCARequiresVerify rejects a database.tls.ca that cannot actually
+// authenticate the server. pgjdbc reads `sslrootcert` only under `verify-ca` and
+// `verify-full`; `require`, `allow` and `prefer` all use a NON-VALIDATING socket
+// factory, and an unset mode is `prefer`, which also falls back to plaintext. So
+// a config naming a CA under any of those got an unverified — possibly
+// unencrypted — migration while reading as though it pinned one.
+//
+// This is deliberately STRICTER than config.Validate, which admits `require`
+// beside a ca (ADR-062): pgx treats `require` + ca as verify-ca, a documented
+// libpq inheritance, so the RUNTIME really does verify there. pgjdbc does not,
+// and the migrator answers for pgjdbc. The divergence is the point — the same
+// config is honored at runtime and refused for migration rather than silently
+// unverified. Match with errors.Is.
+var ErrMigrationTLSCARequiresVerify = errors.New(
+	"migration: database.tls.ca requires database.tls.mode verify-ca or verify-full: pgjdbc reads sslrootcert " +
+		"only under those two modes, so under require/allow/prefer (or an unset mode, which is prefer) the CA " +
+		"would be ignored and the migration would not authenticate the server")
+
+// ErrMigrationTLSCASystemUnsupported rejects the `ca: system` sentinel for
+// migrations. It is a libpq/pgx spelling meaning "the platform trust store", and
+// pgjdbc has no equivalent: LibPQFactory special-cases nothing and treats the
+// value as a FILE PATH, so `sslrootcert=system` names a file that does not exist
+// (verified against pgjdbc REL42.7.12). Mapping it to the JVM's own default
+// trust store would not be equivalent either — `cacerts` is a different trust set
+// from the one pgx consults, so the migration would authenticate against CAs the
+// runtime does not, which is the silent divergence ADR-085 exists to remove.
+// Name a real CA file for the migration instead. Match with errors.Is.
+var ErrMigrationTLSCASystemUnsupported = errors.New(
+	"migration: database.tls.ca: system is not supported for Flyway migrations: it is a libpq/pgx sentinel for " +
+		"the platform trust store and pgjdbc has no equivalent, treating the value as a file path; point " +
+		"database.tls.ca at the CA certificate file itself for the migration configuration")
+
+// tlsCASystemSentinel is libpq's spelling for "use the platform trust store".
+const tlsCASystemSentinel = "system"
+
+// validateMigrationTLSCA checks the CA against the mode it will be used with and
+// returns it trimmed, for the same reason the mode validator does: the trimmed
+// spelling is what must reach sslrootcert, since padding would percent-encode
+// into the URL and name a different file. config trims this field too. The mode
+// arrives already normalized by validateMigrationTLSMode.
+func validateMigrationTLSCA(caFile, normalizedMode string) (string, error) {
+	trimmed := strings.TrimSpace(caFile)
+	if trimmed == "" {
+		return "", nil
+	}
+	if trimmed == tlsCASystemSentinel {
+		return "", ErrMigrationTLSCASystemUnsupported
+	}
+	if normalizedMode != sslModeVerifyCA && normalizedMode != sslModeVerifyFull {
+		return "", ErrMigrationTLSCARequiresVerify
+	}
+	return trimmed, nil
+}
 
 // usesFrameworkOwnedURL reports whether this run gets a framework-built `-url=`.
 // Only PostgreSQL discrete-field configs qualify. Oracle is excluded because it
@@ -206,7 +267,10 @@ func usesFrameworkOwnedURL(db *config.DatabaseConfig, vendor string) bool {
 // only the connection target, TLS material, and application_name — never the
 // username or password, which stay env-delivered, because argv is world-readable
 // in the process list.
-func buildPostgresJDBCURL(db *config.DatabaseConfig, appName, tlsMode string) (string, error) {
+func buildPostgresJDBCURL(db *config.DatabaseConfig, appName, tlsMode, caFile string) (string, error) {
+	// tlsMode and caFile arrive validated and trimmed from urlArgs; cert/key are read
+	// raw because this is a presence check, which trimming cannot change — the pair is
+	// refused outright, never rendered.
 	if db.TLS.CertFile != "" || db.TLS.KeyFile != "" {
 		return "", ErrMigrationMTLSUnsupported
 	}
@@ -220,8 +284,8 @@ func buildPostgresJDBCURL(db *config.DatabaseConfig, appName, tlsMode string) (s
 	if tlsMode != "" {
 		params.Set(urlParamSSLMode, tlsMode)
 	}
-	if db.TLS.CAFile != "" {
-		params.Set(urlParamSSLRootCert, db.TLS.CAFile)
+	if caFile != "" {
+		params.Set(urlParamSSLRootCert, caFile)
 	}
 	if encoded := params.Encode(); encoded != "" {
 		jdbcURL += "?" + encoded
@@ -291,7 +355,11 @@ func urlArgs(db *config.DatabaseConfig, vendor, appName string) ([]string, error
 	if err != nil {
 		return nil, err
 	}
-	jdbcURL, err := buildPostgresJDBCURL(db, appName, tlsMode)
+	caFile, err := validateMigrationTLSCA(db.TLS.CAFile, tlsMode)
+	if err != nil {
+		return nil, err
+	}
+	jdbcURL, err := buildPostgresJDBCURL(db, appName, tlsMode, caFile)
 	if err != nil {
 		return nil, fmt.Errorf("build flyway jdbc url: %w", err)
 	}
