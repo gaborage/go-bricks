@@ -1408,8 +1408,11 @@ only signal was a once-per-migrator WARN. The decision has the framework build
 discrete-field config — TLS configured or not, with no escape hatch. Credentials stay
 environment-delivered (argv is world-readable); the WARN and the whole `DB_SSL*` export are
 removed; `database.tls.cert`/`key` fail closed on `ErrMigrationMTLSUnsupported` rather than
-connecting without the client certificate pgjdbc cannot load from a libpq PEM. Oracle and
-`connectionstring` configs keep the conf-owned URL.
+connecting without the client certificate, because the framework does not forward them as
+`sslcert`/`sslkey` — the limit is ours, not a pgjdbc format rule. Oracle and TLS-free
+`connectionstring` configs keep the conf-owned URL; a `connectionstring` carrying
+`database.tls.*` fails on `ErrMigrationTLSWithConnectionString`, since the migrator cannot
+assume the per-tenant config passed `config.Validate`.
 
 **Key Benefits:** a `database.tls` setting that is a guarantee rather than an advisory, one
 source of truth for the migration target, and `ApplicationName` without a per-conf hand-edit.

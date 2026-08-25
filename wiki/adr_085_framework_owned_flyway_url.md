@@ -75,6 +75,17 @@ key material to a temp file. Server-authenticated TLS (`mode` + `ca`) is fully
 supported, and runtime mTLS is untouched. Connecting without the client certificate the
 config asked for would be the silent-downgrade this ADR exists to remove.
 
+**`database.tls` beside a `connectionstring` fails closed.** The framework does
+not parse DSNs, so it cannot lift `database.tls.*` onto a URL it builds; a
+`connectionstring` config keeps the conf-owned URL. `config.Validate` already
+rejects that pair (ADR-062), but `MigrateFor` takes a per-tenant
+`*config.DatabaseConfig` straight from a dynamic `DBConfigProvider` or the CLI's
+`tenants.yaml` — configs that never necessarily passed validation. Trusting the
+caller there would migrate on the DSN with the configured TLS silently dropped,
+which is the very shape this ADR exists to remove, so `urlArgs` refuses on its own
+with `ErrMigrationTLSWithConnectionString`. A `connectionstring` with no
+`database.tls` block still defers.
+
 **`database.host` is validated, not escaped.** It is the one component that must
 stay a routable address, so it cannot be percent-encoded the way the database name
 and the query values are. Unescaped it is an injection point: a host of
@@ -131,9 +142,16 @@ or databases gets a distinct URL per tenant, from the same source the runtime us
 - **Oracle keeps the conf-owned URL.** No `database.tls` exists for Oracle (ADR-062), so
   there is no TLS guarantee to make, and no Oracle JDBC URL builder here. Reopen trigger:
   Oracle migrations enter production use.
-- **`database.connectionstring` deployments keep the conf-owned URL.** The framework does
-  not parse DSNs, and `tls.*` alongside a connection string is already rejected (ADR-062),
-  so no guarantee is lost.
+- **`database.connectionstring` deployments keep the conf-owned URL** when they carry no
+  `database.tls` block. The framework does not parse DSNs, so a TLS block beside a DSN
+  could only be dropped — `config.Validate` rejects that pair (ADR-062), and the migrator
+  now refuses it independently, because `MigrateFor` accepts per-tenant configs that never
+  passed validation.
+- **Breaking**: a PostgreSQL config carrying both `database.connectionstring` and any
+  `database.tls.*` field now fails the migration with
+  `errors.Is(err, migration.ErrMigrationTLSWithConnectionString)` instead of running on the
+  DSN with the TLS settings dropped. Only reachable for configs bypassing `config.Validate`
+  — a dynamic `DBConfigProvider` or the CLI's `tenants.yaml`. `[C61.4]`.
 - **A `database:` block naming no URL-target field keeps the conf-owned URL** (`type` alone is
   still an ADR-047 identity marker — what is missing is a target to build a URL from). Nothing to build a
   URL from, so no guarantee is offered — and with TLS set it fails rather than deferring.

@@ -132,7 +132,7 @@ For a PostgreSQL config using discrete fields (`host`/`port`/`database`), the fr
 no effect. The built URL is:
 
 ```text
-jdbc:postgresql://<host>:<port>/<database>?ApplicationName=<app.name>[&sslmode=…][&sslrootcert=…]
+jdbc:postgresql://<host>[:<port>]/<database>?ApplicationName=<app.name>[&sslmode=…][&sslrootcert=…]
 ```
 
 | Config key | URL parameter |
@@ -141,7 +141,8 @@ jdbc:postgresql://<host>:<port>/<database>?ApplicationName=<app.name>[&sslmode=�
 | `database.tls.ca` | `sslrootcert` |
 | `app.name` | `ApplicationName` (automatic; no config key — pgjdbc's spelling, not libpq's `application_name`, which pgjdbc ignores; it still lands in the server's `application_name` column) |
 
-Unset TLS fields are omitted. Credentials are **not** on the URL — `DB_USER`/`DB_PASSWORD`
+The port is omitted when `database.port` is unset or non-positive, leaving the driver's
+default. Unset TLS fields are omitted. Credentials are **not** on the URL — `DB_USER`/`DB_PASSWORD`
 stay environment-delivered, because argv is world-readable in the process list. This
 closes the gap where a conf-owned URL could migrate in cleartext while
 `database.tls.mode: verify-full` validated cleanly, and where the migration target could
@@ -173,12 +174,20 @@ whose host arrived blank from a secret store would otherwise migrate against wha
 cannot be put on a URL fails the same way. Credentials do not count as a target:
 `username`/`password` are environment-delivered under every shape and never reach the URL.
 
+**`database.tls` beside a `connectionstring` fails rather than being dropped.** A DSN is
+used verbatim and the framework does not parse it, so TLS configured in a `database.tls`
+block could only be discarded. `config.Validate` already rejects that pair (ADR-062), but
+`MigrateFor` also takes per-tenant configs that never passed it — a dynamic
+`DBConfigProvider`, or this CLI's `tenants.yaml` — so the migrator refuses on its own with
+`ErrMigrationTLSWithConnectionString`. Put `sslmode`/`sslrootcert`/`sslcert`/`sslkey` in the
+connection string itself.
+
 **Three config shapes keep the conf-owned URL:**
 
 | Shape | Why |
 | --- | --- |
 | Oracle | No `database.tls` exists for Oracle (ADR-062) and the framework builds no Oracle JDBC URL. |
-| `database.connectionstring` | The framework does not parse DSNs; `tls.*` alongside a connection string is already rejected, so no guarantee is lost. |
+| `database.connectionstring` **with no `database.tls` block** | The framework does not parse DSNs, and the DSN carries its own TLS, so no guarantee is offered — but `tls.*` alongside one fails rather than deferring. |
 | A block naming no `host`, `port`, or `database` (credentials only, or bare) | Nothing to build a URL from, so no guarantee is offered — but with `tls.*` set it fails instead of deferring. |
 
 ### Runtime tuning
