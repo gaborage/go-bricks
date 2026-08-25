@@ -4875,7 +4875,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `BuildUpsert` on Oracle with computed keys — the overwhelming majority.
 - apply: drop any workaround that pre-split a dotted quoted name into segments, or that renamed
   the column to avoid the mangling — the name now survives whole. Nothing else to change.
-- verify: `qb.EscapeIdentifier(`"my.col"`)` returns `"my.col"` unchanged on both vendors, and
+- verify: `qb.EscapeIdentifier("\"my.col\"")` returns `"my.col"` unchanged on both vendors, and
   `t."my.col"` keeps its second segment intact. On Oracle, `SELECT :1 AS "my.col"` is the
   statement shape this makes expressible — through the query doors, not through `BuildUpsert`.
 - ref: `database/internal/builder/query_builder.go` (`EscapeIdentifier`) ·
