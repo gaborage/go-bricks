@@ -107,6 +107,23 @@ with `ErrInvalidMigrationPort`, which names the field and not the value. It is
 the migrator's own copy for the same reason the rule above is: `MigrateFor`
 takes per-tenant configs that never passed `config.Validate`.
 
+**`database.tls.mode` is validated against the libpq set.** `buildPostgresJDBCURL`
+copies a non-empty mode onto the URL verbatim, so an unsupported one reached
+Flyway and failed inside the driver — or was ignored by it — instead of failing
+here as a typed error, which is the same class of silent divergence the rules
+above close. `supportedMigrationTLSModes` mirrors config's unexported
+`pgSSLModes`; the sharing is not coincidental, since pgx accepts the libpq six
+and so does pgjdbc, the driver on the other end of this URL. The mirror covers
+NORMALIZATION too: `validateVendorSpecificFields` TrimSpaces the mode before its
+own exact match, so ` require` is a config the runtime accepts and this
+validator trims it the same way — rejecting it would make the migrator stricter
+than the thing it mirrors, failing a real config over whitespace off a
+templated secret. Case is folded on neither side, so `Require` fails in both.
+The trimmed spelling is what reaches the URL; an untrimmed one would
+percent-encode its padding into the `sslmode` parameter.
+`ErrInvalidMigrationTLSMode` echoes the offending mode — a fixed keyword, not
+caller data — and nothing else from the config.
+
 **An incomplete target fails closed; a bare one defers.** `usesFrameworkOwnedURL`
 needs a host and a database, so the gate is three-way rather than two.
 `ErrIncompleteMigrationTarget` rejects a run when the block is PARTIALLY filled —
@@ -171,6 +188,12 @@ or databases gets a distinct URL per tenant, from the same source the runtime us
   URL from, so no guarantee is offered — and with TLS set it fails rather than deferring.
 - The control-character check that guarded the subprocess environment now also runs before
   the URL is built, because the same fields are formatted into argv.
+- **Breaking**: a `database.tls.mode` outside `disable`/`allow`/`prefer`/`require`/
+  `verify-ca`/`verify-full` now fails a PostgreSQL migration with
+  `errors.Is(err, migration.ErrInvalidMigrationTLSMode)` rather than reaching the JDBC URL.
+  An unset mode is unaffected, and a space-padded one is trimmed rather than rejected, which
+  is what `config.Validate` does with it. A case-variant (`Require`) fails, as it already did
+  at config validation. `[C61.4]`.
 - **Breaking**: a `database.port` below 0 or above 65535 now fails a PostgreSQL migration
   with `errors.Is(err, migration.ErrInvalidMigrationPort)`. `0` still means unset and is
   unaffected, as is every port in range. `[C61.4]`.

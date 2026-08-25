@@ -171,6 +171,13 @@ from the URL when it is zero; a negative one used to take that same branch and m
 silently against the driver's 5432, so anything below 0 or above 65535 now fails with
 `ErrInvalidMigrationPort`. The error names the field, not the value.
 
+**`database.tls.mode` must be one of the libpq six**, matched case-sensitively:
+`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. The mode was copied onto
+the JDBC URL verbatim, so an unsupported one reached Flyway instead of failing here; it now
+returns `ErrInvalidMigrationTLSMode`, which names the offending mode. Surrounding whitespace is
+trimmed before matching, exactly as the runtime's own validation trims it, so ` require` is
+normalized rather than refused; case is folded by neither, so `Require` fails in both places. An unset mode simply puts no `sslmode` on the URL.
+
 **A partially filled block fails rather than falling back.** If `host`, `port`, or
 `database` is set but not a usable `host` AND `database`, the run fails with
 `ErrIncompleteMigrationTarget` instead of deferring to the conf — on a fleet run, a tenant
