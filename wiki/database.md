@@ -132,6 +132,8 @@ func NewProductService(db database.Interface) *ProductService {
 
 **Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex/RegexI/NotRegex/NotRegexI`, `f.JSONContains` (PostgreSQL only), `f.Null/NotNull`, `f.Between`.
 
+**Operand contract (`f.Eq`/`f.NotEq` and `jf.Eq`/`jf.NotEq`):** a `nil` operand renders `IS NULL` / `IS NOT NULL`, a slice expands to `IN (…)` / `NOT IN (…)`, and an empty slice renders the constant `(1=0)` / `(1=1)`. A `[]byte` is a scalar, not a list. Prefer the explicit spelling — `f.In`/`f.Null` and `jf.In`/`jf.Null` — when you know the shape: it says what you mean and does not depend on a runtime type test. The ordering methods (`Lt`, `Lte`, `Gt`, `Gte`) have no rendering for `nil` or a slice and refuse both: `f` through its own error channel, `jf` with `dbtypes.ErrOrderingOperandNotComparable` (exported from `database/types`, so `errors.Is` works from your own code), surfaced at `ToSQL()`. A `driver.Valuer` reporting NULL and a typed nil pointer both count as nil at every door — they are resolved before the test, the same way the underlying builder resolves them.
+
 **Escape Hatch:** `f.Raw(condition, args...)` (and `jf.Raw(...)` for JOIN conditions) — user must manually quote Oracle reserved words and parameterize all value sides. Every call site MUST carry a `// SECURITY: Manual SQL review completed - <rationale>` comment.
 
 ## Table Aliases
@@ -186,7 +188,7 @@ query := qb.Select("*").
     Where(f.Eq("o.status", "pending"))
 ```
 
-**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`.
+**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Value operands follow the same contract as the Filter doors — see *Operand contract* above.
 
 **Expression Support:** All comparison methods accept `qb.Expr()` for complex SQL expressions without placeholders.
 

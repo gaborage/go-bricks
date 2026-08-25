@@ -1,12 +1,78 @@
 package builder
 
 import (
+	"database/sql/driver"
 	"fmt"
+	"reflect"
 
 	"github.com/Masterminds/squirrel"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
+
+// Comparison operators whose operand contract differs from the ordering ones':
+// nil and slices are meaningful for equality and refused for ordering.
+const (
+	opEqual    = "="
+	opNotEqual = "!="
+)
+
+// isNullOrList reports whether value is nil or a list AFTER the same resolution
+// squirrel performs before it chooses between `= ?`, `IS NULL` and `IN (?, …)`
+// (squirrel@v1.5.4 expr.go, Eq.toSQL): a driver.Valuer is asked for its value
+// first, then a pointer is dereferenced, and only the RESULT is tested.
+//
+// Skipping that prologue is a real defect, not a nicety: `sql.NullString{}` and
+// a typed nil `*int` are neither `== nil` nor slices in their surface form, so a
+// test that looks only at the surface calls them scalars and renders
+// `col = ?` — the very `col = NULL` that never matches, which #1167 exists to
+// remove. f.Eq resolves them and renders IS NULL, so the doors would disagree
+// on exactly the operands most likely to be nil in practice: an optional column
+// read from a nullable database field.
+//
+// A Valuer whose Value() fails counts as "not a scalar" so the equality doors
+// hand it to squirrel, which reports the failure properly rather than binding a
+// broken operand to a placeholder.
+func isNullOrList(value any) bool {
+	resolved, ok := resolveOperand(value)
+	if !ok {
+		return true
+	}
+	if resolved == nil {
+		return true
+	}
+	// squirrel's own isListType: a driver.Value — []byte included — is a scalar.
+	if driver.IsValue(resolved) {
+		return false
+	}
+	switch reflect.ValueOf(resolved).Kind() {
+	case reflect.Slice, reflect.Array:
+		return true
+	default:
+		return false
+	}
+}
+
+// resolveOperand mirrors the prologue of squirrel's Eq.toSQL: resolve a
+// driver.Valuer, then dereference a pointer (a nil one becoming an untyped nil).
+// ok is false when a Valuer reports an error, which is squirrel's to surface.
+func resolveOperand(value any) (resolved any, ok bool) {
+	if v, isValuer := value.(driver.Valuer); isValuer {
+		got, err := v.Value()
+		if err != nil {
+			return nil, false
+		}
+		value = got
+	}
+	r := reflect.ValueOf(value)
+	if r.Kind() == reflect.Pointer {
+		if r.IsNil() {
+			return nil, true
+		}
+		return r.Elem().Interface(), true
+	}
+	return value, true
+}
 
 // JoinFilter represents a composable JOIN ON condition that compares columns to other columns.
 // JoinFilters are created through JoinFilterFactory methods and maintain vendor-specific quoting rules.
@@ -148,6 +214,32 @@ func (jff *JoinFilterFactory) compare(column, op string, value any) dbtypes.Join
 		return JoinFilter{sqlizer: squirrel.Expr(quotedColumn + " " + op + " " + expr.SQL)}
 	}
 
+	// A nil or slice operand delegates to the SAME construct f.Eq/f.NotEq use, so
+	// one operand means one thing at both doors: nil renders IS NULL / IS NOT
+	// NULL, a slice expands to IN / NOT IN, an empty slice takes squirrel's own
+	// constant. `col = ?` bound nil to a placeholder (never true) and a slice to
+	// one argument the driver rejects (#1167).
+	//
+	// A SCALAR keeps the `col op ?` form deliberately, rather than delegating
+	// unconditionally: squirrel.NotEq spells inequality `<>` where this door has
+	// always emitted `!=`, so delegating every operand would rewrite working SQL
+	// for every caller to fix two broken shapes. The two doors still agree on
+	// meaning; they differ in one token for scalar inequality, which is the
+	// smaller debt and the one the issue scoped.
+	if isNullOrList(value) {
+		switch op {
+		case opEqual:
+			return JoinFilter{sqlizer: squirrel.Eq{quotedColumn: value}}
+		case opNotEqual:
+			return JoinFilter{sqlizer: squirrel.NotEq{quotedColumn: value}}
+		default:
+			// Ordering has no rendering for these, so the door fails closed rather
+			// than emitting SQL that silently matches nothing.
+			return joinFilterErr(fmt.Errorf("%w: %s with a nil or slice operand",
+				dbtypes.ErrOrderingOperandNotComparable, op))
+		}
+	}
+
 	return JoinFilter{sqlizer: squirrel.Expr(quotedColumn+" "+op+" ?", value)}
 }
 
@@ -163,14 +255,14 @@ func (jff *JoinFilterFactory) compare(column, op string, value any) dbtypes.Join
 //	expr, _ := qb.Expr("TO_NUMBER(amount_str)")
 //	jf.Eq("amount", expr)                              // amount = TO_NUMBER(amount_str) (expression, no bound placeholder)
 func (jff *JoinFilterFactory) Eq(column string, value any) dbtypes.JoinFilter {
-	return jff.compare(column, "=", value)
+	return jff.compare(column, opEqual, value)
 }
 
 // NotEq creates an inequality condition (column != value).
 // Column names are automatically quoted according to database vendor rules.
 // Accepts RawExpression for complex SQL expressions without placeholders.
 func (jff *JoinFilterFactory) NotEq(column string, value any) dbtypes.JoinFilter {
-	return jff.compare(column, "!=", value)
+	return jff.compare(column, opNotEqual, value)
 }
 
 // Lt creates a less-than condition (column < value).

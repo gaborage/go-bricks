@@ -1,6 +1,7 @@
 package builder
 
 import (
+	dbsql "database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -744,4 +745,163 @@ func TestJoinFilterRejectsRawExpressionAlias(t *testing.T) {
 			assert.Empty(t, args)
 		})
 	}
+}
+
+// TestJoinFilterEqOperandsMatchFilter pins the alignment #1167 asked for: a nil
+// or slice operand means the same thing at both doors. Each case asserts jf's
+// rendering against f's OWN rendering rather than a literal, so the two cannot
+// drift apart again — which is the defect, not any particular spelling.
+func TestJoinFilterEqOperandsMatchFilter(t *testing.T) {
+	const column = "u.id"
+
+	// Only nil and list operands are aligned. A SCALAR keeps this door's own
+	// `col op ?` form — squirrel spells inequality `<>` where jf has always
+	// emitted `!=` — so scalars are pinned separately, below, against the
+	// historical spelling rather than against f.
+	operands := map[string]any{
+		"nil":               nil,
+		"typed_slice":       []int{1, 2},
+		"any_slice":         []any{"a", "b"},
+		"empty_typed_slice": []int{},
+		"empty_any_slice":   []any{},
+		"single_item_slice": []int{7},
+		// Resolved by squirrel BEFORE its nil/list test: a Valuer reporting NULL
+		// and a typed nil pointer both mean NULL. A surface-level test calls them
+		// scalars and renders `col = ?` — the bug this issue removes, reappearing
+		// on the operands most likely to be nil in practice.
+		"null_valuer":   dbsql.NullString{},
+		"typed_nil_ptr": (*int)(nil),
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		for name, operand := range operands {
+			t.Run(vendor+"_Eq_"+name, func(t *testing.T) {
+				qb := NewQueryBuilder(vendor)
+
+				wantSQL, wantArgs, wantErr := qb.Filter().Eq(column, operand).ToSQL()
+				gotSQL, gotArgs, gotErr := qb.JoinFilter().Eq(column, operand).ToSQL()
+
+				require.NoError(t, wantErr)
+				require.NoError(t, gotErr)
+				assert.Equal(t, wantSQL, gotSQL)
+				assert.Equal(t, wantArgs, gotArgs)
+			})
+
+			t.Run(vendor+"_NotEq_"+name, func(t *testing.T) {
+				qb := NewQueryBuilder(vendor)
+
+				wantSQL, wantArgs, wantErr := qb.Filter().NotEq(column, operand).ToSQL()
+				gotSQL, gotArgs, gotErr := qb.JoinFilter().NotEq(column, operand).ToSQL()
+
+				require.NoError(t, wantErr)
+				require.NoError(t, gotErr)
+				assert.Equal(t, wantSQL, gotSQL)
+				assert.Equal(t, wantArgs, gotArgs)
+			})
+		}
+	}
+}
+
+// TestJoinFilterScalarRenderingUnchanged pins what the alignment must NOT move:
+// a scalar keeps `= ?` / `!= ?`, and a []byte counts as a scalar rather than a
+// list — squirrel's own rule, which is why it does not become an IN.
+func TestJoinFilterScalarRenderingUnchanged(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	jf := qb.JoinFilter()
+
+	tests := []struct {
+		name    string
+		filter  dbtypes.JoinFilter
+		wantSQL string
+		wantArg any
+	}{
+		{name: "eq_scalar", filter: jf.Eq("u.id", 42), wantSQL: "u.id = ?", wantArg: 42},
+		{name: "not_eq_scalar", filter: jf.NotEq("u.id", 42), wantSQL: "u.id != ?", wantArg: 42},
+		{name: "eq_byte_slice", filter: jf.Eq("u.id", []byte("raw")), wantSQL: "u.id = ?", wantArg: []byte("raw")},
+		// A Valuer that HOLDS a value is a scalar, so it takes the placeholder
+		// path and is passed through unresolved — database/sql calls Value() at
+		// bind time, which is what a Valuer is for. f.Eq resolves it earlier and
+		// binds 5; both send the same value to the driver.
+		{
+			name:    "eq_set_valuer_binds_unresolved",
+			filter:  jf.Eq("u.id", dbsql.NullInt64{Int64: 5, Valid: true}),
+			wantSQL: "u.id = ?",
+			wantArg: dbsql.NullInt64{Int64: 5, Valid: true},
+		},
+		{name: "not_eq_byte_slice", filter: jf.NotEq("u.id", []byte("raw")), wantSQL: "u.id != ?", wantArg: []byte("raw")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := tt.filter.ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{tt.wantArg}, args)
+		})
+	}
+}
+
+// TestJoinFilterEqEmptySliceMatchesIn pins the empty-set spelling against the
+// door that already had one, rather than against a literal.
+func TestJoinFilterEqEmptySliceMatchesIn(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	jf := qb.JoinFilter()
+
+	eqSQL, _, err := jf.Eq("u.id", []int{}).ToSQL()
+	require.NoError(t, err)
+	inSQL, _, err := jf.In("u.id", []int{}).ToSQL()
+	require.NoError(t, err)
+	assert.Equal(t, inSQL, eqSQL)
+
+	notEqSQL, _, err := jf.NotEq("u.id", []int{}).ToSQL()
+	require.NoError(t, err)
+	notInSQL, _, err := jf.NotIn("u.id", []int{}).ToSQL()
+	require.NoError(t, err)
+	assert.Equal(t, notInSQL, notEqSQL)
+}
+
+// TestJoinFilterOrderingRefusesNilAndSlices pins the fail-closed half: there is
+// no rendering of `col < NULL` or of an ordering against a set.
+func TestJoinFilterOrderingRefusesNilAndSlices(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	jf := qb.JoinFilter()
+
+	doors := []struct {
+		name string
+		op   string
+		fn   func(string, any) dbtypes.JoinFilter
+	}{
+		{name: "lt", op: "<", fn: jf.Lt},
+		{name: "lte", op: "<=", fn: jf.Lte},
+		{name: "gt", op: ">", fn: jf.Gt},
+		{name: "gte", op: ">=", fn: jf.Gte},
+	}
+	operands := map[string]any{
+		"nil":           nil,
+		"typed_slice":   []int{1},
+		"empty_slice":   []int{},
+		"null_valuer":   dbsql.NullString{},
+		"typed_nil_ptr": (*int)(nil),
+	}
+
+	for _, door := range doors {
+		for operandName, operand := range operands {
+			t.Run(door.name+"_"+operandName, func(t *testing.T) {
+				_, _, err := door.fn("u.id", operand).ToSQL()
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), door.op)
+			})
+		}
+	}
+
+	t.Run("byte_slice_is_a_scalar_not_a_list", func(t *testing.T) {
+		sql, args, err := jf.Lt("u.id", []byte("raw")).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id < ?", sql)
+		assert.Equal(t, []any{[]byte("raw")}, args)
+	})
 }

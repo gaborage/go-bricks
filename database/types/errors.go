@@ -17,6 +17,15 @@ var (
 
 	ErrNilTableRef = errors.New("table reference cannot be nil")
 
+	// ErrOrderingOperandNotComparable is returned when an ordering comparison
+	// (<, <=, >, >=) is given a nil or slice operand. There is no rendering for
+	// either — `col < NULL` is never true whatever the data, and a slice has no
+	// ordinal meaning — so the door refuses instead of emitting SQL that silently
+	// matches nothing. It lives here rather than in the builder because the
+	// builder is an internal package: a sentinel a consumer cannot import is a
+	// sentinel a consumer cannot match.
+	ErrOrderingOperandNotComparable = errors.New("ordering comparison requires a scalar operand")
+
 	// ErrEmptyExpressionSQL is returned when Expr() is called with empty SQL.
 	ErrEmptyExpressionSQL = errors.New("expression SQL cannot be empty")
 
