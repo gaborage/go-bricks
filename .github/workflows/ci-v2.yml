@@ -1096,16 +1096,22 @@ jobs:
         if: steps.baseline.outputs.skip != 'true'
         env:
           GOWORK: "off"
-          # The PR's base: main, or the branch below in a stack. Passed as env, not
-          # inline ${{ }}, so a crafted branch name is read as data.
+          # The PR's base: main, or the branch below in a stack. The SHA pins the
+          # snapshot to the base this event describes, so a base that moves during
+          # the run cannot change the subtraction. Passed as env, not inline ${{ }},
+          # so a crafted branch name is read as data.
           BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           # Defensive pre-clean, matching the base-snapshot step.
           git worktree remove --force /tmp/apidiff-main 2>/dev/null || true
           rm -rf /tmp/apidiff-main
           git fetch --quiet origin "$BASE_REF"
-          git worktree add --detach /tmp/apidiff-main "origin/$BASE_REF"
+          # A force-pushed base may have moved past the event's SHA; fetch it directly.
+          git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null || git fetch --quiet origin "$BASE_SHA"
+          # Fails closed (set -e) when the SHA is unreachable.
+          git worktree add --detach /tmp/apidiff-main "$BASE_SHA"
           ( cd /tmp/apidiff-main \
             && GOWORK=off apidiff -m -w /tmp/apidiff-main.snapshot github.com/gaborage/go-bricks )
 
