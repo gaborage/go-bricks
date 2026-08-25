@@ -67,10 +67,11 @@ forwarded. It still lands in the server's `application_name` column.
 FRAMEWORK's, not pgjdbc's: the framework does not forward `database.tls.cert`/`key`
 as the JDBC `sslcert`/`sslkey` parameters, so it refuses rather than silently
 migrating without the client certificate the config asked for. pgjdbc would read
-them — `LibPQFactory` sends a `.key`/`.pem` path to `PEMKeyManager` (unencrypted
-PKCS#8 PEM) and anything else to `LazyKeyManager` (PKCS#8 DER) — but only
-unencrypted PKCS#8, so a PKCS#1 or encrypted `database.tls.key`, which libpq
-semantics permit (`[C60.2]`), would fail inside the driver anyway. The framework does not convert — that means writing
+them — `LibPQFactory` dispatches on the file name: a `.p12`/`.pfx` path goes to
+`PKCS12KeyManager`, a `.key`/`.pem` path to `PEMKeyManager` (unencrypted PKCS#8
+PEM), and anything else to `LazyKeyManager` (PKCS#8 DER) — but a PKCS#1 or
+encrypted `database.tls.key`, which libpq semantics permit (`[C60.2]`), matches
+none of those readers and would fail inside the driver anyway. The framework does not convert — that means writing
 key material to a temp file. Server-authenticated TLS (`mode` + `ca`) is fully
 supported, and runtime mTLS is untouched. Connecting without the client certificate the
 config asked for would be the silent-downgrade this ADR exists to remove.
@@ -123,6 +124,30 @@ The trimmed spelling is what reaches the URL; an untrimmed one would
 percent-encode its padding into the `sslmode` parameter.
 `ErrInvalidMigrationTLSMode` echoes the offending mode — a fixed keyword, not
 caller data — and nothing else from the config.
+
+**`database.tls.ca` requires a verifying mode, and `ca: system` is refused.**
+pgjdbc reads `sslrootcert` only under `verify-ca` and `verify-full`; `require`,
+`allow` and `prefer` all use a non-validating socket factory, and an unset mode
+is `prefer`, which falls back to plaintext. A CA named under any of those was
+put on the URL and then ignored, so the migration authenticated nothing while
+the config read as though it pinned a CA — `ErrMigrationTLSCARequiresVerify`.
+
+This is deliberately STRICTER than `config.Validate`, which admits `require`
+beside a `ca` (ADR-062). That is not an inconsistency to reconcile: pgx treats
+`require` + `ca` as `verify-ca`, a documented libpq inheritance, so the RUNTIME
+genuinely verifies there, while pgjdbc does not — and this door answers for
+pgjdbc. The same config is honored at runtime and refused for migration, which
+is the correct outcome when the two drivers disagree.
+
+`ca: system` is refused outright (`ErrMigrationTLSCASystemUnsupported`). It is a
+libpq/pgx sentinel meaning "the platform trust store"; pgjdbc's `LibPQFactory`
+special-cases nothing and treats `sslrootcert` as a file path (verified against
+REL42.7.12), so the value named a file that does not exist — and under an unset
+mode was never read at all. It is not remapped to the JVM's
+`DefaultJavaSSLFactory`, because `cacerts` is a different trust set from the one
+pgx consults: the migration would authenticate against CAs the runtime does not,
+which is precisely the silent divergence this ADR removes. Name a real CA file
+in the migration configuration instead.
 
 **An incomplete target fails closed; a bare one defers.** `usesFrameworkOwnedURL`
 needs a host and a database, so the gate is three-way rather than two.
@@ -177,7 +202,10 @@ or databases gets a distinct URL per tenant, from the same source the runtime us
   passed validation. Note what the remedy is NOT: moving the TLS settings into the DSN
   secures the RUNTIME pool only. A `connectionstring` config emits no `-url=`, so Flyway
   still reads its JDBC URL from `flyway.conf` — that URL needs its own `sslmode`/
-  `sslrootcert`, or the migration runs against whatever it names, in cleartext.
+  `sslrootcert`, or the migration runs against whatever it names, in cleartext. Securing that
+  URL is necessary but NOT sufficient: confirm it names the SAME host and database as the
+  DSN, because an encrypted migration applied to the wrong target is still the wrong target,
+  and nothing in the framework can cross-check a DSN it does not parse.
 - **Breaking**: a PostgreSQL config carrying both `database.connectionstring` and any
   `database.tls.*` field now fails the migration with
   `errors.Is(err, migration.ErrMigrationTLSWithConnectionString)` instead of running on the
@@ -188,6 +216,12 @@ or databases gets a distinct URL per tenant, from the same source the runtime us
   URL from, so no guarantee is offered — and with TLS set it fails rather than deferring.
 - The control-character check that guarded the subprocess environment now also runs before
   the URL is built, because the same fields are formatted into argv.
+- **Breaking**: a `database.tls.ca` set without `database.tls.mode` `verify-ca` or
+  `verify-full` now fails a PostgreSQL migration with
+  `errors.Is(err, migration.ErrMigrationTLSCARequiresVerify)`, and `ca: system` fails with
+  `ErrMigrationTLSCASystemUnsupported`. Unlike the rules above these bind EVERY config, not
+  only those bypassing `config.Validate`, since `require` + `ca` passes config validation.
+  `[C61.4]`.
 - **Breaking**: a `database.tls.mode` outside `disable`/`allow`/`prefer`/`require`/
   `verify-ca`/`verify-full` now fails a PostgreSQL migration with
   `errors.Is(err, migration.ErrInvalidMigrationTLSMode)` rather than reaching the JDBC URL.

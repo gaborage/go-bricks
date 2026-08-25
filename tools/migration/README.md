@@ -178,6 +178,18 @@ returns `ErrInvalidMigrationTLSMode`, which names the offending mode. Surroundin
 trimmed before matching, exactly as the runtime's own validation trims it, so ` require` is
 normalized rather than refused; case is folded by neither, so `Require` fails in both places. An unset mode simply puts no `sslmode` on the URL.
 
+**`database.tls.ca` needs `verify-ca` or `verify-full`, and `ca: system` is refused.**
+pgjdbc reads `sslrootcert` only under those two modes — `require`, `allow` and `prefer` use a
+non-validating socket factory, and an unset mode is `prefer` — so a CA named under any other
+mode was written onto the URL and then ignored, leaving the migration authenticating nothing.
+It now fails with `ErrMigrationTLSCARequiresVerify`. Note this is **stricter than the runtime**:
+`require` + `ca` passes `config.Validate` because pgx treats that pair as `verify-ca`, so the
+service verifies while the migration would not — the migrate door answers for pgjdbc. The
+`ca: system` sentinel (the platform trust store, understood by pgx) is refused with
+`ErrMigrationTLSCASystemUnsupported`: pgjdbc treats `sslrootcert` as a file path and has no
+equivalent, and remapping it to the JVM trust store would authenticate against a different set
+of CAs than the runtime does. Point `database.tls.ca` at the CA file itself for migrations.
+
 **A partially filled block fails rather than falling back.** If `host`, `port`, or
 `database` is set but not a usable `host` AND `database`, the run fails with
 `ErrIncompleteMigrationTarget` instead of deferring to the conf — on a fleet run, a tenant
@@ -195,6 +207,9 @@ block could only be discarded. `config.Validate` already rejects that pair (ADR-
 the DSN is only half of it: the DSN secures the **runtime** pool, but a `connectionstring`
 config gets no `-url=`, so Flyway still takes its JDBC URL from `flyway.conf` — give that URL
 its own `sslmode`/`sslrootcert`, or the migration runs against whatever it names, unencrypted.
+Encrypting that URL is necessary but not sufficient: confirm it names the **same host and
+database** as the DSN, or you get an encrypted migration applied to the wrong database. Nothing
+in the framework can cross-check a DSN it does not parse.
 
 **Three config shapes keep the conf-owned URL:**
 
