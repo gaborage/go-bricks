@@ -770,7 +770,18 @@ func (qb *QueryBuilder) quoteColumnForQuery(column string) (string, error) {
 func (qb *QueryBuilder) quoteTableForQuery(table string) string {
 	switch qb.vendor {
 	case dbtypes.Oracle:
-		return qb.quoteOracleColumn(table)
+		// An inline alias is part of the table argument's grammar ("users u"), so
+		// quote only the identifier and keep the alias: quoting the whole string
+		// produced `FROM "users u"`, one table nobody named (#1156).
+		trimmed := strings.TrimSpace(table)
+		if m := validTableNamePattern.FindStringSubmatch(trimmed); m != nil {
+			return qb.quoteOracleColumn(m[validTableNamePattern.SubexpIndex("ident")]) +
+				m[validTableNamePattern.SubexpIndex("alias")]
+		}
+		// Not table-shaped. Unreachable from every door — each validates against
+		// this same pattern first — and total for any future caller, the same
+		// contract quoteOracleIdentifierForClause's fallback keeps.
+		return qb.quoteOracleColumn(trimmed)
 	default:
 		return table
 	}

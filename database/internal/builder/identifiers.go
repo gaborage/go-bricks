@@ -19,7 +19,10 @@ import (
 const (
 	// qualified matches a simple or dot-qualified identifier: "col", "table.col",
 	// "schema.table.col", and the quoted variants ("schema"."number", u."level").
-	qualified = sqllex.Segment + `(\.` + sqllex.Segment + `)*`
+	// The repetition is NON-capturing: patterns below wrap this in a group of
+	// their own so a renderer can read the identifier back, and a capture here
+	// would shift every later group index.
+	qualified = sqllex.Segment + `(?:\.` + sqllex.Segment + `)*`
 )
 
 // validIdentifierPattern matches a simple or qualified identifier.
@@ -35,8 +38,14 @@ var validIdentifierPattern = regexp.MustCompile(`^` + qualified + `$`)
 // Anything outside this grammar (additional whitespace-separated tokens,
 // semicolons, comment sequences, parentheses) is rejected so attacker-controlled
 // clause arguments cannot smuggle a second statement or comment.
+// The groups are NAMED, and the Oracle clause renderer reads them through
+// SubexpIndex rather than by position: it quotes the identifier and re-appends
+// the rest instead of splitting on whitespace and understanding only two tokens
+// (#1156). Positional indices made that coupling silent — inserting a group
+// renumbers the others, and the renderer emits wrong SQL with nothing failing to
+// compile. A name that stops existing fails loudly instead.
 var validClauseIdentifierPattern = regexp.MustCompile(
-	`^` + qualified + `( (?i:ASC|DESC))?( (?i:NULLS) (?i:FIRST|LAST))?$`,
+	`^(?P<ident>` + qualified + `)(?P<dir> (?i:ASC|DESC))?(?P<nulls> (?i:NULLS) (?i:FIRST|LAST))?$`,
 )
 
 // validSelectIdentifierPattern extends validIdentifierPattern with the SELECT
@@ -54,8 +63,11 @@ var validSelectIdentifierPattern = regexp.MustCompile(
 // string APIs already accept alongside the explicit Table("users").As("u") helper.
 // The alias is a bare identifier; anything beyond a single trailing identifier is
 // rejected so the table argument cannot smuggle additional SQL.
+// Named for the same reason as validClauseIdentifierPattern: the Oracle table
+// renderer quotes the identifier and keeps the alias, reading the same grammar
+// the validator enforces instead of hand-rolling a second split (#1156).
 var validTableNamePattern = regexp.MustCompile(
-	`^` + qualified + `( ` + sqllex.Segment + `)?$`,
+	`^(?P<ident>` + qualified + `)(?P<alias> ` + sqllex.Segment + `)?$`,
 )
 
 // validateIdentifier rejects identifier arguments (column names, table names/

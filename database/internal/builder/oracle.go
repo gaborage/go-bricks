@@ -237,19 +237,23 @@ func (qb *QueryBuilder) quoteOracleIdentifierForClause(identifier string) string
 		return trimmed
 	}
 
-	// Handle expressions with direction keywords (ASC/DESC)
-	parts := strings.Fields(trimmed)
-	if len(parts) == 2 {
-		column := parts[0]
-		direction := strings.ToUpper(parts[1])
-		if direction == "ASC" || direction == "DESC" {
-			quotedColumn := oracleQuoteIdentifier(column)
-			return quotedColumn + " " + direction
-		}
+	// Read the clause with the grammar the validator enforces, rather than
+	// splitting on whitespace and understanding only `col DIR`: the four-token
+	// form `col DESC NULLS LAST` is blessed by that grammar, and the old split
+	// swallowed the whole string into one quoted identifier (#1156).
+	m := validClauseIdentifierPattern.FindStringSubmatch(trimmed)
+	if m == nil {
+		// Not clause-shaped. Every door validates against this same pattern first,
+		// so this is unreachable from them; quoting the whole string keeps the
+		// function total for any future caller.
+		return oracleQuoteIdentifier(trimmed)
 	}
 
-	// For single identifiers, use standard quoting
-	return oracleQuoteIdentifier(trimmed)
+	// An absent optional group is "", so the direction and the nulls ordering
+	// append unconditionally.
+	quoted := oracleQuoteIdentifier(m[validClauseIdentifierPattern.SubexpIndex("ident")])
+	quoted += strings.ToUpper(m[validClauseIdentifierPattern.SubexpIndex("dir")])
+	return quoted + strings.ToUpper(m[validClauseIdentifierPattern.SubexpIndex("nulls")])
 }
 
 // quoteOracleColumnsForDML applies Oracle-specific quoting for column lists used in DML statements
