@@ -166,6 +166,11 @@ exactly one pair of brackets. Anything else, including a host carrying its own `
 fails with `ErrInvalidMigrationHost`. The error never
 echoes the value, since a misconfigured host can hold a whole DSN.
 
+**`database.port` must be 1–65535, or `0` for the driver default.** The port is omitted
+from the URL when it is zero; a negative one used to take that same branch and migrate
+silently against the driver's 5432, so anything below 0 or above 65535 now fails with
+`ErrInvalidMigrationPort`. The error names the field, not the value.
+
 **A partially filled block fails rather than falling back.** If `host`, `port`, or
 `database` is set but not a usable `host` AND `database`, the run fails with
 `ErrIncompleteMigrationTarget` instead of deferring to the conf — on a fleet run, a tenant
@@ -179,14 +184,16 @@ used verbatim and the framework does not parse it, so TLS configured in a `datab
 block could only be discarded. `config.Validate` already rejects that pair (ADR-062), but
 `MigrateFor` also takes per-tenant configs that never passed it — a dynamic
 `DBConfigProvider`, or this CLI's `tenants.yaml` — so the migrator refuses on its own with
-`ErrMigrationTLSWithConnectionString`. Put `sslmode`/`sslrootcert`/`sslcert`/`sslkey` in the
-connection string itself.
+`ErrMigrationTLSWithConnectionString`. The remedy is two-sided, and moving the settings into
+the DSN is only half of it: the DSN secures the **runtime** pool, but a `connectionstring`
+config gets no `-url=`, so Flyway still takes its JDBC URL from `flyway.conf` — give that URL
+its own `sslmode`/`sslrootcert`, or the migration runs against whatever it names, unencrypted.
 
 **Three config shapes keep the conf-owned URL:**
 
 | Shape | Why |
 | --- | --- |
-| Oracle | No `database.tls` exists for Oracle (ADR-062) and the framework builds no Oracle JDBC URL. |
+| Oracle | `database.tls` is unsupported and rejected for Oracle (ADR-062) — the field exists in the shared config, validation refuses it — and the framework builds no Oracle JDBC URL. |
 | `database.connectionstring` **with no `database.tls` block** | The framework does not parse DSNs, and the DSN carries its own TLS, so no guarantee is offered — but `tls.*` alongside one fails rather than deferring. |
 | A block naming no `host`, `port`, or `database` (credentials only, or bare) | Nothing to build a URL from, so no guarantee is offered — but with `tls.*` set it fails instead of deferring. |
 

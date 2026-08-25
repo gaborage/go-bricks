@@ -97,6 +97,16 @@ chose. The host must therefore be an IP literal or a plain DNS name
 whole DSN. This mirrors `schemaArgs`, which already validates its schema name
 against `safePGIdentifier` before it reaches argv.
 
+**`database.port` is range-checked.** `urlAuthority` omits the port when it is
+zero, letting the driver take its default — the documented unset case. Every
+non-positive port took that branch, so a NEGATIVE port, which plainly means a
+port, silently migrated against pgjdbc's 5432 instead, and nothing observed a
+port above 65535 either. `validateMigrationPort` mirrors
+`config.validateOptionalDatabasePort` (`< 0 || > 65535`, zero exempt) and fails
+with `ErrInvalidMigrationPort`, which names the field and not the value. It is
+the migrator's own copy for the same reason the rule above is: `MigrateFor`
+takes per-tenant configs that never passed `config.Validate`.
+
 **An incomplete target fails closed; a bare one defers.** `usesFrameworkOwnedURL`
 needs a host and a database, so the gate is three-way rather than two.
 `ErrIncompleteMigrationTarget` rejects a run when the block is PARTIALLY filled —
@@ -139,14 +149,18 @@ or databases gets a distinct URL per tenant, from the same source the runtime us
   ignored anyway, and the variable is gone.
 - A migration now reports `<app.name>` in `pg_stat_activity.application_name`. A conf that
   also set one is outranked with the rest of its URL.
-- **Oracle keeps the conf-owned URL.** No `database.tls` exists for Oracle (ADR-062), so
-  there is no TLS guarantee to make, and no Oracle JDBC URL builder here. Reopen trigger:
-  Oracle migrations enter production use.
+- **Oracle keeps the conf-owned URL.** `database.tls` is unsupported and REJECTED for
+  Oracle (ADR-062) — the shared config carries the field, so validation is what refuses it —
+  meaning there is no TLS guarantee to make, and there is no Oracle JDBC URL builder here.
+  Reopen trigger: Oracle migrations enter production use.
 - **`database.connectionstring` deployments keep the conf-owned URL** when they carry no
   `database.tls` block. The framework does not parse DSNs, so a TLS block beside a DSN
   could only be dropped — `config.Validate` rejects that pair (ADR-062), and the migrator
   now refuses it independently, because `MigrateFor` accepts per-tenant configs that never
-  passed validation.
+  passed validation. Note what the remedy is NOT: moving the TLS settings into the DSN
+  secures the RUNTIME pool only. A `connectionstring` config emits no `-url=`, so Flyway
+  still reads its JDBC URL from `flyway.conf` — that URL needs its own `sslmode`/
+  `sslrootcert`, or the migration runs against whatever it names, in cleartext.
 - **Breaking**: a PostgreSQL config carrying both `database.connectionstring` and any
   `database.tls.*` field now fails the migration with
   `errors.Is(err, migration.ErrMigrationTLSWithConnectionString)` instead of running on the
@@ -157,6 +171,9 @@ or databases gets a distinct URL per tenant, from the same source the runtime us
   URL from, so no guarantee is offered — and with TLS set it fails rather than deferring.
 - The control-character check that guarded the subprocess environment now also runs before
   the URL is built, because the same fields are formatted into argv.
+- **Breaking**: a `database.port` below 0 or above 65535 now fails a PostgreSQL migration
+  with `errors.Is(err, migration.ErrInvalidMigrationPort)`. `0` still means unset and is
+  unaffected, as is every port in range. `[C61.4]`.
 - **Breaking**: a `database.host` that is not an IP literal or a plain DNS name now fails a
   PostgreSQL migration with `ErrInvalidMigrationHost`. Hosts that worked before and still
   parse as addresses are unaffected. `[C61.4]`.
