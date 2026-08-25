@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -96,6 +97,7 @@ func assertSpanErrorByType(t T, scenario *Scenario, span *sdktrace.SpanStub) {
 	}
 
 	obtest.AssertExceptionTypeOnly(t, span, "*errors.errorString")
+	assert.Equal(t, codes.Error, span.Status.Code, "a failed delivery marks the span Error")
 	assert.Equal(t, "*errors.errorString", span.Status.Description,
 		"the status description is the error's Go type, never its message")
 	obtest.AssertNoSpanMarkers(t, span, HandlerErrorMarker)

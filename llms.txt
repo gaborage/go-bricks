@@ -5512,7 +5512,7 @@ import (
 )
 
 // 1. Spans — assert that a service emits the expected custom span + attributes
-func TestOrderService_emits_processing_span(t *testing.T) {
+func TestOrderServiceEmitsProcessingSpan(t *testing.T) {
     tp := obtest.NewTestTraceProvider() // in-memory exporter + tracer
     defer tp.Shutdown(context.Background())
 
@@ -5526,7 +5526,7 @@ func TestOrderService_emits_processing_span(t *testing.T) {
 }
 
 // 2. Spans — assert that a failure path records an error on the span
-func TestOrderService_records_error_on_db_failure(t *testing.T) {
+func TestOrderServiceRecordsErrorOnDBFailure(t *testing.T) {
     tp := obtest.NewTestTraceProvider()
     defer tp.Shutdown(context.Background())
 
@@ -5534,11 +5534,14 @@ func TestOrderService_records_error_on_db_failure(t *testing.T) {
     _ = svc.ProcessOrder(context.Background(), 42)
 
     spans := tp.Exporter.GetSpans()
-    obtest.AssertSpanError(t, &spans[0], "database unavailable")
+    // RecordErrorByType puts the error's Go TYPE on both span sinks and no
+    // message at all (ADR-083), so assert the type and the status code.
+    obtest.AssertSpanStatus(t, &spans[0], codes.Error)
+    obtest.AssertExceptionTypeOnly(t, &spans[0], "*errors.errorString")
 }
 
 // 3. Metrics — read the manual reader and assert recorded values
-func TestOrderService_records_counter(t *testing.T) {
+func TestOrderServiceRecordsCounter(t *testing.T) {
     mp := obtest.NewTestMeterProvider()
     defer mp.Shutdown(context.Background())
 
@@ -5551,7 +5554,7 @@ func TestOrderService_records_counter(t *testing.T) {
 }
 
 // 4. Modules that don't care to inspect emissions — use no-op meter
-func TestOrderModule_safe_with_noop_meter(t *testing.T) {
+func TestOrderModuleSafeWithNoopMeter(t *testing.T) {
     deps := &app.ModuleDeps{MeterProvider: noop.NewMeterProvider()}
 
     module := &OrderModule{}
