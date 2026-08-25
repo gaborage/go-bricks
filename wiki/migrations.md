@@ -4918,7 +4918,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   consistency with `Select`/`GroupBy`/`OrderBy`, NOT because it is safer.
   `RawExpression.Validate()` never inspects the SQL body, so an expression body is
   raw SQL exactly as a string predicate is; review it the same way, and grep it by
-  its own name (`git grep -nE 'MustExpr\(|[.]Expr\('`) rather than by an
+  its own name (`git grep -nE 'MustExpr\(|[.]Expr\(|RawExpression\{'`) rather than by an
   annotation. Whether `qb.Expr` bodies should carry the annotation repo-wide is a
   policy question above this change; it is filed separately. —
 

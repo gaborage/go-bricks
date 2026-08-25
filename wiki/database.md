@@ -315,7 +315,7 @@ the builder. The grammar will not accept a computed one.
   checks only that the SQL is non-empty and the alias is clean — it never inspects
   the SQL body, which carries the same injection risk as the string form and is
   reviewed as raw SQL. Its audit hook is its own name, `git grep -nE
-  'MustExpr\(|[.]Expr\('`, rather than an annotation.
+  'MustExpr\(|[.]Expr\(|RawExpression\{'`, rather than an annotation.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
   than to this grammar — a stricter question ("is this one column this vendor can
   name in a MERGE"), enforced by escaping plus `requireSingleColumnNames`.
