@@ -5047,8 +5047,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - detect: `git grep -nE '(^|[^[:alnum:]_])jf[.](Eq|NotEq|Lt|Lte|Gt|Gte)[(]' -- '*.go'` and read each
   operand. The boundary is spelled POSIX, not `\b`: `git grep -E` is ERE, where `\b` matches
   nothing, and the pattern would report no hits at all.
-  Only a COMPUTED operand can be affected — a variable that may be nil, or a slice built from a
-  request or a query. A literal scalar is unaffected.
+  EVERY nil or slice operand is affected, literal or computed: `nil`, `[]int{1}`, `[]int{}`, a
+  typed nil pointer `(*int)(nil)`, and a `driver.Valuer` reporting NULL — the equality doors now
+  RENDER them and the ordering doors now ERROR on them, where both previously produced
+  `col op ?`. Only a scalar operand is unaffected, `[]byte` included. Reading each call site
+  matters more than the grep: the shape is decided by the operand's runtime value, so a
+  parameter typed `any` tells you nothing until you know what reaches it.
 - scope: the JoinFilter value doors built `col op ?` with exactly one placeholder, so a nil
   operand rendered `col = NULL`, which is never true whatever the data, and a slice bound to a
   SINGLE argument, which the driver rejects or the vendor coerces. Equality now delegates to the
@@ -5060,9 +5064,13 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   "Nil" is decided after the same resolution the underlying builder performs: a `driver.Valuer`
   reporting NULL (`sql.NullString{}`) and a typed nil pointer (`(*int)(nil)`) are nil at both
   doors, which is what an optional column read from a nullable field usually is.
-  The ORDERING doors (`<`, `<=`, `>`, `>=`) now REFUSE a nil or slice operand with
+  The JOINFILTER ORDERING doors (`<`, `<=`, `>`, `>=`) now REFUSE a nil or slice operand with
   `dbtypes.ErrOrderingOperandNotComparable` — exported from `database/types`, so consumer code can
-  match it — surfaced through the JoinFilter error channel at `ToSQL`.
+  match it — surfaced through the JoinFilter error channel at `ToSQL`. The FILTER ordering doors
+  are unchanged and are NOT the same rule: they delegate to the underlying builder, which refuses
+  nil, slices and a Valuer reporting NULL with its own messages, but does not dereference a
+  pointer — so `f.Lt(col, (*int)(nil))` still renders `col < ?` where `jf.Lt` now errors. That
+  divergence is tracked in #1205, not closed here.
   There is no rendering for either, and the previous one silently matched nothing.
 - gate: match = a `jf.Eq`/`jf.NotEq` call whose operand can be nil or a slice (it starts working),
   or a `jf.Lt`/`Lte`/`Gt`/`Gte` call whose operand can be nil or a slice (it starts erroring).

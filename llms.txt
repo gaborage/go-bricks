@@ -1269,7 +1269,7 @@ return users, nil
 | Need                | Builder call / API usage                                               |
 |---------------------|------------------------------------------------------------------------|
 | Filtering           | `f.Eq`, `f.And`, `f.Or`, `f.In`, `f.Between`, `f.Lt`/`f.Lte`/`f.Gt`/`f.Gte` (inequalities — no need to reach for raw SQL) |
-| Nil / slice operands | `f.Eq`/`jf.Eq` (and `NotEq`) render `nil` as `IS NULL` and a slice as `IN (…)`; an empty slice is `(1=0)`. `[]byte` is a scalar; a `driver.Valuer` reporting NULL and a typed nil pointer are nil. Ordering methods refuse both (`dbtypes.ErrOrderingOperandNotComparable`). Prefer `f.In`/`f.Null` (and `jf.*`) when the shape is known |
+| Nil / slice operands | `f.Eq`/`jf.Eq` (and `NotEq`) render `nil` as `IS NULL` and a slice as `IN (…)`; an empty slice is `(1=0)`. `[]byte` is a scalar; a `driver.Valuer` reporting NULL and a typed nil pointer are nil. `jf` ordering methods refuse nil and slices (`dbtypes.ErrOrderingOperandNotComparable`); `f` ordering refuses all but a typed nil pointer (#1205). Prefer `f.In`/`f.Null` (and `jf.*`) when the shape is known |
 | Pattern matching    | `f.Like` (case-insensitive), `f.Regex`/`f.RegexI`/`f.NotRegex`/`f.NotRegexI` (POSIX regex; PG `~`/`~*`/`!~`/`!~*`, Oracle `REGEXP_LIKE` with `'i'` flag) |
 | JSON containment    | `f.JSONContains(col, value)` — PostgreSQL `@>` on `jsonb`; pass struct/map/slice (auto JSON-marshalled) or pre-encoded `string`/`[]byte`/`json.RawMessage`. Oracle is not yet supported. |
 | Sorting / grouping  | `qb.Select(...).From("...").OrderBy(qb.MustExpr("created_at DESC")).GroupBy("tenant_id")` |
