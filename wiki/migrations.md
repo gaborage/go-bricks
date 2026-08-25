@@ -3386,7 +3386,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   config actually sets: unset fields are not exported, so naming `sslrootcert` while
   `database.tls.ca` is empty leaves the placeholder unresolved. Note that `database.tls.key`
   is validated against libpq semantics but pgjdbc's `sslkey` wants PKCS-8 DER, not PEM —
-  convert it, or use a mode needing no client certificate.
+  convert it, or use a mode needing no client certificate. **Correction (2026-08-24):** that
+  is not right. pgjdbc's `LibPQFactory` dispatches on the file name — a `.key` or `.pem` path
+  goes to `PEMKeyManager`, which reads an unencrypted PKCS#8 PEM; only other names go to
+  `LazyKeyManager`, which wants DER. Converting is unnecessary for an unencrypted PKCS#8 PEM
+  at such a path. A PKCS#1 (`BEGIN RSA PRIVATE KEY`) or encrypted PEM is still unreadable by
+  either manager.
 - verify: run `migrate` and read the WARN. The framework does not parse your conf, so it warns
   once per migrator whenever `database.tls` is set, naming the conf path; confirm from the
   database side (`pg_stat_ssl`) that the connection is actually encrypted, since the WARN
@@ -4855,9 +4860,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   server's `application_name` column. Credentials are NOT on the URL — `DB_USER`/`DB_PASSWORD` stay
   environment-delivered, because argv is world-readable in the process list. With
   `database.tls.cert` or `database.tls.key` set, a PostgreSQL run now FAILS with
-  `migration.ErrMigrationMTLSUnsupported` — `validate` and `info` too, not just `migrate` — rather than connecting without the client certificate:
-  pgjdbc's `sslkey` wants PKCS-8 DER while `database.tls.key` is a libpq PEM, and the framework
-  will not convert key material through a temp file. Two further shapes now fail rather than
+  `migration.ErrMigrationMTLSUnsupported` — `validate` and `info` too, not just `migrate` — rather
+  than connecting without the client certificate. The limitation is the FRAMEWORK's, not a pgjdbc
+  format rule: the framework does not forward `database.tls.cert`/`database.tls.key` as the JDBC
+  `sslcert`/`sslkey` parameters at all, so rather than silently dropping them it rejects the pair
+  fail-closed. pgjdbc itself would read them — `LibPQFactory` dispatches on the file name, sending
+  a `.key` or `.pem` path to `PEMKeyManager` (unencrypted PKCS#8 PEM, the `BEGIN PRIVATE KEY`
+  header) and anything else to `LazyKeyManager` (raw PKCS#8 DER). Forwarding blindly would still
+  not be safe, though: `PEMKeyManager` parses ONLY unencrypted PKCS#8, so a PKCS#1
+  `BEGIN RSA PRIVATE KEY` or an encrypted PEM — both of which `database.tls.key` may legitimately
+  be, since it is validated against libpq semantics — would fail inside the driver instead. Two further shapes now fail rather than
   run: a `database.host` that is not an IP literal or a plain DNS name
   (`migration.ErrInvalidMigrationHost` — the host is the one URL component that must stay a
   routable address, so it is validated instead of percent-encoded; unescaped, a value like
@@ -4900,7 +4912,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   else. Merely adding `mode`/`ca` to a config that still carries the client-certificate pair
   does NOT help; that config still returns `ErrMigrationMTLSUnsupported`. If the same config
   serves both, split it: separate runtime and migration configurations, the runtime one keeping
-  its `cert`/`key`. Otherwise run Flyway outside the framework with your own PKCS-8 DER key.
+  its `cert`/`key`. Otherwise run Flyway outside the framework, supplying `sslcert`/`sslkey` in your own conf URL.
   Runtime mTLS is unaffected — `database.tls.cert`/`key` still work for the service's own
   connections.
 - verify: point a throwaway tenant's `host` at `h/?sslmode=disable&x=` and confirm the migrate

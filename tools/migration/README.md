@@ -149,9 +149,9 @@ silently disagree with the runtime target.
 
 **Client-certificate (mTLS) migrations are unsupported.** With `database.tls.cert` or
 `database.tls.key` set, a PostgreSQL migrate fails closed rather than connecting without
-the client certificate: `database.tls.key` is validated against libpq semantics (as pgx
-uses it), but pgjdbc's `sslkey` expects a PKCS-8 DER file, and the framework will not
-convert key material through a temp file. Server-authenticated TLS (`mode` + `ca`) is
+the client certificate. The limitation is the framework's, not pgjdbc's: it does not
+forward `database.tls.cert`/`key` as the JDBC `sslcert`/`sslkey` parameters, so it
+refuses rather than silently migrating without them. Server-authenticated TLS (`mode` + `ca`) is
 fully supported; runtime mTLS is unaffected.
 
 **`database.host` must be an IP address or a plain DNS name.** It is the one URL

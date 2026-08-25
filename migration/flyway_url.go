@@ -102,13 +102,15 @@ func validateMigrationHost(host string) error {
 }
 
 // ErrMigrationMTLSUnsupported rejects a migration whose config asks for
-// PostgreSQL client-certificate authentication. `database.tls.key` is
-// validated as a libpq PEM (atom C60.2), which pgjdbc cannot load. Match with
-// errors.Is.
+// PostgreSQL client-certificate authentication. The limit is OURS, not pgjdbc's:
+// the framework does not forward `database.tls.cert`/`key` as the JDBC
+// `sslcert`/`sslkey` parameters, so it refuses rather than migrating without the
+// client certificate the config asked for. Match with errors.Is.
 var ErrMigrationMTLSUnsupported = errors.New(
 	"migration: PostgreSQL client-certificate TLS (database.tls.cert/database.tls.key) is not supported for Flyway migrations: " +
-		"pgjdbc's sslkey requires a PKCS-8 DER key while database.tls.key is a libpq PEM; " +
-		"use database.tls.mode + database.tls.ca for server-authenticated TLS, or migrate outside the framework")
+		"the framework does not forward them as the JDBC sslcert/sslkey parameters, so it refuses rather than " +
+		"migrating without the client certificate; use database.tls.mode + database.tls.ca for server-authenticated TLS, " +
+		"or migrate outside the framework")
 
 // usesFrameworkOwnedURL reports whether this run gets a framework-built `-url=`.
 // Only PostgreSQL discrete-field configs qualify. Oracle is excluded because it

@@ -16,8 +16,9 @@ as `sslmode` and `sslrootcert`, so the residual "a conf that ignores those varia
 migrates without TLS" gap this ADR could only warn about is closed rather than advised.
 
 A `database.tls.cert`/`database.tls.key` migration now FAILS (`ErrMigrationMTLSUnsupported`)
-instead of downgrading: pgjdbc's `sslkey` wants a PKCS-8 DER key while this ADR validates
-`database.tls.key` as a libpq PEM. Oracle and `database.connectionstring` keep the conf-owned
+instead of downgrading: the framework does not forward the pair as the JDBC
+`sslcert`/`sslkey` parameters, so it refuses rather than migrating without the client
+certificate. Oracle and `database.connectionstring` keep the conf-owned
 URL — for Oracle because this ADR rejects `database.tls` there outright, so there is no
 guarantee to make. See `[C61.4]`.
 

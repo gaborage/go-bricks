@@ -63,9 +63,14 @@ forwarded. It still lands in the server's `application_name` column.
 
 **PostgreSQL client-certificate migrations fail closed.** With `database.tls.cert` or
 `database.tls.key` set, any PostgreSQL run the framework builds a URL for — `migrate`, `validate` and
-`info` alike — returns `ErrMigrationMTLSUnsupported` naming the pgjdbc limitation:
-pgjdbc's `sslkey` requires a PKCS-8 DER file, while `database.tls.key` is
-validated as a libpq PEM (`[C60.2]`). The framework does not convert — that means writing
+`info` alike — returns `ErrMigrationMTLSUnsupported`. The limitation is the
+FRAMEWORK's, not pgjdbc's: the framework does not forward `database.tls.cert`/`key`
+as the JDBC `sslcert`/`sslkey` parameters, so it refuses rather than silently
+migrating without the client certificate the config asked for. pgjdbc would read
+them — `LibPQFactory` sends a `.key`/`.pem` path to `PEMKeyManager` (unencrypted
+PKCS#8 PEM) and anything else to `LazyKeyManager` (PKCS#8 DER) — but only
+unencrypted PKCS#8, so a PKCS#1 or encrypted `database.tls.key`, which libpq
+semantics permit (`[C60.2]`), would fail inside the driver anyway. The framework does not convert — that means writing
 key material to a temp file. Server-authenticated TLS (`mode` + `ca`) is fully
 supported, and runtime mTLS is untouched. Connecting without the client certificate the
 config asked for would be the silent-downgrade this ADR exists to remove.
@@ -163,6 +168,6 @@ key is the kind of conditional behavior operators cannot reason about.
 survey found `application_name` and nothing else; a passthrough is easy to add when a
 second parameter appears, and impossible to remove once shipped.
 
-**Convert the PEM key to PKCS-8 DER for the Flyway leg.** Rejected for now: it means
+**Forward the client-certificate pair as `sslcert`/`sslkey`.** Rejected for now: it means
 writing private key material to a temp file, with its own lifetime, permissions, and
 cleanup-on-crash story. Reopen trigger: a real PostgreSQL-mTLS migration deployment.

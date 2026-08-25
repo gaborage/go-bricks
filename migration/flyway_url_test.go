@@ -97,7 +97,10 @@ func TestBuildPostgresJDBCURLRejectsMTLS(t *testing.T) {
 			_, err := buildPostgresJDBCURL(db, testAppName)
 
 			require.ErrorIs(t, err, ErrMigrationMTLSUnsupported)
-			assert.Contains(t, err.Error(), "PKCS-8")
+			// The message must name the ACTIONABLE fact — that the framework does not
+			// forward the pair — rather than a pgjdbc format rule, which is not why
+			// this fails.
+			assert.Contains(t, err.Error(), "sslcert/sslkey")
 		})
 	}
 }
