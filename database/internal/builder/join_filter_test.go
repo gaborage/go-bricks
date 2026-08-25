@@ -767,6 +767,12 @@ func TestJoinFilterEqOperandsMatchFilter(t *testing.T) {
 		"empty_typed_slice": []int{},
 		"empty_any_slice":   []any{},
 		"single_item_slice": []int{7},
+		// An ARRAY is a list operand exactly as a slice is — squirrel's own
+		// isListType admits both Kinds, and the door mirrors it. Without a case
+		// here the array half of that test is unpinned: dropping it from the
+		// classifier leaves every slice case passing.
+		"typed_array": [3]int{1, 2, 3},
+		"empty_array": [0]int{},
 		// Resolved by squirrel BEFORE its nil/list test: a Valuer reporting NULL
 		// and a typed nil pointer both mean NULL. A surface-level test calls them
 		// scalars and renders `col = ?` — the bug this issue removes, reappearing
@@ -862,9 +868,10 @@ func TestJoinFilterEqEmptySliceMatchesIn(t *testing.T) {
 	assert.Equal(t, notInSQL, notEqSQL)
 }
 
-// TestJoinFilterOrderingRefusesNilAndSlices pins the fail-closed half: there is
-// no rendering of `col < NULL` or of an ordering against a set.
-func TestJoinFilterOrderingRefusesNilAndSlices(t *testing.T) {
+// TestJoinFilterOrderingRefusesNilSlicesAndArrays pins the fail-closed half:
+// there is no rendering of `col < NULL` or of an ordering against a set, and a
+// set is a slice OR an array.
+func TestJoinFilterOrderingRefusesNilSlicesAndArrays(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
 	jf := qb.JoinFilter()
 
@@ -882,6 +889,8 @@ func TestJoinFilterOrderingRefusesNilAndSlices(t *testing.T) {
 		"nil":           nil,
 		"typed_slice":   []int{1},
 		"empty_slice":   []int{},
+		"typed_array":   [3]int{1, 2, 3},
+		"empty_array":   [0]int{},
 		"null_valuer":   dbsql.NullString{},
 		"typed_nil_ptr": (*int)(nil),
 	}
@@ -1015,4 +1024,29 @@ func TestJoinFilterRendersFirstResolutionOfStatefulValuer(t *testing.T) {
 	assert.Equal(t, "u.id IS NULL", sql)
 	assert.Empty(t, args)
 	assert.Equal(t, 1, operand.calls)
+}
+
+// TestJoinFilterEqArrayRendersIn pins the array rendering ABSOLUTELY, not only
+// against f.Eq's: the C61.11 verify step promises `jf.Eq("u.id", [3]int{1,2,3})`
+// renders `u.id IN (?,?,?)`, and a doc promise no test reads is a promise that
+// can go stale. The parity table two tests up asserts jf against f, which pins
+// agreement; this pins the spelling both doors agreed on.
+func TestJoinFilterEqArrayRendersIn(t *testing.T) {
+	jf := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter()
+
+	t.Run("eq_array", func(t *testing.T) {
+		sql, args, err := jf.Eq("u.id", [3]int{1, 2, 3}).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id IN (?,?,?)", sql)
+		assert.Equal(t, []any{1, 2, 3}, args)
+	})
+
+	t.Run("not_eq_array", func(t *testing.T) {
+		sql, args, err := jf.NotEq("u.id", [3]int{1, 2, 3}).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id NOT IN (?,?,?)", sql)
+		assert.Equal(t, []any{1, 2, 3}, args)
+	})
 }
