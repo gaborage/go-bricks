@@ -1278,8 +1278,39 @@ func (sqb *SelectQueryBuilder) appendClauseValue(processed *[]string, value any,
 	}
 }
 
-// Having adds a HAVING clause to the query
+// Having adds a HAVING clause to the query.
+//
+// Prefer a qb.Expr() RawExpression — `Having(qb.MustExpr("SUM(amount) > ?"), 100)`,
+// or qb.Expr when you handle its error —
+// which is the sanctioned path for the aggregate comparisons HAVING exists for
+// and the same spelling Select, GroupBy and OrderBy take. HAVING is a predicate,
+// not an identifier, so neither form is validated against the identifier grammar
+// (ADR-082): a string predicate is a raw-SQL door on par with f.Raw/jf.Raw/
+// database.Raw and requires the same inline
+// `// SECURITY: Manual SQL review completed - <what was verified>` annotation at
+// every call site. The RawExpression form is exempt for consistency with Select,
+// GroupBy and OrderBy — NOT because it is safer. RawExpression.Validate() checks
+// only that SQL is non-empty and that the Alias is free of dangerous characters;
+// it never inspects the SQL body, so that body carries the same injection risk as
+// the string form and must be reviewed as raw SQL. Its audit hook is its own
+// name: `git grep -nE 'MustExpr\(|[.]Expr\('`.
 func (sqb *SelectQueryBuilder) Having(pred any, rest ...any) dbtypes.SelectQueryBuilder {
+	if expr, ok := pred.(dbtypes.RawExpression); ok {
+		// The alias is judged BEFORE Validate(): for HAVING no alias is ever legal,
+		// so an alias that also trips Validate's own alias rule must still report
+		// ErrAliasInHaving. Validating first would return that other error instead
+		// and make the sentinel a function of the alias's CONTENT.
+		if expr.Alias != "" {
+			sqb.failClause(fmt.Errorf("%w: %s", dbtypes.ErrAliasInHaving, expr.Alias))
+			return sqb
+		}
+		if err := expr.Validate(); err != nil {
+			sqb.failClause(err)
+			return sqb
+		}
+		sqb.selectBuilder = sqb.selectBuilder.Having(expr.SQL, rest...)
+		return sqb
+	}
 	sqb.selectBuilder = sqb.selectBuilder.Having(pred, rest...)
 	return sqb
 }

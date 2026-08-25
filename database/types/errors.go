@@ -28,6 +28,11 @@ var (
 	// denylist, which accepted everything it did not list.
 	ErrInvalidAlias = errors.New("alias must be an unquoted identifier: a letter or underscore followed by letters, digits, underscore, $ or #")
 
+	// ErrAliasInHaving is returned when a RawExpression carrying an alias is passed
+	// to Having. HAVING takes a predicate, not a projected column, so an alias has
+	// nowhere to render; accepting one silently would drop it.
+	ErrAliasInHaving = errors.New("alias is not allowed in a HAVING predicate")
+
 	// ErrNilSubquery is returned when ValidateSubquery() is called with nil subquery.
 	ErrNilSubquery = errors.New("subquery cannot be nil")
 
