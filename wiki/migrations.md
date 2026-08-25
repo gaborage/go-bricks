@@ -5047,7 +5047,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - detect: `git grep -nE '(^|[^[:alnum:]_])jf[.](Eq|NotEq|Lt|Lte|Gt|Gte)[(]' -- '*.go'` and read each
   operand. The boundary is spelled POSIX, not `\b`: `git grep -E` is ERE, where `\b` matches
   nothing, and the pattern would report no hits at all.
-  EVERY nil or slice operand is affected, literal or computed: `nil`, `[]int{1}`, `[]int{}`, a
+  EVERY nil, slice or ARRAY operand is affected, literal or computed: `nil`, `[]int{1}`, `[]int{}`,
+  `[3]int{1,2,3}`, a
   typed nil pointer `(*int)(nil)`, and a `driver.Valuer` reporting NULL — the equality doors now
   RENDER them and the ordering doors now ERROR on them, where both previously produced
   `col op ?`. Only a scalar operand is unaffected, `[]byte` included. Reading each call site
@@ -5056,7 +5057,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - scope: the JoinFilter value doors built `col op ?` with exactly one placeholder, so a nil
   operand rendered `col = NULL`, which is never true whatever the data, and a slice bound to a
   SINGLE argument, which the driver rejects or the vendor coerces. Equality now delegates to the
-  same construct `f.Eq`/`f.NotEq` use: nil renders `IS NULL` / `IS NOT NULL`, a slice expands to
+  same construct `f.Eq`/`f.NotEq` use: nil renders `IS NULL` / `IS NOT NULL`, a slice or array
+  expands to
   `IN (…)` / `NOT IN (…)`, an empty slice renders the constant `(1=0)` / `(1=1)`. Two shapes that
   could not work now work; nothing that worked changes. A SCALAR operand is untouched, including
   a `[]byte`, which counts as a scalar and not a list — squirrel's own rule, shared here so the
@@ -5064,7 +5066,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   "Nil" is decided after the same resolution the underlying builder performs: a `driver.Valuer`
   reporting NULL (`sql.NullString{}`) and a typed nil pointer (`(*int)(nil)`) are nil at both
   doors, which is what an optional column read from a nullable field usually is.
-  The JOINFILTER ORDERING doors (`<`, `<=`, `>`, `>=`) now REFUSE a nil or slice operand with
+  The JOINFILTER ORDERING doors (`<`, `<=`, `>`, `>=`) now REFUSE a nil, slice or array operand with
   `dbtypes.ErrOrderingOperandNotComparable` — exported from `database/types`, so consumer code can
   match it — surfaced through the JoinFilter error channel at `ToSQL`. The FILTER ordering doors
   are unchanged and are NOT the same rule: they delegate to the underlying builder, which refuses
