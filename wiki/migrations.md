@@ -4932,8 +4932,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   ADR-047 already rejects that block at app startup, so it survives only in migration-only
   processes) all keep the conf-owned URL and get no `-url=`.
 - gate: match = you migrate PostgreSQL with `go-bricks-migrate` or `FlywayMigrator` using discrete
-  `host`/`port`/`database` fields. no-match = Oracle migrations, `connectionstring` configs, or no
-  go-bricks-driven Flyway at all.
+  `host`/`port`/`database` fields. no-match = Oracle migrations, TLS-free `connectionstring`
+  configs (one carrying any `database.tls.*` MATCHES — it fails with
+  `ErrMigrationTLSWithConnectionString` instead of migrating), or no go-bricks-driven Flyway at all.
 - apply: delete `flyway.url` from the conf (it is dead weight that reads as authoritative), along
   with any `${env.DB_SSL*}` interpolation and any `application_name` you were hand-carrying. If the
   conf URL pointed somewhere your `database.*` block does not, that divergence was a bug — fix

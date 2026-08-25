@@ -141,8 +141,8 @@ jdbc:postgresql://<host>[:<port>]/<database>?ApplicationName=<app.name>[&sslmode
 | `database.tls.ca` | `sslrootcert` |
 | `app.name` | `ApplicationName` (automatic; no config key — pgjdbc's spelling, not libpq's `application_name`, which pgjdbc ignores; it still lands in the server's `application_name` column) |
 
-The port is omitted when `database.port` is unset or non-positive, leaving the driver's
-default. Unset TLS fields are omitted. Credentials are **not** on the URL — `DB_USER`/`DB_PASSWORD`
+The port is omitted when `database.port` is unset or `0`, leaving the driver's
+default; a negative port fails with `ErrInvalidMigrationPort` rather than being dropped. Unset TLS fields are omitted. Credentials are **not** on the URL — `DB_USER`/`DB_PASSWORD`
 stay environment-delivered, because argv is world-readable in the process list. This
 closes the gap where a conf-owned URL could migrate in cleartext while
 `database.tls.mode: verify-full` validated cleanly, and where the migration target could
