@@ -4855,18 +4855,24 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   rather than theoretical: `EscapeIdentifier` is EXPORTED for quoting a dynamic identifier before
   it goes into raw SQL, so it is a trust boundary, not a post-validation step — the internal
   renderer, by contrast, is only reached through doors that validate first.
-  `BuildUpsert` is the one door that does NOT gain the dotted-quoted name: it still refuses a key
-  whose RENDERING contains a dot, which ADR-071 records and this change deliberately leaves
-  standing.
+  `BuildUpsert` is the one door that does NOT gain the dotted-quoted name, and the rule there is
+  per-vendor rather than shared. On ORACLE a key must render as ONE column name, so anything
+  whose rendering carries a dot is refused — ADR-071 records that and this change deliberately
+  leaves it standing. On PostgreSQL nothing is refused: its escaper splits on the dot and quotes
+  each part, so `t.name` builds as a QUALIFIED REFERENCE rather than a column named `t.name`.
+  That is unchanged here and is not an endorsement of the key; refusing it on PostgreSQL would be
+  a second breaking change.
   Separately, the Oracle quoter's function-shaped pass-through is deleted — it returned any
   `NAME(args)` string verbatim, and since ADR-082 no public door admits a parenthesis, nothing
   reached it. That is internal, with one visible edge: Oracle's upsert refuses an unquoted key
   carrying a parenthesis, including a malformed one like `COUNT(` that used to be accepted as the
   literal column `"COUNT("`. Quote such a key to keep it.
 
-- gate: match = your code hands the builder a caller-quoted identifier containing a dot, or reads
-  `EscapeIdentifier`'s output for a string with unbalanced quotes. no-match = every identifier is
-  a plain or dot-qualified name, which is the overwhelming majority.
+- gate: match = your code hands the builder a caller-quoted identifier containing a dot; or reads
+  `EscapeIdentifier`'s output for a string with unbalanced quotes; or runs ORACLE and passes
+  `BuildUpsert` an UNQUOTED column key carrying a parenthesis (`COUNT(`, `SUM(x)`), which is
+  refused now. no-match = every identifier is a plain or dot-qualified name and you do not use
+  `BuildUpsert` on Oracle with computed keys — the overwhelming majority.
 - apply: drop any workaround that pre-split a dotted quoted name into segments, or that renamed
   the column to avoid the mangling — the name now survives whole. Nothing else to change.
 - verify: `qb.EscapeIdentifier(`"my.col"`)` returns `"my.col"` unchanged on both vendors, and
