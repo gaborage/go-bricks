@@ -3156,56 +3156,56 @@ func TestDoorsRejectFunctionShapedIdentifiers(t *testing.T) {
 // from whatever the renderer legitimately emits.
 func TestPaddedIdentifiersRenderTrimmed(t *testing.T) {
 	doors := map[string]func(qb *QueryBuilder, pad func(string) string) (string, []any, error){
-		"Select": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"select": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Select(pad(colName)).From(tableUsers).ToSQL()
 		},
-		"From": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"from": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Select(colName).From(pad(tableUsers)).ToSQL()
 		},
-		"FromWithAlias": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"from_with_alias": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Select(colName).From(pad("users u")).ToSQL()
 		},
-		"OrderBy": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"order_by": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Select(colName).From(tableUsers).OrderBy(pad(colName)).ToSQL()
 		},
-		"GroupBy": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"group_by": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Select(colName).From(tableUsers).GroupBy(pad(colName)).ToSQL()
 		},
-		"FilterColumn": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"filter_column": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Select(colName).From(tableUsers).Where(qb.Filter().Eq(pad(colID), 1)).ToSQL()
 		},
-		"JoinFilterColumn": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"join_filter_column": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			jf := qb.JoinFilter()
 			return qb.Select(colName).From(tableUsers).
 				JoinOn("orders o", jf.EqColumn(pad("users.id"), "o.user_id")).ToSQL()
 		},
-		"JoinTable": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"join_table": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			jf := qb.JoinFilter()
 			return qb.Select(colName).From(tableUsers).
 				JoinOn(pad("orders o"), jf.EqColumn("users.id", "o.user_id")).ToSQL()
 		},
-		"InsertWithColumns": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"insert_with_columns": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.InsertWithColumns(tableUsers, pad(colName)).Values(1).ToSQL()
 		},
-		"InsertColumns": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"insert_columns": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Insert(tableUsers).Columns(pad(colName)).Values(1).ToSQL()
 		},
-		"InsertSetMap": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"insert_set_map": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Insert(tableUsers).SetMap(map[string]any{pad(colName): 1}).ToSQL()
 		},
-		"InsertTable": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"insert_table": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Insert(pad(tableUsers)).Columns(colName).Values(1).ToSQL()
 		},
-		"UpdateTable": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"update_table": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Update(pad(tableUsers)).Set(colName, 1).ToSQL()
 		},
-		"DeleteTable": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"delete_table": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Delete(pad(tableUsers)).Where(qb.Filter().Eq(colID, 1)).ToSQL()
 		},
-		"DeleteOrderBy": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"delete_order_by": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Delete(tableUsers).Where(qb.Filter().Eq(colID, 1)).OrderBy(pad(colName)).ToSQL()
 		},
-		"UpdateSetColumn": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+		"update_set_column": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
 			return qb.Update(tableUsers).Set(pad(colName), 1).ToSQL()
 		},
 	}

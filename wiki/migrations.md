@@ -4889,8 +4889,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C61.10] a padded identifier renders trimmed · silent-behavior · when: match
 
-- detect: `git grep -nE '(From|OrderBy|GroupBy|Columns|SetMap|Insert|Update|Delete)\(\s*"[^"]*(^| )[ \t]' -- '*.go'`
-  is the cheap first pass, but the real shape is an identifier your code BUILDS rather than
+- detect: `git grep -nE '(Select|From|OrderBy|GroupBy|Columns|SetMap|Insert|Update|Delete)\("(([[:space:]]|\\[nrt])[^"]*|[^"]*([[:space:]]|\\[nrt]))"' -- '*.go'`
+  finds a padded LITERAL — note the POSIX class and the `\n`/`\r`/`\t` alternative: `git grep -E`
+  is ERE, where `\s` matches nothing at all, and a padded identifier is as likely to be written
+  as an escape as a literal space. That is the cheap first pass; the real shape is an identifier
+  your code BUILDS rather than
   types — a name read from a config file, a CSV header, an HTTP parameter, or joined from
   fragments — where a stray space or newline can ride along. If every identifier in your code is
   a literal you typed, you are not affected.
