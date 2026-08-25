@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
   schedule:
     - cron: '17 6 * * 1'   # Mondays 06:17 UTC — weekly vuln re-scan of main
 
