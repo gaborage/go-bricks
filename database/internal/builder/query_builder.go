@@ -223,7 +223,7 @@ func (qb *QueryBuilder) appendSelectColumn(processed *[]string, col any) error {
 		}
 		*processed = append(*processed, qb.quoteColumnsForSelect(normalized)...)
 	case dbtypes.RawExpression:
-		// A struct literal never passed through Expr(), so the alias denylist and
+		// A struct literal never passed through Expr(), so the alias grammar and
 		// the empty-SQL check run here too — the door is where the value is
 		// interpolated, and the two construction paths converge only if it does.
 		if err := v.Validate(); err != nil {

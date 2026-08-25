@@ -2561,6 +2561,8 @@ func TestSetStructBuildsAndSetColumnRefuses(t *testing.T) {
 // `AS <alias>` verbatim — and empty SQL renders a syntactically broken clause.
 func TestRawExpressionLiteralValidatedAtConsumption(t *testing.T) {
 	const dangerousAlias = "x FROM users; DROP TABLE t--"
+	// Accepted by the old substring denylist, rejected by the grammar (#1164).
+	const denylistEvadingAlias = "x FROM users"
 
 	doors := []struct {
 		name  string
@@ -2600,7 +2602,14 @@ func TestRawExpressionLiteralValidatedAtConsumption(t *testing.T) {
 		{
 			name:    "dangerous_alias",
 			expr:    dbtypes.RawExpression{SQL: "1", Alias: dangerousAlias},
-			wantErr: dbtypes.ErrDangerousAlias,
+			wantErr: dbtypes.ErrInvalidAlias,
+		},
+		{
+			// The case the denylist could not catch: no listed substring, yet it
+			// still ends the alias and opens a new clause.
+			name:    "denylist_evading_alias",
+			expr:    dbtypes.RawExpression{SQL: "1", Alias: denylistEvadingAlias},
+			wantErr: dbtypes.ErrInvalidAlias,
 		},
 		{
 			name:    "empty_sql",

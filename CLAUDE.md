@@ -69,7 +69,7 @@ go test -bench=.        # Run benchmarks
 
 ### Framework Philosophy
 
-GoBricks is a **production-grade framework for building MVPs fast**. It provides enterprise-quality tooling (validation, observability, tracing, type safety) while enabling rapid development velocity. The framework itself maintains high quality standards so applications built with it can move quickly with confidence.
+GoBricks is a **production-grade framework for building MVPs fast**: enterprise-quality tooling (validation, observability, tracing, type safety) at rapid velocity.
 
 ### Core Principles
 
@@ -97,7 +97,7 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 ### Practices & Patterns
 
 - **SOLID** → Apply when it simplifies, don't force it.
-- **Fail Fast** → Module `Init()` errors are fatal. Validation errors crash at startup, never degrade silently.
+- **Fail Fast** → Module `Init()` errors are fatal; validation crashes at startup.
 - **DRY** → Don't repeat yourself (but avoid premature abstractions).
 - **CQS** → Separate commands vs. queries where it adds clarity.
 - **KISS** → Keep it simple, complexity must earn its place.
@@ -111,11 +111,11 @@ GoBricks is a **production-grade framework for building MVPs fast**. It provides
 
 ### Engineering Principles
 
-- **Observability:** OpenTelemetry standards, W3C traceparent propagation across HTTP/messaging.
+- **Observability:** OpenTelemetry, W3C traceparent propagation across HTTP/messaging.
 - **12-Factor App:** Environment variables for config, stateless design, explicit dependencies.
 - **Error Handling:** Idiomatic Go errors (`fmt.Errorf`, `errors.Is/As`), structured errors at API boundaries.
 - **Context Propagation:** No global variables for tenant IDs or trace IDs — always thread context through calls.
-- **Automation:** Makefile/Taskfile for common tasks, multi-platform CI/CD pipelines.
+- **Automation:** Makefile/Taskfile, multi-platform CI/CD.
 - **Documentation:** Just enough for others to understand quickly, examples over exhaustive docs.
 
 ## Code Quality
@@ -429,7 +429,8 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **Section-qualified config errors (ADR-076):** a non-root database section's `ConfigError.Field` names that section (`databases.reporting.host`, `multitenant.tenants.acme.database.host`); match with a database-scoped predicate, not equality and not a bare suffix — `cache.redis.host` ends in `.host` too. Root keeps the root spelling. The runtime door matches via the additive `ApplyDatabasePoolDefaultsForKey` (the old function is unchanged and still root-addressed), so a dynamic tenant is addressed like a static one, the manager stops wrapping, `Action` names the section's own env var (or none where none reaches the key), and the tenant cache (startup door only — the per-key cache FACTORY still root-spells, #1125), messaging and `NewMultiTenantError` fields join the same spelling.
 - **Response error details carry no request input (ADR-084):** `server.FieldError` loses `Value` — it was the rejected input for ANY failed tag — and its `Field` (with the message built from it) redacts the bracketed span, so a `dive`-validated map reads `Limits[*]` instead of the input key. A bind failure's `details.error` becomes a payload-free summary — the type-gated JSON decode summary, or the binding source plus the destination field by struct tag — never `bindErr.Error()`. Every response `error.details` map now requires `app.debug` AND a development `app.env` at the single `devDetails` funnel, extending `[C60.30]` to every status and to raw mode. messaging's safe-rendering primitives move to `internal/saferender` unchanged. See `[C61.1]`, `[C61.2]`.
 - **Span sinks record errors by type (ADR-083):** `observability.RecordErrorByType` is the only framework spelling of "record an error on a span" — one `exception` event carrying `exception.type` (the outer `%T`) and NO `exception.message`, status `codes.Error` with that same type. An alert keyed on `exception.message`, or on a message-bearing span status description, for job, handler, HTTP-client or publish failures stops matching; the log line at each site still carries the message. See `[C61.3]`.
-- **Identifier arguments validated at every door (ADR-082):** `Insert`, `InsertWithColumns`, `InsertStruct`, `InsertFields` and `BuildUpsert` validate their TABLE argument against ADR-031 grammar — a bare or qualified name plus at most one alias — so a computed table needs an allowlist your own code owns; and both identifier renderers double an interior quote, so a name carrying one renders as that name instead of ending the identifier early (#1104). ADR-031 had excluded the Filter API by reading "parameterizes its values" as "is safe" — `f.Eq(column, value)` does the first for the value and neither for the column; `Select` and the INSERT column lists (`InsertWithColumns`, `.Columns`, `.SetMap`) now validate too — a `select` context adds the wildcard so `Select("*")` is unaffected, while a function or constant string moves to `qb.Expr()`, including the `EXISTS` idiom `Select("1")`; and every Filter and JoinFilter column joins them, validated through a single fallible funnel (`quoteColumnForQuery`) rather than per-door guards — on PostgreSQL that closes a LIVE hole, where the renderer emitted the column verbatim and `f.Eq("id = 1 OR 1=1 -- ", v)` built `WHERE id = 1 OR 1=1 -- = $1`. `Having` takes a predicate, not an identifier, and stays a raw-SQL door (#1146); a `RawExpression` STRUCT LITERAL is validated where it is consumed, so the alias denylist `qb.Expr()` applies is no longer skippable — its SQL body still is not judged; `cols.As(alias)` validates too but PANICS with `*dbtypes.InvalidAliasError` — it returns a `Columns`, not a builder, so it has no deferred-error channel, and the empty-alias panic value changes from a string (#1150). See `[C60.24]`–`[C60.29]`.
+- **RawExpression alias is a grammar, not a denylist (ADR-082 addendum):** an alias must be an UNQUOTED identifier (`sqllex.IsUnquotedIdentifier` — not `IsBareIdentifier`, which also admits the quoted reserved-word form); the six-substring denylist accepted everything it did not list, so `Alias: "x FROM users"` opened a clause. `ErrDangerousAlias` is DELETED — match `errors.Is(err, dbtypes.ErrInvalidAlias)`. Checked in `Validate()`, so it fails at `Expr()` AND `ToSQL()`. See `[C61.9]`.
+- **Identifier arguments validated at every door (ADR-082):** `Insert`, `InsertWithColumns`, `InsertStruct`, `InsertFields` and `BuildUpsert` validate their TABLE argument against ADR-031 grammar — a bare or qualified name plus at most one alias — so a computed table needs an allowlist your own code owns; and both identifier renderers double an interior quote, so a name carrying one renders as that name instead of ending the identifier early (#1104). ADR-031 had excluded the Filter API by reading "parameterizes its values" as "is safe" — `f.Eq(column, value)` does the first for the value and neither for the column; `Select` and the INSERT column lists (`InsertWithColumns`, `.Columns`, `.SetMap`) now validate too — a `select` context adds the wildcard so `Select("*")` is unaffected, while a function or constant string moves to `qb.Expr()`, including the `EXISTS` idiom `Select("1")`; and every Filter and JoinFilter column joins them, validated through a single fallible funnel (`quoteColumnForQuery`) rather than per-door guards — on PostgreSQL that closes a LIVE hole, where the renderer emitted the column verbatim and `f.Eq("id = 1 OR 1=1 -- ", v)` built `WHERE id = 1 OR 1=1 -- = $1`. `Having` takes a predicate, not an identifier, and stays a raw-SQL door (#1146); a `RawExpression` STRUCT LITERAL is validated where it is consumed, so the alias grammar `qb.Expr()` applies is no longer skippable — its SQL body still is not judged; `cols.As(alias)` validates too but PANICS with `*dbtypes.InvalidAliasError` — it returns a `Columns`, not a builder, so it has no deferred-error channel, and the empty-alias panic value changes from a string (#1150). See `[C60.24]`–`[C60.29]`.
 
 ## File Organization
 

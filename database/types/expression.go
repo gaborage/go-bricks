@@ -4,6 +4,8 @@ package types
 import (
 	"fmt"
 	"strings"
+
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
 )
 
 // RawExpression represents a raw SQL expression that can be used in SELECT, GROUP BY, and ORDER BY clauses.
@@ -46,7 +48,7 @@ type RawExpression struct {
 //
 // Returns:
 //   - RawExpression: The constructed expression
-//   - error: ErrEmptyExpressionSQL, ErrTooManyAliases, or ErrDangerousAlias on validation failure
+//   - error: ErrEmptyExpressionSQL, ErrTooManyAliases, or ErrInvalidAlias on validation failure
 //
 // Examples:
 //
@@ -78,11 +80,6 @@ func Expr(sql string, alias ...string) (RawExpression, error) {
 	return expr, nil
 }
 
-// dangerousAliasChars are the SQL metacharacters an alias may never contain: an
-// alias is interpolated verbatim after AS, so any of them turns the rest of the
-// statement into caller-controlled syntax.
-var dangerousAliasChars = []string{";", "'", "\"", "--", "/*", "*/"}
-
 // Validate reports why this expression may not be interpolated, or nil.
 //
 // RawExpression is a plain struct, so a caller can build one directly and never
@@ -93,15 +90,17 @@ var dangerousAliasChars = []string{";", "'", "\"", "--", "/*", "*/"}
 //
 // The SQL itself is NOT validated — it is the sanctioned raw-SQL escape hatch,
 // and the caller owns its safety. Only its emptiness and the alias are checked.
+// A non-empty alias must be an unquoted identifier under the shared grammar
+// (ADR-031/ADR-082): it is interpolated verbatim after AS, and the substring
+// denylist this replaces accepted everything it did not enumerate — a space, a
+// parenthesis, a newline (#1164).
 func (e RawExpression) Validate() error {
 	if strings.TrimSpace(e.SQL) == "" {
 		return ErrEmptyExpressionSQL
 	}
 
-	for _, char := range dangerousAliasChars {
-		if strings.Contains(e.Alias, char) {
-			return fmt.Errorf("%w '%s': %s", ErrDangerousAlias, char, e.Alias)
-		}
+	if e.Alias != "" && !sqllex.IsUnquotedIdentifier(e.Alias) {
+		return fmt.Errorf("%w: %q", ErrInvalidAlias, e.Alias)
 	}
 	return nil
 }

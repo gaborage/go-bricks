@@ -65,3 +65,53 @@ func TestIsBareIdentifierRejectsEverythingElse(t *testing.T) {
 		})
 	}
 }
+
+// TestIsUnquotedIdentifierAcceptsOneUnquotedSegment pins the narrower language:
+// the same unquoted segment IsBareIdentifier takes, and nothing quoted.
+func TestIsUnquotedIdentifierAcceptsOneUnquotedSegment(t *testing.T) {
+	accepted := []string{"u", "_", "_u1", "users", "u$1#a", "U", "total_count"}
+
+	for _, s := range accepted {
+		t.Run(s, func(t *testing.T) {
+			assert.True(t, IsUnquotedIdentifier(s), "IsUnquotedIdentifier(%q) must accept", s)
+		})
+	}
+}
+
+// TestIsUnquotedIdentifierRejectsQuotedForm is the whole reason the predicate
+// exists: IsBareIdentifier accepts the framework's quoted reserved-word form, and
+// the doors that take caller-supplied text (an expression alias) must not.
+// Asserting BOTH predicates keeps the divergence pinned — a change that collapsed
+// one into the other would pass a test that only checked the new one.
+func TestIsUnquotedIdentifierRejectsQuotedForm(t *testing.T) {
+	for _, s := range []string{`"level"`, `"_u1"`, `"users"`} {
+		t.Run(s, func(t *testing.T) {
+			assert.True(t, IsBareIdentifier(s), "IsBareIdentifier(%q) still accepts the quoted form", s)
+			assert.False(t, IsUnquotedIdentifier(s), "IsUnquotedIdentifier(%q) must refuse it", s)
+		})
+	}
+}
+
+func TestIsUnquotedIdentifierRejectsEverythingElse(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "empty", input: ""},
+		{name: "leading_digit", input: "1u"},
+		{name: "space", input: "my alias"},
+		{name: "call", input: "f(x)"},
+		{name: "semicolon", input: "a;b"},
+		{name: "newline", input: "a\nb"},
+		{name: "backtick", input: "`bt`"},
+		{name: "dotted", input: "u.name"},
+		{name: "clause_smuggle", input: "x FROM users"},
+		{name: "unbalanced_quote", input: `"level`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, IsUnquotedIdentifier(tt.input), "IsUnquotedIdentifier(%q) must refuse", tt.input)
+		})
+	}
+}
