@@ -332,19 +332,19 @@ func TestRunStartsOneConsumerSpanPerMessage(t *testing.T) {
 
 func TestRunMarksTheSpanFailedForEveryFailingOutcome(t *testing.T) {
 	tests := []struct {
-		name    string
-		handle  Handler
-		wantMsg string
+		name     string
+		handle   Handler
+		wantType string
 	}{
 		{
-			name:    "handler_error",
-			handle:  func(context.Context, logger.Logger, string) error { return errors.New("nope") },
-			wantMsg: "nope",
+			name:     "handler_error",
+			handle:   func(context.Context, logger.Logger, string) error { return errors.New("nope") },
+			wantType: "*errors.errorString",
 		},
 		{
-			name:    "panicked",
-			handle:  func(context.Context, logger.Logger, string) error { panic("nope") },
-			wantMsg: "panic in message handler (type: string)",
+			name:     "panicked",
+			handle:   func(context.Context, logger.Logger, string) error { panic("nope") },
+			wantType: "*errors.errorString",
 		},
 	}
 
@@ -357,11 +357,36 @@ func TestRunMarksTheSpanFailedForEveryFailingOutcome(t *testing.T) {
 			spans := h.exporter.GetSpans()
 			require.Len(t, spans, 1)
 			assert.Equal(t, codes.Error, spans[0].Status.Code)
-			assert.Equal(t, tt.wantMsg, spans[0].Status.Description)
-			require.Len(t, spans[0].Events, 1)
-			assert.Equal(t, "exception", spans[0].Events[0].Name)
+			// ADR-083: the type, never the handler's message.
+			assert.Equal(t, tt.wantType, spans[0].Status.Description)
+			obtest.AssertExceptionTypeOnly(t, &spans[0], tt.wantType)
 		})
 	}
+}
+
+// TestRunKeepsAHandlerErrorMessageOffTheSpan pins ADR-083 for the delivery lane:
+// a handler error whose message embeds a secret reaches no span sink, while the
+// outcome the lane logs still carries the message.
+func TestRunKeepsAHandlerErrorMessageOffTheSpan(t *testing.T) {
+	const marker = obtest.LeakCanary
+	h := newHarness(t)
+
+	res := h.run(func(context.Context, logger.Logger, string) error {
+		return fmt.Errorf("handler rejected: %s", marker)
+	})
+
+	spans := h.exporter.GetSpans()
+	require.Len(t, spans, 1)
+	obtest.AssertNoSpanMarkers(t, &spans[0], marker)
+	assert.Equal(t, "*errors.errorString", spans[0].Status.Description)
+
+	// The on-platform sink keeps the message: the lane hands the error itself to
+	// LogOutcome, which is where the log line is built.
+	require.NotNil(t, res.Err)
+	assert.Contains(t, res.Err.Error(), marker)
+	require.Len(t, h.rec.seen, 1)
+	require.NotNil(t, h.rec.seen[0].Err)
+	assert.Contains(t, h.rec.seen[0].Err.Error(), marker)
 }
 
 func TestRunRecordsOneConsumeAtCompletion(t *testing.T) {
@@ -1016,8 +1041,9 @@ func TestRunKeepsAPanicValueOutOfTheSpan(t *testing.T) {
 
 	assert.NotContains(t, spans[0].Status.Description, deliveryPanicSecret,
 		"span status description discloses the panic value")
-	assert.Contains(t, spans[0].Status.Description, "string",
-		"span status description should name the panic value's TYPE")
+	// ADR-083 narrows what the span says: the error's Go type, not the panic
+	// value's type. The panic value's type stays on the on-platform log sink.
+	assert.Equal(t, "*errors.errorString", spans[0].Status.Description)
 
 	require.Len(t, spans[0].Events, 1)
 	for _, attr := range spans[0].Events[0].Attributes {

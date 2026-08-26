@@ -1416,6 +1416,29 @@ because it holds nothing to leak; and a bind summary whose inputs are all author
 
 ---
 
+### [ADR-083: Every Framework Span Sink Records an Error By Type, Through One Helper](adr_083_span_sinks_record_errors_by_type.md)
+
+**Date:** 2026-08-24 | **Status:** Accepted | **Breaking:** span `exception.message` and
+message-bearing span status descriptions removed at four sinks
+
+`span.RecordError(err)` shipped a consumer-authored `err.Error()` to the tracing backend, and
+every site copied the same text into the span status description. Both are off-platform sinks —
+the vendor owns their retention and export path, and the logger's `SensitiveDataFilter` never
+sees either — while the message is a string the framework did not write: a job's `Execute`
+error, a handler's error, an interceptor's error, a caller's `RoundTripper` error. Two sites had
+already worked this out in place and in two different spellings (the database sink's `%T`, the
+HTTP client's query-stripped message, which still trusted the rest of the stringification). The
+decision makes `observability.RecordErrorByType` the only spelling of "record an error on a
+span" in framework code: one `exception` event with `exception.type` = the outer `%T`, no
+`exception.message`, and `codes.Error` with that type as the description. Log lines at every
+converted site are unchanged — that sink is on-platform, and #1168 gives it a consumer redactor.
+
+**Key Benefits:** one rule a reader can predict without opening the site; a `git grep` that
+enforces it; and a leak class closed at the seam instead of per-site. **Migration:**
+[migrations.md](migrations.md) `[C61.3]`.
+
+---
+
 ### [ADR-082: Identifier Arguments Are Validated At Every Door, and the Renderer Escapes Wherever It Quotes](adr_082_identifier_arguments_validated_at_every_door.md)
 
 **Date:** 2026-08-23 | **Status:** Accepted (decision); implementation staged — the renderer and table

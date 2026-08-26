@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -231,7 +230,7 @@ func TestEndHTTPClientSpanTransportErrorRecordsErrorAndAttr(t *testing.T) {
 			break
 		}
 	}
-	assert.True(t, foundException, "RecordError should add an exception event for transport errors")
+	assert.True(t, foundException, "a transport error must add an exception event")
 
 	for _, kv := range got.Attributes {
 		assert.NotEqualf(t, "http.response.status_code", string(kv.Key),
@@ -401,20 +400,18 @@ func TestStartHTTPClientSpanNilInfoIsSafe(t *testing.T) {
 	assert.Equal(t, "HTTP _OTHER", got.Name)
 }
 
-// TestEndHTTPClientSpanStripQueryStringFromTransportError locks in F-SEC-1
-// from the pre-push security audit: when a transport error's underlying
-// *url.Error carries a query string with credentials, the span's exception
-// event must NOT contain those credentials. Pre-fix, span.RecordError(err)
-// would export Go's default stringification including the full URL.
-func TestEndHTTPClientSpanStripQueryStringFromTransportError(t *testing.T) {
+// TestEndHTTPClientSpanTransportErrorExportsNoMessage locks in ADR-083: a
+// transport error's *url.Error carries a query string with credentials, and the
+// span must export the error's Go TYPE and no message at all. The framework
+// used to export a query-stripped message, which still trusted the rest of the
+// stringification.
+func TestEndHTTPClientSpanTransportErrorExportsNoMessage(t *testing.T) {
 	tp, cleanup := setupTestTraceProvider(t)
 	defer cleanup()
 
 	u := mustParseURL("https://api.example.com/foo")
 	_, span := StartHTTPClientSpan(context.Background(), &HTTPSpanInfo{Method: "GET", URL: u})
-	// Simulate a transport error with a *url.Error carrying a sensitive
-	// query string and a userinfo password — mirrors what net/http surfaces.
-	const secretToken = "sk_live_super_secret_value"
+	const secretToken = obtest.LeakCanary
 	urlErr := &url.Error{
 		Op:  "Get",
 		URL: "https://user:pw@api.example.com/foo?token=" + secretToken + "&api_key=anothersecret",
@@ -423,38 +420,94 @@ func TestEndHTTPClientSpanStripQueryStringFromTransportError(t *testing.T) {
 	EndHTTPClientSpan(span, 0, "connection_error", 0, urlErr)
 
 	got := obtest.NewSpanCollector(t, tp.Exporter).First()
-	require.NotEmpty(t, got.Events, "transport error should produce an exception event")
-	var exMsg string
-	for _, ev := range got.Events {
-		if ev.Name == "exception" {
-			for _, kv := range ev.Attributes {
-				if string(kv.Key) == "exception.message" {
-					exMsg = kv.Value.AsString()
-				}
-			}
-		}
-	}
-	require.NotEmpty(t, exMsg, "exception event should have an exception.message attribute")
-	assert.NotContainsf(t, exMsg, secretToken,
-		"exception.message must not contain query-string secret token, got %q", exMsg)
-	assert.NotContainsf(t, exMsg, "anothersecret",
-		"exception.message must not contain query-string api_key value, got %q", exMsg)
-	assert.NotContainsf(t, exMsg, "user:pw",
-		"exception.message must not contain userinfo credentials, got %q", exMsg)
-	// The operation + redacted URL + inner error should still be present so
-	// the message remains debuggable.
-	assert.Truef(t, strings.Contains(exMsg, "Get"),
-		"exception.message should retain the operation verb for debuggability, got %q", exMsg)
-	assert.Truef(t, strings.Contains(exMsg, "api.example.com"),
-		"exception.message should retain the host for debuggability, got %q", exMsg)
+	obtest.AssertExceptionTypeOnly(t, &got, "*url.Error")
+	obtest.AssertNoSpanMarkers(t, &got, secretToken, "anothersecret", "user:pw", "connection refused")
+	// The classified error type stays the status description — it is framework
+	// vocabulary, not consumer text.
+	assert.Equal(t, "connection_error", got.Status.Description)
+	assert.Equal(t, codes.Error, got.Status.Code)
 }
 
-// TestRedactErrorMessageNonTransportErrorIsUnchanged confirms that errors
-// without an embedded *url.Error pass through unchanged — interceptor
-// failures, framework HTTPErrors, etc. don't carry raw URLs and don't need
-// query-stripping.
-func TestRedactErrorMessageNonTransportErrorIsUnchanged(t *testing.T) {
-	plain := errors.New("interceptor failed: bad signature")
-	assert.Equal(t, plain.Error(), redactErrorMessage(plain))
-	assert.Equal(t, "", redactErrorMessage(nil))
+// TestEndHTTPClientSpanInterceptorErrorExportsNoMessage covers the non-transport
+// half: a response interceptor failing on an HTTP 200 records the type only.
+func TestEndHTTPClientSpanInterceptorErrorExportsNoMessage(t *testing.T) {
+	tp, cleanup := setupTestTraceProvider(t)
+	defer cleanup()
+
+	u := mustParseURL("https://api.example.com/foo")
+	_, span := StartHTTPClientSpan(context.Background(), &HTTPSpanInfo{Method: "GET", URL: u})
+	const marker = obtest.LeakCanary
+	EndHTTPClientSpan(span, 200, "interceptor_failed", 0, errors.New("interceptor rejected "+marker))
+
+	got := obtest.NewSpanCollector(t, tp.Exporter).First()
+	obtest.AssertExceptionTypeOnly(t, &got, "*errors.errorString")
+	obtest.AssertNoSpanMarkers(t, &got, marker)
+	assert.Equal(t, "interceptor_failed", got.Status.Description)
+	assert.Equal(t, codes.Error, got.Status.Code)
+}
+
+// TestEndHTTPClientSpanUnclassifiedErrorDescribesByType covers the branch the
+// message used to fill: with no error-type label, the status description is the
+// error's Go type, never its message.
+func TestEndHTTPClientSpanUnclassifiedErrorDescribesByType(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		wantDesc   string
+	}{
+		{name: "transport_error_without_label", statusCode: 0, wantDesc: "*errors.errorString"},
+		{name: "non_5xx_response_without_label", statusCode: 200, wantDesc: "*errors.errorString"},
+		{name: "5xx_response_without_label", statusCode: 503, wantDesc: "HTTP 503"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tp, cleanup := setupTestTraceProvider(t)
+			defer cleanup()
+
+			u := mustParseURL("https://api.example.com/foo")
+			_, span := StartHTTPClientSpan(context.Background(), &HTTPSpanInfo{Method: "GET", URL: u})
+			const marker = obtest.LeakCanary
+			EndHTTPClientSpan(span, tt.statusCode, "", 0, errors.New("boom "+marker))
+
+			got := obtest.NewSpanCollector(t, tp.Exporter).First()
+			obtest.AssertExceptionTypeOnly(t, &got, "*errors.errorString")
+			obtest.AssertNoSpanMarkers(t, &got, marker)
+			assert.Equal(t, codes.Error, got.Status.Code)
+			assert.Equal(t, tt.wantDesc, got.Status.Description)
+		})
+	}
+}
+
+// TestEndHTTPClientSpanFiveHundredRangeBoundaries pins BOTH edges of the
+// `statusCode >= 500 && statusCode < 600` guard. Asserting one edge only lets a
+// boundary mutation (`>=` → `>`, or `<` → `<=`) survive: 500 must take the HTTP
+// status description and 499 must not, 599 must and 600 must not.
+func TestEndHTTPClientSpanFiveHundredRangeBoundaries(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		wantCode   codes.Code
+		wantDesc   string
+	}{
+		{name: "499_is_below_the_range", statusCode: 499, wantCode: codes.Unset, wantDesc: ""},
+		{name: "500_is_the_low_edge", statusCode: 500, wantCode: codes.Error, wantDesc: "HTTP 500"},
+		{name: "599_is_the_high_edge", statusCode: 599, wantCode: codes.Error, wantDesc: "HTTP 599"},
+		{name: "600_is_above_the_range", statusCode: 600, wantCode: codes.Unset, wantDesc: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tp, cleanup := setupTestTraceProvider(t)
+			defer cleanup()
+
+			u := mustParseURL("https://api.example.com/foo")
+			_, span := StartHTTPClientSpan(context.Background(), &HTTPSpanInfo{Method: "GET", URL: u})
+			EndHTTPClientSpan(span, tt.statusCode, "", 0, nil)
+
+			got := obtest.NewSpanCollector(t, tp.Exporter).First()
+			assert.Equal(t, tt.wantCode, got.Status.Code)
+			assert.Equal(t, tt.wantDesc, got.Status.Description)
+		})
+	}
 }

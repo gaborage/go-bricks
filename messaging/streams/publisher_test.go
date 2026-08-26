@@ -14,7 +14,10 @@ import (
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -234,6 +237,31 @@ func TestPublisherPublishFailsOnASynchronousSendError(t *testing.T) {
 // lifecycle test: a caller that gave up stops waiting, but the entry stays so a
 // send still parked in the client can find its routing key. The confirmation that
 // eventually arrives is a no-op that removes it.
+// TestPublisherPublishKeepsTheSendErrorMessageOffTheSpan pins ADR-083 on the
+// stream publish path: the span reports the error's Go type, and the vendor
+// message — which a broker can shape freely — reaches no span sink.
+func TestPublisherPublishKeepsTheSendErrorMessageOffTheSpan(t *testing.T) {
+	tp := obtest.NewTestTraceProvider()
+	original := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(original)
+		require.NoError(t, tp.Shutdown(context.Background()))
+	})
+
+	handle := &fakeProducer{status: ha.StatusOpen, sendErr: errors.New("frame rejected: " + obtest.LeakCanary)}
+	p := boundPublisher(handle)
+
+	err := p.Publish(context.Background(), &PublishMessage{Data: []byte(testBody)})
+	require.Error(t, err)
+
+	span := obtest.NewSpanCollector(t, tp.Exporter).First()
+	assert.Equal(t, codes.Error, span.Status.Code)
+	assert.Equal(t, "*fmt.wrapError", span.Status.Description)
+	obtest.AssertExceptionTypeOnly(t, &span, "*fmt.wrapError")
+	obtest.AssertNoSpanMarkers(t, &span, obtest.LeakCanary)
+}
+
 func TestPublisherPublishTombstonesTheWaiterOnContextExpiry(t *testing.T) {
 	handle := blockingProducer(t)
 	p := boundPublisher(handle)

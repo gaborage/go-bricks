@@ -15,11 +15,11 @@ import (
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/stream"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	"github.com/gaborage/go-bricks/observability"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -248,10 +248,8 @@ func (p *Publisher) Publish(ctx context.Context, msg *PublishMessage) error {
 	span.SetAttributes(semconv.MessagingMessageBodySize(len(data)))
 
 	err := p.send(ctx, msg)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-	}
+	// SECURITY: type only on the off-platform span sinks (ADR-083).
+	observability.RecordErrorByType(span, err)
 	tracking.RecordStreamPublish(ctx, p.stream, time.Since(start), err)
 	return err
 }

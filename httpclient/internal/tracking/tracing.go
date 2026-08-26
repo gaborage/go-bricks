@@ -2,8 +2,6 @@ package tracking
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net/url"
 	"strconv"
 	"sync"
@@ -12,6 +10,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/gaborage/go-bricks/observability"
 )
 
 // httpTracerName is the tracer name, matching the meter and sibling-package
@@ -120,12 +120,12 @@ func StartHTTPClientSpan(ctx context.Context, info *HTTPSpanInfo) (context.Conte
 // Status mapping (OTel HTTP client semantic conventions):
 //   - 100-499 (incl. 4xx) without err  → status unset (default OK).
 //   - 500-599                           → codes.Error, message "HTTP {code}".
-//   - transport error (statusCode == 0) → codes.Error, message = error.type.
-//   - any err != nil regardless of statusCode → adds a redacted exception event
-//     (see redactErrorMessage) — plus the error.type attribute when errType is
-//     non-empty — instead of span.RecordError(err) (which would leak
-//     query-string secrets via *url.Error). Without this, callers that pass (status, errType, err) for
-//     non-transport failures (e.g. response interceptor errors on an HTTP 200,
+//   - transport error (statusCode == 0) → codes.Error, message = error.type
+//     (or the error's Go type when no error type was classified).
+//   - any err != nil regardless of statusCode → adds a type-only exception event
+//     (observability.RecordErrorByType) — plus the error.type attribute when
+//     errType is non-empty. Without this, callers that pass (status, errType, err)
+//     for non-transport failures (e.g. response interceptor errors on an HTTP 200,
 //     or HTTPError wrappers on a final 5xx) would lose the error attribution
 //     that the parallel metric path records — see RecordHTTPClientMetrics.
 //
@@ -155,43 +155,22 @@ func EndHTTPClientSpan(span trace.Span, statusCode int, errType string, response
 		span.SetAttributes(attribute.String(attrErrorType, errType))
 	}
 	if err != nil {
-		// SECURITY: Don't call span.RecordError(err) directly. Go's stdlib
-		// `*url.Error` formats with the full request URL — and `*url.Error`
-		// only redacts the userinfo password, NOT query strings. A request
-		// like `GET https://api.example.com/x?token=secret` whose transport
-		// fails produces an error whose `.Error()` contains `token=secret`,
-		// and `span.RecordError(err)` would export that to every OTel backend
-		// the operator has configured. The framework's logger pipeline runs
-		// a `SensitiveDataFilter` for this class of leak; the OTel pipeline
-		// does not. Build the exception event manually with a query-stripped
-		// message instead. See #471 pre-push security audit findings.
-		span.AddEvent("exception", trace.WithAttributes(
-			attribute.String("exception.type", fmt.Sprintf("%T", err)),
-			attribute.String("exception.message", redactErrorMessage(err)),
-		))
+		// SECURITY: `*url.Error` carries the query string, and an interceptor or
+		// a caller's RoundTripper can put anything in a message — type only, on
+		// both span sinks (ADR-083).
+		observability.RecordErrorByType(span, err)
 	}
 
+	// One writer for the status description. A 5xx outranks the error class for
+	// any err that came with a wire response; errType is framework vocabulary
+	// (transport_error, interceptor_failed, …) and beats the Go type the helper
+	// set; with neither, the helper's type stands. A 1xx-4xx without err leaves
+	// the status unset (default OK per the OTel HTTP client convention).
 	switch {
-	case statusCode == 0 && err != nil:
-		// Transport failure: no wire response. Use errType as the status
-		// description so dashboards can read the failure class at a glance.
-		span.SetStatus(codes.Error, errType)
 	case statusCode >= 500 && statusCode < 600:
 		span.SetStatus(codes.Error, "HTTP "+strconv.Itoa(statusCode))
-	case err != nil:
-		// Non-5xx response that still produced an error (response-build
-		// failure, interceptor failure on a 2xx/3xx, terminal 4xx wrapped
-		// in HTTPError). Mark the span Error so it isn't swept into the
-		// success bucket; description is errType (or the err's message
-		// when errType is empty so the span carries SOMETHING readable).
-		desc := errType
-		if desc == "" {
-			desc = err.Error()
-		}
-		span.SetStatus(codes.Error, desc)
-	default:
-		// 1xx-4xx without err: leave status unset (default OK per OTel
-		// HTTP client convention; the status code IS the signal).
+	case err != nil && errType != "":
+		span.SetStatus(codes.Error, errType)
 	}
 	span.End()
 }
@@ -252,35 +231,4 @@ func urlPath(u *url.URL) string {
 		return ""
 	}
 	return u.Path
-}
-
-// redactErrorMessage returns a span-safe stringification of err with embedded
-// request URLs stripped of query strings and userinfo. Used in place of
-// `span.RecordError(err)` to prevent token/api-key leaks via Go's stdlib
-// `*url.Error.Error()` formatter, which includes the full URL (Go redacts
-// the userinfo password but never the query string).
-//
-// Strategy: walk the error chain with errors.As looking for `*url.Error`.
-// When found, rebuild a redacted variant (scheme+host+port+path only) and
-// return its `.Error()`. When not found, return err.Error() unchanged — non
-// transport errors (interceptor failures, framework-wrapped HTTPErrors, etc.)
-// don't carry raw URLs.
-func redactErrorMessage(err error) string {
-	if err == nil {
-		return ""
-	}
-	var urlErr *url.Error
-	if errors.As(err, &urlErr) && urlErr.URL != "" {
-		if u, parseErr := url.Parse(urlErr.URL); parseErr == nil {
-			u.RawQuery = "" // strip ?token=... &api_key=...
-			u.User = nil    // strip user:pass@ (Go's default only hides password)
-			redacted := &url.Error{
-				Op:  urlErr.Op,
-				URL: u.String(),
-				Err: urlErr.Err,
-			}
-			return redacted.Error()
-		}
-	}
-	return err.Error()
 }

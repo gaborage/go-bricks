@@ -36,8 +36,9 @@ const (
 // no-declared-line branch asserts a lane emits none of it.
 var spineKeys = []string{fieldCorrelationID, fieldProcessingTime, fieldPanicType, fieldStack}
 
-// errHandlerFailed is the handler error the scenarios raise.
-var errHandlerFailed = errors.New("handler failed")
+// errHandlerFailed is the handler error the scenarios raise. Its message embeds
+// HandlerErrorMarker so a family can prove the message reaches no span sink.
+var errHandlerFailed = errors.New("handler failed: " + HandlerErrorMarker)
 
 // AssertIdentity checks the trace-identity contract for one delivery: the id that
 // traveled on the carrier is the id the handler reads and the id the lane logs,

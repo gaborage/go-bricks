@@ -34,6 +34,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/observability"
@@ -299,6 +300,68 @@ func AssertSpanError(t *testing.T, span *tracetest.SpanStub, expectedDesc string
 	assert.Equal(t, codes.Error, span.Status.Code, "expected error status")
 	if expectedDesc != "" {
 		assert.Equal(t, expectedDesc, span.Status.Description, "span error description mismatch")
+	}
+}
+
+// LeakCanary is the string an ADR-083 test plants inside an error message before
+// driving a framework span sink, so one constant decides what every such test
+// looks for. Neither the name nor the value is credential-shaped: this file ships
+// in the module, so a `password=`-style literal would match the generic-password
+// rule of every secret scanner run against a consumer that vendors go-bricks, and
+// a `Secret`-prefixed identifier trips gosec G101 here.
+const LeakCanary = "gobricks-span-leak-canary-9f13"
+
+// AssertExceptionTypeOnly asserts that span carries exactly one exception event,
+// that it names wantType under exception.type, and that it carries NOTHING else
+// — exception.message above all (ADR-083).
+func AssertExceptionTypeOnly(t TB, span *tracetest.SpanStub, wantType string) {
+	t.Helper()
+
+	var found int
+	for i := range span.Events {
+		if span.Events[i].Name != string(semconv.ExceptionEventName) {
+			continue
+		}
+		found++
+		require.Len(t, span.Events[i].Attributes, 1,
+			"the exception event carries exception.type and nothing else")
+		assert.Equal(t, string(semconv.ExceptionTypeKey), string(span.Events[i].Attributes[0].Key))
+		assert.Equal(t, wantType, span.Events[i].Attributes[0].Value.AsString())
+	}
+	assert.Equal(t, 1, found, "expected exactly one exception event")
+}
+
+// AssertNoExceptionEvent is the negative of AssertExceptionTypeOnly: a span that
+// recorded no error must carry no exception event.
+func AssertNoExceptionEvent(t TB, span *tracetest.SpanStub) {
+	t.Helper()
+
+	for i := range span.Events {
+		assert.NotEqual(t, string(semconv.ExceptionEventName), span.Events[i].Name,
+			"span records an exception event it should not have")
+	}
+}
+
+// AssertNoSpanMarkers asserts that no marker reaches ANY span sink: the status
+// description, the span name, the span attributes, the event names, or the event
+// attributes — keys as well as values, since a key is exported too.
+func AssertNoSpanMarkers(t TB, span *tracetest.SpanStub, markers ...string) {
+	t.Helper()
+
+	for _, marker := range markers {
+		assert.NotContains(t, span.Status.Description, marker, "span status description")
+		assert.NotContains(t, span.Name, marker, "span name")
+		for _, kv := range span.Attributes {
+			assert.NotContains(t, string(kv.Key), marker, "span attribute key")
+			assert.NotContains(t, kv.Value.String(), marker, "span attribute %s", kv.Key)
+		}
+		for i := range span.Events {
+			assert.NotContains(t, span.Events[i].Name, marker, "event name")
+			for _, kv := range span.Events[i].Attributes {
+				assert.NotContains(t, string(kv.Key), marker, "event attribute key")
+				assert.NotContains(t, kv.Value.String(), marker, "event attribute %s", kv.Key)
+			}
+		}
 	}
 }
 

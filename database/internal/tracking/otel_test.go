@@ -179,6 +179,32 @@ func TestCreateDBSpanErrorRecording(t *testing.T) {
 	}
 }
 
+// TestCreateDBSpanKeepsDriverErrorMessageOffTheSpan pins ADR-083: a driver error
+// echoing back the offending row value reaches no span sink, and the exception
+// event names the error's Go type.
+func TestCreateDBSpanKeepsDriverErrorMessageOffTheSpan(t *testing.T) {
+	exporter, cleanup := setupTestTracerProvider(t)
+	defer cleanup()
+
+	tc := &Context{
+		Logger:   newDisabledTestLogger(),
+		Vendor:   "postgresql",
+		Settings: NewSettings(nil),
+	}
+	driverErr := errors.New(`duplicate key value violates unique constraint "users_secret_key": Key (secret)=(` + obtest.LeakCanary + `) already exists`)
+
+	createDBSpan(context.Background(), tc, TestQuerySelectUsers, time.Now(), driverErr)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	span := spans[0]
+
+	assert.Equal(t, codes.Error, span.Status.Code)
+	assert.Equal(t, "*errors.errorString", span.Status.Description)
+	obtest.AssertExceptionTypeOnly(t, &span, "*errors.errorString")
+	obtest.AssertNoSpanMarkers(t, &span, obtest.LeakCanary)
+}
+
 func TestExtractDBOperation(t *testing.T) {
 	tests := []struct {
 		query    string

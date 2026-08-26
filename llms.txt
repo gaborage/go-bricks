@@ -5212,8 +5212,8 @@ import (
 
     "github.com/gaborage/go-bricks/app"
     "github.com/gaborage/go-bricks/database"
+    "github.com/gaborage/go-bricks/observability"
     "go.opentelemetry.io/otel/attribute"
-    "go.opentelemetry.io/otel/codes"
     "go.opentelemetry.io/otel/trace"
 )
 
@@ -5245,16 +5245,16 @@ func (m *OrderModule) ProcessOrder(ctx context.Context, orderID int64) error {
 
     db, err := m.getDB(ctx)
     if err != nil {
-        span.RecordError(err)
-        span.SetStatus(codes.Error, "database unavailable")
+        // A span leaves the platform, so record the error's TYPE and never its
+        // message (ADR-083). span.RecordError(err) exports err.Error() verbatim.
+        observability.RecordErrorByType(span, err)
         return err
     }
 
     // Database operations automatically inherit trace context
     _, err = db.Exec(ctx, "UPDATE orders SET status = $1 WHERE id = $2", "processed", orderID)
     if err != nil {
-        span.RecordError(err)
-        span.SetStatus(codes.Error, err.Error())
+        observability.RecordErrorByType(span, err)
         return err
     }
 
@@ -5275,7 +5275,7 @@ func (m *OrderModule) ProcessOrderWithPayment(ctx context.Context, orderID int64
     // Child span 1: validate order
     ctx, validateSpan := m.tracer.Start(ctx, "ValidateOrder")
     if err := m.validateOrder(ctx, orderID); err != nil {
-        validateSpan.RecordError(err)
+        observability.RecordErrorByType(validateSpan, err)
         validateSpan.End()
         return err
     }
@@ -5284,7 +5284,7 @@ func (m *OrderModule) ProcessOrderWithPayment(ctx context.Context, orderID int64
     // Child span 2: process payment
     ctx, paymentSpan := m.tracer.Start(ctx, "ProcessPayment")
     if err := m.processPayment(ctx, orderID); err != nil {
-        paymentSpan.RecordError(err)
+        observability.RecordErrorByType(paymentSpan, err)
         paymentSpan.End()
         return err
     }
@@ -5512,7 +5512,7 @@ import (
 )
 
 // 1. Spans — assert that a service emits the expected custom span + attributes
-func TestOrderService_emits_processing_span(t *testing.T) {
+func TestOrderServiceEmitsProcessingSpan(t *testing.T) {
     tp := obtest.NewTestTraceProvider() // in-memory exporter + tracer
     defer tp.Shutdown(context.Background())
 
@@ -5526,7 +5526,7 @@ func TestOrderService_emits_processing_span(t *testing.T) {
 }
 
 // 2. Spans — assert that a failure path records an error on the span
-func TestOrderService_records_error_on_db_failure(t *testing.T) {
+func TestOrderServiceRecordsErrorOnDBFailure(t *testing.T) {
     tp := obtest.NewTestTraceProvider()
     defer tp.Shutdown(context.Background())
 
@@ -5534,11 +5534,14 @@ func TestOrderService_records_error_on_db_failure(t *testing.T) {
     _ = svc.ProcessOrder(context.Background(), 42)
 
     spans := tp.Exporter.GetSpans()
-    obtest.AssertSpanError(t, &spans[0], "database unavailable")
+    // RecordErrorByType puts the error's Go TYPE on both span sinks and no
+    // message at all (ADR-083), so assert the type and the status code.
+    obtest.AssertSpanStatus(t, &spans[0], codes.Error)
+    obtest.AssertExceptionTypeOnly(t, &spans[0], "*errors.errorString")
 }
 
 // 3. Metrics — read the manual reader and assert recorded values
-func TestOrderService_records_counter(t *testing.T) {
+func TestOrderServiceRecordsCounter(t *testing.T) {
     mp := obtest.NewTestMeterProvider()
     defer mp.Shutdown(context.Background())
 
@@ -5551,7 +5554,7 @@ func TestOrderService_records_counter(t *testing.T) {
 }
 
 // 4. Modules that don't care to inspect emissions — use no-op meter
-func TestOrderModule_safe_with_noop_meter(t *testing.T) {
+func TestOrderModuleSafeWithNoopMeter(t *testing.T) {
     deps := &app.ModuleDeps{MeterProvider: noop.NewMeterProvider()}
 
     module := &OrderModule{}

@@ -18,13 +18,13 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	"github.com/gaborage/go-bricks/observability"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -227,10 +227,9 @@ func Run(ctx context.Context, req *Request) (res *Result) {
 
 	req.LogOutcome(res)
 
-	if res.Err != nil {
-		span.RecordError(res.Err)
-		span.SetStatus(codes.Error, res.Err.Error())
-	}
+	// SECURITY: a consumer handler's error may embed the payload — type only on
+	// both span sinks; LogOutcome above keeps the message (ADR-083).
+	observability.RecordErrorByType(span, res.Err)
 
 	tracking.RecordConsume(msgCtx, req.Metrics, res.Duration, res.Err)
 

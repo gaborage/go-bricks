@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
@@ -837,9 +838,54 @@ func (*secretPanicJob) Execute(_ JobContext) error {
 
 const schedulerPanicSecret = "test_password_123"
 
+// TestJobErrorKeepsItsMessageOffTheSpan pins ADR-083 for the scheduler: a job's
+// Execute error is consumer-authored, so the span reports its Go TYPE while the
+// on-platform log line keeps the message.
+func TestJobErrorKeepsItsMessageOffTheSpan(t *testing.T) {
+	tp := obtest.NewTestTraceProvider()
+	t.Cleanup(func() { require.NoError(t, tp.Shutdown(context.Background())) })
+
+	// zerolog binds os.Stdout at construction, so build the scheduler inside the
+	// capture — outside it the capture is empty and the log assertion is vacuous.
+	out := captureStdout(t, func() {
+		module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
+		runJobOnce(module, "failing-job", &failingJob{err: errors.New("job failed: " + obtest.LeakCanary)})
+		require.NoError(t, module.Shutdown())
+	})
+
+	span := jobExecuteSpan(t, tp)
+	assert.Equal(t, codes.Error, span.Status.Code)
+	assert.Equal(t, "*errors.errorString", span.Status.Description)
+	obtest.AssertExceptionTypeOnly(t, &span, "*errors.errorString")
+	obtest.AssertNoSpanMarkers(t, &span, obtest.LeakCanary)
+
+	assert.Contains(t, out, obtest.LeakCanary,
+		"the log line is on-platform and keeps the error message")
+}
+
+// TestJobPanicSpanNamesTheTypeNotTheValue pins the panic path's span half, which
+// no stdout-capture test can see: the recovered value's TYPE reaches the span as
+// its own attribute — panicErr's Go type is framework noise — and the value
+// itself reaches no span sink (ADR-081, ADR-083).
+func TestJobPanicSpanNamesTheTypeNotTheValue(t *testing.T) {
+	tp := obtest.NewTestTraceProvider()
+	t.Cleanup(func() { require.NoError(t, tp.Shutdown(context.Background())) })
+
+	module, _ := newTestScheduler(t, 5*time.Second, withTracer(tp.Tracer("test-scheduler")))
+	runJobOnce(module, "secret-panic-job", &secretPanicJob{})
+	require.NoError(t, module.Shutdown())
+
+	span := jobExecuteSpan(t, tp)
+	assert.Equal(t, codes.Error, span.Status.Code)
+	assert.Equal(t, "panic", span.Status.Description)
+	obtest.AssertSpanAttribute(t, &span, "job.status", "panic")
+	obtest.AssertSpanAttribute(t, &span, "job.panic_type", "scheduler.secretBearingPanic")
+	obtest.AssertNoSpanMarkers(t, &span, schedulerPanicSecret, "nightly-sync")
+}
+
 // TestJobExecutionPanicNoSinkCarriesTheValue pins that NONE of the three sinks
-// carries the panic value: not the log field, not span.RecordError, not the
-// summary line's Err(). The load-bearing assertion is the NotContains on
+// carries the panic value: not the log field, not the span, not the summary
+// line's Err(). The load-bearing assertion is the NotContains on
 // "nightly-sync" — a non-sensitive field of the panic value. Under the old code the
 // secret itself was masked (`Password` is a default needle), so only a field the
 // needle list does NOT name can tell the two designs apart.

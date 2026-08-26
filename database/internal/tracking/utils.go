@@ -11,11 +11,11 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/observability"
 )
 
 const (
@@ -325,17 +325,9 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 		// sql.ErrNoRows (empty result) and sql.ErrTxDone (deferred rollback after
 		// commit) are not actual errors - do not mark the span as failed.
 		if !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, sql.ErrTxDone) {
-			// SECURITY: Do not call span.RecordError(err) or use err.Error() in the
-			// span status. Postgres/Oracle driver errors embed the offending row
-			// data (e.g. a unique-constraint violation echoes back the value that
-			// collided, which may be a PAN or other sensitive field), and the OTel
-			// pipeline has no SensitiveDataFilter (that only runs on the log path).
-			// Record the error's Go type instead of its message.
-			class := dbErrorClass(err)
-			span.AddEvent("exception", trace.WithAttributes(
-				attribute.String("exception.type", class),
-			))
-			span.SetStatus(codes.Error, class)
+			// SECURITY: a unique-constraint violation echoes back the value that
+			// collided — type only, on both span sinks (ADR-083).
+			observability.RecordErrorByType(span, err)
 		}
 	}
 
@@ -344,7 +336,7 @@ func createDBSpan(ctx context.Context, tc *Context, query string, start time.Tim
 }
 
 // dbErrorClass returns the Go type of err (e.g. "*pq.Error") without its message,
-// so span error attribution never carries driver-embedded row data.
+// so the log line's error_type field stays a low-cardinality class.
 func dbErrorClass(err error) string {
 	return fmt.Sprintf("%T", err)
 }
@@ -357,7 +349,7 @@ func dbErrorClass(err error) string {
 // offending row data (a unique-constraint violation echoes the colliding value, which may
 // be a PAN or other sensitive field). The log-path SensitiveDataFilter masks by FIELD NAME
 // only and cannot scrub a message body, so record the error's Go type instead — same posture
-// as the span path (see dbErrorClass / createDBSpan).
+// as the span path (see observability.RecordErrorByType).
 func appendDBErrorType(event logger.LogEvent, driverErr error) logger.LogEvent {
 	if driverErr == nil {
 		return event
