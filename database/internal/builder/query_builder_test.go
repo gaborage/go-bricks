@@ -671,21 +671,22 @@ func TestQueryModifiers(t *testing.T) {
 
 // ========== JoinFilter Error Propagation Tests ==========
 
-// mockErrorJoinFilter is a test helper that always returns an error from ToSQL()
-type mockErrorJoinFilter struct{}
+// mockErrorJoinFilter is a test helper that always fails with msg, so a test can
+// tell WHICH of two failing filters the builder reported.
+type mockErrorJoinFilter struct{ msg string }
 
 //nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
 func (m mockErrorJoinFilter) ToSql() (sql string, args []any, err error) {
-	return "", nil, errors.New(joinFilterErrorMsg)
+	return "", nil, errors.New(m.msg)
 }
 
 func (m mockErrorJoinFilter) ToSQL() (sql string, args []any, err error) {
-	return "", nil, errors.New(joinFilterErrorMsg)
+	return "", nil, errors.New(m.msg)
 }
 
 func TestJoinFilterErrorPropagation(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
-	errorFilter := mockErrorJoinFilter{}
+	errorFilter := mockErrorJoinFilter{msg: joinFilterErrorMsg}
 
 	t.Run("JoinOn propagates error", func(t *testing.T) {
 		query := qb.Select(selectAll).
@@ -766,7 +767,7 @@ func TestJoinFilterErrorPropagation(t *testing.T) {
 // TestJoinFilterNoErrorInjection verifies errors are NOT injected into SQL
 func TestJoinFilterNoErrorInjection(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.PostgreSQL)
-	errorFilter := mockErrorJoinFilter{}
+	errorFilter := mockErrorJoinFilter{msg: joinFilterErrorMsg}
 
 	query := qb.Select(selectAll).
 		From(tableUsers).
@@ -1846,14 +1847,9 @@ func TestInsertStructAllFields(t *testing.T) {
 	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
-	assert.Contains(t, sql, "INSERT INTO users")
-	assert.Contains(t, sql, colName)
-	assert.Contains(t, sql, colEmail)
-	assert.Contains(t, sql, colStatus)
-	assert.NotContains(t, sql, colID) // Zero ID excluded
-	assert.Contains(t, args, "Alice")
-	assert.Contains(t, args, testEmail)
-	assert.Contains(t, args, statusActive)
+	// A zero ID is excluded, and the column order is sorted (#1157).
+	assert.Equal(t, "INSERT INTO users (created_at,email,name,status) VALUES ($1,$2,$3,$4)", sql)
+	assert.Equal(t, []any{"", testEmail, "Alice", statusActive}, args)
 }
 
 func TestInsertStructWithNonZeroID(t *testing.T) {
@@ -1870,8 +1866,8 @@ func TestInsertStructWithNonZeroID(t *testing.T) {
 	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
-	assert.Contains(t, sql, colID) // Non-zero ID included
-	assert.Contains(t, args, int64(123))
+	assert.Equal(t, "INSERT INTO users (created_at,email,id,name,status) VALUES ($1,$2,$3,$4,$5)", sql)
+	assert.Equal(t, []any{"", testEmail, int64(123), "Bob", statusInactive}, args)
 }
 
 // TestIsZeroValueIDFieldExactMatching verifies that only columns exactly named "id"
@@ -2026,23 +2022,10 @@ func TestInsertStructOracleReservedWords(t *testing.T) {
 	sql, args, err := query.ToSQL()
 
 	require.NoError(t, err)
-	// Oracle should quote the reserved-word table name (finding M8) and reserved-word columns.
-	assert.Contains(t, sql, `INSERT INTO "level"`)
-	// Assert the column-list portion specifically so the reserved-word column quoting is
-	// genuinely exercised — checking the whole SQL for `"level"` alone would be trivially
-	// satisfied by the quoted table name above. The column order is reflection-driven and
-	// not deterministic, so assert each column within the list rather than a fixed string.
-	openParen := strings.Index(sql, "(")
-	valuesIdx := strings.Index(sql, "VALUES")
-	require.GreaterOrEqual(t, openParen, 0, "expected a column list in %q", sql)
-	require.Greater(t, valuesIdx, openParen, "expected VALUES after the column list in %q", sql)
-	columnList := sql[openParen:valuesIdx]
-	assert.Contains(t, columnList, `"number"`)
-	assert.Contains(t, columnList, `"level"`)
-	assert.Contains(t, columnList, `"size"`)
-	assert.Contains(t, args, testAccountID)
-	assert.Contains(t, args, 5)
-	assert.Contains(t, args, "large")
+	// The reserved-word table and every reserved-word column are quoted, and the
+	// column order is sorted (#1157).
+	assert.Equal(t, `INSERT INTO "level" ("level","number","size") VALUES (:1,:2,:3)`, sql)
+	assert.Equal(t, []any{5, testAccountID, "large"}, args)
 }
 
 // TestInsertOracleReservedWordTableName verifies that all four INSERT entry points
@@ -2847,4 +2830,266 @@ func TestInsertQueryBuilderSetMapQuoting(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "SetMap column")
 	})
+}
+
+const (
+	firstViolation  = "first-violation"
+	secondViolation = "second-violation"
+	// badTable fails validateTableReference: the identifier grammar rejects it.
+	badTable  = "users; DROP TABLE users"
+	badColumn = "id; DROP TABLE users"
+)
+
+// TestSelectQueryBuilderFirstDeferredErrorWins pins ADR-031's rule at every door
+// that records a deferred error: once set, a later violation never replaces it.
+// Each case drives ONE door as the second violation, so removing that door's
+// guard reddens only its own case — a single combined case would let the other
+// guards rot while staying green.
+func TestSelectQueryBuilderFirstDeferredErrorWins(t *testing.T) {
+	second := mockErrorJoinFilter{msg: secondViolation}
+
+	doors := []struct {
+		name string
+		// wantErr is the first violation's marker; wantNotErr is the second's,
+		// which must not have replaced it.
+		wantErr    string
+		wantNotErr string
+		build      func(qb *QueryBuilder) dbtypes.SelectQueryBuilder
+	}{
+		{
+			name: "join_on_filter", wantErr: firstViolation, wantNotErr: secondViolation,
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return failingJoin(qb).JoinOn(tableProfiles, second)
+			},
+		},
+		{
+			name: "left_join_on_filter", wantErr: firstViolation, wantNotErr: secondViolation,
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return failingJoin(qb).LeftJoinOn(tableProfiles, second)
+			},
+		},
+		{
+			name: "right_join_on_filter", wantErr: firstViolation, wantNotErr: secondViolation,
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return failingJoin(qb).RightJoinOn(tableProfiles, second)
+			},
+		},
+		{
+			name: "inner_join_on_filter", wantErr: firstViolation, wantNotErr: secondViolation,
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return failingJoin(qb).InnerJoinOn(tableProfiles, second)
+			},
+		},
+		{
+			// The first violation comes from a DIFFERENT door here, so the guard is
+			// proven against a From-sourced error and not only a filter-sourced one.
+			name: "join_on_filter_after_from", wantErr: "From:", wantNotErr: secondViolation,
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return qb.Select(selectAll).From(badTable).JoinOn(tableProfiles, second)
+			},
+		},
+		{
+			name: "from_after_select", wantErr: badColumn, wantNotErr: "From:",
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return qb.Select(badColumn).From(badTable)
+			},
+		},
+		{
+			name: "join_table_after_from", wantErr: "From:", wantNotErr: "JoinOn:",
+			build: func(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+				return qb.Select(selectAll).From(badTable).
+					JoinOn(badTable, qb.JoinFilter().EqColumn(joinColumn, "orders.user_id"))
+			},
+		},
+	}
+
+	for _, door := range doors {
+		t.Run(door.name, func(t *testing.T) {
+			sql, args, err := door.build(NewQueryBuilder(dbtypes.PostgreSQL)).ToSQL()
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), door.wantErr)
+			assert.NotContains(t, err.Error(), door.wantNotErr)
+			assert.Empty(t, sql)
+			assert.Nil(t, args)
+		})
+	}
+}
+
+// failingJoin is a builder whose FIRST violation is already recorded.
+func failingJoin(qb *QueryBuilder) dbtypes.SelectQueryBuilder {
+	return qb.Select(selectAll).
+		From(tableUsers).
+		JoinOn(tableOrders, mockErrorJoinFilter{msg: firstViolation})
+}
+
+// TestInsertQueryBuilderFirstDeferredErrorWins is the same rule on the sibling
+// builder. Each case puts a DIFFERENT door second, so removing that door's guard
+// reddens only its own case.
+func TestInsertQueryBuilderFirstDeferredErrorWins(t *testing.T) {
+	doors := []struct {
+		name       string
+		wantErr    string
+		wantNotErr string
+		build      func(qb *QueryBuilder) dbtypes.InsertQueryBuilder
+	}{
+		{
+			// Select is the door #1148's defect survived in: it replaced the
+			// column violation recorded before it.
+			name: "select_after_bad_column", wantErr: badColumn, wantNotErr: "InsertQueryBuilder.Select:",
+			build: func(qb *QueryBuilder) dbtypes.InsertQueryBuilder {
+				return qb.InsertWithColumns(tableUsers, badColumn).
+					Select(qb.Select(selectAll).From(badTable))
+			},
+		},
+		{
+			// Insert().Columns() reaches the door; InsertWithColumns short-circuits
+			// on the table error and never calls it.
+			name: "columns_after_bad_table", wantErr: badTable, wantNotErr: badColumn,
+			build: func(qb *QueryBuilder) dbtypes.InsertQueryBuilder {
+				return qb.Insert(badTable).Columns(badColumn)
+			},
+		},
+		{
+			name: "set_map_after_bad_table", wantErr: badTable, wantNotErr: badColumn,
+			build: func(qb *QueryBuilder) dbtypes.InsertQueryBuilder {
+				return qb.Insert(badTable).SetMap(map[string]any{badColumn: 1})
+			},
+		},
+	}
+
+	for _, door := range doors {
+		t.Run(door.name, func(t *testing.T) {
+			sql, args, err := door.build(NewQueryBuilder(dbtypes.PostgreSQL)).ToSQL()
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), door.wantErr)
+			assert.NotContains(t, err.Error(), door.wantNotErr)
+			assert.Empty(t, sql)
+			assert.Nil(t, args)
+		})
+	}
+}
+
+// TestStructDrivenDMLRendersDeterministically pins #1157 for both struct-driven
+// doors: identical input must yield byte-identical SQL on every call, so a
+// prepared-statement cache sees one statement per logical write and a golden file
+// cannot flake. Go randomizes map iteration per range, so a map-order regression
+// reddens this within a few rounds rather than depending on one lucky ordering.
+func TestStructDrivenDMLRendersDeterministically(t *testing.T) {
+	user := IntegrationUser{
+		ID:        7,
+		Name:      "Alice",
+		Email:     testEmail,
+		Status:    statusActive,
+		CreatedAt: "2026-08-24",
+	}
+
+	tests := []struct {
+		name     string
+		vendor   dbtypes.Vendor
+		build    func(qb *QueryBuilder) (string, []any, error)
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:   "insert_postgresql",
+			vendor: dbtypes.PostgreSQL,
+			build: func(qb *QueryBuilder) (string, []any, error) {
+				return qb.InsertStruct(tableUsers, &user).ToSQL()
+			},
+			wantSQL:  "INSERT INTO users (created_at,email,id,name,status) VALUES ($1,$2,$3,$4,$5)",
+			wantArgs: []any{"2026-08-24", testEmail, int64(7), "Alice", statusActive},
+		},
+		{
+			name:   "insert_oracle",
+			vendor: dbtypes.Oracle,
+			build: func(qb *QueryBuilder) (string, []any, error) {
+				return qb.InsertStruct(tableUsers, &user).ToSQL()
+			},
+			wantSQL:  "INSERT INTO users (created_at,email,id,name,status) VALUES (:1,:2,:3,:4,:5)",
+			wantArgs: []any{"2026-08-24", testEmail, int64(7), "Alice", statusActive},
+		},
+		{
+			name:   "set_struct_postgresql",
+			vendor: dbtypes.PostgreSQL,
+			build: func(qb *QueryBuilder) (string, []any, error) {
+				return qb.Update(tableUsers).SetStruct(&user).Where(qb.Filter().Eq(colID, 1)).ToSQL()
+			},
+			wantSQL:  "UPDATE users SET created_at = $1, email = $2, id = $3, name = $4, status = $5 WHERE id = $6",
+			wantArgs: []any{"2026-08-24", testEmail, int64(7), "Alice", statusActive, 1},
+		},
+		{
+			name:   "set_struct_oracle",
+			vendor: dbtypes.Oracle,
+			build: func(qb *QueryBuilder) (string, []any, error) {
+				return qb.Update(tableUsers).SetStruct(&user).Where(qb.Filter().Eq(colID, 1)).ToSQL()
+			},
+			wantSQL:  "UPDATE users SET created_at = :1, email = :2, id = :3, name = :4, status = :5 WHERE id = :6",
+			wantArgs: []any{"2026-08-24", testEmail, int64(7), "Alice", statusActive, 1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for range 20 {
+				sql, args, err := tt.build(NewQueryBuilder(tt.vendor))
+
+				require.NoError(t, err)
+				require.Equal(t, tt.wantSQL, sql)
+				require.Equal(t, tt.wantArgs, args)
+			}
+		})
+	}
+}
+
+// TestUpdateDeleteFirstDeferredErrorWins covers the two remaining builders, each
+// case driving a different door as the second violation.
+func TestUpdateDeleteFirstDeferredErrorWins(t *testing.T) {
+	t.Run("update_set_map_after_bad_table", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, args, err := qb.Update(badTable).
+			SetMap(map[string]any{badColumn: 1}).
+			ToSQL()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), badTable)
+		assert.NotContains(t, err.Error(), badColumn)
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+	})
+
+	t.Run("delete_order_by_after_bad_table", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, args, err := qb.Delete(badTable).OrderBy(badColumn).ToSQL()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), badTable)
+		assert.NotContains(t, err.Error(), "orderBy")
+		assert.Empty(t, sql)
+		assert.Nil(t, args)
+	})
+}
+
+// TestUpdateSetMapReportsTheSameInvalidColumnEveryTime pins the DIAGNOSTIC half
+// of #1148 at this door: with several invalid keys, WHICH one is reported was a
+// map-iteration accident. The rendered SET order is squirrel's and is not this
+// change's concern (#1185).
+func TestUpdateSetMapReportsTheSameInvalidColumnEveryTime(t *testing.T) {
+	clauses := map[string]any{
+		"aaa; DROP TABLE users": 1,
+		"mmm; DROP TABLE users": 2,
+		"zzz; DROP TABLE users": 3,
+	}
+
+	for range 20 {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+		_, _, err := qb.Update(tableUsers).SetMap(clauses).ToSQL()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "aaa; DROP TABLE users",
+			"the alphabetically first invalid column is always the reported one")
+	}
 }

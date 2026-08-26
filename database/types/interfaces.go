@@ -429,6 +429,10 @@ type Columns interface {
 	// The map keys are vendor-quoted column names (respecting alias if set).
 	// Only fields with `db` tags are included. Zero values are included.
 	//
+	// Map iteration order is UNSPECIFIED, so building DML straight from this map
+	// emits a different column order per process. Sort the keys, or use AllFields,
+	// which returns columns and values in declaration order (#1157).
+	//
 	// Example:
 	//   user := User{ID: 123, Name: "Alice", Email: "alice@example.com"}
 	//   cols.FieldMap(&user)
