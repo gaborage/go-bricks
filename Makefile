@@ -12,7 +12,7 @@ INTEGRATION_PKGS := $(shell go list -tags=integration ./... | grep -vE '/(tools)
 GOVULNCHECK_VERSION := v1.7.0
 # Keep in sync with the other module's Makefile.
 # renovate: datasource=go depName=github.com/securego/gosec/v2
-GOSEC_VERSION := v2.28.0
+GOSEC_VERSION := v2.29.0
 # Keep in sync with the other module's Makefile and CI (ci-v2.yml golangci-lint-action version).
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2
 GOLANGCI_LINT_VERSION := v2.13.1
