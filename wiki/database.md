@@ -297,8 +297,9 @@ the builder. The grammar will not accept a computed one.
   syntax nor the semantics of the SQL they carry — it does reject an empty or
   whitespace-only body — and the rest of a `RawExpression` is validated too: a
   struct literal built without the constructor is checked where it is consumed,
-  so an empty SQL body or an alias carrying `;`, `'`, `"`, `--`, `/*` or `*/`
-  fails from `ToSQL()` (ADR-082 addendum).
+  so an empty SQL body, or an alias that is not an unquoted identifier, fails from
+  `ToSQL()` (ADR-082 2026-08-24 addendum). The alias was a six-substring denylist
+  until `[C61.9]` replaced it with the grammar.
 - **`f.Raw()`, `jf.Raw()` and `database.Raw()`** do. Each admits arbitrary SQL —
   the first two a WHERE/JOIN fragment, `database.Raw` the whole statement — and
   each requires an inline `// SECURITY: Manual SQL review completed - <rationale>`

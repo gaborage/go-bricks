@@ -23,8 +23,10 @@ var (
 	// ErrTooManyAliases is returned when Expr() is called with more than 1 alias.
 	ErrTooManyAliases = errors.New("expression accepts maximum 1 alias")
 
-	// ErrDangerousAlias is returned when an alias contains SQL injection patterns.
-	ErrDangerousAlias = errors.New("alias contains dangerous characters")
+	// ErrInvalidAlias is returned when a RawExpression alias is not a bare
+	// unquoted identifier. It replaces the former ErrDangerousAlias substring
+	// denylist, which accepted everything it did not list.
+	ErrInvalidAlias = errors.New("alias must be an unquoted identifier: a letter or underscore followed by letters, digits, underscore, $ or #")
 
 	// ErrNilSubquery is returned when ValidateSubquery() is called with nil subquery.
 	ErrNilSubquery = errors.New("subquery cannot be nil")

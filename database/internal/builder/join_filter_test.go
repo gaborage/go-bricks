@@ -715,3 +715,33 @@ func TestJoinFilterRejectsRawExpressionLiteral(t *testing.T) {
 		})
 	}
 }
+
+// These doors validate an expression but never render its Alias, so a bad alias
+// is not a live sink here today. Pinned anyway: the guard is what makes that
+// true, and a future change that started rendering the alias would otherwise
+// have no regression test standing in its way.
+func TestJoinFilterRejectsRawExpressionAlias(t *testing.T) {
+	bad := dbtypes.RawExpression{SQL: "1", Alias: "x FROM users"}
+
+	tests := []struct {
+		name   string
+		filter func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter
+	}{
+		{name: "eq", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Eq("amount", bad) }},
+		{name: "gte", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Gte("amount", bad) }},
+		{name: "between_lower", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Between("age", bad, 65) }},
+		{name: "between_upper", filter: func(jf dbtypes.JoinFilterFactory) dbtypes.JoinFilter { return jf.Between("age", 18, bad) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(dbtypes.PostgreSQL)
+			sql, args, err := tt.filter(qb.JoinFilter()).ToSQL()
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, dbtypes.ErrInvalidAlias)
+			assert.Empty(t, sql)
+			assert.Empty(t, args)
+		})
+	}
+}

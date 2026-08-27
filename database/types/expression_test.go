@@ -72,40 +72,50 @@ func TestExpr(t *testing.T) {
 		assert.True(t, errors.Is(err, ErrTooManyAliases))
 	})
 
-	t.Run("Alias with semicolon returns error", func(t *testing.T) {
-		_, err := Expr(countClause, "total;DROP TABLE users")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrDangerousAlias))
+	// The alias is judged against the shared bare-identifier grammar, not a
+	// substring denylist: the denylist accepted everything it did not enumerate,
+	// so a space, a parenthesis or a newline passed straight into the AS clause
+	// (#1164). The quoted form is rejected too — the framework never emits a
+	// quoted alias, so accepting one would widen the grammar for caller text alone.
+	t.Run("alias grammar", func(t *testing.T) {
+		accepted := []string{"total", "Total_1", "_x", "a$b", "c#d"}
+		for _, alias := range accepted {
+			t.Run("accepts_"+alias, func(t *testing.T) {
+				expr, err := Expr(countClause, alias)
+				require.NoError(t, err)
+				assert.Equal(t, alias, expr.Alias)
+			})
+		}
+
+		rejected := map[string]string{
+			"space":             "my alias",
+			"call":              "f(x)",
+			"semicolon":         "total;DROP TABLE users",
+			"single_quote":      "total'",
+			"double_quote":      "total\"",
+			"line_comment":      "total--",
+			"block_open":        "total/*",
+			"block_close":       "total*/",
+			"newline":           "a\nb",
+			"quoted_identifier": "\"quoted\"",
+			"backtick":          "`bt`",
+			"subquery":          "a, (SELECT password FROM users) b",
+			"leading_digit":     "1total",
+		}
+		for name, alias := range rejected {
+			t.Run("rejects_"+name, func(t *testing.T) {
+				_, err := Expr(countClause, alias)
+				require.Error(t, err)
+				assert.True(t, errors.Is(err, ErrInvalidAlias))
+			})
+		}
 	})
 
-	t.Run("Alias with single quote returns error", func(t *testing.T) {
-		_, err := Expr(countClause, "total'")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrDangerousAlias))
-	})
-
-	t.Run("Alias with double quote returns error", func(t *testing.T) {
-		_, err := Expr(countClause, "total\"")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrDangerousAlias))
-	})
-
-	t.Run("Alias with SQL comment returns error", func(t *testing.T) {
-		_, err := Expr(countClause, "total--")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrDangerousAlias))
-	})
-
-	t.Run("Alias with block comment start returns error", func(t *testing.T) {
-		_, err := Expr(countClause, "total/*")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrDangerousAlias))
-	})
-
-	t.Run("Alias with block comment end returns error", func(t *testing.T) {
-		_, err := Expr(countClause, "total*/")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, ErrDangerousAlias))
+	// An empty alias is "no alias", not a grammar violation.
+	t.Run("empty alias is accepted", func(t *testing.T) {
+		expr, err := Expr(countClause)
+		require.NoError(t, err)
+		assert.Empty(t, expr.Alias)
 	})
 }
 

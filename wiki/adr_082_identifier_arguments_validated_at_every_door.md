@@ -5,6 +5,39 @@
 **Supersedes:** the Filter exclusion in [ADR-031](adr_031_query_builder_identifier_validation.md)
 **Related:** [ADR-071](adr_071_upsert_column_sets_name_each_column_once.md) · issues #1104, #1143, #1149, #1150, #1151, #1153, #1154
 
+## Addendum (2026-08-24): the alias is a grammar, not a denylist
+
+The 2026-08-23 addendum below routed both construction and consumption through
+`RawExpression.Validate()`, but deliberately did not narrow what that funnel
+ACCEPTS: the alias check stayed a six-substring denylist (`;`, `'`, `"`, `--`,
+`/*`, `*/`). A denylist accepts everything it does not enumerate, so
+`Alias: "x FROM users"` — no listed substring — still ended the alias and opened a
+new clause, and a space, a parenthesis or a newline passed through untouched
+(#1164; recorded as `residual:` in `[C60.29]`).
+
+**An alias is now valid iff it is an UNQUOTED identifier** under this ADR's own
+grammar — `sqllex.IsUnquotedIdentifier`, anchored on `IdentifierSegment`. The
+denylist and `ErrDangerousAlias` are deleted; the failure is
+`dbtypes.ErrInvalidAlias` through the same funnel, so it surfaces from `Expr()` at
+construction and from `ToSQL()` at consumption exactly as before.
+
+Note which predicate: `IsBareIdentifier` also admits the framework's quoted
+reserved-word form (`"level"`), and an alias may NOT use it. The framework never
+emits a quoted alias, so admitting one would widen the grammar for
+caller-supplied text alone. A real need for a quoted alias is the reopen trigger
+for this decision, not something to work around by re-widening the check.
+
+The SQL body is still not validated — unchanged, and still what the hatch is for.
+
+Also recorded here rather than in a new ADR: #1147 moves the `// SECURITY: Manual
+SQL review completed` annotation rule from three doors to four, adding a string
+predicate passed to `Having()` and exempting the `qb.Expr()` form. That change
+ships separately; until it lands, this ADR's "names three functions" wording and
+the `SelectQueryBuilder` godoc still describe the rule in force.
+
+Breaking: an alias carrying a space, a parenthesis or any other non-identifier
+character now fails where the denylist tolerated it. `[C61.9]`.
+
 ## Addendum (2026-08-23): the escape hatch validates at consumption too
 
 `RawExpression` is a plain exported struct, so `qb.Expr()` was a door a caller

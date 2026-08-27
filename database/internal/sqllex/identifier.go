@@ -27,6 +27,11 @@ const (
 // bareIdentifierPattern matches exactly one segment and nothing else.
 var bareIdentifierPattern = regexp.MustCompile(`^` + Segment + `$`)
 
+// unquotedIdentifierPattern matches exactly one UNQUOTED segment. Narrower than
+// bareIdentifierPattern, which also admits the framework's quoted reserved-word
+// form.
+var unquotedIdentifierPattern = regexp.MustCompile(`^` + IdentifierSegment + `$`)
+
 // IsBareIdentifier reports whether s is a single identifier segment — unquoted,
 // or in the framework's own quoted reserved-word form (`"level"`). This is the
 // grammar the table argument already applies to the alias half of "users u".
@@ -36,4 +41,16 @@ var bareIdentifierPattern = regexp.MustCompile(`^` + Segment + `$`)
 // rendering the untrimmed one cannot let the two disagree (ADR-082).
 func IsBareIdentifier(s string) bool {
 	return bareIdentifierPattern.MatchString(s)
+}
+
+// IsUnquotedIdentifier reports whether s is a single UNQUOTED identifier segment.
+// It differs from IsBareIdentifier in rejecting the quoted reserved-word form
+// (`"level"`), for the doors where a quoted spelling has no meaning — an
+// expression alias is one: the framework never emits a quoted alias, so accepting
+// one would widen the grammar for caller-supplied text alone.
+//
+// Like IsBareIdentifier it does not trim: the value is judged exactly as it will
+// be interpolated (ADR-082).
+func IsUnquotedIdentifier(s string) bool {
+	return unquotedIdentifierPattern.MatchString(s)
 }
