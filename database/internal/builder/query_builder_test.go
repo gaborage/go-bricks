@@ -637,6 +637,7 @@ func TestQueryModifiers(t *testing.T) {
 		{
 			name: "Having",
 			setupQuery: func(qb *QueryBuilder) string {
+				// SECURITY: Manual SQL review completed - countClause is a test constant, not input; the value side is parameterized.
 				sql, _, _ := qb.Select("department", qb.MustExpr(countClause)).From(tableUsers).GroupBy("department").Having(countClause+" > ?", 5).ToSQL()
 				return sql
 			},
@@ -1136,6 +1137,7 @@ func TestGroupByExpressions(t *testing.T) {
 		).
 			From(tableOrders).
 			GroupBy(qb.MustExpr(testExpr)).
+			// SECURITY: Manual SQL review completed - constant aggregate predicate; the value side is parameterized.
 			Having("COUNT(*) > ?", 10)
 
 		sql, args, err := query.ToSQL()
@@ -1252,6 +1254,7 @@ func TestComplexExpressionQueries(t *testing.T) {
 			From(tableProducts).
 			Where(f.Eq(colStatus, statusActive)).
 			GroupBy(colCategory).
+			// SECURITY: Manual SQL review completed - constant aggregate predicate; the value side is parameterized.
 			Having("COUNT(*) > ?", 5).
 			OrderBy(qb.MustExpr("COUNT(*) DESC"))
 
@@ -1322,6 +1325,7 @@ func TestComplexExpressionQueries(t *testing.T) {
 			From(tableOrders).
 			Where(f.Gte("created_at", testDate)).
 			GroupBy(qb.MustExpr(testExpr)).
+			// SECURITY: Manual SQL review completed - constant aggregate predicate; the value side is parameterized.
 			Having("SUM(total_amount) > ?", 1000).
 			OrderBy(qb.MustExpr("DATE(created_at) DESC"))
 
@@ -3278,4 +3282,125 @@ func TestTableRefPaddedPartsRenderTrimmed(t *testing.T) {
 			assert.Equal(t, wantSQL, gotSQL)
 		})
 	}
+}
+
+// Having accepts the same qb.Expr() RawExpression Select/GroupBy/OrderBy take, so
+// the aggregate comparisons HAVING exists for have a sanctioned non-string path
+// (#1147). Placeholders must keep numbering across a preceding Where arg.
+func TestSelectQueryBuilderHavingRawExpression(t *testing.T) {
+	tests := []struct {
+		name       string
+		vendor     dbtypes.Vendor
+		wantHaving string
+	}{
+		// The new code is the RawExpression dispatch; the arg numbering it must not
+		// disturb is the underlying builder's, already proven for the string form.
+		{name: "postgresql", vendor: dbtypes.PostgreSQL, wantHaving: "HAVING SUM(amount) > $2"},
+		{name: "oracle", vendor: dbtypes.Oracle, wantHaving: "HAVING SUM(amount) > :2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+			f := qb.Filter()
+
+			sql, args, err := qb.Select("department").
+				From(tableUsers).
+				Where(f.Eq(colStatus, statusActive)).
+				GroupBy("department").
+				Having(qb.MustExpr("SUM(amount) > ?"), 100).
+				ToSQL()
+
+			require.NoError(t, err)
+			assert.Contains(t, sql, tt.wantHaving)
+			assert.Equal(t, []any{statusActive, 100}, args)
+		})
+	}
+}
+
+// A predicate projects nothing, so an alias has nowhere to render; accepting one
+// silently would drop it. The failure travels the builder's deferred-error channel.
+// A dangerous alias trips RawExpression.Validate()'s own alias rule as well, so
+// this pins WHICH error wins: for HAVING no alias is ever legal, and the sentinel
+// must not become a function of the alias's content (#1195 review).
+func TestSelectQueryBuilderHavingRejectsDangerousAliasAsAliasError(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	_, _, err := qb.Select("department").
+		From(tableUsers).
+		GroupBy("department").
+		Having(dbtypes.RawExpression{SQL: "SUM(amount) > ?", Alias: "total;"}, 100).
+		ToSQL()
+
+	require.ErrorIs(t, err, dbtypes.ErrAliasInHaving)
+}
+
+func TestSelectQueryBuilderHavingRejectsAliasedExpression(t *testing.T) {
+	// Vendor-invariant: the alias is rejected in Having itself, before any
+	// vendor-specific rendering, so one vendor proves it (as for the empty-SQL case).
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	_, _, err := qb.Select("department").
+		From(tableUsers).
+		GroupBy("department").
+		Having(qb.MustExpr("SUM(amount) > ?", "total"), 100).
+		ToSQL()
+
+	require.ErrorIs(t, err, dbtypes.ErrAliasInHaving)
+}
+
+func TestSelectQueryBuilderHavingRejectsEmptyExpression(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	_, _, err := qb.Select("department").
+		From(tableUsers).
+		GroupBy("department").
+		Having(dbtypes.RawExpression{}).
+		ToSQL()
+
+	require.ErrorIs(t, err, dbtypes.ErrEmptyExpressionSQL)
+}
+
+// The string form is the documented escape hatch and must be untouched by the
+// RawExpression case.
+func TestSelectQueryBuilderHavingStringUnchanged(t *testing.T) {
+	tests := []struct {
+		name       string
+		vendor     dbtypes.Vendor
+		wantHaving string
+	}{
+		{name: "postgresql_with_arg", vendor: dbtypes.PostgreSQL, wantHaving: "HAVING COUNT(*) > $1"},
+		{name: "oracle_with_arg", vendor: dbtypes.Oracle, wantHaving: "HAVING COUNT(*) > :1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+
+			// SECURITY: Manual SQL review completed - constant predicate, no user input
+			// concatenated; the value side is parameterized.
+			sql, args, err := qb.Select("department").
+				From(tableUsers).
+				GroupBy("department").
+				Having("COUNT(*) > ?", 5).
+				ToSQL()
+
+			require.NoError(t, err)
+			assert.Contains(t, sql, tt.wantHaving)
+			assert.Equal(t, []any{5}, args)
+		})
+	}
+
+	t.Run("bare_string_no_args", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		// SECURITY: Manual SQL review completed - constant predicate, no user input.
+		sql, args, err := qb.Select("department").
+			From(tableUsers).
+			GroupBy("department").
+			Having("COUNT(*) > 1").
+			ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "SELECT department FROM users GROUP BY department HAVING COUNT(*) > 1", sql)
+		assert.Empty(t, args)
+	})
 }

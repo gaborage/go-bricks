@@ -289,8 +289,11 @@ the builder. The grammar will not accept a computed one.
 ### What is not an identifier door
 
 - **`Having`** takes a *predicate*, not an identifier, so no identifier grammar
-  can judge it and its argument is interpolated as written. Treat it as raw SQL.
-  `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape.
+  can judge it and its argument is interpolated as written. Treat a STRING
+  predicate as raw SQL — it is annotated like `f.Raw` (see the door list below);
+  `Having(qb.MustExpr(...))` is the sanctioned expression form and is not.
+  `InsertQueryBuilder.Prefix`, `.Suffix` and `.Options` are the same shape, and
+  unlike `Having` they have no `qb.Expr()` alternative.
 - **`qb.Expr()` / `MustExpr()`** are the declared expression hatches: they exist
   to carry SQL the grammar refuses, and the builder still places what they
   produce. They carry no annotation requirement. The builder judges neither the
@@ -300,10 +303,19 @@ the builder. The grammar will not accept a computed one.
   so an empty SQL body, or an alias that is not an unquoted identifier, fails from
   `ToSQL()` (ADR-082 2026-08-24 addendum). The alias was a six-substring denylist
   until `[C61.9]` replaced it with the grammar.
-- **`f.Raw()`, `jf.Raw()` and `database.Raw()`** do. Each admits arbitrary SQL —
-  the first two a WHERE/JOIN fragment, `database.Raw` the whole statement — and
-  each requires an inline `// SECURITY: Manual SQL review completed - <rationale>`
+- **`f.Raw()`, `jf.Raw()`, `database.Raw()` and a STRING predicate passed to
+  `Having()`** do. Each admits arbitrary SQL — the first two a WHERE/JOIN fragment,
+  `database.Raw` the whole statement, `Having` the group predicate — and each
+  requires an inline `// SECURITY: Manual SQL review completed - <rationale>`
   comment at every call site, which is what makes them grep-discoverable.
+  `Having` also takes a `qb.Expr()` `RawExpression`, which is the preferred
+  spelling and carries no annotation duty; an alias on it is an error, since a
+  predicate projects nothing. That exemption is for CONSISTENCY with
+  `Select`/`GroupBy`/`OrderBy`, **not** a safety claim: `RawExpression.Validate()`
+  checks only that the SQL is non-empty and the alias is clean — it never inspects
+  the SQL body, which carries the same injection risk as the string form and is
+  reviewed as raw SQL. Its audit hook is its own name, `git grep -nE
+  'MustExpr\(|[.]Expr\(|RawExpression\{'`, rather than an annotation.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
   than to this grammar — a stricter question ("is this one column this vendor can
   name in a MERGE"), enforced by escaping plus `requireSingleColumnNames`.

@@ -1272,10 +1272,11 @@ return users, nil
 | Pattern matching    | `f.Like` (case-insensitive), `f.Regex`/`f.RegexI`/`f.NotRegex`/`f.NotRegexI` (POSIX regex; PG `~`/`~*`/`!~`/`!~*`, Oracle `REGEXP_LIKE` with `'i'` flag) |
 | JSON containment    | `f.JSONContains(col, value)` — PostgreSQL `@>` on `jsonb`; pass struct/map/slice (auto JSON-marshalled) or pre-encoded `string`/`[]byte`/`json.RawMessage`. Oracle is not yet supported. |
 | Sorting / grouping  | `qb.Select(...).From("...").OrderBy(qb.MustExpr("created_at DESC")).GroupBy("tenant_id")` |
+| Group predicate     | `Having(qb.MustExpr("SUM(amount) > ?"), 100)` — the sanctioned spelling (`qb.Expr` returns `(RawExpression, error)`; use it when you handle the error); an alias on that expression is an error. A STRING predicate is a raw-SQL door and carries the annotation at its call site: `// SECURITY: Manual SQL review completed - constant predicate, no caller input, value parameterized` above `Having("COUNT(*) > ?", 5)` |
 | Mutations           | `qb.Insert/Update/Delete` → `database.ExecuteInsert` / `ExecuteUpdate` (raw count, zero legal) / `ExecuteUpdateOne` (zero → `ErrNoRows`). Pass the builder directly — no `.ToSQL()` |
 | Joins               | `qb.JoinOn` with `qb.JoinFilter()`                                     |
 | Subqueries          | Compose another builder clause then `f.Exists(subQuery)`               |
-| Raw escape hatch    | `f.Raw(cond, args...)` / `jf.Raw(cond, args...)` produce a WHERE/JOIN **fragment**; `database.Raw(sql, args...)` replaces the **whole statement** (broader — it bypasses the builder's identifier validation entirely). All three REQUIRE a `// SECURITY: Manual SQL review completed - <rationale>` comment at every call site (manual identifier quoting + parameterized values; never concatenate user input) |
+| Raw escape hatch    | `f.Raw(cond, args...)` / `jf.Raw(cond, args...)` produce a WHERE/JOIN **fragment**; `database.Raw(sql, args...)` replaces the **whole statement** (broader — it bypasses the builder's identifier validation entirely). A STRING predicate passed to `Having(...)` is the fourth such door. All four REQUIRE a `// SECURITY: Manual SQL review completed - <rationale>` comment at every call site (manual identifier quoting + parameterized values; never concatenate user input) |
 | Transactions        | `tx, err := db.Begin(ctx); if err != nil { return err }; defer tx.Rollback(ctx); /* work: database.Execute*(ctx, tx, q, "op") — both Interface and Tx satisfy database.Executor */; if err := tx.Commit(ctx); err != nil { return err }` |
 
 **Mutation Examples (INSERT/UPDATE/DELETE):**
@@ -1473,7 +1474,9 @@ query := qb.Select(
     cols.Col("Category"),
     qb.MustExpr("COUNT(*)", "product_count"),
     qb.MustExpr("AVG(price)", "avg_price"),
-).From("products").GroupBy(cols.Col("Category"))
+).From("products").
+    GroupBy(cols.Col("Category")).
+    Having(qb.MustExpr("COUNT(*) > ?"), 10)
 ```
 
 ## Oracle SEQUENCE vs UDT - Important Distinction

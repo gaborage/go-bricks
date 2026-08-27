@@ -73,26 +73,26 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 
 ### Core Principles
 
-- **Explicit > Implicit** → Code must be clear. No hidden defaults, no magic configuration.
-- **Type Safety > Dynamic Hacks** → Refactor-friendly code. Breaking changes prioritized for compile-time safety.
-- **Deterministic > Dynamic Flow** → Predictable, testable logic. Same inputs always produce same outputs.
-- **Composition > Inheritance** → Flexible, simple structures. Use interfaces and embedding over inheritance.
-- **Robustness** → Handle errors idiomatically, wrap once at boundaries. No silent failures.
-- **Patterns, not Over-Design** → Use them only when they solve real problems. Justify abstractions.
-- **Security First** → Input validation mandatory, secrets from env/vault, audit raw-SQL escape hatches (see Security Guidelines below).
-- **Context-First Design** → Always pass `context.Context` as first parameter for tracing, cancellation, deadlines. See [wiki/context_deadlines.md](wiki/context_deadlines.md).
-- **Interface Segregation** → Small, focused interfaces for testability (e.g., `Client` vs `AMQPClient`).
-- **Vendor Agnosticism** → Abstract high-cost dependencies (databases), embrace low-cost ones (HTTP frameworks).
+- **Explicit > Implicit** → No hidden defaults, no magic configuration.
+- **Type Safety > Dynamic Hacks** → Breaking changes prioritized for compile-time safety.
+- **Deterministic > Dynamic Flow** → Same inputs always produce same outputs.
+- **Composition > Inheritance** → Use interfaces and embedding over inheritance.
+- **Robustness** → Handle errors idiomatically, wrap once at boundaries; no silent failures.
+- **Patterns, not Over-Design** → Only when they solve real problems; justify abstractions.
+- **Security First** → Input validation mandatory; secrets from env/vault; audit raw-SQL escape hatches (below).
+- **Context-First Design** → Always pass `context.Context` first (tracing, cancellation, deadlines). See [wiki/context_deadlines.md](wiki/context_deadlines.md).
+- **Interface Segregation** → Small, focused interfaces for testability.
+- **Vendor Agnosticism** → Abstract high-cost dependencies (databases); embrace low-cost ones.
 - **Backward Compatibility** → Do not preserve it in GoBricks' own API surface: remove obsolete paths instead of adding compatibility layers, fallbacks, or in-code migration shims. Breaking is fine — document it (ADR + [wiki/migrations.md](wiki/migrations.md)), don't shim it. Consumer-facing migration aids (e.g. Raw Response Mode for Strangler Fig migrations of *consumer* legacy APIs) are bounded product features, not compat shims.
 
 ### Security Guidelines
 
-- Input validation is **mandatory** at all boundaries (HTTP, messaging, database).
-- Raw-SQL escape hatches (`f.Raw()`, `jf.Raw()`, and `database.Raw()`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site. The annotation is a forcing function for review and makes call sites grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\(|database\.Raw\('`). The rationale should name the specific property checked: identifier quoting for vendor reserved words, value-side parameterization, absence of user-input concatenation, etc.
+- Input validation is **mandatory** at all boundaries.
+- Raw-SQL escape hatches (`f.Raw()`, `jf.Raw()`, `database.Raw()`, and a STRING predicate passed to `Having()`) require an inline `// SECURITY: Manual SQL review completed - <what was verified>` annotation at every call site, which makes them grep-discoverable (`git grep -E 'f\.Raw\(|jf\.Raw\(|database\.Raw\(|Having\('`). The rationale should name the property checked: identifier quoting, value-side parameterization, no user-input concatenation. A `qb.Expr()`/`qb.MustExpr()` `RawExpression` is the sanctioned non-string path, exempt for consistency with `Select`/`GroupBy`/`OrderBy` and NOT because it is safer — `Validate()` never inspects the SQL body, so review it as raw SQL and grep it by name (`git grep -nE 'MustExpr\(|[.]Expr\(|RawExpression\{'`).
 - A recovered panic value is reported by **type**, never by value (ADR-081): render it with `%T`, and never pass the value itself to `%v`/`%+v`/`%s`/`%q`/`Msgf` or `Interface(…, r)`. The verb is innocent, the operand is the defect — `fmt.Errorf("panic (type: %s)", panicType)` on an already-`%T`-rendered string is correct. The value is consumer-chosen, so the log filter cannot help: it matches field NAMES, and a bare `panic("secret")` or an unlisted map key has none. The rule binds wherever `recover()`'s result becomes an error or a message, not only where it is logged — converting a panic to an error one frame lower routes it down the error path, where every sink prints it. Rendering one by value requires an inline `// SECURITY: panic value - <why this one cannot carry a secret>` annotation, grep-discoverable as `git grep -n 'SECURITY: panic value' -- '*.go'`. Framework recovery sites only.
-- Secrets from environment variables or secret managers (AWS Secrets Manager, HashiCorp Vault).
+- Secrets from environment variables or secret managers (AWS Secrets Manager, Vault).
 - No hardcoded credentials, no secrets in logs or error messages. The framework's logger applies a `SensitiveDataFilter` to every log line; for PII not already covered by defaults (PAN variants, SSN, tax ID) extend the list via `log.sensitivefields` in YAML — additive, merged into the defaults — or in code via `app.Options.LoggerFilterConfig`, which REPLACES the whole config: start from `logger.DefaultFilterConfig()` and append, don't hand it a bare struct literal — see [wiki/observability.md#sensitive-data-filtering](wiki/observability.md#sensitive-data-filtering) for the field list, two-seam injection, matching semantics, and defense-in-depth guidance.
-- Audit logging for sensitive operations (access control, data modifications).
+- Audit logging for sensitive operations.
 
 ### Practices & Patterns
 
@@ -100,8 +100,8 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 - **Fail Fast** → Module `Init()` errors are fatal; validation crashes at startup.
 - **DRY** → Don't repeat yourself (but avoid premature abstractions).
 - **CQS** → Separate commands vs. queries where it adds clarity.
-- **KISS** → Keep it simple, complexity must earn its place.
-- **YAGNI** → Don't build what isn't needed *today*.
+- **KISS** → Complexity must earn its place.
+- **YAGNI** → Don't build what isn't needed today.
 
 ### Framework vs. Application Development
 
@@ -116,7 +116,7 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 - **Error Handling:** Idiomatic Go errors (`fmt.Errorf`, `errors.Is/As`), structured errors at API boundaries.
 - **Context Propagation:** No global variables for tenant IDs or trace IDs — always thread context through calls.
 - **Automation:** Makefile/Taskfile, multi-platform CI/CD.
-- **Documentation:** Just enough for others to understand quickly, examples over exhaustive docs.
+- **Documentation:** Just enough to understand quickly; examples over exhaustive docs.
 
 ## Code Quality
 
@@ -362,9 +362,9 @@ tests := []struct{ name string }{
 
 ### Testing Strategy
 
-- **Unit tests:** testify, `database/testing` (DB mocking), `cache/testing` (cache mocking), `outbox/testing` (outbox mocking), httptest (server), fake adapters (messaging).
-- **Integration tests:** testcontainers, `-tags=integration` flag.
-- **Race detection:** All tests run with `-race` in CI.
+- **Unit tests:** testify, `database/testing`, `cache/testing`, `outbox/testing`, httptest (server), fake adapters (messaging).
+- **Integration tests:** testcontainers, `-tags=integration`.
+- **Race detection:** all tests run with `-race` in CI.
 - **Coverage target:** 80% (SonarCloud).
 
 For the testing utilities (TestDB fluent expectations, TenantDBMap, MockCache configurable failures, MockOutbox event tracking, testcontainers patterns), see [wiki/testing.md](wiki/testing.md).
@@ -430,7 +430,7 @@ GoBricks breaks its own API surface when justified. Greenfield work uses the new
 - **Response error details carry no request input (ADR-084):** `server.FieldError` loses `Value` — it was the rejected input for ANY failed tag — and its `Field` (with the message built from it) redacts the bracketed span, so a `dive`-validated map reads `Limits[*]` instead of the input key. A bind failure's `details.error` becomes a payload-free summary — the type-gated JSON decode summary, or the binding source plus the destination field by struct tag — never `bindErr.Error()`. Every response `error.details` map now requires `app.debug` AND a development `app.env` at the single `devDetails` funnel, extending `[C60.30]` to every status and to raw mode. messaging's safe-rendering primitives move to `internal/saferender` unchanged. See `[C61.1]`, `[C61.2]`.
 - **Span sinks record errors by type (ADR-083):** `observability.RecordErrorByType` is the only framework spelling of "record an error on a span" — one `exception` event carrying `exception.type` (the outer `%T`) and NO `exception.message`, status `codes.Error` with that same type. An alert keyed on `exception.message`, or on a message-bearing span status description, for job, handler, HTTP-client or publish failures stops matching; the log line at each site still carries the message. See `[C61.3]`.
 - **RawExpression alias is a grammar, not a denylist (ADR-082 addendum):** an alias must be an UNQUOTED identifier (`sqllex.IsUnquotedIdentifier` — not `IsBareIdentifier`, which also admits the quoted reserved-word form); the six-substring denylist accepted everything it did not list, so `Alias: "x FROM users"` opened a clause. `ErrDangerousAlias` is DELETED — match `errors.Is(err, dbtypes.ErrInvalidAlias)`. Checked in `Validate()`, so it fails at `Expr()` AND `ToSQL()`. See `[C61.9]`.
-- **Identifier arguments validated at every door (ADR-082):** `Insert`, `InsertWithColumns`, `InsertStruct`, `InsertFields` and `BuildUpsert` validate their TABLE argument against ADR-031 grammar — a bare or qualified name plus at most one alias — so a computed table needs an allowlist your own code owns; and both identifier renderers double an interior quote, so a name carrying one renders as that name instead of ending the identifier early (#1104). ADR-031 had excluded the Filter API by reading "parameterizes its values" as "is safe" — `f.Eq(column, value)` does the first for the value and neither for the column; `Select` and the INSERT column lists (`InsertWithColumns`, `.Columns`, `.SetMap`) now validate too — a `select` context adds the wildcard so `Select("*")` is unaffected, while a function or constant string moves to `qb.Expr()`, including the `EXISTS` idiom `Select("1")`; and every Filter and JoinFilter column joins them, validated through a single fallible funnel (`quoteColumnForQuery`) rather than per-door guards — on PostgreSQL that closes a LIVE hole, where the renderer emitted the column verbatim and `f.Eq("id = 1 OR 1=1 -- ", v)` built `WHERE id = 1 OR 1=1 -- = $1`. `Having` takes a predicate, not an identifier, and stays a raw-SQL door (#1146); a `RawExpression` STRUCT LITERAL is validated where it is consumed, so the alias grammar `qb.Expr()` applies is no longer skippable — its SQL body still is not judged; `cols.As(alias)` validates too but PANICS with `*dbtypes.InvalidAliasError` — it returns a `Columns`, not a builder, so it has no deferred-error channel, and the empty-alias panic value changes from a string (#1150). See `[C60.24]`–`[C60.29]`.
+- **Identifier arguments validated at every door (ADR-082):** `Insert`, `InsertWithColumns`, `InsertStruct`, `InsertFields` and `BuildUpsert` validate their TABLE argument against ADR-031 grammar — a bare or qualified name plus at most one alias — so a computed table needs an allowlist your own code owns; and both identifier renderers double an interior quote, so a name carrying one renders as that name instead of ending the identifier early (#1104). ADR-031 had excluded the Filter API by reading "parameterizes its values" as "is safe" — `f.Eq(column, value)` does the first for the value and neither for the column; `Select` and the INSERT column lists (`InsertWithColumns`, `.Columns`, `.SetMap`) now validate too — a `select` context adds the wildcard so `Select("*")` is unaffected, while a function or constant string moves to `qb.Expr()`, including the `EXISTS` idiom `Select("1")`; and every Filter and JoinFilter column joins them, validated through a single fallible funnel (`quoteColumnForQuery`) rather than per-door guards — on PostgreSQL that closes a LIVE hole, where the renderer emitted the column verbatim and `f.Eq("id = 1 OR 1=1 -- ", v)` built `WHERE id = 1 OR 1=1 -- = $1`. `Having` takes a predicate, not an identifier; its STRING form stays a raw-SQL door and it now also accepts a `qb.Expr()` `RawExpression`, which is not annotated (#1146, #1147, `[C61.8]`); a `RawExpression` STRUCT LITERAL is validated where it is consumed, so the alias grammar `qb.Expr()` applies is no longer skippable — its SQL body still is not judged; `cols.As(alias)` validates too but PANICS with `*dbtypes.InvalidAliasError` — it returns a `Columns`, not a builder, so it has no deferred-error channel, and the empty-alias panic value changes from a string (#1150). See `[C60.24]`–`[C60.29]`.
 
 ## File Organization
 
