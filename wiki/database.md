@@ -190,7 +190,7 @@ query := qb.Select("*").
     Where(f.Eq("o.status", "pending"))
 ```
 
-**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Value operands follow the same contract as the Filter doors — see *Operand contract* above.
+**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. The six compare doors — `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte` — follow the *Operand contract* above. `In`, `NotIn` and `Between` hand their operands to the underlying builder untouched (no nil-first resolution, so a nil pointer to a `driver.Valuer` type still panics there — tracked in #1209), and `Like` takes a string.
 
 **Expression Support:** All comparison methods accept `qb.Expr()` for complex SQL expressions without placeholders.
 
