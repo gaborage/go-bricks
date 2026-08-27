@@ -1313,3 +1313,68 @@ func TestFilterColumnsValidateIdentifiers(t *testing.T) {
 		})
 	}
 }
+
+// TestFilterEqNilAndSliceRendering pins f.Eq's operand contract, which the
+// package inherited from the underlying builder and never asserted. #1167 aligns
+// jf.Eq to it, so it needs to be nailed down in its own right rather than only
+// as the reference the JoinFilter tests compare against.
+func TestFilterEqNilAndSliceRendering(t *testing.T) {
+	tests := []struct {
+		name    string
+		vendor  dbtypes.Vendor
+		filter  func(ff dbtypes.FilterFactory) dbtypes.Filter
+		wantSQL string
+		wantLen int
+	}{
+		{
+			name:   "postgresql_eq_nil_is_null",
+			vendor: dbtypes.PostgreSQL,
+			filter: func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.Eq("status", nil) },
+			// nil is NOT a placeholder: `status = ?` bound to nil is never true.
+			wantSQL: "status IS NULL",
+		},
+		{
+			name:    "postgresql_not_eq_nil_is_not_null",
+			vendor:  dbtypes.PostgreSQL,
+			filter:  func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.NotEq("status", nil) },
+			wantSQL: "status IS NOT NULL",
+		},
+		{
+			name:    "postgresql_eq_slice_expands_to_in",
+			vendor:  dbtypes.PostgreSQL,
+			filter:  func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.Eq("status", []int{1, 2}) },
+			wantSQL: "status IN (?,?)",
+			wantLen: 2,
+		},
+		{
+			name:    "postgresql_eq_empty_slice_is_constant_false",
+			vendor:  dbtypes.PostgreSQL,
+			filter:  func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.Eq("status", []int{}) },
+			wantSQL: "(1=0)",
+		},
+		{
+			name:    "postgresql_not_eq_empty_slice_is_constant_true",
+			vendor:  dbtypes.PostgreSQL,
+			filter:  func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.NotEq("status", []int{}) },
+			wantSQL: "(1=1)",
+		},
+		{
+			name:    "oracle_eq_nil_is_null_on_a_reserved_column",
+			vendor:  dbtypes.Oracle,
+			filter:  func(ff dbtypes.FilterFactory) dbtypes.Filter { return ff.Eq("level", nil) },
+			wantSQL: `"level" IS NULL`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			qb := NewQueryBuilder(tt.vendor)
+
+			sql, args, err := tt.filter(qb.Filter()).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Len(t, args, tt.wantLen)
+		})
+	}
+}

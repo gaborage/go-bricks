@@ -1,6 +1,9 @@
 package builder
 
 import (
+	dbsql "database/sql"
+	"database/sql/driver"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -743,5 +746,367 @@ func TestJoinFilterRejectsRawExpressionAlias(t *testing.T) {
 			assert.Empty(t, sql)
 			assert.Empty(t, args)
 		})
+	}
+}
+
+// TestJoinFilterEqOperandsMatchFilter pins the alignment #1167 asked for: a nil
+// or slice operand means the same thing at both doors. Each case asserts jf's
+// rendering against f's OWN rendering rather than a literal, so the two cannot
+// drift apart again — which is the defect, not any particular spelling.
+func TestJoinFilterEqOperandsMatchFilter(t *testing.T) {
+	const column = "u.id"
+
+	// Only nil and list operands are aligned. A SCALAR keeps this door's own
+	// `col op ?` form — squirrel spells inequality `<>` where jf has always
+	// emitted `!=` — so scalars are pinned separately, below, against the
+	// historical spelling rather than against f.
+	operands := map[string]any{
+		"nil":               nil,
+		"typed_slice":       []int{1, 2},
+		"any_slice":         []any{"a", "b"},
+		"empty_typed_slice": []int{},
+		"empty_any_slice":   []any{},
+		"single_item_slice": []int{7},
+		// An ARRAY is a list operand exactly as a slice is — squirrel's own
+		// isListType admits both Kinds, and the door mirrors it. Without a case
+		// here the array half of that test is unpinned: dropping it from the
+		// classifier leaves every slice case passing.
+		"typed_array": [3]int{1, 2, 3},
+		"empty_array": [0]int{},
+		// Resolved by squirrel BEFORE its nil/list test: a Valuer reporting NULL
+		// and a typed nil pointer both mean NULL. A surface-level test calls them
+		// scalars and renders `col = ?` — the bug this issue removes, reappearing
+		// on the operands most likely to be nil in practice.
+		"null_valuer":   dbsql.NullString{},
+		"typed_nil_ptr": (*int)(nil),
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		for name, operand := range operands {
+			t.Run(vendor+"_Eq_"+name, func(t *testing.T) {
+				qb := NewQueryBuilder(vendor)
+
+				wantSQL, wantArgs, wantErr := qb.Filter().Eq(column, operand).ToSQL()
+				gotSQL, gotArgs, gotErr := qb.JoinFilter().Eq(column, operand).ToSQL()
+
+				require.NoError(t, wantErr)
+				require.NoError(t, gotErr)
+				assert.Equal(t, wantSQL, gotSQL)
+				assert.Equal(t, wantArgs, gotArgs)
+			})
+
+			t.Run(vendor+"_NotEq_"+name, func(t *testing.T) {
+				qb := NewQueryBuilder(vendor)
+
+				wantSQL, wantArgs, wantErr := qb.Filter().NotEq(column, operand).ToSQL()
+				gotSQL, gotArgs, gotErr := qb.JoinFilter().NotEq(column, operand).ToSQL()
+
+				require.NoError(t, wantErr)
+				require.NoError(t, gotErr)
+				assert.Equal(t, wantSQL, gotSQL)
+				assert.Equal(t, wantArgs, gotArgs)
+			})
+		}
+	}
+}
+
+// TestJoinFilterScalarRenderingUnchanged pins what the alignment must NOT move:
+// a scalar keeps `= ?` / `!= ?`, and a []byte counts as a scalar rather than a
+// list — squirrel's own rule, which is why it does not become an IN.
+func TestJoinFilterScalarRenderingUnchanged(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	jf := qb.JoinFilter()
+
+	tests := []struct {
+		name    string
+		filter  dbtypes.JoinFilter
+		wantSQL string
+		wantArg any
+	}{
+		{name: "eq_scalar", filter: jf.Eq("u.id", 42), wantSQL: "u.id = ?", wantArg: 42},
+		{name: "not_eq_scalar", filter: jf.NotEq("u.id", 42), wantSQL: "u.id != ?", wantArg: 42},
+		{name: "eq_byte_slice", filter: jf.Eq("u.id", []byte("raw")), wantSQL: "u.id = ?", wantArg: []byte("raw")},
+		// A Valuer that HOLDS a value is a scalar, so it takes the placeholder
+		// path — and it binds the value the door ALREADY resolved to classify it,
+		// so database/sql is never asked for a second, possibly different one.
+		{
+			name:    "eq_set_valuer_binds_resolved",
+			filter:  jf.Eq("u.id", dbsql.NullInt64{Int64: 5, Valid: true}),
+			wantSQL: "u.id = ?",
+			wantArg: int64(5),
+		},
+		{name: "not_eq_byte_slice", filter: jf.NotEq("u.id", []byte("raw")), wantSQL: "u.id != ?", wantArg: []byte("raw")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := tt.filter.ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{tt.wantArg}, args)
+		})
+	}
+}
+
+// TestJoinFilterEqEmptySliceMatchesIn pins the empty-set spelling against the
+// door that already had one, rather than against a literal.
+func TestJoinFilterEqEmptySliceMatchesIn(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	jf := qb.JoinFilter()
+
+	eqSQL, _, err := jf.Eq("u.id", []int{}).ToSQL()
+	require.NoError(t, err)
+	inSQL, _, err := jf.In("u.id", []int{}).ToSQL()
+	require.NoError(t, err)
+	assert.Equal(t, inSQL, eqSQL)
+
+	notEqSQL, _, err := jf.NotEq("u.id", []int{}).ToSQL()
+	require.NoError(t, err)
+	notInSQL, _, err := jf.NotIn("u.id", []int{}).ToSQL()
+	require.NoError(t, err)
+	assert.Equal(t, notInSQL, notEqSQL)
+}
+
+// TestJoinFilterOrderingRefusesNilSlicesAndArrays pins the fail-closed half:
+// there is no rendering of `col < NULL` or of an ordering against a set, and a
+// set is a slice OR an array.
+func TestJoinFilterOrderingRefusesNilSlicesAndArrays(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	jf := qb.JoinFilter()
+
+	doors := []struct {
+		name string
+		op   string
+		fn   func(string, any) dbtypes.JoinFilter
+	}{
+		{name: "lt", op: "<", fn: jf.Lt},
+		{name: "lte", op: "<=", fn: jf.Lte},
+		{name: "gt", op: ">", fn: jf.Gt},
+		{name: "gte", op: ">=", fn: jf.Gte},
+	}
+	operands := map[string]any{
+		"nil":           nil,
+		"typed_slice":   []int{1},
+		"empty_slice":   []int{},
+		"typed_array":   [3]int{1, 2, 3},
+		"empty_array":   [0]int{},
+		"null_valuer":   dbsql.NullString{},
+		"typed_nil_ptr": (*int)(nil),
+	}
+
+	for _, door := range doors {
+		for operandName, operand := range operands {
+			t.Run(door.name+"_"+operandName, func(t *testing.T) {
+				_, _, err := door.fn("u.id", operand).ToSQL()
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), door.op)
+			})
+		}
+	}
+
+	t.Run("byte_slice_is_a_scalar_not_a_list", func(t *testing.T) {
+		sql, args, err := jf.Lt("u.id", []byte("raw")).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id < ?", sql)
+		assert.Equal(t, []any{[]byte("raw")}, args)
+	})
+}
+
+// countingValuer records how many times database/sql's Value() contract is
+// exercised, and answers the same way every time.
+type countingValuer struct {
+	value any
+	calls int
+}
+
+func (c *countingValuer) Value() (driver.Value, error) {
+	c.calls++
+	return c.value, nil
+}
+
+// erroringValuer refuses to produce a value, the way a Valuer over a corrupt or
+// out-of-range field does.
+type erroringValuer struct{ err error }
+
+func (e erroringValuer) Value() (driver.Value, error) { return nil, e.err }
+
+// statefulValuer answers NULL once and a value thereafter — the shape that makes
+// a second resolution observable.
+type statefulValuer struct{ calls int }
+
+func (s *statefulValuer) Value() (driver.Value, error) {
+	s.calls++
+	if s.calls == 1 {
+		return nil, nil
+	}
+	return int64(42), nil
+}
+
+// TestJoinFilterResolvesValuerExactlyOnce pins the single-resolution contract:
+// the door classifies and binds ONE resolution, so nothing downstream — squirrel
+// or database/sql at bind time — has to ask the operand again.
+func TestJoinFilterResolvesValuerExactlyOnce(t *testing.T) {
+	jf := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter()
+
+	tests := []struct {
+		name    string
+		value   any
+		door    func(string, any) dbtypes.JoinFilter
+		wantSQL string
+	}{
+		{name: "eq_scalar_valuer", value: int64(5), door: jf.Eq, wantSQL: "u.id = ?"},
+		{name: "eq_null_valuer", value: nil, door: jf.Eq, wantSQL: "u.id IS NULL"},
+		{name: "not_eq_null_valuer", value: nil, door: jf.NotEq, wantSQL: "u.id IS NOT NULL"},
+		{name: "lt_scalar_valuer", value: int64(5), door: jf.Lt, wantSQL: "u.id < ?"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			operand := &countingValuer{value: tt.value}
+
+			sql, _, err := tt.door("u.id", operand).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, 1, operand.calls, "Value() must be resolved exactly once")
+		})
+	}
+}
+
+// TestJoinFilterValuerErrorSurfacesCause pins that a Valuer failure travels by
+// identity instead of being flattened into the ordering sentinel, which is what
+// discarded the cause: a Valuer that cannot answer says nothing about whether
+// the operand is comparable.
+func TestJoinFilterValuerErrorSurfacesCause(t *testing.T) {
+	errBoom := errors.New("valuer exploded")
+	operand := erroringValuer{err: errBoom}
+	jf := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter()
+
+	doors := []struct {
+		name string
+		fn   func(string, any) dbtypes.JoinFilter
+	}{
+		{name: "eq", fn: jf.Eq},
+		{name: "not_eq", fn: jf.NotEq},
+		{name: "lt", fn: jf.Lt},
+		{name: "lte", fn: jf.Lte},
+		{name: "gt", fn: jf.Gt},
+		{name: "gte", fn: jf.Gte},
+	}
+
+	for _, door := range doors {
+		t.Run(door.name, func(t *testing.T) {
+			sql, args, err := door.fn("u.id", operand).ToSQL()
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, errBoom)
+			assert.NotErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+			assert.Empty(t, sql)
+			assert.Empty(t, args)
+		})
+	}
+}
+
+// TestJoinFilterRendersFirstResolutionOfStatefulValuer pins the half a counter
+// cannot see: when a second resolution WOULD differ, the rendering is the one
+// the door classified. Asking twice used to render `u.id = ?` bound to the
+// SECOND answer under a classification made from the first.
+func TestJoinFilterRendersFirstResolutionOfStatefulValuer(t *testing.T) {
+	operand := &statefulValuer{}
+
+	sql, args, err := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter().Eq("u.id", operand).ToSQL()
+
+	require.NoError(t, err)
+	assert.Equal(t, "u.id IS NULL", sql)
+	assert.Empty(t, args)
+	assert.Equal(t, 1, operand.calls)
+}
+
+// TestJoinFilterEqArrayRendersIn pins the array rendering ABSOLUTELY, not only
+// against f.Eq's: the C61.11 verify step promises `jf.Eq("u.id", [3]int{1,2,3})`
+// renders `u.id IN (?,?,?)`, and a doc promise no test reads is a promise that
+// can go stale. The parity table two tests up asserts jf against f, which pins
+// agreement; this pins the spelling both doors agreed on.
+func TestJoinFilterEqArrayRendersIn(t *testing.T) {
+	jf := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter()
+
+	t.Run("eq_array", func(t *testing.T) {
+		sql, args, err := jf.Eq("u.id", [3]int{1, 2, 3}).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id IN (?,?,?)", sql)
+		assert.Equal(t, []any{1, 2, 3}, args)
+	})
+
+	t.Run("not_eq_array", func(t *testing.T) {
+		sql, args, err := jf.NotEq("u.id", [3]int{1, 2, 3}).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id NOT IN (?,?,?)", sql)
+		assert.Equal(t, []any{1, 2, 3}, args)
+	})
+}
+
+// panickingPtrValuer implements driver.Valuer on a POINTER receiver and reads a
+// field without a nil guard, so calling Value() on a nil one panics — the same
+// way `sql.NullString`'s VALUE receiver does through an implicit dereference.
+// Both receiver kinds must therefore be classified as nil WITHOUT being asked.
+type panickingPtrValuer struct{ v driver.Value }
+
+func (p *panickingPtrValuer) Value() (driver.Value, error) { return p.v, nil }
+
+// TestJoinFilterNilValuerPointerIsNullNotPanic pins the overlap between "is a
+// pointer" and "is a driver.Valuer": a nil `*sql.NullString` satisfies the
+// interface through NullString's value receiver, so asserting the interface
+// before testing the pointer dereferences nil and panics inside ToSQL. The
+// operand is nil, and the door must say so without asking it anything.
+//
+// squirrel still panics here (expr.go:168 asserts the Valuer first), so `f.Eq`
+// and `jf.Eq` DIVERGE on this shape: `jf` renders IS NULL where `f` panics.
+func TestJoinFilterNilValuerPointerIsNullNotPanic(t *testing.T) {
+	operands := map[string]any{
+		"value_receiver_valuer":   (*dbsql.NullString)(nil),
+		"pointer_receiver_valuer": (*panickingPtrValuer)(nil),
+	}
+
+	for name, operand := range operands {
+		jf := NewQueryBuilder(dbtypes.PostgreSQL).JoinFilter()
+
+		t.Run("eq_"+name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				sql, args, err := jf.Eq("u.id", operand).ToSQL()
+
+				require.NoError(t, err)
+				assert.Equal(t, "u.id IS NULL", sql)
+				assert.Empty(t, args)
+			})
+		})
+
+		t.Run("not_eq_"+name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				sql, args, err := jf.NotEq("u.id", operand).ToSQL()
+
+				require.NoError(t, err)
+				assert.Equal(t, "u.id IS NOT NULL", sql)
+				assert.Empty(t, args)
+			})
+		})
+
+		for doorName, door := range map[string]func(string, any) dbtypes.JoinFilter{
+			"lt": jf.Lt, "lte": jf.Lte, "gt": jf.Gt, "gte": jf.Gte,
+		} {
+			t.Run(doorName+"_"+name, func(t *testing.T) {
+				require.NotPanics(t, func() {
+					_, _, err := door("u.id", operand).ToSQL()
+
+					require.Error(t, err)
+					assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				})
+			})
+		}
 	}
 }
