@@ -4622,7 +4622,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ---
 
-## E61 · v0.60.0 → v0.61.0 — the server's own 400 details stop echoing request input, and `Having` gains a sanctioned expression path, and the framework owns the Flyway URL
+## E61 · v0.60.0 → v0.61.0 — the server's own 400 details stop echoing request input, span sinks record errors by type, the query builder validates and normalizes every identifier door and `Having` gains a sanctioned expression path, `jf.Eq` renders nil and lists like `f.Eq`, and the framework owns the Flyway URL
 
 - gist: Two of the framework's own 400 details echoed caller-controlled text. `FieldError.Value`
   was `fmt.Sprintf("%v", err.Value())` — the rejected input, for ANY failed validation tag — and
