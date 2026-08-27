@@ -934,3 +934,19 @@ func TestURLArgsDefersOnCredentialOnlyConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, args)
 }
+
+// TestURLDatabaseSegmentKeepsAPlusLiteral pins the pgjdbc-side decode: the driver runs
+// the database segment through URLDecoder, where a bare "+" becomes a space, so the
+// segment must carry %2B while a real space stays the %20 PathEscape already emits.
+func TestURLDatabaseSegmentKeepsAPlusLiteral(t *testing.T) {
+	assert.Equal(t, "bill%2Bing", urlDatabaseSegment("bill+ing"))
+	assert.Equal(t, "bill%20ing", urlDatabaseSegment("bill ing"))
+	assert.Equal(t, "billing", urlDatabaseSegment("billing"))
+
+	db := pgURLConfig()
+	db.Database = "bill+ing"
+	got, err := buildPostgresJDBCURL(db, testAppName, "", "")
+	require.NoError(t, err)
+	assert.Contains(t, got, "/bill%2Bing?")
+	assert.NotContains(t, got, "/bill+ing")
+}

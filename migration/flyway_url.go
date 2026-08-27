@@ -275,7 +275,7 @@ func buildPostgresJDBCURL(db *config.DatabaseConfig, appName, tlsMode, caFile st
 		return "", ErrMigrationMTLSUnsupported
 	}
 
-	jdbcURL := jdbcPostgresScheme + urlAuthority(db.Host, db.Port) + "/" + url.PathEscape(db.Database)
+	jdbcURL := jdbcPostgresScheme + urlAuthority(db.Host, db.Port) + "/" + urlDatabaseSegment(db.Database)
 
 	params := url.Values{}
 	if appName != "" {
@@ -292,6 +292,14 @@ func buildPostgresJDBCURL(db *config.DatabaseConfig, appName, tlsMode, caFile st
 	}
 
 	return jdbcURL, nil
+}
+
+// urlDatabaseSegment renders the database name as a JDBC path segment. url.PathEscape
+// leaves "+" literal, but pgjdbc decodes the database segment with URLDecoder, which
+// reads "+" as a space — so "bill+ing" would target "bill ing". Escaping it as %2B
+// survives that decode as a literal plus.
+func urlDatabaseSegment(database string) string {
+	return strings.ReplaceAll(url.PathEscape(database), "+", "%2B")
 }
 
 // urlAuthority renders host[:port], omitting the port when it is zero so the
