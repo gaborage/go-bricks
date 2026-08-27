@@ -70,29 +70,40 @@ var validTableNamePattern = regexp.MustCompile(
 	`^(?P<ident>` + qualified + `)(?P<alias> ` + sqllex.Segment + `)?$`,
 )
 
+// normalizeAgainst is the one shape every identifier validator has: trim, match
+// the trimmed value, and return THAT value so the caller renders what was judged.
+// Returning the normalized identifier is the contract itself — validating a
+// trimmed value while rendering the untrimmed one is what let `Select("t.* ")`
+// render as `t."*"` on Oracle (ADR-082) and left padded identifiers in the SQL at
+// every other door (#1158). mkErr builds the rejection, so each door keeps its own
+// wording.
+func normalizeAgainst(pattern *regexp.Regexp, identifier string, mkErr func() error) (normalized string, err error) {
+	trimmed := strings.TrimSpace(identifier)
+	if !pattern.MatchString(trimmed) {
+		return "", mkErr()
+	}
+	return trimmed, nil
+}
+
 // validateIdentifier rejects identifier arguments (column names, table names/
 // aliases, UPDATE SET targets) that fall outside the safe simple/qualified-
 // identifier grammar.
 // Returns a descriptive error naming the rejected value.
-func validateIdentifier(context, identifier string) error {
-	trimmed := strings.TrimSpace(identifier)
-	if !validIdentifierPattern.MatchString(trimmed) {
+func validateIdentifier(context, identifier string) (normalized string, err error) {
+	return normalizeAgainst(validIdentifierPattern, identifier, func() error {
 		return fmt.Errorf("invalid %s identifier %q: must be a simple or qualified identifier "+
 			"matching %s — use qb.Expr()/Raw() for complex expressions", context, identifier, sqllex.Segment)
-	}
-	return nil
+	})
 }
 
 // validateTableName rejects table-name arguments that fall outside the safe
 // simple/qualified-identifier grammar plus an optional inline alias ("users u").
-func validateTableName(identifier string) error {
-	trimmed := strings.TrimSpace(identifier)
-	if !validTableNamePattern.MatchString(trimmed) {
+func validateTableName(identifier string) (normalized string, err error) {
+	return normalizeAgainst(validTableNamePattern, identifier, func() error {
 		return fmt.Errorf("invalid table identifier %q: must be a simple or qualified identifier "+
 			"with an optional alias (e.g. \"users\" or \"users u\") — use qb.Expr()/Raw() for complex expressions",
 			identifier)
-	}
-	return nil
+	})
 }
 
 // validateSelectIdentifier rejects SELECT column arguments that fall outside the
@@ -105,25 +116,21 @@ func validateTableName(identifier string) error {
 // `t.* ` passed validation and then rendered as `t."*"` on Oracle — a blessed
 // input the renderer mangles.
 func validateSelectIdentifier(identifier string) (normalized string, err error) {
-	trimmed := strings.TrimSpace(identifier)
-	if !validSelectIdentifierPattern.MatchString(trimmed) {
-		return "", fmt.Errorf("invalid select identifier %q: must be a simple or qualified identifier, "+
+	return normalizeAgainst(validSelectIdentifierPattern, identifier, func() error {
+		return fmt.Errorf("invalid select identifier %q: must be a simple or qualified identifier, "+
 			"or a wildcard (\"*\", \"t.*\") — use qb.Expr()/Raw() for expressions and aliases",
 			identifier)
-	}
-	return trimmed, nil
+	})
 }
 
 // validateClauseIdentifier rejects ORDER BY / GROUP BY arguments that fall
 // outside the safe identifier-plus-optional-direction grammar. The bounded
 // trailing direction (ASC/DESC [NULLS FIRST|LAST]) is permitted; everything
 // else — extra tokens, semicolons, comment markers — is rejected.
-func validateClauseIdentifier(context, identifier string) error {
-	trimmed := strings.TrimSpace(identifier)
-	if !validClauseIdentifierPattern.MatchString(trimmed) {
+func validateClauseIdentifier(context, identifier string) (normalized string, err error) {
+	return normalizeAgainst(validClauseIdentifierPattern, identifier, func() error {
 		return fmt.Errorf("invalid %s identifier %q: must be a simple or qualified identifier with an "+
 			"optional ASC/DESC [NULLS FIRST|LAST] direction — use qb.Expr()/Raw() for complex expressions",
 			context, identifier)
-	}
-	return nil
+	})
 }

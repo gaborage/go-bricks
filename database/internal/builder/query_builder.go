@@ -305,10 +305,11 @@ func (qb *QueryBuilder) Insert(table string) dbtypes.InsertQueryBuilder {
 // returned builder still fails there; the callers below stop early only to avoid
 // mutating a builder that carries no statement.
 func (qb *QueryBuilder) newInsertBuilder(context, table string) *InsertQueryBuilder {
-	if err := validateTableName(table); err != nil {
+	normalized, err := validateTableName(table)
+	if err != nil {
 		return &InsertQueryBuilder{qb: qb, err: fmt.Errorf("%s: %w", context, err)}
 	}
-	return &InsertQueryBuilder{qb: qb, insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(table))}
+	return &InsertQueryBuilder{qb: qb, insertBuilder: qb.statementBuilder.Insert(qb.quoteTableForQuery(normalized))}
 }
 
 // InsertWithColumns creates an INSERT query builder with pre-specified columns.
@@ -319,24 +320,33 @@ func (qb *QueryBuilder) InsertWithColumns(table string, columns ...string) dbtyp
 	if iqb.err != nil {
 		return iqb
 	}
-	if err := validateIdentifiers("insert column", columns); err != nil {
+	normalized, err := validateIdentifiers("insert column", columns)
+	if err != nil {
 		iqb.failClause(err)
 		return iqb
 	}
-	iqb.insertBuilder = iqb.insertBuilder.Columns(qb.quoteColumnsForDML(columns...)...)
+	iqb.insertBuilder = iqb.insertBuilder.Columns(qb.quoteColumnsForDML(normalized...)...)
 	return iqb
 }
 
 // validateIdentifiers checks a column list against the identifier grammar,
 // reporting the FIRST violation so the error names the first bad column rather
 // than the last — the same first-violation-wins rule the fluent builders follow.
-func validateIdentifiers(context string, columns []string) error {
+//
+// It returns the NORMALIZED list, and callers must render that rather than their
+// own input: validating a trimmed value while rendering the untrimmed one is what
+// let `Select("t.* ")` render as `t."*"` (ADR-082), and returning the value is
+// what stops the two from disagreeing again (#1158).
+func validateIdentifiers(context string, columns []string) (normalized []string, err error) {
+	normalized = make([]string, 0, len(columns))
 	for _, col := range columns {
-		if err := validateIdentifier(context, col); err != nil {
-			return err
+		trimmed, colErr := validateIdentifier(context, col)
+		if colErr != nil {
+			return nil, colErr
 		}
+		normalized = append(normalized, trimmed)
 	}
-	return nil
+	return normalized, nil
 }
 
 // InsertStruct creates an INSERT query by extracting all fields from a struct instance.
@@ -483,11 +493,12 @@ func (qb *QueryBuilder) Update(table string) dbtypes.UpdateQueryBuilder {
 	// Validate the table identifier before interpolation (all vendors): on
 	// PostgreSQL quoteTableForQuery returns the name verbatim, so an unvalidated
 	// table is a raw-interpolation (M9) vector. Surface a violation from ToSQL().
-	if err := validateTableName(table); err != nil {
+	normalized, err := validateTableName(table)
+	if err != nil {
 		uqb.failClause(fmt.Errorf("Update: %w", err))
 		return uqb
 	}
-	uqb.updateBuilder = qb.statementBuilder.Update(qb.quoteTableForQuery(table))
+	uqb.updateBuilder = qb.statementBuilder.Update(qb.quoteTableForQuery(normalized))
 	return uqb
 }
 
@@ -506,11 +517,12 @@ func (qb *QueryBuilder) Delete(table string) dbtypes.DeleteQueryBuilder {
 	dqb := &DeleteQueryBuilder{qb: qb}
 	// Validate the table identifier before interpolation (all vendors) — same M9
 	// raw-interpolation guard as Update/From. Surface a violation from ToSQL().
-	if err := validateTableName(table); err != nil {
+	normalized, err := validateTableName(table)
+	if err != nil {
 		dqb.failClause(fmt.Errorf("Delete: %w", err))
 		return dqb
 	}
-	dqb.deleteBuilder = qb.statementBuilder.Delete(qb.quoteTableForQuery(table))
+	dqb.deleteBuilder = qb.statementBuilder.Delete(qb.quoteTableForQuery(normalized))
 	return dqb
 }
 
@@ -754,10 +766,10 @@ func (qb *QueryBuilder) quoteColumnsForDML(columns ...string) []string {
 // The check matters most on PostgreSQL, where the default branch renders the
 // column verbatim, so an unvalidated argument was interpolated as written.
 func (qb *QueryBuilder) quoteColumnForQuery(column string) (string, error) {
-	if err := validateIdentifier("column", column); err != nil {
+	trimmed, err := validateIdentifier("column", column)
+	if err != nil {
 		return "", err
 	}
-	trimmed := strings.TrimSpace(column)
 	switch qb.vendor {
 	case dbtypes.Oracle:
 		return qb.quoteOracleColumn(trimmed), nil
@@ -792,45 +804,63 @@ func (qb *QueryBuilder) quoteTableForQuery(table string) string {
 // a *TableRef carries one) are interpolated verbatim into the SQL string, so both
 // must satisfy the safe identifier grammar on ALL vendors (M9). Unsupported types
 // fail fast — mirroring quoteTableReference's panic — via the returned error.
-func (qb *QueryBuilder) validateTableReference(table any) error {
+func (qb *QueryBuilder) validateTableReference(table any) (normalizedTableRef, error) {
 	switch t := table.(type) {
 	case string:
 		// Plain string table names may carry an inline alias ("users u").
-		return validateTableName(t)
+		normalized, err := validateTableName(t)
+		return normalizedTableRef{name: normalized, supported: true}, err
 	case *dbtypes.TableRef:
 		// TableRef carries name and alias separately; each is a bare identifier.
-		if err := validateIdentifier("table", t.Name()); err != nil {
-			return err
+		name, err := validateIdentifier("table", t.Name())
+		if err != nil {
+			return normalizedTableRef{}, err
 		}
+		ref := normalizedTableRef{name: name, supported: true}
 		if t.HasAlias() {
-			return validateIdentifier("table alias", t.Alias())
+			if ref.alias, err = validateIdentifier("table alias", t.Alias()); err != nil {
+				return normalizedTableRef{}, err
+			}
 		}
-		return nil
+		return ref, nil
 	default:
 		// Unsupported type is a programming error, not attacker input — defer to
 		// quoteTableReference's fail-fast panic rather than masking it as an error.
-		return nil
+		return normalizedTableRef{typeName: fmt.Sprintf("%T", table)}, nil
 	}
+}
+
+// normalizedTableRef is a validated table reference: the identifier(s) the
+// renderer must interpolate, already trimmed. It exists so validation and
+// rendering cannot disagree about which string they mean — the class #1158
+// closes. name carries the whole string form ("users u", inline alias included);
+// alias is set only for a TableRef, which keeps its parts separate. orig is
+// retained solely so an unsupported type still reaches quoteTableReference's
+// fail-fast panic with the caller's own value.
+type normalizedTableRef struct {
+	name  string
+	alias string
+	// typeName is the caller's own type, captured once so the renderer can name
+	// it in the fail-fast panic without re-deriving the classification — and
+	// without carrying an `any`, which would make this struct only conditionally
+	// comparable (an `any` holding a slice panics on == or map-key use).
+	typeName  string
+	supported bool
 }
 
 // quoteTableReference handles vendor-specific table quoting for both string names and TableRef instances.
 // Returns quoted table name with optional alias (e.g., "customers" c for PostgreSQL, "LEVEL" lvl for Oracle).
 // Accepts either string or *TableRef. Panics for invalid types (fail-fast validation).
-func (qb *QueryBuilder) quoteTableReference(table any) string {
-	switch t := table.(type) {
-	case string:
-		// Backward compatibility: plain string table name
-		return qb.quoteTableForQuery(t)
-	case *dbtypes.TableRef:
-		quotedName := qb.quoteTableForQuery(t.Name())
-		if t.HasAlias() {
-			// Quote table name, preserve alias case (no quotes on alias for standard SQL)
-			return quotedName + " " + t.Alias()
-		}
-		return quotedName
-	default:
-		panic(fmt.Sprintf("unsupported table reference type: %T (must be string or *TableRef)", table))
+func (qb *QueryBuilder) quoteTableReference(ref normalizedTableRef) string {
+	if !ref.supported {
+		panic(fmt.Sprintf("unsupported table reference type: %s (must be string or *TableRef)", ref.typeName))
 	}
+	quotedName := qb.quoteTableForQuery(ref.name)
+	if ref.alias != "" {
+		// Quote table name, preserve alias case (no quotes on alias for standard SQL)
+		return quotedName + " " + ref.alias
+	}
+	return quotedName
 }
 
 // quoteIdentifierForClause handles vendor-specific identifier quoting for ORDER BY and GROUP BY clauses
@@ -927,11 +957,12 @@ func (sqb *SelectQueryBuilder) From(from ...any) dbtypes.SelectQueryBuilder {
 	for i, table := range from {
 		// Validate table-name identifiers BEFORE interpolation (all vendors) so
 		// the FROM clause cannot be used as a SQL injection vector (M9).
-		if err := sqb.qb.validateTableReference(table); err != nil {
+		ref, err := sqb.qb.validateTableReference(table)
+		if err != nil {
 			sqb.failClause(fmt.Errorf("From: %w", err))
 			return sqb
 		}
-		quotedTables[i] = sqb.qb.quoteTableReference(table)
+		quotedTables[i] = sqb.qb.quoteTableReference(ref)
 	}
 
 	// Join with commas and pass as single FROM clause
@@ -1006,11 +1037,12 @@ func (sqb *SelectQueryBuilder) Where(filter dbtypes.Filter) dbtypes.SelectQueryB
 // interpolation. The table argument accepts only a string name or *TableRef (no
 // Expr()/Raw() expression slot for tables). See ADR-031.
 func (sqb *SelectQueryBuilder) validateJoinTable(method string, table any) (quoted string, ok bool) {
-	if err := sqb.qb.validateTableReference(table); err != nil {
+	ref, err := sqb.qb.validateTableReference(table)
+	if err != nil {
 		sqb.failClause(fmt.Errorf("%s: %w", method, err))
 		return "", false
 	}
-	return sqb.qb.quoteTableReference(table), true
+	return sqb.qb.quoteTableReference(ref), true
 }
 
 // JoinOn adds a type-safe JOIN clause to the query using JoinFilter for column comparisons.
@@ -1190,11 +1222,12 @@ func (sqb *SelectQueryBuilder) failClause(err error) {
 // crafted clause argument cannot inject a second statement or comment (M9). Use
 // qb.Expr() for complex expressions that legitimately need raw SQL.
 func (sqb *SelectQueryBuilder) appendClauseString(processed *[]string, value, clauseName string, stringFormatter func(string) string) {
-	if err := validateClauseIdentifier(clauseName, value); err != nil {
+	normalized, err := validateClauseIdentifier(clauseName, value)
+	if err != nil {
 		sqb.failClause(err)
 		return
 	}
-	*processed = append(*processed, stringFormatter(value))
+	*processed = append(*processed, stringFormatter(normalized))
 }
 
 // appendClauseExpr runs the same consumption-time check Select applies: a
@@ -1465,11 +1498,12 @@ func (dqb *DeleteQueryBuilder) OrderBy(orderBys ...string) dbtypes.DeleteQueryBu
 	for _, orderBy := range orderBys {
 		// Validate the ORDER BY identifier (with optional ASC/DESC [NULLS …])
 		// BEFORE interpolation on ALL vendors so it cannot inject SQL (M9).
-		if err := validateClauseIdentifier("orderBy", orderBy); err != nil {
+		normalized, err := validateClauseIdentifier("orderBy", orderBy)
+		if err != nil {
 			dqb.failClause(err)
 			return dqb
 		}
-		quotedOrderBys = append(quotedOrderBys, dqb.qb.quoteIdentifierForClause(orderBy))
+		quotedOrderBys = append(quotedOrderBys, dqb.qb.quoteIdentifierForClause(normalized))
 	}
 	dqb.deleteBuilder = dqb.deleteBuilder.OrderBy(quotedOrderBys...)
 	return dqb
@@ -1488,11 +1522,12 @@ func (dqb *DeleteQueryBuilder) ToSQL() (sql string, args []any, err error) {
 func (iqb *InsertQueryBuilder) Columns(columns ...string) dbtypes.InsertQueryBuilder {
 	// Validate each column identifier BEFORE interpolation (all vendors, M9), the
 	// same guard UpdateQueryBuilder.SetMap has applied since ADR-031.
-	if err := validateIdentifiers("insert column", columns); err != nil {
+	normalized, err := validateIdentifiers("insert column", columns)
+	if err != nil {
 		iqb.failClause(err)
 		return iqb
 	}
-	iqb.insertBuilder = iqb.insertBuilder.Columns(iqb.qb.quoteColumnsForDML(columns...)...)
+	iqb.insertBuilder = iqb.insertBuilder.Columns(iqb.qb.quoteColumnsForDML(normalized...)...)
 	return iqb
 }
 
@@ -1507,16 +1542,20 @@ func (iqb *InsertQueryBuilder) SetMap(clauses map[string]any) dbtypes.InsertQuer
 	// builders, opposite safety, nothing in either signature to tell them apart.
 	// sortedKeys keeps the reported column deterministic when several are invalid.
 	keys := sortedKeys(clauses)
-	if err := validateIdentifiers("SetMap column", keys); err != nil {
+	normalized, err := validateIdentifiers("SetMap column", keys)
+	if err != nil {
 		iqb.failClause(err)
 		return iqb
 	}
 	// Not squirrel's SetMap: it sorts the keys it is handed, so quoting first
 	// would order Oracle's columns by the leading quote ("level" ahead of id)
 	// rather than by name. Sorting the caller's names first and quoting in that
-	// order keeps the column order both vendors emit today.
+	// order keeps the column order both vendors emit today. The columns are the
+	// NORMALIZED names; values follow the caller's own keys, so two keys that
+	// differ only in padding stay two columns and the database reports the
+	// duplicate rather than one value being silently dropped.
 	iqb.insertBuilder = iqb.insertBuilder.
-		Columns(iqb.qb.quoteColumnsForDML(keys...)...).
+		Columns(iqb.qb.quoteColumnsForDML(normalized...)...).
 		Values(valuesByKeyOrder(clauses, keys)...)
 	return iqb
 }

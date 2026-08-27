@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,7 +27,9 @@ func TestValidateIdentifierAcceptsSafeForms(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {
-			require.NoError(t, validateIdentifier("column", c), "expected %q to be accepted", c)
+			normalized, err := validateIdentifier("column", c)
+			require.NoError(t, err, "expected %q to be accepted", c)
+			require.Equal(t, strings.TrimSpace(c), normalized, "an accepted identifier must come back normalized")
 		})
 	}
 }
@@ -50,7 +53,8 @@ func TestValidateIdentifierRejectsInjection(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			require.Error(t, validateIdentifier("column", c.input), "expected %q to be rejected", c.input)
+			_, err := validateIdentifier("column", c.input)
+			require.Error(t, err, "expected %q to be rejected", c.input)
 		})
 	}
 }
@@ -73,7 +77,9 @@ func TestValidateClauseIdentifierAcceptsDirections(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {
-			require.NoError(t, validateClauseIdentifier("orderBy", c), "expected %q to be accepted", c)
+			normalized, err := validateClauseIdentifier("orderBy", c)
+			require.NoError(t, err, "expected %q to be accepted", c)
+			require.Equal(t, strings.TrimSpace(c), normalized, "an accepted identifier must come back normalized")
 		})
 	}
 }
@@ -98,7 +104,8 @@ func TestValidateClauseIdentifierRejectsInjection(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			require.Error(t, validateClauseIdentifier("orderBy", c.input), "expected %q to be rejected", c.input)
+			_, err := validateClauseIdentifier("orderBy", c.input)
+			require.Error(t, err, "expected %q to be rejected", c.input)
 		})
 	}
 }
@@ -116,7 +123,9 @@ func TestValidateTableNameAcceptsAliasForms(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c, func(t *testing.T) {
-			require.NoError(t, validateTableName(c), "expected %q to be accepted", c)
+			normalized, err := validateTableName(c)
+			require.NoError(t, err, "expected %q to be accepted", c)
+			require.Equal(t, strings.TrimSpace(c), normalized, "an accepted identifier must come back normalized")
 		})
 	}
 }
@@ -136,7 +145,8 @@ func TestValidateTableNameRejectsInjection(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			require.Error(t, validateTableName(c.input), "expected %q to be rejected", c.input)
+			_, err := validateTableName(c.input)
+			require.Error(t, err, "expected %q to be rejected", c.input)
 		})
 	}
 }

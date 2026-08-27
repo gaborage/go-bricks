@@ -309,8 +309,9 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 	// vendors' templates: an unvalidated name ends the statement with a trailing
 	// comment and takes the rest of it, which no column precondition can catch
 	// (#1104). Same grammar From/Update/Delete apply.
-	if err := validateTableName(table); err != nil {
-		return "", nil, fmt.Errorf("BuildUpsert: %w", err)
+	table, tableErr := validateTableName(table)
+	if tableErr != nil {
+		return "", nil, fmt.Errorf("BuildUpsert: %w", tableErr)
 	}
 
 	if len(conflictColumns) == 0 {

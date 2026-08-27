@@ -3148,3 +3148,125 @@ func TestDoorsRejectFunctionShapedIdentifiers(t *testing.T) {
 		}
 	}
 }
+
+// TestPaddedIdentifiersRenderTrimmed pins the contract #1158 closes: a validator
+// judges the TRIMMED identifier, so every door must render the value it judged.
+// Each case asserts the padded call is byte-identical to its unpadded twin —
+// comparing against the twin rather than a literal, so the assertion cannot drift
+// from whatever the renderer legitimately emits.
+func TestPaddedIdentifiersRenderTrimmed(t *testing.T) {
+	doors := map[string]func(qb *QueryBuilder, pad func(string) string) (string, []any, error){
+		"select": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Select(pad(colName)).From(tableUsers).ToSQL()
+		},
+		"from": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Select(colName).From(pad(tableUsers)).ToSQL()
+		},
+		"from_with_alias": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Select(colName).From(pad("users u")).ToSQL()
+		},
+		"order_by": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Select(colName).From(tableUsers).OrderBy(pad(colName)).ToSQL()
+		},
+		"group_by": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Select(colName).From(tableUsers).GroupBy(pad(colName)).ToSQL()
+		},
+		"filter_column": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Select(colName).From(tableUsers).Where(qb.Filter().Eq(pad(colID), 1)).ToSQL()
+		},
+		"join_filter_column": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			jf := qb.JoinFilter()
+			return qb.Select(colName).From(tableUsers).
+				JoinOn("orders o", jf.EqColumn(pad("users.id"), "o.user_id")).ToSQL()
+		},
+		"join_table": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			jf := qb.JoinFilter()
+			return qb.Select(colName).From(tableUsers).
+				JoinOn(pad("orders o"), jf.EqColumn("users.id", "o.user_id")).ToSQL()
+		},
+		"insert_with_columns": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.InsertWithColumns(tableUsers, pad(colName)).Values(1).ToSQL()
+		},
+		"insert_columns": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Insert(tableUsers).Columns(pad(colName)).Values(1).ToSQL()
+		},
+		"insert_set_map": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Insert(tableUsers).SetMap(map[string]any{pad(colName): 1}).ToSQL()
+		},
+		"insert_table": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Insert(pad(tableUsers)).Columns(colName).Values(1).ToSQL()
+		},
+		"update_table": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Update(pad(tableUsers)).Set(colName, 1).ToSQL()
+		},
+		"delete_table": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Delete(pad(tableUsers)).Where(qb.Filter().Eq(colID, 1)).ToSQL()
+		},
+		"delete_order_by": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Delete(tableUsers).Where(qb.Filter().Eq(colID, 1)).OrderBy(pad(colName)).ToSQL()
+		},
+		"update_set_column": func(qb *QueryBuilder, pad func(string) string) (string, []any, error) {
+			return qb.Update(tableUsers).Set(pad(colName), 1).ToSQL()
+		},
+	}
+
+	unpadded := func(s string) string { return s }
+	padded := func(s string) string { return " \t" + s + "\n " }
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		for name, door := range doors {
+			t.Run(vendor+"_"+name, func(t *testing.T) {
+				wantSQL, wantArgs, wantErr := door(NewQueryBuilder(vendor), unpadded)
+				require.NoError(t, wantErr)
+
+				gotSQL, gotArgs, gotErr := door(NewQueryBuilder(vendor), padded)
+
+				require.NoError(t, gotErr)
+				assert.Equal(t, wantSQL, gotSQL)
+				assert.Equal(t, wantArgs, gotArgs)
+			})
+		}
+	}
+}
+
+// TestBuildUpsertPaddedTableRendersTrimmed covers the one door that is not a
+// fluent builder, so it cannot ride the table above.
+func TestBuildUpsertPaddedTableRendersTrimmed(t *testing.T) {
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		t.Run(vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(vendor)
+			insert := map[string]any{colID: 1, colName: "x"}
+
+			wantSQL, _, err := qb.BuildUpsert(tableUsers, []string{colID}, insert, nil)
+			require.NoError(t, err)
+
+			gotSQL, _, err := qb.BuildUpsert("  "+tableUsers+"  ", []string{colID}, insert, nil)
+
+			require.NoError(t, err)
+			assert.Equal(t, wantSQL, gotSQL)
+		})
+	}
+}
+
+// TestTableRefPaddedPartsRenderTrimmed pins the TableRef door: its name and alias
+// are separate fields, so they normalize through validateTableReference rather
+// than through the table-name grammar's inline-alias form.
+func TestTableRefPaddedPartsRenderTrimmed(t *testing.T) {
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		t.Run(vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(vendor)
+
+			plain, err := dbtypes.Table(tableUsers)
+			require.NoError(t, err)
+			wantSQL, _, err := qb.Select(colName).From(plain.MustAs("u")).ToSQL()
+			require.NoError(t, err)
+
+			padded, err := dbtypes.Table(" " + tableUsers + " ")
+			require.NoError(t, err)
+			gotSQL, _, err := qb.Select(colName).From(padded.MustAs(" u ")).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, wantSQL, gotSQL)
+		})
+	}
+}
