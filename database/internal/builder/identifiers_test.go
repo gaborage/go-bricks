@@ -93,6 +93,8 @@ func TestValidateClauseIdentifierRejectsInjection(t *testing.T) {
 		{"bogus_direction", "name SIDEWAYS"},
 		{"subselect", "name) UNION SELECT password FROM users--"},
 		{"nulls_without_position", "name NULLS"},
+		{"direction_without_nulls_position", "name DESC NULLS"},
+		{"two_directions", "name ASC DESC"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

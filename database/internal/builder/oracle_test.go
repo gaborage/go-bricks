@@ -738,6 +738,14 @@ func TestQuoteOracleIdentifierForClause(t *testing.T) {
 		// Qualified identifiers
 		{"qualified_reserved", testTableName, `schema."number"`},
 		{"qualified_normal", "schema.name", "schema.name"},
+
+		// The four-token grammar ADR-031 documents. The renderer understood only
+		// `col DIR` and quoted the whole string, which Oracle rejects (#1156).
+		{"reserved_with_desc_nulls_last", "level DESC NULLS LAST", `"level" DESC NULLS LAST`},
+		{"reserved_with_nulls_first_only", "level NULLS FIRST", `"level" NULLS FIRST`},
+		{"normal_with_asc_nulls_last", "created_at ASC NULLS LAST", "created_at ASC NULLS LAST"},
+		{"lowercase_direction_uppercases", "name desc", "name DESC"},
+		{"qualified_reserved_lowercase_nulls", "t.level desc nulls first", `t."level" DESC NULLS FIRST`},
 	}
 
 	for _, tt := range tests {
@@ -1153,6 +1161,28 @@ func TestOracleQuoteIdentifierDottedQuotedNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, oracleQuoteIdentifier(tt.identifier))
+		})
+	}
+}
+
+func TestOracleFromAliasQuoting(t *testing.T) {
+	tests := []struct {
+		name   string
+		vendor dbtypes.Vendor
+		table  string
+		want   string
+	}{
+		{name: "oracle_non_reserved_table_with_alias", vendor: dbtypes.Oracle, table: "users u", want: "SELECT name FROM users u"},
+		{name: "oracle_reserved_table_with_alias", vendor: dbtypes.Oracle, table: "level l", want: `SELECT name FROM "level" l`},
+		{name: "postgresql_table_with_alias", vendor: dbtypes.PostgreSQL, table: "users u", want: "SELECT name FROM users u"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, _, err := NewQueryBuilder(tt.vendor).Select(colName).From(tt.table).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, sql)
 		})
 	}
 }
