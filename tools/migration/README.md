@@ -125,51 +125,99 @@ TLS shapes it rejects:
 
 #### Reaching Flyway
 
-PostgreSQL TLS settings are exported to the Flyway subprocess as environment
-variables, unset ones omitted:
+For a PostgreSQL config using discrete fields (`host`/`port`/`database`), the framework
+**builds the JDBC URL itself** and passes it as `-url=` on the Flyway command line
+(ADR-085). A command-line flag outranks the conf, so **any `flyway.url` in your
+`flyway.conf` is silently ignored** for these configs — delete it, or accept that it has
+no effect. The built URL is:
 
-| Config key | Environment variable |
+```text
+jdbc:postgresql://<host>[:<port>]/<database>?ApplicationName=<app.name>[&sslmode=…][&sslrootcert=…]
+```
+
+| Config key | URL parameter |
 | --- | --- |
-| `database.tls.mode` | `DB_SSLMODE` |
-| `database.tls.ca` | `DB_SSLROOTCERT` |
-| `database.tls.cert` | `DB_SSLCERT` |
-| `database.tls.key` | `DB_SSLKEY` |
+| `database.tls.mode` | `sslmode` |
+| `database.tls.ca` | `sslrootcert` |
+| `app.name` | `ApplicationName` (automatic; no config key — pgjdbc's spelling, not libpq's `application_name`, which pgjdbc ignores; it still lands in the server's `application_name` column) |
 
-**Your `flyway.conf` must reference them** — the JDBC URL is yours, and the framework
-does not parse it, so it cannot confirm the settings are applied. A run with any
-`database.tls` value set logs a WARN saying exactly that. Wire them with Flyway's
-`${env.NAME}` substitution:
+The port is omitted when `database.port` is unset or `0`, leaving the driver's
+default; a negative port fails with `ErrInvalidMigrationPort` rather than being dropped. Unset TLS fields are omitted. Credentials are **not** on the URL — `DB_USER`/`DB_PASSWORD`
+stay environment-delivered, because argv is world-readable in the process list. This
+closes the gap where a conf-owned URL could migrate in cleartext while
+`database.tls.mode: verify-full` validated cleanly, and where the migration target could
+silently disagree with the runtime target.
 
-Server-certificate verification, which needs `database.tls.mode` and `database.tls.ca`:
+**Client-certificate (mTLS) migrations are unsupported.** With `database.tls.cert` or
+`database.tls.key` set, a PostgreSQL migrate fails closed rather than connecting without
+the client certificate. The limitation is the framework's, not pgjdbc's: it does not
+forward `database.tls.cert`/`key` as the JDBC `sslcert`/`sslkey` parameters, so it
+refuses rather than silently migrating without them. Server-authenticated TLS (`mode` + `ca`) is
+fully supported; runtime mTLS is unaffected.
 
-```properties
-flyway.url=jdbc:postgresql://${env.DB_HOST}:${env.DB_PORT}/${env.DB_NAME}?sslmode=${env.DB_SSLMODE}&sslrootcert=${env.DB_SSLROOTCERT}
-```
+**`database.host` must be an IP address or a plain DNS name.** It is the one URL
+component that cannot be percent-encoded — it has to stay routable — so it is validated
+instead. Left unescaped, a host like `db.internal/?sslmode=disable&x=` would end the URL
+authority early and pgjdbc would read the injected parameters, connecting in cleartext to
+a host of the value's choosing. Letters, digits, hyphen, underscore and dots are accepted
+(underscore because internal DNS and Docker hostnames use it), as is an IPv6 literal in
+EITHER spelling — bare (`::1`) or bracketed (`[::1]`), which the URL builder normalizes to
+exactly one pair of brackets. Anything else, including a host carrying its own `:port`,
+fails with `ErrInvalidMigrationHost`. The error never
+echoes the value, since a misconfigured host can hold a whole DSN.
 
-Client-certificate (mTLS) auth, which additionally needs `cert` and `key`:
+**`database.port` must be 1–65535, or `0` for the driver default.** The port is omitted
+from the URL when it is zero; a negative one used to take that same branch and migrate
+silently against the driver's 5432, so anything below 0 or above 65535 now fails with
+`ErrInvalidMigrationPort`. The error names the field, not the value.
 
-```properties
-flyway.url=jdbc:postgresql://${env.DB_HOST}:${env.DB_PORT}/${env.DB_NAME}?sslmode=${env.DB_SSLMODE}&sslrootcert=${env.DB_SSLROOTCERT}&sslcert=${env.DB_SSLCERT}&sslkey=${env.DB_SSLKEY}
-```
+**`database.tls.mode` must be one of the libpq six**, matched case-sensitively:
+`disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full`. The mode was copied onto
+the JDBC URL verbatim, so an unsupported one reached Flyway instead of failing here; it now
+returns `ErrInvalidMigrationTLSMode`, which names the offending mode. Surrounding whitespace is
+trimmed before matching, exactly as the runtime's own validation trims it, so ` require` is
+normalized rather than refused; case is folded by neither, so `Require` fails in both places. An unset mode simply puts no `sslmode` on the URL.
 
-**Reference only the variables your config actually sets.** Unset fields are not
-exported, so a URL naming `sslrootcert=${env.DB_SSLROOTCERT}` while `database.tls.ca`
-is empty leaves the placeholder unresolved. With `mode` alone, use
-`?sslmode=${env.DB_SSLMODE}` and nothing further.
+**`database.tls.ca` needs `verify-ca` or `verify-full`, and `ca: system` is refused.**
+pgjdbc reads `sslrootcert` only under those two modes — `require`, `allow` and `prefer` use a
+non-validating socket factory, and an unset mode is `prefer` — so a CA named under any other
+mode was written onto the URL and then ignored, leaving the migration authenticating nothing.
+It now fails with `ErrMigrationTLSCARequiresVerify`. Note this is **stricter than the runtime**:
+`require` + `ca` passes `config.Validate` because pgx treats that pair as `verify-ca`, so the
+service verifies while the migration would not — the migrate door answers for pgjdbc. The
+`ca: system` sentinel (the platform trust store, understood by pgx) is refused with
+`ErrMigrationTLSCASystemUnsupported`: pgjdbc treats `sslrootcert` as a file path and has no
+equivalent, and remapping it to the JVM trust store would authenticate against a different set
+of CAs than the runtime does. Point `database.tls.ca` at the CA file itself for migrations.
 
-The `env.` prefix is required — a bare `${DB_SSLMODE}` is Flyway's *placeholder*
-syntax, which resolves from `flyway.placeholders.*` and migration scripts, not from
-the process environment. A conf that never mentions `DB_SSLMODE` runs with whatever
-TLS the URL itself specifies — possibly none — no matter what `database.tls.mode` says.
+**A partially filled block fails rather than falling back.** If `host`, `port`, or
+`database` is set but not a usable `host` AND `database`, the run fails with
+`ErrIncompleteMigrationTarget` instead of deferring to the conf — on a fleet run, a tenant
+whose host arrived blank from a secret store would otherwise migrate against whatever host
+`flyway.conf` names, which is another tenant's database. Any `database.tls` setting that
+cannot be put on a URL fails the same way. Credentials do not count as a target:
+`username`/`password` are environment-delivered under every shape and never reach the URL.
 
-`DB_SSLKEY` needs one caveat: `database.tls.key` is validated against libpq
-semantics (as pgx uses it), but pgjdbc's `sslkey` expects a PKCS-8 DER file, not PEM.
-Convert the key for the Flyway leg, or leave `sslkey` out and use a mode that does not
-require a client certificate. A format mismatch fails loudly at connect, not silently.
+**`database.tls` beside a `connectionstring` fails rather than being dropped.** A DSN is
+used verbatim and the framework does not parse it, so TLS configured in a `database.tls`
+block could only be discarded. `config.Validate` already rejects that pair (ADR-062), but
+`MigrateFor` also takes per-tenant configs that never passed it — a dynamic
+`DBConfigProvider`, or this CLI's `tenants.yaml` — so the migrator refuses on its own with
+`ErrMigrationTLSWithConnectionString`. The remedy is two-sided, and moving the settings into
+the DSN is only half of it: the DSN secures the **runtime** pool, but a `connectionstring`
+config gets no `-url=`, so Flyway still takes its JDBC URL from `flyway.conf` — give that URL
+its own `sslmode`/`sslrootcert`, or the migration runs against whatever it names, unencrypted.
+Encrypting that URL is necessary but not sufficient: confirm it names the **same host and
+database** as the DSN, or you get an encrypted migration applied to the wrong database. Nothing
+in the framework can cross-check a DSN it does not parse.
 
-If you already export `DB_SSLMODE` (or the others) from your own environment *and*
-set `database.tls`, the config value now wins: framework variables are appended after
-the inherited environment.
+**Three config shapes keep the conf-owned URL:**
+
+| Shape | Why |
+| --- | --- |
+| Oracle | `database.tls` is unsupported and rejected for Oracle (ADR-062) — the field exists in the shared config, validation refuses it — and the framework builds no Oracle JDBC URL. |
+| `database.connectionstring` **with no `database.tls` block** | The framework does not parse DSNs, and the DSN carries its own TLS, so no guarantee is offered — but `tls.*` alongside one fails rather than deferring. |
+| A block naming no `host`, `port`, or `database` (credentials only, or bare) | Nothing to build a URL from, so no guarantee is offered — but with `tls.*` set it fails instead of deferring. |
 
 ### Runtime tuning
 

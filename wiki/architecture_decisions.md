@@ -1394,6 +1394,32 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-085: The Framework Owns the PostgreSQL Flyway JDBC URL](adr_085_framework_owned_flyway_url.md)
+
+**Date:** 2026-08-24 | **Status:** Accepted | **Breaking:** `flyway.url` in a conf is outranked for PG discrete-field configs; PG mTLS migrations refused
+
+`database.tls` reached Flyway only as `DB_SSL*` environment variables that the operator's
+`flyway.conf` may or may not have interpolated into its own JDBC URL — so a conf naming no
+`sslmode` migrated in cleartext while `database.tls.mode: verify-full` validated cleanly, and a
+conf naming a different host migrated a different database than the runtime connects to. The
+only signal was a once-per-migrator WARN. The decision has the framework build
+`jdbc:postgresql://host[:port]/db?ApplicationName=…[&sslmode=…][&sslrootcert=…]` from
+`database.*` and pass it as `-url=`, which outranks the conf, for every PostgreSQL
+discrete-field config — TLS configured or not, with no escape hatch. Credentials stay
+environment-delivered (argv is world-readable); the WARN and the whole `DB_SSL*` export are
+removed; `database.tls.cert`/`key` fail closed on `ErrMigrationMTLSUnsupported` rather than
+connecting without the client certificate, because the framework does not forward them as
+`sslcert`/`sslkey` — the limit is ours, not a pgjdbc format rule. Oracle and TLS-free
+`connectionstring` configs keep the conf-owned URL; a `connectionstring` carrying
+`database.tls.*` fails on `ErrMigrationTLSWithConnectionString`, since the migrator cannot
+assume the per-tenant config passed `config.Validate`.
+
+**Key Benefits:** a `database.tls` setting that is a guarantee rather than an advisory, one
+source of truth for the migration target, and `ApplicationName` without a per-conf hand-edit.
+**Migration:** [migrations.md](migrations.md) `[C61.4]`.
+
+---
+
 ### [ADR-084: Response Error Details Carry No Request Input](adr_084_response_error_details_carry_no_request_input.md)
 
 **Date:** 2026-08-24 | **Status:** Accepted | **Breaking:** `server.FieldError.Value` removed
@@ -1829,7 +1855,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-084) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-085) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 
