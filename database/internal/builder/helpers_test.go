@@ -588,3 +588,30 @@ func TestUpsertColumnNameNamesTheColumnNotTheSpelling(t *testing.T) {
 		}
 	})
 }
+
+// TestBuildUpsertStillRejectsFunctionShapedKeyPresentInInsertColumns covers the
+// gap the deleted pass-through left: the pre-existing rejection tests use a
+// conflict column ABSENT from the insert map, so the membership check alone
+// would have kept them green while the acceptance rule silently widened.
+// The conflict column is deliberately VALID here. requireSingleColumnNames runs
+// conflict, then insert, then update, returning on the first failure, so a
+// function-shaped CONFLICT column is caught before the insert group is judged at
+// all — the pre-existing tests do that, and a regression in the insert group's
+// own check would leave them green. This one names the insert group.
+//
+// Oracle only: the PostgreSQL branch tests for an unescaped quote and nothing
+// else, so a function-shaped key has always been accepted there. That asymmetry
+// pre-dates this change and is left standing rather than altered inside it
+// (#1187).
+func TestBuildUpsertRejectsFunctionShapedInsertColumn(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.Oracle)
+
+	_, _, err := qb.BuildUpsert(
+		tableUsers,
+		[]string{colID},
+		map[string]any{"COUNT(*)": 1, colID: 2},
+		nil,
+	)
+
+	require.ErrorContains(t, err, "insert column")
+}

@@ -2226,13 +2226,18 @@ func TestAllFieldsWithAlias(t *testing.T) {
 // SQL. Both vendors run it — the gap is not Oracle grammar, it is a rendering
 // defect the two escapers share (#1104).
 func TestEscapeIdentifierDoublesInteriorQuotes(t *testing.T) {
-	// The qualified case belongs to EscapeIdentifier alone: it quotes every dot
+	// The qualified cases belong to EscapeIdentifier alone: it quotes every dot
 	// segment, while the Oracle renderer quotes only the segments that need it,
-	// so this one has no shared golden to derive a rendering from.
+	// so these have no shared golden to derive a rendering from.
 	tests := append([]identifierEscapeCase{}, identifierEscapeCases...)
-	tests = append(tests, identifierEscapeCase{
-		name: "qualified_name_escapes_each_part", identifier: `a"b.c`, escaped: `"a""b"."c"`,
-	})
+	tests = append(tests,
+		identifierEscapeCase{
+			name: "qualified_name_escapes_each_part", identifier: `a.c`, escaped: `"a"."c"`,
+		},
+		identifierEscapeCase{
+			name: "qualified_dotted_quoted_second_segment", identifier: `t."my.col"`, escaped: `"t"."my.col"`,
+		},
+	)
 
 	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
 		qb := NewQueryBuilder(vendor)
@@ -2256,6 +2261,13 @@ type identifierEscapeCase struct {
 // wrapped in a SELECT — two copies would let one be updated and the other left
 // stale, which is the drift class this whole change is about.
 var identifierEscapeCases = []identifierEscapeCase{
+	// A dot INSIDE a quoted segment is part of the name: one column, not two.
+	{name: "dotted_quoted_name_stays_one_identifier", identifier: `"my.col"`, escaped: `"my.col"`},
+	// An unbalanced quote makes the string unparseable as a qualified name, so it
+	// renders as ONE escaped identifier rather than being split on a dot the
+	// parser never reached (#1151). EscapeIdentifier is exported, so this is a
+	// live input shape, not a dead branch — the escape is what keeps it safe.
+	{name: "unparseable_name_renders_as_one_identifier", identifier: `a"b.c`, escaped: `"a""b.c"`},
 	{name: "lone_interior_quote_is_doubled", identifier: `a"b`, escaped: `"a""b"`},
 	{name: "already_doubled_quote_survives", identifier: `a""b`, escaped: `"a""b"`},
 	{name: "well_formed_quoted_passes_through", identifier: `"level"`, escaped: `"level"`},
@@ -3091,5 +3103,48 @@ func TestUpdateSetMapReportsTheSameInvalidColumnEveryTime(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "aaa; DROP TABLE users",
 			"the alphabetically first invalid column is always the reported one")
+	}
+}
+
+// TestDoorsRejectFunctionShapedIdentifiers pins, at the doors rather than at the
+// renderer, what makes the Oracle quoter's deleted function pass-through
+// unreachable (#1149): every public identifier door validates first, and none of
+// them admits a parenthesis. A function belongs in qb.Expr(), which is not an
+// identifier and does not come through here.
+func TestDoorsRejectFunctionShapedIdentifiers(t *testing.T) {
+	doors := map[string]func(qb *QueryBuilder, column string) (string, []any, error){
+		"Select": func(qb *QueryBuilder, column string) (string, []any, error) {
+			return qb.Select(column).From(tableUsers).ToSQL()
+		},
+		"FilterColumn": func(qb *QueryBuilder, column string) (string, []any, error) {
+			return qb.Select(colName).From(tableUsers).Where(qb.Filter().Eq(column, 1)).ToSQL()
+		},
+		"OrderBy": func(qb *QueryBuilder, column string) (string, []any, error) {
+			return qb.Select(colName).From(tableUsers).OrderBy(column).ToSQL()
+		},
+		"GroupBy": func(qb *QueryBuilder, column string) (string, []any, error) {
+			return qb.Select(colName).From(tableUsers).GroupBy(column).ToSQL()
+		},
+		"From": func(qb *QueryBuilder, column string) (string, []any, error) {
+			return qb.Select(colName).From(column).ToSQL()
+		},
+		"InsertWithColumns": func(qb *QueryBuilder, column string) (string, []any, error) {
+			return qb.InsertWithColumns(tableUsers, column).Values(1).ToSQL()
+		},
+		"Columns": func(qb *QueryBuilder, column string) (string, []any, error) {
+			return qb.Insert(tableUsers).Columns(column).Values(1).ToSQL()
+		},
+		"SetMap": func(qb *QueryBuilder, column string) (string, []any, error) {
+			return qb.Insert(tableUsers).SetMap(map[string]any{column: 1}).ToSQL()
+		},
+	}
+
+	for _, vendor := range []dbtypes.Vendor{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		for name, door := range doors {
+			t.Run(vendor+"_"+name, func(t *testing.T) {
+				_, _, err := door(NewQueryBuilder(vendor), "COUNT(*)")
+				require.Error(t, err)
+			})
+		}
 	}
 }

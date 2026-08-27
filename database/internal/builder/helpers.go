@@ -172,7 +172,7 @@ func (qb *QueryBuilder) requireSingleColumnNames(kind string, columns []string) 
 	}
 
 	for i, rendered := range qb.quoteOracleColumnsForDML(columns...) {
-		if !isSingleColumnName(rendered) || keyEscapesIdentifier(columns[i]) {
+		if !isSingleColumnName(rendered) || keyEscapesIdentifier(columns[i]) || keyIsFunctionShaped(columns[i]) {
 			return fmt.Errorf("%s column %q is not a single column name for upsert", kind, columns[i])
 		}
 	}
@@ -192,6 +192,27 @@ func (qb *QueryBuilder) requireSingleColumnNames(kind string, columns []string) 
 // should be accepted now that it renders correctly is tracked separately.
 func keyEscapesIdentifier(key string) bool {
 	return !isQuotedIdentifier(key) && hasUnescapedQuote(key)
+}
+
+// keyIsFunctionShaped reports whether an unquoted key carries a parenthesis.
+//
+// It reads the KEY for the same reason keyEscapesIdentifier does: the rendering
+// stopped betraying it. `count(*)` used to reach isSingleColumnName verbatim,
+// because the Oracle renderer returned anything function-shaped unquoted, and was
+// refused there as not a valid segment. That pass-through is gone (#1149), so the
+// key now renders as the quoted column `"count(*)"` and reads as a single name.
+// Refusing it here keeps the intended acceptance rule rather than widening it as
+// a side effect of deleting the branch. A key the caller QUOTED is left alone, as
+// before: `"count(*)"` names a column that may genuinely exist.
+//
+// It is not byte-for-byte the old rule: a paren-bearing string that was NOT a
+// well-formed call — `COUNT(` — used to fall through to normal quoting and be
+// accepted as the literal column `"COUNT("`, and is refused now. That is a
+// narrowing, deliberate and recorded rather than discovered later: an unquoted
+// key carrying a parenthesis is not a bare identifier, and a caller who means
+// such a column can still say so by quoting it.
+func keyIsFunctionShaped(key string) bool {
+	return !isQuotedIdentifier(key) && strings.ContainsAny(key, "()")
 }
 
 // isSingleColumnName reports whether a rendered identifier is one column name

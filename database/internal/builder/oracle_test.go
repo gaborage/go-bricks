@@ -13,11 +13,10 @@ import (
 )
 
 const (
-	countClause            = "COUNT(*)"
-	sumClause              = "SUM(amount)"
-	assertFormat           = "input: %s"
-	testIncompleteFunction = "COUNT("
-	testTableName          = "schema.number"
+	countClause   = "COUNT(*)"
+	sumClause     = "SUM(amount)"
+	assertFormat  = "input: %s"
+	testTableName = "schema.number"
 )
 
 func TestQuoteOracleColumnHandlesReservedWords(t *testing.T) {
@@ -176,204 +175,6 @@ func TestOracleQuoteIdentifierCaseSensitivity(t *testing.T) {
 			name:     "dotted_identifier",
 			input:    "table.number",
 			expected: `"table"."number"`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := qb.quoteOracleColumn(tt.input)
-			if result != tt.expected {
-				t.Fatalf("input: %s, expected: %s, got: %s", tt.input, tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestOracleSQLFunctionDetection(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		{
-			name:     "count_star",
-			input:    countClause,
-			expected: true,
-		},
-		{
-			name:     "sum_column",
-			input:    sumClause,
-			expected: true,
-		},
-		{
-			name:     "avg_field",
-			input:    "AVG(balance)",
-			expected: true,
-		},
-		{
-			name:     "max_function",
-			input:    "MAX(created_at)",
-			expected: true,
-		},
-		{
-			name:     "lower_case_function",
-			input:    strings.ToLower(countClause),
-			expected: true,
-		},
-		{
-			name:     "mixed_case_function",
-			input:    "CoUnT(*)",
-			expected: true,
-		},
-		{
-			name:     "regular_column",
-			input:    "name",
-			expected: false,
-		},
-		{
-			name:     "quoted_identifier",
-			input:    `"number"`,
-			expected: false,
-		},
-		{
-			name:     "dotted_identifier",
-			input:    "table.column",
-			expected: false,
-		},
-		{
-			name:     "column_with_parens_in_name",
-			input:    `"column(test)"`,
-			expected: false,
-		},
-		{
-			name:     "empty_string",
-			input:    "",
-			expected: false,
-		},
-		{
-			name:     "incomplete_function",
-			input:    testIncompleteFunction,
-			expected: false,
-		},
-		{
-			name:     "number_start",
-			input:    "1COUNT(*)",
-			expected: false,
-		},
-		{
-			name:     "function_with_underscores",
-			input:    "GET_USER_COUNT(*)",
-			expected: true,
-		},
-		{
-			name:     "quoted_with_parens",
-			input:    `"column(test)"`,
-			expected: false,
-		},
-		{
-			name:     "invalid_chars_in_function_name",
-			input:    "COUNT-STAR(*)",
-			expected: false,
-		},
-		{
-			name:     "no_closing_paren",
-			input:    "COUNT(*",
-			expected: false,
-		},
-		{
-			name:     "empty_function_name",
-			input:    "(*)",
-			expected: false,
-		},
-		{
-			name:     "function_with_numbers",
-			input:    "FUNC123(arg)",
-			expected: true,
-		},
-		{
-			name:     "qualified_function_schema_pkg_func",
-			input:    "SCHEMA.PKG.FUNC(table.column)",
-			expected: true,
-		},
-		{
-			name:     "qualified_function_schema_func",
-			input:    "SCHEMA.GET_USER_COUNT(*)",
-			expected: true,
-		},
-		{
-			name:     "qualified_function_with_underscores",
-			input:    "MY_SCHEMA.MY_PKG.MY_FUNC(arg)",
-			expected: true,
-		},
-		{
-			name:     "qualified_function_empty_segment",
-			input:    "SCHEMA..FUNC(arg)",
-			expected: false,
-		},
-		{
-			name:     "qualified_function_invalid_start",
-			input:    "SCHEMA.1PKG.FUNC(arg)",
-			expected: false,
-		},
-		{
-			name:     "qualified_function_invalid_chars",
-			input:    "SCHEMA.PKG-NAME.FUNC(arg)",
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isSQLFunction(tt.input)
-			if result != tt.expected {
-				t.Fatalf("input: %s, expected: %t, got: %t", tt.input, tt.expected, result)
-			}
-		})
-	}
-}
-
-func TestOracleQuoteIdentifierWithSQLFunctions(t *testing.T) {
-	qb := NewQueryBuilder(dbtypes.Oracle)
-
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{
-			name:     "count_star_not_quoted",
-			input:    countClause,
-			expected: countClause,
-		},
-		{
-			name:     "sum_column_not_quoted",
-			input:    sumClause,
-			expected: sumClause,
-		},
-		{
-			name:     "avg_reserved_column",
-			input:    "AVG(number)",
-			expected: "AVG(number)",
-		},
-		{
-			name:     "lowercase_function",
-			input:    countClause,
-			expected: countClause,
-		},
-		{
-			name:     "mixed_case_function",
-			input:    "Count(Balance)",
-			expected: "Count(Balance)",
-		},
-		{
-			name:     "regular_reserved_word_still_quoted",
-			input:    "number",
-			expected: `"number"`,
-		},
-		{
-			name:     "regular_column_not_quoted",
-			input:    "name",
-			expected: "name",
 		},
 	}
 
@@ -610,38 +411,6 @@ func TestIsQuotedString(t *testing.T) {
 	}
 }
 
-func TestExtractFunctionNameAndArgs(t *testing.T) {
-	tests := []struct {
-		name         string
-		input        string
-		expectedName string
-		expectedOk   bool
-	}{
-		{"simple_function", countClause, "COUNT", true},
-		{"with_spaces", "  FUNC  ( args ) ", "FUNC", true},
-		{"no_closing", "FUNC(", "", false},
-		{"no_opening", "FUNC)", "", false},
-		{"empty_name", "()", "", false},
-		{"no_parens", "FUNC", "", false},
-		{"complex_args", "SUM(table.column)", "SUM", true},
-		{"qualified_name", "SCHEMA.PKG.FUNC(arg)", "SCHEMA.PKG.FUNC", true},
-		{"nested_parens", "FUNC(INNER())", "FUNC", true},
-		{"starts_with_paren", "(FUNC)", "", false},
-		{"multiple_parens", "FUNC()MORE()", "FUNC", true}, // Only cares about first
-		{"whitespace_name", "  TRIM_FUNC  (arg)", "TRIM_FUNC", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			name, ok := extractFunctionNameAndArgs(tt.input)
-			assert.Equal(t, tt.expectedOk, ok, assertFormat, tt.input)
-			if tt.expectedOk {
-				assert.Equal(t, tt.expectedName, name, assertFormat, tt.input)
-			}
-		})
-	}
-}
-
 func TestIsValidOracleIdentifierStart(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -773,6 +542,13 @@ func TestParseQualifiedIdentifier(t *testing.T) {
 		{"mixed_quoted", `"SCHEMA".PKG."FUNC"`, []string{`"SCHEMA"`, "PKG", `"FUNC"`}, true},
 		{"all_quoted", `"SCHEMA"."PKG"."FUNC"`, []string{`"SCHEMA"`, `"PKG"`, `"FUNC"`}, true},
 
+		// Doubled quotes inside a quoted segment. The walker is a production
+		// renderer path since #1151, so its escape handling is load-bearing:
+		// these two inputs are what distinguish reading the character AFTER the
+		// quote from reading the one before it.
+		{"quoted_empty_segment", `"".x`, []string{`""`, "x"}, true},
+		{"segment_ends_with_doubled_quote", `"a""".b`, []string{`"a"""`, "b"}, true},
+
 		// Edge cases
 		{"single_dot", ".", nil, false},
 		{"empty_string", "", []string{""}, false},   // Will have empty segment
@@ -829,70 +605,6 @@ func TestValidateSegment(t *testing.T) {
 	}
 }
 
-// Integration test to verify the helper functions work together correctly
-func TestHelperFunctionsIntegration(t *testing.T) {
-	// Test cases that verify the interaction between helper functions
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		// Cases that previously failed due to bugs
-		{"number_start_bug_fix", "1COUNT(*)", false},
-		{"qualified_invalid_start_bug_fix", "SCHEMA.1PKG.FUNC(arg)", false},
-
-		// Valid cases
-		{"simple_function", countClause, true},
-		{"qualified_function", "SCHEMA.PKG.FUNC(arg)", true},
-		{"mixed_quoted_qualified", `"SCHEMA".PKG.FUNC(arg)`, true},
-
-		// Invalid cases
-		{"quoted_identifier", `"column"`, false},
-		{"no_parentheses", "NOTAFUNC", false},
-		{"empty_segments", "SCHEMA..FUNC()", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isSQLFunction(tt.input)
-			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
-		})
-	}
-}
-
-// TestIsBalancedParentheses tests the enhanced parentheses balancing logic
-func TestIsBalancedParentheses(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		// Balanced cases
-		{"simple_balanced", countClause, true},
-		{"nested_balanced", "FUNC(arg, OTHER(inner))", true},
-		{"multiple_balanced", "FUNC() + OTHER()", true},
-		{"empty_string", "", true},
-		{"no_parentheses", "column", true},
-
-		// Unbalanced cases
-		{"extra_opening", "COUNT((", false},
-		{"extra_closing", "COUNT())", false},
-		{"missing_opening", "COUNT)", false},
-		{"missing_closing", testIncompleteFunction, false},
-		{"wrong_order", ")COUNT(", false},
-		{"nested_unbalanced", "FUNC(OTHER()", false},
-		{"multiple_unbalanced", "FUNC()) + OTHER(", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isBalancedParentheses(tt.input)
-			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
-		})
-	}
-}
-
-// TestOracleFromClauseQuoting tests the new FROM clause identifier quoting
 func TestOracleFromClauseQuoting(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 
@@ -1023,11 +735,6 @@ func TestQuoteOracleIdentifierForClause(t *testing.T) {
 		{"normal_with_asc", "name ASC", "name ASC"},
 		{"normal_with_desc", "created_at DESC", "created_at DESC"},
 
-		// SQL functions (should not be quoted)
-		{"count_function", countClause, countClause},
-		{"sum_function", sumClause, sumClause},
-		{"qualified_function", "SCHEMA.FUNC(arg)", "SCHEMA.FUNC(arg)"},
-
 		// Qualified identifiers
 		{"qualified_reserved", testTableName, `schema."number"`},
 		{"qualified_normal", "schema.name", "schema.name"},
@@ -1041,42 +748,6 @@ func TestQuoteOracleIdentifierForClause(t *testing.T) {
 	}
 }
 
-// TestEnhancedSQLFunctionDetectionWithBalancedParentheses tests the stricter parentheses validation
-func TestEnhancedSQLFunctionDetectionWithBalancedParentheses(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
-	}{
-		// Valid balanced cases
-		{"simple_function", countClause, true},
-		{"function_with_args", sumClause, true},
-		{"nested_function", "UPPER(TRIM(name))", true},
-		{"multiple_args", "SUBSTR(name, 1, 10)", true},
-
-		// Invalid unbalanced cases (now properly detected)
-		{"extra_opening_paren", "COUNT((", false},
-		{"extra_closing_paren", "COUNT())", false},
-		{"missing_closing_paren", testIncompleteFunction, false},
-		{"wrong_paren_order", ")COUNT(", false},
-		{"nested_unbalanced", "UPPER(TRIM(name)", false},
-
-		// Edge cases
-		{"empty_function", "FUNC()", true},
-		{"quoted_identifier", `"column"`, false},
-		{"no_parentheses", "column", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isSQLFunction(tt.input)
-			assert.Equal(t, tt.expected, result, assertFormat, tt.input)
-		})
-	}
-}
-
-// TestOracleUpdateTableQuoting tests that UPDATE statements properly quote table names
-// for reserved words and mixed-case identifiers, preventing Oracle syntax errors.
 func TestOracleUpdateTableQuoting(t *testing.T) {
 	qb := NewQueryBuilder(dbtypes.Oracle)
 	f := qb.Filter()
@@ -1465,5 +1136,23 @@ func TestBuildUpsertValidatesTable(t *testing.T) {
 				require.NotEmpty(t, sql)
 			})
 		}
+	}
+}
+
+func TestOracleQuoteIdentifierDottedQuotedNames(t *testing.T) {
+	tests := []struct {
+		name       string
+		identifier string
+		want       string
+	}{
+		{name: "qualified_second_segment_stays_intact", identifier: `t."my.col"`, want: `t."my.col"`},
+		{name: "qualified_plain_name_splits", identifier: `t.level`, want: `t."level"`},
+		{name: "already_quoted_segments_pass_through", identifier: `"a"."b"`, want: `"a"."b"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, oracleQuoteIdentifier(tt.identifier))
+		})
 	}
 }
