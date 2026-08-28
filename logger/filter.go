@@ -215,6 +215,13 @@ func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, 
 		return f.filterStringMapWithProtection(m, visited, maxDepth)
 	}
 
+	// An OPAQUE payload is judged before the reflect walk, because the walk
+	// cannot see into it: bytes are one leaf to a name filter, however many
+	// named fields the payload carries of its own (#1133).
+	if payload, isOpaque := opaqueBytes(value); isOpaque {
+		return f.filterOpaquePayload(payload, value)
+	}
+
 	rv := reflect.ValueOf(value)
 	switch rv.Kind() {
 	case reflect.Slice, reflect.Array:

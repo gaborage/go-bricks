@@ -1450,3 +1450,89 @@ func TestDefaultFilterConfigHasNoErrorRedactor(t *testing.T) {
 	// until a consumer sets it.
 	assert.Nil(t, DefaultFilterConfig().ErrorRedactor)
 }
+
+// TestFilterMasksInsideJSONRawMessage pins the leak reported in #1133: a
+// json.RawMessage is bytes, so the NAME filter sees one opaque leaf called
+// "body" and the password inside it ships in clear through every door that
+// accepts a payload. The filter must parse what looks like JSON, walk it with
+// the same needles, and re-encode.
+func TestFilterMasksInsideJSONRawMessage(t *testing.T) {
+	payload := json.RawMessage(`{"password":"pw","user":"alice"}`)
+	want := `{"password":"***","user":"alice"}`
+
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+}
+
+// TestFilterMasksInsideBytesDoor covers the third door from #1133. Bytes() had
+// no filtering beyond the field NAME, so a payload logged through it leaked
+// whatever its own field names hid.
+func TestFilterMasksInsideBytesDoor(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+	log.Info().Bytes("body", []byte(`{"password":"pw","user":"alice"}`)).Msg("payload")
+
+	assertLoggedFieldJSON(t, buf, "body", `{"password":"***","user":"alice"}`)
+}
+
+// TestFilterLeavesCleanPayloadByteExact is the other half of the contract: a
+// payload with nothing to mask must ship EXACTLY as it arrived. Re-encoding
+// every payload would silently rewrite key order, number spelling and
+// whitespace for every consumer who logs one, so the filter re-encodes only
+// when it actually masked something.
+func TestFilterLeavesCleanPayloadByteExact(t *testing.T) {
+	// Key order and number spelling are the observable discriminators. Passing
+	// the payload through a decode/re-encode round trip would emit the keys
+	// alphabetically (alpha, big, zeta) because a Go map marshals sorted, so
+	// the ORIGINAL order surviving is proof the filter returned the input bytes
+	// rather than rebuilding them. The number literals are proof too: 1e3 comes
+	// back 1000 and the 20-digit integer rounds, unless the bytes are untouched.
+	//
+	// Interior whitespace is NOT asserted: zerolog's own encoder compacts a
+	// json.RawMessage on its way to the sink, which is the sink's rendering and
+	// not something this filter chose. What the filter owes is that it does not
+	// re-serialize a payload it had no reason to touch.
+	payload := json.RawMessage(`{"zeta":1e3,  "alpha":  [1,2],"big":12345678901234567890}`)
+
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	log.Info().Interface("body", payload).Msg("payload")
+
+	assert.Contains(t, buf.String(), `"body":{"zeta":1e3,"alpha":[1,2],"big":12345678901234567890}`,
+		"a payload with nothing to mask keeps its key order and number literals")
+}
+
+// TestFilterMasksInsideJSONLookingString covers the string door: a string whose
+// first non-space byte opens an object or array is a payload wearing a string's
+// clothes, and the name filter sees straight past it.
+func TestFilterMasksInsideJSONLookingString(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+	log.Info().Str("body", `{"password":"pw","user":"alice"}`).Msg("payload")
+
+	assertLoggedFieldJSON(t, buf, "body", `{"password":"***","user":"alice"}`)
+}
+
+// TestFilterMasksInsideRawMessageSlice covers []json.RawMessage, the shape that
+// panicked the walker before #1131 and has leaked since.
+func TestFilterMasksInsideRawMessageSlice(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	payload := []json.RawMessage{
+		json.RawMessage(`{"password":"pw"}`),
+		json.RawMessage(`{"user":"alice"}`),
+	}
+
+	require.NotPanics(t, func() {
+		log.Info().Interface("body", payload).Msg("payload")
+	})
+
+	assertLoggedFieldJSON(t, buf, "body", `[{"password":"***"},{"user":"alice"}]`)
+}
