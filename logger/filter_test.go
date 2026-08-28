@@ -2110,3 +2110,76 @@ func TestPEMScanIsBoundedByTheCap(t *testing.T) {
 		assert.Equal(t, key, loggedField(t, buf, "material"))
 	})
 }
+
+// nestedMap is a NAMED map type, so it takes the reflect.Map arm rather than
+// the map[string]any fast path, and its values can be more of itself — which is
+// what makes depth observable through that walker.
+type nestedMap map[string]any
+
+// TestReflectMapWalkerKeysAndDepth covers the map walker the payload extraction
+// turned into changed lines. Neither behaviour was pinned before: the package
+// had no test for a non-string-keyed map, and none that exhausts the depth
+// budget through this arm rather than through the map[string]any fast path.
+func TestReflectMapWalkerKeysAndDepth(t *testing.T) {
+	t.Run("a_non_string_key_is_stringified", func(t *testing.T) {
+		// `k.String()` on a non-string reflect.Value renders `<int Value>`, not
+		// the number, so the Kind test is what makes an int-keyed map readable.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Interface("counts", map[int]string{7: "seven"}).Msg("payload")
+
+		assert.Equal(t, map[string]any{"7": "seven"}, loggedField(t, buf, "counts"))
+	})
+
+	t.Run("a_string_key_is_unchanged", func(t *testing.T) {
+		// The other side of the same branch, so the test pins the condition
+		// rather than just one arm of it.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Interface("headers", map[string]string{"x-trace": "abc"}).Msg("payload")
+
+		assert.Equal(t, map[string]any{"x-trace": "abc"}, loggedField(t, buf, "headers"))
+	})
+
+	t.Run("a_sensitive_key_is_masked_through_this_arm", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Interface("headers", map[string]string{"authorization": "Bearer x"}).Msg("payload")
+
+		assert.Equal(t, map[string]any{"authorization": DefaultMaskValue}, loggedField(t, buf, "headers"))
+	})
+
+	t.Run("depth_is_spent_per_level_through_this_arm", func(t *testing.T) {
+		// Nested one level past the budget. The walk must exhaust and cut the
+		// subtree to the mask; if the step stopped decrementing, the structure
+		// would survive intact all the way down instead.
+		deep := nestedMap{"leaf": "bottom"}
+		for range DefaultMaxDepth + 1 {
+			deep = nestedMap{"a": deep}
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", deep).Msg("payload")
+
+		// Walk down the logged structure: somewhere at or before the budget the
+		// value must become the mask string rather than another map.
+		current := loggedField(t, buf, "body")
+		levels := 0
+		for {
+			m, isMap := current.(map[string]any)
+			if !isMap {
+				break
+			}
+			next, ok := m["a"]
+			if !ok {
+				break
+			}
+			current = next
+			levels++
+		}
+		assert.Equal(t, DefaultMaskValue, current,
+			"the walk must cut the subtree at the budget, not descend forever")
+		assert.LessOrEqual(t, levels, DefaultMaxDepth,
+			"the cut must happen at or before the depth budget")
+	})
+}
