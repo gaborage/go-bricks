@@ -132,7 +132,7 @@ func NewProductService(db database.Interface) *ProductService {
 
 **Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex/RegexI/NotRegex/NotRegexI`, `f.JSONContains` (PostgreSQL only), `f.Null/NotNull`, `f.Between`.
 
-**Operand contract (both families, every value door):** `f` and `jf` resolve an operand the same way before doing anything with it — a NIL pointer is nil before it is asked for anything, then a `driver.Valuer` becomes its `Value()`, then a pointer becomes its element — and classify the RESULT as NIL (`nil`, a typed nil pointer, a Valuer reporting NULL), a LIST (a slice or an array), or a SCALAR (anything else, `[]byte` and a Valuer holding a value included). A `dbtypes.RawExpression` operand (`qb.Expr(…)`) is spliced before all of this — its SQL goes into the predicate verbatim, with no placeholder and no argument — so it is neither resolved nor classified.
+**Operand contract (both families, nine value doors — `Eq`, `NotEq`, `Lt`, `Lte`, `Gt`, `Gte`, `Between`, `In`, `NotIn`):** `f` and `jf` resolve an operand the same way before doing anything with it — a NIL pointer is nil before it is asked for anything, then a `driver.Valuer` becomes its `Value()`, then a pointer becomes its element — and classify the RESULT as NIL (`nil`, a typed nil pointer, a Valuer reporting NULL), a LIST (a slice or an array), or a SCALAR (anything else, `[]byte` and a Valuer holding a value included). A `dbtypes.RawExpression` operand (`qb.Expr(…)`) is spliced before all of this — its SQL goes into the predicate verbatim, with no placeholder and no argument — so it is neither resolved nor classified.
 
 - **Equality** (`Eq`, `NotEq`): NIL renders `IS NULL` / `IS NOT NULL`; a LIST expands to `IN (…)` / `NOT IN (…)`, an empty one to the constant `(1=0)` / `(1=1)`; a SCALAR is bound to `col op ?` whatever its Go type — a struct no driver accepts is passed through, not diagnosed.
 - **Ordering** (`Lt`, `Lte`, `Gt`, `Gte`) and both bounds of `Between`: a NIL or LIST operand is refused with `dbtypes.ErrOrderingOperandNotComparable` (exported from `database/types`, so `errors.Is` works from your own code), surfaced at `ToSQL()`. There is no rendering for `col < NULL` or for an ordering against a set, so the door fails closed rather than emitting SQL that silently matches nothing.
@@ -196,7 +196,7 @@ query := qb.Select("*").
     Where(f.Eq("o.status", "pending"))
 ```
 
-**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Every value door follows the *Operand contract* above — the six compare doors, `In`, `NotIn` and both `Between` bounds — and `Like` takes a string.
+**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Nine of them follow the *Operand contract* above — the six compare doors, `In`, `NotIn` and both `Between` bounds. `Like` does NOT: it takes a string pattern, so there is no operand to resolve.
 
 **Expression Support:** All comparison methods accept `qb.Expr()` for complex SQL expressions without placeholders.
 
