@@ -684,6 +684,15 @@ func TestBuildUpsertAppliesOneAcceptanceRulePerShape(t *testing.T) {
 			key:  `"count(*)"`,
 		},
 		{
+			// The WIDENING half on PostgreSQL, and the reason it is safe: the old
+			// rule there refused every key carrying a quote, wrapper included.
+			// Punctuation inside a quoted name cannot reach the parser — no
+			// interior quote means nothing ends the identifier early — so this
+			// names the column `a;b` on both vendors rather than a statement.
+			name: "quoted_key_carrying_punctuation",
+			key:  `"a;b"`,
+		},
+		{
 			name:    "dotted",
 			key:     "t.name",
 			wantErr: `insert column "t.name" is not a single column name for upsert`,

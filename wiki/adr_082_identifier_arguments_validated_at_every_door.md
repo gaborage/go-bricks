@@ -56,6 +56,16 @@ literally named `count(*)` with no spelling at all — the quoted key is how suc
 name is stated, which is why `keyIsFunctionShaped` has always exempted it. The
 narrowing is the ESCAPE, not the QUOTES.
 
+**One clause WIDENS, on PostgreSQL.** Its old rule refused any key carrying a
+quote at all — `hasUnescapedQuote` reads the wrapper too — so `"ID"` and
+`"count(*)"` were refused there while Oracle took them. Under the single rule the
+wrapper is legal on both, which is what makes ADR-071's identity rule and the
+`"count(*)"` spelling mean the same thing at both doors. The property that bounds
+it is the one the narrowing installs: a quoted key may carry NO interior quote, so
+nothing inside the wrapper can end the identifier early and become SQL. A name
+like `"a;b"` is therefore accepted and renders as the column `a;b`, not as a
+statement — the semicolon never reaches a parser as syntax.
+
 None of this was an injection. Every key was quote-wrapped and escaped in the
 emitted SQL before and after — `"COUNT(*)"` names a column, it does not call a
 function. The defect was that one door spelled a column differently from every
