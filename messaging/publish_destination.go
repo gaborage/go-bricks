@@ -105,7 +105,9 @@ func checkShortStr(field, value string) error {
 // which declaration kind is at fault; the offending value is the name itself and
 // repeating a 256-byte string into a startup error helps nobody.
 func validateDeclaredShortStrs(d *Declarations) error {
-	var errs []error
+	// Two checks per declaration across the four kinds; errors.Join drops the
+	// nils, so this is a ceiling rather than a count.
+	errs := make([]error, 0, 2*(len(d.Exchanges)+len(d.Queues)+len(d.Bindings)+len(d.Publishers)))
 
 	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
 		errs = append(errs,

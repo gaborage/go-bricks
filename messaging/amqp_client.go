@@ -381,41 +381,55 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 	return publishing
 }
 
-// PublishToExchange publishes a message to a specific exchange with routing key.
-func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error {
-	// Before ANYTHING else — before the span, the readiness pre-flight and the
-	// retry loop. A destination the frame cannot carry is unwritable whatever the
-	// broker's state, so retrying it only re-tears the shared connection, and the
-	// value must not reach the span attribute or the publish metrics on its way
-	// out (#1123).
+// publishPrologue does everything that happens once per publish CALL, ahead of
+// the retry loop: refuse an unwritable destination, open the span, and wait out
+// a cold client. It returns the span for the caller to end and the instant the
+// broker attempt actually begins.
+//
+// The destination check comes before ANYTHING else. A field the frame cannot
+// carry is unwritable whatever the broker's state, so retrying it only re-tears
+// the connection every publisher shares, and the value must not reach the span
+// attribute or the publish metrics on its way out (#1123).
+//
+// The pre-flight gives a cold or mid-reconnect client a bounded, context-aware
+// window to become ready BEFORE the retry loop. That wait does NOT consume a
+// maxPublishAttempts slot — a cold client failing fast on the very first publish
+// (before handleReconnect's async connect finishes) was the root cause of #655.
+// A zero/negative readyTimeout disables it, reproducing the pre-#655 behavior
+// byte-for-byte.
+//
+// publishStart marks the beginning of the broker attempt, AFTER that wait
+// resolved. The retry loop feeds this — not startTime — into publish-latency
+// metrics and logging: startTime→publishStart can be several seconds on a
+// cold-start wait, and folding that into "broker latency" would make one
+// successful publish look like a multi-second broker hiccup. The SPAN keeps
+// startTime, because its duration is meant to cover the full call, wait
+// included.
+func (c *AMQPClientImpl) publishPrologue(
+	ctx context.Context, options PublishOptions, dataLen int,
+) (spanCtx context.Context, span trace.Span, publishStart time.Time, err error) {
 	if err := validatePublishDestination(&options); err != nil {
-		return err
+		return ctx, nil, time.Time{}, err
 	}
 
 	startTime := time.Now()
+	ctx, span = createPublishSpan(ctx, options, dataLen, startTime)
 
-	ctx, span := createPublishSpan(ctx, options, len(data), startTime)
-	defer span.End()
-
-	// Pre-flight: give a cold or mid-reconnect client a bounded, context-aware
-	// window to become ready BEFORE entering the retry loop below. This wait does
-	// NOT consume a maxPublishAttempts slot — a cold client failing fast on the
-	// very first publish (before handleReconnect's async connect finishes) was
-	// the root cause of issue #655. A zero/negative readyTimeout disables the
-	// wait entirely, reproducing the pre-#655 behavior byte-for-byte.
 	if err := c.publishPreflight(ctx, options, startTime, span); err != nil {
-		return err
+		span.End()
+		return ctx, nil, time.Time{}, err
 	}
 
-	// publishStart marks the beginning of the actual broker attempt, AFTER the
-	// pre-flight readiness wait resolved. The retry loop below feeds this — not
-	// startTime — into publish-latency metrics/logging: startTime→publishStart can
-	// be several seconds on a cold-start or mid-reconnect wait (bounded by
-	// readyTimeout), and folding that into "broker latency" would make a single
-	// successful publish look like a multi-second broker hiccup. The span created
-	// above intentionally keeps startTime — its duration is meant to cover the
-	// full call, wait included.
-	publishStart := time.Now()
+	return ctx, span, time.Now(), nil
+}
+
+// PublishToExchange publishes a message to a specific exchange with routing key.
+func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error {
+	ctx, span, publishStart, err := c.publishPrologue(ctx, options, len(data))
+	if err != nil {
+		return err
+	}
+	defer span.End()
 
 	retryCount := 0
 	// lastCause records why the most recent attempt failed (the raw publish error,
