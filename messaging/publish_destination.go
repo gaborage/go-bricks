@@ -50,24 +50,48 @@ func validatePublishDestination(options *PublishOptions) error {
 	if err := checkShortStr("routing key", options.RoutingKey); err != nil {
 		return err
 	}
-	return checkTableKeys(options.Headers)
+	return checkTableKeys("header key", options.Headers)
 }
 
-// checkTableKeys walks a header table, and any table nested inside it, judging
-// the KEYS. Values are longstrs and carry their own much larger bound, so they
-// are not this guard's business.
-func checkTableKeys(headers map[string]any) error {
+// checkTableKeys walks a table, judging its KEYS, and descends through every
+// structure amqp091 encodes recursively: a nested table, and a FIELD-ARRAY,
+// whose elements go back through writeField and can therefore be tables of
+// their own (write.go, `case []any` → writeField → writeTable → writeShortstr).
+// A key one array deep is written by the same function as a key at the top, so
+// it fails the frame the same way.
+//
+// Values are longstrs and carry their own far larger bound, so they are not this
+// guard's business — only the keys are.
+//
+// field names the location for the error, since a header table and a
+// declaration's Args reach different frames and an operator needs to know which
+// one they are looking at.
+func checkTableKeys(field string, headers map[string]any) error {
 	for key, value := range headers {
-		if err := checkShortStr("header key", key); err != nil {
+		if err := checkShortStr(field, key); err != nil {
 			return err
 		}
-		// amqp.Table IS map[string]any, so normalize and recurse once rather
-		// than carrying two identical branches.
-		if table, ok := value.(amqp.Table); ok {
-			value = map[string]any(table)
+		if err := checkTableValue(field, value); err != nil {
+			return err
 		}
-		if nested, ok := value.(map[string]any); ok {
-			if err := checkTableKeys(nested); err != nil {
+	}
+	return nil
+}
+
+// checkTableValue descends into whatever a table value can carry. amqp.Table IS
+// map[string]any, so it is normalized rather than given a branch of its own.
+func checkTableValue(field string, value any) error {
+	if table, ok := value.(amqp.Table); ok {
+		value = map[string]any(table)
+	}
+
+	switch nested := value.(type) {
+	case map[string]any:
+		return checkTableKeys(field, nested)
+	case []any:
+		// A field-array can hold tables, and arrays of arrays of tables.
+		for _, element := range nested {
+			if err := checkTableValue(field, element); err != nil {
 				return err
 			}
 		}
@@ -90,9 +114,11 @@ func checkShortStr(field, value string) error {
 // operator would rather never reach. It is the same rule and the same sentinel
 // deliberately: a second constant would let the two doors drift.
 //
-// Covered: every exchange and queue NAME, every binding and publisher ROUTING
+// Covered: every exchange NAME and TYPE (the type reaches exchange.declare as a
+// shortstr of its own), every queue NAME, every binding and publisher ROUTING
 // KEY, and the KEYS of every Args/Headers table on those four kinds — each is a
-// shortstr in the declare or publish frame it feeds. Consumer declarations are
+// shortstr in the declare or publish frame it feeds. Each names its own
+// location, so an error says which table an operator should be reading. Consumer declarations are
 // not covered here; their tag and queue reach basic.consume, a different frame
 // on the consume side, and no publisher's connection depends on them.
 //
@@ -116,22 +142,23 @@ func validateDeclaredShortStrs(d *Declarations) error {
 	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
 		errs = append(errs,
 			checkShortStr("declared exchange name", name),
-			checkTableKeys(d.Exchanges[name].Args))
+			checkShortStr("declared exchange type", d.Exchanges[name].Type),
+			checkTableKeys("declared exchange argument key", d.Exchanges[name].Args))
 	}
 	for _, name := range slices.Sorted(maps.Keys(d.Queues)) {
 		errs = append(errs,
 			checkShortStr("declared queue name", name),
-			checkTableKeys(d.Queues[name].Args))
+			checkTableKeys("declared queue argument key", d.Queues[name].Args))
 	}
 	for _, binding := range d.Bindings {
 		errs = append(errs,
 			checkShortStr("binding routing key", binding.RoutingKey),
-			checkTableKeys(binding.Args))
+			checkTableKeys("binding argument key", binding.Args))
 	}
 	for _, publisher := range d.Publishers {
 		errs = append(errs,
 			checkShortStr("publisher routing key", publisher.RoutingKey),
-			checkTableKeys(publisher.Headers))
+			checkTableKeys("publisher header key", publisher.Headers))
 	}
 
 	return errors.Join(errs...)

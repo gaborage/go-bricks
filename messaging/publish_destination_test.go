@@ -68,6 +68,20 @@ func TestPublishToExchangeRefusesEveryOversizedShortStr(t *testing.T) {
 			field:   "header key",
 		},
 		{
+			name: "oversized_key_in_a_table_inside_an_array",
+			options: PublishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{
+				"outer": []any{amqp.Table{oversizedShortStr: "v"}},
+			}},
+			field: "header key",
+		},
+		{
+			name: "oversized_key_in_a_table_two_arrays_deep",
+			options: PublishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{
+				"outer": []any{[]any{map[string]any{oversizedShortStr: "v"}}},
+			}},
+			field: "header key",
+		},
+		{
 			name: "oversized_key_in_a_nested_table",
 			options: PublishOptions{Exchange: "ex", RoutingKey: "rk", Headers: map[string]any{
 				"outer": amqp.Table{oversizedShortStr: "v"},
@@ -225,7 +239,8 @@ func TestDeclarationsValidateRefusesAnOversizedArgsKey(t *testing.T) {
 	err := d.Validate()
 
 	require.ErrorIs(t, err, ErrInvalidPublishDestination)
-	assert.Contains(t, err.Error(), "header key")
+	assert.Contains(t, err.Error(), "declared queue argument key",
+		"a declaration's Args are not a message's headers, and the error says which it read")
 }
 
 // TestUnsafePublishRefusesAnOversizedDestination keeps the package's protection
@@ -242,4 +257,22 @@ func TestUnsafePublishRefusesAnOversizedDestination(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrInvalidPublishDestination)
 	assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts))
+}
+
+// TestDeclarationsValidateRefusesAnOversizedExchangeType covers the field beside
+// the exchange name: DeclareExchange forwards Type to channel.ExchangeDeclare,
+// where the exchange.declare frame writes it with writeShortstr exactly as it
+// writes the name (spec091.go). A 256-byte type is the same connection teardown
+// as a 256-byte name.
+func TestDeclarationsValidateRefusesAnOversizedExchangeType(t *testing.T) {
+	d := NewDeclarations()
+	d.Exchanges["ex"] = &ExchangeDeclaration{Name: "ex", Type: oversizedShortStr}
+	d.Queues["q"] = &QueueDeclaration{Name: "q"}
+
+	err := d.Validate()
+
+	require.ErrorIs(t, err, ErrInvalidPublishDestination)
+	assert.Contains(t, err.Error(), "declared exchange type")
+	assert.Contains(t, err.Error(), "256 bytes")
+	assert.NotContains(t, err.Error(), oversizedShortStr)
 }
