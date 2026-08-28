@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/logger"
 )
 
 func guardTestConfig() *config.Config {
@@ -170,4 +171,30 @@ func TestOutermostRecoverMessageMatchesTheStandardFiveHundred(t *testing.T) {
 			assert.Equal(t, tt.want, errObj["message"])
 		})
 	}
+}
+
+// panickingLogger is a consumer logger whose Error() panics — the shape that
+// would otherwise take a spent recover() straight back to net/http.
+type panickingLogger struct{ testLogger }
+
+func (l *panickingLogger) Error() logger.LogEvent { panic("logger exploded") }
+
+// TestOutermostRecoverSurvivesAPanickingLogger keeps the guard from reopening
+// #1144 through its own reporting call: the logger is consumer-supplied, and a
+// panic from it runs inside an already-spent recover, so without containment it
+// would unwind past Echo into net/http — printing the LOGGER's panic value and
+// dropping the connection. The request must still get its 500 envelope.
+func TestOutermostRecoverSurvivesAPanickingLogger(t *testing.T) {
+	e := echo.New()
+	e.Use(outermostRecoverEcho(&panickingLogger{}, guardTestConfig()))
+	e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
+
+	rec := httptest.NewRecorder()
+	require.NotPanics(t, func() {
+		e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", http.NoBody))
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"error"`)
+	assert.NotContains(t, rec.Body.String(), recoverProbeSecret)
 }

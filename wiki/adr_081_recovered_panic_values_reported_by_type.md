@@ -27,7 +27,10 @@
 > span — a pre-`Recover` panic ends its span without an error status, which is
 > accepted rather than reaching around the OTel middleware from outside it — and
 > the existing `Recover` + `sanitizePanicValue` pair is unchanged, so panics
-> downstream of it behave exactly as before (#1144, `[C61.12]`).
+> downstream of it behave exactly as before. Its own reporting call is wrapped in
+> a nested recover, on ADR-079's reasoning: the logger is consumer-supplied, and
+> one that panics inside an already-spent `recover()` would unwind into net/http
+> carrying the LOGGER's value (#1144, `[C61.12]`).
 
 ## Context
 

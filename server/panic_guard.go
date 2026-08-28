@@ -8,6 +8,33 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 )
 
+// reportPanic writes the guard's single ERROR line, and cannot itself take the
+// process back to the failure this guard exists to prevent.
+//
+// The logger is consumer-supplied, and this call runs inside an already-spent
+// recover(): a logger that panics here would unwind past Echo into net/http,
+// which is exactly the outcome #1144 closes — with the panic value it prints
+// being the LOGGER's, not the handler's. ADR-079 guarded the framework's other
+// two panic-reporting calls for this reason; this is the third. The recovered
+// value is discarded rather than reported, since reporting it needs the same
+// logger that just failed.
+//
+// The message matches the HTTPErrorHandler's own panic line, so an alert keyed
+// on it catches the panics from BOTH sides of Recover; request_id comes from the
+// same helper that line uses, and is empty when the request-id middleware —
+// which runs inside this guard — had not run yet.
+func reportPanic(log logger.Logger, c *echo.Context, r any) {
+	defer func() { _ = recover() }()
+
+	req := c.Request()
+	log.Error().
+		Str("panic_type", fmt.Sprintf("%T", r)).
+		Str("request_id", safeGetRequestID(c)).
+		Str("method", req.Method).
+		Str("path", req.URL.Path).
+		Msg("Panic recovered")
+}
+
 // outermostRecoverEcho is the panic guard registered as the FIRST middleware, so
 // every other middleware — including the eight that run before Echo's Recover:
 // request id, OTel, request enrich, CORS, IP pre-guard, tenant resolution,
@@ -56,18 +83,7 @@ func outermostRecoverEcho(log logger.Logger, cfg *config.Config) echo.Middleware
 				// consumer-chosen, so the logger's SensitiveDataFilter cannot
 				// help — it matches field NAMES, and a bare panic("secret") has
 				// none.
-				// The message matches the HTTPErrorHandler's own panic line, so an
-				// alert keyed on it catches the panics from BOTH sides of Recover;
-				// request_id comes from the same helper that line uses, and is
-				// empty when the request-id middleware — which runs inside this
-				// guard — had not run yet.
-				req := c.Request()
-				log.Error().
-					Str("panic_type", fmt.Sprintf("%T", r)).
-					Str("request_id", safeGetRequestID(c)).
-					Str("method", req.Method).
-					Str("path", req.URL.Path).
-					Msg("Panic recovered")
+				reportPanic(log, c, r)
 
 				// The same message classifyError would have produced for this
 				// status, so a caller cannot tell which recovery layer caught the
