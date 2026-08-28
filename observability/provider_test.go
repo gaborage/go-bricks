@@ -16,6 +16,12 @@ import (
 )
 
 const (
+	// The two default OTLP ports, used here because nothing is expected to be
+	// listening on them: these tests prove the pipeline is WIRED, not that a
+	// collector answers. A developer running a real local collector changes what
+	// they exercise — the export then succeeds instead of failing — but not
+	// whether they pass, since every one of them either bounds the export below
+	// its own Shutdown budget or discards Shutdown's error.
 	testOTLPHTTPEndpoint = "http://localhost:4318"
 	testOTLPGRPCEndpoint = "localhost:4317"
 	testSpanName         = "test-span"
