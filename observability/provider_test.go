@@ -1141,7 +1141,11 @@ func installExportStartSignal(t *testing.T) *exportStartedSpanExporter {
 	signaling := &exportStartedSpanExporter{started: make(chan struct{})}
 	prev := getTraceExporterWrapper()
 	setTraceExporterWrapper(func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
-		signaling.SpanExporter = exporter
+		// Composed, not replaced: saving prev only to restore it would still drop
+		// whatever it does for the provider built while this one is installed. The
+		// default is an identity wrapper (provider.go), and the production call
+		// sites invoke the result unguarded, so prev is never nil by contract.
+		signaling.SpanExporter = prev(exporter)
 		return signaling
 	})
 	t.Cleanup(func() { setTraceExporterWrapper(prev) })
