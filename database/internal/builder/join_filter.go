@@ -431,15 +431,15 @@ func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any)
 	// A bound that is an expression is interpolated verbatim, so it is validated
 	// at this door for the same reason compare() validates its value (#1153).
 	if expr, ok := lowerBound.(dbtypes.RawExpression); ok {
-		if err := expr.Validate(); err != nil {
-			return joinFilterErr(err)
+		if validateErr := expr.Validate(); validateErr != nil {
+			return joinFilterErr(validateErr)
 		}
 		lowerIsExpr = true
 		lowerExpr = expr
 	}
 	if expr, ok := upperBound.(dbtypes.RawExpression); ok {
-		if err := expr.Validate(); err != nil {
-			return joinFilterErr(err)
+		if validateErr := expr.Validate(); validateErr != nil {
+			return joinFilterErr(validateErr)
 		}
 		upperIsExpr = true
 		upperExpr = expr
