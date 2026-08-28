@@ -105,9 +105,13 @@ func checkShortStr(field, value string) error {
 // which declaration kind is at fault; the offending value is the name itself and
 // repeating a 256-byte string into a startup error helps nobody.
 func validateDeclaredShortStrs(d *Declarations) error {
-	// Two checks per declaration across the four kinds; errors.Join drops the
-	// nils, so this is a ceiling rather than a count.
-	errs := make([]error, 0, 2*(len(d.Exchanges)+len(d.Queues)+len(d.Bindings)+len(d.Publishers)))
+	// Deliberately not preallocated. A capacity here is arithmetic on a value
+	// nothing observes — append grows the slice either way and errors.Join drops
+	// the nils — so a mutation of it changes no behavior any test can assert, and
+	// the diff-scoped mutation gate then blocks on a mutant that cannot be
+	// killed. The allocation it would save runs once, at startup.
+	//nolint:prealloc // see above: an unobservable capacity is an unkillable mutant
+	var errs []error
 
 	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
 		errs = append(errs,
