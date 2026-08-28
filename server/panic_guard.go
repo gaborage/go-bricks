@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+
 	"github.com/labstack/echo/v5"
 
 	"github.com/gaborage/go-bricks/config"

@@ -28,13 +28,13 @@ func guardTestConfig() *config.Config {
 // which printed the value to stderr and dropped the connection. The outermost
 // guard answers with the framework's own 500 envelope instead.
 func TestOutermostRecoverRendersTheStandardEnvelope(t *testing.T) {
-	log := &testLogger{}
+	frameworkLog := &testLogger{}
 	e := echo.New()
-	e.Use(outermostRecoverEcho(log, guardTestConfig()))
+	e.Use(outermostRecoverEcho(frameworkLog, guardTestConfig()))
 	e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
 
 	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", http.NoBody))
+	e.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	var body map[string]any
@@ -49,14 +49,14 @@ func TestOutermostRecoverRendersTheStandardEnvelope(t *testing.T) {
 // line names the panic's TYPE and the request that produced it, and the value —
 // consumer-chosen, so the sensitive-data filter cannot help — appears nowhere.
 func TestOutermostRecoverLogsTheTypeNotTheValue(t *testing.T) {
-	log := &testLogger{}
+	frameworkLog := &testLogger{}
 	e := echo.New()
-	e.Use(outermostRecoverEcho(log, guardTestConfig()))
+	e.Use(outermostRecoverEcho(frameworkLog, guardTestConfig()))
 	e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
 
-	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/boom", http.NoBody))
+	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
 
-	entries := log.logEntries()
+	entries := frameworkLog.logEntries()
 	require.Len(t, entries, 1, "exactly one ERROR line per recovered panic")
 	entry := entries[0]
 	assert.Equal(t, "error", entry.level)
@@ -73,15 +73,15 @@ func TestOutermostRecoverLogsTheTypeNotTheValue(t *testing.T) {
 // sentinel must reach the server unchanged so the connection is dropped without
 // a response, exactly as sanitizePanicValue does one layer down.
 func TestOutermostRecoverRepanicsAbortHandler(t *testing.T) {
-	log := &testLogger{}
+	frameworkLog := &testLogger{}
 	e := echo.New()
-	e.Use(outermostRecoverEcho(log, guardTestConfig()))
+	e.Use(outermostRecoverEcho(frameworkLog, guardTestConfig()))
 	e.GET("/abort", func(*echo.Context) error { panic(http.ErrAbortHandler) })
 
 	assert.PanicsWithValue(t, http.ErrAbortHandler, func() {
-		e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/abort", http.NoBody))
+		e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/abort", http.NoBody))
 	})
-	assert.Empty(t, log.logEntries(), "an abort is not a panic to report")
+	assert.Empty(t, frameworkLog.logEntries(), "an abort is not a panic to report")
 }
 
 // panicTenantResolver is a consumer-supplied resolver that panics — the shape
@@ -115,7 +115,9 @@ func TestOutermostRecoverStopsAPreRecoverPanicReachingNetHTTP(t *testing.T) {
 	srv := httptest.NewServer(e)
 	t.Cleanup(srv.Close)
 
-	resp, err := srv.Client().Get(srv.URL + "/tenant")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/tenant", http.NoBody)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err, "the connection is answered, not dropped")
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	payload, err := io.ReadAll(resp.Body)
@@ -161,7 +163,7 @@ func TestOutermostRecoverMessageMatchesTheStandardFiveHundred(t *testing.T) {
 			e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
 
 			rec := httptest.NewRecorder()
-			e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", http.NoBody))
+			e.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
 
 			var body map[string]any
 			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
@@ -191,7 +193,7 @@ func TestOutermostRecoverSurvivesAPanickingLogger(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	require.NotPanics(t, func() {
-		e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", http.NoBody))
+		e.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/boom", http.NoBody))
 	})
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
