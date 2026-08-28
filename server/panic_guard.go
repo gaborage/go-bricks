@@ -9,9 +9,10 @@ import (
 )
 
 // outermostRecoverEcho is the panic guard registered as the FIRST middleware, so
-// every other middleware — including the seven that run before Echo's Recover:
+// every other middleware — including the eight that run before Echo's Recover:
 // request id, OTel, request enrich, CORS, IP pre-guard, tenant resolution,
-// forwarded client cert, and the request logger — unwinds into it.
+// forwarded client cert, and the request logger (three of them conditional on
+// config) — unwinds into it.
 //
 // Echo v5 has no top-level recover, so a panic in any of those reached net/http,
 // which prints `http: panic serving <addr>: <value>` with a stack to stderr and
@@ -27,6 +28,15 @@ import (
 // It deliberately does not touch the span. A panic before Recover ends the span
 // without an error status, which the issue accepts rather than reaching around
 // the OTel middleware from outside it.
+//
+// Moving Echo's own Recover to the front instead of adding this guard is the
+// obvious alternative and it is wrong. Recover turns a panic into a plain error
+// RETURN for everything registered after it, and the access logger is registered
+// BEFORE it precisely so its `err := next(c)` observes that return and still
+// writes a line for a panicking request. Put Recover in front of the logger and
+// the panic unwinds through the logger's frame instead, which has no defer of
+// its own — silently dropping the access-log line for EVERY recovered panic,
+// including the handler panics that are logged correctly today.
 func outermostRecoverEcho(log logger.Logger, cfg *config.Config) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) (err error) {
@@ -59,7 +69,18 @@ func outermostRecoverEcho(log logger.Logger, cfg *config.Config) echo.Middleware
 					Str("path", req.URL.Path).
 					Msg("Panic recovered")
 
-				err = formatErrorResponse(c, NewInternalServerError(""), cfg)
+				// The same message classifyError would have produced for this
+				// status, so a caller cannot tell which recovery layer caught the
+				// panic from the body it gets back.
+				//
+				// formatErrorResponse rather than customErrorHandler because the
+				// error is already classified and there is nothing to log twice.
+				// That skips the raw-mode formatter switch, which is correct HERE
+				// and only here: rawResponseContextKey is set inside
+				// handlerWrapper.wrap, far downstream of Recover, so a panic
+				// reaching THIS guard cannot have passed through it. A change that
+				// sets raw mode earlier has to revisit this line.
+				err = formatErrorResponse(c, NewInternalServerError(internalErrorMessage(cfg)), cfg)
 			}()
 			return next(c)
 		}

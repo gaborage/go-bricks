@@ -27,7 +27,7 @@ import (
 func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string) {
 	// MUST stay first — outermostRecoverEcho covers every middleware registered
 	// below it (ADR-081 amendment 2026-08-28). Echo's Recover, further down,
-	// only covers what is downstream of ITSELF, and the seven middlewares
+	// only covers what is downstream of ITSELF, and the eight middlewares
 	// between here and there used to unwind past Echo into net/http, which
 	// printed the panic VALUE to stderr and dropped the connection (#1144).
 	e.Use(outermostRecoverEcho(log, cfg))

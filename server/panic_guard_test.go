@@ -133,3 +133,41 @@ func TestOutermostRecoverStopsAPreRecoverPanicReachingNetHTTP(t *testing.T) {
 		assert.NotContains(t, value, recoverProbeSecret, "field %q carries the panic value", key)
 	}
 }
+
+// TestOutermostRecoverMessageMatchesTheStandardFiveHundred pins the parity the
+// guard's own renderer could otherwise break: a caller must not be able to tell
+// WHICH recovery layer caught the panic from the message it gets back, so the
+// guard's body carries the text classifyError produces for an unhandled 500 in
+// the same posture.
+func TestOutermostRecoverMessageMatchesTheStandardFiveHundred(t *testing.T) {
+	// The expected strings are the wire contract, written out rather than read
+	// back from the constants the code uses — an assertion against those would
+	// pass whatever they said.
+	tests := []struct {
+		name  string
+		debug bool
+		want  string
+	}{
+		{name: "production_hides_the_wording", debug: false, want: "An error occurred while processing your request"},
+		{name: "debug_keeps_it", debug: true, want: "Internal server error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{App: config.AppConfig{Name: "test", Env: "production", Debug: tt.debug}}
+			e := echo.New()
+			e.Use(outermostRecoverEcho(&testLogger{}, cfg))
+			e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
+
+			rec := httptest.NewRecorder()
+			e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", http.NoBody))
+
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+			errObj, ok := body["error"].(map[string]any)
+			require.True(t, ok)
+
+			assert.Equal(t, tt.want, errObj["message"])
+		})
+	}
+}

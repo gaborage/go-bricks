@@ -6,7 +6,7 @@
 
 > **Amended (2026-08-28, the site outside Recover):** this ADR's rule was applied
 > wherever the framework RECOVERED a panic, and one HTTP path recovered none.
-> Echo v5 has no top-level recover, and seven middlewares — request id, OTel,
+> Echo v5 has no top-level recover, and eight middlewares — request id, OTel,
 > request enrich, CORS, IP pre-guard, tenant resolution, forwarded client cert,
 > and the access logger — are registered OUTSIDE `Recover`, so a panic in any of
 > them unwound past Echo into net/http, which prints `http: panic serving <addr>:
@@ -21,8 +21,8 @@
 > line under the error handler's own `Panic recovered` message, naming the
 > panic's `%T` alongside the request id, method and path, never the value —
 > and answers with the standard 500 envelope. `http.ErrAbortHandler` is
-> re-panicked by identity, not `errors.Is`, for the reason `sanitizePanicValue`
-> already states: a bypass gate that matches a WRAPPED sentinel would hand the
+> re-panicked through the predicate `sanitizePanicValue` shares with it, by
+> identity and not `errors.Is`, for the reason that predicate states: a bypass gate that matches a WRAPPED sentinel would hand the
 > wrapper's payload to net/http's own renderer. The guard does not touch the
 > span — a pre-`Recover` panic ends its span without an error status, which is
 > accepted rather than reaching around the OTel middleware from outside it — and
