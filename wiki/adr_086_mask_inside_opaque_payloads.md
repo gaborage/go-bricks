@@ -32,9 +32,12 @@ or a response.
 **An opaque payload that parses as JSON is walked with the same needles and re-encoded
 only when something was masked.**
 
-1. **What is offered to the door.** `json.RawMessage`, `[]byte`, `[]json.RawMessage`, the
-   `Bytes()` door, and string values whose first non-space byte is `{` or `[`. Nothing else
-   is parsed. A bare number, an id, a message, a non-JSON byte slice never reaches the
+1. **What is offered to the door.** `json.RawMessage`, `[]byte`, `[]json.RawMessage` and string
+   values, at EVERY door — the check lives in the filter's shared type dispatch, so
+   `Interface`, `WithFields`, `Bytes`, `Str` and any nested struct, map or slice element inherit
+   it rather than each door carrying its own copy. A value is PARSED only if its first non-space
+   byte is `{` or `[`; one that is not JSON-shaped is asked a single further question — whether
+   it is itself a PEM private key — and otherwise returned untouched. Nothing else is parsed. A bare number, an id, a message, a non-JSON byte slice never reaches the
    decoder, so ordinary logging pays nothing for this — a benchmark pins 0 allocations for a
    non-JSON string field.
 2. **Byte-exact when clean.** The payload is re-encoded ONLY if the walk masked something.
@@ -45,9 +48,11 @@ only when something was masked.**
 3. **Shape rules on top of names.** An object carrying `kty` is a JWK, and inside that object
    `d p q dp dq qi k oth` are masked wherever it sits — root, inside a JWKS `keys` array, or
    nested. Matched EXACTLY, never by substring, because the names are one and two letters
-   long. A string carrying a PEM block whose label ends in `PRIVATE KEY` is masked whole; a
-   `CERTIFICATE` or `PUBLIC KEY` block is left readable, because it is public and it is what
-   an operator reads to diagnose a TLS problem.
+   long. A PEM block whose label ends in `PRIVATE KEY` is masked whole, both when the payload
+   IS the key and when a key sits as a string member inside a JSON document — in the second
+   case only that member is masked, since masking the envelope would discard every other field
+   in it. A `CERTIFICATE` or `PUBLIC KEY` block is left readable, because it is public and it
+   is what an operator reads to diagnose a TLS problem.
 4. **Fail closed on what cannot be read.** A payload that looks like JSON and fails to parse,
    nests deeper than `DefaultMaxDepth`, or exceeds `FilterConfig.MaxPayloadBytes` is masked
    whole. Depth exhaustion is deliberately the WHOLE payload here, where the name filter masks

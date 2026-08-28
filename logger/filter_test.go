@@ -1706,3 +1706,79 @@ func TestFilterMasksOverlyNestedPayloadWhole(t *testing.T) {
 		assertLoggedFieldJSON(t, buf, "body", `{"a":{"b":{"password":"***"}}}`)
 	})
 }
+
+// TestFilterMasksJSONStringThroughEveryDoor closes the gap the Str-only hook
+// left: a JSON-looking STRING is a payload whichever door carries it. Bytes
+// already inherited the check from the shared type dispatch, so `Interface`,
+// `WithFields` and a nested struct field all masked a []byte payload while the
+// identical text typed as a string shipped in clear unless it went through Str.
+func TestFilterMasksJSONStringThroughEveryDoor(t *testing.T) {
+	const payload = `{"password":"pw","user":"alice"}`
+	const want = `{"password":"***","user":"alice"}`
+
+	t.Run("str", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("nested_in_a_map", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("envelope", map[string]any{"body": payload}).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "envelope", `{"body":`+want+`}`)
+	})
+
+	t.Run("a_plain_string_is_left_alone", func(t *testing.T) {
+		// Not keyed "message": that is zerolog's own key for the Msg text, so
+		// the assertion would read the message back rather than the field.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("detail", "user alice signed in").Msg("payload")
+		assert.Equal(t, "user alice signed in", loggedField(t, buf, "detail"))
+	})
+}
+
+// TestFilterMasksBarePEMPrivateKey pins the shape a PEM key actually takes in a
+// log call. The PEM rule used to sit behind the JSON gate, reachable only for a
+// key already embedded as a string inside a JSON document — but a PEM block
+// begins `-----BEGIN`, never `{` or `[`, so a key logged on its own, which is
+// the ordinary way one shows up, never reached the rule at all.
+func TestFilterMasksBarePEMPrivateKey(t *testing.T) {
+	privateKey := "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----"
+	certificate := "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAK\n-----END CERTIFICATE-----"
+
+	t.Run("str_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("material", privateKey).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("interface_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("material", privateKey).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("bytes_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Bytes("material", []byte(privateKey)).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("certificate_stays_readable_at_every_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("material", certificate).Msg("payload")
+		assert.Equal(t, certificate, loggedField(t, buf, "material"))
+	})
+}

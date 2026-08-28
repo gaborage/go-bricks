@@ -52,8 +52,8 @@ func BenchmarkFilterNonJSONString(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, handled := filter.filterJSONString("message", "user alice signed in"); handled {
-			b.Fatal("a non-JSON string must not be taken by the payload door")
+		if filtered := filter.FilterValue("message", "user alice signed in"); filtered != any("user alice signed in") {
+			b.Fatal("a non-JSON string must come back untouched")
 		}
 	}
 }
@@ -68,6 +68,6 @@ func BenchmarkFilterNonJSONBytes(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		filter.filterOpaquePayload(payload, payload)
+		filterOpaquePayload(filter, payload, payload)
 	}
 }

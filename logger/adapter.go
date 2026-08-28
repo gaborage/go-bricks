@@ -80,16 +80,16 @@ func (lea *LogEventAdapter) Err(err error) LogEvent {
 // Str adds a string field to the log event
 func (lea *LogEventAdapter) Str(key, value string) LogEvent {
 	if lea.filter != nil {
-		// A string whose first non-space byte opens an object or an array is a
-		// payload wearing a string's clothes, and FilterString judges the KEY
-		// only — so it is offered to the payload door first (#1133). Anything
-		// else, and any payload the door declines, falls through to the
-		// unchanged name-based path.
-		if payload, handled := lea.filter.filterJSONString(key, value); handled {
-			lea.event = lea.event.Interface(key, payload)
+		// FilterValue, not FilterString: a string may be an opaque payload, and
+		// the shared dispatch is where that is decided. A masked or re-encoded
+		// payload comes back as something other than a string, which is what
+		// the Interface fallback is for.
+		if filtered, ok := lea.filter.FilterValue(key, value).(string); ok {
+			lea.event = lea.event.Str(key, filtered)
 			return lea
 		}
-		value = lea.filter.FilterString(key, value)
+		lea.event = lea.event.Interface(key, lea.filter.FilterValue(key, value))
+		return lea
 	}
 	lea.event = lea.event.Str(key, value)
 	return lea

@@ -236,7 +236,17 @@ func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, 
 	// cannot see into it: bytes are one leaf to a name filter, however many
 	// named fields the payload carries of its own (#1133).
 	if payload, isOpaque := opaqueBytes(value); isOpaque {
-		return f.filterOpaquePayload(payload, value)
+		return filterOpaquePayload(f, payload, value)
+	}
+
+	// A STRING can be a payload too — a JSON body handed over as text, or a PEM
+	// private key. It is judged HERE, in the shared dispatch, rather than at the
+	// door that happened to carry it: bytes already inherited the check from
+	// this switch, so wiring strings into one adapter method instead left
+	// `Interface`, `WithFields` and every nested struct or map field shipping in
+	// clear the same text that `Str` masked.
+	if text, isString := value.(string); isString {
+		return filterOpaquePayload(f, text, value)
 	}
 
 	rv := reflect.ValueOf(value)
