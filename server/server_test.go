@@ -951,12 +951,15 @@ const (
 )
 
 // newDetailGateServer builds a server for one cell of the env × debug matrix and
-// registers a panicking route and a route returning an unhandled 500.
-func newDetailGateServer(env string, debug bool) (*Server, *testLogger) {
+// registers a panicking route and a route returning an unhandled 500. The logger is
+// the caller's: most tests want the recording double, while the redactor tests need a
+// REAL filtered logger, and the routes and config they exercise are the same either
+// way — parameterizing is what keeps the panic value, the error text and the two
+// route paths defined once.
+func newDetailGateServer(env string, debug bool, log logger.Logger) *Server {
 	cfg := newTestConfig("", "", "")
 	cfg.App.Env = env
 	cfg.App.Debug = debug
-	log := &testLogger{}
 	srv := New(cfg, log)
 	srv.echo.GET(detailGatePanicRoute, func(*echo.Context) error {
 		panic("detail-gate-panic-value")
@@ -964,17 +967,25 @@ func newDetailGateServer(env string, debug bool) (*Server, *testLogger) {
 	srv.echo.GET(detailGateErrorRoute, func(*echo.Context) error {
 		return errors.New(detailGateErrorText)
 	})
-	return srv, log
+	return srv
+}
+
+// serveDetailGateRoute drives one detail-gate route and asserts the 500 every caller
+// depends on before reading the response body or the log line it produced.
+func serveDetailGateRoute(t *testing.T, srv *Server, route string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, route, http.NoBody)
+	srv.echo.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	return rec
 }
 
 // detailGateResponseDetail serves route and returns the decoded details["error"] entry
 // (empty string plus false when absent).
 func detailGateResponseDetail(t *testing.T, srv *Server, route string) (string, bool) {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, route, http.NoBody)
-	srv.echo.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	rec := serveDetailGateRoute(t, srv, route)
 
 	var resp APIResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "body: %s", rec.Body.String())
@@ -1017,7 +1028,7 @@ func TestErrorDetailGateRequiresDebugAndDevelopment(t *testing.T) {
 	for _, tt := range tests {
 		for _, rt := range routes {
 			t.Run(tt.name+"_"+rt.name, func(t *testing.T) {
-				srv, _ := newDetailGateServer(tt.env, tt.debug)
+				srv := newDetailGateServer(tt.env, tt.debug, &testLogger{})
 				detail, present := detailGateResponseDetail(t, srv, rt.route)
 				if !tt.expectDetail {
 					assert.False(t, present, "details.error must be absent unless app.debug AND a development env")
@@ -1045,7 +1056,8 @@ func TestErrorDetailGateLogsTypeOnlyWithDebugOff(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv, log := newDetailGateServer(config.EnvDevelopment, false)
+			log := &testLogger{}
+			srv := newDetailGateServer(config.EnvDevelopment, false, log)
 			_, _ = detailGateResponseDetail(t, srv, tt.route)
 
 			entry := findLogEntry(log.logEntries(), tt.msg)
@@ -1164,22 +1176,9 @@ func TestErrorDetailGoesThroughTheErrorRedactor(t *testing.T) {
 				filterCfg := logger.DefaultFilterConfig()
 				filterCfg.ErrorRedactor = func(error) string { return redacted }
 
-				cfg := newTestConfig("", "", "")
-				cfg.App.Env = config.EnvDevelopment
-				cfg.App.Debug = true
-
-				srv := New(cfg, logger.NewWithFilter("error", false, filterCfg))
-				srv.echo.GET(detailGatePanicRoute, func(*echo.Context) error {
-					panic("detail-gate-panic-value")
-				})
-				srv.echo.GET(detailGateErrorRoute, func(*echo.Context) error {
-					return errors.New(detailGateErrorText)
-				})
-
-				rec := httptest.NewRecorder()
-				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, tt.route, http.NoBody)
-				srv.echo.ServeHTTP(rec, req)
-				require.Equal(t, http.StatusInternalServerError, rec.Code)
+				srv := newDetailGateServer(config.EnvDevelopment, true,
+					logger.NewWithFilter("error", false, filterCfg))
+				serveDetailGateRoute(t, srv, tt.route)
 			})
 
 			line := findLoggedLine(t, out, tt.msg)
@@ -1246,19 +1245,9 @@ func TestErrorDetailAtTheRealSinkWithoutARedactor(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			out := captureStdout(t, func() {
-				cfg := newTestConfig("", "", "")
-				cfg.App.Env = config.EnvDevelopment
-				cfg.App.Debug = tt.debug
-
-				srv := New(cfg, logger.NewWithFilter("error", false, logger.DefaultFilterConfig()))
-				srv.echo.GET(detailGateErrorRoute, func(*echo.Context) error {
-					return errors.New(detailGateErrorText)
-				})
-
-				rec := httptest.NewRecorder()
-				req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, detailGateErrorRoute, http.NoBody)
-				srv.echo.ServeHTTP(rec, req)
-				require.Equal(t, http.StatusInternalServerError, rec.Code)
+				srv := newDetailGateServer(config.EnvDevelopment, tt.debug,
+					logger.NewWithFilter("error", false, logger.DefaultFilterConfig()))
+				serveDetailGateRoute(t, srv, detailGateErrorRoute)
 			})
 
 			tt.check(t, findLoggedLine(t, out, "unhandled error"))

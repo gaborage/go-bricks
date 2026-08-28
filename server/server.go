@@ -399,8 +399,10 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 		// cannot be trusted to scrub PII/PCI a driver error may embed (e.g. a
 		// unique-constraint value). Mirror the response-body redaction above instead:
 		// non-debug builds log the error type only, never the raw message; debug builds
-		// keep full detail for troubleshooting. Str() still routes through the injected
-		// filter as defense-in-depth for any field an operator has marked sensitive.
+		// keep full detail for troubleshooting. The debug branch writes through Err, so
+		// FilterConfig.ErrorRedactor — the seam that CAN see message content — reaches
+		// it (#1182); field-name masking does not, exactly as at every other Err site in
+		// the framework. The non-debug error_type still goes through Str and its filter.
 		appendErrorDetail(log.Error().Str("request_id", safeGetRequestID(c)), err, cfg.App.Debug).
 			Msg("unhandled error")
 	}
@@ -433,6 +435,12 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 // wired up to scrub driver-supplied PII, which is the one thing field-name masking
 // cannot do (#1182). The field name is unchanged: zerolog's Err writes under
 // zerolog.ErrorFieldName, which is "error", and so does the redacted path.
+//
+// One consequence, deliberate: Err does not run field-name masking, where the old
+// Str call did. An operator who had added "error" to log.sensitivefields therefore
+// stops seeing this ONE line masked. That is the same treatment every other Err site
+// in the framework already gives an error, and masking a whole message by field name
+// was never the defense here — ErrorRedactor is, and it now applies.
 func appendErrorDetail(event logger.LogEvent, err error, debug bool) logger.LogEvent {
 	if err == nil {
 		return event
