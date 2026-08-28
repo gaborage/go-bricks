@@ -1,10 +1,6 @@
 package builder
 
 import (
-	"database/sql/driver"
-	"fmt"
-	"reflect"
-
 	"github.com/Masterminds/squirrel"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -83,7 +79,7 @@ func newFilterFactory(qb *QueryBuilder) *FilterFactory {
 func (ff *FilterFactory) equality(column, op string, value any) dbtypes.Filter {
 	resolved, _, err := resolveOperand(value)
 	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: fmt.Errorf("resolving the %s operand: %w", op, err)}}
+		return filterOf(nil, wrapOperandErr(op, err))
 	}
 	if op == opEqual {
 		return filterOf(ff.qb.Eq(column, resolved))
@@ -112,7 +108,7 @@ func (ff *FilterFactory) NotEq(column string, value any) dbtypes.Filter {
 func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
 	resolved, err := orderingOperand("<", value)
 	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
+		return filterOf(nil, err)
 	}
 	return filterOf(ff.qb.Lt(column, resolved))
 }
@@ -123,7 +119,7 @@ func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
 func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
 	resolved, err := orderingOperand("<=", value)
 	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
+		return filterOf(nil, err)
 	}
 	return filterOf(ff.qb.LtOrEq(column, resolved))
 }
@@ -134,7 +130,7 @@ func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
 func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
 	resolved, err := orderingOperand(">", value)
 	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
+		return filterOf(nil, err)
 	}
 	return filterOf(ff.qb.Gt(column, resolved))
 }
@@ -145,56 +141,9 @@ func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
 func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
 	resolved, err := orderingOperand(">=", value)
 	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
+		return filterOf(nil, err)
 	}
 	return filterOf(ff.qb.GtOrEq(column, resolved))
-}
-
-// resolveListOperands turns an IN / NOT IN operand into the list squirrel
-// renders, resolving EVERY element the way the compare doors resolve a single
-// one: a nil pointer — typed, or pointing at a driver.Valuer — becomes an
-// untyped nil, and a Valuer holding a value is asked once, here, so its answer
-// is what gets bound.
-//
-// Squirrel appends list elements to the argument list untouched, so without
-// this a nil pointer to a Valuer survived the whole build and crashed at EXEC,
-// where database/sql asks it for its value (#1209) — a build-time door
-// reporting a run-time panic. Resolving also normalizes what a nil element
-// renders as: it was already `IN (NULL)` at the driver, and it stays that,
-// spelled by the door instead of by the driver.
-//
-// A scalar is wrapped in a one-element list rather than left alone, which is
-// what keeps `IN (?)` from collapsing into squirrel's `= ?`.
-func resolveListOperands(op string, values any) (resolved []any, err error) {
-	if values == nil {
-		return []any{}, nil
-	}
-
-	v := reflect.ValueOf(values)
-	if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
-		element, _, resolveErr := resolveOperand(values)
-		if resolveErr != nil {
-			return nil, fmt.Errorf("resolving the %s operand: %w", op, resolveErr)
-		}
-		return []any{element}, nil
-	}
-
-	// A []byte is a driver.Value, not a list — squirrel's own rule, which the
-	// compare doors follow through driver.IsValue. Splitting it into a list of
-	// bytes would turn one operand into N.
-	if driver.IsValue(values) {
-		return []any{values}, nil
-	}
-
-	resolved = make([]any, v.Len())
-	for i := range resolved {
-		element, _, resolveErr := resolveOperand(v.Index(i).Interface())
-		if resolveErr != nil {
-			return nil, fmt.Errorf("resolving element %d of the %s operand: %w", i, op, resolveErr)
-		}
-		resolved[i] = element
-	}
-	return resolved, nil
 }
 
 // In creates an IN filter (column IN (values...)).
@@ -210,12 +159,12 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	if err != nil {
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
-	normalized, err := resolveListOperands("IN", values)
+	normalized, empty, err := resolveListOperands("IN", values)
 	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
+		return filterOf(nil, err)
 	}
 	// Empty slice special case: generate "1=0" to ensure no matches
-	if len(normalized) == 0 {
+	if empty {
 		return Filter{sqlizer: squirrel.Expr("(1=0)")}
 	}
 	return Filter{sqlizer: squirrel.Eq{quotedColumn: normalized}}
@@ -234,11 +183,11 @@ func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
 	if err != nil {
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
-	normalized, err := resolveListOperands("NOT IN", values)
+	normalized, empty, err := resolveListOperands("NOT IN", values)
 	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
+		return filterOf(nil, err)
 	}
-	if len(normalized) == 0 {
+	if empty {
 		return Filter{sqlizer: squirrel.Expr("(1=1)")} // Empty NOT IN list - always true
 	}
 	return Filter{sqlizer: squirrel.NotEq{quotedColumn: normalized}}
@@ -329,11 +278,11 @@ func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbty
 	// otherwise reach squirrel's GtOrEq prologue and panic (#1209).
 	lower, err := orderingOperand(">=", lowerBound)
 	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
+		return filterOf(nil, err)
 	}
 	upper, err := orderingOperand("<=", upperBound)
 	if err != nil {
-		return Filter{sqlizer: errorSqlizer{err: err}}
+		return filterOf(nil, err)
 	}
 	condition := squirrel.And{
 		squirrel.GtOrEq{quotedColumn: lower},

@@ -1065,8 +1065,9 @@ func (p *panickingPtrValuer) Value() (driver.Value, error) { return p.v, nil }
 // before testing the pointer dereferences nil and panics inside ToSQL. The
 // operand is nil, and the door must say so without asking it anything.
 //
-// squirrel still panics here (expr.go:168 asserts the Valuer first), so `f.Eq`
-// and `jf.Eq` DIVERGE on this shape: `jf` renders IS NULL where `f` panics.
+// squirrel panics here (expr.go:168 asserts the Valuer first), which is why the
+// door cannot delegate the operand unresolved. `f.Eq` answers the same way since
+// #1205/#1209 — TestFilterEqNilPointerToValuer pins its half.
 func TestJoinFilterNilValuerPointerIsNullNotPanic(t *testing.T) {
 	operands := map[string]any{
 		"value_receiver_valuer":   (*dbsql.NullString)(nil),
@@ -1109,4 +1110,57 @@ func TestJoinFilterNilValuerPointerIsNullNotPanic(t *testing.T) {
 			})
 		}
 	}
+}
+
+// TestJoinFilterBetweenResolvesTheBoundBesideAnExpression pins the shape the
+// mixed branches used to skip: when ONE bound is a RawExpression the other is
+// spliced straight into squirrel.Expr, which resolves nothing at build time, so
+// a nil bound rendered `col <= ?` bound to NULL — matching nothing — and a nil
+// pointer to a Valuer reached the driver, to be dereferenced at EXEC. The
+// expression half still renders verbatim; the value half now takes the same
+// ordering contract as every other bound.
+func TestJoinFilterBetweenResolvesTheBoundBesideAnExpression(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	jf := qb.JoinFilter()
+	expr, err := qb.Expr("18")
+	require.NoError(t, err)
+
+	operands := map[string]any{
+		"nil":              nil,
+		"typed_slice":      []int{1},
+		"null_valuer":      dbsql.NullString{},
+		"typed_nil_ptr":    (*int)(nil),
+		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
+		"nil_ptr_receiver": (*panickingPtrValuer)(nil),
+	}
+
+	for name, operand := range operands {
+		t.Run("expression_lower_value_upper_"+name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				_, _, err := jf.Between("u.id", expr, operand).ToSQL()
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), "<=")
+			})
+		})
+
+		t.Run("value_lower_expression_upper_"+name, func(t *testing.T) {
+			require.NotPanics(t, func() {
+				_, _, err := jf.Between("u.id", operand, expr).ToSQL()
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), ">=")
+			})
+		})
+	}
+
+	t.Run("valid_value_beside_an_expression_binds_the_resolved_value", func(t *testing.T) {
+		sql, args, err := jf.Between("u.id", expr, dbsql.NullInt64{Int64: 5, Valid: true}).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "(u.id >= 18 AND u.id <= ?)", sql)
+		assert.Equal(t, []any{int64(5)}, args)
+	})
 }

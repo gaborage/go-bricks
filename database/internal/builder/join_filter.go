@@ -1,9 +1,7 @@
 package builder
 
 import (
-	"database/sql/driver"
 	"fmt"
-	"reflect"
 
 	"github.com/Masterminds/squirrel"
 
@@ -16,87 +14,6 @@ const (
 	opEqual    = "="
 	opNotEqual = "!="
 )
-
-// resolveOperand mirrors the prologue of squirrel's Eq.toSQL — resolve a
-// driver.Valuer, then dereference a pointer (a nil one becoming an untyped nil)
-// — and classifies the RESULT the way squirrel's own isListType does.
-//
-// Classification and rendering share ONE resolution, and every caller renders
-// and binds the value this returns rather than the original. Resolving twice is
-// a real defect: a stateful Valuer asked a second time by database/sql can
-// answer differently, so a door that classified the first answer and bound the
-// original could bind a NULL under `col = ?` — the very `col = NULL` #1167
-// exists to remove — or expand an IN list that no longer matches the operand.
-//
-// Skipping the prologue is a defect too, not a nicety: `sql.NullString{}` and a
-// typed nil `*int` are neither `== nil` nor slices in their surface form, so a
-// test that looks only at the surface calls them scalars and renders `col = ?`.
-// f.Eq resolves them and renders IS NULL, so the doors would disagree on exactly
-// the operands most likely to be nil in practice: an optional column read from a
-// nullable database field.
-//
-// A Valuer whose Value() fails returns that error for the caller to WRAP, so
-// errors.Is finds the cause. The ordering sentinel is deliberately not attached
-// to it: a Valuer failure says nothing about comparability, and reporting it as
-// ErrOrderingOperandNotComparable is what discarded the cause before.
-func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
-	r := reflect.ValueOf(value)
-	// A NIL pointer is nil whatever it points at, and it is settled HERE, before
-	// the Valuer assertion, because the two overlap: a `*sql.NullString` satisfies
-	// driver.Valuer through NullString's VALUE receiver, so asking a nil one for
-	// its value dereferences nil and panics inside ToSQL. squirrel asserts first
-	// and panics for exactly that reason (expr.go:168), which is why this door
-	// cannot simply mirror its order.
-	if r.Kind() == reflect.Pointer && r.IsNil() {
-		return nil, true, nil
-	}
-
-	if v, isValuer := value.(driver.Valuer); isValuer {
-		got, valuerErr := v.Value()
-		if valuerErr != nil {
-			return nil, false, valuerErr
-		}
-		value = got
-		r = reflect.ValueOf(value)
-	}
-	// A non-nil pointer is dereferenced the way squirrel's prologue does; the
-	// IsNil arm still stands because Value() may itself have returned a pointer.
-	if r.Kind() == reflect.Pointer {
-		if r.IsNil() {
-			return nil, true, nil
-		}
-		value = r.Elem().Interface()
-		r = reflect.ValueOf(value)
-	}
-
-	if value == nil {
-		return nil, true, nil
-	}
-	// squirrel's own isListType: a driver.Value — []byte included — is a scalar.
-	if driver.IsValue(value) {
-		return value, false, nil
-	}
-	return value, r.Kind() == reflect.Slice || r.Kind() == reflect.Array, nil
-}
-
-// orderingOperand resolves an ordering operand and fails closed on the shapes an
-// ordering has no rendering for. Both families call it, so nil, a set and a
-// Valuer reporting NULL take the SAME sentinel at `f` and at `jf` and errors.Is
-// works on either (#1167, #1205). Squirrel, which FilterFactory delegated to,
-// returned its own text for those, rendered `col < ?` bound to a typed nil
-// pointer — the silent-no-rows shape — and panicked on a nil pointer to a
-// Valuer (#1209).
-func orderingOperand(op string, value any) (resolved any, err error) {
-	resolved, nullOrList, err := resolveOperand(value)
-	if err != nil {
-		return nil, fmt.Errorf("resolving the %s operand: %w", op, err)
-	}
-	if nullOrList {
-		return nil, fmt.Errorf("%w: %s with a nil or slice operand",
-			dbtypes.ErrOrderingOperandNotComparable, op)
-	}
-	return resolved, nil
-}
 
 // JoinFilter represents a composable JOIN ON condition that compares columns to other columns.
 // JoinFilters are created through JoinFilterFactory methods and maintain vendor-specific quoting rules.
@@ -241,7 +158,7 @@ func (jff *JoinFilterFactory) compare(column, op string, value any) dbtypes.Join
 
 	resolved, nullOrList, resolveErr := resolveOperand(value)
 	if resolveErr != nil {
-		return joinFilterErr(fmt.Errorf("resolving the %s operand: %w", op, resolveErr))
+		return joinFilterErr(wrapOperandErr(op, resolveErr))
 	}
 
 	// A nil or slice operand delegates to the SAME construct f.Eq/f.NotEq use, so
@@ -265,8 +182,7 @@ func (jff *JoinFilterFactory) compare(column, op string, value any) dbtypes.Join
 		default:
 			// Ordering has no rendering for these, so the door fails closed rather
 			// than emitting SQL that silently matches nothing.
-			return joinFilterErr(fmt.Errorf("%w: %s with a nil or slice operand",
-				dbtypes.ErrOrderingOperandNotComparable, op))
+			return joinFilterErr(orderingOperandErr(op))
 		}
 	}
 
@@ -336,12 +252,12 @@ func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 	if err != nil {
 		return joinFilterErr(err)
 	}
-	normalized, err := resolveListOperands("IN", values)
+	normalized, empty, err := resolveListOperands("IN", values)
 	if err != nil {
 		return joinFilterErr(err)
 	}
 	// Empty slice special case: generate "1=0" to ensure no matches
-	if len(normalized) == 0 {
+	if empty {
 		return JoinFilter{sqlizer: squirrel.Expr("(1=0)")} // Empty IN list - always false
 	}
 	return JoinFilter{sqlizer: squirrel.Eq{quotedColumn: normalized}}
@@ -360,11 +276,11 @@ func (jff *JoinFilterFactory) NotIn(column string, values any) dbtypes.JoinFilte
 	if err != nil {
 		return joinFilterErr(err)
 	}
-	normalized, err := resolveListOperands("NOT IN", values)
+	normalized, empty, err := resolveListOperands("NOT IN", values)
 	if err != nil {
 		return joinFilterErr(err)
 	}
-	if len(normalized) == 0 {
+	if empty {
 		return JoinFilter{sqlizer: squirrel.Expr("(1=1)")} // Empty NOT IN list - always true
 	}
 	return JoinFilter{sqlizer: squirrel.NotEq{quotedColumn: normalized}}
@@ -445,6 +361,24 @@ func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any)
 		upperExpr = expr
 	}
 
+	// A bound that is NOT an expression is an ordering operand wherever it is
+	// rendered, so it is resolved BEFORE the branch that renders it rather than
+	// inside one of them. squirrel.Expr — the construct the mixed branches use —
+	// resolves nothing at build time, so a bound spliced into it unresolved
+	// reached the driver as written: a nil rendered `col <= ?` bound to NULL,
+	// matching nothing, and a nil pointer to a Valuer was dereferenced at EXEC.
+	var lower, upper any
+	if !lowerIsExpr {
+		if lower, err = orderingOperand(">=", lowerBound); err != nil {
+			return joinFilterErr(err)
+		}
+	}
+	if !upperIsExpr {
+		if upper, err = orderingOperand("<=", upperBound); err != nil {
+			return joinFilterErr(err)
+		}
+	}
+
 	// Build condition based on whether bounds are expressions or values
 	if lowerIsExpr && upperIsExpr {
 		// Both expressions - no placeholders
@@ -457,27 +391,18 @@ func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any)
 		// Lower is expression, upper is value
 		condition := squirrel.And{
 			squirrel.Expr(quotedColumn + " >= " + lowerExpr.SQL),
-			squirrel.Expr(quotedColumn+" <= ?", upperBound),
+			squirrel.Expr(quotedColumn+" <= ?", upper),
 		}
 		return JoinFilter{sqlizer: condition}
 	} else if upperIsExpr {
 		// Upper is expression, lower is value
 		condition := squirrel.And{
-			squirrel.Expr(quotedColumn+" >= ?", lowerBound),
+			squirrel.Expr(quotedColumn+" >= ?", lower),
 			squirrel.Expr(quotedColumn + " <= " + upperExpr.SQL),
 		}
 		return JoinFilter{sqlizer: condition}
 	}
 
-	// Both values - use placeholders
-	lower, err := orderingOperand(">=", lowerBound)
-	if err != nil {
-		return joinFilterErr(err)
-	}
-	upper, err := orderingOperand("<=", upperBound)
-	if err != nil {
-		return joinFilterErr(err)
-	}
 	condition := squirrel.And{
 		squirrel.GtOrEq{quotedColumn: lower},
 		squirrel.LtOrEq{quotedColumn: upper},

@@ -2,7 +2,6 @@ package builder
 
 import (
 	dbsql "database/sql"
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -1435,7 +1434,7 @@ func TestFilterOrderingRefusesNilSlicesAndArrays(t *testing.T) {
 		"null_valuer":      dbsql.NullString{},
 		"typed_nil_ptr":    (*int)(nil),
 		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
-		"nil_ptr_receiver": (*pointerReceiverValuer)(nil),
+		"nil_ptr_receiver": (*panickingPtrValuer)(nil),
 	}
 
 	for _, door := range doors {
@@ -1459,18 +1458,6 @@ func TestFilterOrderingRefusesNilSlicesAndArrays(t *testing.T) {
 	})
 }
 
-// pointerReceiverValuer declares Value() on a POINTER receiver, so only
-// *pointerReceiverValuer satisfies driver.Valuer. A nil one crashes the same way
-// a nil *sql.NullString does — the receiver kind is not what matters, reading a
-// field through a nil receiver is (#1209).
-type pointerReceiverValuer struct {
-	payload string
-}
-
-func (v *pointerReceiverValuer) Value() (driver.Value, error) {
-	return v.payload, nil
-}
-
 // TestBetweenRefusesNilAndSetBoundsAtBothFactories pins Between at BOTH
 // families: a BETWEEN bound is an ordering operand, so nil, a set and a Valuer
 // reporting NULL take the same sentinel the ordering doors take, and a nil
@@ -1483,7 +1470,7 @@ func TestBetweenRefusesNilAndSetBoundsAtBothFactories(t *testing.T) {
 		"null_valuer":      dbsql.NullString{},
 		"typed_nil_ptr":    (*int)(nil),
 		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
-		"nil_ptr_receiver": (*pointerReceiverValuer)(nil),
+		"nil_ptr_receiver": (*panickingPtrValuer)(nil),
 	}
 	families := []struct {
 		name string
@@ -1547,7 +1534,7 @@ func TestInAndNotInResolveNilPointerElements(t *testing.T) {
 	elements := map[string]any{
 		"typed_nil_ptr":    (*int)(nil),
 		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
-		"nil_ptr_receiver": (*pointerReceiverValuer)(nil),
+		"nil_ptr_receiver": (*panickingPtrValuer)(nil),
 		"null_valuer":      dbsql.NullString{},
 	}
 	doors := []struct {
@@ -1698,6 +1685,60 @@ func TestFilterCompareDoorsBindTheResolvedValue(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantSQL, sql)
 			assert.Equal(t, []any{tt.wantArg}, args)
+		})
+	}
+}
+
+// TestInResolvesTypedPointerSliceElements guards the fast path added for large
+// lists: a slice whose ELEMENT TYPE can never be a nil pointer or a Valuer is
+// passed through unresolved, because resolving it could not change any element.
+// A []*int can, so it must still take the per-element path — this is the case
+// that fails if the fast path's type test is widened by mistake.
+func TestInResolvesTypedPointerSliceElements(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	seven := 7
+
+	tests := []struct {
+		name     string
+		values   any
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:     "typed_pointer_slice_with_a_nil_element",
+			values:   []*int{nil, &seven},
+			wantSQL:  "u.id IN (?,?)",
+			wantArgs: []any{nil, 7},
+		},
+		{
+			name:     "typed_valuer_slice_with_a_null_element",
+			values:   []dbsql.NullInt64{{}, {Int64: 5, Valid: true}},
+			wantSQL:  "u.id IN (?,?)",
+			wantArgs: []any{nil, int64(5)},
+		},
+		{
+			name:     "plain_scalar_slice_takes_the_fast_path_unchanged",
+			values:   []int{1, 2},
+			wantSQL:  "u.id IN (?,?)",
+			wantArgs: []any{1, 2},
+		},
+		{
+			// The constant carries no placeholder, so the argument list is empty
+			// whichever path built it.
+			name:     "empty_typed_slice_still_renders_the_constant",
+			values:   []int{},
+			wantSQL:  "(1=0)",
+			wantArgs: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := qb.Filter().In("u.id", tt.values).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, tt.wantArgs, args)
 		})
 	}
 }
