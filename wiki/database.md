@@ -322,7 +322,13 @@ the builder. The grammar will not accept a computed one.
   'MustExpr\(|[.]Expr\(|RawExpression\{'`, rather than an annotation.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
   than to this grammar — a stricter question ("is this one column this vendor can
-  name in a MERGE"), enforced by escaping plus `requireSingleColumnNames`.
+  name in a MERGE"). Since `[C61.12]` that question has **one answer on both
+  vendors**: a conflict/insert/update key is trimmed, then must be a single column
+  name carrying no quote of its own beyond a plain wrapping pair, so `COUNT(*)`,
+  `t.name`, `a""b` and `"a""b"` are refused on PostgreSQL too. The trimmed
+  spelling is the one rendered and the one every membership and distinctness check
+  compares, so `" id "` matches its `id` insert key and `{"id", " id "}` is
+  rejected as one column written twice.
 
 Valid identifiers on PostgreSQL are left **unquoted**: PostgreSQL folds unquoted
 identifiers to lowercase, so quoting a valid one would change which physical

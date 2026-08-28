@@ -554,21 +554,24 @@ type QueryBuilderInterface interface {
 	// judged by that same vendor identity rule. A map cannot hold an exact repeat,
 	// but two keys can still name one column: on Oracle {"id": 1, "ID": 2} is one
 	// column written twice and is rejected, while on PostgreSQL it is two columns
-	// and builds. On Oracle every key of either map, and every conflict column,
-	// must also be a single column name — no qualifier, no function call, no empty
-	// name. On BOTH vendors a key may not carry a quote that ends the identifier
-	// early: a quote inside a name must be doubled, since neither escaper doubles
-	// it for you and the remainder would otherwise leave the identifier and become
-	// SQL — that one clause is the only new rejection PostgreSQL sees. The rest of
-	// the single-column-name rule is Oracle's alone, and so is the reason for it:
-	// there, conflict and insert keys have no choice, because the MERGE names them
-	// as column aliases in its USING clause and in the INSERT list, neither of
-	// which admits anything else. Oracle update keys become UPDATE SET targets,
+	// and builds. Every key is TRIMMED before it is judged, and the trimmed
+	// spelling is what the statement renders, so {"id": 1, " id ": 2} names one
+	// column on both vendors and is rejected on both, naming both spellings.
+	//
+	// ONE acceptance rule decides what a key may be, on every vendor: a single
+	// column name — no qualifier, no function call, no empty name — carrying no
+	// quote of its own beyond a plain wrapping pair. COUNT(*), t.name, a""b and
+	// "a""b" are therefore refused on PostgreSQL as well as on Oracle. An
+	// identifier argument carries no quoting; the door quotes. A column whose name
+	// genuinely holds a quote goes through qb.Expr(), which carries the security
+	// annotation that spelling deserves, while a column literally named count(*)
+	// stays reachable as the quoted key "count(*)". The rule is Oracle's grammar
+	// in origin — its MERGE names conflict and insert keys as column aliases in
+	// the USING clause and in the INSERT list, neither of which admits anything
+	// else — and PostgreSQL applies it so that one spelling of a column works
+	// everywhere the call names it. Oracle update keys become UPDATE SET targets,
 	// where Oracle itself would also accept an alias-qualified one; refusing those
-	// is this API's restriction, so that one spelling of a column works everywhere
-	// the call names it. PostgreSQL is otherwise unchanged: it splits a
-	// dotted key on the dot and quotes each part, so the key renders as a
-	// qualified reference rather than as a column name, and the call still builds.
+	// is this API's restriction, for the same reason.
 	//
 	// BuildUpsert rejects a column present in both conflictColumns and
 	// updateColumns on every vendor, because Oracle's MERGE cannot update a

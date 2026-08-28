@@ -318,27 +318,28 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 		return "", nil, errConflictColumnsRequired
 	}
 
-	// Rendering is settled first, for every column the statement will name. The
-	// five identity checks below all consult upsertColumnName, whose quote test is
-	// only correct for a rendering that is one whole token, so no key that would
-	// defeat it may reach them. Most of this check is Oracle grammar — a dotted
-	// key or a function call is a MERGE alias Oracle cannot parse — but its
-	// interior-quote clause runs on PostgreSQL too.
-	insertKeys, updateKeys := sortedKeys(insertColumns), sortedKeys(updateColumns)
-	for _, group := range []struct {
-		kind    string
-		columns []string
-	}{
-		{kind: "conflict", columns: conflictColumns},
-		{kind: "insert", columns: insertKeys},
-		{kind: "update", columns: updateKeys},
-	} {
-		if nameErr := qb.requireSingleColumnNames(group.kind, group.columns); nameErr != nil {
-			return "", nil, nameErr
-		}
+	// Acceptance and normalization are settled first, for every column the
+	// statement will name. The five identity checks below all consult
+	// upsertColumnName, whose quote test is only correct for a rendering that is
+	// one whole token, so no key that would defeat it may reach them. They then
+	// compare the NORMALIZED spelling, which is the one the builders render, so
+	// no door judges a key the statement does not carry (#1196).
+	conflicts, conflictNameErr := normalizeUpsertColumns("conflict", conflictColumns)
+	if conflictNameErr != nil {
+		return "", nil, conflictNameErr
 	}
 
-	if uniqueErr := qb.requireDistinctColumnIdentities("conflict", conflictColumns); uniqueErr != nil {
+	insertKeys, insertNameErr := normalizeUpsertColumns("insert", sortedKeys(insertColumns))
+	if insertNameErr != nil {
+		return "", nil, insertNameErr
+	}
+
+	updateKeys, updateNameErr := normalizeUpsertColumns("update", sortedKeys(updateColumns))
+	if updateNameErr != nil {
+		return "", nil, updateNameErr
+	}
+
+	if uniqueErr := qb.requireDistinctColumnIdentities("conflict", conflicts); uniqueErr != nil {
 		return "", nil, uniqueErr
 	}
 
@@ -350,18 +351,24 @@ func (qb *QueryBuilder) BuildUpsert(table string, conflictColumns []string, inse
 		return "", nil, updateDistinctErr
 	}
 
-	if insertErr := qb.requireConflictColumnsInInsertSet(conflictColumns, insertColumns); insertErr != nil {
+	if insertErr := qb.requireConflictColumnsInInsertSet(conflicts, insertKeys); insertErr != nil {
 		return "", nil, insertErr
 	}
 
-	if conflictErr := qb.rejectConflictColumnUpdates(conflictColumns, updateColumns); conflictErr != nil {
+	if conflictErr := qb.rejectConflictColumnUpdates(conflicts, updateKeys); conflictErr != nil {
 		return "", nil, conflictErr
 	}
 
+	// From here the builders see only normalized spellings, so neither can render
+	// a key that differs from the one every check above judged.
+	normalizedConflicts := normalizedSpellings(conflicts)
+	normalizedInserts := normalizedColumnMap(insertColumns, insertKeys)
+	normalizedUpdates := normalizedColumnMap(updateColumns, updateKeys)
+
 	if qb.vendor == dbtypes.Oracle {
-		return qb.buildOracleMerge(table, conflictColumns, insertColumns, updateColumns)
+		return qb.buildOracleMerge(table, normalizedConflicts, normalizedInserts, normalizedUpdates)
 	}
-	return qb.buildPostgreSQLUpsert(table, conflictColumns, insertColumns, updateColumns)
+	return qb.buildPostgreSQLUpsert(table, normalizedConflicts, normalizedInserts, normalizedUpdates)
 }
 
 // buildOracleMerge constructs an Oracle MERGE statement for upsert operations.
