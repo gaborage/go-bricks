@@ -22,8 +22,9 @@ const maxShortStrBytes = 255
 
 // ErrInvalidPublishDestination is returned when a caller-supplied field that the
 // AMQP wire format carries as a shortstr cannot fit one. Two doors return it:
-// Publish/PublishToExchange, for the basic.publish frame's exchange, routing key
-// and header keys; and Declarations.Validate, for a declared name or routing key,
+// Publish/PublishToExchange, for the exchange and routing key of the
+// basic.publish METHOD frame and the header keys of the CONTENT-HEADER frame
+// beside it; and Declarations.Validate, for a declared name or routing key,
 // which fails startup rather than the first publish. Match it with errors.Is; the wrapped message names the FIELD and its
 // byte length, never the value — an over-long destination is usually built from
 // request data, and this error reaches logs and spans.
@@ -33,8 +34,11 @@ const maxShortStrBytes = 255
 // brought back. ErrPublishRetriesExhausted is deliberately NOT involved.
 var ErrInvalidPublishDestination = errors.New("amqp: publish destination exceeds the AMQP shortstr limit")
 
-// validatePublishDestination checks every caller-supplied shortstr in the
-// basic.publish frame: the exchange, the routing key, and every header KEY
+// validatePublishDestination checks every caller-supplied shortstr a publish
+// puts on the wire: the exchange and routing key, which travel in the
+// basic.publish METHOD frame, and every header KEY, which travels in the
+// CONTENT-HEADER frame that follows it (the same frame carrying CorrelationId,
+// which ADR-070 already guards). One operation, two frames, one ceiling
 // (nested tables included — a table's keys are shortstrs at every depth).
 //
 // Length only. The charset is deliberately NOT checked: unlike the consume side
@@ -131,6 +135,13 @@ func checkShortStr(field, value string) error {
 // other. Reporting every key in a table would mean threading a collector through
 // the recursion for a case that is a config typo either way.
 //
+// A nil entry in either map is reported rather than dereferenced: the maps are
+// exported, so a module can put one there, and a nil-map-value panic at startup
+// tells an operator far less than the key that carries it. The KEY is named here
+// — unlike an over-long value, a map key that was registered without a
+// declaration is the only thing identifying it. It reuses errNilDeclaration, the
+// sentinel the declare path already returns for the same mistake.
+//
 // Declared names are first-party config, not caller input, so the failure names
 // which declaration kind is at fault; the offending value is the name itself and
 // repeating a 256-byte string into a startup error helps nobody.
@@ -144,15 +155,25 @@ func validateDeclaredShortStrs(d *Declarations) error {
 	var errs []error
 
 	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
+		exchange := d.Exchanges[name]
+		if exchange == nil {
+			errs = append(errs, fmt.Errorf("%w: exchange %q", errNilDeclaration, name))
+			continue
+		}
 		errs = append(errs,
 			checkShortStr("declared exchange name", name),
-			checkShortStr("declared exchange type", d.Exchanges[name].Type),
-			checkTableKeys("declared exchange argument key", d.Exchanges[name].Args))
+			checkShortStr("declared exchange type", exchange.Type),
+			checkTableKeys("declared exchange argument key", exchange.Args))
 	}
 	for _, name := range slices.Sorted(maps.Keys(d.Queues)) {
+		queue := d.Queues[name]
+		if queue == nil {
+			errs = append(errs, fmt.Errorf("%w: queue %q", errNilDeclaration, name))
+			continue
+		}
 		errs = append(errs,
 			checkShortStr("declared queue name", name),
-			checkTableKeys("declared queue argument key", d.Queues[name].Args))
+			checkTableKeys("declared queue argument key", queue.Args))
 	}
 	for _, binding := range d.Bindings {
 		errs = append(errs,

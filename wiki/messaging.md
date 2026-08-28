@@ -464,8 +464,9 @@ failure:
 | `messaging.ErrPublishNacked` | the broker received the message and returned `basic.nack` (a transient broker condition — disk alarm, mirror resync, failover; also how a missing exchange surfaces) |
 | `messaging.ErrPublishConfirmTimeout` | no ACK/NACK arrived within `connectiontimeout` |
 
-`messaging.ErrInvalidPublishDestination` is refused **before** any of this. The exchange, the
-routing key and every header key are AMQP shortstrs, and amqp091 answers an over-long one with a
+`messaging.ErrInvalidPublishDestination` is refused **before** any of this. The exchange and routing key (basic.publish's
+method frame) and every header key (the content-header frame beside
+`CorrelationId`) are AMQP shortstrs, and amqp091 answers an over-long one with a
 frame-write error by shutting down the whole `Connection` every publisher in the process shares —
 so a publish carrying one is rejected up front, with zero channel attempts, no reconnect and no
 retry: the frame is unwritable whatever the broker's state. The error names the field and its byte

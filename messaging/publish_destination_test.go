@@ -276,3 +276,41 @@ func TestDeclarationsValidateRefusesAnOversizedExchangeType(t *testing.T) {
 	assert.Contains(t, err.Error(), "256 bytes")
 	assert.NotContains(t, err.Error(), oversizedShortStr)
 }
+
+// TestDeclarationsValidateReportsANilDeclaration keeps a registration mistake
+// from arriving as a nil-map-value panic. Declarations.Exchanges and .Queues are
+// exported maps, so a module can put a nil in one; the key that carries it is
+// the only thing identifying it, so the error names the key.
+func TestDeclarationsValidateReportsANilDeclaration(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(*Declarations)
+		want  string
+	}{
+		{
+			name:  "nil_exchange_entry",
+			build: func(d *Declarations) { d.Exchanges["ghost-exchange"] = nil },
+			want:  `exchange "ghost-exchange"`,
+		},
+		{
+			name:  "nil_queue_entry",
+			build: func(d *Declarations) { d.Queues["ghost-queue"] = nil },
+			want:  `queue "ghost-queue"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewDeclarations()
+			d.Exchanges["ex"] = &ExchangeDeclaration{Name: "ex", Type: "topic"}
+			d.Queues["q"] = &QueueDeclaration{Name: "q"}
+			tt.build(d)
+
+			var err error
+			require.NotPanics(t, func() { err = d.Validate() })
+
+			require.ErrorIs(t, err, errNilDeclaration)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
