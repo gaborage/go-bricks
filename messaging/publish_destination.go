@@ -122,10 +122,14 @@ func checkShortStr(field, value string) error {
 // not covered here; their tag and queue reach basic.consume, a different frame
 // on the consume side, and no publisher's connection depends on them.
 //
-// Every violation is reported, not just the first — the file's own convention
-// for startup checks (see validateStreamDeclarations), so an operator with two
-// over-long names fixes both in one deploy instead of discovering the second
-// after redeploying.
+// Violations are aggregated with errors.Join — the file's own convention for
+// startup checks (see validateStreamDeclarations) — one error per FIELD, so an
+// operator with an over-long exchange name and an over-long publisher routing
+// key fixes both in one deploy. The aggregation stops at the field: checkTableKeys
+// returns on the first oversized key inside a table, and map order is undefined,
+// so a single table carrying two of them names one and the next boot names the
+// other. Reporting every key in a table would mean threading a collector through
+// the recursion for a case that is a config typo either way.
 //
 // Declared names are first-party config, not caller input, so the failure names
 // which declaration kind is at fault; the offending value is the name itself and
