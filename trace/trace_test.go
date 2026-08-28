@@ -363,3 +363,31 @@ func TestInjectIntoHeadersDropsTraceStateBesideAnEmptyHeaderTraceParent(t *testi
 	assert.Equal(t, emitted, ValidateTraceParent(emitted))
 	assert.Empty(t, acc.Get(HeaderTraceState))
 }
+
+// TestInjectIntoHeadersDropsAnOrphanTraceState covers the shape with no pre-set
+// traceparent at all: a header map carrying only `tracestate` has state that
+// annotates a parent this hop never saw, so it must not ride out on the
+// context's parent. The rule is the same one the refused case answers to —
+// the state that ships is the one written beside the parent that ships.
+func TestInjectIntoHeadersDropsAnOrphanTraceState(t *testing.T) {
+	acc := &mapAccessor{m: map[string]any{HeaderTraceState: "vendor=orphan"}}
+	ctx := WithTraceParent(context.Background(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
+
+	InjectIntoHeaders(ctx, acc)
+
+	assert.Equal(t, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01", acc.Get(HeaderTraceParent))
+	assert.Empty(t, acc.Get(HeaderTraceState))
+}
+
+// TestInjectIntoHeadersWritesNoTraceStateWhenNothingIsDisplaced pins the other
+// half of that rule: the removal is written only where a value is actually being
+// displaced. Every ordinary publish goes through here, and stamping an empty
+// header on each one would put an entry in every AMQP table and every persisted
+// outbox row to say nothing.
+func TestInjectIntoHeadersWritesNoTraceStateWhenNothingIsDisplaced(t *testing.T) {
+	acc := &mapAccessor{}
+
+	InjectIntoHeaders(context.Background(), acc)
+
+	assert.NotContains(t, acc.m, HeaderTraceState)
+}

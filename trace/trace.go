@@ -253,11 +253,15 @@ type outboundParent struct {
 //     context's state belongs to a different parent and must not overwrite it.
 //   - otherwise the emitted parent is the context's or a generated one, so the
 //     context's state is the only one that can annotate it.
-//   - with no context state and a REJECTED pre-set parent, whatever sits beside
-//     that refused value describes a trace this hop is no longer continuing and
-//     must not ride along with the value that replaced it. The accessor has no
-//     delete, so an empty value is the removal every reader already treats as
-//     absent (ValidateTraceState).
+//   - with no context state, a pre-set tracestate is left annotating a parent
+//     that is not going out, so it must not ride along with the value that
+//     replaced it. That covers the REFUSED pre-set parent and the parent that
+//     was never supplied at all — a header map carrying `tracestate` and no
+//     `traceparent` is state from a trace this hop is not continuing either way.
+//     The accessor has no delete, so an empty value is the removal every reader
+//     already treats as absent (ValidateTraceState); it is written only where a
+//     value is actually being displaced, so the common publish stamps no header
+//     at all.
 func injectTraceState(ctx context.Context, headers HeaderAccessor, parent outboundParent) {
 	if parent.fromHeader {
 		return
@@ -266,7 +270,7 @@ func injectTraceState(ctx context.Context, headers HeaderAccessor, parent outbou
 		headers.Set(HeaderTraceState, ts)
 		return
 	}
-	if parent.rejected {
+	if _, carried := headerString(headers, HeaderTraceState); carried {
 		headers.Set(HeaderTraceState, "")
 	}
 }

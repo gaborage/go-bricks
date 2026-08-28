@@ -12,7 +12,9 @@
 > every cycle. Both now go through `ValidateTraceParent` before reuse. Precedence is
 > unchanged — a VALID pre-set value still outranks the context — but an invalid one
 > falls through to the context's parent and then to a generated one, and the
-> `tracestate` beside it is overwritten from the context or removed. That is the
+> `tracestate` beside it is overwritten from the context or removed — as is one a
+> carrier wrote with no `traceparent` at all, which annotates a parent this hop
+> never saw. That is the
 > carrier scoping of the first amendment applied to the outbound carrier, and it
 > binds in both directions: where the pre-set `traceparent` is ACCEPTED, the
 > `tracestate` written beside it is now left alone, where the context's state
