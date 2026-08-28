@@ -426,12 +426,19 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 // SensitiveDataFilter masks by field name, not message content, so a raw error
 // string (which can embed driver-supplied PII/PCI) must never be logged in
 // production. Shared by the panic-recovery and unhandled-5xx log paths.
+//
+// The debug branch goes through Err rather than Str because FilterConfig.ErrorRedactor
+// — the one seam that sees error CONTENT — runs at Err and nowhere else (#1168). Writing
+// the message with Str put these two sites outside the reach of a redactor an operator
+// wired up to scrub driver-supplied PII, which is the one thing field-name masking
+// cannot do (#1182). The field name is unchanged: zerolog's Err writes under
+// zerolog.ErrorFieldName, which is "error", and so does the redacted path.
 func appendErrorDetail(event logger.LogEvent, err error, debug bool) logger.LogEvent {
 	if err == nil {
 		return event
 	}
 	if debug {
-		return event.Str("error", err.Error())
+		return event.Err(err)
 	}
 	return event.Str("error_type", fmt.Sprintf("%T", err))
 }
