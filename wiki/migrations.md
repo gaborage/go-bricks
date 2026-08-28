@@ -5342,9 +5342,14 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 ### [C61.13] `LogEvent.Err` masks an error field the operator marked sensitive · silent-behavior · when: match
 
-- detect: `grep -rn 'sensitivefields' -A 10 config*.yaml` and `git grep -n 'LoggerFilterConfig' -- '*.go'`,
-  then read the needle list for an entry that SUBSTRING-matches `error` — `error` itself, but also
-  `err` or `rror`, since matching is substring-wise and case-insensitive, not equality.
+- detect: read the whole needle list at BOTH doors, not a fixed window around the key — a list
+  longer than the context you print hides its own tail, and the needle you are looking for is as
+  likely to be last as first. YAML door: `yq '.log.sensitivefields[]' config*.yaml` (or
+  `yq '.. | select(has("sensitivefields")).sensitivefields[]'` when the block is nested), piped
+  through `grep -i -E 'err|rror'`. Code door: `git grep -n 'LoggerFilterConfig' -- '*.go'` and read
+  the `SensitiveFields` slice each hit builds, including entries appended in a loop or read from
+  another source. Match SUBSTRING-wise and case-insensitively, not by equality — `error` itself
+  fires, and so do `err`, `Err` and `rror`.
 - scope: `LogEvent.Err(err)` wrote its message through zerolog's own `Err`, which applies no
   field-name masking, so a deployment that named `error` in `log.sensitivefields` had the message
   rendered in clear at every framework `Err` site while the same value under a `Str("error", …)`
@@ -5358,10 +5363,15 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - apply: nothing to change. Expect the mask value (`***` unless you set `MaskValue`) where those
   lines used to carry the message — including framework lines you do not author: handler failures,
   job failures, message-handler failures, and the server's 5xx detail under `app.debug`.
-- verify: run with the needle set and force one framework error (an unhandled 5xx under
-  `app.debug` is the easiest); its `error` field reads the mask value, and the raw message appears
-  nowhere in the line. Then drop the needle and confirm the message returns — that second half is
-  what distinguishes this change from a redactor left switched on.
+- verify: force one framework error (an unhandled 5xx under `app.debug` is the easiest) and read
+  its `error` field in each of the three configurations SEPARATELY, because they are three
+  different values and only the pair distinguishes this change from a redactor someone left on:
+  needle set and NO redactor → the mask value (`***` unless you set `MaskValue`), raw message
+  absent from the line; redactor set and NO needle → the redactor's own output, which is not the
+  raw message either; neither set → the raw message, byte-identical to before this hop. Note what
+  the middle case means for a rollback check: dropping the needle does NOT restore the raw text
+  while a redactor stays configured, so testing only "remove the needle, is it back?" reports a
+  failure that is not there.
 - ref: issue #1182 · `logger/adapter.go` (`LogEventAdapter.Err`) · `logger/filter.go` (`maskField`)
 
 ---
