@@ -382,6 +382,25 @@ func TestComputeBackoffHandlesDegenerateInputs(t *testing.T) {
 // The test fires two publishes serially (so DeliveryTags 1 and 2 are deterministic),
 // then sends ACKs in REVERSE order (tag 2 before tag 1) — both publishes must
 // still resolve correctly, proving the routing is keyed by tag not by arrival.
+// awaitPublishAttempt waits for the fake channel to report that a publish
+// actually reached it.
+//
+// Bounded deliberately. A bare `<-sig` on the test goroutine turns any change
+// that stops a publish from reaching the channel — a guard that refuses a valid
+// destination, an early return that skips the attempt — into a HANG until the
+// package timeout, rather than the failure it is. The mutation gate sees that as
+// TIMED OUT, which is not a verdict: the mutants at publish_destination.go's
+// length check and at PublishToExchange's prologue error branch both survived
+// review as timeouts for exactly this reason (#1123).
+func awaitPublishAttempt(t *testing.T, sig <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-sig:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no publish attempt reached the channel")
+	}
+}
+
 func TestPublishConfirmsRoutedByDeliveryTag(t *testing.T) {
 	ch := &fakeChannel{}
 	c := newClientWithFakeChannel(t, ch)
@@ -401,14 +420,14 @@ func TestPublishConfirmsRoutedByDeliveryTag(t *testing.T) {
 		resultA <- c.PublishToExchange(context.Background(),
 			PublishOptions{Exchange: "ex", RoutingKey: "a"}, []byte("A"))
 	}()
-	<-sig // A's PublishWithContext fired → tag 1 registered
+	awaitPublishAttempt(t, sig) // A's PublishWithContext fired → tag 1 registered
 
 	// Publish B — will get DeliveryTag=2
 	go func() {
 		resultB <- c.PublishToExchange(context.Background(),
 			PublishOptions{Exchange: "ex", RoutingKey: "b"}, []byte("B"))
 	}()
-	<-sig // B's PublishWithContext fired → tag 2 registered
+	awaitPublishAttempt(t, sig) // B's PublishWithContext fired → tag 2 registered
 
 	// Send ACKs OUT OF ORDER. Pre-fix this would have made A claim B's ACK
 	// (and vice versa); post-fix the dispatcher routes by DeliveryTag.
