@@ -132,6 +132,14 @@ leave with the tracing exporter. A log field is on-platform: the operator owns
 its retention and the sensitive-data filter sees it.
 _Avoid_: external, third-party, remote
 
+**Opaque payload**:
+Bytes or a string whose structure the sensitive-data filter cannot see into
+by field name — a pre-encoded JSON document, a JWK, a PEM block, a response
+body logged as one value. Masking one is a matter of parsing it or recognising
+its shape, never of naming fields.
+_Avoid_: pre-encoded payload (one cause, not the class), raw payload (collides
+with `RawMessage` and the raw-SQL doors), blob
+
 ### Query building
 
 **Identifier argument**:
