@@ -22,6 +22,29 @@ const (
 	testTracerName       = "test-tracer"
 )
 
+// The three durations the OTLP exporter tests use to make one race deterministic
+// (#1162). Those tests aim a real exporter at a port with nothing listening, which
+// is the point — they prove the pipeline is wired, not that a collector answers.
+//
+// Once the batch processor's timer starts an export, ForceFlush cannot take it
+// back and Shutdown inherits it; that export runs on a BACKGROUND context, so the
+// caller's Shutdown deadline does not cap it. With the development defaults —
+// 500ms batch, 10s export — and the OTLP client's ~5s retry after a refused dial,
+// Shutdown blocked past its 2s budget and returned "context deadline exceeded",
+// but only when the timer happened to beat ForceFlush, which is why it flaked
+// under CI load and passed locally.
+//
+// So the tests force that ordering instead of hoping to avoid it: the batch
+// timeout makes the timer own the export, the stall guarantees it gets there
+// first (1ms alone does not — span.End() to ForceFlush is sub-millisecond on an
+// idle machine and the flush still wins), and the export timeout bounds what
+// Shutdown inherits, well under the 2s budget.
+const (
+	timerOwnedBatchTimeout    = time.Millisecond
+	timerOrderingStall        = 50 * time.Millisecond
+	boundedInheritedExportTTL = 500 * time.Millisecond
+)
+
 func TestNewProviderDisabled(t *testing.T) {
 	cfg := &Config{
 		Enabled: false,
@@ -168,22 +191,8 @@ func TestNewProviderTracingEnabled(t *testing.T) {
 func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 	// Note: This test creates the exporter but does not actually send data
 	// since we don't have a real OTLP collector running
-	// The exporter points at a port with nothing listening, which is the whole
-	// point: this test proves the pipeline is wired, not that a collector answers.
-	// Two timeouts are set explicitly rather than left to the development defaults,
-	// and both are load-bearing (#1162).
-	//
-	// Batch.Timeout at 1ms makes the batch processor's own timer ALWAYS own the
-	// export, which is the hostile ordering: once the timer starts an export,
-	// ForceFlush cannot take it back and Shutdown inherits it. The default 500ms
-	// left that to chance — the test usually reached ForceFlush first, and lost the
-	// race only under load, which is what made this flake CI-only.
-	//
-	// Export.Timeout at 500ms is what bounds the inherited export. It runs on a
-	// background context, so the caller's Shutdown deadline does not cap it; with
-	// the development default of 10s and the OTLP client's ~5s retry after a
-	// refused dial, Shutdown blocked past its 2s budget and returned
-	// "context deadline exceeded". Below the shutdown budget, it cannot.
+	// Aimed at a dead port on purpose, with the three timing constants above
+	// making the timer-versus-ForceFlush ordering deterministic (#1162).
 	cfg := &Config{
 		Enabled: true,
 		Service: ServiceConfig{
@@ -194,8 +203,8 @@ func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 			Endpoint: testOTLPHTTPEndpoint,
 			Protocol: "http",
 			Insecure: true,
-			Batch:    BatchConfig{Timeout: time.Millisecond},
-			Export:   ExportConfig{Timeout: 500 * time.Millisecond},
+			Batch:    BatchConfig{Timeout: timerOwnedBatchTimeout},
+			Export:   ExportConfig{Timeout: boundedInheritedExportTTL},
 			Sample: SampleConfig{
 				Rate: Float64Ptr(1.0),
 			},
@@ -219,12 +228,9 @@ func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 	assert.NotNil(t, span)
 	span.End()
 
-	// Deliberate stall: 1ms alone does not GUARANTEE the timer wins, because
-	// span.End() to ForceFlush is sub-millisecond on an idle machine and the flush
-	// still gets there first. Waiting hands the export to the timer every run,
-	// which is the ordering CI produced only under load. Without it this test would
-	// pass for the wrong reason and stop guarding anything.
-	time.Sleep(50 * time.Millisecond)
+	// Hands the export to the batch timer before ForceFlush runs; see
+	// timerOrderingStall's block above for why omitting it passes for the wrong reason.
+	time.Sleep(timerOrderingStall)
 
 	// Force flush to ensure span is processed (even though it will fail to send)
 	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
@@ -241,22 +247,8 @@ func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 func TestNewProviderOTLPGRPCExporter(t *testing.T) {
 	// Note: This test creates the exporter but does not actually send data
 	// since we don't have a real OTLP collector running
-	// The exporter points at a port with nothing listening, which is the whole
-	// point: this test proves the pipeline is wired, not that a collector answers.
-	// Two timeouts are set explicitly rather than left to the development defaults,
-	// and both are load-bearing (#1162).
-	//
-	// Batch.Timeout at 1ms makes the batch processor's own timer ALWAYS own the
-	// export, which is the hostile ordering: once the timer starts an export,
-	// ForceFlush cannot take it back and Shutdown inherits it. The default 500ms
-	// left that to chance — the test usually reached ForceFlush first, and lost the
-	// race only under load, which is what made this flake CI-only.
-	//
-	// Export.Timeout at 500ms is what bounds the inherited export. It runs on a
-	// background context, so the caller's Shutdown deadline does not cap it; with
-	// the development default of 10s and the OTLP client's ~5s retry after a
-	// refused dial, Shutdown blocked past its 2s budget and returned
-	// "context deadline exceeded". Below the shutdown budget, it cannot.
+	// Aimed at a dead port on purpose, with the three timing constants above
+	// making the timer-versus-ForceFlush ordering deterministic (#1162).
 	cfg := &Config{
 		Enabled: true,
 		Service: ServiceConfig{
@@ -267,8 +259,8 @@ func TestNewProviderOTLPGRPCExporter(t *testing.T) {
 			Endpoint: testOTLPGRPCEndpoint,
 			Protocol: "grpc",
 			Insecure: true,
-			Batch:    BatchConfig{Timeout: time.Millisecond},
-			Export:   ExportConfig{Timeout: 500 * time.Millisecond},
+			Batch:    BatchConfig{Timeout: timerOwnedBatchTimeout},
+			Export:   ExportConfig{Timeout: boundedInheritedExportTTL},
 			Sample: SampleConfig{
 				Rate: Float64Ptr(1.0),
 			},
@@ -292,12 +284,9 @@ func TestNewProviderOTLPGRPCExporter(t *testing.T) {
 	assert.NotNil(t, span)
 	span.End()
 
-	// Deliberate stall: 1ms alone does not GUARANTEE the timer wins, because
-	// span.End() to ForceFlush is sub-millisecond on an idle machine and the flush
-	// still gets there first. Waiting hands the export to the timer every run,
-	// which is the ordering CI produced only under load. Without it this test would
-	// pass for the wrong reason and stop guarding anything.
-	time.Sleep(50 * time.Millisecond)
+	// Hands the export to the batch timer before ForceFlush runs; see
+	// timerOrderingStall's block above for why omitting it passes for the wrong reason.
+	time.Sleep(timerOrderingStall)
 
 	// Force flush to ensure span is processed (even though it will fail to send)
 	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
