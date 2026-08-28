@@ -293,6 +293,13 @@ func (d *Declarations) Validate() error {
 		return err
 	}
 
+	// Length-bound every declared shortstr here rather than letting the first
+	// publish discover it: an over-long name is unwritable, and on the publish
+	// path that costs the shared connection (#1123).
+	if err := validateDeclaredShortStrs(d); err != nil {
+		return err
+	}
+
 	for _, binding := range d.Bindings {
 		if _, exists := d.Queues[binding.Queue]; !exists {
 			return fmt.Errorf("binding references non-existent queue: %s", binding.Queue)

@@ -4,6 +4,31 @@
 - **Date**: 2026-08-19
 - **Related**: [ADR-068](adr_068_delivery_pipeline.md) and [ADR-069](adr_069_pipeline_owns_settlement_timing.md) (the delivery pipeline both messaging lanes run on, which is where the AMQP door reaches this seam)
 
+> **Amended (2026-08-28, the publish frame's other shortstrs):** this ADR guarded
+> `CorrelationId` at its assignment site because an over-long shortstr does not
+> fail the publish — amqp091 answers a frame-write error by shutting down the
+> whole `Connection`, which every publisher in the process shares. The fields
+> beside it in the same publish operation had no such guard: `Exchange`,
+> `RoutingKey`, and every `Headers` KEY — at any depth, since amqp091 encodes a
+> nested table AND a field-array's elements through the same writer — all
+> caller-supplied on the public API and all shortstrs. `Exchange` and
+> `RoutingKey` ride in the basic.publish METHOD frame; the header keys ride in
+> the CONTENT-HEADER frame beside `CorrelationId`, which is the field this ADR
+> already guarded. Different frames, one operation, and one writeShortstr
+> refusing all of them. A routing key built from request data therefore reached
+> `writeShortstr` unexamined, and because the resulting error is classified
+> transient, the bounded retry loop re-tore the connection on every attempt.
+>
+> Each is now length-checked once, before the retry loop and before the span,
+> against a new exported `ErrInvalidPublishDestination`; the error names the
+> field and its byte length, never the value. The same rule runs at declaration
+> validation, so a name the frame cannot carry fails startup instead of the first
+> publish. Length ONLY: unlike the ingress doors this ADR opened with, these are
+> the service's own destinations rather than a foreign carrier's, and a broker
+> that dislikes one answers with a CHANNEL error — recoverable, and not the
+> connection-wide failure the bound exists to prevent. Empty stays legal (the
+> default exchange, a fanout binding) (#1123, `[C61.17]`).
+>
 > **Amended (2026-08-28, the emit side):** this ADR validated every INGRESS door and
 > trusted the egress. `trace.InjectIntoHeaders` preferred a `traceparent` already
 > present in the header map and re-emitted it verbatim, so two carriers reached the

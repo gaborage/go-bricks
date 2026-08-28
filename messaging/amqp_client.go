@@ -383,6 +383,15 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 
 // PublishToExchange publishes a message to a specific exchange with routing key.
 func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error {
+	// Before ANYTHING else — before the span, the readiness pre-flight and the
+	// retry loop. A destination the frame cannot carry is unwritable whatever the
+	// broker's state, so retrying it only re-tears the shared connection, and the
+	// value must not reach the span attribute or the publish metrics on its way
+	// out (#1123).
+	if err := validatePublishDestination(&options); err != nil {
+		return err
+	}
+
 	startTime := time.Now()
 
 	ctx, span := createPublishSpan(ctx, options, len(data), startTime)
