@@ -141,13 +141,18 @@ func TestInjectIntoHeadersForceMode(t *testing.T) {
 func TestComputeHelpers(t *testing.T) {
 	// computeTraceParent: header > context > generated
 	acc := &mapAccessor{m: map[string]any{HeaderTraceParent: "00-11111111111111111111111111111111-2222222222222222-01"}}
-	assert.Equal(t, "00-11111111111111111111111111111111-2222222222222222-01", computeTraceParent(context.Background(), acc))
+	fromHeader, rejected := computeTraceParent(context.Background(), acc)
+	assert.Equal(t, "00-11111111111111111111111111111111-2222222222222222-01", fromHeader)
+	assert.False(t, rejected)
 
 	ctx := WithTraceParent(context.Background(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
-	assert.Equal(t, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01", computeTraceParent(ctx, &mapAccessor{}))
+	fromContext, rejected := computeTraceParent(ctx, &mapAccessor{})
+	assert.Equal(t, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01", fromContext)
+	assert.False(t, rejected)
 
 	// Fallback generates a valid 00-... string
-	gen := computeTraceParent(context.Background(), &mapAccessor{})
+	gen, rejected := computeTraceParent(context.Background(), &mapAccessor{})
+	assert.False(t, rejected)
 	ok, _ := regexp.MatchString(`^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`, gen)
 	assert.True(t, ok)
 }
@@ -250,4 +255,61 @@ func TestExtractFromHeadersDoesNotMixTraceLineages(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestInjectIntoHeadersDiscardsMalformedHeaderTraceParent pins the emit-side
+// half of ADR-070 (#1121): a traceparent already sitting in the header map is
+// caller-supplied — first-party code hand-setting PublishOptions.Headers, or an
+// outbox row persisted before the ingress fix — so it is validated like every
+// other door. An unusable one falls through to the context value rather than
+// being re-emitted.
+func TestInjectIntoHeadersDiscardsMalformedHeaderTraceParent(t *testing.T) {
+	const contextParent = "00-aaaabbbbccccddddeeeeffff00001111-0011223344556677-01"
+	acc := &mapAccessor{m: map[string]any{
+		// 32 characters in the trace-id position, none of them hex.
+		HeaderTraceParent: "00-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz-0011223344556677-01",
+	}}
+	ctx := WithTraceParent(context.Background(), contextParent)
+
+	InjectIntoHeaders(ctx, acc)
+
+	assert.Equal(t, contextParent, acc.Get(HeaderTraceParent))
+	assert.Equal(t, "aaaabbbbccccddddeeeeffff00001111", acc.Get(HeaderXRequestID))
+}
+
+// TestInjectIntoHeadersDoesNotAlignRequestIDToNonHexTraceID is the belt to the
+// braces above (#1121): WithTraceParent is exported, so a context value the
+// ingress seam never saw still reaches the alignment. Aligning on length alone
+// let 32 arbitrary bytes become the outbound X-Request-ID, which the publish
+// side then refuses — shipping an empty CorrelationId. The alignment now
+// requires the traceparent charset, so an unusable parent leaves the context's
+// own trace ID in place.
+func TestInjectIntoHeadersDoesNotAlignRequestIDToNonHexTraceID(t *testing.T) {
+	ctx := WithTraceID(context.Background(), "rid-abc")
+	ctx = WithTraceParent(ctx, "00-ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ-0011223344556677-01")
+	acc := &mapAccessor{}
+
+	InjectIntoHeaders(ctx, acc)
+
+	assert.Equal(t, "rid-abc", acc.Get(HeaderXRequestID))
+}
+
+// TestInjectIntoHeadersDropsTraceStateBesideARejectedTraceParent pins the other
+// half of the emit-side rule (#1121): a tracestate is only meaningful for the
+// traceparent it was written beside. When that traceparent is refused and the
+// context carries no state of its own, the stale state must not ride along with
+// the value that replaced it — and with no context parent either, the emitted
+// traceparent is a freshly generated one.
+func TestInjectIntoHeadersDropsTraceStateBesideARejectedTraceParent(t *testing.T) {
+	acc := &mapAccessor{m: map[string]any{
+		HeaderTraceParent: "00-not-a-traceparent-at-all-01",
+		HeaderTraceState:  "vendor=stale",
+	}}
+
+	InjectIntoHeaders(context.Background(), acc)
+
+	emitted, ok := acc.Get(HeaderTraceParent).(string)
+	require.True(t, ok)
+	assert.Equal(t, emitted, ValidateTraceParent(emitted), "the emitted traceparent is well-formed")
+	assert.Empty(t, acc.Get(HeaderTraceState))
 }

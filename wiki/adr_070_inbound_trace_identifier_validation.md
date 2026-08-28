@@ -4,6 +4,26 @@
 - **Date**: 2026-08-19
 - **Related**: [ADR-068](adr_068_delivery_pipeline.md) and [ADR-069](adr_069_pipeline_owns_settlement_timing.md) (the delivery pipeline both messaging lanes run on, which is where the AMQP door reaches this seam)
 
+> **Amended (2026-08-28, the emit side):** this ADR validated every INGRESS door and
+> trusted the egress. `trace.InjectIntoHeaders` preferred a `traceparent` already
+> present in the header map and re-emitted it verbatim, so two carriers reached the
+> wire unjudged: application code hand-setting `PublishOptions.Headers`, and an
+> outbox row persisted before these doors existed, which the relay republishes on
+> every cycle. Both now go through `ValidateTraceParent` before reuse. Precedence is
+> unchanged — a VALID pre-set value still outranks the context — but an invalid one
+> falls through to the context's parent and then to a generated one, and the
+> `tracestate` beside it is overwritten from the context or removed, which is the
+> carrier scoping of the first amendment applied to the outbound carrier. The
+> alignment that derives the outbound `X-Request-ID` now judges the trace-id field by
+> this ADR's own charset instead of its length, through the same validator and parser
+> rather than a second regex; 32 arbitrary bytes used to pass it and then be refused
+> by the publish-side request-id guard, shipping an empty `CorrelationId`. The
+> discard is silent: `trace` has no logger and gains none, so an operator detects it
+> as this ADR's other doors are detected — by the value ceasing to appear downstream.
+> The context parent itself stays unvalidated on the way out: `WithTraceParent` is
+> exported first-party API, and the publish-side `CorrelationId` guard remains the
+> defense in depth for what it can carry (#1121, `[C61.12]`).
+>
 > **Amended (2026-08-19):** `tracestate` is scoped to the carrier that brought its
 > parent, in addition to the size cap the Decision describes. It is retained only
 > when the SAME carrier supplied a valid `traceparent`, and discarded otherwise —

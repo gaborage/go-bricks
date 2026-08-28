@@ -219,25 +219,42 @@ func InjectIntoHeaders(ctx context.Context, headers HeaderAccessor) {
 		return
 	}
 
-	traceparent := computeTraceParent(ctx, headers)
+	traceparent, rejected := computeTraceParent(ctx, headers)
 	alignedTraceID := forceAlignTraceID(EnsureTraceID(ctx), traceparent)
 
 	headers.Set(HeaderXRequestID, alignedTraceID)
 	headers.Set(HeaderTraceParent, traceparent)
 	if ts, ok := StateFromContext(ctx); ok {
 		headers.Set(HeaderTraceState, ts)
+	} else if rejected {
+		// A pre-set tracestate belongs to the traceparent it was written beside.
+		// Once that traceparent is refused, the state describes a trace this hop
+		// is no longer continuing, so it must not ride along with the value that
+		// replaced it. The accessor has no delete, so an empty value is the
+		// removal every reader already treats as absent (ValidateTraceState).
+		headers.Set(HeaderTraceState, "")
 	}
 }
 
-// computeTraceParent determines the traceparent value to use (existing header > context > generated)
-func computeTraceParent(ctx context.Context, headers HeaderAccessor) string {
-	if v := headerString(headers, HeaderTraceParent); v != "" {
-		return v
+// computeTraceParent determines the traceparent value to use (existing header > context > generated).
+//
+// The header value is caller-supplied — first-party code hand-setting
+// PublishOptions.Headers, or an outbox row persisted before the ingress seam
+// existed — so it is validated like every other door rather than taken verbatim
+// (ADR-070, #1121). An unusable one falls through to the context value and then
+// to a generated one; a well-formed one still wins.
+// It reports whether a pre-set header value was present and refused, which is
+// what tells the caller the tracestate beside it is stale.
+func computeTraceParent(ctx context.Context, headers HeaderAccessor) (traceparent string, rejected bool) {
+	preset := headerString(headers, HeaderTraceParent)
+	if v := ValidateTraceParent(preset); v != "" {
+		return v, false
 	}
+	rejected = preset != ""
 	if tp, ok := ParentFromContext(ctx); ok && tp != "" {
-		return tp
+		return tp, rejected
 	}
-	return GenerateTraceParent()
+	return GenerateTraceParent(), rejected
 }
 
 // headerString gets a header as string using safe conversion
@@ -267,13 +284,18 @@ func safeToString(value any) string {
 	}
 }
 
-// extractTraceIDFromParent extracts the trace ID from a W3C traceparent header
+// extractTraceIDFromParent extracts the trace ID from a W3C traceparent header.
+//
+// The field must be 32 LOWERCASE HEX digits — ValidateTraceParent's charset, not
+// its length alone. WithTraceParent is exported, so a value the ingress seam
+// never saw still reaches this alignment, and a length-only check let 32
+// arbitrary bytes become the outbound X-Request-ID that the publish side then
+// refuses, shipping an empty CorrelationId (ADR-070, #1121).
 func extractTraceIDFromParent(traceparent string) string {
-	parts := strings.Split(traceparent, "-")
-	if len(parts) >= 4 && len(parts[1]) == 32 {
-		return parts[1]
+	if ValidateTraceParent(traceparent) == "" {
+		return ""
 	}
-	return ""
+	return splitTraceParent(traceparent).traceID
 }
 
 // forceAlignTraceID aligns trace ID with traceparent (force mode)

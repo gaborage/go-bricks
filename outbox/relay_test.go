@@ -296,6 +296,44 @@ func TestPublishRecordRehydratesTraceContextForPublish(t *testing.T) {
 		"publish context trace id must be the originating trace id, not a fresh one")
 }
 
+// TestPublishRecordDoesNotReEmitAPersistedMalformedTraceParent is #1121's second
+// reacher: a row written before the ingress seam existed carries whatever
+// traceparent the caller planted, and the relay publishes that persisted map
+// verbatim — ExtractFromHeaders only sanitizes the CONTEXT it derives from it.
+//
+// The neutralization therefore happens one layer down, where the AMQP client
+// injects over the map it was handed, so this test runs that same injection over
+// the captured publish arguments rather than asserting on the raw map. Before
+// #1121 the poisoned value survived that injection and went on the wire.
+func TestPublishRecordDoesNotReEmitAPersistedMalformedTraceParent(t *testing.T) {
+	const persisted = "00-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!-00f067aa0ba902b7-01"
+	store := &fakeStore{}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	rec := &Record{
+		ID:         "evt-poisoned",
+		EventType:  "order.created",
+		Exchange:   "orders",
+		RoutingKey: "created",
+		Headers:    []byte(`{"traceparent":"` + persisted + `"}`),
+	}
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	require.Equal(t, outcomePublished, out)
+	require.NoError(t, outErr)
+
+	require.NotNil(t, amqp.LastPublishHdrs)
+	require.NotNil(t, amqp.LastPublishCtx)
+	gobrickstrace.InjectIntoHeaders(amqp.LastPublishCtx, &mapHeaderAccessor{headers: amqp.LastPublishHdrs})
+
+	emitted, ok := amqp.LastPublishHdrs[gobrickstrace.HeaderTraceParent].(string)
+	require.True(t, ok)
+	assert.NotEqual(t, persisted, emitted, "the persisted value must not go back on the wire")
+	assert.Equal(t, emitted, gobrickstrace.ValidateTraceParent(emitted), "the emitted traceparent is well-formed")
+}
+
 func TestMarkRecordFailedLogsButDoesNotPanicOnStoreError(t *testing.T) {
 	// Even if the store fails to record the failure, the relay must continue.
 	store := &fakeStore{MarkFailedErr: errors.New("store unreachable")}
