@@ -194,3 +194,52 @@ func TestDeclarationsValidateAcceptsNamesAtTheLimit(t *testing.T) {
 
 	assert.NoError(t, d.Validate())
 }
+
+// TestDeclarationsValidateReportsEveryOversizedName pins the aggregation the
+// file's other startup checks already promise: an operator with two over-long
+// names fixes both in one deploy instead of discovering the second after
+// redeploying.
+func TestDeclarationsValidateReportsEveryOversizedName(t *testing.T) {
+	otherOversized := strings.Repeat("q", 300)
+	d := NewDeclarations()
+	d.Exchanges[oversizedShortStr] = &ExchangeDeclaration{Name: oversizedShortStr, Type: "topic"}
+	d.Queues[otherOversized] = &QueueDeclaration{Name: otherOversized}
+
+	err := d.Validate()
+
+	require.ErrorIs(t, err, ErrInvalidPublishDestination)
+	assert.Contains(t, err.Error(), "declared exchange name")
+	assert.Contains(t, err.Error(), "declared queue name")
+	assert.Contains(t, err.Error(), "256 bytes")
+	assert.Contains(t, err.Error(), "300 bytes")
+}
+
+// TestDeclarationsValidateRefusesAnOversizedArgsKey covers the table keys on the
+// declaration kinds, which reach the declare frame as shortstrs exactly as the
+// names beside them do.
+func TestDeclarationsValidateRefusesAnOversizedArgsKey(t *testing.T) {
+	d := NewDeclarations()
+	d.Exchanges["ex"] = &ExchangeDeclaration{Name: "ex", Type: "topic"}
+	d.Queues["q"] = &QueueDeclaration{Name: "q", Args: map[string]any{oversizedShortStr: "v"}}
+
+	err := d.Validate()
+
+	require.ErrorIs(t, err, ErrInvalidPublishDestination)
+	assert.Contains(t, err.Error(), "header key")
+}
+
+// TestUnsafePublishRefusesAnOversizedDestination keeps the package's protection
+// from depending on which internal path reached the wire: unsafePublish calls
+// PublishWithContext by its own route.
+func TestUnsafePublishRefusesAnOversizedDestination(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+
+	err := c.unsafePublish(context.Background(), PublishOptions{
+		Exchange:   "ex",
+		RoutingKey: oversizedShortStr,
+	}, []byte(testMessageBody))
+
+	require.ErrorIs(t, err, ErrInvalidPublishDestination)
+	assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts))
+}

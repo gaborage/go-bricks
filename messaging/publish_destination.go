@@ -3,6 +3,8 @@ package messaging
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -11,11 +13,18 @@ import (
 // anything longer, and the Connection — not the publish, not the channel — is
 // what dies when a frame write fails: it answers with `go c.shutdown(...)`, and
 // every publisher in the process shares that connection.
+//
+// The same 255 is spelled inside routingKeyPattern on the consume side, where it
+// is belt only (a CONSUMED value arrives through readShortstr and cannot exceed
+// it); a regexp cannot read a constant, so the two state the ceiling separately
+// and this comment is the link between them.
 const maxShortStrBytes = 255
 
-// ErrInvalidPublishDestination is returned by Publish and PublishToExchange when
-// a caller-supplied field of the basic.publish frame cannot fit an AMQP
-// shortstr. Match it with errors.Is; the wrapped message names the FIELD and its
+// ErrInvalidPublishDestination is returned when a caller-supplied field that the
+// AMQP wire format carries as a shortstr cannot fit one. Two doors return it:
+// Publish/PublishToExchange, for the basic.publish frame's exchange, routing key
+// and header keys; and Declarations.Validate, for a declared name or routing key,
+// which fails startup rather than the first publish. Match it with errors.Is; the wrapped message names the FIELD and its
 // byte length, never the value — an over-long destination is usually built from
 // request data, and this error reaches logs and spans.
 //
@@ -52,12 +61,12 @@ func checkTableKeys(headers map[string]any) error {
 		if err := checkShortStr("header key", key); err != nil {
 			return err
 		}
-		switch nested := value.(type) {
-		case amqp.Table:
-			if err := checkTableKeys(nested); err != nil {
-				return err
-			}
-		case map[string]any:
+		// amqp.Table IS map[string]any, so normalize and recurse once rather
+		// than carrying two identical branches.
+		if table, ok := value.(amqp.Table); ok {
+			value = map[string]any(table)
+		}
+		if nested, ok := value.(map[string]any); ok {
 			if err := checkTableKeys(nested); err != nil {
 				return err
 			}
@@ -81,32 +90,43 @@ func checkShortStr(field, value string) error {
 // operator would rather never reach. It is the same rule and the same sentinel
 // deliberately: a second constant would let the two doors drift.
 //
+// Covered: every exchange and queue NAME, every binding and publisher ROUTING
+// KEY, and the KEYS of every Args/Headers table on those four kinds — each is a
+// shortstr in the declare or publish frame it feeds. Consumer declarations are
+// not covered here; their tag and queue reach basic.consume, a different frame
+// on the consume side, and no publisher's connection depends on them.
+//
+// Every violation is reported, not just the first — the file's own convention
+// for startup checks (see validateStreamDeclarations), so an operator with two
+// over-long names fixes both in one deploy instead of discovering the second
+// after redeploying.
+//
 // Declared names are first-party config, not caller input, so the failure names
 // which declaration kind is at fault; the offending value is the name itself and
 // repeating a 256-byte string into a startup error helps nobody.
 func validateDeclaredShortStrs(d *Declarations) error {
-	for name := range d.Exchanges {
-		if err := checkShortStr("declared exchange name", name); err != nil {
-			return err
-		}
+	var errs []error
+
+	for _, name := range slices.Sorted(maps.Keys(d.Exchanges)) {
+		errs = append(errs,
+			checkShortStr("declared exchange name", name),
+			checkTableKeys(d.Exchanges[name].Args))
 	}
-	for name := range d.Queues {
-		if err := checkShortStr("declared queue name", name); err != nil {
-			return err
-		}
+	for _, name := range slices.Sorted(maps.Keys(d.Queues)) {
+		errs = append(errs,
+			checkShortStr("declared queue name", name),
+			checkTableKeys(d.Queues[name].Args))
 	}
 	for _, binding := range d.Bindings {
-		if err := checkShortStr("binding routing key", binding.RoutingKey); err != nil {
-			return err
-		}
+		errs = append(errs,
+			checkShortStr("binding routing key", binding.RoutingKey),
+			checkTableKeys(binding.Args))
 	}
 	for _, publisher := range d.Publishers {
-		if err := checkShortStr("publisher routing key", publisher.RoutingKey); err != nil {
-			return err
-		}
-		if err := checkTableKeys(publisher.Headers); err != nil {
-			return err
-		}
+		errs = append(errs,
+			checkShortStr("publisher routing key", publisher.RoutingKey),
+			checkTableKeys(publisher.Headers))
 	}
-	return nil
+
+	return errors.Join(errs...)
 }

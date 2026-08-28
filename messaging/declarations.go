@@ -296,6 +296,11 @@ func (d *Declarations) Validate() error {
 	// Length-bound every declared shortstr here rather than letting the first
 	// publish discover it: an over-long name is unwritable, and on the publish
 	// path that costs the shared connection (#1123).
+	//
+	// This is the one error from Validate that carries an exported sentinel. It
+	// is deliberate: the same rule fires at runtime on the publish path, where a
+	// caller must be able to branch on it with errors.Is, and one rule reported
+	// two ways would be worse than one sentinel among plain errors here.
 	if err := validateDeclaredShortStrs(d); err != nil {
 		return err
 	}
