@@ -40,10 +40,13 @@ the vendor fork in `requireSingleColumnNames` is gone.
 Note the third clause is a NARROWING on Oracle, not only on PostgreSQL: a doubled
 quote was Oracle's legal spelling of a quote inside a name, and is refused now. An
 identifier argument carries no ESCAPING of its own — the door escapes — and a
-column whose name genuinely holds a quote reaches SQL through `qb.Expr()`, the
-sanctioned raw-SQL path — exempt from the `// SECURITY:` annotation for
-consistency with `Select`/`GroupBy`/`OrderBy`, and discoverable by its own name
-instead (`git grep -nE 'MustExpr\(|[.]Expr\(|RawExpression\{'`).
+column whose name genuinely holds a quote has no spelling at this door at all.
+Note what that does NOT mean: `qb.Expr()` is the hatch for a `Select`, a
+predicate or an `OrderBy` term, but `BuildUpsert` takes `[]string` and two
+`map[string]any`, so no expression can be a KEY here. A schema with a quote in a
+column name needs a hand-written statement (`database.Raw`, carrying its
+`// SECURITY: Manual SQL review completed` annotation) — which is the honest
+answer, and a narrower one than "use Expr".
 
 **Read the clause precisely: the DOUBLED quote is refused; well-formed caller
 quoting is not.** A key wrapped in quotes with no interior quote — `"ID"`,

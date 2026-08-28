@@ -222,10 +222,11 @@ func isAcceptableUpsertColumnKey(key string) bool {
 // A DOUBLED quote is refused too, on both vendors — Oracle used to exempt it as
 // the legal spelling of a quote inside a name while PostgreSQL refused it. An
 // identifier argument carries no quoting of its own; the door quotes. A column
-// whose name genuinely contains a quote is reachable through qb.Expr(), the
-// sanctioned raw-SQL path — which is grep-discoverable by name rather than by a
-// // SECURITY: annotation, and is reviewed as the raw SQL it is. Refusing the
-// spelling here is what leaves ONE acceptance rule at this door (#1187).
+// whose name genuinely contains a quote has NO spelling at this door — the
+// signature takes strings, so qb.Expr() cannot reach a key here the way it
+// reaches a Select or a predicate. Such a schema needs a hand-written statement
+// (database.Raw, with its // SECURITY: annotation). Refusing the spelling here
+// is what leaves ONE acceptance rule at this door (#1187).
 func keyCarriesInteriorQuote(key string) bool {
 	if isQuotedString(key) {
 		return strings.Contains(key[1:len(key)-1], `"`)
