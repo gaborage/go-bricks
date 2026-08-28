@@ -1254,3 +1254,24 @@ func TestErrorDetailAtTheRealSinkWithoutARedactor(t *testing.T) {
 		})
 	}
 }
+
+// TestErrorDetailMasksASensitiveErrorField is the regression the mirror review asked
+// for: moving this site from Str to Err must not cost an operator the field-name
+// masking Str gave them. With app.debug on, `error` marked sensitive and NO redactor
+// configured, the 5xx line must carry the mask value rather than the driver text.
+func TestErrorDetailMasksASensitiveErrorField(t *testing.T) {
+	out := captureStdout(t, func() {
+		filterCfg := logger.DefaultFilterConfig()
+		filterCfg.SensitiveFields = append(filterCfg.SensitiveFields, "error")
+
+		srv := newDetailGateServer(config.EnvDevelopment, true,
+			logger.NewWithFilter("error", false, filterCfg))
+		serveDetailGateRoute(t, srv, detailGateErrorRoute)
+	})
+
+	line := findLoggedLine(t, out, "unhandled error")
+	assert.Equal(t, logger.DefaultFilterConfig().MaskValue, line["error"],
+		"a field the operator marked sensitive must be masked at this door too")
+	assert.NotContains(t, out, detailGateErrorText,
+		"the raw error message must not reach the sink when the error field is sensitive")
+}

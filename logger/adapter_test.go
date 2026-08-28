@@ -1002,3 +1002,50 @@ func TestLogEventAdapterErrRedactorLeavesOtherDoorsUnchanged(t *testing.T) {
 		assert.Equal(t, "failed: "+raw, loggedField(t, buf, zerolog.MessageFieldName))
 	})
 }
+
+// TestLogEventAdapterErrMasksASensitiveErrorField closes the gap #1182 opened at the
+// server's 5xx sites: those wrote the message with Str, which masks by field name, and
+// moving them to Err took that masking away — an operator running with
+// log.sensitivefields: [error] and NO redactor had the error content ship in clear
+// (CWE-532). Err now applies the same field-name rule Str does, so the two doors agree.
+func TestLogEventAdapterErrMasksASensitiveErrorField(t *testing.T) {
+	const secret = "duplicate key value: 4111111111111111"
+
+	t.Run("masked_when_the_error_field_is_marked_sensitive", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.SensitiveFields = append(config.SensitiveFields, zerolog.ErrorFieldName)
+
+		log, buf := newFilteredEventLogger(t, config)
+		log.Error().Err(errors.New(secret)).Msg("error occurred")
+
+		assert.Equal(t, config.MaskValue, loggedField(t, buf, zerolog.ErrorFieldName))
+		assert.NotContains(t, buf.String(), "4111111111111111",
+			"a field the operator marked sensitive must not reach the sink in clear")
+	})
+
+	t.Run("masking_wins_over_a_redactor", func(t *testing.T) {
+		// Both configured is the stricter-of-the-two case: the redactor runs first,
+		// and its output is still a value under a field name the operator called
+		// sensitive, so it is masked too.
+		config := DefaultFilterConfig()
+		config.SensitiveFields = append(config.SensitiveFields, zerolog.ErrorFieldName)
+		config.ErrorRedactor = func(error) string { return "redacted-but-still-the-error-field" }
+
+		log, buf := newFilteredEventLogger(t, config)
+		log.Error().Err(errors.New(secret)).Msg("error occurred")
+
+		assert.Equal(t, config.MaskValue, loggedField(t, buf, zerolog.ErrorFieldName))
+	})
+}
+
+// TestDefaultFilterConfigDoesNotMaskTheErrorField pins the fact the masking above
+// depends on: `error` is NOT a default needle, and no default needle is a substring of
+// it either — matching is substring-wise, so this is not obvious by inspection. If a
+// future needle list changed that, every framework error line would start rendering as
+// the mask value, and this test is what would say so.
+func TestDefaultFilterConfigDoesNotMaskTheErrorField(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	log.Error().Err(errors.New("plain error text")).Msg("error occurred")
+
+	assert.Equal(t, "plain error text", loggedField(t, buf, zerolog.ErrorFieldName))
+}

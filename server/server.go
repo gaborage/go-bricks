@@ -401,8 +401,8 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 		// non-debug builds log the error type only, never the raw message; debug builds
 		// keep full detail for troubleshooting. The debug branch writes through Err, so
 		// FilterConfig.ErrorRedactor — the seam that CAN see message content — reaches
-		// it (#1182); field-name masking does not, exactly as at every other Err site in
-		// the framework. The non-debug error_type still goes through Str and its filter.
+		// it (#1182), and Err applies the field-name filter as well, so marking `error`
+		// sensitive still masks this line. The non-debug error_type goes through Str.
 		appendErrorDetail(log.Error().Str("request_id", safeGetRequestID(c)), err, cfg.App.Debug).
 			Msg("unhandled error")
 	}
@@ -436,11 +436,11 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 // cannot do (#1182). The field name is unchanged: zerolog's Err writes under
 // zerolog.ErrorFieldName, which is "error", and so does the redacted path.
 //
-// One consequence, deliberate: Err does not run field-name masking, where the old
-// Str call did. An operator who had added "error" to log.sensitivefields therefore
-// stops seeing this ONE line masked. That is the same treatment every other Err site
-// in the framework already gives an error, and masking a whole message by field name
-// was never the defense here — ErrorRedactor is, and it now applies.
+// Field-name masking is not lost in the move: Err applies the `error` needle the
+// same way Str did, so an operator running log.sensitivefields: [error] keeps that
+// masking here — and gains it at every other Err site, which never had it. The
+// review of this change is what surfaced that gap; ErrorRedactor and the needle are
+// now both live at this door, the mask winning when both are configured.
 func appendErrorDetail(event logger.LogEvent, err error, debug bool) logger.LogEvent {
 	if err == nil {
 		return event

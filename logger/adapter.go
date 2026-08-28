@@ -52,7 +52,24 @@ func (lea *LogEventAdapter) Err(err error) LogEvent {
 	// rendering, not raw field content.
 	if err != nil && lea.event != nil {
 		if redacted, ok := lea.filter.redactError(err); ok {
+			// Masking runs on the redactor's OUTPUT, not instead of it: both
+			// configured is the stricter-of-the-two case, and the redacted string
+			// is still a value under a field name the operator called sensitive.
+			if masked, sensitive := lea.filter.maskField(zerolog.ErrorFieldName, redacted); sensitive {
+				redacted = masked
+			}
 			lea.event = lea.event.Str(zerolog.ErrorFieldName, redacted)
+			return lea
+		}
+		// Field-name masking applies here too, so this door agrees with Str about a
+		// field the operator marked sensitive. Without it, moving a call site from
+		// Str("error", …) to Err would silently drop that masking and ship the
+		// message in clear (CWE-532, found reviewing #1182). The check is a needle
+		// lookup, and only a HIT rewrites anything — a miss falls through to
+		// zerolog's own Err below, so the default configuration, where "error" is
+		// not a needle, keeps its byte-identical rendering and its ErrorMarshalFunc.
+		if masked, sensitive := lea.filter.maskField(zerolog.ErrorFieldName, err.Error()); sensitive {
+			lea.event = lea.event.Str(zerolog.ErrorFieldName, masked)
 			return lea
 		}
 	}
