@@ -41,6 +41,74 @@ func BenchmarkLogEventAdapterErr(b *testing.B) {
 	})
 }
 
+// BenchmarkLogEventNonJSONFields guards the cost of the payload door on the
+// path that must not pay for it: ordinary fields, driven through the REAL
+// adapter doors a caller reaches.
+//
+// Measuring the door directly is not enough and once hid a regression: routing
+// Bytes through FilterValue, whose parameter is `any`, boxed the slice header
+// on every byte-slice field — an allocation a benchmark calling the door with a
+// concrete []byte could never see. These drive log.Info().Str(...) and
+// log.Info().Bytes(...) end to end, so a door that starts boxing shows up here.
+func BenchmarkLogEventNonJSONFields(b *testing.B) {
+	newLogger := func() *ZeroLogger {
+		zl := zerolog.New(io.Discard)
+		return &ZeroLogger{zlog: &zl, filter: NewSensitiveDataFilter(DefaultFilterConfig())}
+	}
+
+	b.Run("str", func(b *testing.B) {
+		log := newLogger()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			log.Info().Str("detail", "user alice signed in").Msg("event")
+		}
+	})
+
+	b.Run("bytes", func(b *testing.B) {
+		log := newLogger()
+		payload := []byte("not a json document at all")
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			log.Info().Bytes("body", payload).Msg("event")
+		}
+	})
+
+	// The controls: the SAME doors on a logger with no filter at all. What the
+	// payload door costs is the delta against these, not against an empty event
+	// — zerolog's own Str and Bytes allocate on their own account.
+	b.Run("control_str_unfiltered", func(b *testing.B) {
+		zl := zerolog.New(io.Discard)
+		log := &ZeroLogger{zlog: &zl}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			log.Info().Str("detail", "user alice signed in").Msg("event")
+		}
+	})
+
+	b.Run("control_bytes_unfiltered", func(b *testing.B) {
+		zl := zerolog.New(io.Discard)
+		log := &ZeroLogger{zlog: &zl}
+		payload := []byte("not a json document at all")
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			log.Info().Bytes("body", payload).Msg("event")
+		}
+	})
+
+	b.Run("baseline_no_fields", func(b *testing.B) {
+		log := newLogger()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for range b.N {
+			log.Info().Msg("event")
+		}
+	})
+}
+
 // BenchmarkFilterNonJSONString guards the cost of the payload door on the path
 // that must not pay for it: an ordinary string field. The door's whole design
 // rests on looksLikeJSON rejecting such a value before any parsing, so this

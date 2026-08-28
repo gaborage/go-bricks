@@ -286,3 +286,28 @@ func (f *SensitiveDataFilter) maxPayloadBytes() int {
 	}
 	return f.config.MaxPayloadBytes
 }
+
+// opaquePayloadValue is the payload door for a caller that still holds its
+// payload CONCRETELY, as a string or a byte slice. It reports whether the door
+// took the value, so an untouched payload never has to be boxed into an `any`
+// merely to be handed back — a slice header does not fit in an interface word,
+// so that box is a real allocation on a path every logged byte slice takes.
+//
+// filterOpaquePayload answers with the ORIGINAL when it declines, which is what
+// makes the comparison below sound: identity, not equality.
+func opaquePayloadValue[T ~string | ~[]byte](f *SensitiveDataFilter, payload T) (filtered any, handled bool) {
+	if f == nil {
+		return nil, false
+	}
+	result := filterOpaquePayload(f, payload, declinedPayload{})
+	if _, declined := result.(declinedPayload); declined {
+		return nil, false
+	}
+	return result, true
+}
+
+// declinedPayload is the sentinel filterOpaquePayload hands back untouched when
+// it decides a payload is not one. A distinct empty type rather than nil: nil is
+// a value a masked payload could in principle be, and an empty struct costs no
+// allocation to box.
+type declinedPayload struct{}
