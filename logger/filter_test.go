@@ -1883,7 +1883,7 @@ func TestFilterMasksEveryPayloadShapeThroughEveryDoor(t *testing.T) {
 }
 
 // TestPayloadDoorGuardBoundaries pins the BOUNDARIES of the guards the payload
-// door is built from, not just the behaviours they implement. The mutation gate
+// door is built from, not just the behaviors they implement. The mutation gate
 // found six survivors on these lines: every test above passed with `limit < 0`
 // flipped to `<= 0`, with the marker scan's bound moved by one, and with the
 // depth test shifted — because nothing exercised any guard AT its edge. These
