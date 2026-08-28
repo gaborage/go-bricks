@@ -25,6 +25,13 @@ import (
 // like healthPath/readyPath, so the decision is made by the caller from observability.enabled).
 // healthPath and readyPath are used by the tenant middleware skipper to bypass probe endpoints.
 func SetupMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Config, observabilityEnabled bool, healthPath, readyPath string) {
+	// Outermost panic guard — FIRST, so every middleware below runs inside it.
+	// Echo's Recover (registered further down) only covers what is downstream of
+	// itself, and the seven middlewares between here and there used to unwind
+	// past Echo into net/http, which printed the panic VALUE to stderr and
+	// dropped the connection. See outermostRecoverEcho (#1144, ADR-081).
+	e.Use(outermostRecoverEcho(log, cfg))
+
 	// Request ID — validates the inbound X-Request-ID and sets the response
 	// header to either the validated value or a fresh UUID. Replaces Echo's
 	// stock middleware.RequestID() which echoes the inbound header verbatim

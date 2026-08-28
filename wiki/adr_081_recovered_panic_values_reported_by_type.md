@@ -4,6 +4,30 @@
 - **Date**: 2026-08-22
 - **Related**: [ADR-083](adr_083_span_sinks_record_errors_by_type.md) (generalizes this rule to every error a framework span sink records) · [ADR-079](adr_079_log_filter_walks_slices_without_comparing.md) (guarded these reporting calls and stated the protection this ADR corrects) · [ADR-072](adr_072_default_log_filter_names_key_material_explicitly.md) (the field-name matcher whose reach is the whole issue) · [ADR-019](adr_019_migration_audit_delivery.md)
 
+> **Amended (2026-08-28, the site outside Recover):** this ADR's rule was applied
+> wherever the framework RECOVERED a panic, and one HTTP path recovered none.
+> Echo v5 has no top-level recover, and seven middlewares — request id, OTel,
+> request enrich, CORS, IP pre-guard, tenant resolution, forwarded client cert,
+> and the access logger — are registered OUTSIDE `Recover`, so a panic in any of
+> them unwound past Echo into net/http, which prints `http: panic serving <addr>:
+> <value>` with a stack to the standard logger and drops the connection. The
+> value was therefore rendered by a sink this framework does not own, on a path
+> where the caller saw only EOF and no access-log line was written.
+> `http.Server.ErrorLog` is not the fix: net/http formats the value into the
+> string before any adapter sees it.
+>
+> An outermost guard is now registered as the FIRST middleware, so every other
+> middleware runs inside it. It applies this ADR's rule unchanged — one ERROR
+> line naming the panic's `%T` alongside the method and path, never the value —
+> and answers with the standard 500 envelope. `http.ErrAbortHandler` is
+> re-panicked by identity, not `errors.Is`, for the reason `sanitizePanicValue`
+> already states: a bypass gate that matches a WRAPPED sentinel would hand the
+> wrapper's payload to net/http's own renderer. The guard does not touch the
+> span — a pre-`Recover` panic ends its span without an error status, which is
+> accepted rather than reaching around the OTel middleware from outside it — and
+> the existing `Recover` + `sanitizePanicValue` pair is unchanged, so panics
+> downstream of it behave exactly as before (#1144, `[C61.12]`).
+
 ## Context
 
 ADR-079 guarded two panic-reporting calls so that a failure to render the
