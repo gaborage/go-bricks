@@ -39,11 +39,20 @@ the vendor fork in `requireSingleColumnNames` is gone.
 
 Note the third clause is a NARROWING on Oracle, not only on PostgreSQL: a doubled
 quote was Oracle's legal spelling of a quote inside a name, and is refused now. An
-identifier argument carries no quoting of its own — the door quotes — and a column
-whose name genuinely holds a quote reaches SQL through `qb.Expr()`, which carries
-the annotation that spelling deserves. A caller-quoted key with no interior quote
-(`"ID"`, `"count(*)"`) is untouched: ADR-071's identity rule reads it, and it is how
-a column literally named `count(*)` is still nameable.
+identifier argument carries no ESCAPING of its own — the door escapes — and a
+column whose name genuinely holds a quote reaches SQL through `qb.Expr()`, which
+carries the annotation that spelling deserves.
+
+**Read the clause precisely: the DOUBLED quote is refused; well-formed caller
+quoting is not.** A key wrapped in quotes with no interior quote — `"ID"`,
+`"id"`, `"level"`, `"count(*)"` — is untouched, and deliberately so. ADR-071's
+identity rule is written on exactly that spelling: `id` renders unquoted and Oracle
+folds it to `ID`, while `"ID"` renders quoted and IS `ID`, so the two are one
+column and `upsertColumnName` must keep reading both. Refusing the wrapper as well
+as the escape would delete that rule as a side effect, and would leave a column
+literally named `count(*)` with no spelling at all — the quoted key is how such a
+name is stated, which is why `keyIsFunctionShaped` has always exempted it. The
+narrowing is the ESCAPE, not the QUOTES.
 
 None of this was an injection. Every key was quote-wrapped and escaped in the
 emitted SQL before and after — `"COUNT(*)"` names a column, it does not call a
