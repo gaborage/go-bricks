@@ -1881,3 +1881,165 @@ func TestFilterMasksEveryPayloadShapeThroughEveryDoor(t *testing.T) {
 		assertLoggedFieldJSON(t, buf, "body", want)
 	})
 }
+
+// TestPayloadDoorGuardBoundaries pins the BOUNDARIES of the guards the payload
+// door is built from, not just the behaviours they implement. The mutation gate
+// found six survivors on these lines: every test above passed with `limit < 0`
+// flipped to `<= 0`, with the marker scan's bound moved by one, and with the
+// depth test shifted — because nothing exercised any guard AT its edge. These
+// cases are chosen so that moving any one of those comparisons by one breaks
+// exactly one of them.
+func TestPayloadDoorGuardBoundaries(t *testing.T) {
+	const payload = `{"password":"pw"}`
+
+	t.Run("cap_of_zero_means_the_default_not_disabled", func(t *testing.T) {
+		// The `limit < 0` boundary. With `<= 0` this payload would ship in clear,
+		// because zero would read as the opt-out instead of as "unset".
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = 0
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***"}`)
+	})
+
+	t.Run("a_negative_cap_disables_the_door", func(t *testing.T) {
+		// The other side of the same comparison: -1 must opt out.
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = -1
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", payload)
+	})
+
+	t.Run("a_payload_exactly_at_the_cap_is_parsed", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = len(payload)
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***"}`)
+	})
+
+	t.Run("a_payload_one_byte_over_the_cap_is_masked_whole", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = len(payload) - 1
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("a_value_that_is_exactly_the_marker_is_not_a_private_key", func(t *testing.T) {
+		// The scan's `i+width <= len(value)` bound: the marker alone is a
+		// complete match for the SCAN but not for the pattern, so the door must
+		// look and then decline. A bound of `<` would never look at all.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Str("material", "-----BEGIN").Msg("payload")
+
+		assert.Equal(t, "-----BEGIN", loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_marker_at_the_very_end_of_a_value_is_found", func(t *testing.T) {
+		// Same bound, other direction: the marker sits flush against the end,
+		// so an off-by-one bound would miss it. It still is not a full private
+		// key header, so the value stays readable — what is pinned here is that
+		// the scan REACHED it, which the next case makes observable.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Str("material", "trailing -----BEGIN").Msg("payload")
+
+		assert.Equal(t, "trailing -----BEGIN", loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_private_key_at_the_very_end_of_a_value_is_masked", func(t *testing.T) {
+		// The scan must find a marker whose last byte is the value's last byte
+		// minus the header remainder — the case an off-by-one bound drops.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Str("material", "key: -----BEGIN EC PRIVATE KEY-----").Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_near_miss_marker_is_not_matched", func(t *testing.T) {
+		// One byte different at the last position of the marker, which is what
+		// the per-byte comparison inside the scan decides.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Str("material", "-----BEGiN RSA PRIVATE KEY-----").Msg("payload")
+
+		assert.Equal(t, "-----BEGiN RSA PRIVATE KEY-----", loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_document_exactly_at_the_depth_budget_is_walked", func(t *testing.T) {
+		// The `depth <= 0` boundary and the `depth-1` step together: this nests
+		// exactly to the budget, so masking must still happen. One less depth
+		// spent per level, or a shifted test, and this masks whole instead.
+		deep := `{"password":"pw"}`
+		for range DefaultMaxDepth - 1 {
+			deep = `{"a":` + deep + `}`
+		}
+		want := `{"password":"***"}`
+		for range DefaultMaxDepth - 1 {
+			want = `{"a":` + want + `}`
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("arrays_spend_the_depth_budget_too", func(t *testing.T) {
+		// The ARRAY branch has its own `depth-1`, and every depth test above
+		// nests OBJECTS, so that step was never exercised — the mutation gate
+		// found it by flipping it to `depth+1` and watching every test pass.
+		// Nested one level past the budget through arrays alone.
+		deep := `{"password":"pw"}`
+		for range DefaultMaxDepth {
+			deep = `[` + deep + `]`
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("arrays_within_the_budget_are_still_walked", func(t *testing.T) {
+		// The other side: a masked leaf reached THROUGH arrays proves the
+		// branch recurses at all, so the case above cannot pass for the wrong
+		// reason (a budget never spent would walk it; a budget spent twice per
+		// level would mask this one too).
+		deep := `{"password":"pw"}`
+		want := `{"password":"***"}`
+		for range DefaultMaxDepth - 1 {
+			deep = `[` + deep + `]`
+			want = `[` + want + `]`
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("a_document_one_level_past_the_budget_is_masked_whole", func(t *testing.T) {
+		deep := `{"password":"pw"}`
+		for range DefaultMaxDepth {
+			deep = `{"a":` + deep + `}`
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+}

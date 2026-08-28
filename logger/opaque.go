@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"regexp"
+	"strings"
 )
 
 // errTrailingJSON marks a payload that decoded one value and had more bytes
@@ -63,10 +64,15 @@ const pemBeginMarker = "-----BEGIN"
 // it — and the reason this door exists is that opaque payloads were shipping
 // secrets in clear.
 func filterOpaquePayload[T ~string | ~[]byte](f *SensitiveDataFilter, payload T, original any) any {
-	limit := f.maxPayloadBytes()
-	if limit < 0 {
+	// The opt-out is read from the CONFIG rather than from the resolved limit:
+	// maxPayloadBytes never returns zero — it maps zero to the default — so a
+	// test on the resolved value cannot tell `< 0` from `<= 0`, and the guard
+	// would read as though zero disabled the door, when zero is exactly what a
+	// bare struct literal carries and must NOT disable it.
+	if f.config.MaxPayloadBytes < 0 {
 		return original
 	}
+	limit := f.maxPayloadBytes()
 
 	// A payload that is not JSON-shaped gets ONE more question asked of it,
 	// because a PEM block opens with `-----BEGIN` and so can never pass the JSON
@@ -185,19 +191,18 @@ func looksLikePEMPrivateKey[T ~string | ~[]byte](value T) bool {
 // and []byte. Converting first is what a bytes payload must not pay: it copies
 // the whole slice on the ordinary path where the answer is no, which a
 // benchmark caught as 32 B and one allocation for a non-JSON byte slice.
+//
+// The scan is the standard library's, deliberately. A hand-rolled index loop
+// carries its own bounds, and the mutation gate showed those bounds were
+// unfalsifiable here: a marker sitting flush against the end of a value can
+// never complete a private-key header, so moving the loop's bound by one
+// changed no observable answer and no test could pin it. A guard no test can
+// fail is a guard to delete.
 func containsPEMBeginMarker[T ~string | ~[]byte](value T) bool {
-	width := len(pemBeginMarker)
-	for i := 0; i+width <= len(value); i++ {
-		if value[i] != '-' {
-			continue
-		}
-		// Comparing a converted sub-slice against a constant does not allocate:
-		// the compiler recognizes the shape.
-		if string(value[i:i+width]) == pemBeginMarker {
-			return true
-		}
+	if text, isString := any(value).(string); isString {
+		return strings.Contains(text, pemBeginMarker)
 	}
-	return false
+	return bytes.Contains([]byte(value), []byte(pemBeginMarker))
 }
 
 // maskJSONValue walks a decoded document with the same needles the name filter
