@@ -1663,3 +1663,41 @@ func TestInAndNotInWrapAByteSliceAsOneElement(t *testing.T) {
 		})
 	}
 }
+
+// TestFilterCompareDoorsBindTheResolvedValue pins the argument half of the
+// convergence: a Valuer HOLDING a value stays a scalar and keeps its SQL, but
+// the door binds the value it already resolved (int64(5)) rather than the
+// wrapper. Asserting on the SQL alone cannot see this — the text is `col op ?`
+// either way — so it is the args that are pinned here.
+func TestFilterCompareDoorsBindTheResolvedValue(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+	held := dbsql.NullInt64{Int64: 5, Valid: true}
+	pointed := 7
+
+	tests := []struct {
+		name    string
+		filter  dbtypes.Filter
+		wantSQL string
+		wantArg any
+	}{
+		{name: "eq_valuer", filter: f.Eq("u.id", held), wantSQL: "u.id = ?", wantArg: int64(5)},
+		{name: "not_eq_valuer", filter: f.NotEq("u.id", held), wantSQL: "u.id <> ?", wantArg: int64(5)},
+		{name: "lt_valuer", filter: f.Lt("u.id", held), wantSQL: "u.id < ?", wantArg: int64(5)},
+		{name: "lte_valuer", filter: f.Lte("u.id", held), wantSQL: "u.id <= ?", wantArg: int64(5)},
+		{name: "gt_valuer", filter: f.Gt("u.id", held), wantSQL: "u.id > ?", wantArg: int64(5)},
+		{name: "gte_valuer", filter: f.Gte("u.id", held), wantSQL: "u.id >= ?", wantArg: int64(5)},
+		{name: "eq_pointer", filter: f.Eq("u.id", &pointed), wantSQL: "u.id = ?", wantArg: 7},
+		{name: "lt_pointer", filter: f.Lt("u.id", &pointed), wantSQL: "u.id < ?", wantArg: 7},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := tt.filter.ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{tt.wantArg}, args)
+		})
+	}
+}
