@@ -219,29 +219,54 @@ func InjectIntoHeaders(ctx context.Context, headers HeaderAccessor) {
 		return
 	}
 
-	traceparent, parentTraceID, rejected := computeTraceParent(ctx, headers)
+	parent := computeTraceParent(ctx, headers)
 
-	headers.Set(HeaderXRequestID, alignTraceID(EnsureTraceID(ctx), parentTraceID))
-	headers.Set(HeaderTraceParent, traceparent)
-	injectTraceState(ctx, headers, rejected)
+	headers.Set(HeaderXRequestID, alignTraceID(EnsureTraceID(ctx), parent.traceID))
+	headers.Set(HeaderTraceParent, parent.value)
+	injectTraceState(ctx, headers, parent)
+}
+
+// outboundParent is the traceparent this hop will emit, with what the decision
+// already established about it: the trace-id field, whether the value came from
+// the header map the caller pre-populated, and whether a pre-set value was
+// present and refused. The tracestate rule reads all three, so they travel
+// together rather than as three positional returns.
+type outboundParent struct {
+	value   string
+	traceID string
+	// fromHeader says the emitted value IS the caller's pre-set one, accepted.
+	fromHeader bool
+	// rejected says a pre-set value was present and refused.
+	rejected bool
 }
 
 // injectTraceState writes the tracestate that belongs to the traceparent just
 // emitted. It mirrors extractTraceState on the ingress side: the pairing rule
 // lives in one function rather than inline at the door.
 //
-// rejected says a pre-set traceparent was present and refused. The tracestate
-// beside it describes a trace this hop is no longer continuing, so it must not
-// ride along with the value that replaced it — the carrier scoping ADR-070
-// applies on ingress, read on the outbound carrier. The accessor has no delete,
-// so an empty value is the removal every reader already treats as absent
-// (ValidateTraceState).
-func injectTraceState(ctx context.Context, headers HeaderAccessor, rejected bool) {
+// A tracestate annotates ONE traceparent, so it is written by the same carrier
+// that supplied the parent being emitted — the carrier scoping ADR-070 applies
+// on ingress, read on the outbound carrier:
+//
+//   - the caller's pre-set traceparent was ACCEPTED, so the pre-set tracestate
+//     beside it still annotates the value going out and is left untouched. The
+//     context's state belongs to a different parent and must not overwrite it.
+//   - otherwise the emitted parent is the context's or a generated one, so the
+//     context's state is the only one that can annotate it.
+//   - with no context state and a REJECTED pre-set parent, whatever sits beside
+//     that refused value describes a trace this hop is no longer continuing and
+//     must not ride along with the value that replaced it. The accessor has no
+//     delete, so an empty value is the removal every reader already treats as
+//     absent (ValidateTraceState).
+func injectTraceState(ctx context.Context, headers HeaderAccessor, parent outboundParent) {
+	if parent.fromHeader {
+		return
+	}
 	if ts, ok := StateFromContext(ctx); ok {
 		headers.Set(HeaderTraceState, ts)
 		return
 	}
-	if rejected {
+	if parent.rejected {
 		headers.Set(HeaderTraceState, "")
 	}
 }
@@ -259,21 +284,21 @@ func injectTraceState(ctx context.Context, headers HeaderAccessor, rejected bool
 // from those would run the whole grammar a second time on the publish path.
 // Only the context branch is unvalidated, and only it pays for a check.
 //
-// It also reports whether a pre-set header value was present and refused, which
-// is what tells the caller the tracestate beside it is stale.
-func computeTraceParent(ctx context.Context, headers HeaderAccessor) (traceparent, traceID string, rejected bool) {
+// It also reports which carrier won and whether a pre-set value was refused,
+// which is what decides the tracestate beside it (see injectTraceState).
+func computeTraceParent(ctx context.Context, headers HeaderAccessor) outboundParent {
 	preset := headerString(headers, HeaderTraceParent)
 	if v := ValidateTraceParent(preset); v != "" {
-		return v, splitTraceParent(v).traceID, false
+		return outboundParent{value: v, traceID: splitTraceParent(v).traceID, fromHeader: true}
 	}
-	rejected = preset != ""
+	rejected := preset != ""
 	if tp, ok := ParentFromContext(ctx); ok && tp != "" {
 		// WithTraceParent is exported, so this one has never been through the
 		// seam — it is the single branch whose trace-id must be judged here.
-		return tp, extractTraceIDFromParent(tp), rejected
+		return outboundParent{value: tp, traceID: extractTraceIDFromParent(tp), rejected: rejected}
 	}
 	generated := GenerateTraceParent()
-	return generated, splitTraceParent(generated).traceID, rejected
+	return outboundParent{value: generated, traceID: splitTraceParent(generated).traceID, rejected: rejected}
 }
 
 // headerString gets a header as string using safe conversion

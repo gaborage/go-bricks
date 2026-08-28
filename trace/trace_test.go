@@ -141,21 +141,25 @@ func TestInjectIntoHeadersForceMode(t *testing.T) {
 func TestComputeHelpers(t *testing.T) {
 	// computeTraceParent: header > context > generated
 	acc := &mapAccessor{m: map[string]any{HeaderTraceParent: "00-11111111111111111111111111111111-2222222222222222-01"}}
-	fromHeader, headerTraceID, rejected := computeTraceParent(context.Background(), acc)
-	assert.Equal(t, "11111111111111111111111111111111", headerTraceID)
-	assert.Equal(t, "00-11111111111111111111111111111111-2222222222222222-01", fromHeader)
-	assert.False(t, rejected)
+	fromHeader := computeTraceParent(context.Background(), acc)
+	assert.Equal(t, "11111111111111111111111111111111", fromHeader.traceID)
+	assert.Equal(t, "00-11111111111111111111111111111111-2222222222222222-01", fromHeader.value)
+	assert.True(t, fromHeader.fromHeader)
+	assert.False(t, fromHeader.rejected)
 
 	ctx := WithTraceParent(context.Background(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
-	fromContext, contextTraceID, rejected := computeTraceParent(ctx, &mapAccessor{})
-	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", contextTraceID)
-	assert.Equal(t, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01", fromContext)
-	assert.False(t, rejected)
+	fromContext := computeTraceParent(ctx, &mapAccessor{})
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fromContext.traceID)
+	assert.Equal(t, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01", fromContext.value)
+	assert.False(t, fromContext.fromHeader)
+	assert.False(t, fromContext.rejected)
 
 	// Fallback generates a valid 00-... string
-	gen, genTraceID, rejected := computeTraceParent(context.Background(), &mapAccessor{})
-	assert.Equal(t, gen[3:35], genTraceID)
-	assert.False(t, rejected)
+	generated := computeTraceParent(context.Background(), &mapAccessor{})
+	gen := generated.value
+	assert.Equal(t, gen[3:35], generated.traceID)
+	assert.False(t, generated.fromHeader)
+	assert.False(t, generated.rejected)
 	ok, _ := regexp.MatchString(`^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`, gen)
 	assert.True(t, ok)
 }
@@ -315,4 +319,25 @@ func TestInjectIntoHeadersDropsTraceStateBesideARejectedTraceParent(t *testing.T
 	require.True(t, ok)
 	assert.Equal(t, emitted, ValidateTraceParent(emitted), "the emitted traceparent is well-formed")
 	assert.Empty(t, acc.Get(HeaderTraceState))
+}
+
+// TestInjectIntoHeadersKeepsTheTraceStateOfAnAcceptedHeaderParent is the other
+// side of the carrier rule (#1121): a tracestate annotates ONE traceparent. When
+// the caller's pre-set traceparent is ACCEPTED it is the value going out, so the
+// tracestate written beside it stays — the context's state belongs to a
+// different parent and overwriting with it would re-emit one trace's vendor
+// state under another's, which is what ADR-070 refuses on ingress.
+func TestInjectIntoHeadersKeepsTheTraceStateOfAnAcceptedHeaderParent(t *testing.T) {
+	const headerParent = "00-11111111111111111111111111111111-2222222222222222-01"
+	acc := &mapAccessor{m: map[string]any{
+		HeaderTraceParent: headerParent,
+		HeaderTraceState:  "vendor=carrier",
+	}}
+	ctx := WithTraceParent(context.Background(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
+	ctx = WithTraceState(ctx, "vendor=context")
+
+	InjectIntoHeaders(ctx, acc)
+
+	assert.Equal(t, headerParent, acc.Get(HeaderTraceParent), "a valid pre-set parent still wins")
+	assert.Equal(t, "vendor=carrier", acc.Get(HeaderTraceState))
 }

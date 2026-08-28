@@ -12,8 +12,12 @@
 > every cycle. Both now go through `ValidateTraceParent` before reuse. Precedence is
 > unchanged — a VALID pre-set value still outranks the context — but an invalid one
 > falls through to the context's parent and then to a generated one, and the
-> `tracestate` beside it is overwritten from the context or removed, which is the
-> carrier scoping of the first amendment applied to the outbound carrier. The
+> `tracestate` beside it is overwritten from the context or removed. That is the
+> carrier scoping of the first amendment applied to the outbound carrier, and it
+> binds in both directions: where the pre-set `traceparent` is ACCEPTED, the
+> `tracestate` written beside it is now left alone, where the context's state
+> used to overwrite it unconditionally — one carrier's vendor state under another
+> carrier's parent is the thing this ADR refuses on ingress. The
 > alignment that derives the outbound `X-Request-ID` now judges the trace-id field by
 > this ADR's own charset instead of its length, through the same validator and parser
 > rather than a second regex; 32 arbitrary bytes used to pass it and then be refused
