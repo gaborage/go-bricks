@@ -340,74 +340,67 @@ func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any)
 		return joinFilterErr(err)
 	}
 
-	lowerIsExpr := false
-	upperIsExpr := false
-	var lowerExpr, upperExpr dbtypes.RawExpression
+	// Each bound is resolved on its own and renders itself, so the door has two
+	// steps rather than a branch per COMBINATION of bound kinds — the four-way
+	// tree the pair-wise form needed (expr/expr, expr/value, value/expr,
+	// value/value) said nothing the bounds do not each say for themselves.
+	lower, err := resolveBetweenBound(">=", lowerBound)
+	if err != nil {
+		return joinFilterErr(err)
+	}
+	upper, err := resolveBetweenBound("<=", upperBound)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 
-	// A bound that is an expression is interpolated verbatim, so it is validated
-	// at this door for the same reason compare() validates its value (#1153).
-	if expr, ok := lowerBound.(dbtypes.RawExpression); ok {
+	return JoinFilter{sqlizer: squirrel.And{
+		lower.sqlizer(quotedColumn, ">="),
+		upper.sqlizer(quotedColumn, "<="),
+	}}
+}
+
+// betweenBound is one resolved BETWEEN bound: either a RawExpression to splice
+// verbatim, or an ordering operand already resolved to the value that will be
+// bound.
+type betweenBound struct {
+	exprSQL string
+	value   any
+	isExpr  bool
+}
+
+// resolveBetweenBound validates an expression bound or resolves a value one.
+//
+// An expression is interpolated verbatim, so it is validated at this door for
+// the same reason compare() validates its value: RawExpression is a plain
+// struct and a caller can hand one over that never passed through Expr()
+// (#1153). A value bound is an ordering operand wherever it ends up rendered —
+// squirrel.Expr, the construct a mixed pair uses, resolves nothing at build
+// time, so a bound spliced into it unresolved reached the driver as written: a
+// nil rendered `col <= ?` bound to NULL, matching nothing, and a nil pointer to
+// a Valuer was dereferenced at EXEC.
+func resolveBetweenBound(op string, bound any) (resolved betweenBound, err error) {
+	if expr, isExpr := bound.(dbtypes.RawExpression); isExpr {
 		if validateErr := expr.Validate(); validateErr != nil {
-			return joinFilterErr(validateErr)
+			return betweenBound{}, validateErr
 		}
-		lowerIsExpr = true
-		lowerExpr = expr
-	}
-	if expr, ok := upperBound.(dbtypes.RawExpression); ok {
-		if validateErr := expr.Validate(); validateErr != nil {
-			return joinFilterErr(validateErr)
-		}
-		upperIsExpr = true
-		upperExpr = expr
+		return betweenBound{exprSQL: expr.SQL, isExpr: true}, nil
 	}
 
-	// A bound that is NOT an expression is an ordering operand wherever it is
-	// rendered, so it is resolved BEFORE the branch that renders it rather than
-	// inside one of them. squirrel.Expr — the construct the mixed branches use —
-	// resolves nothing at build time, so a bound spliced into it unresolved
-	// reached the driver as written: a nil rendered `col <= ?` bound to NULL,
-	// matching nothing, and a nil pointer to a Valuer was dereferenced at EXEC.
-	var lower, upper any
-	if !lowerIsExpr {
-		if lower, err = orderingOperand(">=", lowerBound); err != nil {
-			return joinFilterErr(err)
-		}
+	value, operandErr := orderingOperand(op, bound)
+	if operandErr != nil {
+		return betweenBound{}, operandErr
 	}
-	if !upperIsExpr {
-		if upper, err = orderingOperand("<=", upperBound); err != nil {
-			return joinFilterErr(err)
-		}
-	}
+	return betweenBound{value: value}, nil
+}
 
-	// Build condition based on whether bounds are expressions or values
-	if lowerIsExpr && upperIsExpr {
-		// Both expressions - no placeholders
-		condition := squirrel.And{
-			squirrel.Expr(quotedColumn + " >= " + lowerExpr.SQL),
-			squirrel.Expr(quotedColumn + " <= " + upperExpr.SQL),
-		}
-		return JoinFilter{sqlizer: condition}
-	} else if lowerIsExpr {
-		// Lower is expression, upper is value
-		condition := squirrel.And{
-			squirrel.Expr(quotedColumn + " >= " + lowerExpr.SQL),
-			squirrel.Expr(quotedColumn+" <= ?", upper),
-		}
-		return JoinFilter{sqlizer: condition}
-	} else if upperIsExpr {
-		// Upper is expression, lower is value
-		condition := squirrel.And{
-			squirrel.Expr(quotedColumn+" >= ?", lower),
-			squirrel.Expr(quotedColumn + " <= " + upperExpr.SQL),
-		}
-		return JoinFilter{sqlizer: condition}
+// sqlizer renders this bound as `<column> <op> …`: an expression inline with no
+// placeholder and no argument, a value as a placeholder bound to the value the
+// door already resolved.
+func (b betweenBound) sqlizer(quotedColumn, op string) squirrel.Sqlizer {
+	if b.isExpr {
+		return squirrel.Expr(quotedColumn + " " + op + " " + b.exprSQL)
 	}
-
-	condition := squirrel.And{
-		squirrel.GtOrEq{quotedColumn: lower},
-		squirrel.LtOrEq{quotedColumn: upper},
-	}
-	return JoinFilter{sqlizer: condition}
+	return squirrel.Expr(quotedColumn+" "+op+" ?", b.value)
 }
 
 // ========== Logical Operators ==========
