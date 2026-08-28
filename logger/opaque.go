@@ -12,6 +12,9 @@ import (
 // after it, which is not a single JSON document.
 var errTrailingJSON = errors.New("trailing content after JSON document")
 
+// errPayloadTooDeep marks a payload nested deeper than the walk's budget.
+var errPayloadTooDeep = errors.New("payload nested deeper than the filter walks")
+
 // opaqueBytes reports whether value is a byte slice — json.RawMessage included,
 // since it is one by definition — and hands back its bytes. A named byte-slice
 // type counts: what matters is that the NAME filter sees a single leaf where
@@ -69,7 +72,13 @@ func (f *SensitiveDataFilter) filterOpaquePayload(payload []byte, original any) 
 		return f.config.MaskValue
 	}
 
-	masked, changed := f.maskJSONValue(decoded)
+	masked, changed, err := f.maskJSONValue(decoded, DefaultMaxDepth)
+	if err != nil {
+		// Too deep to walk means too deep to vouch for: the same fail-closed
+		// rule an unparseable payload takes, and the same one the name filter
+		// applies when its own recursion budget runs out.
+		return f.config.MaskValue
+	}
 	if !changed {
 		return original
 	}
@@ -139,7 +148,18 @@ func looksLikePEMPrivateKey(value string) bool {
 // maskJSONValue walks a decoded document with the same needles the name filter
 // uses, reporting whether anything was masked so the caller can keep the
 // original bytes when nothing was.
-func (f *SensitiveDataFilter) maskJSONValue(value any) (result any, changed bool) {
+//
+// Recursion is bounded by the same DefaultMaxDepth budget the name filter
+// spends, and exhausting it is an ERROR rather than a masked subtree: the
+// depth of this document is chosen by whoever produced the payload, not by the
+// code logging it, so an arbitrarily nested body must not be able to drive the
+// walk down an unbounded stack. The caller masks the whole payload, which is
+// the same answer it gives for a payload it cannot parse.
+func (f *SensitiveDataFilter) maskJSONValue(value any, depth int) (result any, changed bool, err error) {
+	if depth <= 0 {
+		return nil, false, errPayloadTooDeep
+	}
+
 	switch v := value.(type) {
 	case map[string]any:
 		// The JWK test is done once per object, not per member, and applies to
@@ -152,32 +172,38 @@ func (f *SensitiveDataFilter) maskJSONValue(value any) (result any, changed bool
 				changed = true
 				continue
 			}
-			masked, childChanged := f.maskJSONValue(child)
+			masked, childChanged, childErr := f.maskJSONValue(child, depth-1)
+			if childErr != nil {
+				return nil, false, childErr
+			}
 			if childChanged {
 				v[key] = masked
 				changed = true
 			}
 		}
-		return v, changed
+		return v, changed, nil
 	case []any:
 		for i, child := range v {
-			masked, childChanged := f.maskJSONValue(child)
+			masked, childChanged, childErr := f.maskJSONValue(child, depth-1)
+			if childErr != nil {
+				return nil, false, childErr
+			}
 			if childChanged {
 				v[i] = masked
 				changed = true
 			}
 		}
-		return v, changed
+		return v, changed, nil
 	case string:
 		// A PEM private key is one long opaque string under whatever field name
 		// the consumer chose, so neither the name filter nor the JWK rule sees
 		// it; the block header is the only thing that identifies it.
 		if looksLikePEMPrivateKey(v) {
-			return f.config.MaskValue, true
+			return f.config.MaskValue, true, nil
 		}
-		return value, false
+		return value, false, nil
 	default:
-		return value, false
+		return value, false, nil
 	}
 }
 

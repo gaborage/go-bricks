@@ -49,8 +49,13 @@ only when something was masked.**
    `CERTIFICATE` or `PUBLIC KEY` block is left readable, because it is public and it is what
    an operator reads to diagnose a TLS problem.
 4. **Fail closed on what cannot be read.** A payload that looks like JSON and fails to parse,
-   exceeds the walker's depth limit, or exceeds `FilterConfig.MaxPayloadBytes` is masked
-   whole. It is opaque by definition — the filter cannot say what is inside it — and
+   nests deeper than `DefaultMaxDepth`, or exceeds `FilterConfig.MaxPayloadBytes` is masked
+   whole. Depth exhaustion is deliberately the WHOLE payload here, where the name filter masks
+   only the subtree it could not reach: the name filter walks Go values this process built,
+   while this door walks bytes a caller handed in, so the nesting is chosen by whoever produced
+   the payload. Bounding the walk is what keeps an arbitrarily nested body from driving the
+   filter down an unbounded stack on the logging path, and masking only past the cut would ship
+   everything above it from a payload the filter just admitted it could not finish reading. It is opaque by definition — the filter cannot say what is inside it — and
    shipping secrets from opaque payloads is the defect being closed. A masked document that
    somehow fails to re-encode masks whole too: it must never fall back to the original bytes,
    which are the secret the walk just decided to hide.

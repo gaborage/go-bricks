@@ -195,8 +195,8 @@ matched by shape instead:
 If you added `log.sensitivefields: [keys]` for JWKS on ADR-072's advice, the `kty` rule now
 covers it; leaving the needle in place costs only a masked field named `keys`.
 
-**Fail-closed.** A payload that looks like JSON and does not parse, exceeds the walker's depth
-limit, or exceeds `FilterConfig.MaxPayloadBytes` is masked **whole** — the filter cannot say
+**Fail-closed.** A payload that looks like JSON and does not parse, nests deeper than
+`logger.DefaultMaxDepth`, or exceeds `FilterConfig.MaxPayloadBytes` is masked **whole** — the filter cannot say
 what is inside it, and that is exactly the case this door exists for.
 `MaxPayloadBytes` defaults to 64 KiB (`logger.DefaultMaxPayloadBytes`): zero means the default,
 so a bare struct literal cannot silently opt out, and a negative value disables the payload

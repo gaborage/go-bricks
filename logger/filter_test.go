@@ -1679,3 +1679,30 @@ func TestFilterMasksUnreadablePayloadsWhole(t *testing.T) {
 			loggedField(t, buf, "body"))
 	})
 }
+
+// TestFilterMasksOverlyNestedPayloadWhole pins the third fail-closed arm, and
+// the reason it is an error rather than a masked subtree: the DEPTH of a
+// payload is chosen by whoever produced it, not by the code logging it, so an
+// arbitrarily nested body must not be able to walk the filter down an unbounded
+// stack. Too deep to walk is too deep to vouch for, so the whole payload is
+// masked — the same answer an unparseable payload gets.
+func TestFilterMasksOverlyNestedPayloadWhole(t *testing.T) {
+	// One level deeper than the walker's budget, built as nested objects.
+	deep := "null"
+	for range DefaultMaxDepth + 1 {
+		deep = `{"a":` + deep + `}`
+	}
+
+	t.Run("beyond_the_budget_masks_whole", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("within_the_budget_is_walked_normally", func(t *testing.T) {
+		shallow := `{"a":{"b":{"password":"pw"}}}`
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(shallow)).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", `{"a":{"b":{"password":"***"}}}`)
+	})
+}
