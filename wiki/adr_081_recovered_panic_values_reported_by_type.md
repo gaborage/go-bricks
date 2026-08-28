@@ -18,7 +18,8 @@
 >
 > An outermost guard is now registered as the FIRST middleware, so every other
 > middleware runs inside it. It applies this ADR's rule unchanged — one ERROR
-> line naming the panic's `%T` alongside the method and path, never the value —
+> line under the error handler's own `Panic recovered` message, naming the
+> panic's `%T` alongside the request id, method and path, never the value —
 > and answers with the standard 500 envelope. `http.ErrAbortHandler` is
 > re-panicked by identity, not `errors.Is`, for the reason `sanitizePanicValue`
 > already states: a bypass gate that matches a WRAPPED sentinel would hand the

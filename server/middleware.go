@@ -323,6 +323,27 @@ func buildCompositeTenantResolver(tenantRegex *regexp.Regexp, subs ...multitenan
 	return &multitenant.CompositeResolver{Resolvers: resolvers, TenantRegex: tenantRegex}
 }
 
+// isAbortSentinel reports that a recovered value IS net/http's abort sentinel,
+// which every panic gate in this package must re-panic unchanged so the
+// connection is dropped without a response.
+//
+// SECURITY: identity, not errors.Is, and the difference matters. This is a
+// BYPASS gate — whatever matches skips the gate's own handling — so breadth here
+// is a defect. errors.Is also matches a WRAPPED sentinel, and
+// `panic(fmt.Errorf("%s: %w", secret, http.ErrAbortHandler))` would then bypass
+// it carrying a payload: Echo adopts an error verbatim, so the value would reach
+// the span status and the action log, and net/http's own renderer would print it
+// on the outermost path. Only the exact sentinel carries no data, and net/http
+// honors only the exact sentinel too, so identity is both the safe comparison
+// and the faithful one.
+//
+// It is a function rather than a comparison repeated at each gate so the two —
+// this package's outermost guard and sanitizePanicValue — cannot drift: a
+// maintainer relaxing one to errors.Is would have to relax the rule itself.
+//
+//nolint:errorlint // sentinel bypass: see above, breadth is the bug
+func isAbortSentinel(r any) bool { return r == http.ErrAbortHandler }
+
 // panicTypeError names a recovered panic's TYPE and carries nothing else.
 // It deliberately implements `error` so Echo's Recover adopts it verbatim
 // (`recover.go` does `tmpErr, ok := r.(error)`) instead of rendering it.
@@ -360,18 +381,7 @@ func sanitizePanicValue() echo.MiddlewareFunc {
 				}
 				// net/http's abort contract: this sentinel must reach the server
 				// unchanged, exactly as Echo's own Recover re-panics it.
-				//
-				// SECURITY: identity, not errors.Is, and the difference matters.
-				// This is a BYPASS gate — whatever matches skips sanitizing — so
-				// breadth here is a defect. errors.Is also matches a WRAPPED
-				// sentinel, and `panic(fmt.Errorf("%s: %w", secret,
-				// http.ErrAbortHandler))` would then be re-panicked unsanitized;
-				// Echo adopts an error verbatim, so the payload would reach the
-				// span status and the action log. Only the exact sentinel carries
-				// no data, and net/http honors only the exact sentinel too, so
-				// identity is both the safe comparison and the faithful one.
-				//nolint:errorlint // sentinel bypass: see above, breadth is the bug
-				if r == http.ErrAbortHandler {
+				if isAbortSentinel(r) {
 					panic(r)
 				}
 				panic(&panicTypeError{typ: fmt.Sprintf("%T", r)})

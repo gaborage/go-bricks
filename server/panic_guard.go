@@ -2,8 +2,6 @@ package server
 
 import (
 	"fmt"
-	"net/http"
-
 	"github.com/labstack/echo/v5"
 
 	"github.com/gaborage/go-bricks/config"
@@ -38,26 +36,28 @@ func outermostRecoverEcho(log logger.Logger, cfg *config.Config) echo.Middleware
 					return
 				}
 				// net/http's abort contract: the sentinel must reach the server
-				// unchanged, so the connection is dropped with no response.
-				//
-				// SECURITY: identity, not errors.Is. This is a BYPASS gate, so
-				// breadth is a defect — `errors.Is` also matches a WRAPPED
-				// sentinel, and re-panicking `fmt.Errorf("%s: %w", secret,
-				// http.ErrAbortHandler)` would hand the payload to net/http's own
-				// stderr renderer. net/http honors only the exact sentinel too.
-				//nolint:errorlint // sentinel bypass: breadth is the bug
-				if r == http.ErrAbortHandler {
+				// unchanged, so the connection is dropped with no response. The
+				// predicate is shared with sanitizePanicValue — see isAbortSentinel
+				// for why it is identity and not errors.Is.
+				if isAbortSentinel(r) {
 					panic(r)
 				}
 				// SECURITY: the TYPE, never the value (ADR-081). The value is
 				// consumer-chosen, so the logger's SensitiveDataFilter cannot
 				// help — it matches field NAMES, and a bare panic("secret") has
 				// none.
+				// The message matches the HTTPErrorHandler's own panic line, so an
+				// alert keyed on it catches the panics from BOTH sides of Recover;
+				// request_id comes from the same helper that line uses, and is
+				// empty when the request-id middleware — which runs inside this
+				// guard — had not run yet.
+				req := c.Request()
 				log.Error().
 					Str("panic_type", fmt.Sprintf("%T", r)).
-					Str("method", c.Request().Method).
-					Str("path", c.Request().URL.Path).
-					Msg("Panic recovered outside Recover")
+					Str("request_id", safeGetRequestID(c)).
+					Str("method", req.Method).
+					Str("path", req.URL.Path).
+					Msg("Panic recovered")
 
 				err = formatErrorResponse(c, NewInternalServerError(""), cfg)
 			}()

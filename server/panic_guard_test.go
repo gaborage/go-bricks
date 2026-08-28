@@ -18,10 +18,6 @@ import (
 	"github.com/gaborage/go-bricks/config"
 )
 
-// panicMarker is the value a test handler panics with. It must not appear in any
-// sink — not the response body, not a log field (ADR-081).
-const panicMarker = "PANIC-MARKER-a4f1c2"
-
 func guardTestConfig() *config.Config {
 	return &config.Config{App: config.AppConfig{Name: "test", Env: "production"}}
 }
@@ -34,7 +30,7 @@ func TestOutermostRecoverRendersTheStandardEnvelope(t *testing.T) {
 	log := &testLogger{}
 	e := echo.New()
 	e.Use(outermostRecoverEcho(log, guardTestConfig()))
-	e.GET("/boom", func(*echo.Context) error { panic(panicMarker) })
+	e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
 
 	rec := httptest.NewRecorder()
 	e.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/boom", http.NoBody))
@@ -45,7 +41,7 @@ func TestOutermostRecoverRendersTheStandardEnvelope(t *testing.T) {
 	errObj, ok := body["error"].(map[string]any)
 	require.True(t, ok, "the response carries the standard error envelope")
 	assert.NotEmpty(t, errObj["code"])
-	assert.NotContains(t, rec.Body.String(), panicMarker, "the panic value never reaches the caller")
+	assert.NotContains(t, rec.Body.String(), recoverProbeSecret, "the panic value never reaches the caller")
 }
 
 // TestOutermostRecoverLogsTheTypeNotTheValue is ADR-081 at the new site: the log
@@ -55,7 +51,7 @@ func TestOutermostRecoverLogsTheTypeNotTheValue(t *testing.T) {
 	log := &testLogger{}
 	e := echo.New()
 	e.Use(outermostRecoverEcho(log, guardTestConfig()))
-	e.GET("/boom", func(*echo.Context) error { panic(panicMarker) })
+	e.GET("/boom", func(*echo.Context) error { panic(recoverProbeSecret) })
 
 	e.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/boom", http.NoBody))
 
@@ -67,9 +63,9 @@ func TestOutermostRecoverLogsTheTypeNotTheValue(t *testing.T) {
 	assert.Equal(t, http.MethodGet, entry.values["method"])
 	assert.Equal(t, "/boom", entry.values["path"])
 	for key, value := range entry.values {
-		assert.NotContains(t, value, panicMarker, "field %q carries the panic value", key)
+		assert.NotContains(t, value, recoverProbeSecret, "field %q carries the panic value", key)
 	}
-	assert.NotContains(t, strings.Join(entry.fields, ","), panicMarker)
+	assert.NotContains(t, strings.Join(entry.fields, ","), recoverProbeSecret)
 }
 
 // TestOutermostRecoverRepanicsAbortHandler keeps net/http's abort contract: the
@@ -94,7 +90,7 @@ func TestOutermostRecoverRepanicsAbortHandler(t *testing.T) {
 type panicTenantResolver struct{}
 
 func (panicTenantResolver) ResolveTenant(context.Context, *http.Request) (string, error) {
-	panic(panicMarker)
+	panic(recoverProbeSecret)
 }
 
 // TestOutermostRecoverStopsAPreRecoverPanicReachingNetHTTP drives a real server
@@ -126,22 +122,14 @@ func TestOutermostRecoverStopsAPreRecoverPanicReachingNetHTTP(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Contains(t, string(payload), `"error"`, "the standard envelope, not an empty body")
-	assert.NotContains(t, string(payload), panicMarker)
-	assert.NotContains(t, stdLog.String(), panicMarker, "net/http never renders the value")
+	assert.NotContains(t, string(payload), recoverProbeSecret)
+	assert.NotContains(t, stdLog.String(), recoverProbeSecret, "net/http never renders the value")
 	assert.Empty(t, stdLog.String(), "net/http prints nothing at all")
 
 	entries := frameworkLog.logEntries()
-	var guarded []testLogEntry
-	for _, entry := range entries {
-		if entry.values["panic_type"] != "" {
-			guarded = append(guarded, entry)
-		}
-	}
-	require.Len(t, guarded, 1)
-	assert.Equal(t, "string", guarded[0].values["panic_type"])
-	for _, entry := range entries {
-		for key, value := range entry.values {
-			assert.NotContains(t, value, panicMarker, "field %q carries the panic value", key)
-		}
+	require.Len(t, entries, 1, "the guard is the only thing that logs on this path")
+	assert.Equal(t, "string", entries[0].values["panic_type"])
+	for key, value := range entries[0].values {
+		assert.NotContains(t, value, recoverProbeSecret, "field %q carries the panic value", key)
 	}
 }
