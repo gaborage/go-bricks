@@ -1138,15 +1138,15 @@ func (e *exportStartedSpanExporter) ExportSpans(ctx context.Context, spans []sdk
 func installExportStartSignal(t *testing.T) *exportStartedSpanExporter {
 	t.Helper()
 
-	signalling := &exportStartedSpanExporter{started: make(chan struct{})}
+	signaling := &exportStartedSpanExporter{started: make(chan struct{})}
 	prev := getTraceExporterWrapper()
 	setTraceExporterWrapper(func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
-		signalling.SpanExporter = exporter
-		return signalling
+		signaling.SpanExporter = exporter
+		return signaling
 	})
 	t.Cleanup(func() { setTraceExporterWrapper(prev) })
 
-	return signalling
+	return signaling
 }
 
 // awaitTimerOwnedExport blocks until the batch timer has entered ExportSpans, and
