@@ -367,30 +367,48 @@ func (qb *QueryBuilder) escapeIdentifiers(columns []string) []string {
 // to it: a Valuer failure says nothing about comparability, and reporting it as
 // ErrOrderingOperandNotComparable is what discarded the cause before.
 func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
-	r := reflect.ValueOf(value)
-	// A NIL pointer is nil whatever it points at, and it is settled HERE, before
-	// the Valuer assertion, because the two overlap: a `*sql.NullString` satisfies
+	// One level at a time, and the ORDER within a level is the whole contract:
+	// test for nil, THEN ask whether this level is a driver.Valuer, and only then
+	// dereference. Each step is load-bearing.
+	//
+	// Nil first, because the two overlap: a `*sql.NullString` satisfies
 	// driver.Valuer through NullString's VALUE receiver, so asking a nil one for
-	// its value dereferences nil and panics inside ToSQL. squirrel asserts first
-	// and panics for exactly that reason (expr.go:168), which is why this door
-	// cannot simply mirror its order.
-	if r.Kind() == reflect.Pointer && r.IsNil() {
-		return nil, true, nil
-	}
-
-	if v, isValuer := value.(driver.Valuer); isValuer {
-		got, valuerErr := v.Value()
-		if valuerErr != nil {
-			return nil, false, valuerErr
-		}
-		value = got
-		r = reflect.ValueOf(value)
-	}
-	// A non-nil pointer is dereferenced the way squirrel's prologue does; the
-	// IsNil arm still stands because Value() may itself have returned a pointer.
-	if r.Kind() == reflect.Pointer {
-		if r.IsNil() {
+	// its value dereferences nil inside ToSQL. squirrel asserts before it tests
+	// and panics for exactly that reason (expr.go:168).
+	//
+	// Assert BEFORE dereferencing, because a Value() declared on a POINTER
+	// receiver belongs to `*T` and not to `T` — unwrap first and the operand
+	// stops being a Valuer, so it is never asked and binds as a bare struct.
+	//
+	// Loop, because squirrel unwraps a single level and so did this door: a
+	// `**int` with a nil inner pointer left a typed nil `*int`, which is neither
+	// `== nil` nor a list, so it was classified a SCALAR and handed back —
+	// `col < ?` bound to a nil pointer at an ordering door, the silent-no-rows
+	// shape this change removes, one level deeper. A pointer chain always
+	// terminates: Go types are finite, so each dereference shortens it.
+	//
+	// Value() is asked at most ONCE across the whole walk, so a Valuer answering
+	// with another Valuer cannot spin the door.
+	valuerAsked := false
+	r := reflect.ValueOf(value)
+	for {
+		if r.Kind() == reflect.Pointer && r.IsNil() {
 			return nil, true, nil
+		}
+
+		if v, isValuer := value.(driver.Valuer); isValuer && !valuerAsked {
+			got, valuerErr := v.Value()
+			if valuerErr != nil {
+				return nil, false, valuerErr
+			}
+			valuerAsked = true
+			value = got
+			r = reflect.ValueOf(value)
+			continue
+		}
+
+		if r.Kind() != reflect.Pointer {
+			break
 		}
 		value = r.Elem().Interface()
 		r = reflect.ValueOf(value)

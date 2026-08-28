@@ -1742,3 +1742,70 @@ func TestInResolvesTypedPointerSliceElements(t *testing.T) {
 		})
 	}
 }
+
+// TestOperandResolutionWalksThePointerChain pins the multi-level case: squirrel
+// unwraps ONE pointer level, so a `**int` whose inner pointer is nil left a
+// typed nil `*int` behind — neither `== nil` nor a list, therefore classified a
+// SCALAR and handed back. Equality survived that by accident (squirrel's own
+// prologue unwrapped the remaining level at render time), but an ordering door
+// bound the nil pointer to `col < ?`, and a `**sql.NullString` reached the
+// Valuer assertion and panicked. The chain is walked to the end at every door.
+func TestOperandResolutionWalksThePointerChain(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	nilInner := (*int)(nil)
+	nilValuerInner := (*dbsql.NullString)(nil)
+	seven := 7
+	pointedSeven := &seven
+
+	t.Run("eq_double_pointer_to_nil_is_null", func(t *testing.T) {
+		sql, args, err := f.Eq("u.id", &nilInner).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id IS NULL", sql)
+		assert.Empty(t, args)
+	})
+
+	t.Run("eq_double_pointer_to_nil_valuer_is_null", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			sql, args, err := f.Eq("u.id", &nilValuerInner).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, "u.id IS NULL", sql)
+			assert.Empty(t, args)
+		})
+	})
+
+	t.Run("lt_double_pointer_to_nil_returns_the_sentinel", func(t *testing.T) {
+		_, _, err := f.Lt("u.id", &nilInner).ToSQL()
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+	})
+
+	t.Run("lt_double_pointer_to_nil_valuer_returns_the_sentinel", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			_, _, err := f.Lt("u.id", &nilValuerInner).ToSQL()
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+		})
+	})
+
+	t.Run("double_pointer_to_a_value_binds_the_value", func(t *testing.T) {
+		sql, args, err := f.Eq("u.id", &pointedSeven).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id = ?", sql)
+		assert.Equal(t, []any{7}, args)
+	})
+
+	t.Run("in_resolves_a_double_pointer_element", func(t *testing.T) {
+		sql, args, err := f.In("u.id", []any{&nilInner, &pointedSeven}).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id IN (?,?)", sql)
+		assert.Equal(t, []any{nil, 7}, args)
+	})
+}
