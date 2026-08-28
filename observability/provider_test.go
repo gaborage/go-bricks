@@ -311,6 +311,11 @@ func TestNewProviderOTLPWithHeaders(t *testing.T) {
 			Endpoint: testOTLPHTTPEndpoint,
 			Protocol: "http",
 			Insecure: true,
+			// Same dead port and the same 2s Shutdown assertion as the two exporter
+			// tests, so the same timer-owned export can overrun it (#1162). This test
+			// is about headers, not about the race, so it only needs the export
+			// BOUNDED — it does not force the hostile ordering the way they do.
+			Export: ExportConfig{Timeout: boundedInheritedExportTTL},
 			Headers: map[string]string{
 				"Authorization":   "Bearer test-token",
 				"X-Custom-Header": "custom-value",
