@@ -16,6 +16,10 @@ import (
 // the caller reached.
 var errConflictColumnsRequired = errors.New("conflict columns required for upsert")
 
+// errCyclicOperand marks an operand whose pointer chain returns to a pointer the
+// walk already followed, which no amount of dereferencing will resolve.
+var errCyclicOperand = errors.New("operand pointer chain is cyclic")
+
 // sortedKeys returns a deterministically ordered slice of keys from the provided map.
 func sortedKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
@@ -384,16 +388,36 @@ func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
 	// `**int` with a nil inner pointer left a typed nil `*int`, which is neither
 	// `== nil` nor a list, so it was classified a SCALAR and handed back —
 	// `col < ?` bound to a nil pointer at an ordering door, the silent-no-rows
-	// shape this change removes, one level deeper. A pointer chain always
-	// terminates: Go types are finite, so each dereference shortens it.
+	// shape this change removes, one level deeper.
+	//
+	// The loop tracks the pointers it has already followed, because a chain does
+	// NOT have to terminate on its own. An earlier version of this comment
+	// argued it did — Go types being finite, each dereference shortens the type
+	// — which holds for `**int` and fails the moment an INTERFACE is in the
+	// chain: `var v any; v = &v` has type `*any`, dereferences to an `any`
+	// holding `*any`, and shortens nothing. That spun ToSQL forever on the
+	// request goroutine. A pointer already followed is reported, not followed.
 	//
 	// Value() is asked at most ONCE across the whole walk, so a Valuer answering
 	// with another Valuer cannot spin the door.
 	valuerAsked := false
+	var followed map[uintptr]struct{}
 	r := reflect.ValueOf(value)
 	for {
-		if r.Kind() == reflect.Pointer && r.IsNil() {
-			return nil, true, nil
+		if r.Kind() == reflect.Pointer {
+			if r.IsNil() {
+				return nil, true, nil
+			}
+			// Allocated lazily: most operands are not pointers at all, and one
+			// that is usually points at a value rather than at another pointer.
+			address := r.Pointer()
+			if _, seen := followed[address]; seen {
+				return nil, false, errCyclicOperand
+			}
+			if followed == nil {
+				followed = make(map[uintptr]struct{}, 2)
+			}
+			followed[address] = struct{}{}
 		}
 
 		if v, isValuer := value.(driver.Valuer); isValuer && !valuerAsked {
@@ -489,9 +513,26 @@ func resolveListOperands(op string, values any) (normalized any, empty bool, err
 		if resolveErr != nil {
 			return nil, false, wrapOperandErr(op, resolveErr)
 		}
-		return []any{element}, false, nil
+		// Classify what resolution PRODUCED, not the operand's surface form. A
+		// POINTER to a slice resolves to the slice, and wrapping that as a
+		// single element left squirrel expanding only the outer list — `IN (?)`
+		// bound to a whole []int, which the driver rejects. A resolved nil stays
+		// one NULL element, and a []byte stays one operand, both handled by the
+		// list path below.
+		if element == nil {
+			return []any{nil}, false, nil
+		}
+		return resolveList(op, reflect.ValueOf(element), element)
 	}
 
+	return resolveList(op, v, values)
+}
+
+// resolveList resolves an already-classified list operand. It takes both the
+// reflect.Value and the original interface because the two answer different
+// questions: driver.IsValue judges the interface, while the element type and
+// length come from the reflected value.
+func resolveList(op string, v reflect.Value, values any) (normalized any, empty bool, err error) {
 	// A []byte is a driver.Value, not a list — squirrel's own rule, which the
 	// compare doors follow through driver.IsValue. Splitting it into a list of
 	// bytes would turn one operand into N.
