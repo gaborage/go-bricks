@@ -2,6 +2,7 @@ package logger
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"reflect"
@@ -1535,4 +1536,146 @@ func TestFilterMasksInsideRawMessageSlice(t *testing.T) {
 	})
 
 	assertLoggedFieldJSON(t, buf, "body", `[{"password":"***"},{"user":"alice"}]`)
+}
+
+// TestFilterMasksJWKPrivateMembers pins the shape rule: a JWK's private members
+// are named d, p, q, dp, dq, qi, k and oth — none of which any name needle
+// matches, and all of which are the private key. The marker is `kty`, and the
+// rule applies wherever the object sits: at the root, inside a JWKS `keys`
+// array, or nested under an unrelated field. Public members stay readable so
+// the line remains useful for debugging.
+func TestFilterMasksJWKPrivateMembers(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  string
+		wantJSON string
+	}{
+		{
+			name:     "root_jwk",
+			payload:  `{"kty":"RSA","kid":"k1","n":"modulus","e":"AQAB","d":"PRIVATE","p":"P","q":"Q"}`,
+			wantJSON: `{"kty":"RSA","kid":"k1","n":"modulus","e":"AQAB","d":"***","p":"***","q":"***"}`,
+		},
+		{
+			name:     "jwks_keys_array",
+			payload:  `{"keys":[{"kty":"RSA","n":"modulus","e":"AQAB","d":"PRIVATE"}]}`,
+			wantJSON: `{"keys":[{"kty":"RSA","n":"modulus","e":"AQAB","d":"***"}]}`,
+		},
+		{
+			name:     "nested_jwk",
+			payload:  `{"config":{"signing":{"kty":"oct","k":"SYMMETRIC","kid":"k2"}}}`,
+			wantJSON: `{"config":{"signing":{"kty":"oct","k":"***","kid":"k2"}}}`,
+		},
+		{
+			name: "all_private_members",
+			payload: `{"kty":"RSA","d":"D","p":"P","q":"Q","dp":"DP","dq":"DQ","qi":"QI",` +
+				`"k":"K","oth":[{"r":"R"}]}`,
+			wantJSON: `{"kty":"RSA","d":"***","p":"***","q":"***","dp":"***","dq":"***",` +
+				`"qi":"***","k":"***","oth":"***"}`,
+		},
+		{
+			// Without the kty marker these are ordinary short field names and
+			// must NOT be masked — d, p and k appear in plenty of documents.
+			name:     "no_kty_marker_leaves_short_names_alone",
+			payload:  `{"d":"day","p":"page","k":"key-count","q":"query"}`,
+			wantJSON: `{"d":"day","p":"page","k":"key-count","q":"query"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("body", json.RawMessage(tt.payload)).Msg("payload")
+			assertLoggedFieldJSON(t, buf, "body", tt.wantJSON)
+		})
+	}
+}
+
+// TestFilterMasksPEMPrivateKeyBlocks pins the second shape rule. A PEM private
+// key arrives as one long string under a field name like "material" that no
+// needle matches; a certificate in the same position is public and must stay,
+// because redacting it would remove the thing an operator reads to diagnose a
+// TLS problem.
+func TestFilterMasksPEMPrivateKeyBlocks(t *testing.T) {
+	privateKey := "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----"
+	certificate := "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAK\n-----END CERTIFICATE-----"
+
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "rsa_private_key_masked_whole",
+			payload: `{"material":` + mustJSONString(t, privateKey) + `}`,
+			want:    `{"material":"***"}`,
+		},
+		{
+			name:    "pkcs8_private_key_masked_whole",
+			payload: `{"material":"-----BEGIN PRIVATE KEY-----\nMIIBOg\n-----END PRIVATE KEY-----"}`,
+			want:    `{"material":"***"}`,
+		},
+		{
+			name:    "certificate_left_readable",
+			payload: `{"material":` + mustJSONString(t, certificate) + `}`,
+			want:    `{"material":` + mustJSONString(t, certificate) + `}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("body", json.RawMessage(tt.payload)).Msg("payload")
+			assertLoggedFieldJSON(t, buf, "body", tt.want)
+		})
+	}
+}
+
+// mustJSONString renders s as a JSON string literal, so a test payload carrying
+// newlines stays readable in the source instead of being hand-escaped.
+func mustJSONString(t *testing.T, s string) string {
+	t.Helper()
+	encoded, err := json.Marshal(s)
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+// TestFilterMasksUnreadablePayloadsWhole covers the fail-closed arm: a payload
+// that looks like JSON and is not readable — truncated, or bigger than the cap
+// — is masked entirely, because the filter cannot tell what is inside it and an
+// opaque payload leaking secrets is the defect this door exists to close.
+func TestFilterMasksUnreadablePayloadsWhole(t *testing.T) {
+	t.Run("truncated_json", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(`{"password":"pw`)).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("over_the_byte_cap", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = 32
+		log, buf := newFilteredEventLogger(t, config)
+
+		oversized := `{"note":"` + strings.Repeat("x", 64) + `"}`
+		log.Info().Interface("body", json.RawMessage(oversized)).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("at_the_byte_cap_is_still_parsed", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		payload := `{"password":"pw"}`
+		config.MaxPayloadBytes = len(payload)
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***"}`)
+	})
+
+	t.Run("non_json_bytes_are_untouched", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", []byte("not json at all")).Msg("payload")
+		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("not json at all")),
+			loggedField(t, buf, "body"))
+	})
 }

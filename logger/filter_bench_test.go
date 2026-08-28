@@ -40,3 +40,34 @@ func BenchmarkLogEventAdapterErr(b *testing.B) {
 		run(b, config)
 	})
 }
+
+// BenchmarkFilterNonJSONString guards the cost of the payload door on the path
+// that must not pay for it: an ordinary string field. The door's whole design
+// rests on looksLikeJSON rejecting such a value before any parsing, so this
+// benchmark should report 0 allocations — the same as the plain name check.
+// A regression here means the door started touching every log line.
+func BenchmarkFilterNonJSONString(b *testing.B) {
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, handled := filter.filterJSONString("message", "user alice signed in"); handled {
+			b.Fatal("a non-JSON string must not be taken by the payload door")
+		}
+	}
+}
+
+// BenchmarkFilterNonJSONBytes is the same guard for the bytes door: a byte
+// slice that does not open with a brace or bracket is returned untouched
+// without allocating.
+func BenchmarkFilterNonJSONBytes(b *testing.B) {
+	filter := NewSensitiveDataFilter(DefaultFilterConfig())
+	payload := []byte("not a json document at all")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		filter.filterOpaquePayload(payload, payload)
+	}
+}

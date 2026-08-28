@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"unicode"
 )
 
@@ -52,8 +53,15 @@ func looksLikeJSON(payload []byte) bool {
 // it — and the reason this door exists is that opaque payloads were shipping
 // secrets in clear.
 func (f *SensitiveDataFilter) filterOpaquePayload(payload []byte, original any) any {
+	cap := f.maxPayloadBytes()
+	if cap < 0 {
+		return original
+	}
 	if !looksLikeJSON(payload) {
 		return original
+	}
+	if len(payload) > cap {
+		return f.config.MaskValue
 	}
 
 	decoded, err := decodeJSONPayload(payload)
@@ -96,14 +104,50 @@ func decodeJSONPayload(payload []byte) (any, error) {
 	return decoded, nil
 }
 
+// jwkPrivateMembers are the JWK members that ARE the private key, across every
+// key type RFC 7517/7518 defines: RSA (d, p, q, dp, dq, qi, oth), EC and OKP
+// (d), and oct (k). None of them is a name any needle matches — they are one
+// and two letters long, and a bare "d" or "k" needle would mask half the fields
+// in an ordinary document. The marker is what makes them safe to name: an
+// object carrying `kty` is a JWK, so inside THAT object these eight are key
+// material rather than short field names.
+var jwkPrivateMembers = map[string]struct{}{
+	"d": {}, "p": {}, "q": {}, "dp": {}, "dq": {}, "qi": {}, "k": {}, "oth": {},
+}
+
+// pemPrivateKeyPattern matches a PEM header whose label ends in PRIVATE KEY —
+// `RSA PRIVATE KEY`, `EC PRIVATE KEY`, `PRIVATE KEY`, `OPENSSH PRIVATE KEY`.
+// A CERTIFICATE or PUBLIC KEY block deliberately does not match: it is public,
+// and masking it would remove exactly what an operator reads to diagnose a TLS
+// problem.
+var pemPrivateKeyPattern = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
+
+// isJWK reports whether a decoded object is a JWK, by the presence of the `kty`
+// member RFC 7517 requires on every one.
+func isJWK(object map[string]any) bool {
+	_, hasKeyType := object["kty"]
+	return hasKeyType
+}
+
+// looksLikePEMPrivateKey reports whether a string carries a PEM private-key
+// block. The whole string is masked when it does — a PEM block is base64 of the
+// key itself, so there is no part of it worth keeping.
+func looksLikePEMPrivateKey(value string) bool {
+	return pemPrivateKeyPattern.MatchString(value)
+}
+
 // maskJSONValue walks a decoded document with the same needles the name filter
 // uses, reporting whether anything was masked so the caller can keep the
 // original bytes when nothing was.
 func (f *SensitiveDataFilter) maskJSONValue(value any) (result any, changed bool) {
 	switch v := value.(type) {
 	case map[string]any:
+		// The JWK test is done once per object, not per member, and applies to
+		// THIS object only — a nested JWK is judged by its own kty, and an
+		// object that merely contains one does not inherit the rule.
+		insideJWK := isJWK(v)
 		for key, child := range v {
-			if f.isSensitiveField(key) {
+			if f.isSensitiveField(key) || (insideJWK && isJWKPrivateMember(key)) {
 				v[key] = f.config.MaskValue
 				changed = true
 				continue
@@ -124,9 +168,25 @@ func (f *SensitiveDataFilter) maskJSONValue(value any) (result any, changed bool
 			}
 		}
 		return v, changed
+	case string:
+		// A PEM private key is one long opaque string under whatever field name
+		// the consumer chose, so neither the name filter nor the JWK rule sees
+		// it; the block header is the only thing that identifies it.
+		if looksLikePEMPrivateKey(v) {
+			return f.config.MaskValue, true
+		}
+		return value, false
 	default:
 		return value, false
 	}
+}
+
+// isJWKPrivateMember reports whether a member name is key material, matched
+// EXACTLY rather than by substring: the names are one and two letters long, so
+// a substring rule would mask every field containing a d or a k.
+func isJWKPrivateMember(name string) bool {
+	_, private := jwkPrivateMembers[name]
+	return private
 }
 
 // filterJSONString offers a string value to the payload door, reporting whether
@@ -155,4 +215,15 @@ func (f *SensitiveDataFilter) filterJSONString(key, value string) (payload any, 
 		return nil, false
 	}
 	return filtered, true
+}
+
+// maxPayloadBytes resolves the configured cap. Zero means "unset", which takes
+// the default rather than disabling the door — a config built as a bare struct
+// literal must not silently opt out of masking. A negative value is the
+// explicit opt-out.
+func (f *SensitiveDataFilter) maxPayloadBytes() int {
+	if f.config.MaxPayloadBytes == 0 {
+		return DefaultMaxPayloadBytes
+	}
+	return f.config.MaxPayloadBytes
 }

@@ -11,6 +11,13 @@ import (
 const (
 	// DefaultMaxDepth is the default maximum recursion depth for filtering
 	DefaultMaxDepth = 8
+
+	// DefaultMaxPayloadBytes is the default ceiling on an opaque payload the
+	// filter will parse. 64 KiB is comfortably above the request and response
+	// bodies services log in practice and well below the size at which decoding
+	// on the logging path becomes the expensive part of handling a request.
+	// A payload above it is masked whole rather than shipped unread.
+	DefaultMaxPayloadBytes = 64 * 1024
 )
 
 // Common sensitive field names used in DefaultFilterConfig.
@@ -38,6 +45,16 @@ type FilterConfig struct {
 	// set this field. The YAML log.sensitivefields merge path leaves it nil,
 	// the value being a function.
 	ErrorRedactor func(error) string
+	// MaxPayloadBytes caps how large an opaque payload may be before the filter
+	// stops trying to read it and masks it whole. Parsing is the only way to
+	// see inside bytes, and parsing is linear in their size, so an unbounded
+	// cap would let one oversized payload — a bulk export, a base64 blob that
+	// happens to open with a brace — do arbitrary decode work on the logging
+	// path. Zero (the default, and what DefaultFilterConfig returns) means
+	// DefaultMaxPayloadBytes; a negative value disables the payload door
+	// entirely, leaving bytes and strings judged by NAME alone as they were
+	// before ADR-086.
+	MaxPayloadBytes int
 }
 
 // DefaultFilterConfig returns a default configuration with common sensitive field names
