@@ -159,7 +159,7 @@ var jwkPrivateMembers = map[string]struct{}{
 // A CERTIFICATE or PUBLIC KEY block deliberately does not match: it is public,
 // and masking it would remove exactly what an operator reads to diagnose a TLS
 // problem.
-var pemPrivateKeyPattern = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
+var pemPrivateKeyPattern = regexp.MustCompile(`-{5}BEGIN [A-Z0-9 ]*PRIVATE KEY-{5}`)
 
 // isJWK reports whether a decoded object is a JWK, by the presence of the `kty`
 // member RFC 7517 requires on every one.
