@@ -208,7 +208,7 @@ door entirely, restoring name-only filtering. Raise it through
 `app.Options.LoggerFilterConfig`, which REPLACES the whole config — start from
 `logger.DefaultFilterConfig()` and set the field.
 
-**Deliberately not inspected.** JWT strings (recognising one means decoding it, and its claims
+**Deliberately not inspected.** JWT strings (recognizing one means decoding it, and its claims
 are usually what the operator needs — the signing key is covered where it appears as a JWK or
 a PEM block), XML and form-encoded bodies, and the log MESSAGE text: `Msg` is a format string
 the caller wrote, and the field seam is where the filter has names to judge.

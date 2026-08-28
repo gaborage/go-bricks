@@ -79,7 +79,7 @@ only when something was masked.**
 
 ### Deliberately not inspected
 
-- **JWTs.** A JWT is three base64 segments in a string. Recognising one means decoding it,
+- **JWTs.** A JWT is three base64 segments in a string. recognizing one means decoding it,
   and its payload is claims the operator usually needs; the private material is the signing
   key, which this ADR already covers where it appears as a JWK or a PEM block.
 - **XML and form-encoded bodies.** Each needs its own parser on the logging path, with its
