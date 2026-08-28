@@ -8,6 +8,14 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
+// Padded spellings of two columns, named rather than written inline: the padding
+// is the shape under test, and gocritic's mapKey check cannot tell a deliberate
+// padded map key from a typo.
+const (
+	paddedIDKey   = " id "
+	paddedNameKey = " name "
+)
+
 // TestBuildUpsertReportsMissingPreconditionsIdenticallyPerVendor pins the wording
 // of both upsert preconditions to one string per precondition. The two builders
 // used to phrase them per vendor ("for Oracle MERGE" / "for PostgreSQL upsert"),
@@ -646,7 +654,7 @@ func TestBuildUpsertNormalizesColumnKeysOnEveryVendor(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
 		sql, args, err := qb.BuildUpsert("users", []string{"id"},
-			map[string]any{"id": 1, "name": "x"}, map[string]any{" name ": "y"})
+			map[string]any{"id": 1, "name": "x"}, map[string]any{paddedNameKey: "y"})
 
 		require.NoError(t, err)
 		require.Equal(t,
@@ -668,7 +676,7 @@ func TestBuildUpsertRejectsPaddedTwinKeysOnEveryVendor(t *testing.T) {
 			qb := NewQueryBuilder(vendor)
 
 			sql, args, err := qb.BuildUpsert("users", []string{"id"},
-				map[string]any{"id": 1, " id ": 2}, nil)
+				map[string]any{"id": 1, paddedIDKey: 2}, nil)
 
 			require.EqualError(t, err,
 				`insert columns must be distinct: " id " and "id" name the same column for upsert`)
@@ -774,7 +782,7 @@ func TestBuildUpsertAppliesOneAcceptanceRulePerShape(t *testing.T) {
 			qb := NewQueryBuilder(vendor)
 
 			_, _, err := qb.BuildUpsert("users", []string{"id"},
-				map[string]any{"id": 1, "name": 2, " name ": 3}, nil)
+				map[string]any{"id": 1, "name": 2, paddedNameKey: 3}, nil)
 
 			require.EqualErrorf(t, err,
 				`insert columns must be distinct: " name " and "name" name the same column for upsert`,
