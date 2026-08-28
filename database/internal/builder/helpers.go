@@ -201,9 +201,13 @@ func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns []u
 // isAcceptableUpsertColumnKey reports whether a key names one column an upsert
 // can carry on either vendor.
 func isAcceptableUpsertColumnKey(key string) bool {
-	return isSingleColumnName(oracleQuoteIdentifier(key)) &&
-		!keyCarriesInteriorQuote(key) &&
-		!keyIsFunctionShaped(key)
+	// The two key-only scans come first: they answer with one pass and no
+	// allocation, while oracleQuoteIdentifier parses the key into segments and
+	// may allocate a quoted rendering. A key either of them refuses never pays
+	// for that parse.
+	return !keyCarriesInteriorQuote(key) &&
+		!keyIsFunctionShaped(key) &&
+		isSingleColumnName(oracleQuoteIdentifier(key))
 }
 
 // keyCarriesInteriorQuote reports whether a caller's key carries a quote
@@ -218,9 +222,10 @@ func isAcceptableUpsertColumnKey(key string) bool {
 // A DOUBLED quote is refused too, on both vendors — Oracle used to exempt it as
 // the legal spelling of a quote inside a name while PostgreSQL refused it. An
 // identifier argument carries no quoting of its own; the door quotes. A column
-// whose name genuinely contains a quote is reachable through qb.Expr(), which
-// carries the security annotation that spelling deserves. Refusing it here is
-// what leaves ONE acceptance rule at this door (#1187).
+// whose name genuinely contains a quote is reachable through qb.Expr(), the
+// sanctioned raw-SQL path — which is grep-discoverable by name rather than by a
+// // SECURITY: annotation, and is reviewed as the raw SQL it is. Refusing the
+// spelling here is what leaves ONE acceptance rule at this door (#1187).
 func keyCarriesInteriorQuote(key string) bool {
 	if isQuotedString(key) {
 		return strings.Contains(key[1:len(key)-1], `"`)

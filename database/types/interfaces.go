@@ -563,9 +563,9 @@ type QueryBuilderInterface interface {
 	// quote of its own beyond a plain wrapping pair. COUNT(*), t.name, a""b and
 	// "a""b" are therefore refused on PostgreSQL as well as on Oracle. An
 	// identifier argument carries no quoting; the door quotes. A column whose name
-	// genuinely holds a quote goes through qb.Expr(), which carries the security
-	// annotation that spelling deserves, while a column literally named count(*)
-	// stays reachable as the quoted key "count(*)". The rule is Oracle's grammar
+	// genuinely holds a quote goes through qb.Expr(), the sanctioned raw-SQL path,
+	// while a column literally named count(*) stays reachable as the quoted key
+	// "count(*)". The rule is Oracle's grammar
 	// in origin — its MERGE names conflict and insert keys as column aliases in
 	// the USING clause and in the INSERT list, neither of which admits anything
 	// else — and PostgreSQL applies it so that one spelling of a column works

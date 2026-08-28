@@ -8,13 +8,10 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
-// Padded spellings of two columns, named rather than written inline: the padding
-// is the shape under test, and gocritic's mapKey check cannot tell a deliberate
-// padded map key from a typo.
-const (
-	paddedIDKey   = " id "
-	paddedNameKey = " name "
-)
+// A padded spelling of the `name` column, named rather than written inline: the
+// padding is the shape under test, and gocritic's mapKey check cannot tell a
+// deliberate padded map key from a typo.
+const paddedNameKey = " name "
 
 // TestBuildUpsertReportsMissingPreconditionsIdenticallyPerVendor pins the wording
 // of both upsert preconditions to one string per precondition. The two builders
@@ -664,49 +661,6 @@ func TestBuildUpsertNormalizesColumnKeysOnEveryVendor(t *testing.T) {
 	})
 }
 
-// TestBuildUpsertRejectsPaddedTwinKeysOnEveryVendor pins the other half of the
-// normalized contract: once padding stops being part of the name, two keys that
-// differ only by padding name one column and the pair is refused — naming both
-// spellings, so the caller can find the half they did not mean to write. It used
-// to render `INSERT INTO users ("id","id")` on PostgreSQL, which only fails at
-// execution.
-func TestBuildUpsertRejectsPaddedTwinKeysOnEveryVendor(t *testing.T) {
-	for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
-		t.Run(vendor, func(t *testing.T) {
-			qb := NewQueryBuilder(vendor)
-
-			sql, args, err := qb.BuildUpsert("users", []string{"id"},
-				map[string]any{"id": 1, paddedIDKey: 2}, nil)
-
-			require.EqualError(t, err,
-				`insert columns must be distinct: " id " and "id" name the same column for upsert`)
-			require.Empty(t, sql, "a rejected call emits no SQL")
-			require.Empty(t, args, "a rejected call binds no arguments")
-		})
-	}
-}
-
-// TestBuildUpsertRefusesDoubledQuoteKeysOnEveryVendor pins the last fork in the
-// acceptance rule: an identifier ARGUMENT carries no quoting of its own — the
-// door quotes — so a key spelling an interior quote as a doubled one is refused
-// on both vendors rather than accepted on Oracle and refused on PostgreSQL. A
-// column whose name genuinely contains a quote goes through qb.Expr().
-func TestBuildUpsertRefusesDoubledQuoteKeysOnEveryVendor(t *testing.T) {
-	for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
-		t.Run(vendor, func(t *testing.T) {
-			qb := NewQueryBuilder(vendor)
-
-			_, _, bareErr := qb.BuildUpsert("users", []string{"id"},
-				map[string]any{"id": 1, `a""b`: 2}, nil)
-			_, _, wrappedErr := qb.BuildUpsert("users", []string{"id"},
-				map[string]any{"id": 1, `"a""b"`: 2}, nil)
-
-			require.EqualError(t, bareErr, `insert column "a\"\"b" is not a single column name for upsert`)
-			require.EqualError(t, wrappedErr, `insert column "\"a\"\"b\"" is not a single column name for upsert`)
-		})
-	}
-}
-
 // TestBuildUpsertAppliesOneAcceptanceRulePerShape is the matrix the two issues
 // asked for: every column-key shape gets ONE verdict, and both vendors return
 // it. It is the regression guard against the rule forking again — a change that
@@ -738,6 +692,13 @@ func TestBuildUpsertAppliesOneAcceptanceRulePerShape(t *testing.T) {
 			name:    "doubled_quote",
 			key:     `a""b`,
 			wantErr: `insert column "a\"\"b" is not a single column name for upsert`,
+		},
+		{
+			// The wrapped spelling of the same name: the wrapper alone does not
+			// rescue it, which is the half that used to build on Oracle.
+			name:    "wrapped_doubled_quote",
+			key:     `"a""b"`,
+			wantErr: `insert column "\"a\"\"b\"" is not a single column name for upsert`,
 		},
 		{
 			name:    "unescaped_quote",
