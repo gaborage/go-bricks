@@ -136,7 +136,7 @@ func NewProductService(db database.Interface) *ProductService {
 
 - **Equality** (`Eq`, `NotEq`): NIL renders `IS NULL` / `IS NOT NULL`; a LIST expands to `IN (…)` / `NOT IN (…)`, an empty one to the constant `(1=0)` / `(1=1)`; a SCALAR is bound to `col op ?` whatever its Go type — a struct no driver accepts is passed through, not diagnosed.
 - **Ordering** (`Lt`, `Lte`, `Gt`, `Gte`) and both bounds of `Between`: a NIL or LIST operand is refused with `dbtypes.ErrOrderingOperandNotComparable` (exported from `database/types`, so `errors.Is` works from your own code), surfaced at `ToSQL()`. There is no rendering for `col < NULL` or for an ordering against a set, so the door fails closed rather than emitting SQL that silently matches nothing.
-- **`In` / `NotIn`**: every ELEMENT is resolved the same way, so a nil-pointer element binds as an untyped nil rather than reaching the driver as a pointer it would have to dereference. A scalar operand is wrapped in a one-element list; an empty one renders `(1=0)` / `(1=1)`.
+- **`In` / `NotIn`**: every ELEMENT is resolved the same way, so a nil-pointer element binds as an untyped nil rather than reaching the driver as a pointer it would have to dereference. A scalar operand is wrapped in a one-element list — a `[]byte` included, so it renders `IN (?)` here rather than the `col = ?` a `[]byte` takes at the compare doors — and an empty operand renders `(1=0)` / `(1=1)`.
 
 Every door binds the value it RESOLVED (`int64(5)`), never the wrapper (`sql.NullInt64{5,true}`) or the pointer. The driver receives the same value either way — it is the value `database/sql` would have unwrapped at bind time — so only something reading `ToSQL()`'s args back, a golden file or a contract test, can see the difference.
 

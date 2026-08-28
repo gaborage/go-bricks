@@ -1616,3 +1616,50 @@ func TestInAndNotInResolveNilPointerElements(t *testing.T) {
 		})
 	}
 }
+
+// TestInAndNotInWrapAByteSliceAsOneElement pins the one SQL text this atom
+// moves at the list doors. A []byte is a driver.Value, so squirrel classified
+// it as a SCALAR and rendered `col = ?` / `col <> ?` from an IN door — the
+// door's own contract says a scalar is wrapped in a one-element list, and it
+// now is, so the SQL says IN. The argument is unchanged: one []byte, not one
+// placeholder per byte.
+func TestInAndNotInWrapAByteSliceAsOneElement(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	raw := []byte("raw")
+
+	tests := []struct {
+		name    string
+		filter  dbtypes.Filter
+		wantSQL string
+	}{
+		{name: "filter_in", filter: qb.Filter().In("u.id", raw), wantSQL: "u.id IN (?)"},
+		{name: "filter_not_in", filter: qb.Filter().NotIn("u.id", raw), wantSQL: "u.id NOT IN (?)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := tt.filter.ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{raw}, args)
+		})
+	}
+
+	joinTests := []struct {
+		name    string
+		filter  dbtypes.JoinFilter
+		wantSQL string
+	}{
+		{name: "join_filter_in", filter: qb.JoinFilter().In("u.id", raw), wantSQL: "u.id IN (?)"},
+		{name: "join_filter_not_in", filter: qb.JoinFilter().NotIn("u.id", raw), wantSQL: "u.id NOT IN (?)"},
+	}
+	for _, tt := range joinTests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := tt.filter.ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{raw}, args)
+		})
+	}
+}
