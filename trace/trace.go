@@ -287,11 +287,14 @@ func injectTraceState(ctx context.Context, headers HeaderAccessor, parent outbou
 // It also reports which carrier won and whether a pre-set value was refused,
 // which is what decides the tracestate beside it (see injectTraceState).
 func computeTraceParent(ctx context.Context, headers HeaderAccessor) outboundParent {
-	preset := headerString(headers, HeaderTraceParent)
+	preset, carried := headerString(headers, HeaderTraceParent)
 	if v := ValidateTraceParent(preset); v != "" {
 		return outboundParent{value: v, traceID: splitTraceParent(v).traceID, fromHeader: true}
 	}
-	rejected := preset != ""
+	// PRESENCE, not emptiness, is what makes the tracestate beside it stale: a
+	// carrier that wrote `traceparent: ""` still wrote one, and the value that
+	// replaces it belongs to a different trace either way.
+	rejected := carried
 	if tp, ok := ParentFromContext(ctx); ok && tp != "" {
 		// WithTraceParent is exported, so this one has never been through the
 		// seam — it is the single branch whose trace-id must be judged here.
@@ -301,12 +304,16 @@ func computeTraceParent(ctx context.Context, headers HeaderAccessor) outboundPar
 	return outboundParent{value: generated, traceID: splitTraceParent(generated).traceID, rejected: rejected}
 }
 
-// headerString gets a header as string using safe conversion
-func headerString(headers HeaderAccessor, key string) string {
-	if v := headers.Get(key); v != nil {
-		return safeToString(v)
+// headerString gets a header as string using safe conversion. carried reports
+// that the key was PRESENT, which is a different question from the value being
+// usable: an empty value the carrier actually wrote still scopes the tracestate
+// beside it (see computeTraceParent).
+func headerString(headers HeaderAccessor, key string) (value string, carried bool) {
+	v := headers.Get(key)
+	if v == nil {
+		return "", false
 	}
-	return ""
+	return safeToString(v), true
 }
 
 // safeToString safely converts any to string, handling []byte

@@ -166,8 +166,12 @@ func TestComputeHelpers(t *testing.T) {
 
 func TestHeaderStringAndSafeToString(t *testing.T) {
 	acc := &mapAccessor{m: map[string]any{HeaderXRequestID: []byte("bytes-id")}}
-	assert.Equal(t, "bytes-id", headerString(acc, HeaderXRequestID))
-	assert.Equal(t, "", headerString(&mapAccessor{}, "missing"))
+	value, carried := headerString(acc, HeaderXRequestID)
+	assert.Equal(t, "bytes-id", value)
+	assert.True(t, carried)
+	value, carried = headerString(&mapAccessor{}, "missing")
+	assert.Equal(t, "", value)
+	assert.False(t, carried)
 
 	assert.Equal(t, "str", safeToString("str"))
 	assert.Equal(t, "abc", safeToString([]byte("abc")))
@@ -340,4 +344,22 @@ func TestInjectIntoHeadersKeepsTheTraceStateOfAnAcceptedHeaderParent(t *testing.
 
 	assert.Equal(t, headerParent, acc.Get(HeaderTraceParent), "a valid pre-set parent still wins")
 	assert.Equal(t, "vendor=carrier", acc.Get(HeaderTraceState))
+}
+
+// TestInjectIntoHeadersDropsTraceStateBesideAnEmptyHeaderTraceParent covers the
+// carrier rule's third shape: a header map that carries the traceparent key with
+// an EMPTY value still carried it, so a tracestate written beside it annotates a
+// parent this hop is not continuing. Presence, not emptiness, decides.
+func TestInjectIntoHeadersDropsTraceStateBesideAnEmptyHeaderTraceParent(t *testing.T) {
+	acc := &mapAccessor{m: map[string]any{
+		HeaderTraceParent: "",
+		HeaderTraceState:  "vendor=stale",
+	}}
+
+	InjectIntoHeaders(context.Background(), acc)
+
+	emitted, ok := acc.Get(HeaderTraceParent).(string)
+	require.True(t, ok)
+	assert.Equal(t, emitted, ValidateTraceParent(emitted))
+	assert.Empty(t, acc.Get(HeaderTraceState))
 }
