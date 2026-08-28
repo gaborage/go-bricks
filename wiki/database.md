@@ -196,7 +196,7 @@ query := qb.Select("*").
     Where(f.Eq("o.status", "pending"))
 ```
 
-**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Nine of them follow the *Operand contract* above — the six compare doors, `In`, `NotIn` and both `Between` bounds. `Like` does NOT: it takes a string pattern, so there is no operand to resolve.
+**Available Methods:** `Eq`, `NotEq`, `Lt/Lte/Gt/Gte`, `In/NotIn`, `Between`, `Like`, `Null/NotNull`. Nine of them follow the *Operand contract* above — the six compare doors, `In`, `NotIn` and `Between`, whose two bounds are each resolved as an ordering operand. `Like` does NOT: it takes a string pattern, so there is no operand to resolve.
 
 **Expression Support:** All comparison methods accept `qb.Expr()` for complex SQL expressions without placeholders.
 
