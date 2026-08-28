@@ -34,22 +34,7 @@ GoBricks is an enterprise-grade Go framework for building microservices with mod
 
 ## Quick Reference
 
-**Most Common Commands:**
-
-```bash
-make check              # Pre-commit: fmt + lint + markdownlint + test + alloc guards + vuln scan + gosec (mirrors CI; needs Node for npx)
-make test               # Unit tests with race detection
-make test-integration   # Integration tests (Docker required)
-make mutate             # Diff-scoped mutation gate: mutants on changed lines vs origin/main must die (~440s — run in background)
-go test -run TestName   # Run specific test
-go test -bench=.        # Run benchmarks
-```
-
-**Key Files:**
-
-- [CLAUDE.md](CLAUDE.md) — This development guide
-- [llms.txt](llms.txt) — Quick code examples for LLMs
-- [.golangci.yml](.golangci.yml) — Linting configuration
+**Key File:** [llms.txt](llms.txt) — quick code examples for LLMs (the "full example" target referenced below).
 
 **Wiki (deep dives — read on demand):**
 
@@ -118,13 +103,6 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 - **Automation:** Makefile/Taskfile, multi-platform CI/CD.
 - **Documentation:** Just enough to understand quickly; examples over exhaustive docs.
 
-## Code Quality
-
-- Linting: `.golangci.yml` with staticcheck, gosec, gocritic.
-- SonarCloud: Project `gaborage_go-bricks`, 80% coverage target.
-- CI/CD: Multi-platform (Ubuntu, Windows) × Go 1.26.
-- Race detection enabled on all platforms.
-
 ## Architecture
 
 ### Core Components
@@ -148,50 +126,7 @@ GoBricks is a **production-grade framework for building MVPs fast**: enterprise-
 
 ### Module System
 
-Modules implement this core interface. Route registration and messaging are opt-in via duck-typing: if your module implements `RouteRegisterer` or `MessagingDeclarer`, the framework detects this at startup and calls the corresponding method automatically.
-
-```go
-type Module interface {
-    Name() string
-    Init(deps *ModuleDeps) error
-    Shutdown() error
-}
-
-// Optional: register HTTP routes during startup.
-type RouteRegisterer interface {
-    RegisterRoutes(hr *server.HandlerRegistry, r server.RouteRegistrar)
-}
-
-// Optional: declare AMQP exchanges, queues, bindings, publishers, and consumers.
-// Declarations are validated once at startup and replayed per-tenant for isolation.
-type MessagingDeclarer interface {
-    DeclareMessaging(decls *messaging.Declarations)
-}
-
-// Optional: contribute global middleware (e.g. auth) that runs once per request,
-// after tenant resolution, before handlers, and cannot be skipped per-route (ADR-036).
-type GlobalMiddlewareRegisterer interface {
-    GlobalMiddleware() []server.MiddlewareFunc
-}
-
-// Optional: declare that this module cannot function without a database.
-// Registration — and therefore startup — fails when no database is configured,
-// so a service whose database config never reached it aborts instead of booting
-// green. Deployments that resolve database config at runtime are exempt
-// (multi-tenant, dynamic config source, dynamic resource source).
-type DatabaseRequirer interface {
-    RequiresDatabase() bool
-}
-
-// Simplified — see app/module.go for the full struct (~12 fields including
-// Scheduler, Outbox, Tracer, MeterProvider, DBByName, etc.)
-type ModuleDeps struct {
-    DB        func(context.Context) (database.Interface, error)
-    Logger    logger.Logger
-    Messaging func(context.Context) (messaging.AMQPClient, error)
-    Config    *config.Config
-}
-```
+Modules implement `app.Module` (`Name` / `Init(*ModuleDeps)` / `Shutdown`); capabilities are opt-in via duck-typing — the framework detects each interface at startup and calls it: `RouteRegisterer` (HTTP routes), `MessagingDeclarer` (AMQP declarations, validated once and replayed per-tenant), `GlobalMiddlewareRegisterer` (middleware that runs once per request after tenant resolution and cannot be skipped per-route — ADR-036), `DatabaseRequirer` (registration, and therefore startup, fails when no database is configured, so a service whose database config never reached it aborts instead of booting green; multi-tenant, dynamic-config and dynamic-resource deployments are exempt). `ModuleDeps` carries the accessors (`DB`, `Cache`, `Messaging`, `Config`, `Logger`, `Scheduler`, `Outbox`, `Tracer`, `MeterProvider`, `DBByName`, …) — see `app/module.go`.
 
 ### Configuration Injection
 
@@ -213,23 +148,7 @@ For pointer-vs-value request/response trade-offs (file uploads, bulk exports), *
 
 Unified `database.Interface` supporting PostgreSQL (pgx, `$1` placeholders) and Oracle (`:1` placeholders, SEQUENCE built-in, UDT registration) with vendor-specific SQL generation, type-safe WHERE clauses, performance tracking, and connection pooling.
 
-**Type-Safe Query Building (use this pattern by default):**
-
-```go
-type User struct {
-    ID    int64  `db:"id"`
-    Name  string `db:"name"`
-    Level int    `db:"level"`  // Oracle reserved word — auto-quoted
-}
-
-cols := qb.Columns(&User{})  // Cached per vendor
-f := qb.Filter()
-
-query := qb.Select(cols.Cols("ID", "Name")).
-    From("users").
-    Where(f.Eq(cols.Col("Level"), 5))
-// Oracle: SELECT id, name FROM users WHERE "level" = :1
-```
+**Type-safe query building is the default pattern:** `qb.Columns(&T{})` (cached per vendor; Oracle reserved words such as `level` are auto-quoted), `qb.Filter()`, then `qb.Select(cols.Cols("ID", "Name")).From("users").Where(f.Eq(cols.Col("Level"), 5))` — full example in [llms.txt](llms.txt).
 
 **Type-Safe Methods:** `f.Eq`, `f.NotEq`, `f.Lt/Lte/Gt/Gte`, `f.In/NotIn`, `f.Like`, `f.Regex*`, `f.JSONContains` (PG only), `f.Null/NotNull`, `f.Between`, `f.Exists`, `f.NotExists`, `f.InSubquery`. Use `qb.Expr()` for complex SQL inside type-safe methods (no placeholders).
 
@@ -339,26 +258,9 @@ For the full deep dive (when to shorten, when to detach, common pitfalls, why co
 
 ### Test Naming Conventions (MANDATORY)
 
-**Use camelCase for ALL test function names.** The codebase has 100% compliance across >800 test functions.
+**Use camelCase for ALL test function names** (`TestUserServiceCreateUser`, never `TestUserService_CreateUser`). 100% compliance across >800 test functions; the `check-test-conventions.sh` PostToolUse hook flags violations.
 
-```go
-// CORRECT
-func TestUserServiceCreateUser(t *testing.T) { }
-func TestCacheManagerGetOrCreateCache(t *testing.T) { }
-
-// WRONG
-func TestUserService_CreateUser(t *testing.T) { }
-func Test_CacheManager_GetOrCreateCache(t *testing.T) { }
-```
-
-**Exception:** Test case descriptions inside table-driven tests use **snake_case** for readability:
-
-```go
-tests := []struct{ name string }{
-    {name: "simple_equality"},
-    {name: "with_invalid_credentials"},
-}
-```
+**Exception:** table-driven case `name` fields use **snake_case** (`"with_invalid_credentials"`) for readability.
 
 ### Testing Strategy
 
@@ -391,65 +293,7 @@ The OpenAPI generator now lives in its own repository: [**gaborage/go-bricks-ope
 
 ## Breaking Changes
 
-GoBricks breaks its own API surface when justified. Greenfield work uses the new APIs only. **The lines below are an index, not the migration** — entries carry a tracked ADR (`wiki/adr_NNN_*.md`) or a `wiki/migrations.md` atom, and hops that need one have a table in [wiki/migrations.md](wiki/migrations.md). Read those before upgrading.
-
-- **S8179 (getter naming):** `GetX()` → `X()` across all packages.
-- **S8196 (interface naming):** `Job` → `Executor`, `HealthProbe` → `Prober`, `TenantStore` → `DBConfigProvider`.
-- **ToSQL standardization (ADR-017):** Insert builders return `types.InsertQueryBuilder` with `ToSQL()`.
-- **Session timezone (ADR-016):** default `UTC`; opt out with `database.timezone: "-"`.
-- **Consumer concurrency (v0.17.0):** default workers `1` → `NumCPU * 4`; set `Workers: 1` when ordering matters.
-- **Message error handling (v2.X):** handler errors and panics nack messages without requeue.
-- **MongoDB removed (ADR-012):** PostgreSQL and Oracle only.
-- **Bounded publish + outbox dead-lettering (ADR-033):** publish returns `ErrPublishRetriesExhausted` after the new `messaging.reconnect.maxpublishattempts` — match with `errors.Is`, not `==`. `outbox.Store.FetchPending` drops `maxRetries`, gains `MarkDeadLettered`. New key: `outbox.publishtimeout`.
-- **Env policy (ADR-022):** `app.env` accepts any conforming string; behavior switches go through `config.IsDevelopment()` / `config.IsProduction()` alias sets, never equality.
-- **CORS dev wildcard opt-in (ADR-038):** the dev reflect-any-origin posture also requires `CORS_DEV_WILDCARD=true`; without it, dev fails closed.
-- **Composite resolver order required (ADR-039):** `multitenant.resolver.order` is mandatory — no default.
-- **Declaration Args reach the broker (ADR-040):** declare methods take `(ctx, *…Declaration)` and forward `Args`; may surface `406 PRECONDITION_FAILED` against ops-provisioned queues.
-- **Database absence vs misconfiguration (ADR-047):** the `database:` block is all-or-nothing — omitting it is supported (`/ready` reports `not_configured`, 200), but any identity field (`type`, `host`, `port`, `database`, `username`, `password`, `connectionstring`, `oracle.service.name`, `oracle.service.sid`) marks it intended, and an incomplete intended block fails startup. Modules needing a database implement `app.DatabaseRequirer`.
-- **httpclient Build fail-closed (ADR-044):** `Build()` returns `(Client, error)` and refuses compositions that would silently discard TLS material or a caller's `RoundTripper`.
-- **Readiness strict + sanitized by default (ADR-046, ADR-048):** an absent `cache.critical` makes the cache probe critical (503 during a Redis outage); every critical probe's 503 body serves a fixed `"<name> unavailable"` unless `HealthStatus.PublicErr` overrides it.
-- **Delivered-empty `debug.allowedips` (ADR-078):** any delivery that decodes to NO entries — `DEBUG_ALLOWEDIPS=`, `allowedips: ""`, a separator-only value (`,`), or YAML null — fails configuration resolution; it used to wipe the loopback default and, with `debug.bearertoken` set, skip the IP whitelist while booting. An empty LIST (`allowedips: []`) stays legal as the deliberate token-only clear. Note the divergence from ADR-074/077: null is absence there, a wipe here. Other `[]string` keys are unchanged.
-- **Log filter walks arrays; needles normalize (ADR-079):** a JSON body shaped `{"…":[{…}]}` no longer panics the log path at either door (`Interface()`, `WithFields`); a slice whose elements the filter rewrites emits as `[]any` (serialized output unchanged, typed nils included). Needle trim/drop-empty moved into `NewSensitiveDataFilter`, closing the `Options.LoggerFilterConfig` door where one empty needle masked every field — YAML `log.sensitivefields` was already normalized and is unaffected; the masking-disabled WARN now judges the effective list. Scheduler job-panic summaries read `panic (type: T)`: repoint alerts, the old match fails silently.
-- **Client IP from observed hops only (ADR-080):** `server.ClientIP` answers with an identified untrusted hop or the peer it observed, never a caller-written value — every `X-Forwarded-For` line is read, brackets stripped, an unparseable hop stops the walk, an all-trusted chain yields the peer, and `X-Real-IP` is not consulted; all three `trustedproxies` keys reject a list that trusts an entire address family — a literal default route, a set covering one between its entries (`["0.0.0.0/1","128.0.0.0/1"]`), or the v4-mapped `::ffff:0.0.0.0/96` (the debug and scheduler keys previously accepted even a literal default route, which `server.trustedproxies` refused, making a DIRECT caller's headers authoritative; the set-coverage rule is new on all three), and `debug.allowedips` gains CIDR-syntax validation accepting bare addresses. Allowlists stay exempt. See `[C60.22]`.
-- **Debug endpoints fail closed (ADR-049):** `RegisterDebugEndpoints` returns `error` and aborts startup when `debug.enabled: true` would expose an endpoint with neither `debug.allowedips` nor `debug.bearertoken` set; either key — or `debug.enabled: false` — satisfies the check.
-- **Cache construction fails closed (ADR-054):** `ResourceManagerFactory.CreateCacheManager` returns `(*cache.CacheManager, error)`, so a cache the framework was told to build but could not — a negative `cache.manager.maxsize`/`idlettl` — aborts startup instead of a WARN plus a bare `nil` that registered no readiness probe. Absence (`cache.enabled: false`) is unchanged; an unreachable Redis at boot still only WARNs.
-- **Database wiring fails closed (#892, ADR-050, ADR-051):** an enabled outbox/inbox without a usable ledger database, an unrecognized `connectionstring` scheme on the built-in connector, and any identity key delivered as an empty string each abort startup; a recognized scheme infers `database.type`.
-- **Dead exported surface removed (ADR-052, ADR-053):** `jose.PolicyRegistry` (memoize `jose.ScanType` + `jose.ResolvePolicy` yourself, keyed on type AND direction) and `server.TestShortTimeout`/`TestMediumTimeout`/`TestLongTimeout` are gone.
-- **OTel log-record identity (ADR-055, ADR-056):** top-level fields keyed `service.*`, `telemetry.sdk.*`, or `deployment.environment.name` reach OTLP as `app.<key>`; framework record attributes shrink to `log.type`, identity stays in `ResourceLogs.resource`.
-- **Consumer-scoped AMQP args (ADR-058):** `ConsumeOptions`/`ConsumerOptions`/`ConsumerDeclaration` gain `Args`, forwarded to `basic.consume` — that is where `x-stream-offset` goes; `DeclareStreamQueue` sets only queue type + retention. A map field makes all three non-comparable: `==` and map-key use stop compiling.
-- **Cache conditional release (ADR-060):** `cache.Cache` gains `CompareAndDelete`; every implementer must add it, including test doubles `go build` skips — use `go vet ./...`. Release locks with it, not `Delete`, and acquire with a positive TTL.
-- **Role password control chars (ADR-061):** `PGRoleSpec.Validate` rejects CR/LF/NUL in `MigratorPassword`/`RuntimePassword` — match `errors.Is(err, migration.ErrPGRolePasswordHasControlChar)`; trim file-sourced secrets.
-- **Database TLS fail-closed (ADR-062):** `database.tls.mode` must be a valid sslmode; cert/key/ca require `require`/`verify-ca`/`verify-full`; the block is rejected alongside `connectionstring` and (entirely) on Oracle.
-- **App validates every config (ADR-064):** `app.NewWithConfig`/`Builder.WithConfig` run `config.Validate`; hand-built configs that violate it fail construction.
-- **keystore.secretminlength tri-state (ADR-065):** `KeyStoreConfig.SecretMinLength` is `*int` (`new(n)` in Go literals; nil = 32, `0` = off, deprecated); a hand-built config that left it unset now enforces the 32-byte floor.
-- **Dead app lifecycle surface removed (ADR-067):** `MessagingInitializer` and `ConnectionPreWarmer` (constructors and methods included), `Options.Database` and `Options.MessagingClient` are gone; the eight debug response types are unexported with their JSON unchanged.
-- **One delivery pipeline (ADR-068):** `messaging.StartConsumeSpan` is removed — a service driving its own consume loop starts its own span — and the AMQP `messaging.client.consumed.messages` counter is recorded at completion with `error.type` instead of at receive without it.
-- **Delivered-empty numeric and bool config (ADR-074, ADR-077):** an empty string bound to a numeric or bool key (`FOO=`, empty `secretKeyRef`) fails configuration resolution naming the key — at startup, or at first use for the CLI's `tenants.yaml` and a dynamic `DBConfigProvider` — instead of decoding as `0`/`false` — which flipped `database.pool.keepalive.enabled` off and made a failing `cache.critical` probe stop failing `/ready`; explicit values, unset, YAML omission and YAML null are unchanged.
-- **Scheduler timeouts normalize (ADR-075):** `scheduler.timeout.shutdown`/`slowjob` default in `config.Validate` (30s/25s — hand-built configs move 30s → 25s), negatives fail validation, and `scheduler.Module.Init` requires a NORMALIZED `deps.Config` — non-nil, both timeouts positive — so a config assembled outside app construction must go through `config.Validate` first.
-- **Section-qualified config errors (ADR-076):** a non-root database section's `ConfigError.Field` names that section (`databases.reporting.host`, `multitenant.tenants.acme.database.host`); match with a database-scoped predicate, not equality and not a bare suffix — `cache.redis.host` ends in `.host` too. Root keeps the root spelling. The runtime door matches via the additive `ApplyDatabasePoolDefaultsForKey` (the old function is unchanged and still root-addressed), so a dynamic tenant is addressed like a static one, the manager stops wrapping, `Action` names the section's own env var (or none where none reaches the key), and the tenant cache (startup door only — the per-key cache FACTORY still root-spells, #1125), messaging and `NewMultiTenantError` fields join the same spelling.
-- **Response error details carry no request input (ADR-084):** `server.FieldError` loses `Value` — it was the rejected input for ANY failed tag — and its `Field` (with the message built from it) redacts the bracketed span, so a `dive`-validated map reads `Limits[*]` instead of the input key. A bind failure's `details.error` becomes a payload-free summary — the type-gated JSON decode summary, or the binding source plus the destination field by struct tag — never `bindErr.Error()`. Every response `error.details` map now requires `app.debug` AND a development `app.env` at the single `devDetails` funnel, extending `[C60.30]` to every status and to raw mode. messaging's safe-rendering primitives move to `internal/saferender` unchanged. See `[C61.1]`, `[C61.2]`.
-- **Framework owns the PG Flyway URL (ADR-085):** for a PostgreSQL discrete-field config the framework builds `jdbc:postgresql://host[:port]/db?ApplicationName=<app.name>[&sslmode][&sslrootcert]` from `database.*` and passes `-url=`, silently outranking any `flyway.url` in your `flyway.conf`; the TLS WARN and the `DB_SSL*` export are gone and credentials stay env-delivered (argv is world-readable). Eight fail closed: `tls.cert`/`tls.key` (`ErrMigrationMTLSUnsupported` — the framework does not forward them as JDBC `sslcert`/`sslkey`); a `host` that is not an IP or plain DNS name (`ErrInvalidMigrationHost` — unescaped it ends the authority early, injecting params); a `port` below 0 or above 65535, `0` staying unset (`ErrInvalidMigrationPort` — a negative one silently took the driver default); a `tls.mode` outside the libpq six (`ErrInvalidMigrationTLSMode` — it was copied onto the URL verbatim; trimmed first and matched case-sensitively, exactly as `config.Validate` does, so ` require` normalizes and `Require` fails); a `tls.ca` without `verify-ca`/`verify-full` (`ErrMigrationTLSCARequiresVerify` — pgjdbc reads `sslrootcert` only under those two, so the CA was emitted and ignored; deliberately STRICTER than `config.Validate`, which admits `require`+ca because pgx honors it there); `tls.ca: system` (`ErrMigrationTLSCASystemUnsupported` — a libpq/pgx sentinel pgjdbc has no equivalent for, and the JVM trust store is a different trust set, so it is refused rather than remapped); a partial block or `tls.*` that cannot reach a URL (`ErrIncompleteMigrationTarget`); and `tls.*` beside a `connectionstring` (`ErrMigrationTLSWithConnectionString` — the framework does not parse DSNs, so keep TLS in the DSN for the runtime and put the migration's own on the `flyway.conf` URL, which must also name the SAME host and database or an encrypted migration lands on the wrong one). By validation scope: four bind every config — the mTLS pair, the host grammar, and both CA rules — because `config.Validate` admits those shapes (pgx honors them); the other four (port range, `tls.mode`, the partial block, and `tls.*` beside a `connectionstring`) repeat what `config.Validate` already rejects, so they are reachable only for dynamic-provider and CLI configs that never pass it. Oracle (where `database.tls` is rejected, not absent), a TLS-free `connectionstring`, and a type-only block without TLS keep the conf-owned URL. See `[C61.4]`.
-- **Span sinks record errors by type (ADR-083):** `observability.RecordErrorByType` is the only framework spelling of "record an error on a span" — one `exception` event carrying `exception.type` (the outer `%T`) and NO `exception.message`, status `codes.Error` with that same type. An alert keyed on `exception.message`, or on a message-bearing span status description, for job, handler, HTTP-client or publish failures stops matching; the log line at each site still carries the message. See `[C61.3]`.
-- **RawExpression alias is a grammar, not a denylist (ADR-082 addendum):** an alias must be an UNQUOTED identifier (`sqllex.IsUnquotedIdentifier` — not `IsBareIdentifier`, which also admits the quoted reserved-word form); the six-substring denylist accepted everything it did not list, so `Alias: "x FROM users"` opened a clause. `ErrDangerousAlias` is DELETED — match `errors.Is(err, dbtypes.ErrInvalidAlias)`. Checked in `Validate()`, so it fails at `Expr()` AND `ToSQL()`. See `[C61.9]`.
-- **Identifier arguments validated at every door (ADR-082):** `Insert`, `InsertWithColumns`, `InsertStruct`, `InsertFields` and `BuildUpsert` validate their TABLE argument against ADR-031 grammar — a bare or qualified name plus at most one alias — so a computed table needs an allowlist your own code owns; and both identifier renderers double an interior quote, so a name carrying one renders as that name instead of ending the identifier early (#1104). ADR-031 had excluded the Filter API by reading "parameterizes its values" as "is safe" — `f.Eq(column, value)` does the first for the value and neither for the column; `Select` and the INSERT column lists (`InsertWithColumns`, `.Columns`, `.SetMap`) now validate too — a `select` context adds the wildcard so `Select("*")` is unaffected, while a function or constant string moves to `qb.Expr()`, including the `EXISTS` idiom `Select("1")`; and every Filter and JoinFilter column joins them, validated through a single fallible funnel (`quoteColumnForQuery`) rather than per-door guards — on PostgreSQL that closes a LIVE hole, where the renderer emitted the column verbatim and `f.Eq("id = 1 OR 1=1 -- ", v)` built `WHERE id = 1 OR 1=1 -- = $1`. `Having` takes a predicate, not an identifier; its STRING form stays a raw-SQL door and it now also accepts a `qb.Expr()` `RawExpression`, which is not annotated (#1146, #1147, `[C61.8]`); a `RawExpression` STRUCT LITERAL is validated where it is consumed, so the alias grammar `qb.Expr()` applies is no longer skippable — its SQL body still is not judged; `cols.As(alias)` validates too but PANICS with `*dbtypes.InvalidAliasError` — it returns a `Columns`, not a builder, so it has no deferred-error channel, and the empty-alias panic value changes from a string (#1150). See `[C60.24]`–`[C60.29]`.
-
-## File Organization
-
-- **internal/** — Private packages (reflection utilities, test helpers).
-- **testing/** — Framework-wide testing utilities.
-  - **testing/mocks/** — Testify-based mocks for database, messaging, query builder interfaces.
-  - **testing/fixtures/** — Pre-configured mocks and SQL result builders.
-  - **testing/containers/** — Testcontainers helpers (PostgreSQL, Oracle, RabbitMQ, Redis).
-- **database/testing/** — Database-specific testing (TestDB, TenantDBMap, fluent expectations).
-- **cache/testing/** — Cache-specific testing (MockCache, assertion helpers).
-- **observability/testing/** — Test utilities for spans and metrics.
-- **outbox/testing/** — Outbox-specific testing (MockOutbox, assertion helpers).
-- **keystore/testing/** — KeyStore-specific testing (MockKeyStore, assertion helpers).
-- **cmd/seal-payload/** — installable CLI sealing JSON into compact JWE-of-JWS for curl-testing jose endpoints (#776).
-- **tools/** — Development tooling (`migration` CLI / `go-bricks-migrate`).
-- **wiki/** — Architecture documentation and ADRs.
-- **llms.txt** — Quick reference examples for LLM code generation.
-- Tests alongside source files (`*_test.go`).
+GoBricks breaks its own API surface when justified. Greenfield work uses the new APIs only. The per-change index — one line per break with its ADR, config keys, and match rules — lives in the `breaking-changes` skill ([.claude/skills/breaking-changes/SKILL.md](.claude/skills/breaking-changes/SKILL.md)); every `fix(scope)!:` adds an entry there alongside its ADR (`wiki/adr_NNN_*.md`) and [wiki/migrations.md](wiki/migrations.md) atom. Read those before upgrading.
 
 ## Agent skills
 
