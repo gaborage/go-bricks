@@ -101,10 +101,13 @@ func (e *testLogEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(form
 // LogEventAdapter, and TestErrorDetailGoesThroughTheErrorRedactor drives a real
 // filtered logger to prove it.
 func (e *testLogEvent) Err(err error) logger.LogEvent {
-	e.fields = append(e.fields, "error")
 	if err == nil {
+		// zerolog emits nothing for a nil error and LogEventAdapter.Err returns
+		// before touching the event, so recording the field name here would let a
+		// test assert a field the real sink never writes.
 		return e
 	}
+	e.fields = append(e.fields, "error")
 	if e.values == nil {
 		e.values = make(map[string]string)
 	}
@@ -1165,9 +1168,13 @@ func TestErrorDetailGoesThroughTheErrorRedactor(t *testing.T) {
 		name  string
 		route string
 		msg   string
+		// raw is the text this route's own failure carries. Asserting the SHARED
+		// error-route text at both cases would have let the panic case pass while
+		// leaking its own value, which is the thing ADR-081 exists to prevent.
+		raw string
 	}{
-		{name: "panic", route: detailGatePanicRoute, msg: "Panic recovered"},
-		{name: "unhandled_error", route: detailGateErrorRoute, msg: "unhandled error"},
+		{name: "panic", route: detailGatePanicRoute, msg: "Panic recovered", raw: "detail-gate-panic-value"},
+		{name: "unhandled_error", route: detailGateErrorRoute, msg: "unhandled error", raw: detailGateErrorText},
 	}
 
 	for _, tt := range tests {
@@ -1184,8 +1191,8 @@ func TestErrorDetailGoesThroughTheErrorRedactor(t *testing.T) {
 			line := findLoggedLine(t, out, tt.msg)
 			assert.Equal(t, redacted, line["error"],
 				"the redactor's output must be what lands under the error key")
-			assert.NotContains(t, out, detailGateErrorText,
-				"the raw error message must not reach the sink when a redactor is configured")
+			assert.NotContainsf(t, out, tt.raw,
+				"%s: the raw failure text must not reach the sink when a redactor is configured", tt.name)
 		})
 	}
 }
