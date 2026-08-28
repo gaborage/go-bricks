@@ -348,6 +348,50 @@ func (qb *QueryBuilder) escapeIdentifiers(columns []string) []string {
 
 // ========== Operand Resolution (shared by Filter and JoinFilter) ==========
 
+// operandWalk carries the two pieces of state the pointer walk accumulates: the
+// pointers it has already followed, and whether it has spent its one Valuer
+// question. Holding them together keeps the loop body reading as the three
+// steps of the contract — settle nil, ask once, dereference — with the
+// bookkeeping each step needs behind a call rather than inline.
+type operandWalk struct {
+	followed    map[uintptr]struct{}
+	valuerAsked bool
+}
+
+// follow records a non-nil pointer level and reports a chain that returns to a
+// pointer already visited, which no amount of dereferencing will resolve.
+//
+// The map is allocated lazily: most operands are not pointers at all, and one
+// that is usually points at a value rather than at another pointer.
+func (w *operandWalk) follow(r reflect.Value) error {
+	address := r.Pointer()
+	if _, seen := w.followed[address]; seen {
+		return errCyclicOperand
+	}
+	if w.followed == nil {
+		w.followed = make(map[uintptr]struct{}, 2)
+	}
+	w.followed[address] = struct{}{}
+	return nil
+}
+
+// askValuer spends the walk's single Valuer question, replacing *value with the
+// answer and reporting whether it asked. Asking at most once is what stops a
+// Valuer that answers with another Valuer from spinning the loop.
+func (w *operandWalk) askValuer(value *any) (asked bool, err error) {
+	v, isValuer := (*value).(driver.Valuer)
+	if !isValuer || w.valuerAsked {
+		return false, nil
+	}
+	got, valuerErr := v.Value()
+	if valuerErr != nil {
+		return false, valuerErr
+	}
+	w.valuerAsked = true
+	*value = got
+	return true, nil
+}
+
 // resolveOperand mirrors the prologue of squirrel's Eq.toSQL — resolve a
 // driver.Valuer, then dereference a pointer (a nil one becoming an untyped nil)
 // — and classifies the RESULT the way squirrel's own isListType does.
@@ -400,33 +444,23 @@ func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
 	//
 	// Value() is asked at most ONCE across the whole walk, so a Valuer answering
 	// with another Valuer cannot spin the door.
-	valuerAsked := false
-	var followed map[uintptr]struct{}
+	walk := operandWalk{}
 	r := reflect.ValueOf(value)
 	for {
 		if r.Kind() == reflect.Pointer {
 			if r.IsNil() {
 				return nil, true, nil
 			}
-			// Allocated lazily: most operands are not pointers at all, and one
-			// that is usually points at a value rather than at another pointer.
-			address := r.Pointer()
-			if _, seen := followed[address]; seen {
-				return nil, false, errCyclicOperand
+			if cycleErr := walk.follow(r); cycleErr != nil {
+				return nil, false, cycleErr
 			}
-			if followed == nil {
-				followed = make(map[uintptr]struct{}, 2)
-			}
-			followed[address] = struct{}{}
 		}
 
-		if v, isValuer := value.(driver.Valuer); isValuer && !valuerAsked {
-			got, valuerErr := v.Value()
-			if valuerErr != nil {
-				return nil, false, valuerErr
-			}
-			valuerAsked = true
-			value = got
+		asked, valuerErr := walk.askValuer(&value)
+		if valuerErr != nil {
+			return nil, false, valuerErr
+		}
+		if asked {
 			r = reflect.ValueOf(value)
 			continue
 		}
