@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"regexp"
 )
 
@@ -126,9 +127,17 @@ func decodeJSONPayload(payload []byte) (any, error) {
 	if err := decoder.Decode(&decoded); err != nil {
 		return nil, err
 	}
-	// Trailing content means the payload was not one document; treat it as
-	// unparseable rather than silently logging only its first value.
-	if decoder.More() {
+	// Trailing content means the payload was not one document, and it is
+	// rejected by DECODING AGAIN and demanding io.EOF rather than by asking
+	// More(). More() answers "is there another element in the current context",
+	// which is not the same question: `{}]{"password":"pw"}` leaves a `]` next,
+	// which reads as a closing delimiter rather than another value, so More()
+	// says no. The walk would then have masked the empty object it decoded,
+	// found nothing, and — byte-exactness being the rule for a clean payload —
+	// shipped the ORIGINAL bytes, password and all. Fail closed instead: one
+	// document or nothing.
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return nil, errTrailingJSON
 	}
 	return decoded, nil

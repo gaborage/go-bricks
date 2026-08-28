@@ -54,8 +54,15 @@ only when something was masked.**
    in it. A `CERTIFICATE` or `PUBLIC KEY` block is left readable, because it is public and it
    is what an operator reads to diagnose a TLS problem.
 4. **Fail closed on what cannot be read.** A payload that looks like JSON and fails to parse,
-   nests deeper than `DefaultMaxDepth`, or exceeds `FilterConfig.MaxPayloadBytes` is masked
-   whole. Depth exhaustion is deliberately the WHOLE payload here, where the name filter masks
+   is not EXACTLY ONE document, nests deeper than `DefaultMaxDepth`, or exceeds
+   `FilterConfig.MaxPayloadBytes` is masked whole. "Exactly one" is checked by decoding again and
+   demanding EOF, not by asking the decoder whether more elements follow: those are different
+   questions, and the gap between them is where a crafted payload aims. `{}]{"password":"pw"}`
+   decodes cleanly as `{}`, leaves a closing delimiter rather than a value next — so a
+   "more elements?" test says no — and the walk then finds nothing to mask in the empty object it
+   read. Byte-exactness for a clean payload would have shipped the ORIGINAL bytes, password
+   included: a document that parses while carrying its secret in the part the parser never
+   looked at. Depth exhaustion is deliberately the WHOLE payload here, where the name filter masks
    only the subtree it could not reach: the name filter walks Go values this process built,
    while this door walks bytes a caller handed in, so the nesting is chosen by whoever produced
    the payload. Bounding the walk is what keeps an arbitrarily nested body from driving the

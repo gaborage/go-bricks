@@ -1782,3 +1782,44 @@ func TestFilterMasksBarePEMPrivateKey(t *testing.T) {
 		assert.Equal(t, certificate, loggedField(t, buf, "material"))
 	})
 }
+
+// TestFilterMasksPayloadWithTrailingContent pins the leak CodeRabbit found in
+// the trailing-content check. decoder.More() answers "is there another element
+// in the current context", which is a different question from "did the payload
+// end": after `{}` the next byte of `{}]{"password":"pw"}` is a `]`, read as a
+// closing delimiter rather than another value, so More() said no. The walk then
+// masked the empty object it had decoded, found nothing to mask, and — a clean
+// payload shipping byte-exact being the rule — emitted the ORIGINAL bytes, with
+// the password still in them. One document or nothing.
+func TestFilterMasksPayloadWithTrailingContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "closing_delimiter_then_a_second_document", payload: `{}]{"password":"pw"}`},
+		{name: "two_documents", payload: `{"a":1}{"password":"pw"}`},
+		{name: "document_then_garbage", payload: `{"a":1} not json`},
+		{name: "array_then_a_document", payload: `[1,2]{"password":"pw"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+			log.Info().Interface("body", json.RawMessage(tt.payload)).Msg("payload")
+
+			line := buf.String()
+			assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"),
+				"a payload that is not exactly one document must be masked whole")
+			assert.NotContains(t, line, "pw", "the trailing document must not reach the sink")
+		})
+	}
+
+	t.Run("trailing_whitespace_is_still_one_document", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Interface("body", json.RawMessage("{\"password\":\"pw\"}\n  ")).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***"}`)
+	})
+}
