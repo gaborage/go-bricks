@@ -120,7 +120,7 @@ func BenchmarkFilterNonJSONString(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if filtered := filter.FilterValue("message", "user alice signed in"); filtered != any("user alice signed in") {
+		if filter.FilterValue("message", "user alice signed in") != any("user alice signed in") {
 			b.Fatal("a non-JSON string must come back untouched")
 		}
 	}

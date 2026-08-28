@@ -32,8 +32,9 @@ or a response.
 **An opaque payload that parses as JSON is walked with the same needles and re-encoded
 only when something was masked.**
 
-1. **What is offered to the door.** `json.RawMessage`, `[]byte`, `[]json.RawMessage` and string
-   values, at EVERY door — the check lives in the filter's shared type dispatch, so
+1. **What is offered to the door.** `json.RawMessage`, `[]byte`, any NAMED byte-slice type
+   (`type Blob []byte` — matched by kind, since what makes it a payload is the shape, not the
+   spelling), `[]json.RawMessage` and string values, at EVERY door — the check lives in the filter's shared type dispatch, so
    `Interface`, `WithFields`, `Bytes`, `Str` and any nested struct, map or slice element inherit
    it rather than each door carrying its own copy. A value is PARSED only if its first non-space
    byte is `{` or `[`; one that is not JSON-shaped is asked a single further question — whether

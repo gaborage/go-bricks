@@ -1936,9 +1936,9 @@ func TestPayloadDoorGuardBoundaries(t *testing.T) {
 	})
 
 	t.Run("a_value_that_is_exactly_the_marker_is_not_a_private_key", func(t *testing.T) {
-		// The scan's `i+width <= len(value)` bound: the marker alone is a
-		// complete match for the SCAN but not for the pattern, so the door must
-		// look and then decline. A bound of `<` would never look at all.
+		// The two-step: the marker gate admits this value, and the pattern then
+		// declines it, because a header needs a `PRIVATE KEY` label after the
+		// marker. Pins that the gate is a cheap PRE-filter and not the decision.
 		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
 
 		log.Info().Str("material", "-----BEGIN").Msg("payload")
@@ -1947,10 +1947,9 @@ func TestPayloadDoorGuardBoundaries(t *testing.T) {
 	})
 
 	t.Run("a_marker_at_the_very_end_of_a_value_is_found", func(t *testing.T) {
-		// Same bound, other direction: the marker sits flush against the end,
-		// so an off-by-one bound would miss it. It still is not a full private
-		// key header, so the value stays readable — what is pinned here is that
-		// the scan REACHED it, which the next case makes observable.
+		// The marker sits flush against the end of the value, so the gate finds
+		// it and the pattern still declines: no label, no key. The value stays
+		// readable, which is what a certificate-adjacent string must do.
 		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
 
 		log.Info().Str("material", "trailing -----BEGIN").Msg("payload")
@@ -1959,8 +1958,8 @@ func TestPayloadDoorGuardBoundaries(t *testing.T) {
 	})
 
 	t.Run("a_private_key_at_the_very_end_of_a_value_is_masked", func(t *testing.T) {
-		// The scan must find a marker whose last byte is the value's last byte
-		// minus the header remainder — the case an off-by-one bound drops.
+		// A complete header preceded by other text: the gate finds the marker
+		// mid-value and the pattern matches, so the whole value is masked.
 		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
 
 		log.Info().Str("material", "key: -----BEGIN EC PRIVATE KEY-----").Msg("payload")
@@ -1969,8 +1968,8 @@ func TestPayloadDoorGuardBoundaries(t *testing.T) {
 	})
 
 	t.Run("a_near_miss_marker_is_not_matched", func(t *testing.T) {
-		// One byte different at the last position of the marker, which is what
-		// the per-byte comparison inside the scan decides.
+		// One byte different inside the marker, so the gate never admits it and
+		// the pattern is never consulted — a near miss stays readable.
 		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
 
 		log.Info().Str("material", "-----BEGiN RSA PRIVATE KEY-----").Msg("payload")
@@ -2041,5 +2040,73 @@ func TestPayloadDoorGuardBoundaries(t *testing.T) {
 		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
 
 		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+}
+
+// blobPayload is a NAMED byte-slice type, the way a service usually spells a
+// stored or pre-encoded body. It is a payload by exactly the argument []byte is
+// — the name filter sees one leaf whatever the type is called.
+type blobPayload []byte
+
+// TestFilterMasksInsideNamedByteSliceTypes pins what opaqueBytes' doc always
+// claimed and its type switch did not do: matching only `json.RawMessage` and
+// `[]byte` sent every other byte slice down the reflect walk, which reads it as
+// a list of numbers and masks nothing inside it.
+func TestFilterMasksInsideNamedByteSliceTypes(t *testing.T) {
+	payload := blobPayload(`{"password":"pw","user":"alice"}`)
+
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***","user":"alice"}`)
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***","user":"alice"}`)
+	})
+
+	t.Run("a_named_byte_slice_carrying_a_pem_key_is_masked", func(t *testing.T) {
+		key := blobPayload("-----BEGIN RSA PRIVATE KEY-----\nMIIBOg\n-----END RSA PRIVATE KEY-----")
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("material", key).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_named_byte_slice_that_is_not_a_payload_is_untouched", func(t *testing.T) {
+		plain := blobPayload("not json at all")
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", plain).Msg("payload")
+		assert.Equal(t, base64.StdEncoding.EncodeToString(plain), loggedField(t, buf, "body"))
+	})
+}
+
+// TestPEMScanIsBoundedByTheCap pins that the cap bounds the PEM header scan on a
+// payload that is NOT JSON-shaped. Such a payload passes through rather than
+// being masked — an oversized blob is not made secret by being large — but past
+// the cap it is not scanned for a key either, so an arbitrarily long value
+// cannot be walked end to end on the logging path.
+func TestPEMScanIsBoundedByTheCap(t *testing.T) {
+	key := "-----BEGIN RSA PRIVATE KEY-----\nMIIBOg\n-----END RSA PRIVATE KEY-----"
+
+	t.Run("within_the_cap_a_key_is_still_masked", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = len(key)
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Str("material", key).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("past_the_cap_it_is_not_scanned_and_passes_through", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = len(key) - 1
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Str("material", key).Msg("payload")
+
+		assert.Equal(t, key, loggedField(t, buf, "material"))
 	})
 }

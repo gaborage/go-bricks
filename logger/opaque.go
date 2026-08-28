@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"regexp"
 	"strings"
 )
@@ -26,9 +27,18 @@ func opaqueBytes(value any) (payload []byte, ok bool) {
 		return v, true
 	case []byte:
 		return v, true
-	default:
-		return nil, false
 	}
+
+	// A NAMED byte-slice type — `type Blob []byte`, which is how services often
+	// spell a stored body — is a payload by the same argument, so the test is on
+	// the KIND rather than on the two spellings the switch above happens to
+	// name. Matching only those two sent every other byte slice down the reflect
+	// walk, which treats it as a list of numbers and masks nothing inside it.
+	rv := reflect.ValueOf(value)
+	if rv.Kind() == reflect.Slice && rv.Type().Elem().Kind() == reflect.Uint8 {
+		return rv.Bytes(), true
+	}
+	return nil, false
 }
 
 // looksLikeJSON reports whether a payload is worth handing to the parser: its
@@ -86,7 +96,13 @@ func filterOpaquePayload[T ~string | ~[]byte](f *SensitiveDataFilter, payload T,
 	// throwing away every other field in it; a JSON payload is walked instead,
 	// and maskJSONValue masks that member and only that member.
 	if !looksLikeJSON(payload) {
-		if looksLikePEMPrivateKey(payload) {
+		// The cap bounds this scan as well. A non-JSON payload passes THROUGH
+		// rather than being masked — that is the brief's rule, and an oversized
+		// blob is not made secret by being large — but scanning an arbitrarily
+		// long value for a PEM header, and copying it for the pattern once the
+		// marker hits, is work the cap exists to bound. Past it the value is
+		// simply not treated as a key.
+		if len(payload) <= limit && looksLikePEMPrivateKey(payload) {
 			return f.config.MaskValue
 		}
 		return original
@@ -237,38 +253,9 @@ func (f *SensitiveDataFilter) maskJSONValue(value any, depth int) (result any, c
 
 	switch v := value.(type) {
 	case map[string]any:
-		// The JWK test is done once per object, not per member, and applies to
-		// THIS object only — a nested JWK is judged by its own kty, and an
-		// object that merely contains one does not inherit the rule.
-		insideJWK := isJWK(v)
-		for key, child := range v {
-			if f.isSensitiveField(key) || (insideJWK && isJWKPrivateMember(key)) {
-				v[key] = f.config.MaskValue
-				changed = true
-				continue
-			}
-			masked, childChanged, childErr := f.maskJSONValue(child, depth-1)
-			if childErr != nil {
-				return nil, false, childErr
-			}
-			if childChanged {
-				v[key] = masked
-				changed = true
-			}
-		}
-		return v, changed, nil
+		return f.maskJSONObject(v, depth)
 	case []any:
-		for i, child := range v {
-			masked, childChanged, childErr := f.maskJSONValue(child, depth-1)
-			if childErr != nil {
-				return nil, false, childErr
-			}
-			if childChanged {
-				v[i] = masked
-				changed = true
-			}
-		}
-		return v, changed, nil
+		return f.maskJSONArray(v, depth)
 	case string:
 		// A PEM private key is one long opaque string under whatever field name
 		// the consumer chose, so neither the name filter nor the JWK rule sees
@@ -280,6 +267,46 @@ func (f *SensitiveDataFilter) maskJSONValue(value any, depth int) (result any, c
 	default:
 		return value, false, nil
 	}
+}
+
+// maskJSONObject walks one decoded object. The JWK test is done once per
+// object, not per member, and applies to THIS object only — a nested JWK is
+// judged by its own kty, and an object that merely contains one does not
+// inherit the rule.
+func (f *SensitiveDataFilter) maskJSONObject(object map[string]any, depth int) (result any, changed bool, err error) {
+	insideJWK := isJWK(object)
+	for key, child := range object {
+		if f.isSensitiveField(key) || (insideJWK && isJWKPrivateMember(key)) {
+			object[key] = f.config.MaskValue
+			changed = true
+			continue
+		}
+		masked, childChanged, childErr := f.maskJSONValue(child, depth-1)
+		if childErr != nil {
+			return nil, false, childErr
+		}
+		if childChanged {
+			object[key] = masked
+			changed = true
+		}
+	}
+	return object, changed, nil
+}
+
+// maskJSONArray walks one decoded array, spending the same depth budget per
+// level the object walk spends.
+func (f *SensitiveDataFilter) maskJSONArray(array []any, depth int) (result any, changed bool, err error) {
+	for i, child := range array {
+		masked, childChanged, childErr := f.maskJSONValue(child, depth-1)
+		if childErr != nil {
+			return nil, false, childErr
+		}
+		if childChanged {
+			array[i] = masked
+			changed = true
+		}
+	}
+	return array, changed, nil
 }
 
 // isJWKPrivateMember reports whether a member name is key material, matched
