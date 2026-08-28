@@ -1826,7 +1826,7 @@ func TestFilterMasksPayloadWithTrailingContent(t *testing.T) {
 
 // TestFilterMasksEveryPayloadShapeThroughEveryDoor is the acceptance matrix
 // from #1133 stated as one table: every payload SHAPE through every DOOR that
-// can carry it. The individual tests above pin behaviour per shape; this pins
+// can carry it. The individual tests above pin behavior per shape; this pins
 // that no door was wired differently from its siblings, which is exactly the
 // gap that let a JSON-looking string mask through Str and ship in clear through
 // Interface.
