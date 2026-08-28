@@ -2117,7 +2117,7 @@ func TestPEMScanIsBoundedByTheCap(t *testing.T) {
 type nestedMap map[string]any
 
 // TestReflectMapWalkerKeysAndDepth covers the map walker the payload extraction
-// turned into changed lines. Neither behaviour was pinned before: the package
+// turned into changed lines. Neither behavior was pinned before: the package
 // had no test for a non-string-keyed map, and none that exhausts the depth
 // budget through this arm rather than through the map[string]any fast path.
 func TestReflectMapWalkerKeysAndDepth(t *testing.T) {
