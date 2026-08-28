@@ -141,17 +141,20 @@ func TestInjectIntoHeadersForceMode(t *testing.T) {
 func TestComputeHelpers(t *testing.T) {
 	// computeTraceParent: header > context > generated
 	acc := &mapAccessor{m: map[string]any{HeaderTraceParent: "00-11111111111111111111111111111111-2222222222222222-01"}}
-	fromHeader, rejected := computeTraceParent(context.Background(), acc)
+	fromHeader, headerTraceID, rejected := computeTraceParent(context.Background(), acc)
+	assert.Equal(t, "11111111111111111111111111111111", headerTraceID)
 	assert.Equal(t, "00-11111111111111111111111111111111-2222222222222222-01", fromHeader)
 	assert.False(t, rejected)
 
 	ctx := WithTraceParent(context.Background(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
-	fromContext, rejected := computeTraceParent(ctx, &mapAccessor{})
+	fromContext, contextTraceID, rejected := computeTraceParent(ctx, &mapAccessor{})
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", contextTraceID)
 	assert.Equal(t, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01", fromContext)
 	assert.False(t, rejected)
 
 	// Fallback generates a valid 00-... string
-	gen, rejected := computeTraceParent(context.Background(), &mapAccessor{})
+	gen, genTraceID, rejected := computeTraceParent(context.Background(), &mapAccessor{})
+	assert.Equal(t, gen[3:35], genTraceID)
 	assert.False(t, rejected)
 	ok, _ := regexp.MatchString(`^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`, gen)
 	assert.True(t, ok)
@@ -174,9 +177,9 @@ func TestExtractTraceIDAndForceAlign(t *testing.T) {
 	assert.Equal(t, "0123456789abcdef0123456789abcdef", extractTraceIDFromParent("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"))
 	assert.Equal(t, "", extractTraceIDFromParent("bad-parent"))
 
-	// forceAlignTraceID
-	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", forceAlignTraceID("orig", "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"))
-	assert.Equal(t, "orig", forceAlignTraceID("orig", ""))
+	// alignTraceID
+	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", alignTraceID("orig", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+	assert.Equal(t, "orig", alignTraceID("orig", ""))
 }
 
 // A delivery must belong to ONE trace. The hazard is a context that already
