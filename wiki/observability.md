@@ -21,6 +21,7 @@ GoBricks provides production-grade observability built on OpenTelemetry: distrib
 - **⚠️ `observability.environment` is not derived from `app.env`.** It is an independent key defaulting to `development`, so a service running `app.env: production` against a remote OTLP collector keeps the 10s default until you set `observability.environment` explicitly.
 - **Override via YAML:** `observability.trace.export.timeout: "90s"` (trace only); use `observability.metrics.export.timeout` and `observability.logs.export.timeout` for the other subsystems
 - **Why 60s?** Real-world production scenarios involve cross-region latency, TLS negotiation, and 512-span batch transmission to remote OTLP endpoints
+- **Shutdown inherits this budget.** `Provider.Shutdown` waits for an export already in flight, and that export runs on its own context — the batch processor's timer starts it, not the caller — so against an unreachable collector it can block for up to `trace.export.timeout` regardless of the context you pass. Size the deployment's shutdown budget to cover it, or lower `observability.trace.export.timeout`: with the 10s development default and a shorter budget, `Shutdown` returns a deadline error even though nothing is wrong beyond the collector being down
 
 **Dual-Mode Logging:** `DualModeLogProcessor` routes logs by `log.type`:
 
