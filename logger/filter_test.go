@@ -1823,3 +1823,61 @@ func TestFilterMasksPayloadWithTrailingContent(t *testing.T) {
 		assertLoggedFieldJSON(t, buf, "body", `{"password":"***"}`)
 	})
 }
+
+// TestFilterMasksEveryPayloadShapeThroughEveryDoor is the acceptance matrix
+// from #1133 stated as one table: every payload SHAPE through every DOOR that
+// can carry it. The individual tests above pin behaviour per shape; this pins
+// that no door was wired differently from its siblings, which is exactly the
+// gap that let a JSON-looking string mask through Str and ship in clear through
+// Interface.
+func TestFilterMasksEveryPayloadShapeThroughEveryDoor(t *testing.T) {
+	const want = `{"password":"***","user":"alice"}`
+	const raw = `{"password":"pw","user":"alice"}`
+
+	shapes := map[string]any{
+		"raw_message":       json.RawMessage(raw),
+		"byte_slice":        []byte(raw),
+		"json_string":       raw,
+		"raw_message_slice": []json.RawMessage{json.RawMessage(raw)},
+	}
+	// The list shape renders as an array, so it wants its own expectation.
+	wantFor := func(shape string) string {
+		if shape == "raw_message_slice" {
+			return `[` + want + `]`
+		}
+		return want
+	}
+
+	for shape, payload := range shapes {
+		t.Run("interface_"+shape, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("body", payload).Msg("payload")
+			assertLoggedFieldJSON(t, buf, "body", wantFor(shape))
+		})
+
+		t.Run("with_fields_"+shape, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+			assertLoggedFieldJSON(t, buf, "body", wantFor(shape))
+		})
+
+		t.Run("nested_in_a_map_"+shape, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("envelope", map[string]any{"body": payload}).Msg("payload")
+			assertLoggedFieldJSON(t, buf, "envelope", `{"body":`+wantFor(shape)+`}`)
+		})
+	}
+
+	// The two doors that take a concrete type rather than an any.
+	t.Run("bytes_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Bytes("body", []byte(raw)).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("str_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("body", raw).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+}
