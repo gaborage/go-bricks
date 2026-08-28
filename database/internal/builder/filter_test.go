@@ -1,6 +1,8 @@
 package builder
 
 import (
+	dbsql "database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -1375,6 +1377,242 @@ func TestFilterEqNilAndSliceRendering(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantSQL, sql)
 			assert.Len(t, args, tt.wantLen)
+		})
+	}
+}
+
+// TestFilterEqNilPointerToValuer pins the reproducer from #1209: a nil pointer
+// to a type whose Value() has a VALUE receiver satisfies driver.Valuer, so
+// squirrel's Eq prologue asserts the interface and dereferences nil before it
+// ever reaches its own pointer test. The door must settle the pointer first and
+// render the NULL that JoinFilter's compare door already renders.
+func TestFilterEqNilPointerToValuer(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	sql, args, err := qb.Filter().Eq("u.id", (*dbsql.NullString)(nil)).ToSQL()
+
+	require.NoError(t, err)
+	assert.Equal(t, "u.id IS NULL", sql)
+	assert.Empty(t, args)
+}
+
+// TestFilterNotEqNilPointerToValuer is the NotEq half of #1209's reproducer.
+func TestFilterNotEqNilPointerToValuer(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	sql, args, err := qb.Filter().NotEq("u.id", (*dbsql.NullString)(nil)).ToSQL()
+
+	require.NoError(t, err)
+	assert.Equal(t, "u.id IS NOT NULL", sql)
+	assert.Empty(t, args)
+}
+
+// TestFilterOrderingRefusesNilSlicesAndArrays is the FilterFactory mirror of the
+// JoinFilter ordering contract (#1167, #1205): there is no rendering of
+// `col < NULL` or of an ordering against a set, so the door fails closed with
+// the shared sentinel instead of delegating to squirrel — which rendered
+// `col < ?` for a typed nil pointer and PANICKED on a nil pointer to a Valuer.
+func TestFilterOrderingRefusesNilSlicesAndArrays(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	doors := []struct {
+		name string
+		op   string
+		fn   func(string, any) dbtypes.Filter
+	}{
+		{name: "lt", op: "<", fn: f.Lt},
+		{name: "lte", op: "<=", fn: f.Lte},
+		{name: "gt", op: ">", fn: f.Gt},
+		{name: "gte", op: ">=", fn: f.Gte},
+	}
+	operands := map[string]any{
+		"nil":              nil,
+		"typed_slice":      []int{1},
+		"empty_slice":      []int{},
+		"typed_array":      [3]int{1, 2, 3},
+		"empty_array":      [0]int{},
+		"null_valuer":      dbsql.NullString{},
+		"typed_nil_ptr":    (*int)(nil),
+		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
+		"nil_ptr_receiver": (*pointerReceiverValuer)(nil),
+	}
+
+	for _, door := range doors {
+		for operandName, operand := range operands {
+			t.Run(door.name+"_"+operandName, func(t *testing.T) {
+				_, _, err := door.fn("u.id", operand).ToSQL()
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), door.op)
+			})
+		}
+	}
+
+	t.Run("byte_slice_is_a_scalar_not_a_list", func(t *testing.T) {
+		sql, args, err := f.Lt("u.id", []byte("raw")).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id < ?", sql)
+		assert.Equal(t, []any{[]byte("raw")}, args)
+	})
+}
+
+// pointerReceiverValuer declares Value() on a POINTER receiver, so only
+// *pointerReceiverValuer satisfies driver.Valuer. A nil one crashes the same way
+// a nil *sql.NullString does — the receiver kind is not what matters, reading a
+// field through a nil receiver is (#1209).
+type pointerReceiverValuer struct {
+	payload string
+}
+
+func (v *pointerReceiverValuer) Value() (driver.Value, error) {
+	return v.payload, nil
+}
+
+// TestBetweenRefusesNilAndSetBoundsAtBothFactories pins Between at BOTH
+// families: a BETWEEN bound is an ordering operand, so nil, a set and a Valuer
+// reporting NULL take the same sentinel the ordering doors take, and a nil
+// pointer to a Valuer no longer panics (#1205, #1209). Each bound is checked in
+// turn against a valid partner so neither position is left unpinned.
+func TestBetweenRefusesNilAndSetBoundsAtBothFactories(t *testing.T) {
+	operands := map[string]any{
+		"nil":              nil,
+		"typed_slice":      []int{1},
+		"null_valuer":      dbsql.NullString{},
+		"typed_nil_ptr":    (*int)(nil),
+		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
+		"nil_ptr_receiver": (*pointerReceiverValuer)(nil),
+	}
+	families := []struct {
+		name string
+		op   string
+		call func(qb *QueryBuilder, lower, upper any) (string, []any, error)
+	}{
+		{
+			name: "filter",
+			call: func(qb *QueryBuilder, lower, upper any) (string, []any, error) {
+				return qb.Filter().Between("u.id", lower, upper).ToSQL()
+			},
+		},
+		{
+			name: "join_filter",
+			call: func(qb *QueryBuilder, lower, upper any) (string, []any, error) {
+				return qb.JoinFilter().Between("u.id", lower, upper).ToSQL()
+			},
+		},
+	}
+
+	for _, family := range families {
+		for operandName, operand := range operands {
+			t.Run(family.name+"_lower_"+operandName, func(t *testing.T) {
+				_, _, err := family.call(NewQueryBuilder(dbtypes.PostgreSQL), operand, 10)
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), ">=")
+			})
+
+			t.Run(family.name+"_upper_"+operandName, func(t *testing.T) {
+				_, _, err := family.call(NewQueryBuilder(dbtypes.PostgreSQL), 1, operand)
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), "<=")
+			})
+		}
+
+		t.Run(family.name+"_valid_bounds_bind_the_resolved_value", func(t *testing.T) {
+			sql, args, err := family.call(
+				NewQueryBuilder(dbtypes.PostgreSQL),
+				dbsql.NullInt64{Int64: 5, Valid: true},
+				10,
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, "(u.id >= ? AND u.id <= ?)", sql)
+			assert.Equal(t, []any{int64(5), 10}, args)
+		})
+	}
+}
+
+// TestInAndNotInResolveNilPointerElements pins the choice made for a nil-pointer
+// element (#1209): the element is RESOLVED to NULL at build time rather than
+// bound as a pointer. Binding the pointer left the crash to exec — database/sql
+// asks a nil pointer-receiver Valuer for its value there — and rendered
+// `IN (NULL)`, which matches nothing, without the door ever saying so. Both
+// families take the same rule.
+func TestInAndNotInResolveNilPointerElements(t *testing.T) {
+	elements := map[string]any{
+		"typed_nil_ptr":    (*int)(nil),
+		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
+		"nil_ptr_receiver": (*pointerReceiverValuer)(nil),
+		"null_valuer":      dbsql.NullString{},
+	}
+	doors := []struct {
+		name    string
+		wantSQL string
+		call    func(qb *QueryBuilder, values any) (string, []any, error)
+	}{
+		{
+			name:    "filter_in",
+			wantSQL: "u.id IN (?)",
+			call: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.Filter().In("u.id", values).ToSQL()
+			},
+		},
+		{
+			name:    "filter_not_in",
+			wantSQL: "u.id NOT IN (?)",
+			call: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.Filter().NotIn("u.id", values).ToSQL()
+			},
+		},
+		{
+			name:    "join_filter_in",
+			wantSQL: "u.id IN (?)",
+			call: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.JoinFilter().In("u.id", values).ToSQL()
+			},
+		},
+		{
+			name:    "join_filter_not_in",
+			wantSQL: "u.id NOT IN (?)",
+			call: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.JoinFilter().NotIn("u.id", values).ToSQL()
+			},
+		},
+	}
+
+	for _, door := range doors {
+		for elementName, element := range elements {
+			t.Run(door.name+"_scalar_"+elementName, func(t *testing.T) {
+				sql, args, err := door.call(NewQueryBuilder(dbtypes.PostgreSQL), element)
+
+				require.NoError(t, err)
+				assert.Equal(t, door.wantSQL, sql)
+				assert.Equal(t, []any{nil}, args)
+			})
+
+			t.Run(door.name+"_inside_slice_"+elementName, func(t *testing.T) {
+				sql, args, err := door.call(NewQueryBuilder(dbtypes.PostgreSQL), []any{element})
+
+				require.NoError(t, err)
+				assert.Equal(t, door.wantSQL, sql)
+				assert.Equal(t, []any{nil}, args)
+			})
+		}
+
+		t.Run(door.name+"_set_valuer_binds_the_resolved_value", func(t *testing.T) {
+			sql, args, err := door.call(
+				NewQueryBuilder(dbtypes.PostgreSQL),
+				[]any{dbsql.NullInt64{Int64: 5, Valid: true}, 7},
+			)
+
+			require.NoError(t, err)
+			assert.Contains(t, sql, "(?,?)")
+			assert.Equal(t, []any{int64(5), 7}, args)
 		})
 	}
 }

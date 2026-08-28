@@ -79,6 +79,25 @@ func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
 	return value, r.Kind() == reflect.Slice || r.Kind() == reflect.Array, nil
 }
 
+// orderingOperand resolves an ordering operand and fails closed on the shapes an
+// ordering has no rendering for. Both families call it, so nil, a set and a
+// Valuer reporting NULL take the SAME sentinel at `f` and at `jf` and errors.Is
+// works on either (#1167, #1205). Squirrel, which FilterFactory delegated to,
+// returned its own text for those, rendered `col < ?` bound to a typed nil
+// pointer — the silent-no-rows shape — and panicked on a nil pointer to a
+// Valuer (#1209).
+func orderingOperand(op string, value any) (resolved any, err error) {
+	resolved, nullOrList, err := resolveOperand(value)
+	if err != nil {
+		return nil, fmt.Errorf("resolving the %s operand: %w", op, err)
+	}
+	if nullOrList {
+		return nil, fmt.Errorf("%w: %s with a nil or slice operand",
+			dbtypes.ErrOrderingOperandNotComparable, op)
+	}
+	return resolved, nil
+}
+
 // JoinFilter represents a composable JOIN ON condition that compares columns to other columns.
 // JoinFilters are created through JoinFilterFactory methods and maintain vendor-specific quoting rules.
 //
@@ -317,9 +336,12 @@ func (jff *JoinFilterFactory) In(column string, values any) dbtypes.JoinFilter {
 	if err != nil {
 		return joinFilterErr(err)
 	}
-	normalized := normalizeToSlice(values)
+	normalized, err := resolveListOperands("IN", values)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	// Empty slice special case: generate "1=0" to ensure no matches
-	if s, ok := normalized.([]any); ok && len(s) == 0 {
+	if len(normalized) == 0 {
 		return JoinFilter{sqlizer: squirrel.Expr("(1=0)")} // Empty IN list - always false
 	}
 	return JoinFilter{sqlizer: squirrel.Eq{quotedColumn: normalized}}
@@ -338,8 +360,11 @@ func (jff *JoinFilterFactory) NotIn(column string, values any) dbtypes.JoinFilte
 	if err != nil {
 		return joinFilterErr(err)
 	}
-	normalized := normalizeToSlice(values)
-	if s, ok := normalized.([]any); ok && len(s) == 0 {
+	normalized, err := resolveListOperands("NOT IN", values)
+	if err != nil {
+		return joinFilterErr(err)
+	}
+	if len(normalized) == 0 {
 		return JoinFilter{sqlizer: squirrel.Expr("(1=1)")} // Empty NOT IN list - always true
 	}
 	return JoinFilter{sqlizer: squirrel.NotEq{quotedColumn: normalized}}
@@ -445,9 +470,17 @@ func (jff *JoinFilterFactory) Between(column string, lowerBound, upperBound any)
 	}
 
 	// Both values - use placeholders
+	lower, err := orderingOperand(">=", lowerBound)
+	if err != nil {
+		return joinFilterErr(err)
+	}
+	upper, err := orderingOperand("<=", upperBound)
+	if err != nil {
+		return joinFilterErr(err)
+	}
 	condition := squirrel.And{
-		squirrel.GtOrEq{quotedColumn: lowerBound},
-		squirrel.LtOrEq{quotedColumn: upperBound},
+		squirrel.GtOrEq{quotedColumn: lower},
+		squirrel.LtOrEq{quotedColumn: upper},
 	}
 	return JoinFilter{sqlizer: condition}
 }
