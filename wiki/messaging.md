@@ -464,6 +464,16 @@ failure:
 | `messaging.ErrPublishNacked` | the broker received the message and returned `basic.nack` (a transient broker condition — disk alarm, mirror resync, failover; also how a missing exchange surfaces) |
 | `messaging.ErrPublishConfirmTimeout` | no ACK/NACK arrived within `connectiontimeout` |
 
+`messaging.ErrInvalidPublishDestination` is refused **before** any of this. The exchange and routing key (basic.publish's
+method frame) and every header key (the content-header frame beside
+`CorrelationId`) are AMQP shortstrs, and amqp091 answers an over-long one with a
+frame-write error by shutting down the whole `Connection` every publisher in the process shares —
+so a publish carrying one is rejected up front, with zero channel attempts, no reconnect and no
+retry: the frame is unwritable whatever the broker's state. The error names the field and its byte
+length, never the value. The bound is 255 bytes (empty is legal), it is length only — the charset
+is the *consume* side's rule, for a different reason (ADR-070) — and `Declarations.Validate`
+applies the same bound at startup so an over-long declared name never reaches a publish.
+
 > `messaging.ErrNotConnected` is **not** one of the wrapped causes above — it is returned directly
 > (unwrapped), most commonly by the readiness pre-flight described below, timing out after waiting
 > up to `reconnect.readytimeout`. That case means "still not ready after the bounded wait," not
