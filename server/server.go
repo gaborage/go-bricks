@@ -399,8 +399,10 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 		// cannot be trusted to scrub PII/PCI a driver error may embed (e.g. a
 		// unique-constraint value). Mirror the response-body redaction above instead:
 		// non-debug builds log the error type only, never the raw message; debug builds
-		// keep full detail for troubleshooting. Str() still routes through the injected
-		// filter as defense-in-depth for any field an operator has marked sensitive.
+		// keep full detail for troubleshooting. The debug branch writes through Err, so
+		// FilterConfig.ErrorRedactor — the seam that CAN see message content — reaches
+		// it (#1182), and Err applies the field-name filter as well, so marking `error`
+		// sensitive still masks this line. The non-debug error_type goes through Str.
 		appendErrorDetail(log.Error().Str("request_id", safeGetRequestID(c)), err, cfg.App.Debug).
 			Msg("unhandled error")
 	}
@@ -426,12 +428,25 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 // SensitiveDataFilter masks by field name, not message content, so a raw error
 // string (which can embed driver-supplied PII/PCI) must never be logged in
 // production. Shared by the panic-recovery and unhandled-5xx log paths.
+//
+// The debug branch goes through Err rather than Str because FilterConfig.ErrorRedactor
+// — the one seam that sees error CONTENT — runs at Err and nowhere else (#1168). Writing
+// the message with Str put these two sites outside the reach of a redactor an operator
+// wired up to scrub driver-supplied PII, which is the one thing field-name masking
+// cannot do (#1182). The field name is unchanged: zerolog's Err writes under
+// zerolog.ErrorFieldName, which is "error", and so does the redacted path.
+//
+// Field-name masking is not lost in the move: Err applies the `error` needle the
+// same way Str did, so an operator running log.sensitivefields: [error] keeps that
+// masking here — and gains it at every other Err site, which never had it. The
+// review of this change is what surfaced that gap; ErrorRedactor and the needle are
+// now both live at this door, the mask winning when both are configured.
 func appendErrorDetail(event logger.LogEvent, err error, debug bool) logger.LogEvent {
 	if err == nil {
 		return event
 	}
 	if debug {
-		return event.Str("error", err.Error())
+		return event.Err(err)
 	}
 	return event.Str("error_type", fmt.Sprintf("%T", err))
 }

@@ -1,13 +1,16 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -89,8 +92,26 @@ func (e *testLogEvent) Msg(msg string) {
 }
 
 func (e *testLogEvent) Msgf(format string, args ...any) { e.Msg(fmt.Sprintf(format, args...)) }
-func (e *testLogEvent) Err(error) logger.LogEvent {
+
+// Err records the VALUE, not just the field name: appendErrorDetail's debug
+// branch writes through Err (#1182), so a double that dropped it would make
+// every debug-detail assertion in this file vacuous. The raw message is what a
+// logger with no ErrorRedactor writes, which is the case these tests exercise —
+// redaction is deliberately NOT reimplemented here. It belongs to the real
+// LogEventAdapter, and TestErrorDetailGoesThroughTheErrorRedactor drives a real
+// filtered logger to prove it.
+func (e *testLogEvent) Err(err error) logger.LogEvent {
+	if err == nil {
+		// zerolog emits nothing for a nil error and LogEventAdapter.Err returns
+		// before touching the event, so recording the field name here would let a
+		// test assert a field the real sink never writes.
+		return e
+	}
 	e.fields = append(e.fields, "error")
+	if e.values == nil {
+		e.values = make(map[string]string)
+	}
+	e.values["error"] = err.Error()
 	return e
 }
 
@@ -933,12 +954,15 @@ const (
 )
 
 // newDetailGateServer builds a server for one cell of the env × debug matrix and
-// registers a panicking route and a route returning an unhandled 500.
-func newDetailGateServer(env string, debug bool) (*Server, *testLogger) {
+// registers a panicking route and a route returning an unhandled 500. The logger is
+// the caller's: most tests want the recording double, while the redactor tests need a
+// REAL filtered logger, and the routes and config they exercise are the same either
+// way — parameterizing is what keeps the panic value, the error text and the two
+// route paths defined once.
+func newDetailGateServer(env string, debug bool, log logger.Logger) *Server {
 	cfg := newTestConfig("", "", "")
 	cfg.App.Env = env
 	cfg.App.Debug = debug
-	log := &testLogger{}
 	srv := New(cfg, log)
 	srv.echo.GET(detailGatePanicRoute, func(*echo.Context) error {
 		panic("detail-gate-panic-value")
@@ -946,17 +970,25 @@ func newDetailGateServer(env string, debug bool) (*Server, *testLogger) {
 	srv.echo.GET(detailGateErrorRoute, func(*echo.Context) error {
 		return errors.New(detailGateErrorText)
 	})
-	return srv, log
+	return srv
+}
+
+// serveDetailGateRoute drives one detail-gate route and asserts the 500 every caller
+// depends on before reading the response body or the log line it produced.
+func serveDetailGateRoute(t *testing.T, srv *Server, route string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, route, http.NoBody)
+	srv.echo.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	return rec
 }
 
 // detailGateResponseDetail serves route and returns the decoded details["error"] entry
 // (empty string plus false when absent).
 func detailGateResponseDetail(t *testing.T, srv *Server, route string) (string, bool) {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, route, http.NoBody)
-	srv.echo.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	rec := serveDetailGateRoute(t, srv, route)
 
 	var resp APIResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp), "body: %s", rec.Body.String())
@@ -999,7 +1031,7 @@ func TestErrorDetailGateRequiresDebugAndDevelopment(t *testing.T) {
 	for _, tt := range tests {
 		for _, rt := range routes {
 			t.Run(tt.name+"_"+rt.name, func(t *testing.T) {
-				srv, _ := newDetailGateServer(tt.env, tt.debug)
+				srv := newDetailGateServer(tt.env, tt.debug, &testLogger{})
 				detail, present := detailGateResponseDetail(t, srv, rt.route)
 				if !tt.expectDetail {
 					assert.False(t, present, "details.error must be absent unless app.debug AND a development env")
@@ -1027,7 +1059,8 @@ func TestErrorDetailGateLogsTypeOnlyWithDebugOff(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv, log := newDetailGateServer(config.EnvDevelopment, false)
+			log := &testLogger{}
+			srv := newDetailGateServer(config.EnvDevelopment, false, log)
 			_, _ = detailGateResponseDetail(t, srv, tt.route)
 
 			entry := findLogEntry(log.logEntries(), tt.msg)
@@ -1077,4 +1110,175 @@ func TestClassifyErrorWithholdsDetailOutsideDevelopment(t *testing.T) {
 			assert.Contains(t, detail, detailGateErrorText)
 		})
 	}
+}
+
+// captureStdout swaps os.Stdout for a pipe, runs fn, and returns everything
+// written. The real ZeroLogger binds os.Stdout at CONSTRUCTION, so fn must build
+// its logger inside — a logger made before the swap keeps writing to the terminal
+// and the assertions below would read an empty buffer and pass vacuously. Same
+// shape as app/app_builder_test.go's helper, with the drain moved into a
+// goroutine so a log line larger than the pipe buffer cannot block the writer.
+//
+// os.Stdout is process-global, so no test using this may call t.Parallel().
+//
+// Teardown is deferred as one unit because a require failure inside fn calls
+// Goexit: restoring, closing and draining anywhere else would leave the copier
+// blocked on a pipe nobody closes and the next test writing into a dangling one.
+func captureStdout(t *testing.T, fn func()) (out string) {
+	t.Helper()
+
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+
+	orig := os.Stdout
+	os.Stdout = w
+
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(&buf, r)
+	}()
+
+	defer func() {
+		os.Stdout = orig
+		_ = w.Close()
+		<-done
+		_ = r.Close()
+		out = buf.String()
+	}()
+
+	fn()
+	return out
+}
+
+// TestErrorDetailGoesThroughTheErrorRedactor pins #1182: under app.debug the log
+// line's error detail is written through LogEvent.Err, so a FilterConfig.ErrorRedactor
+// an operator wires up actually reaches it. It used to go through Str, which the
+// redactor cannot see — the seam only runs at Err — so a redactor configured to scrub
+// driver-supplied PII was silently bypassed at these two sites.
+//
+// The logger is REAL rather than the package's double: the behavior under test lives
+// in LogEventAdapter.Err, so a double that reimplemented the redaction would prove
+// only that the test agrees with itself.
+func TestErrorDetailGoesThroughTheErrorRedactor(t *testing.T) {
+	const redacted = "REDACTED-BY-OPERATOR-HOOK"
+
+	tests := []struct {
+		name  string
+		route string
+		msg   string
+		// raw is the text this route's own failure carries. Asserting the SHARED
+		// error-route text at both cases would have let the panic case pass while
+		// leaking its own value, which is the thing ADR-081 exists to prevent.
+		raw string
+	}{
+		{name: "panic", route: detailGatePanicRoute, msg: "Panic recovered", raw: "detail-gate-panic-value"},
+		{name: "unhandled_error", route: detailGateErrorRoute, msg: "unhandled error", raw: detailGateErrorText},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				filterCfg := logger.DefaultFilterConfig()
+				filterCfg.ErrorRedactor = func(error) string { return redacted }
+
+				srv := newDetailGateServer(config.EnvDevelopment, true,
+					logger.NewWithFilter("error", false, filterCfg))
+				serveDetailGateRoute(t, srv, tt.route)
+			})
+
+			line := findLoggedLine(t, out, tt.msg)
+			assert.Equal(t, redacted, line["error"],
+				"the redactor's output must be what lands under the error key")
+			assert.NotContainsf(t, out, tt.raw,
+				"%s: the raw failure text must not reach the sink when a redactor is configured", tt.name)
+		})
+	}
+}
+
+// findLoggedLine returns the decoded log line whose message is msg. The captured
+// stream carries every line the server emitted, so the assertions must name the one
+// under test rather than parse the first.
+func findLoggedLine(t *testing.T, out, msg string) map[string]any {
+	t.Helper()
+
+	for _, raw := range strings.Split(strings.TrimSpace(out), "\n") {
+		if raw == "" {
+			continue
+		}
+		var line map[string]any
+		require.NoError(t, json.Unmarshal([]byte(raw), &line), "log line is not JSON: %s", raw)
+		if line["message"] == msg {
+			return line
+		}
+	}
+
+	t.Fatalf("no log line with message %q in captured output:\n%s", msg, out)
+	return nil
+}
+
+// TestErrorDetailAtTheRealSinkWithoutARedactor pins the two halves #1182 must NOT
+// change, at the real sink rather than through the double: with no redactor
+// configured the debug line still carries the raw message under `error` (zerolog's
+// own Err rendering, which is what "the redactor is nil by default" means), and the
+// non-debug line is untouched — `error_type` only, no `error` key at all.
+func TestErrorDetailAtTheRealSinkWithoutARedactor(t *testing.T) {
+	tests := []struct {
+		name  string
+		debug bool
+		check func(t *testing.T, line map[string]any)
+	}{
+		{
+			name:  "debug_without_redactor_keeps_the_raw_message",
+			debug: true,
+			check: func(t *testing.T, line map[string]any) {
+				assert.Equal(t, detailGateErrorText, line["error"],
+					"a nil redactor must leave Err byte-identical to zerolog's own rendering")
+				assert.NotContains(t, line, "error_type")
+			},
+		},
+		{
+			name:  "without_debug_the_line_is_type_only",
+			debug: false,
+			check: func(t *testing.T, line map[string]any) {
+				assert.Equal(t, "*errors.errorString", line["error_type"])
+				assert.NotContains(t, line, "error",
+					"the non-debug branch must not gain an error field — it never rendered the message")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out := captureStdout(t, func() {
+				srv := newDetailGateServer(config.EnvDevelopment, tt.debug,
+					logger.NewWithFilter("error", false, logger.DefaultFilterConfig()))
+				serveDetailGateRoute(t, srv, detailGateErrorRoute)
+			})
+
+			tt.check(t, findLoggedLine(t, out, "unhandled error"))
+		})
+	}
+}
+
+// TestErrorDetailMasksASensitiveErrorField is the regression the mirror review asked
+// for: moving this site from Str to Err must not cost an operator the field-name
+// masking Str gave them. With app.debug on, `error` marked sensitive and NO redactor
+// configured, the 5xx line must carry the mask value rather than the driver text.
+func TestErrorDetailMasksASensitiveErrorField(t *testing.T) {
+	out := captureStdout(t, func() {
+		filterCfg := logger.DefaultFilterConfig()
+		filterCfg.SensitiveFields = append(filterCfg.SensitiveFields, "error")
+
+		srv := newDetailGateServer(config.EnvDevelopment, true,
+			logger.NewWithFilter("error", false, filterCfg))
+		serveDetailGateRoute(t, srv, detailGateErrorRoute)
+	})
+
+	line := findLoggedLine(t, out, "unhandled error")
+	assert.Equal(t, logger.DefaultFilterConfig().MaskValue, line["error"],
+		"a field the operator marked sensitive must be masked at this door too")
+	assert.NotContains(t, out, detailGateErrorText,
+		"the raw error message must not reach the sink when the error field is sensitive")
 }

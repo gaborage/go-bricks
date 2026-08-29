@@ -129,6 +129,21 @@ func (f *SensitiveDataFilter) redactError(err error) (string, bool) {
 	return f.config.ErrorRedactor(err), true
 }
 
+// maskField reports the masked rendering of a value when the deployment marked
+// that FIELD NAME sensitive, and false when it did not. The miss is reported
+// rather than swallowed so a caller can keep a rendering it would otherwise have
+// to rebuild: Err hands zerolog the error itself in the overwhelming case, and
+// only diverts to a plain string when masking actually changes the value.
+//
+// Nil-receiver safe, like redactError: a logger built without a filter masks
+// nothing.
+func (f *SensitiveDataFilter) maskField(key, value string) (string, bool) {
+	if f == nil || !f.isSensitiveField(key) {
+		return "", false
+	}
+	return f.maskString(value), true
+}
+
 // normalizeNeedles lowercases and trims a needle list, dropping entries that are
 // empty afterwards and de-duplicating the rest. An empty needle is not a
 // harmless no-op: strings.Contains reports true against it for every field name,
