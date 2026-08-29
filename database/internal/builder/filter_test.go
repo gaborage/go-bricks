@@ -1,9 +1,11 @@
 package builder
 
 import (
+	dbsql "database/sql"
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1377,4 +1379,563 @@ func TestFilterEqNilAndSliceRendering(t *testing.T) {
 			assert.Len(t, args, tt.wantLen)
 		})
 	}
+}
+
+// TestFilterEqNilPointerToValuer pins the reproducer from #1209: a nil pointer
+// to a type whose Value() has a VALUE receiver satisfies driver.Valuer, so
+// squirrel's Eq prologue asserts the interface and dereferences nil before it
+// ever reaches its own pointer test. The door must settle the pointer first and
+// render the NULL that JoinFilter's compare door already renders.
+func TestFilterEqNilPointerToValuer(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	sql, args, err := qb.Filter().Eq("u.id", (*dbsql.NullString)(nil)).ToSQL()
+
+	require.NoError(t, err)
+	assert.Equal(t, "u.id IS NULL", sql)
+	assert.Empty(t, args)
+}
+
+// TestFilterNotEqNilPointerToValuer is the NotEq half of #1209's reproducer.
+func TestFilterNotEqNilPointerToValuer(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+	sql, args, err := qb.Filter().NotEq("u.id", (*dbsql.NullString)(nil)).ToSQL()
+
+	require.NoError(t, err)
+	assert.Equal(t, "u.id IS NOT NULL", sql)
+	assert.Empty(t, args)
+}
+
+// TestFilterOrderingRefusesNilSlicesAndArrays is the FilterFactory mirror of the
+// JoinFilter ordering contract (#1167, #1205): there is no rendering of
+// `col < NULL` or of an ordering against a set, so the door fails closed with
+// the shared sentinel instead of delegating to squirrel — which rendered
+// `col < ?` for a typed nil pointer and PANICKED on a nil pointer to a Valuer.
+func TestFilterOrderingRefusesNilSlicesAndArrays(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	doors := []struct {
+		name string
+		op   string
+		fn   func(string, any) dbtypes.Filter
+	}{
+		{name: "lt", op: "<", fn: f.Lt},
+		{name: "lte", op: "<=", fn: f.Lte},
+		{name: "gt", op: ">", fn: f.Gt},
+		{name: "gte", op: ">=", fn: f.Gte},
+	}
+	operands := map[string]any{
+		"nil":              nil,
+		"typed_slice":      []int{1},
+		"empty_slice":      []int{},
+		"typed_array":      [3]int{1, 2, 3},
+		"empty_array":      [0]int{},
+		"null_valuer":      dbsql.NullString{},
+		"typed_nil_ptr":    (*int)(nil),
+		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
+		"nil_ptr_receiver": (*panickingPtrValuer)(nil),
+	}
+
+	for _, door := range doors {
+		for operandName, operand := range operands {
+			t.Run(door.name+"_"+operandName, func(t *testing.T) {
+				_, _, err := door.fn("u.id", operand).ToSQL()
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), door.op)
+			})
+		}
+	}
+
+	t.Run("byte_slice_is_a_scalar_not_a_list", func(t *testing.T) {
+		sql, args, err := f.Lt("u.id", []byte("raw")).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id < ?", sql)
+		assert.Equal(t, []any{[]byte("raw")}, args)
+	})
+}
+
+// TestBetweenRefusesNilAndSetBoundsAtBothFactories pins Between at BOTH
+// families: a BETWEEN bound is an ordering operand, so nil, a set and a Valuer
+// reporting NULL take the same sentinel the ordering doors take, and a nil
+// pointer to a Valuer no longer panics (#1205, #1209). Each bound is checked in
+// turn against a valid partner so neither position is left unpinned.
+func TestBetweenRefusesNilAndSetBoundsAtBothFactories(t *testing.T) {
+	operands := map[string]any{
+		"nil":              nil,
+		"typed_slice":      []int{1},
+		"null_valuer":      dbsql.NullString{},
+		"typed_nil_ptr":    (*int)(nil),
+		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
+		"nil_ptr_receiver": (*panickingPtrValuer)(nil),
+	}
+	families := []struct {
+		name string
+		op   string
+		call func(qb *QueryBuilder, lower, upper any) (string, []any, error)
+	}{
+		{
+			name: "filter",
+			call: func(qb *QueryBuilder, lower, upper any) (string, []any, error) {
+				return qb.Filter().Between("u.id", lower, upper).ToSQL()
+			},
+		},
+		{
+			name: "join_filter",
+			call: func(qb *QueryBuilder, lower, upper any) (string, []any, error) {
+				return qb.JoinFilter().Between("u.id", lower, upper).ToSQL()
+			},
+		},
+	}
+
+	for _, family := range families {
+		for operandName, operand := range operands {
+			t.Run(family.name+"_lower_"+operandName, func(t *testing.T) {
+				_, _, err := family.call(NewQueryBuilder(dbtypes.PostgreSQL), operand, 10)
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), ">=")
+			})
+
+			t.Run(family.name+"_upper_"+operandName, func(t *testing.T) {
+				_, _, err := family.call(NewQueryBuilder(dbtypes.PostgreSQL), 1, operand)
+
+				require.Error(t, err)
+				assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+				assert.Contains(t, err.Error(), "<=")
+			})
+		}
+
+		t.Run(family.name+"_valid_bounds_bind_the_resolved_value", func(t *testing.T) {
+			sql, args, err := family.call(
+				NewQueryBuilder(dbtypes.PostgreSQL),
+				dbsql.NullInt64{Int64: 5, Valid: true},
+				10,
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, "(u.id >= ? AND u.id <= ?)", sql)
+			assert.Equal(t, []any{int64(5), 10}, args)
+		})
+	}
+}
+
+// TestInAndNotInResolveNilPointerElements pins the choice made for a nil-pointer
+// element (#1209): the element is RESOLVED to NULL at build time rather than
+// bound as a pointer. Binding the pointer left the crash to exec — database/sql
+// asks a nil pointer-receiver Valuer for its value there — and rendered
+// `IN (NULL)`, which matches nothing, without the door ever saying so. Both
+// families take the same rule.
+func TestInAndNotInResolveNilPointerElements(t *testing.T) {
+	elements := map[string]any{
+		"typed_nil_ptr":    (*int)(nil),
+		"nil_valuer_ptr":   (*dbsql.NullString)(nil),
+		"nil_ptr_receiver": (*panickingPtrValuer)(nil),
+		"null_valuer":      dbsql.NullString{},
+	}
+	doors := []struct {
+		name    string
+		wantSQL string
+		call    func(qb *QueryBuilder, values any) (string, []any, error)
+	}{
+		{
+			name:    "filter_in",
+			wantSQL: "u.id IN (?)",
+			call: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.Filter().In("u.id", values).ToSQL()
+			},
+		},
+		{
+			name:    "filter_not_in",
+			wantSQL: "u.id NOT IN (?)",
+			call: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.Filter().NotIn("u.id", values).ToSQL()
+			},
+		},
+		{
+			name:    "join_filter_in",
+			wantSQL: "u.id IN (?)",
+			call: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.JoinFilter().In("u.id", values).ToSQL()
+			},
+		},
+		{
+			name:    "join_filter_not_in",
+			wantSQL: "u.id NOT IN (?)",
+			call: func(qb *QueryBuilder, values any) (string, []any, error) {
+				return qb.JoinFilter().NotIn("u.id", values).ToSQL()
+			},
+		},
+	}
+
+	for _, door := range doors {
+		for elementName, element := range elements {
+			t.Run(door.name+"_scalar_"+elementName, func(t *testing.T) {
+				sql, args, err := door.call(NewQueryBuilder(dbtypes.PostgreSQL), element)
+
+				require.NoError(t, err)
+				assert.Equal(t, door.wantSQL, sql)
+				assert.Equal(t, []any{nil}, args)
+			})
+
+			t.Run(door.name+"_inside_slice_"+elementName, func(t *testing.T) {
+				sql, args, err := door.call(NewQueryBuilder(dbtypes.PostgreSQL), []any{element})
+
+				require.NoError(t, err)
+				assert.Equal(t, door.wantSQL, sql)
+				assert.Equal(t, []any{nil}, args)
+			})
+		}
+
+		t.Run(door.name+"_set_valuer_binds_the_resolved_value", func(t *testing.T) {
+			sql, args, err := door.call(
+				NewQueryBuilder(dbtypes.PostgreSQL),
+				[]any{dbsql.NullInt64{Int64: 5, Valid: true}, 7},
+			)
+
+			require.NoError(t, err)
+			assert.Contains(t, sql, "(?,?)")
+			assert.Equal(t, []any{int64(5), 7}, args)
+		})
+	}
+}
+
+// TestInAndNotInWrapAByteSliceAsOneElement pins the one SQL text this atom
+// moves at the list doors. A []byte is a driver.Value, so squirrel classified
+// it as a SCALAR and rendered `col = ?` / `col <> ?` from an IN door — the
+// door's own contract says a scalar is wrapped in a one-element list, and it
+// now is, so the SQL says IN. The argument is unchanged: one []byte, not one
+// placeholder per byte.
+func TestInAndNotInWrapAByteSliceAsOneElement(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	raw := []byte("raw")
+
+	tests := []struct {
+		name    string
+		filter  dbtypes.Filter
+		wantSQL string
+	}{
+		{name: "filter_in", filter: qb.Filter().In("u.id", raw), wantSQL: "u.id IN (?)"},
+		{name: "filter_not_in", filter: qb.Filter().NotIn("u.id", raw), wantSQL: "u.id NOT IN (?)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := tt.filter.ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{raw}, args)
+		})
+	}
+
+	joinTests := []struct {
+		name    string
+		filter  dbtypes.JoinFilter
+		wantSQL string
+	}{
+		{name: "join_filter_in", filter: qb.JoinFilter().In("u.id", raw), wantSQL: "u.id IN (?)"},
+		{name: "join_filter_not_in", filter: qb.JoinFilter().NotIn("u.id", raw), wantSQL: "u.id NOT IN (?)"},
+	}
+	for _, tt := range joinTests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := tt.filter.ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{raw}, args)
+		})
+	}
+}
+
+// TestFilterCompareDoorsBindTheResolvedValue pins the argument half of the
+// convergence: a Valuer HOLDING a value stays a scalar and keeps its SQL, but
+// the door binds the value it already resolved (int64(5)) rather than the
+// wrapper. Asserting on the SQL alone cannot see this — the text is `col op ?`
+// either way — so it is the args that are pinned here.
+func TestFilterCompareDoorsBindTheResolvedValue(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+	held := dbsql.NullInt64{Int64: 5, Valid: true}
+	pointed := 7
+
+	tests := []struct {
+		name    string
+		filter  dbtypes.Filter
+		wantSQL string
+		wantArg any
+	}{
+		{name: "eq_valuer", filter: f.Eq("u.id", held), wantSQL: "u.id = ?", wantArg: int64(5)},
+		{name: "not_eq_valuer", filter: f.NotEq("u.id", held), wantSQL: "u.id <> ?", wantArg: int64(5)},
+		{name: "lt_valuer", filter: f.Lt("u.id", held), wantSQL: "u.id < ?", wantArg: int64(5)},
+		{name: "lte_valuer", filter: f.Lte("u.id", held), wantSQL: "u.id <= ?", wantArg: int64(5)},
+		{name: "gt_valuer", filter: f.Gt("u.id", held), wantSQL: "u.id > ?", wantArg: int64(5)},
+		{name: "gte_valuer", filter: f.Gte("u.id", held), wantSQL: "u.id >= ?", wantArg: int64(5)},
+		{name: "eq_pointer", filter: f.Eq("u.id", &pointed), wantSQL: "u.id = ?", wantArg: 7},
+		{name: "lt_pointer", filter: f.Lt("u.id", &pointed), wantSQL: "u.id < ?", wantArg: 7},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := tt.filter.ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, []any{tt.wantArg}, args)
+		})
+	}
+}
+
+// TestInResolvesTypedPointerSliceElements guards the fast path added for large
+// lists: a slice whose ELEMENT TYPE can never be a nil pointer or a Valuer is
+// passed through unresolved, because resolving it could not change any element.
+// A []*int can, so it must still take the per-element path — this is the case
+// that fails if the fast path's type test is widened by mistake.
+func TestInResolvesTypedPointerSliceElements(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	seven := 7
+
+	tests := []struct {
+		name     string
+		values   any
+		wantSQL  string
+		wantArgs []any
+	}{
+		{
+			name:     "typed_pointer_slice_with_a_nil_element",
+			values:   []*int{nil, &seven},
+			wantSQL:  "u.id IN (?,?)",
+			wantArgs: []any{nil, 7},
+		},
+		{
+			name:     "typed_valuer_slice_with_a_null_element",
+			values:   []dbsql.NullInt64{{}, {Int64: 5, Valid: true}},
+			wantSQL:  "u.id IN (?,?)",
+			wantArgs: []any{nil, int64(5)},
+		},
+		{
+			name:     "plain_scalar_slice_takes_the_fast_path_unchanged",
+			values:   []int{1, 2},
+			wantSQL:  "u.id IN (?,?)",
+			wantArgs: []any{1, 2},
+		},
+		{
+			// The constant carries no placeholder, so the argument list is empty
+			// whichever path built it.
+			name:     "empty_typed_slice_still_renders_the_constant",
+			values:   []int{},
+			wantSQL:  "(1=0)",
+			wantArgs: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sql, args, err := qb.Filter().In("u.id", tt.values).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantSQL, sql)
+			assert.Equal(t, tt.wantArgs, args)
+		})
+	}
+}
+
+// TestOperandResolutionWalksThePointerChain pins the multi-level case: squirrel
+// unwraps ONE pointer level, so a `**int` whose inner pointer is nil left a
+// typed nil `*int` behind — neither `== nil` nor a list, therefore classified a
+// SCALAR and handed back. Equality survived that by accident (squirrel's own
+// prologue unwrapped the remaining level at render time), but an ordering door
+// bound the nil pointer to `col < ?`, and a `**sql.NullString` reached the
+// Valuer assertion and panicked. The chain is walked to the end at every door.
+func TestOperandResolutionWalksThePointerChain(t *testing.T) {
+	qb := NewQueryBuilder(dbtypes.PostgreSQL)
+	f := qb.Filter()
+
+	nilInner := (*int)(nil)
+	nilValuerInner := (*dbsql.NullString)(nil)
+	seven := 7
+	pointedSeven := &seven
+
+	t.Run("eq_double_pointer_to_nil_is_null", func(t *testing.T) {
+		sql, args, err := f.Eq("u.id", &nilInner).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id IS NULL", sql)
+		assert.Empty(t, args)
+	})
+
+	t.Run("eq_double_pointer_to_nil_valuer_is_null", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			sql, args, err := f.Eq("u.id", &nilValuerInner).ToSQL()
+
+			require.NoError(t, err)
+			assert.Equal(t, "u.id IS NULL", sql)
+			assert.Empty(t, args)
+		})
+	})
+
+	t.Run("lt_double_pointer_to_nil_returns_the_sentinel", func(t *testing.T) {
+		_, _, err := f.Lt("u.id", &nilInner).ToSQL()
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+	})
+
+	t.Run("lt_double_pointer_to_nil_valuer_returns_the_sentinel", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			_, _, err := f.Lt("u.id", &nilValuerInner).ToSQL()
+
+			require.Error(t, err)
+			assert.ErrorIs(t, err, dbtypes.ErrOrderingOperandNotComparable)
+		})
+	})
+
+	t.Run("double_pointer_to_a_value_binds_the_value", func(t *testing.T) {
+		sql, args, err := f.Eq("u.id", &pointedSeven).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id = ?", sql)
+		assert.Equal(t, []any{7}, args)
+	})
+
+	t.Run("in_resolves_a_double_pointer_element", func(t *testing.T) {
+		sql, args, err := f.In("u.id", []any{&nilInner, &pointedSeven}).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id IN (?,?)", sql)
+		assert.Equal(t, []any{nil, 7}, args)
+	})
+}
+
+// TestOperandResolutionRefusesACyclicPointer pins the case that made the
+// pointer walk non-terminating. The loop's own comment argued a chain must end
+// because Go types are finite — true for `**int`, false the moment an interface
+// is in the chain: `var v any; v = &v` has type `*any`, dereferences to an `any`
+// holding `*any`, and shortens nothing. The walk must detect the repeat and
+// report it through the deferred-error channel rather than spin.
+//
+// Guarded by a timeout so a regression FAILS the suite instead of hanging it.
+func TestOperandResolutionRefusesACyclicPointer(t *testing.T) {
+	var cyclic any
+	cyclic = &cyclic
+
+	doors := map[string]func(*QueryBuilder) (string, []any, error){
+		"f_eq": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Filter().Eq("u.id", cyclic).ToSQL()
+		},
+		"f_lt": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Filter().Lt("u.id", cyclic).ToSQL()
+		},
+		"f_in": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Filter().In("u.id", cyclic).ToSQL()
+		},
+		"f_between": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.Filter().Between("u.id", cyclic, 10).ToSQL()
+		},
+		"jf_eq": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.JoinFilter().Eq("u.id", cyclic).ToSQL()
+		},
+		"jf_in": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.JoinFilter().In("u.id", cyclic).ToSQL()
+		},
+		"jf_between": func(qb *QueryBuilder) (string, []any, error) {
+			return qb.JoinFilter().Between("u.id", cyclic, 10).ToSQL()
+		},
+	}
+
+	for name, door := range doors {
+		t.Run(name, func(t *testing.T) {
+			done := make(chan error, 1)
+			go func() {
+				_, _, err := door(NewQueryBuilder(dbtypes.PostgreSQL))
+				done <- err
+			}()
+
+			select {
+			case err := <-done:
+				require.Error(t, err, "a cyclic operand must surface an error")
+				assert.Contains(t, err.Error(), "cyclic")
+			case <-time.After(5 * time.Second):
+				t.Fatal("resolving a cyclic pointer operand did not terminate")
+			}
+		})
+	}
+}
+
+// TestInExpandsAPointerToASlice pins the second rendering bug: a pointer to a
+// slice resolves to the slice, but the list door then wrapped that slice as ONE
+// element, so squirrel expanded only the outer list and `IN` received a single
+// argument holding a []int — which a driver rejects. Classification has to
+// happen on the RESOLVED value, not on the operand's surface form.
+func TestInExpandsAPointerToASlice(t *testing.T) {
+	values := []int{1, 2}
+
+	doors := []struct {
+		name    string
+		wantSQL string
+		call    func(qb *QueryBuilder, v any) (string, []any, error)
+	}{
+		{
+			name:    "filter_in",
+			wantSQL: "u.id IN (?,?)",
+			call: func(qb *QueryBuilder, v any) (string, []any, error) {
+				return qb.Filter().In("u.id", v).ToSQL()
+			},
+		},
+		{
+			name:    "filter_not_in",
+			wantSQL: "u.id NOT IN (?,?)",
+			call: func(qb *QueryBuilder, v any) (string, []any, error) {
+				return qb.Filter().NotIn("u.id", v).ToSQL()
+			},
+		},
+		{
+			name:    "join_filter_in",
+			wantSQL: "u.id IN (?,?)",
+			call: func(qb *QueryBuilder, v any) (string, []any, error) {
+				return qb.JoinFilter().In("u.id", v).ToSQL()
+			},
+		},
+	}
+
+	for _, door := range doors {
+		t.Run(door.name, func(t *testing.T) {
+			sql, args, err := door.call(NewQueryBuilder(dbtypes.PostgreSQL), &values)
+
+			require.NoError(t, err)
+			assert.Equal(t, door.wantSQL, sql)
+			assert.Equal(t, []any{1, 2}, args)
+		})
+	}
+
+	t.Run("a_pointer_to_a_byte_slice_stays_one_operand", func(t *testing.T) {
+		raw := []byte("raw")
+		sql, args, err := NewQueryBuilder(dbtypes.PostgreSQL).Filter().In("u.id", &raw).ToSQL()
+
+		require.NoError(t, err)
+		assert.Equal(t, "u.id IN (?)", sql)
+		assert.Equal(t, []any{raw}, args)
+	})
+
+	t.Run("a_pointer_to_a_nil_slice_matches_the_unpointered_form", func(t *testing.T) {
+		// Pinned against the DIRECT nil slice rather than against a literal: the
+		// point of resolving the pointer is that `&nilSlice` and `nilSlice` mean
+		// the same thing at this door, and an empty list is the door's own
+		// `(1=0)`, not a one-element list holding NULL.
+		var nilSlice []int
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		wantSQL, wantArgs, err := qb.Filter().In("u.id", nilSlice).ToSQL()
+		require.NoError(t, err)
+		gotSQL, gotArgs, err := qb.Filter().In("u.id", &nilSlice).ToSQL()
+		require.NoError(t, err)
+
+		assert.Equal(t, wantSQL, gotSQL)
+		assert.Equal(t, wantArgs, gotArgs)
+		assert.Equal(t, "(1=0)", gotSQL)
+	})
 }

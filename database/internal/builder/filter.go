@@ -1,8 +1,6 @@
 package builder
 
 import (
-	"reflect"
-
 	"github.com/Masterminds/squirrel"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -69,62 +67,83 @@ func newFilterFactory(qb *QueryBuilder) *FilterFactory {
 
 // ========== Comparison Operators ==========
 
+// equality renders the shared prologue of Eq and NotEq: the operand is resolved
+// ONCE by resolveOperand — nil pointer first, then driver.Valuer, then
+// dereference — and it is the RESOLVED value that squirrel classifies and
+// binds. Squirrel runs the same prologue in the other order, asserting
+// driver.Valuer before it tests the pointer, so a nil pointer to a type whose
+// Value() has a value receiver (`(*sql.NullString)(nil)`) dereferences nil and
+// PANICS inside ToSql (#1209). Resolving here settles that pointer as NULL,
+// which is also what JoinFilter's compare door renders, so one operand means
+// one thing at both families.
+func (ff *FilterFactory) equality(column, op string, value any) dbtypes.Filter {
+	resolved, _, err := resolveOperand(value)
+	if err != nil {
+		return filterOf(nil, wrapOperandErr(op, err))
+	}
+	if op == opEqual {
+		return filterOf(ff.qb.Eq(column, resolved))
+	}
+	return filterOf(ff.qb.NotEq(column, resolved))
+}
+
 // Eq creates an equality filter (column = value).
 // Column names are automatically quoted according to database vendor rules.
+// A nil operand — untyped, a typed nil pointer, or a Valuer reporting NULL —
+// renders IS NULL.
 func (ff *FilterFactory) Eq(column string, value any) dbtypes.Filter {
-	return filterOf(ff.qb.Eq(column, value))
+	return ff.equality(column, opEqual, value)
 }
 
 // NotEq creates a not-equal filter (column <> value).
 // Column names are automatically quoted according to database vendor rules.
+// A nil operand renders IS NOT NULL.
 func (ff *FilterFactory) NotEq(column string, value any) dbtypes.Filter {
-	return filterOf(ff.qb.NotEq(column, value))
+	return ff.equality(column, opNotEqual, value)
 }
 
 // Lt creates a less-than filter (column < value).
 // Column names are automatically quoted according to database vendor rules.
+// A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
 func (ff *FilterFactory) Lt(column string, value any) dbtypes.Filter {
-	return filterOf(ff.qb.Lt(column, value))
+	resolved, err := orderingOperand("<", value)
+	if err != nil {
+		return filterOf(nil, err)
+	}
+	return filterOf(ff.qb.Lt(column, resolved))
 }
 
 // Lte creates a less-than-or-equal filter (column <= value).
 // Column names are automatically quoted according to database vendor rules.
+// A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
 func (ff *FilterFactory) Lte(column string, value any) dbtypes.Filter {
-	return filterOf(ff.qb.LtOrEq(column, value))
+	resolved, err := orderingOperand("<=", value)
+	if err != nil {
+		return filterOf(nil, err)
+	}
+	return filterOf(ff.qb.LtOrEq(column, resolved))
 }
 
 // Gt creates a greater-than filter (column > value).
 // Column names are automatically quoted according to database vendor rules.
+// A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
 func (ff *FilterFactory) Gt(column string, value any) dbtypes.Filter {
-	return filterOf(ff.qb.Gt(column, value))
+	resolved, err := orderingOperand(">", value)
+	if err != nil {
+		return filterOf(nil, err)
+	}
+	return filterOf(ff.qb.Gt(column, resolved))
 }
 
 // Gte creates a greater-than-or-equal filter (column >= value).
 // Column names are automatically quoted according to database vendor rules.
+// A nil or set operand returns dbtypes.ErrOrderingOperandNotComparable.
 func (ff *FilterFactory) Gte(column string, value any) dbtypes.Filter {
-	return filterOf(ff.qb.GtOrEq(column, value))
-}
-
-// normalizeToSlice ensures the value is a slice for IN/NOT IN operations.
-// This prevents squirrel.Eq from generating "column = ?" instead of "column IN (?)".
-//
-// Squirrel's Eq checks value type at runtime:
-//   - Slice/Array → generates "column IN (?, ?, ...)"
-//   - Scalar → generates "column = ?"
-//
-// By normalizing scalars to single-element slices, we ensure consistent IN semantics.
-func normalizeToSlice(value any) any {
-	if value == nil {
-		return []any{}
+	resolved, err := orderingOperand(">=", value)
+	if err != nil {
+		return filterOf(nil, err)
 	}
-
-	v := reflect.ValueOf(value)
-	switch v.Kind() {
-	case reflect.Slice, reflect.Array:
-		return value
-	default:
-		return []any{value}
-	}
+	return filterOf(ff.qb.GtOrEq(column, resolved))
 }
 
 // In creates an IN filter (column IN (values...)).
@@ -140,9 +159,12 @@ func (ff *FilterFactory) In(column string, values any) dbtypes.Filter {
 	if err != nil {
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
-	normalized := normalizeToSlice(values)
+	normalized, empty, err := resolveListOperands("IN", values)
+	if err != nil {
+		return filterOf(nil, err)
+	}
 	// Empty slice special case: generate "1=0" to ensure no matches
-	if s, ok := normalized.([]any); ok && len(s) == 0 {
+	if empty {
 		return Filter{sqlizer: squirrel.Expr("(1=0)")}
 	}
 	return Filter{sqlizer: squirrel.Eq{quotedColumn: normalized}}
@@ -161,8 +183,11 @@ func (ff *FilterFactory) NotIn(column string, values any) dbtypes.Filter {
 	if err != nil {
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
-	normalized := normalizeToSlice(values)
-	if s, ok := normalized.([]any); ok && len(s) == 0 {
+	normalized, empty, err := resolveListOperands("NOT IN", values)
+	if err != nil {
+		return filterOf(nil, err)
+	}
+	if empty {
 		return Filter{sqlizer: squirrel.Expr("(1=1)")} // Empty NOT IN list - always true
 	}
 	return Filter{sqlizer: squirrel.NotEq{quotedColumn: normalized}}
@@ -248,9 +273,20 @@ func (ff *FilterFactory) Between(column string, lowerBound, upperBound any) dbty
 	if err != nil {
 		return Filter{sqlizer: errorSqlizer{err: err}}
 	}
+	// A BETWEEN bound is an ordering operand, so it takes the ordering contract:
+	// there is no rendering of `col >= NULL`, and a nil pointer to a Valuer would
+	// otherwise reach squirrel's GtOrEq prologue and panic (#1209).
+	lower, err := orderingOperand(">=", lowerBound)
+	if err != nil {
+		return filterOf(nil, err)
+	}
+	upper, err := orderingOperand("<=", upperBound)
+	if err != nil {
+		return filterOf(nil, err)
+	}
 	condition := squirrel.And{
-		squirrel.GtOrEq{quotedColumn: lowerBound},
-		squirrel.LtOrEq{quotedColumn: upperBound},
+		squirrel.GtOrEq{quotedColumn: lower},
+		squirrel.LtOrEq{quotedColumn: upper},
 	}
 	return Filter{sqlizer: condition}
 }

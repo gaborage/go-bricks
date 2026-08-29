@@ -1,8 +1,10 @@
 package builder
 
 import (
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -13,6 +15,10 @@ import (
 // same precondition the same way; the vendor is already implied by the builder
 // the caller reached.
 var errConflictColumnsRequired = errors.New("conflict columns required for upsert")
+
+// errCyclicOperand marks an operand whose pointer chain returns to a pointer the
+// walk already followed, which no amount of dereferencing will resolve.
+var errCyclicOperand = errors.New("operand pointer chain is cyclic")
 
 // sortedKeys returns a deterministically ordered slice of keys from the provided map.
 func sortedKeys(m map[string]any) []string {
@@ -338,4 +344,255 @@ func (qb *QueryBuilder) escapeIdentifiers(columns []string) []string {
 		escaped[i] = qb.EscapeIdentifier(col)
 	}
 	return escaped
+}
+
+// ========== Operand Resolution (shared by Filter and JoinFilter) ==========
+
+// operandWalk carries the two pieces of state the pointer walk accumulates: the
+// pointers it has already followed, and whether it has spent its one Valuer
+// question. Holding them together keeps the loop body reading as the three
+// steps of the contract — settle nil, ask once, dereference — with the
+// bookkeeping each step needs behind a call rather than inline.
+type operandWalk struct {
+	followed    map[uintptr]struct{}
+	valuerAsked bool
+}
+
+// follow records a non-nil pointer level and reports a chain that returns to a
+// pointer already visited, which no amount of dereferencing will resolve.
+//
+// The map is allocated lazily: most operands are not pointers at all, and one
+// that is usually points at a value rather than at another pointer.
+func (w *operandWalk) follow(r reflect.Value) error {
+	address := r.Pointer()
+	if _, seen := w.followed[address]; seen {
+		return errCyclicOperand
+	}
+	if w.followed == nil {
+		w.followed = make(map[uintptr]struct{}, 2)
+	}
+	w.followed[address] = struct{}{}
+	return nil
+}
+
+// askValuer spends the walk's single Valuer question, replacing *value with the
+// answer and reporting whether it asked. Asking at most once is what stops a
+// Valuer that answers with another Valuer from spinning the loop.
+func (w *operandWalk) askValuer(value *any) (asked bool, err error) {
+	v, isValuer := (*value).(driver.Valuer)
+	if !isValuer || w.valuerAsked {
+		return false, nil
+	}
+	got, valuerErr := v.Value()
+	if valuerErr != nil {
+		return false, valuerErr
+	}
+	w.valuerAsked = true
+	*value = got
+	return true, nil
+}
+
+// resolveOperand mirrors the prologue of squirrel's Eq.toSQL — resolve a
+// driver.Valuer, then dereference a pointer (a nil one becoming an untyped nil)
+// — and classifies the RESULT the way squirrel's own isListType does.
+//
+// Classification and rendering share ONE resolution, and every caller renders
+// and binds the value this returns rather than the original. Resolving twice is
+// a real defect: a stateful Valuer asked a second time by database/sql can
+// answer differently, so a door that classified the first answer and bound the
+// original could bind a NULL under `col = ?` — the very `col = NULL` #1167
+// exists to remove — or expand an IN list that no longer matches the operand.
+//
+// Skipping the prologue is a defect too, not a nicety: `sql.NullString{}` and a
+// typed nil `*int` are neither `== nil` nor slices in their surface form, so a
+// test that looks only at the surface calls them scalars and renders `col = ?`.
+// f.Eq resolves them and renders IS NULL, so the doors would disagree on exactly
+// the operands most likely to be nil in practice: an optional column read from a
+// nullable database field.
+//
+// A Valuer whose Value() fails returns that error for the caller to WRAP, so
+// errors.Is finds the cause. The ordering sentinel is deliberately not attached
+// to it: a Valuer failure says nothing about comparability, and reporting it as
+// ErrOrderingOperandNotComparable is what discarded the cause before.
+func resolveOperand(value any) (resolved any, nullOrList bool, err error) {
+	// One level at a time, and the ORDER within a level is the whole contract:
+	// test for nil, THEN ask whether this level is a driver.Valuer, and only then
+	// dereference. Each step is load-bearing.
+	//
+	// Nil first, because the two overlap: a `*sql.NullString` satisfies
+	// driver.Valuer through NullString's VALUE receiver, so asking a nil one for
+	// its value dereferences nil inside ToSQL. squirrel asserts before it tests
+	// and panics for exactly that reason (expr.go:168).
+	//
+	// Assert BEFORE dereferencing, because a Value() declared on a POINTER
+	// receiver belongs to `*T` and not to `T` — unwrap first and the operand
+	// stops being a Valuer, so it is never asked and binds as a bare struct.
+	//
+	// Loop, because squirrel unwraps a single level and so did this door: a
+	// `**int` with a nil inner pointer left a typed nil `*int`, which is neither
+	// `== nil` nor a list, so it was classified a SCALAR and handed back —
+	// `col < ?` bound to a nil pointer at an ordering door, the silent-no-rows
+	// shape this change removes, one level deeper.
+	//
+	// The loop tracks the pointers it has already followed, because a chain does
+	// NOT have to terminate on its own. An earlier version of this comment
+	// argued it did — Go types being finite, each dereference shortens the type
+	// — which holds for `**int` and fails the moment an INTERFACE is in the
+	// chain: `var v any; v = &v` has type `*any`, dereferences to an `any`
+	// holding `*any`, and shortens nothing. That spun ToSQL forever on the
+	// request goroutine. A pointer already followed is reported, not followed.
+	//
+	// Value() is asked at most ONCE across the whole walk, so a Valuer answering
+	// with another Valuer cannot spin the door.
+	walk := operandWalk{}
+	r := reflect.ValueOf(value)
+	for {
+		if r.Kind() == reflect.Pointer {
+			if r.IsNil() {
+				return nil, true, nil
+			}
+			if cycleErr := walk.follow(r); cycleErr != nil {
+				return nil, false, cycleErr
+			}
+		}
+
+		asked, valuerErr := walk.askValuer(&value)
+		if valuerErr != nil {
+			return nil, false, valuerErr
+		}
+		if asked {
+			r = reflect.ValueOf(value)
+			continue
+		}
+
+		if r.Kind() != reflect.Pointer {
+			break
+		}
+		value = r.Elem().Interface()
+		r = reflect.ValueOf(value)
+	}
+
+	if value == nil {
+		return nil, true, nil
+	}
+	// squirrel's own isListType: a driver.Value — []byte included — is a scalar.
+	if driver.IsValue(value) {
+		return value, false, nil
+	}
+	return value, r.Kind() == reflect.Slice || r.Kind() == reflect.Array, nil
+}
+
+// orderingOperand resolves an ordering operand and fails closed on the shapes an
+// ordering has no rendering for. Both families call it, so nil, a set and a
+// Valuer reporting NULL take the SAME sentinel at `f` and at `jf` and errors.Is
+// works on either (#1167, #1205). Squirrel, which FilterFactory delegated to,
+// returned its own text for those, rendered `col < ?` bound to a typed nil
+// pointer — the silent-no-rows shape — and panicked on a nil pointer to a
+// Valuer (#1209).
+func orderingOperand(op string, value any) (resolved any, err error) {
+	resolved, nullOrList, err := resolveOperand(value)
+	if err != nil {
+		return nil, wrapOperandErr(op, err)
+	}
+	if nullOrList {
+		return nil, orderingOperandErr(op)
+	}
+	return resolved, nil
+}
+
+// wrapOperandErr and orderingOperandErr are the two spellings every door shares.
+// A Valuer failure names the operator it was resolving for; a nil or set operand
+// at an ordering door names the same sentinel, written ONCE so the six doors that
+// report it cannot drift apart in wording while still matching errors.Is.
+func wrapOperandErr(op string, err error) error {
+	return fmt.Errorf("resolving the %s operand: %w", op, err)
+}
+
+func orderingOperandErr(op string) error {
+	return fmt.Errorf("%w: %s with a nil or slice operand",
+		dbtypes.ErrOrderingOperandNotComparable, op)
+}
+
+// valuerType is the interface every list element is tested against ONCE, by
+// TYPE, so a list whose elements cannot need resolution is not walked at all.
+var valuerType = reflect.TypeOf((*driver.Valuer)(nil)).Elem()
+
+// resolveListOperands turns an IN / NOT IN operand into the list squirrel
+// renders, resolving EVERY element that could need it the way the compare doors
+// resolve a single one: a nil pointer — typed, or pointing at a driver.Valuer —
+// becomes an untyped nil, and a Valuer holding a value is asked once, here, so
+// its answer is what gets bound.
+//
+// Squirrel appends list elements to the argument list untouched, so without
+// this a nil pointer to a Valuer survived the whole build and crashed at EXEC,
+// where database/sql asks it for its value (#1209) — a build-time door
+// reporting a run-time panic. Resolving also normalizes what a nil element
+// renders as: it was already `IN (NULL)` at the driver, and it stays that,
+// spelled by the door instead of by the driver.
+//
+// A scalar is wrapped in a one-element list rather than left alone, which is
+// what keeps `IN (?)` from collapsing into squirrel's `= ?`. That includes a
+// []byte, which is a driver.Value and therefore ONE operand, not N.
+//
+// The returned `empty` reports the empty-set case for the caller's constant,
+// which the pass-through path could not answer from a []any length.
+func resolveListOperands(op string, values any) (normalized any, empty bool, err error) {
+	if values == nil {
+		return []any{}, true, nil
+	}
+
+	v := reflect.ValueOf(values)
+	if v.Kind() != reflect.Slice && v.Kind() != reflect.Array {
+		element, _, resolveErr := resolveOperand(values)
+		if resolveErr != nil {
+			return nil, false, wrapOperandErr(op, resolveErr)
+		}
+		// Classify what resolution PRODUCED, not the operand's surface form. A
+		// POINTER to a slice resolves to the slice, and wrapping that as a
+		// single element left squirrel expanding only the outer list — `IN (?)`
+		// bound to a whole []int, which the driver rejects. A resolved nil stays
+		// one NULL element, and a []byte stays one operand, both handled by the
+		// list path below.
+		if element == nil {
+			return []any{nil}, false, nil
+		}
+		return resolveList(op, reflect.ValueOf(element), element)
+	}
+
+	return resolveList(op, v, values)
+}
+
+// resolveList resolves an already-classified list operand. It takes both the
+// reflect.Value and the original interface because the two answer different
+// questions: driver.IsValue judges the interface, while the element type and
+// length come from the reflected value.
+func resolveList(op string, v reflect.Value, values any) (normalized any, empty bool, err error) {
+	// A []byte is a driver.Value, not a list — squirrel's own rule, which the
+	// compare doors follow through driver.IsValue. Splitting it into a list of
+	// bytes would turn one operand into N.
+	if driver.IsValue(values) {
+		return []any{values}, false, nil
+	}
+
+	// The ELEMENT TYPE decides whether the list has to be walked. Resolution can
+	// only change an element that is a pointer, an interface (which may hold
+	// one), or a driver.Valuer; for any other element type resolveOperand is the
+	// identity, so walking a []int of a thousand ids would allocate a second
+	// thousand-entry list and box every element to return exactly what came in.
+	// squirrel then makes its own O(N) pass regardless, so the skipped pass is
+	// pure duplication, not a shortcut.
+	elem := v.Type().Elem()
+	if elem.Kind() != reflect.Pointer && elem.Kind() != reflect.Interface && !elem.Implements(valuerType) {
+		return values, v.Len() == 0, nil
+	}
+
+	resolved := make([]any, v.Len())
+	for i := range resolved {
+		element, _, resolveErr := resolveOperand(v.Index(i).Interface())
+		if resolveErr != nil {
+			return nil, false, fmt.Errorf("resolving element %d of the %s operand: %w", i, op, resolveErr)
+		}
+		resolved[i] = element
+	}
+	return resolved, len(resolved) == 0, nil
 }
