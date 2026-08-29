@@ -84,7 +84,7 @@ function. The defect was that one door spelled a column differently from every
 other door, and differently per vendor.
 
 Breaking: PostgreSQL refuses qualified, function-shaped and empty keys it used to
-render, and both vendors refuse a doubled-quote key. `[C61.12]`.
+render, and both vendors refuse a doubled-quote key. `[C61.15]`.
 
 ## Addendum (2026-08-24): the alias is a grammar, not a denylist
 

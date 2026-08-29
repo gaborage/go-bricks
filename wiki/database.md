@@ -322,7 +322,7 @@ the builder. The grammar will not accept a computed one.
   'MustExpr\(|[.]Expr\(|RawExpression\{'`, rather than an annotation.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
   than to this grammar — a stricter question ("is this one column the vendor's
-  upsert syntax can name"). Since `[C61.12]` that question has **one answer on
+  upsert syntax can name"). Since `[C61.15]` that question has **one answer on
   both vendors**: a conflict/insert/update key is trimmed, then must be a single
   column name carrying no escaping of its own beyond a plain wrapping quote pair,
   so `COUNT(*)`, `t.name`, `a""b` and `"a""b"` are refused on PostgreSQL too. The
