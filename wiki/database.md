@@ -321,14 +321,16 @@ the builder. The grammar will not accept a computed one.
   reviewed as raw SQL. Its audit hook is its own name, `git grep -nE
   'MustExpr\(|[.]Expr\(|RawExpression\{'`, rather than an annotation.
 - **`BuildUpsert`'s column maps** answer to the upsert's own preconditions rather
-  than to this grammar — a stricter question ("is this one column this vendor can
-  name in a MERGE"). Since `[C61.12]` that question has **one answer on both
-  vendors**: a conflict/insert/update key is trimmed, then must be a single column
-  name carrying no quote of its own beyond a plain wrapping pair, so `COUNT(*)`,
-  `t.name`, `a""b` and `"a""b"` are refused on PostgreSQL too. The trimmed
-  spelling is the one rendered and the one every membership and distinctness check
-  compares, so `" id "` matches its `id` insert key and `{"id", " id "}` is
-  rejected as one column written twice.
+  than to this grammar — a stricter question ("is this one column the vendor's
+  upsert syntax can name"). Since `[C61.12]` that question has **one answer on
+  both vendors**: a conflict/insert/update key is trimmed, then must be a single
+  column name carrying no escaping of its own beyond a plain wrapping quote pair,
+  so `COUNT(*)`, `t.name`, `a""b` and `"a""b"` are refused on PostgreSQL too. The
+  trimmed spelling is the one rendered, and identity is the RENDERED identifier on
+  both vendors — so a key written with surrounding spaces matches its unpadded
+  insert key, a map holding both spellings is rejected as one column written
+  twice, and on PostgreSQL `ID` and `"ID"` are one column (they render alike)
+  while `id` and `ID` stay two.
 
 Valid identifiers on PostgreSQL are left **unquoted**: PostgreSQL folds unquoted
 identifiers to lowercase, so quoting a valid one would change which physical

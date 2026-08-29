@@ -559,14 +559,25 @@ func TestUpsertColumnNameNamesTheColumnNotTheSpelling(t *testing.T) {
 		})
 	}
 
-	t.Run("postgresql_names_the_key_itself", func(t *testing.T) {
+	t.Run("postgresql_names_the_rendered_identifier", func(t *testing.T) {
 		pg := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		// No folding and no unwrapping: the key is the name, which is why the
-		// distinctness check cannot fire on this vendor.
-		for _, column := range []string{"id", "ID", `"ID"`, "level"} {
-			if got := pg.upsertColumnName(column); got != column {
-				t.Errorf("upsertColumnName(%q) = %q, want it unchanged", column, got)
+		// No folding — PostgreSQL quotes everything, so case survives — but the
+		// wrapper does not survive, because the renderer adds it to the bare key
+		// and keeps it on the quoted one. That is what makes `ID` and `"ID"` one
+		// column here, and it is why the distinctness check CAN fire on this
+		// vendor now: two spellings of one column no longer look distinct.
+		cases := map[string]string{
+			"id":     `"id"`,
+			"ID":     `"ID"`,
+			`"ID"`:   `"ID"`,
+			`"id"`:   `"id"`,
+			"level":  `"level"`,
+			"name x": `"name x"`,
+		}
+		for column, want := range cases {
+			if got := pg.upsertColumnName(column); got != want {
+				t.Errorf("upsertColumnName(%q) = %q, want %q", column, got, want)
 			}
 		}
 	})
@@ -758,5 +769,51 @@ func TestBuildUpsertAppliesOneAcceptanceRulePerShape(t *testing.T) {
 				`insert columns must be distinct: " name " and "name" name the same column for upsert`,
 				"%s must refuse padded twins like its sibling door", vendor)
 		}
+	})
+}
+
+// TestBuildUpsertMatchesQuotedAndUnquotedKeysOnPostgreSQL closes the gap the
+// wrapper-quoted widening opened: `ID` and `"ID"` are ONE PostgreSQL column,
+// because EscapeIdentifier renders both as "ID" — it quotes the bare key and
+// passes the already-quoted one through. Identity there was the raw spelling, so
+// the two doors disagreed with the renderer: a quoted conflict key missed its
+// unquoted insert key, and two insert keys naming one column both survived
+// distinctness and rendered `("ID","ID")`, which PostgreSQL rejects.
+func TestBuildUpsertMatchesQuotedAndUnquotedKeysOnPostgreSQL(t *testing.T) {
+	t.Run("quoted_conflict_key_finds_its_unquoted_insert_key", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, _, err := qb.BuildUpsert("users", []string{`"ID"`},
+			map[string]any{"ID": 1, "name": "x"}, nil)
+
+		require.NoError(t, err, `"ID" and ID render as the same PostgreSQL column`)
+		require.Equal(t,
+			`INSERT INTO users ("ID","name") VALUES ($1,$2) ON CONFLICT ("ID") DO NOTHING`,
+			sql)
+	})
+
+	t.Run("quoted_and_unquoted_twins_are_one_column", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, args, err := qb.BuildUpsert("users", []string{"k"},
+			map[string]any{"k": 0, "ID": 1, `"ID"`: 2}, nil)
+
+		require.EqualError(t, err,
+			`insert columns must be distinct: "\"ID\"" and "ID" name the same column for upsert`)
+		require.Empty(t, sql, "a rejected call emits no SQL")
+		require.Empty(t, args, "a rejected call binds no arguments")
+	})
+
+	t.Run("case_variants_stay_two_columns", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		// The half the canonicalization must NOT break: PostgreSQL quotes every
+		// identifier, so id and ID are two columns and conflicting on both is a
+		// legitimate composite target.
+		sql, _, err := qb.BuildUpsert("users", []string{"id", "ID"},
+			map[string]any{"id": 1, "ID": 2, "name": "a"}, nil)
+
+		require.NoError(t, err)
+		require.Contains(t, sql, `ON CONFLICT ("ID", "id")`)
 	})
 }

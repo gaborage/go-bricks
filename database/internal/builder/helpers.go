@@ -158,7 +158,16 @@ func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns, updateColum
 // this the TRIMMED spelling, so padding never reaches the fold.
 func (qb *QueryBuilder) upsertColumnName(column string) string {
 	if qb.vendor != dbtypes.Oracle {
-		return column
+		// Canonicalized through the RENDERER, the same way the Oracle branch below
+		// is. PostgreSQL quotes every identifier, so EscapeIdentifier renders the
+		// bare `ID` and the caller-quoted `"ID"` alike as "ID" — one column. Raw
+		// spelling was an adequate identity only while a quoted key was refused
+		// here; once the wrapper became acceptable, comparing raw spellings made
+		// these doors disagree with the SQL: a quoted conflict key missed its
+		// unquoted insert key, and two keys naming one column passed distinctness
+		// and rendered ("ID","ID"). Case is still preserved, so id and ID remain
+		// two columns — which is what PostgreSQL itself does with quoted names.
+		return qb.EscapeIdentifier(column)
 	}
 
 	rendered := oracleQuoteIdentifier(column)
@@ -183,9 +192,10 @@ func (qb *QueryBuilder) upsertColumnName(column string) string {
 // through sortedKeys. A map cannot hold an exact repeat, but two of its keys can
 // still name one Oracle column, which builds a MERGE declaring one alias twice
 // in its USING clause and naming it twice in the INSERT list. On PostgreSQL a
-// key is its own name once normalized, so only two keys differing by padding can
-// collide there — which is exactly the pair that used to render
-// `INSERT INTO users ("id","id")` and fail at execution (#1196).
+// two keys collide there when they RENDER alike: one differing only by padding,
+// or a bare key against its caller-quoted twin (`ID` and `"ID"`), both of which
+// used to render one column twice — `INSERT INTO users ("id","id")` — and fail at
+// execution (#1196).
 func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns []upsertColumn) error {
 	seen := make(map[string]string, len(columns))
 	for _, col := range columns {

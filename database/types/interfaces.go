@@ -562,7 +562,8 @@ type QueryBuilderInterface interface {
 	// column name — no qualifier, no function call, no empty name — carrying no
 	// quote of its own beyond a plain wrapping pair. COUNT(*), t.name, a""b and
 	// "a""b" are therefore refused on PostgreSQL as well as on Oracle. An
-	// identifier argument carries no quoting; the door quotes. A column whose name
+	// identifier argument carries no escaping beyond the accepted wrapping quote
+	// pair; the door quotes. A column whose name
 	// genuinely holds a quote has no key form here at all — conflictColumns is
 	// []string and both maps are keyed by string, so there is no expression key to
 	// pass; such a schema needs a hand-written statement. A column literally named

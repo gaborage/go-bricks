@@ -59,6 +59,15 @@ literally named `count(*)` with no spelling at all — the quoted key is how suc
 name is stated, which is why `keyIsFunctionShaped` has always exempted it. The
 narrowing is the ESCAPE, not the QUOTES.
 
+**Identity is the RENDERED identifier on both vendors.** Oracle already folded
+through `oracleQuoteIdentifier`; PostgreSQL compared the raw spelling, which was
+adequate only while a caller-quoted key was refused there. Once the wrapper
+became acceptable (below), raw spellings made the doors disagree with the SQL —
+`EscapeIdentifier` renders `ID` and `"ID"` alike as `"ID"`, so a quoted conflict
+key missed its unquoted insert key, and two keys naming one column passed
+distinctness and rendered `("ID","ID")`. Both now canonicalize through the
+renderer. Case still survives on PostgreSQL, so `id` and `ID` remain two columns.
+
 **One clause WIDENS, on PostgreSQL.** Its old rule refused any key carrying a
 quote at all — `hasUnescapedQuote` reads the wrapper too — so `"ID"` and
 `"count(*)"` were refused there while Oracle took them. Under the single rule the
@@ -340,7 +349,8 @@ outside the rule and are named here rather than left for a reader to notice.
 `BuildUpsert`'s three column maps are not checked against the identifier grammar —
 they answer to the upsert's own preconditions instead (`normalizeUpsertColumns`,
 `requireDistinctColumnIdentities`), which ask a stricter question: not merely "is
-this an identifier" but "is this one column this vendor can name in a MERGE". (The
+this an identifier" but "is this one column the vendor's upsert syntax can name" —
+Oracle's MERGE and PostgreSQL's ON CONFLICT alike. (The
 2026-08-28 amendment above makes that one question with one answer per shape, and
 gives it the normalized-return contract; when this was written it was a pair of
 per-vendor rules that never trimmed.)
