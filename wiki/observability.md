@@ -177,7 +177,9 @@ whose structure the filter cannot see into — used to be a single leaf named by
 carried it, so a marshalled request body logged its own `password` in clear. Since
 [ADR-086](adr_086_mask_inside_opaque_payloads.md) the filter looks inside.
 
-**What is inspected.** A `json.RawMessage`, `[]byte`, `[]json.RawMessage` or a string, at every
+**What is inspected.** A `json.RawMessage`, `[]byte`, `[]json.RawMessage` or a string — and a
+DEFINED type over either builtin (`type Blob []byte`, `type JSONText string`), since the test is on
+the value's KIND and not on the two spellings a type switch happens to name — at every
 door — the check lives in the filter's shared type dispatch, so `Interface`, `WithFields`,
 `Bytes`, `Str` and nested struct, map and slice values all inherit it. A value is parsed only if
 its first non-space byte is `{` or `[`; one that is not JSON-shaped is asked only whether it is

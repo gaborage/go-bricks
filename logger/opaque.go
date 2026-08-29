@@ -41,6 +41,24 @@ func opaqueBytes(value any) (payload []byte, ok bool) {
 	return nil, false
 }
 
+// opaqueString answers the string side of the same question, and for the same
+// reason opaqueBytes tests the KIND rather than the spelling: a DEFINED string
+// type — `type JSONText string`, how a service spells a body it carries as text
+// and how sqlx spells one it reads back — fails a `value.(string)` assertion, so
+// asserting the builtin sent every such payload to the sink unfiltered while the
+// identical text in a plain string was masked (#1133).
+func opaqueString(value any) (payload string, ok bool) {
+	if v, isString := value.(string); isString {
+		return v, true
+	}
+
+	rv := reflect.ValueOf(value)
+	if rv.Kind() == reflect.String {
+		return rv.String(), true
+	}
+	return "", false
+}
+
 // looksLikeJSON reports whether a payload is worth handing to the parser: its
 // first non-space byte opens an object or an array. Deliberately narrow — a
 // bare JSON number, string or `null` is a scalar the name filter already judged

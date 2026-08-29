@@ -112,8 +112,16 @@ func BenchmarkLogEventNonJSONFields(b *testing.B) {
 // BenchmarkFilterNonJSONString guards the cost of the payload door on the path
 // that must not pay for it: an ordinary string field. The door's whole design
 // rests on looksLikeJSON rejecting such a value before any parsing, so this
-// benchmark should report 0 allocations — the same as the plain name check.
-// A regression here means the door started touching every log line.
+// benchmark reports 0 allocations — the same as the plain name check. A
+// regression here means the door started touching every log line.
+//
+// The zero is exact, not approximate, and the `visited` map FilterValue makes on
+// every call is not an exception to it: escape analysis keeps that map on the
+// stack (`go build -gcflags=-m` reports "make(map[uintptr]struct {}) does not
+// escape" at its construction), and an empty map allocates no buckets. If a
+// future change makes it escape — storing it, passing it to something that
+// outlives the call — this benchmark is where that shows up, as a non-zero
+// baseline on the cheapest possible input.
 func BenchmarkFilterNonJSONString(b *testing.B) {
 	filter := NewSensitiveDataFilter(DefaultFilterConfig())
 

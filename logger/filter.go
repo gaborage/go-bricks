@@ -229,6 +229,8 @@ func (f *SensitiveDataFilter) filterValueWithProtection(key string, value any, v
 // reporting whether it took the value. Bytes are one leaf to a name filter
 // however many named fields they carry of their own, and a string can be a
 // payload too — a JSON body handed over as text, or a PEM private key (#1133).
+// Both tests are on the KIND, so a defined type over either (`type Blob []byte`,
+// `type JSONText string`) is judged like the builtin it is spelled from.
 //
 // Both live HERE, in the shared dispatch, rather than at whichever door carried
 // the value: bytes already inherited the check from this switch, so wiring
@@ -238,7 +240,7 @@ func (f *SensitiveDataFilter) filterIfOpaquePayload(value any) (filtered any, is
 	if payload, isOpaque := opaqueBytes(value); isOpaque {
 		return filterOpaquePayload(f, payload, value), true
 	}
-	if text, isString := value.(string); isString {
+	if text, isString := opaqueString(value); isString {
 		return filterOpaquePayload(f, text, value), true
 	}
 	return nil, false

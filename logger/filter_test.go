@@ -2183,3 +2183,30 @@ func TestReflectMapWalkerKeysAndDepth(t *testing.T) {
 			"the cut must happen at or before the depth budget")
 	})
 }
+
+// jsonText is a DEFINED string type — `type JSONText string` is how a service
+// spells a body it carries as text, and how sqlx spells one it reads back.
+type jsonText string
+
+// TestFilterMasksInsideDefinedStringType closes the string-side half of the hole
+// #1133 closed for bytes: the dispatch asserted `value.(string)`, which a
+// defined string type fails, so the payload skipped the payload check entirely
+// and reached zerolog in clear. The KIND is what makes it a payload, not the
+// spelling — exactly the argument opaqueBytes already makes for `type Blob
+// []byte`.
+func TestFilterMasksInsideDefinedStringType(t *testing.T) {
+	payload := jsonText(`{"password":"pw","user":"alice"}`)
+	want := `{"password":"***","user":"alice"}`
+
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+}
