@@ -458,4 +458,21 @@ func TestInjectIntoHeadersValidatesTheTraceStateOfAnAcceptedHeaderParent(t *test
 			assert.Equal(t, tt.wantState, acc.Get(HeaderTraceState), tt.wantReason)
 		})
 	}
+
+	// An accepted parent with NO carried state must not GAIN one. The context
+	// here holds `vendor=context`, which the accepted-parent path deliberately
+	// does not apply, and the validation added above must not turn "nothing
+	// carried" into an empty header either — inverting the branch's condition
+	// produces exactly that, and it is the only effect the cases above cannot
+	// see, since they all carry a state.
+	t.Run("no_carried_state_stays_absent", func(t *testing.T) {
+		acc := &mapAccessor{m: map[string]any{HeaderTraceParent: headerParent}}
+		ctx := WithTraceState(context.Background(), "vendor=context")
+
+		InjectIntoHeaders(ctx, acc)
+
+		assert.Equal(t, headerParent, acc.Get(HeaderTraceParent))
+		_, present := acc.m[HeaderTraceState]
+		assert.False(t, present, "an absent tracestate must stay absent, not become empty")
+	})
 }
