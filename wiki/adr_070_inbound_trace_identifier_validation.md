@@ -28,7 +28,7 @@
 > as this ADR's other doors are detected — by the value ceasing to appear downstream.
 > The context parent itself stays unvalidated on the way out: `WithTraceParent` is
 > exported first-party API, and the publish-side `CorrelationId` guard remains the
-> defense in depth for what it can carry (#1121, `[C61.12]`).
+> defense in depth for what it can carry (#1121, `[C61.14]`).
 >
 > **Amended (2026-08-19):** `tracestate` is scoped to the carrier that brought its
 > parent, in addition to the size cap the Decision describes. It is retained only
