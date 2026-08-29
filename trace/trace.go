@@ -264,6 +264,17 @@ type outboundParent struct {
 //     at all.
 func injectTraceState(ctx context.Context, headers HeaderAccessor, parent outboundParent) {
 	if parent.fromHeader {
+		// The carried state OUTRANKS the context's here — it was written beside
+		// the parent that is shipping — but outranking is not exemption. This
+		// path used to return before any validation, so a well-formed
+		// `traceparent` beside a malformed `tracestate` forwarded the malformed
+		// value verbatim, which is the same defect on the state that this hop
+		// closes on the parent. The carrier reaches here from a caller's header
+		// map AND from a persisted outbox row the relay replays, so neither
+		// source is trusted.
+		if ts, carried := headerString(headers, HeaderTraceState); carried {
+			headers.Set(HeaderTraceState, ValidateTraceState(ts))
+		}
 		return
 	}
 	if ts, ok := StateFromContext(ctx); ok {

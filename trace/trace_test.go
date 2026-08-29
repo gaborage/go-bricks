@@ -391,3 +391,71 @@ func TestInjectIntoHeadersWritesNoTraceStateWhenNothingIsDisplaced(t *testing.T)
 
 	assert.NotContains(t, acc.m, HeaderTraceState)
 }
+
+// TestInjectIntoHeadersValidatesTheTraceStateOfAnAcceptedHeaderParent closes the
+// gap the accepted-parent path left open: it returned before any validation ran,
+// so a caller — or a persisted outbox row, whose carrier map the relay reuses —
+// could ship a well-formed `traceparent` with a malformed `tracestate` and the
+// malformed value was forwarded verbatim. Preserving a carried state is right;
+// preserving it UNVALIDATED is what this pins shut.
+func TestInjectIntoHeadersValidatesTheTraceStateOfAnAcceptedHeaderParent(t *testing.T) {
+	const headerParent = "00-11111111111111111111111111111111-2222222222222222-01"
+
+	tests := []struct {
+		name       string
+		state      string
+		wantState  string
+		wantReason string
+	}{
+		{
+			// The threat ADR-070 names: an AMQP longstr carries any byte, so a
+			// foreign publisher can plant CR/LF in a value this framework
+			// re-emits and persists. net/http refuses it on the way out, which
+			// turns one cheap message into a client burning its retry budget.
+			name:       "control_bytes_are_emptied",
+			state:      "vendor=x\r\nInjected: 1",
+			wantState:  "",
+			wantReason: "a control byte must not ride out on an accepted parent",
+		},
+		{
+			// Pins the deliberate LOOSENESS: the validator is the cap plus a
+			// control-byte refusal, NOT the W3C list grammar, which ADR-070
+			// declined because it would drag an OTel dependency under server,
+			// messaging and outbox. A value that is not valid tracestate syntax
+			// but is printable must still pass, or this door has quietly grown
+			// a rule its siblings do not have.
+			name:       "printable_non_grammar_state_is_kept",
+			state:      "not a tracestate!",
+			wantState:  "not a tracestate!",
+			wantReason: "the validator refuses control bytes and length, not grammar",
+		},
+		{
+			name:       "oversized_state_is_emptied",
+			state:      "vendor=" + strings.Repeat("x", MaxTraceStateBytes),
+			wantState:  "",
+			wantReason: "the length cap applies on this path too",
+		},
+		{
+			name:       "valid_state_is_preserved",
+			state:      "vendor=carrier",
+			wantState:  "vendor=carrier",
+			wantReason: "a valid carried state still wins over the context's",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			acc := &mapAccessor{m: map[string]any{
+				HeaderTraceParent: headerParent,
+				HeaderTraceState:  tt.state,
+			}}
+			ctx := WithTraceState(context.Background(), "vendor=context")
+
+			InjectIntoHeaders(ctx, acc)
+
+			assert.Equal(t, headerParent, acc.Get(HeaderTraceParent),
+				"the accepted parent is untouched whatever the state does")
+			assert.Equal(t, tt.wantState, acc.Get(HeaderTraceState), tt.wantReason)
+		})
+	}
+}
