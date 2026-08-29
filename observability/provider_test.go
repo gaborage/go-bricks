@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,10 +17,50 @@ import (
 )
 
 const (
+	// The two default OTLP ports, used here because nothing is expected to be
+	// listening on them: these tests prove the pipeline is WIRED, not that a
+	// collector answers. A developer running a real local collector changes what
+	// they exercise — the export then succeeds instead of failing — but not
+	// whether they pass, since each of them bounds the export below its own
+	// Shutdown budget.
 	testOTLPHTTPEndpoint = "http://localhost:4318"
 	testOTLPGRPCEndpoint = "localhost:4317"
 	testSpanName         = "test-span"
 	testTracerName       = "test-tracer"
+)
+
+// The three durations the OTLP exporter tests use to make one race deterministic
+// (#1162). Those tests aim a real exporter at a port with nothing listening, which
+// is the point — they prove the pipeline is wired, not that a collector answers.
+//
+// Once the batch processor's timer starts an export, ForceFlush cannot take it
+// back and Shutdown inherits it; that export runs on a BACKGROUND context, so the
+// caller's Shutdown deadline does not cap it. With the development defaults —
+// 500ms batch, 10s export — and the OTLP client's ~5s retry after a refused dial,
+// Shutdown blocked past its 2s budget and returned "context deadline exceeded",
+// but only when the timer happened to beat ForceFlush, which is why it flaked
+// under CI load and passed locally.
+//
+// So the tests force that ordering instead of hoping to avoid it: the batch
+// timeout makes the timer own the export, the tests then WAIT for the export to
+// actually start before calling ForceFlush, and the export timeout bounds what
+// Shutdown inherits, well under the 2s budget.
+//
+// The wait is a signal from the exporter, not a sleep. A sleep only proves time
+// passed: if the processor's worker started late, ForceFlush would run the export
+// itself on the test goroutine and both assertions would pass without the
+// timer-owned path ever being exercised — the test would then guard nothing while
+// looking like it did.
+const (
+	timerOwnedBatchTimeout    = time.Millisecond
+	boundedInheritedExportTTL = 500 * time.Millisecond
+	// A LIVENESS bound, not pacing. The wait ends on the export's own signal —
+	// 0.01s on HTTP, 0.51s on gRPC — so nothing is spent by setting this
+	// generously, and a tight value is actively wrong here: at 2s these tests
+	// failed under a concurrent `make check`, which is the same contention the
+	// flake they guard against needs. Its only job is turning a genuine hang into
+	// a named failure well inside Go's 10m package timeout.
+	timerOwnershipDeadline = 30 * time.Second
 )
 
 func TestNewProviderDisabled(t *testing.T) {
@@ -168,6 +209,8 @@ func TestNewProviderTracingEnabled(t *testing.T) {
 func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 	// Note: This test creates the exporter but does not actually send data
 	// since we don't have a real OTLP collector running
+	// Aimed at a dead port on purpose, with the three timing constants above
+	// making the timer-versus-ForceFlush ordering deterministic (#1162).
 	cfg := &Config{
 		Enabled: true,
 		Service: ServiceConfig{
@@ -178,11 +221,15 @@ func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 			Endpoint: testOTLPHTTPEndpoint,
 			Protocol: "http",
 			Insecure: true,
+			Batch:    BatchConfig{Timeout: timerOwnedBatchTimeout},
+			Export:   ExportConfig{Timeout: boundedInheritedExportTTL},
 			Sample: SampleConfig{
 				Rate: Float64Ptr(1.0),
 			},
 		},
 	}
+
+	exportStart := installExportStartSignal(t)
 
 	provider, err := NewProvider(cfg)
 	require.NoError(t, err)
@@ -200,6 +247,10 @@ func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 	ctx, span := tracer.Start(context.Background(), testSpanName)
 	assert.NotNil(t, span)
 	span.End()
+
+	// Block until the batch timer has actually entered ExportSpans, so ForceFlush
+	// below cannot be the thing that exports. See the const block above.
+	awaitTimerOwnedExport(t, exportStart)
 
 	// Force flush to ensure span is processed (even though it will fail to send)
 	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
@@ -216,6 +267,8 @@ func TestNewProviderOTLPHTTPExporter(t *testing.T) {
 func TestNewProviderOTLPGRPCExporter(t *testing.T) {
 	// Note: This test creates the exporter but does not actually send data
 	// since we don't have a real OTLP collector running
+	// Aimed at a dead port on purpose, with the three timing constants above
+	// making the timer-versus-ForceFlush ordering deterministic (#1162).
 	cfg := &Config{
 		Enabled: true,
 		Service: ServiceConfig{
@@ -226,11 +279,15 @@ func TestNewProviderOTLPGRPCExporter(t *testing.T) {
 			Endpoint: testOTLPGRPCEndpoint,
 			Protocol: "grpc",
 			Insecure: true,
+			Batch:    BatchConfig{Timeout: timerOwnedBatchTimeout},
+			Export:   ExportConfig{Timeout: boundedInheritedExportTTL},
 			Sample: SampleConfig{
 				Rate: Float64Ptr(1.0),
 			},
 		},
 	}
+
+	exportStart := installExportStartSignal(t)
 
 	provider, err := NewProvider(cfg)
 	require.NoError(t, err)
@@ -248,6 +305,10 @@ func TestNewProviderOTLPGRPCExporter(t *testing.T) {
 	ctx, span := tracer.Start(context.Background(), testSpanName)
 	assert.NotNil(t, span)
 	span.End()
+
+	// Block until the batch timer has actually entered ExportSpans, so ForceFlush
+	// below cannot be the thing that exports. See the const block above.
+	awaitTimerOwnedExport(t, exportStart)
 
 	// Force flush to ensure span is processed (even though it will fail to send)
 	flushCtx, flushCancel := context.WithTimeout(ctx, 1*time.Second)
@@ -272,6 +333,11 @@ func TestNewProviderOTLPWithHeaders(t *testing.T) {
 			Endpoint: testOTLPHTTPEndpoint,
 			Protocol: "http",
 			Insecure: true,
+			// Same dead port and the same 2s Shutdown assertion as the two exporter
+			// tests, so the same timer-owned export can overrun it (#1162). This test
+			// is about headers, not about the race, so it only needs the export
+			// BOUNDED — it does not force the hostile ordering the way they do.
+			Export: ExportConfig{Timeout: boundedInheritedExportTTL},
 			Headers: map[string]string{
 				"Authorization":   "Bearer test-token",
 				"X-Custom-Header": "custom-value",
@@ -1048,6 +1114,56 @@ func TestNewProviderNoCleanupOnSuccess(t *testing.T) {
 	err = provider.Shutdown(context.Background())
 	assert.NoError(t, err)
 	assert.True(t, recordingTraceExporter.ShutdownCalled(), "provider shutdown should trigger exporter shutdown")
+}
+
+// exportStartedSpanExporter announces the first ExportSpans call. The OTLP
+// exporter tests use it to observe that the BatchSpanProcessor's own timer
+// claimed the export, which a sleep cannot establish — it signals on ENTRY, so
+// the wait ends before the refused dial the export then blocks on.
+type exportStartedSpanExporter struct {
+	sdktrace.SpanExporter
+	once    sync.Once
+	started chan struct{}
+}
+
+func (e *exportStartedSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	e.once.Do(func() { close(e.started) })
+	return e.SpanExporter.ExportSpans(ctx, spans)
+}
+
+// installExportStartSignal wraps the next provider's trace exporter so its first
+// export is observable. It must run BEFORE NewProvider — the wrapper is consulted
+// while the provider builds the exporter — and restores the previous wrapper on
+// cleanup, since it is process-global.
+func installExportStartSignal(t *testing.T) *exportStartedSpanExporter {
+	t.Helper()
+
+	signaling := &exportStartedSpanExporter{started: make(chan struct{})}
+	prev := getTraceExporterWrapper()
+	setTraceExporterWrapper(func(exporter sdktrace.SpanExporter) sdktrace.SpanExporter {
+		// Composed, not replaced: saving prev only to restore it would still drop
+		// whatever it does for the provider built while this one is installed. The
+		// default is an identity wrapper (provider.go), and the production call
+		// sites invoke the result unguarded, so prev is never nil by contract.
+		signaling.SpanExporter = prev(exporter)
+		return signaling
+	})
+	t.Cleanup(func() { setTraceExporterWrapper(prev) })
+
+	return signaling
+}
+
+// awaitTimerOwnedExport blocks until the batch timer has entered ExportSpans, and
+// fails the test rather than hanging if it never does — a test that silently
+// proceeded here would be back to proving nothing about the ordering.
+func awaitTimerOwnedExport(t *testing.T, e *exportStartedSpanExporter) {
+	t.Helper()
+
+	select {
+	case <-e.started:
+	case <-time.After(timerOwnershipDeadline):
+		t.Fatal("the batch processor's timer never started an export; the ordering this test exists to exercise did not happen")
+	}
 }
 
 type recordingSpanExporter struct {
