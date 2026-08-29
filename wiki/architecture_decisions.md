@@ -1413,7 +1413,7 @@ text are deliberately not inspected.
 
 **Key Benefits:** the needle list finally reaches the pre-encoded bodies consumers actually log, and
 key material is caught by shape where no name needle could match.
-**Migration:** [migrations.md](migrations.md) `[C61.12]`.
+**Migration:** [migrations.md](migrations.md) `[C61.18]`.
 
 ---
 
