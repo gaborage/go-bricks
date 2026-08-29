@@ -3,7 +3,88 @@
 **Status:** Accepted
 **Date:** 2026-08-23
 **Supersedes:** the Filter exclusion in [ADR-031](adr_031_query_builder_identifier_validation.md)
-**Related:** [ADR-071](adr_071_upsert_column_sets_name_each_column_once.md) · issues #1104, #1143, #1149, #1150, #1151, #1153, #1154
+**Related:** [ADR-071](adr_071_upsert_column_sets_name_each_column_once.md) · issues #1104, #1143, #1149, #1150, #1151, #1153, #1154, #1187, #1196
+
+## Amendment (2026-08-28): the upsert's own acceptance system is ONE rule, and it normalizes
+
+The body below names `BuildUpsert`'s column maps as a shape that sits outside the
+identifier grammar and answers to the upsert's own preconditions instead. That
+stays true — the question there is stricter than "is this an identifier" — but the
+carve-out concealed two defects the rest of this ADR exists to remove.
+
+**It was not one acceptance system; it was two.** `requireSingleColumnNames`
+branched on the vendor: Oracle refused a qualified, function-shaped or empty key
+its MERGE cannot name, while PostgreSQL tested only for an unescaped quote and
+rendered the rest. So `COUNT(*)` built `ON CONFLICT ("COUNT(*)")` on PostgreSQL and
+errored on Oracle (#1187). The fork also ran the other way: a key spelling an
+interior quote as a doubled one (`a""b`) was accepted on Oracle and refused on
+PostgreSQL. A caller could not tell from either signature which rule applied,
+which is the divergence class this ADR set out to close.
+
+**And it never normalized.** #1158 gave the three identifier validators the
+normalized-return contract — validate the trimmed value, return it, render THAT —
+so no other door emits a padded identifier. The upsert column path was not on it:
+PostgreSQL rendered `"  name  "` verbatim while Oracle trimmed (its renderer always
+did), a padded conflict key failed with a confusing `must be present in insert
+columns`, and `{"id": 1, " id ": 2}` passed distinctness and rendered
+`INSERT INTO users ("id","id")`, invalid at execution (#1196).
+
+**One rule now, on both vendors, on the normalized spelling.** A conflict, insert
+or update key is trimmed, then must be a single column name — no qualifier, no
+function call, no empty name — carrying no quote of its own beyond a plain
+wrapping pair. The trimmed spelling is what the statement renders and what every
+membership and distinctness check compares. `normalizeUpsertColumns` returns it,
+which is the same contract `normalizeAgainst` gives every validator-routed door;
+the vendor fork in `requireSingleColumnNames` is gone.
+
+Note the third clause is a NARROWING on Oracle, not only on PostgreSQL: a doubled
+quote was Oracle's legal spelling of a quote inside a name, and is refused now. An
+identifier argument carries no ESCAPING of its own — the door escapes — and a
+column whose name genuinely holds a quote has no spelling at this door at all.
+Note what that does NOT mean: `qb.Expr()` is the hatch for a `Select`, a
+predicate or an `OrderBy` term, but `BuildUpsert` takes `[]string` and two
+`map[string]any`, so no expression can be a KEY here. A schema with a quote in a
+column name needs a hand-written statement (`database.Raw`, carrying its
+`// SECURITY: Manual SQL review completed` annotation) — which is the honest
+answer, and a narrower one than "use Expr".
+
+**Read the clause precisely: the DOUBLED quote is refused; well-formed caller
+quoting is not.** A key wrapped in quotes with no interior quote — `"ID"`,
+`"id"`, `"level"`, `"count(*)"` — is untouched, and deliberately so. ADR-071's
+identity rule is written on exactly that spelling: `id` renders unquoted and Oracle
+folds it to `ID`, while `"ID"` renders quoted and IS `ID`, so the two are one
+column and `upsertColumnName` must keep reading both. Refusing the wrapper as well
+as the escape would delete that rule as a side effect, and would leave a column
+literally named `count(*)` with no spelling at all — the quoted key is how such a
+name is stated, which is why `keyIsFunctionShaped` has always exempted it. The
+narrowing is the ESCAPE, not the QUOTES.
+
+**Identity is the RENDERED identifier on both vendors.** Oracle already folded
+through `oracleQuoteIdentifier`; PostgreSQL compared the raw spelling, which was
+adequate only while a caller-quoted key was refused there. Once the wrapper
+became acceptable (below), raw spellings made the doors disagree with the SQL —
+`EscapeIdentifier` renders `ID` and `"ID"` alike as `"ID"`, so a quoted conflict
+key missed its unquoted insert key, and two keys naming one column passed
+distinctness and rendered `("ID","ID")`. Both now canonicalize through the
+renderer. Case still survives on PostgreSQL, so `id` and `ID` remain two columns.
+
+**One clause WIDENS, on PostgreSQL.** Its old rule refused any key carrying a
+quote at all — `hasUnescapedQuote` reads the wrapper too — so `"ID"` and
+`"count(*)"` were refused there while Oracle took them. Under the single rule the
+wrapper is legal on both, which is what makes ADR-071's identity rule and the
+`"count(*)"` spelling mean the same thing at both doors. The property that bounds
+it is the one the narrowing installs: a quoted key may carry NO interior quote, so
+nothing inside the wrapper can end the identifier early and become SQL. A name
+like `"a;b"` is therefore accepted and renders as the column `a;b`, not as a
+statement — the semicolon never reaches a parser as syntax.
+
+None of this was an injection. Every key was quote-wrapped and escaped in the
+emitted SQL before and after — `"COUNT(*)"` names a column, it does not call a
+function. The defect was that one door spelled a column differently from every
+other door, and differently per vendor.
+
+Breaking: PostgreSQL refuses qualified, function-shaped and empty keys it used to
+render, and both vendors refuse a doubled-quote key. `[C61.15]`.
 
 ## Addendum (2026-08-24): the alias is a grammar, not a denylist
 
@@ -266,9 +347,13 @@ tracked separately (#1149) rather than settled here.
 **"Every door" means every door that takes an identifier ARGUMENT.** Two shapes sit
 outside the rule and are named here rather than left for a reader to notice.
 `BuildUpsert`'s three column maps are not checked against the identifier grammar —
-they answer to the upsert's own preconditions instead (`requireSingleColumnNames`,
+they answer to the upsert's own preconditions instead (`normalizeUpsertColumns`,
 `requireDistinctColumnIdentities`), which ask a stricter question: not merely "is
-this an identifier" but "is this one column this vendor can name in a MERGE".
+this an identifier" but "is this one column the vendor's upsert syntax can name" —
+Oracle's MERGE and PostgreSQL's ON CONFLICT alike. (The
+2026-08-28 amendment above makes that one question with one answer per shape, and
+gives it the normalized-return contract; when this was written it was a pair of
+per-vendor rules that never trimmed.)
 And `qb.Expr()`/`RawExpression` is the declared escape hatch: it is meant to carry
 SQL the grammar refuses, which is the point of having it. Neither is an oversight;
 both would be, if unstated.

@@ -8,6 +8,11 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
+// A padded spelling of the `name` column, named rather than written inline: the
+// padding is the shape under test, and gocritic's mapKey check cannot tell a
+// deliberate padded map key from a typo.
+const paddedNameKey = " name "
+
 // TestBuildUpsertReportsMissingPreconditionsIdenticallyPerVendor pins the wording
 // of both upsert preconditions to one string per precondition. The two builders
 // used to phrase them per vendor ("for Oracle MERGE" / "for PostgreSQL upsert"),
@@ -120,16 +125,18 @@ func TestBuildUpsertMatchesConflictColumnsToInsertSetByVendorIdentity(t *testing
 		require.ErrorContains(t, err, `conflict column "level" must be present in insert columns`)
 	})
 
-	t.Run("postgresql_keeps_case_and_whitespace_variants_distinct", func(t *testing.T) {
+	t.Run("postgresql_keeps_case_variants_distinct_but_not_padding", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		// PostgreSQL quotes every identifier, so folding here would accept calls
-		// the database rejects.
+		// PostgreSQL quotes every identifier, so folding CASE here would accept
+		// calls the database rejects. Padding is not case: it is not part of the
+		// name on either vendor, so the padded key names the column it matches
+		// (#1196).
 		_, _, caseErr := qb.BuildUpsert("users", []string{"id"}, map[string]any{"ID": 1}, nil)
 		_, _, spaceErr := qb.BuildUpsert("users", []string{" id "}, map[string]any{"id": 1}, nil)
 
 		require.ErrorContains(t, caseErr, `conflict column "id" must be present in insert columns`)
-		require.ErrorContains(t, spaceErr, `conflict column " id " must be present in insert columns`)
+		require.NoError(t, spaceErr)
 	})
 }
 
@@ -306,19 +313,6 @@ func TestBuildUpsertKeepsDistinctIdentitiesBuildable(t *testing.T) {
 		_, _, levelErr := qb.BuildUpsert("users", []string{"level"},
 			map[string]any{"level": 1, "LEVEL": 2}, nil)
 		require.NoError(t, levelErr)
-	})
-
-	t.Run("oracle_keeps_a_doubled_quote_inside_a_quoted_name", func(t *testing.T) {
-		qb := NewQueryBuilder(dbtypes.Oracle)
-
-		// A doubled quote is how Oracle spells a quote inside an identifier, so
-		// this names one column and must survive the check that refuses the
-		// undoubled ones.
-		sql, _, err := qb.BuildUpsert("users", []string{"id"},
-			map[string]any{"id": 1, `a""b`: 2}, nil)
-
-		require.NoError(t, err)
-		require.Contains(t, sql, `:1 AS "a""b"`)
 	})
 
 	t.Run("oracle_quoted_and_unquoted_spellings_are_two_columns", func(t *testing.T) {
@@ -511,28 +505,17 @@ func TestBuildUpsertRejectsColumnsOracleMergeCannotName(t *testing.T) {
 			`update column "role\" = 'admin', \"name" is not a single column name for upsert`)
 	})
 
-	t.Run("postgresql_keeps_a_doubled_quote_key", func(t *testing.T) {
+	t.Run("postgresql_refuses_a_dotted_key", func(t *testing.T) {
 		qb := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		// A doubled quote is the legal spelling on this vendor too, so the rule
-		// refuses only what the escaper cannot render faithfully.
-		_, _, err := qb.BuildUpsert("users", []string{"id"},
-			map[string]any{"id": 1, `a""b`: 2}, nil)
-
-		require.NoError(t, err)
-	})
-
-	t.Run("postgresql_still_builds_a_dotted_key", func(t *testing.T) {
-		qb := NewQueryBuilder(dbtypes.PostgreSQL)
-
-		// PostgreSQL is unchanged, which is the claim under test — not that the
-		// key is sensible there. Its escaper splits on the dot and quotes each
-		// part, so the key renders as a qualified reference rather than a column
-		// name; refusing it there would be a second breaking change, out of scope.
+		// The escaper here splits on the dot and quotes each part, so the key
+		// renders as a qualified reference rather than the column name an upsert
+		// list may hold. Oracle has always refused it; one rule means this door
+		// refuses it too (#1187).
 		_, _, err := qb.BuildUpsert("users", []string{"id"},
 			map[string]any{"id": 1, "t.name": 2}, nil)
 
-		require.NoError(t, err)
+		require.EqualError(t, err, `insert column "t.name" is not a single column name for upsert`)
 	})
 }
 
@@ -576,14 +559,25 @@ func TestUpsertColumnNameNamesTheColumnNotTheSpelling(t *testing.T) {
 		})
 	}
 
-	t.Run("postgresql_names_the_key_itself", func(t *testing.T) {
+	t.Run("postgresql_names_the_rendered_identifier", func(t *testing.T) {
 		pg := NewQueryBuilder(dbtypes.PostgreSQL)
 
-		// No folding and no unwrapping: the key is the name, which is why the
-		// distinctness check cannot fire on this vendor.
-		for _, column := range []string{"id", "ID", `"ID"`, "level"} {
-			if got := pg.upsertColumnName(column); got != column {
-				t.Errorf("upsertColumnName(%q) = %q, want it unchanged", column, got)
+		// No folding — PostgreSQL quotes everything, so case survives — but the
+		// wrapper does not survive, because the renderer adds it to the bare key
+		// and keeps it on the quoted one. That is what makes `ID` and `"ID"` one
+		// column here, and it is why the distinctness check CAN fire on this
+		// vendor now: two spellings of one column no longer look distinct.
+		cases := map[string]string{
+			"id":     `"id"`,
+			"ID":     `"ID"`,
+			`"ID"`:   `"ID"`,
+			`"id"`:   `"id"`,
+			"level":  `"level"`,
+			"name x": `"name x"`,
+		}
+		for column, want := range cases {
+			if got := pg.upsertColumnName(column); got != want {
+				t.Errorf("upsertColumnName(%q) = %q, want %q", column, got, want)
 			}
 		}
 	})
@@ -593,7 +587,7 @@ func TestUpsertColumnNameNamesTheColumnNotTheSpelling(t *testing.T) {
 // gap the deleted pass-through left: the pre-existing rejection tests use a
 // conflict column ABSENT from the insert map, so the membership check alone
 // would have kept them green while the acceptance rule silently widened.
-// The conflict column is deliberately VALID here. requireSingleColumnNames runs
+// The conflict column is deliberately VALID here. normalizeUpsertColumns runs
 // conflict, then insert, then update, returning on the first failure, so a
 // function-shaped CONFLICT column is caught before the insert group is judged at
 // all — the pre-existing tests do that, and a regression in the insert group's
@@ -614,4 +608,212 @@ func TestBuildUpsertRejectsFunctionShapedInsertColumn(t *testing.T) {
 	)
 
 	require.ErrorContains(t, err, "insert column")
+}
+
+// TestBuildUpsertRefusesFunctionShapedKeysOnEveryVendor pins #1187: the
+// acceptance rule for an upsert column key is one rule, so a function-shaped
+// key is refused with the same message on both vendors. PostgreSQL used to
+// render it as the literal column `"COUNT(*)"` — legal SQL, but a shape its
+// sibling door refuses.
+func TestBuildUpsertRefusesFunctionShapedKeysOnEveryVendor(t *testing.T) {
+	for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
+		t.Run(vendor, func(t *testing.T) {
+			qb := NewQueryBuilder(vendor)
+
+			_, _, err := qb.BuildUpsert("t", []string{"COUNT(*)"},
+				map[string]any{"COUNT(*)": 1, "id": 2}, nil)
+
+			require.EqualError(t, err, `conflict column "COUNT(*)" is not a single column name for upsert`)
+		})
+	}
+}
+
+// TestBuildUpsertNormalizesColumnKeysOnEveryVendor pins #1196: an upsert column
+// key is an identifier argument, so it is trimmed before it is judged and the
+// trimmed spelling is what the statement renders. PostgreSQL used to render the
+// padded key verbatim inside the quoted identifier while Oracle trimmed it, and
+// a padded CONFLICT key failed membership on PostgreSQL because the two map keys
+// differed as strings.
+func TestBuildUpsertNormalizesColumnKeysOnEveryVendor(t *testing.T) {
+	t.Run("postgresql_renders_the_trimmed_spelling", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, args, err := qb.BuildUpsert("users", []string{"id"},
+			map[string]any{"id": 1, "  name  ": "x"}, nil)
+
+		require.NoError(t, err)
+		require.Equal(t,
+			`INSERT INTO users ("id","name") VALUES ($1,$2) ON CONFLICT ("id") DO NOTHING`,
+			sql)
+		require.Equal(t, []any{1, "x"}, args)
+	})
+
+	t.Run("postgresql_padded_conflict_key_matches_its_insert_key", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, _, err := qb.BuildUpsert("users", []string{"  id  "},
+			map[string]any{"id": 1, "name": "x"}, nil)
+
+		require.NoError(t, err, "a padded conflict key names the column its insert key names")
+		require.Contains(t, sql, `ON CONFLICT ("id")`)
+	})
+
+	t.Run("postgresql_renders_the_trimmed_update_target", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, args, err := qb.BuildUpsert("users", []string{"id"},
+			map[string]any{"id": 1, "name": "x"}, map[string]any{paddedNameKey: "y"})
+
+		require.NoError(t, err)
+		require.Equal(t,
+			`INSERT INTO users ("id","name") VALUES ($1,$2) ON CONFLICT ("id") DO UPDATE SET "name" = $3`,
+			sql)
+		require.Equal(t, []any{1, "x", "y"}, args)
+	})
+}
+
+// TestBuildUpsertAppliesOneAcceptanceRulePerShape is the matrix the two issues
+// asked for: every column-key shape gets ONE verdict, and both vendors return
+// it. It is the regression guard against the rule forking again — a change that
+// widens or narrows one door and not the other fails here rather than in a
+// consumer's Oracle deployment.
+func TestBuildUpsertAppliesOneAcceptanceRulePerShape(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     string
+		wantErr string
+	}{
+		{
+			name:    "function_shaped",
+			key:     "COUNT(*)",
+			wantErr: `insert column "COUNT(*)" is not a single column name for upsert`,
+		},
+		{
+			// The escape hatch for a column genuinely named count(*): the caller
+			// quotes it, which says "this is a name" rather than "this is a call".
+			name: "quoted_function_shaped_names_a_real_column",
+			key:  `"count(*)"`,
+		},
+		{
+			// The WIDENING half on PostgreSQL, and the reason it is safe: the old
+			// rule there refused every key carrying a quote, wrapper included.
+			// Punctuation inside a quoted name cannot reach the parser — no
+			// interior quote means nothing ends the identifier early — so this
+			// names the column `a;b` on both vendors rather than a statement.
+			name: "quoted_key_carrying_punctuation",
+			key:  `"a;b"`,
+		},
+		{
+			name:    "dotted",
+			key:     "t.name",
+			wantErr: `insert column "t.name" is not a single column name for upsert`,
+		},
+		{
+			name:    "doubled_quote",
+			key:     `a""b`,
+			wantErr: `insert column "a\"\"b" is not a single column name for upsert`,
+		},
+		{
+			// The wrapped spelling of the same name: the wrapper alone does not
+			// rescue it, which is the half that used to build on Oracle.
+			name:    "wrapped_doubled_quote",
+			key:     `"a""b"`,
+			wantErr: `insert column "\"a\"\"b\"" is not a single column name for upsert`,
+		},
+		{
+			name:    "unescaped_quote",
+			key:     `role" = 'admin', "name`,
+			wantErr: `insert column "role\" = 'admin', \"name" is not a single column name for upsert`,
+		},
+		{
+			name:    "blank",
+			key:     "  ",
+			wantErr: `insert column "  " is not a single column name for upsert`,
+		},
+		{
+			// Padding is not part of the name, so this is the column `name` and
+			// builds — the verdict PostgreSQL used to disagree with by rendering
+			// the padding into the identifier.
+			name: "padded",
+			key:  "  name  ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
+				qb := NewQueryBuilder(vendor)
+
+				_, _, err := qb.BuildUpsert("users", []string{"id"},
+					map[string]any{"id": 1, tt.key: 2}, nil)
+
+				if tt.wantErr == "" {
+					require.NoErrorf(t, err, "%s must accept %q like its sibling door", vendor, tt.key)
+					continue
+				}
+				require.EqualErrorf(t, err, tt.wantErr, "%s must refuse %q like its sibling door", vendor, tt.key)
+			}
+		})
+	}
+
+	t.Run("twin_keys_differing_only_by_padding", func(t *testing.T) {
+		// Not in the table: it needs two keys rather than one, and the message
+		// names both spellings.
+		for _, vendor := range []string{dbtypes.PostgreSQL, dbtypes.Oracle} {
+			qb := NewQueryBuilder(vendor)
+
+			_, _, err := qb.BuildUpsert("users", []string{"id"},
+				map[string]any{"id": 1, "name": 2, paddedNameKey: 3}, nil)
+
+			require.EqualErrorf(t, err,
+				`insert columns must be distinct: " name " and "name" name the same column for upsert`,
+				"%s must refuse padded twins like its sibling door", vendor)
+		}
+	})
+}
+
+// TestBuildUpsertMatchesQuotedAndUnquotedKeysOnPostgreSQL closes the gap the
+// wrapper-quoted widening opened: `ID` and `"ID"` are ONE PostgreSQL column,
+// because EscapeIdentifier renders both as "ID" — it quotes the bare key and
+// passes the already-quoted one through. Identity there was the raw spelling, so
+// the two doors disagreed with the renderer: a quoted conflict key missed its
+// unquoted insert key, and two insert keys naming one column both survived
+// distinctness and rendered `("ID","ID")`, which PostgreSQL rejects.
+func TestBuildUpsertMatchesQuotedAndUnquotedKeysOnPostgreSQL(t *testing.T) {
+	t.Run("quoted_conflict_key_finds_its_unquoted_insert_key", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, _, err := qb.BuildUpsert("users", []string{`"ID"`},
+			map[string]any{"ID": 1, "name": "x"}, nil)
+
+		require.NoError(t, err, `"ID" and ID render as the same PostgreSQL column`)
+		require.Equal(t,
+			`INSERT INTO users ("ID","name") VALUES ($1,$2) ON CONFLICT ("ID") DO NOTHING`,
+			sql)
+	})
+
+	t.Run("quoted_and_unquoted_twins_are_one_column", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		sql, args, err := qb.BuildUpsert("users", []string{"k"},
+			map[string]any{"k": 0, "ID": 1, `"ID"`: 2}, nil)
+
+		require.EqualError(t, err,
+			`insert columns must be distinct: "\"ID\"" and "ID" name the same column for upsert`)
+		require.Empty(t, sql, "a rejected call emits no SQL")
+		require.Empty(t, args, "a rejected call binds no arguments")
+	})
+
+	t.Run("case_variants_stay_two_columns", func(t *testing.T) {
+		qb := NewQueryBuilder(dbtypes.PostgreSQL)
+
+		// The half the canonicalization must NOT break: PostgreSQL quotes every
+		// identifier, so id and ID are two columns and conflicting on both is a
+		// legitimate composite target.
+		sql, _, err := qb.BuildUpsert("users", []string{"id", "ID"},
+			map[string]any{"id": 1, "ID": 2, "name": "a"}, nil)
+
+		require.NoError(t, err)
+		require.Contains(t, sql, `ON CONFLICT ("ID", "id")`)
+	})
 }

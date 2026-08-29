@@ -33,6 +33,59 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 	return vals
 }
 
+// upsertColumn pairs a caller's key with the normalized spelling the statement
+// renders. Every identity check reads the normalized half — that is what makes
+// the acceptance system judge what the renderer emits (#1196) — while a
+// rejection names the half the caller wrote, so the message points at their own
+// argument.
+type upsertColumn struct {
+	key        string
+	normalized string
+}
+
+// normalizeUpsertColumns trims each key, rejects the ones no upsert can name,
+// and returns the normalized spellings for the caller to render and compare.
+// Returning the normalized identifier is the contract itself, the one
+// normalizeAgainst gives every other identifier door: validating a trimmed value
+// while rendering the untrimmed one is what left padded keys in the SQL here
+// after every other door stopped emitting them (#1158).
+//
+// It is vendor-neutral on purpose: one rule at both doors is the point of #1187,
+// and the Oracle rendering it judges against is the canonical single-token form
+// of a key rather than the SQL either vendor emits.
+func normalizeUpsertColumns(kind string, columns []string) ([]upsertColumn, error) {
+	normalized := make([]upsertColumn, len(columns))
+	for i, col := range columns {
+		trimmed := strings.TrimSpace(col)
+		if !isAcceptableUpsertColumnKey(trimmed) {
+			return nil, fmt.Errorf("%s column %q is not a single column name for upsert", kind, col)
+		}
+		normalized[i] = upsertColumn{key: col, normalized: trimmed}
+	}
+	return normalized, nil
+}
+
+// normalizedColumnMap re-keys a caller's column map by the normalized spelling,
+// so the vendor builders below name every column the way it was judged.
+// Duplicate normalized keys cannot reach here: requireDistinctColumnIdentities
+// refuses them on both vendors first.
+func normalizedColumnMap(columns map[string]any, keys []upsertColumn) map[string]any {
+	normalized := make(map[string]any, len(keys))
+	for _, col := range keys {
+		normalized[col.normalized] = columns[col.key]
+	}
+	return normalized
+}
+
+// normalizedSpellings returns just the normalized half of each column.
+func normalizedSpellings(columns []upsertColumn) []string {
+	spellings := make([]string, len(columns))
+	for i, col := range columns {
+		spellings[i] = col.normalized
+	}
+	return spellings
+}
+
 // requireConflictColumnsInInsertSet keeps one BuildUpsert call meaning one thing
 // on both vendors. Oracle's MERGE names every conflict column in its ON clause as
 // source.<column>, which the USING SELECT supplies only for inserted columns, so
@@ -44,15 +97,15 @@ func valuesByKeyOrder(m map[string]any, keys []string) []any {
 // Membership is keyed by the column each key names, like the checks around it,
 // so a conflict column that names an inserted column in a different spelling is
 // accepted on Oracle, where `"ID"` and id are one column.
-func (qb *QueryBuilder) requireConflictColumnsInInsertSet(conflictColumns []string, insertColumns map[string]any) error {
+func (qb *QueryBuilder) requireConflictColumnsInInsertSet(conflictColumns, insertColumns []upsertColumn) error {
 	insertIdentities := make(map[string]struct{}, len(insertColumns))
-	for col := range insertColumns {
-		insertIdentities[qb.upsertColumnName(col)] = struct{}{}
+	for _, col := range insertColumns {
+		insertIdentities[qb.upsertColumnName(col.normalized)] = struct{}{}
 	}
 
 	for _, col := range conflictColumns {
-		if _, ok := insertIdentities[qb.upsertColumnName(col)]; !ok {
-			return fmt.Errorf("conflict column %q must be present in insert columns for upsert", col)
+		if _, ok := insertIdentities[qb.upsertColumnName(col.normalized)]; !ok {
+			return fmt.Errorf("conflict column %q must be present in insert columns for upsert", col.key)
 		}
 	}
 	return nil
@@ -61,24 +114,25 @@ func (qb *QueryBuilder) requireConflictColumnsInInsertSet(conflictColumns []stri
 // rejectConflictColumnUpdates keeps one BuildUpsert call meaning one thing on
 // both vendors: Oracle's MERGE rejects an updated ON-clause column at execution
 // (ORA-38104) while PostgreSQL would accept it, so both builders reject early.
-func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns []string, updateColumns map[string]any) error {
+func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns, updateColumns []upsertColumn) error {
 	if len(updateColumns) == 0 {
 		return nil
 	}
 
 	// Keyed by the column each key names, so a spelling that names the same
-	// column cannot slip past. sortedKeys keeps the reported name deterministic
-	// when two update keys collapse to one column.
+	// column cannot slip past. The caller passes the update keys in sorted
+	// order, which keeps the reported name deterministic when two of them
+	// collapse to one column.
 	byIdentity := make(map[string]string, len(updateColumns))
-	for _, col := range sortedKeys(updateColumns) {
-		if identity := qb.upsertColumnName(col); byIdentity[identity] == "" {
-			byIdentity[identity] = col
+	for _, col := range updateColumns {
+		if identity := qb.upsertColumnName(col.normalized); byIdentity[identity] == "" {
+			byIdentity[identity] = col.key
 		}
 	}
 
 	for _, col := range conflictColumns {
-		if updateCol, ok := byIdentity[qb.upsertColumnName(col)]; ok {
-			return fmt.Errorf("update column %q collides with conflict column %q (Oracle MERGE forbids updating ON-clause columns, ORA-38104; rejected on all vendors for parity)", updateCol, col)
+		if updateCol, ok := byIdentity[qb.upsertColumnName(col.normalized)]; ok {
+			return fmt.Errorf("update column %q collides with conflict column %q (Oracle MERGE forbids updating ON-clause columns, ORA-38104; rejected on all vendors for parity)", updateCol, col.key)
 		}
 	}
 	return nil
@@ -100,14 +154,29 @@ func (qb *QueryBuilder) rejectConflictColumnUpdates(conflictColumns []string, up
 //
 // The quote test reads the first and last byte, which answers correctly only for
 // a rendering that either carries no quote at all or begins AND ends with one.
-// requireSingleColumnNames rules every other shape out ahead of it.
+// normalizeUpsertColumns rules every other shape out ahead of it, and hands
+// this the TRIMMED spelling, so padding never reaches the fold.
 func (qb *QueryBuilder) upsertColumnName(column string) string {
 	if qb.vendor != dbtypes.Oracle {
-		return column
+		// Canonicalized through the RENDERER, the same way the Oracle branch below
+		// is. PostgreSQL quotes every identifier, so EscapeIdentifier renders the
+		// bare `ID` and the caller-quoted `"ID"` alike as "ID" — one column. Raw
+		// spelling was an adequate identity only while a quoted key was refused
+		// here; once the wrapper became acceptable, comparing raw spellings made
+		// these doors disagree with the SQL: a quoted conflict key missed its
+		// unquoted insert key, and two keys naming one column passed distinctness
+		// and rendered ("ID","ID"). Case is still preserved, so id and ID remain
+		// two columns — which is what PostgreSQL itself does with quoted names.
+		return qb.EscapeIdentifier(column)
 	}
 
 	rendered := oracleQuoteIdentifier(column)
 	if len(rendered) >= 2 && rendered[0] == '"' && rendered[len(rendered)-1] == '"' {
+		// The unescape is kept though no key reaching here can carry a doubled
+		// quote any more: reading an escaped rendering as the name it denotes is
+		// this function's own rule, not a consequence of the door's, and a
+		// renderer that starts escaping something else must not silently rename
+		// the column.
 		return strings.ReplaceAll(rendered[1:len(rendered)-1], `""`, `"`)
 	}
 	return strings.ToUpper(rendered)
@@ -123,80 +192,61 @@ func (qb *QueryBuilder) upsertColumnName(column string) string {
 // through sortedKeys. A map cannot hold an exact repeat, but two of its keys can
 // still name one Oracle column, which builds a MERGE declaring one alias twice
 // in its USING clause and naming it twice in the INSERT list. On PostgreSQL a
-// key is its own name, so this cannot fire for either map.
-func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns []string) error {
+// two keys collide there when they RENDER alike: one differing only by padding,
+// or a bare key against its caller-quoted twin (`ID` and `"ID"`), both of which
+// used to render one column twice — `INSERT INTO users ("id","id")` — and fail at
+// execution (#1196).
+func (qb *QueryBuilder) requireDistinctColumnIdentities(kind string, columns []upsertColumn) error {
 	seen := make(map[string]string, len(columns))
 	for _, col := range columns {
-		identity := qb.upsertColumnName(col)
+		identity := qb.upsertColumnName(col.normalized)
 		if first, ok := seen[identity]; ok {
-			return fmt.Errorf("%s columns must be distinct: %q and %q name the same column for upsert", kind, first, col)
+			return fmt.Errorf("%s columns must be distinct: %q and %q name the same column for upsert", kind, first, col.key)
 		}
-		seen[identity] = col
+		seen[identity] = col.key
 	}
 	return nil
 }
 
-// requireSingleColumnNames rejects a key Oracle's MERGE has no way to name.
-// Every upsert column becomes a column alias in the USING clause — :1 AS
-// <column> — which admits one identifier and nothing else: no qualifier, no
-// function call, no empty name. Such a key could only ever render SQL Oracle
-// refuses to parse, so the failure moves from execution to build time. Rendering
-// goes through the same helper buildOracleMerge uses, so what is judged here is
-// what the statement would carry.
-//
-// Running before the identity checks is what keeps upsertColumnName's quote test
-// honest — see its doc for the shape that leaves it correct.
-//
-// PostgreSQL is untouched: a dotted key renders there as a qualified reference
-// rather than a column name, but rejecting it would be a second breaking change,
-// and one this seam has no evidence for.
-func (qb *QueryBuilder) requireSingleColumnNames(kind string, columns []string) error {
-	if qb.vendor != dbtypes.Oracle {
-		// The quote rule is the one half that is not Oracle grammar. It was
-		// written when both escapers wrapped without doubling, so the same key
-		// left the identifier on PostgreSQL too; ADR-082 fixed the renderers, and
-		// the rule is kept because nothing legitimate passes a bare interior
-		// quote, so refusing it still costs no working call. Note this branch is
-		// STRICTER than the Oracle one: it refuses a well-formed quoted key
-		// (`"a""b"`) that keyEscapesIdentifier exempts. That divergence pre-dates
-		// ADR-082 and is left standing rather than widened inside a security fix;
-		// it is tracked with the other upsert-acceptance question. The rest of
-		// this check — qualifiers, function calls — stays Oracle's, where a
-		// dotted key is a grammar violation rather than merely unusual.
-		for _, col := range columns {
-			if hasUnescapedQuote(col) {
-				return fmt.Errorf("%s column %q is not a single column name for upsert", kind, col)
-			}
-		}
-		return nil
-	}
-
-	for i, rendered := range qb.quoteOracleColumnsForDML(columns...) {
-		if !isSingleColumnName(rendered) || keyEscapesIdentifier(columns[i]) || keyIsFunctionShaped(columns[i]) {
-			return fmt.Errorf("%s column %q is not a single column name for upsert", kind, columns[i])
-		}
-	}
-	return nil
+// isAcceptableUpsertColumnKey reports whether a key names one column an upsert
+// can carry on either vendor.
+func isAcceptableUpsertColumnKey(key string) bool {
+	// The two key-only scans come first: they answer with one pass and no
+	// allocation, while oracleQuoteIdentifier parses the key into segments and
+	// may allocate a quoted rendering. A key either of them refuses never pays
+	// for that parse.
+	return !keyCarriesInteriorQuote(key) &&
+		!keyIsFunctionShaped(key) &&
+		isSingleColumnName(oracleQuoteIdentifier(key))
 }
 
-// keyEscapesIdentifier reports whether a caller's key carries a quote that is
-// neither half of a doubled escape nor the wrapper of a well-formed quoted
-// identifier.
+// keyCarriesInteriorQuote reports whether a caller's key carries a quote
+// anywhere other than as the wrapper of a quoted identifier.
 //
 // It reads the KEY because the rendering no longer betrays it. The renderers now
 // double an interior quote, so `role" = 'admin', "name` renders as one (absurd)
 // column rather than as a second assignment, and the rendering-side test that
 // used to catch it passes. Refusing the key keeps ADR-071's rule that the builder
-// names only what the caller can have meant, and keeps this change from widening
-// what an upsert accepts while it is closing an injection. Whether such a key
-// should be accepted now that it renders correctly is tracked separately.
-func keyEscapesIdentifier(key string) bool {
-	return !isQuotedIdentifier(key) && hasUnescapedQuote(key)
+// names only what the caller can have meant.
+//
+// A DOUBLED quote is refused too, on both vendors — Oracle used to exempt it as
+// the legal spelling of a quote inside a name while PostgreSQL refused it. An
+// identifier argument carries no quoting of its own; the door quotes. A column
+// whose name genuinely contains a quote has NO spelling at this door — the
+// signature takes strings, so qb.Expr() cannot reach a key here the way it
+// reaches a Select or a predicate. Such a schema needs a hand-written statement
+// (database.Raw, with its // SECURITY: annotation). Refusing the spelling here
+// is what leaves ONE acceptance rule at this door (#1187).
+func keyCarriesInteriorQuote(key string) bool {
+	if isQuotedString(key) {
+		return strings.Contains(key[1:len(key)-1], `"`)
+	}
+	return strings.Contains(key, `"`)
 }
 
 // keyIsFunctionShaped reports whether an unquoted key carries a parenthesis.
 //
-// It reads the KEY for the same reason keyEscapesIdentifier does: the rendering
+// It reads the KEY for the same reason keyCarriesInteriorQuote does: the rendering
 // stopped betraying it. `count(*)` used to reach isSingleColumnName verbatim,
 // because the Oracle renderer returned anything function-shaped unquoted, and was
 // refused there as not a valid segment. That pass-through is gone (#1149), so the
@@ -224,8 +274,8 @@ func keyIsFunctionShaped(key string) bool {
 // rendered as `"role" = 'admin', "name"` — not a column, but a second assignment
 // in a position no bind parameter guards. The renderer escapes now, so no
 // rendering it produces should reach this with an early-ending quote, and the
-// rule that refuses such a key has moved to keyEscapesIdentifier, which reads the
-// key itself. The quote test is kept rather than deleted: it is one comparison
+// rule that refuses such a key has moved to keyCarriesInteriorQuote, which reads
+// the key itself. The quote test is kept rather than deleted: it is one comparison
 // standing between a future renderer change and an injected assignment, and this
 // is not the seam to economize on. Its other clauses — empty, qualified, not a
 // valid segment — remain load-bearing on their own.
@@ -246,12 +296,9 @@ func isSingleColumnName(rendered string) bool {
 }
 
 // hasUnescapedQuote reports whether text carries a quote that is not part of a
-// doubled "" escape. On the PostgreSQL side this is applied to the KEY rather
-// than its rendering: the escaper splits a dotted key and quotes each part, so
-// a legitimate qualified reference renders with quotes in the middle and the
-// rendering cannot tell that apart from an escape defect. The key can: nothing
-// legitimate carries a bare quote, and one that does leaves the identifier the
-// escaper wraps it in.
+// doubled "" escape. It reads renderings only: the upsert door judges the KEY
+// with keyCarriesInteriorQuote, which is stricter — a rendering may legitimately
+// carry a doubled quote, a caller's identifier argument may not.
 func hasUnescapedQuote(text string) bool {
 	return strings.Contains(strings.ReplaceAll(text, `""`, ""), `"`)
 }
