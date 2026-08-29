@@ -152,7 +152,7 @@ func extractTraceParent(ctx context.Context, headers HeaderAccessor, carriedID b
 	}
 
 	// Validate before storing anything: the raw traceparent was previously kept
-	// verbatim and re-emitted on every outbound hop, and forceAlignTraceID
+	// verbatim and re-emitted on every outbound hop, and the outbound alignment
 	// re-emits the raw request id whenever the traceparent is malformed — the one
 	// condition under which a poisoned value escapes onto the next hop.
 	tp := ValidateTraceParent(safeToString(v))
@@ -167,9 +167,9 @@ func extractTraceParent(ctx context.Context, headers HeaderAccessor, carriedID b
 	// id inherited from the caller outrank the carrier's own parent, so the handler
 	// would log under the caller's trace while its span hung under the carrier's.
 	if !carriedID {
-		if traceID := extractTraceIDFromParent(tp); traceID != "" {
-			ctx = WithTraceID(ctx, traceID)
-		}
+		// tp came back from ValidateTraceParent above, so the fields are exact
+		// and the parser can be read directly rather than validating twice.
+		ctx = WithTraceID(ctx, splitTraceParent(tp).traceID)
 	}
 
 	return ctx, true
@@ -219,33 +219,116 @@ func InjectIntoHeaders(ctx context.Context, headers HeaderAccessor) {
 		return
 	}
 
-	traceparent := computeTraceParent(ctx, headers)
-	alignedTraceID := forceAlignTraceID(EnsureTraceID(ctx), traceparent)
+	parent := computeTraceParent(ctx, headers)
 
-	headers.Set(HeaderXRequestID, alignedTraceID)
-	headers.Set(HeaderTraceParent, traceparent)
+	headers.Set(HeaderXRequestID, alignTraceID(EnsureTraceID(ctx), parent.traceID))
+	headers.Set(HeaderTraceParent, parent.value)
+	injectTraceState(ctx, headers, parent)
+}
+
+// outboundParent is the traceparent this hop will emit, with what the decision
+// already established about it: the trace-id field, whether the value came from
+// the header map the caller pre-populated, and whether a pre-set value was
+// present and refused. The tracestate rule reads all three, so they travel
+// together rather than as three positional returns.
+type outboundParent struct {
+	value   string
+	traceID string
+	// fromHeader says the emitted value IS the caller's pre-set one, accepted.
+	fromHeader bool
+	// rejected says a pre-set value was present and refused.
+	rejected bool
+}
+
+// injectTraceState writes the tracestate that belongs to the traceparent just
+// emitted. It mirrors extractTraceState on the ingress side: the pairing rule
+// lives in one function rather than inline at the door.
+//
+// A tracestate annotates ONE traceparent, so it is written by the same carrier
+// that supplied the parent being emitted — the carrier scoping ADR-070 applies
+// on ingress, read on the outbound carrier:
+//
+//   - the caller's pre-set traceparent was ACCEPTED, so the pre-set tracestate
+//     beside it still annotates the value going out and is left untouched. The
+//     context's state belongs to a different parent and must not overwrite it.
+//   - otherwise the emitted parent is the context's or a generated one, so the
+//     context's state is the only one that can annotate it.
+//   - with no context state, a pre-set tracestate is left annotating a parent
+//     that is not going out, so it must not ride along with the value that
+//     replaced it. That covers the REFUSED pre-set parent and the parent that
+//     was never supplied at all — a header map carrying `tracestate` and no
+//     `traceparent` is state from a trace this hop is not continuing either way.
+//     The accessor has no delete, so an empty value is the removal every reader
+//     already treats as absent (ValidateTraceState); it is written only where a
+//     value is actually being displaced, so the common publish stamps no header
+//     at all.
+func injectTraceState(ctx context.Context, headers HeaderAccessor, parent outboundParent) {
+	if parent.fromHeader {
+		// The carried state OUTRANKS the context's here — it was written beside
+		// the parent that is shipping — but outranking is not exemption. This
+		// path used to return before any validation, so a well-formed
+		// `traceparent` beside a malformed `tracestate` forwarded the malformed
+		// value verbatim, which is the same defect on the state that this hop
+		// closes on the parent. The carrier reaches here from a caller's header
+		// map AND from a persisted outbox row the relay replays, so neither
+		// source is trusted.
+		if ts, carried := headerString(headers, HeaderTraceState); carried {
+			headers.Set(HeaderTraceState, ValidateTraceState(ts))
+		}
+		return
+	}
 	if ts, ok := StateFromContext(ctx); ok {
 		headers.Set(HeaderTraceState, ts)
+		return
+	}
+	if _, carried := headerString(headers, HeaderTraceState); carried {
+		headers.Set(HeaderTraceState, "")
 	}
 }
 
-// computeTraceParent determines the traceparent value to use (existing header > context > generated)
-func computeTraceParent(ctx context.Context, headers HeaderAccessor) string {
-	if v := headerString(headers, HeaderTraceParent); v != "" {
-		return v
+// computeTraceParent determines the traceparent value to use (existing header > context > generated).
+//
+// The header value is caller-supplied — first-party code hand-setting
+// PublishOptions.Headers, or an outbox row persisted before the ingress seam
+// existed — so it is validated like every other door rather than taken verbatim
+// (ADR-070, #1121). An unusable one falls through to the context value and then
+// to a generated one; a well-formed one still wins.
+// It returns the trace-id field alongside the value rather than making the
+// caller re-derive it: two of the three branches produce a traceparent this
+// function has just validated or just generated, and re-extracting the field
+// from those would run the whole grammar a second time on the publish path.
+// Only the context branch is unvalidated, and only it pays for a check.
+//
+// It also reports which carrier won and whether a pre-set value was refused,
+// which is what decides the tracestate beside it (see injectTraceState).
+func computeTraceParent(ctx context.Context, headers HeaderAccessor) outboundParent {
+	preset, carried := headerString(headers, HeaderTraceParent)
+	if v := ValidateTraceParent(preset); v != "" {
+		return outboundParent{value: v, traceID: splitTraceParent(v).traceID, fromHeader: true}
 	}
+	// PRESENCE, not emptiness, is what makes the tracestate beside it stale: a
+	// carrier that wrote `traceparent: ""` still wrote one, and the value that
+	// replaces it belongs to a different trace either way.
+	rejected := carried
 	if tp, ok := ParentFromContext(ctx); ok && tp != "" {
-		return tp
+		// WithTraceParent is exported, so this one has never been through the
+		// seam — it is the single branch whose trace-id must be judged here.
+		return outboundParent{value: tp, traceID: extractTraceIDFromParent(tp), rejected: rejected}
 	}
-	return GenerateTraceParent()
+	generated := GenerateTraceParent()
+	return outboundParent{value: generated, traceID: splitTraceParent(generated).traceID, rejected: rejected}
 }
 
-// headerString gets a header as string using safe conversion
-func headerString(headers HeaderAccessor, key string) string {
-	if v := headers.Get(key); v != nil {
-		return safeToString(v)
+// headerString gets a header as string using safe conversion. carried reports
+// that the key was PRESENT, which is a different question from the value being
+// usable: an empty value the carrier actually wrote still scopes the tracestate
+// beside it (see computeTraceParent).
+func headerString(headers HeaderAccessor, key string) (value string, carried bool) {
+	v := headers.Get(key)
+	if v == nil {
+		return "", false
 	}
-	return ""
+	return safeToString(v), true
 }
 
 // safeToString safely converts any to string, handling []byte
@@ -267,24 +350,26 @@ func safeToString(value any) string {
 	}
 }
 
-// extractTraceIDFromParent extracts the trace ID from a W3C traceparent header
+// extractTraceIDFromParent extracts the trace ID from a W3C traceparent header.
+//
+// The field must be 32 LOWERCASE HEX digits — ValidateTraceParent's charset, not
+// its length alone. WithTraceParent is exported, so a value the ingress seam
+// never saw still reaches this alignment, and a length-only check let 32
+// arbitrary bytes become the outbound X-Request-ID that the publish side then
+// refuses, shipping an empty CorrelationId (ADR-070, #1121).
 func extractTraceIDFromParent(traceparent string) string {
-	parts := strings.Split(traceparent, "-")
-	if len(parts) >= 4 && len(parts[1]) == 32 {
-		return parts[1]
+	if ValidateTraceParent(traceparent) == "" {
+		return ""
 	}
-	return ""
+	return splitTraceParent(traceparent).traceID
 }
 
-// forceAlignTraceID aligns trace ID with traceparent (force mode)
-func forceAlignTraceID(traceID, traceparent string) string {
-	if traceparent == "" {
+// alignTraceID prefers the emitted traceparent's own trace-id so the outbound
+// X-Request-ID and traceparent cannot disagree. An empty parentTraceID means the
+// traceparent carried none this seam will vouch for, and the context's id stands.
+func alignTraceID(traceID, parentTraceID string) string {
+	if parentTraceID == "" {
 		return traceID
 	}
-
-	if parentTraceID := extractTraceIDFromParent(traceparent); parentTraceID != "" {
-		return parentTraceID
-	}
-
-	return traceID
+	return parentTraceID
 }

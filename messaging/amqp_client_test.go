@@ -666,9 +666,12 @@ func TestPreparePublishingAlignsCorrelationIDWithRequestIDHeader(t *testing.T) {
 // ADR-070's guard outlives the single-derivation fix. CorrelationId is an AMQP
 // shortstr and amqp091 answers an oversized one by tearing down the Connection
 // every publisher in the process shares, so the property refuses what the seam
-// refuses while the header, a longstr field, still carries it. Both shapes below
-// reach the guard through the same door: computeTraceParent forwards a
-// caller-supplied traceparent without validating it.
+// refuses while the header, a longstr field, still carries it.
+//
+// #1121 closed the HEADER door — a caller-supplied traceparent in
+// options.Headers is now validated before it is reused — so both shapes below
+// reach the guard through the door that is still open by design: WithTraceParent
+// is exported, and a context value the ingress seam never saw is taken as-is.
 func TestPreparePublishingRefusesAnUnvalidatedCorrelationID(t *testing.T) {
 	oversized := strings.Repeat("a", 256)
 	nonHexTraceID := strings.Repeat("!", 32)
@@ -687,30 +690,52 @@ func TestPreparePublishingRefusesAnUnvalidatedCorrelationID(t *testing.T) {
 			traceparent: "00-zzzz-1234567890123456-01",
 			wantHeader:  oversized,
 		},
-		// A trace-id of the right LENGTH but the wrong charset aligns
-		// successfully onto garbage: the extraction checks length, not hex. This
-		// is the shape that keeps the guard from being dead code — the poisoned
-		// value arrives through the aligned path itself, not around it.
+		// A trace-id of the right LENGTH but the wrong charset no longer aligns:
+		// the extraction requires hex, so the alignment falls back to the
+		// context's id — which the guard then refuses on its own merits. This is
+		// the shape that keeps the guard from being dead code.
 		{
-			name:        "alignment_succeeds_onto_a_non_hex_trace_id",
-			ctxTraceID:  "valid-context-id",
+			name:        "alignment_refuses_a_non_hex_trace_id",
+			ctxTraceID:  oversized,
 			traceparent: "00-" + nonHexTraceID + "-1234567890123456-01",
-			wantHeader:  nonHexTraceID,
+			wantHeader:  oversized,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := gobrickstrace.WithTraceID(context.Background(), tt.ctxTraceID)
+			ctx = gobrickstrace.WithTraceParent(ctx, tt.traceparent)
 
-			pub := preparePublishing(ctx, PublishOptions{
-				Headers: map[string]any{gobrickstrace.HeaderTraceParent: tt.traceparent},
-			}, []byte(testMessageBody))
+			pub := preparePublishing(ctx, PublishOptions{}, []byte(testMessageBody))
 
 			assert.Empty(t, pub.CorrelationId, "an id the seam refuses never reaches the shortstr")
 			assert.Equal(t, tt.wantHeader, pub.Headers[gobrickstrace.HeaderXRequestID])
 		})
 	}
+}
+
+// TestPreparePublishingRegeneratesAMalformedHeaderTraceParent is #1121 at the
+// publish door: application code that hand-sets PublishOptions.Headers, and an
+// outbox row persisted before the ingress seam existed, both arrive here as a
+// pre-set traceparent. A malformed one is discarded rather than re-emitted, so
+// the publish ships a well-formed traceparent and an aligned, non-empty
+// CorrelationId instead of the empty one the poisoned id used to produce.
+func TestPreparePublishingRegeneratesAMalformedHeaderTraceParent(t *testing.T) {
+	pub := preparePublishing(context.Background(), PublishOptions{
+		Headers: map[string]any{
+			gobrickstrace.HeaderTraceParent: "00-" + strings.Repeat("!", 32) + "-1234567890123456-01",
+			gobrickstrace.HeaderTraceState:  "vendor=stale",
+		},
+	}, []byte(testMessageBody))
+
+	parent, ok := pub.Headers[gobrickstrace.HeaderTraceParent].(string)
+	require.True(t, ok, "injection writes the traceparent as a string")
+	assert.Equal(t, parent, gobrickstrace.ValidateTraceParent(parent), "the emitted traceparent is well-formed")
+	assert.NotEmpty(t, pub.CorrelationId, "the aligned id is usable, so the property carries it")
+	assert.Equal(t, pub.Headers[gobrickstrace.HeaderXRequestID], pub.CorrelationId)
+	assert.Empty(t, pub.Headers[gobrickstrace.HeaderTraceState],
+		"a tracestate written beside a refused traceparent describes a trace this hop is not continuing")
 }
 
 func TestPublishToExchangeAckSuccess(t *testing.T) {
