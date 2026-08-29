@@ -11,6 +11,13 @@ import (
 const (
 	// DefaultMaxDepth is the default maximum recursion depth for filtering
 	DefaultMaxDepth = 8
+
+	// DefaultMaxPayloadBytes is the default ceiling on an opaque payload the
+	// filter will parse. 64 KiB is comfortably above the request and response
+	// bodies services log in practice and well below the size at which decoding
+	// on the logging path becomes the expensive part of handling a request.
+	// A payload above it is masked whole rather than shipped unread.
+	DefaultMaxPayloadBytes = 64 * 1024
 )
 
 // Common sensitive field names used in DefaultFilterConfig.
@@ -38,6 +45,21 @@ type FilterConfig struct {
 	// set this field. The YAML log.sensitivefields merge path leaves it nil,
 	// the value being a function.
 	ErrorRedactor func(error) string
+	// MaxPayloadBytes caps how large an opaque payload may be before the filter
+	// stops trying to read it. A JSON-LOOKING payload past the cap is masked
+	// whole — it is opaque and unread, which is the case the mask exists for.
+	// A payload that is not JSON-shaped passes through UNCHANGED whatever its
+	// size, since it was never going to be parsed; the cap still bounds the PEM
+	// header scan over it, so an oversized blob is not scanned end to end on
+	// the logging path. Parsing is the only way to
+	// see inside bytes, and parsing is linear in their size, so an unbounded
+	// cap would let one oversized payload — a bulk export, a base64 blob that
+	// happens to open with a brace — do arbitrary decode work on the logging
+	// path. Zero (the default, and what DefaultFilterConfig returns) means
+	// DefaultMaxPayloadBytes; a negative value disables the payload door
+	// entirely, leaving bytes and strings judged by NAME alone as they were
+	// before ADR-086.
+	MaxPayloadBytes int
 }
 
 // DefaultFilterConfig returns a default configuration with common sensitive field names
@@ -203,6 +225,50 @@ func (f *SensitiveDataFilter) filterValueWithProtection(key string, value any, v
 	return f.filterByTypeWithProtection(key, value, visited, maxDepth)
 }
 
+// filterIfOpaquePayload answers the two shapes the reflect walk cannot see into,
+// reporting whether it took the value. Bytes are one leaf to a name filter
+// however many named fields they carry of their own, and a string can be a
+// payload too — a JSON body handed over as text, or a PEM private key (#1133).
+// Both tests are on the KIND, so a defined type over either (`type Blob []byte`,
+// `type JSONText string`) is judged like the builtin it is spelled from.
+//
+// Both live HERE, in the shared dispatch, rather than at whichever door carried
+// the value: bytes already inherited the check from this switch, so wiring
+// strings into one adapter method instead left `Interface`, `WithFields` and
+// every nested struct or map field shipping in clear the same text `Str` masked.
+func (f *SensitiveDataFilter) filterIfOpaquePayload(value any) (filtered any, isPayload bool) {
+	if payload, isOpaque := opaqueBytes(value); isOpaque {
+		return filterOpaquePayload(f, payload, value), true
+	}
+	if text, isString := opaqueString(value); isString {
+		return filterOpaquePayload(f, text, value), true
+	}
+	return nil, false
+}
+
+// filterReflectMapWithProtection covers map[string]string, map[string][]string
+// (http.Header), map[string]int and every other concrete map type;
+// map[string]any takes the fast-path type assertion in the caller. Keys are
+// stringified so a non-string-keyed map still gets its keys sensitivity-checked,
+// and the output is always map[string]any — the log consumer does not require
+// the original value type.
+func (f *SensitiveDataFilter) filterReflectMapWithProtection(rv reflect.Value, visited map[uintptr]struct{}, maxDepth int) any {
+	if rv.IsNil() {
+		// A typed nil map (e.g. var h http.Header = nil) must stay nil in the log
+		// output. Without this guard, rv.Len()==0 would produce {} instead of null.
+		return nil
+	}
+	result := make(map[string]any, rv.Len())
+	for _, k := range rv.MapKeys() {
+		keyStr := k.String()
+		if k.Kind() != reflect.String {
+			keyStr = fmt.Sprintf("%v", k.Interface())
+		}
+		result[keyStr] = f.filterValueWithProtection(keyStr, rv.MapIndex(k).Interface(), visited, maxDepth-1)
+	}
+	return result
+}
+
 // filterByTypeWithProtection dispatches to appropriate handler with cycle detection
 func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, visited map[uintptr]struct{}, maxDepth int) any {
 	// Handle typed map first (most common case)
@@ -213,6 +279,10 @@ func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, 
 			return nil
 		}
 		return f.filterStringMapWithProtection(m, visited, maxDepth)
+	}
+
+	if filtered, isPayload := f.filterIfOpaquePayload(value); isPayload {
+		return filtered
 	}
 
 	rv := reflect.ValueOf(value)
@@ -227,27 +297,7 @@ func (f *SensitiveDataFilter) filterByTypeWithProtection(key string, value any, 
 		}
 		return value
 	case reflect.Map:
-		// Covers map[string]string, map[string][]string (http.Header), map[string]int, etc.
-		// map[string]any is handled by the fast-path type-assertion above; this arm catches
-		// every other concrete map type. Keys are stringified so non-string-keyed maps still
-		// get their keys sensitivity-checked. Output is always map[string]any — the log
-		// consumer does not require the original value type.
-		if rv.IsNil() {
-			// A typed nil map (e.g. var h http.Header = nil) must stay nil in the log output.
-			// Without this guard, rv.Len()==0 would produce {} instead of null.
-			return nil
-		}
-		result := make(map[string]any, rv.Len())
-		for _, k := range rv.MapKeys() {
-			var keyStr string
-			if k.Kind() == reflect.String {
-				keyStr = k.String()
-			} else {
-				keyStr = fmt.Sprintf("%v", k.Interface())
-			}
-			result[keyStr] = f.filterValueWithProtection(keyStr, rv.MapIndex(k).Interface(), visited, maxDepth-1)
-		}
-		return result
+		return f.filterReflectMapWithProtection(rv, visited, maxDepth)
 	default:
 		// All other types pass through unchanged
 		return value

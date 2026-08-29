@@ -170,6 +170,53 @@ fw, _, err := app.NewWithOptions(&app.Options{LoggerFilterConfig: base})
 - **Runs inside the log call**, so a panicking redactor is covered by the same guards that already wrap framework log calls in deferred paths.
 - **Covers the OTLP sink too.** The OTel log bridge is an `io.Writer` over zerolog's emitted JSON, so the redacted string is what the log exporter receives — the raw message never reaches it.
 
+### Opaque payloads (JSON bodies, JWKs, PEM keys)
+
+Field-name masking sees a tree of named Go fields. An **opaque payload** — bytes or a string
+whose structure the filter cannot see into — used to be a single leaf named by whatever key
+carried it, so a marshalled request body logged its own `password` in clear. Since
+[ADR-086](adr_086_mask_inside_opaque_payloads.md) the filter looks inside.
+
+**What is inspected.** A `json.RawMessage`, `[]byte`, `[]json.RawMessage` or a string — and a
+DEFINED type over either builtin (`type Blob []byte`, `type JSONText string`), since the test is on
+the value's KIND and not on the two spellings a type switch happens to name — at every
+door — the check lives in the filter's shared type dispatch, so `Interface`, `WithFields`,
+`Bytes`, `Str` and nested struct, map and slice values all inherit it. A value is parsed only if
+its first non-space byte is `{` or `[`; one that is not JSON-shaped is asked only whether it is
+itself a PEM private key. The payload is parsed, walked with the same needle list, and
+re-encoded **only when something was masked** — so a payload with
+nothing to mask ships the bytes it arrived with, key order and number spelling intact. Nothing
+else is parsed: an id, a message, a bare number and a non-JSON byte slice never reach the
+decoder, and a benchmark pins zero extra allocations for a non-JSON string field.
+
+**Shape rules.** Two kinds of key material carry names no needle can match, so they are
+matched by shape instead:
+
+| Shape | Marker | Masked |
+| --- | --- | --- |
+| JWK / JWKS | an object carrying `kty`, at the root, inside a `keys` array, or nested | `d`, `p`, `q`, `dp`, `dq`, `qi`, `k`, `oth` — matched exactly, never by substring |
+| PEM block | a header whose label ends in `PRIVATE KEY` | the whole value when the payload IS the key; only that member when it sits inside a JSON document. A `CERTIFICATE` or `PUBLIC KEY` block stays readable |
+
+If you added `log.sensitivefields: [keys]` for JWKS on ADR-072's advice, the `kty` rule now
+covers it; leaving the needle in place costs only a masked field named `keys`.
+
+**Fail-closed.** A payload that looks like JSON and does not parse, is not exactly one JSON
+document, nests deeper than `logger.DefaultMaxDepth`, or exceeds `FilterConfig.MaxPayloadBytes`
+is masked **whole** — the filter cannot say
+what is inside it, and that is exactly the case this door exists for.
+`MaxPayloadBytes` defaults to 64 KiB (`logger.DefaultMaxPayloadBytes`): zero means the default,
+so a bare struct literal cannot silently opt out, and a negative value disables the payload
+door entirely, restoring name-only filtering. Raise it through
+`app.Options.LoggerFilterConfig`, which REPLACES the whole config — start from
+`logger.DefaultFilterConfig()` and set the field.
+
+**Deliberately not inspected.** JWT strings (recognizing one means decoding it, and its claims
+are usually what the operator needs — the signing key is covered where it appears as a JWK or
+a PEM block), XML and form-encoded bodies, and the log MESSAGE text: `Msg` is a format string
+the caller wrote, and the field seam is where the filter has names to judge.
+`FilterConfig.ErrorRedactor` ([ADR-083](adr_083_span_sinks_record_errors_by_type.md)) remains
+the seam for error text.
+
 ### Defense in depth (recommended for PCI workloads)
 
 Field-name masking is *one* layer. A complete PCI-DSS 3.3/3.4/3.5 posture combines it with:

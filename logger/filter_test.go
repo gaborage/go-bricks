@@ -2,6 +2,7 @@ package logger
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"reflect"
@@ -1449,4 +1450,763 @@ func TestDefaultFilterConfigHasNoErrorRedactor(t *testing.T) {
 	// The framework ships no scrubbing pattern of its own: the seam is inert
 	// until a consumer sets it.
 	assert.Nil(t, DefaultFilterConfig().ErrorRedactor)
+}
+
+// TestFilterMasksInsideJSONRawMessage pins the leak reported in #1133: a
+// json.RawMessage is bytes, so the NAME filter sees one opaque leaf called
+// "body" and the password inside it ships in clear through every door that
+// accepts a payload. The filter must parse what looks like JSON, walk it with
+// the same needles, and re-encode.
+func TestFilterMasksInsideJSONRawMessage(t *testing.T) {
+	payload := json.RawMessage(`{"password":"pw","user":"alice"}`)
+	want := `{"password":"***","user":"alice"}`
+
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+}
+
+// TestFilterMasksInsideBytesDoor covers the third door from #1133. Bytes() had
+// no filtering beyond the field NAME, so a payload logged through it leaked
+// whatever its own field names hid.
+func TestFilterMasksInsideBytesDoor(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+	log.Info().Bytes("body", []byte(`{"password":"pw","user":"alice"}`)).Msg("payload")
+
+	assertLoggedFieldJSON(t, buf, "body", `{"password":"***","user":"alice"}`)
+}
+
+// TestFilterLeavesCleanPayloadByteExact is the other half of the contract: a
+// payload with nothing to mask must ship EXACTLY as it arrived. Re-encoding
+// every payload would silently rewrite key order, number spelling and
+// whitespace for every consumer who logs one, so the filter re-encodes only
+// when it actually masked something.
+func TestFilterLeavesCleanPayloadByteExact(t *testing.T) {
+	// Key order and number spelling are the observable discriminators. Passing
+	// the payload through a decode/re-encode round trip would emit the keys
+	// alphabetically (alpha, big, zeta) because a Go map marshals sorted, so
+	// the ORIGINAL order surviving is proof the filter returned the input bytes
+	// rather than rebuilding them. The number literals are proof too: 1e3 comes
+	// back 1000 and the 20-digit integer rounds, unless the bytes are untouched.
+	//
+	// Interior whitespace is NOT asserted: zerolog's own encoder compacts a
+	// json.RawMessage on its way to the sink, which is the sink's rendering and
+	// not something this filter chose. What the filter owes is that it does not
+	// re-serialize a payload it had no reason to touch.
+	payload := json.RawMessage(`{"zeta":1e3,  "alpha":  [1,2],"big":12345678901234567890}`)
+
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	log.Info().Interface("body", payload).Msg("payload")
+
+	assert.Contains(t, buf.String(), `"body":{"zeta":1e3,"alpha":[1,2],"big":12345678901234567890}`,
+		"a payload with nothing to mask keeps its key order and number literals")
+}
+
+// TestFilterMasksInsideJSONLookingString covers the string door: a string whose
+// first non-space byte opens an object or array is a payload wearing a string's
+// clothes, and the name filter sees straight past it.
+func TestFilterMasksInsideJSONLookingString(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+	log.Info().Str("body", `{"password":"pw","user":"alice"}`).Msg("payload")
+
+	assertLoggedFieldJSON(t, buf, "body", `{"password":"***","user":"alice"}`)
+}
+
+// TestFilterMasksInsideRawMessageSlice covers []json.RawMessage, the shape that
+// panicked the walker before #1131 and has leaked since.
+func TestFilterMasksInsideRawMessageSlice(t *testing.T) {
+	log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+	payload := []json.RawMessage{
+		json.RawMessage(`{"password":"pw"}`),
+		json.RawMessage(`{"user":"alice"}`),
+	}
+
+	require.NotPanics(t, func() {
+		log.Info().Interface("body", payload).Msg("payload")
+	})
+
+	assertLoggedFieldJSON(t, buf, "body", `[{"password":"***"},{"user":"alice"}]`)
+}
+
+// TestFilterMasksJWKPrivateMembers pins the shape rule: a JWK's private members
+// are named d, p, q, dp, dq, qi, k and oth — none of which any name needle
+// matches, and all of which are the private key. The marker is `kty`, and the
+// rule applies wherever the object sits: at the root, inside a JWKS `keys`
+// array, or nested under an unrelated field. Public members stay readable so
+// the line remains useful for debugging.
+func TestFilterMasksJWKPrivateMembers(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  string
+		wantJSON string
+	}{
+		{
+			name:     "root_jwk",
+			payload:  `{"kty":"RSA","kid":"k1","n":"modulus","e":"AQAB","d":"PRIVATE","p":"P","q":"Q"}`,
+			wantJSON: `{"kty":"RSA","kid":"k1","n":"modulus","e":"AQAB","d":"***","p":"***","q":"***"}`,
+		},
+		{
+			name:     "jwks_keys_array",
+			payload:  `{"keys":[{"kty":"RSA","n":"modulus","e":"AQAB","d":"PRIVATE"}]}`,
+			wantJSON: `{"keys":[{"kty":"RSA","n":"modulus","e":"AQAB","d":"***"}]}`,
+		},
+		{
+			name:     "nested_jwk",
+			payload:  `{"config":{"signing":{"kty":"oct","k":"SYMMETRIC","kid":"k2"}}}`,
+			wantJSON: `{"config":{"signing":{"kty":"oct","k":"***","kid":"k2"}}}`,
+		},
+		{
+			name: "all_private_members",
+			payload: `{"kty":"RSA","d":"D","p":"P","q":"Q","dp":"DP","dq":"DQ","qi":"QI",` +
+				`"k":"K","oth":[{"r":"R"}]}`,
+			wantJSON: `{"kty":"RSA","d":"***","p":"***","q":"***","dp":"***","dq":"***",` +
+				`"qi":"***","k":"***","oth":"***"}`,
+		},
+		{
+			// Without the kty marker these are ordinary short field names and
+			// must NOT be masked — d, p and k appear in plenty of documents.
+			name:     "no_kty_marker_leaves_short_names_alone",
+			payload:  `{"d":"day","p":"page","k":"key-count","q":"query"}`,
+			wantJSON: `{"d":"day","p":"page","k":"key-count","q":"query"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("body", json.RawMessage(tt.payload)).Msg("payload")
+			assertLoggedFieldJSON(t, buf, "body", tt.wantJSON)
+		})
+	}
+}
+
+// TestFilterMasksPEMPrivateKeyBlocks pins the second shape rule. A PEM private
+// key arrives as one long string under a field name like "material" that no
+// needle matches; a certificate in the same position is public and must stay,
+// because redacting it would remove the thing an operator reads to diagnose a
+// TLS problem.
+func TestFilterMasksPEMPrivateKeyBlocks(t *testing.T) {
+	privateKey := "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----"
+	certificate := "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAK\n-----END CERTIFICATE-----"
+
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "rsa_private_key_masked_whole",
+			payload: `{"material":` + mustJSONString(t, privateKey) + `}`,
+			want:    `{"material":"***"}`,
+		},
+		{
+			name:    "pkcs8_private_key_masked_whole",
+			payload: `{"material":"-----BEGIN PRIVATE KEY-----\nMIIBOg\n-----END PRIVATE KEY-----"}`,
+			want:    `{"material":"***"}`,
+		},
+		{
+			name:    "certificate_left_readable",
+			payload: `{"material":` + mustJSONString(t, certificate) + `}`,
+			want:    `{"material":` + mustJSONString(t, certificate) + `}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("body", json.RawMessage(tt.payload)).Msg("payload")
+			assertLoggedFieldJSON(t, buf, "body", tt.want)
+		})
+	}
+}
+
+// mustJSONString renders s as a JSON string literal, so a test payload carrying
+// newlines stays readable in the source instead of being hand-escaped.
+func mustJSONString(t *testing.T, s string) string {
+	t.Helper()
+	encoded, err := json.Marshal(s)
+	require.NoError(t, err)
+	return string(encoded)
+}
+
+// TestFilterMasksUnreadablePayloadsWhole covers the fail-closed arm: a payload
+// that looks like JSON and is not readable — truncated, or bigger than the cap
+// — is masked entirely, because the filter cannot tell what is inside it and an
+// opaque payload leaking secrets is the defect this door exists to close.
+func TestFilterMasksUnreadablePayloadsWhole(t *testing.T) {
+	t.Run("truncated_json", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(`{"password":"pw`)).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("over_the_byte_cap", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = 32
+		log, buf := newFilteredEventLogger(t, config)
+
+		oversized := `{"note":"` + strings.Repeat("x", 64) + `"}`
+		log.Info().Interface("body", json.RawMessage(oversized)).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("at_the_byte_cap_is_still_parsed", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		payload := `{"password":"pw"}`
+		config.MaxPayloadBytes = len(payload)
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***"}`)
+	})
+
+	t.Run("non_json_bytes_are_untouched", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", []byte("not json at all")).Msg("payload")
+		assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("not json at all")),
+			loggedField(t, buf, "body"))
+	})
+}
+
+// TestFilterMasksOverlyNestedPayloadWhole pins the third fail-closed arm, and
+// the reason it is an error rather than a masked subtree: the DEPTH of a
+// payload is chosen by whoever produced it, not by the code logging it, so an
+// arbitrarily nested body must not be able to walk the filter down an unbounded
+// stack. Too deep to walk is too deep to vouch for, so the whole payload is
+// masked — the same answer an unparseable payload gets.
+func TestFilterMasksOverlyNestedPayloadWhole(t *testing.T) {
+	// One level deeper than the walker's budget, built as nested objects.
+	deep := "null"
+	for range DefaultMaxDepth + 1 {
+		deep = `{"a":` + deep + `}`
+	}
+
+	t.Run("beyond_the_budget_masks_whole", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("within_the_budget_is_walked_normally", func(t *testing.T) {
+		shallow := `{"a":{"b":{"password":"pw"}}}`
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(shallow)).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", `{"a":{"b":{"password":"***"}}}`)
+	})
+}
+
+// TestFilterMasksJSONStringThroughEveryDoor closes the gap the Str-only hook
+// left: a JSON-looking STRING is a payload whichever door carries it. Bytes
+// already inherited the check from the shared type dispatch, so `Interface`,
+// `WithFields` and a nested struct field all masked a []byte payload while the
+// identical text typed as a string shipped in clear unless it went through Str.
+func TestFilterMasksJSONStringThroughEveryDoor(t *testing.T) {
+	const payload = `{"password":"pw","user":"alice"}`
+	const want = `{"password":"***","user":"alice"}`
+
+	t.Run("str", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("nested_in_a_map", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("envelope", map[string]any{"body": payload}).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "envelope", `{"body":`+want+`}`)
+	})
+
+	t.Run("a_plain_string_is_left_alone", func(t *testing.T) {
+		// Not keyed "message": that is zerolog's own key for the Msg text, so
+		// the assertion would read the message back rather than the field.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("detail", "user alice signed in").Msg("payload")
+		assert.Equal(t, "user alice signed in", loggedField(t, buf, "detail"))
+	})
+}
+
+// TestFilterMasksBarePEMPrivateKey pins the shape a PEM key actually takes in a
+// log call. The PEM rule used to sit behind the JSON gate, reachable only for a
+// key already embedded as a string inside a JSON document — but a PEM block
+// begins `-----BEGIN`, never `{` or `[`, so a key logged on its own, which is
+// the ordinary way one shows up, never reached the rule at all.
+func TestFilterMasksBarePEMPrivateKey(t *testing.T) {
+	privateKey := "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----"
+	certificate := "-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAK\n-----END CERTIFICATE-----"
+
+	t.Run("str_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("material", privateKey).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("interface_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("material", privateKey).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("bytes_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Bytes("material", []byte(privateKey)).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("certificate_stays_readable_at_every_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("material", certificate).Msg("payload")
+		assert.Equal(t, certificate, loggedField(t, buf, "material"))
+	})
+}
+
+// TestFilterMasksPayloadWithTrailingContent pins the leak CodeRabbit found in
+// the trailing-content check. decoder.More() answers "is there another element
+// in the current context", which is a different question from "did the payload
+// end": after `{}` the next byte of `{}]{"password":"pw"}` is a `]`, read as a
+// closing delimiter rather than another value, so More() said no. The walk then
+// masked the empty object it had decoded, found nothing to mask, and — a clean
+// payload shipping byte-exact being the rule — emitted the ORIGINAL bytes, with
+// the password still in them. One document or nothing.
+func TestFilterMasksPayloadWithTrailingContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "closing_delimiter_then_a_second_document", payload: `{}]{"password":"pw"}`},
+		{name: "two_documents", payload: `{"a":1}{"password":"pw"}`},
+		{name: "document_then_garbage", payload: `{"a":1} not json`},
+		{name: "array_then_a_document", payload: `[1,2]{"password":"pw"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+			log.Info().Interface("body", json.RawMessage(tt.payload)).Msg("payload")
+
+			line := buf.String()
+			assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"),
+				"a payload that is not exactly one document must be masked whole")
+			assert.NotContains(t, line, "pw", "the trailing document must not reach the sink")
+		})
+	}
+
+	t.Run("trailing_whitespace_is_still_one_document", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Interface("body", json.RawMessage("{\"password\":\"pw\"}\n  ")).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***"}`)
+	})
+}
+
+// TestFilterMasksEveryPayloadShapeThroughEveryDoor is the acceptance matrix
+// from #1133 stated as one table: every payload SHAPE through every DOOR that
+// can carry it. The individual tests above pin behavior per shape; this pins
+// that no door was wired differently from its siblings, which is exactly the
+// gap that let a JSON-looking string mask through Str and ship in clear through
+// Interface.
+func TestFilterMasksEveryPayloadShapeThroughEveryDoor(t *testing.T) {
+	const want = `{"password":"***","user":"alice"}`
+	const raw = `{"password":"pw","user":"alice"}`
+
+	shapes := map[string]any{
+		"raw_message":       json.RawMessage(raw),
+		"byte_slice":        []byte(raw),
+		"json_string":       raw,
+		"raw_message_slice": []json.RawMessage{json.RawMessage(raw)},
+	}
+	// The list shape renders as an array, so it wants its own expectation.
+	wantFor := func(shape string) string {
+		if shape == "raw_message_slice" {
+			return `[` + want + `]`
+		}
+		return want
+	}
+
+	for shape, payload := range shapes {
+		t.Run("interface_"+shape, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("body", payload).Msg("payload")
+			assertLoggedFieldJSON(t, buf, "body", wantFor(shape))
+		})
+
+		t.Run("with_fields_"+shape, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+			assertLoggedFieldJSON(t, buf, "body", wantFor(shape))
+		})
+
+		t.Run("nested_in_a_map_"+shape, func(t *testing.T) {
+			log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+			log.Info().Interface("envelope", map[string]any{"body": payload}).Msg("payload")
+			assertLoggedFieldJSON(t, buf, "envelope", `{"body":`+wantFor(shape)+`}`)
+		})
+	}
+
+	// The two doors that take a concrete type rather than an any.
+	t.Run("bytes_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Bytes("body", []byte(raw)).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("str_door", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Str("body", raw).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+}
+
+// TestPayloadDoorGuardBoundaries pins the BOUNDARIES of the guards the payload
+// door is built from, not just the behaviors they implement. The mutation gate
+// found six survivors on these lines: every test above passed with `limit < 0`
+// flipped to `<= 0`, with the marker scan's bound moved by one, and with the
+// depth test shifted — because nothing exercised any guard AT its edge. These
+// cases are chosen so that moving any one of those comparisons by one breaks
+// exactly one of them.
+func TestPayloadDoorGuardBoundaries(t *testing.T) {
+	const payload = `{"password":"pw"}`
+
+	t.Run("cap_of_zero_means_the_default_not_disabled", func(t *testing.T) {
+		// The `limit < 0` boundary. With `<= 0` this payload would ship in clear,
+		// because zero would read as the opt-out instead of as "unset".
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = 0
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***"}`)
+	})
+
+	t.Run("a_negative_cap_disables_the_door", func(t *testing.T) {
+		// The other side of the same comparison: -1 must opt out.
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = -1
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", payload)
+	})
+
+	t.Run("a_payload_exactly_at_the_cap_is_parsed", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = len(payload)
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***"}`)
+	})
+
+	t.Run("a_payload_one_byte_over_the_cap_is_masked_whole", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = len(payload) - 1
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Interface("body", json.RawMessage(payload)).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("a_value_that_is_exactly_the_marker_is_not_a_private_key", func(t *testing.T) {
+		// The two-step: the marker gate admits this value, and the pattern then
+		// declines it, because a header needs a `PRIVATE KEY` label after the
+		// marker. Pins that the gate is a cheap PRE-filter and not the decision.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Str("material", "-----BEGIN").Msg("payload")
+
+		assert.Equal(t, "-----BEGIN", loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_marker_at_the_very_end_of_a_value_is_found", func(t *testing.T) {
+		// The marker sits flush against the end of the value, so the gate finds
+		// it and the pattern still declines: no label, no key. The value stays
+		// readable, which is what a certificate-adjacent string must do.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Str("material", "trailing -----BEGIN").Msg("payload")
+
+		assert.Equal(t, "trailing -----BEGIN", loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_private_key_at_the_very_end_of_a_value_is_masked", func(t *testing.T) {
+		// A complete header preceded by other text: the gate finds the marker
+		// mid-value and the pattern matches, so the whole value is masked.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Str("material", "key: -----BEGIN EC PRIVATE KEY-----").Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_near_miss_marker_is_not_matched", func(t *testing.T) {
+		// One byte different inside the marker, so the gate never admits it and
+		// the pattern is never consulted — a near miss stays readable.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Str("material", "-----BEGiN RSA PRIVATE KEY-----").Msg("payload")
+
+		assert.Equal(t, "-----BEGiN RSA PRIVATE KEY-----", loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_document_exactly_at_the_depth_budget_is_walked", func(t *testing.T) {
+		// The `depth <= 0` boundary and the `depth-1` step together: this nests
+		// exactly to the budget, so masking must still happen. One less depth
+		// spent per level, or a shifted test, and this masks whole instead.
+		deep := `{"password":"pw"}`
+		for range DefaultMaxDepth - 1 {
+			deep = `{"a":` + deep + `}`
+		}
+		want := `{"password":"***"}`
+		for range DefaultMaxDepth - 1 {
+			want = `{"a":` + want + `}`
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("arrays_spend_the_depth_budget_too", func(t *testing.T) {
+		// The ARRAY branch has its own `depth-1`, and every depth test above
+		// nests OBJECTS, so that step was never exercised — the mutation gate
+		// found it by flipping it to `depth+1` and watching every test pass.
+		// Nested one level past the budget through arrays alone.
+		deep := `{"password":"pw"}`
+		for range DefaultMaxDepth {
+			deep = `[` + deep + `]`
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+
+	t.Run("arrays_within_the_budget_are_still_walked", func(t *testing.T) {
+		// The other side: a masked leaf reached THROUGH arrays proves the
+		// branch recurses at all, so the case above cannot pass for the wrong
+		// reason (a budget never spent would walk it; a budget spent twice per
+		// level would mask this one too).
+		deep := `{"password":"pw"}`
+		want := `{"password":"***"}`
+		for range DefaultMaxDepth - 1 {
+			deep = `[` + deep + `]`
+			want = `[` + want + `]`
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("a_document_one_level_past_the_budget_is_masked_whole", func(t *testing.T) {
+		deep := `{"password":"pw"}`
+		for range DefaultMaxDepth {
+			deep = `{"a":` + deep + `}`
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", json.RawMessage(deep)).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "body"))
+	})
+}
+
+// blobPayload is a NAMED byte-slice type, the way a service usually spells a
+// stored or pre-encoded body. It is a payload by exactly the argument []byte is
+// — the name filter sees one leaf whatever the type is called.
+type blobPayload []byte
+
+// TestFilterMasksInsideNamedByteSliceTypes pins what opaqueBytes' doc always
+// claimed and its type switch did not do: matching only `json.RawMessage` and
+// `[]byte` sent every other byte slice down the reflect walk, which reads it as
+// a list of numbers and masks nothing inside it.
+func TestFilterMasksInsideNamedByteSliceTypes(t *testing.T) {
+	payload := blobPayload(`{"password":"pw","user":"alice"}`)
+
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***","user":"alice"}`)
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", `{"password":"***","user":"alice"}`)
+	})
+
+	t.Run("a_named_byte_slice_carrying_a_pem_key_is_masked", func(t *testing.T) {
+		key := blobPayload("-----BEGIN RSA PRIVATE KEY-----\nMIIBOg\n-----END RSA PRIVATE KEY-----")
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("material", key).Msg("payload")
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("a_named_byte_slice_that_is_not_a_payload_is_untouched", func(t *testing.T) {
+		plain := blobPayload("not json at all")
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", plain).Msg("payload")
+		assert.Equal(t, base64.StdEncoding.EncodeToString(plain), loggedField(t, buf, "body"))
+	})
+}
+
+// TestPEMScanIsBoundedByTheCap pins that the cap bounds the PEM header scan on a
+// payload that is NOT JSON-shaped. Such a payload passes through rather than
+// being masked — an oversized blob is not made secret by being large — but past
+// the cap it is not scanned for a key either, so an arbitrarily long value
+// cannot be walked end to end on the logging path.
+func TestPEMScanIsBoundedByTheCap(t *testing.T) {
+	key := "-----BEGIN RSA PRIVATE KEY-----\nMIIBOg\n-----END RSA PRIVATE KEY-----"
+
+	t.Run("within_the_cap_a_key_is_still_masked", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = len(key)
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Str("material", key).Msg("payload")
+
+		assert.Equal(t, DefaultMaskValue, loggedField(t, buf, "material"))
+	})
+
+	t.Run("past_the_cap_it_is_not_scanned_and_passes_through", func(t *testing.T) {
+		config := DefaultFilterConfig()
+		config.MaxPayloadBytes = len(key) - 1
+		log, buf := newFilteredEventLogger(t, config)
+
+		log.Info().Str("material", key).Msg("payload")
+
+		assert.Equal(t, key, loggedField(t, buf, "material"))
+	})
+}
+
+// nestedMap is a NAMED map type, so it takes the reflect.Map arm rather than
+// the map[string]any fast path, and its values can be more of itself — which is
+// what makes depth observable through that walker.
+type nestedMap map[string]any
+
+// TestReflectMapWalkerKeysAndDepth covers the map walker the payload extraction
+// turned into changed lines. Neither behavior was pinned before: the package
+// had no test for a non-string-keyed map, and none that exhausts the depth
+// budget through this arm rather than through the map[string]any fast path.
+func TestReflectMapWalkerKeysAndDepth(t *testing.T) {
+	t.Run("a_non_string_key_is_stringified", func(t *testing.T) {
+		// `k.String()` on a non-string reflect.Value renders `<int Value>`, not
+		// the number, so the Kind test is what makes an int-keyed map readable.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Interface("counts", map[int]string{7: "seven"}).Msg("payload")
+
+		assert.Equal(t, map[string]any{"7": "seven"}, loggedField(t, buf, "counts"))
+	})
+
+	t.Run("a_string_key_is_unchanged", func(t *testing.T) {
+		// The other side of the same branch, so the test pins the condition
+		// rather than just one arm of it.
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Interface("headers", map[string]string{"x-trace": "abc"}).Msg("payload")
+
+		assert.Equal(t, map[string]any{"x-trace": "abc"}, loggedField(t, buf, "headers"))
+	})
+
+	t.Run("a_sensitive_key_is_masked_through_this_arm", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+
+		log.Info().Interface("headers", map[string]string{"authorization": "Bearer x"}).Msg("payload")
+
+		assert.Equal(t, map[string]any{"authorization": DefaultMaskValue}, loggedField(t, buf, "headers"))
+	})
+
+	t.Run("depth_is_spent_per_level_through_this_arm", func(t *testing.T) {
+		// Nested one level past the budget. The walk must exhaust and cut the
+		// subtree to the mask; if the step stopped decrementing, the structure
+		// would survive intact all the way down instead.
+		deep := nestedMap{"leaf": "bottom"}
+		for range DefaultMaxDepth + 1 {
+			deep = nestedMap{"a": deep}
+		}
+
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", deep).Msg("payload")
+
+		// Walk down the logged structure: somewhere at or before the budget the
+		// value must become the mask string rather than another map.
+		current := loggedField(t, buf, "body")
+		levels := 0
+		for {
+			m, isMap := current.(map[string]any)
+			if !isMap {
+				break
+			}
+			next, ok := m["a"]
+			if !ok {
+				break
+			}
+			current = next
+			levels++
+		}
+		assert.Equal(t, DefaultMaskValue, current,
+			"the walk must cut the subtree at the budget, not descend forever")
+		assert.LessOrEqual(t, levels, DefaultMaxDepth,
+			"the cut must happen at or before the depth budget")
+	})
+}
+
+// jsonText is a DEFINED string type — `type JSONText string` is how a service
+// spells a body it carries as text, and how sqlx spells one it reads back.
+type jsonText string
+
+// TestFilterMasksInsideDefinedStringType closes the string-side half of the hole
+// #1133 closed for bytes: the dispatch asserted `value.(string)`, which a
+// defined string type fails, so the payload skipped the payload check entirely
+// and reached zerolog in clear. The KIND is what makes it a payload, not the
+// spelling — exactly the argument opaqueBytes already makes for `type Blob
+// []byte`.
+func TestFilterMasksInsideDefinedStringType(t *testing.T) {
+	payload := jsonText(`{"password":"pw","user":"alice"}`)
+	want := `{"password":"***","user":"alice"}`
+
+	t.Run("interface", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.Info().Interface("body", payload).Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
+
+	t.Run("with_fields", func(t *testing.T) {
+		log, buf := newFilteredEventLogger(t, DefaultFilterConfig())
+		log.WithFields(map[string]any{"body": payload}).Info().Msg("payload")
+		assertLoggedFieldJSON(t, buf, "body", want)
+	})
 }

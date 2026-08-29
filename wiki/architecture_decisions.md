@@ -1394,6 +1394,29 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-086: The Sensitive-Data Filter Masks Inside Opaque Payloads](adr_086_mask_inside_opaque_payloads.md)
+
+**Date:** 2026-08-28 | **Status:** Accepted | **Breaking:** a masked payload is re-encoded (key order, whitespace); an unreadable JSON-looking payload renders as the mask value
+
+The filter masks by field NAME, so an **opaque payload** — bytes or a string whose structure it
+cannot see into — was one leaf however many named fields it carried. Verified with the default
+config: a `json.RawMessage` `{"password":"pw"}` logged in clear through `Interface`, `WithFields`
+and `Bytes`; a root JWK logged its `d`; a plain JWKS leaked (ADR-072's `log.sensitivefields: [keys]`
+is opt-in). The decision parses what looks like JSON — first non-space byte `{` or `[` — walks it
+with the same needles, and re-encodes ONLY when something was masked, so a clean payload keeps its
+key order and number spelling. Two shape rules sit on top of names: an object carrying `kty` has
+`d p q dp dq qi k oth` masked wherever it sits, matched exactly rather than by substring; a PEM
+block whose label ends in `PRIVATE KEY` is masked whole, while a certificate stays readable.
+Unparseable, too deep, or over `FilterConfig.MaxPayloadBytes` (64 KiB default) masks whole — fail
+closed, since the filter cannot say what is inside. JWTs, XML, form-encoded bodies and the `Msg`
+text are deliberately not inspected.
+
+**Key Benefits:** the needle list finally reaches the pre-encoded bodies consumers actually log, and
+key material is caught by shape where no name needle could match.
+**Migration:** [migrations.md](migrations.md) `[C61.18]`.
+
+---
+
 ### [ADR-085: The Framework Owns the PostgreSQL Flyway JDBC URL](adr_085_framework_owned_flyway_url.md)
 
 **Date:** 2026-08-24 | **Status:** Accepted | **Breaking:** `flyway.url` in a conf is outranked for PG discrete-field configs; PG mTLS migrations refused
@@ -1855,7 +1878,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-085) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-086) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

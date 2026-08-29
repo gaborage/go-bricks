@@ -80,7 +80,21 @@ func (lea *LogEventAdapter) Err(err error) LogEvent {
 // Str adds a string field to the log event
 func (lea *LogEventAdapter) Str(key, value string) LogEvent {
 	if lea.filter != nil {
-		value = lea.filter.FilterString(key, value)
+		// The name decides first, and it decides alone: a sensitive key masks
+		// whatever the value holds, payload or not.
+		if lea.filter.isSensitiveField(key) {
+			lea.event = lea.event.Str(key, lea.filter.maskString(value))
+			return lea
+		}
+		// Then the payload door, called with the CONCRETE string rather than
+		// through FilterValue — whose `any` parameter boxes the string header,
+		// an allocation on every string field logged, paid before the door's
+		// cheap not-a-payload rejection has even run. Benchmarked against an
+		// unfiltered logger: this door now costs what zerolog's own Str costs.
+		if filtered, handled := opaquePayloadValue(lea.filter, value); handled {
+			lea.event = lea.event.Interface(key, filtered)
+			return lea
+		}
 	}
 	lea.event = lea.event.Str(key, value)
 	return lea
@@ -131,10 +145,29 @@ func (lea *LogEventAdapter) Interface(key string, i any) LogEvent {
 	return lea
 }
 
-// Bytes adds a byte slice field to the log event
+// Bytes adds a byte slice field to the log event.
+//
+// A byte slice is an OPAQUE payload: the name filter sees one leaf called by
+// this key, however many named fields the bytes carry of their own. So the
+// payload goes through the filter rather than straight to the encoder, and what
+// comes back decides the door — an untouched payload keeps zerolog's own Bytes
+// rendering, while a masked one is written as the value the filter chose
+// (#1133).
+//
+// It calls the payload door DIRECTLY rather than through FilterValue, whose
+// parameter is `any`: a slice header does not fit in an interface word, so
+// boxing one costs an allocation on every byte-slice field logged — paid before
+// the cheap not-JSON rejection inside the door has even run. The door answers
+// without boxing on the untouched path, which is the common one.
 func (lea *LogEventAdapter) Bytes(key string, val []byte) LogEvent {
 	if masked, ok := lea.maskIfSensitive(key); ok {
 		return masked
+	}
+	if lea.filter != nil {
+		if filtered, handled := opaquePayloadValue(lea.filter, val); handled {
+			lea.event = lea.event.Interface(key, filtered)
+			return lea
+		}
 	}
 	lea.event = lea.event.Bytes(key, val)
 	return lea
