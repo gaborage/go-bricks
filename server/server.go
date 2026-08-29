@@ -357,6 +357,24 @@ func customErrorHandler(c *echo.Context, err error, cfg *config.Config, log logg
 // classifyError converts an arbitrary error into a structured IAPIError.
 // It handles context.DeadlineExceeded, IAPIError, echo.HTTPError, and
 // untyped errors, applying production sanitization and server-error logging.
+// The 500 body's message text. Production hides the internal wording; debug
+// keeps it. They are constants, and internalErrorMessage is the single reader,
+// because the panic guard outside Echo's Recover renders its own 500 without
+// passing through classifyError — and a caller must not be able to tell which
+// recovery layer caught the panic from the message it gets back.
+const (
+	msgInternalErrorDebug = "Internal server error"
+	msgInternalErrorProd  = "An error occurred while processing your request"
+)
+
+// internalErrorMessage returns the 500 message this deployment's posture allows.
+func internalErrorMessage(cfg *config.Config) string {
+	if cfg.App.Debug {
+		return msgInternalErrorDebug
+	}
+	return msgInternalErrorProd
+}
+
 func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Logger) IAPIError {
 	// Context deadline exceeded (timeout errors)
 	if goerrors.Is(err, context.DeadlineExceeded) {
@@ -373,7 +391,7 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 	// In v5, sentinel errors like ErrNotFound are httpError (lowercase) which
 	// implements HTTPStatusCoder but NOT *HTTPError, so we check both interfaces.
 	status := http.StatusInternalServerError
-	msg := "Internal server error"
+	msg := msgInternalErrorDebug
 	var he *echo.HTTPError
 	if goerrors.As(err, &he) {
 		status = he.Code
@@ -389,7 +407,7 @@ func classifyError(err error, c *echo.Context, cfg *config.Config, log logger.Lo
 
 	// In non-debug (production) hide internal details for 500s
 	if !cfg.App.Debug && status == http.StatusInternalServerError {
-		msg = "An error occurred while processing your request"
+		msg = msgInternalErrorProd
 	}
 
 	if status >= http.StatusInternalServerError {

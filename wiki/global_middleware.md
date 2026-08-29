@@ -72,12 +72,15 @@ framework-level exemption is the health/ready probes.
 Global middleware lands at the **innermost slot** of the root chain:
 
 ```text
-requestID → tenant resolution → logger → Recover → timeout → rate-limit → [GLOBAL MIDDLEWARE] → handler
+panic guard → requestID → tenant resolution → logger → Recover → timeout → rate-limit → [GLOBAL MIDDLEWARE] → handler
 ```
 
 Consequences:
 
-- Runs **inside `Recover`** — panics are caught.
+- Runs **inside `Recover`** — panics are caught. Everything above it runs inside the outermost
+  panic guard instead, which answers a panic from one of those middlewares with the standard 500
+  envelope and one ERROR line naming the panic's TYPE (ADR-081); before it, such a panic reached
+  net/http, which printed the VALUE and dropped the connection.
 - Runs **after rate-limiting** — an unauthenticated request still consumes rate-limit budget
   before being rejected (intended: cheap flood rejection). This is an auth-gate hook, not a
   general "run early" hook.
