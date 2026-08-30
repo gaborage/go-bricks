@@ -1146,3 +1146,26 @@ func TestLazyPublisherPassesConfiguredTargets(t *testing.T) {
 		})
 	}
 }
+
+// TestModuleInitRefusesConfiguredSuperStreams pins the interim fail-closed guard: until the
+// relay grows its stream leg, every row is dispatched over PublishToExchange, so a
+// stream-lane row would reach the empty exchange, be dropped, and then be marked published.
+// DELETE this test together with the guard when the super-stream leg lands.
+func TestModuleInitRefusesConfiguredSuperStreams(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("disabled", true),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, SuperStreams: []string{"customers"}},
+		},
+		DB: func(context.Context) (dbtypes.Interface, error) {
+			return dbtesting.NewTestDB("postgresql"), nil
+		},
+		Messaging: func(context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outbox.superstreams")
+	assert.Contains(t, err.Error(), "next slice")
+}

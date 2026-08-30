@@ -437,3 +437,26 @@ func TestPostgresStoreCreateTableSeedErrorIsReported(t *testing.T) {
 	assert.ErrorIs(t, err, wantErr)
 	assert.Contains(t, err.Error(), "leader")
 }
+
+// TestPostgresStoreFetchPendingEmptyStreamIsAMQPLane pins C1: the stream-lane columns are
+// NOT NULL DEFAULT '' on PostgreSQL, so a row written before the stream lane existed reads
+// back as an AMQP-lane row rather than failing the scan and blocking startup.
+func TestPostgresStoreFetchPendingEmptyStreamIsAMQPLane(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	rows := dbtesting.NewRowSet(
+		"id", "event_type", "aggregate_id", "payload", "headers",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
+	).AddRow("evt-1", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
+		"orders", "orders.created", LaneAMQP, "", "",
+		StatusPending, int64(0), time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC), int64(1))
+	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
+
+	out, err := store.FetchPending(t.Context(), db, 10)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, LaneAMQP, out[0].Lane)
+	assert.Empty(t, out[0].Stream)
+	assert.Empty(t, out[0].PartitionKey)
+}

@@ -463,3 +463,26 @@ func TestOracleStoreCreateTableCreatesLeaderAndSeqIndex(t *testing.T) {
 	assert.Contains(t, log[3].SQL, "GOBRICKS_OUTBOX_leader")
 	assert.Contains(t, log[4].SQL, "MERGE INTO")
 }
+
+// TestOracleStoreFetchPendingEmptyStreamIsAMQPLane is the Oracle half of C1's regression.
+// Oracle keeps both columns NULLABLE — '' IS NULL there, so NOT NULL DEFAULT '' would reject
+// every AMQP-lane insert with ORA-01400 (issue #586) — and maps NULL back to "" on scan.
+func TestOracleStoreFetchPendingEmptyStreamIsAMQPLane(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	rows := dbtesting.NewRowSet(
+		"id", "event_type", "aggregate_id", "payload", "headers",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
+	).AddRow("evt-1", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
+		"orders", "orders.created", LaneAMQP, nil, nil,
+		StatusPending, int64(0), time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC), int64(1))
+	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
+
+	out, err := store.FetchPending(t.Context(), db, 10)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, LaneAMQP, out[0].Lane)
+	assert.Empty(t, out[0].Stream)
+	assert.Empty(t, out[0].PartitionKey)
+}
