@@ -7094,6 +7094,26 @@ func TestCheckKeyStoreRejectsUnreachableKeyNames(t *testing.T) {
 	assertSectionNameRejected(t, err, "keystore.keys.my_key")
 }
 
+// TestCheckKeyStoreRejectsADottedKeyName: a '.' is koanf's path delimiter, so a
+// dotted name makes the constructed keystore.keys.<name> Field ambiguous — is
+// "keystore.keys.my.key" the entry "my.key" or a "key" under "my"? The parent
+// field is reported instead, exactly as the databases and static-tenant rules
+// already do, and this must run BEFORE the reachability grammar so the
+// ambiguous path is never built.
+func TestCheckKeyStoreRejectsADottedKeyName(t *testing.T) {
+	cfg := &KeyStoreConfig{Keys: map[string]KeyPairConfig{
+		"my.key": {},
+	}}
+
+	err := checkKeyStore(cfg)
+
+	require.Error(t, err)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "keystore.keys", cfgErr.Field, "the parent field, since a dotted name cannot carry an unambiguous path")
+	assert.ErrorContains(t, err, "'.'")
+}
+
 // TestCheckKeyStoreAcceptsReachableKeyNames is the boundary's other side: a
 // conforming name reaches validateKeyEntry, which then judges its sources.
 func TestCheckKeyStoreAcceptsReachableKeyNames(t *testing.T) {

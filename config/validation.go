@@ -167,6 +167,7 @@ const (
 	fieldDatabase           = "database"
 	fieldDatabases          = "databases"
 	fieldMultitenantTenants = "multitenant.tenants"
+	fieldKeystoreKeys       = "keystore.keys"
 	fieldDatabasePort       = "database.port"
 	fieldDatabasePassword   = "database.password"
 	fieldMessaging          = "messaging"
@@ -1740,6 +1741,20 @@ func checkKeyStore(cfg *KeyStoreConfig) error {
 	slices.Sort(names)
 
 	for _, name := range names {
+		// A '.' collides with koanf's path delimiter: the constructed section
+		// path keystore.keys.<name>.public becomes ambiguous, and so would this
+		// name's own error Field — keystore.keys.my.key reads as a "key" under
+		// "my". The parent field is reported instead, as the databases and
+		// static-tenant rules do, and this runs first so the ambiguous path is
+		// never built.
+		if strings.Contains(name, ".") {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fieldKeystoreKeys,
+				Message:  fmt.Sprintf("key name %q cannot contain '.' (the config path delimiter)", name),
+				Action:   "rename the keystore.keys entry without dots",
+			}
+		}
 		// The name is judged before its sources: an unreachable entry cannot be
 		// configured by environment variable whatever its file or value says.
 		if err := checkSectionName(fmt.Sprintf(keystoreKeysFieldPrefix, name), name); err != nil {

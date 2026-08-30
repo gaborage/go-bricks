@@ -6152,7 +6152,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 - detect: read the KEYS you chose under three maps — `databases.<name>`,
   `multitenant.tenants.<id>` and `keystore.keys.<name>` — in every config file AND every overlay,
-  `config.yaml` and `config.<env>.yaml` alike. `git grep -nE '^[[:space:]]{2,}[A-Za-z0-9_.-]+:' -- '*.yaml'`
+  `config.yaml` / `config.yml` and `config.<env>.yaml` / `config.<env>.yml` alike — the loader
+  tries `.yaml` and falls back to `.yml` (`config/config.go`, `tryLoadYAMLFile`), so a repo that
+  spells its overlays either way is in scope.
+  `git grep -nE '^[[:space:]]{2,}[A-Za-z0-9_.-]+:' -- '*.yaml' '*.yml'`
   narrowed to those three blocks (`[[:space:]]`, never `\s` — `git grep -E` has no PCRE escape and a
   pattern carrying one silently matches nothing, which would report "not affected" to every
   consumer), or read them by eye: the question is whether any key carries a
@@ -6164,7 +6167,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   A key under `databases`, `multitenant.tenants` or `keystore.keys` must match `^[a-z0-9-]+$`.
   One that does not fails `config.Validate` with a `*ConfigError` whose `Field` is the KEY PATH
   (`databases.report_db`, `multitenant.tenants.acme_corp`, `keystore.keys.my_key`) and whose action
-  says rename and states the rule. Hyphen is legal; there is no length bound here (the resolver keeps
+  says rename and states the rule. One exception, in all three sections: a name containing `.` is
+  reported against the PARENT map (`databases`, `multitenant.tenants`, `keystore.keys`), because a
+  dotted name would make the key path itself ambiguous — `keystore.keys.my.key` reads as a `key`
+  under `my`. Hyphen is legal; there is no length bound here (the resolver keeps
   its own `{1,64}`).
   The reason is reachability. `Load` maps an environment variable to a key by lowercasing it and
   turning `_` into `.`, so `DATABASES_REPORT_DB_PORT` reaches `databases.report.db.port`: a section
