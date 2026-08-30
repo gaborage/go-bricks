@@ -151,6 +151,16 @@ func TestRequalifyActionRewritesOnlyItsOwnGeneratedHints(t *testing.T) {
 				"multitenant.tenants.acme.cache.enabled to config.yaml",
 		},
 		{
+			// The YAML-only hint has no "set X env var or " lead, so its "add " sits at index 0 —
+			// the boundary yamlKeyFromAction reads the key from. A key that cannot round-trip to
+			// an environment variable is how that form is generated in the first place.
+			name:   "yaml_only_hint_is_repointed_too",
+			action: "add cache.some_thing to config.yaml",
+			origF:  orig,
+			qualF:  qualified,
+			want:   "add multitenant.tenants.acme.cache.some_thing to config.yaml",
+		},
+		{
 			name:   "hint_naming_a_key_outside_the_field_is_untouched",
 			action: "set DATABASE_HOST env var or add database.host to config.yaml",
 			origF:  orig,
