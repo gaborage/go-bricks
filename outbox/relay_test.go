@@ -1026,7 +1026,7 @@ func TestRelayOutagePathMarksUnderLeadership(t *testing.T) {
 // stamped "acme" produced the same key, as did two stream rows on DIFFERENT streams sharing a
 // partition key — so a failure on one would park the other for nothing.
 func TestRelayKeyNamespacesDistinctScopes(t *testing.T) {
-	stamped := map[string]any{tenantStampHeader: "acme"}
+	stamped := map[string]any{messaging.TenantStampHeader: "acme"}
 
 	streamOrders := relayKey(&Record{Lane: LaneStream, Stream: "orders", PartitionKey: "acme"}, nil)
 	streamCustomers := relayKey(&Record{Lane: LaneStream, Stream: "customers", PartitionKey: "acme"}, nil)
