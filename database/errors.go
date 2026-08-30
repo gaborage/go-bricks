@@ -14,6 +14,8 @@ const (
 	pgForeignKeyViolation  = "23503"
 	oraUniqueViolation     = 1    // ORA-00001
 	oraForeignKeyViolation = 2291 // ORA-02291
+	pgLockNotAvailable     = "55P03"
+	oraResourceBusy        = 54 // ORA-00054
 )
 
 // IsUniqueViolation reports whether err is a unique or primary-key constraint
@@ -31,6 +33,26 @@ func IsUniqueViolation(err error) bool {
 	var oraErr *oranet.OracleError
 	if errors.As(err, &oraErr) {
 		return oraErr.ErrCode == oraUniqueViolation
+	}
+	return false
+}
+
+// IsLockNotAvailable reports whether err is a "row is locked and the statement
+// asked not to wait" failure (PostgreSQL SQLSTATE 55P03, Oracle ORA-00054), the
+// shape a SELECT ... FOR UPDATE NOWAIT takes when another session holds the row.
+// Like the helpers above it traverses the wrap chain via errors.As, so callers
+// must wrap driver errors with %w.
+func IsLockNotAvailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == pgLockNotAvailable
+	}
+	var oraErr *oranet.OracleError
+	if errors.As(err, &oraErr) {
+		return oraErr.ErrCode == oraResourceBusy
 	}
 	return false
 }

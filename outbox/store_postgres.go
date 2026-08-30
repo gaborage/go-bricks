@@ -212,3 +212,9 @@ func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) e
 
 	return nil
 }
+
+// Lead takes the ledger's leader row FOR UPDATE NOWAIT in a transaction held until
+// Release. The row lock IS the claim, so the transaction stays open for the cycle.
+func (s *postgresStore) Lead(ctx context.Context, db dbtypes.Interface) (Leadership, error) {
+	return leadRow(ctx, db, sqlid.LeaderTableName(s.tableName), "postgres", `SELECT 1`)
+}

@@ -85,8 +85,14 @@ type fakeStore struct {
 	DeletePublishedN    int64
 	DeletePublishedErr  error
 	CreateTableErr      error
+	LeadErr             error
+	ProbeErr            error
+	ProbeErrAfter       int // Probe returns ProbeErr from this call number on; 0 disables
 
 	// Call counters and last-arg captures.
+	LeadCalls               int
+	ProbeCalls              int
+	ReleaseCalls            int
 	InsertCalls             int
 	FetchPendingCalls       int
 	FetchPendingLastBatch   int
@@ -101,6 +107,40 @@ type fakeStore struct {
 	DeletePublishedCalls    int
 	DeletePublishedCutoff   time.Time
 	CreateTableCalls        int
+}
+
+// Lead returns a leadership bound to the fake's counters. The zero value leads and
+// probes clean, so a test that does not care about leadership needs no setup.
+func (s *fakeStore) Lead(_ context.Context, _ dbtypes.Interface) (Leadership, error) {
+	s.mu.Lock()
+	s.LeadCalls++
+	err := s.LeadErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &fakeLeadership{store: s}, nil
+}
+
+type fakeLeadership struct {
+	store *fakeStore
+}
+
+func (l *fakeLeadership) Probe(context.Context) error {
+	l.store.mu.Lock()
+	defer l.store.mu.Unlock()
+	l.store.ProbeCalls++
+	if l.store.ProbeErrAfter > 0 && l.store.ProbeCalls >= l.store.ProbeErrAfter {
+		return l.store.ProbeErr
+	}
+	return nil
+}
+
+func (l *fakeLeadership) Release(context.Context) error {
+	l.store.mu.Lock()
+	defer l.store.mu.Unlock()
+	l.store.ReleaseCalls++
+	return nil
 }
 
 func (s *fakeStore) Insert(_ context.Context, _ dbtypes.Tx, _ *Record) error {
@@ -182,7 +222,12 @@ type fakeAMQP struct {
 	// connectivity mid-batch (rather than being down for the whole cycle).
 	PublishHook func(f *fakeAMQP)
 
+	// PublishErrOnce, keyed by exchange:routingKey, fails only the FIRST publish for
+	// that key — so a later cycle (or a later row of a different key) succeeds.
+	PublishErrOnce map[string]error
+
 	// Captured calls.
+	PublishOrder    []string
 	PublishCalls    int
 	LastPublishOpts messaging.PublishOptions
 	LastPublishData []byte
@@ -209,8 +254,13 @@ func (f *fakeAMQP) PublishToExchange(ctx context.Context, opts messaging.Publish
 		f.PublishHook(f)
 	}
 	key := opts.Exchange + ":" + opts.RoutingKey
+	f.PublishOrder = append(f.PublishOrder, opts.RoutingKey)
 	block := f.PublishBlock[key]
 	err := f.PublishErr
+	if e, found := f.PublishErrOnce[key]; found {
+		delete(f.PublishErrOnce, key)
+		err = e
+	}
 	if e, found := f.PublishErrFor[key]; found {
 		err = e
 	}

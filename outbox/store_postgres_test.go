@@ -1,10 +1,12 @@
 package outbox
 
 import (
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -459,4 +461,71 @@ func TestPostgresStoreFetchPendingEmptyStreamIsAMQPLane(t *testing.T) {
 	assert.Equal(t, LaneAMQP, out[0].Lane)
 	assert.Empty(t, out[0].Stream)
 	assert.Empty(t, out[0].PartitionKey)
+}
+
+// --- Lead --------------------------------------------------------------------
+
+func TestPostgresStoreLeadAcquiresRow(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectTransaction()
+	tx.ExpectQuery(`FOR UPDATE NOWAIT`).WillReturnRows(dbtesting.NewRowSet("id").AddRow(int64(1)))
+	tx.ExpectExec(`SELECT 1`).WillReturnRowsAffected(0)
+
+	lead, err := store.Lead(t.Context(), db)
+	require.NoError(t, err)
+	require.NotNil(t, lead)
+
+	log := tx.QueryLog()
+	require.Len(t, log, 1)
+	assert.Contains(t, log[0].SQL, "gobricks_outbox_leader")
+	assert.Contains(t, log[0].SQL, "FOR UPDATE NOWAIT")
+
+	require.NoError(t, lead.Probe(t.Context()))
+	require.NoError(t, lead.Release(t.Context()))
+	dbtesting.AssertRolledBack(t, tx)
+}
+
+func TestPostgresStoreLeadNotLeader(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectTransaction()
+	tx.ExpectQuery(`FOR UPDATE NOWAIT`).WillReturnError(&pgconn.PgError{Code: "55P03"})
+
+	lead, err := store.Lead(t.Context(), db)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotLeader)
+	assert.Nil(t, lead)
+	dbtesting.AssertRolledBack(t, tx)
+}
+
+func TestPostgresStoreLeadRowMissing(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectTransaction()
+	tx.ExpectQuery(`FOR UPDATE NOWAIT`).WillReturnError(sql.ErrNoRows)
+
+	_, err := store.Lead(t.Context(), db)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "leader row missing")
+	assert.Contains(t, err.Error(), "gobricks_outbox_leader")
+	dbtesting.AssertRolledBack(t, tx)
+}
+
+func TestPostgresStoreLeadProbeReportsDeadTransaction(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectTransaction()
+	tx.ExpectQuery(`FOR UPDATE NOWAIT`).WillReturnRows(dbtesting.NewRowSet("id").AddRow(int64(1)))
+	wantErr := errors.New("connection recycled")
+	tx.ExpectExec(`SELECT 1`).WillReturnError(wantErr)
+
+	lead, err := store.Lead(t.Context(), db)
+	require.NoError(t, err)
+	assert.ErrorIs(t, lead.Probe(t.Context()), wantErr)
+
+	// A failed probe does not release the claim: the caller still must, and Release must
+	// succeed so the transaction is rolled back rather than left open.
+	require.NoError(t, lead.Release(t.Context()))
+	dbtesting.AssertRolledBack(t, tx)
 }

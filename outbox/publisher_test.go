@@ -33,6 +33,10 @@ type mockStore struct {
 	insertErr       error
 }
 
+func (s *mockStore) Lead(_ context.Context, _ dbtypes.Interface) (Leadership, error) {
+	return nil, nil
+}
+
 func (s *mockStore) Insert(_ context.Context, _ dbtypes.Tx, record *Record) error {
 	if s.insertErr != nil {
 		return s.insertErr

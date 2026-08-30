@@ -86,3 +86,29 @@ func TestConstraintName(t *testing.T) {
 		t.Fatal("nil → ok=false")
 	}
 }
+
+func TestIsLockNotAvailable(t *testing.T) {
+	pgLocked := &pgconn.PgError{Code: "55P03"}
+	oraLocked := &oranet.OracleError{ErrCode: 54}
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"pg_lock_not_available", pgLocked, true},
+		{"pg_lock_not_available_wrapped", fmt.Errorf("lead: %w", pgLocked), true},
+		{"pg_unique_is_not_a_lock_error", &pgconn.PgError{Code: "23505"}, false},
+		{"oracle_resource_busy", oraLocked, true},
+		{"oracle_resource_busy_wrapped", fmt.Errorf("lead: %w", oraLocked), true},
+		{"oracle_unique_is_not_a_lock_error", &oranet.OracleError{ErrCode: 1}, false},
+		{"plain_error", errors.New("x"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsLockNotAvailable(tc.err); got != tc.want {
+				t.Fatalf("IsLockNotAvailable(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
