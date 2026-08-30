@@ -115,7 +115,7 @@ verified leads).
 - **No `tenant.id` metric-attribute convention exists.** `grep -rn "attribute.String" ...`
   finds tenant attributes on *no* metric; the closest tenant conventions are the relay's
   per-cycle log field `Str("tenant", tenantID)` (`outbox/relay.go:210`) and the AMQP
-  `x-tenant-id` publish header (`messaging/tenant_publisher.go:11`). The metric section below
+  `x-tenant-id` publish header, the tenant stamp (`messaging/internal/tenantstamp/tenantstamp.go`, written by `messaging/stamping_publisher.go`). The metric section below
   resolves what to do given this absence.
 
 ## API surface
@@ -433,7 +433,7 @@ the endpoints simply don't exist unless opted in.
 - **Tenant dimension — the honest answer.** There is **no existing `tenant.id` metric-attribute
   convention** in the framework (grep across `observability/` and `messaging/` finds none; the
   only tenant-tagging precedents are the relay's *log* field `Str("tenant", tenantID)`,
-  `outbox/relay.go:210`, and the AMQP `x-tenant-id` *header*, `messaging/tenant_publisher.go:11`).
+  `outbox/relay.go:210`, and the AMQP `x-tenant-id` *header*, the tenant stamp — `messaging/internal/tenantstamp/tenantstamp.go`).
   So the build plan introduces the attribute deliberately: emit one gauge series **per tenant**
   with `attribute.String("tenant.id", tenantID)` when multi-tenant, and a single series with no
   tenant attribute in single-tenant mode (tenantID `""`). This follows the relay's own
