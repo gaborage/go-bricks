@@ -613,14 +613,16 @@ func TestRelayMidBatchDropAccountingSumsToTotal(t *testing.T) {
 	db := dbtesting.NewTestDB("postgresql")
 	ctx := newFakeJobCtx(db, amqp)
 
-	res := r.runRelayLoop(ctx, ctx.Logger(), db, amqp, records)
+	lead, err := store.Lead(ctx, db)
+	require.NoError(t, err)
+	res := r.runRelayLoop(ctx, ctx.Logger(), db, amqp, lead, records)
 
 	assert.Equal(t, 1, res.published, "record 1 published before the drop")
 	assert.Equal(t, 0, res.unrecorded)
 	assert.Equal(t, 0, res.deadlettered)
 	assert.Equal(t, 2, res.failed, "record 2 (failed attempt) AND record 3 (outage remainder) both count as failed")
 	assert.ErrorIs(t, res.outageErr, messaging.ErrNotConnected)
-	sum := res.published + res.unrecorded + res.failed + res.deadlettered
+	sum := res.published + res.unrecorded + res.failed + res.deadlettered + res.parked
 	assert.Equal(t, len(records), sum, "cycle accounting must sum to the batch total")
 	assert.Equal(t, res.failed, store.MarkFailedCalls, "result count matches what was actually marked failed in the DB")
 }
@@ -816,4 +818,197 @@ func TestDeadLetterPoisonReportsAFailedLedgerWrite(t *testing.T) {
 			assert.Equal(t, tt.wantLines, log.messages())
 		})
 	}
+}
+
+// --- leadership --------------------------------------------------------------
+
+func TestRelayNotLeaderSkipsCycle(t *testing.T) {
+	store := &fakeStore{
+		LeadErr:            ErrNotLeader,
+		FetchPendingResult: []Record{{ID: "evt-1", Exchange: "orders", RoutingKey: "created"}},
+	}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)), "another instance leading is not a cycle failure")
+	assert.Zero(t, store.FetchPendingCalls, "a non-leader must not even fetch")
+	assert.Zero(t, amqp.PublishCalls)
+	assert.Zero(t, store.ReleaseCalls, "nothing was acquired, so nothing is released")
+}
+
+func TestRelayLeaderErrorFailsCycle(t *testing.T) {
+	store := &fakeStore{
+		LeadErr:            errors.New("leader row missing in gobricks_outbox_leader"),
+		FetchPendingResult: []Record{{ID: "evt-1", Exchange: "orders", RoutingKey: "created"}},
+	}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	err := r.Execute(newFakeJobCtx(db, amqp))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "leader")
+	assert.Zero(t, amqp.PublishCalls)
+}
+
+func TestRelayLeaderReleasedAfterCycle(t *testing.T) {
+	store := &fakeStore{
+		FetchPendingResult: []Record{
+			{ID: "evt-1", Exchange: "orders", RoutingKey: "a"},
+			{ID: "evt-2", Exchange: "orders", RoutingKey: "b"},
+		},
+	}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Equal(t, 1, store.LeadCalls)
+	assert.Equal(t, 1, store.ReleaseCalls)
+	assert.Equal(t, 2, store.ProbeCalls, "leadership is probed once per record")
+}
+
+func TestRelayLostLeadershipStopsBatch(t *testing.T) {
+	store := &fakeStore{
+		ProbeErrAfter: 2,
+		ProbeErr:      errors.New("gone"),
+		FetchPendingResult: []Record{
+			{ID: "evt-1", Exchange: "orders", RoutingKey: "a"},
+			{ID: "evt-2", Exchange: "orders", RoutingKey: "b"},
+			{ID: "evt-3", Exchange: "orders", RoutingKey: "c"},
+		},
+	}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	err := r.Execute(newFakeJobCtx(db, amqp))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "leadership lost")
+	assert.Equal(t, 1, amqp.PublishCalls, "a deposed leader publishes nothing further")
+	assert.Zero(t, store.MarkFailedCalls, "the unattempted remainder is left pending, not marked")
+	assert.Equal(t, 1, store.ReleaseCalls)
+}
+
+// --- key-ordered draining ----------------------------------------------------
+
+func TestRelayFailedKeyParksLaterRowsOfThatKey(t *testing.T) {
+	store := &fakeStore{
+		FetchPendingResult: []Record{
+			{ID: "K1", Exchange: "ex", RoutingKey: "k"},
+			{ID: "K2", Exchange: "ex", RoutingKey: "k"},
+			{ID: "J1", Exchange: "ex", RoutingKey: "j"},
+		},
+	}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{"ex:k": errors.New("broker rejected")}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Equal(t, 2, amqp.PublishCalls, "K2 is parked behind K1; K1 and J1 are attempted")
+	assert.Equal(t, 1, store.MarkFailedCalls)
+	assert.Equal(t, "K1", store.MarkFailedLastID)
+	assert.Equal(t, "J1", store.MarkPublishedLastID, "an unrelated key drains past a parked one")
+}
+
+func TestRelayNextCycleReattemptsParkedKeyInOrder(t *testing.T) {
+	records := []Record{
+		{ID: "K1", Exchange: "ex", RoutingKey: "k"},
+		{ID: "K2", Exchange: "ex", RoutingKey: "k"},
+	}
+	store := &fakeStore{FetchPendingResult: records}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{"ex:k": errors.New("broker rejected")}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	require.Equal(t, 1, amqp.PublishCalls)
+
+	amqp.PublishErrFor = nil
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Equal(t, []string{"k", "k", "k"}, amqp.PublishOrder,
+		"the parked row follows its predecessor, in sequence order, on the next cycle")
+}
+
+func TestRelayStampedAMQPRowsKeyByTenantStamp(t *testing.T) {
+	store := &fakeStore{
+		FetchPendingResult: []Record{
+			{ID: "A1", Exchange: "ex", RoutingKey: "a", Headers: []byte(`{"x-tenant-id":"acme"}`)},
+			{ID: "A2", Exchange: "ex", RoutingKey: "b", Headers: []byte(`{"x-tenant-id":"acme"}`)},
+			{ID: "B1", Exchange: "ex", RoutingKey: "a", Headers: []byte(`{"x-tenant-id":"beta"}`)},
+		},
+	}
+	amqp := newFakeAMQP()
+	amqp.PublishErrOnce = map[string]error{"ex:a": errors.New("broker rejected")}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Equal(t, 2, amqp.PublishCalls,
+		"A2 parks behind A1 because they share a tenant stamp, not a routing key")
+	assert.Equal(t, []string{"a", "a"}, amqp.PublishOrder,
+		"B1 publishes although its routing key equals A1's — a different stamp is a different key")
+	assert.Equal(t, "B1", store.MarkPublishedLastID)
+}
+
+// TestRelayStreamRowsKeyByPartitionKey pins that a stream-lane row orders under its
+// PARTITION KEY, not its routing key (which it has none of). The stream leg itself lands in
+// a later slice; this asserts only the ordering key, which is what this slice owns.
+func TestRelayStreamRowsKeyByPartitionKey(t *testing.T) {
+	store := &fakeStore{
+		FetchPendingResult: []Record{
+			{ID: "S1", Lane: LaneStream, Stream: "customers", PartitionKey: "acme"},
+			{ID: "S2", Lane: LaneStream, Stream: "customers", PartitionKey: "acme"},
+			{ID: "T1", Lane: LaneStream, Stream: "customers", PartitionKey: "beta"},
+		},
+	}
+	amqp := newFakeAMQP()
+	// Every stream-lane row publishes to the empty exchange until the stream leg exists,
+	// so one error configuration fails them all; the first failure is what parks.
+	amqp.PublishErr = errors.New("broker rejected")
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Equal(t, 2, amqp.PublishCalls,
+		"S2 parks behind S1 on their shared partition key; T1's differs, so it is attempted")
+	assert.Equal(t, 2, store.MarkFailedCalls, "only the two attempted rows advance retry_count")
+}
+
+func TestRelayDeadLetteredRowDoesNotPark(t *testing.T) {
+	store := &fakeStore{
+		FetchPendingResult: []Record{
+			{ID: "K1", Exchange: "ex", RoutingKey: "k", Headers: []byte(`{not json}`), RetryCount: 2},
+			{ID: "K2", Exchange: "ex", RoutingKey: "k"},
+		},
+	}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Equal(t, 1, store.MarkDeadLetteredCalls)
+	assert.Equal(t, "K2", store.MarkPublishedLastID, "K2 is attempted, not parked behind a terminal row")
+}
+
+func TestRelayOutagePathMarksUnderLeadership(t *testing.T) {
+	store := &fakeStore{
+		FetchPendingResult: []Record{
+			{ID: "evt-1", Exchange: "ex", RoutingKey: "a"},
+			{ID: "evt-2", Exchange: "ex", RoutingKey: "b"},
+		},
+	}
+	amqp := newFakeAMQP()
+	amqp.Ready = false
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+
+	err := r.Execute(newFakeJobCtx(db, amqp))
+	require.Error(t, err)
+	assert.Equal(t, 1, store.LeadCalls, "marks are writes, so the outage path runs under leadership too")
+	assert.Equal(t, 2, store.MarkFailedCalls)
+	assert.Equal(t, 1, store.ReleaseCalls)
 }

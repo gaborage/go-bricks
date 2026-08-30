@@ -103,6 +103,20 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	msgClient, msgErr := r.getMessaging(ctx)
 	brokerUsable := msgErr == nil && msgClient != nil && msgClient.IsReady()
 
+	// One relay instance per ledger drains at a time: the leader row is held FOR UPDATE
+	// NOWAIT in a transaction that lives for this cycle. Taken BEFORE the fetch so a
+	// non-leader does no work at all, and covering the outage path too, whose marks are
+	// writes.
+	lead, err := r.store.Lead(ctx, db)
+	if err != nil {
+		if errors.Is(err, ErrNotLeader) {
+			log.Debug().Msg("Outbox relay: another instance leads this ledger; skipping cycle")
+			return nil
+		}
+		return fmt.Errorf("leader: %w", err)
+	}
+	defer func() { _ = lead.Release(ctx) }()
+
 	records, err := r.store.FetchPending(ctx, db, r.config.BatchSize)
 	if err != nil {
 		return fmt.Errorf("fetch failed: %w", err)
@@ -118,13 +132,13 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	// level (and, in multi-tenant mode, names the affected tenant) instead of silently
 	// reporting success forever under a permanent misconfiguration.
 	if !brokerUsable {
-		r.markOutage(ctx, log, db, records)
+		r.markOutage(ctx, log, db, lead, records)
 		return brokerUnavailableErr(msgErr)
 	}
 
-	res := r.runRelayLoop(ctx, log, db, msgClient, records)
+	res := r.runRelayLoop(ctx, log, db, msgClient, lead, records)
 
-	r.logCycle(log, tenantID, res.published, res.unrecorded, res.failed, res.deadlettered, len(records))
+	r.logCycle(log, tenantID, res.published, res.unrecorded, res.failed, res.deadlettered, res.parked, len(records))
 	if res.outageErr != nil {
 		return brokerUnavailableErr(res.outageErr)
 	}
@@ -135,21 +149,36 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 // publish loop, plus (if the batch stopped early on a mid-batch broker drop) the
 // outage error the caller surfaces at the job level.
 type relayBatchResult struct {
-	published, unrecorded, failed, deadlettered int
-	outageErr                                   error
+	published, unrecorded, failed, deadlettered, parked int
+	outageErr                                           error
 }
 
 // runRelayLoop publishes each pending record in order, stopping early on
 // shutdown/cancel, a shutdown-aborted publish, or a mid-batch broker drop
 // (outcomeBrokerDown — see publishRecord). Split out of relayTenant to keep
 // that function's cyclomatic complexity within budget (gocyclo).
-func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, records []Record) relayBatchResult {
+func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, lead Leadership, records []Record) relayBatchResult {
 	var res relayBatchResult
+	// Keys whose head failed this cycle. A later row of a parked key is left untouched —
+	// not even its retry_count moves — so the key keeps its order across cycles.
+	parked := make(map[string]struct{})
 	for i := range records {
 		// Stop cleanly on shutdown/cancel: leave the rest pending for the next startup
 		// rather than bumping their retry_count on the way down.
 		if ctx.Err() != nil {
 			break
+		}
+		// A deposed leader must not publish another row: another instance may already be
+		// draining the same ledger.
+		if err := lead.Probe(ctx); err != nil {
+			log.Warn().Err(err).Msg("Outbox relay lost leadership mid-cycle; stopping")
+			res.outageErr = fmt.Errorf("leadership lost: %w", err)
+			return res
+		}
+		key := relayKey(&records[i])
+		if _, isParked := parked[key]; isParked {
+			res.parked++
+			continue
 		}
 		outcome, pubErr := r.publishRecord(ctx, log, db, msgClient, &records[i])
 		switch outcome {
@@ -159,6 +188,9 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 			res.unrecorded++
 		case outcomeFailed:
 			res.failed++
+			// Only a failure parks: a dead-lettered row is terminal and an unrecorded one
+			// was delivered, so neither blocks its key.
+			parked[key] = struct{}{}
 		case outcomeDeadLettered:
 			res.deadlettered++
 		case outcomeBrokerDown:
@@ -171,7 +203,7 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 			// still sum to the batch total.
 			res.failed++
 			res.outageErr = pubErr
-			res.failed += r.markOutage(ctx, log, db, records[i+1:])
+			res.failed += r.markOutage(ctx, log, db, lead, records[i+1:])
 			return res
 		case outcomeAborted:
 			// Shutting down mid-publish — stop without counting this record.
@@ -181,14 +213,43 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 	return res
 }
 
+// tenantStampHeader is the header the messaging layer stamps a tenant into. Mirrored here
+// because messaging keeps its constant unexported; it becomes an import once that is exported.
+const tenantStampHeader = "x-tenant-id"
+
+// relayKey is the key a row is ordered under within a cycle. The stream lane orders by its
+// partition key; the AMQP lane orders by the tenant stamp when the row carries one, so two
+// tenants publishing the same routing key do not block each other, and by the routing key
+// otherwise. A row whose headers will not decode is poison — publishRecord dead-letters it —
+// and keying it by routing key holds its siblings behind it only until it does.
+func relayKey(record *Record) string {
+	if record.Lane == LaneStream {
+		return record.PartitionKey
+	}
+	if len(record.Headers) > 0 {
+		var headers map[string]any
+		if err := json.Unmarshal(record.Headers, &headers); err == nil {
+			if stamp, ok := headers[tenantStampHeader].(string); ok && stamp != "" {
+				return stamp
+			}
+		}
+	}
+	return record.RoutingKey
+}
+
 // markOutage advances retry_count for every pending record without attempting a publish,
 // used when the broker is unreachable/not-ready. Stops early on shutdown/cancel so a
 // shutdown does not inflate retry_count for records it never got to. Returns how many
 // records it actually marked (fewer than len(records) on early stop) so callers can
 // fold the outage remainder into their cycle accounting.
-func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.Interface, records []Record) int {
+func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.Interface, lead Leadership, records []Record) int {
 	for i := range records {
 		if ctx.Err() != nil {
+			return i
+		}
+		// A mark is a write, so it needs the same leadership guarantee as a publish.
+		if err := lead.Probe(ctx); err != nil {
+			log.Warn().Err(err).Msg("Outbox relay lost leadership while marking an outage; stopping")
 			return i
 		}
 		r.markRecordFailed(ctx, log, db, records[i].ID, "messaging unavailable")
@@ -199,12 +260,13 @@ func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.In
 // logCycle emits the per-cycle delivery summary. "unrecorded" counts events delivered to the
 // broker whose MarkPublished failed (they re-deliver next cycle) — kept distinct from
 // "published" so the success count is not inflated by stuck-but-delivered records.
-func (r *Relay) logCycle(log logger.Logger, tenantID string, published, unrecorded, failed, deadlettered, total int) {
+func (r *Relay) logCycle(log logger.Logger, tenantID string, published, unrecorded, failed, deadlettered, parked, total int) {
 	event := log.Info().
 		Int("published", published).
 		Int("unrecorded", unrecorded).
 		Int("failed", failed).
 		Int("deadlettered", deadlettered).
+		Int("parked", parked).
 		Int("total", total)
 	if tenantID != "" {
 		event = event.Str("tenant", tenantID)
