@@ -238,18 +238,43 @@ func (m *Manager) loadHeld(ctx context.Context, runner *consumerRunner) error {
 }
 
 // reloadHeldOnPromotion refreshes the set when this member is promoted to a
-// partition. The promotion callback cannot fail the promotion — the client offers
-// no way to refuse one — so a failed read is reported and the last known set
-// stands, which is stale rather than empty: a tenant wrongly still held costs one
-// detour through the ledger, where a tenant wrongly released costs the ordering.
+// partition, and does not let the partition consume until it succeeds.
+//
+// The client offers no way to refuse a promotion, so "does not consume" is
+// spelled as blocking this callback: it returns only once the ledger answered,
+// or once the consumer is stopping. Consuming from a STALE set would deliver a
+// held tenant's later message ahead of the one it is held behind — the ordering
+// the hold exists to keep — and a set is at its stalest right here, on a member
+// that has been standing by while another partition owner parked tenants.
 func (m *Manager) reloadHeldOnPromotion(runner *consumerRunner) {
 	if runner.hold == nil {
 		return
 	}
 
-	if err := m.loadHeld(runner.baseCtx, runner); err != nil {
-		m.log.Error().Err(err).
-			Str(logFieldConsumer, runner.name).
-			Msg("Could not reload held tenants on promotion; gating from the last known set")
+	wait := runner.holdBackoff
+	if wait <= 0 {
+		wait = holdBackoffDefault
+	}
+
+	for attempt := 1; ; attempt++ {
+		if err := m.loadHeld(runner.baseCtx, runner); err == nil {
+			return
+		} else if attempt == 1 {
+			// Once: a ledger outage during a promotion storm should not write a line
+			// per retry per partition.
+			m.log.Error().Err(err).
+				Str(logFieldConsumer, runner.name).
+				Msg("Could not reload held tenants on promotion; not consuming until it succeeds")
+		}
+
+		if !delivery.Wait(runner.baseCtx, wait) {
+			// The consumer is stopping. Nothing has been consumed on this partition,
+			// so a restart reloads the set before it takes a message.
+			return
+		}
+		wait *= 2
+		if wait > holdBackoffMax {
+			wait = holdBackoffMax
+		}
 	}
 }

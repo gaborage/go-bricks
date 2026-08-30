@@ -118,3 +118,20 @@ func TestHoldWithoutADrainFailsStartup(t *testing.T) {
 func TestNoHoldNeedsNoDrain(t *testing.T) {
 	assert.NoError(t, assertHoldIsDrainable(nil))
 }
+
+// TestARejectedModuleContributesNoLedger pins that registration order matters: a
+// module the registry refuses must not leave its ledger behind, where it would
+// count toward "two modules provide a hold ledger" and refuse a startup that is
+// actually fine.
+func TestARejectedModuleContributesNoLedger(t *testing.T) {
+	a := newHoldApp(t)
+	require.NoError(t, a.RegisterModule(&fakeHoldModule{ledger: &stubHoldLedger{}}))
+
+	// Same name: the registry rejects it as a duplicate.
+	err := a.RegisterModule(&fakeHoldModule{ledger: &stubHoldLedger{}})
+
+	require.Error(t, err)
+	found, ledgerErr := a.holdLedger()
+	require.NoError(t, ledgerErr, "the rejected module's ledger was never counted")
+	assert.NotNil(t, found)
+}

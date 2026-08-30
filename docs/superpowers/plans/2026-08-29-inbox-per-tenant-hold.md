@@ -52,7 +52,7 @@ Titles: C1 `feat(messaging): retry a failed stream delivery in place within a bo
 9. **A hold consumer's message with no tenant is refused and skipped, never parked.** A `ReadError` from the stamp (A's fail-closed) produces the lane's failure outcome; with no tenant there is nothing to key a hold on, so `Settle` skips as today. `Hold: true` beside `TenantOptional: true` is a declaration error.
 10. **The gauges read a snapshot the drain wrote, not the database.** Observable-gauge callbacks fire on the exporter's schedule; querying the ledger from them would put a database read on the metrics path. The drain refreshes `HoldStats` per consumer at the end of each pass into an `atomic.Pointer`, and the callback reports it. The atomic protects each VALUE, not the map that holds them: the map itself is guarded by a mutex on every read and write, because an observable-gauge callback fires on the exporter's own schedule and would otherwise read the map while the drain writes `d.stats[consumer]`.
 11. **`internal/ledgererr` replaces the outbox's private `boundPersistedError`.** The hold's `last_error` column needs the same 1 KiB bound, control-byte scrub and `...[truncated]` marker; copying thirty lines into `inbox` would trip SonarCloud's 3 % new-code duplication gate, so the helper moves to `internal/ledgererr.Bound` and `outbox` becomes its first caller (behaviour identical, its tests move with it).
-12. **The hold's table names derive from one key.** `inbox.hold.tablename` (default `gobricks_inbox_hold`) names the row table; the tenant table is `<tablename>_tenant`; indexes are `idx_<tablename>_tenant_order` and `idx_<tablename>_tenant_due`. The name bound is `63 - len("_tenant")`, PostgreSQL's effective identifier limit rather than Oracle's 128, so every derived name fits on BOTH vendors.
+12. **The hold's table names derive from one key.** `inbox.hold.tablename` (default `gobricks_inbox_hold`) names the row table; the tenant table is `<tablename>_tenant`; indexes are `idx_<tablename>_tenant_order` and `idx_<tablename>_tenant_due`. The name bound is `63 - len("idx__tenant_order")` = 46 — PostgreSQL's effective identifier limit, against the LONGEST derived name rather than the tenant table's suffix, so every derived name fits on both vendors.
 
 13. **The park and drain backoffs reuse the delivery package's saturating series.** As C1 shipped it, `delivery.backoffFor` computes each wait as a bounded shift that SATURATES before it can wrap, and `delivery.BackoffBudget(r, budget)` walks that series to report a total and whether it passes over — the streams lane already bounds a declared policy with it against `streams.MaxRetryWait`. The drain's per-tenant backoff calls ONE exported helper there rather than growing a second copy of the arithmetic, and carries an overflow-boundary case of its own.
 
@@ -268,7 +268,7 @@ Titles: C1 `feat(messaging): retry a failed stream delivery in place within a bo
   func NewOracleHoldStore(tableName string) (HoldStore, error)
   ```
 
-  `validateHoldTableName(name string) error` — `sqlid.ValidateTableName`, unqualified, `len ≤ 63 - len("_tenant")` (Decision 12): PostgreSQL truncates an identifier past 63 bytes, so the derived tenant table must fit that, not merely Oracle's 128.
+  `validateHoldTableName(name string) error` — `sqlid.ValidateTableName`, unqualified, `len ≤ 63 - len("idx__tenant_order")` = 46 (Decision 12): PostgreSQL truncates an identifier past 63 bytes rather than refusing, and the INDEX names are the longest derived ones — budgeting only for the tenant table leaves both indexes to truncate to the SAME identifier, at which point the second CREATE INDEX quietly does nothing.
 
 - DDL, PostgreSQL (`%s` = table name; the tenant table and both indexes derive from it):
 
@@ -328,7 +328,7 @@ Titles: C1 `feat(messaging): retry a failed stream delivery in place within a bo
 | `release_only_when_empty` | affected 1 → true; affected 0 → false |
 | `next_rows_orders_by_stream_then_offset` | SQL pattern contains `ORDER BY stream, stream_offset` |
 | `stats_with_no_tenants` | `MIN` scans NULL → `OldestHeldSince.IsZero()` |
-| `table_name_bound` | `63 - len("_tenant")` = 56: `NewPostgresHoldStore(strings.Repeat("a", 56))` accepted, 57 rejected with `too long`; the same bound on the Oracle store |
+| `table_name_bound` | `63 - len("idx__tenant_order")` = 46: `NewPostgresHoldStore(strings.Repeat("a", 46))` accepted, 47 rejected with `too long`; the same bound on the Oracle store; assert EVERY derived name fits, not just the tenant table |
 | `oracle_unique_violation_is_not_inserted` | `Exec` returns an `ORA-00001`-shaped error `database.IsUniqueViolation` recognises → `inserted == false`, nil |
 
 - [ ] **Step 3: Run, expect FAIL.** **Step 4: Green.**

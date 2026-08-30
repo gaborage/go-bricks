@@ -68,6 +68,21 @@ func NewPostgresHoldStore(tableName string) (HoldStore, error) {
 // nothing, and the tenant marker is upserted rather than inserted so a row
 // arriving just after the drain released that tenant holds it again.
 func (s *postgresHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow) (bool, error) {
+	// The marker FIRST, and with a DO UPDATE that touches the row: an existing
+	// marker is locked by it for the rest of this transaction, so a drain deciding
+	// to release this tenant blocks until the row below is committed and its
+	// no-rows-remain check sees it. Inserting the row first would let a release
+	// commit in between, leaving a held row with nothing holding its tenant.
+	upsert := fmt.Sprintf(
+		`INSERT INTO %s (consumer, tenant_id, held_since, attempts, next_attempt_at)
+		 VALUES ($1, $2, NOW(), 0, NOW())
+		 ON CONFLICT (consumer, tenant_id) DO UPDATE SET consumer = EXCLUDED.consumer`,
+		s.tenantTable,
+	)
+	if _, err := tx.Exec(ctx, upsert, row.Consumer, row.TenantID); err != nil {
+		return false, fmt.Errorf("inbox postgres: mark tenant held failed: %w", err)
+	}
+
 	insert := fmt.Sprintf(
 		`INSERT INTO %s (consumer, stream, stream_offset, tenant_id, data, properties, held_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, NOW())
@@ -81,19 +96,6 @@ func (s *postgresHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRo
 	inserted, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("inbox postgres: rows affected failed: %w", err)
-	}
-
-	// The marker is upserted in the SAME transaction as the row, so a drain pass
-	// that released this tenant between the two writes cannot leave a row behind
-	// with nothing holding it.
-	upsert := fmt.Sprintf(
-		`INSERT INTO %s (consumer, tenant_id, held_since, attempts, next_attempt_at)
-		 VALUES ($1, $2, NOW(), 0, NOW())
-		 ON CONFLICT (consumer, tenant_id) DO NOTHING`,
-		s.tenantTable,
-	)
-	if _, err := tx.Exec(ctx, upsert, row.Consumer, row.TenantID); err != nil {
-		return false, fmt.Errorf("inbox postgres: mark tenant held failed: %w", err)
 	}
 	return inserted == 1, nil
 }
@@ -198,7 +200,7 @@ func (s *postgresHoldStore) Stats(ctx context.Context, db dbtypes.Interface, con
 	query := fmt.Sprintf(
 		`SELECT (SELECT COUNT(*) FROM %s WHERE consumer = $1),
 		        (SELECT COUNT(*) FROM %s WHERE consumer = $1),
-		        (SELECT COALESCE(MIN(held_since), NOW()) FROM %s WHERE consumer = $1)`,
+		        (SELECT MIN(held_since) FROM %s WHERE consumer = $1)`,
 		s.tenantTable, s.table, s.tenantTable,
 	)
 	return scanHoldStats(ctx, db, query, consumer)

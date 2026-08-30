@@ -258,9 +258,7 @@ func (a *App) RegisterModule(module Module) error {
 	if setter, ok := module.(sharedResolverSetter); ok {
 		setter.SetSharedResolvers(a.sharedDBResolver(), a.sharedMessagingResolver())
 	}
-	if provider, ok := module.(holdLedgerProvider); ok {
-		a.holdLedgers = append(a.holdLedgers, provider)
-	}
+
 	if setter, ok := module.(holdReplayerSetter); ok {
 		// A source, not a value: the streams manager is built later, in
 		// prepareStreamConsumers, so a value captured here would always be nil. The
@@ -269,7 +267,17 @@ func (a *App) RegisterModule(module Module) error {
 		// does with it.
 		setter.SetHoldReplayer(func() streams.HoldReplayer { return nil })
 	}
-	return a.registry.Register(module)
+	if err := a.registry.Register(module); err != nil {
+		return err
+	}
+
+	// Only after the registry accepted it: a module rejected as a duplicate must not
+	// leave its ledger behind, where it would count toward "two modules provide a
+	// hold ledger" and refuse a startup that is actually fine.
+	if provider, ok := module.(holdLedgerProvider); ok {
+		a.holdLedgers = append(a.holdLedgers, provider)
+	}
+	return nil
 }
 
 // sharedDBResolver returns a resolver for the control-plane ("" key) database,

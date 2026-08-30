@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -85,4 +86,62 @@ func TestAConsumerWithoutAHoldNeedsNoLedger(t *testing.T) {
 
 	require.Len(t, m.consumers, 1)
 	assert.Nil(t, m.consumers[0].runner.hold)
+}
+
+// TestPromotionDoesNotConsumeWithAStaleHeldSet pins decision 14: the reload on
+// SAC promotion fails CLOSED. A partition promoted while the ledger is unreachable
+// waits rather than consuming from a set that may be missing tenants another owner
+// parked while this member stood by.
+func TestPromotionDoesNotConsumeWithAStaleHeldSet(t *testing.T) {
+	ledger := &fakeHoldLedger{heldErr: errors.New("ledger unavailable")}
+	m := NewManager(ManagerOptions{
+		URI:    "rabbitmq-stream://localhost:5552/%2f",
+		Logger: logger.New("error", false),
+		Hold:   ledger,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := m.newRunner(ctx, &consumerDeclaration{
+		Stream: testStream, Name: testConsumerName, Handler: noopHandler, Hold: true,
+	})
+	runner.holdBackoff = time.Millisecond
+
+	returned := make(chan struct{})
+	go func() {
+		m.reloadHeldOnPromotion(runner)
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		t.Fatal("the promotion returned while the held set was unknown")
+	case <-time.After(20 * time.Millisecond):
+		// Still retrying, which is the point: the partition is not consuming.
+	}
+
+	// Only stopping the consumer ends the wait, and nothing was consumed meanwhile.
+	cancel()
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("a stopping consumer must not be stuck in the reload")
+	}
+	assert.Greater(t, ledger.loads(), 1, "it kept asking rather than giving up")
+}
+
+// TestPromotionReloadsTheHeldSetWhenTheLedgerAnswers is the ordinary path: the
+// promoted partition picks up what the ledger holds before it consumes.
+func TestPromotionReloadsTheHeldSetWhenTheLedgerAnswers(t *testing.T) {
+	ledger := &fakeHoldLedger{held: map[string][]string{testConsumerName: {"tenant-a"}}}
+	m := NewManager(ManagerOptions{
+		URI:    "rabbitmq-stream://localhost:5552/%2f",
+		Logger: logger.New("error", false),
+		Hold:   ledger,
+	})
+	runner := m.newRunner(context.Background(), &consumerDeclaration{
+		Stream: testStream, Name: testConsumerName, Handler: noopHandler, Hold: true,
+	})
+
+	m.reloadHeldOnPromotion(runner)
+
+	assert.True(t, runner.held.has("tenant-a"))
 }

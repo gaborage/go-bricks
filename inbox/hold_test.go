@@ -58,8 +58,8 @@ func TestHoldLedgerIsNilUntilTheHoldIsOn(t *testing.T) {
 func TestHoldLedgerParksThroughTheSharedResolver(t *testing.T) {
 	db := holdReadyDB()
 	tx := db.ExpectTransaction()
-	tx.ExpectExec(`INSERT INTO gobricks_inbox_hold`).WillReturnRowsAffected(1)
 	tx.ExpectExec(`INSERT INTO gobricks_inbox_hold_tenant`).WillReturnRowsAffected(1)
+	tx.ExpectExec(`INSERT INTO gobricks_inbox_hold`).WillReturnRowsAffected(1)
 	m := holdModule(t, db)
 
 	ledger := m.HoldLedger()
@@ -77,8 +77,8 @@ func TestHoldLedgerParksThroughTheSharedResolver(t *testing.T) {
 
 	require.NoError(t, err)
 	execs := tx.ExecLog()
-	require.Len(t, execs, 2, "one park is the row and its tenant marker")
-	encoded, ok := execs[0].Args[5].([]byte)
+	require.Len(t, execs, 2, "one park is the tenant marker and its row")
+	encoded, ok := execs[1].Args[5].([]byte)
 	require.True(t, ok, "properties reach the column as bytes")
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(encoded, &decoded))
@@ -90,8 +90,8 @@ func TestHoldLedgerParksThroughTheSharedResolver(t *testing.T) {
 func TestHoldLedgerParksWithoutProperties(t *testing.T) {
 	db := holdReadyDB()
 	tx := db.ExpectTransaction()
-	tx.ExpectExec(`INSERT INTO gobricks_inbox_hold`).WillReturnRowsAffected(1)
 	tx.ExpectExec(`INSERT INTO gobricks_inbox_hold_tenant`).WillReturnRowsAffected(1)
+	tx.ExpectExec(`INSERT INTO gobricks_inbox_hold`).WillReturnRowsAffected(1)
 	m := holdModule(t, db)
 
 	err := m.HoldLedger().Park(t.Context(), &streams.HeldMessage{
@@ -101,7 +101,7 @@ func TestHoldLedgerParksWithoutProperties(t *testing.T) {
 	require.NoError(t, err)
 	execs := tx.ExecLog()
 	require.Len(t, execs, 2)
-	assert.Nil(t, execs[0].Args[5], "no properties means no bytes, not an encoded nil")
+	assert.Nil(t, execs[1].Args[5], "no properties means no bytes, not an encoded nil")
 }
 
 // TestHoldLedgerReadsTheHeldTenants pins the other half of the port.

@@ -47,15 +47,17 @@ func tenantRowSet(heldSince time.Time) *dbtesting.RowSet {
 }
 
 // TestPostgresHoldStoreParkWritesRowAndTenantTogether pins that one park is two
-// writes in the CALLER's transaction: the row, and the marker that holds its
-// tenant. A row without its marker would be replayed by nothing.
+// writes in the CALLER's transaction, marker FIRST: an existing marker is locked
+// before the row is written, so a drain deciding to release this tenant waits for
+// the row rather than deleting the marker out from under it. A row without its
+// marker would be replayed by nothing.
 func TestPostgresHoldStoreParkWritesRowAndTenantTogether(t *testing.T) {
 	t.Run("first_park_reports_inserted", func(t *testing.T) {
 		store := newPostgresHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 		tx := db.ExpectTransaction()
-		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnRowsAffected(1)
 		tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnRowsAffected(1)
+		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnRowsAffected(1)
 
 		dbtx, err := db.Begin(t.Context())
 		require.NoError(t, err)
@@ -64,15 +66,17 @@ func TestPostgresHoldStoreParkWritesRowAndTenantTogether(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.True(t, inserted)
+		require.Len(t, tx.ExecLog(), 2)
+		assert.Contains(t, tx.ExecLog()[0].SQL, holdTenantTable, "the marker is taken first")
 	})
 
 	t.Run("a_redelivered_offset_reports_not_inserted", func(t *testing.T) {
 		store := newPostgresHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 		tx := db.ExpectTransaction()
+		tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnRowsAffected(1)
 		// ON CONFLICT DO NOTHING: the row is already parked.
 		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnRowsAffected(0)
-		tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnRowsAffected(0)
 
 		dbtx, err := db.Begin(t.Context())
 		require.NoError(t, err)
@@ -83,12 +87,12 @@ func TestPostgresHoldStoreParkWritesRowAndTenantTogether(t *testing.T) {
 		assert.False(t, inserted, "a re-park inserts nothing but must not fail")
 	})
 
-	t.Run("a_failed_row_write_never_marks_the_tenant", func(t *testing.T) {
+	t.Run("a_failed_marker_write_never_writes_the_row", func(t *testing.T) {
 		store := newPostgresHoldTestStore(t)
 		wantErr := errors.New("connection reset")
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 		tx := db.ExpectTransaction()
-		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnError(wantErr)
+		tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnError(wantErr)
 
 		dbtx, err := db.Begin(t.Context())
 		require.NoError(t, err)
@@ -97,7 +101,8 @@ func TestPostgresHoldStoreParkWritesRowAndTenantTogether(t *testing.T) {
 
 		require.Error(t, err)
 		assert.ErrorIs(t, err, wantErr)
-		assert.Contains(t, err.Error(), "park row failed")
+		assert.Contains(t, err.Error(), "mark tenant held failed")
+		assert.Len(t, tx.ExecLog(), 1, "the row is never written without its marker")
 	})
 }
 
@@ -300,4 +305,22 @@ func TestPostgresHoldStoreLeaseAndStats(t *testing.T) {
 
 		require.NoError(t, store.CreateTable(t.Context(), db))
 	})
+}
+
+// TestPostgresHoldStoreStatsReportsNoOldestWhenNothingIsHeld pins that an empty
+// hold has no oldest entry: substituting the database's own clock would report an
+// age of zero for a hold that does not exist, which a gauge cannot tell apart
+// from a tenant parked this instant.
+func TestPostgresHoldStoreStatsReportsNoOldestWhenNothingIsHeld(t *testing.T) {
+	store := newPostgresHoldTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(0), int64(0), nil),
+	)
+
+	stats, err := store.Stats(t.Context(), db, testHoldConsumer)
+
+	require.NoError(t, err)
+	assert.Zero(t, stats.Tenants)
+	assert.True(t, stats.OldestHeldSince.IsZero(), "no hold, no oldest")
 }

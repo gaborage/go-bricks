@@ -27,8 +27,10 @@ func TestOracleHoldStoreParkDetectsADuplicateByTheViolation(t *testing.T) {
 		store := newOracleHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.Oracle)
 		tx := db.ExpectTransaction()
-		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnRowsAffected(1)
+		// No marker yet: the FOR UPDATE lock finds nothing and the marker is inserted.
+		tx.ExpectQuery(`FOR UPDATE`).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
 		tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnRowsAffected(1)
+		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnRowsAffected(1)
 
 		dbtx, err := db.Begin(t.Context())
 		require.NoError(t, err)
@@ -37,6 +39,24 @@ func TestOracleHoldStoreParkDetectsADuplicateByTheViolation(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.True(t, inserted)
+	})
+
+	t.Run("an_existing_marker_is_locked_not_reinserted", func(t *testing.T) {
+		store := newOracleHoldTestStore(t)
+		db := dbtesting.NewTestDB(dbtypes.Oracle)
+		tx := db.ExpectTransaction()
+		tx.ExpectQuery(`FOR UPDATE`).WillReturnRows(
+			dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
+		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnRowsAffected(1)
+
+		dbtx, err := db.Begin(t.Context())
+		require.NoError(t, err)
+
+		_, err = store.Park(t.Context(), dbtx, sampleHoldRow())
+
+		require.NoError(t, err)
+		require.Len(t, tx.ExecLog(), 1, "the held tenant's marker is locked, not written again")
+		assert.Contains(t, tx.ExecLog()[0].SQL, holdTable)
 	})
 
 	t.Run("a_tenantless_row_is_refused_before_any_write", func(t *testing.T) {
@@ -60,6 +80,8 @@ func TestOracleHoldStoreParkDetectsADuplicateByTheViolation(t *testing.T) {
 		wantErr := errors.New("ORA-00600 internal error")
 		db := dbtesting.NewTestDB(dbtypes.Oracle)
 		tx := db.ExpectTransaction()
+		tx.ExpectQuery(`FOR UPDATE`).WillReturnRows(
+			dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
 		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnError(wantErr)
 
 		dbtx, err := db.Begin(t.Context())

@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -205,9 +206,17 @@ func scanTenantIDs(ctx context.Context, db dbtypes.Interface, query string, args
 // scanHoldStats reads the three-column snapshot the gauges publish.
 func scanHoldStats(ctx context.Context, db dbtypes.Interface, query string, args ...any) (HoldStats, error) {
 	var stats HoldStats
+	// Nothing held means no oldest, which is the zero time — substituting the
+	// database's own clock would report an age of zero for a hold that does not
+	// exist, and a gauge cannot tell that from a hold parked this instant.
+	var oldest sql.NullTime
+
 	row := db.QueryRow(ctx, query, args...)
-	if err := row.Scan(&stats.Tenants, &stats.Rows, &stats.OldestHeldSince); err != nil {
+	if err := row.Scan(&stats.Tenants, &stats.Rows, &oldest); err != nil {
 		return HoldStats{}, fmt.Errorf("inbox hold: stats failed: %w", err)
+	}
+	if oldest.Valid {
+		stats.OldestHeldSince = oldest.Time
 	}
 	return stats, nil
 }

@@ -82,6 +82,14 @@ func (s *oracleHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow)
 		return false, errHoldTenantRequired
 	}
 
+	// The marker FIRST, and locked for the rest of this transaction, so a drain
+	// deciding to release this tenant waits until the row below is committed and
+	// visible to its no-rows-remain check. Oracle has no upsert, so an existing
+	// marker is locked with a SELECT ... FOR UPDATE and a missing one is inserted.
+	if err := s.holdTenantMarker(ctx, tx, row); err != nil {
+		return false, err
+	}
+
 	insert := fmt.Sprintf(
 		`INSERT INTO %s (consumer, stream, stream_offset, tenant_id, data, properties, held_at)
 		 VALUES (:1, :2, :3, :4, :5, :6, SYSTIMESTAMP)`,
@@ -95,17 +103,35 @@ func (s *oracleHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow)
 		inserted = false
 	}
 
-	// Same transaction as the row: a drain pass that released this tenant between
-	// the two writes cannot leave a row behind with nothing holding it.
-	upsert := fmt.Sprintf(
+	return inserted, nil
+}
+
+// holdTenantMarker holds this tenant, locking the marker when it already exists so
+// a concurrent release cannot delete it while the caller's row is still uncommitted.
+func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, row *HoldRow) error {
+	lock := fmt.Sprintf(
+		`SELECT tenant_id FROM %s WHERE consumer = :1 AND tenant_id = :2 FOR UPDATE`,
+		s.tenantTable,
+	)
+	rows, err := tx.Query(ctx, lock, row.Consumer, row.TenantID)
+	if err != nil {
+		return fmt.Errorf("inbox oracle: lock tenant marker failed: %w", err)
+	}
+	locked := rows.Next()
+	closeErr := rows.Close()
+	if locked {
+		return closeErr
+	}
+
+	insert := fmt.Sprintf(
 		`INSERT INTO %s (consumer, tenant_id, held_since, attempts, next_attempt_at)
 		 VALUES (:1, :2, SYSTIMESTAMP, 0, SYSTIMESTAMP)`,
 		s.tenantTable,
 	)
-	if _, err := tx.Exec(ctx, upsert, row.Consumer, row.TenantID); err != nil && !database.IsUniqueViolation(err) {
-		return false, fmt.Errorf("inbox oracle: mark tenant held failed: %w", err)
+	if _, err := tx.Exec(ctx, insert, row.Consumer, row.TenantID); err != nil && !database.IsUniqueViolation(err) {
+		return fmt.Errorf("inbox oracle: mark tenant held failed: %w", err)
 	}
-	return inserted, nil
+	return nil
 }
 
 func (s *oracleHoldStore) HeldTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]string, error) {
@@ -201,7 +227,7 @@ func (s *oracleHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consu
 	query := fmt.Sprintf(
 		`SELECT (SELECT COUNT(*) FROM %s WHERE consumer = :1),
 		        (SELECT COUNT(*) FROM %s WHERE consumer = :1),
-		        (SELECT NVL(MIN(held_since), SYSTIMESTAMP) FROM %s WHERE consumer = :1)
+		        (SELECT MIN(held_since) FROM %s WHERE consumer = :1)
 		 FROM dual`,
 		s.tenantTable, s.table, s.tenantTable,
 	)
