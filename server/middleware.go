@@ -278,7 +278,7 @@ func compositeSubResolvers(cfg *config.ResolverConfig) []multitenant.TenantResol
 
 func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	resolverCfg := &cfg.Multitenant.Resolver
-	tenantRegex := multitenant.DefaultTenantIDPattern
+	tenantRegex := multitenant.DefaultTenantIDPattern()
 
 	wrap := func(res multitenant.TenantResolver) multitenant.TenantResolver {
 		if res == nil {
