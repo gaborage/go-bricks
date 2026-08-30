@@ -1425,7 +1425,7 @@ is read only when someone is already looking.
 
 **Key Benefits:** a section that cannot be driven from the environment can no longer reach
 production, and the silent-sibling collision becomes a startup error naming the offending key.
-**Migration:** [migrations.md](migrations.md) `[C61.24]`.
+**Migration:** [migrations.md](migrations.md) `[C61.22]`.
 
 ---
 

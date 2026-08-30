@@ -6945,7 +6945,7 @@ func assertSectionNameRejected(t *testing.T, err error, wantField string) {
 }
 
 // TestValidateRejectsAnUnreachableSectionThroughThePublicDoor drives Validate
-// itself, not the per-section checker. ADR-090 and [C61.24] both promise that a
+// itself, not the per-section checker. ADR-090 and [C61.22] both promise that a
 // hand-built Config is judged the same way — every construction path calls
 // Validate (ADR-064) — and only this test would notice if a phase reorder or an
 // early return left the rule unreached.

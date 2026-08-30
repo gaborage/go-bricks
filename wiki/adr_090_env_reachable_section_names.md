@@ -79,7 +79,7 @@ delimiter. One grammar, stated once, is cheaper than a mapping layer that must s
 
 - **Breaking.** A config that booted now fails startup: any `databases`, `multitenant.tenants`
   or `keystore.keys` key carrying `_`, an uppercase letter, or any other character outside
-  `[a-z0-9-]`. The remedy is a rename, and the error states it. See `[C61.24]`.
+  `[a-z0-9-]`. The remedy is a rename, and the error states it. See `[C61.22]`.
 - Renaming a section is not free for an operator: the YAML key, any `DATABASES_<NAME>_*`
   variables, and any code calling `deps.DBByName("report_db")` move together. That cost is
   the point — the alternative is a section whose environment variables silently address
