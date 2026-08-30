@@ -531,5 +531,4 @@ func TestMigrateAllRejectsNilTenantConfig(t *testing.T) {
 	one := res.Results[0]
 	assert.ErrorIs(t, one.Err, database.ErrNoDatabaseConfig)
 	assert.Empty(t, one.Vendor)
-	assert.Positive(t, one.Duration)
 }

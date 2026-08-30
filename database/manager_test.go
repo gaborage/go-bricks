@@ -709,13 +709,19 @@ func TestDbManagerGetRejectsNilConfigFromProvider(t *testing.T) {
 	assert.Equal(t, 0, manager.Size())
 }
 
-// togglingConfigSource returns (nil, nil) until ready flips, then a usable config.
+// togglingConfigSource returns (nil, nil) until ready flips, then a usable config. It tallies
+// calls so a test can prove concurrent Gets collapsed onto one of them, and sleeps while not
+// ready to widen the singleflight window the followers have to arrive in.
 type togglingConfigSource struct {
 	ready atomic.Bool
+	calls atomic.Int32
+	delay time.Duration
 }
 
 func (t *togglingConfigSource) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
+	t.calls.Add(1)
 	if !t.ready.Load() {
+		time.Sleep(t.delay)
 		return nil, nil
 	}
 	return &config.DatabaseConfig{Type: "postgresql", Host: "localhost"}, nil
@@ -726,7 +732,7 @@ func (t *togglingConfigSource) DBConfig(context.Context, string) (*config.Databa
 // key stays creatable once the provider starts returning a config.
 func TestDbManagerGetNilConfigCollapsesAndRecovers(t *testing.T) {
 	ctx := context.Background()
-	source := &togglingConfigSource{}
+	source := &togglingConfigSource{delay: 20 * time.Millisecond}
 	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
 		return &stubDB{}, nil
 	}
@@ -754,6 +760,7 @@ func TestDbManagerGetNilConfigCollapsesAndRecovers(t *testing.T) {
 		assert.ErrorIs(t, err, ErrNoDatabaseConfig)
 	}
 	assert.Equal(t, 0, manager.Size())
+	assert.Equal(t, int32(1), source.calls.Load(), "singleflight must collapse the failing resolution to one provider call")
 
 	source.ready.Store(true)
 	conn, release, err := manager.Get(ctx, tenantA)
