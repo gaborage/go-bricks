@@ -4493,7 +4493,7 @@ func TestValidateNamedDatabasesSuccess(t *testing.T) {
 		{
 			name: "named_databases_with_multitenant_no_conflict",
 			databases: map[string]DatabaseConfig{
-				"shared_analytics": {
+				"shared-analytics": {
 					Type:     PostgreSQL,
 					Host:     "shared.db.local",
 					Port:     5432,
@@ -6928,6 +6928,207 @@ func TestDebugAllowedIPsValidationMatchesTheRuntimeParser(t *testing.T) {
 				return
 			}
 			require.NoError(t, err, "the runtime parser serves %v, so validation must not refuse it", tc.entries)
+		})
+	}
+}
+
+// TestValidateRejectsSectionNamesUnreachableByEnv is the reproducer: the env
+// transform lowercases and maps '_' to '.', so a name carrying '_' or an
+// uppercase letter cannot be addressed by any environment variable — its
+// variable lands on a different key. Names are judged against ^[a-z0-9-]+$ at
+// check, which makes the transform injective over every key that survives
+// startup.
+func TestValidateRejectsSectionNamesUnreachableByEnv(t *testing.T) {
+	tests := []struct {
+		name      string
+		dbName    string
+		wantField string
+	}{
+		{name: "underscore_in_name", dbName: "report_db", wantField: "databases.report_db"},
+		{name: "uppercase_in_name", dbName: "Reporting", wantField: "databases.Reporting"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			databases := map[string]DatabaseConfig{
+				tt.dbName: {
+					Type:     PostgreSQL,
+					Host:     dbLocalField,
+					Port:     5432,
+					Database: "db",
+					Username: "user",
+				},
+			}
+			mt := MultitenantConfig{Enabled: false}
+
+			err := checkNamedDatabases(databases, &mt)
+
+			require.Error(t, err)
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.ErrorContains(t, err, "rename")
+		})
+	}
+}
+
+// TestValidateAcceptsEnvReachableSectionNames pins the other half: the rule
+// admits every name the transform round-trips, hyphen included.
+func TestValidateAcceptsEnvReachableSectionNames(t *testing.T) {
+	for _, name := range []string{"report-db", "reporting", "db2"} {
+		t.Run(name, func(t *testing.T) {
+			databases := map[string]DatabaseConfig{
+				name: {
+					Type:     PostgreSQL,
+					Host:     dbLocalField,
+					Port:     5432,
+					Database: "db",
+					Username: "user",
+				},
+			}
+			mt := MultitenantConfig{Enabled: false}
+
+			require.NoError(t, checkNamedDatabases(databases, &mt))
+		})
+	}
+}
+
+// TestCheckMultitenantTenantEntryRejectsUnreachableIDs: a static tenant map key
+// is a config section name like any other, so it obeys the same grammar the
+// resolver applies to a resolved tenant ID.
+func TestCheckMultitenantTenantEntryRejectsUnreachableIDs(t *testing.T) {
+	tests := []struct {
+		name      string
+		tenantID  string
+		wantField string
+	}{
+		{name: "underscore_in_id", tenantID: "acme_corp", wantField: "multitenant.tenants.acme_corp"},
+		{name: "uppercase_in_id", tenantID: "Acme", wantField: "multitenant.tenants.Acme"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkMultitenantTenantEntry(tt.tenantID, &TenantEntry{})
+
+			require.Error(t, err)
+			var cfgErr *ConfigError
+			require.ErrorAs(t, err, &cfgErr)
+			assert.Equal(t, tt.wantField, cfgErr.Field)
+			assert.ErrorContains(t, err, "rename")
+		})
+	}
+}
+
+func TestCheckMultitenantTenantEntryAcceptsReachableIDs(t *testing.T) {
+	for _, id := range []string{"acme-corp", "acme", "t1"} {
+		t.Run(id, func(t *testing.T) {
+			require.NoError(t, checkMultitenantTenantEntry(id, &TenantEntry{}))
+		})
+	}
+}
+
+// TestCheckKeyStoreRejectsUnreachableKeyNames: a keystore entry's name reaches
+// the same env transform, and is rejected before its sources are read.
+func TestCheckKeyStoreRejectsUnreachableKeyNames(t *testing.T) {
+	cfg := &KeyStoreConfig{Keys: map[string]KeyPairConfig{
+		"my_key": {},
+	}}
+
+	err := checkKeyStore(cfg)
+
+	require.Error(t, err)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "keystore.keys.my_key", cfgErr.Field)
+	assert.ErrorContains(t, err, "rename")
+}
+
+// TestValidateRejectsSiblingCollisionBeforeItCanHappen pins the silent shape the
+// rule exists to prevent: with both a report and a report_db section,
+// DATABASES_REPORT_DB_PORT used to land on report while report_db silently kept
+// its YAML value. The failure is now at validation, so no resolved value is ever
+// read from the wrong section.
+func TestValidateRejectsSiblingCollisionBeforeItCanHappen(t *testing.T) {
+	entry := DatabaseConfig{
+		Type:     PostgreSQL,
+		Host:     dbLocalField,
+		Port:     5432,
+		Database: "db",
+		Username: "user",
+	}
+	databases := map[string]DatabaseConfig{"report": entry, "report_db": entry}
+	mt := MultitenantConfig{Enabled: false}
+
+	err := checkNamedDatabases(databases, &mt)
+
+	require.Error(t, err)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "databases.report_db", cfgErr.Field, "the unreachable sibling is named, not the one its variable would land on")
+}
+
+// TestCheckMultitenantRejectsTenantSiblingCollision is the same shape one section over.
+func TestCheckMultitenantRejectsTenantSiblingCollision(t *testing.T) {
+	mt := &MultitenantConfig{
+		Enabled: true,
+		Tenants: map[string]TenantEntry{"acme": {}, "acme_corp": {}},
+		Resolver: ResolverConfig{
+			Type:   "header",
+			Header: "X-Tenant-ID",
+		},
+	}
+	source := &SourceConfig{Type: SourceTypeStatic}
+
+	err := checkMultitenant(mt, &DatabaseConfig{}, &MessagingConfig{}, source)
+
+	require.Error(t, err)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, "multitenant.tenants.acme_corp", cfgErr.Field)
+}
+
+// TestCheckMultitenantLeavesDynamicTenantIDsToTheResolver: a dynamic source's
+// tenant IDs never reach this check — they arrive at request time and the
+// resolver's own grammar gates them. The static path with the same ID still fails.
+func TestCheckMultitenantLeavesDynamicTenantIDsToTheResolver(t *testing.T) {
+	resolver := ResolverConfig{Type: "header", Header: "X-Tenant-ID"}
+
+	dynamic := &MultitenantConfig{
+		Enabled:  true,
+		Tenants:  map[string]TenantEntry{"acme_corp": {}},
+		Resolver: resolver,
+	}
+	require.NoError(t, checkMultitenant(dynamic, &DatabaseConfig{}, &MessagingConfig{}, &SourceConfig{Type: SourceTypeDynamic}),
+		"a dynamic source's tenant map is not the config's to judge")
+
+	static := &MultitenantConfig{
+		Enabled:  true,
+		Tenants:  map[string]TenantEntry{"acme_corp": {}},
+		Resolver: resolver,
+	}
+	require.Error(t, checkMultitenant(static, &DatabaseConfig{}, &MessagingConfig{}, &SourceConfig{Type: SourceTypeStatic}),
+		"the same ID under a static source is still rejected")
+}
+
+// TestEnvVarToKeyIsUnchangedForEveryReachableName is seam 4: the rule constrains
+// which names are legal, never how a variable maps to a key. Every mapping an
+// existing deployment relies on must be byte-identical.
+func TestEnvVarToKeyIsUnchangedForEveryReachableName(t *testing.T) {
+	tests := []struct {
+		envVar string
+		key    string
+	}{
+		{envVar: "LOG_SENSITIVEFIELDS", key: "log.sensitivefields"},
+		{envVar: "DATABASES_REPORTING_PORT", key: "databases.reporting.port"},
+		{envVar: "MULTITENANT_TENANTS_ACME_DATABASE_HOST", key: "multitenant.tenants.acme.database.host"},
+		{envVar: "KEYSTORE_KEYS_SIGNING_PUBLIC_FILE", key: "keystore.keys.signing.public.file"},
+		{envVar: "MESSAGING_RECONNECT_CONNECTIONTIMEOUT", key: "messaging.reconnect.connectiontimeout"},
+		{envVar: "DATABASE_POOL_MAX_CONNECTIONS", key: "database.pool.max.connections"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.envVar, func(t *testing.T) {
+			assert.Equal(t, tt.key, envVarToKey(tt.envVar))
 		})
 	}
 }

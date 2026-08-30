@@ -43,6 +43,15 @@ databases:               # Named databases — supports mixed vendors
     database: analytics_db
 ```
 
+**Naming rule (enforced at startup).** A key under `databases` must match `^[a-z0-9-]+$` —
+lowercase letters, digits and hyphens. An environment variable is mapped to a config key by
+lowercasing it and turning `_` into `.`, so `DATABASES_REPORT_DB_PORT` reaches
+`databases.report.db.port`: a section named `report_db` is addressable by no variable at all, and
+where a sibling `databases.report` exists the variable lands on the sibling instead. `config.Validate`
+rejects such a name and says which key to rename ([ADR-090](adr_090_env_reachable_section_names.md)).
+A hyphenated name is legal config, but whether it is *settable* from the environment depends on the
+runtime: Docker and Kubernetes permit `-` in a variable name, POSIX `export` does not.
+
 **Module Usage:**
 
 ```go

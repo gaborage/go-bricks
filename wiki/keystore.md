@@ -31,7 +31,7 @@ keystore:
         file: "certs/signing_public.der"        # local dev
       private:
         value: "${SIGNING_PRIVATE_KEY_BASE64}"  # deployed (base64 DER)
-    mac-key:                     # symmetric secret entry
+    mac-key:                     # symmetric secret entry — names match ^[a-z0-9-]+$
       secret:
         file: "certs/mac-key.bin"               # local dev: raw key bytes
     mac-key-deployed:
@@ -39,7 +39,11 @@ keystore:
         value: "${MAC_KEY_BASE64}"              # deployed: base64 raw key
 ```
 
-Each `keys.<name>` entry resolves to **exactly one** of:
+Each `keys.<name>` entry resolves to **exactly one** of (the `<name>` itself must match
+`^[a-z0-9-]+$`, so the entry stays addressable by environment variable — an underscored or
+uppercase name fails startup, [ADR-090](adr_090_env_reachable_section_names.md); a hyphenated
+name is settable only where the runtime permits `-` in a variable name, which Docker and
+Kubernetes do and POSIX `export` does not):
 
 | Shape | Required | Notes |
 | --- | --- | --- |
