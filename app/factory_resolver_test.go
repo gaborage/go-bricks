@@ -413,9 +413,7 @@ func TestCacheConnectorAddressesConfigErrorsToTheKey(t *testing.T) {
 			require.ErrorAs(t, err, &configErr)
 			assert.Equal(t, tt.wantField, configErr.Field)
 			assert.Equal(t, tt.wantCat, configErr.Category)
-			if tt.wantAction != "" {
-				assert.Equal(t, tt.wantAction, configErr.Action)
-			}
+			assert.Equal(t, tt.wantAction, configErr.Action)
 			if tt.absentInErr != "" {
 				assert.NotContains(t, err.Error(), tt.absentInErr)
 			}

@@ -202,9 +202,10 @@ func (s dbSection) qualify(err error) error {
 // field to move, so it is wrapped with path instead — the only place a path is allowed into
 // the message rather than the field.
 //
-// Shared with the per-tenant cache door: the two producers used to carry their own copy of
-// this recipe, and one of them missed the Action step when it was added, which is the same
-// drift C60.19 exists to end.
+// Shared with BOTH cache doors — the startup check (checkTenantCache) and the runtime factory,
+// which reach it through the exported QualifyCacheConfigErrorForKey. The producers used to carry
+// their own copy of this recipe, and one of them missed the Action step when it was added, which
+// is the same drift C60.19 exists to end.
 func qualifyConfigError(err error, path string, addressField func(string) string) error {
 	var cfgErr *ConfigError
 	if !errors.As(err, &cfgErr) {

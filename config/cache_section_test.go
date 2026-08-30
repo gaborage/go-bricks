@@ -182,7 +182,7 @@ func TestRequalifyActionRewritesOnlyItsOwnGeneratedHints(t *testing.T) {
 			want:   "either all tenants must have cache.enabled or add cache.enabled to config.yaml",
 		},
 		{
-			name:   "hint_whose_env_half_is_not_the_key's_own_is_untouched",
+			name:   "hint_whose_env_half_is_not_the_keys_own_is_untouched",
 			action: "set SOMETHING_ELSE env var or add cache.enabled to config.yaml",
 			origF:  orig,
 			qualF:  qualified,
