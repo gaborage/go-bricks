@@ -448,32 +448,35 @@ func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 	}
 
 	if cfg.Tenancy != TenancyPerTenant && cfg.Tenancy != TenancyShared {
-		return NewValidationError("messaging.tenancy",
-			fmt.Sprintf("must be %q or %q", TenancyPerTenant, TenancyShared))
+		return NewInvalidFieldError("messaging.tenancy",
+			fmt.Sprintf(errNotSupportedFmt, cfg.Tenancy),
+			[]string{TenancyPerTenant, TenancyShared})
 	}
 
-	// Streams stay rejected only where one Environment per tenant would be needed:
-	// under shared tenancy the lane consumes once on the control-plane key.
-	return checkMessagingStreams(&cfg.Streams, multitenant && cfg.Tenancy == TenancyPerTenant)
+	return checkMessagingStreams(cfg, multitenant)
 }
 
 // checkMessagingStreams rejects a stream URI with an unsupported scheme or no
-// host, streams in multi-tenant mode, and a half-set address resolver.
+// host, streams under per-tenant tenancy, and a half-set address resolver. It
+// takes the whole messaging block because the gate is a tenancy policy, which
+// belongs next to the rationale below.
 //
 // SECURITY: messaging.streams.uri carries broker credentials, so no error raised
 // here echoes the URI — only the config key and the offending scheme reach the
 // message.
-func checkMessagingStreams(cfg *StreamsConfig, perTenant bool) error {
-	if cfg.URI != "" {
+func checkMessagingStreams(cfg *MessagingConfig, multitenant bool) error {
+	streams := &cfg.Streams
+	if streams.URI != "" {
 		// Per-tenant stream consumption would need one Environment per tenant and a
 		// per-tenant stream URI leg; until that exists the combination fails loudly
-		// instead of consuming one tenant's streams on behalf of all of them.
-		if perTenant {
+		// instead of consuming one tenant's streams on behalf of all of them. Shared
+		// tenancy does not need it: the lane consumes once on the control-plane key.
+		if multitenant && cfg.Tenancy == TenancyPerTenant {
 			return NewValidationError("messaging.streams",
 				"single-tenant only; multi-tenant stream consumption is not yet supported")
 		}
 
-		u, err := url.Parse(cfg.URI)
+		u, err := url.Parse(streams.URI)
 		if err != nil {
 			return NewValidationError(fieldMessagingStreamsURI, "must be a valid URI")
 		}
@@ -492,7 +495,7 @@ func checkMessagingStreams(cfg *StreamsConfig, perTenant bool) error {
 		}
 	}
 
-	return validateStreamsAddressResolver(&cfg.AddressResolver)
+	return validateStreamsAddressResolver(&streams.AddressResolver)
 }
 
 // validateStreamsAddressResolver enforces the both-or-neither rule: a host with no

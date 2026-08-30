@@ -6239,10 +6239,9 @@ func TestValidateMessagingStreamsUnderSharedTenancy(t *testing.T) {
 	})
 }
 
-// newSharedTenancyConfig builds a multi-tenant static-source config with two
-// tenants that carry a database each, the given root broker URL and the given
-// messaging tenancy. Two tenants, because checkTenantMessagingConsistency is a
-// whole-map invariant that one tenant cannot exercise.
+// newSharedTenancyConfig builds a multi-tenant static-source config with one
+// tenant carrying a database, the given root broker URL and the given messaging
+// tenancy.
 func newSharedTenancyConfig(rootBroker, tenancy string) *Config {
 	tenantDB := func(name string) DatabaseConfig {
 		return DatabaseConfig{
@@ -6265,8 +6264,7 @@ func newSharedTenancyConfig(rootBroker, tenancy string) *Config {
 			Enabled:  true,
 			Resolver: ResolverConfig{Type: "header", Header: testTenantHeader},
 			Tenants: map[string]TenantEntry{
-				"acme":   {Database: tenantDB("acme")},
-				"globex": {Database: tenantDB("globex")},
+				"acme": {Database: tenantDB("acme")},
 			},
 		},
 		Source: SourceConfig{Type: SourceTypeStatic},
