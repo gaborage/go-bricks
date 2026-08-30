@@ -6106,8 +6106,9 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - scope: the rule, once and precisely —
   `resourcepool.Pool` runs create inside `singleflight.Group.DoChan`, which re-panics on a NEW
   goroutine once any caller used DoChan, so no caller-side recover — Echo's `Recover` included —
-  could catch it: one bad factory took the process down. The pool's closure now recovers, and
-  every caller still waiting on that create receives
+  could catch it: one bad factory took the process down. The pool now recovers around the create
+  CALL itself — not around the rest of the installation, where a panic arrives after the entry
+  already holds its seed lease — and every caller still waiting on that create receives
   `resourcepool: panic during create for key "<key>" (type: <T>)` — the value's Go TYPE only, never
   the value (ADR-081), which is consumer-chosen and therefore beyond the log filter's field-name
   matching. A caller whose own context ended first still gets its `ctx.Err()`, as it always did.
@@ -6117,8 +6118,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   create for the same key runs normally.
   This binds every pool-backed manager — `database.DbManager`, `cache.CacheManager` and the
   messaging publisher pool — at their create seam only. A panic anywhere else is untouched: a
-  handler panic still goes through the server's `Recover`, a message-handler panic still nacks
-  without requeue, and a panic in the Closer is not covered here.
+  handler panic still goes through the server's `Recover`, and a message-handler panic still nacks
+  without requeue. A panic in the CLOSER is deliberately NOT covered: it runs after the new entry
+  is installed, so answering it with an acquisition error would strand that entry's seed lease —
+  it stays fatal, exactly as it was before this hop.
   What you LOSE is the panic value: it used to reach stderr in net/http's or the runtime's own
   renderer, and now it is printed nowhere at all. The type and the key are what remain, so a
   factory panicking with a value that identified WHICH input was bad now needs that detail in an
@@ -6143,7 +6146,6 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `internal/resourcepool/resourcepool.go` (`Pool.acquireShared`) · `messaging/manager.go`
   (`EnsureConsumers`, the same guard on the messaging manager's own DoChan) · [C61.12] (the same
   blast-radius class on the HTTP middleware chain)
-
 
 ---
 

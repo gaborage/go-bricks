@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -846,6 +848,85 @@ func TestPoolUsableAfterCreatePanic(t *testing.T) {
 	assert.Equal(t, 1, st.TotalCreated)
 	assert.Equal(t, 1, st.Errors)
 	assert.Equal(t, 1, st.Size)
+}
+
+// childModeEnv selects a child-process body inside a re-executed test binary. Two properties of
+// the panic guard cannot be observed in-process: an UNRECOVERED panic on singleflight's own
+// goroutine takes the process down (that is the whole reason the guard exists), and
+// GODEBUG=panicnil=1 is read at startup, so it cannot be set from inside a running test.
+const childModeEnv = "GOBRICKS_RESOURCEPOOL_CHILD"
+
+// runPoolChild re-executes this test binary with mode selected and the given extra environment,
+// returning its combined output and exit error.
+func runPoolChild(t *testing.T, testName, mode string, env ...string) (string, error) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run="+testName, "-test.v")
+	cmd.Env = append(append(os.Environ(), childModeEnv+"="+mode), env...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// TestPoolCloserPanicIsNotConvertedToAnAcquisitionError pins the guard's SCOPE. The recover wraps
+// the consumer's create and nothing else, so a panic in the Closer — which runs after the entry
+// is installed with its seed lease — still unwinds. Converting that one would hand the caller an
+// acquisition error for an entry that WAS installed, leaving its seed lease unclaimed: refs stays
+// >= 1 forever, so eviction can detach the resource but never close it, and repeated closer panics
+// leak live resources past the pool's own limit.
+func TestPoolCloserPanicIsNotConvertedToAnAcquisitionError(t *testing.T) {
+	const marker = "closer-boom"
+	if os.Getenv(childModeEnv) == "closer-panic" {
+		p := New(1, 0, func(*fakeResource) error { panic(marker) })
+		ctx := context.Background()
+
+		_, rel, err := p.GetOrCreate(ctx, keyOne, keyedCreate(keyOne))
+		if err != nil {
+			t.Errorf("first create failed: %v", err)
+			return
+		}
+		rel() // unleased, so the next create evicts and closes it
+
+		// maxSize is 1, so this create evicts keyOne and calls the panicking Closer AFTER
+		// installing keyTwo's entry.
+		_, _, _ = p.GetOrCreate(ctx, keyTwo, keyedCreate(keyTwo))
+		t.Errorf("child survived the closer panic")
+		return
+	}
+
+	out, err := runPoolChild(t, "TestPoolCloserPanicIsNotConvertedToAnAcquisitionError", "closer-panic")
+
+	require.Error(t, err, "the closer panic must still take the process down, not become an error:\n%s", out)
+	assert.Contains(t, out, "panic: "+marker, "the runtime's own panic, not a converted one")
+	assert.NotContains(t, out, "resourcepool: panic during create",
+		"the guard must not reach past the create into the Closer")
+}
+
+// TestPoolCreatePanicNilIsStillAnError covers panic(nil) under GODEBUG=panicnil=1, where recover()
+// returns nil: the guard tracks normal completion rather than a non-nil recovered value, so the
+// create still fails with the documented error instead of returning a nil error beside a zero
+// resource for createEntry to install.
+func TestPoolCreatePanicNilIsStillAnError(t *testing.T) {
+	if os.Getenv(childModeEnv) == "panic-nil" {
+		tr := newCloseTracker()
+		p := New(0, 0, tr.closer)
+		defer p.Close()
+
+		var calls atomic.Int32
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, panickingConnector(&calls, nil, 0))
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `resourcepool: panic during create for key "key-1"`)
+		assert.Nil(t, v)
+		assert.Nil(t, rel)
+		st := p.Stats()
+		assert.Equal(t, 1, st.Errors)
+		assert.Equal(t, 0, st.Size)
+		assert.Equal(t, 0, st.TotalCreated)
+		return
+	}
+
+	out, err := runPoolChild(t, "TestPoolCreatePanicNilIsStillAnError", "panic-nil", "GODEBUG=panicnil=1")
+
+	require.NoError(t, err, "child failed under GODEBUG=panicnil=1:\n%s", out)
 }
 
 // TestPoolRemoveClosesUnleased verifies Remove hands back an unleased resource for the caller

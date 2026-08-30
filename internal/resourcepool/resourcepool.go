@@ -206,23 +206,10 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 // uncancelably, so a caller whose budget was already spent still sat through the whole
 // dial before being handed an error that was not its own.
 func (p *Pool[V]) acquireShared(ctx context.Context, key string, create func(context.Context) (V, error)) (*entry[V], error) {
-	ch := p.sf.DoChan(key, func() (v any, err error) {
+	ch := p.sf.DoChan(key, func() (any, error) {
 		if e := p.peek(key); e != nil {
 			return e, nil
 		}
-		// A panic must not escape through DoChan: x/sync re-panics on a NEW goroutine once any
-		// caller used DoChan (`go panic(e)` in doCall), which no recover — including Echo's
-		// middleware.Recover — can catch, so one consumer-supplied factory's panic would kill the
-		// process instead of failing the callers waiting on that create. Registered here rather
-		// than at the top of the closure so it covers the create and nothing else. The value is
-		// rendered by TYPE only (ADR-081); the create is counted as one failure, like a returned
-		// error.
-		defer func() {
-			if r := recover(); r != nil {
-				p.incErrors()
-				v, err = nil, fmt.Errorf("resourcepool: panic during create for key %q (type: %T)", key, r)
-			}
-		}()
 		e, cerr := p.createEntry(ctx, key, create)
 		if cerr != nil {
 			// Count the failure once, HERE in the singleflight leader. Every collapsed caller
@@ -355,6 +342,36 @@ func (p *Pool[V]) releaseEntry(e *entry[V]) {
 	}
 }
 
+// callCreate runs the consumer's create function and converts a panic into an error, so the
+// rest of createEntry — and singleflight above it — see one ordinary failure.
+//
+// A panic must not escape through DoChan: x/sync re-panics on a NEW goroutine once any caller
+// used DoChan (`go panic(e)` in doCall), which no recover — including Echo's middleware.Recover
+// — can catch, so one consumer-supplied factory's panic would kill the process instead of
+// failing the callers waiting on that create. The guard wraps THIS call and nothing else: a
+// panic anywhere later in createEntry happens after the entry is installed with its seed lease,
+// and converting that one to an error would return a failure to a caller who never claims the
+// seed, leaving an entry pinned at refs >= 1 that eviction can detach but never close.
+//
+// The value is rendered by TYPE only, never by value (ADR-081). `completed` is what separates a
+// normal return from a panic rather than a non-nil recover(): under GODEBUG=panicnil=1 a
+// `panic(nil)` recovers as nil, and reading the recovered value alone would let that panic
+// through as a nil error beside a zero resource, which createEntry would then install.
+func callCreate[V any](ctx context.Context, key string, create func(context.Context) (V, error)) (v V, err error) {
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		r := recover()
+		var zero V
+		v, err = zero, fmt.Errorf("resourcepool: panic during create for key %q (type: %T)", key, r)
+	}()
+	v, err = create(ctx)
+	completed = true
+	return v, err
+}
+
 // createEntry creates a new resource and adds it to the pool with a single seed lease
 // (refs == 1, seedHeld). The seed keeps the entry alive through the window before the caller
 // claims it via claimOrAcquire, so a concurrent evict/Remove can only detach it. If Close ran
@@ -377,7 +394,7 @@ func (p *Pool[V]) createEntry(ctx context.Context, key string, create func(conte
 		createCtx, cancel = context.WithDeadline(createCtx, deadline)
 		defer cancel()
 	}
-	value, err := create(createCtx)
+	value, err := callCreate(createCtx, key, create)
 	if err != nil {
 		return nil, err
 	}
