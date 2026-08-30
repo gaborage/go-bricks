@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/cache"
 	"github.com/gaborage/go-bricks/config"
@@ -246,7 +247,8 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		var configErr *config.ConfigError
 		assert.ErrorAs(t, err, &configErr)
 		assert.Equal(t, "not_configured", configErr.Category)
-		assert.Equal(t, "cache", configErr.Field)
+		// testCacheKey is a resource key, so the error is addressed to that tenant (C61.23).
+		assert.Equal(t, "multitenant.tenants.test-key.cache", configErr.Field)
 	})
 
 	t.Run("invalid cache type (not redis)", func(t *testing.T) {
@@ -265,7 +267,7 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		var configErr *config.ConfigError
 		assert.ErrorAs(t, err, &configErr)
 		assert.Equal(t, "invalid", configErr.Category)
-		assert.Equal(t, "cache.type", configErr.Field)
+		assert.Equal(t, "multitenant.tenants.test-key.cache.type", configErr.Field)
 		assert.Contains(t, err.Error(), "memcached")
 		assert.Contains(t, err.Error(), "redis")
 	})
@@ -286,8 +288,8 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		var configErr *config.ConfigError
 		assert.ErrorAs(t, err, &configErr)
 		assert.Equal(t, "missing", configErr.Category)
-		assert.Equal(t, "cache.redis.host", configErr.Field)
-		assert.Contains(t, err.Error(), "CACHE_REDIS_HOST")
+		assert.Equal(t, "multitenant.tenants.test-key.cache.redis.host", configErr.Field)
+		assert.Contains(t, err.Error(), "MULTITENANT_TENANTS_TEST-KEY_CACHE_REDIS_HOST")
 	})
 
 	t.Run("redis client validation failure - invalid port", func(t *testing.T) {
@@ -308,6 +310,115 @@ func TestFactoryResolverDefensiveValidation(t *testing.T) {
 		// This tests the error logging path at factory_resolver.go:174-182
 		assert.Contains(t, err.Error(), "invalid port")
 	})
+}
+
+// TestCacheConnectorAddressesConfigErrorsToTheKey pins that the runtime cache door spells its
+// config errors the way the startup door already does: a non-empty resource key is a tenant id,
+// so Field names that tenant's cache subtree and the hint names the tenant's env var — or drops
+// the env half when the key does not round-trip. The empty key is the root and stays byte-identical.
+func TestCacheConnectorAddressesConfigErrorsToTheKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		key         string
+		store       TenantStore
+		wantField   string
+		wantCat     string
+		wantAction  string
+		absentInErr string
+	}{
+		{
+			name:      "tenant_key_empty_host",
+			key:       "acme",
+			store:     &mockTenantStoreEmptyHost{},
+			wantField: "multitenant.tenants.acme.cache.redis.host",
+			wantCat:   "missing",
+			wantAction: "set MULTITENANT_TENANTS_ACME_CACHE_REDIS_HOST env var or add " +
+				"multitenant.tenants.acme.cache.redis.host to config.yaml",
+		},
+		{
+			name:        "underscored_tenant_key_drops_the_env_hint",
+			key:         "acme_corp",
+			store:       &mockTenantStoreEmptyHost{},
+			wantField:   "multitenant.tenants.acme_corp.cache.redis.host",
+			wantCat:     "missing",
+			wantAction:  "add multitenant.tenants.acme_corp.cache.redis.host to config.yaml",
+			absentInErr: "MULTITENANT_",
+		},
+		{
+			name:      "tenant_key_cache_disabled",
+			key:       "acme",
+			store:     &mockTenantStoreCacheDisabled{},
+			wantField: "multitenant.tenants.acme.cache",
+			wantCat:   "not_configured",
+			wantAction: "to enable: set MULTITENANT_TENANTS_ACME_CACHE_ENABLED env var or add " +
+				"multitenant.tenants.acme.cache.enabled to config.yaml",
+		},
+		{
+			name:       "tenant_key_invalid_type_keeps_its_handwritten_action",
+			key:        "acme",
+			store:      &mockTenantStoreInvalidType{},
+			wantField:  "multitenant.tenants.acme.cache.type",
+			wantCat:    "invalid",
+			wantAction: "must be one of: redis",
+		},
+		{
+			name:      "tenant_key_nil_config",
+			key:       "acme",
+			store:     &mockTenantStoreNilCacheCfg{},
+			wantField: "multitenant.tenants.acme.cache",
+			wantCat:   "invalid",
+		},
+		{
+			name:       "root_key_empty_host_is_byte_identical",
+			key:        "",
+			store:      &mockTenantStoreEmptyHost{},
+			wantField:  "cache.redis.host",
+			wantCat:    "missing",
+			wantAction: "set CACHE_REDIS_HOST env var or add cache.redis.host to config.yaml",
+		},
+		{
+			name:       "root_key_cache_disabled_is_byte_identical",
+			key:        "",
+			store:      &mockTenantStoreCacheDisabled{},
+			wantField:  "cache",
+			wantCat:    "not_configured",
+			wantAction: "to enable: set CACHE_ENABLED env var or add cache.enabled to config.yaml",
+		},
+		{
+			name:       "root_key_invalid_type_is_byte_identical",
+			key:        "",
+			store:      &mockTenantStoreInvalidType{},
+			wantField:  "cache.type",
+			wantCat:    "invalid",
+			wantAction: "must be one of: redis",
+		},
+		{
+			name:      "root_key_nil_config_is_byte_identical",
+			key:       "",
+			store:     &mockTenantStoreNilCacheCfg{},
+			wantField: "cache",
+			wantCat:   "invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolver := NewFactoryResolver(nil)
+			connector := resolver.CacheConnector(tt.store, logger.New("debug", true))
+
+			c, err := connector(context.Background(), tt.key)
+
+			assert.Nil(t, c)
+			var configErr *config.ConfigError
+			require.ErrorAs(t, err, &configErr)
+			assert.Equal(t, tt.wantField, configErr.Field)
+			assert.Equal(t, tt.wantCat, configErr.Category)
+			assert.Equal(t, tt.wantAction, configErr.Action)
+			if tt.absentInErr != "" {
+				assert.NotContains(t, err.Error(), tt.absentInErr)
+			}
+		})
+	}
 }
 
 // Mock TenantStore implementations for defensive validation tests

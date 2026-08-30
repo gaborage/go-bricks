@@ -202,9 +202,10 @@ func (s dbSection) qualify(err error) error {
 // field to move, so it is wrapped with path instead — the only place a path is allowed into
 // the message rather than the field.
 //
-// Shared with the per-tenant cache door: the two producers used to carry their own copy of
-// this recipe, and one of them missed the Action step when it was added, which is the same
-// drift C60.19 exists to end.
+// Shared with BOTH cache doors — the startup check (checkTenantCache) and the runtime factory,
+// which reach it through the exported QualifyCacheConfigErrorForKey. The producers used to carry
+// their own copy of this recipe, and one of them missed the Action step when it was added, which
+// is the same drift C60.19 exists to end.
 func qualifyConfigError(err error, path string, addressField func(string) string) error {
 	var cfgErr *ConfigError
 	if !errors.As(err, &cfgErr) {
@@ -218,14 +219,70 @@ func qualifyConfigError(err error, path string, addressField func(string) string
 }
 
 // requalifyAction re-points a generated "set X env var or add Y to config.yaml" hint at the
-// qualified key. It rewrites only a hint this package generated FOR THE ORIGINAL FIELD,
-// recognized by rebuilding that hint and comparing — so a hand-written Action, and one
-// naming some other key, are both left exactly as they are.
+// qualified key. It rewrites only a hint this package generated, recognized by rebuilding that
+// hint for the key the hint itself names and comparing — so a hand-written Action, and one
+// naming a key outside the field being qualified, are both left exactly as they are.
+//
+// The key in the hint is not always the Field: NewNotConfiguredError puts the FEATURE in Field
+// ("cache") and the YAML path in the hint ("cache.enabled"), behind a "to enable: " lead-in. So
+// the key is read out of the hint and re-pointed by the same field-to-field move, which is what
+// keeps that hint from surviving qualification and sending an operator at the root key.
+//
+// A hint shape this function does not recognize is left as it is, which is the safe direction but
+// not a free one: a future constructor whose Action does not rebuild from missingFieldAction —
+// a different lead-in, or two keys in one hint — keeps a root-spelled hint beside a qualified
+// Field until it is taught here.
 func requalifyAction(action, origField, qualifiedField string) string {
-	if action == "" || action != missingFieldAction(origField) {
+	if action == "" || origField == "" {
 		return action
 	}
-	return missingFieldAction(qualifiedField)
+	lead, body := "", action
+	if rest, found := strings.CutPrefix(action, actionEnableLeadIn); found {
+		lead, body = actionEnableLeadIn, rest
+	}
+	key, ok := yamlKeyFromAction(body)
+	if !ok || body != missingFieldAction(key) {
+		return action
+	}
+	qualifiedKey, ok := reattachHead(key, origField, qualifiedField)
+	if !ok {
+		return action
+	}
+	return lead + missingFieldAction(qualifiedKey)
+}
+
+// yamlKeyFromAction reads back the YAML key a generated hint names. Both templates end in
+// "add <key> to config.yaml", so the key is what sits between them. The caller still rebuilds
+// the hint from the key and compares, which is what proves the text was generated rather than
+// merely shaped like it — including that its env half is the one envVarForKey derives.
+func yamlKeyFromAction(action string) (string, bool) {
+	const addPrefix, yamlSuffix = "add ", " to config.yaml"
+	rest, ok := strings.CutSuffix(action, yamlSuffix)
+	if !ok {
+		return "", false
+	}
+	i := strings.LastIndex(rest, addPrefix)
+	if i < 0 {
+		return "", false
+	}
+	return rest[i+len(addPrefix):], true
+}
+
+// reattachHead moves one dotted key from oldHead to newHead: the head itself becomes newHead, a
+// key UNDER it keeps its remainder, and anything else is not oldHead's to move and reports false.
+// It is the one place that rule lives — the field qualifiers and the hint re-pointer all read a
+// key against a head this way, and the dot is the delimiter each of them measures in, so the
+// trap missingFieldAction documents (a dot inside a section or tenant NAME) is one trap here
+// rather than one per caller.
+func reattachHead(key, oldHead, newHead string) (string, bool) {
+	switch {
+	case key == oldHead:
+		return newHead, true
+	case strings.HasPrefix(key, oldHead+"."):
+		return newHead + strings.TrimPrefix(key, oldHead), true
+	default:
+		return "", false
+	}
 }
 
 // missingFieldAction is the hint NewMissingFieldError builds for key. The env half is
@@ -252,14 +309,13 @@ func missingFieldAction(key string) string {
 // A field that is not key-shaped — the Oracle connection-identifier check names one — is
 // prefixed instead, which keeps the offending name rather than dropping it.
 func (s dbSection) qualifyField(field string) string {
-	switch {
-	case field == "" || field == fieldDatabase:
+	if field == "" {
 		return s.path
-	case strings.HasPrefix(field, fieldDatabase+"."):
-		return s.path + strings.TrimPrefix(field, fieldDatabase)
-	default:
-		return s.path + "." + field
 	}
+	if qualified, ok := reattachHead(field, fieldDatabase, s.path); ok {
+		return qualified
+	}
+	return s.path + "." + field
 }
 
 // forEachDatabaseSection visits every database section the deployment

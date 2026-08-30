@@ -151,7 +151,8 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 		}
 
 		if cacheCfg == nil {
-			err := config.NewValidationError("cache", fmt.Sprintf("configuration is nil for key '%s'", key))
+			err = config.QualifyCacheConfigErrorForKey(
+				config.NewValidationError("cache", fmt.Sprintf("configuration is nil for key '%s'", key)), key)
 			log.Error().
 				Str("key", key).
 				Msg("Cache configuration unexpectedly nil")
@@ -159,7 +160,8 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 		}
 
 		if !cacheCfg.Enabled {
-			err := config.NewNotConfiguredError("cache", "CACHE_ENABLED", "cache.enabled")
+			err = config.QualifyCacheConfigErrorForKey(
+				config.NewNotConfiguredError("cache", "CACHE_ENABLED", "cache.enabled"), key)
 			log.Error().
 				Str("key", key).
 				Msg("Cache configuration has Enabled=false")
@@ -168,9 +170,9 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 
 		// Validate cache type is "redis" (or empty for backward compatibility)
 		if cacheCfg.Type != "" && cacheCfg.Type != config.CacheTypeRedis {
-			err := config.NewInvalidFieldError("cache.type",
+			err = config.QualifyCacheConfigErrorForKey(config.NewInvalidFieldError("cache.type",
 				fmt.Sprintf("unsupported type '%s'", cacheCfg.Type),
-				[]string{config.CacheTypeRedis})
+				[]string{config.CacheTypeRedis}), key)
 			log.Error().
 				Str("key", key).
 				Str("type", cacheCfg.Type).
@@ -179,7 +181,8 @@ func newRedisConnector(resourceSource TenantStore, log logger.Logger) cache.Conn
 		}
 
 		if cacheCfg.Redis.Host == "" {
-			err := config.NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
+			err = config.QualifyCacheConfigErrorForKey(
+				config.NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host"), key)
 			log.Error().
 				Str("key", key).
 				Msg("Redis host is empty - cannot create cache instance")

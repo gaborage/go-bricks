@@ -2286,15 +2286,10 @@ func normalizeTenantCache(cache *CacheConfig) error {
 // checkTenantCache is checkCache addressed to the tenant. The tenant travels in Field, not
 // in a wrapping message: a consumer matching on ConfigError.Field could not otherwise tell
 // which tenant's cache failed, and the database sections next door already spell it this
-// way (C60.19).
+// way (C60.19). The addressing itself is the exported door, so the startup and runtime cache
+// doors cannot drift apart.
 func checkTenantCache(tenantID string, cache *CacheConfig) error {
-	err := checkCache(cache)
-	if err == nil {
-		return nil
-	}
-	return qualifyConfigError(err, "multitenant.tenants."+tenantID+".cache", func(field string) string {
-		return tenantField(tenantID, field)
-	})
+	return QualifyCacheConfigErrorForKey(checkCache(cache), tenantID)
 }
 
 // validateSourceConfig validates the source configuration type
