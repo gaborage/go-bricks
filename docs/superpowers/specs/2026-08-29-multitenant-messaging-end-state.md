@@ -58,7 +58,7 @@ permission is created when a tenant is onboarded. Onboarding touches the databas
 3. **The messaging KIND has a tenancy**, `messaging.tenancy: per-tenant | shared` (default
    per-tenant, unchanged), reusing `config.TenancyPerTenant`/`TenancyShared`. Under
    `shared` + `multitenant.enabled`: declared consumers replay once at boot against the
-   control-plane key through the single-tenant grading branch itself (declared consumers
+   control-plane key through the single-tenant consumer branch itself (declared consumers
    that cannot start fail `Run`; none declared → WARN); `deps.Messaging(ctx)` resolves the
    control-plane publisher with no tenant required (a tenant in ctx is ignored, not an
    error); per-tenant replay never happens; the control-plane publisher is pre-warmed like

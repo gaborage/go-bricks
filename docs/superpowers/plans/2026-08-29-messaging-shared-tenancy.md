@@ -179,7 +179,7 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
 
 - Modify: `app/app.go` (`multiTenant()` at `99-102`: add `sharedMessaging()` and `perTenantMessaging()` beside it)
 - Modify: `app/messaging_setup.go` (`prepareRuntimeConsumers` `20-40`)
-- Modify: the messaging slot's start gate — `git grep -n 'preWarmMessaging' app/*.go`, the caller that checks the deployment mode
+- Modify: the messaging slot's start gate — `git grep -n 'preWarmMessaging' app/*.go`, the caller that checks the kind's tenancy
 - Modify: `app/resource_provider.go` (`MultiTenantResourceProvider` struct, `Messaging`, and a shared helper for the control-plane path used by both providers)
 - Modify: `app/bootstrap.go` (`127-130`, call the setter when shared), `app/managers.go` (`ManagerConfigBuilder` `16-35`, `BuildMessagingOptions` `77-90`), `app/bootstrap.go` `newManagerConfigBuilderFromConfig` `48-62`
 - Modify: `messaging/manager.go` (`ManagerOptions` `89-111`: add `TenantStamps bool`; `Manager` stores it)

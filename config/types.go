@@ -461,7 +461,10 @@ type MessagingConfig struct {
 	//   - "shared": one control-plane client resolved via the empty ("") key —
 	//     the root messaging: block, or whatever a custom resource source returns
 	//     for "". Consumers replay once at boot and the tenant travels as the
-	//     x-tenant-id stamp. See wiki/messaging.md and ADR-087.
+	//     x-tenant-id stamp. That is the contract this key names; it is served
+	//     from the classic-lane slice onward, and the config layer accepts it
+	//     first so the two land as reviewable steps. See wiki/messaging.md and
+	//     ADR-087.
 	// In single-tenant mode both values behave identically.
 	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
 }
