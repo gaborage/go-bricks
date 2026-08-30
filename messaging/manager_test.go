@@ -40,7 +40,7 @@ func (s *stubAMQPClient) Publish(ctx context.Context, destination string, data [
 	return s.PublishToExchange(ctx, PublishOptions{Exchange: "", RoutingKey: destination}, data)
 }
 
-func (s *stubAMQPClient) PublishToExchange(_ context.Context, options PublishOptions, _ []byte) error {
+func (s *stubAMQPClient) PublishToExchange(_ context.Context, _ PublishOptions, _ []byte) error {
 	return nil
 }
 
