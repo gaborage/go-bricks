@@ -22,9 +22,8 @@ import (
 
 const (
 	serverErrorMsg = "server error: %w"
-	// observabilityShutdownWarnMsg reports a best-effort observability teardown that failed:
-	// the telemetry sink is not an application dependency, so the failure never reaches the
-	// error App.Run returns (ADR-029 amendment).
+	// observabilityShutdownWarnMsg reports a failed teardown of the telemetry sink; see
+	// shutdownObservability for why it is best-effort.
 	observabilityShutdownWarnMsg = "Observability shutdown failed; telemetry may have been lost"
 	disabledStatus               = "disabled"
 	healthyStatus                = "healthy"

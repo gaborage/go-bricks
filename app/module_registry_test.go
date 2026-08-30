@@ -27,13 +27,14 @@ type recLogger struct {
 type recEvent struct {
 	l     *recLogger
 	str   map[string]string
+	dur   map[string]time.Duration
 	level string
 	err   string
 	msg   string
 }
 
 func (l *recLogger) event(level string) logger.LogEvent {
-	return &recEvent{l: l, level: level, str: map[string]string{}}
+	return &recEvent{l: l, level: level, str: map[string]string{}, dur: map[string]time.Duration{}}
 }
 func (l *recLogger) Info() logger.LogEvent                     { return l.event("info") }
 func (l *recLogger) Error() logger.LogEvent                    { return l.event("error") }
@@ -72,7 +73,7 @@ func (e *recEvent) Err(err error) logger.LogEvent {
 func (e *recEvent) Int(_ string, _ int) logger.LogEvent           { return e }
 func (e *recEvent) Int64(_ string, _ int64) logger.LogEvent       { return e }
 func (e *recEvent) Uint64(_ string, _ uint64) logger.LogEvent     { return e }
-func (e *recEvent) Dur(_ string, _ time.Duration) logger.LogEvent { return e }
+func (e *recEvent) Dur(k string, v time.Duration) logger.LogEvent { e.dur[k] = v; return e }
 func (e *recEvent) Interface(_ string, _ any) logger.LogEvent     { return e }
 func (e *recEvent) Bytes(_ string, _ []byte) logger.LogEvent      { return e }
 func (e *recEvent) Bool(_ string, _ bool) logger.LogEvent         { return e }
