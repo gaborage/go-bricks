@@ -195,7 +195,7 @@ func TestMessagingManagerStampsEveryClientItHandsOut(t *testing.T) {
 
 	t.Run("a_consumer_supplied_client_is_stamped_too", func(t *testing.T) {
 		// stubAMQPClient is exactly what a consumer's own ClientFactory returns: an
-		// AMQPClient the framework did not build and cannot recognise by type.
+		// AMQPClient the framework did not build and cannot recognize by type.
 		client := &recordingStubClient{}
 		pub := lease(t, tenantID, client)
 
