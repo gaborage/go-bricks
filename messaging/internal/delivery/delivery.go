@@ -38,6 +38,9 @@ const (
 	panicMessage       = "panic in message handler (type: %T)"
 	settlePanicMessage = "Panic recovered while settling a delivery; not retried"
 
+	spanAttrAttempts  = "messaging.delivery.attempts"
+	spanAttrPermanent = "messaging.delivery.permanent"
+
 	// spanAttrCap is the four common attributes plus the AMQP lane's four extras.
 	spanAttrCap = 8
 )
@@ -116,6 +119,11 @@ type Request struct {
 
 	Handle Handler
 
+	// Retry bounds in-place re-invocation of Handle after a HandlerError. Nil
+	// means exactly one attempt, which is what every classic-lane consumer and
+	// every stream consumer that does not ask for a policy gets.
+	Retry *Retry
+
 	// LogOutcome writes the lane's own line for the finished delivery. It runs
 	// while the span is open and the lease scope still holds, so a handle the
 	// handler borrowed outlives the line.
@@ -143,6 +151,9 @@ type Result struct {
 	Duration time.Duration
 	TraceID  string
 	Log      logger.Logger
+	// Attempts is how often Handle ran for this delivery: 1 unless a Retry
+	// policy re-invoked it.
+	Attempts int
 	// PanicType is the Go type of the value a panicking handler produced, never
 	// the value (ADR-081). The raw value is deliberately NOT retained: this struct
 	// crosses both messaging lanes, and a field holding it would let any lane —
@@ -220,12 +231,17 @@ func Run(ctx context.Context, req *Request) (res *Result) {
 
 	log := req.Log.WithContext(msgCtx)
 
-	res = invoke(msgCtx, log, traceID, req.Handle)
+	res = runAttempts(msgCtx, log, traceID, req)
 	res.Duration = time.Since(start)
 	res.TraceID = traceID
 	res.Log = log
 
 	req.LogOutcome(res)
+
+	span.SetAttributes(attribute.Int64(spanAttrAttempts, int64(res.Attempts)))
+	if IsPermanent(res.Err) {
+		span.SetAttributes(attribute.Bool(spanAttrPermanent, true))
+	}
 
 	// SECURITY: a consumer handler's error may embed the payload — type only on
 	// both span sinks; LogOutcome above keeps the message (ADR-083).
@@ -246,6 +262,47 @@ func spanAttributes(req *Request) []attribute.KeyValue {
 		semconv.MessagingMessageBodySize(req.BodySize),
 	)
 	return append(attrs, req.SpanExtras...)
+}
+
+// runAttempts invokes the handler under the request's policy and returns the
+// result the lane settles on — the LAST one, so the outcome line, the span and
+// the consume record see one delivery however often it was tried. Only a
+// HandlerError is retried: a panic repeats (ADR-081's rule aside, a handler that
+// panics on a message panics on it again), and a Permanent error says so itself.
+func runAttempts(ctx context.Context, log logger.Logger, traceID string, req *Request) *Result {
+	for attempt := 1; ; attempt++ {
+		res := invoke(ctx, log, traceID, req.Handle)
+		res.Attempts = attempt
+
+		if res.Outcome != HandlerError || req.Retry == nil ||
+			attempt >= req.Retry.MaxAttempts || IsPermanent(res.Err) {
+			return res
+		}
+
+		if !wait(ctx, backoffFor(req.Retry, attempt+1)) {
+			return res
+		}
+	}
+}
+
+// wait sleeps for d unless the context ends first, reporting whether the caller
+// may try again. A consumer shutting down must not sleep out its backoff.
+func wait(ctx context.Context, d time.Duration) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if d <= 0 {
+		return true
+	}
+
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // invoke runs the lane's handler, turning a panic into an error so one tail

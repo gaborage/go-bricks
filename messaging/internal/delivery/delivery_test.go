@@ -1217,3 +1217,190 @@ func renderMembers(n int, at func(int) reflect.Value) string {
 	}
 	return sb.String()
 }
+
+// sequenceHandler returns a Handler that answers each call with the next error in
+// errs, counting the calls; once the sequence is exhausted it repeats the last one.
+func sequenceHandler(calls *int, errs ...error) Handler {
+	return func(context.Context, logger.Logger, string) error {
+		*calls++
+		if *calls <= len(errs) {
+			return errs[*calls-1]
+		}
+		return errs[len(errs)-1]
+	}
+}
+
+// TestRunRetriesAHandlerErrorUpToTheBound pins the retry policy: a nil Retry is one
+// attempt as today, a bounded one re-invokes the handler until it succeeds or the
+// bound is spent, and neither a permanent error nor a panic is retried.
+func TestRunRetriesAHandlerErrorUpToTheBound(t *testing.T) {
+	first := errors.New("first")
+	second := errors.New("second")
+	third := errors.New("third")
+
+	tests := []struct {
+		name          string
+		retry         *Retry
+		handlerErrs   []error
+		panics        bool
+		wantOutcome   Outcome
+		wantAttempts  int
+		wantCalls     int
+		wantErr       error
+		wantPermanent bool
+	}{
+		{
+			name:         "nil_retry_is_one_attempt",
+			retry:        nil,
+			handlerErrs:  []error{first},
+			wantOutcome:  HandlerError,
+			wantAttempts: 1,
+			wantCalls:    1,
+			wantErr:      first,
+		},
+		{
+			name:         "fails_twice_then_succeeds",
+			retry:        &Retry{MaxAttempts: 3, InitialBackoff: time.Millisecond, MaxBackoff: 4 * time.Millisecond},
+			handlerErrs:  []error{first, second, nil},
+			wantOutcome:  Succeeded,
+			wantAttempts: 3,
+			wantCalls:    3,
+		},
+		{
+			name:         "exhausts_the_bound",
+			retry:        &Retry{MaxAttempts: 3},
+			handlerErrs:  []error{first, second, third},
+			wantOutcome:  HandlerError,
+			wantAttempts: 3,
+			wantCalls:    3,
+			wantErr:      third,
+		},
+		{
+			name:          "permanent_short_circuits",
+			retry:         &Retry{MaxAttempts: 3},
+			handlerErrs:   []error{Permanent(errors.New("bad"))},
+			wantOutcome:   HandlerError,
+			wantAttempts:  1,
+			wantCalls:     1,
+			wantPermanent: true,
+		},
+		{
+			name:         "panic_is_not_retried",
+			retry:        &Retry{MaxAttempts: 3},
+			panics:       true,
+			wantOutcome:  Panicked,
+			wantAttempts: 1,
+			wantCalls:    1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			calls := 0
+
+			handle := sequenceHandler(&calls, tc.handlerErrs...)
+			if tc.panics {
+				handle = func(context.Context, logger.Logger, string) error {
+					calls++
+					panic("handler exploded")
+				}
+			}
+
+			req := h.request(handle)
+			req.Retry = tc.retry
+			start := time.Now()
+			res := h.runRequest(req)
+			elapsed := time.Since(start)
+
+			assert.Equal(t, tc.wantOutcome, res.Outcome)
+			assert.Equal(t, tc.wantAttempts, res.Attempts, "attempts")
+			assert.Equal(t, tc.wantCalls, calls, "handler calls")
+			require.Len(t, h.rec.seen, 1, "the lane logs the final result once")
+			assert.Same(t, res, h.rec.seen[0])
+
+			if tc.wantErr != nil {
+				assert.Same(t, tc.wantErr, res.Err, "the lane settles on the last error")
+			}
+			if tc.wantPermanent {
+				assert.True(t, IsPermanent(res.Err))
+				assert.Equal(t, "bad", res.Err.Error())
+			}
+			if tc.name == "fails_twice_then_succeeds" {
+				assert.GreaterOrEqual(t, res.Duration, 3*time.Millisecond, "Duration covers every attempt and its waits")
+				assert.GreaterOrEqual(t, elapsed, 3*time.Millisecond)
+			}
+		})
+	}
+}
+
+// TestRunStopsRetryingOnACanceledContext pins that a consumer shutting down does not
+// sleep out its backoff: the wait selects on ctx.Done and the loop ends there.
+func TestRunStopsRetryingOnACanceledContext(t *testing.T) {
+	h := newHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	calls := 0
+	req := h.request(func(context.Context, logger.Logger, string) error {
+		calls++
+		cancel()
+		return errors.New("boom")
+	})
+	req.Retry = &Retry{MaxAttempts: 5, InitialBackoff: 50 * time.Millisecond, MaxBackoff: 50 * time.Millisecond}
+
+	start := time.Now()
+	res := Run(ctx, req)
+
+	assert.Equal(t, HandlerError, res.Outcome)
+	assert.LessOrEqual(t, res.Attempts, 2, "a canceled context ends the loop")
+	assert.Less(t, time.Since(start), 100*time.Millisecond, "the backoff must not be slept out")
+}
+
+// TestRunReportsAttemptsOnTheSpan pins the two attributes an operator reads to tell a
+// retried delivery from a first-try one.
+func TestRunReportsAttemptsOnTheSpan(t *testing.T) {
+	t.Run("attempts_on_the_span", func(t *testing.T) {
+		h := newHarness(t)
+		calls := 0
+
+		req := h.request(sequenceHandler(&calls, errors.New("once"), nil))
+		req.Retry = &Retry{MaxAttempts: 2}
+		h.runRequest(req)
+
+		spans := h.exporter.GetSpans()
+		require.Len(t, spans, 1)
+		assertAttribute(t, spans[0].Attributes, "messaging.delivery.attempts", int64(2))
+		assertNoAttribute(t, spans[0].Attributes, "messaging.delivery.permanent")
+	})
+
+	t.Run("permanent_on_the_span", func(t *testing.T) {
+		h := newHarness(t)
+		calls := 0
+
+		req := h.request(sequenceHandler(&calls, Permanent(errors.New("bad"))))
+		req.Retry = &Retry{MaxAttempts: 2}
+		h.runRequest(req)
+
+		spans := h.exporter.GetSpans()
+		require.Len(t, spans, 1)
+		assertAttribute(t, spans[0].Attributes, "messaging.delivery.attempts", int64(1))
+		assertAttribute(t, spans[0].Attributes, "messaging.delivery.permanent", true)
+	})
+}
+
+// TestPermanentWrapsWithoutHidingTheCause pins the wrapper's three properties: it
+// renders as its cause, it unwraps to it, and nil stays nil.
+func TestPermanentWrapsWithoutHidingTheCause(t *testing.T) {
+	assert.NoError(t, Permanent(nil))
+	assert.False(t, IsPermanent(nil))
+
+	wrapped := Permanent(errSentinel)
+	assert.Equal(t, errSentinel.Error(), wrapped.Error())
+	assert.True(t, errors.Is(wrapped, errSentinel))
+	assert.True(t, IsPermanent(wrapped))
+	assert.True(t, IsPermanent(fmt.Errorf("wrapped again: %w", wrapped)))
+	assert.False(t, IsPermanent(errSentinel))
+}
+
+var errSentinel = errors.New("sentinel")
