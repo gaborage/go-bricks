@@ -769,6 +769,7 @@ func TestPoolGetOrCreateRecoversCreatePanic(t *testing.T) {
 			v, rel, err := p.GetOrCreate(context.Background(), keyOne, panickingConnector(&calls, tt.panicVal, 0))
 
 			require.Error(t, err)
+			assert.Equal(t, int32(1), calls.Load(), "the panicking create runs exactly once")
 			assert.Contains(t, err.Error(), `resourcepool: panic during create for key "key-1"`)
 			assert.Contains(t, err.Error(), tt.wantType)
 			assert.NotContains(t, err.Error(), marker, "the panic value must never reach the error text")

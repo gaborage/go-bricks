@@ -6141,7 +6141,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   half that matters operationally — that the pool is still usable afterwards.
 - ref: issue #1141 · [ADR-081](adr_081_recovered_panic_values_reported_by_type.md) ·
   `internal/resourcepool/resourcepool.go` (`Pool.acquireShared`) · `messaging/manager.go`
-  (`ensureConsumers`, the same guard on the messaging manager's own DoChan) · [C61.12] (the same
+  (`EnsureConsumers`, the same guard on the messaging manager's own DoChan) · [C61.12] (the same
   blast-radius class on the HTTP middleware chain)
 
 
