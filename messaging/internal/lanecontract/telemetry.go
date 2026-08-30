@@ -28,6 +28,7 @@ const (
 	attrDestination = "messaging.destination.name"
 	attrBodySize    = "messaging.message.body.size"
 	attrAttempts    = "messaging.delivery.attempts"
+	attrPermanent   = "messaging.delivery.permanent"
 	attrErrorType   = "error.type"
 
 	spanOperation = "receive"
@@ -76,7 +77,9 @@ func assertSpanAttributes(t T, lane *Lane, scenario *Scenario, span *sdktrace.Sp
 	// so the pipeline's own counter reports the delivery it ran.
 	assertAttr(t, span.Attributes, attrAttempts, int64(1))
 
-	shared := []string{attrSystem, attrOperation, attrDestination, attrBodySize, attrAttempts}
+	// Both delivery attributes are the PIPELINE's, set on every lane's span rather
+	// than added through Request.SpanExtras, so neither is a lane's to declare.
+	shared := []string{attrSystem, attrOperation, attrDestination, attrBodySize, attrAttempts, attrPermanent}
 	var extras []string
 	for _, kv := range span.Attributes {
 		if key := string(kv.Key); !slices.Contains(shared, key) {

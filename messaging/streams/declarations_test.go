@@ -886,11 +886,7 @@ func TestNewRunnerResolvesTheRetryPolicy(t *testing.T) {
 		{
 			name: "hold_defaults_the_retry",
 			decl: &consumerDeclaration{Stream: testStream, Name: testConsumerName, Handler: noopHandler, Hold: true},
-			want: &delivery.Retry{
-				MaxAttempts:    DefaultHoldRetry.MaxAttempts,
-				InitialBackoff: DefaultHoldRetry.InitialBackoff,
-				MaxBackoff:     DefaultHoldRetry.MaxBackoff,
-			},
+			want: toDeliveryRetry(&DefaultHoldRetry),
 		},
 		{
 			name: "explicit_retry_without_hold",

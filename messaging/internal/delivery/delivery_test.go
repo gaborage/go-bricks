@@ -1255,7 +1255,6 @@ func TestRunRetriesAHandlerErrorUpToTheBound(t *testing.T) {
 			handlerErrs:  []error{first},
 			wantOutcome:  HandlerError,
 			wantAttempts: 1,
-			wantCalls:    1,
 			wantErr:      first,
 		},
 		{
@@ -1264,7 +1263,6 @@ func TestRunRetriesAHandlerErrorUpToTheBound(t *testing.T) {
 			handlerErrs:  []error{first, second, nil},
 			wantOutcome:  Succeeded,
 			wantAttempts: 3,
-			wantCalls:    3,
 		},
 		{
 			name:         "exhausts_the_bound",
@@ -1272,7 +1270,6 @@ func TestRunRetriesAHandlerErrorUpToTheBound(t *testing.T) {
 			handlerErrs:  []error{first, second, third},
 			wantOutcome:  HandlerError,
 			wantAttempts: 3,
-			wantCalls:    3,
 			wantErr:      third,
 		},
 		{
@@ -1281,7 +1278,6 @@ func TestRunRetriesAHandlerErrorUpToTheBound(t *testing.T) {
 			handlerErrs:   []error{Permanent(errors.New("bad"))},
 			wantOutcome:   HandlerError,
 			wantAttempts:  1,
-			wantCalls:     1,
 			wantPermanent: true,
 		},
 		{
@@ -1290,7 +1286,6 @@ func TestRunRetriesAHandlerErrorUpToTheBound(t *testing.T) {
 			panics:       true,
 			wantOutcome:  Panicked,
 			wantAttempts: 1,
-			wantCalls:    1,
 		},
 	}
 
@@ -1315,7 +1310,7 @@ func TestRunRetriesAHandlerErrorUpToTheBound(t *testing.T) {
 
 			assert.Equal(t, tc.wantOutcome, res.Outcome)
 			assert.Equal(t, tc.wantAttempts, res.Attempts, "attempts")
-			assert.Equal(t, tc.wantCalls, calls, "handler calls")
+			assert.Equal(t, tc.wantAttempts, calls, "the handler ran once per attempt")
 			require.Len(t, h.rec.seen, 1, "the lane logs the final result once")
 			assert.Same(t, res, h.rec.seen[0])
 
@@ -1404,3 +1399,60 @@ func TestPermanentWrapsWithoutHidingTheCause(t *testing.T) {
 }
 
 var errSentinel = errors.New("sentinel")
+
+// TestBackoffForSaturatesInsteadOfWrapping pins the arithmetic directly, because
+// the case that matters is unreachable through Run in test time: an UNCAPPED
+// policy doubles until int64 overflows, and a wrapped negative duration reads as
+// "no wait" at the retry loop's own door — turning the tail of a long policy into
+// a tight loop against a failing dependency.
+func TestBackoffForSaturatesInsteadOfWrapping(t *testing.T) {
+	tests := []struct {
+		name    string
+		retry   *Retry
+		attempt int
+		want    time.Duration
+	}{
+		{name: "nil_policy_never_waits", retry: nil, attempt: 5, want: 0},
+		{name: "first_attempt_never_waits", retry: &Retry{MaxAttempts: 3, InitialBackoff: time.Second}, attempt: 1, want: 0},
+		{name: "zero_initial_never_waits", retry: &Retry{MaxAttempts: 3}, attempt: 4, want: 0},
+		{
+			name:    "second_attempt_waits_the_initial",
+			retry:   &Retry{MaxAttempts: 5, InitialBackoff: 200 * time.Millisecond, MaxBackoff: 2 * time.Second},
+			attempt: 2,
+			want:    200 * time.Millisecond,
+		},
+		{
+			name:    "doubles_per_attempt",
+			retry:   &Retry{MaxAttempts: 5, InitialBackoff: 200 * time.Millisecond, MaxBackoff: 2 * time.Second},
+			attempt: 4,
+			want:    800 * time.Millisecond,
+		},
+		{
+			name:    "clamps_at_the_cap",
+			retry:   &Retry{MaxAttempts: 9, InitialBackoff: 200 * time.Millisecond, MaxBackoff: 2 * time.Second},
+			attempt: 9,
+			want:    2 * time.Second,
+		},
+		{
+			name:    "uncapped_saturates_rather_than_wrapping",
+			retry:   &Retry{MaxAttempts: 200, InitialBackoff: time.Second},
+			attempt: 100,
+			want:    maxDuration,
+		},
+		{
+			name:    "uncapped_saturates_at_the_shift_boundary",
+			retry:   &Retry{MaxAttempts: 70, InitialBackoff: time.Second},
+			attempt: 65,
+			want:    maxDuration,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := backoffFor(tc.retry, tc.attempt)
+
+			assert.Equal(t, tc.want, got)
+			assert.GreaterOrEqual(t, got, time.Duration(0), "a wait is never negative")
+		})
+	}
+}

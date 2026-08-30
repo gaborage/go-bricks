@@ -2,8 +2,13 @@ package delivery
 
 import (
 	"errors"
+	"math"
 	"time"
 )
+
+// maxDuration is the largest representable backoff, which an uncapped policy
+// saturates at instead of wrapping.
+const maxDuration = time.Duration(math.MaxInt64)
 
 // Retry bounds how often one delivery's handler is re-invoked in place after a
 // HandlerError. MaxAttempts counts the first attempt, so a policy of 1 retries
@@ -41,22 +46,24 @@ func IsPermanent(err error) bool {
 }
 
 // backoffFor returns the wait before the given attempt (2-based; attempt 1 never
-// waits). The shift is bounded before it runs: a large attempt count would
-// otherwise shift the duration out of range and wrap to a nonsense wait.
+// waits). The doubling is a bounded shift rather than a loop: MaxBackoff is
+// optional, so nothing else would stop a long bound from shifting the duration
+// past int64 and wrapping it NEGATIVE — which the wait door reads as "no wait",
+// turning the tail of a long policy into a tight loop.
 func backoffFor(r *Retry, attempt int) time.Duration {
 	if r == nil || attempt < 2 || r.InitialBackoff <= 0 {
 		return 0
 	}
 
-	wait := r.InitialBackoff
-	for i := 2; i < attempt; i++ {
-		wait *= 2
-		if r.MaxBackoff > 0 && wait >= r.MaxBackoff {
-			return r.MaxBackoff
-		}
+	// Named for what it is rather than "wait", which is the cancelable sleep this
+	// package already has.
+	backoff := maxDuration
+	if shift := attempt - 2; shift < 63 && r.InitialBackoff <= maxDuration>>shift {
+		backoff = r.InitialBackoff << shift
 	}
-	if r.MaxBackoff > 0 && wait > r.MaxBackoff {
+
+	if r.MaxBackoff > 0 && backoff > r.MaxBackoff {
 		return r.MaxBackoff
 	}
-	return wait
+	return backoff
 }

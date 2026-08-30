@@ -140,8 +140,9 @@ type ConsumerOptions struct {
 	// Retry bounds in-place re-invocation of Handler after it returns an error.
 	// Nil is one attempt, unless Hold is set — see DefaultHoldRetry.
 	Retry *RetryOptions
-	// Hold parks a failed delivery in this consumer's hold ledger, keeping the
-	// tenant's later messages behind it while the rest of the partition flows.
+	// Hold asks for per-tenant parking of a failed delivery. Today it selects
+	// DefaultHoldRetry when Retry is nil; the ledger the parked delivery lands in
+	// arrives with the hold itself.
 	Hold bool
 }
 
@@ -172,7 +173,8 @@ type SuperStreamConsumerOptions struct {
 	// Retry bounds in-place re-invocation of Handler after it returns an error.
 	// Nil is one attempt, unless Hold is set — see DefaultHoldRetry.
 	Retry *RetryOptions
-	// Hold parks a failed delivery in this consumer's hold ledger, keeping the
-	// tenant's later messages behind it while the rest of the partition flows.
+	// Hold asks for per-tenant parking of a failed delivery. Today it selects
+	// DefaultHoldRetry when Retry is nil; the ledger the parked delivery lands in
+	// arrives with the hold itself.
 	Hold bool
 }

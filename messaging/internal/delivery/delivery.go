@@ -238,10 +238,7 @@ func Run(ctx context.Context, req *Request) (res *Result) {
 
 	req.LogOutcome(res)
 
-	span.SetAttributes(attribute.Int64(spanAttrAttempts, int64(res.Attempts)))
-	if IsPermanent(res.Err) {
-		span.SetAttributes(attribute.Bool(spanAttrPermanent, true))
-	}
+	span.SetAttributes(outcomeAttributes(res)...)
 
 	// SECURITY: a consumer handler's error may embed the payload — type only on
 	// both span sinks; LogOutcome above keeps the message (ADR-083).
@@ -250,6 +247,19 @@ func Run(ctx context.Context, req *Request) (res *Result) {
 	tracking.RecordConsume(msgCtx, req.Metrics, res.Duration, res.Err)
 
 	return res
+}
+
+// outcomeAttributes renders what only the finished delivery knows, in one call
+// and one slice: two SetAttributes each take the span's lock and grow its
+// attribute slice, and the permanent check is skipped unless the handler
+// actually failed — errors.As on a nil error still escapes its target.
+func outcomeAttributes(res *Result) []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 1, 2)
+	attrs[0] = attribute.Int64(spanAttrAttempts, int64(res.Attempts))
+	if res.Outcome == HandlerError && IsPermanent(res.Err) {
+		attrs = append(attrs, attribute.Bool(spanAttrPermanent, true))
+	}
+	return attrs
 }
 
 // spanAttributes renders the four attributes both lanes set, then the lane's own.
