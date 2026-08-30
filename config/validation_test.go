@@ -6151,6 +6151,128 @@ func TestValidateMessagingTenancy(t *testing.T) {
 	}
 }
 
+// TestValidateSharedMessagingTenancyCrossSectionRules pins the two cross-section
+// rules the messaging tenancy moves: under shared, a per-tenant messaging block is
+// unreachable and fails check, while the root messaging block becomes legal beside
+// static tenants because it IS the control-plane broker.
+func TestValidateSharedMessagingTenancyCrossSectionRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		tenantURL  string
+		rootBroker string
+		tenancy    string
+		wantErrs   []string
+	}{
+		{
+			name:       "per_tenant_brokers_ok",
+			tenantURL:  "amqp://guest:" + streamsFixturePassword + "@tenant-broker:5672/",
+			rootBroker: "",
+			tenancy:    TenancyPerTenant,
+		},
+		{
+			name:       "shared_with_tenant_broker_rejected",
+			tenantURL:  "amqp://guest:" + streamsFixturePassword + "@tenant-broker:5672/",
+			rootBroker: "amqp://guest:" + streamsFixturePassword + "@control-plane:5672/",
+			tenancy:    TenancyShared,
+			wantErrs:   []string{"multitenant.tenants.*.messaging", TenancyShared},
+		},
+		{
+			name:       "shared_root_broker_ok",
+			tenantURL:  "",
+			rootBroker: "amqp://guest:" + streamsFixturePassword + "@control-plane:5672/",
+			tenancy:    TenancyShared,
+		},
+		{
+			name:       "per_tenant_root_broker_rejected",
+			tenantURL:  "",
+			rootBroker: "amqp://guest:" + streamsFixturePassword + "@control-plane:5672/",
+			tenancy:    TenancyPerTenant,
+			wantErrs:   []string{"messaging", "not allowed when static tenants are configured"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := newSharedTenancyConfig(tt.rootBroker, tt.tenancy)
+			for id := range cfg.Multitenant.Tenants {
+				tenant := cfg.Multitenant.Tenants[id]
+				tenant.Messaging = TenantMessagingConfig{URL: tt.tenantURL}
+				cfg.Multitenant.Tenants[id] = tenant
+			}
+
+			err := Validate(cfg)
+
+			if len(tt.wantErrs) == 0 {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			for _, want := range tt.wantErrs {
+				assert.Contains(t, err.Error(), want)
+			}
+		})
+	}
+}
+
+// TestValidateMessagingStreamsUnderSharedTenancy pins the streams gate moving from
+// "multi-tenant" to "per-tenant tenancy": one Environment per tenant still does not
+// exist, but shared tenancy consumes streams once on the control-plane key.
+func TestValidateMessagingStreamsUnderSharedTenancy(t *testing.T) {
+	const streamsURI = "rabbitmq-stream://svc:" + streamsFixturePassword + "@broker:5552/%2f"
+
+	t.Run("streams_rejected_per_tenant", func(t *testing.T) {
+		cfg := newSharedTenancyConfig("", TenancyPerTenant)
+		cfg.Messaging.Streams = StreamsConfig{URI: streamsURI}
+
+		err := Validate(cfg)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "single-tenant only")
+		assert.NotContains(t, err.Error(), streamsFixturePassword)
+	})
+
+	t.Run("streams_accepted_shared", func(t *testing.T) {
+		cfg := newSharedTenancyConfig("", TenancyShared)
+		cfg.Messaging.Streams = StreamsConfig{URI: streamsURI}
+
+		require.NoError(t, Validate(cfg))
+	})
+}
+
+// newSharedTenancyConfig builds a multi-tenant static-source config with two
+// tenants that carry a database each, the given root broker URL and the given
+// messaging tenancy. Two tenants, because checkTenantMessagingConsistency is a
+// whole-map invariant that one tenant cannot exercise.
+func newSharedTenancyConfig(rootBroker, tenancy string) *Config {
+	tenantDB := func(name string) DatabaseConfig {
+		return DatabaseConfig{
+			Type:     PostgreSQL,
+			Host:     name + ".db",
+			Port:     5432,
+			Database: name,
+			Username: name + "_user",
+		}
+	}
+	return &Config{
+		App:    createValidAppConfig(),
+		Server: createValidServerConfig(),
+		Log:    createValidLogConfig(),
+		Messaging: MessagingConfig{
+			Broker:  BrokerConfig{URL: rootBroker},
+			Tenancy: tenancy,
+		},
+		Multitenant: MultitenantConfig{
+			Enabled:  true,
+			Resolver: ResolverConfig{Type: "header", Header: testTenantHeader},
+			Tenants: map[string]TenantEntry{
+				"acme":   {Database: tenantDB("acme")},
+				"globex": {Database: tenantDB("globex")},
+			},
+		},
+		Source: SourceConfig{Type: SourceTypeStatic},
+	}
+}
+
 // TestApplyDatabasePoolDefaultsInfersTypeFromScheme runs the shared inference
 // fixtures against the seam. Unrecognized and absent DSNs leave Type empty and
 // return no error: this seam is on the per-tenant connection path, so

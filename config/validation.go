@@ -452,7 +452,9 @@ func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 			fmt.Sprintf("must be %q or %q", TenancyPerTenant, TenancyShared))
 	}
 
-	return checkMessagingStreams(&cfg.Streams, multitenant)
+	// Streams stay rejected only where one Environment per tenant would be needed:
+	// under shared tenancy the lane consumes once on the control-plane key.
+	return checkMessagingStreams(&cfg.Streams, multitenant && cfg.Tenancy == TenancyPerTenant)
 }
 
 // checkMessagingStreams rejects a stream URI with an unsupported scheme or no
@@ -461,12 +463,12 @@ func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 // SECURITY: messaging.streams.uri carries broker credentials, so no error raised
 // here echoes the URI — only the config key and the offending scheme reach the
 // message.
-func checkMessagingStreams(cfg *StreamsConfig, multitenant bool) error {
+func checkMessagingStreams(cfg *StreamsConfig, perTenant bool) error {
 	if cfg.URI != "" {
-		// Multi-tenant stream consumption would need one Environment per tenant and a
+		// Per-tenant stream consumption would need one Environment per tenant and a
 		// per-tenant stream URI leg; until that exists the combination fails loudly
 		// instead of consuming one tenant's streams on behalf of all of them.
-		if multitenant {
+		if perTenant {
 			return NewValidationError("messaging.streams",
 				"single-tenant only; multi-tenant stream consumption is not yet supported")
 		}
@@ -1914,6 +1916,10 @@ func checkMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingC
 			return fmt.Errorf("tenants: %w", err)
 		}
 
+		if err := checkTenantMessagingReachable(mt.Tenants, msg); err != nil {
+			return fmt.Errorf("tenants: %w", err)
+		}
+
 		// Sorted, like forEachDatabaseSection: with several malformed tenants the
 		// startup error names the same one every run.
 		for _, tenantID := range slices.Sorted(maps.Keys(mt.Tenants)) {
@@ -1959,7 +1965,9 @@ func validateNoSingleTenantConflict(db *DatabaseConfig, msg *MessagingConfig) er
 			Action:   "remove database section from root config or move to multitenant.tenants.<tenant_id>.database",
 		}
 	}
-	if IsMessagingConfigured(msg) {
+	// Under shared tenancy the root block IS the control-plane broker every tenant
+	// is served from, so it is the configuration this mode requires, not a conflict.
+	if IsMessagingConfigured(msg) && msg.Tenancy != TenancyShared {
 		return &ConfigError{
 			Category: errCategoryInvalid,
 			Field:    fieldMessaging,
@@ -2160,6 +2168,28 @@ func checkTenantMessagingConsistency(tenants map[string]TenantEntry) error {
 			Field:   "multitenant.tenants.*.messaging",
 			Message: "inconsistent configuration",
 			Action:  "either all tenants must have messaging configured or none should",
+		}
+	}
+	return nil
+}
+
+// checkTenantMessagingReachable rejects per-tenant messaging blocks that shared
+// tenancy would never read: under messaging.tenancy: shared every consumer and
+// publisher resolves the control-plane key, so a tenant broker URL is a silently
+// dead setting rather than a working per-tenant broker.
+func checkTenantMessagingReachable(tenants map[string]TenantEntry, msg *MessagingConfig) error {
+	if msg.Tenancy != TenancyShared {
+		return nil
+	}
+	for tenantID := range tenants {
+		tenant := tenants[tenantID]
+		if isTenantMessagingConfigured(&tenant.Messaging) {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    "multitenant.tenants.*.messaging",
+				Message:  "unreachable under messaging.tenancy: " + TenancyShared,
+				Action:   "remove the per-tenant messaging blocks or set messaging.tenancy: " + TenancyPerTenant,
+			}
 		}
 	}
 	return nil
