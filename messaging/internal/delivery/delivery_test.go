@@ -42,7 +42,12 @@ const (
 // trace.HeaderAccessor, so a test does not need either lane's header type.
 type mapCarrier map[string]any
 
-func (c mapCarrier) Get(key string) any        { return c[key] }
+func (c mapCarrier) Get(key string) any { return c[key] }
+
+func (c mapCarrier) Lookup(key string) (value any, present bool) {
+	v, ok := c[key]
+	return v, ok
+}
 func (c mapCarrier) Set(key string, value any) { c[key] = value }
 
 // bindingLogger records the logger a binding produced and the context it was bound
@@ -243,11 +248,26 @@ func TestRunRefusesAnUnusableStampWithoutCallingTheHandler(t *testing.T) {
 	tests := []struct {
 		name     string
 		stamp    any
+		stampNil bool // the header IS present, with a nil value
 		optional bool
 		wantText string
 		notText  string
 	}{
 		{name: "missing", stamp: nil, wantText: "tenant stamp missing (0 bytes)"},
+		{
+			// A stamp WRITTEN as nil is a malformed stamp, not an absent one. Only
+			// absence is optional, so this must be refused even for a consumer that
+			// opted out of needing a tenant — see the optional row below.
+			name:     "present_but_nil",
+			stampNil: true,
+			wantText: "tenant stamp not a string (<nil>)",
+		},
+		{
+			name:     "optional_still_refuses_present_nil",
+			stampNil: true,
+			optional: true,
+			wantText: "tenant stamp not a string (<nil>)",
+		},
 		{name: "not_a_string", stamp: 42, wantText: "tenant stamp not a string (int)"},
 		{name: "invalid", stamp: "Acme", wantText: "tenant stamp invalid (4 bytes)", notText: "Acme"},
 		{
@@ -276,7 +296,10 @@ func TestRunRefusesAnUnusableStampWithoutCallingTheHandler(t *testing.T) {
 			req.TenantStamps = true
 			req.TenantOptional = tt.optional
 			req.Carrier = mapCarrier{}
-			if tt.stamp != nil {
+			switch {
+			case tt.stampNil:
+				req.Carrier = mapCarrier{tenantstamp.Header: nil}
+			case tt.stamp != nil:
 				req.Carrier = mapCarrier{tenantstamp.Header: tt.stamp}
 			}
 

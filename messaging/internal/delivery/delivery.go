@@ -97,10 +97,19 @@ type Handler func(ctx context.Context, log logger.Logger, traceID string) error
 
 // Request is what one lane hands the pipeline for one message. Handle and
 // LogOutcome are required.
+// Carrier is a lane's header source. It reads and writes like the trace package's
+// accessor, and additionally reports whether an entry is PRESENT — the tenant
+// stamp needs that, because an absent stamp and one written as nil mean different
+// things and only the first is optional.
+type Carrier interface {
+	gobrickstrace.HeaderAccessor
+	Lookup(key string) (value any, present bool)
+}
+
 type Request struct {
 	// Carrier is where the trace context traveled: AMQP 0.9.1 headers on the
 	// classic lane, AMQP 1.0 application properties on the streams lane.
-	Carrier gobrickstrace.HeaderAccessor
+	Carrier Carrier
 
 	// Destination is the queue or stream the message arrived on — the span
 	// name's prefix and messaging.destination.name.
@@ -302,7 +311,7 @@ func seedTenant(ctx context.Context, req *Request) (context.Context, error) {
 		return ctx, nil
 	}
 
-	id, err := tenantstamp.Read(req.Carrier.Get)
+	id, err := tenantstamp.Read(req.Carrier.Lookup)
 	if err != nil {
 		var readErr *tenantstamp.ReadError
 		if req.TenantOptional && errors.As(err, &readErr) && readErr.Reason == tenantstamp.ReasonMissing {

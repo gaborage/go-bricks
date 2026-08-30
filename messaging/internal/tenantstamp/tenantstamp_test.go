@@ -101,12 +101,16 @@ func TestRead(t *testing.T) {
 	tests := []struct {
 		name     string
 		value    any
+		absent   bool // the carrier has no such entry at all
 		wantID   string
 		wantText string
 		notText  string
 	}{
 		{name: "read_ok", value: testTenant, wantID: testTenant},
-		{name: "read_missing", value: nil, wantText: "tenant stamp missing (0 bytes)"},
+		{name: "read_missing", absent: true, wantText: "tenant stamp missing (0 bytes)"},
+		// Present with a nil value is a stamp the producer WROTE, so it is malformed
+		// rather than missing — the distinction TenantOptional turns on.
+		{name: "read_present_nil", value: nil, wantText: "tenant stamp not a string (<nil>)"},
 		{name: "read_not_string", value: 42, wantText: "tenant stamp not a string (int)"},
 		{name: "read_invalid", value: "Acme", wantText: "4 bytes", notText: "Acme"},
 		{
@@ -120,9 +124,9 @@ func TestRead(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var askedFor []string
-			id, err := Read(func(key string) any {
+			id, err := Read(func(key string) (any, bool) {
 				askedFor = append(askedFor, key)
-				return tt.value
+				return tt.value, !tt.absent
 			})
 			assert.Equal(t, []string{Header}, askedFor,
 				"Read must ask the carrier for the stamp header, not some other key")

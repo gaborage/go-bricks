@@ -1240,6 +1240,13 @@ func (a amqpHeaderAccessor) Get(key string) any {
 	return a.headers[key]
 }
 
+// Lookup reports the entry AND whether it was there, which Get cannot: a header
+// written as nil is not the same as a header that was never written.
+func (a amqpHeaderAccessor) Lookup(key string) (value any, present bool) {
+	v, ok := a.headers[key]
+	return v, ok
+}
+
 func (a amqpHeaderAccessor) Set(key string, value any) {
 	if a.headers == nil {
 		return

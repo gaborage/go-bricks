@@ -98,11 +98,16 @@ func (e *ReadError) Error() string {
 }
 
 // Read returns the delivery's tenant stamp, or a *ReadError saying why it cannot
-// be used. get resolves one carrier entry by name, which lets each lane keep its
-// own carrier type.
-func Read(get func(key string) any) (string, error) {
-	value := get(Header)
-	if value == nil {
+// be used. lookup resolves one carrier entry by name AND reports whether the entry
+// was there at all, which lets each lane keep its own carrier type.
+//
+// Presence is separate from the value because only an ABSENT stamp is optional. A
+// producer that writes the header with a nil value has written a stamp — a
+// malformed one — and TenantOptional must not admit it, so the two cases cannot be
+// collapsed into "the lookup returned nil".
+func Read(lookup func(key string) (value any, present bool)) (string, error) {
+	value, present := lookup(Header)
+	if !present {
 		return "", &ReadError{Reason: ReasonMissing}
 	}
 
