@@ -1099,155 +1099,87 @@ func (h *tenantRecordingHandler) seen() (calls int, tenant string) {
 	return h.calls, h.tenant
 }
 
-// TestRegistrySeedTenantErrorText pins what a refused delivery reports. The rule is
-// a security one: the stamp is producer-written and reaches us unauthenticated, so
-// the error names the reason and the byte length and never the value.
-func TestRegistrySeedTenantErrorText(t *testing.T) {
-	tests := []struct {
-		name     string
-		header   any
-		wantText string
-		notText  string
-	}{
-		{name: "missing", header: nil, wantText: "tenant stamp missing (0 bytes)"},
-		{name: "not_a_string", header: 42, wantText: "tenant stamp not a string (0 bytes)"},
-		{name: "invalid_short", header: "Acme", wantText: "tenant stamp invalid (4 bytes)", notText: "Acme"},
-		{
-			name:     "invalid_long",
-			header:   strings.Repeat("a", 300),
-			wantText: "tenant stamp invalid (300 bytes)",
-			notText:  strings.Repeat("a", 300),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
-			registry.tenantStamps = true
-			headers := amqp.Table{}
-			if tt.header != nil {
-				headers[TenantStampHeader] = tt.header
-			}
-
-			_, err := registry.seedTenant(context.Background(),
-				&ConsumerDeclaration{Queue: testQueueName},
-				&amqp.Delivery{Headers: headers})
-
-			require.Error(t, err)
-			assert.Equal(t, tt.wantText, err.Error())
-			if tt.notText != "" {
-				assert.NotContains(t, err.Error(), tt.notText)
-			}
-		})
-	}
-}
-
-// TestRegistryProcessMessageTenantStamp pins the classic read side: under shared
-// tenancy a delivery's stamp seeds the handler context, and an unusable stamp
-// fails the delivery closed — the handler is never called and the message is
-// nacked without requeue — unless the consumer opted out of needing one.
+// TestRegistryProcessMessageTenantStamp is the classic lane's pass-through case:
+// the lane hands the pipeline its two tenancy fields and settles what comes back.
+// The stamp rules themselves — precedence, the error text, fail-closed, the
+// TenantOptional carve-out — belong to the pipeline both lanes share and are
+// tabled in messaging/internal/delivery's own tests.
 func TestRegistryProcessMessageTenantStamp(t *testing.T) {
 	const acme = "acme"
-	tests := []struct {
-		name           string
-		tenantStamps   bool
-		tenantOptional bool
-		header         any
-		ctxTenant      string
-		wantCalled     bool
-		wantTenant     string
-		wantNack       bool
-		wantLogged     string
-		wantNotLogged  string
-	}{
-		{
-			name: "stamped_delivery_seeds_tenant", tenantStamps: true, header: acme,
-			wantCalled: true, wantTenant: acme,
-		},
-		{
-			name: "missing_stamp_nacks_without_requeue", tenantStamps: true, header: nil,
-			wantNack: true, wantLogged: "tenant stamp missing (0 bytes)",
-		},
-		{
-			name: "invalid_stamp_nacks_length_only", tenantStamps: true, header: strings.Repeat("a", 300),
-			wantNack: true, wantLogged: "300 bytes", wantNotLogged: strings.Repeat("a", 300),
-		},
-		{
-			name: "non_string_stamp_nacks", tenantStamps: true, header: 42,
-			wantNack: true, wantLogged: "not a string",
-		},
-		{
-			name: "optional_consumer_runs_without_stamp", tenantStamps: true, tenantOptional: true,
-			header: nil, wantCalled: true, wantTenant: "",
-		},
-		{
-			name: "optional_consumer_still_refuses_invalid", tenantStamps: true, tenantOptional: true,
-			header: "Acme", wantNack: true, wantLogged: "invalid", wantNotLogged: "Acme",
-		},
-		{
-			name: "stamps_off_ignores_the_header", tenantStamps: false, header: "other",
-			ctxTenant: acme, wantCalled: true, wantTenant: acme,
-		},
-	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
-			registry.tenantStamps = tt.tenantStamps
+	t.Run("stamped_delivery_seeds_the_handler", func(t *testing.T) {
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry.tenantStamps = true
+		handler := &tenantRecordingHandler{}
+		acker := &mockAcknowledger{}
 
-			handler := &tenantRecordingHandler{}
-			consumer := &ConsumerDeclaration{
-				Queue:          testQueueName,
-				EventType:      testEventType,
-				Handler:        handler,
-				TenantOptional: tt.tenantOptional,
-			}
-
-			headers := amqp.Table{}
-			if tt.header != nil {
-				headers[TenantStampHeader] = tt.header
-			}
-			acker := &mockAcknowledger{}
-			delivery := &amqp.Delivery{
+		registry.processMessage(context.Background(),
+			&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Handler: handler},
+			&amqp.Delivery{
 				MessageId:    testMessageID,
-				RoutingKey:   testRoutingKey,
-				Exchange:     testExchangeName,
-				DeliveryTag:  123,
 				Body:         []byte(testMessageBody),
-				Headers:      headers,
+				Headers:      amqp.Table{TenantStampHeader: acme},
 				Acknowledger: acker,
-			}
+			}, &stubLogger{})
 
-			ctx := context.Background()
-			if tt.ctxTenant != "" {
-				ctx = multitenant.SetTenant(ctx, tt.ctxTenant)
-			}
-			log := &stubLogger{}
+		calls, tenant := handler.seen()
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, acme, tenant)
+		assert.True(t, acker.AckCalled())
+	})
 
-			registry.processMessage(ctx, consumer, delivery, log)
+	// The lane's own contribution: a refusal from the pipeline settles as this
+	// lane settles any failure — nacked, never requeued, so a bad stamp cannot
+	// loop forever.
+	t.Run("unusable_stamp_nacks_without_requeue", func(t *testing.T) {
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry.tenantStamps = true
+		handler := &tenantRecordingHandler{}
+		acker := &mockAcknowledger{}
 
-			calls, tenant := handler.seen()
-			if tt.wantCalled {
-				assert.Equal(t, 1, calls)
-				assert.Equal(t, tt.wantTenant, tenant)
-				assert.True(t, acker.AckCalled())
-				return
-			}
+		registry.processMessage(context.Background(),
+			&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Handler: handler},
+			&amqp.Delivery{
+				MessageId:    testMessageID,
+				Body:         []byte(testMessageBody),
+				Headers:      amqp.Table{},
+				Acknowledger: acker,
+			}, &stubLogger{})
 
-			assert.Zero(t, calls, "a delivery without a usable tenant never reaches the handler")
-			acker.mu.Lock()
-			nacked, requeue := acker.nackCalled, acker.nackRequeue
-			acker.mu.Unlock()
-			assert.True(t, nacked)
-			assert.False(t, requeue, "a bad stamp is not retryable; requeue would loop forever")
+		calls, _ := handler.seen()
+		assert.Zero(t, calls)
 
-			// The reason and byte length ride the failure line's Err() field, which
-			// this package's stub logger discards; the text itself is pinned at its
-			// source by TestRegistrySeedTenantErrorText.
-			assert.Contains(t, strings.Join(log.getEntries(), "\n"),
-				"Message processing failed - discarding without requeue")
-		})
-	}
+		acker.mu.Lock()
+		defer acker.mu.Unlock()
+		assert.True(t, acker.nackCalled)
+		assert.False(t, acker.nackRequeue)
+	})
+
+	// TenantOptional reaches the pipeline from the consumer declaration, not from
+	// the registry — this is the wiring, not the rule.
+	t.Run("tenant_optional_reaches_the_pipeline", func(t *testing.T) {
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry.tenantStamps = true
+		handler := &tenantRecordingHandler{}
+		acker := &mockAcknowledger{}
+
+		registry.processMessage(context.Background(),
+			&ConsumerDeclaration{
+				Queue: testQueueName, EventType: testEventType,
+				Handler: handler, TenantOptional: true,
+			},
+			&amqp.Delivery{
+				MessageId:    testMessageID,
+				Body:         []byte(testMessageBody),
+				Headers:      amqp.Table{},
+				Acknowledger: acker,
+			}, &stubLogger{})
+
+		calls, tenant := handler.seen()
+		assert.Equal(t, 1, calls)
+		assert.Empty(t, tenant)
+		assert.True(t, acker.AckCalled())
+	})
 }
 
 func TestRegistryProcessMessageHandlerError(t *testing.T) {
@@ -3076,6 +3008,48 @@ func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
 	// and to 23.0 once the lane stopped boxing its header carrier and building
 	// the metric destination through fmt.
 	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
+}
+
+// TestRegistryProcessMessagePerDeliveryStampAllocs is the same tripwire for the
+// path the one above does NOT reach: it runs with tenantStamps unset, so the
+// stamp read is skipped entirely and its budget says nothing about it. This one
+// turns stamps on and gives the delivery a valid stamp.
+//
+// The stamp itself is a header lookup through the accessor the pipeline already
+// built; the cost above the baseline is multitenant.SetTenant's context.WithValue,
+// which every tenant-aware path pays once per delivery by design.
+func TestRegistryProcessMessagePerDeliveryStampAllocs(t *testing.T) {
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry.tenantStamps = true
+	log := gobrickslogger.New("error", false)
+
+	handler := &countingTestHandler{}
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   handler,
+	}
+
+	delivery := &amqp.Delivery{
+		MessageId:    testMessageID,
+		RoutingKey:   testRoutingKey,
+		Exchange:     testExchangeName,
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Headers:      amqp.Table{gobrickstrace.HeaderXRequestID: "req-119", TenantStampHeader: "acme"},
+		Acknowledger: &mockAcknowledger{},
+	}
+	ctx := context.Background()
+
+	avg := testing.AllocsPerRun(200, func() {
+		registry.processMessage(ctx, consumer, delivery, log)
+	})
+	t.Logf("processMessage with stamps allocs/op = %.1f", avg)
+	// Measured 28.0 against the 24.0 of the stamps-off path: +2 for SetTenant's
+	// valueCtx and its boxed string, the rest run-order noise in the warmed
+	// meter/tracer globals. Same 42.0 ceiling as the sibling above, so a
+	// regression that reintroduces a per-delivery allocation layer fails both.
+	assert.Less(t, avg, 42.0, "the stamp read grew a per-delivery allocation layer")
 }
 
 // TestRegistryProcessMessageLogsDebugFieldsWhenEnabled proves the Step 1 guard

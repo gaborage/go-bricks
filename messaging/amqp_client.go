@@ -378,7 +378,7 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte,
 	accessor := amqpHeaderAccessor{headers: publishing.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
 
-	tenantstamp.Write(stamp, func(key string, value any) { publishing.Headers[key] = value })
+	tenantstamp.Write(stamp, accessor.Set)
 
 	// AMQP-specific: populate CorrelationId and MessageId.
 	//

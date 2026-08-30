@@ -14,8 +14,6 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	pipeline "github.com/gaborage/go-bricks/messaging/internal/delivery"
-	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
-	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // defaultConsumerResubscribeDelay is the wait between consumer re-subscribe
@@ -770,17 +768,15 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
 	id := identifyDelivery(delivery)
 	pipeline.Run(ctx, &pipeline.Request{
-		Carrier:     amqpHeaderAccessor{headers: delivery.Headers},
-		Destination: consumer.Queue,
-		BodySize:    len(delivery.Body),
-		SpanExtras:  consumeSpanExtras(id),
-		Metrics:     consumeMetrics(consumer.Queue, id),
-		Log:         log,
+		Carrier:        amqpHeaderAccessor{headers: delivery.Headers},
+		TenantStamps:   r.tenantStamps,
+		TenantOptional: consumer.TenantOptional,
+		Destination:    consumer.Queue,
+		BodySize:       len(delivery.Body),
+		SpanExtras:     consumeSpanExtras(id),
+		Metrics:        consumeMetrics(consumer.Queue, id),
+		Log:            log,
 		Handle: func(msgCtx context.Context, msgLog logger.Logger, traceID string) error {
-			msgCtx, err := r.seedTenant(msgCtx, consumer, delivery)
-			if err != nil {
-				return err
-			}
 			logProcessing(msgLog, traceID, delivery, id)
 			return consumer.Handler.Handle(msgCtx, delivery)
 		},
@@ -791,32 +787,6 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 			settleDelivery(res, consumer, delivery)
 		},
 	})
-}
-
-// seedTenant reads the delivery's tenant stamp into the handler context. It runs
-// only where a stamp is the authority: under per-tenant tenancy the replay key
-// already seeded the context, and single-tenant deployments have no stamp to read.
-//
-// An unusable stamp is a delivery failure, not a warning — the error rides the
-// pipeline's existing failure path, so the lane nacks without requeue and logs one
-// line naming the reason and the byte length, never the value.
-func (r *Registry) seedTenant(ctx context.Context, consumer *ConsumerDeclaration,
-	delivery *amqp.Delivery,
-) (context.Context, error) {
-	if !r.tenantStamps {
-		return ctx, nil
-	}
-
-	id, err := tenantstamp.Read(func(key string) any { return delivery.Headers[key] })
-	if err != nil {
-		var readErr *tenantstamp.ReadError
-		if consumer.TenantOptional && errors.As(err, &readErr) && readErr.Reason == tenantstamp.ReasonMissing {
-			return ctx, nil
-		}
-		return ctx, err
-	}
-
-	return multitenant.SetTenant(ctx, id), nil
 }
 
 // settleDelivery is this lane's broker action for a finished delivery.

@@ -143,7 +143,7 @@ func (s *databaseSlot) preInit(ctx context.Context) error {
 // *misconfigured* one fatal.
 func (s *databaseSlot) start(ctx context.Context) (advisory, fatal error) {
 	return s.app.preWarmKind(ctx, s.name(), "database connection",
-		s.app.dbManager != nil, s.app.multiTenant(), s.app.preWarmDatabase), nil
+		kindPresent(s.app.dbManager != nil), kindPerTenant(s.app.multiTenant()), s.app.preWarmDatabase), nil
 }
 
 func (s *databaseSlot) stop(context.Context) {
@@ -191,7 +191,8 @@ func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
 	}
 
 	return s.app.preWarmKind(ctx, s.name(), componentMessaging,
-		s.app.messagingManager != nil, s.app.perTenantMessaging(), s.app.preWarmMessaging), nil
+		kindPresent(s.app.messagingManager != nil), kindPerTenant(s.app.perTenantMessaging()),
+		s.app.preWarmMessaging), nil
 }
 
 func (s *messagingSlot) stop(context.Context) { s.app.shutdownConsumers() }
@@ -311,11 +312,20 @@ type preWarmSubject string
 // verdict, which only the slot can read. Multi-tenant deployments resolve per tenant, so
 // the fixed "" key is never warmed; a not-configured kind is a silent skip; anything else
 // is advisory, never fatal.
-// perTenant is the kind's own resolution mode, not the deployment's: a kind resolved
-// per tenant has no fixed key to warm, while one resolved on the control-plane key
-// does even when multitenant.enabled is true (messaging.tenancy: shared).
-func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubject, present bool,
-	perTenant bool, warm func(context.Context) error,
+// kindPresent reports whether the kind's manager was built at all, and kindPerTenant
+// whether the kind resolves per tenant rather than on the control-plane key. They are
+// distinct types because they are adjacent arguments of the same underlying type with
+// opposite meanings: as plain bools a transposed pair compiles silently and inverts
+// warm-vs-skip. A kind resolved per tenant has no fixed key to warm; one resolved on
+// the control-plane key does, even when multitenant.enabled is true
+// (messaging.tenancy: shared).
+type (
+	kindPresent   bool
+	kindPerTenant bool
+)
+
+func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubject, present kindPresent,
+	perTenant kindPerTenant, warm func(context.Context) error,
 ) error {
 	if perTenant {
 		return nil

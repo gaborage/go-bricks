@@ -28,7 +28,6 @@ func (s *stubMessagingSource) BrokerURL(_ context.Context, key string) (string, 
 type stubAMQPClient struct {
 	closed         bool
 	closedMu       sync.Mutex
-	lastPublish    PublishOptions
 	consumers      int
 	consumeCtx     context.Context //nolint:containedctx // test-only: captures the ctx the supervisor subscribes with, to assert its lifecycle
 	closeCallback  func()
@@ -42,7 +41,6 @@ func (s *stubAMQPClient) Publish(ctx context.Context, destination string, data [
 }
 
 func (s *stubAMQPClient) PublishToExchange(_ context.Context, options PublishOptions, _ []byte) error {
-	s.lastPublish = options
 	return nil
 }
 

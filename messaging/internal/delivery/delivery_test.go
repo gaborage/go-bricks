@@ -25,7 +25,9 @@ import (
 
 	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	"github.com/gaborage/go-bricks/multitenant"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -194,6 +196,117 @@ func TestRunReportsHandlerErrorAndCarriesTheError(t *testing.T) {
 	assert.Equal(t, HandlerError, res.Outcome)
 	assert.Same(t, handlerErr, res.Err)
 	assert.Empty(t, res.PanicType)
+}
+
+// TestRunSeedsTheTenantStampBeforeTheHandler pins the read side both lanes share.
+// The stamp is read here, not in either lane, so the classic and streams lanes
+// cannot drift on which deliveries they refuse or on what the refusal says.
+func TestRunSeedsTheTenantStampBeforeTheHandler(t *testing.T) {
+	const acme = "acme"
+
+	t.Run("stamped_delivery_seeds_the_tenant", func(t *testing.T) {
+		h := newHarness(t)
+		var seen string
+		req := h.request(func(ctx context.Context, _ logger.Logger, _ string) error {
+			seen, _ = multitenant.GetTenant(ctx)
+			return nil
+		})
+		req.TenantStamps = true
+		req.Carrier = mapCarrier{tenantstamp.Header: acme}
+
+		res := h.runRequest(req)
+
+		assert.Equal(t, Succeeded, res.Outcome)
+		assert.Equal(t, acme, seen)
+	})
+
+	t.Run("stamps_off_ignores_the_carrier", func(t *testing.T) {
+		h := newHarness(t)
+		var seen string
+		req := h.request(func(ctx context.Context, _ logger.Logger, _ string) error {
+			seen, _ = multitenant.GetTenant(ctx)
+			return nil
+		})
+		req.Carrier = mapCarrier{tenantstamp.Header: acme}
+
+		assert.Equal(t, Succeeded, h.runRequest(req).Outcome)
+		assert.Empty(t, seen, "under per-tenant tenancy the replay key is authoritative")
+	})
+}
+
+// TestRunRefusesAnUnusableStampWithoutCallingTheHandler is the fail-closed half,
+// and the reason the read sits ABOVE the handler invocation: a delivery whose
+// tenant cannot be established is never made valid by being tried again, so it
+// must be refused before anything that could retry the handler. The call count is
+// the assertion that keeps it there.
+func TestRunRefusesAnUnusableStampWithoutCallingTheHandler(t *testing.T) {
+	tests := []struct {
+		name     string
+		stamp    any
+		optional bool
+		wantText string
+		notText  string
+	}{
+		{name: "missing", stamp: nil, wantText: "tenant stamp missing (0 bytes)"},
+		{name: "not_a_string", stamp: 42, wantText: "tenant stamp not a string (0 bytes)"},
+		{name: "invalid", stamp: "Acme", wantText: "tenant stamp invalid (4 bytes)", notText: "Acme"},
+		{
+			name:     "optional_still_refuses_invalid",
+			stamp:    strings.Repeat("a", 300),
+			optional: true,
+			wantText: "tenant stamp invalid (300 bytes)",
+			notText:  strings.Repeat("a", 300),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			calls := 0
+			req := h.request(func(context.Context, logger.Logger, string) error {
+				calls++
+				return nil
+			})
+			req.TenantStamps = true
+			req.TenantOptional = tt.optional
+			req.Carrier = mapCarrier{}
+			if tt.stamp != nil {
+				req.Carrier = mapCarrier{tenantstamp.Header: tt.stamp}
+			}
+
+			res := h.runRequest(req)
+
+			assert.Zero(t, calls, "the handler must never see a delivery with no usable tenant")
+			assert.Equal(t, HandlerError, res.Outcome)
+			require.Error(t, res.Err)
+			assert.Equal(t, tt.wantText, res.Err.Error())
+			if tt.notText != "" {
+				assert.NotContains(t, res.Err.Error(), tt.notText)
+			}
+		})
+	}
+}
+
+// TestRunLetsAnOptionalConsumerRunWithoutAStamp is the one case TenantOptional
+// admits: absent, not malformed.
+func TestRunLetsAnOptionalConsumerRunWithoutAStamp(t *testing.T) {
+	h := newHarness(t)
+	calls := 0
+	var seen string
+	req := h.request(func(ctx context.Context, _ logger.Logger, _ string) error {
+		calls++
+		seen, _ = multitenant.GetTenant(ctx)
+		return nil
+	})
+	req.TenantStamps = true
+	req.TenantOptional = true
+	req.Carrier = mapCarrier{}
+
+	res := h.runRequest(req)
+
+	assert.Equal(t, Succeeded, res.Outcome)
+	assert.Equal(t, 1, calls)
+	assert.Empty(t, seen)
 }
 
 func TestRunConvertsAPanicIntoAnError(t *testing.T) {

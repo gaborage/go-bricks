@@ -1410,10 +1410,12 @@ func TestPublishToExchangeMultipleRetriesBeforeSuccess(t *testing.T) {
 		"the failure must have cost one attempt and the retry must have succeeded")
 }
 
-// TestPublishToExchangeTenantStampPrecedence pins the whole precedence table for
-// the classic publish door: which of the two sources that can know a tenant — the
-// context, and the replay key the client was pooled under — supplies the stamp,
-// and when a caller-supplied one is refused.
+// TestPublishToExchangeTenantStampPrecedence pins what the publish DOOR owns: that
+// the resolved stamp reaches the headers beside the trace context, that each of the
+// two sources reaches it (the replay key is wired through the client, so only a door
+// test proves that leg), and that a refused publish is refused before the channel is
+// touched. The precedence rules themselves belong to tenantstamp and are tabled in
+// its own tests rather than re-derived here.
 func TestPublishToExchangeTenantStampPrecedence(t *testing.T) {
 	const (
 		acme   = "acme"
@@ -1429,24 +1431,12 @@ func TestPublishToExchangeTenantStampPrecedence(t *testing.T) {
 	}{
 		{name: "ctx_only", ctxTenant: acme, wantStamp: acme},
 		{name: "key_only", replayKey: acme, wantStamp: acme},
-		{name: "both_equal", ctxTenant: acme, replayKey: acme, wantStamp: acme},
 		{name: "both_differ_refused", ctxTenant: acme, replayKey: globex, wantConflict: true},
 		{name: "none_leaves_no_stamp", wantStamp: ""},
-		{
-			name:          "caller_header_equal_accepted",
-			ctxTenant:     acme,
-			callerHeaders: map[string]any{TenantStampHeader: acme},
-			wantStamp:     acme,
-		},
 		{
 			name:          "caller_header_differs_refused",
 			ctxTenant:     acme,
 			callerHeaders: map[string]any{TenantStampHeader: globex},
-			wantConflict:  true,
-		},
-		{
-			name:          "caller_header_without_any_tenant_refused",
-			callerHeaders: map[string]any{TenantStampHeader: acme},
 			wantConflict:  true,
 		},
 	}
@@ -1488,6 +1478,40 @@ func TestPublishToExchangeTenantStampPrecedence(t *testing.T) {
 				"the stamp must not displace the trace headers")
 		})
 	}
+}
+
+// TestUnsafePublishRefusesAConflictingCallerStamp covers the OTHER publish door.
+// unsafePublish reaches the channel by its own path, so the stamp guard has to be
+// on both — a conflict slipping through here would publish an unauthenticated
+// tenant claim with no confirmation to notice it.
+func TestUnsafePublishRefusesAConflictingCallerStamp(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+	ctx := multitenant.SetTenant(context.Background(), "acme")
+
+	err := c.unsafePublish(ctx, PublishOptions{
+		Exchange:   "ex",
+		RoutingKey: "rk",
+		Headers:    map[string]any{TenantStampHeader: "globex"},
+	}, []byte("payload"))
+
+	require.ErrorIs(t, err, ErrTenantStampConflict)
+	assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts),
+		"a refused publish never reaches the channel")
+}
+
+// TestUnsafePublishStampsTheContextTenant pins the write half of the same door.
+func TestUnsafePublishStampsTheContextTenant(t *testing.T) {
+	ch := &fakeChannel{}
+	c := newClientWithFakeChannel(t, ch)
+	ctx := multitenant.SetTenant(context.Background(), "acme")
+
+	require.NoError(t, c.unsafePublish(ctx,
+		PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("payload")))
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	assert.Equal(t, "acme", ch.lastPublishing.Headers[TenantStampHeader])
 }
 
 func TestPublishToExchangeCustomHeaders(t *testing.T) {
