@@ -3,7 +3,6 @@ package outbox
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -280,11 +279,10 @@ func TestModuleInitAllowsShortPublishTimeoutWhenNoRetries(t *testing.T) {
 // back to it unpublishable, so Init refuses it beside the publishtimeout guards.
 func TestModuleInitRejectsAnOversizedDefaultExchange(t *testing.T) {
 	m := NewModule()
-	oversized := strings.Repeat("k", 256)
 	deps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
-			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: oversized},
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: oversizedShortStr},
 			Messaging: config.MessagingConfig{
 				Broker: config.BrokerConfig{URL: "amqp://localhost"},
 			},
@@ -298,7 +296,7 @@ func TestModuleInitRejectsAnOversizedDefaultExchange(t *testing.T) {
 	assert.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
 	assert.Contains(t, err.Error(), "outbox.defaultexchange")
 	assert.Contains(t, err.Error(), "256 bytes")
-	assert.NotContains(t, err.Error(), oversized, "the error names the key and the length, never the value")
+	assert.NotContains(t, err.Error(), oversizedShortStr, "the error names the key and the length, never the value")
 }
 
 // TestModuleInitAllowsAMaxLengthDefaultExchange pins the boundary: 255 bytes is what
@@ -308,7 +306,7 @@ func TestModuleInitAllowsAMaxLengthDefaultExchange(t *testing.T) {
 	deps := &app.ModuleDeps{
 		Logger: logger.New("info", false),
 		Config: &config.Config{
-			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: strings.Repeat("k", 255)},
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: maxLengthShortStr},
 			Messaging: config.MessagingConfig{
 				Broker: config.BrokerConfig{URL: "amqp://localhost"},
 			},

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"maps"
-	"strings"
 	"testing"
 	"time"
 
@@ -529,10 +528,6 @@ func TestMarshalPayloadStruct(t *testing.T) {
 // rather than parked by the relay after MaxRetries. The fallbacks are validated as
 // applied: an empty RoutingKey carries the EventType.
 func TestPublisherRefusesADestinationTheFrameCannotCarry(t *testing.T) {
-	const oversized = 256
-	oversizedShortStr := strings.Repeat("k", oversized)
-	maxLengthShortStr := strings.Repeat("k", 255)
-
 	tests := []struct {
 		name            string
 		defaultExchange string

@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,15 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+)
+
+// oversizedShortStr is one byte past what an AMQP shortstr can carry, and
+// maxLengthShortStr is exactly at the ceiling — the pair every destination-bound
+// test needs, since a guard that only rejects proves nothing about where the
+// boundary sits.
+var (
+	oversizedShortStr = strings.Repeat("k", 256)
+	maxLengthShortStr = strings.Repeat("k", 255)
 )
 
 // fakeJobCtx is a minimal scheduler.JobContext implementation for outbox
