@@ -426,7 +426,7 @@ Size the pool to hold every concurrently-active tenant: set `cache.manager.maxsi
 >
 > An instance that is **still in use** when evicted (held by an in-flight request, message, or job) is detached immediately but its `Close()` is **deferred until the last borrower releases its lease** — so an in-use cache is never closed under an active caller ([ADR-032](adr_032_lease_refcount_tenant_handles.md), the M3 fix). The lease is reference-counted by `CacheManager` and released by the framework at each request/message/job boundary; **application code is unchanged** (`deps.Cache(ctx)` keeps its `(Cache, error)` signature). Direct callers of `CacheManager.Get` see a new `ReleaseFunc` third return — see [migrations.md](migrations.md).
 >
-> A per-tenant cache that fails to resolve reports which tenant failed: `ConfigError.Field` reads `multitenant.tenants.<id>.cache.<leaf>` at the runtime door as it already did at startup, and the remediation hint names that tenant's own key rather than the root `CACHE_*` variable ([C61.24](migrations.md), ADR-076). Match the family, not `cache.redis.host` by equality.
+> A per-tenant cache that fails to resolve reports which tenant failed: `ConfigError.Field` reads `multitenant.tenants.<id>.cache.<leaf>` at the runtime door as it already did at startup — or the bare `multitenant.tenants.<id>.cache` where the failure names no leaf, as a nil config and a disabled cache do, and the remediation hint names that tenant's own key rather than the root `CACHE_*` variable ([C61.24](migrations.md), ADR-076). Match the family, not `cache.redis.host` by equality.
 
 ---
 
