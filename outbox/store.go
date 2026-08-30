@@ -9,12 +9,28 @@ import (
 	"github.com/gaborage/go-bricks/internal/sqlid"
 )
 
+// maxTableNameLen bounds the outbox table's own segment so its "<name>_leader" companion
+// stays a DISTINCT identifier. PostgreSQL truncates an identifier to 63 bytes, so a 63-byte
+// table name and its companion collapse onto the same name — CreateTable would skip creating
+// the leader table and aim the seed at the outbox table itself. The bound is applied for both
+// vendors because PostgreSQL's limit is the binding one; Oracle allows 128.
+const maxTableNameLen = 63 - len(leaderSuffix)
+
+// leaderSuffix is what sqlid.LeaderTableName appends.
+const leaderSuffix = "_leader"
+
 // validateTableName checks that name is a safe SQL identifier, delegating to the
 // shared sqlid validator and wrapping its error with the outbox package prefix.
 // Supports optional schema-qualified names (e.g., "myschema.outbox_events").
 func validateTableName(name string) error {
 	if err := sqlid.ValidateTableName(name); err != nil {
 		return fmt.Errorf("outbox: %w", err)
+	}
+	// Measure the table segment only: a schema prefix is a separate identifier and does
+	// not spend the table's byte budget.
+	if segment := sqlid.IndexBaseName(name); len(segment) > maxTableNameLen {
+		return fmt.Errorf("outbox: table name segment %q is %d bytes; the maximum is %d so the %q companion table stays a distinct identifier",
+			segment, len(segment), maxTableNameLen, leaderSuffix)
 	}
 	return nil
 }

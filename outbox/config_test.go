@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -208,4 +209,20 @@ func TestValidateConfigSuperStreams(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.errFrag)
 		})
 	}
+}
+
+// TestValidateConfigRejectsOverlongTableName pins the leader-table headroom at the config
+// door, so the operator sees the key name. The bound itself is enforced (and boundary-tested)
+// in validateTableName, which the store constructors call unconditionally.
+func TestValidateConfigRejectsOverlongTableName(t *testing.T) {
+	cfg := &config.OutboxConfig{
+		PollInterval: 5 * time.Second,
+		BatchSize:    100,
+		Tenancy:      config.TenancyPerTenant,
+		TableName:    strings.Repeat("a", 57),
+	}
+	err := validateConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outbox.tablename")
+	assert.Contains(t, err.Error(), "56")
 }

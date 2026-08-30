@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -74,4 +75,37 @@ func TestNewOracleStoreInvalidTableName(t *testing.T) {
 	_, err := NewOracleStore("invalid;table")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "dangerous SQL")
+}
+
+// TestValidateTableNameLengthBound pins the leader-table headroom. PostgreSQL truncates an
+// identifier to 63 bytes, so a 63-byte table name and its "<name>_leader" companion collapse
+// onto the SAME identifier — CreateTable would then skip creating the leader table and aim
+// the seed at the outbox table itself. The bound is 63 minus len("_leader"), applied to the
+// table segment so a schema prefix does not eat the budget, and uniformly for both vendors
+// because PostgreSQL's limit is the binding one (Oracle allows 128).
+func TestValidateTableNameLengthBound(t *testing.T) {
+	tests := []struct {
+		name  string
+		table string
+		want  string
+	}{
+		{name: "at_the_bound_56_bytes", table: strings.Repeat("a", 56)},
+		{name: "one_over_the_bound_57_bytes", table: strings.Repeat("a", 57), want: "57"},
+		{name: "collides_with_itself_at_63_bytes", table: strings.Repeat("a", 63), want: "56"},
+		{name: "schema_prefix_does_not_count", table: "averylongschemaname." + strings.Repeat("a", 56)},
+		{name: "long_table_under_a_schema_still_rejected", table: "s." + strings.Repeat("a", 57), want: "56"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTableName(tt.table)
+			if tt.want == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+			assert.Contains(t, err.Error(), "_leader")
+		})
+	}
 }
