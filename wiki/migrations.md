@@ -5984,13 +5984,16 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 ### [C61.19] an unpublishable outbox destination is refused at Publish and parked by the relay · silent-behavior · when: match
 
 - detect: the question is whether an outbox event's destination can exceed 255 BYTES — bytes, not
-  characters, so a multi-byte name is shorter than it looks. `git grep -nE 'OutboxEvent\{' -- '*.go'`
+  characters, so a multi-byte name spends more of the budget than its length suggests and a name
+  that looks well short of the limit can exceed it. `git grep -nE 'OutboxEvent\{' -- '*.go'`
   and read every `Exchange`, `RoutingKey`, `EventType` and `Headers` KEY that is COMPUTED rather
   than a literal — `EventType` counts because it is what an empty `RoutingKey` falls back to, and
   header keys count at every nesting depth. Then read `outbox.defaultexchange` in every
   environment's config, since an empty `Event.Exchange` falls back to it. From the other end, query
-  the ledger: rows whose `exchange` or `routing_key` is 256 bytes or longer, and rows `pending` with
-  a `retry_count` far past `outbox.maxretries` whose `error` column names `publish destination`.
+  the ledger: rows whose `exchange` or `routing_key` is 256 bytes or longer — `routing_key` is where
+  an over-long `EventType` lands, since the empty-`RoutingKey` fallback persists it there — rows
+  whose `headers` JSON carries a key that long at any depth, and rows `pending` with a `retry_count`
+  far past `outbox.maxretries` whose `error` column names `publish destination`.
 - scope: the rule, once and precisely —
   `outbox.Publish` runs the same length rule the publish doors run (`[C61.17]`), now exported as
   `messaging.ValidatePublishDestination`, on the values it is about to PERSIST: the exchange after
@@ -6031,7 +6034,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   row; then publish one with a 255-byte key and confirm it inserts, since a verification that only
   checks the rejection cannot see that the bound is the AMQP limit rather than one below it. Start
   the app with a 256-byte `outbox.defaultexchange` and confirm Init fails naming
-  `outbox.defaultexchange`. Finally, insert a row with an over-long destination directly and run the
+  `outbox.defaultexchange`. Repeat the first check for each remaining field the rule covers — a
+  256-byte `Exchange`, a 256-byte `EventType` with an EMPTY `RoutingKey` (the fallback puts it on
+  the wire), and a 256-byte header KEY nested one table deep — since a verification that exercises
+  only the routing key cannot see a field the walk misses. Finally, insert a row with an over-long
+  destination directly and run the
   relay `outbox.maxretries` times: `retry_count` advances each cycle and the last one parks it as
   `status = 'failed'` instead of leaving it `pending` forever.
 - ref: [ADR-033](adr_033_outbox_retry_count_status_parking.md) (amended 2026-08-29) ·

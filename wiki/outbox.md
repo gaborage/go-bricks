@@ -69,7 +69,7 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) erro
 
 **How It Works:**
 
-1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction, refusing an exchange, routing key or header key past the AMQP shortstr limit (255 bytes) before the INSERT — a destination the broker can never accept is rejected at its source
+1. `Publish()` writes an `OutboxRecord` to the outbox table within the caller's transaction, refusing an exchange, routing key (or the `EventType` an empty one falls back to) or header key past the AMQP shortstr limit (255 bytes) before the INSERT — a destination the broker can never accept is rejected at its source
 2. The **relay job** (`outbox-relay` via scheduler) polls for pending events every `pollinterval`
 3. Each pending event is published to the target AMQP exchange with `x-outbox-event-id` header
 4. Successfully published events are marked as `published`
@@ -151,7 +151,7 @@ Consequences worth knowing:
   broker-independent failures: undecodable headers (which the framework essentially never produces)
   and a destination the AMQP frame cannot carry.
 - **An over-long destination parks rather than retrying forever.** A row whose exchange, routing key
-  or header key exceeds 255 bytes is refused before any channel work, identically on every cycle, so
+  (which carries the `EventType` when `RoutingKey` is empty) or header key exceeds 255 bytes is refused before any channel work, identically on every cycle, so
   it is poison: `retry_count` climbs and it is dead-lettered at `maxretries`. `Publish()` and the
   module's startup check on `outbox.defaultexchange` normally refuse such a destination first — a
   parked row means it reached the ledger another way (a hand-managed schema, a direct INSERT).
