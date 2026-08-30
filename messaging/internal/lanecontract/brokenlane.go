@@ -88,8 +88,11 @@ func deliverBroken(t *testing.T, scenario *Scenario) Observed {
 	// DEFECT 2: no lease scope, so a handle the handler borrows is released the
 	// moment it registers. No span and no consume either: there is no pipeline.
 	res, handlerTraceID := invokeBroken(context.Background(), scenario.Handle)
-	// DEFECT 3: the Result hands back the root logger, not one bound to the
-	// per-message context, so its BoundTo is nil.
+	// DEFECT 3: the Result hands back the ROOT logger, not the per-message one a
+	// lane derives, so nothing the pipeline put in the context reaches an outcome
+	// line — the correlation_id a family looks for is absent because the logger
+	// carrying it was never handed back. DEFECT 4 is the other half: even the
+	// spine this lane could stamp without a context is missing.
 	res.Log = log
 
 	// DEFECT 4: none of the shared spine — no correlation_id, no processing_time,
