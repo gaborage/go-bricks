@@ -1098,11 +1098,15 @@ func TestRelayLoopCountsParkedRows(t *testing.T) {
 
 // --- the stream lane ---------------------------------------------------------
 
+// streamRow mirrors what applyStreamTarget actually persists: the tenant lives in
+// partition_key and NOT in the headers. An earlier version of this fixture hand-wrote an
+// x-tenant-id header the writer never produces, which hid that a real stream row reached the
+// publisher unstamped under shared tenancy.
 func streamRow() Record {
 	return Record{
 		ID: "S1", Lane: LaneStream, Stream: "customers", PartitionKey: "acme",
 		EventType: "customer.created", Payload: []byte("p"),
-		Headers: []byte(`{"x-tenant-id":"acme"}`),
+		Headers: []byte(`{"traceparent":"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}`),
 	}
 }
 
@@ -1220,4 +1224,58 @@ func TestRelayStreamRowHonorsPublishTimeout(t *testing.T) {
 		t.Fatal("a stuck stream publish was not bounded by PublishTimeout")
 	}
 	assert.Equal(t, 1, store.MarkFailedCalls, "a deadline is connectivity, so it retries")
+}
+
+// TestRelayStreamRowStampsFromPartitionKeyWithoutContextTenant is the shared-tenancy case:
+// the cycle's own context carries no tenant (SetTenant with "" is a no-op) and a stream row
+// keeps its tenant ONLY in partition_key, so reading the header alone would publish unstamped
+// — and a shared-tenancy consumer fails closed on a missing stamp.
+func TestRelayStreamRowStampsFromPartitionKeyWithoutContextTenant(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{streamRow()}}
+	amqp := newFakeAMQP()
+	pub := &fakeStreamPublisher{}
+	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
+	r.tenants = []string{""} // shared ledger: no tenant on the cycle's context
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+
+	require.Equal(t, 1, pub.Calls)
+	tenant, ok := multitenant.GetTenant(pub.LastCtx)
+	require.True(t, ok, "the publisher must learn the tenant, or it ships an unstamped message")
+	assert.Equal(t, "acme", tenant, "a stream row's tenant is its partition key")
+	assert.NotContains(t, pub.LastMsg.Properties, messaging.TenantStampHeader,
+		"the framework stamps from context; the relay supplies no header")
+}
+
+// TestRelayStripsAnEmptyValuedStamp pins the presence-not-value rule: the conflict check keys
+// on the header EXISTING, so an empty-valued one left in place would fail every publish.
+func TestRelayStripsAnEmptyValuedStamp(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "a", Headers: []byte(`{"x-tenant-id":""}`)},
+	}}
+	amqp := newFakeAMQP()
+	r := newRelayWithFakes(store, amqp, nil)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	require.Equal(t, 1, amqp.PublishCalls)
+	assert.NotContains(t, amqp.LastPublishHdrs, messaging.TenantStampHeader,
+		"an empty-valued stamp is still a present header, so it must be removed")
+}
+
+// TestRelayStampConflictIsPoison pins that a stamp conflict parks instead of retrying: it is
+// deterministic in the row, so retrying it forever would never succeed.
+func TestRelayStampConflictIsPoison(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "A1", Exchange: "ex", RoutingKey: "a", RetryCount: 2},
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErr = messaging.ErrTenantStampConflict
+	r := newRelayWithFakes(store, amqp, nil)
+	db := dbtesting.NewTestDB("postgresql")
+
+	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	assert.Equal(t, 1, store.MarkDeadLetteredCalls, "a conflict is message-intrinsic, so it parks")
+	assert.Zero(t, store.MarkFailedCalls)
 }

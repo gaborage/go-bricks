@@ -36,9 +36,10 @@ type Relay struct {
 	getDB        func(context.Context) (dbtypes.Interface, error)
 	getMessaging func(context.Context) (messaging.AMQPClient, error)
 
-	// streamPublisher resolves a super stream's publisher. The module writes its map once
-	// in DeclareStreams, before any cycle runs, so this needs no lock. Nil on a relay with
-	// no configured targets.
+	// streamPublisher resolves a super stream's publisher. The module writes its map once in
+	// DeclareStreams — which startSlots runs before RegisterJobs, so before any cycle — and
+	// only reads it after, so this needs no lock. A relay with no configured targets still
+	// gets a closure; it simply finds nothing.
 	streamPublisher func(name string) (streamPublisher, bool)
 	// tenants lists the tenant keys to relay each cycle. Always non-empty: a single
 	// "" entry for single-tenant mode (multitenant.SetTenant with "" is a no-op) and
@@ -335,15 +336,27 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 	// consume span surface — breaking trace continuity on the error path.
 	pubCtx := gobrickstrace.ExtractFromHeaders(ctx, &mapHeaderAccessor{headers: headers})
 
-	// Move the persisted tenant stamp from the headers onto the publish context. The
-	// framework is the stamp's ONLY writer (messaging.ErrTenantStampConflict), and from a
-	// publisher's point of view a persisted header IS a caller-supplied stamp — so leaving
-	// it in place would either conflict or smuggle an unauthenticated claim. Rehydrating it
-	// onto the context lets the publisher stamp it itself, which is also how the stream
-	// lane's partition key reaches a publisher that reads the tenant from context.
-	if stamp, ok := headers[messaging.TenantStampHeader].(string); ok && stamp != "" {
+	// Move the row's tenant onto the publish context. The framework is the stamp's ONLY
+	// writer (ADR-087), and a stamp replayed out of storage is caller-supplied from a
+	// publisher's point of view — so any header spelling it must go, and the value must
+	// travel by context instead.
+	//
+	// Where the row keeps its tenant differs by lane, because the writers differ: a
+	// stream-lane row records it as the PARTITION KEY (Publish refuses one without a
+	// tenant) and never in its headers, while an AMQP row carries whatever stamp was
+	// persisted with it. Reading only the header would leave a stream row unstamped under
+	// outbox.tenancy=shared, where the cycle's own context carries no tenant either.
+	stamp := ""
+	if record.Lane == LaneStream {
+		stamp = record.PartitionKey
+	} else if persisted, ok := headers[messaging.TenantStampHeader].(string); ok {
+		stamp = persisted
+	}
+	// Delete on PRESENCE, not on a non-empty value: the conflict check keys on the header
+	// existing at all, so an empty-valued one left behind fails every publish.
+	delete(headers, messaging.TenantStampHeader)
+	if stamp != "" {
 		pubCtx = multitenant.SetTenant(pubCtx, stamp)
-		delete(headers, messaging.TenantStampHeader)
 	}
 
 	switch record.Lane {
@@ -378,7 +391,10 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 		// header key) is refused before any channel work and is refused identically
 		// every cycle: message-intrinsic, so it is poison on the same path as an
 		// undecodable header rather than connectivity.
-		if errors.Is(err, messaging.ErrInvalidPublishDestination) {
+		if errors.Is(err, messaging.ErrInvalidPublishDestination) ||
+			errors.Is(err, messaging.ErrTenantStampConflict) {
+			// A stamp conflict is deterministic in the row, not the broker: it will read
+			// the same way every cycle, so it parks rather than retrying forever.
 			return r.deadLetterPoison(ctx, log, db, record, err.Error()), nil
 		}
 		// Every other broker-side publish failure — NOT-connected, confirmation timeout, deadline,
@@ -449,6 +465,11 @@ func (r *Relay) publishStreamRecord(ctx context.Context, log logger.Logger, db d
 		// Shutdown is not a delivery failure — do not advance retry_count.
 		if errors.Is(err, context.Canceled) || errors.Is(err, streams.ErrPublisherClosed) {
 			return outcomeAborted, nil
+		}
+		if errors.Is(err, messaging.ErrTenantStampConflict) {
+			// Message-intrinsic, as on the AMQP lane: the row will conflict identically
+			// every cycle, so it parks instead of retrying forever.
+			return r.deadLetterPoison(ctx, log, db, record, err.Error()), nil
 		}
 		// Everything else is connectivity: a publisher not yet started, the per-record
 		// deadline, or a broker that would not confirm. None means the message is bad.
