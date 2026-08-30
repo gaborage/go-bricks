@@ -28,6 +28,16 @@ func validateConfig(c *config.OutboxConfig) error {
 	if c.PublishTimeout < 0 {
 		return fmt.Errorf("outbox: publishtimeout must not be negative, got %s", c.PublishTimeout)
 	}
+	seen := make(map[string]struct{}, len(c.SuperStreams))
+	for i, name := range c.SuperStreams {
+		if name == "" {
+			return fmt.Errorf("outbox: superstreams[%d] must not be empty", i)
+		}
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("outbox: superstreams lists %q twice", name)
+		}
+		seen[name] = struct{}{}
+	}
 	if c.Tenancy != config.TenancyPerTenant && c.Tenancy != config.TenancyShared {
 		return fmt.Errorf("outbox: tenancy must be %q or %q, got %q",
 			config.TenancyPerTenant, config.TenancyShared, c.Tenancy)

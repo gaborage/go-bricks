@@ -790,6 +790,12 @@ type OutboxConfig struct {
 	//     single pass. See wiki/outbox.md and ADR-041.
 	// In single-tenant mode both values behave identically.
 	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
+
+	// SuperStreams lists the super streams the relay may publish to over the native
+	// streams lane. Each name must be declared as a super stream by a module's
+	// DeclareStreams; the outbox declares its publisher. Requires
+	// messaging.streams.uri. Default: none (every event stays on the AMQP lane).
+	SuperStreams []string `koanf:"superstreams" json:"superstreams" yaml:"superstreams" toml:"superstreams" mapstructure:"superstreams"`
 }
 
 // InboxConfig holds consumer-side idempotency (inbox) settings.

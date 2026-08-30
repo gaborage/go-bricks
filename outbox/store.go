@@ -22,18 +22,37 @@ func validateTableName(name string) error {
 // Record represents a single row in the outbox table.
 // Records are created by Publisher.Publish() and consumed by the relay job.
 type Record struct {
-	ID          string     // UUID, generated on insert
-	EventType   string     // Event type for routing
-	AggregateID string     // Aggregate identifier for correlation
-	Payload     []byte     // Event payload; JSON-encoded unless the caller supplied []byte, which is stored as-is
-	Headers     []byte     // JSON-encoded AMQP headers (nullable)
-	Exchange    string     // Target AMQP exchange
-	RoutingKey  string     // AMQP routing key
-	Status      string     // "pending", "published", or "failed"
-	RetryCount  int        // Number of failed publish attempts so far (not incremented on eventual success)
-	Error       string     // Last recorded failure message; NOT cleared on a later successful publish
-	CreatedAt   time.Time  // When the event was created
-	PublishedAt *time.Time // When the event was successfully published (nil if pending)
+	ID           string     // UUID, generated on insert
+	EventType    string     // Event type for routing
+	AggregateID  string     // Aggregate identifier for correlation
+	Payload      []byte     // Event payload; JSON-encoded unless the caller supplied []byte, which is stored as-is
+	Headers      []byte     // JSON-encoded AMQP headers (nullable)
+	Exchange     string     // Target AMQP exchange
+	RoutingKey   string     // AMQP routing key
+	Lane         string     // LaneAMQP or LaneStream; the store fills an empty lane with LaneAMQP
+	Stream       string     // Stream-lane target super stream (empty on the AMQP lane)
+	PartitionKey string     // Stream-lane partition key: the row's tenant stamp
+	Seq          int64      // Per-ledger sequence assigned by the database at insert; zero before insert, never written by Insert
+	Status       string     // "pending", "published", or "failed"
+	RetryCount   int        // Number of failed publish attempts so far (not incremented on eventual success)
+	Error        string     // Last recorded failure message; NOT cleared on a later successful publish
+	CreatedAt    time.Time  // When the event was created
+	PublishedAt  *time.Time // When the event was successfully published (nil if pending)
+}
+
+// Lane constants name the transport a row is dispatched on.
+const (
+	LaneAMQP   = "amqp"
+	LaneStream = "stream"
+)
+
+// laneOrDefault fills an unset lane with LaneAMQP, so no persisted row carries an
+// empty lane even when a caller hand-builds a Record.
+func laneOrDefault(lane string) string {
+	if lane == "" {
+		return LaneAMQP
+	}
+	return lane
 }
 
 // Event status constants.
@@ -50,7 +69,7 @@ type Store interface {
 	// Insert writes an event row to the outbox table within the given transaction.
 	Insert(ctx context.Context, tx dbtypes.Tx, record *Record) error
 
-	// FetchPending retrieves up to batchSize pending events ordered by creation time.
+	// FetchPending retrieves up to batchSize pending events in ledger sequence order.
 	// Selection is status-gated only: parking is driven by the "failed" status
 	// (set by MarkDeadLettered), NOT by retry_count, so an outage-inflated count can
 	// never freeze a healthy pending event.

@@ -75,10 +75,11 @@ func TestOracleStoreFetchPendingSuccess(t *testing.T) {
 	createdAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	rows := dbtesting.NewRowSet(
 		"id", "event_type", "aggregate_id", "payload", "headers",
-		"exchange", "routing_key", "status", "retry_count", "created_at",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
 	).
 		AddRow("evt-1", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
-			"orders", "orders.created", StatusPending, int64(0), createdAt)
+			"orders", "orders.created", LaneAMQP, "", "", StatusPending, int64(0), createdAt, int64(1))
 
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
@@ -99,10 +100,11 @@ func TestOracleStoreFetchPendingHandlesNullExchangeAndRoutingKey(t *testing.T) {
 	createdAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	rows := dbtesting.NewRowSet(
 		"id", "event_type", "aggregate_id", "payload", "headers",
-		"exchange", "routing_key", "status", "retry_count", "created_at",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
 	).
 		AddRow("evt-default-ex", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
-			nil, nil, StatusPending, int64(0), createdAt) // NULL exchange + routing_key
+			nil, nil, LaneAMQP, nil, nil, StatusPending, int64(0), createdAt, int64(1)) // NULL exchange + routing_key
 
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
@@ -119,7 +121,8 @@ func TestOracleStoreFetchPendingEmpty(t *testing.T) {
 
 	rows := dbtesting.NewRowSet(
 		"id", "event_type", "aggregate_id", "payload", "headers",
-		"exchange", "routing_key", "status", "retry_count", "created_at",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
 	)
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
@@ -170,7 +173,8 @@ func TestOracleStoreFetchPendingSelectsByStatusOnly(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.Oracle)
 	rows := dbtesting.NewRowSet(
 		"id", "event_type", "aggregate_id", "payload", "headers",
-		"exchange", "routing_key", "status", "retry_count", "created_at",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
 	)
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
@@ -270,6 +274,8 @@ func TestOracleStoreCreateTableSuccess(t *testing.T) {
 	db.ExpectExec(`CREATE TABLE GOBRICKS_OUTBOX`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX idx_GOBRICKS_OUTBOX_pending`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX idx_GOBRICKS_OUTBOX_published`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE TABLE GOBRICKS_OUTBOX_leader`).WillReturnRowsAffected(0)
+	db.ExpectExec(`MERGE INTO GOBRICKS_OUTBOX_leader`).WillReturnRowsAffected(1)
 
 	require.NoError(t, store.CreateTable(t.Context(), db))
 }
@@ -282,11 +288,13 @@ func TestOracleStoreCreateTableSchemaQualified(t *testing.T) {
 	db.ExpectExec(`CREATE TABLE MYSCHEMA.OUTBOX_EVENTS`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX idx_OUTBOX_EVENTS_pending`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX idx_OUTBOX_EVENTS_published`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE TABLE MYSCHEMA.OUTBOX_EVENTS_leader`).WillReturnRowsAffected(0)
+	db.ExpectExec(`MERGE INTO MYSCHEMA.OUTBOX_EVENTS_leader`).WillReturnRowsAffected(1)
 
 	require.NoError(t, store.CreateTable(t.Context(), db))
 	// Both index ON clauses must reference the full schema-qualified name.
 	execs := db.ExecLog()
-	require.Len(t, execs, 3) // table, pending index, published index
+	require.Len(t, execs, 5) // table, pending index, published index, leader table, leader seed
 	assert.Contains(t, execs[1].SQL, "ON MYSCHEMA.OUTBOX_EVENTS", "pending index must target the qualified table")
 	assert.Contains(t, execs[2].SQL, "ON MYSCHEMA.OUTBOX_EVENTS", "published index must target the qualified table")
 }
@@ -332,3 +340,126 @@ func TestOracleStoreCreateTableErrorOnPublishedIndex(t *testing.T) {
 
 // Compile-time guard: ensure oracleStore satisfies the Store interface.
 var _ Store = (*oracleStore)(nil)
+
+// --- lane, stream, partition key, sequence ----------------------------------
+
+func TestOracleStoreInsertWritesLaneAndStreamColumns(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	tx := db.ExpectTransaction()
+	tx.ExpectExec(`INSERT INTO GOBRICKS_OUTBOX`).WillReturnRowsAffected(1)
+
+	begun, err := db.Begin(t.Context())
+	require.NoError(t, err)
+
+	record := sampleRecord()
+	record.Exchange = ""
+	record.RoutingKey = ""
+	record.Lane = LaneStream
+	record.Stream = "orders"
+	record.PartitionKey = "acme"
+	require.NoError(t, store.Insert(t.Context(), begun, record))
+
+	log := tx.ExecLog()
+	require.Len(t, log, 1)
+	assert.Contains(t, log[0].SQL, "lane")
+	assert.Contains(t, log[0].SQL, "stream")
+	assert.Contains(t, log[0].SQL, "partition_key")
+	assert.NotContains(t, log[0].SQL, "seq", "seq is assigned by the database, never written by Insert")
+	assert.Equal(t, []any{LaneStream, "orders", "acme"}, log[0].Args[7:10],
+		"lane, stream and partition_key follow routing_key in argument order")
+}
+
+func TestOracleStoreInsertAMQPRowDefaultsLane(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	tx := db.ExpectTransaction()
+	tx.ExpectExec(`INSERT INTO GOBRICKS_OUTBOX`).WillReturnRowsAffected(1)
+
+	begun, err := db.Begin(t.Context())
+	require.NoError(t, err)
+
+	record := sampleRecord()
+	record.Lane = ""
+	require.NoError(t, store.Insert(t.Context(), begun, record))
+
+	log := tx.ExecLog()
+	require.Len(t, log, 1)
+	assert.Equal(t, LaneAMQP, log[0].Args[7], "the store fills an empty lane, so no row carries one")
+}
+
+func TestOracleStoreFetchPendingOrdersBySeq(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+
+	createdAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	rows := dbtesting.NewRowSet(
+		"id", "event_type", "aggregate_id", "payload", "headers",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
+	).
+		AddRow("evt-1", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
+			"orders", "orders.created", LaneAMQP, "", "", StatusPending, int64(0), createdAt, int64(7)).
+		AddRow("evt-2", "customer.created", "cust-1", []byte(`{}`), []byte(`{}`),
+			"", "", LaneStream, "customers", "acme", StatusPending, int64(0), createdAt, int64(8))
+
+	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
+
+	out, err := store.FetchPending(t.Context(), db, 10)
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+	assert.Equal(t, int64(7), out[0].Seq)
+	assert.Equal(t, int64(8), out[1].Seq)
+	assert.Equal(t, LaneStream, out[1].Lane)
+	assert.Equal(t, "customers", out[1].Stream)
+	assert.Equal(t, "acme", out[1].PartitionKey)
+
+	log := db.QueryLog()
+	require.Len(t, log, 1)
+	assert.Contains(t, log[0].SQL, "seq")
+	assert.Contains(t, log[0].SQL, "ORDER BY seq ASC")
+}
+
+// TestOracleStoreFetchPendingMapsNullStreamToEmpty pins the Oracle ” IS NULL
+// handling for the stream-lane columns, matching exchange/routing_key (issue #586).
+func TestOracleStoreFetchPendingMapsNullStreamToEmpty(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+
+	rows := dbtesting.NewRowSet(
+		"id", "event_type", "aggregate_id", "payload", "headers",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
+	).
+		AddRow("evt-1", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
+			"orders", "orders.created", LaneAMQP, nil, nil,
+			StatusPending, int64(0), time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC), int64(1))
+
+	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
+
+	out, err := store.FetchPending(t.Context(), db, 10)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Empty(t, out[0].Stream)
+	assert.Empty(t, out[0].PartitionKey)
+}
+
+func TestOracleStoreCreateTableCreatesLeaderAndSeqIndex(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	db.ExpectExec(`CREATE TABLE GOBRICKS_OUTBOX`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX idx_GOBRICKS_OUTBOX_pending`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX idx_GOBRICKS_OUTBOX_published`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE TABLE GOBRICKS_OUTBOX_leader`).WillReturnRowsAffected(0)
+	db.ExpectExec(`MERGE INTO GOBRICKS_OUTBOX_leader`).WillReturnRowsAffected(1)
+
+	require.NoError(t, store.CreateTable(t.Context(), db))
+
+	log := db.ExecLog()
+	require.Len(t, log, 5)
+	assert.Contains(t, log[0].SQL, "seq")
+	assert.Contains(t, log[0].SQL, "lane")
+	assert.Contains(t, log[1].SQL, "THEN seq END")
+	assert.Contains(t, log[3].SQL, "GOBRICKS_OUTBOX_leader")
+	assert.Contains(t, log[4].SQL, "MERGE INTO")
+}

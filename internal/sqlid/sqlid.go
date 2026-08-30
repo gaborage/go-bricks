@@ -56,3 +56,10 @@ func IndexBaseName(name string) string {
 	}
 	return name
 }
+
+// LeaderTableName returns the companion leader-table name for a table, preserving
+// any schema prefix ("myschema.outbox" -> "myschema.outbox_leader"). The input has
+// already passed ValidateTableName.
+func LeaderTableName(name string) string {
+	return name + "_leader"
+}

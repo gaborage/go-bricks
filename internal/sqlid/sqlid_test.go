@@ -47,3 +47,15 @@ func TestIndexBaseName(t *testing.T) {
 		}
 	}
 }
+
+func TestLeaderTableName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"gobricks_outbox", "gobricks_outbox_leader"},
+		{"myschema.outbox", "myschema.outbox_leader"},
+	}
+	for _, c := range cases {
+		if got := LeaderTableName(c.in); got != c.want {
+			t.Fatalf("LeaderTableName(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

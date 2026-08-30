@@ -1026,12 +1026,14 @@ func TestLazyStoreCreateTableDelegatesAfterInit(t *testing.T) {
 	m, db := initEnabledModule(t, "postgresql", 0)
 	ls := &lazyStore{module: m}
 
-	// postgresStore.CreateTable issues three sequential Exec calls (table
-	// then two indexes). Distinct patterns prevent first-match-wins
-	// ambiguity between the two `CREATE INDEX` statements.
+	// postgresStore.CreateTable issues five sequential Exec calls (table, two
+	// indexes, then the leader table and its seed). Distinct patterns prevent
+	// first-match-wins ambiguity between the two `CREATE INDEX` statements.
 	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_pending`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox_leader`).WillReturnRowsAffected(0)
+	db.ExpectExec(`INSERT INTO gobricks_outbox_leader`).WillReturnRowsAffected(1)
 
 	require.NoError(t, ls.CreateTable(context.Background(), db))
 	_, ok := m.stores.Cached("")
