@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +14,7 @@ import (
 	"github.com/gaborage/go-bricks/app"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -21,12 +23,14 @@ import (
 type outboxPublisher struct {
 	store           Store
 	defaultExchange string
+	streamTargets   []string
 }
 
-func newPublisher(store Store, defaultExchange string) app.OutboxPublisher {
+func newPublisher(store Store, defaultExchange string, superStreams []string) app.OutboxPublisher {
 	return &outboxPublisher{
 		store:           store,
 		defaultExchange: defaultExchange,
+		streamTargets:   superStreams,
 	}
 }
 
@@ -47,28 +51,32 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", errors.New("outbox: aggregate ID must not be empty")
 	}
 
-	exchange := event.Exchange
-	if exchange == "" {
-		exchange = p.defaultExchange
-	}
+	// Resolve the AMQP destination once, for the AMQP lane only. A stream-lane row
+	// carries no exchange or routing key, so applying the fallbacks to it would invent
+	// a destination it will never be published to — and then refuse the event when that
+	// invented destination happens to be too long for a frame it never enters.
+	exchange, routingKey := event.Exchange, event.RoutingKey
+	if event.Stream == "" {
+		if exchange == "" {
+			exchange = p.defaultExchange
+		}
+		if routingKey == "" {
+			routingKey = event.EventType
+		}
 
-	routingKey := event.RoutingKey
-	if routingKey == "" {
-		routingKey = event.EventType
-	}
-
-	// The values persisted here are the ones the relay later puts on the wire, so
-	// the publish rule runs on the post-fallback destination BEFORE the INSERT: a
-	// row the AMQP frame can never carry is refused at its source rather than
-	// parked by the relay after MaxRetries. Only the caller's header keys are
-	// judged — the trace keys the framework adds are literals. It runs before the
-	// payload and header marshaling because it needs none of it.
-	if err := messaging.ValidatePublishDestination(messaging.PublishOptions{
-		Exchange:   exchange,
-		RoutingKey: routingKey,
-		Headers:    event.Headers,
-	}); err != nil {
-		return "", fmt.Errorf("outbox: %w", err)
+		// The values persisted here are the ones the relay later puts on the wire, so
+		// the publish rule runs on the post-fallback destination BEFORE the INSERT: a
+		// row the AMQP frame can never carry is refused at its source rather than
+		// parked by the relay after MaxRetries. Only the caller's header keys are
+		// judged — the trace keys the framework adds are literals. It runs before the
+		// payload and header marshaling because it needs none of it.
+		if err := messaging.ValidatePublishDestination(messaging.PublishOptions{
+			Exchange:   exchange,
+			RoutingKey: routingKey,
+			Headers:    event.Headers,
+		}); err != nil {
+			return "", fmt.Errorf("outbox: %w", err)
+		}
 	}
 
 	payload, err := marshalPayload(event.Payload)
@@ -92,25 +100,51 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", fmt.Errorf("outbox: failed to marshal headers: %w", err)
 	}
 
-	eventID := uuid.New().String()
-
 	record := &Record{
-		ID:          eventID,
+		ID:          uuid.New().String(),
 		EventType:   event.EventType,
 		AggregateID: event.AggregateID,
 		Payload:     payload,
 		Headers:     headers,
-		Exchange:    exchange,
-		RoutingKey:  routingKey,
 		Status:      StatusPending,
 		CreatedAt:   time.Now(),
+	}
+
+	if event.Stream != "" {
+		if err := p.applyStreamTarget(ctx, event, record); err != nil {
+			return "", err
+		}
+	} else {
+		record.Lane = LaneAMQP
+		record.Exchange = exchange
+		record.RoutingKey = routingKey
 	}
 
 	if err := p.store.Insert(ctx, tx, record); err != nil {
 		return "", err
 	}
 
-	return eventID, nil
+	return record.ID, nil
+}
+
+// applyStreamTarget validates a stream-targeted event and fills the record's stream
+// lane fields. The partition key is the tenant stamp, taken here at Publish where the
+// developer sees the refusal, rather than as poison cycles later in the relay.
+func (p *outboxPublisher) applyStreamTarget(ctx context.Context, event *app.OutboxEvent, record *Record) error {
+	if event.Exchange != "" || event.RoutingKey != "" {
+		return ErrConflictingTargets
+	}
+	if !slices.Contains(p.streamTargets, event.Stream) {
+		return fmt.Errorf("%w: %q", ErrStreamNotAnOutboxTarget, event.Stream)
+	}
+	tenant, ok := multitenant.GetTenant(ctx)
+	if !ok {
+		return ErrStreamTargetRequiresTenant
+	}
+	record.Lane = LaneStream
+	record.Stream = event.Stream
+	record.PartitionKey = tenant
+	return nil
 }
 
 // marshalHeaders JSON-encodes the AMQP headers, first capturing the trace

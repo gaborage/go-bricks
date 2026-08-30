@@ -80,12 +80,13 @@ func TestPostgresStoreFetchPendingSuccess(t *testing.T) {
 	createdAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	rows := dbtesting.NewRowSet(
 		"id", "event_type", "aggregate_id", "payload", "headers",
-		"exchange", "routing_key", "status", "retry_count", "created_at",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
 	).
 		AddRow("evt-1", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
-			"orders", "orders.created", StatusPending, int64(0), createdAt).
+			"orders", "orders.created", LaneAMQP, "", "", StatusPending, int64(0), createdAt, int64(1)).
 		AddRow("evt-2", "order.shipped", "order-2", []byte(`{}`), []byte(nil),
-			"orders", "orders.shipped", StatusPending, int64(1), createdAt)
+			"orders", "orders.shipped", LaneAMQP, "", "", StatusPending, int64(1), createdAt, int64(2))
 
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
@@ -103,7 +104,8 @@ func TestPostgresStoreFetchPendingEmpty(t *testing.T) {
 
 	rows := dbtesting.NewRowSet(
 		"id", "event_type", "aggregate_id", "payload", "headers",
-		"exchange", "routing_key", "status", "retry_count", "created_at",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
 	)
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
@@ -134,7 +136,8 @@ func TestPostgresStoreFetchPendingSelectsByStatusOnly(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 	rows := dbtesting.NewRowSet(
 		"id", "event_type", "aggregate_id", "payload", "headers",
-		"exchange", "routing_key", "status", "retry_count", "created_at",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
 	)
 	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
 
@@ -252,6 +255,8 @@ func TestPostgresStoreCreateTableSuccess(t *testing.T) {
 	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_pending`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox_leader`).WillReturnRowsAffected(0)
+	db.ExpectExec(`INSERT INTO gobricks_outbox_leader`).WillReturnRowsAffected(1)
 
 	require.NoError(t, store.CreateTable(t.Context(), db))
 }
@@ -304,14 +309,154 @@ func TestPostgresStoreCreateTableSchemaQualified(t *testing.T) {
 	db.ExpectExec(`CREATE TABLE IF NOT EXISTS myschema.outbox_events`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_outbox_events_pending`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_outbox_events_published`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS myschema.outbox_events_leader`).WillReturnRowsAffected(0)
+	db.ExpectExec(`INSERT INTO myschema.outbox_events_leader`).WillReturnRowsAffected(1)
 
 	require.NoError(t, store.CreateTable(t.Context(), db))
 	// Both index ON clauses must reference the full schema-qualified name.
 	execs := db.ExecLog()
-	require.Len(t, execs, 3) // table, pending index, published index
+	require.Len(t, execs, 5) // table, pending index, published index, leader table, leader seed
 	assert.Contains(t, execs[1].SQL, "ON myschema.outbox_events", "pending index must target the qualified table")
 	assert.Contains(t, execs[2].SQL, "ON myschema.outbox_events", "published index must target the qualified table")
 }
 
 // Compile-time guard: ensure postgresStore satisfies the Store interface.
 var _ Store = (*postgresStore)(nil)
+
+// --- lane, stream, partition key, sequence ----------------------------------
+
+func TestPostgresStoreInsertWritesLaneAndStreamColumns(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectTransaction()
+	tx.ExpectExec(`INSERT INTO gobricks_outbox`).WillReturnRowsAffected(1)
+
+	begun, err := db.Begin(t.Context())
+	require.NoError(t, err)
+
+	record := sampleRecord()
+	record.Exchange = ""
+	record.RoutingKey = ""
+	record.Lane = LaneStream
+	record.Stream = "orders"
+	record.PartitionKey = "acme"
+	require.NoError(t, store.Insert(t.Context(), begun, record))
+
+	log := tx.ExecLog()
+	require.Len(t, log, 1)
+	assert.Contains(t, log[0].SQL, "lane")
+	assert.Contains(t, log[0].SQL, "stream")
+	assert.Contains(t, log[0].SQL, "partition_key")
+	assert.NotContains(t, log[0].SQL, "seq", "seq is assigned by the database, never written by Insert")
+	assert.Equal(t, []any{LaneStream, "orders", "acme"}, log[0].Args[7:10],
+		"lane, stream and partition_key follow routing_key in argument order")
+}
+
+func TestPostgresStoreInsertAMQPRowDefaultsLane(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	tx := db.ExpectTransaction()
+	tx.ExpectExec(`INSERT INTO gobricks_outbox`).WillReturnRowsAffected(1)
+
+	begun, err := db.Begin(t.Context())
+	require.NoError(t, err)
+
+	record := sampleRecord()
+	record.Lane = ""
+	require.NoError(t, store.Insert(t.Context(), begun, record))
+
+	log := tx.ExecLog()
+	require.Len(t, log, 1)
+	assert.Equal(t, LaneAMQP, log[0].Args[7], "the store fills an empty lane, so no row carries one")
+}
+
+func TestPostgresStoreFetchPendingOrdersBySeq(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+
+	createdAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	rows := dbtesting.NewRowSet(
+		"id", "event_type", "aggregate_id", "payload", "headers",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
+	).
+		AddRow("evt-1", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
+			"orders", "orders.created", LaneAMQP, "", "", StatusPending, int64(0), createdAt, int64(7)).
+		AddRow("evt-2", "customer.created", "cust-1", []byte(`{}`), []byte(`{}`),
+			"", "", LaneStream, "customers", "acme", StatusPending, int64(0), createdAt, int64(8))
+
+	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
+
+	out, err := store.FetchPending(t.Context(), db, 10)
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+	assert.Equal(t, int64(7), out[0].Seq)
+	assert.Equal(t, int64(8), out[1].Seq)
+	assert.Equal(t, LaneStream, out[1].Lane)
+	assert.Equal(t, "customers", out[1].Stream)
+	assert.Equal(t, "acme", out[1].PartitionKey)
+
+	log := db.QueryLog()
+	require.Len(t, log, 1)
+	assert.Contains(t, log[0].SQL, "seq")
+	assert.Contains(t, log[0].SQL, "ORDER BY seq ASC")
+}
+
+func TestPostgresStoreCreateTableCreatesLeaderAndSeqIndex(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_pending`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox_leader`).WillReturnRowsAffected(0)
+	db.ExpectExec(`INSERT INTO gobricks_outbox_leader`).WillReturnRowsAffected(1)
+
+	require.NoError(t, store.CreateTable(t.Context(), db))
+
+	log := db.ExecLog()
+	require.Len(t, log, 5)
+	assert.Contains(t, log[0].SQL, "seq")
+	assert.Contains(t, log[0].SQL, "lane")
+	assert.Contains(t, log[1].SQL, "(seq)")
+	assert.Contains(t, log[3].SQL, "gobricks_outbox_leader")
+	assert.Contains(t, log[4].SQL, "ON CONFLICT")
+}
+
+func TestPostgresStoreCreateTableSeedErrorIsReported(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	wantErr := errors.New("seed failed")
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_pending`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox_leader`).WillReturnRowsAffected(0)
+	db.ExpectExec(`INSERT INTO gobricks_outbox_leader`).WillReturnError(wantErr)
+
+	err := store.CreateTable(t.Context(), db)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, wantErr)
+	assert.Contains(t, err.Error(), "leader")
+}
+
+// TestPostgresStoreFetchPendingEmptyStreamIsAMQPLane pins C1: the stream-lane columns are
+// NOT NULL DEFAULT ” on PostgreSQL, so a row written before the stream lane existed reads
+// back as an AMQP-lane row rather than failing the scan and blocking startup.
+func TestPostgresStoreFetchPendingEmptyStreamIsAMQPLane(t *testing.T) {
+	store := newPostgresTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	rows := dbtesting.NewRowSet(
+		"id", "event_type", "aggregate_id", "payload", "headers",
+		"exchange", "routing_key", "lane", "stream", "partition_key",
+		"status", "retry_count", "created_at", "seq",
+	).AddRow("evt-1", "order.created", "order-1", []byte(`{}`), []byte(`{}`),
+		"orders", "orders.created", LaneAMQP, "", "",
+		StatusPending, int64(0), time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC), int64(1))
+	db.ExpectQuery(`SELECT id, event_type`).WillReturnRows(rows)
+
+	out, err := store.FetchPending(t.Context(), db, 10)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, LaneAMQP, out[0].Lane)
+	assert.Empty(t, out[0].Stream)
+	assert.Empty(t, out[0].PartitionKey)
+}

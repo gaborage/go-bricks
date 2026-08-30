@@ -1026,12 +1026,14 @@ func TestLazyStoreCreateTableDelegatesAfterInit(t *testing.T) {
 	m, db := initEnabledModule(t, "postgresql", 0)
 	ls := &lazyStore{module: m}
 
-	// postgresStore.CreateTable issues three sequential Exec calls (table
-	// then two indexes). Distinct patterns prevent first-match-wins
-	// ambiguity between the two `CREATE INDEX` statements.
+	// postgresStore.CreateTable issues five sequential Exec calls (table, two
+	// indexes, then the leader table and its seed). Distinct patterns prevent
+	// first-match-wins ambiguity between the two `CREATE INDEX` statements.
 	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_pending`).WillReturnRowsAffected(0)
 	db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_gobricks_outbox_published`).WillReturnRowsAffected(0)
+	db.ExpectExec(`CREATE TABLE IF NOT EXISTS gobricks_outbox_leader`).WillReturnRowsAffected(0)
+	db.ExpectExec(`INSERT INTO gobricks_outbox_leader`).WillReturnRowsAffected(1)
 
 	require.NoError(t, ls.CreateTable(context.Background(), db))
 	_, ok := m.stores.Cached("")
@@ -1100,4 +1102,70 @@ func TestLazyPublisherUsesCallersTenantStore(t *testing.T) {
 	// emit tenant A's Postgres $N-placeholder SQL and fail txB's :N-only expectation.
 	_, err = pub.Publish(ctxB, txB, event)
 	require.NoError(t, err, "tenant B's publish must use tenant B's (Oracle) store, not a cached tenant-A store")
+}
+
+// TestLazyPublisherPassesConfiguredTargets proves the module's configured super
+// streams reach the publisher's target set: the same event is accepted when the
+// stream is listed and refused when the list is empty.
+func TestLazyPublisherPassesConfiguredTargets(t *testing.T) {
+	tests := []struct {
+		name         string
+		superStreams []string
+		wantErr      error
+	}{
+		{name: "configured_target_reaches_the_store", superStreams: []string{"customers"}},
+		{name: "unconfigured_target_is_refused", wantErr: ErrStreamNotAnOutboxTarget},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, db := initEnabledModule(t, "postgresql", 0)
+			m.cfg.SuperStreams = tt.superStreams
+			lp := &lazyPublisher{module: m}
+
+			tx := db.ExpectTransaction()
+			tx.ExpectExec(`INSERT INTO gobricks_outbox`).WillReturnRowsAffected(1)
+			begun, err := db.Begin(context.Background())
+			require.NoError(t, err)
+
+			ctx := multitenant.SetTenant(context.Background(), "acme")
+			_, err = lp.Publish(ctx, begun, &app.OutboxEvent{
+				EventType:   "customer.created",
+				AggregateID: "c1",
+				Stream:      "customers",
+			})
+
+			if tt.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.wantErr)
+				assert.Empty(t, tx.ExecLog(), "a refused event never reaches the store")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, tx.ExecLog(), 1)
+		})
+	}
+}
+
+// TestModuleInitRefusesConfiguredSuperStreams pins the interim fail-closed guard: until the
+// relay grows its stream leg, every row is dispatched over PublishToExchange, so a
+// stream-lane row would reach the empty exchange, be dropped, and then be marked published.
+// DELETE this test together with the guard when the super-stream leg lands.
+func TestModuleInitRefusesConfiguredSuperStreams(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("disabled", true),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, SuperStreams: []string{"customers"}},
+		},
+		DB: func(context.Context) (dbtypes.Interface, error) {
+			return dbtesting.NewTestDB("postgresql"), nil
+		},
+		Messaging: func(context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outbox.superstreams")
+	assert.Contains(t, err.Error(), "next slice")
 }

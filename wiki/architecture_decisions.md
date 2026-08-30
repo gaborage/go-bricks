@@ -1429,6 +1429,29 @@ production, and the silent-sibling collision becomes a startup error naming the 
 
 ---
 
+### [ADR-088: The Outbox Ledger Is Sequenced, Laned, and Drained by One Leader](adr_088_outbox_ordered_leader_relay.md)
+
+**Date:** 2026-08-30 | **Status:** Accepted | **Breaking:** `config.OutboxConfig` stops being comparable; `outbox.Store` gains `Lead`; a migrated ledger needs an explicit `seq` backfill before the new relay runs
+
+The relay ordered by `created_at`, which TIES under concurrent inserts, and preserved no order
+across a failure at all — a row that failed was retried later while the rows behind it went out
+immediately, so an aggregate's second event could reach the broker before its first. Nothing
+stopped two replicas draining the same ledger either, so the duplicate rate scaled with the
+replica count and ordering had no meaning even within one key. Both gaps are invisible in a
+single-replica deployment with a healthy broker, which is why they survived. Every row now
+carries a database-assigned per-ledger `seq` that `FetchPending` orders by, plus a `lane`
+column; a cycle takes a companion `<table>_leader` row `FOR UPDATE NOWAIT` before fetching —
+before, so it cannot inherit rows the previous leader published between the read and the lock —
+and probes that claim before every record, so a deposed leader stops within one record. A row
+that FAILS parks its key's later rows for the cycle without publishing or marking them, keyed by
+the scope it competes in: the tenant stamp, the destination, or the stream and partition key.
+
+**Key Benefits:** at-least-once stops meaning "duplicated per replica", and a failing key no
+longer lets its own later events overtake it.
+**Migration:** [migrations.md](migrations.md) `[C61.23]`.
+
+---
+
 ### [ADR-086: The Sensitive-Data Filter Masks Inside Opaque Payloads](adr_086_mask_inside_opaque_payloads.md)
 
 **Date:** 2026-08-28 | **Status:** Accepted | **Breaking:** a masked payload is re-encoded (key order, whitespace); an unreadable JSON-looking payload renders as the mask value

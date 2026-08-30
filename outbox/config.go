@@ -32,6 +32,24 @@ func validateConfig(c *config.OutboxConfig) error {
 		return fmt.Errorf("outbox: tenancy must be %q or %q, got %q",
 			config.TenancyPerTenant, config.TenancyShared, c.Tenancy)
 	}
+	// Non-empty only: applyDefaults runs first in every real path, so an empty name here
+	// means a hand-built config in a unit test. The grammar and the length bound are
+	// enforced unconditionally at the store door (NewPostgresStore / NewOracleStore).
+	if c.TableName != "" {
+		if err := validateTableName(c.TableName); err != nil {
+			return fmt.Errorf("outbox.tablename: %w", err)
+		}
+	}
+	seen := make(map[string]struct{}, len(c.SuperStreams))
+	for i, name := range c.SuperStreams {
+		if name == "" {
+			return fmt.Errorf("outbox: superstreams[%d] must not be empty", i)
+		}
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("outbox: superstreams lists %q twice", name)
+		}
+		seen[name] = struct{}{}
+	}
 	return nil
 }
 

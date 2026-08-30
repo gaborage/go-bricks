@@ -90,6 +90,15 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return err
 	}
 
+	// INTERIM (removed with the super-stream leg): the relay dispatches every row over
+	// PublishToExchange, so a stream-lane row would go to the empty exchange — dropped by
+	// the broker and then marked published. Refuse the configuration rather than lose
+	// events silently.
+	if len(m.cfg.SuperStreams) > 0 {
+		return errors.New("outbox: outbox.superstreams is not usable yet; " +
+			"the super-stream leg lands with the next slice")
+	}
+
 	if !m.cfg.Enabled {
 		m.logger.Info().Msg("Outbox module disabled (outbox.enabled=false)")
 		return nil
@@ -416,7 +425,7 @@ func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.O
 	if err != nil {
 		return "", err
 	}
-	return newPublisher(store, p.module.cfg.DefaultExchange).Publish(ctx, tx, event)
+	return newPublisher(store, p.module.cfg.DefaultExchange, p.module.cfg.SuperStreams).Publish(ctx, tx, event)
 }
 
 // lazyStore wraps Store to lazily initialize via the module.

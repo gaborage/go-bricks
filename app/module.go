@@ -145,6 +145,12 @@ type OutboxEvent struct {
 
 	// RoutingKey overrides the default routing key. If empty, uses EventType.
 	RoutingKey string
+
+	// Stream targets a super stream on the native streams lane instead of an exchange;
+	// the partition key is the tenant stamp from ctx (a tenant is required), and
+	// Exchange and RoutingKey must be empty. The name must be listed in
+	// outbox.superstreams.
+	Stream string
 }
 
 // OutboxProvider is an optional interface that modules can implement to provide

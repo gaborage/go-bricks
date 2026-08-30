@@ -739,6 +739,9 @@ type OutboxConfig struct {
 	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
 
 	// TableName is the outbox table name in the database.
+	// The table segment is bounded at 49 bytes so every identifier derived from it — the
+	// "idx_<name>_published" index and the "<name>_leader" companion table — stays distinct
+	// under PostgreSQL's 63-byte truncation.
 	// Default: "gobricks_outbox".
 	TableName string `koanf:"tablename" json:"tablename" yaml:"tablename" toml:"tablename" mapstructure:"tablename"`
 
@@ -790,6 +793,17 @@ type OutboxConfig struct {
 	//     single pass. See wiki/outbox.md and ADR-041.
 	// In single-tenant mode both values behave identically.
 	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
+
+	// SuperStreams is RESERVED and not yet usable: the relay dispatches every row over
+	// the AMQP lane until the stream leg lands, so a stream-targeted row would reach the
+	// empty exchange and be dropped. Init REJECTS a non-empty value rather than lose
+	// events silently, and setting messaging.streams.uri does not change that.
+	//
+	// Once the stream leg lands this lists the super streams the relay may publish to over
+	// the native streams lane, each of which must be declared as a super stream by a
+	// module's DeclareStreams; the outbox declares its publisher. Default: none — and on
+	// this release, the only accepted value.
+	SuperStreams []string `koanf:"superstreams" json:"superstreams" yaml:"superstreams" toml:"superstreams" mapstructure:"superstreams"`
 }
 
 // InboxConfig holds consumer-side idempotency (inbox) settings.

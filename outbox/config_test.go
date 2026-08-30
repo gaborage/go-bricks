@@ -1,10 +1,12 @@
 package outbox
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
 )
@@ -166,4 +168,61 @@ func TestValidateConfigTenancy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateConfigSuperStreams(t *testing.T) {
+	tests := []struct {
+		name         string
+		superStreams []string
+		errFrag      string
+	}{
+		{
+			name:         "superstreams_empty_entry",
+			superStreams: []string{"orders", ""},
+			errFrag:      "superstreams[1] must not be empty",
+		},
+		{
+			name:         "superstreams_duplicate",
+			superStreams: []string{"orders", "orders"},
+			errFrag:      `lists "orders" twice`,
+		},
+		{
+			name:         "superstreams_ok",
+			superStreams: []string{"orders", "payments"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.OutboxConfig{
+				PollInterval: 5 * time.Second,
+				BatchSize:    100,
+				Tenancy:      config.TenancyPerTenant,
+				SuperStreams: tt.superStreams,
+			}
+			err := validateConfig(cfg)
+			if tt.errFrag == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errFrag)
+		})
+	}
+}
+
+// TestValidateConfigRejectsOverlongTableName pins the leader-table headroom at the config
+// door, so the operator sees the key name. The bound itself is enforced (and boundary-tested)
+// in validateTableName, which the store constructors call unconditionally.
+func TestValidateConfigRejectsOverlongTableName(t *testing.T) {
+	cfg := &config.OutboxConfig{
+		PollInterval: 5 * time.Second,
+		BatchSize:    100,
+		Tenancy:      config.TenancyPerTenant,
+		TableName:    strings.Repeat("a", 50),
+	}
+	err := validateConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outbox.tablename")
+	assert.Contains(t, err.Error(), "49")
 }
