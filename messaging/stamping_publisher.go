@@ -49,8 +49,13 @@ func (p *stampingPublisher) PublishToExchange(ctx context.Context, options Publi
 
 	// The caller's map is never written to: a publish must not mutate the options
 	// a caller may reuse or share across goroutines.
+	//
+	// Sized to the caller's headers only: the map grows itself for the one stamp,
+	// and a +1 in the hint is unobservable — the same reason the streams lane sizes
+	// its property map this way, and the mutation gate's proof of it (an operator
+	// swap in the hint changes nothing any test can see).
 	stamped := options
-	stamped.Headers = make(map[string]any, len(options.Headers)+1)
+	stamped.Headers = make(map[string]any, len(options.Headers))
 	maps.Copy(stamped.Headers, options.Headers)
 	tenantstamp.Write(stamp, func(key string, value any) { stamped.Headers[key] = value })
 
