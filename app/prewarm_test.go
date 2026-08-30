@@ -200,6 +200,72 @@ func TestMessagingSlotStartPropagatesContextCancellation(t *testing.T) {
 	assert.Less(t, elapsed, time.Second, "must return once ctx expires")
 }
 
+// TestPreWarmGateIsPerKind pins WHICH gate each slot hands preWarmKind. The two
+// arguments are both bools, so a swapped pair compiles and every pre-existing test
+// still passes; only these cases separate them.
+//
+// Messaging under shared tenancy resolves the control-plane key, so it pre-warms
+// even though multitenant.enabled is true — while the database, resolved per
+// tenant in the same deployment, must not be warmed on the "" key.
+func TestPreWarmGateIsPerKind(t *testing.T) {
+	sharedMT := &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Messaging:   config.MessagingConfig{Tenancy: config.TenancyShared},
+	}
+	perTenantMT := &config.Config{
+		Multitenant: config.MultitenantConfig{Enabled: true},
+		Messaging:   config.MessagingConfig{Tenancy: config.TenancyPerTenant},
+	}
+
+	t.Run("shared_messaging_pre_warms_on_the_control_plane_key", func(t *testing.T) {
+		rec := &recLogger{}
+		client := newPrewarmMockClient()
+		client.SetReady(true)
+		manager := newPrewarmTestManager(rec, client)
+		defer func() { _ = manager.Close() }()
+		a := newMinimalMessagingApp(rec, manager, sharedMT)
+
+		advisory, fatal := slotOf(t, a, componentMessaging).start(context.Background())
+
+		require.NoError(t, fatal)
+		require.NoError(t, advisory)
+		assert.Positive(t, loggedCount(rec, "Pre-warmed messaging publisher"),
+			"shared tenancy has a fixed key to warm, so the messaging pre-warm must run")
+	})
+
+	t.Run("per_tenant_messaging_does_not_pre_warm", func(t *testing.T) {
+		rec := &recLogger{}
+		client := newPrewarmMockClient()
+		client.SetReady(true)
+		manager := newPrewarmTestManager(rec, client)
+		defer func() { _ = manager.Close() }()
+		a := newMinimalMessagingApp(rec, manager, perTenantMT)
+
+		advisory, fatal := slotOf(t, a, componentMessaging).start(context.Background())
+
+		require.NoError(t, fatal)
+		require.NoError(t, advisory)
+		assert.Zero(t, loggedCount(rec, "Pre-warmed messaging publisher"),
+			"per-tenant tenancy has no fixed key, so nothing may be warmed at startup")
+	})
+
+	t.Run("database_pre_warm_ignores_the_messaging_tenancy", func(t *testing.T) {
+		rec := &recLogger{}
+		client := newPrewarmMockClient()
+		client.SetReady(true)
+		manager := newPrewarmTestManager(rec, client)
+		defer func() { _ = manager.Close() }()
+		a := newMinimalMessagingApp(rec, manager, sharedMT)
+
+		advisory, fatal := slotOf(t, a, componentDatabase).start(context.Background())
+
+		require.NoError(t, fatal)
+		require.NoError(t, advisory)
+		assert.Zero(t, loggedCount(rec, "Pre-warmed single-tenant database connection"),
+			"the database is still resolved per tenant when only messaging is shared")
+	})
+}
+
 // declaredConsumerFixture returns declarationsWithConsumer() (see
 // messaging_setup_test.go) plus the queue its one consumer references, so
 // Declarations.Validate() — which rejects a consumer pointing at an
@@ -220,7 +286,7 @@ func declaredConsumerFixture(t *testing.T) *messaging.Declarations {
 // duplicate EnsureConsumers silently, so the broker-facing calls read 1 whether the
 // bootstrap ran once or twice.
 func consumerBootstrapAnnouncements(rec *recLogger) int {
-	return loggedCount(rec, "Single-tenant consumers started successfully") +
+	return loggedCount(rec, "Consumers started on the control-plane key") +
 		loggedCount(rec, "Ensured messaging consumers")
 }
 

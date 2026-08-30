@@ -304,6 +304,46 @@ func TestMultiTenantResourceProvider(t *testing.T) {
 	// Note: Multi-tenant success testing requires mock resource source configuration
 	// For the 80/20 rule, we focus on testing error paths which are more critical
 
+	t.Run("shared tenancy resolves the control-plane key without a tenant", func(t *testing.T) {
+		mockClient := testmocks.NewMockAMQPClient()
+		mockClient.On("Close").Return(nil).Maybe()
+		provider := NewMultiTenantResourceProvider(nil,
+			createTestMessagingManagerWithMock(t, mockClient), nil, nil)
+		provider.SetMessagingTenancy(config.TenancyShared)
+
+		client, err := provider.Messaging(context.Background())
+
+		require.NoError(t, err)
+		assert.Equal(t, mockClient, client)
+	})
+
+	t.Run("shared tenancy ignores a tenant in context", func(t *testing.T) {
+		mockClient := testmocks.NewMockAMQPClient()
+		mockClient.On("Close").Return(nil).Maybe()
+		provider := NewMultiTenantResourceProvider(nil,
+			createTestMessagingManagerWithMock(t, mockClient), nil, nil)
+		provider.SetMessagingTenancy(config.TenancyShared)
+		ctx := multitenant.SetTenant(context.Background(), testTenantID)
+
+		client, err := provider.Messaging(ctx)
+
+		require.NoError(t, err, "a tenant in ctx is ignored under shared tenancy, not an error")
+		assert.Equal(t, mockClient, client)
+	})
+
+	t.Run("per-tenant tenancy still requires a tenant", func(t *testing.T) {
+		provider := NewMultiTenantResourceProvider(nil,
+			createTestMessagingManagerWithMock(t, testmocks.NewMockAMQPClient()), nil, nil)
+
+		client, err := provider.Messaging(context.Background())
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoTenantInContext)
+		assert.ErrorIs(t, err, multitenant.ErrNoTenant,
+			"the app sentinel is the multitenant one, so errors.Is matches through either name")
+		assert.Nil(t, client)
+	})
+
 	t.Run("GetDB with nil database manager", func(t *testing.T) {
 		provider := NewMultiTenantResourceProvider(nil, nil, nil, nil)
 		ctx := multitenant.SetTenant(context.Background(), testTenantID)

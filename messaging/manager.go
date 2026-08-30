@@ -108,6 +108,11 @@ type ManagerOptions struct {
 	ReconnectMaxDelay time.Duration
 	ReinitDelay       time.Duration
 	ResendDelay       time.Duration
+	// TenantStamps makes consumers read the tenant stamp off each delivery and seed
+	// the handler context with it. True only under multitenant.enabled together with
+	// messaging.tenancy: shared — under per-tenant tenancy the replay key is already
+	// the tenant, and in single-tenant mode there is none to read.
+	TenantStamps bool
 }
 
 // NewMessagingManager creates a new messaging manager. The idle-publisher sweep starts here and

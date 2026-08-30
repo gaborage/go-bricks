@@ -16,6 +16,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/messaging/streams"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/observability"
 	"github.com/gaborage/go-bricks/server"
 )
@@ -44,7 +45,10 @@ const (
 	errorKey           = "error"
 )
 
-var ErrNoTenantInContext = errors.New("no tenant in context")
+// ErrNoTenantInContext is multitenant.ErrNoTenant under the name app's accessors
+// have always returned. One value, so errors.Is matches through either name
+// whichever layer produced the error.
+var ErrNoTenantInContext = multitenant.ErrNoTenant
 
 // OSSignalHandler implements SignalHandler using the real OS signal package
 type OSSignalHandler struct{}
@@ -102,6 +106,20 @@ type App struct {
 // because a directly-constructed App may carry no config.
 func (a *App) multiTenant() bool {
 	return a.cfg != nil && a.cfg.Multitenant.Enabled
+}
+
+// sharedMessaging reports whether the messaging kind resolves and replays on the
+// control-plane key rather than per tenant. It is deliberately independent of
+// multiTenant: under multitenant.enabled: false the two branches are the same one
+// (ADR-041 env-parity), so shared is a no-op there rather than an error.
+func (a *App) sharedMessaging() bool {
+	return a.cfg != nil && a.cfg.Messaging.Tenancy == config.TenancyShared
+}
+
+// perTenantMessaging reports whether messaging is resolved per tenant — the only
+// case in which startup defers consumer replay to the first request for a tenant.
+func (a *App) perTenantMessaging() bool {
+	return a.multiTenant() && !a.sharedMessaging()
 }
 
 func (a *App) buildMessagingDeclarations() error {

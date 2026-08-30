@@ -22,19 +22,19 @@ func (a *App) prepareRuntimeConsumers(ctx context.Context, decls *messaging.Decl
 		return nil
 	}
 
-	if a.cfg.Multitenant.Enabled {
+	if a.perTenantMessaging() {
 		a.logger.Info().Msg("Multi-tenant mode: consumers will be started per tenant on demand")
 		return nil
 	}
 
 	if err := a.messagingManager.EnsureConsumers(ctx, "", decls); err != nil {
 		if len(decls.Consumers()) > 0 {
-			return fmt.Errorf("failed to start single-tenant consumers: %w", err)
+			return fmt.Errorf("failed to start consumers on the control-plane key: %w", err)
 		}
-		a.logger.Warn().Err(err).Msg("Failed to start single-tenant consumers")
+		a.logger.Warn().Err(err).Msg("Failed to start consumers on the control-plane key")
 		return nil
 	}
 
-	a.logger.Info().Msg("Single-tenant consumers started successfully")
+	a.logger.Info().Msg("Consumers started on the control-plane key")
 	return nil
 }

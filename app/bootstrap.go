@@ -55,6 +55,7 @@ func newManagerConfigBuilderFromConfig(cfg *config.Config) *ManagerConfigBuilder
 	configBuilder.reconnectMaxDelay = cfg.Messaging.Reconnect.MaxDelay
 	configBuilder.reInitDelay = cfg.Messaging.Reconnect.ReinitDelay
 	configBuilder.resendDelay = cfg.Messaging.Reconnect.ResendDelay
+	configBuilder.tenantStamps = cfg.Multitenant.Enabled && cfg.Messaging.Tenancy == config.TenancyShared
 	configBuilder.publisherConfig = cfg.Messaging.Publisher
 	configBuilder.cacheConfig = cfg.Cache.Manager
 	configBuilder.dbConfig = cfg.Database.Manager
@@ -125,7 +126,9 @@ func (b *appBootstrap) dependencies(startupCtx context.Context) (*dependencyBund
 	// Create appropriate resource provider based on mode
 	var provider ResourceProvider
 	if b.cfg.Multitenant.Enabled {
-		provider = NewMultiTenantResourceProvider(dbManager, messagingManager, cacheManager, nil)
+		mtProvider := NewMultiTenantResourceProvider(dbManager, messagingManager, cacheManager, nil)
+		mtProvider.SetMessagingTenancy(b.cfg.Messaging.Tenancy)
+		provider = mtProvider
 	} else {
 		provider = NewSingleTenantResourceProvider(dbManager, messagingManager, cacheManager, nil)
 	}

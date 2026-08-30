@@ -143,7 +143,7 @@ func (s *databaseSlot) preInit(ctx context.Context) error {
 // *misconfigured* one fatal.
 func (s *databaseSlot) start(ctx context.Context) (advisory, fatal error) {
 	return s.app.preWarmKind(ctx, s.name(), "database connection",
-		s.app.dbManager != nil, s.app.preWarmDatabase), nil
+		s.app.dbManager != nil, s.app.multiTenant(), s.app.preWarmDatabase), nil
 }
 
 func (s *databaseSlot) stop(context.Context) {
@@ -191,7 +191,7 @@ func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
 	}
 
 	return s.app.preWarmKind(ctx, s.name(), componentMessaging,
-		s.app.messagingManager != nil, s.app.preWarmMessaging), nil
+		s.app.messagingManager != nil, s.app.perTenantMessaging(), s.app.preWarmMessaging), nil
 }
 
 func (s *messagingSlot) stop(context.Context) { s.app.shutdownConsumers() }
@@ -311,10 +311,13 @@ type preWarmSubject string
 // verdict, which only the slot can read. Multi-tenant deployments resolve per tenant, so
 // the fixed "" key is never warmed; a not-configured kind is a silent skip; anything else
 // is advisory, never fatal.
+// perTenant is the kind's own resolution mode, not the deployment's: a kind resolved
+// per tenant has no fixed key to warm, while one resolved on the control-plane key
+// does even when multitenant.enabled is true (messaging.tenancy: shared).
 func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubject, present bool,
-	warm func(context.Context) error,
+	perTenant bool, warm func(context.Context) error,
 ) error {
-	if a.multiTenant() {
+	if perTenant {
 		return nil
 	}
 	if !present {

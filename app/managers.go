@@ -21,6 +21,10 @@ type ManagerConfigBuilder struct {
 	// used only to emit a startup WARN when a resource pool's MaxSize is below the
 	// known tenant count, signaling per-request eviction thrash. Set by bootstrap.
 	staticTenantCount int
+	// tenantStamps mirrors messaging.ManagerOptions.TenantStamps: consumers read the
+	// tenant stamp only under multitenant.enabled + messaging.tenancy: shared. Set by
+	// bootstrap.
+	tenantStamps bool
 	// connectionTimeout is the per-publish AMQP broker confirmation timeout,
 	// sourced from messaging.reconnect.connectiontimeout and set by bootstrap.
 	connectionTimeout time.Duration
@@ -86,6 +90,7 @@ func (b *ManagerConfigBuilder) BuildMessagingOptions() messaging.ManagerOptions 
 		ReconnectMaxDelay:  b.reconnectMaxDelay,
 		ReinitDelay:        b.reInitDelay,
 		ResendDelay:        b.resendDelay,
+		TenantStamps:       b.tenantStamps,
 	}
 }
 
