@@ -1033,6 +1033,20 @@ func TestRelayKeyNamespacesDistinctScopes(t *testing.T) {
 	amqpStamped := relayKey(&Record{Exchange: "ex", RoutingKey: "created"}, stamped)
 	amqpPlain := relayKey(&Record{Exchange: "ex", RoutingKey: "created"}, nil)
 
+	// Two exchanges sharing a routing-key convention must not park each other.
+	assert.NotEqual(t,
+		relayKey(&Record{Exchange: "orders", RoutingKey: "created"}, nil),
+		relayKey(&Record{Exchange: "billing", RoutingKey: "created"}, nil),
+		"the destination includes the exchange, not the routing key alone")
+
+	// The lane prefix is load-bearing, not decoration: a stream literally named "amqp"
+	// whose partition key begins "tenant:" would otherwise produce the same key as a
+	// tenant-stamped AMQP row.
+	assert.NotEqual(t,
+		relayKey(&Record{Lane: LaneStream, Stream: LaneAMQP, PartitionKey: "tenant:acme"}, nil),
+		relayKey(&Record{Exchange: "ex", RoutingKey: "created"}, stamped),
+		"the lane prefix keeps a stream named like the other lane out of its key space")
+
 	assert.NotEqual(t, streamOrders, streamCustomers, "different streams are different scopes")
 	assert.NotEqual(t, streamOrders, amqpStamped, "a partition key and a tenant stamp are different scopes")
 	assert.NotEqual(t, amqpStamped, amqpPlain, "a stamped row orders by tenant, not by destination")
