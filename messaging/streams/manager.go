@@ -404,6 +404,7 @@ func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *con
 		offsets: m.newOffsetBook(),
 		log:     m.log,
 		baseCtx: ctx,
+		retry:   toDeliveryRetry(resolveRetry(decl)),
 	}
 }
 

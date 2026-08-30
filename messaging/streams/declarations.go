@@ -3,6 +3,8 @@ package streams
 import (
 	"errors"
 	"fmt"
+
+	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 )
 
 // streamDeclaration is one declared stream and its retention spec.
@@ -30,6 +32,8 @@ type consumerDeclaration struct {
 	SAC     bool
 	Handler Handler
 	Super   bool
+	Retry   *RetryOptions
+	Hold    bool
 }
 
 // consumerKey identifies a consumer for duplicate detection.
@@ -154,6 +158,8 @@ func (d *Declarations) DeclareConsumer(opts *ConsumerOptions) {
 		Start:   opts.Start,
 		SAC:     opts.SAC,
 		Handler: opts.Handler,
+		Retry:   copyRetry(opts.Retry),
+		Hold:    opts.Hold,
 	})
 }
 
@@ -174,6 +180,8 @@ func (d *Declarations) DeclareSuperStreamConsumer(opts *SuperStreamConsumerOptio
 		SAC:     true,
 		Handler: opts.Handler,
 		Super:   true,
+		Retry:   copyRetry(opts.Retry),
+		Hold:    opts.Hold,
 	})
 }
 
@@ -329,6 +337,46 @@ func (d *Declarations) consumerErrors() []error {
 		}
 		if err := d.consumerTargetError(c); err != nil {
 			errs = append(errs, err)
+		}
+		errs = append(errs, retryErrors(c)...)
+	}
+	return errs
+}
+
+// retryErrors reports every problem with one consumer's retry policy. A policy
+// the runner cannot honor is a startup error rather than a silent correction:
+// a bound of zero would mean "never handle", and an inverted pair hides which of
+// the two waits the caller meant.
+func retryErrors(c *consumerDeclaration) []error {
+	retry := resolveRetry(c)
+	if retry == nil {
+		return nil
+	}
+
+	var errs []error
+	if retry.MaxAttempts < 1 {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q declares MaxAttempts %d; at least 1 is required",
+			c.Name, c.Stream, retry.MaxAttempts))
+	}
+	if retry.MaxAttempts > MaxRetryAttempts {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q declares MaxAttempts %d; at most %d is allowed",
+			c.Name, c.Stream, retry.MaxAttempts, MaxRetryAttempts))
+	}
+	if retry.InitialBackoff < 0 {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q has a negative InitialBackoff", c.Name, c.Stream))
+	}
+	if retry.MaxBackoff < 0 {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q has a negative MaxBackoff", c.Name, c.Stream))
+	}
+	if retry.MaxBackoff > 0 && retry.InitialBackoff > retry.MaxBackoff {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q InitialBackoff exceeds MaxBackoff", c.Name, c.Stream))
+	}
+	// Only worth computing once the shape holds: a negative or inverted pair would
+	// report a total that says less than the rule it already broke.
+	if len(errs) == 0 {
+		if total, exceeded := delivery.BackoffBudget(toDeliveryRetry(retry), MaxRetryWait); exceeded {
+			errs = append(errs, fmt.Errorf("consumer %q on stream %q would wait at least %s in place across its attempts; at most %s is allowed",
+				c.Name, c.Stream, total, MaxRetryWait))
 		}
 	}
 	return errs
