@@ -18,6 +18,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.32.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	"github.com/gaborage/go-bricks/observability"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -269,8 +270,16 @@ func (p *Publisher) send(ctx context.Context, msg *PublishMessage) error {
 	if err := p.routingError(msg.RoutingKey); err != nil {
 		return err
 	}
+	// The stream lane has no per-tenant client to fall back on: it runs single-tenant
+	// or on the control-plane key, so the publishing context is the only source and
+	// the replay key is always empty. The conflict that key could raise belongs to
+	// the classic lane; what this call refuses here is a caller-supplied stamp.
+	stamp, stampErr := tenantstamp.ResolveForPublish(ctx, msg.Properties, "")
+	if stampErr != nil {
+		return stampErr
+	}
 
-	clientMsg := p.buildMessage(ctx, msg)
+	clientMsg := p.buildMessage(ctx, msg, stamp)
 	w, live := p.registerSend(clientMsg, msg.RoutingKey)
 
 	// The send runs on a goroutine this call is willing to abandon: the client's
@@ -336,7 +345,7 @@ func (p *Publisher) routingError(routingKey string) error {
 // goes through the framework's own trace package rather than the OTel propagator,
 // so both messaging lanes write the same header names and the consume side can
 // extract them symmetrically.
-func (p *Publisher) buildMessage(ctx context.Context, msg *PublishMessage) message.StreamMessage {
+func (p *Publisher) buildMessage(ctx context.Context, msg *PublishMessage, stamp string) message.StreamMessage {
 	clientMsg := amqp.NewMessage(msg.Data)
 
 	// Sized to the caller's properties only: the map grows itself for the two or
@@ -344,7 +353,9 @@ func (p *Publisher) buildMessage(ctx context.Context, msg *PublishMessage) messa
 	// micro-optimisation nobody can test.
 	properties := make(map[string]any, len(msg.Properties))
 	maps.Copy(properties, msg.Properties)
-	gobrickstrace.InjectIntoHeaders(ctx, propertyAccessor(properties))
+	accessor := propertyAccessor(properties)
+	gobrickstrace.InjectIntoHeaders(ctx, accessor)
+	tenantstamp.Write(stamp, accessor.Set)
 	clientMsg.ApplicationProperties = properties
 
 	return clientMsg

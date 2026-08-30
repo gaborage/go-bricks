@@ -17,6 +17,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
+	"github.com/gaborage/go-bricks/multitenant"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -186,6 +188,70 @@ func TestPublisherPublishResolvesOnConfirmation(t *testing.T) {
 
 	require.NoError(t, <-done)
 	assert.Zero(t, pendingCount(p), "a confirmed send leaves no entry behind")
+}
+
+// TestPublisherPublishStampsTheContextTenant pins the streams lane's write side.
+// The stamp is the same one the classic lane writes and the same one the shared
+// delivery pipeline reads back, so an ordered-lane message carries the tenant the
+// consumer will run under.
+func TestPublisherPublishStampsTheContextTenant(t *testing.T) {
+	const acme = "acme"
+
+	t.Run("stamps_from_the_context", func(t *testing.T) {
+		handle := openProducer()
+		p := boundPublisher(handle)
+		ctx := multitenant.SetTenant(context.Background(), acme)
+
+		done := publishAsync(ctx, p, &PublishMessage{Data: []byte(testBody)})
+		sent := waitForSend(t, handle)
+		p.resolveConfirmation(sent, true, nil)
+		require.NoError(t, <-done)
+
+		assert.Equal(t, acme, sent.GetApplicationProperties()[tenantstamp.Header])
+	})
+
+	t.Run("no_tenant_carries_no_stamp", func(t *testing.T) {
+		handle := openProducer()
+		p := boundPublisher(handle)
+
+		done := publishAsync(context.Background(), p, &PublishMessage{Data: []byte(testBody)})
+		sent := waitForSend(t, handle)
+		p.resolveConfirmation(sent, true, nil)
+		require.NoError(t, <-done)
+
+		assert.NotContains(t, sent.GetApplicationProperties(), tenantstamp.Header)
+	})
+
+	t.Run("the_callers_property_map_is_never_written_to", func(t *testing.T) {
+		handle := openProducer()
+		p := boundPublisher(handle)
+		callerProps := map[string]any{"keep": "me"}
+		ctx := multitenant.SetTenant(context.Background(), acme)
+
+		done := publishAsync(ctx, p, &PublishMessage{Data: []byte(testBody), Properties: callerProps})
+		sent := waitForSend(t, handle)
+		p.resolveConfirmation(sent, true, nil)
+		require.NoError(t, <-done)
+
+		assert.Equal(t, map[string]any{"keep": "me"}, callerProps)
+		assert.Equal(t, acme, sent.GetApplicationProperties()[tenantstamp.Header])
+	})
+}
+
+// TestPublisherPublishRefusesACallerSuppliedStamp: the framework is the stamp's
+// only writer on this lane too, and the sentinel is the same value the classic
+// lane exports, so errors.Is holds across both.
+func TestPublisherPublishRefusesACallerSuppliedStamp(t *testing.T) {
+	handle := openProducer()
+	p := boundPublisher(handle)
+
+	err := p.Publish(multitenant.SetTenant(context.Background(), "acme"), &PublishMessage{
+		Data:       []byte(testBody),
+		Properties: map[string]any{tenantstamp.Header: "acme"},
+	})
+
+	require.ErrorIs(t, err, ErrTenantStampConflict)
+	assert.Zero(t, handle.sentCount(), "a refused publish never reaches the producer")
 }
 
 func TestPublisherPublishFailsOnARejectedConfirmation(t *testing.T) {

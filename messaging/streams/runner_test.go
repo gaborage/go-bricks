@@ -13,6 +13,8 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
+	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 var errHandlerFailed = errors.New("handler failed")
@@ -431,6 +433,55 @@ func TestRunnerDeliverPassesMessageToHandler(t *testing.T) {
 	assert.Equal(t, testStream, got.Stream)
 	assert.Equal(t, map[string]any{"kind": "test"}, got.Properties)
 	assert.Equal(t, []int64{55}, storer.offsets())
+}
+
+// TestRunnerDeliverForwardsTheTenancySettings pins the ONE fact that is this
+// lane's: that deliver hands the shared pipeline its two tenancy settings. The
+// stamp rules themselves — precedence, the error text, fail-closed, the
+// TenantOptional carve-out — belong to messaging/internal/delivery and are tabled
+// there, and "a HandlerError leaves the offset uncommitted" is already pinned by
+// TestRunnerDeliverHandlerErrorSkipsOffsetCommit below, whatever produced the
+// error. Re-proving either here would test the pipeline through a longer path.
+func TestRunnerDeliverForwardsTheTenancySettings(t *testing.T) {
+	const acme = "acme"
+
+	stamped := func(body, tenant string) *amqp.Message {
+		msg := amqpMessage(body)
+		msg.ApplicationProperties[tenantstamp.Header] = tenant
+		return msg
+	}
+
+	// tenantStamps forwarded: the pipeline reads the stamp, so the handler sees it.
+	t.Run("tenant_stamps_reaches_the_pipeline", func(t *testing.T) {
+		clock := newFakeClock()
+		var seen string
+		runner := newTestRunner(t, func(ctx context.Context, _ *Message) error {
+			seen, _ = multitenant.GetTenant(ctx)
+			return nil
+		}, newOffsetTracker(1, time.Hour, clock.Now))
+		runner.tenantStamps = true
+
+		runner.deliver(testStream, 55, stamped("payload", acme), &fakeStorer{})
+
+		assert.Equal(t, acme, seen, "the runner did not forward tenantStamps")
+	})
+
+	// tenantOptional forwarded: without it the pipeline refuses an unstamped
+	// delivery, so the handler running at all is the proof it arrived.
+	t.Run("tenant_optional_reaches_the_pipeline", func(t *testing.T) {
+		clock := newFakeClock()
+		calls := 0
+		runner := newTestRunner(t, func(context.Context, *Message) error {
+			calls++
+			return nil
+		}, newOffsetTracker(1, time.Hour, clock.Now))
+		runner.tenantStamps = true
+		runner.tenantOptional = true
+
+		runner.deliver(testStream, 62, amqpMessage("payload"), &fakeStorer{})
+
+		assert.Equal(t, 1, calls, "the runner did not forward tenantOptional")
+	})
 }
 
 func TestRunnerDeliverHandlerErrorSkipsOffsetCommit(t *testing.T) {

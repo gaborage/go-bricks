@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	testmocks "github.com/gaborage/go-bricks/testing/mocks"
 )
 
@@ -139,6 +140,18 @@ func TestPrepareRuntimeConsumersSkipsEnsureInMultiTenantMode(t *testing.T) {
 
 // TestPrepareRuntimeConsumersSucceedsSingleTenant proves the fail-fast return
 // is scoped to real failures: a reachable broker still boots green.
+// TestTheTwoLanesShareOneStampSentinel is asserted from app because it is the only
+// package that imports both: messaging/streams must not import messaging (import
+// cycle), so neither lane's own tests can prove the two exported sentinels are one
+// value. A consumer writing errors.Is(err, messaging.ErrTenantStampConflict) must
+// match a refusal raised by either lane.
+func TestTheTwoLanesShareOneStampSentinel(t *testing.T) {
+	require.ErrorIs(t, streams.ErrTenantStampConflict, messaging.ErrTenantStampConflict)
+	require.ErrorIs(t, messaging.ErrTenantStampConflict, streams.ErrTenantStampConflict)
+	assert.Equal(t, messaging.TenantStampHeader, streams.TenantStampProperty,
+		"both lanes must name the same carrier entry, or a stamp written by one is invisible to the other")
+}
+
 // TestPrepareRuntimeConsumersUnderSharedTenancy pins the control-plane branch:
 // under messaging.tenancy: shared a multi-tenant deployment replays its declared
 // consumers ONCE on the control-plane key at boot, exactly as single-tenant does,

@@ -93,6 +93,14 @@ type runningConsumer struct {
 type Manager struct {
 	opts ManagerOptions
 	log  logger.Logger
+	// tenantStamps makes every delivery's tenant stamp seed the handler context:
+	// true only under multitenant.enabled together with messaging.tenancy: shared.
+	// Written once by SetTenantStamps before any consumer starts and never again.
+	//
+	// It is not a ManagerOptions field because that struct is already at gocritic's
+	// hugeParam limit, and widening NewManager's parameter to a pointer would be an
+	// incompatible change to a shipped exported function.
+	tenantStamps bool
 
 	// flushBudget is shutdownFlushBudget, held as a field so tests can shrink it.
 	// Deliberately not a ManagerOptions field: an operator has no way to know
@@ -118,6 +126,18 @@ type Manager struct {
 // NewManager creates a Manager. It performs no I/O: the environment is dialed by
 // Start, so a service that declares no streams never opens a connection.
 //
+// SetTenantStamps tells this manager's consumers to read the tenant stamp off each
+// delivery and seed the handler context with it — true only under
+// multitenant.enabled together with messaging.tenancy: shared.
+//
+// It is a setter rather than a ManagerOptions field because that struct already
+// sits at gocritic's hugeParam limit; one more field would force NewManager to take
+// a pointer, which is an incompatible change to a shipped exported function. Call
+// it before StartConsumers: a runner reads the flag when it is built.
+func (m *Manager) SetTenantStamps(enabled bool) {
+	m.tenantStamps = enabled
+}
+
 // Panics on a nil Logger. Every consumer lifecycle, handler-failure and shutdown
 // path dereferences it unguarded, so a wiring error would otherwise surface as a
 // nil dereference on the first log line — mid-consumption, in production, from a
@@ -399,12 +419,14 @@ func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment,
 // newRunner builds the delivery callback state of one declared consumer.
 func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *consumerRunner {
 	return &consumerRunner{
-		name:    decl.Name,
-		handler: decl.Handler,
-		offsets: m.newOffsetBook(),
-		log:     m.log,
-		baseCtx: ctx,
-		retry:   toDeliveryRetry(resolveRetry(decl)),
+		name:           decl.Name,
+		handler:        decl.Handler,
+		offsets:        m.newOffsetBook(),
+		log:            m.log,
+		tenantStamps:   m.tenantStamps,
+		tenantOptional: decl.TenantOptional,
+		baseCtx:        ctx,
+		retry:          toDeliveryRetry(resolveRetry(decl)),
 	}
 }
 

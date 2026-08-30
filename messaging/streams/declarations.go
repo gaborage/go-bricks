@@ -26,14 +26,15 @@ type superStreamDeclaration struct {
 // options at registration time. Super marks which of the two declare methods
 // produced it, because the two consume through different client APIs.
 type consumerDeclaration struct {
-	Stream  string
-	Name    string
-	Start   OffsetStart
-	SAC     bool
-	Handler Handler
-	Super   bool
-	Retry   *RetryOptions
-	Hold    bool
+	Stream         string
+	Name           string
+	Start          OffsetStart
+	SAC            bool
+	Handler        Handler
+	Super          bool
+	Retry          *RetryOptions
+	Hold           bool
+	TenantOptional bool
 }
 
 // consumerKey identifies a consumer for duplicate detection.
@@ -153,13 +154,14 @@ func (d *Declarations) DeclareConsumer(opts *ConsumerOptions) {
 	}
 
 	d.registerConsumer(&consumerDeclaration{
-		Stream:  opts.Stream,
-		Name:    opts.Name,
-		Start:   opts.Start,
-		SAC:     opts.SAC,
-		Handler: opts.Handler,
-		Retry:   copyRetry(opts.Retry),
-		Hold:    opts.Hold,
+		Stream:         opts.Stream,
+		Name:           opts.Name,
+		Start:          opts.Start,
+		SAC:            opts.SAC,
+		Handler:        opts.Handler,
+		Retry:          copyRetry(opts.Retry),
+		Hold:           opts.Hold,
+		TenantOptional: opts.TenantOptional,
 	})
 }
 
@@ -174,14 +176,15 @@ func (d *Declarations) DeclareSuperStreamConsumer(opts *SuperStreamConsumerOptio
 	}
 
 	d.registerConsumer(&consumerDeclaration{
-		Stream:  opts.SuperStream,
-		Name:    opts.Name,
-		Start:   opts.Start,
-		SAC:     true,
-		Handler: opts.Handler,
-		Super:   true,
-		Retry:   copyRetry(opts.Retry),
-		Hold:    opts.Hold,
+		Stream:         opts.SuperStream,
+		Name:           opts.Name,
+		Start:          opts.Start,
+		SAC:            true,
+		Handler:        opts.Handler,
+		Super:          true,
+		Retry:          copyRetry(opts.Retry),
+		Hold:           opts.Hold,
+		TenantOptional: opts.TenantOptional,
 	})
 }
 
