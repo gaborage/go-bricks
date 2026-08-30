@@ -456,7 +456,9 @@ trust store and forces `verify-full` regardless of the configured mode. `require
 **These rules reach dynamic configs too.** `ApplyDatabasePoolDefaults` runs the same
 vendor-specific validation as `Validate`, so a config a `DBConfigProvider` returns —
 inferred or explicitly typed — fails at connection acquisition where it previously
-connected with the TLS material silently dropped.
+connected with the TLS material silently dropped. A provider that returns a nil config with a nil
+error violates the interface contract: `DbManager.Get` rejects it with an error wrapping
+`database.ErrNoDatabaseConfig` naming the key, rather than dereferencing it.
 
 ## Connection Pool Defaults
 

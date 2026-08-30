@@ -41,6 +41,12 @@ func (f *failingResourceSource) DBConfig(context.Context, string) (*config.Datab
 	return nil, f.err
 }
 
+type nilConfigSource struct{}
+
+func (n *nilConfigSource) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
+	return nil, nil
+}
+
 type stubStatement struct{}
 
 func (s *stubStatement) Query(_ context.Context, _ ...any) (*sql.Rows, error) { return nil, nil }
@@ -680,4 +686,79 @@ func TestDbManagerDynamicConfigConcurrentCreateSharedConfig(t *testing.T) {
 	for err := range errs {
 		require.NoError(t, err)
 	}
+}
+
+// TestDbManagerGetRejectsNilConfigFromProvider proves a provider returning (nil, nil)
+// surfaces as ErrNoDatabaseConfig at Get instead of dereferencing the nil config.
+func TestDbManagerGetRejectsNilConfigFromProvider(t *testing.T) {
+	ctx := context.Background()
+	manager := NewDbManager(&nilConfigSource{}, newErrorTestLogger(), DbManagerOptions{}, nil)
+	defer func() { _ = manager.Close() }()
+
+	var conn Interface
+	var release ReleaseFunc
+	var err error
+	require.NotPanics(t, func() {
+		conn, release, err = manager.Get(ctx, tenantA)
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoDatabaseConfig)
+	assert.ErrorContains(t, err, tenantA)
+	assert.Nil(t, conn)
+	assert.Nil(t, release)
+	assert.Equal(t, 0, manager.Size())
+}
+
+// togglingConfigSource returns (nil, nil) until ready flips, then a usable config.
+type togglingConfigSource struct {
+	ready atomic.Bool
+}
+
+func (t *togglingConfigSource) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
+	if !t.ready.Load() {
+		return nil, nil
+	}
+	return &config.DatabaseConfig{Type: "postgresql", Host: "localhost"}, nil
+}
+
+// TestDbManagerGetNilConfigCollapsesAndRecovers proves concurrent Gets collapsed by
+// singleflight all receive ErrNoDatabaseConfig without a goroutine dying, and that the
+// key stays creatable once the provider starts returning a config.
+func TestDbManagerGetNilConfigCollapsesAndRecovers(t *testing.T) {
+	ctx := context.Background()
+	source := &togglingConfigSource{}
+	connector := func(*config.DatabaseConfig, logger.Logger) (Interface, error) {
+		return &stubDB{}, nil
+	}
+	manager := NewDbManager(source, newErrorTestLogger(), DbManagerOptions{}, connector)
+	defer func() { _ = manager.Close() }()
+
+	const goroutines = 2
+	errs := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, release, err := manager.Get(ctx, tenantA)
+			if release != nil {
+				release()
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrNoDatabaseConfig)
+	}
+	assert.Equal(t, 0, manager.Size())
+
+	source.ready.Store(true)
+	conn, release, err := manager.Get(ctx, tenantA)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	assert.NotNil(t, conn)
+	release()
 }

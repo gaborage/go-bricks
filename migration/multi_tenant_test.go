@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/logger"
 )
 
@@ -33,6 +34,13 @@ type fakeConfigProvider struct {
 	errs map[string]error
 	mu   sync.Mutex
 	hits map[string]int
+}
+
+// nilConfigProvider violates the DBConfigProvider contract by returning (nil, nil).
+type nilConfigProvider struct{}
+
+func (nilConfigProvider) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
+	return nil, nil
 }
 
 func newFakeConfigProvider(cfgs map[string]*config.DatabaseConfig) *fakeConfigProvider {
@@ -497,4 +505,31 @@ func TestMigrateAllParallelStopsDispatchWhenQuiesceFlipsMidRun(t *testing.T) {
 	require.Len(t, res.Results, 1, "dispatch must stop after the flag flips; in-flight tenant is in the partial result")
 	assert.Equal(t, "t1", res.Results[0].TenantID)
 	assert.NoError(t, res.Results[0].Err, "the already-dispatched tenant completes normally")
+}
+
+// TestMigrateAllRejectsNilTenantConfig proves a provider returning (nil, nil) yields a
+// TenantResult error wrapping database.ErrNoDatabaseConfig instead of dereferencing it.
+func TestMigrateAllRejectsNilTenantConfig(t *testing.T) {
+	fm := newFlywayMigratorForTest(t)
+
+	var res *MigrateAllResult
+	var err error
+	require.NotPanics(t, func() {
+		res, err = MigrateAll(
+			context.Background(),
+			fm,
+			&fakeLister{ids: []string{"pg"}},
+			nilConfigProvider{},
+			ActionMigrate,
+			MigrateAllOptions{},
+		)
+	})
+
+	require.Error(t, err)
+	require.NotNil(t, res)
+	require.Len(t, res.Results, 1)
+	one := res.Results[0]
+	assert.ErrorIs(t, one.Err, database.ErrNoDatabaseConfig)
+	assert.Empty(t, one.Vendor)
+	assert.Positive(t, one.Duration)
 }

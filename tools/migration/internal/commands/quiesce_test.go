@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -305,4 +306,69 @@ func TestRunQuiesceClearNoOpEmitsJSON(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, runQuiesceClear(context.Background(), &out, ctrl, "ops", true))
 	assert.Contains(t, out.String(), `"active": false`, "clear --json must emit machine-readable output on the no-op path")
+}
+
+type stubDBConfigProvider struct {
+	cfg *config.DatabaseConfig
+	err error
+}
+
+func (s stubDBConfigProvider) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
+	return s.cfg, s.err
+}
+
+func TestResolveControlPlaneConfigRejectsNilConfig(t *testing.T) {
+	boom := errors.New("vault down")
+	tests := []struct {
+		name     string
+		provider stubDBConfigProvider
+		wantErr  bool
+		errFrags []string
+	}{
+		{
+			name:     "nil_config_and_nil_error",
+			provider: stubDBConfigProvider{},
+			wantErr:  true,
+			errFrags: []string{"no configuration", "tenant-a"},
+		},
+		{
+			name:     "provider_error",
+			provider: stubDBConfigProvider{err: boom},
+			wantErr:  true,
+			errFrags: []string{"resolve control-plane db config for", "vault down"},
+		},
+		{
+			name:     "non_postgresql_vendor",
+			provider: stubDBConfigProvider{cfg: &config.DatabaseConfig{Type: "oracle"}},
+			wantErr:  true,
+			errFrags: []string{"PostgreSQL-only in v1"},
+		},
+		{
+			name:     "postgresql_vendor",
+			provider: stubDBConfigProvider{cfg: &config.DatabaseConfig{Type: config.PostgreSQL}},
+		},
+		{
+			name:     "empty_vendor",
+			provider: stubDBConfigProvider{cfg: &config.DatabaseConfig{}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg *config.DatabaseConfig
+			var err error
+			require.NotPanics(t, func() {
+				cfg, err = resolveControlPlaneConfig(context.Background(), tt.provider, "tenant-a")
+			})
+			if !tt.wantErr {
+				require.NoError(t, err)
+				assert.NotNil(t, cfg)
+				return
+			}
+			require.Error(t, err)
+			for _, frag := range tt.errFrags {
+				assert.ErrorContains(t, err, frag)
+			}
+		})
+	}
 }
