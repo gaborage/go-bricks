@@ -4,6 +4,26 @@
 - **Date**: 2026-08-20
 - **Related**: [ADR-047](adr_047_database_absence_vs_misconfiguration.md) (absence vs misconfiguration, which is what the root section's placement rule encodes) · [ADR-051](adr_051_delivered_empty_database_identity.md) (the delivered-empty check, whose key spelling this now matches)
 
+> **Amended (2026-08-30, the runtime CACHE door):** this ADR moved the SECTION path into
+> `Field` for database sections, and `[C60.19]` extended it to the database RUNTIME door, which
+> resolves a dynamic tenant by resource key. The cache factory beside it was left out and kept
+> reporting `cache.redis.host` with a root `CACHE_REDIS_HOST` hint for a tenant it had resolved
+> by key — so for one tenant the startup door said `multitenant.tenants.acme.cache.redis.host`
+> and the runtime door said `cache.redis.host`, and the hint named a variable that configures
+> the ROOT cache and leaves that tenant unfixed. The rule now binds both cache doors through one
+> exported `config.QualifyCacheConfigErrorForKey`, which the startup door also calls, so the two
+> cannot drift; the empty key is the root and returns the error untouched. Caches have no named
+> siblings, so a non-empty key is always a tenant — there is no `databases.<name>` analogue here.
+>
+> One mechanism widened with it. `requalifyAction` rebuilt the hint from `Field` to decide
+> whether it had generated it, which cannot recognise the not-configured hint:
+> `NewNotConfiguredError` puts the FEATURE in `Field` (`cache`) and the YAML key in the hint
+> (`cache.enabled`). It now reads the key out of the hint, rebuilds from THAT key to prove the
+> text is generated, and re-points it only when the key sits under the field being qualified.
+> A hand-written action, and a hint naming a key outside that field, are still left untouched —
+> that guard is the point of the function, and widening it into "rewrite anything hint-shaped"
+> would be the bug.
+
 ## Context
 
 A deployment can carry several database sections: the root `database`, any number
@@ -144,14 +164,15 @@ three now spell `multitenant.tenants.<id>.<key>`.
 
 Root-section errors remain byte-identical, in `Field`, `Action` and rendered text.
 
-Deliberately not covered, and worth naming so this is not read as a finished sweep: the
-per-key CACHE factory (`app/factory_resolver.go`) is a runtime door too, and it still emits
-`cache.redis.host` with a `set CACHE_REDIS_HOST env var` hint even though it holds the
-tenant key. A tenant whose cache is misconfigured is therefore addressed one way when
-declared statically and another when resolved dynamically — the same asymmetry this
+Deliberately not covered by THIS addendum, and worth naming so it was not read as a finished
+sweep: the per-key CACHE factory (`app/factory_resolver.go`) is a runtime door too, and it
+still emitted `cache.redis.host` with a `set CACHE_REDIS_HOST env var` hint even though it
+held the tenant key. A tenant whose cache was misconfigured was therefore addressed one way
+when declared statically and another when resolved dynamically — the same asymmetry this
 addendum closes for databases, one package over, and the same hint trap, since configuring
-the ROOT cache does not give that tenant one. Tracked as #1125; the database seam's shape
-(`qualifyConfigError` plus a key-to-section mapping) is what it should adopt.
+the ROOT cache does not give that tenant one. CLOSED by the 2026-08-30 amendment at the top
+of this ADR, which adopts exactly the shape named here (`qualifyConfigError` plus a
+key-to-section mapping, behind an exported per-key door).
 
 Migration: [C60.19](migrations.md).
 

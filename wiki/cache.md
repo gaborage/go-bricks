@@ -425,6 +425,8 @@ Size the pool to hold every concurrently-active tenant: set `cache.manager.maxsi
 > Eviction closes the evicted instance **outside** the manager lock, so a slow `Close()` on an evicted tenant never blocks concurrent `Get()` calls for other tenants. It does, however, still incur a recreate on the next request for the evicted tenant.
 >
 > An instance that is **still in use** when evicted (held by an in-flight request, message, or job) is detached immediately but its `Close()` is **deferred until the last borrower releases its lease** — so an in-use cache is never closed under an active caller ([ADR-032](adr_032_lease_refcount_tenant_handles.md), the M3 fix). The lease is reference-counted by `CacheManager` and released by the framework at each request/message/job boundary; **application code is unchanged** (`deps.Cache(ctx)` keeps its `(Cache, error)` signature). Direct callers of `CacheManager.Get` see a new `ReleaseFunc` third return — see [migrations.md](migrations.md).
+>
+> A per-tenant cache that fails to resolve reports which tenant failed: `ConfigError.Field` reads `multitenant.tenants.<id>.cache.<leaf>` at the runtime door as it already did at startup, and the remediation hint names that tenant's own key rather than the root `CACHE_*` variable ([C61.24](migrations.md), ADR-076). Match the family, not `cache.redis.host` by equality.
 
 ---
 

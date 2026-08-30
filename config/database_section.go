@@ -218,14 +218,62 @@ func qualifyConfigError(err error, path string, addressField func(string) string
 }
 
 // requalifyAction re-points a generated "set X env var or add Y to config.yaml" hint at the
-// qualified key. It rewrites only a hint this package generated FOR THE ORIGINAL FIELD,
-// recognized by rebuilding that hint and comparing — so a hand-written Action, and one
-// naming some other key, are both left exactly as they are.
+// qualified key. It rewrites only a hint this package generated, recognized by rebuilding that
+// hint for the key the hint itself names and comparing — so a hand-written Action, and one
+// naming a key outside the field being qualified, are both left exactly as they are.
+//
+// The key in the hint is not always the Field: NewNotConfiguredError puts the FEATURE in Field
+// ("cache") and the YAML path in the hint ("cache.enabled"), behind a "to enable: " lead-in. So
+// the key is read out of the hint and re-pointed by the same field-to-field move, which is what
+// keeps that hint from surviving qualification and sending an operator at the root key.
 func requalifyAction(action, origField, qualifiedField string) string {
-	if action == "" || action != missingFieldAction(origField) {
+	if action == "" || origField == "" {
 		return action
 	}
-	return missingFieldAction(qualifiedField)
+	lead, body := "", action
+	if rest, found := strings.CutPrefix(action, actionEnableLeadIn); found {
+		lead, body = actionEnableLeadIn, rest
+	}
+	key, ok := yamlKeyFromAction(body)
+	if !ok || body != missingFieldAction(key) {
+		return action
+	}
+	qualifiedKey, ok := requalifyKey(key, origField, qualifiedField)
+	if !ok {
+		return action
+	}
+	return lead + missingFieldAction(qualifiedKey)
+}
+
+// yamlKeyFromAction reads back the YAML key a generated hint names. Both templates end in
+// "add <key> to config.yaml", so the key is what sits between them. The caller still rebuilds
+// the hint from the key and compares, which is what proves the text was generated rather than
+// merely shaped like it — including that its env half is the one envVarForKey derives.
+func yamlKeyFromAction(action string) (string, bool) {
+	const addPrefix, yamlSuffix = "add ", " to config.yaml"
+	rest, ok := strings.CutSuffix(action, yamlSuffix)
+	if !ok {
+		return "", false
+	}
+	i := strings.LastIndex(rest, addPrefix)
+	if i < 0 {
+		return "", false
+	}
+	return rest[i+len(addPrefix):], true
+}
+
+// requalifyKey moves one key by the same step that took origField to qualifiedField. A key
+// under the original field travels with it; anything else is not this section's to re-address
+// and reports false, which leaves the whole hint untouched.
+func requalifyKey(key, origField, qualifiedField string) (string, bool) {
+	switch {
+	case key == origField:
+		return qualifiedField, true
+	case strings.HasPrefix(key, origField+"."):
+		return qualifiedField + strings.TrimPrefix(key, origField), true
+	default:
+		return "", false
+	}
 }
 
 // missingFieldAction is the hint NewMissingFieldError builds for key. The env half is

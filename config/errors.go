@@ -71,7 +71,10 @@ func (e *ConfigError) Unwrap() error {
 // spelling of that sentence.
 const (
 	actionSetEnvOrYAMLPath = "set %s env var or add %s to config.yaml"
-	actionAddYAMLPath      = "add %s to config.yaml"
+	// actionEnableLeadIn fronts the not-configured hint, whose body is one of the two
+	// templates above; requalifyAction strips it before reading the key back.
+	actionEnableLeadIn = "to enable: "
+	actionAddYAMLPath  = "add %s to config.yaml"
 )
 
 // NewMissingFieldError creates an error for a required missing configuration field.
@@ -103,7 +106,7 @@ func NewInvalidFieldError(field, message string, validOptions []string) *ConfigE
 // NewNotConfiguredError creates an informational error for optional features.
 // This indicates the feature is intentionally not configured, not an error state.
 func NewNotConfiguredError(feature, envVar, yamlPath string) *ConfigError {
-	action := fmt.Sprintf("to enable: set %s env var or add %s to config.yaml", envVar, yamlPath)
+	action := actionEnableLeadIn + fmt.Sprintf(actionSetEnvOrYAMLPath, envVar, yamlPath)
 	return &ConfigError{
 		Category: errCategoryNotConfigured,
 		Field:    feature,

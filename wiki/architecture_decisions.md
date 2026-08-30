@@ -1740,6 +1740,15 @@ round-trips to the same key: the old root-spelled hint sent operators to write a
 block that ADR-047 then rejected. Three sibling tenant-tree spellings join the rule.
 Closes #1113 and #1114; unreachable underscore names are #1124.
 
+**Addendum (2026-08-30, `[C61.24]`):** the runtime CACHE door joins the rule. It held the key and
+still reported `cache.redis.host` with a root `CACHE_REDIS_HOST` hint for a resolved tenant, so the
+two cache doors disagreed for the same tenant. Both now route through the exported
+`config.QualifyCacheConfigErrorForKey` (`""` is the root and returns the error untouched; any other
+key is a tenant — caches have no named siblings). `requalifyAction` reads the YAML key out of the
+hint rather than rebuilding it from `Field`, which is what lets the not-configured hint
+(`cache.enabled` under `Field` `cache`) travel; hints naming a key outside the field, and
+hand-written actions, are still untouched. Closes #1125.
+
 ### [ADR-075: One Normalized Default per Scheduler Timeout Key](adr_075_scheduler_timeout_single_default.md)
 
 **Date:** 2026-08-20 | **Status:** Accepted
