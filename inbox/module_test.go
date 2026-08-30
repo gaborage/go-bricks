@@ -392,9 +392,12 @@ func TestModuleInitRefusesAHoldOnPerTenantLedgers(t *testing.T) {
 func TestModuleInitAcceptsAHoldOnTheSharedLedger(t *testing.T) {
 	m := NewModule()
 	// The shared resolver must be probe-ready: this Init reaches the startup
-	// database check, which stubSharedDB's bare TestDB has no expectation for.
+	// database check, which stubSharedDB's bare TestDB has no expectation for —
+	// and with the hold on, that check probes the hold's tables as well.
 	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) {
-		return probeReadyDB(), nil
+		db := probeReadyDB()
+		db.ExpectQuery(`SELECT tenant_id`).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
+		return db, nil
 	}, nil)
 	deps := testDeps()
 	deps.Config = &config.Config{

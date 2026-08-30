@@ -12,6 +12,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // Module implements the GoBricks Module interface for the consumer-side inbox.
@@ -43,6 +44,10 @@ type Module struct {
 	cfg       config.InboxConfig
 
 	stores tenantstore.Cache[Store] // one store per tenant ("" = single-tenant)
+	// holdStores holds the hold ledger's store. Always the control-plane key: a
+	// hold lives on that database and nowhere else.
+	holdStores   tenantstore.Cache[HoldStore]
+	holdReplayer func() streams.HoldReplayer
 }
 
 // NewModule creates a new inbox Module instance.
@@ -165,6 +170,10 @@ func (m *Module) verifyStartupDatabase() error {
 	}
 	if _, err := store.DeleteProcessed(ctx, db, time.Unix(0, 0).UTC()); err != nil {
 		return tenantstore.TableUnusableError("inbox", m.cfg.TableName, "inbox.autocreatetable", err)
+	}
+
+	if m.holdEnabled() {
+		return m.verifyHoldDatabase(ctx, db)
 	}
 	return nil
 }

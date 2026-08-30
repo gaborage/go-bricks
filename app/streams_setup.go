@@ -41,6 +41,11 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 		return err
 	}
 
+	hold, err := a.holdLedger()
+	if err != nil {
+		return err
+	}
+
 	cfg := a.cfg.Messaging.Streams
 	a.warnIfPlaintextStreamURI(cfg.URI)
 	mgr := streams.NewManager(streams.ManagerOptions{
@@ -50,6 +55,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 		OffsetStoreCount:    cfg.OffsetStore.CountBeforeStorage,
 		OffsetStoreInterval: cfg.OffsetStore.FlushInterval,
 		Logger:              a.logger,
+		Hold:                hold,
 	})
 	mgr.SetTenantStamps(a.multiTenant() && a.sharedMessaging())
 
@@ -138,4 +144,23 @@ func (a *App) shutdownStreamConsumers() {
 	}
 	a.logger.Info().Msg("Stopping stream consumers")
 	a.streamsManager.StopConsumers()
+}
+
+// holdLedger is the one ledger stream consumers park into, or nil when no module
+// offers one. Two providers is a configuration error rather than a choice: the
+// hold's order guarantee is per tenant per consumer, and two ledgers would split
+// one consumer's held set between them.
+func (a *App) holdLedger() (streams.HoldLedger, error) {
+	var found streams.HoldLedger
+	for _, provider := range a.holdLedgers {
+		ledger := provider.HoldLedger()
+		if ledger == nil {
+			continue
+		}
+		if found != nil {
+			return nil, errors.New("two modules provide a hold ledger; stream consumers can park into only one")
+		}
+		found = ledger
+	}
+	return found, nil
 }
