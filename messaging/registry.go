@@ -14,6 +14,8 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	pipeline "github.com/gaborage/go-bricks/messaging/internal/delivery"
+	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 // defaultConsumerResubscribeDelay is the wait between consumer re-subscribe
@@ -70,6 +72,10 @@ type Registry struct {
 	declared        bool
 	consumersActive bool
 	cancelConsumers context.CancelFunc
+	// tenantStamps makes every delivery's tenant stamp seed the handler context.
+	// Set from ManagerOptions.TenantStamps when the manager builds this registry:
+	// true only under multitenant.enabled together with messaging.tenancy: shared.
+	tenantStamps bool
 	// resubscribeDelay is the backoff between consumer re-subscribe attempts
 	// after a delivery-channel close. Defaults to defaultConsumerResubscribeDelay;
 	// tests lower it for fast iteration.
@@ -131,6 +137,10 @@ type ConsumerDeclaration struct {
 	Workers       int            // Number of concurrent workers (0 = auto-scale to NumCPU*4, >0 = explicit)
 	PrefetchCount int            // RabbitMQ prefetch count (0 = auto-scale to Workers*10, capped at 500)
 	Args          map[string]any // Per-consumer arguments forwarded to basic.consume (x-stream-offset, x-priority, ...)
+	// TenantOptional lets this consumer run a delivery that carries no tenant stamp,
+	// for a control-plane consumer whose events belong to no tenant. The default is
+	// false — fail closed — and it never admits a stamp that is present but unusable.
+	TenantOptional bool
 }
 
 // NewRegistry creates a new messaging registry
@@ -767,6 +777,10 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 		Metrics:     consumeMetrics(consumer.Queue, id),
 		Log:         log,
 		Handle: func(msgCtx context.Context, msgLog logger.Logger, traceID string) error {
+			msgCtx, err := r.seedTenant(msgCtx, consumer, delivery)
+			if err != nil {
+				return err
+			}
 			logProcessing(msgLog, traceID, delivery, id)
 			return consumer.Handler.Handle(msgCtx, delivery)
 		},
@@ -777,6 +791,32 @@ func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclara
 			settleDelivery(res, consumer, delivery)
 		},
 	})
+}
+
+// seedTenant reads the delivery's tenant stamp into the handler context. It runs
+// only where a stamp is the authority: under per-tenant tenancy the replay key
+// already seeded the context, and single-tenant deployments have no stamp to read.
+//
+// An unusable stamp is a delivery failure, not a warning — the error rides the
+// pipeline's existing failure path, so the lane nacks without requeue and logs one
+// line naming the reason and the byte length, never the value.
+func (r *Registry) seedTenant(ctx context.Context, consumer *ConsumerDeclaration,
+	delivery *amqp.Delivery,
+) (context.Context, error) {
+	if !r.tenantStamps {
+		return ctx, nil
+	}
+
+	id, err := tenantstamp.Read(func(key string) any { return delivery.Headers[key] })
+	if err != nil {
+		var readErr *tenantstamp.ReadError
+		if consumer.TenantOptional && errors.As(err, &readErr) && readErr.Reason == tenantstamp.ReasonMissing {
+			return ctx, nil
+		}
+		return ctx, err
+	}
+
+	return multitenant.SetTenant(ctx, id), nil
 }
 
 // settleDelivery is this lane's broker action for a finished delivery.

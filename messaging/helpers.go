@@ -108,23 +108,28 @@ type ConsumerOptions struct {
 	Workers       int            // Number of concurrent workers (0 = auto-scale to NumCPU*4, >0 = explicit)
 	PrefetchCount int            // RabbitMQ prefetch count (0 = auto-scale to Workers*10, capped at 500)
 	Args          map[string]any // Per-consumer arguments forwarded to basic.consume (x-stream-offset, x-priority, ...)
+	// TenantOptional lets this consumer run a delivery that carries no tenant stamp
+	// (a control-plane consumer). Default false: a consumer that needs a tenant fails
+	// the delivery closed rather than running the handler without one.
+	TenantOptional bool
 }
 
 // NewConsumer creates a consumer declaration from options.
 func NewConsumer(opts *ConsumerOptions) *ConsumerDeclaration {
 	return &ConsumerDeclaration{
-		Queue:         opts.Queue,
-		Consumer:      opts.Consumer,
-		AutoAck:       opts.AutoAck,
-		Exclusive:     opts.Exclusive,
-		NoLocal:       opts.NoLocal,
-		NoWait:        false,
-		EventType:     opts.EventType,
-		Description:   opts.Description,
-		Handler:       opts.Handler,
-		Workers:       opts.Workers,
-		PrefetchCount: opts.PrefetchCount,
-		Args:          opts.Args,
+		Queue:          opts.Queue,
+		Consumer:       opts.Consumer,
+		AutoAck:        opts.AutoAck,
+		Exclusive:      opts.Exclusive,
+		NoLocal:        opts.NoLocal,
+		NoWait:         false,
+		EventType:      opts.EventType,
+		Description:    opts.Description,
+		Handler:        opts.Handler,
+		Workers:        opts.Workers,
+		PrefetchCount:  opts.PrefetchCount,
+		Args:           opts.Args,
+		TenantOptional: opts.TenantOptional,
 	}
 }
 

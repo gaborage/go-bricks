@@ -173,22 +173,67 @@ func TestMessagingManagerCachesPublishersPerKey(t *testing.T) {
 	assert.Equal(t, 1, factoryCalls[amqpHost])
 }
 
-func TestMessagingManagerInjectsTenantHeader(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
+// TestMessagingManagerSetsTheReplayKeyOnItsClients pins the wiring the tenant
+// stamp depends on: the key a publisher was pooled under reaches the client, so
+// its publish door can use it as a stamp source. The stamping itself, and the
+// precedence between this key and the context tenant, are pinned at that door by
+// TestPublishToExchangeTenantStampPrecedence.
+func TestMessagingManagerSetsTheReplayKeyOnItsClients(t *testing.T) {
+	newManagerWithRealClient := func(t *testing.T, key string) *AMQPClientImpl {
+		t.Helper()
+		var created *AMQPClientImpl
+		factory := func(url string, log logger.Logger) AMQPClient {
+			created = &AMQPClientImpl{m: &sync.RWMutex{}, brokerURL: url, log: log, done: make(chan bool)}
+			return created
+		}
+		source := &stubMessagingSource{urls: map[string]string{key: amqpHost}}
+		manager := NewMessagingManager(source, logger.New("error", false),
+			ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+		t.Cleanup(func() { _ = manager.Close() })
 
-	client := &stubAMQPClient{}
-	factory := func(string, logger.Logger) AMQPClient { return client }
-	source := &stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}
-	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+		_, release, err := manager.Publisher(context.Background(), key)
+		require.NoError(t, err)
+		release()
+		require.NotNil(t, created)
+		return created
+	}
 
-	pub, _, err := manager.Publisher(ctx, tenantID)
-	require.NoError(t, err)
+	t.Run("per_tenant_key", func(t *testing.T) {
+		assert.Equal(t, tenantID, newManagerWithRealClient(t, tenantID).replayKey)
+	})
 
-	err = pub.PublishToExchange(ctx, PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload"))
-	assert.NoError(t, err)
-	assert.Equal(t, tenantID, client.lastPublish.Headers[tenantHeader])
+	t.Run("control_plane_key", func(t *testing.T) {
+		assert.Empty(t, newManagerWithRealClient(t, "").replayKey,
+			"the control-plane client has no tenant of its own; the context is the only source")
+	})
+
+	// The manager talks to the optional interface, not to *AMQPClientImpl, so a
+	// double that opts in is told its key too — and one that does not is left alone
+	// rather than being a special case in the manager.
+	t.Run("any_client_that_opts_in_is_told", func(t *testing.T) {
+		client := &replayKeyStub{}
+		source := &stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}
+		manager := NewMessagingManager(source, logger.New("error", false),
+			ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+			func(string, logger.Logger) AMQPClient { return client })
+		t.Cleanup(func() { _ = manager.Close() })
+
+		_, release, err := manager.Publisher(context.Background(), tenantID)
+		require.NoError(t, err)
+		release()
+
+		assert.Equal(t, tenantID, client.key)
+	})
 }
+
+// replayKeyStub is a client that opts into replayKeySetter without being the real
+// AMQP client.
+type replayKeyStub struct {
+	stubAMQPClient
+	key string
+}
+
+func (s *replayKeyStub) setReplayKey(key string) { s.key = key }
 
 func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
 	ctx := context.Background()

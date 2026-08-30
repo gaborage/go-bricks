@@ -123,7 +123,8 @@ func (p *SingleTenantResourceProvider) Messaging(ctx context.Context) (messaging
 // messaging.tenancy: shared a multi-tenant one takes it too, which is what makes
 // the two modes the same branch rather than two implementations of one rule.
 func controlPlaneMessaging(ctx context.Context, mgr *messaging.Manager,
-	decls *messaging.Declarations) (messaging.AMQPClient, error) {
+	decls *messaging.Declarations,
+) (messaging.AMQPClient, error) {
 	if decls != nil {
 		if err := mgr.EnsureConsumers(ctx, "", decls); err != nil {
 			return nil, err

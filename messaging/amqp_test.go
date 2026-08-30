@@ -152,6 +152,7 @@ func TestAMQPHeaderHardeningVariousTypes(t *testing.T) {
 			"empty-byte-header":             []byte{},
 		}},
 		[]byte(testMessageBody),
+		"",
 	)
 
 	// Force alignment outranks both the context id and the inbound header value.

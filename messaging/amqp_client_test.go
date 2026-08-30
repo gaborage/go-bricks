@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -665,7 +666,7 @@ func TestPreparePublishingAlignsCorrelationIDWithRequestIDHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pub := preparePublishing(tt.ctx, PublishOptions{}, []byte(testMessageBody))
+			pub := preparePublishing(tt.ctx, PublishOptions{}, []byte(testMessageBody), "")
 
 			header, ok := pub.Headers[gobrickstrace.HeaderXRequestID].(string)
 			require.True(t, ok, "injection writes the request id as a string")
@@ -726,7 +727,7 @@ func TestPreparePublishingRefusesAnUnvalidatedCorrelationID(t *testing.T) {
 			ctx := gobrickstrace.WithTraceID(context.Background(), tt.ctxTraceID)
 			ctx = gobrickstrace.WithTraceParent(ctx, tt.traceparent)
 
-			pub := preparePublishing(ctx, PublishOptions{}, []byte(testMessageBody))
+			pub := preparePublishing(ctx, PublishOptions{}, []byte(testMessageBody), "")
 
 			assert.Empty(t, pub.CorrelationId, "an id the seam refuses never reaches the shortstr")
 			assert.Equal(t, tt.wantHeader, pub.Headers[gobrickstrace.HeaderXRequestID])
@@ -746,7 +747,7 @@ func TestPreparePublishingRegeneratesAMalformedHeaderTraceParent(t *testing.T) {
 			gobrickstrace.HeaderTraceParent: "00-" + strings.Repeat("!", 32) + "-1234567890123456-01",
 			gobrickstrace.HeaderTraceState:  "vendor=stale",
 		},
-	}, []byte(testMessageBody))
+	}, []byte(testMessageBody), "")
 
 	parent, ok := pub.Headers[gobrickstrace.HeaderTraceParent].(string)
 	require.True(t, ok, "injection writes the traceparent as a string")
@@ -1407,6 +1408,86 @@ func TestPublishToExchangeMultipleRetriesBeforeSuccess(t *testing.T) {
 	}
 	assert.Equal(t, uint64(2), atomic.LoadUint64(&ch.publishAttempts),
 		"the failure must have cost one attempt and the retry must have succeeded")
+}
+
+// TestPublishToExchangeTenantStampPrecedence pins the whole precedence table for
+// the classic publish door: which of the two sources that can know a tenant — the
+// context, and the replay key the client was pooled under — supplies the stamp,
+// and when a caller-supplied one is refused.
+func TestPublishToExchangeTenantStampPrecedence(t *testing.T) {
+	const (
+		acme   = "acme"
+		globex = "globex"
+	)
+	tests := []struct {
+		name          string
+		ctxTenant     string
+		replayKey     string
+		callerHeaders map[string]any
+		wantStamp     string
+		wantConflict  bool
+	}{
+		{name: "ctx_only", ctxTenant: acme, wantStamp: acme},
+		{name: "key_only", replayKey: acme, wantStamp: acme},
+		{name: "both_equal", ctxTenant: acme, replayKey: acme, wantStamp: acme},
+		{name: "both_differ_refused", ctxTenant: acme, replayKey: globex, wantConflict: true},
+		{name: "none_leaves_no_stamp", wantStamp: ""},
+		{
+			name:          "caller_header_equal_accepted",
+			ctxTenant:     acme,
+			callerHeaders: map[string]any{TenantStampHeader: acme},
+			wantStamp:     acme,
+		},
+		{
+			name:          "caller_header_differs_refused",
+			ctxTenant:     acme,
+			callerHeaders: map[string]any{TenantStampHeader: globex},
+			wantConflict:  true,
+		},
+		{
+			name:          "caller_header_without_any_tenant_refused",
+			callerHeaders: map[string]any{TenantStampHeader: acme},
+			wantConflict:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := &fakeChannel{}
+			c := newClientWithFakeChannel(t, ch)
+			c.replayKey = tt.replayKey
+
+			ctx := context.Background()
+			if tt.ctxTenant != "" {
+				ctx = multitenant.SetTenant(ctx, tt.ctxTenant)
+			}
+			options := PublishOptions{Exchange: "ex", RoutingKey: "rk", Headers: tt.callerHeaders}
+
+			if tt.wantConflict {
+				err := c.PublishToExchange(ctx, options, []byte("payload"))
+
+				require.ErrorIs(t, err, ErrTenantStampConflict)
+				assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts),
+					"a refused publish never reaches the channel")
+				return
+			}
+
+			sendConfirmsAfterEachAttempt(t, c, ch, amqp.Confirmation{Ack: true, DeliveryTag: 1})
+			require.NoError(t, c.PublishToExchange(ctx, options, []byte("payload")))
+
+			ch.mu.Lock()
+			headers := ch.lastPublishing.Headers
+			ch.mu.Unlock()
+			if tt.wantStamp == "" {
+				assert.NotContains(t, headers, TenantStampHeader,
+					"a publish with no tenant in play carries no stamp")
+				return
+			}
+			assert.Equal(t, tt.wantStamp, headers[TenantStampHeader])
+			assert.Contains(t, headers, gobrickstrace.HeaderTraceParent,
+				"the stamp must not displace the trace headers")
+		})
+	}
 }
 
 func TestPublishToExchangeCustomHeaders(t *testing.T) {

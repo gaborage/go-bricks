@@ -26,6 +26,7 @@ import (
 
 	gobrickslogger "github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	"github.com/gaborage/go-bricks/multitenant"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -1071,6 +1072,182 @@ func TestRegistryProcessMessageSuccess(t *testing.T) {
 	// Verify message was acknowledged
 	assert.True(t, acker.ackCalled)
 	assert.False(t, acker.nackCalled)
+}
+
+// tenantRecordingHandler records the tenant its context carried, so a test can
+// assert what the delivery seeded rather than what the stamp said.
+type tenantRecordingHandler struct {
+	mu     sync.Mutex
+	calls  int
+	tenant string
+	err    error
+}
+
+func (h *tenantRecordingHandler) Handle(ctx context.Context, _ *amqp.Delivery) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls++
+	h.tenant, _ = multitenant.GetTenant(ctx)
+	return h.err
+}
+
+func (h *tenantRecordingHandler) EventType() string { return testEventType }
+
+func (h *tenantRecordingHandler) seen() (calls int, tenant string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls, h.tenant
+}
+
+// TestRegistrySeedTenantErrorText pins what a refused delivery reports. The rule is
+// a security one: the stamp is producer-written and reaches us unauthenticated, so
+// the error names the reason and the byte length and never the value.
+func TestRegistrySeedTenantErrorText(t *testing.T) {
+	tests := []struct {
+		name     string
+		header   any
+		wantText string
+		notText  string
+	}{
+		{name: "missing", header: nil, wantText: "tenant stamp missing (0 bytes)"},
+		{name: "not_a_string", header: 42, wantText: "tenant stamp not a string (0 bytes)"},
+		{name: "invalid_short", header: "Acme", wantText: "tenant stamp invalid (4 bytes)", notText: "Acme"},
+		{
+			name:     "invalid_long",
+			header:   strings.Repeat("a", 300),
+			wantText: "tenant stamp invalid (300 bytes)",
+			notText:  strings.Repeat("a", 300),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+			registry.tenantStamps = true
+			headers := amqp.Table{}
+			if tt.header != nil {
+				headers[TenantStampHeader] = tt.header
+			}
+
+			_, err := registry.seedTenant(context.Background(),
+				&ConsumerDeclaration{Queue: testQueueName},
+				&amqp.Delivery{Headers: headers})
+
+			require.Error(t, err)
+			assert.Equal(t, tt.wantText, err.Error())
+			if tt.notText != "" {
+				assert.NotContains(t, err.Error(), tt.notText)
+			}
+		})
+	}
+}
+
+// TestRegistryProcessMessageTenantStamp pins the classic read side: under shared
+// tenancy a delivery's stamp seeds the handler context, and an unusable stamp
+// fails the delivery closed — the handler is never called and the message is
+// nacked without requeue — unless the consumer opted out of needing one.
+func TestRegistryProcessMessageTenantStamp(t *testing.T) {
+	const acme = "acme"
+	tests := []struct {
+		name           string
+		tenantStamps   bool
+		tenantOptional bool
+		header         any
+		ctxTenant      string
+		wantCalled     bool
+		wantTenant     string
+		wantNack       bool
+		wantLogged     string
+		wantNotLogged  string
+	}{
+		{
+			name: "stamped_delivery_seeds_tenant", tenantStamps: true, header: acme,
+			wantCalled: true, wantTenant: acme,
+		},
+		{
+			name: "missing_stamp_nacks_without_requeue", tenantStamps: true, header: nil,
+			wantNack: true, wantLogged: "tenant stamp missing (0 bytes)",
+		},
+		{
+			name: "invalid_stamp_nacks_length_only", tenantStamps: true, header: strings.Repeat("a", 300),
+			wantNack: true, wantLogged: "300 bytes", wantNotLogged: strings.Repeat("a", 300),
+		},
+		{
+			name: "non_string_stamp_nacks", tenantStamps: true, header: 42,
+			wantNack: true, wantLogged: "not a string",
+		},
+		{
+			name: "optional_consumer_runs_without_stamp", tenantStamps: true, tenantOptional: true,
+			header: nil, wantCalled: true, wantTenant: "",
+		},
+		{
+			name: "optional_consumer_still_refuses_invalid", tenantStamps: true, tenantOptional: true,
+			header: "Acme", wantNack: true, wantLogged: "invalid", wantNotLogged: "Acme",
+		},
+		{
+			name: "stamps_off_ignores_the_header", tenantStamps: false, header: "other",
+			ctxTenant: acme, wantCalled: true, wantTenant: acme,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+			registry.tenantStamps = tt.tenantStamps
+
+			handler := &tenantRecordingHandler{}
+			consumer := &ConsumerDeclaration{
+				Queue:          testQueueName,
+				EventType:      testEventType,
+				Handler:        handler,
+				TenantOptional: tt.tenantOptional,
+			}
+
+			headers := amqp.Table{}
+			if tt.header != nil {
+				headers[TenantStampHeader] = tt.header
+			}
+			acker := &mockAcknowledger{}
+			delivery := &amqp.Delivery{
+				MessageId:    testMessageID,
+				RoutingKey:   testRoutingKey,
+				Exchange:     testExchangeName,
+				DeliveryTag:  123,
+				Body:         []byte(testMessageBody),
+				Headers:      headers,
+				Acknowledger: acker,
+			}
+
+			ctx := context.Background()
+			if tt.ctxTenant != "" {
+				ctx = multitenant.SetTenant(ctx, tt.ctxTenant)
+			}
+			log := &stubLogger{}
+
+			registry.processMessage(ctx, consumer, delivery, log)
+
+			calls, tenant := handler.seen()
+			if tt.wantCalled {
+				assert.Equal(t, 1, calls)
+				assert.Equal(t, tt.wantTenant, tenant)
+				assert.True(t, acker.AckCalled())
+				return
+			}
+
+			assert.Zero(t, calls, "a delivery without a usable tenant never reaches the handler")
+			acker.mu.Lock()
+			nacked, requeue := acker.nackCalled, acker.nackRequeue
+			acker.mu.Unlock()
+			assert.True(t, nacked)
+			assert.False(t, requeue, "a bad stamp is not retryable; requeue would loop forever")
+
+			// The reason and byte length ride the failure line's Err() field, which
+			// this package's stub logger discards; the text itself is pinned at its
+			// source by TestRegistrySeedTenantErrorText.
+			assert.Contains(t, strings.Join(log.getEntries(), "\n"),
+				"Message processing failed - discarding without requeue")
+		})
+	}
 }
 
 func TestRegistryProcessMessageHandlerError(t *testing.T) {
