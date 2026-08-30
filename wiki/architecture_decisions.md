@@ -1402,6 +1402,33 @@ unexports eight debug response types with their JSON unchanged. See
 
 ---
 
+### [ADR-090: User-Named Config Sections Must Be Reachable By Environment Variable](adr_090_env_reachable_section_names.md)
+
+**Date:** 2026-08-30 | **Status:** Accepted | **Breaking:** a `databases` / `multitenant.tenants` / `keystore.keys` key outside `^[a-z0-9-]+$` now fails startup
+
+`Load` lowercases an environment variable and maps `_` to `.`, koanf's delimiter — a transform that
+is not injective. ADR-024 fixed that for FRAMEWORK leaf keys by renaming them; the keys an operator
+chooses were never judged. Verified on `main`: a lone `databases.report_db` plus
+`DATABASES_REPORT_DB_PORT` fails startup blaming a phantom `databases.report`, and with a real
+sibling `databases.report` present the same variable is applied SILENTLY to the sibling's subtree
+while `report_db` keeps its YAML value — dropped where the remaining segments name no field, landing
+on the sibling's own setting where they do (`report_pool` beside `report` reaches
+`databases.report.pool.max.connections`), and the pod comes up green either way. The decision rejects the name instead: a key under `databases`,
+`multitenant.tenants` or `keystore.keys` must match `^[a-z0-9-]+$`, checked in `config.Validate`, so
+the existing transform is injective over every key that survives startup. The `ConfigError.Field` is
+the key path and the action says rename. Hyphen is legal (the resolver's tenant-ID grammar, minus its
+length bound); whether a hyphenated name is settable is the runtime's business — Docker and
+Kubernetes allow `-`, POSIX `export` does not — and the docs say so. Header maps are excluded:
+a header name is a protocol identifier. Dynamic tenant sources are gated by the resolver at request
+time, not here. Rejection rather than a warning because the failure it replaces is silent: a warning
+is read only when someone is already looking.
+
+**Key Benefits:** a section that cannot be driven from the environment can no longer reach
+production, and the silent-sibling collision becomes a startup error naming the offending key.
+**Migration:** [migrations.md](migrations.md) `[C61.22]`.
+
+---
+
 ### [ADR-086: The Sensitive-Data Filter Masks Inside Opaque Payloads](adr_086_mask_inside_opaque_payloads.md)
 
 **Date:** 2026-08-28 | **Status:** Accepted | **Breaking:** a masked payload is re-encoded (key order, whitespace); an unreadable JSON-looking payload renders as the mask value
@@ -1886,7 +1913,7 @@ deliberately unchanged: a consume span is still a root span. See [migrations.md]
 
 ### Numbering Policy
 
-ADR numbers (ADR-001 through ADR-086) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
+ADR numbers (ADR-001 through ADR-090) reflect **decision/adoption sequence**, not strict chronological order. The authoritative timeline for each decision is the date in its individual ADR header (e.g., ADR-008 is dated 2025-01-10 while ADR-011 is dated 2025-11-09). When reviewing historical chronology, sort by the dates in the ADR index rather than by number. For example, [ADR-011](adr_011_redis_cache.md) introduced the `ModuleDeps` Cache extension — a breaking API change — and its number simply indicates it was the eleventh decision adopted, not that it followed ADR-010 temporally.
 
 ## Writing New ADRs
 

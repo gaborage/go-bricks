@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -166,6 +167,7 @@ const (
 	fieldDatabase           = "database"
 	fieldDatabases          = "databases"
 	fieldMultitenantTenants = "multitenant.tenants"
+	fieldKeystoreKeys       = "keystore.keys"
 	fieldDatabasePort       = "database.port"
 	fieldDatabasePassword   = "database.password"
 	fieldMessaging          = "messaging"
@@ -180,6 +182,8 @@ const (
 	fieldResolverOrder      = "multitenant.resolver.order"
 	errInvalidField         = "invalid value: %v"
 	databasesFieldPrefix    = "databases.%s"
+	keystoreKeysFieldPrefix = "keystore.keys.%s"
+	tenantsFieldPrefix      = "multitenant.tenants.%s"
 	defaultHost             = "localhost"
 
 	fieldServerTLSCertFile   = "server.tls.certfile"
@@ -1278,8 +1282,42 @@ func checkNamedDatabases(databases map[string]DatabaseConfig, mt *MultitenantCon
 	return nil
 }
 
+// sectionNamePattern is the grammar every USER-CHOSEN section key obeys:
+// entries under databases, multitenant.tenants and keystore.keys. It is the
+// resolver's tenant-ID grammar without the length bound, which stays the
+// resolver's.
+//
+// The reason is reachability, not taste. Load maps an environment variable to
+// a config key by lowercasing it and turning '_' into '.', which is not
+// injective: DATABASES_REPORT_DB_PORT reaches databases.report.db.port, so a
+// section named report_db cannot be addressed by any variable — its value
+// either lands on a phantom key or, when a sibling named report exists,
+// silently on the sibling. Uppercase is unreachable the same way. Rejecting
+// the name at check makes the transform injective over every key that
+// survives startup, without touching the transform itself (ADR-024).
+//
+// Hyphen is legal here; whether a hyphenated name is settable depends on the
+// runtime (Docker and Kubernetes permit '-' in variable names, POSIX `export`
+// does not), which the docs state and this rule does not police.
+var sectionNamePattern = regexp.MustCompile(`^[a-z0-9-]+$`)
+
+// checkSectionName rejects a user-chosen section key no environment variable
+// can address. field is the key PATH, so an operator can find the entry.
+func checkSectionName(field, name string) error {
+	if sectionNamePattern.MatchString(name) {
+		return nil
+	}
+	return &ConfigError{
+		Category: errCategoryInvalid,
+		Message:  fmt.Sprintf("name %q is not reachable by an environment variable", name),
+		Field:    field,
+		Action:   "rename it using lowercase letters, digits and '-' only: an environment variable lowercases and maps '_' to the config path delimiter, so any other name is unaddressable",
+	}
+}
+
 // validateNamedDatabaseName checks the map key: non-empty, not the reserved
-// prefix, and not colliding with a static tenant ID.
+// prefix, reachable by an environment variable (checkSectionName), and not
+// colliding with a static tenant ID.
 func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 	if name == "" {
 		return &ConfigError{
@@ -1287,6 +1325,20 @@ func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 			Field:    fieldDatabases,
 			Message:  "database name cannot be empty",
 			Action:   "provide a non-empty key for each entry in databases section",
+		}
+	}
+	// A '.' collides with koanf's path delimiter: constructed section paths
+	// (databases.<name>) become ambiguous, so the bare "databases" Field is used
+	// here rather than fmt.Sprintf(databasesFieldPrefix, name) — embedding the
+	// dotted name would reproduce the same ambiguity in the error itself. This
+	// runs BEFORE the reserved-prefix rule below, which does embed the name: a
+	// name breaking both (`gb_.foo`) must still be reported against the parent.
+	if strings.Contains(name, ".") {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fieldDatabases,
+			Message:  fmt.Sprintf("database name %q cannot contain '.' (the config path delimiter)", name),
+			Action:   "rename the databases entry without dots",
 		}
 	}
 	if strings.HasPrefix(name, NamedDatabasePrefix) {
@@ -1297,18 +1349,11 @@ func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 			Action:   fmt.Sprintf("rename databases.%s to remove the '%s' prefix", name, NamedDatabasePrefix),
 		}
 	}
-	// A '.' collides with koanf's path delimiter: constructed section paths
-	// (databases.<name>, and this name's own error Field above) become
-	// ambiguous, so the bare "databases" Field is used here rather than
-	// fmt.Sprintf(databasesFieldPrefix, name) — embedding the dotted name
-	// would reproduce the same ambiguity in the error itself.
-	if strings.Contains(name, ".") {
-		return &ConfigError{
-			Category: errCategoryInvalid,
-			Field:    fieldDatabases,
-			Message:  fmt.Sprintf("database name %q cannot contain '.' (the config path delimiter)", name),
-			Action:   "rename the databases entry without dots",
-		}
+	// Everything the dot rule above does not already reject is judged by the
+	// shared reachability grammar. It runs after that rule because a dotted
+	// name cannot carry an unambiguous Field, which this one needs.
+	if err := checkSectionName(fmt.Sprintf(databasesFieldPrefix, name), name); err != nil {
+		return err
 	}
 	if mt.Enabled && mt.Tenants != nil {
 		if _, exists := mt.Tenants[name]; exists {
@@ -1678,7 +1723,8 @@ func normalizeKeyStore(cfg *KeyStoreConfig) {
 // must be non-negative — nil is left alone since white-box tests call
 // checkKeyStore directly, before normalize has filled it. Each entry is
 // either an RSA pair (public required with exactly one source, private
-// optional) or a symmetric secret — a mixed entry is rejected.
+// optional) or a symmetric secret — a mixed entry is rejected. Each entry's
+// NAME is judged first, against the env-reachability grammar.
 func checkKeyStore(cfg *KeyStoreConfig) error {
 	if cfg.SecretMinLength != nil && *cfg.SecretMinLength < 0 {
 		return NewValidationError("keystore.secretminlength", errMustBeNonNegative)
@@ -1696,6 +1742,25 @@ func checkKeyStore(cfg *KeyStoreConfig) error {
 	slices.Sort(names)
 
 	for _, name := range names {
+		// A '.' collides with koanf's path delimiter: the constructed section
+		// path keystore.keys.<name>.public becomes ambiguous, and so would this
+		// name's own error Field — keystore.keys.my.key reads as a "key" under
+		// "my". The parent field is reported instead, as the databases and
+		// static-tenant rules do, and this runs first so the ambiguous path is
+		// never built.
+		if strings.Contains(name, ".") {
+			return &ConfigError{
+				Category: errCategoryInvalid,
+				Field:    fieldKeystoreKeys,
+				Message:  fmt.Sprintf("key name %q cannot contain '.' (the config path delimiter)", name),
+				Action:   "rename the keystore.keys entry without dots",
+			}
+		}
+		// The name is judged before its sources: an unreachable entry cannot be
+		// configured by environment variable whatever its file or value says.
+		if err := checkSectionName(fmt.Sprintf(keystoreKeysFieldPrefix, name), name); err != nil {
+			return err
+		}
 		kp := cfg.Keys[name]
 		if err := validateKeyEntry(&kp, name); err != nil {
 			return err
@@ -1714,7 +1779,7 @@ func validateKeyEntry(kp *KeyPairConfig, name string) error {
 	if hasSecret && hasAsymmetric {
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    fmt.Sprintf("keystore.keys.%s", name),
+			Field:    fmt.Sprintf(keystoreKeysFieldPrefix, name),
 			Message:  "entry has both a symmetric 'secret' and asymmetric 'public'/'private' material",
 			Action:   "configure an entry as either a 'secret' or an RSA pair, not both",
 		}
@@ -1941,8 +2006,9 @@ func checkMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingC
 }
 
 // checkMultitenantTenantEntry rejects one static tenant's ID and cache
-// section: an empty or dotted ID, or (once the ID is valid) whatever
-// checkTenantCache rejects.
+// section: an empty or dotted ID, an ID no environment variable can address
+// (checkSectionName), or (once the ID is valid) whatever checkTenantCache
+// rejects.
 func checkMultitenantTenantEntry(tenantID string, entry *TenantEntry) error {
 	if tenantID == "" {
 		return NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty")
@@ -1954,6 +2020,12 @@ func checkMultitenantTenantEntry(tenantID string, entry *TenantEntry) error {
 	if strings.Contains(tenantID, ".") {
 		return NewValidationError(fieldMultitenantTenants,
 			fmt.Sprintf("tenant ID %q cannot contain '.' (the config path delimiter)", tenantID))
+	}
+	// Static tenant map keys only. A dynamic source never reaches here (see
+	// checkMultitenant's SourceTypeStatic gate); the resolver's own grammar is
+	// its request-time gate.
+	if err := checkSectionName(fmt.Sprintf(tenantsFieldPrefix, tenantID), tenantID); err != nil {
+		return err
 	}
 	return checkTenantCache(tenantID, &entry.Cache)
 }

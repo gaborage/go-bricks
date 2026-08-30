@@ -418,7 +418,7 @@ func TestTenantStoreNamedDatabasesWithMultitenant(t *testing.T) {
 	cfg := &Config{
 		Database: DatabaseConfig{Type: PostgreSQL, Host: defaultDB},
 		Databases: map[string]DatabaseConfig{
-			"shared_analytics": {Type: PostgreSQL, Host: "shared-analytics.db"},
+			"shared-analytics": {Type: PostgreSQL, Host: "shared-analytics.db"},
 		},
 		Multitenant: MultitenantConfig{
 			Enabled: true,
@@ -434,7 +434,7 @@ func TestTenantStoreNamedDatabasesWithMultitenant(t *testing.T) {
 
 	t.Run("named database works in multi-tenant mode", func(t *testing.T) {
 		// Named database (shared across tenants)
-		dbCfg, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"shared_analytics")
+		dbCfg, err := store.DBConfig(context.Background(), NamedDatabasePrefix+"shared-analytics")
 		assert.NoError(t, err)
 		assert.Equal(t, "shared-analytics.db", dbCfg.Host)
 	})

@@ -131,7 +131,10 @@ The hint is derived through `keyToEnvVar` and emitted **only when it round-trips
 is not injective: a section named `report_db` would be told to set
 `DATABASES_REPORT_DB_PORT`, which reaches `databases.report.db.port` instead. Such a
 section gets no env hint at all; the YAML half, always reachable, stays. That those
-names are unreachable by variable in the first place is a separate defect — #1124.
+names are unreachable by variable in the first place was a separate defect — #1124, since
+fixed by [ADR-090](adr_090_env_reachable_section_names.md), which rejects such a name at
+validation. This ADR's rule is unchanged by that: the hint is still emitted only where it
+round-trips, and every name that survives ADR-090 round-trips.
 
 Three sibling spellings in the tenant tree came along, for one rule rather than four:
 the per-tenant cache error (`cache.*` with the tenant only in a wrapping message), the
