@@ -226,6 +226,11 @@ func qualifyConfigError(err error, path string, addressField func(string) string
 // ("cache") and the YAML path in the hint ("cache.enabled"), behind a "to enable: " lead-in. So
 // the key is read out of the hint and re-pointed by the same field-to-field move, which is what
 // keeps that hint from surviving qualification and sending an operator at the root key.
+//
+// A hint shape this function does not recognize is left as it is, which is the safe direction but
+// not a free one: a future constructor whose Action does not rebuild from missingFieldAction —
+// a different lead-in, or two keys in one hint — keeps a root-spelled hint beside a qualified
+// Field until it is taught here.
 func requalifyAction(action, origField, qualifiedField string) string {
 	if action == "" || origField == "" {
 		return action
@@ -238,7 +243,7 @@ func requalifyAction(action, origField, qualifiedField string) string {
 	if !ok || body != missingFieldAction(key) {
 		return action
 	}
-	qualifiedKey, ok := requalifyKey(key, origField, qualifiedField)
+	qualifiedKey, ok := reattachHead(key, origField, qualifiedField)
 	if !ok {
 		return action
 	}
@@ -262,15 +267,18 @@ func yamlKeyFromAction(action string) (string, bool) {
 	return rest[i+len(addPrefix):], true
 }
 
-// requalifyKey moves one key by the same step that took origField to qualifiedField. A key
-// under the original field travels with it; anything else is not this section's to re-address
-// and reports false, which leaves the whole hint untouched.
-func requalifyKey(key, origField, qualifiedField string) (string, bool) {
+// reattachHead moves one dotted key from oldHead to newHead: the head itself becomes newHead, a
+// key UNDER it keeps its remainder, and anything else is not oldHead's to move and reports false.
+// It is the one place that rule lives — the field qualifiers and the hint re-pointer all read a
+// key against a head this way, and the dot is the delimiter each of them measures in, so the
+// trap missingFieldAction documents (a dot inside a section or tenant NAME) is one trap here
+// rather than one per caller.
+func reattachHead(key, oldHead, newHead string) (string, bool) {
 	switch {
-	case key == origField:
-		return qualifiedField, true
-	case strings.HasPrefix(key, origField+"."):
-		return qualifiedField + strings.TrimPrefix(key, origField), true
+	case key == oldHead:
+		return newHead, true
+	case strings.HasPrefix(key, oldHead+"."):
+		return newHead + strings.TrimPrefix(key, oldHead), true
 	default:
 		return "", false
 	}
@@ -300,14 +308,13 @@ func missingFieldAction(key string) string {
 // A field that is not key-shaped — the Oracle connection-identifier check names one — is
 // prefixed instead, which keeps the offending name rather than dropping it.
 func (s dbSection) qualifyField(field string) string {
-	switch {
-	case field == "" || field == fieldDatabase:
+	if field == "" {
 		return s.path
-	case strings.HasPrefix(field, fieldDatabase+"."):
-		return s.path + strings.TrimPrefix(field, fieldDatabase)
-	default:
-		return s.path + "." + field
 	}
+	if qualified, ok := reattachHead(field, fieldDatabase, s.path); ok {
+		return qualified
+	}
+	return s.path + "." + field
 }
 
 // forEachDatabaseSection visits every database section the deployment
