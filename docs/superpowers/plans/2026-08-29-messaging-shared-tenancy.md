@@ -273,7 +273,7 @@ Shipped deviation: only `shared_replays_on_control_plane_key` and `per_tenant_st
 **Files:**
 
 - Modify: `messaging/helpers.go` (`ConsumerOptions` `98-111`, `NewConsumer` `113-128`), `messaging/registry.go` (`ConsumerDeclaration` `121-134`; `Registry` struct `56-77` — add `tenantStamps bool`; `processMessage` `760-785`)
-- Modify: `messaging/manager.go` (`ensureConsumersInternal` — after `registry := NewRegistry(client, m.logger, false)` set `registry.tenantStamps = m.tenantStamps`, the field Task 5 stored from `ManagerOptions.TenantStamps`)
+- Modify: `messaging/manager.go` (`ensureConsumersInternal` — after `registry := NewRegistry(client, m.logger)` set `registry.tenantStamps = m.tenantStamps`, the field Task 5 stored from `ManagerOptions.TenantStamps`)
 - Test: `messaging/registry_test.go` (beside `TestRegistryProcessMessageHandlerError`), `messaging/helpers_test.go`
 
 **Interfaces:**

@@ -292,7 +292,8 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	}
 
 	// Create registry and replay declarations
-	registry := NewRegistry(client, m.logger, m.tenantStamps)
+	registry := NewRegistry(client, m.logger)
+	registry.setTenantStamps(m.tenantStamps)
 	if err := decls.ReplayToRegistry(registry); err != nil {
 		m.closeClientOnRollback(client, key, "replay_declarations")
 		return fmt.Errorf("failed to replay messaging declarations: %w", err)

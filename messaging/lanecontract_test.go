@@ -112,7 +112,7 @@ func deliverClassic(t *testing.T, scenario *lanecontract.Scenario) lanecontract.
 		Acknowledger:  acker,
 	}
 
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
 	// A scenario can make one of the lane's own closures panic, which is how the
 	// failure family proves a tail panic is contained rather than escaping.
 	deliverLog := logger.Logger(log)

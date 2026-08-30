@@ -72,14 +72,25 @@ type Registry struct {
 	cancelConsumers context.CancelFunc
 	// tenantStamps makes every delivery's tenant stamp seed the handler context:
 	// true only under multitenant.enabled together with messaging.tenancy: shared.
-	// Set once by NewRegistry and never written again, so it needs no mutex and is
-	// deliberately absent from the "Mutex protects" list above — a setter would have
-	// made correctness depend on being called before StartConsumers.
+	// Written once by setTenantStamps before the registry leaves the manager and
+	// never again, so it needs no mutex and is deliberately absent from the "Mutex
+	// protects" list above.
+	//
+	// It is not a NewRegistry parameter because that function is exported and
+	// shipped: adding one is an incompatible change (apidiff), and no consumer
+	// builds a Registry — the manager is the only caller.
 	tenantStamps bool
 	// resubscribeDelay is the backoff between consumer re-subscribe attempts
 	// after a delivery-channel close. Defaults to defaultConsumerResubscribeDelay;
 	// tests lower it for fast iteration.
 	resubscribeDelay time.Duration
+}
+
+// setTenantStamps records whether this registry's consumers read a tenant stamp.
+// Called by the manager immediately after NewRegistry, before the registry is
+// stored or any consumer starts, so no delivery can observe it unset.
+func (r *Registry) setTenantStamps(enabled bool) {
+	r.tenantStamps = enabled
 }
 
 // ExchangeDeclaration defines an exchange to be declared
@@ -144,11 +155,10 @@ type ConsumerDeclaration struct {
 }
 
 // NewRegistry creates a new messaging registry
-func NewRegistry(client AMQPClient, log logger.Logger, tenantStamps bool) *Registry {
+func NewRegistry(client AMQPClient, log logger.Logger) *Registry {
 	return &Registry{
 		client:           client,
 		logger:           log,
-		tenantStamps:     tenantStamps,
 		exchanges:        make(map[string]*ExchangeDeclaration),
 		queues:           make(map[string]*QueueDeclaration),
 		bindings:         make([]*BindingDeclaration, 0),

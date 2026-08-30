@@ -309,7 +309,7 @@ func TestDeclarativeDLQParksFailedDelivery(t *testing.T) {
 
 	require.NoError(t, decls.Validate())
 
-	reg := NewRegistry(client, log, false)
+	reg := NewRegistry(client, log)
 	require.NoError(t, decls.ReplayToRegistry(reg))
 	require.NoError(t, reg.DeclareInfrastructure(ctx))
 	require.NoError(t, reg.StartConsumers(ctx))
