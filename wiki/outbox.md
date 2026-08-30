@@ -342,12 +342,17 @@ inbox:
 - **Pool-model only.** Shared tenancy is for "one database, tenant as data," not for silo-model
   dynamic deployments that still want automatic per-tenant fan-out (that use case is deferred —
   see ADR-041).
-- **Consumers on the shared broker are out of scope.** Shared tenancy is publisher-only:
-  `DeclareMessaging` consumers still start per-tenant. Do not declare a consumer intended to drain
-  the shared ledger's exchange without a separate bootstrap plan.
-- **Tenant identity travels in the event, not the ledger schema.** The outbox/inbox table schemas
-  are unchanged; if downstream consumers need to know which tenant an event belongs to, carry that
-  in the event headers/payload (the inbox's `Record` already persists `TenantID` from ctx,
+- **Consumers on the shared broker are `messaging.tenancy: shared`.** This ledger setting stays
+  publisher-side; the consumer half is the messaging kind's own tenancy (ADR-087). Set
+  `messaging.tenancy: shared` and declared consumers replay once at boot on the control-plane key,
+  with the tenant carried as the `x-tenant-id` stamp — see
+  [messaging.md](messaging.md#multi-tenant-consumption). Under the default `per-tenant` tenancy
+  `DeclareMessaging` consumers still start per tenant.
+- **Tenant identity travels in the event as the tenant stamp, not in the ledger schema.** The
+  outbox/inbox table schemas are unchanged; the framework writes the tenant into the
+  `x-tenant-id` header from the publishing context (ADR-087), so a downstream consumer under shared
+  messaging tenancy reads it back automatically. A caller must not set that header itself — it is a
+  publish error. For anything else the event needs, carry it in the payload (the inbox's `Record` already persists `TenantID` from ctx,
   regardless of tenancy mode).
 - **First relay cycle after cold start may log one broker-outage cycle.** The connection pre-warmer
   is single-tenant-only, so a shared-tenancy deployment (which requires `multitenant.enabled: true`)

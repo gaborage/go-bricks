@@ -22,10 +22,10 @@ closing. Delivery is at-least-once, and a context expiry leaves the outcome
 | Super streams | no | yes (RabbitMQ 3.13+) |
 | Publishing | through an exchange bound to the stream queue, on AMQP publisher confirms | **direct to the stream** (`Publisher.Publish`), one broker confirmation per message, hash-routed across super-stream partitions |
 | Handler concurrency | worker pool (`NumCPU*4`) | **sequential per stream**, one goroutine per partition |
-| Multi-tenant | yes | no — single-tenant only |
+| Multi-tenant | yes | yes under `messaging.tenancy: shared` (the tenant stamp seeds the tenant); per-tenant tenancy is not supported |
 
-Pick the AMQP lane when port 5552 is not reachable or the deployment is
-multi-tenant; see [messaging.md](messaging.md#stream-queues-amqp-lane). Pick this
+Pick the AMQP lane when port 5552 is not reachable, or when the deployment needs
+per-tenant brokers rather than one shared one; see [messaging.md](messaging.md#stream-queues-amqp-lane). Pick this
 lane when a restart must resume where it left off.
 
 ## Configuration
@@ -51,12 +51,24 @@ messaging:
 - Declaring anything on this lane — a stream, a consumer, a publisher — with no
   `uri` set **fails startup**; the declarations would otherwise be silently
   dropped.
-- `multitenant.enabled` together with a stream `uri` is a **startup validation
-  error**. Per-tenant stream consumption needs one Environment per tenant, which
-  does not exist yet. `config.Validate` enforces this, and `app.NewWithConfig`
-  runs `config.Validate` too (ADR-064), so this shape is caught at
-  construction; startup repeats the check before building the manager as
-  defense-in-depth, and both paths carry the `single-tenant only` marker.
+- `multitenant.enabled` together with a stream `uri` needs
+  **`messaging.tenancy: shared`** (ADR-087). Under that tenancy the lane consumes
+  once on the control-plane key, exactly as single-tenant does, and each delivery's
+  `x-tenant-id` stamp seeds the handler's tenant. Under the default `per-tenant`
+  tenancy it is a **startup validation error**: per-tenant stream consumption would
+  need one Environment per tenant, which does not exist. `config.Validate` enforces
+  this, and `app.NewWithConfig` runs `config.Validate` too (ADR-064), so the shape is
+  caught at construction; startup repeats the check before building the manager as
+  defense-in-depth.
+- A delivery whose stamp is missing or malformed is refused **before the handler** and
+  its offset is **not committed**, so it is redelivered rather than skipped. Set
+  `TenantOptional` on a consumer whose events legitimately belong to no tenant; it
+  never admits a stamp that is present but unusable.
+- **Partition sizing is a documented rule, not an enforced one:** provision 2–4×
+  the maximum number of consumer replicas. Partition count is fixed at creation, so
+  growing later means a new super stream and a cutover, and replicas beyond the
+  partition count idle. Under shared tenancy all tenants share these partitions:
+  isolation is by the stamp, at the application level, not by the transport.
 - Plaintext `rabbitmq-stream://` is accepted but **logs a WARN outside
   development**: the URI's credentials cross the network in the clear. There is
   no TLS configuration surface yet (see [ADR-059](adr_059_streams_consumption.md)

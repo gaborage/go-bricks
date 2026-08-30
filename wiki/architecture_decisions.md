@@ -1452,6 +1452,26 @@ longer lets its own later events overtake it.
 
 ---
 
+### [ADR-087: The Messaging Kind Has a Tenancy, and the Tenant Travels as a Stamp](adr_087_messaging_tenancy_and_tenant_stamp.md)
+
+**Date:** 2026-08-30 | **Status:** Accepted | **Breaking:** no — `messaging.tenancy` defaults to `per-tenant`, which is the existing behaviour; a caller-supplied `x-tenant-id` publish header is now an error rather than being silently overwritten
+
+The multi-tenant messaging shape was one client per tenant, which is **vhost-per-tenant**: a
+connection per vhost per replica, vhost cost that hurts in the thousands, and per-tenant quorum
+queues against a Raft ceiling. It is also unusable for a consume-only service, which has no
+per-tenant broker to name and had to invent tenant messaging blocks to satisfy a check.
+`messaging.tenancy: shared` gives the KIND a tenancy: consumers replay once at boot on the
+control-plane key, `deps.Messaging(ctx)` resolves the control-plane publisher with no tenant, and
+the tenant travels instead as the `x-tenant-id` **tenant stamp** — an AMQP 0.9.1 header or an AMQP
+1.0 application property, written by the framework alone from the publishing context, read back by
+the delivery pipeline both lanes share so neither can drift. **Stated goal: zero broker objects per
+tenant** — onboarding touches the database side only. A missing or malformed stamp fails closed
+before the handler, naming the reason and the byte length but never the value;
+`ConsumerOptions.TenantOptional` exempts a control-plane consumer from needing one, never from
+refusing a malformed one. The accepted cost is stated plainly: the stamp is identification, not
+authorization, so under shared tenancy **the shared queue's publish ACL is the tenant-isolation
+boundary**.
+
 ### [ADR-086: The Sensitive-Data Filter Masks Inside Opaque Payloads](adr_086_mask_inside_opaque_payloads.md)
 
 **Date:** 2026-08-28 | **Status:** Accepted | **Breaking:** a masked payload is re-encoded (key order, whitespace); an unreadable JSON-looking payload renders as the mask value
