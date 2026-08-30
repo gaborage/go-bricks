@@ -105,9 +105,6 @@ func TestRecordingLoggerDerivedLoggersShareTheBuffer(t *testing.T) {
 	assert.Equal(t, "from the bound logger", lines[0].Msg)
 	// Map iteration order is random, so WithFields sorts its keys.
 	assert.Equal(t, [][2]string{{"consumer", "orders-worker"}, {"tenant", "acme"}}, lines[1].Fields)
-
-	require.IsType(t, &RecordingLogger{}, bound)
-	assert.Equal(t, ctx, bound.(*RecordingLogger).BoundTo, "the bound context must be recorded")
 }
 
 // The two lanes differ on level today, so a family can only catch that if every

@@ -91,18 +91,13 @@ func (o *Outcomes) Seen() []*delivery.Result {
 	return out
 }
 
-// RecordingLogger captures every emitted line with its fields in order and
-// records the context each derived logger was bound to, so a family can assert
-// WHICH logger a lane received. Derived loggers share the parent's buffer and
-// mutex, so a lane's per-message logger records into the same place.
+// RecordingLogger captures every emitted line with its fields in order.
+// Derived loggers share the parent's buffer and mutex, so a lane's per-message
+// logger records into the same place.
 type RecordingLogger struct {
 	mu     *sync.Mutex
 	lines  *[]LogLine
 	fields [][2]string // context-level fields prepended to every event
-
-	// BoundTo is the context passed to the WithContext call that produced this
-	// logger; nil on a logger nobody bound.
-	BoundTo context.Context
 }
 
 // NewRecordingLogger returns a logger recording into a fresh buffer.
@@ -119,10 +114,9 @@ func (l *RecordingLogger) Lines() []LogLine {
 	return out
 }
 
-// WithContext returns a logger sharing this one's buffer and remembering ctx.
-func (l *RecordingLogger) WithContext(ctx any) logger.Logger {
-	msgCtx, _ := ctx.(context.Context)
-	return &RecordingLogger{mu: l.mu, lines: l.lines, fields: l.fields, BoundTo: msgCtx}
+// WithContext returns a logger sharing this one's buffer.
+func (l *RecordingLogger) WithContext(_ any) logger.Logger {
+	return &RecordingLogger{mu: l.mu, lines: l.lines, fields: l.fields}
 }
 
 // WithFields returns a logger carrying f on every later event.
@@ -137,7 +131,7 @@ func (l *RecordingLogger) WithFields(f map[string]any) logger.Logger {
 	for _, k := range keys {
 		merged = append(merged, [2]string{k, fmt.Sprint(f[k])})
 	}
-	return &RecordingLogger{mu: l.mu, lines: l.lines, fields: merged, BoundTo: l.BoundTo}
+	return &RecordingLogger{mu: l.mu, lines: l.lines, fields: merged}
 }
 
 func (l *RecordingLogger) Info() logger.LogEvent  { return l.event(LevelInfo) }
