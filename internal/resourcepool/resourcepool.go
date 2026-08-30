@@ -207,20 +207,22 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 // dial before being handed an error that was not its own.
 func (p *Pool[V]) acquireShared(ctx context.Context, key string, create func(context.Context) (V, error)) (*entry[V], error) {
 	ch := p.sf.DoChan(key, func() (v any, err error) {
+		if e := p.peek(key); e != nil {
+			return e, nil
+		}
 		// A panic must not escape through DoChan: x/sync re-panics on a NEW goroutine once any
 		// caller used DoChan (`go panic(e)` in doCall), which no recover — including Echo's
 		// middleware.Recover — can catch, so one consumer-supplied factory's panic would kill the
-		// process instead of failing the callers waiting on that create. The value is rendered by
-		// TYPE only (ADR-081); the create is counted as one failure, like a returned error.
+		// process instead of failing the callers waiting on that create. Registered here rather
+		// than at the top of the closure so it covers the create and nothing else. The value is
+		// rendered by TYPE only (ADR-081); the create is counted as one failure, like a returned
+		// error.
 		defer func() {
 			if r := recover(); r != nil {
 				p.incErrors()
 				v, err = nil, fmt.Errorf("resourcepool: panic during create for key %q (type: %T)", key, r)
 			}
 		}()
-		if e := p.peek(key); e != nil {
-			return e, nil
-		}
 		e, cerr := p.createEntry(ctx, key, create)
 		if cerr != nil {
 			// Count the failure once, HERE in the singleflight leader. Every collapsed caller
