@@ -81,6 +81,10 @@ func TestCheckCallerHeaders(t *testing.T) {
 		{name: "check_present_without_stamp", headers: map[string]any{Header: testTenant}, wantErr: true},
 		{name: "check_empty_value", headers: map[string]any{Header: ""}, stamp: testTenant, wantErr: true},
 		{name: "check_not_a_string", headers: map[string]any{Header: 42}, stamp: testTenant, wantErr: true},
+		// An empty caller value against an empty stamp: the two "match", but a
+		// control-plane publish carries no stamp at all, so a caller writing the
+		// header is still claiming to own a field only the framework writes.
+		{name: "check_empty_value_without_stamp", headers: map[string]any{Header: ""}, wantErr: true},
 	}
 
 	for _, tt := range tests {
