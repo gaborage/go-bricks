@@ -185,3 +185,27 @@ func TestRunnerLogsWhatItParked(t *testing.T) {
 	assert.Equal(t, "*errors.errorString", rec.fieldAt("warn", holdParkedMsg, "error_type"))
 	assert.Equal(t, errHandlerFailed.Error(), rec.fieldAt("warn", holdParkedMsg, "error"))
 }
+
+// TestRunnerDoesNotGateAnotherTenant pins what the hold is FOR: one tenant held
+// must not stop the partition it shares. The second tenant's delivery runs and
+// commits while the first is parked.
+func TestRunnerDoesNotGateAnotherTenant(t *testing.T) {
+	ledger := &fakeHoldLedger{}
+	handled := 0
+	runner := newHoldRunner(t, func(context.Context, *Message) error {
+		handled++
+		return nil
+	}, ledger, newOffsetTracker(1, time.Hour, newFakeClock().Now))
+	runner.held.add("tenant-a")
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
+	runner.deliver(testStream, 42, stampedMessage("tenant-b"), storer)
+
+	assert.Equal(t, 1, handled, "only the unheld tenant's message reaches the handler")
+	parks := ledger.parked()
+	require.Len(t, parks, 1, "and only the held tenant's message is parked")
+	assert.Equal(t, "tenant-a", parks[0].TenantID)
+	assert.False(t, runner.held.has("tenant-b"), "a held neighbour does not hold this tenant")
+	assert.Equal(t, []int64{41, 42}, storer.offsets(), "the partition keeps moving")
+}
