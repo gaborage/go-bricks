@@ -70,6 +70,10 @@ func (m *Module) SetSharedResolvers(
 // (control-plane) tenancy rather than the default per-tenant fan-out.
 func (m *Module) sharedLedger() bool { return m.cfg.Tenancy == config.TenancyShared }
 
+// holdEnabled reports whether this module runs a hold ledger: an enabled inbox
+// that asked for one.
+func (m *Module) holdEnabled() bool { return m.cfg.Enabled && m.cfg.Hold.Enabled }
+
 // Init implements app.Module.
 func (m *Module) Init(deps *app.ModuleDeps) error {
 	m.logger = deps.Logger
@@ -87,6 +91,15 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	if !m.cfg.Enabled {
 		m.logger.Info().Msg("Inbox module disabled (inbox.enabled=false)")
 		return nil
+	}
+
+	// A hold parks one tenant's messages so the others keep flowing, which only
+	// works on the control-plane ledger: a tenant whose own database is down cannot
+	// hold its own messages there. Checked after the disabled return, so a stray
+	// hold key on a disabled inbox stays the no-op the rest of the module is.
+	if m.cfg.Hold.Enabled && !m.sharedLedger() {
+		return errors.New("inbox: hold requires inbox.tenancy: shared — a tenant whose database is down " +
+			"cannot hold its own messages; set inbox.tenancy: shared or disable inbox.hold")
 	}
 
 	// Guards direct construction only: app.RegisterModule always wires a non-nil

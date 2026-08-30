@@ -845,6 +845,42 @@ type InboxConfig struct {
 	//     wiki/outbox.md and ADR-041.
 	// In single-tenant mode both values behave identically.
 	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
+
+	// Hold configures per-tenant parking of failed stream deliveries.
+	Hold InboxHoldConfig `koanf:"hold" json:"hold" yaml:"hold" toml:"hold" mapstructure:"hold"`
+}
+
+// InboxHoldConfig holds the per-tenant hold ledger's settings. A hold keeps a
+// tenant's later messages behind a failed one while the rest of the partition
+// keeps flowing, and a scheduled drain replays them in order.
+//
+// It requires inbox.tenancy: shared — a tenant whose own database is down
+// cannot hold its own messages. Held rows are never dropped automatically: only
+// a successful replay removes one, and an operator deletes the rest by hand.
+// The DDL for managed migrations is in wiki/outbox.md.
+type InboxHoldConfig struct {
+	// Enabled activates the hold ledger and its drain job.
+	// Default: false (opt-in).
+	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
+
+	// TableName is the hold row table; the tenant table is "<tablename>_tenant".
+	// Must be unqualified. Default: "gobricks_inbox_hold".
+	TableName string `koanf:"tablename" json:"tablename" yaml:"tablename" toml:"tablename" mapstructure:"tablename"`
+
+	// DrainInterval is how often the drain job looks for due tenants.
+	// Default: 5s.
+	DrainInterval time.Duration `koanf:"draininterval" json:"draininterval" yaml:"draininterval" toml:"draininterval" mapstructure:"draininterval"`
+
+	// MaxBackoff caps the drain's per-tenant retry backoff. Default: 5m.
+	MaxBackoff time.Duration `koanf:"maxbackoff" json:"maxbackoff" yaml:"maxbackoff" toml:"maxbackoff" mapstructure:"maxbackoff"`
+
+	// MaxAge is how long a tenant may stay held before each drain pass logs one
+	// WARN naming it. Default: 1h.
+	MaxAge time.Duration `koanf:"maxage" json:"maxage" yaml:"maxage" toml:"maxage" mapstructure:"maxage"`
+
+	// LeaseDuration is how long one drainer holds a tenant, and therefore the
+	// time bound on a replayed handler. Default: 60s.
+	LeaseDuration time.Duration `koanf:"leaseduration" json:"leaseduration" yaml:"leaseduration" toml:"leaseduration" mapstructure:"leaseduration"`
 }
 
 // SchedulerConfig holds job scheduler settings.

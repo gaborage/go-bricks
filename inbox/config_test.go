@@ -78,3 +78,96 @@ func TestValidateConfigTenancy(t *testing.T) {
 		})
 	}
 }
+
+// TestHoldDefaultsApplyOnlyWhenTheHoldIsOn pins that the hold's defaults are
+// filled for a hold that is on and left alone otherwise: a deployment reading
+// inbox.hold.* back must not find a table name for a hold it never enabled.
+func TestHoldDefaultsApplyOnlyWhenTheHoldIsOn(t *testing.T) {
+	t.Run("hold_defaults_applied", func(t *testing.T) {
+		c := &config.InboxConfig{Enabled: true, Tenancy: config.TenancyShared, Hold: config.InboxHoldConfig{Enabled: true}}
+
+		applyDefaults(c)
+
+		assert.Equal(t, DefaultHoldTableName, c.Hold.TableName)
+		assert.Equal(t, DefaultHoldDrainInterval, c.Hold.DrainInterval)
+		assert.Equal(t, DefaultHoldMaxBackoff, c.Hold.MaxBackoff)
+		assert.Equal(t, DefaultHoldMaxAge, c.Hold.MaxAge)
+		assert.Equal(t, DefaultHoldLeaseDuration, c.Hold.LeaseDuration)
+	})
+
+	t.Run("hold_disabled_leaves_zero_values", func(t *testing.T) {
+		c := &config.InboxConfig{Enabled: true}
+
+		applyDefaults(c)
+
+		assert.Empty(t, c.Hold.TableName)
+		assert.Zero(t, c.Hold.DrainInterval)
+	})
+
+	t.Run("hold_defaults_preserve_explicit_values", func(t *testing.T) {
+		c := &config.InboxConfig{Enabled: true, Hold: config.InboxHoldConfig{
+			Enabled: true, TableName: "my_hold", DrainInterval: time.Minute,
+		}}
+
+		applyDefaults(c)
+
+		assert.Equal(t, "my_hold", c.Hold.TableName)
+		assert.Equal(t, time.Minute, c.Hold.DrainInterval)
+	})
+}
+
+// TestValidateConfigRejectsAnUnusableHold pins the rules a hold owes before the
+// drain can run at all.
+func TestValidateConfigRejectsAnUnusableHold(t *testing.T) {
+	tests := []struct {
+		name    string
+		hold    config.InboxHoldConfig
+		wantErr string
+	}{
+		{
+			name: "accepts_a_defaulted_hold",
+			hold: config.InboxHoldConfig{Enabled: true},
+		},
+		{
+			name:    "hold_rejects_negative_backoff",
+			hold:    config.InboxHoldConfig{Enabled: true, MaxBackoff: -time.Second},
+			wantErr: "maxbackoff",
+		},
+		{
+			name:    "hold_rejects_negative_drain_interval",
+			hold:    config.InboxHoldConfig{Enabled: true, DrainInterval: -time.Second},
+			wantErr: "draininterval",
+		},
+		{
+			name:    "hold_rejects_negative_max_age",
+			hold:    config.InboxHoldConfig{Enabled: true, MaxAge: -time.Second},
+			wantErr: "maxage",
+		},
+		{
+			name:    "hold_rejects_negative_lease_duration",
+			hold:    config.InboxHoldConfig{Enabled: true, LeaseDuration: -time.Second},
+			wantErr: "leaseduration",
+		},
+		{
+			name:    "hold_rejects_bad_table_name",
+			hold:    config.InboxHoldConfig{Enabled: true, TableName: "schema.hold"},
+			wantErr: "hold",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &config.InboxConfig{Enabled: true, Tenancy: config.TenancyShared, Hold: tc.hold}
+			applyDefaults(c)
+
+			err := validateConfig(c)
+
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}

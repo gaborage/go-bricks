@@ -366,3 +366,60 @@ func TestRegisterJobsSkipsWhenDisabled(t *testing.T) {
 	require.NoError(t, m.RegisterJobs(reg))
 	assert.Empty(t, reg.dailyJobs)
 }
+
+// TestModuleInitRefusesAHoldOnPerTenantLedgers pins the tenancy the hold needs:
+// a tenant whose own database is down cannot hold its own messages, so the
+// ledger must be the control-plane one.
+func TestModuleInitRefusesAHoldOnPerTenantLedgers(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(stubSharedDB, nil)
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox: config.InboxConfig{
+			Enabled: true, RetentionPeriod: time.Hour, Tenancy: config.TenancyPerTenant,
+			Hold: config.InboxHoldConfig{Enabled: true},
+		},
+	}
+
+	err := m.Init(deps)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "inbox.tenancy: shared")
+}
+
+// TestModuleInitAcceptsAHoldOnTheSharedLedger is the other half: the same hold
+// on the tenancy it requires reaches the rest of startup.
+func TestModuleInitAcceptsAHoldOnTheSharedLedger(t *testing.T) {
+	m := NewModule()
+	// The shared resolver must be probe-ready: this Init reaches the startup
+	// database check, which stubSharedDB's bare TestDB has no expectation for.
+	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) {
+		return probeReadyDB(), nil
+	}, nil)
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox: config.InboxConfig{
+			Enabled: true, RetentionPeriod: time.Hour, Tenancy: config.TenancyShared,
+			Hold: config.InboxHoldConfig{Enabled: true},
+		},
+	}
+
+	require.NoError(t, m.Init(deps))
+	assert.True(t, m.holdEnabled())
+}
+
+// TestModuleInitIgnoresAHoldOnADisabledInbox pins that a stray hold key on a
+// disabled inbox stays a no-op rather than failing startup.
+func TestModuleInitIgnoresAHoldOnADisabledInbox(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox: config.InboxConfig{
+			Enabled: false, Tenancy: config.TenancyPerTenant,
+			Hold: config.InboxHoldConfig{Enabled: true},
+		},
+	}
+
+	require.NoError(t, m.Init(deps))
+	assert.False(t, m.holdEnabled())
+}
