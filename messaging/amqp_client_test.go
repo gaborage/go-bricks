@@ -605,29 +605,6 @@ func TestPublishNotReadyReturnsErrNotConnected(t *testing.T) {
 	}
 }
 
-func TestUnsafePublishSuccessInjectionAndIDs(t *testing.T) {
-	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
-	ctx := context.Background()
-	err := c.unsafePublish(ctx, PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("payload"))
-	if err != nil {
-		t.Fatalf("unsafePublish err: %v", err)
-	}
-	// Check headers injected
-	if ch.lastPublishing.Headers == nil {
-		t.Fatalf("expected headers injected")
-	}
-	if _, ok := ch.lastPublishing.Headers[gobrickstrace.HeaderTraceParent]; !ok {
-		t.Fatalf("expected traceparent header")
-	}
-	if ch.lastPublishing.CorrelationId == "" {
-		t.Fatalf("expected correlation id set")
-	}
-	if ch.lastPublishing.MessageId == "" {
-		t.Fatalf("expected message id set")
-	}
-}
-
 // preparePublishing must derive the X-Request-ID header and the CorrelationId
 // property from ONE value. Two derivations one call apart made them disagree on
 // every publish out of an HTTP-originated context: the injection aligns the id
@@ -1893,19 +1870,6 @@ func TestPublishBasicMethodDelegation(t *testing.T) {
 	}
 	if ch.lastPublishArgs.key != testQueue {
 		t.Fatalf("expected routing key 'test-queue', got: %s", ch.lastPublishArgs.key)
-	}
-}
-
-func TestUnsafePublishNotReady(t *testing.T) {
-	c := &AMQPClientImpl{m: &sync.RWMutex{}, log: &stubLogger{}}
-	c.isReady = false
-
-	err := c.unsafePublish(context.Background(), PublishOptions{Exchange: "ex", RoutingKey: "rk"}, []byte("msg"))
-	if err == nil {
-		t.Fatalf("expected errNotConnected when not ready")
-	}
-	if !errors.Is(err, errNotConnected) {
-		t.Fatalf("expected errNotConnected, got: %v", err)
 	}
 }
 

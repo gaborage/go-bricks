@@ -106,7 +106,7 @@ func TestPrepareRuntimeConsumersFailsStartupOnEnsureError(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, errBrokerLookupFailed)
-	assert.ErrorContains(t, err, "failed to start single-tenant consumers")
+	assert.ErrorContains(t, err, "failed to start consumers on the control-plane key")
 	assert.Equal(t, 1, source.callCount(), "the error must come from consumer bootstrap")
 }
 
@@ -139,6 +139,44 @@ func TestPrepareRuntimeConsumersSkipsEnsureInMultiTenantMode(t *testing.T) {
 
 // TestPrepareRuntimeConsumersSucceedsSingleTenant proves the fail-fast return
 // is scoped to real failures: a reachable broker still boots green.
+// TestPrepareRuntimeConsumersUnderSharedTenancy pins the control-plane branch:
+// under messaging.tenancy: shared a multi-tenant deployment replays its declared
+// consumers ONCE on the control-plane key at boot, exactly as single-tenant does,
+// instead of deferring them to a per-tenant replay that never comes.
+func TestPrepareRuntimeConsumersUnderSharedTenancy(t *testing.T) {
+	sharedCfg := func() *config.Config {
+		return &config.Config{
+			Multitenant: config.MultitenantConfig{Enabled: true},
+			Messaging:   config.MessagingConfig{Tenancy: config.TenancyShared},
+		}
+	}
+
+	t.Run("shared_replays_on_control_plane_key", func(t *testing.T) {
+		log := logger.New("debug", true)
+		source := &failingBrokerURLProvider{}
+		a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source), sharedCfg())
+
+		err := a.prepareRuntimeConsumers(context.Background(), messaging.NewDeclarations())
+
+		require.NoError(t, err, "no declared consumers means the failure is advisory")
+		assert.Positive(t, source.callCount(),
+			"shared tenancy must reach consumer bootstrap on the control-plane key")
+	})
+
+	t.Run("per_tenant_still_skips", func(t *testing.T) {
+		log := logger.New("debug", true)
+		source := &failingBrokerURLProvider{}
+		a := newMinimalMessagingApp(log, newFailingConsumerManager(t, log, source),
+			&config.Config{
+				Multitenant: config.MultitenantConfig{Enabled: true},
+				Messaging:   config.MessagingConfig{Tenancy: config.TenancyPerTenant},
+			})
+
+		require.NoError(t, a.prepareRuntimeConsumers(context.Background(), messaging.NewDeclarations()))
+		assert.Zero(t, source.callCount(), "per-tenant tenancy must not start consumers at startup")
+	})
+}
+
 func TestPrepareRuntimeConsumersSucceedsSingleTenant(t *testing.T) {
 	log := logger.New("debug", true)
 	client := testmocks.NewMockAMQPClient()

@@ -184,14 +184,15 @@ func TestNewConsumer(t *testing.T) {
 
 	t.Run("creates consumer with all options", func(t *testing.T) {
 		opts := &ConsumerOptions{
-			Queue:       "test.queue",
-			Consumer:    testConsumer,
-			EventType:   eventTestEvent,
-			Description: "Test event consumer",
-			Handler:     mockHandler,
-			AutoAck:     true,
-			Exclusive:   true,
-			NoLocal:     true,
+			Queue:          "test.queue",
+			Consumer:       testConsumer,
+			EventType:      eventTestEvent,
+			Description:    "Test event consumer",
+			Handler:        mockHandler,
+			AutoAck:        true,
+			Exclusive:      true,
+			NoLocal:        true,
+			TenantOptional: true,
 		}
 
 		consumer := NewConsumer(opts)
@@ -205,6 +206,7 @@ func TestNewConsumer(t *testing.T) {
 		assert.True(t, consumer.Exclusive)
 		assert.True(t, consumer.NoLocal)
 		assert.False(t, consumer.NoWait) // Always false per spec
+		assert.True(t, consumer.TenantOptional)
 	})
 
 	t.Run("creates consumer with minimal options", func(t *testing.T) {
@@ -212,6 +214,7 @@ func TestNewConsumer(t *testing.T) {
 			Queue:    "minimal.queue",
 			Consumer: testConsumer,
 		}
+		// TenantOptional defaults false: a consumer that says nothing fails closed.
 
 		consumer := NewConsumer(opts)
 

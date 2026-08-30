@@ -70,10 +70,27 @@ type Registry struct {
 	declared        bool
 	consumersActive bool
 	cancelConsumers context.CancelFunc
+	// tenantStamps makes every delivery's tenant stamp seed the handler context:
+	// true only under multitenant.enabled together with messaging.tenancy: shared.
+	// Written once by setTenantStamps before the registry leaves the manager and
+	// never again, so it needs no mutex and is deliberately absent from the "Mutex
+	// protects" list above.
+	//
+	// It is not a NewRegistry parameter because that function is exported and
+	// shipped: adding one is an incompatible change (apidiff), and no consumer
+	// builds a Registry — the manager is the only caller.
+	tenantStamps bool
 	// resubscribeDelay is the backoff between consumer re-subscribe attempts
 	// after a delivery-channel close. Defaults to defaultConsumerResubscribeDelay;
 	// tests lower it for fast iteration.
 	resubscribeDelay time.Duration
+}
+
+// setTenantStamps records whether this registry's consumers read a tenant stamp.
+// Called by the manager immediately after NewRegistry, before the registry is
+// stored or any consumer starts, so no delivery can observe it unset.
+func (r *Registry) setTenantStamps(enabled bool) {
+	r.tenantStamps = enabled
 }
 
 // ExchangeDeclaration defines an exchange to be declared
@@ -131,6 +148,10 @@ type ConsumerDeclaration struct {
 	Workers       int            // Number of concurrent workers (0 = auto-scale to NumCPU*4, >0 = explicit)
 	PrefetchCount int            // RabbitMQ prefetch count (0 = auto-scale to Workers*10, capped at 500)
 	Args          map[string]any // Per-consumer arguments forwarded to basic.consume (x-stream-offset, x-priority, ...)
+	// TenantOptional lets this consumer run a delivery that carries no tenant stamp,
+	// for a control-plane consumer whose events belong to no tenant. The default is
+	// false — fail closed — and it never admits a stamp that is present but unusable.
+	TenantOptional bool
 }
 
 // NewRegistry creates a new messaging registry
@@ -760,12 +781,14 @@ func (r *Registry) worker(ctx context.Context, consumer *ConsumerDeclaration, jo
 func (r *Registry) processMessage(ctx context.Context, consumer *ConsumerDeclaration, delivery *amqp.Delivery, log logger.Logger) {
 	id := identifyDelivery(delivery)
 	pipeline.Run(ctx, &pipeline.Request{
-		Carrier:     amqpHeaderAccessor{headers: delivery.Headers},
-		Destination: consumer.Queue,
-		BodySize:    len(delivery.Body),
-		SpanExtras:  consumeSpanExtras(id),
-		Metrics:     consumeMetrics(consumer.Queue, id),
-		Log:         log,
+		Carrier:        amqpHeaderAccessor{headers: delivery.Headers},
+		TenantStamps:   r.tenantStamps,
+		TenantOptional: consumer.TenantOptional,
+		Destination:    consumer.Queue,
+		BodySize:       len(delivery.Body),
+		SpanExtras:     consumeSpanExtras(id),
+		Metrics:        consumeMetrics(consumer.Queue, id),
+		Log:            log,
 		Handle: func(msgCtx context.Context, msgLog logger.Logger, traceID string) error {
 			logProcessing(msgLog, traceID, delivery, id)
 			return consumer.Handler.Handle(msgCtx, delivery)

@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 type stubMessagingSource struct {
@@ -28,7 +29,6 @@ func (s *stubMessagingSource) BrokerURL(_ context.Context, key string) (string, 
 type stubAMQPClient struct {
 	closed         bool
 	closedMu       sync.Mutex
-	lastPublish    PublishOptions
 	consumers      int
 	consumeCtx     context.Context //nolint:containedctx // test-only: captures the ctx the supervisor subscribes with, to assert its lifecycle
 	closeCallback  func()
@@ -41,8 +41,7 @@ func (s *stubAMQPClient) Publish(ctx context.Context, destination string, data [
 	return s.PublishToExchange(ctx, PublishOptions{Exchange: "", RoutingKey: destination}, data)
 }
 
-func (s *stubAMQPClient) PublishToExchange(_ context.Context, options PublishOptions, _ []byte) error {
-	s.lastPublish = options
+func (s *stubAMQPClient) PublishToExchange(_ context.Context, _ PublishOptions, _ []byte) error {
 	return nil
 }
 
@@ -173,21 +172,118 @@ func TestMessagingManagerCachesPublishersPerKey(t *testing.T) {
 	assert.Equal(t, 1, factoryCalls[amqpHost])
 }
 
-func TestMessagingManagerInjectsTenantHeader(t *testing.T) {
-	ctx := context.Background()
-	log := logger.New("error", false)
+// TestMessagingManagerStampsEveryClientItHandsOut pins the wiring the tenant stamp
+// depends on. The factory is replaceable (app.Options.MessagingClientFactory), so
+// this must hold for a client the FRAMEWORK never built: a deployment with its own
+// factory that published unstamped would, under messaging.tenancy: shared, have its
+// own consumers nack every delivery with nothing at startup saying why.
+func TestMessagingManagerStampsEveryClientItHandsOut(t *testing.T) {
+	lease := func(t *testing.T, key string, client AMQPClient) AMQPClient {
+		t.Helper()
+		manager := NewMessagingManager(
+			&stubMessagingSource{urls: map[string]string{key: amqpHost}},
+			logger.New("error", false),
+			ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
+			func(string, logger.Logger) AMQPClient { return client })
+		t.Cleanup(func() { _ = manager.Close() })
 
-	client := &stubAMQPClient{}
-	factory := func(string, logger.Logger) AMQPClient { return client }
-	source := &stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}
-	manager := NewMessagingManager(source, log, ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
+		pub, release, err := manager.Publisher(context.Background(), key)
+		require.NoError(t, err)
+		t.Cleanup(release)
+		return pub
+	}
 
-	pub, _, err := manager.Publisher(ctx, tenantID)
-	require.NoError(t, err)
+	t.Run("a_consumer_supplied_client_is_stamped_too", func(t *testing.T) {
+		// stubAMQPClient is exactly what a consumer's own ClientFactory returns: an
+		// AMQPClient the framework did not build and cannot recognize by type.
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
 
-	err = pub.PublishToExchange(ctx, PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload"))
-	assert.NoError(t, err)
-	assert.Equal(t, tenantID, client.lastPublish.Headers[tenantHeader])
+		require.NoError(t, pub.PublishToExchange(
+			multitenant.SetTenant(context.Background(), tenantID),
+			PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
+
+		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
+	})
+
+	t.Run("the_replay_key_stamps_when_the_context_has_no_tenant", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
+
+		require.NoError(t, pub.PublishToExchange(context.Background(),
+			PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
+
+		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
+	})
+
+	t.Run("the_control_plane_client_carries_no_stamp_without_a_tenant", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, "", client)
+
+		require.NoError(t, pub.PublishToExchange(context.Background(),
+			PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
+
+		assert.NotContains(t, client.lastHeaders, TenantStampHeader)
+	})
+
+	t.Run("a_caller_supplied_stamp_is_refused_before_the_client", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
+
+		err := pub.PublishToExchange(multitenant.SetTenant(context.Background(), tenantID),
+			PublishOptions{
+				Exchange: genericEx, RoutingKey: "rk",
+				Headers: map[string]any{TenantStampHeader: tenantID},
+			}, []byte("payload"))
+
+		require.ErrorIs(t, err, ErrTenantStampConflict)
+		assert.Zero(t, client.publishes, "a refused publish never reaches the client")
+	})
+
+	// Publish is the second door on the wrapper: it routes through PublishToExchange
+	// so one implementation stamps both, and a future change that gives it its own
+	// body would publish unstamped without this.
+	t.Run("the_plain_publish_door_is_stamped_too", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
+
+		require.NoError(t, pub.Publish(
+			multitenant.SetTenant(context.Background(), tenantID), "some.queue", []byte("payload")))
+
+		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
+	})
+
+	t.Run("the_callers_header_map_is_never_written_to", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
+		callerHeaders := map[string]any{"keep": "me"}
+
+		require.NoError(t, pub.PublishToExchange(context.Background(),
+			PublishOptions{Exchange: genericEx, RoutingKey: "rk", Headers: callerHeaders},
+			[]byte("payload")))
+
+		assert.Equal(t, map[string]any{"keep": "me"}, callerHeaders)
+		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
+		assert.Equal(t, "me", client.lastHeaders["keep"])
+	})
+}
+
+// recordingStubClient is a client the framework did not build: it records what
+// actually reached it, so a test can tell a stamped publish from an unstamped one.
+type recordingStubClient struct {
+	stubAMQPClient
+	lastHeaders map[string]any
+	publishes   int
+}
+
+func (c *recordingStubClient) Publish(ctx context.Context, destination string, data []byte) error {
+	return c.PublishToExchange(ctx, PublishOptions{RoutingKey: destination}, data)
+}
+
+func (c *recordingStubClient) PublishToExchange(_ context.Context, options PublishOptions, _ []byte) error {
+	c.publishes++
+	c.lastHeaders = options.Headers
+	return nil
 }
 
 func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {

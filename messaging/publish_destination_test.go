@@ -243,22 +243,6 @@ func TestDeclarationsValidateRefusesAnOversizedArgsKey(t *testing.T) {
 		"a declaration's Args are not a message's headers, and the error says which it read")
 }
 
-// TestUnsafePublishRefusesAnOversizedDestination keeps the package's protection
-// from depending on which internal path reached the wire: unsafePublish calls
-// PublishWithContext by its own route.
-func TestUnsafePublishRefusesAnOversizedDestination(t *testing.T) {
-	ch := &fakeChannel{}
-	c := newClientWithFakeChannel(t, ch)
-
-	err := c.unsafePublish(context.Background(), PublishOptions{
-		Exchange:   "ex",
-		RoutingKey: oversizedShortStr,
-	}, []byte(testMessageBody))
-
-	require.ErrorIs(t, err, ErrInvalidPublishDestination)
-	assert.Zero(t, atomic.LoadUint64(&ch.publishAttempts))
-}
-
 // TestDeclarationsValidateRefusesAnOversizedExchangeType covers the field beside
 // the exchange name: DeclareExchange forwards Type to channel.ExchangeDeclare,
 // where the exchange.declare frame writes it with writeShortstr exactly as it

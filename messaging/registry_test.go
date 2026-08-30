@@ -26,6 +26,7 @@ import (
 
 	gobrickslogger "github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	"github.com/gaborage/go-bricks/multitenant"
 	obtest "github.com/gaborage/go-bricks/observability/testing"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -1071,6 +1072,114 @@ func TestRegistryProcessMessageSuccess(t *testing.T) {
 	// Verify message was acknowledged
 	assert.True(t, acker.ackCalled)
 	assert.False(t, acker.nackCalled)
+}
+
+// tenantRecordingHandler records the tenant its context carried, so a test can
+// assert what the delivery seeded rather than what the stamp said.
+type tenantRecordingHandler struct {
+	mu     sync.Mutex
+	calls  int
+	tenant string
+	err    error
+}
+
+func (h *tenantRecordingHandler) Handle(ctx context.Context, _ *amqp.Delivery) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls++
+	h.tenant, _ = multitenant.GetTenant(ctx)
+	return h.err
+}
+
+func (h *tenantRecordingHandler) EventType() string { return testEventType }
+
+func (h *tenantRecordingHandler) seen() (calls int, tenant string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls, h.tenant
+}
+
+// TestRegistryProcessMessageTenantStamp is the classic lane's pass-through case:
+// the lane hands the pipeline its two tenancy fields and settles what comes back.
+// The stamp rules themselves — precedence, the error text, fail-closed, the
+// TenantOptional carve-out — belong to the pipeline both lanes share and are
+// tabled in messaging/internal/delivery's own tests.
+func TestRegistryProcessMessageTenantStamp(t *testing.T) {
+	const acme = "acme"
+
+	t.Run("stamped_delivery_seeds_the_handler", func(t *testing.T) {
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry.tenantStamps = true
+		handler := &tenantRecordingHandler{}
+		acker := &mockAcknowledger{}
+
+		registry.processMessage(context.Background(),
+			&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Handler: handler},
+			&amqp.Delivery{
+				MessageId:    testMessageID,
+				Body:         []byte(testMessageBody),
+				Headers:      amqp.Table{TenantStampHeader: acme},
+				Acknowledger: acker,
+			}, &stubLogger{})
+
+		calls, tenant := handler.seen()
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, acme, tenant)
+		assert.True(t, acker.AckCalled())
+	})
+
+	// The lane's own contribution: a refusal from the pipeline settles as this
+	// lane settles any failure — nacked, never requeued, so a bad stamp cannot
+	// loop forever.
+	t.Run("unusable_stamp_nacks_without_requeue", func(t *testing.T) {
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry.tenantStamps = true
+		handler := &tenantRecordingHandler{}
+		acker := &mockAcknowledger{}
+
+		registry.processMessage(context.Background(),
+			&ConsumerDeclaration{Queue: testQueueName, EventType: testEventType, Handler: handler},
+			&amqp.Delivery{
+				MessageId:    testMessageID,
+				Body:         []byte(testMessageBody),
+				Headers:      amqp.Table{},
+				Acknowledger: acker,
+			}, &stubLogger{})
+
+		calls, _ := handler.seen()
+		assert.Zero(t, calls)
+
+		acker.mu.Lock()
+		defer acker.mu.Unlock()
+		assert.True(t, acker.nackCalled)
+		assert.False(t, acker.nackRequeue)
+	})
+
+	// TenantOptional reaches the pipeline from the consumer declaration, not from
+	// the registry — this is the wiring, not the rule.
+	t.Run("tenant_optional_reaches_the_pipeline", func(t *testing.T) {
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry.tenantStamps = true
+		handler := &tenantRecordingHandler{}
+		acker := &mockAcknowledger{}
+
+		registry.processMessage(context.Background(),
+			&ConsumerDeclaration{
+				Queue: testQueueName, EventType: testEventType,
+				Handler: handler, TenantOptional: true,
+			},
+			&amqp.Delivery{
+				MessageId:    testMessageID,
+				Body:         []byte(testMessageBody),
+				Headers:      amqp.Table{},
+				Acknowledger: acker,
+			}, &stubLogger{})
+
+		calls, tenant := handler.seen()
+		assert.Equal(t, 1, calls)
+		assert.Empty(t, tenant)
+		assert.True(t, acker.AckCalled())
+	})
 }
 
 func TestRegistryProcessMessageHandlerError(t *testing.T) {
@@ -2863,42 +2972,57 @@ func TestRegistryProcessMessagePanicLineSeparatesTheTraceAndAMQPCorrelationIDs(t
 // the success path silent while still paying the full WithContext/WithFields
 // cost, which is exactly what is being measured.
 func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
-	log := gobrickslogger.New("error", false)
+	measure := func(t *testing.T, tenantStamps bool, headers amqp.Table) float64 {
+		t.Helper()
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry.setTenantStamps(tenantStamps)
+		log := gobrickslogger.New("error", false)
+		consumer := &ConsumerDeclaration{
+			Queue:     testQueueName,
+			EventType: testEventType,
+			Handler:   &countingTestHandler{},
+		}
+		delivery := &amqp.Delivery{
+			MessageId:    testMessageID,
+			RoutingKey:   testRoutingKey,
+			Exchange:     testExchangeName,
+			DeliveryTag:  123,
+			Body:         []byte(testMessageBody),
+			Headers:      headers,
+			Acknowledger: &mockAcknowledger{},
+		}
+		ctx := context.Background()
 
-	handler := &countingTestHandler{}
-	consumer := &ConsumerDeclaration{
-		Queue:     testQueueName,
-		EventType: testEventType,
-		Handler:   handler,
-		AutoAck:   false,
+		return testing.AllocsPerRun(200, func() {
+			registry.processMessage(ctx, consumer, delivery, log)
+		})
 	}
 
-	delivery := &amqp.Delivery{
-		MessageId:    testMessageID,
-		RoutingKey:   testRoutingKey,
-		Exchange:     testExchangeName,
-		DeliveryTag:  123,
-		Body:         []byte(testMessageBody),
-		Headers:      amqp.Table{gobrickstrace.HeaderXRequestID: "req-119"},
-		Acknowledger: &mockAcknowledger{},
-	}
-	ctx := context.Background()
-
-	avg := testing.AllocsPerRun(200, func() {
-		registry.processMessage(ctx, consumer, delivery, log)
+	stampsOff := measure(t, false, amqp.Table{gobrickstrace.HeaderXRequestID: "req-119"})
+	stampsOn := measure(t, true, amqp.Table{
+		gobrickstrace.HeaderXRequestID: "req-119",
+		TenantStampHeader:              "acme",
 	})
-	t.Logf("processMessage allocs/op = %.1f", avg)
-	// Ceiling fixed at 42.0 (advisor resolution 2026-08-09): measured BEFORE =
-	// 47.0, AFTER = 38.0 allocs/op — fails the old per-delivery WithFields
-	// layer, passes the new per-event stamps with headroom. 38.0 predates
-	// PR2a's tracking collapse, which had already dropped this tree's baseline
-	// to 34.0 before the delivery pipeline (ADR-068) landed at 29.0 allocs/op
-	// (25–27 once it shared its span options and cached its tracer — the exact
-	// figure is order-dependent: earlier tests warm the meter/tracer globals),
-	// and to 23.0 once the lane stopped boxing its header carrier and building
-	// the metric destination through fmt.
-	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
+	t.Logf("allocs/op: stamps off = %.1f, on = %.1f", stampsOff, stampsOn)
+
+	// Ceiling fixed at 42.0 (advisor resolution 2026-08-09): measured BEFORE = 47.0,
+	// AFTER = 38.0 allocs/op — fails the old per-delivery WithFields layer, passes the
+	// new per-event stamps with headroom. 38.0 predates PR2a's tracking collapse, which
+	// had already dropped this tree's baseline to 34.0 before the delivery pipeline
+	// (ADR-068) landed at 29.0 allocs/op (25–27 once it shared its span options and
+	// cached its tracer — the exact figure is order-dependent: earlier tests warm the
+	// meter/tracer globals), and to 23.0 once the lane stopped boxing its header carrier
+	// and building the metric destination through fmt.
+	assert.Less(t, stampsOff, 42.0, "the per-delivery WithFields layer is back")
+
+	// The stamp's own cost is asserted as a DELTA, not an absolute: both figures move
+	// together by a couple of allocations depending on which tests warmed the meter and
+	// tracer globals first, so an absolute ceiling tight enough to be meaningful here
+	// would be flaky. Reading the carrier allocates nothing; the whole delta is
+	// multitenant.SetTenant's valueCtx and its boxed string, which every tenant-aware
+	// delivery pays by design.
+	assert.LessOrEqual(t, stampsOn-stampsOff, 3.0,
+		"the tenant stamp read grew an allocation layer beyond SetTenant's context value")
 }
 
 // TestRegistryProcessMessageLogsDebugFieldsWhenEnabled proves the Step 1 guard

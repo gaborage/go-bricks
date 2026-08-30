@@ -11,6 +11,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync/atomic"
@@ -23,7 +24,9 @@ import (
 
 	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/observability"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
@@ -94,10 +97,19 @@ type Handler func(ctx context.Context, log logger.Logger, traceID string) error
 
 // Request is what one lane hands the pipeline for one message. Handle and
 // LogOutcome are required.
+// Carrier is a lane's header source. It reads and writes like the trace package's
+// accessor, and additionally reports whether an entry is PRESENT — the tenant
+// stamp needs that, because an absent stamp and one written as nil mean different
+// things and only the first is optional.
+type Carrier interface {
+	gobrickstrace.HeaderAccessor
+	Lookup(key string) (value any, present bool)
+}
+
 type Request struct {
 	// Carrier is where the trace context traveled: AMQP 0.9.1 headers on the
 	// classic lane, AMQP 1.0 application properties on the streams lane.
-	Carrier gobrickstrace.HeaderAccessor
+	Carrier Carrier
 
 	// Destination is the queue or stream the message arrived on — the span
 	// name's prefix and messaging.destination.name.
@@ -123,6 +135,21 @@ type Request struct {
 	// means exactly one attempt, which is what every classic-lane consumer and
 	// every stream consumer that does not ask for a policy gets.
 	Retry *Retry
+
+	// TenantStamps makes the pipeline read the carrier's tenant stamp and seed the
+	// handler context with it. True only under multitenant.enabled together with
+	// messaging.tenancy: shared — under per-tenant tenancy the replay key already
+	// seeded the tenant, and single-tenant deployments carry no stamp to read.
+	//
+	// It lives here rather than in either lane because the rule is one rule: both
+	// lanes must refuse the same deliveries with the same text, and a lane-side copy
+	// is a copy that can drift.
+	TenantStamps bool
+
+	// TenantOptional lets this consumer run a delivery that carries no stamp — a
+	// control-plane consumer whose events belong to no tenant. It never admits a
+	// stamp that is present but unusable, whoever the consumer is.
+	TenantOptional bool
 
 	// LogOutcome writes the lane's own line for the finished delivery. It runs
 	// while the span is open and the lease scope still holds, so a handle the
@@ -231,7 +258,16 @@ func Run(ctx context.Context, req *Request) (res *Result) {
 
 	log := req.Log.WithContext(msgCtx)
 
-	res = runAttempts(msgCtx, log, traceID, req)
+	// Above the retry loop on purpose: a delivery whose tenant cannot be
+	// established is never made more valid by being tried again, so a stamp
+	// failure must be refused before anything that can re-invoke the handler.
+	// runAttempts is exactly such a thing.
+	if stampCtx, err := seedTenant(msgCtx, req); err != nil {
+		res = handlerErrorResult(err)
+	} else {
+		msgCtx = stampCtx
+		res = runAttempts(msgCtx, log, traceID, req)
+	}
 	res.Duration = time.Since(start)
 	res.TraceID = traceID
 	res.Log = log
@@ -260,6 +296,38 @@ func outcomeAttributes(res *Result) []attribute.KeyValue {
 		attrs = append(attrs, attribute.Bool(spanAttrPermanent, true))
 	}
 	return attrs
+}
+
+// seedTenant reads the carrier's tenant stamp into the handler context.
+//
+// A stamp that cannot be used fails the delivery closed: the handler is never
+// called, and the error travels the outcome path each lane already has — nack
+// without requeue on the classic lane, an uncommitted offset on the streams lane.
+//
+// SECURITY: the stamp is producer-written and arrives unauthenticated, so the
+// error names the reason and the byte length only — never the value.
+func seedTenant(ctx context.Context, req *Request) (context.Context, error) {
+	if !req.TenantStamps {
+		return ctx, nil
+	}
+
+	id, err := tenantstamp.Read(req.Carrier.Lookup)
+	if err != nil {
+		var readErr *tenantstamp.ReadError
+		if req.TenantOptional && errors.As(err, &readErr) && readErr.Reason == tenantstamp.ReasonMissing {
+			return ctx, nil
+		}
+		return ctx, err
+	}
+
+	return multitenant.SetTenant(ctx, id), nil
+}
+
+// handlerErrorResult renders a refusal raised before the handler ran as the same
+// outcome a handler error produces, so every lane settles it the way it already
+// settles a failure.
+func handlerErrorResult(err error) *Result {
+	return &Result{Outcome: HandlerError, Err: err}
 }
 
 // spanAttributes renders the four attributes both lanes set, then the lane's own.

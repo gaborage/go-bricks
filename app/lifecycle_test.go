@@ -311,50 +311,6 @@ func TestPrepareRuntimeAllowsEmptyDeclarationsWithMessagingUnconfigured(t *testi
 	require.NoError(t, app.prepareRuntime(context.Background()))
 }
 
-// TestPrepareRuntimeRefusesSharedMessagingUntilItsRuntimeExists pins the
-// stack-ordering guard: config.Validate accepts messaging.tenancy: shared one
-// slice before the runtime that serves it, so startup must refuse rather than
-// boot per-tenant replay under a config that says shared. Delete with the guard
-// when the classic-lane slice lands.
-func TestPrepareRuntimeRefusesSharedMessagingUntilItsRuntimeExists(t *testing.T) {
-	t.Run("shared_with_multitenant_refused", func(t *testing.T) {
-		cfg := &config.Config{
-			App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
-			Multitenant: config.MultitenantConfig{Enabled: true},
-			Messaging:   config.MessagingConfig{Tenancy: config.TenancyShared},
-		}
-		app := newLifecycleCheckApp(t, cfg)
-
-		err := app.prepareRuntime(context.Background())
-
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "messaging.tenancy: shared")
-		assert.Contains(t, err.Error(), "classic-lane slice")
-	})
-
-	t.Run("shared_single_tenant_allowed", func(t *testing.T) {
-		cfg := &config.Config{
-			App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
-			Multitenant: config.MultitenantConfig{Enabled: false},
-			Messaging:   config.MessagingConfig{Tenancy: config.TenancyShared},
-		}
-		app := newLifecycleCheckApp(t, cfg)
-
-		require.NoError(t, app.prepareRuntime(context.Background()))
-	})
-
-	t.Run("per_tenant_multitenant_allowed", func(t *testing.T) {
-		cfg := &config.Config{
-			App:         config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"},
-			Multitenant: config.MultitenantConfig{Enabled: true},
-			Messaging:   config.MessagingConfig{Tenancy: config.TenancyPerTenant},
-		}
-		app := newLifecycleCheckApp(t, cfg)
-
-		require.NoError(t, app.prepareRuntime(context.Background()))
-	})
-}
-
 // TestStartSlotsStopsAlreadyStartedKindsOnFatal pins the unwind on a failed start phase.
 // The kinds that came up own live inbound work — the messaging slot's consumers run under
 // context.WithoutCancel, so the aborting startup context never stops them — and Run returns
@@ -394,7 +350,7 @@ func TestPrepareRuntimeAbortsWhenDeclaredConsumersCannotStart(t *testing.T) {
 	err := a.prepareRuntime(context.Background())
 
 	require.Error(t, err, "a declared-but-unstartable consumer set must abort startup")
-	assert.Contains(t, err.Error(), "failed to start single-tenant consumers")
+	assert.Contains(t, err.Error(), "failed to start consumers on the control-plane key")
 	assert.ErrorIs(t, err, errBrokerLookupFailed)
 
 	_, emitted := loggedEvent(rec, preWarmWarnMsg)

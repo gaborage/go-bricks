@@ -254,18 +254,19 @@ func (d *Declarations) RegisterConsumer(c *ConsumerDeclaration) {
 
 	// Deep copy to prevent shared mutable state
 	decl := &ConsumerDeclaration{
-		Queue:         c.Queue,
-		Consumer:      c.Consumer,
-		AutoAck:       c.AutoAck,
-		Exclusive:     c.Exclusive,
-		NoLocal:       c.NoLocal,
-		NoWait:        c.NoWait,
-		EventType:     c.EventType,
-		Description:   c.Description,
-		Handler:       c.Handler, // Handlers are typically stateless, so no deep copy needed
-		Workers:       c.Workers,
-		PrefetchCount: c.PrefetchCount,
-		Args:          make(map[string]any),
+		Queue:          c.Queue,
+		Consumer:       c.Consumer,
+		AutoAck:        c.AutoAck,
+		Exclusive:      c.Exclusive,
+		NoLocal:        c.NoLocal,
+		NoWait:         c.NoWait,
+		EventType:      c.EventType,
+		Description:    c.Description,
+		Handler:        c.Handler, // Handlers are typically stateless, so no deep copy needed
+		Workers:        c.Workers,
+		PrefetchCount:  c.PrefetchCount,
+		TenantOptional: c.TenantOptional,
+		Args:           make(map[string]any),
 	}
 
 	if c.Args != nil {
@@ -665,6 +666,10 @@ func (d *Declarations) Hash() uint64 {
 		writeBool(h, c.Exclusive)
 		writeBool(h, c.NoLocal)
 		writeBool(h, c.NoWait)
+		// TenantOptional decides whether a delivery without a tenant runs or is
+		// refused, so two declaration sets that differ only in it are not the same
+		// set — the same reason AutoAck is hashed.
+		writeBool(h, c.TenantOptional)
 		// Consumer Args change broker-visible behavior (x-stream-offset, ...), so
 		// they must invalidate the replay-idempotency hash.
 		writeMapArgs(h, c.Args)

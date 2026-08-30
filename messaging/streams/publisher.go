@@ -445,4 +445,11 @@ type propertyAccessor map[string]any
 
 func (a propertyAccessor) Get(key string) any { return a[key] }
 
+// Lookup reports the property AND whether it was there, which Get cannot: a
+// property written as nil is not the same as one that was never written.
+func (a propertyAccessor) Lookup(key string) (value any, present bool) {
+	v, ok := a[key]
+	return v, ok
+}
+
 func (a propertyAccessor) Set(key string, value any) { a[key] = value }

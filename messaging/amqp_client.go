@@ -1240,37 +1240,16 @@ func (a amqpHeaderAccessor) Get(key string) any {
 	return a.headers[key]
 }
 
+// Lookup reports the entry AND whether it was there, which Get cannot: a header
+// written as nil is not the same as a header that was never written.
+func (a amqpHeaderAccessor) Lookup(key string) (value any, present bool) {
+	v, ok := a.headers[key]
+	return v, ok
+}
+
 func (a amqpHeaderAccessor) Set(key string, value any) {
 	if a.headers == nil {
 		return
 	}
 	a.headers[key] = value
-}
-
-// unsafePublish publishes a message without confirmation handling.
-func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptions, data []byte) error {
-	// The same guard PublishToExchange runs. This method reaches
-	// PublishWithContext by its own path, so leaving it out would mean the
-	// package's protection depended on which internal caller was used — and the
-	// one thing an unwritable frame costs is the connection every publisher
-	// shares (#1123).
-	if err := ValidatePublishDestination(options); err != nil {
-		return err
-	}
-
-	channel, err := c.readyChannel()
-	if err != nil {
-		return err
-	}
-
-	publishing := preparePublishing(ctx, options, data)
-
-	return channel.PublishWithContext(
-		ctx,
-		options.Exchange,
-		options.RoutingKey,
-		options.Mandatory,
-		options.Immediate,
-		publishing,
-	)
 }

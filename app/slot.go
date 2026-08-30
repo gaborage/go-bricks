@@ -143,7 +143,7 @@ func (s *databaseSlot) preInit(ctx context.Context) error {
 // *misconfigured* one fatal.
 func (s *databaseSlot) start(ctx context.Context) (advisory, fatal error) {
 	return s.app.preWarmKind(ctx, s.name(), "database connection",
-		s.app.dbManager != nil, s.app.preWarmDatabase), nil
+		kindPresent(s.app.dbManager != nil), kindPerTenant(s.app.multiTenant()), s.app.preWarmDatabase), nil
 }
 
 func (s *databaseSlot) stop(context.Context) {
@@ -191,7 +191,8 @@ func (s *messagingSlot) start(ctx context.Context) (advisory, fatal error) {
 	}
 
 	return s.app.preWarmKind(ctx, s.name(), componentMessaging,
-		s.app.messagingManager != nil, s.app.preWarmMessaging), nil
+		kindPresent(s.app.messagingManager != nil), kindPerTenant(s.app.perTenantMessaging()),
+		s.app.preWarmMessaging), nil
 }
 
 func (s *messagingSlot) stop(context.Context) { s.app.shutdownConsumers() }
@@ -311,27 +312,43 @@ type preWarmSubject string
 // verdict, which only the slot can read. Multi-tenant deployments resolve per tenant, so
 // the fixed "" key is never warmed; a not-configured kind is a silent skip; anything else
 // is advisory, never fatal.
-func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubject, present bool,
-	warm func(context.Context) error,
+// kindPresent reports whether the kind's manager was built at all, and kindPerTenant
+// whether the kind resolves per tenant rather than on the control-plane key. They are
+// distinct types because they are adjacent arguments of the same underlying type with
+// opposite meanings: as plain bools a transposed pair compiles silently and inverts
+// warm-vs-skip.
+type (
+	kindPresent   bool
+	kindPerTenant bool
+)
+
+// preWarmKind opens the kind's fixed-key resource once at startup so the first
+// request does not pay the dial. It warms only a kind resolved on the control-plane
+// key: a per-tenant kind has no fixed key to warm, and which of the two a kind is
+// no longer follows from the deployment being multi-tenant — under
+// messaging.tenancy: shared the messaging kind resolves on the control-plane key
+// while the database beside it still resolves per tenant.
+func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubject, present kindPresent,
+	perTenant kindPerTenant, warm func(context.Context) error,
 ) error {
-	if a.multiTenant() {
+	if perTenant {
 		return nil
 	}
 	if !present {
-		a.logger.Debug().Msgf("Skipping single-tenant %s pre-warming: manager unavailable", kind)
+		a.logger.Debug().Msgf("Skipping control-plane %s pre-warming: manager unavailable", kind)
 		return nil
 	}
 
 	if err := warm(ctx); err != nil {
 		if config.IsNotConfigured(err) {
-			a.logger.Debug().Msgf("Skipping single-tenant %s pre-warming: not configured", kind)
+			a.logger.Debug().Msgf("Skipping control-plane %s pre-warming: not configured", kind)
 			return nil
 		}
-		a.logger.Warn().Err(err).Msgf("Failed to pre-warm single-tenant %s", subject)
+		a.logger.Warn().Err(err).Msgf("Failed to pre-warm control-plane %s", subject)
 		return fmt.Errorf("%s pre-warming failed: %w", kind, err)
 	}
 
-	a.logger.Info().Msgf("Pre-warmed single-tenant %s", subject)
+	a.logger.Info().Msgf("Pre-warmed control-plane %s", subject)
 	return nil
 }
 

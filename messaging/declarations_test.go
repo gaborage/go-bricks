@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -811,6 +812,86 @@ func TestDeclarationsIsEmpty(t *testing.T) {
 		d.RegisterQueue(&QueueDeclaration{Name: testQueue})
 		assert.False(t, d.IsEmpty())
 	})
+}
+
+// TestRegisterConsumerCopiesEveryField is a tripwire, not a behavior test.
+// RegisterConsumer deep-copies a ConsumerDeclaration field by field, so a field
+// added to the struct but forgotten in that copy is silently dropped — which is
+// exactly how TenantOptional was lost until the replay hash happened to notice.
+// This fills every field with a non-zero value by reflection and compares the
+// stored copy to the original, so the NEXT missed field fails here instead.
+func TestRegisterConsumerCopiesEveryField(t *testing.T) {
+	original := &ConsumerDeclaration{}
+	fillNonZero(t, reflect.ValueOf(original).Elem())
+
+	d := NewDeclarations()
+	d.RegisterQueue(&QueueDeclaration{Name: original.Queue})
+	d.RegisterConsumer(original)
+
+	require.Len(t, d.consumerOrder, 1)
+	stored := d.consumerIndex[d.consumerOrder[0]]
+
+	assert.Equal(t, original, stored,
+		"RegisterConsumer's deep copy dropped a field; add it to the copy in declarations.go")
+	assert.NotSame(t, original, stored, "the declaration must be copied, not aliased")
+
+	// Args must be a copy of the caller's map, not a reference to it. Comparing the
+	// two fields' addresses would pass no matter what — they are fields of different
+	// structs — so mutate the caller's map and prove the stored one does not follow.
+	original.Args["added-after-registration"] = true
+	assert.NotContains(t, stored.Args, "added-after-registration",
+		"Args aliases the caller's map; a later caller mutation would rewrite a registered declaration")
+}
+
+// fillNonZero sets every field of a struct to a non-zero value of its type, so a
+// copy that skips one is detectable. It fails the test on a kind it does not know
+// how to fill rather than leaving that field zero and silently weakening the
+// tripwire.
+func fillNonZero(t *testing.T, v reflect.Value) {
+	t.Helper()
+	for i := range v.NumField() {
+		field := v.Field(i)
+		name := v.Type().Field(i).Name
+		switch field.Kind() {
+		case reflect.String:
+			field.SetString("filled-" + name)
+		case reflect.Bool:
+			field.SetBool(true)
+		case reflect.Int:
+			field.SetInt(7)
+		case reflect.Map:
+			m := reflect.MakeMap(field.Type())
+			m.SetMapIndex(reflect.ValueOf("k"), reflect.ValueOf(any("v")))
+			field.Set(m)
+		case reflect.Interface:
+			require.Truef(t, reflect.TypeOf(&mockHandler{}).Implements(field.Type()),
+				"field %s is an interface this filler cannot populate", name)
+			field.Set(reflect.ValueOf(&mockHandler{}))
+		default:
+			t.Fatalf("field %s has kind %s, which fillNonZero does not know how to fill; "+
+				"extend it so this tripwire keeps covering every field", name, field.Kind())
+		}
+	}
+}
+
+// TestDeclarationsHashSeparatesTenantOptional pins that the replay hash tells two
+// consumer sets apart when only TenantOptional differs. Without it a tenancy change
+// would reuse a cached replay and leave the old fail-closed posture in force.
+func TestDeclarationsHashSeparatesTenantOptional(t *testing.T) {
+	build := func(optional bool) *Declarations {
+		d := NewDeclarations()
+		d.RegisterQueue(&QueueDeclaration{Name: testQueueName})
+		d.RegisterConsumer(&ConsumerDeclaration{
+			Queue:          testQueueName,
+			Consumer:       "consumer-tag",
+			EventType:      testEventType,
+			TenantOptional: optional,
+		})
+		return d
+	}
+
+	assert.NotEqual(t, build(false).Hash(), build(true).Hash())
+	assert.Equal(t, build(true).Hash(), build(true).Hash(), "the hash stays deterministic")
 }
 
 // TestDeclarationsHashCoversAllArgTypes exercises Hash() with a publisher whose

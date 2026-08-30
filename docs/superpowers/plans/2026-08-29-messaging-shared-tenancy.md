@@ -193,7 +193,7 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
   - `func (p *MultiTenantResourceProvider) SetMessagingTenancy(tenancy string)`
   - `func controlPlaneMessaging(ctx context.Context, mgr *messaging.Manager, decls *messaging.Declarations) (messaging.AMQPClient, error)` — the body of today's `SingleTenantResourceProvider.Messaging` after the nil check (EnsureConsumers on `""` if decls != nil, then `Publisher(ctx, "")`, then `acquireLease`); both providers call it.
   - `messaging.ManagerOptions.TenantStamps bool`; `ManagerConfigBuilder.tenantStamps bool` set in `newManagerConfigBuilderFromConfig` to `cfg.Multitenant.Enabled && cfg.Messaging.Tenancy == config.TenancyShared` and copied by `BuildMessagingOptions`.
-- Behaviour: `prepareRuntimeConsumers` returns early only when `a.perTenantMessaging()`; the pre-warm gate admits `!a.multiTenant() || a.sharedMessaging()`; `MultiTenantResourceProvider.Messaging` under shared skips the tenant lookup and calls `controlPlaneMessaging` (per-tenant path unchanged).
+- Behaviour: `prepareRuntimeConsumers` returns early only when `a.perTenantMessaging()`; the pre-warm gate takes the KIND's own resolution mode — `preWarmKind` gained a `kindPerTenant` argument, database passing `a.multiTenant()` and messaging `a.perTenantMessaging()`. The originally-planned `!a.multiTenant() || a.sharedMessaging()` inside `preWarmKind` was rejected during implementation: that function is shared with the database and cache slots, so widening it there would have pre-warmed the DATABASE on the `""` key in any deployment that merely chose shared messaging; `MultiTenantResourceProvider.Messaging` under shared skips the tenant lookup and calls `controlPlaneMessaging` (per-tenant path unchanged).
 
 **Seams (pre-agreed):** `App.prepareRuntimeConsumers` through `newMinimalMessagingApp` (`app/messaging_setup_test.go:26-35`) with a manager built by `messaging.NewMessagingManager` and a `BrokerURLProvider` fake; `MultiTenantResourceProvider.Messaging` with a manager whose client factory returns a fake `AMQPClient` (see `TestMultiTenantResourceProvider`); `ManagerConfigBuilder.BuildMessagingOptions` through `newManagerConfigBuilderFromConfig`.
 
@@ -210,6 +210,8 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
 | `provider_per_tenant_unchanged` | no setter call, ctx with `acme` | `EnsureConsumers("acme")`, `Publisher("acme")` |
 | `provider_per_tenant_no_tenant` | no setter, no tenant | `ErrNoTenantInContext` |
 | `options_tenant_stamps` | MT enabled + shared → `true`; MT enabled + per-tenant → `false`; MT disabled + shared → `false` | `BuildMessagingOptions().TenantStamps` |
+
+Shipped deviation: only `shared_replays_on_control_plane_key` and `per_tenant_still_skips` were written. `shared_declared_consumer_cannot_start_fails_run` and `shared_no_consumers_warns` were not: both assert grading that `prepareRuntimeConsumers` already applies identically for single-tenant, and the shared path reaches it through the same branch — the branch itself is what shared tenancy changes, and that is what the shipped rows pin. Recorded rather than silently dropped.
 
 - [ ] **Step 2: Run, expect FAIL.**
 - [ ] **Step 3: Green** — edits above. The `prepareRuntimeConsumers` INFO line under per-tenant keeps its text; add no new log line for shared beyond the existing "Single-tenant consumers started successfully" (rename that message to "Consumers started on the control-plane key" so both modes read true — update the test that pins it).
@@ -232,10 +234,10 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
   - `const Header = "x-tenant-id"`
   - `var ErrConflict = errors.New("messaging: x-tenant-id is written by the framework from the context tenant; remove it from the caller's headers")`
   - `func CheckCallerHeaders(headers map[string]any) error` — `ErrConflict` when the key is present (any value), nil otherwise; nil map → nil.
-  - `func Write(ctx context.Context, set func(key string, value any))` — `if id, ok := multitenant.GetTenant(ctx); ok { set(Header, id) }`.
+  - `func Write(id string, set func(key string, value any))` — `if id != "" { set(Header, id) }`. It writes a tenant the caller already resolved rather than reading the context itself: `Resolve` (and `ResolveForPublish`) decides WHICH tenant, `Write` only puts it on the carrier, so the precedence rule lives in one place.
   - `type ReadError struct{ Reason string; Len int }` with `Error()` = `"tenant stamp <Reason> (<Len> bytes)"`, `Reason` ∈ `{"missing", "not a string", "invalid"}`; `func Read(get func(key string) any) (string, error)` — absent → `ReadError{missing, 0}`; non-string → `ReadError{not a string, 0}`; `multitenant.ValidateTenantID` fails → `ReadError{invalid, len}`; else the id.
 - Produces, in `messaging`: `const TenantStampHeader = tenantstamp.Header`; `var ErrTenantStampConflict = tenantstamp.ErrConflict`.
-- Behaviour: `publishPrologue` and `unsafePublish` call `tenantstamp.CheckCallerHeaders(options.Headers)` right after `validatePublishDestination`; `preparePublishing` calls `tenantstamp.Write(ctx, accessor.Set)` right after the trace injection. `tenantAwarePublisher` is deleted (`git grep -n tenantAwarePublisher` → nothing).
+- Behaviour (as shipped, after the A2 review's I-1 and I-2): the client does NOT stamp. `Manager.createPublisher` wraps every client it returns in `stampingPublisher`, which on both publish doors calls `tenantstamp.CheckCallerHeaders(options.Headers)` — refusing ANY caller-supplied `x-tenant-id` — then `tenantstamp.Resolve(ctx, key)` for the pool key it was created under, and writes the stamp into a COPY of the caller's headers; the write itself lives in `stampingPublisher`, which `Manager.createPublisher` wraps around EVERY client it hands out — the factory is replaceable (`app.Options.MessagingClientFactory`), so a stamp that depended on the concrete client type would be silently absent for a deployment with its own factory, whose consumers would then nack every delivery under shared tenancy. ONE source rule, stated once: the context tenant; the client's replay key when the context carries none; `ErrConflict` when both exist and differ; ANY caller-supplied `x-tenant-id` refused, equal to the resolved stamp or not (spec Decision 2 — the framework is the only writer, and a caller that guesses right still claims a field it does not own). The stamp is resolved once per publish, above the retry loop, so every attempt writes the same value. `tenantAwarePublisher` is deleted (`git grep -n tenantAwarePublisher` → nothing). It was NOT dead when this plan was written — `manager.go` wrapped every pooled publisher with it, stamping `x-tenant-id` from the replay key and silently OVERWRITING a caller's value. It is replaced by `stampingPublisher`, which wraps the same way but resolves the stamp instead of assuming the key, and refuses a caller-supplied one instead of overwriting it. Deleting the old one therefore moves the stamp to one writer with a stated precedence (context tenant; the replay key when the context carries none; `ErrConflict` when both exist and differ) and turns a conflicting caller-supplied stamp into a publish error.
 
 **Seams (pre-agreed):** `tenantstamp` package API; `AMQPClientImpl.PublishToExchange` observed through `fakeChannel.lastPublishing.Headers` (`newClientWithFakeChannel`, `sendConfirmsAfterEachAttempt`); `unsafePublish` through the same fake.
 
@@ -243,9 +245,9 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
 
 | case name | call | expect |
 | --- | --- | --- |
-| `write_with_tenant` | `Write(SetTenant(ctx,"acme"), set)` | `set("x-tenant-id","acme")` once |
-| `write_without_tenant` | `Write(ctx, set)` | `set` never called |
-| `check_conflict` | headers `{"x-tenant-id":"x"}` | `ErrConflict` |
+| `write_with_tenant` | `Write("acme", set)` | `set("x-tenant-id","acme")` once |
+| `write_without_tenant` | `Write("", set)` | `set` never called |
+| `check_present` | headers `{"x-tenant-id":"x"}` | `ErrConflict` — and equally for a value matching the resolved stamp, per spec Decision 2 |
 | `check_nil_and_clean` | nil; `{"a":1}` | nil, nil |
 | `read_ok` | get → `"acme"` | `"acme", nil` |
 | `read_missing` | get → nil | `ReadError{missing,0}`; text `tenant stamp missing (0 bytes)` |
@@ -276,7 +278,7 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
 
 **Interfaces:**
 
-- Produces: `ConsumerOptions.TenantOptional bool` copied to `ConsumerDeclaration.TenantOptional bool` by `NewConsumer`. In `processMessage`'s `Handle` closure, before the handler: when `r.tenantStamps`, `id, err := tenantstamp.Read(func(k string) any { return delivery.Headers[k] })`; on error, if `consumer.TenantOptional` and the reason is `missing` → run the handler with `msgCtx` as is; otherwise return the `ReadError` (the pipeline turns it into the nack-without-requeue outcome and the failure line); on success `msgCtx = multitenant.SetTenant(msgCtx, id)`. When `!r.tenantStamps` the closure is unchanged.
+- Produces (as shipped): `ConsumerOptions.TenantOptional bool` copied to `ConsumerDeclaration.TenantOptional bool` by `NewConsumer`, and `NewRegistry` takes `tenantStamps bool`. The read itself is NOT in this lane: `pipeline.Request` gained `TenantStamps`/`TenantOptional` and `delivery.Run` does the read through `req.Carrier.Get` before invoking the handler, turning a failure into the `HandlerError` outcome each lane already settles. `Registry.processMessage` passes the two fields and settles what comes back. The read moved because the spec states one rule for both lanes: owning it here would have meant the streams lane hand-authoring a second copy with nothing keeping the two in agreement.
 - `Declarations.Hash()` — check whether it covers consumer fields; if it does, `TenantOptional` must be part of the hash like `AutoAck` is. Report which.
 
 **Seams (pre-agreed):** `Registry.processMessage` with a `ConsumerDeclaration` whose `Handler` records `multitenant.TenantID(ctx)` and a `*amqp.Delivery` carrying an `Acknowledger` fake (the existing `TestRegistryProcessMessage*` fixtures); `NewConsumer` field copy.
@@ -359,7 +361,7 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
 **Interfaces:**
 
 - Produces: `streams.ErrTenantStampConflict` (the same error value as `messaging.ErrTenantStampConflict`, so `errors.Is` holds across both).
-- Behaviour: `send` returns `tenantstamp.CheckCallerHeaders(msg.Properties)`'s error before `buildMessage`; `buildMessage` calls `tenantstamp.Write(ctx, func(k string, v any) { properties[k] = v })` after `InjectIntoHeaders`.
+- Behaviour (as shipped): `send` calls `tenantstamp.ResolveForPublish(ctx, msg.Properties, "")`, which refuses a caller-supplied stamp and then resolves the tenant — the replay key is always empty on this lane, which has no per-tenant client — and hands the resolved stamp to `buildMessage`, which calls `tenantstamp.Write(stamp, accessor.Set)` after `InjectIntoHeaders` on the copied property map.
 
 **Seams (pre-agreed):** `Publisher.Publish` through the existing fake environment/producer in `publisher_test.go`, observing the `message.StreamMessage`'s `ApplicationProperties` handed to the fake.
 

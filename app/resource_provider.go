@@ -115,13 +115,23 @@ func (p *SingleTenantResourceProvider) Messaging(ctx context.Context) (messaging
 		}
 	}
 
-	if p.declarations != nil {
-		if err := p.messagingManager.EnsureConsumers(ctx, "", p.declarations); err != nil {
+	return controlPlaneMessaging(ctx, p.messagingManager, p.declarations)
+}
+
+// controlPlaneMessaging resolves the messaging client for the control-plane key.
+// Single-tenant deployments have always taken this path; under
+// messaging.tenancy: shared a multi-tenant one takes it too, which is what makes
+// the two modes the same branch rather than two implementations of one rule.
+func controlPlaneMessaging(ctx context.Context, mgr *messaging.Manager,
+	decls *messaging.Declarations,
+) (messaging.AMQPClient, error) {
+	if decls != nil {
+		if err := mgr.EnsureConsumers(ctx, "", decls); err != nil {
 			return nil, err
 		}
 	}
 
-	client, release, err := p.messagingManager.Publisher(ctx, "")
+	client, release, err := mgr.Publisher(ctx, "")
 	return acquireLease(ctx, client, release, err)
 }
 
@@ -151,6 +161,7 @@ type MultiTenantResourceProvider struct {
 	messagingManager *messaging.Manager
 	cacheManager     *cache.CacheManager
 	declarations     *messaging.Declarations
+	messagingTenancy string
 }
 
 // NewMultiTenantResourceProvider creates a resource provider for multi-tenant mode.
@@ -226,6 +237,10 @@ func (p *MultiTenantResourceProvider) Messaging(ctx context.Context) (messaging.
 		}
 	}
 
+	if p.messagingTenancy == config.TenancyShared {
+		return controlPlaneMessaging(ctx, p.messagingManager, p.declarations)
+	}
+
 	tenantID, ok := multitenant.GetTenant(ctx)
 	if !ok {
 		return nil, ErrNoTenantInContext
@@ -264,4 +279,11 @@ func (p *MultiTenantResourceProvider) Cache(ctx context.Context) (cache.Cache, e
 // SetDeclarations updates the declaration store used for ensuring consumers.
 func (p *MultiTenantResourceProvider) SetDeclarations(declarations *messaging.Declarations) {
 	p.declarations = declarations
+}
+
+// SetMessagingTenancy tells the provider which key the messaging kind resolves
+// under. It is a setter rather than a constructor parameter so the exported
+// constructor keeps its four arguments.
+func (p *MultiTenantResourceProvider) SetMessagingTenancy(tenancy string) {
+	p.messagingTenancy = tenancy
 }

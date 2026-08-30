@@ -127,6 +127,37 @@ func TestManagerConfigBuilderScalesZeroMaxSizeToTenantLimitInMultiTenant(t *test
 	assert.Equal(t, 250, b.BuildCacheOptions().MaxSize)
 }
 
+// TestBuildMessagingOptionsTenantStamps pins the one input that decides whether
+// consumers read a tenant stamp: both multitenant.enabled AND messaging.tenancy:
+// shared. Either alone leaves stamps off — single-tenant has no stamp to read, and
+// per-tenant tenancy already knows the tenant from its replay key.
+func TestBuildMessagingOptionsTenantStamps(t *testing.T) {
+	tests := []struct {
+		name        string
+		multitenant bool
+		tenancy     string
+		want        bool
+	}{
+		{name: "multitenant_shared", multitenant: true, tenancy: config.TenancyShared, want: true},
+		{name: "multitenant_per_tenant", multitenant: true, tenancy: config.TenancyPerTenant},
+		{name: "single_tenant_shared", multitenant: false, tenancy: config.TenancyShared},
+		{name: "single_tenant_per_tenant", multitenant: false, tenancy: config.TenancyPerTenant},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				Multitenant: config.MultitenantConfig{Enabled: tt.multitenant},
+				Messaging:   config.MessagingConfig{Tenancy: tt.tenancy},
+			}
+
+			got := newManagerConfigBuilderFromConfig(cfg).BuildMessagingOptions().TenantStamps
+
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestManagerConfigBuilderPassesValidatedValuesThrough(t *testing.T) {
 	b := NewManagerConfigBuilder(false, 0)
 	b.dbConfig = config.DatabaseManagerConfig{MaxSize: 7, IdleTTL: 3 * time.Minute}

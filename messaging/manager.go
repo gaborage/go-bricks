@@ -71,6 +71,10 @@ type Manager struct {
 
 	// Singleflight for concurrent consumer initialization
 	sfg singleflight.Group
+	// tenantStamps is ManagerOptions.TenantStamps, handed to every registry this
+	// manager builds so the consume side knows whether a delivery's tenant stamp
+	// is the authority for the handler's tenant.
+	tenantStamps bool
 }
 
 // consumerEntry represents a long-lived consumer
@@ -108,6 +112,11 @@ type ManagerOptions struct {
 	ReconnectMaxDelay time.Duration
 	ReinitDelay       time.Duration
 	ResendDelay       time.Duration
+	// TenantStamps makes consumers read the tenant stamp off each delivery and seed
+	// the handler context with it. True only under multitenant.enabled together with
+	// messaging.tenancy: shared — under per-tenant tenancy the replay key is already
+	// the tenant, and in single-tenant mode there is none to read.
+	TenantStamps bool
 }
 
 // NewMessagingManager creates a new messaging manager. The idle-publisher sweep starts here and
@@ -159,6 +168,7 @@ func NewMessagingManager(resourceSource BrokerURLProvider, log logger.Logger, op
 		}),
 		consumers:     make(map[string]*consumerEntry),
 		replayedHashs: make(map[string]uint64),
+		tenantStamps:  opts.TenantStamps,
 	}
 
 	resourcepool.WarnIfCleanupIntervalTooLate(log, "messaging.publisher", opts.CleanupInterval, opts.IdleTTL)
@@ -283,6 +293,7 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 
 	// Create registry and replay declarations
 	registry := NewRegistry(client, m.logger)
+	registry.setTenantStamps(m.tenantStamps)
 	if err := decls.ReplayToRegistry(registry); err != nil {
 		m.closeClientOnRollback(client, key, "replay_declarations")
 		return fmt.Errorf("failed to replay messaging declarations: %w", err)
@@ -377,17 +388,22 @@ func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, Releas
 	return client, ReleaseFunc(release), nil
 }
 
-// createPublisher creates a new AMQP client for the given key and wraps it so publishes carry
-// the tenant header. It performs only client creation — the pool owns all lease/LRU/eviction
-// bookkeeping. Invoked inside the pool's create callback, so singleflight guarantees one call
-// per key per creation.
+// createPublisher creates a new AMQP client for the given key and tells it which key it
+// was pooled under, so its publish doors can resolve the tenant stamp. It performs only
+// client creation — the pool owns all lease/LRU/eviction bookkeeping. Invoked inside the
+// pool's create callback, so singleflight guarantees one call per key per creation.
+//
+// Every client is wrapped, whatever produced it: the factory is replaceable
+// (app.Options.MessagingClientFactory), so a stamp that depended on the concrete
+// type would be silently absent for a deployment with its own factory — and under
+// messaging.tenancy: shared that deployment's consumers would nack every delivery.
 func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, error) {
 	// Create the AMQP client (error is already well-formatted from createAMQPClient)
 	client, err := m.createAMQPClient(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	return newTenantAwarePublisher(client, key), nil
+	return newStampingPublisher(client, key), nil
 }
 
 // createAMQPClient creates a new AMQP client for the given key
