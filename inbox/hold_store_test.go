@@ -41,15 +41,29 @@ func TestValidateHoldTableNameBoundsEveryDerivedName(t *testing.T) {
 	}
 }
 
-// TestHoldTableNameBoundLeavesRoomForTheTenantTable pins WHY the bound is what
-// it is: the derived tenant table must itself fit PostgreSQL's identifier limit.
-func TestHoldTableNameBoundLeavesRoomForTheTenantTable(t *testing.T) {
+// TestHoldTableNameBoundLeavesRoomForEveryDerivedName pins WHY the bound is what
+// it is, and it is the INDEX names that set it, not the tenant table: PostgreSQL
+// truncates past 63 bytes instead of refusing, and the two index names share the
+// prefix `idx_<table>_tenant_`, so a name long enough to truncate them collapses
+// BOTH to the same identifier — at which point the second CREATE INDEX quietly
+// does nothing and the drain's due-tenant query runs unindexed forever.
+func TestHoldTableNameBoundLeavesRoomForEveryDerivedName(t *testing.T) {
 	longest := strings.Repeat("a", maxHoldTableNameLen)
 
-	assert.LessOrEqual(t, len(longest+holdTenantTableSuffix), postgresMaxIdentifierLen,
-		"the tenant table derived from the longest legal name still fits")
-	assert.Greater(t, len(longest+"a"+holdTenantTableSuffix), postgresMaxIdentifierLen,
-		"one byte more would not")
+	derived := []string{
+		longest + holdTenantTableSuffix,
+		"idx_" + longest + "_tenant_order",
+		"idx_" + longest + "_tenant_due",
+		// PostgreSQL names a primary key <table>_pkey on its own.
+		longest + holdTenantTableSuffix + "_pkey",
+	}
+	for _, name := range derived {
+		assert.LessOrEqual(t, len(name), postgresMaxIdentifierLen,
+			"%q is derived from the longest legal table name and must fit", name)
+	}
+
+	assert.Greater(t, len("idx_"+longest+"a_tenant_order"), postgresMaxIdentifierLen,
+		"one byte more would not fit, which is what makes this the bound")
 }
 
 // TestHoldStoreConstructorsRefuseABadTableName pins that neither vendor's

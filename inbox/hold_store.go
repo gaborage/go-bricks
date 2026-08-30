@@ -19,9 +19,18 @@ const holdTenantTableSuffix = "_tenant"
 // table.
 const postgresMaxIdentifierLen = 63
 
-// maxHoldTableNameLen bounds the configured name so every name derived from it
-// fits that limit.
-const maxHoldTableNameLen = postgresMaxIdentifierLen - len(holdTenantTableSuffix)
+// holdLongestDerivedAffix is the longest thing appended to the configured name:
+// the order index, `idx_<name>_tenant_order`. It is longer than the tenant table's
+// own suffix and longer than the `_pkey` PostgreSQL appends to that table, so
+// budgeting for it covers every derived name.
+const holdLongestDerivedAffix = len("idx_") + len("_tenant_order")
+
+// maxHoldTableNameLen bounds the configured name so EVERY name derived from it
+// fits the identifier limit. Budgeting only for the tenant table would leave the
+// two index names to truncate — and they share the prefix `idx_<name>_tenant_`,
+// so both would truncate to the same identifier, the second CREATE INDEX would
+// quietly do nothing, and the drain's due-tenant query would run unindexed.
+const maxHoldTableNameLen = postgresMaxIdentifierLen - holdLongestDerivedAffix
 
 // validateHoldTableName checks that name is a safe, unqualified identifier short
 // enough for its derived names.

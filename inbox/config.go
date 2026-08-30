@@ -100,8 +100,10 @@ func validateHoldConfig(h *config.InboxHoldConfig) error {
 		}
 	}
 
-	if err := validateTableName(h.TableName); err != nil {
-		return fmt.Errorf("inbox: hold.tablename: %w", err)
+	// The hold's own bound, not the inbox ledger's: a name between the two passes
+	// here and fails later in the store, which is a fail-fast that does not.
+	if err := validateHoldTableName(h.TableName); err != nil {
+		return fmt.Errorf("inbox: %w", err)
 	}
 	return nil
 }
