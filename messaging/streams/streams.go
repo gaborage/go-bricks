@@ -137,6 +137,12 @@ type ConsumerOptions struct {
 	SAC bool
 	// Handler processes each message. Required.
 	Handler Handler
+	// Retry bounds in-place re-invocation of Handler after it returns an error.
+	// Nil is one attempt, unless Hold is set — see DefaultHoldRetry.
+	Retry *RetryOptions
+	// Hold parks a failed delivery in this consumer's hold ledger, keeping the
+	// tenant's later messages behind it while the rest of the partition flows.
+	Hold bool
 }
 
 // SuperStreamConsumerOptions declares one consumer over every partition of a
@@ -163,4 +169,10 @@ type SuperStreamConsumerOptions struct {
 	// Handler processes each message. Required, and called concurrently across
 	// partitions — see Handler.
 	Handler Handler
+	// Retry bounds in-place re-invocation of Handler after it returns an error.
+	// Nil is one attempt, unless Hold is set — see DefaultHoldRetry.
+	Retry *RetryOptions
+	// Hold parks a failed delivery in this consumer's hold ledger, keeping the
+	// tenant's later messages behind it while the rest of the partition flows.
+	Hold bool
 }

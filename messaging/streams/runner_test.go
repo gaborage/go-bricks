@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 )
 
 var errHandlerFailed = errors.New("handler failed")
@@ -532,4 +533,61 @@ func TestRunnerDeliverHandlesEmptyBody(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Nil(t, got.Data)
 	assert.Nil(t, got.Properties)
+}
+
+// TestRunnerDeliverRetriesBeforeCommitting pins the policy at the lane's own seam:
+// a runner carrying one commits the offset once the handler finally succeeds, and a
+// runner without one is the unchanged single-attempt lane.
+func TestRunnerDeliverRetriesBeforeCommitting(t *testing.T) {
+	t.Run("runner_retries_then_commits", func(t *testing.T) {
+		clock := newFakeClock()
+		calls := 0
+		runner := newTestRunner(t, func(context.Context, *Message) error {
+			calls++
+			if calls < 3 {
+				return errHandlerFailed
+			}
+			return nil
+		}, newOffsetTracker(1, time.Hour, clock.Now))
+		runner.retry = &delivery.Retry{MaxAttempts: 3}
+		storer := &fakeStorer{}
+
+		runner.deliver(testStream, 61, amqpMessage("payload"), storer)
+
+		assert.Equal(t, 3, calls)
+		assert.Equal(t, []int64{61}, storer.offsets())
+	})
+
+	t.Run("runner_without_retry_is_unchanged", func(t *testing.T) {
+		clock := newFakeClock()
+		calls := 0
+		runner := newTestRunner(t, func(context.Context, *Message) error {
+			calls++
+			return errHandlerFailed
+		}, newOffsetTracker(1, time.Hour, clock.Now))
+		storer := &fakeStorer{}
+
+		runner.deliver(testStream, 61, amqpMessage("payload"), storer)
+
+		assert.Equal(t, 1, calls)
+		assert.Empty(t, storer.offsets())
+	})
+}
+
+// TestStreamsPermanentMarksTheErrorForTheLane pins that the lane's own spelling is
+// the pipeline's claim, so a handler marking an error permanent stops the retry.
+func TestStreamsPermanentMarksTheErrorForTheLane(t *testing.T) {
+	clock := newFakeClock()
+	calls := 0
+	runner := newTestRunner(t, func(context.Context, *Message) error {
+		calls++
+		return Permanent(errHandlerFailed)
+	}, newOffsetTracker(1, time.Hour, clock.Now))
+	runner.retry = &delivery.Retry{MaxAttempts: 3}
+	storer := &fakeStorer{}
+
+	runner.deliver(testStream, 61, amqpMessage("payload"), storer)
+
+	assert.Equal(t, 1, calls, "a permanent error is not retried")
+	assert.Empty(t, storer.offsets())
 }

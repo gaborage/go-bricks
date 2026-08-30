@@ -30,6 +30,8 @@ type consumerDeclaration struct {
 	SAC     bool
 	Handler Handler
 	Super   bool
+	Retry   *RetryOptions
+	Hold    bool
 }
 
 // consumerKey identifies a consumer for duplicate detection.
@@ -154,6 +156,8 @@ func (d *Declarations) DeclareConsumer(opts *ConsumerOptions) {
 		Start:   opts.Start,
 		SAC:     opts.SAC,
 		Handler: opts.Handler,
+		Retry:   opts.Retry,
+		Hold:    opts.Hold,
 	})
 }
 
@@ -174,6 +178,8 @@ func (d *Declarations) DeclareSuperStreamConsumer(opts *SuperStreamConsumerOptio
 		SAC:     true,
 		Handler: opts.Handler,
 		Super:   true,
+		Retry:   opts.Retry,
+		Hold:    opts.Hold,
 	})
 }
 
@@ -330,6 +336,33 @@ func (d *Declarations) consumerErrors() []error {
 		if err := d.consumerTargetError(c); err != nil {
 			errs = append(errs, err)
 		}
+		errs = append(errs, retryErrors(c)...)
+	}
+	return errs
+}
+
+// retryErrors reports every problem with one consumer's retry policy. A policy
+// the runner cannot honor is a startup error rather than a silent correction:
+// a bound of zero would mean "never handle", and an inverted pair hides which of
+// the two waits the caller meant.
+func retryErrors(c *consumerDeclaration) []error {
+	if c.Retry == nil {
+		return nil
+	}
+
+	var errs []error
+	if c.Retry.MaxAttempts < 1 {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q declares MaxAttempts %d; at least 1 is required",
+			c.Name, c.Stream, c.Retry.MaxAttempts))
+	}
+	if c.Retry.InitialBackoff < 0 {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q has a negative InitialBackoff", c.Name, c.Stream))
+	}
+	if c.Retry.MaxBackoff < 0 {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q has a negative MaxBackoff", c.Name, c.Stream))
+	}
+	if c.Retry.MaxBackoff > 0 && c.Retry.InitialBackoff > c.Retry.MaxBackoff {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q InitialBackoff exceeds MaxBackoff", c.Name, c.Stream))
 	}
 	return errs
 }

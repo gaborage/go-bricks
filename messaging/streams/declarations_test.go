@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 )
 
 const (
@@ -784,4 +786,134 @@ func TestDeclarePublisherAndSuperStreamPublisherShareTheDuplicateKey(t *testing.
 		func() { d.DeclareSuperStreamPublisher(&SuperStreamPublisherOptions{SuperStream: testStream}) })
 
 	assert.Equal(t, 1, d.Stats().Publishers)
+}
+
+// TestValidateRejectsAnUnusableRetryPolicy pins the three rules a retry policy owes
+// before a consumer starts: a bound of at least one attempt, no negative wait, and
+// a cap no smaller than the first wait.
+func TestValidateRejectsAnUnusableRetryPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		retry   *RetryOptions
+		hold    bool
+		wantErr string
+	}{
+		{
+			name:    "validate_rejects_zero_attempts",
+			retry:   &RetryOptions{MaxAttempts: 0},
+			wantErr: "MaxAttempts 0",
+		},
+		{
+			name:    "validate_rejects_negative_backoff",
+			retry:   &RetryOptions{MaxAttempts: 1, InitialBackoff: -1},
+			wantErr: "negative InitialBackoff",
+		},
+		{
+			name:    "validate_rejects_inverted_backoff",
+			retry:   &RetryOptions{MaxAttempts: 3, InitialBackoff: 2 * time.Second, MaxBackoff: time.Second},
+			wantErr: "exceeds MaxBackoff",
+		},
+		{
+			name:  "validate_accepts_hold_without_retry",
+			hold:  true,
+			retry: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := NewDeclarations()
+			d.DeclareStream(testStream, nil)
+			d.DeclareConsumer(&ConsumerOptions{
+				Stream:  testStream,
+				Name:    testConsumerName,
+				Handler: noopHandler,
+				Retry:   tc.retry,
+				Hold:    tc.hold,
+			})
+
+			err := d.Validate()
+
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestDeclareConsumerCarriesTheRetryPolicy pins that both declare methods copy the
+// two new fields onto the declaration the runner is built from.
+func TestDeclareConsumerCarriesTheRetryPolicy(t *testing.T) {
+	retry := &RetryOptions{MaxAttempts: 2}
+
+	t.Run("plain_consumer", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclareStream(testStream, nil)
+		d.DeclareConsumer(&ConsumerOptions{
+			Stream: testStream, Name: testConsumerName, Handler: noopHandler, Retry: retry, Hold: true,
+		})
+
+		require.Len(t, d.consumers, 1)
+		assert.Equal(t, retry, d.consumers[0].Retry)
+		assert.True(t, d.consumers[0].Hold)
+	})
+
+	t.Run("super_stream_consumer", func(t *testing.T) {
+		d := NewDeclarations()
+		d.DeclareSuperStream(testSuperStream, testPartitions, nil)
+		d.DeclareSuperStreamConsumer(&SuperStreamConsumerOptions{
+			SuperStream: testSuperStream, Name: testConsumerName, Handler: noopHandler, Retry: retry, Hold: true,
+		})
+
+		require.Len(t, d.consumers, 1)
+		assert.Equal(t, retry, d.consumers[0].Retry)
+		assert.True(t, d.consumers[0].Hold)
+	})
+}
+
+// TestNewRunnerResolvesTheRetryPolicy pins what the runner ends up with: a hold
+// without a policy takes the framework default, an explicit policy is carried
+// verbatim, and a consumer that asks for neither keeps today's single attempt.
+func TestNewRunnerResolvesTheRetryPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		decl *consumerDeclaration
+		want *delivery.Retry
+	}{
+		{
+			name: "hold_defaults_the_retry",
+			decl: &consumerDeclaration{Stream: testStream, Name: testConsumerName, Handler: noopHandler, Hold: true},
+			want: &delivery.Retry{
+				MaxAttempts:    DefaultHoldRetry.MaxAttempts,
+				InitialBackoff: DefaultHoldRetry.InitialBackoff,
+				MaxBackoff:     DefaultHoldRetry.MaxBackoff,
+			},
+		},
+		{
+			name: "explicit_retry_without_hold",
+			decl: &consumerDeclaration{
+				Stream: testStream, Name: testConsumerName, Handler: noopHandler,
+				Retry: &RetryOptions{MaxAttempts: 2},
+			},
+			want: &delivery.Retry{MaxAttempts: 2},
+		},
+		{
+			name: "no_hold_no_retry_is_one_attempt",
+			decl: &consumerDeclaration{Stream: testStream, Name: testConsumerName, Handler: noopHandler},
+			want: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testManager(t)
+
+			runner := m.newRunner(context.Background(), tc.decl)
+
+			assert.Equal(t, tc.want, runner.retry)
+		})
+	}
 }

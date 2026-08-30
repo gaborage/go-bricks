@@ -211,6 +211,8 @@ type consumerRunner struct {
 	handler Handler
 	offsets *offsetBook
 	log     logger.Logger
+	// retry bounds in-place re-invocation of the handler; nil is one attempt.
+	retry *delivery.Retry
 
 	// baseCtx is held rather than passed because the client's MessagesHandler
 	// carries no context of its own. The manager cancels it in StopConsumers.
@@ -251,6 +253,7 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 		},
 		Metrics: tracking.StreamConsumeAttributes(streamName),
 		Log:     r.log,
+		Retry:   r.retry,
 		Handle: func(msgCtx context.Context, _ logger.Logger, _ string) error {
 			// The handler signature is unchanged (ADR-069 follow-up decision Q1):
 			// a handler reads the trace id from msgCtx via trace.IDFromContext.
