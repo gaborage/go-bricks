@@ -2852,6 +2852,8 @@ GoBricks ships a complete AMQP/RabbitMQ stack: **declarative topology** (exchang
 
 ```yaml
 messaging:
+  tenancy: per-tenant                      # or: shared — one control-plane broker, tenant carried
+                                           # as the x-tenant-id stamp (see wiki/messaging.md)
   broker:
     url: amqp://guest:guest@localhost:5672/
     virtualhost: /
@@ -3959,6 +3961,24 @@ See [wiki/jose.md](wiki/jose.md) ("Outbound httpclient JOSE wrapping") and
 - Enable with `multitenant.enabled=true`.
 - Resolution strategies: `header` (default `X-Tenant-ID`), `subdomain` (`<tenant>.<domain>`), `path` (1-indexed segment with optional prefix gate), or `composite` (first-match chain over an explicit `resolver.order` — **required since v0.50.0 (ADR-039)**, no implicit default; recommended `[subdomain, path, header]`, or header-first when a trusted gateway owns `X-Tenant-ID`).
 - Each tenant gets isolated DB connections, messaging clients, and module lifecycle events.
+- `messaging.tenancy: shared` changes the messaging half: one control-plane broker for every tenant instead of one client per tenant, with the tenant carried per message as the `x-tenant-id` **tenant stamp** (ADR-087). Consumers replay once at boot, the framework writes the stamp on every publish from ctx, and the delivery pipeline reads it back and seeds the handler's tenant — so `deps.DB(ctx)` still resolves the right database with no handler code:
+
+```go
+// A consumer under messaging.tenancy: shared. The tenant arrives on the message.
+func (h *OrderHandler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
+    tenant, err := multitenant.TenantID(ctx) // ErrNoTenant when the delivery carried none
+    if err != nil {
+        return err
+    }
+    db, err := h.deps.DB(ctx)                // already tenant's database
+    if err != nil {
+        return err
+    }
+    return h.store(ctx, db, tenant, delivery.Body)
+}
+```
+
+  A missing or malformed stamp is refused before the handler (nack-without-requeue on the classic lane, uncommitted offset on the streams lane); set `ConsumerOptions.TenantOptional` for a control-plane consumer that legitimately has no tenant. A caller that sets `x-tenant-id` itself gets `messaging.ErrTenantStampConflict`. The stamp is identification, not authorization: under shared tenancy the queue's publish ACL is the tenant-isolation boundary.
 - Resolution runs as middleware before route matching, so `deps.DB(ctx)` / `deps.Cache(ctx)` etc. resolve to the tenant-specific instance on every request.
 - Resolved tenant IDs are validated against `^[a-z0-9-]{1,64}$` before landing in context. The composite resolver returns the first non-empty, valid tenant ID, advancing to the next sub-resolver when one yields nothing (empty result or error) or fails validation.
 

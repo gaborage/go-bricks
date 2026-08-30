@@ -1,5 +1,7 @@
 # ADR-041: Shared (Control-Plane) Ledger Tenancy for Outbox/Inbox
 
+> **Extended by [ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md) (2026-08-30):** §4's deferred consumer half now exists as `messaging.tenancy: shared`, with the tenant carried as an `x-tenant-id` stamp.
+
 **Status:** Accepted
 **Date:** 2026-07-23
 **Ships in:** the first release *after* v0.53.0 — the Context below describes

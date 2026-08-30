@@ -344,6 +344,99 @@ any other queue. The native lane publishes to the stream directly instead, with
 one synchronous broker confirmation per message and murmur3 partition routing on
 a super stream — see [streams.md#publishing](streams.md#publishing).
 
+## Multi-tenant consumption
+
+The messaging kind has a **tenancy**, `messaging.tenancy`, with the same two values the ledgers
+use (ADR-041, ADR-087):
+
+```yaml
+messaging:
+  tenancy: per-tenant   # default; or: shared
+  broker:
+    url: ${MESSAGING_BROKER_URL}
+```
+
+- **`per-tenant`** (the default, and the behaviour every existing deployment already has): one
+  client per tenant, resolved from `multitenant.tenants.<id>.messaging` or the resource source and
+  replayed lazily. Nothing below applies — the replay key already tells a consumer which tenant it
+  is serving.
+- **`shared`**: the whole kind resolves on the **control-plane key**. Declared consumers replay
+  once at boot, `deps.Messaging(ctx)` returns the control-plane publisher with no tenant required,
+  and the tenant travels per message instead.
+
+Under `multitenant.enabled: false`, `shared` is a no-op: single-tenant already resolves the one
+key, so the two values behave identically and a config can move between environments unchanged.
+
+### The tenant stamp
+
+Under shared tenancy the tenant travels as the **`x-tenant-id` tenant stamp** — an AMQP 0.9.1
+header on the classic lane, an AMQP 1.0 application property on the streams lane, the same entry
+either way.
+
+**The framework is its only writer.** Every publish through `deps.Messaging(ctx)` — and the outbox
+relay — stamps the tenant from the publishing context. A caller that sets `x-tenant-id` itself gets
+a publish error, `messaging.ErrTenantStampConflict` (re-exported as
+`streams.ErrTenantStampConflict`, the same value, so `errors.Is` holds across lanes). A value equal
+to the one the framework would have written is refused too: guessing right is still claiming a
+field the caller does not own.
+
+**The consumer reads it back automatically.** Before the handler runs, the delivery pipeline both
+lanes share reads the stamp, validates it against `multitenant.DefaultTenantIDPattern()`
+(`^[a-z0-9-]{1,64}$`), and puts the tenant in the handler's context — so `deps.DB(ctx)`,
+`deps.Cache(ctx)` and `multitenant.TenantID(ctx)` all resolve the right tenant with no handler
+code at all:
+
+```go
+func (h *OrderHandler) Handle(ctx context.Context, delivery *amqp.Delivery) error {
+    tenant, err := multitenant.TenantID(ctx)   // errors.Is(err, multitenant.ErrNoTenant) when none
+    if err != nil {
+        return err
+    }
+    db, err := h.deps.DB(ctx)                  // already this tenant's database
+    ...
+}
+```
+
+### Fail closed
+
+A delivery whose stamp is **missing or malformed never reaches the handler**. The classic lane
+nacks it without requeue (dead-lettered if the queue declares a DLQ); the streams lane leaves its
+offset uncommitted. The failure line names the reason and the byte length and **never the value**,
+because the stamp is producer-written and arrives unauthenticated.
+
+A consumer whose events legitimately belong to no tenant — a control-plane consumer — opts out:
+
+```go
+decls.DeclareConsumer(&messaging.ConsumerOptions{
+    Queue:          "platform.audit",
+    Consumer:       "audit-writer",
+    EventType:      "platform.audit",
+    Handler:        auditHandler,
+    TenantOptional: true,   // an ABSENT stamp is fine; a malformed one is still refused
+})
+```
+
+`TenantOptional` relaxes only absence. A stamp that is present but unusable — a non-string, a value
+outside the grammar, or one written as nil — is refused for every consumer.
+
+### Configuration rules
+
+- A `multitenant.tenants.<id>.messaging` block beside `messaging.tenancy: shared` **fails check**:
+  nothing would ever read it.
+- The root `messaging:` block is **legal beside static tenants** under shared tenancy — it is the
+  control-plane broker.
+- Stream consumption is refused only under **per-tenant** tenancy; `shared` admits it
+  ([streams.md](streams.md)).
+
+### What the stamp is not
+
+The stamp is **identification, not authorization** — ADR-039's rule one layer down. Any producer
+with publish rights to the queue can write any syntactically valid tenant id, so under
+`messaging.tenancy: shared` **the queue's publish ACL is the tenant-isolation boundary**. The
+framework tells you which tenant a message claims to be for; the deployment decides who may claim
+it. Tenant existence is proven at the first `deps.DB(ctx)`, so an unknown tenant fails as a handler
+error rather than being silently accepted.
+
 ## Consumer Concurrency (v0.17+)
 
 **Breaking Change (v0.17.0):** Default worker count changed from 1 to `runtime.NumCPU() * 4` for optimal I/O-bound performance (20-30x throughput improvement).
