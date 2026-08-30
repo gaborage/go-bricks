@@ -1,6 +1,13 @@
 package multitenant
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrNoTenant reports a context that carries no tenant. It is the error form of
+// GetTenant's ok result, so every lane answers "no tenant" the same way.
+var ErrNoTenant = errors.New("multitenant: no tenant in context")
 
 // ctxKey ensures tenant context keys do not collide with external packages.
 type ctxKey string
@@ -26,4 +33,13 @@ func GetTenant(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return tenantID, true
+}
+
+// TenantID is GetTenant in error form: the tenant identifier, or ErrNoTenant.
+func TenantID(ctx context.Context) (string, error) {
+	tenantID, ok := GetTenant(ctx)
+	if !ok {
+		return "", ErrNoTenant
+	}
+	return tenantID, nil
 }

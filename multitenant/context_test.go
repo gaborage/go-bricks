@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetTenant(t *testing.T) {
@@ -58,5 +59,29 @@ func TestGetTenant(t *testing.T) {
 		tenantID1, ok1 := GetTenant(ctxWithTenant1)
 		assert.True(t, ok1)
 		assert.Equal(t, "tenant1", tenantID1)
+	})
+}
+
+func TestTenantID(t *testing.T) {
+	t.Run("tenant_id_present", func(t *testing.T) {
+		id, err := TenantID(SetTenant(context.Background(), "acme"))
+
+		require.NoError(t, err)
+		assert.Equal(t, "acme", id)
+	})
+
+	t.Run("tenant_id_absent", func(t *testing.T) {
+		id, err := TenantID(context.Background())
+
+		require.ErrorIs(t, err, ErrNoTenant)
+		assert.Empty(t, id)
+	})
+
+	t.Run("tenant_id_nil_ctx", func(t *testing.T) {
+		var nilCtx context.Context
+		id, err := TenantID(nilCtx)
+
+		require.ErrorIs(t, err, ErrNoTenant)
+		assert.Empty(t, id)
 	})
 }
