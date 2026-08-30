@@ -141,6 +141,52 @@ func scanHoldTenants(ctx context.Context, db dbtypes.Interface, what, query stri
 	return tenants, nil
 }
 
+// scanHoldRows runs a row-shaped query and reads its rows. Both vendors select
+// the same seven columns in the same order, so only their SQL differs.
+func scanHoldRows(ctx context.Context, db dbtypes.Interface, query string, args ...any) ([]HoldRow, error) {
+	rows, err := db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("inbox hold: next rows failed: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var held []HoldRow
+	for rows.Next() {
+		var row HoldRow
+		if err := rows.Scan(&row.Consumer, &row.Stream, &row.Offset, &row.TenantID, &row.Data, &row.Properties, &row.HeldAt); err != nil {
+			return nil, fmt.Errorf("inbox hold: scan held row failed: %w", err)
+		}
+		held = append(held, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inbox hold: next rows failed: %w", err)
+	}
+	return held, nil
+}
+
+// scanTenantIDs reads the one-column held-tenant listing a runner's held set
+// is built from.
+func scanTenantIDs(ctx context.Context, db dbtypes.Interface, query string, args ...any) ([]string, error) {
+	rows, err := db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("inbox hold: list held tenants failed: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tenants []string
+	for rows.Next() {
+		var tenant string
+		if err := rows.Scan(&tenant); err != nil {
+			return nil, fmt.Errorf("inbox hold: scan held tenant failed: %w", err)
+		}
+		tenants = append(tenants, tenant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("inbox hold: list held tenants failed: %w", err)
+	}
+	return tenants, nil
+}
+
 // scanHoldStats reads the three-column snapshot the gauges publish.
 func scanHoldStats(ctx context.Context, db dbtypes.Interface, query string, args ...any) (HoldStats, error) {
 	var stats HoldStats

@@ -100,24 +100,7 @@ func (s *postgresHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRo
 
 func (s *postgresHoldStore) HeldTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]string, error) {
 	query := fmt.Sprintf(`SELECT tenant_id FROM %s WHERE consumer = $1`, s.tenantTable)
-	rows, err := db.Query(ctx, query, consumer)
-	if err != nil {
-		return nil, fmt.Errorf("inbox postgres: list held tenants failed: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var tenants []string
-	for rows.Next() {
-		var tenant string
-		if err := rows.Scan(&tenant); err != nil {
-			return nil, fmt.Errorf("inbox postgres: scan held tenant failed: %w", err)
-		}
-		tenants = append(tenants, tenant)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("inbox postgres: list held tenants failed: %w", err)
-	}
-	return tenants, nil
+	return scanTenantIDs(ctx, db, query, consumer)
 }
 
 func (s *postgresHoldStore) ListTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]HoldTenant, error) {
@@ -172,24 +155,7 @@ func (s *postgresHoldStore) NextRows(ctx context.Context, db dbtypes.Interface, 
 		 ORDER BY stream, stream_offset LIMIT $3`,
 		s.table,
 	)
-	rows, err := db.Query(ctx, query, consumer, tenant, limit)
-	if err != nil {
-		return nil, fmt.Errorf("inbox postgres: next rows failed: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var held []HoldRow
-	for rows.Next() {
-		var row HoldRow
-		if err := rows.Scan(&row.Consumer, &row.Stream, &row.Offset, &row.TenantID, &row.Data, &row.Properties, &row.HeldAt); err != nil {
-			return nil, fmt.Errorf("inbox postgres: scan held row failed: %w", err)
-		}
-		held = append(held, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("inbox postgres: next rows failed: %w", err)
-	}
-	return held, nil
+	return scanHoldRows(ctx, db, query, consumer, tenant, limit)
 }
 
 // DeleteRow removes a replayed row only while this owner still holds the lease.

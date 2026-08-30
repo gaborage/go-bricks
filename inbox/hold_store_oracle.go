@@ -110,24 +110,7 @@ func (s *oracleHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRow)
 
 func (s *oracleHoldStore) HeldTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]string, error) {
 	query := fmt.Sprintf(`SELECT tenant_id FROM %s WHERE consumer = :1`, s.tenantTable)
-	rows, err := db.Query(ctx, query, consumer)
-	if err != nil {
-		return nil, fmt.Errorf("inbox oracle: list held tenants failed: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var tenants []string
-	for rows.Next() {
-		var tenant string
-		if err := rows.Scan(&tenant); err != nil {
-			return nil, fmt.Errorf("inbox oracle: scan held tenant failed: %w", err)
-		}
-		tenants = append(tenants, tenant)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("inbox oracle: list held tenants failed: %w", err)
-	}
-	return tenants, nil
+	return scanTenantIDs(ctx, db, query, consumer)
 }
 
 func (s *oracleHoldStore) ListTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]HoldTenant, error) {
@@ -180,24 +163,7 @@ func (s *oracleHoldStore) NextRows(ctx context.Context, db dbtypes.Interface, co
 		 ORDER BY stream, stream_offset FETCH FIRST :3 ROWS ONLY`,
 		s.table,
 	)
-	rows, err := db.Query(ctx, query, consumer, tenant, limit)
-	if err != nil {
-		return nil, fmt.Errorf("inbox oracle: next rows failed: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var held []HoldRow
-	for rows.Next() {
-		var row HoldRow
-		if err := rows.Scan(&row.Consumer, &row.Stream, &row.Offset, &row.TenantID, &row.Data, &row.Properties, &row.HeldAt); err != nil {
-			return nil, fmt.Errorf("inbox oracle: scan held row failed: %w", err)
-		}
-		held = append(held, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("inbox oracle: next rows failed: %w", err)
-	}
-	return held, nil
+	return scanHoldRows(ctx, db, query, consumer, tenant, limit)
 }
 
 func (s *oracleHoldStore) DeleteRow(ctx context.Context, db dbtypes.Interface, consumer, stream string, offset int64, tenant, owner string) (bool, error) {
