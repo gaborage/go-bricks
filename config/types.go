@@ -712,7 +712,9 @@ type SourceConfig struct {
 //   - AutoCreateTable: false (opt-in; set true to create the table on first use)
 //   - PollInterval: 5s (relay poll frequency)
 //   - BatchSize: 100 (events per relay cycle)
-//   - MaxRetries: 5 (poison-event dead-letter ceiling — undecodable headers or an unpublishable destination; connectivity failures are never counted — see the MaxRetries field doc)
+//   - MaxRetries: 5 (poison-event dead-letter ceiling — undecodable headers or an unpublishable
+//     destination; connectivity failures advance retry_count but are never dead-lettered by this
+//     count — see the MaxRetries field doc)
 //   - RetentionPeriod: 72h (cleanup published events older than this)
 //   - PublishTimeout: 60s (per-record relay publish bound)
 type OutboxConfig struct {
