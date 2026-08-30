@@ -821,7 +821,7 @@ func TestValidateRejectsAnUnusableRetryPolicy(t *testing.T) {
 		{
 			name:    "validate_rejects_a_policy_that_stalls_the_partition",
 			retry:   &RetryOptions{MaxAttempts: 2, InitialBackoff: MaxRetryWait + time.Second, MaxBackoff: 2 * time.Minute},
-			wantErr: "would wait 1m1s in place",
+			wantErr: "would wait at least 1m1s in place",
 		},
 		{
 			// The ceiling is inclusive: one attempt's wait of exactly MaxRetryWait is
@@ -832,6 +832,23 @@ func TestValidateRejectsAnUnusableRetryPolicy(t *testing.T) {
 		{
 			name:  "validate_accepts_a_zero_backoff_bound",
 			retry: &RetryOptions{MaxAttempts: 3},
+		},
+		{
+			// One attempt is the smallest legal bound: the rule refuses what is BELOW
+			// it, not the value itself.
+			name:  "validate_accepts_a_single_attempt",
+			retry: &RetryOptions{MaxAttempts: 1},
+		},
+		{
+			// And MaxRetryAttempts itself is allowed — the ceiling is inclusive.
+			name:  "validate_accepts_the_attempt_ceiling_exactly",
+			retry: &RetryOptions{MaxAttempts: MaxRetryAttempts},
+		},
+		{
+			// An uncapped policy is legal: MaxBackoff zero means "no cap", so it must
+			// not be read as a cap the InitialBackoff exceeds.
+			name:  "validate_accepts_an_uncapped_backoff",
+			retry: &RetryOptions{MaxAttempts: 2, InitialBackoff: time.Second},
 		},
 		{
 			name:  "validate_accepts_hold_without_retry",

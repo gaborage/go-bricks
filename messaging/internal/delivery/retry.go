@@ -49,41 +49,52 @@ func IsPermanent(err error) bool {
 // waits). The doubling is a bounded shift rather than a loop: MaxBackoff is
 // optional, so nothing else would stop a long bound from shifting the duration
 // past int64 and wrapping it NEGATIVE — which the wait door reads as "no wait",
-// turning the tail of a long policy into a tight loop.
+// turning the tail of a long policy into a tight loop. A negative InitialBackoff
+// is read as none rather than refused here; the lane's own validation rejects it
+// where a caller can still be told which field was wrong.
 func backoffFor(r *Retry, attempt int) time.Duration {
-	if r == nil || attempt < 2 || r.InitialBackoff <= 0 {
+	if r == nil || attempt < 2 {
+		return 0
+	}
+
+	base := max(r.InitialBackoff, 0)
+	if base == 0 {
 		return 0
 	}
 
 	// Named for what it is rather than "wait", which is the cancelable sleep this
-	// package already has.
+	// package already has. A shift of 63 or more leaves maxDuration>>shift at zero,
+	// which no positive base can be under, so the saturating branch covers it.
 	backoff := maxDuration
-	if shift := attempt - 2; shift < 63 && r.InitialBackoff <= maxDuration>>shift {
-		backoff = r.InitialBackoff << shift
+	if shift := attempt - 2; base <= maxDuration>>shift {
+		backoff = base << shift
 	}
 
-	if r.MaxBackoff > 0 && backoff > r.MaxBackoff {
-		return r.MaxBackoff
+	if r.MaxBackoff > 0 {
+		return min(backoff, r.MaxBackoff)
 	}
 	return backoff
 }
 
-// TotalBackoff is the worst case time a delivery spends waiting between attempts
-// under this policy: every backoff the bound allows, summed. The streams lane
-// bounds a declared policy by it, because the waits happen inside the partition's
-// own delivery callback. Saturates rather than wrapping, like backoffFor.
-func TotalBackoff(r *Retry) time.Duration {
-	if r == nil || r.InitialBackoff <= 0 {
-		return 0
+// BackoffBudget reports how long a policy's waits add up to and whether they pass
+// over budget. It stops at the wait that proves the crossing, so the running total
+// never has to saturate: the duration is the exact total when the policy fits, and
+// the sum through the crossing wait — a lower bound — when it does not.
+func BackoffBudget(r *Retry, budget time.Duration) (total time.Duration, exceeded bool) {
+	if r == nil {
+		return 0, false
 	}
 
-	var total time.Duration
 	for attempt := 2; attempt <= r.MaxAttempts; attempt++ {
 		wait := backoffFor(r, attempt)
-		if total > maxDuration-wait {
-			return maxDuration
+		if wait == 0 {
+			// Waits only grow, so the first zero says every later one is zero too.
+			break
+		}
+		if wait > budget-total {
+			return total + wait, true
 		}
 		total += wait
 	}
-	return total
+	return total, false
 }

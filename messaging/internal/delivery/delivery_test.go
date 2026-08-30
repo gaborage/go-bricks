@@ -1445,6 +1445,29 @@ func TestBackoffForSaturatesInsteadOfWrapping(t *testing.T) {
 			attempt: 65,
 			want:    maxDuration,
 		},
+		{
+			// A base that fits the shift EXACTLY must still be shifted, not saturated:
+			// the boundary the overflow check turns on.
+			name:    "a_base_that_exactly_fits_the_shift_is_shifted",
+			retry:   &Retry{MaxAttempts: 3, InitialBackoff: maxDuration >> 1},
+			attempt: 3,
+			want:    (maxDuration >> 1) << 1,
+		},
+		{
+			// A zero base stays zero however far the shift would reach — the guard
+			// must not fall through to the saturating branch.
+			name:    "a_zero_base_never_saturates",
+			retry:   &Retry{MaxAttempts: 70},
+			attempt: 65,
+			want:    0,
+		},
+		{
+			// A negative base is read as none rather than shifted into a negative wait.
+			name:    "a_negative_base_waits_nothing",
+			retry:   &Retry{MaxAttempts: 3, InitialBackoff: -time.Second, MaxBackoff: time.Minute},
+			attempt: 3,
+			want:    0,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1457,38 +1480,65 @@ func TestBackoffForSaturatesInsteadOfWrapping(t *testing.T) {
 	}
 }
 
-// TestTotalBackoffSumsTheWholeBound pins what the streams lane bounds a declared
-// policy by: the worst case time one delivery spends waiting, which is what a
-// partition's other tenants pay for.
-func TestTotalBackoffSumsTheWholeBound(t *testing.T) {
+// TestBackoffBudgetStopsAtTheCrossingWait pins what the streams lane bounds a
+// declared policy by, including the two boundaries a `<` and a `<=` differ on: a
+// total that lands EXACTLY on the budget fits, and the LAST attempt's wait counts.
+func TestBackoffBudgetStopsAtTheCrossingWait(t *testing.T) {
 	tests := []struct {
-		name  string
-		retry *Retry
-		want  time.Duration
+		name         string
+		retry        *Retry
+		budget       time.Duration
+		wantTotal    time.Duration
+		wantExceeded bool
 	}{
-		{name: "nil_policy_waits_nothing", retry: nil, want: 0},
-		{name: "zero_backoff_waits_nothing", retry: &Retry{MaxAttempts: 5}, want: 0},
-		{name: "one_attempt_waits_nothing", retry: &Retry{MaxAttempts: 1, InitialBackoff: time.Second}, want: 0},
+		{name: "nil_policy_waits_nothing", retry: nil, budget: time.Minute},
+		{name: "zero_backoff_waits_nothing", retry: &Retry{MaxAttempts: 5}, budget: time.Minute},
+		{name: "one_attempt_waits_nothing", retry: &Retry{MaxAttempts: 1, InitialBackoff: time.Second}, budget: time.Minute},
 		{
-			name:  "sums_every_wait_the_bound_allows",
-			retry: &Retry{MaxAttempts: 4, InitialBackoff: time.Second, MaxBackoff: 4 * time.Second},
-			want:  7 * time.Second, // 1s + 2s + 4s
+			name:      "sums_every_wait_the_bound_allows",
+			retry:     &Retry{MaxAttempts: 4, InitialBackoff: time.Second, MaxBackoff: 4 * time.Second},
+			budget:    time.Minute,
+			wantTotal: 7 * time.Second, // 1s + 2s + 4s
 		},
 		{
-			name:  "counts_the_cap_once_it_is_reached",
-			retry: &Retry{MaxAttempts: 5, InitialBackoff: time.Second, MaxBackoff: 2 * time.Second},
-			want:  7 * time.Second, // 1s + 2s + 2s + 2s
+			name:      "counts_the_cap_once_it_is_reached",
+			retry:     &Retry{MaxAttempts: 5, InitialBackoff: time.Second, MaxBackoff: 2 * time.Second},
+			budget:    time.Minute,
+			wantTotal: 7 * time.Second, // 1s + 2s + 2s + 2s
 		},
 		{
-			name:  "uncapped_saturates_rather_than_wrapping",
-			retry: &Retry{MaxAttempts: 200, InitialBackoff: time.Second},
-			want:  maxDuration,
+			// The budget is inclusive: a policy landing exactly on it fits, which is
+			// the case a `>=` in the crossing check would wrongly refuse.
+			name:      "a_total_exactly_on_the_budget_fits",
+			retry:     &Retry{MaxAttempts: 3, InitialBackoff: 20 * time.Second, MaxBackoff: 40 * time.Second},
+			budget:    time.Minute,
+			wantTotal: time.Minute, // 20s + 40s
+		},
+		{
+			// The LAST attempt's wait counts: dropping it would accept this policy.
+			name:         "the_last_attempts_wait_still_counts",
+			retry:        &Retry{MaxAttempts: 3, InitialBackoff: 30 * time.Second, MaxBackoff: 31 * time.Second},
+			budget:       time.Minute,
+			wantTotal:    61 * time.Second,
+			wantExceeded: true,
+		},
+		{
+			// 1s+2s+4s+8s+16s fits in the minute; the 32s that follows crosses it, and
+			// the reported total is the sum through that wait.
+			name:         "an_uncapped_policy_passes_over_and_reports_the_crossing",
+			retry:        &Retry{MaxAttempts: 200, InitialBackoff: time.Second},
+			budget:       time.Minute,
+			wantTotal:    63 * time.Second,
+			wantExceeded: true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, TotalBackoff(tc.retry))
+			total, exceeded := BackoffBudget(tc.retry, tc.budget)
+
+			assert.Equal(t, tc.wantTotal, total)
+			assert.Equal(t, tc.wantExceeded, exceeded)
 		})
 	}
 }

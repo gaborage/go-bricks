@@ -374,8 +374,8 @@ func retryErrors(c *consumerDeclaration) []error {
 	// Only worth computing once the shape holds: a negative or inverted pair would
 	// report a total that says less than the rule it already broke.
 	if len(errs) == 0 {
-		if total := delivery.TotalBackoff(toDeliveryRetry(retry)); total > MaxRetryWait {
-			errs = append(errs, fmt.Errorf("consumer %q on stream %q would wait %s in place across its attempts; at most %s is allowed",
+		if total, exceeded := delivery.BackoffBudget(toDeliveryRetry(retry), MaxRetryWait); exceeded {
+			errs = append(errs, fmt.Errorf("consumer %q on stream %q would wait at least %s in place across its attempts; at most %s is allowed",
 				c.Name, c.Stream, total, MaxRetryWait))
 		}
 	}

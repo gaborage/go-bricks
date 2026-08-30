@@ -296,12 +296,13 @@ func runAttempts(ctx context.Context, log logger.Logger, traceID string, req *Re
 }
 
 // wait sleeps for d unless the context ends first, reporting whether the caller
-// may try again. A consumer shutting down must not sleep out its backoff.
+// may try again. A consumer shutting down must not sleep out its backoff. d comes
+// from backoffFor, which never returns a negative duration.
 func wait(ctx context.Context, d time.Duration) bool {
 	if ctx.Err() != nil {
 		return false
 	}
-	if d <= 0 {
+	if d == 0 {
 		return true
 	}
 
