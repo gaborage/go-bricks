@@ -138,7 +138,10 @@ type ConsumerOptions struct {
 	// Handler processes each message. Required.
 	Handler Handler
 	// Retry bounds in-place re-invocation of Handler after it returns an error.
-	// Nil is one attempt, unless Hold is set — see DefaultHoldRetry.
+	// Nil is one attempt, unless Hold is set — see DefaultHoldRetry. A policy may
+	// ask for at most MaxRetryAttempts attempts and MaxRetryWait of total waiting,
+	// because the waits run inside the partition's own delivery callback; a failure
+	// that needs more patience than that belongs in the hold.
 	Retry *RetryOptions
 	// Hold asks for per-tenant parking of a failed delivery. Today it selects
 	// DefaultHoldRetry when Retry is nil; the ledger the parked delivery lands in
@@ -171,7 +174,10 @@ type SuperStreamConsumerOptions struct {
 	// partitions — see Handler.
 	Handler Handler
 	// Retry bounds in-place re-invocation of Handler after it returns an error.
-	// Nil is one attempt, unless Hold is set — see DefaultHoldRetry.
+	// Nil is one attempt, unless Hold is set — see DefaultHoldRetry. A policy may
+	// ask for at most MaxRetryAttempts attempts and MaxRetryWait of total waiting,
+	// because the waits run inside the partition's own delivery callback; a failure
+	// that needs more patience than that belongs in the hold.
 	Retry *RetryOptions
 	// Hold asks for per-tenant parking of a failed delivery. Today it selects
 	// DefaultHoldRetry when Retry is nil; the ledger the parked delivery lands in

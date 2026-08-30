@@ -1456,3 +1456,39 @@ func TestBackoffForSaturatesInsteadOfWrapping(t *testing.T) {
 		})
 	}
 }
+
+// TestTotalBackoffSumsTheWholeBound pins what the streams lane bounds a declared
+// policy by: the worst case time one delivery spends waiting, which is what a
+// partition's other tenants pay for.
+func TestTotalBackoffSumsTheWholeBound(t *testing.T) {
+	tests := []struct {
+		name  string
+		retry *Retry
+		want  time.Duration
+	}{
+		{name: "nil_policy_waits_nothing", retry: nil, want: 0},
+		{name: "zero_backoff_waits_nothing", retry: &Retry{MaxAttempts: 5}, want: 0},
+		{name: "one_attempt_waits_nothing", retry: &Retry{MaxAttempts: 1, InitialBackoff: time.Second}, want: 0},
+		{
+			name:  "sums_every_wait_the_bound_allows",
+			retry: &Retry{MaxAttempts: 4, InitialBackoff: time.Second, MaxBackoff: 4 * time.Second},
+			want:  7 * time.Second, // 1s + 2s + 4s
+		},
+		{
+			name:  "counts_the_cap_once_it_is_reached",
+			retry: &Retry{MaxAttempts: 5, InitialBackoff: time.Second, MaxBackoff: 2 * time.Second},
+			want:  7 * time.Second, // 1s + 2s + 2s + 2s
+		},
+		{
+			name:  "uncapped_saturates_rather_than_wrapping",
+			retry: &Retry{MaxAttempts: 200, InitialBackoff: time.Second},
+			want:  maxDuration,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, TotalBackoff(tc.retry))
+		})
+	}
+}

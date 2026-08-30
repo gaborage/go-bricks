@@ -3,6 +3,8 @@ package streams
 import (
 	"errors"
 	"fmt"
+
+	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 )
 
 // streamDeclaration is one declared stream and its retention spec.
@@ -355,6 +357,10 @@ func retryErrors(c *consumerDeclaration) []error {
 		errs = append(errs, fmt.Errorf("consumer %q on stream %q declares MaxAttempts %d; at least 1 is required",
 			c.Name, c.Stream, c.Retry.MaxAttempts))
 	}
+	if c.Retry.MaxAttempts > MaxRetryAttempts {
+		errs = append(errs, fmt.Errorf("consumer %q on stream %q declares MaxAttempts %d; at most %d is allowed",
+			c.Name, c.Stream, c.Retry.MaxAttempts, MaxRetryAttempts))
+	}
 	if c.Retry.InitialBackoff < 0 {
 		errs = append(errs, fmt.Errorf("consumer %q on stream %q has a negative InitialBackoff", c.Name, c.Stream))
 	}
@@ -363,6 +369,14 @@ func retryErrors(c *consumerDeclaration) []error {
 	}
 	if c.Retry.MaxBackoff > 0 && c.Retry.InitialBackoff > c.Retry.MaxBackoff {
 		errs = append(errs, fmt.Errorf("consumer %q on stream %q InitialBackoff exceeds MaxBackoff", c.Name, c.Stream))
+	}
+	// Only worth computing once the shape holds: a negative or inverted pair would
+	// report a total that says less than the rule it already broke.
+	if len(errs) == 0 {
+		if total := delivery.TotalBackoff(toDeliveryRetry(c.Retry)); total > MaxRetryWait {
+			errs = append(errs, fmt.Errorf("consumer %q on stream %q would wait %s in place across its attempts; at most %s is allowed",
+				c.Name, c.Stream, total, MaxRetryWait))
+		}
 	}
 	return errs
 }

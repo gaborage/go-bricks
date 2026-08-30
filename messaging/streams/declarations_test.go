@@ -814,6 +814,26 @@ func TestValidateRejectsAnUnusableRetryPolicy(t *testing.T) {
 			wantErr: "exceeds MaxBackoff",
 		},
 		{
+			name:    "validate_rejects_too_many_attempts",
+			retry:   &RetryOptions{MaxAttempts: MaxRetryAttempts + 1},
+			wantErr: "at most 10 is allowed",
+		},
+		{
+			name:    "validate_rejects_a_policy_that_stalls_the_partition",
+			retry:   &RetryOptions{MaxAttempts: 2, InitialBackoff: MaxRetryWait + time.Second, MaxBackoff: 2 * time.Minute},
+			wantErr: "would wait 1m1s in place",
+		},
+		{
+			// The ceiling is inclusive: one attempt's wait of exactly MaxRetryWait is
+			// the largest policy the lane accepts, and it must not be off by one.
+			name:  "validate_accepts_the_ceiling_exactly",
+			retry: &RetryOptions{MaxAttempts: 2, InitialBackoff: MaxRetryWait, MaxBackoff: MaxRetryWait},
+		},
+		{
+			name:  "validate_accepts_a_zero_backoff_bound",
+			retry: &RetryOptions{MaxAttempts: 3},
+		},
+		{
 			name:  "validate_accepts_hold_without_retry",
 			hold:  true,
 			retry: nil,

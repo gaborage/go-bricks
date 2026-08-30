@@ -16,6 +16,16 @@ type RetryOptions struct {
 	MaxBackoff     time.Duration
 }
 
+const (
+	// MaxRetryAttempts and MaxRetryWait bound what a declared policy may ask of one
+	// partition. The waits happen inside that partition's own delivery callback, so
+	// a long policy is a stall every OTHER tenant on the partition pays for; work
+	// that needs more patience than this belongs in the hold, which parks one
+	// tenant and lets the partition move.
+	MaxRetryAttempts = 10
+	MaxRetryWait     = time.Minute
+)
+
 // DefaultHoldRetry is the policy a holding consumer gets when it declares none.
 // A consumer that does not hold keeps today's single attempt unless it asks for
 // a policy itself.

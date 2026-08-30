@@ -67,3 +67,23 @@ func backoffFor(r *Retry, attempt int) time.Duration {
 	}
 	return backoff
 }
+
+// TotalBackoff is the worst case time a delivery spends waiting between attempts
+// under this policy: every backoff the bound allows, summed. The streams lane
+// bounds a declared policy by it, because the waits happen inside the partition's
+// own delivery callback. Saturates rather than wrapping, like backoffFor.
+func TotalBackoff(r *Retry) time.Duration {
+	if r == nil || r.InitialBackoff <= 0 {
+		return 0
+	}
+
+	var total time.Duration
+	for attempt := 2; attempt <= r.MaxAttempts; attempt++ {
+		wait := backoffFor(r, attempt)
+		if total > maxDuration-wait {
+			return maxDuration
+		}
+		total += wait
+	}
+	return total
+}
