@@ -274,6 +274,50 @@ func TestModuleInitAllowsShortPublishTimeoutWhenNoRetries(t *testing.T) {
 	require.NoError(t, m.Init(deps))
 }
 
+// TestModuleInitRejectsAnOversizedDefaultExchange guards the startup bound: an
+// outbox.defaultexchange past the AMQP shortstr ceiling makes every row that falls
+// back to it unpublishable, so Init refuses it beside the publishtimeout guards.
+func TestModuleInitRejectsAnOversizedDefaultExchange(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: oversizedShortStr},
+			Messaging: config.MessagingConfig{
+				Broker: config.BrokerConfig{URL: "amqp://localhost"},
+			},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
+	assert.Contains(t, err.Error(), "outbox.defaultexchange")
+	assert.Contains(t, err.Error(), "256 bytes")
+	assert.NotContains(t, err.Error(), oversizedShortStr, "the error names the key and the length, never the value")
+}
+
+// TestModuleInitAllowsAMaxLengthDefaultExchange pins the boundary: 255 bytes is what
+// the frame carries, so it initializes.
+func TestModuleInitAllowsAMaxLengthDefaultExchange(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: maxLengthShortStr},
+			Messaging: config.MessagingConfig{
+				Broker: config.BrokerConfig{URL: "amqp://localhost"},
+			},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	require.NoError(t, m.Init(deps))
+}
+
 // TestModuleInitMessagingUnconfiguredErrorPrecedesTimeoutGuard pins Init's error
 // ordering: with no broker URL AND a publishtimeout below connectiontimeout, the
 // actionable root cause ("messaging is not configured") must surface, not the derived

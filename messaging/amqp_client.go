@@ -408,7 +408,7 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte)
 func (c *AMQPClientImpl) publishPrologue(
 	ctx context.Context, options PublishOptions, dataLen int,
 ) (spanCtx context.Context, span trace.Span, publishStart time.Time, err error) {
-	if err := validatePublishDestination(&options); err != nil {
+	if err := ValidatePublishDestination(options); err != nil {
 		return ctx, nil, time.Time{}, err
 	}
 
@@ -1254,7 +1254,7 @@ func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptio
 	// package's protection depended on which internal caller was used — and the
 	// one thing an unwritable frame costs is the connection every publisher
 	// shares (#1123).
-	if err := validatePublishDestination(&options); err != nil {
+	if err := ValidatePublishDestination(options); err != nil {
 		return err
 	}
 

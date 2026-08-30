@@ -422,6 +422,49 @@ func TestRelayDeadLettersPoisonAtMaxRetries(t *testing.T) {
 	assert.Equal(t, 0, store.MarkFailedCalls)
 }
 
+// TestRelayDeadLettersInvalidPublishDestinationAtMaxRetries: a publish refused with
+// messaging.ErrInvalidPublishDestination is message-intrinsic — the frame is unwritable
+// whatever the broker's state — so it is the second poison class and parks at MaxRetries
+// rather than being re-attempted for the life of the table.
+func TestRelayDeadLettersInvalidPublishDestinationAtMaxRetries(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "unpublishable", Exchange: "ex", RoutingKey: "rk", RetryCount: 99}, // past MaxRetries
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{
+		"ex:rk": fmt.Errorf("%w: routing key is 256 bytes, limit is 255", messaging.ErrInvalidPublishDestination),
+	}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	require.NoError(t, r.Execute(ctx))
+	assert.Equal(t, 1, amqp.PublishCalls, "the record is attempted once this cycle")
+	assert.Equal(t, 1, store.MarkDeadLetteredCalls, "an unpublishable destination parks at MaxRetries")
+	assert.Equal(t, "unpublishable", store.MarkDeadLetteredLastID)
+	assert.Equal(t, 0, store.MarkFailedCalls)
+}
+
+// TestRelayKeepsInvalidPublishDestinationPendingBelowMaxRetries: below the ceiling the
+// record only advances retry_count and stays pending, the same shape the decode-poison
+// path already has.
+func TestRelayKeepsInvalidPublishDestinationPendingBelowMaxRetries(t *testing.T) {
+	store := &fakeStore{FetchPendingResult: []Record{
+		{ID: "unpublishable", Exchange: "ex", RoutingKey: "rk"}, // RetryCount 0, MaxRetries 3
+	}}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{
+		"ex:rk": fmt.Errorf("%w: exchange is 256 bytes, limit is 255", messaging.ErrInvalidPublishDestination),
+	}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	require.NoError(t, r.Execute(ctx))
+	assert.Equal(t, 1, store.MarkFailedCalls, "below the ceiling retry_count advances and the record stays pending")
+	assert.Equal(t, 0, store.MarkDeadLetteredCalls)
+}
+
 // TestRelayMarksNackAsConnectivityNeverParks: a broker NACK is a transient broker condition
 // (disk alarm, mirror resync, failover) and a missing exchange surfaces as a synthesized NACK
 // — both are CONNECTIVITY, so they advance retry_count and are NEVER dead-lettered, even past

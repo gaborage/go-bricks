@@ -3435,10 +3435,10 @@ outbox:
   enabled: true
   tablename: gobricks_outbox       # Custom table name
   autocreatetable: true           # DDL on first use
-  defaultexchange: ""              # Fallback exchange
+  defaultexchange: ""              # Fallback exchange (≤255 bytes)
   pollinterval: 5s                 # Relay frequency
   batchsize: 100                   # Events per cycle
-  maxretries: 5                    # Before giving up
+  maxretries: 5                    # Poison dead-letter ceiling (undecodable headers, unpublishable destination); connectivity retries forever
   retentionperiod: 72h             # Cleanup threshold
   publishtimeout: 60s              # Per-record relay publish bound
 ```

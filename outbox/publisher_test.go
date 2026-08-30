@@ -15,6 +15,7 @@ import (
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/messaging"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -519,4 +520,83 @@ func TestMarshalPayloadStruct(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &result))
 	assert.Equal(t, "Alice", result.Name)
 	assert.Equal(t, 30, result.Age)
+}
+
+// TestPublisherRefusesADestinationTheFrameCannotCarry: the exchange, routing key and
+// header keys the row persists are the ones the relay later puts on the wire, so a
+// value past the AMQP shortstr ceiling is refused at its source — before the INSERT —
+// rather than parked by the relay after MaxRetries. The fallbacks are validated as
+// applied: an empty RoutingKey carries the EventType.
+func TestPublisherRefusesADestinationTheFrameCannotCarry(t *testing.T) {
+	tests := []struct {
+		name            string
+		defaultExchange string
+		event           app.OutboxEvent
+		field           string
+	}{
+		{
+			name:  "oversized_routing_key",
+			event: app.OutboxEvent{EventType: eventTypeTest, AggregateID: aggregateTest, RoutingKey: oversizedShortStr},
+			field: "routing key",
+		},
+		{
+			name:  "oversized_event_type_falls_back_into_the_routing_key",
+			event: app.OutboxEvent{EventType: oversizedShortStr, AggregateID: aggregateTest},
+			field: "routing key",
+		},
+		{
+			name:  "oversized_exchange",
+			event: app.OutboxEvent{EventType: eventTypeTest, AggregateID: aggregateTest, Exchange: oversizedShortStr},
+			field: "exchange",
+		},
+		{
+			name:            "oversized_default_exchange_falls_back_into_the_exchange",
+			defaultExchange: oversizedShortStr,
+			event:           app.OutboxEvent{EventType: eventTypeTest, AggregateID: aggregateTest},
+			field:           "exchange",
+		},
+		{
+			name: "oversized_nested_header_key",
+			event: app.OutboxEvent{
+				EventType:   eventTypeTest,
+				AggregateID: aggregateTest,
+				Headers:     map[string]any{"outer": map[string]any{oversizedShortStr: "v"}},
+			},
+			field: "header key",
+		},
+		{
+			name: "max_length_fields_are_persisted",
+			event: app.OutboxEvent{
+				EventType:   eventTypeTest,
+				AggregateID: aggregateTest,
+				Exchange:    maxLengthShortStr,
+				RoutingKey:  maxLengthShortStr,
+				Headers:     map[string]any{maxLengthShortStr: "v"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{}
+			pub := newPublisher(store, tt.defaultExchange)
+
+			eventID, err := pub.Publish(context.Background(), &mockTx{}, &tt.event)
+
+			if tt.field == "" {
+				require.NoError(t, err)
+				assert.NotEmpty(t, eventID)
+				assert.Equal(t, 1, store.InsertCalls)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
+			assert.Empty(t, eventID)
+			assert.Equal(t, 0, store.InsertCalls, "an unpublishable destination never reaches the ledger")
+			assert.Contains(t, err.Error(), "outbox:")
+			assert.Contains(t, err.Error(), tt.field)
+			assert.Contains(t, err.Error(), "256 bytes")
+			assert.NotContains(t, err.Error(), oversizedShortStr, "the error reports the length, never the value")
+		})
+	}
 }

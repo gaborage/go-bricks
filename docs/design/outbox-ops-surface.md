@@ -5,7 +5,7 @@ proposed for this commit. A follow-on build plan (sketched at the end) executes 
 
 ## Problem
 
-When the outbox relay exhausts retries on a **poison** event (undecodable headers), it
+When the outbox relay exhausts retries on a **poison** event (undecodable headers, or a destination past the AMQP shortstr limit), it
 parks the row at `status='failed'` via `MarkDeadLettered` and emits one WARN. After that
 the event is invisible to an operator:
 
@@ -22,10 +22,10 @@ deny the runtime DB role. The wiki even *promises* visibility that today only ca
 "visible to someone with SQL access" (`wiki/outbox.md:164-165`: failed rows "are
 intentionally never auto-deleted so they stay visible").
 
-**Scope honesty.** Only poison (undecodable headers) ever parks. Every connectivity failure
+**Scope honesty.** Only poison (undecodable headers, or a destination the AMQP frame can never carry) ever parks. Every connectivity failure
 (broker down, NACK, confirmation timeout) advances `retry_count` but keeps retrying forever
-and is *never* parked (`outbox/relay.go:299-317` and the `MaxRetries` doc at
-`config/types.go:742-747`). So the real-world dead-letter backlog is **low-volume but
+and is *never* parked (`outbox/relay.go:319-333` and the `MaxRetries` doc at
+`config/types.go:748-754`). So the real-world dead-letter backlog is **low-volume but
 high-signal**: every parked row is a bug or a corruption artifact, not routine churn. That
 shapes the design — a cheap standing count and a small list/retry surface, not a
 high-throughput queue console.
@@ -49,7 +49,7 @@ verified leads).
   is status-gated ... parking is driven by the 'failed' status ... NOT by retry_count." This
   is the property that makes a parallel reader/retrier safe (see race analysis below).
 - `outbox/store.go:41-43` — status constants `pending` / `published` / `failed`.
-- `outbox/relay.go:299-317` — `deadLetterPoison`: at `RetryCount+1 >= MaxRetries` (:304) it
+- `outbox/relay.go:319-333` — `deadLetterPoison`: at `RetryCount+1 >= MaxRetries` (:320) it
   calls `MarkDeadLettered` and logs `Warn(...).Msg("Outbox event dead-lettered after
   exhausting retries")` (:309-312). One log line at park time is the *entire* current
   visibility surface.
@@ -91,7 +91,7 @@ verified leads).
 
 ### Config precedent
 
-- `config/types.go:716-770` — `OutboxConfig` field/tag style (`koanf`/`json`/`yaml`/`toml`/
+- `config/types.go:720-777` — `OutboxConfig` field/tag style (`koanf`/`json`/`yaml`/`toml`/
   `mapstructure` on every field).
 - `config/types.go:814-836` — `SchedulerConfig.Security SchedulerSecurityConfig`, whose
   `CIDRAllowlist []string` (:830) and `TrustedProxies []string` (:835) are the shapes to
@@ -114,7 +114,7 @@ verified leads).
   are "created directly using `meter.Int64ObservableGauge` ... with callbacks."
 - **No `tenant.id` metric-attribute convention exists.** `grep -rn "attribute.String" ...`
   finds tenant attributes on *no* metric; the closest tenant conventions are the relay's
-  per-cycle log field `Str("tenant", tenantID)` (`outbox/relay.go:207`) and the AMQP
+  per-cycle log field `Str("tenant", tenantID)` (`outbox/relay.go:210`) and the AMQP
   `x-tenant-id` publish header (`messaging/tenant_publisher.go:11`). The metric section below
   resolves what to do given this absence.
 
@@ -183,7 +183,7 @@ Response envelope (illustrative):
 - **`retry_count` semantics — RECOMMEND reset to 0.** The operator retries *after* fixing the
   poison cause (e.g., corrected a bad header producer), so the row deserves a fresh retry
   budget. A non-reset retry would flip to pending, get fetched once, fail the same header
-  decode, and immediately re-park at `RetryCount+1 >= MaxRetries` (`outbox/relay.go:304`) —
+  decode, and immediately re-park at `RetryCount+1 >= MaxRetries` (`outbox/relay.go:320`) —
   effectively a one-shot that hides whether the fix worked. Also clear `error` (PG) /
   `error_msg` (Oracle) so a subsequent failure records the *new* cause.
 - **Path param** via an `EventIDParam` struct (mirrors `JobIDParam`,
@@ -383,7 +383,7 @@ and it all collapses to the one store — no discriminator needed.
 
 Mirror `SchedulerSecurityConfig` (`config/types.go:826-836`) field-for-field, nested under a new
 `OutboxConfig.API` block (all five tags on every field, per the `OutboxConfig` convention at
-`config/types.go:716-770`). Default **disabled** (additive, opt-in — matches the framework's
+`config/types.go:720-777`). Default **disabled** (additive, opt-in — matches the framework's
 fail-closed posture):
 
 ```go
@@ -423,7 +423,7 @@ the endpoints simply don't exist unless opted in.
   into that pass is a single cheap query per tenant per poll — no new schedule, no standing
   goroutine. The alternative (b), counting only on-demand inside the GET handler, yields no
   standing series to alert on, defeating the point (alerting on a gauge beats alerting on the
-  park-time WARN log line at `outbox/relay.go:309-312`). The count query is the same
+  park-time WARN log line at `outbox/relay.go:325-328`). The count query is the same
   `CountDeadLettered` added in the Store extension.
   - Observable-gauge nuance: OTel observable callbacks are pull-based, so rather than "push on
     each relay cycle," the cleaner shape is a registered callback that runs `CountDeadLettered`
@@ -433,7 +433,7 @@ the endpoints simply don't exist unless opted in.
 - **Tenant dimension — the honest answer.** There is **no existing `tenant.id` metric-attribute
   convention** in the framework (grep across `observability/` and `messaging/` finds none; the
   only tenant-tagging precedents are the relay's *log* field `Str("tenant", tenantID)`,
-  `outbox/relay.go:207`, and the AMQP `x-tenant-id` *header*, `messaging/tenant_publisher.go:11`).
+  `outbox/relay.go:210`, and the AMQP `x-tenant-id` *header*, `messaging/tenant_publisher.go:11`).
   So the build plan introduces the attribute deliberately: emit one gauge series **per tenant**
   with `attribute.String("tenant.id", tenantID)` when multi-tenant, and a single series with no
   tenant attribute in single-tenant mode (tenantID `""`). This follows the relay's own

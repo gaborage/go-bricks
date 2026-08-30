@@ -34,7 +34,7 @@ const maxShortStrBytes = 255
 // brought back. ErrPublishRetriesExhausted is deliberately NOT involved.
 var ErrInvalidPublishDestination = errors.New("amqp: publish destination exceeds the AMQP shortstr limit")
 
-// validatePublishDestination checks every caller-supplied shortstr a publish
+// ValidatePublishDestination checks every caller-supplied shortstr a publish
 // puts on the wire: the exchange and routing key, which travel in the
 // basic.publish METHOD frame, and every header KEY, which travels in the
 // CONTENT-HEADER frame that follows it (the same frame carrying CorrelationId,
@@ -47,7 +47,12 @@ var ErrInvalidPublishDestination = errors.New("amqp: publish destination exceeds
 // CHANNEL error — recoverable, and not the connection-wide failure this guard
 // exists to prevent. Empty is legal: the default exchange and a fanout binding
 // both use it.
-func validatePublishDestination(options *PublishOptions) error {
+//
+// It is exported for callers that record a destination now and publish it later —
+// the outbox writes exchange, routing key and header keys to a ledger row, and a
+// row the frame can never carry is better refused at the INSERT than parked by the
+// relay after MaxRetries. They run the rule rather than restating the ceiling.
+func ValidatePublishDestination(options PublishOptions) error {
 	if err := checkShortStr("exchange", options.Exchange); err != nil {
 		return err
 	}

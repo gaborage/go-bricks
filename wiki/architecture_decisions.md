@@ -441,6 +441,12 @@ surfaces as a NACK, so both are connectivity and never park, meaning neither an 
 recoverable broker fault can exhaust a healthy event. Shutdown/cancel does not count. No DB schema
 migration.
 
+**Amended (2026-08-29):** poison gains a second class — a publish refused with
+`messaging.ErrInvalidPublishDestination` (a destination past the AMQP shortstr limit) is
+message-intrinsic, so it parks at `MaxRetries` instead of retrying forever; and the bound moved to
+the source, where `outbox.Publish` runs the exported `messaging.ValidatePublishDestination` before
+the INSERT and `Init` refuses an over-long `outbox.defaultexchange` (#1229, `[C61.19]`).
+
 **Breaking:** `PublishToExchange` returns after `maxpublishattempts` instead of looping forever
 (observable to every publisher); the `outbox.Store` interface changed (`FetchPending` drops its
 `maxRetries` param, gains `MarkDeadLettered`).
