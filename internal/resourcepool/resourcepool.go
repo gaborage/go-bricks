@@ -60,7 +60,7 @@ type PoolStats struct {
 	TotalCreated int           // Total entries created since the pool started
 	Evictions    int           // Total evictions due to LRU policy
 	IdleCleanups int           // Total removals due to idle timeout
-	Errors       int           // Total create failures and tracked close failures
+	Errors       int           // Total create failures (a recovered create panic included) and tracked close failures
 	IdleTTL      time.Duration // Idle timeout duration
 }
 
@@ -159,7 +159,8 @@ func New[V any](maxSize int, idleTTL time.Duration, closer Closer[V]) *Pool[V] {
 // mid-GetOrCreate on a fresh entry another borrower holds, who may still
 // receive that live handle after Close returns; it closes exactly once, at
 // its final release. On error the returned ReleaseFunc is nil — check err
-// first.
+// first. A panic inside create is recovered and returned as an error naming
+// only the panic value's type (ADR-081), leaving the pool usable.
 func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(context.Context) (V, error)) (V, ReleaseFunc, error) {
 	var zero V
 	for attempt := 0; attempt < maxAcquireAttempts; attempt++ {
@@ -341,6 +342,36 @@ func (p *Pool[V]) releaseEntry(e *entry[V]) {
 	}
 }
 
+// callCreate runs the consumer's create function and converts a panic into an error, so the
+// rest of createEntry — and singleflight above it — see one ordinary failure.
+//
+// A panic must not escape through DoChan: x/sync re-panics on a NEW goroutine once any caller
+// used DoChan (`go panic(e)` in doCall), which no recover — including Echo's middleware.Recover
+// — can catch, so one consumer-supplied factory's panic would kill the process instead of
+// failing the callers waiting on that create. The guard wraps THIS call and nothing else: a
+// panic anywhere later in createEntry happens after the entry is installed with its seed lease,
+// and converting that one to an error would return a failure to a caller who never claims the
+// seed, leaving an entry pinned at refs >= 1 that eviction can detach but never close.
+//
+// The value is rendered by TYPE only, never by value (ADR-081). `completed` is what separates a
+// normal return from a panic rather than a non-nil recover(): under GODEBUG=panicnil=1 a
+// `panic(nil)` recovers as nil, and reading the recovered value alone would let that panic
+// through as a nil error beside a zero resource, which createEntry would then install.
+func callCreate[V any](ctx context.Context, key string, create func(context.Context) (V, error)) (v V, err error) {
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		r := recover()
+		var zero V
+		v, err = zero, fmt.Errorf("resourcepool: panic during create for key %q (type: %T)", key, r)
+	}()
+	v, err = create(ctx)
+	completed = true
+	return v, err
+}
+
 // createEntry creates a new resource and adds it to the pool with a single seed lease
 // (refs == 1, seedHeld). The seed keeps the entry alive through the window before the caller
 // claims it via claimOrAcquire, so a concurrent evict/Remove can only detach it. If Close ran
@@ -363,7 +394,7 @@ func (p *Pool[V]) createEntry(ctx context.Context, key string, create func(conte
 		createCtx, cancel = context.WithDeadline(createCtx, deadline)
 		defer cancel()
 	}
-	value, err := create(createCtx)
+	value, err := callCreate(createCtx, key, create)
 	if err != nil {
 		return nil, err
 	}

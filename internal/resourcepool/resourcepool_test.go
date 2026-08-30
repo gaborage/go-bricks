@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -109,6 +111,17 @@ func failingConnector(calls *atomic.Int32, err error, delay time.Duration) func(
 		calls.Add(1)
 		time.Sleep(delay)
 		return nil, err
+	}
+}
+
+// panickingConnector returns a create function that panics with v after a delay, tallying call
+// count. The delay widens the singleflight window so concurrent callers collapse onto one
+// panicking create.
+func panickingConnector(calls *atomic.Int32, v any, delay time.Duration) func(context.Context) (*fakeResource, error) {
+	return func(context.Context) (*fakeResource, error) {
+		calls.Add(1)
+		time.Sleep(delay)
+		panic(v)
 	}
 }
 
@@ -730,6 +743,190 @@ func TestPoolConcurrentCreateFailureCountsErrorOnce(t *testing.T) {
 
 	assert.Equal(t, int32(1), calls.Load(), "singleflight must collapse the failing create to one call")
 	assert.Equal(t, 1, p.Stats().Errors, "a single collapsed create failure counts once, not once per waiter")
+}
+
+// TestPoolGetOrCreateRecoversCreatePanic pins that a panic inside the create function is
+// recovered in the singleflight leader and surfaced as an error rendered by TYPE only (ADR-081):
+// the panic value never reaches the error text, and the pool counts the failure once without
+// crediting a creation.
+func TestPoolGetOrCreateRecoversCreatePanic(t *testing.T) {
+	const marker = "marker-abc123"
+	tests := []struct {
+		name     string
+		panicVal any
+		wantType string
+	}{
+		{name: "error_value", panicVal: errors.New(marker), wantType: "*errors.errorString"},
+		{name: "bare_string", panicVal: marker, wantType: "string"},
+		{name: "struct_value", panicVal: struct{ Secret string }{marker}, wantType: "struct { Secret string }"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newCloseTracker()
+			p := New(0, 0, tr.closer)
+			defer p.Close()
+
+			var calls atomic.Int32
+			v, rel, err := p.GetOrCreate(context.Background(), keyOne, panickingConnector(&calls, tt.panicVal, 0))
+
+			require.Error(t, err)
+			assert.Equal(t, int32(1), calls.Load(), "the panicking create runs exactly once")
+			assert.Contains(t, err.Error(), `resourcepool: panic during create for key "key-1"`)
+			assert.Contains(t, err.Error(), tt.wantType)
+			assert.NotContains(t, err.Error(), marker, "the panic value must never reach the error text")
+			assert.Nil(t, v)
+			assert.Nil(t, rel)
+
+			st := p.Stats()
+			assert.Equal(t, 1, st.Errors)
+			assert.Equal(t, 0, st.TotalCreated)
+			assert.Equal(t, 0, st.Size)
+		})
+	}
+}
+
+// TestPoolConcurrentCreatePanicCountsErrorOnce pins that a create PANIC collapsed across N
+// concurrent callers runs the create once, hands every waiter the same marker-free error, and
+// increments Errors exactly once — in the leader — not once per blocked caller.
+func TestPoolConcurrentCreatePanicCountsErrorOnce(t *testing.T) {
+	const marker = "marker-abc123"
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	var calls atomic.Int32
+	create := panickingConnector(&calls, errors.New(marker), 20*time.Millisecond)
+
+	const workers = 8
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	errs := make([]string, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			v, rel, err := p.GetOrCreate(context.Background(), keyOne, create)
+			if assert.Error(t, err) {
+				errs[i] = err.Error()
+			}
+			assert.Nil(t, v)
+			assert.Nil(t, rel)
+		}()
+	}
+	wg.Wait()
+
+	for i := range errs {
+		assert.Equal(t, errs[0], errs[i], "every collapsed caller must receive the same error")
+		assert.NotContains(t, errs[i], marker)
+	}
+	assert.Contains(t, errs[0], `resourcepool: panic during create for key "key-1"`)
+	assert.Equal(t, int32(1), calls.Load(), "singleflight must collapse the panicking create to one call")
+	assert.Equal(t, 1, p.Stats().Errors, "a single collapsed create panic counts once, not once per waiter")
+	assert.Equal(t, 0, p.Stats().TotalCreated)
+}
+
+// TestPoolUsableAfterCreatePanic pins that the pool survives a recovered create panic: the pool
+// mutex is not held across the unwind (createEntry calls create before its first Lock), so a
+// later create for the same key runs normally instead of deadlocking.
+func TestPoolUsableAfterCreatePanic(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+	ctx := context.Background()
+
+	var calls atomic.Int32
+	_, _, err := p.GetOrCreate(ctx, keyOne, panickingConnector(&calls, errors.New("boom"), 0))
+	require.Error(t, err)
+
+	v, rel, err := p.GetOrCreate(ctx, keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	require.NotNil(t, rel)
+	defer rel()
+	assert.Equal(t, keyOne, v.id)
+
+	st := p.Stats()
+	assert.Equal(t, 1, st.TotalCreated)
+	assert.Equal(t, 1, st.Errors)
+	assert.Equal(t, 1, st.Size)
+}
+
+// childModeEnv selects a child-process body inside a re-executed test binary. Two properties of
+// the panic guard cannot be observed in-process: an UNRECOVERED panic on singleflight's own
+// goroutine takes the process down (that is the whole reason the guard exists), and
+// GODEBUG=panicnil=1 is read at startup, so it cannot be set from inside a running test.
+const childModeEnv = "GOBRICKS_RESOURCEPOOL_CHILD"
+
+// runPoolChild re-executes this test binary with mode selected and the given extra environment,
+// returning its combined output and exit error.
+func runPoolChild(t *testing.T, testName, mode string, env ...string) (string, error) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run="+testName, "-test.v")
+	cmd.Env = append(append(os.Environ(), childModeEnv+"="+mode), env...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// TestPoolCloserPanicIsNotConvertedToAnAcquisitionError pins the guard's SCOPE. The recover wraps
+// the consumer's create and nothing else, so a panic in the Closer — which runs after the entry
+// is installed with its seed lease — still unwinds. Converting that one would hand the caller an
+// acquisition error for an entry that WAS installed, leaving its seed lease unclaimed: refs stays
+// >= 1 forever, so eviction can detach the resource but never close it, and repeated closer panics
+// leak live resources past the pool's own limit.
+func TestPoolCloserPanicIsNotConvertedToAnAcquisitionError(t *testing.T) {
+	const marker = "closer-boom"
+	if os.Getenv(childModeEnv) == "closer-panic" {
+		p := New(1, 0, func(*fakeResource) error { panic(marker) })
+		ctx := context.Background()
+
+		_, rel, err := p.GetOrCreate(ctx, keyOne, keyedCreate(keyOne))
+		if err != nil {
+			t.Errorf("first create failed: %v", err)
+			return
+		}
+		rel() // unleased, so the next create evicts and closes it
+
+		// maxSize is 1, so this create evicts keyOne and calls the panicking Closer AFTER
+		// installing keyTwo's entry.
+		_, _, _ = p.GetOrCreate(ctx, keyTwo, keyedCreate(keyTwo))
+		t.Errorf("child survived the closer panic")
+		return
+	}
+
+	out, err := runPoolChild(t, "TestPoolCloserPanicIsNotConvertedToAnAcquisitionError", "closer-panic")
+
+	require.Error(t, err, "the closer panic must still take the process down, not become an error:\n%s", out)
+	assert.Contains(t, out, "panic: "+marker, "the runtime's own panic, not a converted one")
+	assert.NotContains(t, out, "resourcepool: panic during create",
+		"the guard must not reach past the create into the Closer")
+}
+
+// TestPoolCreatePanicNilIsStillAnError covers panic(nil) under GODEBUG=panicnil=1, where recover()
+// returns nil: the guard tracks normal completion rather than a non-nil recovered value, so the
+// create still fails with the documented error instead of returning a nil error beside a zero
+// resource for createEntry to install.
+func TestPoolCreatePanicNilIsStillAnError(t *testing.T) {
+	if os.Getenv(childModeEnv) == "panic-nil" {
+		tr := newCloseTracker()
+		p := New(0, 0, tr.closer)
+		defer p.Close()
+
+		var calls atomic.Int32
+		v, rel, err := p.GetOrCreate(context.Background(), keyOne, panickingConnector(&calls, nil, 0))
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `resourcepool: panic during create for key "key-1"`)
+		assert.Nil(t, v)
+		assert.Nil(t, rel)
+		st := p.Stats()
+		assert.Equal(t, 1, st.Errors)
+		assert.Equal(t, 0, st.Size)
+		assert.Equal(t, 0, st.TotalCreated)
+		return
+	}
+
+	out, err := runPoolChild(t, "TestPoolCreatePanicNilIsStillAnError", "panic-nil", "GODEBUG=panicnil=1")
+
+	require.NoError(t, err, "child failed under GODEBUG=panicnil=1:\n%s", out)
 }
 
 // TestPoolRemoveClosesUnleased verifies Remove hands back an unleased resource for the caller

@@ -47,6 +47,21 @@ func (n *nilConfigSource) DBConfig(context.Context, string) (*config.DatabaseCon
 	return nil, nil
 }
 
+// panickingResourceSource panics on its first DBConfig call and resolves normally afterwards, so
+// one manager can prove both that a panicking source fails only that call and that the pool stays
+// usable for the next one.
+type panickingResourceSource struct {
+	panicVal any
+	calls    atomic.Int32
+}
+
+func (p *panickingResourceSource) DBConfig(context.Context, string) (*config.DatabaseConfig, error) {
+	if p.calls.Add(1) == 1 {
+		panic(p.panicVal)
+	}
+	return &config.DatabaseConfig{Type: "postgresql", Database: "after-panic"}, nil
+}
+
 type stubStatement struct{}
 
 func (s *stubStatement) Query(_ context.Context, _ ...any) (*sql.Rows, error) { return nil, nil }
@@ -182,6 +197,33 @@ func TestCreateConnectionPropagatesConnectorError(t *testing.T) {
 	_, _, err := manager.Get(ctx, "tenant")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "failed to create database connection")
+}
+
+// TestDbManagerGetRecoversSourcePanic proves end-to-end that a panic in a consumer-supplied
+// DBConfigProvider no longer kills the process: the pool's singleflight guard converts it into a
+// type-only error for that Get (ADR-081 — the panic value never reaches the message), and a later
+// Get for the same tenant succeeds.
+func TestDbManagerGetRecoversSourcePanic(t *testing.T) {
+	const marker = "marker-abc123"
+	ctx := context.Background()
+	connector := func(cfg *config.DatabaseConfig, _ logger.Logger) (Interface, error) {
+		return &stubDB{key: cfg.Database}, nil
+	}
+	manager := NewDbManager(&panickingResourceSource{panicVal: errors.New(marker)}, newErrorTestLogger(), DbManagerOptions{}, connector)
+	defer manager.Close()
+
+	_, rel, err := manager.Get(ctx, tenantA)
+	require.Error(t, err)
+	assert.Nil(t, rel)
+	assert.ErrorContains(t, err, "panic during create")
+	assert.ErrorContains(t, err, "*errors.errorString")
+	assert.NotContains(t, err.Error(), marker, "the panic value must never reach the error text")
+
+	db, rel2, err := manager.Get(ctx, tenantA)
+	require.NoError(t, err)
+	require.NotNil(t, rel2)
+	defer rel2()
+	assert.NotNil(t, db)
 }
 
 // TestDbManagerGetAfterCloseReturnsError pins the F22 fix: once Close() has run, Get()
