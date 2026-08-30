@@ -94,7 +94,8 @@ type Store interface {
 	// Returns the number of rows deleted.
 	DeletePublished(ctx context.Context, db dbtypes.Interface, before time.Time) (int64, error)
 
-	// CreateTable creates the outbox table if it does not exist.
+	// CreateTable creates the outbox table, its indexes, and the companion leader
+	// table with its single row, if they do not exist.
 	// Used for auto-migration when outbox.autocreatetable is true.
 	CreateTable(ctx context.Context, db dbtypes.Interface) error
 }

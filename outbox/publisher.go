@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,18 +23,14 @@ import (
 type outboxPublisher struct {
 	store           Store
 	defaultExchange string
-	streamTargets   map[string]struct{}
+	streamTargets   []string
 }
 
 func newPublisher(store Store, defaultExchange string, superStreams []string) app.OutboxPublisher {
-	targets := make(map[string]struct{}, len(superStreams))
-	for _, name := range superStreams {
-		targets[name] = struct{}{}
-	}
 	return &outboxPublisher{
 		store:           store,
 		defaultExchange: defaultExchange,
-		streamTargets:   targets,
+		streamTargets:   superStreams,
 	}
 }
 
@@ -125,13 +122,11 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		}
 	}
 
-	eventID := record.ID
-
 	if err := p.store.Insert(ctx, tx, record); err != nil {
 		return "", err
 	}
 
-	return eventID, nil
+	return record.ID, nil
 }
 
 // applyStreamTarget validates a stream-targeted event and fills the record's stream
@@ -141,7 +136,7 @@ func (p *outboxPublisher) applyStreamTarget(ctx context.Context, event *app.Outb
 	if event.Exchange != "" || event.RoutingKey != "" {
 		return ErrConflictingTargets
 	}
-	if _, ok := p.streamTargets[event.Stream]; !ok {
+	if !slices.Contains(p.streamTargets, event.Stream) {
 		return fmt.Errorf("%w: %q", ErrStreamNotAnOutboxTarget, event.Stream)
 	}
 	tenant, ok := multitenant.GetTenant(ctx)
