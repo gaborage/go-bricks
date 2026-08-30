@@ -35,11 +35,7 @@ func (p *stampingPublisher) Publish(ctx context.Context, destination string, dat
 }
 
 func (p *stampingPublisher) PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error {
-	if err := tenantstamp.CheckCallerHeaders(options.Headers); err != nil {
-		return err
-	}
-
-	stamp, err := tenantstamp.Resolve(ctx, p.key)
+	stamp, err := tenantstamp.ResolveForPublish(ctx, options.Headers, p.key)
 	if err != nil {
 		return err
 	}

@@ -435,13 +435,14 @@ func TestRunnerDeliverPassesMessageToHandler(t *testing.T) {
 	assert.Equal(t, []int64{55}, storer.offsets())
 }
 
-// TestRunnerDeliverSeedsTheTenantStamp pins that this lane hands the shared
-// pipeline its two tenancy fields and settles what comes back. The stamp rules —
-// precedence, the error text, fail-closed, the TenantOptional carve-out — belong to
-// messaging/internal/delivery, which both lanes run, and are tabled there. What is
-// this lane's is that an unusable stamp leaves the offset UNCOMMITTED, so the
-// message is redelivered rather than silently skipped.
-func TestRunnerDeliverSeedsTheTenantStamp(t *testing.T) {
+// TestRunnerDeliverForwardsTheTenancySettings pins the ONE fact that is this
+// lane's: that deliver hands the shared pipeline its two tenancy settings. The
+// stamp rules themselves — precedence, the error text, fail-closed, the
+// TenantOptional carve-out — belong to messaging/internal/delivery and are tabled
+// there, and "a HandlerError leaves the offset uncommitted" is already pinned by
+// TestRunnerDeliverHandlerErrorSkipsOffsetCommit below, whatever produced the
+// error. Re-proving either here would test the pipeline through a longer path.
+func TestRunnerDeliverForwardsTheTenancySettings(t *testing.T) {
 	const acme = "acme"
 
 	stamped := func(body, tenant string) *amqp.Message {
@@ -450,7 +451,8 @@ func TestRunnerDeliverSeedsTheTenantStamp(t *testing.T) {
 		return msg
 	}
 
-	t.Run("stamped_delivery_seeds_the_handler", func(t *testing.T) {
+	// tenantStamps forwarded: the pipeline reads the stamp, so the handler sees it.
+	t.Run("tenant_stamps_reaches_the_pipeline", func(t *testing.T) {
 		clock := newFakeClock()
 		var seen string
 		runner := newTestRunner(t, func(ctx context.Context, _ *Message) error {
@@ -458,32 +460,15 @@ func TestRunnerDeliverSeedsTheTenantStamp(t *testing.T) {
 			return nil
 		}, newOffsetTracker(1, time.Hour, clock.Now))
 		runner.tenantStamps = true
-		storer := &fakeStorer{}
 
-		runner.deliver(testStream, 55, stamped("payload", acme), storer)
+		runner.deliver(testStream, 55, stamped("payload", acme), &fakeStorer{})
 
-		assert.Equal(t, acme, seen)
-		assert.Equal(t, []int64{55}, storer.offsets())
+		assert.Equal(t, acme, seen, "the runner did not forward tenantStamps")
 	})
 
-	t.Run("unusable_stamp_leaves_the_offset_uncommitted", func(t *testing.T) {
-		clock := newFakeClock()
-		calls := 0
-		runner := newTestRunner(t, func(context.Context, *Message) error {
-			calls++
-			return nil
-		}, newOffsetTracker(1, time.Hour, clock.Now))
-		runner.tenantStamps = true
-		storer := &fakeStorer{}
-
-		runner.deliver(testStream, 61, amqpMessage("payload"), storer)
-
-		assert.Zero(t, calls, "the handler must never see a delivery with no usable tenant")
-		assert.Empty(t, storer.offsets(),
-			"an unusable stamp must not advance the offset; the message is redelivered, not skipped")
-	})
-
-	t.Run("tenant_optional_runs_without_a_stamp", func(t *testing.T) {
+	// tenantOptional forwarded: without it the pipeline refuses an unstamped
+	// delivery, so the handler running at all is the proof it arrived.
+	t.Run("tenant_optional_reaches_the_pipeline", func(t *testing.T) {
 		clock := newFakeClock()
 		calls := 0
 		runner := newTestRunner(t, func(context.Context, *Message) error {
@@ -492,27 +477,10 @@ func TestRunnerDeliverSeedsTheTenantStamp(t *testing.T) {
 		}, newOffsetTracker(1, time.Hour, clock.Now))
 		runner.tenantStamps = true
 		runner.tenantOptional = true
-		storer := &fakeStorer{}
 
-		runner.deliver(testStream, 62, amqpMessage("payload"), storer)
+		runner.deliver(testStream, 62, amqpMessage("payload"), &fakeStorer{})
 
-		assert.Equal(t, 1, calls)
-		assert.Equal(t, []int64{62}, storer.offsets())
-	})
-
-	t.Run("stamps_off_ignores_the_property", func(t *testing.T) {
-		clock := newFakeClock()
-		var seen string
-		runner := newTestRunner(t, func(ctx context.Context, _ *Message) error {
-			seen, _ = multitenant.GetTenant(ctx)
-			return nil
-		}, newOffsetTracker(1, time.Hour, clock.Now))
-		storer := &fakeStorer{}
-
-		runner.deliver(testStream, 63, stamped("payload", acme), storer)
-
-		assert.Empty(t, seen, "under per-tenant tenancy the replay key is authoritative")
-		assert.Equal(t, []int64{63}, storer.offsets())
+		assert.Equal(t, 1, calls, "the runner did not forward tenantOptional")
 	})
 }
 

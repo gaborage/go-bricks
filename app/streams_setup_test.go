@@ -210,7 +210,7 @@ func TestShutdownStreamConsumersStopsTheManager(t *testing.T) {
 }
 
 // TestPrepareStreamConsumersRejectsMultiTenantBypass pins the runtime re-check
-// (assertStreamsSingleTenant) as a defense-in-depth backstop: it builds the App
+// (assertStreamsNotPerTenant) as a defense-in-depth backstop: it builds the App
 // directly, bypassing Builder.WithConfig's config.Validate call (which now runs on
 // every NewWithConfig — see B1), so a multi-tenant service with a stream URI and a
 // declaring module would otherwise boot green and run handlers with no tenant in
@@ -234,7 +234,7 @@ func TestPrepareStreamConsumersAllowsSingleTenant(t *testing.T) {
 	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
 	a.cfg.Multitenant.Enabled = false
 
-	require.NoError(t, a.assertStreamsSingleTenant())
+	require.NoError(t, a.assertStreamsNotPerTenant())
 }
 
 // TestPrepareStreamConsumersAdmitsSharedTenancy is the half this slice adds: the
@@ -246,20 +246,7 @@ func TestPrepareStreamConsumersAdmitsSharedTenancy(t *testing.T) {
 	a.cfg.Multitenant.Enabled = true
 	a.cfg.Messaging.Tenancy = config.TenancyShared
 
-	require.NoError(t, a.assertStreamsSingleTenant())
-}
-
-// TestPrepareStreamConsumersStillRejectsPerTenant keeps the refusal pinned for the
-// tenancy that has no runtime: multi-tenant with per-tenant messaging.
-func TestPrepareStreamConsumersStillRejectsPerTenant(t *testing.T) {
-	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
-	a.cfg.Multitenant.Enabled = true
-	a.cfg.Messaging.Tenancy = config.TenancyPerTenant
-
-	err := a.assertStreamsSingleTenant()
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "per-tenant stream consumption")
+	require.NoError(t, a.assertStreamsNotPerTenant())
 }
 
 func TestWarnIfPlaintextStreamURI(t *testing.T) {

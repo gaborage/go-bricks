@@ -33,7 +33,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 		return nil
 	}
 
-	if err := a.assertStreamsSingleTenant(); err != nil {
+	if err := a.assertStreamsNotPerTenant(); err != nil {
 		return err
 	}
 
@@ -72,7 +72,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	return nil
 }
 
-// assertStreamsSingleTenant re-asserts the tenancy invariant at runtime: streams
+// assertStreamsNotPerTenant re-asserts the tenancy invariant at runtime: streams
 // are consumed on one key, which is the deployment's own under single-tenant and the
 // control-plane key under messaging.tenancy: shared. Only per-tenant tenancy would
 // need one Environment per tenant, and that is what stays refused.
@@ -83,8 +83,8 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 // unchecked. Without this repeat, such a service would boot green and run stream
 // handlers against one shared Environment with no tenant in context, which is
 // precisely what the gate exists to prevent.
-func (a *App) assertStreamsSingleTenant() error {
-	if !a.cfg.Multitenant.Enabled || a.sharedMessaging() {
+func (a *App) assertStreamsNotPerTenant() error {
+	if !a.perTenantMessaging() {
 		return nil
 	}
 	return errors.New("messaging.streams needs single-tenant mode or messaging.tenancy: shared; " +

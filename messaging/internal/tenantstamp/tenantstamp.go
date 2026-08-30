@@ -22,6 +22,21 @@ const Header = "x-tenant-id"
 var ErrConflict = errors.New("messaging: " + Header +
 	" is written by the framework from the context tenant; remove it from the caller's headers")
 
+// ResolveForPublish is the whole publish-side rule in one call: refuse a
+// caller-supplied stamp, then decide which tenant the framework writes.
+//
+// The order is the point. Refusing the caller's header first means the answer
+// never depends on what the framework happened to resolve — a caller cannot
+// discover the resolved tenant by guessing, and cannot have a lucky guess
+// accepted. Both lanes call this rather than sequencing the two steps
+// themselves, so the order cannot drift between them.
+func ResolveForPublish(ctx context.Context, callerHeaders map[string]any, replayKey string) (string, error) {
+	if err := CheckCallerHeaders(callerHeaders); err != nil {
+		return "", err
+	}
+	return Resolve(ctx, replayKey)
+}
+
 // Resolve decides which tenant a publish is stamped with, from the two sources
 // that can know one: the context tenant, and the replay key the client was
 // pooled under (empty for a control-plane client, so under shared tenancy the

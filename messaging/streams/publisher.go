@@ -270,13 +270,11 @@ func (p *Publisher) send(ctx context.Context, msg *PublishMessage) error {
 	if err := p.routingError(msg.RoutingKey); err != nil {
 		return err
 	}
-	if err := tenantstamp.CheckCallerHeaders(msg.Properties); err != nil {
-		return err
-	}
-
 	// The stream lane has no per-tenant client to fall back on: it runs single-tenant
-	// or on the control-plane key, so the publishing context is the only source.
-	stamp, stampErr := tenantstamp.Resolve(ctx, "")
+	// or on the control-plane key, so the publishing context is the only source and
+	// the replay key is always empty. The conflict that key could raise belongs to
+	// the classic lane; what this call refuses here is a caller-supplied stamp.
+	stamp, stampErr := tenantstamp.ResolveForPublish(ctx, msg.Properties, "")
 	if stampErr != nil {
 		return stampErr
 	}
