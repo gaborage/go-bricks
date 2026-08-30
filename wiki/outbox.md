@@ -185,6 +185,56 @@ Consequences worth knowing:
 - **`failed` rows accumulate:** `outbox-cleanup` purges only `published` events. Monitor and prune
   dead-lettered rows; they are intentionally never auto-deleted so they stay visible.
 
+## Lanes and Ordering
+
+Every row carries a **lane**. The default is `amqp`: the relay publishes it to an exchange, as
+it always has. A row whose event named a `Stream` is on the `stream` lane and is published
+through the native streams publisher for that super stream, partitioned by the row's tenant
+stamp — the same murmur3 routing every RabbitMQ client uses ([streams.md](streams.md),
+[ADR-063](adr_063_streams_native_publishing.md)).
+
+```yaml
+outbox:
+  enabled: true
+  superstreams: [customers]      # each name needs one DeclareStreams super stream
+messaging:
+  streams:
+    uri: rabbitmq-stream://localhost:5552   # required once superstreams is set
+```
+
+```go
+// A stream-targeted event. The tenant in ctx becomes the partition key, so a tenant is
+// REQUIRED; Exchange and RoutingKey must be empty.
+_, err := s.outbox.Publish(ctx, tx, &app.OutboxEvent{
+    EventType:   "customer.created",
+    AggregateID: customer.ID,
+    Payload:     customer,
+    Stream:      "customers",
+})
+```
+
+Three refusals happen at `Publish`, where the developer sees them rather than as poison rows
+cycles later: naming a stream beside an exchange or routing key, naming a stream absent from
+`outbox.superstreams`, and publishing a stream target with no tenant in context.
+
+**Ordering.** Rows drain in `seq` order — a per-ledger sequence the database assigns at insert
+— and one relay instance per ledger drains at a time, holding the ledger's `<table>_leader`
+row. When a row fails, the later rows of ITS key are parked for that cycle: not published, not
+marked, `retry_count` untouched, keeping their place for the next cycle. The key is the tenant
+stamp for a stamped AMQP row, the destination (exchange and routing key) for an unstamped one,
+and the stream plus partition key on the stream lane. A dead-lettered row is terminal and a
+delivered-but-unrecorded row was delivered, so neither parks anything behind it.
+
+The guarantee is **causal**, not global: a dependent event's transaction begins after its cause
+committed, so its `seq` is higher. Two independent transactions may commit out of `seq` order
+and the relay claims nothing between them.
+
+**The tenant stamp is moved onto the publish context**, not replayed from the row's headers:
+the framework is the stamp's only writer ([ADR-087](adr_087_messaging_tenancy_and_tenant_stamp.md)),
+so a stamp replayed out of storage would be an unauthenticated claim. A consumer still reads
+`x-tenant-id` as before — the framework re-stamps it — but a hand-written stamp in
+`OutboxEvent.Headers` does not reach the broker verbatim.
+
 ## Outbox Defaults
 
 GoBricks applies production-safe outbox defaults when outbox is enabled:
@@ -196,7 +246,8 @@ GoBricks applies production-safe outbox defaults when outbox is enabled:
 | `outbox.pollinterval` | `5s` | Relay poll frequency |
 | `outbox.batchsize` | `100` | Events per relay cycle |
 | `outbox.defaultexchange` | `""` | Fallback exchange when `Event.Exchange` is empty; **must be ≤ 255 bytes** (Init fails otherwise) |
-| `outbox.maxretries` | `5` | Dead-letter ceiling for **poison** events only (undecodable headers, or a destination past the AMQP shortstr limit) |
+| `outbox.maxretries` | `5` | Dead-letter ceiling for **poison** events only (undecodable headers, a destination past the AMQP shortstr limit, an unknown lane, a stream not listed below, or a stream row with no partition key) |
+| `outbox.superstreams` | none | Super streams the relay may publish to over the native streams lane. Requires `messaging.streams.uri`; each listed name gets one publisher declared by the outbox |
 | `outbox.publishtimeout` | `60s` | Per-record publish bound; **must be ≥ `messaging.reconnect.connectiontimeout`** (Init fails otherwise) |
 | `outbox.retentionperiod` | `72h` | Published event retention |
 

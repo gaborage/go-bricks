@@ -3,6 +3,20 @@
 **Status:** Accepted
 **Date:** 2026-06-30
 
+> **Amended (2026-08-30, a second lane and a parked outcome):** this ADR classified the
+> outcomes of ONE lane. The relay now dispatches by the row's `lane`, and the stream lane
+> (ADR-088) answers to the same test rather than a new one: `streams.ErrPublisherClosed` is
+> shutdown and marks nothing, a publisher not yet started and a broker that will not confirm
+> are CONNECTIVITY and retry, and three message-intrinsic conditions are POISON — a lane this
+> build does not recognise, a stream no longer listed in `outbox.superstreams`, and a row with
+> no partition key. All three are config drift on a row already written, so they read the same
+> way every cycle, which is this ADR's own definition of poison. A fifth outcome joins the four: a row can now be PARKED. When an earlier row of the same
+> ordering key failed in this cycle, the row is neither published nor marked and its
+> `retry_count` does NOT advance — it simply waits for the next cycle in sequence order. Only
+> `outcomeFailed` parks a key; a dead-lettered row is terminal and a delivered-but-unrecorded
+> row was delivered, so neither holds anything behind it. A dashboard reading `retry_count` as
+> liveness should know that a parked row's count is deliberately still.
+>
 > **Amended (2026-08-29, a second poison class):** this ADR classified every broker-side
 > publish failure as connectivity, leaving undecodable headers as its single poison class. That was
 > written before `messaging.ErrInvalidPublishDestination` existed (ADR-070's 2026-08-28

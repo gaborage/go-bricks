@@ -798,6 +798,8 @@ type OutboxConfig struct {
 	// lane. Each name must be declared as a super stream by a module's DeclareStreams; the
 	// outbox declares its own publisher for each. Requires messaging.streams.uri.
 	// Default: none — every event stays on the AMQP lane.
+	// Listing a name here declares one publisher for it, so a super stream the outbox
+	// targets cannot also be published to directly by another module in the process.
 	SuperStreams []string `koanf:"superstreams" json:"superstreams" yaml:"superstreams" toml:"superstreams" mapstructure:"superstreams"`
 }
 
