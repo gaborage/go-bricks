@@ -834,7 +834,13 @@ func TestRegisterConsumerCopiesEveryField(t *testing.T) {
 	assert.Equal(t, original, stored,
 		"RegisterConsumer's deep copy dropped a field; add it to the copy in declarations.go")
 	assert.NotSame(t, original, stored, "the declaration must be copied, not aliased")
-	assert.NotSame(t, &original.Args, &stored.Args, "Args must be a copy, not the caller's map")
+
+	// Args must be a copy of the caller's map, not a reference to it. Comparing the
+	// two fields' addresses would pass no matter what — they are fields of different
+	// structs — so mutate the caller's map and prove the stored one does not follow.
+	original.Args["added-after-registration"] = true
+	assert.NotContains(t, stored.Args, "added-after-registration",
+		"Args aliases the caller's map; a later caller mutation would rewrite a registered declaration")
 }
 
 // fillNonZero sets every field of a struct to a non-zero value of its type, so a
