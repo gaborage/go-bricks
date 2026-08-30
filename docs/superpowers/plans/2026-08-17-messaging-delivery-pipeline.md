@@ -1414,7 +1414,7 @@ func TestRegistryProcessMessageSpanCarriesEveryDeliveryAttribute(t *testing.T) {
 	exporter, cleanup := setupTestTracing(t)
 	defer cleanup()
 
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 	consumer := &ConsumerDeclaration{
 		Queue:     testQueueName,
 		EventType: testEventType,
