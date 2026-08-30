@@ -27,7 +27,6 @@ func newHoldRunner(t *testing.T, handler Handler, ledger HoldLedger, tracker *of
 	runner := newTestRunner(t, handler, tracker)
 	runner.tenantStamps = true
 	runner.hold = ledger
-	runner.held = newHeldSet()
 	return runner
 }
 

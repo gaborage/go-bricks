@@ -442,6 +442,7 @@ func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment,
 // newRunner builds the delivery callback state of one declared consumer.
 func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *consumerRunner {
 	runner := &consumerRunner{
+		held:           newHeldSet(),
 		name:           decl.Name,
 		handler:        decl.Handler,
 		offsets:        m.newOffsetBook(),
@@ -453,7 +454,6 @@ func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *con
 	}
 	if decl.Hold {
 		runner.hold = m.opts.Hold
-		runner.held = newHeldSet()
 	}
 	return runner
 }

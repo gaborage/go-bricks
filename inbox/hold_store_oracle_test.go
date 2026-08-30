@@ -14,7 +14,7 @@ import (
 
 func newOracleHoldTestStore(t *testing.T) HoldStore {
 	t.Helper()
-	store, err := NewOracleHoldStore(pgHoldTable)
+	store, err := NewOracleHoldStore(holdTable)
 	require.NoError(t, err)
 	return store
 }
@@ -27,8 +27,8 @@ func TestOracleHoldStoreParkDetectsADuplicateByTheViolation(t *testing.T) {
 		store := newOracleHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.Oracle)
 		tx := db.ExpectTransaction()
-		tx.ExpectExec(`INSERT INTO ` + pgHoldTable).WillReturnRowsAffected(1)
-		tx.ExpectExec(`INSERT INTO ` + pgHoldTenantTable).WillReturnRowsAffected(1)
+		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnRowsAffected(1)
+		tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnRowsAffected(1)
 
 		dbtx, err := db.Begin(t.Context())
 		require.NoError(t, err)
@@ -60,7 +60,7 @@ func TestOracleHoldStoreParkDetectsADuplicateByTheViolation(t *testing.T) {
 		wantErr := errors.New("ORA-00600 internal error")
 		db := dbtesting.NewTestDB(dbtypes.Oracle)
 		tx := db.ExpectTransaction()
-		tx.ExpectExec(`INSERT INTO ` + pgHoldTable).WillReturnError(wantErr)
+		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnError(wantErr)
 
 		dbtx, err := db.Begin(t.Context())
 		require.NoError(t, err)
@@ -98,6 +98,24 @@ func TestOracleHoldStoreUsesItsOwnDialect(t *testing.T) {
 		assert.True(t, took)
 	})
 
+	// Oracle folds the empty-string literal to NULL, so its NVL substitutes a
+	// SPACE where PostgreSQL's COALESCE substitutes "". A caller asking whether a
+	// tenant has an error must not have to know which vendor answered.
+	t.Run("an_absent_last_error_reads_empty_on_both_vendors", func(t *testing.T) {
+		store := newOracleHoldTestStore(t)
+		db := dbtesting.NewTestDB(dbtypes.Oracle)
+		db.ExpectQuery(`FROM ` + holdTenantTable).WillReturnRows(
+			dbtesting.NewRowSet("consumer", "tenant_id", "held_since", "attempts", "next_attempt_at", "last_error").
+				AddRow(testHoldConsumer, testHoldTenant, time.Now(), 0, time.Now(), " "),
+		)
+
+		tenants, err := store.ListTenants(t.Context(), db, testHoldConsumer)
+
+		require.NoError(t, err)
+		require.Len(t, tenants, 1)
+		assert.Empty(t, tenants[0].LastError, "the space Oracle substitutes is not an error")
+	})
+
 	t.Run("stats_selects_from_dual", func(t *testing.T) {
 		store := newOracleHoldTestStore(t)
 		oldest := time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
@@ -116,10 +134,10 @@ func TestOracleHoldStoreUsesItsOwnDialect(t *testing.T) {
 	t.Run("create_table_names_its_constraints", func(t *testing.T) {
 		store := newOracleHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.Oracle)
-		db.ExpectExec(`CONSTRAINT pk_` + pgHoldTable).WillReturnRowsAffected(0)
-		db.ExpectExec(`CONSTRAINT pk_` + pgHoldTenantTable).WillReturnRowsAffected(0)
-		db.ExpectExec(`CREATE INDEX idx_` + pgHoldTable + `_tenant_order`).WillReturnRowsAffected(0)
-		db.ExpectExec(`CREATE INDEX idx_` + pgHoldTable + `_tenant_due`).WillReturnRowsAffected(0)
+		db.ExpectExec(`CONSTRAINT pk_` + holdTable).WillReturnRowsAffected(0)
+		db.ExpectExec(`CONSTRAINT pk_` + holdTenantTable).WillReturnRowsAffected(0)
+		db.ExpectExec(`CREATE INDEX idx_` + holdTable + `_tenant_order`).WillReturnRowsAffected(0)
+		db.ExpectExec(`CREATE INDEX idx_` + holdTable + `_tenant_due`).WillReturnRowsAffected(0)
 
 		require.NoError(t, store.CreateTable(t.Context(), db))
 	})
@@ -134,11 +152,10 @@ func TestOracleHoldStoreFencesEveryPostReplayWrite(t *testing.T) {
 		pattern  string
 		affected int64
 		call     func(HoldStore, dbtypes.Interface) (bool, error)
-		wantOK   bool
 	}{
 		{
 			name:     "delete_row_without_the_lease",
-			pattern:  `DELETE FROM ` + pgHoldTable,
+			pattern:  `DELETE FROM ` + holdTable,
 			affected: 0,
 			call: func(s HoldStore, db dbtypes.Interface) (bool, error) {
 				return s.DeleteRow(t.Context(), db, testHoldConsumer, testHoldStream, 41, testHoldTenant, testHoldOwner)
@@ -146,7 +163,7 @@ func TestOracleHoldStoreFencesEveryPostReplayWrite(t *testing.T) {
 		},
 		{
 			name:     "defer_without_the_lease",
-			pattern:  `UPDATE ` + pgHoldTenantTable,
+			pattern:  `UPDATE ` + holdTenantTable,
 			affected: 0,
 			call: func(s HoldStore, db dbtypes.Interface) (bool, error) {
 				return s.Defer(t.Context(), db, testHoldConsumer, testHoldTenant, testHoldOwner, time.Second, "boom")
@@ -154,7 +171,7 @@ func TestOracleHoldStoreFencesEveryPostReplayWrite(t *testing.T) {
 		},
 		{
 			name:     "release_without_the_lease",
-			pattern:  `DELETE FROM ` + pgHoldTenantTable,
+			pattern:  `DELETE FROM ` + holdTenantTable,
 			affected: 0,
 			call: func(s HoldStore, db dbtypes.Interface) (bool, error) {
 				return s.Release(t.Context(), db, testHoldConsumer, testHoldTenant, testHoldOwner)
@@ -171,7 +188,9 @@ func TestOracleHoldStoreFencesEveryPostReplayWrite(t *testing.T) {
 			ok, err := tc.call(store, db)
 
 			require.NoError(t, err)
-			assert.Equal(t, tc.wantOK, ok)
+			// The fence held exactly when the write changed a row: a zero-row write
+			// is lease loss, which is what the caller reads this bool for.
+			assert.Equal(t, tc.affected != 0, ok)
 		})
 	}
 }

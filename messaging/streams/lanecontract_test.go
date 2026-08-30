@@ -80,6 +80,7 @@ func deliverStreams(t *testing.T, scenario *lanecontract.Scenario) lanecontract.
 		handler: handler,
 		offsets: bookOf(newOffsetTracker(1, time.Hour, newFakeClock().Now)),
 		log:     deliverLog,
+		held:    newHeldSet(),
 		baseCtx: context.Background(),
 	}
 

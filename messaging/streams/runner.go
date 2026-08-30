@@ -221,10 +221,12 @@ type consumerRunner struct {
 	tenantStamps   bool
 	tenantOptional bool
 
-	// hold is the ledger a failed delivery is parked in, nil for a consumer that
-	// does not hold. held is this consumer's view of which tenants are held; the
-	// drain replaces it, a park adds to it.
+	// hold is the ledger a failed delivery is parked in, and the ONE thing that
+	// says whether this consumer holds: held is always present, so no pair of
+	// fields has to be kept in step for the gate to be safe.
 	hold HoldLedger
+	// held is this consumer's view of which tenants are held; the drain replaces
+	// it, a park adds to it. Empty and unused for a consumer that does not hold.
 	held *heldSet
 	// holdBackoff is the first wait between failed ledger writes, doubling to
 	// holdBackoffMax. A field so a test does not have to sleep for real.

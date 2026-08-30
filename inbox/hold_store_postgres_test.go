@@ -15,17 +15,17 @@ import (
 )
 
 const (
-	pgHoldTable       = "gobricks_inbox_hold"
-	pgHoldTenantTable = "gobricks_inbox_hold_tenant"
-	testHoldConsumer  = "orders-processor"
-	testHoldTenant    = "tenant-a"
-	testHoldOwner     = "replica-1"
-	testHoldStream    = "orders-0"
+	holdTable        = "gobricks_inbox_hold"
+	holdTenantTable  = "gobricks_inbox_hold_tenant"
+	testHoldConsumer = "orders-processor"
+	testHoldTenant   = "tenant-a"
+	testHoldOwner    = "replica-1"
+	testHoldStream   = "orders-0"
 )
 
 func newPostgresHoldTestStore(t *testing.T) HoldStore {
 	t.Helper()
-	store, err := NewPostgresHoldStore(pgHoldTable)
+	store, err := NewPostgresHoldStore(holdTable)
 	require.NoError(t, err)
 	return store
 }
@@ -54,8 +54,8 @@ func TestPostgresHoldStoreParkWritesRowAndTenantTogether(t *testing.T) {
 		store := newPostgresHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 		tx := db.ExpectTransaction()
-		tx.ExpectExec(`INSERT INTO ` + pgHoldTable).WillReturnRowsAffected(1)
-		tx.ExpectExec(`INSERT INTO ` + pgHoldTenantTable).WillReturnRowsAffected(1)
+		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnRowsAffected(1)
+		tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnRowsAffected(1)
 
 		dbtx, err := db.Begin(t.Context())
 		require.NoError(t, err)
@@ -71,8 +71,8 @@ func TestPostgresHoldStoreParkWritesRowAndTenantTogether(t *testing.T) {
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 		tx := db.ExpectTransaction()
 		// ON CONFLICT DO NOTHING: the row is already parked.
-		tx.ExpectExec(`INSERT INTO ` + pgHoldTable).WillReturnRowsAffected(0)
-		tx.ExpectExec(`INSERT INTO ` + pgHoldTenantTable).WillReturnRowsAffected(0)
+		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnRowsAffected(0)
+		tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnRowsAffected(0)
 
 		dbtx, err := db.Begin(t.Context())
 		require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestPostgresHoldStoreParkWritesRowAndTenantTogether(t *testing.T) {
 		wantErr := errors.New("connection reset")
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
 		tx := db.ExpectTransaction()
-		tx.ExpectExec(`INSERT INTO ` + pgHoldTable).WillReturnError(wantErr)
+		tx.ExpectExec(`INSERT INTO ` + holdTable).WillReturnError(wantErr)
 
 		dbtx, err := db.Begin(t.Context())
 		require.NoError(t, err)
@@ -107,7 +107,7 @@ func TestPostgresHoldStoreReadsTheHeldSet(t *testing.T) {
 	t.Run("held_tenants", func(t *testing.T) {
 		store := newPostgresHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-		db.ExpectQuery(`SELECT tenant_id FROM ` + pgHoldTenantTable).
+		db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).
 			WillReturnRows(dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant).AddRow("tenant-b"))
 
 		tenants, err := store.HeldTenants(t.Context(), db, testHoldConsumer)
@@ -120,7 +120,7 @@ func TestPostgresHoldStoreReadsTheHeldSet(t *testing.T) {
 		store := newPostgresHoldTestStore(t)
 		heldSince := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-		db.ExpectQuery(`FROM ` + pgHoldTenantTable).WillReturnRows(tenantRowSet(heldSince))
+		db.ExpectQuery(`FROM ` + holdTenantTable).WillReturnRows(tenantRowSet(heldSince))
 
 		tenants, err := store.ListTenants(t.Context(), db, testHoldConsumer)
 
@@ -172,58 +172,51 @@ func TestPostgresHoldStoreFencesEveryPostReplayWrite(t *testing.T) {
 		pattern  string
 		affected int64
 		call     func(HoldStore, dbtypes.Interface) (bool, error)
-		wantOK   bool
 	}{
 		{
 			name:     "delete_row_under_the_lease",
-			pattern:  `DELETE FROM ` + pgHoldTable,
+			pattern:  `DELETE FROM ` + holdTable,
 			affected: 1,
-			wantOK:   true,
 			call: func(s HoldStore, db dbtypes.Interface) (bool, error) {
 				return s.DeleteRow(t.Context(), db, testHoldConsumer, testHoldStream, 41, testHoldTenant, testHoldOwner)
 			},
 		},
 		{
 			name:     "delete_row_without_the_lease",
-			pattern:  `DELETE FROM ` + pgHoldTable,
+			pattern:  `DELETE FROM ` + holdTable,
 			affected: 0,
-			wantOK:   false,
 			call: func(s HoldStore, db dbtypes.Interface) (bool, error) {
 				return s.DeleteRow(t.Context(), db, testHoldConsumer, testHoldStream, 41, testHoldTenant, testHoldOwner)
 			},
 		},
 		{
 			name:     "defer_under_the_lease",
-			pattern:  `UPDATE ` + pgHoldTenantTable,
+			pattern:  `UPDATE ` + holdTenantTable,
 			affected: 1,
-			wantOK:   true,
 			call: func(s HoldStore, db dbtypes.Interface) (bool, error) {
 				return s.Defer(t.Context(), db, testHoldConsumer, testHoldTenant, testHoldOwner, time.Second, "boom")
 			},
 		},
 		{
 			name:     "defer_without_the_lease",
-			pattern:  `UPDATE ` + pgHoldTenantTable,
+			pattern:  `UPDATE ` + holdTenantTable,
 			affected: 0,
-			wantOK:   false,
 			call: func(s HoldStore, db dbtypes.Interface) (bool, error) {
 				return s.Defer(t.Context(), db, testHoldConsumer, testHoldTenant, testHoldOwner, time.Second, "boom")
 			},
 		},
 		{
 			name:     "release_under_the_lease",
-			pattern:  `DELETE FROM ` + pgHoldTenantTable,
+			pattern:  `DELETE FROM ` + holdTenantTable,
 			affected: 1,
-			wantOK:   true,
 			call: func(s HoldStore, db dbtypes.Interface) (bool, error) {
 				return s.Release(t.Context(), db, testHoldConsumer, testHoldTenant, testHoldOwner)
 			},
 		},
 		{
 			name:     "release_without_the_lease",
-			pattern:  `DELETE FROM ` + pgHoldTenantTable,
+			pattern:  `DELETE FROM ` + holdTenantTable,
 			affected: 0,
-			wantOK:   false,
 			call: func(s HoldStore, db dbtypes.Interface) (bool, error) {
 				return s.Release(t.Context(), db, testHoldConsumer, testHoldTenant, testHoldOwner)
 			},
@@ -239,7 +232,9 @@ func TestPostgresHoldStoreFencesEveryPostReplayWrite(t *testing.T) {
 			ok, err := tc.call(store, db)
 
 			require.NoError(t, err, "a lost lease is not an error, it is a false")
-			assert.Equal(t, tc.wantOK, ok)
+			// The fence held exactly when the write changed a row: a zero-row write
+			// is lease loss, which is what the caller reads this bool for.
+			assert.Equal(t, tc.affected != 0, ok)
 		})
 	}
 }
@@ -250,7 +245,7 @@ func TestPostgresHoldStoreBoundsThePersistedError(t *testing.T) {
 	store := newPostgresHoldTestStore(t)
 	oversized := strings.Repeat("handler exploded; ", 512)
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-	db.ExpectExec(`UPDATE ` + pgHoldTenantTable).WillReturnRowsAffected(1)
+	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
 
 	_, err := store.Defer(t.Context(), db, testHoldConsumer, testHoldTenant, testHoldOwner, time.Second, oversized)
 	require.NoError(t, err)
@@ -271,7 +266,7 @@ func TestPostgresHoldStoreLeaseAndStats(t *testing.T) {
 	t.Run("acquire_lease_reports_whether_it_took_it", func(t *testing.T) {
 		store := newPostgresHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-		db.ExpectExec(`UPDATE ` + pgHoldTenantTable).WillReturnRowsAffected(0)
+		db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(0)
 
 		took, err := store.AcquireLease(t.Context(), db, testHoldConsumer, testHoldTenant, testHoldOwner, time.Minute)
 
@@ -298,10 +293,10 @@ func TestPostgresHoldStoreLeaseAndStats(t *testing.T) {
 	t.Run("create_table_makes_both_tables_and_both_indexes", func(t *testing.T) {
 		store := newPostgresHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-		db.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + pgHoldTable).WillReturnRowsAffected(0)
-		db.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + pgHoldTenantTable).WillReturnRowsAffected(0)
-		db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_` + pgHoldTable + `_tenant_order`).WillReturnRowsAffected(0)
-		db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_` + pgHoldTable + `_tenant_due`).WillReturnRowsAffected(0)
+		db.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + holdTable).WillReturnRowsAffected(0)
+		db.ExpectExec(`CREATE TABLE IF NOT EXISTS ` + holdTenantTable).WillReturnRowsAffected(0)
+		db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_` + holdTable + `_tenant_order`).WillReturnRowsAffected(0)
+		db.ExpectExec(`CREATE INDEX IF NOT EXISTS idx_` + holdTable + `_tenant_due`).WillReturnRowsAffected(0)
 
 		require.NoError(t, store.CreateTable(t.Context(), db))
 	})

@@ -3,6 +3,7 @@ package inbox
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
@@ -133,6 +134,11 @@ func scanHoldTenants(ctx context.Context, db dbtypes.Interface, what, query stri
 		if err := rows.Scan(&t.Consumer, &t.TenantID, &t.HeldSince, &t.Attempts, &t.NextAttemptAt, &t.LastError); err != nil {
 			return nil, fmt.Errorf("inbox hold: scan tenant failed: %w", err)
 		}
+		// Oracle folds the empty-string literal to NULL, so its NVL substitutes a
+		// space where PostgreSQL's COALESCE substitutes "". Normalizing here keeps
+		// the vendor workaround vendor-local: a caller asks whether there is an
+		// error, not which database answered.
+		t.LastError = strings.TrimSpace(t.LastError)
 		tenants = append(tenants, t)
 	}
 	if err := rows.Err(); err != nil {

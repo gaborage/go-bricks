@@ -91,6 +91,7 @@ func newTestRunnerWithLogger(t *testing.T, handler Handler, tracker *offsetTrack
 		handler: handler,
 		offsets: bookOf(tracker),
 		log:     log,
+		held:    newHeldSet(),
 		baseCtx: context.Background(),
 	}
 }
@@ -108,6 +109,7 @@ func newTestRunnerWithBook(t *testing.T, handler Handler, book *offsetBook) *con
 		handler: handler,
 		offsets: book,
 		log:     logger.New("error", false),
+		held:    newHeldSet(),
 		baseCtx: context.Background(),
 	}
 }

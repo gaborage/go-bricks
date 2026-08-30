@@ -154,32 +154,23 @@ func (r *consumerRunner) park(ctx context.Context, msg *HeldMessage, gated bool)
 			return nil
 		}
 
-		r.log.Error().Err(err).
+		// The context-bound logger, not r.log: during a ledger outage this is the
+		// only repeating signal, and it correlates with the delivery that stalled
+		// exactly as every other per-delivery line in this lane does.
+		r.log.WithContext(ctx).Error().Err(err).
 			Str(logFieldStream, msg.Stream).
 			Str(logFieldConsumer, r.name).
 			Int64(logFieldOffset, msg.Offset).
 			Int("attempt", attempt).
 			Msg("Hold ledger write failed; partition stalled until it succeeds")
 
-		if !waitOrDone(ctx, wait) {
+		if !delivery.Wait(ctx, wait) {
 			return ctx.Err()
 		}
-		if wait *= 2; wait > holdBackoffMax {
+		wait *= 2
+		if wait > holdBackoffMax {
 			wait = holdBackoffMax
 		}
-	}
-}
-
-// waitOrDone sleeps unless the context ends first, reporting whether the caller
-// may try again.
-func waitOrDone(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return true
-	case <-ctx.Done():
-		return false
 	}
 }
 
