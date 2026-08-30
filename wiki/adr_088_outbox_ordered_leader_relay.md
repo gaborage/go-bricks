@@ -96,6 +96,16 @@ The documented migration therefore backfills `seq` explicitly with a
 wrote, before the index is built. Skipping it drains the backlog once in an arbitrary order,
 and nothing reports that it happened.
 
+**The backfill must not race writers.** On PostgreSQL, Flyway runs a migration in ONE
+transaction, and the `ALTER TABLE` takes an ACCESS EXCLUSIVE lock the transaction holds to
+its end — so writers are blocked from the `ALTER` through the sequence reset, and the
+backfill cannot miss a row inserted alongside it. That is a lock held for the length of the
+backfill, so on a large ledger it is a write outage to schedule, not a background task. On
+Oracle each DDL statement autocommits, so no such transaction exists and nothing blocks a
+concurrent insert: the runbook there requires the relay quiesced and writers stopped for the
+whole block — a maintenance window — or rows inserted between the `ALTER` and the identity
+reset keep `seq` values the reset then hands out again.
+
 **A parked key still occupies its batch slots.** `FetchPending` returns the oldest `BatchSize`
 rows by sequence, so a key whose head keeps failing keeps its later rows in every batch until
 that head succeeds or dead-letters. A large enough backlog for one key starves the others.

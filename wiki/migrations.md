@@ -6226,8 +6226,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - scope: four columns join the ledger — `seq` (a per-ledger identity assigned at insert),
   `lane` (`amqp` or `stream`), `stream` and `partition_key` — plus a companion
   `<table>_leader` table holding one row. `FetchPending` orders by `seq` instead of
-  `created_at`, so a backlog drains in insert order rather than in an order that TIES under
-  concurrent inserts. The pending index moves to `(seq)`.
+  `created_at`. The guarantee that buys is CAUSAL, not global: a dependent event's transaction
+  begins after its cause committed, so its `seq` is higher and it drains later. Two INDEPENDENT
+  transactions may still commit out of `seq` order — `FetchPending` orders what is VISIBLE to
+  it — and the relay promises nothing between them. What ends is the `created_at` TIE, where two
+  rows written in the same tick could drain in either order however they were related. The pending index moves to `(seq)`.
   Two behaviors change for every deployment, including single-tenant ones that configure
   nothing new. **One relay instance per ledger drains at a time**: a cycle takes the leader row
   `FOR UPDATE NOWAIT` before fetching and holds it for the cycle, so a second replica logs
@@ -6267,7 +6270,7 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   rows with `lane = 'amqp'`; a relay cycle logs `parked=0` on a healthy tick; with two replicas
   running, exactly one logs a cycle summary and the other logs `another instance leads this
   ledger` at DEBUG. If you migrated a BACKLOG, confirm the backfill ran before the index by
-  reading `SELECT id, seq FROM gobricks_outbox ORDER BY created_at LIMIT 5` and checking `seq`
+  reading `SELECT id, seq FROM gobricks_outbox ORDER BY created_at, id LIMIT 5` and checking `seq`
   ascends with it — an unbackfilled ledger drains in an arbitrary order exactly once, invisibly.
 - ref: `outbox/store.go` (`Record`, `Store.Lead`, `Leadership`, `leadRow`) ·
   `outbox/store_postgres.go` · `outbox/store_oracle.go` · `outbox/relay.go` (`relayKey`,
