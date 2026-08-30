@@ -5818,7 +5818,8 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 ### [C61.17] an over-long publish destination is refused instead of publishing · silent-behavior · when: match
 
 - detect: the question is whether any destination your code publishes to, or declares, can exceed
-  255 BYTES — bytes, not characters, so a multi-byte name is shorter than it looks.
+  255 BYTES — bytes, not characters, so a multi-byte name spends more of the budget than its
+  length suggests and a name that looks well short of the limit can exceed it.
   `git grep -nE 'PublishToExchange\(|[.]Publish\(|RoutingKey:|Exchange:' -- '*.go'` and read every
   hit whose value is COMPUTED rather than a literal: a tenant slug, a resource id, a user-supplied
   event name, a routing key built by joining segments. A literal in your source is self-evidently
