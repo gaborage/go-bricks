@@ -348,32 +348,33 @@ func (d *Declarations) consumerErrors() []error {
 // a bound of zero would mean "never handle", and an inverted pair hides which of
 // the two waits the caller meant.
 func retryErrors(c *consumerDeclaration) []error {
-	if c.Retry == nil {
+	retry := resolveRetry(c)
+	if retry == nil {
 		return nil
 	}
 
 	var errs []error
-	if c.Retry.MaxAttempts < 1 {
+	if retry.MaxAttempts < 1 {
 		errs = append(errs, fmt.Errorf("consumer %q on stream %q declares MaxAttempts %d; at least 1 is required",
-			c.Name, c.Stream, c.Retry.MaxAttempts))
+			c.Name, c.Stream, retry.MaxAttempts))
 	}
-	if c.Retry.MaxAttempts > MaxRetryAttempts {
+	if retry.MaxAttempts > MaxRetryAttempts {
 		errs = append(errs, fmt.Errorf("consumer %q on stream %q declares MaxAttempts %d; at most %d is allowed",
-			c.Name, c.Stream, c.Retry.MaxAttempts, MaxRetryAttempts))
+			c.Name, c.Stream, retry.MaxAttempts, MaxRetryAttempts))
 	}
-	if c.Retry.InitialBackoff < 0 {
+	if retry.InitialBackoff < 0 {
 		errs = append(errs, fmt.Errorf("consumer %q on stream %q has a negative InitialBackoff", c.Name, c.Stream))
 	}
-	if c.Retry.MaxBackoff < 0 {
+	if retry.MaxBackoff < 0 {
 		errs = append(errs, fmt.Errorf("consumer %q on stream %q has a negative MaxBackoff", c.Name, c.Stream))
 	}
-	if c.Retry.MaxBackoff > 0 && c.Retry.InitialBackoff > c.Retry.MaxBackoff {
+	if retry.MaxBackoff > 0 && retry.InitialBackoff > retry.MaxBackoff {
 		errs = append(errs, fmt.Errorf("consumer %q on stream %q InitialBackoff exceeds MaxBackoff", c.Name, c.Stream))
 	}
 	// Only worth computing once the shape holds: a negative or inverted pair would
 	// report a total that says less than the rule it already broke.
 	if len(errs) == 0 {
-		if total := delivery.TotalBackoff(toDeliveryRetry(c.Retry)); total > MaxRetryWait {
+		if total := delivery.TotalBackoff(toDeliveryRetry(retry)); total > MaxRetryWait {
 			errs = append(errs, fmt.Errorf("consumer %q on stream %q would wait %s in place across its attempts; at most %s is allowed",
 				c.Name, c.Stream, total, MaxRetryWait))
 		}

@@ -398,19 +398,13 @@ func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment,
 
 // newRunner builds the delivery callback state of one declared consumer.
 func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *consumerRunner {
-	retry := decl.Retry
-	if decl.Hold && retry == nil {
-		policy := DefaultHoldRetry
-		retry = &policy
-	}
-
 	return &consumerRunner{
 		name:    decl.Name,
 		handler: decl.Handler,
 		offsets: m.newOffsetBook(),
 		log:     m.log,
 		baseCtx: ctx,
-		retry:   toDeliveryRetry(retry),
+		retry:   toDeliveryRetry(resolveRetry(decl)),
 	}
 }
 

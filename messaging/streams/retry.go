@@ -40,6 +40,18 @@ var DefaultHoldRetry = RetryOptions{
 // nil.
 func Permanent(err error) error { return delivery.Permanent(err) }
 
+// resolveRetry is the policy a declaration actually runs under: its own, or the
+// framework default when it holds without naming one. Validation and the runner
+// both go through it, so the rule is stated once and what Validate judges is what
+// the runner uses.
+func resolveRetry(decl *consumerDeclaration) *RetryOptions {
+	if decl.Retry == nil && decl.Hold {
+		policy := DefaultHoldRetry
+		return &policy
+	}
+	return decl.Retry
+}
+
 // toDeliveryRetry renders a declaration's policy for the pipeline. Nil in, nil
 // out — the pipeline reads that as exactly one attempt.
 func toDeliveryRetry(opts *RetryOptions) *delivery.Retry {
