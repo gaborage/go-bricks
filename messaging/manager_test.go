@@ -240,6 +240,19 @@ func TestMessagingManagerStampsEveryClientItHandsOut(t *testing.T) {
 		assert.Zero(t, client.publishes, "a refused publish never reaches the client")
 	})
 
+	// Publish is the second door on the wrapper: it routes through PublishToExchange
+	// so one implementation stamps both, and a future change that gives it its own
+	// body would publish unstamped without this.
+	t.Run("the_plain_publish_door_is_stamped_too", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
+
+		require.NoError(t, pub.Publish(
+			multitenant.SetTenant(context.Background(), tenantID), "some.queue", []byte("payload")))
+
+		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
+	})
+
 	t.Run("the_callers_header_map_is_never_written_to", func(t *testing.T) {
 		client := &recordingStubClient{}
 		pub := lease(t, tenantID, client)
@@ -261,6 +274,10 @@ type recordingStubClient struct {
 	stubAMQPClient
 	lastHeaders map[string]any
 	publishes   int
+}
+
+func (c *recordingStubClient) Publish(ctx context.Context, destination string, data []byte) error {
+	return c.PublishToExchange(ctx, PublishOptions{RoutingKey: destination}, data)
 }
 
 func (c *recordingStubClient) PublishToExchange(_ context.Context, options PublishOptions, _ []byte) error {

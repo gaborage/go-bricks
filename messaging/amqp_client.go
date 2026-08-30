@@ -1246,31 +1246,3 @@ func (a amqpHeaderAccessor) Set(key string, value any) {
 	}
 	a.headers[key] = value
 }
-
-// unsafePublish publishes a message without confirmation handling.
-func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptions, data []byte) error {
-	// The same guard PublishToExchange runs. This method reaches
-	// PublishWithContext by its own path, so leaving it out would mean the
-	// package's protection depended on which internal caller was used — and the
-	// one thing an unwritable frame costs is the connection every publisher
-	// shares (#1123).
-	if err := ValidatePublishDestination(options); err != nil {
-		return err
-	}
-
-	channel, err := c.readyChannel()
-	if err != nil {
-		return err
-	}
-
-	publishing := preparePublishing(ctx, options, data)
-
-	return channel.PublishWithContext(
-		ctx,
-		options.Exchange,
-		options.RoutingKey,
-		options.Mandatory,
-		options.Immediate,
-		publishing,
-	)
-}
