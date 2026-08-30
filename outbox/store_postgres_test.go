@@ -439,7 +439,7 @@ func TestPostgresStoreCreateTableSeedErrorIsReported(t *testing.T) {
 }
 
 // TestPostgresStoreFetchPendingEmptyStreamIsAMQPLane pins C1: the stream-lane columns are
-// NOT NULL DEFAULT '' on PostgreSQL, so a row written before the stream lane existed reads
+// NOT NULL DEFAULT ” on PostgreSQL, so a row written before the stream lane existed reads
 // back as an AMQP-lane row rather than failing the scan and blocking startup.
 func TestPostgresStoreFetchPendingEmptyStreamIsAMQPLane(t *testing.T) {
 	store := newPostgresTestStore(t)

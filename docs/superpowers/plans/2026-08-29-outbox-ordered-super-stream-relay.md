@@ -208,10 +208,12 @@ stream columns `NOT NULL DEFAULT ''` so existing rows are readable immediately),
 backfill, then the index — so the index is built over final values and no window exists in
 which `FetchPending` reads a row it cannot scan.
 
-The table name is bounded at 56 bytes for its own segment (`outbox.tablename`), so
-`<name>_leader` stays a distinct identifier: PostgreSQL truncates an identifier to 63 bytes,
-and a 63-byte table name would collapse onto its own companion — `CreateTable` would skip
-creating the leader table and aim the seed at the outbox table itself.
+The table name is bounded at 49 bytes for its own segment (`outbox.tablename`), so every
+identifier derived from it stays distinct under PostgreSQL's 63-byte truncation. The longest
+derivation is `idx_<name>_published` (+14), not the `<name>_leader` companion (+7). Past the
+bound two silent failures wait: a 63-byte name collapses onto its own companion, so
+`CreateTable` skips the leader table and aims the seed at the ledger; and a 50-to-56-byte
+name truncates the pending and published index names into each other.
 
 `CreateTable` does not perform any of this: it is `IF NOT EXISTS`, so against an existing
 table it no-ops the table and then fails creating the `(seq)` index — surfaced by the caller

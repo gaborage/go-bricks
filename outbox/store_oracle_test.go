@@ -465,7 +465,7 @@ func TestOracleStoreCreateTableCreatesLeaderAndSeqIndex(t *testing.T) {
 }
 
 // TestOracleStoreFetchPendingEmptyStreamIsAMQPLane is the Oracle half of C1's regression.
-// Oracle keeps both columns NULLABLE — '' IS NULL there, so NOT NULL DEFAULT '' would reject
+// Oracle keeps both columns NULLABLE — ” IS NULL there, so NOT NULL DEFAULT ” would reject
 // every AMQP-lane insert with ORA-01400 (issue #586) — and maps NULL back to "" on scan.
 func TestOracleStoreFetchPendingEmptyStreamIsAMQPLane(t *testing.T) {
 	store := newOracleTestStore(t)

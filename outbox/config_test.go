@@ -219,10 +219,10 @@ func TestValidateConfigRejectsOverlongTableName(t *testing.T) {
 		PollInterval: 5 * time.Second,
 		BatchSize:    100,
 		Tenancy:      config.TenancyPerTenant,
-		TableName:    strings.Repeat("a", 57),
+		TableName:    strings.Repeat("a", 50),
 	}
 	err := validateConfig(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outbox.tablename")
-	assert.Contains(t, err.Error(), "56")
+	assert.Contains(t, err.Error(), "49")
 }

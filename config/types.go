@@ -739,8 +739,9 @@ type OutboxConfig struct {
 	Enabled bool `koanf:"enabled" json:"enabled" yaml:"enabled" toml:"enabled" mapstructure:"enabled"`
 
 	// TableName is the outbox table name in the database.
-	// The table segment is bounded at 56 bytes so the relay's "<name>_leader" companion
-	// table stays a distinct identifier under PostgreSQL's 63-byte truncation.
+	// The table segment is bounded at 49 bytes so every identifier derived from it — the
+	// "idx_<name>_published" index and the "<name>_leader" companion table — stays distinct
+	// under PostgreSQL's 63-byte truncation.
 	// Default: "gobricks_outbox".
 	TableName string `koanf:"tablename" json:"tablename" yaml:"tablename" toml:"tablename" mapstructure:"tablename"`
 

@@ -9,15 +9,20 @@ import (
 	"github.com/gaborage/go-bricks/internal/sqlid"
 )
 
-// maxTableNameLen bounds the outbox table's own segment so its "<name>_leader" companion
-// stays a DISTINCT identifier. PostgreSQL truncates an identifier to 63 bytes, so a 63-byte
-// table name and its companion collapse onto the same name — CreateTable would skip creating
-// the leader table and aim the seed at the outbox table itself. The bound is applied for both
+// maxTableNameLen bounds the outbox table's own segment so every identifier the store
+// DERIVES from it stays distinct under PostgreSQL's 63-byte truncation. The longest
+// decoration wins: "idx_" + segment + "_published" (14 bytes) beats the leader table's
+// "_leader" (7). Without the bound a 63-byte name collapses onto its own companion —
+// CreateTable would skip creating the leader table and aim the seed at the ledger — and a
+// 50-to-56-byte name truncates the two index names into each other. Applied for both
 // vendors because PostgreSQL's limit is the binding one; Oracle allows 128.
-const maxTableNameLen = 63 - len(leaderSuffix)
+const maxTableNameLen = 63 - len(longestDerivedPrefix) - len(longestDerivedSuffix)
 
-// leaderSuffix is what sqlid.LeaderTableName appends.
-const leaderSuffix = "_leader"
+const (
+	leaderSuffix         = "_leader"
+	longestDerivedPrefix = "idx_"
+	longestDerivedSuffix = "_published"
+)
 
 // validateTableName checks that name is a safe SQL identifier, delegating to the
 // shared sqlid validator and wrapping its error with the outbox package prefix.
@@ -29,8 +34,9 @@ func validateTableName(name string) error {
 	// Measure the table segment only: a schema prefix is a separate identifier and does
 	// not spend the table's byte budget.
 	if segment := sqlid.IndexBaseName(name); len(segment) > maxTableNameLen {
-		return fmt.Errorf("outbox: table name segment %q is %d bytes; the maximum is %d so the %q companion table stays a distinct identifier",
-			segment, len(segment), maxTableNameLen, leaderSuffix)
+		return fmt.Errorf("outbox: table name segment %q is %d bytes; the maximum is %d so the derived %q%s%s index and %q%s companion table stay distinct identifiers under PostgreSQL's 63-byte truncation",
+			segment, len(segment), maxTableNameLen,
+			longestDerivedPrefix, "<name>", longestDerivedSuffix, "<name>", leaderSuffix)
 	}
 	return nil
 }
