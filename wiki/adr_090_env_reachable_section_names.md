@@ -17,9 +17,13 @@ The other half was left open. The keys under `databases`, `multitenant.tenants` 
 
 - a lone `databases.report_db` plus `DATABASES_REPORT_DB_PORT` fails startup blaming a
   phantom `databases.report` — the variable reached `databases.report.db.port`;
-- with a real sibling `databases.report` present, the same variable lands **silently** on
-  the sibling, and `report_db` keeps its YAML value. Nothing errors; the wrong database is
-  configured;
+- with a real sibling `databases.report` present, the same variable is applied **silently** to
+  the sibling's subtree while `report_db` keeps its YAML value. What that costs depends on the
+  name: `databases.report.db.port` matches no field of a database section, so the override is
+  dropped without a word; a section named `report_pool` beside a `report` sends
+  `DATABASES_REPORT_POOL_MAX_CONNECTIONS` to `databases.report.pool.max.connections`, which IS a
+  real field on the sibling. Either way nothing errors and the setting never reaches the section
+  it was written for;
 - an uppercase name (`databases.Reporting`) is unreachable the same way.
 
 `[C60.19]` already suppressed the misleading "set `DATABASES_REPORT_DB_PORT`" hint these
@@ -40,10 +44,14 @@ un-addressable.
    collision this ADR exists to stop.
 3. **The error names the key path.** `ConfigError.Field` is `databases.report_db`, not a bare
    `databases`, so an operator can find the entry; the action states the rule and says rename.
-4. **Hyphen is legal**, and the grammar is deliberately the resolver's tenant-ID grammar
-   (ADR-039) without its length bound. Whether a hyphenated name is *settable* depends on the
-   runtime — Docker and Kubernetes permit `-` in variable names, POSIX `export` does not — which
-   the docs state and the framework does not police.
+4. **Hyphen is legal**, and the character class is deliberately the one the resolver applies to a
+   resolved tenant ID (ADR-039), without its `{1,64}` length bound. The two are separate regexps,
+   not a shared symbol: `config` cannot import the resolver's, since `server` imports `config`.
+   They are therefore kept aligned by this ADR and by the tests either side, not by the compiler,
+   and the length bound genuinely differs — a static tenant key longer than 64 characters passes
+   this check and would still be refused by the resolver at request time. Whether a hyphenated
+   name is *settable* depends on the runtime — Docker and Kubernetes permit `-` in variable names,
+   POSIX `export` does not — which the docs state and the framework does not police.
 5. **Dynamic tenant sources are not validated here.** Their IDs arrive at request time and
    the resolver's own `^[a-z0-9-]{1,64}$` is their gate; the static-source gate in
    `checkMultitenant` is what keeps them out of this check.

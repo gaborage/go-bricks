@@ -6167,8 +6167,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   The reason is reachability. `Load` maps an environment variable to a key by lowercasing it and
   turning `_` into `.`, so `DATABASES_REPORT_DB_PORT` reaches `databases.report.db.port`: a section
   named `report_db` cannot be addressed by ANY variable. Alone, that surfaced as a startup failure
-  blaming a phantom `databases.report`; beside a real sibling `databases.report`, the variable landed
-  on the SIBLING and `report_db` silently kept its YAML value — the shape this atom exists to end.
+  blaming a phantom `databases.report`; beside a real sibling `databases.report`, the variable was
+  applied to the SIBLING's subtree while `report_db` silently kept its YAML value. What that costs
+  depends on the name: `report.db.port` matches no field, so the override is silently DROPPED, while
+  a section named `report_pool` beside a `report` sends `DATABASES_REPORT_POOL_MAX_CONNECTIONS` to
+  `databases.report.pool.max.connections`, which is a real field on the sibling. Either way the
+  setting an operator wrote does not reach the section they wrote it for, and nothing errors.
   Where the rule does NOT reach: header maps (`*.headers.<name>`) are protocol identifiers and are
   untouched; a DYNAMIC tenant source's IDs are gated by the resolver's own `^[a-z0-9-]{1,64}$` at
   request time; and the env transform itself is byte-identical, so every variable that reached a key

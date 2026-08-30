@@ -6932,6 +6932,52 @@ func TestDebugAllowedIPsValidationMatchesTheRuntimeParser(t *testing.T) {
 	}
 }
 
+// assertSectionNameRejected collapses the tail every env-reachability case
+// shares: a *ConfigError naming the offending KEY PATH and an action telling
+// the operator to rename it.
+func assertSectionNameRejected(t *testing.T, err error, wantField string) {
+	t.Helper()
+	require.Error(t, err)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, wantField, cfgErr.Field)
+	assert.ErrorContains(t, err, "rename")
+}
+
+// TestCheckSectionNameGrammar exercises the shared rule directly, at the
+// character-class boundary, so the three call sites are left proving only that
+// they WIRE it — and its own branch is covered without going through a section.
+func TestCheckSectionNameGrammar(t *testing.T) {
+	tests := []struct {
+		name     string
+		section  string
+		accepted bool
+	}{
+		{name: "lowercase", section: "reporting", accepted: true},
+		{name: "digits", section: "db2", accepted: true},
+		{name: "hyphen", section: "report-db", accepted: true},
+		{name: "digits_only", section: "2", accepted: true},
+		{name: "hyphen_only", section: "-", accepted: true},
+		{name: "empty", section: ""},
+		{name: "underscore", section: "report_db"},
+		{name: "uppercase", section: "Reporting"},
+		{name: "dot", section: "report.db"},
+		{name: "space", section: "report db"},
+		{name: "non_ascii", section: "reporté"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkSectionName("databases."+tt.section, tt.section)
+			if tt.accepted {
+				require.NoError(t, err)
+				return
+			}
+			assertSectionNameRejected(t, err, "databases."+tt.section)
+		})
+	}
+}
+
 // TestValidateRejectsSectionNamesUnreachableByEnv is the reproducer: the env
 // transform lowercases and maps '_' to '.', so a name carrying '_' or an
 // uppercase letter cannot be addressed by any environment variable — its
@@ -6963,11 +7009,7 @@ func TestValidateRejectsSectionNamesUnreachableByEnv(t *testing.T) {
 
 			err := checkNamedDatabases(databases, &mt)
 
-			require.Error(t, err)
-			var cfgErr *ConfigError
-			require.ErrorAs(t, err, &cfgErr)
-			assert.Equal(t, tt.wantField, cfgErr.Field)
-			assert.ErrorContains(t, err, "rename")
+			assertSectionNameRejected(t, err, tt.wantField)
 		})
 	}
 }
@@ -7010,11 +7052,7 @@ func TestCheckMultitenantTenantEntryRejectsUnreachableIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := checkMultitenantTenantEntry(tt.tenantID, &TenantEntry{})
 
-			require.Error(t, err)
-			var cfgErr *ConfigError
-			require.ErrorAs(t, err, &cfgErr)
-			assert.Equal(t, tt.wantField, cfgErr.Field)
-			assert.ErrorContains(t, err, "rename")
+			assertSectionNameRejected(t, err, tt.wantField)
 		})
 	}
 }
@@ -7036,11 +7074,17 @@ func TestCheckKeyStoreRejectsUnreachableKeyNames(t *testing.T) {
 
 	err := checkKeyStore(cfg)
 
-	require.Error(t, err)
-	var cfgErr *ConfigError
-	require.ErrorAs(t, err, &cfgErr)
-	assert.Equal(t, "keystore.keys.my_key", cfgErr.Field)
-	assert.ErrorContains(t, err, "rename")
+	assertSectionNameRejected(t, err, "keystore.keys.my_key")
+}
+
+// TestCheckKeyStoreAcceptsReachableKeyNames is the boundary's other side: a
+// conforming name reaches validateKeyEntry, which then judges its sources.
+func TestCheckKeyStoreAcceptsReachableKeyNames(t *testing.T) {
+	cfg := &KeyStoreConfig{Keys: map[string]KeyPairConfig{
+		"my-key": {Secret: KeySourceConfig{Value: "c2VjcmV0LWJ5dGVzLXRoYXQtYXJlLWxvbmctZW5vdWdo"}},
+	}}
+
+	require.NoError(t, checkKeyStore(cfg))
 }
 
 // TestValidateRejectsSiblingCollisionBeforeItCanHappen pins the silent shape the
@@ -7061,10 +7105,7 @@ func TestValidateRejectsSiblingCollisionBeforeItCanHappen(t *testing.T) {
 
 	err := checkNamedDatabases(databases, &mt)
 
-	require.Error(t, err)
-	var cfgErr *ConfigError
-	require.ErrorAs(t, err, &cfgErr)
-	assert.Equal(t, "databases.report_db", cfgErr.Field, "the unreachable sibling is named, not the one its variable would land on")
+	assertSectionNameRejected(t, err, "databases.report_db")
 }
 
 // TestCheckMultitenantRejectsTenantSiblingCollision is the same shape one section over.
@@ -7081,10 +7122,7 @@ func TestCheckMultitenantRejectsTenantSiblingCollision(t *testing.T) {
 
 	err := checkMultitenant(mt, &DatabaseConfig{}, &MessagingConfig{}, source)
 
-	require.Error(t, err)
-	var cfgErr *ConfigError
-	require.ErrorAs(t, err, &cfgErr)
-	assert.Equal(t, "multitenant.tenants.acme_corp", cfgErr.Field)
+	assertSectionNameRejected(t, err, "multitenant.tenants.acme_corp")
 }
 
 // TestCheckMultitenantLeavesDynamicTenantIDsToTheResolver: a dynamic source's

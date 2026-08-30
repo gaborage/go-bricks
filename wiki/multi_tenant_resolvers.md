@@ -19,9 +19,10 @@ All resolvers funnel through the same interface (`multitenant.TenantResolver`) a
 
 Every resolved tenant ID is checked against a regex (default `^[a-z0-9-]{1,64}$`) before it lands in context. Reject the request rather than silently masking malformed IDs — tenant strings are used downstream as DB schema names, cache keys, and span attributes, so a strict allowlist closes a class of injection attacks. The composite resolver advances to the next sub-resolver if the validation fails (same as a missing tenant).
 
-The same grammar applies to the keys of a STATIC `multitenant.tenants` map, checked at startup
-rather than per request, so a tenant section is reachable by environment variable
-([ADR-090](adr_090_env_reachable_section_names.md)); a hyphenated ID is legal but settable only
+The same character class applies to the keys of a STATIC `multitenant.tenants` map, checked at
+startup rather than per request, so a tenant section is reachable by environment variable
+([ADR-090](adr_090_env_reachable_section_names.md)). It is a separate regexp with no length bound,
+so a static key longer than 64 characters passes startup and would still be refused here; a hyphenated ID is legal but settable only
 where the runtime permits `-` in a variable name (Docker and Kubernetes yes, POSIX `export` no).
 A DYNAMIC source's IDs are not checked at startup — they arrive at request time and this resolver
 rule is their gate.

@@ -181,6 +181,7 @@ const (
 	fieldResolverOrder      = "multitenant.resolver.order"
 	errInvalidField         = "invalid value: %v"
 	databasesFieldPrefix    = "databases.%s"
+	keystoreKeysFieldPrefix = "keystore.keys.%s"
 	defaultHost             = "localhost"
 
 	fieldServerTLSCertFile   = "server.tls.certfile"
@@ -1313,7 +1314,8 @@ func checkSectionName(field, name string) error {
 }
 
 // validateNamedDatabaseName checks the map key: non-empty, not the reserved
-// prefix, and not colliding with a static tenant ID.
+// prefix, reachable by an environment variable (checkSectionName), and not
+// colliding with a static tenant ID.
 func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 	if name == "" {
 		return &ConfigError{
@@ -1718,7 +1720,8 @@ func normalizeKeyStore(cfg *KeyStoreConfig) {
 // must be non-negative — nil is left alone since white-box tests call
 // checkKeyStore directly, before normalize has filled it. Each entry is
 // either an RSA pair (public required with exactly one source, private
-// optional) or a symmetric secret — a mixed entry is rejected.
+// optional) or a symmetric secret — a mixed entry is rejected. Each entry's
+// NAME is judged first, against the env-reachability grammar.
 func checkKeyStore(cfg *KeyStoreConfig) error {
 	if cfg.SecretMinLength != nil && *cfg.SecretMinLength < 0 {
 		return NewValidationError("keystore.secretminlength", errMustBeNonNegative)
@@ -1738,7 +1741,7 @@ func checkKeyStore(cfg *KeyStoreConfig) error {
 	for _, name := range names {
 		// The name is judged before its sources: an unreachable entry cannot be
 		// configured by environment variable whatever its file or value says.
-		if err := checkSectionName(fmt.Sprintf("keystore.keys.%s", name), name); err != nil {
+		if err := checkSectionName(fmt.Sprintf(keystoreKeysFieldPrefix, name), name); err != nil {
 			return err
 		}
 		kp := cfg.Keys[name]
@@ -1759,7 +1762,7 @@ func validateKeyEntry(kp *KeyPairConfig, name string) error {
 	if hasSecret && hasAsymmetric {
 		return &ConfigError{
 			Category: errCategoryInvalid,
-			Field:    fmt.Sprintf("keystore.keys.%s", name),
+			Field:    fmt.Sprintf(keystoreKeysFieldPrefix, name),
 			Message:  "entry has both a symmetric 'secret' and asymmetric 'public'/'private' material",
 			Action:   "configure an entry as either a 'secret' or an RSA pair, not both",
 		}
@@ -1986,8 +1989,9 @@ func checkMultitenant(mt *MultitenantConfig, db *DatabaseConfig, msg *MessagingC
 }
 
 // checkMultitenantTenantEntry rejects one static tenant's ID and cache
-// section: an empty or dotted ID, or (once the ID is valid) whatever
-// checkTenantCache rejects.
+// section: an empty or dotted ID, an ID no environment variable can address
+// (checkSectionName), or (once the ID is valid) whatever checkTenantCache
+// rejects.
 func checkMultitenantTenantEntry(tenantID string, entry *TenantEntry) error {
 	if tenantID == "" {
 		return NewValidationError(fieldMultitenantTenants, "tenant ID cannot be empty")

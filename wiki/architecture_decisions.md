@@ -1410,9 +1410,10 @@ unexports eight debug response types with their JSON unchanged. See
 is not injective. ADR-024 fixed that for FRAMEWORK leaf keys by renaming them; the keys an operator
 chooses were never judged. Verified on `main`: a lone `databases.report_db` plus
 `DATABASES_REPORT_DB_PORT` fails startup blaming a phantom `databases.report`, and with a real
-sibling `databases.report` present the same variable lands SILENTLY on the sibling while `report_db`
-keeps its YAML value — a different database configured than the one the operator edited, and the pod
-comes up green. The decision rejects the name instead: a key under `databases`,
+sibling `databases.report` present the same variable is applied SILENTLY to the sibling's subtree
+while `report_db` keeps its YAML value — dropped where the remaining segments name no field, landing
+on the sibling's own setting where they do (`report_pool` beside `report` reaches
+`databases.report.pool.max.connections`), and the pod comes up green either way. The decision rejects the name instead: a key under `databases`,
 `multitenant.tenants` or `keystore.keys` must match `^[a-z0-9-]+$`, checked in `config.Validate`, so
 the existing transform is injective over every key that survives startup. The `ConfigError.Field` is
 the key path and the action says rename. Hyphen is legal (the resolver's tenant-ID grammar, minus its
