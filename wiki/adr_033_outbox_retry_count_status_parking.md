@@ -3,6 +3,26 @@
 **Status:** Accepted
 **Date:** 2026-06-30
 
+> **Amended (2026-08-29, a second poison class):** this ADR classified every broker-side
+> publish failure as connectivity, leaving undecodable headers as its single poison class. That was
+> written before `messaging.ErrInvalidPublishDestination` existed (ADR-070's 2026-08-28
+> amendment, `[C61.17]`): a destination past the AMQP shortstr limit is refused BEFORE any
+> channel work, identically on every cycle, whatever the broker's state — deterministic,
+> broker-independent, and therefore poison by this ADR's own test. Under the old
+> classification such a row advanced `retry_count` and stayed `pending` for the life of the
+> table. A publish error satisfying `errors.Is(err, messaging.ErrInvalidPublishDestination)`
+> now takes the same path as an undecodable header: parked via `MarkDeadLettered` at
+> `MaxRetries`, never first-hit. Connectivity is unchanged — NACK, confirmation timeout,
+> not-connected, deadline and `ErrPublishRetriesExhausted` still retry forever.
+>
+> The bound also moved to the source, so a row that can never be delivered is normally
+> refused before it is written: `messaging` exports the rule its publish doors already run
+> (`ValidatePublishDestination`), `outbox.Publish` runs it on the post-fallback exchange and
+> routing key and the caller's header keys before the INSERT, and the outbox module's `Init`
+> refuses an over-long `outbox.defaultexchange`. Parking is the backstop for a row that
+> reached the ledger another way — a hand-managed schema, a direct INSERT (#1229,
+> `[C61.19]`).
+
 ## Context
 
 The transactional outbox relay republishes pending events and increments a per-row
@@ -67,7 +87,8 @@ No schema migration is required: the `status` column and the `'failed'` value al
 
 ## Consequences
 
-- **`MaxRetries` now bounds poison (undecodable headers) only**, not connectivity. A permanently-
+- **`MaxRetries` now bounds poison only** (undecodable headers, and — since the 2026-08-29
+  amendment — an unpublishable destination), not connectivity. A permanently-
   misnamed exchange or a persistently-NACKing event keeps retrying with a climbing `retry_count`
   rather than parking — so it delivers the moment the broker recovers or the config is fixed, at
   the cost of retrying indefinitely until then (monitor `retry_count` growth to catch it). This is

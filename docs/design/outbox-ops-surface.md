@@ -5,7 +5,7 @@ proposed for this commit. A follow-on build plan (sketched at the end) executes 
 
 ## Problem
 
-When the outbox relay exhausts retries on a **poison** event (undecodable headers), it
+When the outbox relay exhausts retries on a **poison** event (undecodable headers, or a destination past the AMQP shortstr limit), it
 parks the row at `status='failed'` via `MarkDeadLettered` and emits one WARN. After that
 the event is invisible to an operator:
 
@@ -22,7 +22,7 @@ deny the runtime DB role. The wiki even *promises* visibility that today only ca
 "visible to someone with SQL access" (`wiki/outbox.md:164-165`: failed rows "are
 intentionally never auto-deleted so they stay visible").
 
-**Scope honesty.** Only poison (undecodable headers) ever parks. Every connectivity failure
+**Scope honesty.** Only poison (undecodable headers, or a destination the AMQP frame can never carry) ever parks. Every connectivity failure
 (broker down, NACK, confirmation timeout) advances `retry_count` but keeps retrying forever
 and is *never* parked (`outbox/relay.go:299-317` and the `MaxRetries` doc at
 `config/types.go:742-747`). So the real-world dead-letter backlog is **low-volume but

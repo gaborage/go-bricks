@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -265,6 +266,51 @@ func TestModuleInitAllowsShortPublishTimeoutWhenNoRetries(t *testing.T) {
 					ResendDelay:        45 * time.Second,
 					MaxPublishAttempts: 1,
 				},
+			},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	require.NoError(t, m.Init(deps))
+}
+
+// TestModuleInitRejectsAnOversizedDefaultExchange guards the startup bound: an
+// outbox.defaultexchange past the AMQP shortstr ceiling makes every row that falls
+// back to it unpublishable, so Init refuses it beside the publishtimeout guards.
+func TestModuleInitRejectsAnOversizedDefaultExchange(t *testing.T) {
+	m := NewModule()
+	oversized := strings.Repeat("k", 256)
+	deps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: oversized},
+			Messaging: config.MessagingConfig{
+				Broker: config.BrokerConfig{URL: "amqp://localhost"},
+			},
+		},
+		DB:        func(_ context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil },
+		Messaging: func(_ context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+
+	err := m.Init(deps)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, messaging.ErrInvalidPublishDestination)
+	assert.Contains(t, err.Error(), "outbox.defaultexchange")
+	assert.Contains(t, err.Error(), "256 bytes")
+	assert.NotContains(t, err.Error(), oversized, "the error names the key and the length, never the value")
+}
+
+// TestModuleInitAllowsAMaxLengthDefaultExchange pins the boundary: 255 bytes is what
+// the frame carries, so it initializes.
+func TestModuleInitAllowsAMaxLengthDefaultExchange(t *testing.T) {
+	m := NewModule()
+	deps := &app.ModuleDeps{
+		Logger: logger.New("info", false),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, PublishTimeout: 30 * time.Second, DefaultExchange: strings.Repeat("k", 255)},
+			Messaging: config.MessagingConfig{
+				Broker: config.BrokerConfig{URL: "amqp://localhost"},
 			},
 		},
 		DB:        func(_ context.Context) (dbtypes.Interface, error) { return probeReadyDB("postgresql"), nil },

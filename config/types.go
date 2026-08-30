@@ -712,7 +712,7 @@ type SourceConfig struct {
 //   - AutoCreateTable: false (opt-in; set true to create the table on first use)
 //   - PollInterval: 5s (relay poll frequency)
 //   - BatchSize: 100 (events per relay cycle)
-//   - MaxRetries: 5 (poison-event dead-letter ceiling; connectivity failures are never counted — see the MaxRetries field doc)
+//   - MaxRetries: 5 (poison-event dead-letter ceiling — undecodable headers or an unpublishable destination; connectivity failures are never counted — see the MaxRetries field doc)
 //   - RetentionPeriod: 72h (cleanup published events older than this)
 //   - PublishTimeout: 60s (per-record relay publish bound)
 type OutboxConfig struct {
@@ -730,7 +730,9 @@ type OutboxConfig struct {
 	AutoCreateTable bool `koanf:"autocreatetable" json:"autocreatetable" yaml:"autocreatetable" toml:"autocreatetable" mapstructure:"autocreatetable"`
 
 	// DefaultExchange is the fallback AMQP exchange when Event.Exchange is empty.
-	// Default: "" (empty, which publishes to the default exchange).
+	// Default: "" (empty, which publishes to the default exchange). It must fit the AMQP
+	// shortstr limit (255 bytes) — a longer value makes every event that falls back to it
+	// unpublishable, so the outbox module fails to start.
 	DefaultExchange string `koanf:"defaultexchange" json:"defaultexchange" yaml:"defaultexchange" toml:"defaultexchange" mapstructure:"defaultexchange"`
 
 	// PollInterval is how often the relay checks for pending events.
@@ -741,8 +743,9 @@ type OutboxConfig struct {
 	// Default: 100. Higher values improve throughput but increase memory usage.
 	BatchSize int `koanf:"batchsize" json:"batchsize" yaml:"batchsize" toml:"batchsize" mapstructure:"batchsize"`
 
-	// MaxRetries is the retry ceiling after which a *poison* event (undecodable headers
-	// — a deterministic, broker-independent failure) is dead-lettered to status "failed"
+	// MaxRetries is the retry ceiling after which a *poison* event — undecodable headers,
+	// or a destination past the AMQP shortstr limit that the broker can never accept, both
+	// deterministic and broker-independent — is dead-lettered to status "failed"
 	// and stops being retried. Connectivity failures (broker down, NACK, confirmation
 	// timeout) advance retry_count but are NEVER dead-lettered by this count, so neither a
 	// prolonged outage nor a transient broker fault can park healthy events. Default: 5.

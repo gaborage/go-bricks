@@ -12,6 +12,7 @@ import (
 
 	"github.com/gaborage/go-bricks/app"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
+	"github.com/gaborage/go-bricks/messaging"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -75,6 +76,19 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 	routingKey := event.RoutingKey
 	if routingKey == "" {
 		routingKey = event.EventType
+	}
+
+	// The values persisted here are the ones the relay later puts on the wire, so
+	// the publish rule runs on the post-fallback destination BEFORE the INSERT: a
+	// row the AMQP frame can never carry is refused at its source rather than
+	// parked by the relay after MaxRetries. Only the caller's header keys are
+	// judged — the trace keys the framework adds are literals.
+	if err := messaging.ValidatePublishDestination(messaging.PublishOptions{
+		Exchange:   exchange,
+		RoutingKey: routingKey,
+		Headers:    event.Headers,
+	}); err != nil {
+		return "", fmt.Errorf("outbox: %w", err)
 	}
 
 	eventID := uuid.New().String()

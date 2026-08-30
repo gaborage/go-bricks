@@ -123,6 +123,10 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return err
 	}
 
+	if err := m.validateDefaultExchange(); err != nil {
+		return err
+	}
+
 	if m.startupDatabaseCheckApplies() {
 		if err := m.verifyStartupDatabase(); err != nil {
 			return err
@@ -274,6 +278,19 @@ func (m *Module) validatePublishTimeout() error {
 		return fmt.Errorf("outbox: publishtimeout (%s) must be >= messaging.reconnect.resenddelay (%s); "+
 			"a shorter value expires inside a single publish-retry wait, so each retryable event burns its whole timeout delivering nothing",
 			m.cfg.PublishTimeout, rd)
+	}
+	return nil
+}
+
+// validateDefaultExchange fails fast when outbox.defaultexchange cannot fit the AMQP
+// shortstr the basic.publish frame carries it in: every event that falls back to it
+// would be persisted and then refused by the relay on every cycle until MaxRetries
+// parks it, so the misconfiguration is rejected at startup instead. It runs the
+// messaging publish rule rather than restating the ceiling, and the error names the
+// config KEY and the byte length — never the value, which reaches logs and spans.
+func (m *Module) validateDefaultExchange() error {
+	if err := messaging.ValidatePublishDestination(messaging.PublishOptions{Exchange: m.cfg.DefaultExchange}); err != nil {
+		return fmt.Errorf("outbox: outbox.defaultexchange is invalid: %w", err)
 	}
 	return nil
 }

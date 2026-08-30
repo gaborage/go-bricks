@@ -314,3 +314,45 @@ func TestDeclarationsValidateReportsANilDeclaration(t *testing.T) {
 		})
 	}
 }
+
+// TestValidatePublishDestination covers the exported door on its own: it is the rule
+// the publish doors run, offered to callers (the outbox) that persist a destination
+// now and publish it later, so they can refuse it at its source instead of restating
+// the ceiling.
+func TestValidatePublishDestination(t *testing.T) {
+	maxLengthShortStr := strings.Repeat("k", maxShortStrBytes)
+
+	tests := []struct {
+		name    string
+		options PublishOptions
+		field   string
+	}{
+		{name: "empty_is_legal", options: PublishOptions{}},
+		{
+			name:    "max_length_fields_are_legal",
+			options: PublishOptions{Exchange: maxLengthShortStr, RoutingKey: maxLengthShortStr, Headers: map[string]any{maxLengthShortStr: "v"}},
+		},
+		{name: "oversized_exchange", options: PublishOptions{Exchange: oversizedShortStr}, field: "exchange"},
+		{name: "oversized_routing_key", options: PublishOptions{RoutingKey: oversizedShortStr}, field: "routing key"},
+		{
+			name:    "oversized_nested_header_key",
+			options: PublishOptions{Headers: map[string]any{"outer": map[string]any{oversizedShortStr: "v"}}},
+			field:   "header key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePublishDestination(tt.options)
+			if tt.field == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrInvalidPublishDestination)
+			assert.Contains(t, err.Error(), tt.field)
+			assert.Contains(t, err.Error(), "256 bytes")
+			assert.NotContains(t, err.Error(), oversizedShortStr, "the error reports the length, never the value")
+		})
+	}
+}
