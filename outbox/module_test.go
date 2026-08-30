@@ -1103,3 +1103,46 @@ func TestLazyPublisherUsesCallersTenantStore(t *testing.T) {
 	_, err = pub.Publish(ctxB, txB, event)
 	require.NoError(t, err, "tenant B's publish must use tenant B's (Oracle) store, not a cached tenant-A store")
 }
+
+// TestLazyPublisherPassesConfiguredTargets proves the module's configured super
+// streams reach the publisher's target set: the same event is accepted when the
+// stream is listed and refused when the list is empty.
+func TestLazyPublisherPassesConfiguredTargets(t *testing.T) {
+	tests := []struct {
+		name         string
+		superStreams []string
+		wantErr      error
+	}{
+		{name: "configured_target_reaches_the_store", superStreams: []string{"customers"}},
+		{name: "unconfigured_target_is_refused", wantErr: ErrStreamNotAnOutboxTarget},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, db := initEnabledModule(t, "postgresql", 0)
+			m.cfg.SuperStreams = tt.superStreams
+			lp := &lazyPublisher{module: m}
+
+			tx := db.ExpectTransaction()
+			tx.ExpectExec(`INSERT INTO gobricks_outbox`).WillReturnRowsAffected(1)
+			begun, err := db.Begin(context.Background())
+			require.NoError(t, err)
+
+			ctx := multitenant.SetTenant(context.Background(), "acme")
+			_, err = lp.Publish(ctx, begun, &app.OutboxEvent{
+				EventType:   "customer.created",
+				AggregateID: "c1",
+				Stream:      "customers",
+			})
+
+			if tt.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.wantErr)
+				assert.Empty(t, tx.ExecLog(), "a refused event never reaches the store")
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, tx.ExecLog(), 1)
+		})
+	}
+}

@@ -16,6 +16,7 @@ import (
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -79,7 +80,7 @@ func (t *mockTx) Prepare(_ context.Context, _ string) (dbtypes.Statement, error)
 
 func TestPublisherPublishBasicEvent(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "default.exchange")
+	pub := newPublisher(store, "default.exchange", nil)
 
 	event := &app.OutboxEvent{
 		EventType:   eventTypeOrderCreated,
@@ -111,7 +112,7 @@ func TestPublisherPublishBasicEvent(t *testing.T) {
 
 func TestPublisherPublishWithDefaultExchange(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "fallback.exchange")
+	pub := newPublisher(store, "fallback.exchange", nil)
 
 	event := &app.OutboxEvent{
 		EventType:   eventTypeOrderCreated,
@@ -133,7 +134,7 @@ func TestPublisherPublishWithDefaultExchange(t *testing.T) {
 
 func TestPublisherPublishBytePayload(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	rawPayload := []byte(`{"raw":"data"}`)
 	event := &app.OutboxEvent{
@@ -151,7 +152,7 @@ func TestPublisherPublishBytePayload(t *testing.T) {
 
 func TestPublisherPublishWithHeaders(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	event := &app.OutboxEvent{
 		EventType:   eventTypeTest,
@@ -177,7 +178,7 @@ func TestPublisherPublishWithHeaders(t *testing.T) {
 
 func TestPublisherPublishNilEvent(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	_, err := pub.Publish(context.Background(), &mockTx{}, nil)
 
@@ -187,7 +188,7 @@ func TestPublisherPublishNilEvent(t *testing.T) {
 
 func TestPublisherPublishEmptyEventType(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	event := &app.OutboxEvent{
 		AggregateID: aggregateTest,
@@ -202,7 +203,7 @@ func TestPublisherPublishEmptyEventType(t *testing.T) {
 
 func TestPublisherPublishEmptyAggregateID(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	event := &app.OutboxEvent{
 		EventType: eventTypeTest,
@@ -217,7 +218,7 @@ func TestPublisherPublishEmptyAggregateID(t *testing.T) {
 
 func TestPublisherPublishStoreError(t *testing.T) {
 	store := &mockStore{insertErr: assert.AnError}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	event := &app.OutboxEvent{
 		EventType:   eventTypeTest,
@@ -232,7 +233,7 @@ func TestPublisherPublishStoreError(t *testing.T) {
 
 func TestPublisherPublishNilPayload(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	event := &app.OutboxEvent{
 		EventType:   eventTypeTest,
@@ -248,7 +249,7 @@ func TestPublisherPublishNilPayload(t *testing.T) {
 
 func TestPublisherPublishNilTransaction(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	event := &app.OutboxEvent{
 		EventType:   eventTypeTest,
@@ -281,7 +282,7 @@ const (
 // trace to replay and the consumer sees a freshly generated id.
 func TestPublisherPublishPersistsTraceContext(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	ctx := gobrickstrace.WithTraceParent(context.Background(), inboundTraceparent)
 
@@ -309,7 +310,7 @@ func TestPublisherPublishPersistsTraceContext(t *testing.T) {
 // not clobber application-supplied headers and does not mutate the caller's map.
 func TestPublisherPublishPreservesCallerHeadersWithTrace(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	callerHeaders := map[string]any{"x-priority": "high"}
 	event := &app.OutboxEvent{
@@ -337,7 +338,7 @@ func TestPublisherPublishPreservesCallerHeadersWithTrace(t *testing.T) {
 // request carries it — matching the behavior documented in wiki/outbox.md.
 func TestPublisherPublishPersistsTracestate(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	const tracestate = "vendor1=opaqueValue1,vendor2=opaqueValue2"
 	ctx := gobrickstrace.WithTraceState(
@@ -365,7 +366,7 @@ func TestPublisherPublishPersistsTracestate(t *testing.T) {
 // headers, preserving existing behavior (nil headers for header-less events).
 func TestPublisherPublishNoTraceLeavesHeadersUnchanged(t *testing.T) {
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 
 	event := &app.OutboxEvent{
 		EventType:   eventTypeTest,
@@ -392,7 +393,7 @@ func TestOutboxTracePropagationContinuityAcrossThreeSites(t *testing.T) {
 
 	// Site 2 — outbox publish persists the trace into the row.
 	store := &mockStore{}
-	pub := newPublisher(store, "")
+	pub := newPublisher(store, "", nil)
 	_, err := pub.Publish(ctx, &mockTx{}, &app.OutboxEvent{
 		EventType:   eventTypeOrderCreated,
 		AggregateID: aggregateOrderID,
@@ -579,7 +580,7 @@ func TestPublisherRefusesADestinationTheFrameCannotCarry(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &fakeStore{}
-			pub := newPublisher(store, tt.defaultExchange)
+			pub := newPublisher(store, tt.defaultExchange, nil)
 
 			eventID, err := pub.Publish(context.Background(), &mockTx{}, &tt.event)
 
@@ -597,6 +598,126 @@ func TestPublisherRefusesADestinationTheFrameCannotCarry(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.field)
 			assert.Contains(t, err.Error(), "256 bytes")
 			assert.NotContains(t, err.Error(), oversizedShortStr, "the error reports the length, never the value")
+		})
+	}
+}
+
+// --- stream lane ------------------------------------------------------------
+
+func TestPublisherStreamTarget(t *testing.T) {
+	tests := []struct {
+		name         string
+		tenant       string
+		superStreams []string
+		event        *app.OutboxEvent
+		wantErr      error
+		wantErrFrag  string
+		assertRecord func(t *testing.T, r *Record)
+	}{
+		{
+			name:         "stream_target_persists_lane_and_key",
+			tenant:       "acme",
+			superStreams: []string{"customers"},
+			event: &app.OutboxEvent{
+				EventType:   "customer.created",
+				AggregateID: "c1",
+				Stream:      "customers",
+			},
+			assertRecord: func(t *testing.T, r *Record) {
+				assert.Equal(t, LaneStream, r.Lane)
+				assert.Equal(t, "customers", r.Stream)
+				assert.Equal(t, "acme", r.PartitionKey)
+				assert.Empty(t, r.Exchange)
+				assert.Empty(t, r.RoutingKey)
+			},
+		},
+		{
+			name:         "stream_target_without_tenant",
+			superStreams: []string{"customers"},
+			event: &app.OutboxEvent{
+				EventType:   "customer.created",
+				AggregateID: "c1",
+				Stream:      "customers",
+			},
+			wantErr: ErrStreamTargetRequiresTenant,
+		},
+		{
+			name:         "stream_target_with_exchange",
+			tenant:       "acme",
+			superStreams: []string{"customers"},
+			event: &app.OutboxEvent{
+				EventType:   "customer.created",
+				AggregateID: "c1",
+				Stream:      "customers",
+				Exchange:    "orders",
+			},
+			wantErr: ErrConflictingTargets,
+		},
+		{
+			name:         "stream_target_with_routing_key",
+			tenant:       "acme",
+			superStreams: []string{"customers"},
+			event: &app.OutboxEvent{
+				EventType:   "customer.created",
+				AggregateID: "c1",
+				Stream:      "customers",
+				RoutingKey:  "x",
+			},
+			wantErr: ErrConflictingTargets,
+		},
+		{
+			name:         "stream_target_not_configured",
+			tenant:       "acme",
+			superStreams: []string{"customers"},
+			event: &app.OutboxEvent{
+				EventType:   "payment.created",
+				AggregateID: "p1",
+				Stream:      "payments",
+			},
+			wantErr:     ErrStreamNotAnOutboxTarget,
+			wantErrFrag: `"payments"`,
+		},
+		{
+			name:         "amqp_event_marks_lane",
+			superStreams: []string{"customers"},
+			event: &app.OutboxEvent{
+				EventType:   eventTypeOrderCreated,
+				AggregateID: "o1",
+			},
+			assertRecord: func(t *testing.T, r *Record) {
+				assert.Equal(t, LaneAMQP, r.Lane)
+				assert.Equal(t, eventTypeOrderCreated, r.RoutingKey)
+				assert.Empty(t, r.Stream)
+				assert.Empty(t, r.PartitionKey)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &mockStore{}
+			pub := newPublisher(store, "", tt.superStreams)
+
+			ctx := context.Background()
+			if tt.tenant != "" {
+				ctx = multitenant.SetTenant(ctx, tt.tenant)
+			}
+
+			_, err := pub.Publish(ctx, &mockTx{}, tt.event)
+
+			if tt.wantErr != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.wantErr)
+				if tt.wantErrFrag != "" {
+					assert.ErrorContains(t, err, tt.wantErrFrag)
+				}
+				assert.Empty(t, store.insertedRecords, "a refused event never reaches the store")
+				return
+			}
+
+			require.NoError(t, err)
+			require.Len(t, store.insertedRecords, 1)
+			tt.assertRecord(t, store.insertedRecords[0])
 		})
 	}
 }

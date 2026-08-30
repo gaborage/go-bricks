@@ -416,7 +416,7 @@ func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.O
 	if err != nil {
 		return "", err
 	}
-	return newPublisher(store, p.module.cfg.DefaultExchange).Publish(ctx, tx, event)
+	return newPublisher(store, p.module.cfg.DefaultExchange, p.module.cfg.SuperStreams).Publish(ctx, tx, event)
 }
 
 // lazyStore wraps Store to lazily initialize via the module.

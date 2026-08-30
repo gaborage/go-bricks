@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/app"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/multitenant"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
 )
 
@@ -21,12 +22,18 @@ import (
 type outboxPublisher struct {
 	store           Store
 	defaultExchange string
+	streamTargets   map[string]struct{}
 }
 
-func newPublisher(store Store, defaultExchange string) app.OutboxPublisher {
+func newPublisher(store Store, defaultExchange string, superStreams []string) app.OutboxPublisher {
+	targets := make(map[string]struct{}, len(superStreams))
+	for _, name := range superStreams {
+		targets[name] = struct{}{}
+	}
 	return &outboxPublisher{
 		store:           store,
 		defaultExchange: defaultExchange,
+		streamTargets:   targets,
 	}
 }
 
@@ -92,25 +99,59 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", fmt.Errorf("outbox: failed to marshal headers: %w", err)
 	}
 
-	eventID := uuid.New().String()
-
 	record := &Record{
-		ID:          eventID,
+		ID:          uuid.New().String(),
 		EventType:   event.EventType,
 		AggregateID: event.AggregateID,
 		Payload:     payload,
 		Headers:     headers,
-		Exchange:    exchange,
-		RoutingKey:  routingKey,
 		Status:      StatusPending,
 		CreatedAt:   time.Now(),
 	}
+
+	if event.Stream != "" {
+		if err := p.applyStreamTarget(ctx, event, record); err != nil {
+			return "", err
+		}
+	} else {
+		record.Lane = LaneAMQP
+		record.Exchange = event.Exchange
+		if record.Exchange == "" {
+			record.Exchange = p.defaultExchange
+		}
+		record.RoutingKey = event.RoutingKey
+		if record.RoutingKey == "" {
+			record.RoutingKey = event.EventType
+		}
+	}
+
+	eventID := record.ID
 
 	if err := p.store.Insert(ctx, tx, record); err != nil {
 		return "", err
 	}
 
 	return eventID, nil
+}
+
+// applyStreamTarget validates a stream-targeted event and fills the record's stream
+// lane fields. The partition key is the tenant stamp, taken here at Publish where the
+// developer sees the refusal, rather than as poison cycles later in the relay.
+func (p *outboxPublisher) applyStreamTarget(ctx context.Context, event *app.OutboxEvent, record *Record) error {
+	if event.Exchange != "" || event.RoutingKey != "" {
+		return ErrConflictingTargets
+	}
+	if _, ok := p.streamTargets[event.Stream]; !ok {
+		return fmt.Errorf("%w: %q", ErrStreamNotAnOutboxTarget, event.Stream)
+	}
+	tenant, ok := multitenant.GetTenant(ctx)
+	if !ok {
+		return ErrStreamTargetRequiresTenant
+	}
+	record.Lane = LaneStream
+	record.Stream = event.Stream
+	record.PartitionKey = tenant
+	return nil
 }
 
 // marshalHeaders JSON-encodes the AMQP headers, first capturing the trace
