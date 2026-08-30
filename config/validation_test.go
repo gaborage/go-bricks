@@ -5929,7 +5929,7 @@ func TestValidateMessagingStreamsURIScheme(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &MessagingConfig{Streams: StreamsConfig{URI: tt.uri}}
 
-			err := checkMessaging(cfg, false)
+			err := normalizeAndCheckMessaging(cfg, false)
 
 			if tt.wantErr == "" {
 				require.NoError(t, err)
@@ -5948,7 +5948,7 @@ func TestValidateMessagingStreamsRejectsMultiTenant(t *testing.T) {
 		URI: "rabbitmq-stream://svc:" + streamsFixturePassword + "@broker:5552/%2f",
 	}}
 
-	err := checkMessaging(cfg, true)
+	err := normalizeAndCheckMessaging(cfg, true)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "messaging.streams single-tenant only")
@@ -5959,7 +5959,7 @@ func TestValidateMessagingStreamsRejectsMultiTenant(t *testing.T) {
 func TestValidateMessagingStreamsAllowsMultiTenantWithoutURI(t *testing.T) {
 	cfg := &MessagingConfig{}
 
-	require.NoError(t, checkMessaging(cfg, true),
+	require.NoError(t, normalizeAndCheckMessaging(cfg, true),
 		"multi-tenant deployments that declare no streams stay valid")
 }
 
@@ -6001,7 +6001,7 @@ func TestValidateMessagingStreamsAddressResolver(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &MessagingConfig{Streams: StreamsConfig{AddressResolver: tt.resolver}}
 
-			err := checkMessaging(cfg, false)
+			err := normalizeAndCheckMessaging(cfg, false)
 
 			if tt.wantErr == "" {
 				require.NoError(t, err)
@@ -6086,6 +6086,69 @@ func TestValidateStreamsRejectsMultiTenantEndToEnd(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "single-tenant only")
+}
+
+// TestValidateMessagingTenancy pins the messaging kind's tenancy: unset normalizes
+// to per-tenant, both accepted values pass in either deployment mode (shared is a
+// no-op single-tenant, ADR-041 env-parity), and anything else fails check naming
+// both accepted values.
+func TestValidateMessagingTenancy(t *testing.T) {
+	tests := []struct {
+		name        string
+		tenancy     string
+		multitenant bool
+		wantErr     bool
+	}{
+		{name: "unset_defaults_to_per_tenant", tenancy: "", multitenant: false},
+		{name: "per_tenant_accepted", tenancy: TenancyPerTenant, multitenant: true},
+		{name: "shared_accepted", tenancy: TenancyShared, multitenant: true},
+		{name: "shared_accepted_single_tenant", tenancy: TenancyShared, multitenant: false},
+		{name: "unknown_rejected", tenancy: "Shared", multitenant: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				App:       createValidAppConfig(),
+				Server:    createValidServerConfig(),
+				Log:       createValidLogConfig(),
+				Messaging: MessagingConfig{Tenancy: tt.tenancy},
+			}
+			if tt.multitenant {
+				cfg.Multitenant = MultitenantConfig{
+					Enabled:  true,
+					Resolver: ResolverConfig{Type: "header", Header: testTenantHeader},
+					Tenants: map[string]TenantEntry{
+						"acme": {Database: DatabaseConfig{
+							Type:     PostgreSQL,
+							Host:     "acme.db",
+							Port:     5432,
+							Database: "acme",
+							Username: "acme_user",
+						}},
+					},
+				}
+				cfg.Source = SourceConfig{Type: SourceTypeStatic}
+			}
+
+			err := Validate(cfg)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "messaging.tenancy")
+				assert.Contains(t, err.Error(), TenancyPerTenant)
+				assert.Contains(t, err.Error(), TenancyShared)
+				return
+			}
+			require.NoError(t, err)
+
+			want := tt.tenancy
+			if want == "" {
+				want = TenancyPerTenant
+			}
+			assert.Equal(t, want, cfg.Messaging.Tenancy)
+		})
+	}
 }
 
 // TestApplyDatabasePoolDefaultsInfersTypeFromScheme runs the shared inference

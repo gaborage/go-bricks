@@ -437,14 +437,19 @@ func normalizeMessaging(cfg *MessagingConfig, multitenant bool) error {
 	return applyStreamsDefaults(&cfg.Streams)
 }
 
-// checkMessaging rejects an inverted reconnect.maxdelay/delay pair, then the
-// streams block.
+// checkMessaging rejects an inverted reconnect.maxdelay/delay pair and an
+// unknown tenancy, then the streams block.
 func checkMessaging(cfg *MessagingConfig, multitenant bool) error {
 	// Both sides are defaulted by normalizeMessaging, so this compares effective
 	// values. computeBackoff silently clamps an inverted pair (maxdelay <
 	// delay), which would leave the configured ceiling ignored.
 	if cfg.Reconnect.MaxDelay < cfg.Reconnect.Delay {
 		return NewValidationError("messaging.reconnect.maxdelay", "must be >= messaging.reconnect.delay")
+	}
+
+	if cfg.Tenancy != TenancyPerTenant && cfg.Tenancy != TenancyShared {
+		return NewValidationError("messaging.tenancy",
+			fmt.Sprintf("must be %q or %q", TenancyPerTenant, TenancyShared))
 	}
 
 	return checkMessagingStreams(&cfg.Streams, multitenant)
@@ -1330,6 +1335,7 @@ func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 //     churn); if negative, returns an error.
 //   - Publisher.CleanupInterval: if 0, sets to 2m; if negative, returns an error.
 //   - Reconnect.MaxPublishAttempts: if 0, sets to 5; if negative, returns an error.
+//   - Tenancy: if empty, sets to "per-tenant".
 //
 // Returns an error when any value is invalid; otherwise returns nil.
 func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
@@ -1364,6 +1370,10 @@ func applyMessagingDefaults(cfg *MessagingConfig, multitenant bool) error {
 
 	if err := applyNonNegativeDefault(&cfg.Reconnect.MaxPublishAttempts, defaultMaxPublishAttempts, "messaging.reconnect.maxpublishattempts"); err != nil {
 		return err
+	}
+
+	if cfg.Tenancy == "" {
+		cfg.Tenancy = TenancyPerTenant
 	}
 
 	return applyModeAwarePoolDefault(&cfg.Publisher.MaxCached, defaultMaxPublishers, "messaging.publisher.maxcached", multitenant)

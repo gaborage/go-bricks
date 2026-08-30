@@ -453,6 +453,17 @@ type MessagingConfig struct {
 	Reconnect ReconnectConfig     `koanf:"reconnect" json:"reconnect" yaml:"reconnect" toml:"reconnect" mapstructure:"reconnect"`
 	Publisher PublisherPoolConfig `koanf:"publisher" json:"publisher" yaml:"publisher" toml:"publisher" mapstructure:"publisher"`
 	Streams   StreamsConfig       `koanf:"streams" json:"streams" yaml:"streams" toml:"streams" mapstructure:"streams"`
+
+	// Tenancy selects which key the messaging kind's consumers and publishers are
+	// resolved and replayed under when multitenant.enabled is true:
+	//   - "per-tenant" (default): one client per tenant, replayed lazily from
+	//     multitenant.tenants.<id>.messaging or the resource source.
+	//   - "shared": one control-plane client resolved via the empty ("") key —
+	//     the root messaging: block, or whatever a custom resource source returns
+	//     for "". Consumers replay once at boot and the tenant travels as the
+	//     x-tenant-id stamp. See wiki/messaging.md and ADR-087.
+	// In single-tenant mode both values behave identically.
+	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
 }
 
 // StreamsConfig holds native RabbitMQ stream-protocol settings (consumption).
