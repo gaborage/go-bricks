@@ -411,6 +411,40 @@ func TestNewManagerKeepsExplicitOffsetStoreTuning(t *testing.T) {
 // TestNewManagerRequiresLogger pins the constructor guard: ManagerOptions.Logger
 // is documented as required and every log call dereferences it unguarded, so an
 // omitted logger must fail here rather than on the first consumer event.
+// TestManagerSetTenantStampsReachesItsRunners pins the path the setting travels:
+// SetTenantStamps → the manager → every runner it builds, which is what hands it to
+// the shared delivery pipeline. It is a setter rather than a ManagerOptions field
+// because that struct is already at gocritic's hugeParam limit and widening
+// NewManager's parameter would break a shipped exported signature.
+func TestManagerSetTenantStampsReachesItsRunners(t *testing.T) {
+	newRunnerFor := func(t *testing.T, enabled, optional bool) *consumerRunner {
+		t.Helper()
+		m := NewManager(ManagerOptions{
+			URI:    "rabbitmq-stream://localhost:5552/",
+			Logger: logger.New("error", false),
+		})
+		m.SetTenantStamps(enabled)
+		return m.newRunner(context.Background(), &consumerDeclaration{
+			Name:           testConsumerName,
+			Stream:         testStream,
+			TenantOptional: optional,
+		})
+	}
+
+	t.Run("enabled_reaches_the_runner", func(t *testing.T) {
+		assert.True(t, newRunnerFor(t, true, false).tenantStamps)
+	})
+
+	t.Run("unset_leaves_it_off", func(t *testing.T) {
+		assert.False(t, newRunnerFor(t, false, false).tenantStamps,
+			"a manager nobody told must not stamp: single-tenant and per-tenant both read false")
+	})
+
+	t.Run("the_declaration_carries_tenant_optional", func(t *testing.T) {
+		assert.True(t, newRunnerFor(t, true, true).tenantOptional)
+	})
+}
+
 func TestNewManagerRequiresLogger(t *testing.T) {
 	assert.PanicsWithValue(t,
 		"streams: NewManager requires a non-nil Logger (pass deps.Logger)",

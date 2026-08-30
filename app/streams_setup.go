@@ -50,8 +50,8 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 		OffsetStoreCount:    cfg.OffsetStore.CountBeforeStorage,
 		OffsetStoreInterval: cfg.OffsetStore.FlushInterval,
 		Logger:              a.logger,
-		TenantStamps:        a.multiTenant() && a.sharedMessaging(),
 	})
+	mgr.SetTenantStamps(a.multiTenant() && a.sharedMessaging())
 
 	// A service that declared streams and cannot start them would serve HTTP while
 	// consuming nothing and publishing nowhere, so startup fails rather than
