@@ -51,28 +51,32 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		return "", errors.New("outbox: aggregate ID must not be empty")
 	}
 
-	exchange := event.Exchange
-	if exchange == "" {
-		exchange = p.defaultExchange
-	}
+	// Resolve the AMQP destination once, for the AMQP lane only. A stream-lane row
+	// carries no exchange or routing key, so applying the fallbacks to it would invent
+	// a destination it will never be published to — and then refuse the event when that
+	// invented destination happens to be too long for a frame it never enters.
+	exchange, routingKey := event.Exchange, event.RoutingKey
+	if event.Stream == "" {
+		if exchange == "" {
+			exchange = p.defaultExchange
+		}
+		if routingKey == "" {
+			routingKey = event.EventType
+		}
 
-	routingKey := event.RoutingKey
-	if routingKey == "" {
-		routingKey = event.EventType
-	}
-
-	// The values persisted here are the ones the relay later puts on the wire, so
-	// the publish rule runs on the post-fallback destination BEFORE the INSERT: a
-	// row the AMQP frame can never carry is refused at its source rather than
-	// parked by the relay after MaxRetries. Only the caller's header keys are
-	// judged — the trace keys the framework adds are literals. It runs before the
-	// payload and header marshaling because it needs none of it.
-	if err := messaging.ValidatePublishDestination(messaging.PublishOptions{
-		Exchange:   exchange,
-		RoutingKey: routingKey,
-		Headers:    event.Headers,
-	}); err != nil {
-		return "", fmt.Errorf("outbox: %w", err)
+		// The values persisted here are the ones the relay later puts on the wire, so
+		// the publish rule runs on the post-fallback destination BEFORE the INSERT: a
+		// row the AMQP frame can never carry is refused at its source rather than
+		// parked by the relay after MaxRetries. Only the caller's header keys are
+		// judged — the trace keys the framework adds are literals. It runs before the
+		// payload and header marshaling because it needs none of it.
+		if err := messaging.ValidatePublishDestination(messaging.PublishOptions{
+			Exchange:   exchange,
+			RoutingKey: routingKey,
+			Headers:    event.Headers,
+		}); err != nil {
+			return "", fmt.Errorf("outbox: %w", err)
+		}
 	}
 
 	payload, err := marshalPayload(event.Payload)
@@ -112,14 +116,8 @@ func (p *outboxPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app
 		}
 	} else {
 		record.Lane = LaneAMQP
-		record.Exchange = event.Exchange
-		if record.Exchange == "" {
-			record.Exchange = p.defaultExchange
-		}
-		record.RoutingKey = event.RoutingKey
-		if record.RoutingKey == "" {
-			record.RoutingKey = event.EventType
-		}
+		record.Exchange = exchange
+		record.RoutingKey = routingKey
 	}
 
 	if err := p.store.Insert(ctx, tx, record); err != nil {

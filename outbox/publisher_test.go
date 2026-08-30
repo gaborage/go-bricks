@@ -721,3 +721,27 @@ func TestPublisherStreamTarget(t *testing.T) {
 		})
 	}
 }
+
+// TestPublisherStreamTargetSkipsTheAMQPDestinationRule pins the interaction between the
+// shortstr pre-flight and the stream lane. The pre-flight validates the POST-FALLBACK
+// destination, and the fallbacks are AMQP's: an event bound for a stream has neither an
+// exchange nor a routing key, so applying them would invent a destination it never enters and
+// then refuse the event when that invented value is too long for a frame it never reaches.
+func TestPublisherStreamTargetSkipsTheAMQPDestinationRule(t *testing.T) {
+	store := &mockStore{}
+	// A default exchange no AMQP frame could carry. An AMQP-lane event would be refused.
+	pub := newPublisher(store, oversizedShortStr, []string{"customers"})
+	ctx := multitenant.SetTenant(context.Background(), "acme")
+
+	_, err := pub.Publish(ctx, &mockTx{}, &app.OutboxEvent{
+		EventType:   "customer.created",
+		AggregateID: "c1",
+		Stream:      "customers",
+	})
+
+	require.NoError(t, err, "a stream target is not judged against the AMQP destination rule")
+	require.Len(t, store.insertedRecords, 1)
+	assert.Equal(t, LaneStream, store.insertedRecords[0].Lane)
+	assert.Empty(t, store.insertedRecords[0].Exchange, "no invented exchange is persisted")
+	assert.Empty(t, store.insertedRecords[0].RoutingKey)
+}
