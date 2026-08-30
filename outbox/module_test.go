@@ -15,6 +15,7 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
@@ -1145,4 +1146,72 @@ func TestLazyPublisherPassesConfiguredTargets(t *testing.T) {
 			require.Len(t, tx.ExecLog(), 1)
 		})
 	}
+}
+
+// --- stream publishers -------------------------------------------------------
+
+func newStreamTargetDeps(t *testing.T, superStreams []string, streamURI string) *app.ModuleDeps {
+	t.Helper()
+	return &app.ModuleDeps{
+		Logger: logger.New("disabled", true),
+		Config: &config.Config{
+			Outbox: config.OutboxConfig{Enabled: true, SuperStreams: superStreams},
+			Messaging: config.MessagingConfig{
+				Broker:  config.BrokerConfig{URL: "amqp://localhost"},
+				Streams: config.StreamsConfig{URI: streamURI},
+			},
+		},
+		DB: func(context.Context) (dbtypes.Interface, error) {
+			return probeReadyDB("postgresql"), nil
+		},
+		Messaging: func(context.Context) (messaging.AMQPClient, error) { return nil, nil },
+	}
+}
+
+func TestModuleDeclareStreams(t *testing.T) {
+	tests := []struct {
+		name           string
+		superStreams   []string
+		enabled        bool
+		wantPublishers int
+	}{
+		{
+			name:           "declare_streams_declares_one_publisher_per_target",
+			superStreams:   []string{"customers", "payments"},
+			enabled:        true,
+			wantPublishers: 2,
+		},
+		{name: "declare_streams_noop_without_targets", enabled: true},
+		{name: "declare_streams_noop_when_disabled", superStreams: []string{"customers"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModule()
+			m.cfg = config.OutboxConfig{Enabled: tt.enabled, SuperStreams: tt.superStreams}
+			decls := streams.NewDeclarations()
+
+			m.DeclareStreams(decls)
+
+			assert.Equal(t, tt.wantPublishers, decls.Stats().Publishers)
+			assert.Len(t, m.streamPublishers, tt.wantPublishers)
+			for _, name := range tt.superStreams[:tt.wantPublishers] {
+				assert.Contains(t, m.streamPublishers, name)
+			}
+		})
+	}
+}
+
+// TestModuleInitRequiresStreamURIForTargets pins that a stream target without the stream
+// protocol fails at startup: the relay cannot reach a super stream over AMQP, so accepting
+// the configuration would dead-letter every stream-lane row at MaxRetries instead.
+func TestModuleInitRequiresStreamURIForTargets(t *testing.T) {
+	err := NewModule().Init(newStreamTargetDeps(t, []string{"customers"}, ""))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "messaging.streams.uri")
+}
+
+func TestModuleInitAcceptsTargetsWithStreamURI(t *testing.T) {
+	err := NewModule().Init(newStreamTargetDeps(t, []string{"customers"}, "rabbitmq-stream://x:5552"))
+	require.NoError(t, err)
 }

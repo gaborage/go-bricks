@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // Module implements the GoBricks Module interface for transactional outbox.
@@ -44,6 +45,11 @@ type Module struct {
 
 	publisher app.OutboxPublisher
 	cfg       config.OutboxConfig
+
+	// streamPublishers holds one handle per configured super stream, written once in
+	// DeclareStreams (which the registry calls during prepareRuntime, before any job
+	// registers or runs) and read-only thereafter — so the relay needs no lock.
+	streamPublishers map[string]streamPublisher
 
 	stores tenantstore.Cache[Store] // one store per tenant ("" = single-tenant)
 }
@@ -88,6 +94,11 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 
 	if err := validateConfig(&m.cfg); err != nil {
 		return err
+	}
+
+	if len(m.cfg.SuperStreams) > 0 && m.config.Messaging.Streams.URI == "" {
+		return errors.New("outbox: superstreams is set but messaging.streams.uri is not; " +
+			"the relay cannot reach a super stream without the stream protocol")
 	}
 
 	if !m.cfg.Enabled {
@@ -336,6 +347,10 @@ func (m *Module) RegisterJobs(registrar app.JobRegistrar) error {
 		getDB:        m.getDB,
 		getMessaging: m.getMsg,
 		tenants:      tenants,
+		streamPublisher: func(name string) (streamPublisher, bool) {
+			p, ok := m.streamPublishers[name]
+			return p, ok
+		},
 	}
 
 	if err := registrar.FixedRate("outbox-relay", relay, m.cfg.PollInterval); err != nil {
@@ -417,6 +432,27 @@ func (p *lazyPublisher) Publish(ctx context.Context, tx dbtypes.Tx, event *app.O
 		return "", err
 	}
 	return newPublisher(store, p.module.cfg.DefaultExchange, p.module.cfg.SuperStreams).Publish(ctx, tx, event)
+}
+
+// streamPublisher is the slice of *streams.Publisher the relay needs, kept unexported so
+// the outbox's stream leg can be faked without a broker.
+type streamPublisher interface {
+	Publish(ctx context.Context, msg *streams.PublishMessage) error
+}
+
+// DeclareStreams registers one publisher per configured super stream, satisfying
+// app.StreamsDeclarer. It is a no-op for a disabled outbox or one with no targets, so a
+// deployment that never mentions superstreams declares nothing.
+func (m *Module) DeclareStreams(decls *streams.Declarations) {
+	if !m.cfg.Enabled || len(m.cfg.SuperStreams) == 0 {
+		return
+	}
+	m.streamPublishers = make(map[string]streamPublisher, len(m.cfg.SuperStreams))
+	for _, name := range m.cfg.SuperStreams {
+		m.streamPublishers[name] = decls.DeclareSuperStreamPublisher(&streams.SuperStreamPublisherOptions{
+			SuperStream: name,
+		})
+	}
 }
 
 // lazyStore wraps Store to lazily initialize via the module.
@@ -504,4 +540,7 @@ var (
 		)
 	} = (*Module)(nil)
 	_ app.SharedTxRunner = (*lazyPublisher)(nil)
+	// The registry detects StreamDeclarer by duck-typing, so a signature drift here would
+	// silently stop the outbox declaring its publishers rather than fail the build.
+	_ app.StreamDeclarer = (*Module)(nil)
 )

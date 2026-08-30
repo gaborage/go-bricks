@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/leasescope"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/scheduler"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -34,6 +35,11 @@ type Relay struct {
 	config       config.OutboxConfig
 	getDB        func(context.Context) (dbtypes.Interface, error)
 	getMessaging func(context.Context) (messaging.AMQPClient, error)
+
+	// streamPublisher resolves a super stream's publisher. The module writes its map once
+	// in DeclareStreams, before any cycle runs, so this needs no lock. Nil on a relay with
+	// no configured targets.
+	streamPublisher func(name string) (streamPublisher, bool)
 	// tenants lists the tenant keys to relay each cycle. Always non-empty: a single
 	// "" entry for single-tenant mode (multitenant.SetTenant with "" is a no-op) and
 	// for shared (control-plane) tenancy, or the configured static multitenant tenant
@@ -329,6 +335,28 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 	// consume span surface — breaking trace continuity on the error path.
 	pubCtx := gobrickstrace.ExtractFromHeaders(ctx, &mapHeaderAccessor{headers: headers})
 
+	// Move the persisted tenant stamp from the headers onto the publish context. The
+	// framework is the stamp's ONLY writer (messaging.ErrTenantStampConflict), and from a
+	// publisher's point of view a persisted header IS a caller-supplied stamp — so leaving
+	// it in place would either conflict or smuggle an unauthenticated claim. Rehydrating it
+	// onto the context lets the publisher stamp it itself, which is also how the stream
+	// lane's partition key reaches a publisher that reads the tenant from context.
+	if stamp, ok := headers[messaging.TenantStampHeader].(string); ok && stamp != "" {
+		pubCtx = multitenant.SetTenant(pubCtx, stamp)
+		delete(headers, messaging.TenantStampHeader)
+	}
+
+	switch record.Lane {
+	case LaneAMQP, "":
+		// today's path, below
+	case LaneStream:
+		return r.publishStreamRecord(ctx, log, db, pubCtx, headers, record)
+	default:
+		// A lane this build does not know is message-intrinsic: it will read the same way
+		// every cycle, so it parks rather than retrying forever.
+		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("unknown lane %q", record.Lane)), nil
+	}
+
 	opts := messaging.PublishOptions{
 		Exchange:   record.Exchange,
 		RoutingKey: record.RoutingKey,
@@ -373,6 +401,12 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 		return outcomeFailed, nil
 	}
 
+	return r.recordPublished(ctx, log, db, record), nil
+}
+
+// recordPublished marks a delivered record published. Shared by both lanes: the delivery
+// happened either way, so a failed mark must not bump retry_count on either.
+func (r *Relay) recordPublished(ctx context.Context, log logger.Logger, db dbtypes.Interface, record *Record) publishOutcome {
 	if err := r.store.MarkPublished(ctx, db, record.ID); err != nil {
 		log.Error().
 			Err(err).
@@ -380,10 +414,49 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 			Msg("Failed to mark outbox event as published")
 		// The message WAS delivered; do not bump retry_count. It re-delivers next
 		// cycle and the consumer dedups via the x-outbox-event-id header.
-		return outcomePublishedUnrecorded, nil
+		return outcomePublishedUnrecorded
+	}
+	return outcomePublished
+}
+
+// publishStreamRecord publishes a stream-lane row through its super stream's publisher.
+// The partition key is the row's tenant stamp, which the streams publisher hashes to pick a
+// partition; the stamp itself is NOT put in Properties — plan A's rehydration leaves it on
+// pubCtx and the publisher stamps it from there, so the relay never supplies a caller-set one.
+func (r *Relay) publishStreamRecord(ctx context.Context, log logger.Logger, db dbtypes.Interface, pubCtx context.Context, headers map[string]any, record *Record) (publishOutcome, error) {
+	// Both of these are config drift on a persisted row — a target removed from
+	// outbox.superstreams between deploys, or a row written without a key — and read the
+	// same way every cycle, so they park rather than retry.
+	if r.streamPublisher == nil {
+		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("stream %q is not an outbox target", record.Stream)), nil
+	}
+	pub, ok := r.streamPublisher(record.Stream)
+	if !ok {
+		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("stream %q is not an outbox target", record.Stream)), nil
+	}
+	if record.PartitionKey == "" {
+		return r.deadLetterPoison(ctx, log, db, record, "stream row has no partition key"), nil
 	}
 
-	return outcomePublished, nil
+	recCtx, cancel := context.WithTimeout(pubCtx, r.config.PublishTimeout)
+	err := pub.Publish(recCtx, &streams.PublishMessage{
+		Data:       record.Payload,
+		Properties: headers,
+		RoutingKey: record.PartitionKey,
+	})
+	cancel()
+	if err != nil {
+		// Shutdown is not a delivery failure — do not advance retry_count.
+		if errors.Is(err, context.Canceled) || errors.Is(err, streams.ErrPublisherClosed) {
+			return outcomeAborted, nil
+		}
+		// Everything else is connectivity: a publisher not yet started, the per-record
+		// deadline, or a broker that would not confirm. None means the message is bad.
+		r.markRecordFailed(ctx, log, db, record.ID, err.Error())
+		return outcomeFailed, nil
+	}
+
+	return r.recordPublished(ctx, log, db, record), nil
 }
 
 // deadLetterPoison handles a poison record — undecodable headers, or a destination past the
