@@ -250,20 +250,19 @@ func (s *oracleHoldStore) CreateTable(ctx context.Context, db dbtypes.Interface)
 // markerLocked runs the FOR UPDATE probe and reports whether it found the marker.
 // Its own function so the rows are closed and their error checked on one path,
 // whatever the caller does next.
-func markerLocked(ctx context.Context, tx dbtypes.Tx, query string, args ...any) (found bool, err error) {
+func markerLocked(ctx context.Context, tx dbtypes.Tx, query string, args ...any) (bool, error) {
 	rows, err := tx.Query(ctx, query, args...)
 	if err != nil {
 		return false, fmt.Errorf("inbox oracle: lock tenant marker failed: %w", err)
 	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil && err == nil {
-			err = fmt.Errorf("inbox oracle: lock tenant marker failed: %w", closeErr)
-		}
-	}()
 
-	found = rows.Next()
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return false, fmt.Errorf("inbox oracle: lock tenant marker failed: %w", rowsErr)
+	found := rows.Next()
+	// Joined rather than ranked by a condition: errors.Join drops nils, so this
+	// says "either failure is the failure" without a compound guard whose arms no
+	// test could tell apart — the close error is unreachable behind a live driver's
+	// success, and a guard nothing can falsify is worse than none.
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return false, fmt.Errorf("inbox oracle: lock tenant marker failed: %w", err)
 	}
 	return found, nil
 }
