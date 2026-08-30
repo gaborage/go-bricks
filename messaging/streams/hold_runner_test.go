@@ -14,8 +14,8 @@ import (
 )
 
 // stampedMessage carries a tenant stamp the way a publisher writes one.
-func stampedMessage(body, tenant string) *amqp.Message {
-	msg := amqpMessage(body)
+func stampedMessage(tenant string) *amqp.Message {
+	msg := amqpMessage("payload")
 	msg.ApplicationProperties[tenantstamp.Header] = tenant
 	return msg
 }
@@ -43,7 +43,7 @@ func TestRunnerGatesAHeldTenantBeforeTheHandler(t *testing.T) {
 	runner.held.add("tenant-a")
 	storer := &fakeStorer{}
 
-	runner.deliver(testStream, 41, stampedMessage("payload", "tenant-a"), storer)
+	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
 
 	assert.Zero(t, handled, "a held tenant's message never reaches the handler")
 	parks := ledger.parked()
@@ -63,7 +63,7 @@ func TestRunnerParksAFailedDeliveryAndHoldsItsTenant(t *testing.T) {
 	}, ledger, newOffsetTracker(1, time.Hour, newFakeClock().Now))
 	storer := &fakeStorer{}
 
-	runner.deliver(testStream, 41, stampedMessage("payload", "tenant-a"), storer)
+	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
 
 	parks := ledger.parked()
 	require.Len(t, parks, 1)
@@ -94,7 +94,7 @@ func TestRunnerSkipsWhenTheStampRefused(t *testing.T) {
 }
 
 // TestRunnerWithoutAHoldIsUnchanged pins that a consumer that does not hold keeps
-// the lane's old behaviour exactly: a failure skips, and no ledger is touched.
+// the lane's old behavior exactly: a failure skips, and no ledger is touched.
 func TestRunnerWithoutAHoldIsUnchanged(t *testing.T) {
 	runner := newTestRunner(t, func(context.Context, *Message) error {
 		return errHandlerFailed
@@ -102,7 +102,7 @@ func TestRunnerWithoutAHoldIsUnchanged(t *testing.T) {
 	runner.tenantStamps = true
 	storer := &fakeStorer{}
 
-	runner.deliver(testStream, 41, stampedMessage("payload", "tenant-a"), storer)
+	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
 
 	assert.Empty(t, storer.offsets(), "an unheld failure still skips the offset")
 }
@@ -118,7 +118,7 @@ func TestRunnerStallsUntilTheLedgerAccepts(t *testing.T) {
 	runner.holdBackoff = time.Millisecond
 	storer := &fakeStorer{}
 
-	runner.deliver(testStream, 41, stampedMessage("payload", "tenant-a"), storer)
+	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
 
 	assert.Len(t, ledger.parked(), 1, "the park eventually succeeds")
 	assert.Equal(t, []int64{41}, storer.offsets())
@@ -142,7 +142,7 @@ func TestRunnerStopsStallingWhenTheConsumerStops(t *testing.T) {
 		cancel()
 	}()
 
-	runner.deliver(testStream, 41, stampedMessage("payload", "tenant-a"), storer)
+	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
 
 	assert.Empty(t, ledger.parked(), "the ledger never accepted it")
 	assert.Empty(t, storer.offsets(), "so the offset is not committed and the message is redelivered")
@@ -162,7 +162,7 @@ func TestRunnerParkSurvivesTheRetryPolicy(t *testing.T) {
 	runner.held.add("tenant-a")
 	storer := &fakeStorer{}
 
-	runner.deliver(testStream, 41, stampedMessage("payload", "tenant-a"), storer)
+	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
 
 	assert.Len(t, ledger.parked(), 1, "the gate parks once however many attempts the policy allows")
 	assert.Equal(t, []int64{41}, storer.offsets())
@@ -177,7 +177,7 @@ func TestRunnerLogsWhatItParked(t *testing.T) {
 	}, &fakeHoldLedger{}, newOffsetTracker(1, time.Hour, newFakeClock().Now))
 	runner.log = rec
 
-	runner.deliver(testStream, 41, stampedMessage("payload", "tenant-a"), &fakeStorer{})
+	runner.deliver(testStream, 41, stampedMessage("tenant-a"), &fakeStorer{})
 
 	assert.Contains(t, rec.warnMessages(), holdParkedMsg)
 	assert.Equal(t, "tenant-a", rec.fieldAt("warn", holdParkedMsg, "tenant"))

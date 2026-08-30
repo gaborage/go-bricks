@@ -42,7 +42,7 @@ func TestStartRefusesAHoldWithoutALedger(t *testing.T) {
 // would deliver a held tenant's later message ahead of the one it is held behind.
 func TestStartLoadsTheHeldSetBeforeConsuming(t *testing.T) {
 	ledger := &fakeHoldLedger{held: map[string][]string{testConsumerName: {"tenant-a"}}}
-	m := NewManager(ManagerOptions{
+	m := NewManager(&ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 		Hold:   ledger,
@@ -61,7 +61,7 @@ func TestStartLoadsTheHeldSetBeforeConsuming(t *testing.T) {
 // partition that cannot learn what is held does not start.
 func TestStartFailsWhenTheHeldSetCannotBeLoaded(t *testing.T) {
 	ledger := &fakeHoldLedger{heldErr: errors.New("ledger unavailable")}
-	m := NewManager(ManagerOptions{
+	m := NewManager(&ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 		Hold:   ledger,
@@ -94,7 +94,7 @@ func TestAConsumerWithoutAHoldNeedsNoLedger(t *testing.T) {
 // parked while this member stood by.
 func TestPromotionDoesNotConsumeWithAStaleHeldSet(t *testing.T) {
 	ledger := &fakeHoldLedger{heldErr: errors.New("ledger unavailable")}
-	m := NewManager(ManagerOptions{
+	m := NewManager(&ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 		Hold:   ledger,
@@ -132,7 +132,7 @@ func TestPromotionDoesNotConsumeWithAStaleHeldSet(t *testing.T) {
 // promoted partition picks up what the ledger holds before it consumes.
 func TestPromotionReloadsTheHeldSetWhenTheLedgerAnswers(t *testing.T) {
 	ledger := &fakeHoldLedger{held: map[string][]string{testConsumerName: {"tenant-a"}}}
-	m := NewManager(ManagerOptions{
+	m := NewManager(&ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 		Hold:   ledger,

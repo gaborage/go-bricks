@@ -179,7 +179,8 @@ func (r *consumerRunner) park(ctx context.Context, msg *HeldMessage, gated bool)
 // redeliver a message the ledger already owns. A park that could not be written
 // commits nothing.
 func (r *consumerRunner) parkFailed(res *delivery.Result, streamName string, offset int64,
-	tenant string, msg *Message, raw *amqp.Message, store offsetStorer) {
+	tenant string, msg *Message, raw *amqp.Message, store offsetStorer,
+) {
 	held := heldMessageOf(r.name, streamName, offset, tenant, msg, raw)
 	if err := r.park(r.baseCtx, held, false); err != nil {
 		return
@@ -200,7 +201,7 @@ func (r *consumerRunner) parkFailed(res *delivery.Result, streamName string, off
 	event.Msg(holdParkedMsg)
 
 	// Recorded as a success: the delivery is settled, just not by the handler.
-	r.offsets.trackerFor(streamName).record(offset, nil, store)
+	r.recordSettled(res.Log, streamName, offset, nil, store)
 }
 
 // requireHoldLedger refuses a declaration set that asks for a hold this manager

@@ -113,14 +113,12 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 		`SELECT tenant_id FROM %s WHERE consumer = :1 AND tenant_id = :2 FOR UPDATE`,
 		s.tenantTable,
 	)
-	rows, err := tx.Query(ctx, lock, row.Consumer, row.TenantID)
+	locked, err := markerLocked(ctx, tx, lock, row.Consumer, row.TenantID)
 	if err != nil {
-		return fmt.Errorf("inbox oracle: lock tenant marker failed: %w", err)
+		return err
 	}
-	locked := rows.Next()
-	closeErr := rows.Close()
 	if locked {
-		return closeErr
+		return nil
 	}
 
 	insert := fmt.Sprintf(
@@ -247,4 +245,25 @@ func (s *oracleHoldStore) CreateTable(ctx context.Context, db dbtypes.Interface)
 		}
 	}
 	return nil
+}
+
+// markerLocked runs the FOR UPDATE probe and reports whether it found the marker.
+// Its own function so the rows are closed and their error checked on one path,
+// whatever the caller does next.
+func markerLocked(ctx context.Context, tx dbtypes.Tx, query string, args ...any) (found bool, err error) {
+	rows, err := tx.Query(ctx, query, args...)
+	if err != nil {
+		return false, fmt.Errorf("inbox oracle: lock tenant marker failed: %w", err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("inbox oracle: lock tenant marker failed: %w", closeErr)
+		}
+	}()
+
+	found = rows.Next()
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return false, fmt.Errorf("inbox oracle: lock tenant marker failed: %w", rowsErr)
+	}
+	return found, nil
 }

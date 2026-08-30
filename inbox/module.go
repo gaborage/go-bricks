@@ -50,6 +50,10 @@ type Module struct {
 	holdReplayer func() streams.HoldReplayer
 }
 
+// moduleName is what this module answers to, and the prefix its store errors and
+// table diagnostics carry.
+const moduleName = "inbox"
+
 // NewModule creates a new inbox Module instance.
 func NewModule() *Module {
 	return &Module{}
@@ -57,7 +61,7 @@ func NewModule() *Module {
 
 // Name implements app.Module.
 func (m *Module) Name() string {
-	return "inbox"
+	return moduleName
 }
 
 // SetSharedResolvers injects the control-plane ("" key) resolvers. Called by
@@ -121,7 +125,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	// this is a no-op in effect, but the resolver must still have been injected.
 	if m.sharedLedger() {
 		if m.sharedDB == nil {
-			return tenantstore.SharedResolversRequired("inbox")
+			return tenantstore.SharedResolversRequired(moduleName)
 		}
 		m.getDB = m.sharedDB
 		if err := tenantstore.RejectSharedWithStaticTenants("inbox", m.config); err != nil {

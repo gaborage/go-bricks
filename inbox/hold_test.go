@@ -16,7 +16,7 @@ import (
 	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
-// holdModule is an initialised module with the hold on, whose shared resolver
+// holdModule is an initialized module with the hold on, whose shared resolver
 // hands out the given database.
 func holdModule(t *testing.T, db dbtypes.Interface) *Module {
 	t.Helper()

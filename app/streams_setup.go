@@ -51,7 +51,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 
 	cfg := a.cfg.Messaging.Streams
 	a.warnIfPlaintextStreamURI(cfg.URI)
-	mgr := streams.NewManager(streams.ManagerOptions{
+	mgr := streams.NewManager(&streams.ManagerOptions{
 		URI:                 cfg.URI,
 		AddressResolverHost: cfg.AddressResolver.Host,
 		AddressResolverPort: cfg.AddressResolver.Port,

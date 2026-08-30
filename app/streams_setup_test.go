@@ -199,7 +199,7 @@ func TestShutdownStreamConsumersWithoutManagerIsNoop(t *testing.T) {
 
 func TestShutdownStreamConsumersStopsTheManager(t *testing.T) {
 	a := &App{logger: logger.New("error", false)}
-	a.streamsManager = streams.NewManager(streams.ManagerOptions{
+	a.streamsManager = streams.NewManager(&streams.ManagerOptions{
 		URI:    unreachableStreamURI,
 		Logger: a.logger,
 	})

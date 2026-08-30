@@ -351,7 +351,7 @@ func TestCacheProbePingHonorsCallerContext(t *testing.T) {
 }
 
 func TestStreamsProbeNotOpenIsUnhealthy(t *testing.T) {
-	m := streams.NewManager(streams.ManagerOptions{URI: unreachableStreamURI, Logger: logger.New("error", false)})
+	m := streams.NewManager(&streams.ManagerOptions{URI: unreachableStreamURI, Logger: logger.New("error", false)})
 
 	got := streamsProbe(m).Run(context.Background())
 
@@ -462,7 +462,7 @@ func TestPublicStatsAllowlistsMatchManagerCounters(t *testing.T) {
 // simply publishes its status alone) right up until that kind's stats matter, and for
 // streams the dropped line is what puts stored_offsets back on the unauthenticated body.
 func TestProbeConstructorsWireTheirPublicStatsAllowlist(t *testing.T) {
-	streamsManager := streams.NewManager(streams.ManagerOptions{
+	streamsManager := streams.NewManager(&streams.ManagerOptions{
 		URI:    unreachableStreamURI,
 		Logger: logger.New("error", false),
 	})

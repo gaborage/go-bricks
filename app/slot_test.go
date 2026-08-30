@@ -214,7 +214,7 @@ func TestCollectProbesWithholdsStreamsUntilItsManagerExists(t *testing.T) {
 	a := newSlotTestApp(t, false, false)
 	require.Len(t, a.collectProbes(), 3, "a streams-free service registers three kinds")
 
-	a.streamsManager = streams.NewManager(streams.ManagerOptions{
+	a.streamsManager = streams.NewManager(&streams.ManagerOptions{
 		URI:    unreachableStreamURI,
 		Logger: a.logger,
 	})
@@ -236,7 +236,7 @@ func TestStreamsSlotContributesItsCloserOnceItsManagerExists(t *testing.T) {
 	a.registerSlotClosers()
 	require.Empty(t, closerNames(a), "a streams-free service closes nothing")
 
-	a.streamsManager = streams.NewManager(streams.ManagerOptions{
+	a.streamsManager = streams.NewManager(&streams.ManagerOptions{
 		URI:    unreachableStreamURI,
 		Logger: a.logger,
 	})
@@ -572,7 +572,7 @@ func newStopSlotTestApp(t *testing.T) (*App, *recLogger) {
 	rec := &recLogger{}
 	a := newSlotTestAppWithLogger(t, rec, false, true)
 
-	a.streamsManager = streams.NewManager(streams.ManagerOptions{URI: unreachableStreamURI, Logger: rec})
+	a.streamsManager = streams.NewManager(&streams.ManagerOptions{URI: unreachableStreamURI, Logger: rec})
 	t.Cleanup(func() { _ = a.streamsManager.Close() })
 
 	return a, rec

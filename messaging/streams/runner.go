@@ -334,11 +334,18 @@ func (r *consumerRunner) logOutcome(res *delivery.Result, streamName string, off
 // batching tracker, which commits the batch high-water mark only when every
 // message in it succeeded (ADR-059).
 func (r *consumerRunner) commitOffset(res *delivery.Result, streamName string, offset int64, store offsetStorer) {
-	if storeErr := r.offsets.trackerFor(streamName).record(offset, res.Err, store); storeErr != nil {
-		// res.Log, not r.log: the pipeline's context-bound logger carries the
-		// trace_id and span_id a real ZeroLogger contributes, exactly as the
-		// classic lane's ack/nack failure lines do.
-		res.Log.Warn().Err(storeErr).
+	r.recordSettled(res.Log, streamName, offset, res.Err, store)
+}
+
+// recordSettled hands one settled delivery to the batching tracker and reports a
+// commit that failed. handleErr nil means the offset may advance — which a parked
+// delivery also earns, since the ledger owns the message once the park lands.
+func (r *consumerRunner) recordSettled(log logger.Logger, streamName string, offset int64, handleErr error, store offsetStorer) {
+	if storeErr := r.offsets.trackerFor(streamName).record(offset, handleErr, store); storeErr != nil {
+		// The context-bound logger, not r.log: it carries the trace_id and span_id a
+		// real ZeroLogger contributes, exactly as the classic lane's ack/nack failure
+		// lines do.
+		log.Warn().Err(storeErr).
 			Str(logFieldStream, streamName).
 			Str(logFieldConsumer, r.name).
 			Int64(logFieldOffset, offset).

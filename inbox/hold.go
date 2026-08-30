@@ -102,7 +102,7 @@ func (m *Module) holdStoreFor(ctx context.Context) (dbtypes.Interface, HoldStore
 // on the control-plane database.
 func (m *Module) ensureHoldStoreInitialized(ctx context.Context) (HoldStore, error) {
 	return m.holdStores.Get(ctx, &tenantstore.Deps[HoldStore]{
-		Name:            "inbox",
+		Name:            moduleName,
 		TableName:       m.cfg.Hold.TableName,
 		AutoCreateTable: m.cfg.AutoCreateTable,
 		Logger:          m.logger,
@@ -123,7 +123,7 @@ func (m *Module) verifyHoldDatabase(ctx context.Context, db dbtypes.Interface) e
 		return err
 	}
 	if _, err := store.HeldTenants(ctx, db, ""); err != nil {
-		return tenantstore.TableUnusableError("inbox", m.cfg.Hold.TableName, "inbox.autocreatetable", err)
+		return tenantstore.TableUnusableError(moduleName, m.cfg.Hold.TableName, "inbox.autocreatetable", err)
 	}
 	return nil
 }
