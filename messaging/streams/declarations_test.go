@@ -911,6 +911,34 @@ func TestDeclareConsumerCarriesTheRetryPolicy(t *testing.T) {
 	})
 }
 
+// TestDeclareConsumerCopiesTheCallersPolicy pins that a declaration keeps its own
+// copy: the pointer belongs to the caller, and a write to it after Validate would
+// otherwise run a policy the ceiling never cleared.
+func TestDeclareConsumerCopiesTheCallersPolicy(t *testing.T) {
+	callers := &RetryOptions{MaxAttempts: 2, InitialBackoff: time.Second, MaxBackoff: 2 * time.Second}
+
+	d := NewDeclarations()
+	d.DeclareStream(testStream, nil)
+	d.DeclareConsumer(&ConsumerOptions{
+		Stream: testStream, Name: testConsumerName, Handler: noopHandler, Retry: callers,
+	})
+	require.NoError(t, d.Validate())
+
+	// The caller mutates its own struct into a policy Validate would have refused.
+	callers.MaxAttempts = MaxRetryAttempts + 1
+	callers.InitialBackoff = time.Hour
+
+	require.Len(t, d.consumers, 1)
+	assert.NotSame(t, callers, d.consumers[0].Retry, "the declaration keeps its own copy")
+	assert.Equal(t, 2, d.consumers[0].Retry.MaxAttempts)
+	assert.Equal(t, time.Second, d.consumers[0].Retry.InitialBackoff)
+	assert.NoError(t, d.Validate(), "the validated policy is unchanged by the caller's write")
+
+	m := testManager(t)
+	runner := m.newRunner(context.Background(), d.consumers[0])
+	assert.Equal(t, 2, runner.retry.MaxAttempts, "the runner runs the validated policy")
+}
+
 // TestNewRunnerResolvesTheRetryPolicy pins what the runner ends up with: a hold
 // without a policy takes the framework default, an explicit policy is carried
 // verbatim, and a consumer that asks for neither keeps today's single attempt.

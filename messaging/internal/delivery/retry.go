@@ -92,6 +92,11 @@ func BackoffBudget(r *Retry, budget time.Duration) (total time.Duration, exceede
 			break
 		}
 		if wait > budget-total {
+			// The reported sum saturates like the series it sums: a caller reading it
+			// back must never see a wrapped negative duration.
+			if total > maxDuration-wait {
+				return maxDuration, true
+			}
 			return total + wait, true
 		}
 		total += wait

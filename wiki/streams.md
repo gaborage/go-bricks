@@ -170,11 +170,11 @@ bound your own work (`context.WithTimeout` around the slow call).
 
 ### Retrying in place
 
-A consumer may ask for a bounded in-place retry: `Retry: &streams.RetryOptions{MaxAttempts: 3, InitialBackoff: 200 * time.Millisecond, MaxBackoff: 2 * time.Second}`. The handler is re-invoked after it returns an error, waiting `InitialBackoff` before the second attempt and doubling to `MaxBackoff`; the lane settles on the FINAL attempt, so one delivery is still one span, one outcome line and one consume record however often it was tried. Declaring nothing keeps today's behaviour — exactly one attempt.
+A consumer may ask for a bounded in-place retry: `Retry: &streams.RetryOptions{MaxAttempts: 3, InitialBackoff: 200 * time.Millisecond, MaxBackoff: 2 * time.Second}`. The handler is re-invoked after it returns an error, waiting `InitialBackoff` before the second attempt and doubling up to `MaxBackoff` (zero means uncapped, so the doubling runs for the whole bound); the lane settles on the FINAL attempt, so one delivery is still one span, one outcome line and one consume record however often it was tried. Declaring nothing keeps today's behaviour — exactly one attempt.
 
 Two outcomes end the retries early. A panic is never retried: a handler that panics on a message panics on it again. Neither is an error the handler wrapped in `streams.Permanent(err)`, which is its claim that retrying cannot help; the wrapper renders and unwraps as the original error, so nothing downstream has to know about it.
 
-**The waits happen inside the partition's own delivery callback**, which is why a policy is bounded: `Validate` refuses more than `streams.MaxRetryAttempts` (10) attempts, or a policy whose worst-case total wait exceeds `streams.MaxRetryWait` (1 minute), naming the total it computed. That budget is one tenant's failure spending every OTHER tenant's throughput on the same partition. A failure that needs more patience than a minute is not a retry — it belongs in the hold, which parks the one tenant and lets the partition move.
+**The waits happen inside the partition's own delivery callback**, which is why a policy is bounded: `Validate` refuses more than `streams.MaxRetryAttempts` (10) attempts, or a policy whose worst-case total wait exceeds `streams.MaxRetryWait` (1 minute); the error names that total as a lower bound, since the walk stops at the wait that proves the crossing. That budget is one tenant's failure spending every OTHER tenant's throughput on the same partition. A failure that needs more patience than a minute is not a retry — it belongs in the hold, which parks the one tenant and lets the partition move.
 
 The context the wait selects on is the consumer's, so `StopConsumers` cuts a pending backoff rather than sleeping it out.
 

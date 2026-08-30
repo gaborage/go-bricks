@@ -1523,6 +1523,15 @@ func TestBackoffBudgetStopsAtTheCrossingWait(t *testing.T) {
 			wantExceeded: true,
 		},
 		{
+			// The reported sum saturates too: a policy whose crossing wait would push
+			// the total past int64 reports the ceiling, not a wrapped negative.
+			name:         "the_reported_total_saturates",
+			retry:        &Retry{MaxAttempts: 4, InitialBackoff: maxDuration >> 1},
+			budget:       maxDuration - 1,
+			wantTotal:    maxDuration,
+			wantExceeded: true,
+		},
+		{
 			// 1s+2s+4s+8s+16s fits in the minute; the 32s that follows crosses it, and
 			// the reported total is the sum through that wait.
 			name:         "an_uncapped_policy_passes_over_and_reports_the_crossing",

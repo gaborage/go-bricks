@@ -11,9 +11,12 @@ import (
 // attempt, so 1 retries nothing; the wait before attempt n (n >= 2) is
 // InitialBackoff doubled n-2 times, capped at MaxBackoff.
 type RetryOptions struct {
-	MaxAttempts    int
+	MaxAttempts int
+	// InitialBackoff is the wait before the second attempt.
 	InitialBackoff time.Duration
-	MaxBackoff     time.Duration
+	// MaxBackoff caps the doubling. Zero means uncapped — the waits keep doubling
+	// for the whole bound, which is what MaxRetryWait then has to contain.
+	MaxBackoff time.Duration
 }
 
 const (
@@ -39,6 +42,18 @@ var DefaultHoldRetry = RetryOptions{
 // on the attempt that produced err whatever the policy allows. Permanent(nil) is
 // nil.
 func Permanent(err error) error { return delivery.Permanent(err) }
+
+// copyRetry takes the declaration's own copy of a caller's policy. The pointer
+// is the caller's, and a declaration is validated once at startup: keeping the
+// pointer would let a later write to that struct run a policy past the ceiling
+// Validate cleared.
+func copyRetry(opts *RetryOptions) *RetryOptions {
+	if opts == nil {
+		return nil
+	}
+	policy := *opts
+	return &policy
+}
 
 // resolveRetry is the policy a declaration actually runs under: its own, or the
 // framework default when it holds without naming one. Validation and the runner

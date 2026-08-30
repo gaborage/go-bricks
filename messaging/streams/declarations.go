@@ -158,7 +158,7 @@ func (d *Declarations) DeclareConsumer(opts *ConsumerOptions) {
 		Start:   opts.Start,
 		SAC:     opts.SAC,
 		Handler: opts.Handler,
-		Retry:   opts.Retry,
+		Retry:   copyRetry(opts.Retry),
 		Hold:    opts.Hold,
 	})
 }
@@ -180,7 +180,7 @@ func (d *Declarations) DeclareSuperStreamConsumer(opts *SuperStreamConsumerOptio
 		SAC:     true,
 		Handler: opts.Handler,
 		Super:   true,
-		Retry:   opts.Retry,
+		Retry:   copyRetry(opts.Retry),
 		Hold:    opts.Hold,
 	})
 }
