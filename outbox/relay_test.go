@@ -194,7 +194,8 @@ func TestPublishRecordMarksFailedOnInvalidHeaders(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-bad-hdr", Headers: []byte(`{not valid json}`)}
-	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	hdrs, decodeErr := decodeHeaders(rec.Headers)
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec, hdrs, decodeErr)
 
 	assert.Equal(t, outcomeFailed, out, "corrupt headers are a (poison) failure")
 	assert.NoError(t, outErr)
@@ -218,7 +219,8 @@ func TestPublishRecordInjectsOutboxMetadataHeaders(t *testing.T) {
 		RoutingKey: "created",
 		Headers:    []byte(`{"x-correlation-id":"abc"}`),
 	}
-	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	hdrs, decodeErr := decodeHeaders(rec.Headers)
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec, hdrs, decodeErr)
 	require.Equal(t, outcomePublished, out)
 	require.NoError(t, outErr)
 
@@ -238,7 +240,8 @@ func TestPublishRecordInjectsHeadersWhenRecordHasNone(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-7", EventType: "x.y", Exchange: "ex", RoutingKey: "rk"}
-	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	hdrs, decodeErr := decodeHeaders(rec.Headers)
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec, hdrs, decodeErr)
 	require.Equal(t, outcomePublished, out)
 	require.NoError(t, outErr)
 	require.NotNil(t, amqp.LastPublishHdrs)
@@ -253,7 +256,8 @@ func TestPublishRecordReturnsFalseWhenMarkPublishedFails(t *testing.T) {
 	ctx := newFakeJobCtx(db, amqp)
 
 	rec := &Record{ID: "evt-mp-fail", Exchange: "ex", RoutingKey: "rk"}
-	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	hdrs, decodeErr := decodeHeaders(rec.Headers)
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec, hdrs, decodeErr)
 
 	assert.Equal(t, outcomePublishedUnrecorded, out, "the message WAS delivered; a MarkPublished failure must not bump retry_count")
 	assert.NoError(t, outErr)
@@ -284,7 +288,8 @@ func TestPublishRecordRehydratesTraceContextForPublish(t *testing.T) {
 		RoutingKey: "created",
 		Headers:    []byte(`{"traceparent":"` + inboundTraceparent + `","X-Request-ID":"` + inboundTraceID + `"}`),
 	}
-	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	hdrs, decodeErr := decodeHeaders(rec.Headers)
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec, hdrs, decodeErr)
 	require.Equal(t, outcomePublished, out)
 	require.NoError(t, outErr)
 
@@ -320,7 +325,8 @@ func TestPublishRecordDoesNotReEmitAPersistedMalformedTraceParent(t *testing.T) 
 		RoutingKey: "created",
 		Headers:    []byte(`{"traceparent":"` + persisted + `"}`),
 	}
-	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec)
+	hdrs, decodeErr := decodeHeaders(rec.Headers)
+	out, outErr := r.publishRecord(ctx, ctx.Logger(), db, amqp, rec, hdrs, decodeErr)
 	require.Equal(t, outcomePublished, out)
 	require.NoError(t, outErr)
 
@@ -885,7 +891,9 @@ func TestRelayLostLeadershipStopsBatch(t *testing.T) {
 
 	err := r.Execute(newFakeJobCtx(db, amqp))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "leadership lost")
+	assert.ErrorIs(t, err, ErrNotLeader, "a lost leader row is reported as such")
+	assert.NotContains(t, err.Error(), "messaging not available",
+		"the cause is the database, so it must not be reported as a broker outage")
 	assert.Equal(t, 1, amqp.PublishCalls, "a deposed leader publishes nothing further")
 	assert.Zero(t, store.MarkFailedCalls, "the unattempted remainder is left pending, not marked")
 	assert.Equal(t, 1, store.ReleaseCalls)

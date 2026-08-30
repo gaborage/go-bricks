@@ -138,7 +138,12 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 
 	res := r.runRelayLoop(ctx, log, db, msgClient, lead, records)
 
-	r.logCycle(log, tenantID, res.published, res.unrecorded, res.failed, res.deadlettered, res.parked, len(records))
+	r.logCycle(log, tenantID, res, len(records))
+	// Leadership loss first: it is a database-side failure, and wrapping it as a broker
+	// outage would send an operator to the wrong system. The next tick re-leads.
+	if res.leadershipErr != nil {
+		return res.leadershipErr
+	}
 	if res.outageErr != nil {
 		return brokerUnavailableErr(res.outageErr)
 	}
@@ -151,6 +156,10 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 type relayBatchResult struct {
 	published, unrecorded, failed, deadlettered, parked int
 	outageErr                                           error
+	// leadershipErr is set when the claim on the leader row was lost mid-cycle. It is kept
+	// apart from outageErr because its cause is the DATABASE, not the broker: reporting it
+	// as a broker outage would point an operator at the wrong system.
+	leadershipErr error
 }
 
 // runRelayLoop publishes each pending record in order, stopping early on
@@ -171,16 +180,20 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 		// A deposed leader must not publish another row: another instance may already be
 		// draining the same ledger.
 		if err := lead.Probe(ctx); err != nil {
-			log.Warn().Err(err).Msg("Outbox relay lost leadership mid-cycle; stopping")
-			res.outageErr = fmt.Errorf("leadership lost: %w", err)
+			log.Warn().Err(err).Msg("Outbox relay lost its leader row mid-cycle; stopping")
+			res.leadershipErr = fmt.Errorf("%w: lost the leader row mid-cycle, database unreachable or the transaction was ended: %w", ErrNotLeader, err)
 			return res
 		}
-		key := relayKey(&records[i])
+		// Decode once per record: the key derivation and the publish need the same blob.
+		// A decode failure yields nil headers, so the key falls back to the routing key
+		// while publishRecord dead-letters the row as poison.
+		headers, decodeErr := decodeHeaders(records[i].Headers)
+		key := relayKey(&records[i], headers)
 		if _, isParked := parked[key]; isParked {
 			res.parked++
 			continue
 		}
-		outcome, pubErr := r.publishRecord(ctx, log, db, msgClient, &records[i])
+		outcome, pubErr := r.publishRecord(ctx, log, db, msgClient, &records[i], headers, decodeErr)
 		switch outcome {
 		case outcomePublished:
 			res.published++
@@ -219,22 +232,20 @@ const tenantStampHeader = "x-tenant-id"
 
 // relayKey is the key a row is ordered under within a cycle. The stream lane orders by its
 // partition key; the AMQP lane orders by the tenant stamp when the row carries one, so two
-// tenants publishing the same routing key do not block each other, and by the routing key
-// otherwise. A row whose headers will not decode is poison — publishRecord dead-letters it —
-// and keying it by routing key holds its siblings behind it only until it does.
-func relayKey(record *Record) string {
+// tenants publishing the same routing key do not block each other, and otherwise by the
+// destination the row is actually published to — exchange AND routing key, so two rows aimed
+// at different exchanges never park each other merely for sharing a routing-key convention.
+// A row whose headers will not decode arrives here with nil headers and is keyed by its
+// destination; it is poison and publishRecord dead-letters it, so it holds its siblings only
+// until it does.
+func relayKey(record *Record, headers map[string]any) string {
 	if record.Lane == LaneStream {
 		return record.PartitionKey
 	}
-	if len(record.Headers) > 0 {
-		var headers map[string]any
-		if err := json.Unmarshal(record.Headers, &headers); err == nil {
-			if stamp, ok := headers[tenantStampHeader].(string); ok && stamp != "" {
-				return stamp
-			}
-		}
+	if stamp, ok := headers[tenantStampHeader].(string); ok && stamp != "" {
+		return stamp
 	}
-	return record.RoutingKey
+	return record.Exchange + ":" + record.RoutingKey
 }
 
 // markOutage advances retry_count for every pending record without attempting a publish,
@@ -260,13 +271,13 @@ func (r *Relay) markOutage(ctx context.Context, log logger.Logger, db dbtypes.In
 // logCycle emits the per-cycle delivery summary. "unrecorded" counts events delivered to the
 // broker whose MarkPublished failed (they re-deliver next cycle) — kept distinct from
 // "published" so the success count is not inflated by stuck-but-delivered records.
-func (r *Relay) logCycle(log logger.Logger, tenantID string, published, unrecorded, failed, deadlettered, parked, total int) {
+func (r *Relay) logCycle(log logger.Logger, tenantID string, res relayBatchResult, total int) {
 	event := log.Info().
-		Int("published", published).
-		Int("unrecorded", unrecorded).
-		Int("failed", failed).
-		Int("deadlettered", deadlettered).
-		Int("parked", parked).
+		Int("published", res.published).
+		Int("unrecorded", res.unrecorded).
+		Int("failed", res.failed).
+		Int("deadlettered", res.deadlettered).
+		Int("parked", res.parked).
 		Int("total", total)
 	if tenantID != "" {
 		event = event.Str("tenant", tenantID)
@@ -292,12 +303,12 @@ func brokerUnavailableErr(msgErr error) error {
 // only to the publish itself, so an expired deadline never fails the bookkeeping UPDATE.
 // The second return is non-nil only for outcomeBrokerDown, carrying the connectivity
 // error the caller surfaces as the job-level outage error (see relayTenant).
-func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, record *Record) (publishOutcome, error) {
-	// Decode headers — corrupt headers are deterministic, broker-independent corruption
-	// (poison), so they dead-letter at MaxRetries rather than retrying forever. Poison has
-	// one other class: a destination the frame can never carry (below). Every remaining
-	// broker-side publish failure is connectivity.
-	headers, decodeErr := decodeHeaders(record.Headers)
+func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes.Interface, msgClient messaging.AMQPClient, record *Record, headers map[string]any, decodeErr error) (publishOutcome, error) {
+	// Corrupt headers are deterministic, broker-independent corruption (poison), so they
+	// dead-letter at MaxRetries rather than retrying forever. Poison has one other class: a
+	// destination the frame can never carry (below). Every remaining broker-side publish
+	// failure is connectivity. The decode itself happens once per record in the caller, which
+	// also needs it to derive the ordering key.
 	if decodeErr != nil {
 		return r.deadLetterPoison(ctx, log, db, record, decodeErr.Error()), nil
 	}

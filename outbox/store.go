@@ -2,8 +2,12 @@ package outbox
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/gaborage/go-bricks/database"
 
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/sqlid"
@@ -83,6 +87,33 @@ func (l *leadership) Probe(ctx context.Context) error {
 
 func (l *leadership) Release(ctx context.Context) error {
 	return l.tx.Rollback(ctx)
+}
+
+// leadRow is the whole of Lead except the two things that genuinely differ by vendor: the
+// word in its errors and the statement Probe uses. The claim query is common SQL, not a
+// dialect difference, so it lives here rather than being mirrored under the stores'
+// file-level dupl exemption, which exists for real dialect divergence.
+func leadRow(ctx context.Context, db dbtypes.Interface, leaderTable, vendor, probeStmt string) (Leadership, error) {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("outbox %s: begin leader transaction failed: %w", vendor, err)
+	}
+
+	var id int64
+	query := fmt.Sprintf(`SELECT id FROM %s WHERE id = 1 FOR UPDATE NOWAIT`, leaderTable)
+	if err := tx.QueryRow(ctx, query).Scan(&id); err != nil {
+		_ = tx.Rollback(ctx)
+		switch {
+		case database.IsLockNotAvailable(err):
+			return nil, ErrNotLeader
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, fmt.Errorf("outbox %s: leader row missing in %s; run the documented migration", vendor, leaderTable)
+		default:
+			return nil, fmt.Errorf("outbox %s: take leader row failed: %w", vendor, err)
+		}
+	}
+
+	return &leadership{tx: tx, probeStmt: probeStmt}, nil
 }
 
 // laneOrDefault fills an unset lane with LaneAMQP, so no persisted row carries an
