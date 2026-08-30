@@ -1058,3 +1058,35 @@ func TestRelayKeyNamespacesDistinctScopes(t *testing.T) {
 		relayKey(&Record{Exchange: "other", RoutingKey: "shipped"}, stamped),
 		"one tenant's rows share a key across exchanges, which is the ordering a tenant needs")
 }
+
+// TestRelayLoopCountsParkedRows asserts the parked COUNT, not just the parking behaviour.
+// The count is what logCycle reports and what makes a cycle's numbers sum to its batch, so a
+// test that only observes which rows were published leaves it unpinned.
+func TestRelayLoopCountsParkedRows(t *testing.T) {
+	// TWO rows park behind K1, so the count proves the counter ACCUMULATES: a dropped
+	// increment reads 0 and a decrement reads -2, neither of which a single parked row
+	// would distinguish from an off-by-one.
+	records := []Record{
+		{ID: "K1", Exchange: "ex", RoutingKey: "k"},
+		{ID: "K2", Exchange: "ex", RoutingKey: "k"},
+		{ID: "K3", Exchange: "ex", RoutingKey: "k"},
+		{ID: "J1", Exchange: "ex", RoutingKey: "j"},
+	}
+	store := &fakeStore{FetchPendingResult: records}
+	amqp := newFakeAMQP()
+	amqp.PublishErrFor = map[string]error{"ex:k": errors.New("broker rejected")}
+	r := newRelayWithFakes(store, amqp)
+	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
+
+	lead, err := store.Lead(ctx, db)
+	require.NoError(t, err)
+	res := r.runRelayLoop(ctx, ctx.Logger(), db, amqp, lead, records)
+
+	assert.Equal(t, 2, res.parked, "K2 and K3 both park behind K1")
+	assert.Equal(t, 1, res.failed, "K1 failed")
+	assert.Equal(t, 1, res.published, "J1 published")
+	assert.Equal(t, len(records),
+		res.published+res.unrecorded+res.failed+res.deadlettered+res.parked,
+		"every fetched row is accounted for exactly once")
+}
