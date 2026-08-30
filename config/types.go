@@ -467,8 +467,10 @@ type MessagingConfig struct {
 }
 
 // StreamsConfig holds native RabbitMQ stream-protocol settings (consumption).
-// Single-tenant only: multitenant.enabled together with a stream URI is a
-// startup validation error (see config/validation.go: checkMessagingStreams).
+// Requires single-tenant mode or messaging.tenancy: shared, which consumes once
+// on the control-plane key: multitenant.enabled together with a stream URI under
+// per-tenant tenancy is a startup validation error (see config/validation.go:
+// checkMessagingStreams).
 type StreamsConfig struct {
 	// URI is the stream-protocol endpoint, scheme rabbitmq-stream:// (or
 	// rabbitmq-stream+tls://), default port 5552. Required when any module

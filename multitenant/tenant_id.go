@@ -11,8 +11,10 @@ import (
 // because messaging reads the same rule off a tenant stamp and cannot import
 // server (import cycle).
 //
-// SECURITY: unexported behind DefaultTenantIDPattern so no consumer can loosen
-// tenant validation process-wide by reassigning it (or nil it into a panic).
+// SECURITY: unexported behind DefaultTenantIDPattern so no consumer can reassign
+// it — neither loosening tenant validation process-wide nor nilling it into a
+// panic. The accessor still hands out the shared value, so callers must not call
+// mutators such as (*Regexp).Longest on it.
 var defaultTenantIDPattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 
 // DefaultTenantIDPattern returns the framework's tenant identifier grammar.

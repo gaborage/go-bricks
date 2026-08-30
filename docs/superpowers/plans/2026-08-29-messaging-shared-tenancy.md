@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.26 · `github.com/rabbitmq/amqp091-go` · `github.com/rabbitmq/rabbitmq-stream-go-client` · koanf config · testify.
 
-**Spec:** [docs/superpowers/specs/2026-08-29-multitenant-messaging-end-state.md](../specs/2026-08-29-multitenant-messaging-end-state.md) — a local, gitignored file; the same design is the "Agent Brief" comment on #1230 (`GH_TOKEN=$(gh auth token -u gaborage) gh issue view 1230 --comments`). Where they differ, the spec wins.
+**Spec:** [docs/superpowers/specs/2026-08-29-multitenant-messaging-end-state.md](../specs/2026-08-29-multitenant-messaging-end-state.md) — tracked in this repo; the same design is the "Agent Brief" comment on #1230 (`GH_TOKEN=$(gh auth token -u gaborage) gh issue view 1230 --comments`). Where they differ, the spec wins.
 
 **Vocabulary:** [CONTEXT.md](../../CONTEXT.md) `### Tenancy` — *Control-plane key*, *Tenancy*, *Replay*, *Tenant stamp*. Use those words in comments, docs and commit messages; avoid "root key", "empty key", "mode", "bootstrap", "tenant header".
 
@@ -38,7 +38,7 @@ Titles: A1 `feat(config): give the messaging kind a tenancy`, A2 `feat(app): rep
 
 ## Decisions the plan makes
 
-1. **The tenant-id grammar moves to `multitenant`.** #1004 asked for `server.ValidateTenantID`; `messaging` cannot import `server` (cycle), so the rule lives beside the context accessors: `multitenant.DefaultTenantIDPattern` (`^[a-z0-9-]{1,64}$`, moved from `server/middleware.go:214`) and `multitenant.ValidateTenantID(id string) error` returning `multitenant.ErrInvalidTenantID`. `server` keeps its behaviour by reading the exported pattern. A4's PR body says `Closes #1004`.
+1. **The tenant-id grammar moves to `multitenant`.** #1004 asked for `server.ValidateTenantID`; `messaging` cannot import `server` (cycle), so the rule lives beside the context accessors: `multitenant.DefaultTenantIDPattern()` (an accessor over the unexported `defaultTenantIDPattern`, `^[a-z0-9-]{1,64}$`, moved from `server/middleware.go:214`) and `multitenant.ValidateTenantID(id string) error` returning `multitenant.ErrInvalidTenantID`. `server` keeps its behaviour by calling the accessor. The pattern is NOT an exported var: a consumer could otherwise reassign it and loosen tenant validation process-wide, or nil it into a panic. A4's PR body says `Closes #1004`.
 2. **`TenantOptional bool`, not `RequireTenant`.** Go has no "unset" for a plain bool, and the safe default must be fail-closed; a pointer tri-state is more surface than a consumer needs. `TenantOptional: true` is the control-plane-consumer opt-out. It is read only when stamps are read (below).
 3. **Stamps are READ only under `multitenant.enabled && messaging.tenancy == shared`.** Under `multitenant.enabled: false`, `shared` stays a no-op (ADR-041 env-parity); under per-tenant tenancy the replay key already seeds the context and a stamp is ignored. Stamps are WRITTEN whenever the context carries a tenant, in every mode — it is free and it is what B and C consume. The conflict check on a caller-supplied `x-tenant-id` runs in every mode.
 4. **The fail-closed line is the lane's failure line, not a second WARN.** The stamp check runs inside the delivery pipeline's `Handle` step and returns an error; the classic lane's existing ERROR line ("Message processing failed - discarding without requeue") and nack-without-requeue follow, the streams lane's existing skip outcome follows. The error text carries the reason and the byte length, never the value. One line per refused delivery.
@@ -127,7 +127,7 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
 
 - Modify: `multitenant/context.go` (add below `GetTenant`)
 - Create: `multitenant/tenant_id.go`
-- Modify: `server/middleware.go` (`defaultTenantIDRegex` at `214`, used at `283`) — delete the var, use `multitenant.DefaultTenantIDPattern`
+- Modify: `server/middleware.go` (`defaultTenantIDRegex` at `214`, used at `283`) — delete the var, call `multitenant.DefaultTenantIDPattern()`
 - Modify: `multitenant/context_test.go`; Create: `multitenant/tenant_id_test.go`; Modify: the `server` test that pins the regex if one exists (`git grep -n defaultTenantIDRegex server/`)
 
 **Interfaces:**
@@ -135,9 +135,9 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
 - Produces:
   - `var ErrNoTenant = errors.New("multitenant: no tenant in context")`
   - `func TenantID(ctx context.Context) (string, error)` — `GetTenant` ok-form mapped to `ErrNoTenant`; nil ctx → `ErrNoTenant`.
-  - `var DefaultTenantIDPattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)`
+  - `var defaultTenantIDPattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)` (unexported) with `func DefaultTenantIDPattern() *regexp.Regexp` returning it
   - `var ErrInvalidTenantID = errors.New("multitenant: tenant id does not match the default grammar")`
-  - `func ValidateTenantID(id string) error` — nil when `DefaultTenantIDPattern.MatchString(id)`, else `fmt.Errorf("%w: %d bytes", ErrInvalidTenantID, len(id))` — the value never appears in the error.
+  - `func ValidateTenantID(id string) error` — nil when `defaultTenantIDPattern.MatchString(id)`, else `fmt.Errorf("%w: %d bytes", ErrInvalidTenantID, len(id))` — the value never appears in the error.
 - Consumed by: A2 Task 6/7, A3 Task 9/10, A4 Task 12, and `server`.
 
 **Seams (pre-agreed):** the four exported functions/values; `server.buildTenantResolver` through the existing resolver tests (they must not change).
@@ -155,7 +155,7 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
 | `validate_empty` | `""` | `ErrInvalidTenantID` |
 
 - [ ] **Step 2: Run, expect FAIL** (undefined symbols).
-- [ ] **Step 3: Green** — the code above; `server/middleware.go:283` becomes `tenantRegex := multitenant.DefaultTenantIDPattern`.
+- [ ] **Step 3: Green** — the code above; `server/middleware.go:283` becomes `tenantRegex := multitenant.DefaultTenantIDPattern()`.
 - [ ] **Step 4: `go test ./multitenant/... ./server/...` PASS.**
 - [ ] **Step 5: `make check`, commit** — `feat(multitenant): export TenantID and the default tenant-id grammar`.
 
@@ -451,4 +451,4 @@ Streams (`messaging.streams.uri: rabbitmq-stream://svc:pw@broker:5552/%2f`, `mul
 ## Self-review against the spec
 
 - Decision 1–2 (stamp, single writer): Tasks 6, 10, 12. Decision 3 (kind tenancy, control-plane branch, pre-warm, env-parity): Tasks 1, 5. Decision 4 (check rules): Task 2. Decision 5 (read side, grammar, `TenantOptional`): Tasks 3, 7, 9. Decision 6 (fail closed): Tasks 7, 9. Decision 7 (accessor): Task 3. Decision 11 (streams gate): Tasks 2, 9. Decision 12 (ADR-087, ADR-041 pointer, no atom): Task 13. Glossary: Task 1's commit.
-- Names used consistently: `TenantOptional`, `TenantStamps`, `tenantstamp.{Header, ErrConflict, CheckCallerHeaders, Write, Read, ReadError}`, `messaging.{TenantStampHeader, ErrTenantStampConflict}`, `streams.ErrTenantStampConflict`, `multitenant.{TenantID, ErrNoTenant, DefaultTenantIDPattern, ValidateTenantID, ErrInvalidTenantID}`, `SetMessagingTenancy`, `controlPlaneMessaging`, `sharedMessaging()`, `perTenantMessaging()`.
+- Names used consistently: `TenantOptional`, `TenantStamps`, `tenantstamp.{Header, ErrConflict, CheckCallerHeaders, Write, Read, ReadError}`, `messaging.{TenantStampHeader, ErrTenantStampConflict}`, `streams.ErrTenantStampConflict`, `multitenant.{TenantID, ErrNoTenant, DefaultTenantIDPattern(), ValidateTenantID, ErrInvalidTenantID}`, `SetMessagingTenancy`, `controlPlaneMessaging`, `sharedMessaging()`, `perTenantMessaging()`.

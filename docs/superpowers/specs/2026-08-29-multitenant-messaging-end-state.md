@@ -82,8 +82,13 @@ permission is created when a tenant is onboarded. Onboarding touches the databas
    `multitenant.ErrNoTenant`; same answer on every lane. `GetTenant` ok-form stays
    (`trace.IDFromContext` precedent); `SetTenant` stays exported — app code sets a tenant in
    tests, hand-built adapters and fan-out jobs.
-8. **Ordered lane = super streams keyed by the tenant stamp** (partition key). Partition
-   count is fixed at creation; growing later is a new super stream and a cutover; replicas
+8. **Ordered lane = super streams keyed by the tenant stamp** (partition key). Concretely,
+   the publisher sets `streams.PublishMessage.RoutingKey` to the tenant stamp — that is the
+   value murmur3-hashes to a partition (ADR-063) — while the application's own routing key,
+   if it has one, stays an entry in `PublishMessage.Properties` beside the `x-tenant-id`
+   stamp. The two never share a field: partition selection is the tenant's, application
+   routing semantics are the payload's. Partition count is fixed at creation; growing later
+   is a new super stream and a cutover; replicas
    beyond partitions idle. Documented rule: partitions = 2–4× max consumer replicas. Not
    enforced.
 9. **Failure posture on the ordered lane: D then C.** D — bounded in-place retry with

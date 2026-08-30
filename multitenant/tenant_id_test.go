@@ -20,9 +20,9 @@ func TestValidateTenantID(t *testing.T) {
 		{name: "validate_single_char", id: "a"},
 		{name: "validate_max_length", id: strings.Repeat("a", 64)},
 		{name: "validate_uppercase", id: "Acme", wantErr: true, wantText: "4 bytes", notText: "Acme"},
-		{name: "validate_too_long", id: strings.Repeat("a", 65), wantErr: true, wantText: "65 bytes"},
+		{name: "validate_too_long", id: strings.Repeat("a", 65), wantErr: true, wantText: "65 bytes", notText: strings.Repeat("a", 65)},
 		{name: "validate_empty", id: "", wantErr: true, wantText: "0 bytes"},
-		{name: "validate_underscore", id: "acme_1", wantErr: true, wantText: "6 bytes"},
+		{name: "validate_underscore", id: "acme_1", wantErr: true, wantText: "6 bytes", notText: "acme_1"},
 	}
 
 	for _, tt := range tests {

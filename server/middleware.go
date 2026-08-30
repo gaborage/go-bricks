@@ -284,9 +284,6 @@ func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 		if res == nil {
 			return nil
 		}
-		if tenantRegex == nil {
-			return res
-		}
 		return &multitenant.ValidatingResolver{Resolver: res, TenantRegex: tenantRegex}
 	}
 
