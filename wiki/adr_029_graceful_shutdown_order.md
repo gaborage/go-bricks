@@ -10,7 +10,9 @@
 > and it is unchanged. The fold could not be satisfied with the framework's own defaults: the
 > batch processor's in-flight export runs on a context of the SDK's own, bounded by
 > `observability.*.export.timeout` (10s in `development`, 60s otherwise), while the phase's
-> budget is whatever the HTTP drain left of `server.timeout.shutdown` (10s). A collector that
+> budget is whatever the HTTP drain, the slot stop and module shutdown left of the one
+> `App.Shutdown` context (`server.timeout.shutdown`, 10s) — every phase ahead of it spends
+> from the same budget, so a slow module shortens the flush as surely as a slow drain does. A collector that
 > is down therefore failed a graceful shutdown in which nothing but the telemetry sink had
 > failed. `App.Run()`'s error now reflects application failures — server, modules, closers, the
 > hard-stop timeout — not the availability of the telemetry sink. See `[C61.20]` in
@@ -41,7 +43,9 @@ Reorder `App.Shutdown` to stop **inbound work first**, then tear down what it de
 2. **AMQP consumers** — stop delivering new messages (new `App.shutdownConsumers()` → `Manager.StopConsumers()`), *without* closing connections.
 3. **modules** — no new HTTP requests or AMQP deliveries are admitted; in-flight handlers may still be unwinding after cancellation, but no fresh work is handed to modules being torn down.
 4. **observability** — flush and shut down, best-effort: failures are warned, never folded into the shutdown error (2026-08-29 amendment above).
-5. **manager cleanup loops**, then **closers** (DB pools, messaging connections).
+5. **closers** (DB pools, messaging connections). Manager cleanup loops were a separate phase
+   here until [ADR-067](adr_067_lifecycle_slots.md); each manager now stops its own sweep in
+   `Close()`, which the closers still run last.
 
 `Manager.StopConsumers()` is a new public method that cancels each consumer registry's consume context (idempotent — `Registry.StopConsumers` guards on its active flag) without closing the AMQP clients. `Manager.Close()` (run later via the messaging-manager closer) still stops consumers and closes connections, so the two compose safely.
 

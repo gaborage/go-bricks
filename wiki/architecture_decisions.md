@@ -344,7 +344,7 @@ insert) — those now apply the caller's intended value.
 `App.Shutdown` tore down modules **first**, while the HTTP server was still serving and AMQP
 consumers were still delivering — so in-flight handlers ran against already-shut-down modules
 (shutdown-window panics). Reordered to stop inbound work first: **server → consumers →
-modules → observability → manager cleanup loops → closers**, with a new additive
+modules → observability → closers**, with a new additive
 `Manager.StopConsumers()` that quiesces consumers (idempotent) without closing connections.
 Superseded in part by [ADR-067](adr_067_lifecycle_slots.md): the manager-cleanup-loop phase is
 gone — each manager stops its own sweep in `Close()`, which the closers still run last.
