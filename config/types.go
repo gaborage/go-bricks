@@ -453,11 +453,27 @@ type MessagingConfig struct {
 	Reconnect ReconnectConfig     `koanf:"reconnect" json:"reconnect" yaml:"reconnect" toml:"reconnect" mapstructure:"reconnect"`
 	Publisher PublisherPoolConfig `koanf:"publisher" json:"publisher" yaml:"publisher" toml:"publisher" mapstructure:"publisher"`
 	Streams   StreamsConfig       `koanf:"streams" json:"streams" yaml:"streams" toml:"streams" mapstructure:"streams"`
+
+	// Tenancy selects which key the messaging kind's consumers and publishers are
+	// resolved and replayed under when multitenant.enabled is true:
+	//   - "per-tenant" (default): one client per tenant, replayed lazily from
+	//     multitenant.tenants.<id>.messaging or the resource source.
+	//   - "shared": one control-plane client resolved via the empty ("") key —
+	//     the root messaging: block, or whatever a custom resource source returns
+	//     for "". Consumers replay once at boot and the tenant travels as the
+	//     x-tenant-id stamp. That is the contract this key names; it is served
+	//     from the classic-lane slice onward, and the config layer accepts it
+	//     first so the two land as reviewable steps. See wiki/messaging.md and
+	//     ADR-087.
+	// In single-tenant mode both values behave identically.
+	Tenancy string `koanf:"tenancy" json:"tenancy" yaml:"tenancy" toml:"tenancy" mapstructure:"tenancy"`
 }
 
 // StreamsConfig holds native RabbitMQ stream-protocol settings (consumption).
-// Single-tenant only: multitenant.enabled together with a stream URI is a
-// startup validation error (see config/validation.go: checkMessagingStreams).
+// Requires single-tenant mode or messaging.tenancy: shared, which consumes once
+// on the control-plane key: multitenant.enabled together with a stream URI under
+// per-tenant tenancy is a startup validation error (see config/validation.go:
+// checkMessagingStreams).
 type StreamsConfig struct {
 	// URI is the stream-protocol endpoint, scheme rabbitmq-stream:// (or
 	// rabbitmq-stream+tls://), default port 5552. Required when any module

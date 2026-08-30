@@ -211,8 +211,6 @@ func setupIdentityMiddlewares(e *echo.Echo, log logger.Logger, cfg *config.Confi
 	}
 }
 
-var defaultTenantIDRegex = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
-
 func newHeaderResolver(cfg *config.ResolverConfig) multitenant.TenantResolver {
 	name := cfg.Header
 	if name == "" {
@@ -280,14 +278,11 @@ func compositeSubResolvers(cfg *config.ResolverConfig) []multitenant.TenantResol
 
 func buildTenantResolver(cfg *config.Config) multitenant.TenantResolver {
 	resolverCfg := &cfg.Multitenant.Resolver
-	tenantRegex := defaultTenantIDRegex
+	tenantRegex := multitenant.DefaultTenantIDPattern()
 
 	wrap := func(res multitenant.TenantResolver) multitenant.TenantResolver {
 		if res == nil {
 			return nil
-		}
-		if tenantRegex == nil {
-			return res
 		}
 		return &multitenant.ValidatingResolver{Resolver: res, TenantRegex: tenantRegex}
 	}

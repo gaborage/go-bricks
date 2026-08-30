@@ -117,6 +117,43 @@ with the vendor environment as its production adapter and an in-memory fake
 for tests.
 _Avoid_: env, client (ambiguous with the AMQP client), connection
 
+### Tenancy
+
+**Control-plane key**:
+The `""` key: the deployment's own resources — the root `database:` and
+`messaging:` blocks, or whatever a custom resource source returns for `""`.
+Never a tenant; no resolver can produce it.
+_Avoid_: root key, empty key, default tenant, shared key
+
+**Tenancy**:
+Which key a resource kind is resolved and replayed under when multitenant is
+enabled: `per-tenant` (the resolved tenant) or `shared` (the control-plane
+key). The ledgers carry one; the messaging kind carries one.
+_Avoid_: mode, scope, isolation, tenant model
+
+**Replay**:
+Applying validated declarations to one key — declare infrastructure, start
+consumers — exactly once per key, idempotent on the declaration hash.
+_Avoid_: bootstrap, setup, fan-out (the relay's per-tenant pass)
+
+**Tenant stamp**:
+The tenant identity a producer writes into the carrier from its authenticated
+context — never copied from a payload. The consumer reads it as
+identification, not authorization.
+_Avoid_: tenant header, tenant tag, tenant id (for the carried value)
+
+**Partition key**:
+The value hashed to choose a super-stream partition; on the ordered lane it is
+the tenant stamp, so one tenant's messages keep their order.
+_Avoid_: routing key (the classic lane's word), shard key, hash key
+
+**Hold**:
+Per-tenant parking that keeps every later message for a tenant behind a failed
+one until that one succeeds, so order survives a failure without stalling the
+tenants that share its partition.
+_Avoid_: DLQ (where a classic-lane message goes instead), quarantine, retry
+queue, parking lot
+
 ### Observability
 
 **Sink**:

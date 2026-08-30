@@ -181,7 +181,7 @@ func TestBuildTenantResolver(t *testing.T) {
 		resolver := buildTenantResolver(cfg)
 		require.IsType(t, &multitenant.ValidatingResolver{}, resolver)
 		vr := resolver.(*multitenant.ValidatingResolver)
-		assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
+		assert.Equal(t, multitenant.DefaultTenantIDPattern(), vr.TenantRegex)
 		require.IsType(t, &multitenant.HeaderResolver{}, vr.Resolver)
 		hr := vr.Resolver.(*multitenant.HeaderResolver)
 		assert.Equal(t, defaultTenantHeader, hr.HeaderName)
@@ -193,7 +193,7 @@ func TestBuildTenantResolver(t *testing.T) {
 		resolver := buildTenantResolver(cfg)
 		require.IsType(t, &multitenant.ValidatingResolver{}, resolver)
 		vr := resolver.(*multitenant.ValidatingResolver)
-		assert.Equal(t, defaultTenantIDRegex, vr.TenantRegex)
+		assert.Equal(t, multitenant.DefaultTenantIDPattern(), vr.TenantRegex)
 		require.IsType(t, &multitenant.SubdomainResolver{}, vr.Resolver)
 		sr := vr.Resolver.(*multitenant.SubdomainResolver)
 		assert.Equal(t, testDomain, sr.RootDomain)
@@ -205,7 +205,7 @@ func TestBuildTenantResolver(t *testing.T) {
 		resolver := buildTenantResolver(cfg)
 		require.IsType(t, &multitenant.CompositeResolver{}, resolver)
 		cr := resolver.(*multitenant.CompositeResolver)
-		assert.Equal(t, defaultTenantIDRegex, cr.TenantRegex)
+		assert.Equal(t, multitenant.DefaultTenantIDPattern(), cr.TenantRegex)
 		assert.Len(t, cr.Resolvers, 2)
 
 		hasHeader := false
