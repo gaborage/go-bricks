@@ -39,11 +39,13 @@ keystore:
         value: "${MAC_KEY_BASE64}"              # deployed: base64 raw key
 ```
 
-Each `keys.<name>` entry resolves to **exactly one** of (the `<name>` itself must match
-`^[a-z0-9-]+$`, so the entry stays addressable by environment variable — an underscored or
-uppercase name fails startup, [ADR-090](adr_090_env_reachable_section_names.md); a hyphenated
-name is settable only where the runtime permits `-` in a variable name, which Docker and
-Kubernetes do and POSIX `export` does not):
+The `<name>` must match `^[a-z0-9-]+$`, so the entry stays addressable by environment
+variable: an underscored or uppercase name fails startup
+([ADR-090](adr_090_env_reachable_section_names.md)), and a hyphenated one is settable only
+where the runtime permits `-` in a variable name, which Docker and Kubernetes do and POSIX
+`export` does not.
+
+Each `keys.<name>` entry resolves to **exactly one** of the following shapes:
 
 | Shape | Required | Notes |
 | --- | --- | --- |

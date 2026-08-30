@@ -161,10 +161,14 @@ func envVarToKey(name string) string {
 
 // envVarForKey returns the environment variable that reaches key, or "" when none does.
 // The blanket underscore-to-dot transform is not injective: a section or tenant name
-// carrying "_" (nothing forbids one) makes keyToEnvVar emit a variable that lands on a
-// DIFFERENT key — DATABASES_REPORT_DB_PORT reaches databases.report.db.port, not
-// databases.report_db.port — so a hint naming it would send an operator to manufacture a
-// second failure. Round-tripping is the check: no round-trip, no hint.
+// carrying "_" makes keyToEnvVar emit a variable that lands on a DIFFERENT key —
+// DATABASES_REPORT_DB_PORT reaches databases.report.db.port, not databases.report_db.port —
+// so a hint naming it would send an operator to manufacture a second failure.
+//
+// Such a name no longer survives startup: config.Validate rejects a key under databases,
+// multitenant.tenants or keystore.keys that is not ^[a-z0-9-]+$ (ADR-090). This round-trip
+// guard is the backstop, not the rule — it also covers keys those three checks do not reach,
+// and it keeps the hint honest for a config assembled outside Validate.
 func envVarForKey(key string) string {
 	envVar := keyToEnvVar(key)
 	if envVarToKey(envVar) != key {

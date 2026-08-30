@@ -182,6 +182,7 @@ const (
 	errInvalidField         = "invalid value: %v"
 	databasesFieldPrefix    = "databases.%s"
 	keystoreKeysFieldPrefix = "keystore.keys.%s"
+	tenantsFieldPrefix      = "multitenant.tenants.%s"
 	defaultHost             = "localhost"
 
 	fieldServerTLSCertFile   = "server.tls.certfile"
@@ -2007,7 +2008,7 @@ func checkMultitenantTenantEntry(tenantID string, entry *TenantEntry) error {
 	// Static tenant map keys only. A dynamic source never reaches here (see
 	// checkMultitenant's SourceTypeStatic gate); the resolver's own grammar is
 	// its request-time gate.
-	if err := checkSectionName(fmt.Sprintf("%s.%s", fieldMultitenantTenants, tenantID), tenantID); err != nil {
+	if err := checkSectionName(fmt.Sprintf(tenantsFieldPrefix, tenantID), tenantID); err != nil {
 		return err
 	}
 	return checkTenantCache(tenantID, &entry.Cache)

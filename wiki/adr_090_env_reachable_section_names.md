@@ -86,5 +86,8 @@ delimiter. One grammar, stated once, is cheaper than a mapping layer that must s
   something else.
 - The two collision shapes become validation errors instead of misconfigured runtime state,
   and are pinned as regression tests.
-- Dynamic tenant providers are unaffected, so a pool-model deployment delivering `acme_corp`
-  from an external store keeps working; the resolver judges those IDs at request time.
+- Dynamic tenant providers are unaffected by this check, so a pool-model deployment
+  delivering `acme-corp` from an external store keeps working without a config entry. Their
+  IDs are judged by the resolver at request time, not at startup — an `acme_corp` from such a
+  store is still refused, but by the resolver's own grammar and as a rejected request rather
+  than a failed boot.

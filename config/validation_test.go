@@ -6944,6 +6944,23 @@ func assertSectionNameRejected(t *testing.T, err error, wantField string) {
 	assert.ErrorContains(t, err, "rename")
 }
 
+// TestValidateRejectsAnUnreachableSectionThroughThePublicDoor drives Validate
+// itself, not the per-section checker. ADR-090 and [C61.24] both promise that a
+// hand-built Config is judged the same way — every construction path calls
+// Validate (ADR-064) — and only this test would notice if a phase reorder or an
+// early return left the rule unreached.
+func TestValidateRejectsAnUnreachableSectionThroughThePublicDoor(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.Databases = map[string]DatabaseConfig{"report_db": createValidDatabaseConfig()}
+
+	err := Validate(cfg)
+
+	require.Error(t, err)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr, "the section error survives Validate's wrapping")
+	assert.Equal(t, "databases.report_db", cfgErr.Field)
+}
+
 // TestCheckSectionNameGrammar exercises the shared rule directly, at the
 // character-class boundary, so the three call sites are left proving only that
 // they WIRE it — and its own branch is covered without going through a section.
