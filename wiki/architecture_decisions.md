@@ -1448,7 +1448,7 @@ the scope it competes in: the tenant stamp, the destination, or the stream and p
 
 **Key Benefits:** at-least-once stops meaning "duplicated per replica", and a failing key no
 longer lets its own later events overtake it.
-**Migration:** [migrations.md](migrations.md) `[C61.25]`.
+**Migration:** [migrations.md](migrations.md) `[C61.23]`.
 
 ---
 

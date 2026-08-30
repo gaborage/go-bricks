@@ -125,4 +125,4 @@ NOTICE rather than an error, so an index quietly exists under a name nobody wrot
 
 **`config.OutboxConfig` stops being comparable** — `SuperStreams []string` makes it so — and
 `outbox.Store` gains `Lead`, which breaks an implementation outside the framework. Both are
-compile-time, both are documented in `[C61.25]`.
+compile-time, both are documented in `[C61.23]`.
