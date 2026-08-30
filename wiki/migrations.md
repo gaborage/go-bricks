@@ -6107,10 +6107,11 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `resourcepool.Pool` runs create inside `singleflight.Group.DoChan`, which re-panics on a NEW
   goroutine once any caller used DoChan, so no caller-side recover — Echo's `Recover` included —
   could catch it: one bad factory took the process down. The pool's closure now recovers, and
-  every caller collapsed onto that create receives
+  every caller still waiting on that create receives
   `resourcepool: panic during create for key "<key>" (type: <T>)` — the value's Go TYPE only, never
   the value (ADR-081), which is consumer-chosen and therefore beyond the log filter's field-name
-  matching. The failure counts as one error in `PoolStats.Errors`, in the singleflight leader, not
+  matching. A caller whose own context ended first still gets its `ctx.Err()`, as it always did.
+  The failure counts as one error in `PoolStats.Errors`, in the singleflight leader, not
   once per waiter; `TotalCreated` does not move and no entry is installed. The pool stays usable:
   the create ran before the pool mutex was taken, so the unwind leaves nothing locked and a later
   create for the same key runs normally.
