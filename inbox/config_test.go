@@ -149,6 +149,22 @@ func TestValidateConfigRejectsAnUnusableHold(t *testing.T) {
 			wantErr: "leaseduration",
 		},
 		{
+			// The rule is POSITIVE, so zero is refused: a zero lease would expire the
+			// instant it was taken, and a zero interval would drain in a tight loop.
+			// applyDefaults only fills a zero it OWNS, so an explicit zero arrives here.
+			name:    "hold_rejects_a_zero_lease_duration",
+			hold:    config.InboxHoldConfig{Enabled: true, LeaseDuration: -1},
+			wantErr: "leaseduration",
+		},
+		{
+			// And the smallest positive value is accepted, which is what makes the
+			// rule a boundary rather than a range.
+			name: "hold_accepts_the_smallest_positive_durations",
+			hold: config.InboxHoldConfig{
+				Enabled: true, DrainInterval: 1, MaxBackoff: 1, MaxAge: 1, LeaseDuration: 1,
+			},
+		},
+		{
 			name:    "hold_rejects_bad_table_name",
 			hold:    config.InboxHoldConfig{Enabled: true, TableName: "schema.hold"},
 			wantErr: "hold",
@@ -168,6 +184,44 @@ func TestValidateConfigRejectsAnUnusableHold(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// TestValidateHoldConfigDoesNotAssumeItsDefaultsRan pins the boundary the
+// duration rule turns on. Through applyDefaults a zero can never arrive — every
+// zero is filled — so the rule reads as "positive" only when the validator is
+// asked directly, which is also the contract: it must not assume its caller ran
+// the defaults first.
+func TestValidateHoldConfigDoesNotAssumeItsDefaultsRan(t *testing.T) {
+	filled := config.InboxHoldConfig{
+		Enabled: true, TableName: DefaultHoldTableName, DrainInterval: 1,
+		MaxBackoff: 1, MaxAge: 1, LeaseDuration: 1,
+	}
+
+	t.Run("every_duration_filled_is_accepted", func(t *testing.T) {
+		hold := filled
+		assert.NoError(t, validateHoldConfig(&hold))
+	})
+
+	for _, tc := range []struct {
+		name  string
+		blank func(*config.InboxHoldConfig)
+		key   string
+	}{
+		{"drain_interval", func(h *config.InboxHoldConfig) { h.DrainInterval = 0 }, "draininterval"},
+		{"max_backoff", func(h *config.InboxHoldConfig) { h.MaxBackoff = 0 }, "maxbackoff"},
+		{"max_age", func(h *config.InboxHoldConfig) { h.MaxAge = 0 }, "maxage"},
+		{"lease_duration", func(h *config.InboxHoldConfig) { h.LeaseDuration = 0 }, "leaseduration"},
+	} {
+		t.Run("a_zero_"+tc.name+"_is_refused", func(t *testing.T) {
+			hold := filled
+			tc.blank(&hold)
+
+			err := validateHoldConfig(&hold)
+
+			require.Error(t, err, "zero is not positive: a zero lease expires the instant it is taken")
+			assert.Contains(t, err.Error(), tc.key)
 		})
 	}
 }

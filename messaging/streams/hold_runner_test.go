@@ -94,17 +94,25 @@ func TestRunnerSkipsWhenTheStampRefused(t *testing.T) {
 }
 
 // TestRunnerWithoutAHoldIsUnchanged pins that a consumer that does not hold keeps
-// the lane's old behavior exactly: a failure skips, and no ledger is touched.
+// the lane's old behavior exactly: a failure skips, and nothing reaches for a
+// ledger that is not there. The settle path must not even TRY to park — the
+// pipeline would recover the nil-ledger panic and the offset would still be
+// skipped, so only the absence of that panic line tells the two apart.
 func TestRunnerWithoutAHoldIsUnchanged(t *testing.T) {
-	runner := newTestRunner(t, func(context.Context, *Message) error {
+	rec := &recordingLogger{}
+	runner := newTestRunnerWithLogger(t, func(context.Context, *Message) error {
 		return errHandlerFailed
-	}, newOffsetTracker(1, time.Hour, newFakeClock().Now))
+	}, newOffsetTracker(1, time.Hour, newFakeClock().Now), rec)
 	runner.tenantStamps = true
 	storer := &fakeStorer{}
 
 	runner.deliver(testStream, 41, stampedMessage("tenant-a"), storer)
 
 	assert.Empty(t, storer.offsets(), "an unheld failure still skips the offset")
+	for _, msg := range rec.messagesAt("error") {
+		assert.NotContains(t, msg, "Panic recovered while settling",
+			"a runner with no ledger must not reach for one")
+	}
 }
 
 // TestRunnerStallsUntilTheLedgerAccepts pins the stall: a ledger that refuses the

@@ -216,3 +216,48 @@ func TestOracleHoldStoreFencesEveryPostReplayWrite(t *testing.T) {
 		})
 	}
 }
+
+// TestOracleHoldStoreMarkerLockFailuresAreReported covers the Oracle-only marker
+// probe, which has no PostgreSQL counterpart: PostgreSQL locks an existing marker
+// with its upsert, while Oracle must SELECT ... FOR UPDATE first and decide from
+// the result whether to insert. Both arms of that decision, and the probe's own
+// failure, are Oracle's alone.
+func TestOracleHoldStoreMarkerLockFailuresAreReported(t *testing.T) {
+	t.Run("a_failed_lock_never_writes_anything", func(t *testing.T) {
+		store := newOracleHoldTestStore(t)
+		wantErr := errors.New("ORA-00054 resource busy")
+		db := dbtesting.NewTestDB(dbtypes.Oracle)
+		tx := db.ExpectTransaction()
+		tx.ExpectQuery(`FOR UPDATE`).WillReturnError(wantErr)
+
+		dbtx, err := db.Begin(t.Context())
+		require.NoError(t, err)
+
+		_, err = store.Park(t.Context(), dbtx, sampleHoldRow())
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, wantErr)
+		assert.Contains(t, err.Error(), "lock tenant marker failed")
+		assert.Empty(t, tx.ExecLog(), "neither the marker nor the row is written")
+	})
+
+	t.Run("a_failed_marker_insert_never_writes_the_row", func(t *testing.T) {
+		store := newOracleHoldTestStore(t)
+		wantErr := errors.New("ORA-00600 internal error")
+		db := dbtesting.NewTestDB(dbtypes.Oracle)
+		tx := db.ExpectTransaction()
+		// No marker found, so the insert runs — and fails.
+		tx.ExpectQuery(`FOR UPDATE`).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
+		tx.ExpectExec(`INSERT INTO ` + holdTenantTable).WillReturnError(wantErr)
+
+		dbtx, err := db.Begin(t.Context())
+		require.NoError(t, err)
+
+		_, err = store.Park(t.Context(), dbtx, sampleHoldRow())
+
+		require.Error(t, err)
+		assert.ErrorIs(t, err, wantErr)
+		require.Len(t, tx.ExecLog(), 1, "the row is never written without its marker")
+		assert.Contains(t, tx.ExecLog()[0].SQL, holdTenantTable)
+	})
+}

@@ -93,6 +93,29 @@ const (
 	holdBackoffMax     = 5 * time.Second
 )
 
+// backoffSeries is the wait before each retry of a hold's ledger call: the
+// configured first wait, doubling, capped. Both stalls — the park and the
+// promotion reload — take their waits from one of these rather than keeping the
+// same arithmetic twice.
+type backoffSeries struct {
+	next time.Duration
+	max  time.Duration
+}
+
+func newBackoffSeries(first, maxWait time.Duration) *backoffSeries {
+	if first <= 0 {
+		first = holdBackoffDefault
+	}
+	return &backoffSeries{next: min(first, maxWait), max: maxWait}
+}
+
+// take returns the next wait and advances the series.
+func (b *backoffSeries) take() time.Duration {
+	wait := b.next
+	b.next = min(b.next*2, b.max)
+	return wait
+}
+
 const (
 	holdParkedMsg = "Tenant held: delivery parked"
 	// attrHoldGated marks a span whose delivery was parked WITHOUT running, so a
@@ -124,8 +147,10 @@ func (r *consumerRunner) gates(tenant string) bool {
 // A delivery with no tenant is skipped as it always was: a hold is keyed by the
 // tenant, and there is nothing to key this one on.
 func (r *consumerRunner) parks(res *delivery.Result, tenant string) bool {
-	return r.hold != nil && tenant != "" && res.Err != nil &&
-		(res.Outcome == delivery.HandlerError || res.Outcome == delivery.Panicked)
+	// res.Err is the whole test: it is non-nil for exactly the two failing
+	// outcomes, so naming them as well would add a clause no delivery can
+	// disagree with.
+	return r.hold != nil && tenant != "" && res.Err != nil
 }
 
 // park writes one delivery to the ledger, retrying until it lands or the consumer
@@ -138,12 +163,10 @@ func (r *consumerRunner) park(ctx context.Context, msg *HeldMessage, gated bool)
 		trace.SpanFromContext(ctx).SetAttributes(attribute.Bool(attrHoldGated, true))
 	}
 
-	wait := r.holdBackoff
-	if wait <= 0 {
-		wait = holdBackoffDefault
-	}
+	backoff := newBackoffSeries(r.holdBackoff, holdBackoffMax)
+	logged := false
 
-	for attempt := 1; ; attempt++ {
+	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -154,22 +177,22 @@ func (r *consumerRunner) park(ctx context.Context, msg *HeldMessage, gated bool)
 			return nil
 		}
 
-		// The context-bound logger, not r.log: during a ledger outage this is the
-		// only repeating signal, and it correlates with the delivery that stalled
-		// exactly as every other per-delivery line in this lane does.
-		r.log.WithContext(ctx).Error().Err(err).
-			Str(logFieldStream, msg.Stream).
-			Str(logFieldConsumer, r.name).
-			Int64(logFieldOffset, msg.Offset).
-			Int("attempt", attempt).
-			Msg("Hold ledger write failed; partition stalled until it succeeds")
-
-		if !delivery.Wait(ctx, wait) {
-			return ctx.Err()
+		if !logged {
+			// Once: a ledger outage would otherwise write a line per retry per
+			// partition, and the first one already says the partition is stalled.
+			logged = true
+			// The context-bound logger, not r.log: during a ledger outage this is the
+			// only signal, and it correlates with the delivery that stalled exactly as
+			// every other per-delivery line in this lane does.
+			r.log.WithContext(ctx).Error().Err(err).
+				Str(logFieldStream, msg.Stream).
+				Str(logFieldConsumer, r.name).
+				Int64(logFieldOffset, msg.Offset).
+				Msg("Hold ledger write failed; partition stalled until it succeeds")
 		}
-		wait *= 2
-		if wait > holdBackoffMax {
-			wait = holdBackoffMax
+
+		if !delivery.Wait(ctx, backoff.take()) {
+			return ctx.Err()
 		}
 	}
 }
@@ -252,30 +275,25 @@ func (m *Manager) reloadHeldOnPromotion(runner *consumerRunner) {
 		return
 	}
 
-	wait := runner.holdBackoff
-	if wait <= 0 {
-		wait = holdBackoffDefault
-	}
+	backoff := newBackoffSeries(runner.holdBackoff, holdBackoffMax)
+	logged := false
 
-	for attempt := 1; ; attempt++ {
+	for {
 		if err := m.loadHeld(runner.baseCtx, runner); err == nil {
 			return
-		} else if attempt == 1 {
-			// Once: a ledger outage during a promotion storm should not write a line
-			// per retry per partition.
+		} else if !logged {
+			// Once, for the same reason the park logs once: a promotion storm during
+			// a ledger outage should not write a line per retry per partition.
+			logged = true
 			m.log.Error().Err(err).
 				Str(logFieldConsumer, runner.name).
 				Msg("Could not reload held tenants on promotion; not consuming until it succeeds")
 		}
 
-		if !delivery.Wait(runner.baseCtx, wait) {
+		if !delivery.Wait(runner.baseCtx, backoff.take()) {
 			// The consumer is stopping. Nothing has been consumed on this partition,
 			// so a restart reloads the set before it takes a message.
 			return
-		}
-		wait *= 2
-		if wait > holdBackoffMax {
-			wait = holdBackoffMax
 		}
 	}
 }
