@@ -60,7 +60,7 @@ type PoolStats struct {
 	TotalCreated int           // Total entries created since the pool started
 	Evictions    int           // Total evictions due to LRU policy
 	IdleCleanups int           // Total removals due to idle timeout
-	Errors       int           // Total create failures and tracked close failures
+	Errors       int           // Total create failures (a recovered create panic included) and tracked close failures
 	IdleTTL      time.Duration // Idle timeout duration
 }
 
@@ -159,7 +159,8 @@ func New[V any](maxSize int, idleTTL time.Duration, closer Closer[V]) *Pool[V] {
 // mid-GetOrCreate on a fresh entry another borrower holds, who may still
 // receive that live handle after Close returns; it closes exactly once, at
 // its final release. On error the returned ReleaseFunc is nil — check err
-// first.
+// first. A panic inside create is recovered and returned as an error naming
+// only the panic value's type (ADR-081), leaving the pool usable.
 func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(context.Context) (V, error)) (V, ReleaseFunc, error) {
 	var zero V
 	for attempt := 0; attempt < maxAcquireAttempts; attempt++ {
@@ -205,7 +206,18 @@ func (p *Pool[V]) GetOrCreate(ctx context.Context, key string, create func(conte
 // uncancelably, so a caller whose budget was already spent still sat through the whole
 // dial before being handed an error that was not its own.
 func (p *Pool[V]) acquireShared(ctx context.Context, key string, create func(context.Context) (V, error)) (*entry[V], error) {
-	ch := p.sf.DoChan(key, func() (any, error) {
+	ch := p.sf.DoChan(key, func() (v any, err error) {
+		// A panic must not escape through DoChan: x/sync re-panics on a NEW goroutine once any
+		// caller used DoChan (`go panic(e)` in doCall), which no recover — including Echo's
+		// middleware.Recover — can catch, so one consumer-supplied factory's panic would kill the
+		// process instead of failing the callers waiting on that create. The value is rendered by
+		// TYPE only (ADR-081); the create is counted as one failure, like a returned error.
+		defer func() {
+			if r := recover(); r != nil {
+				p.incErrors()
+				v, err = nil, fmt.Errorf("resourcepool: panic during create for key %q (type: %T)", key, r)
+			}
+		}()
 		if e := p.peek(key); e != nil {
 			return e, nil
 		}

@@ -112,6 +112,17 @@ func failingConnector(calls *atomic.Int32, err error, delay time.Duration) func(
 	}
 }
 
+// panickingConnector returns a create function that panics with v after a delay, tallying call
+// count. The delay widens the singleflight window so concurrent callers collapse onto one
+// panicking create.
+func panickingConnector(calls *atomic.Int32, v any, delay time.Duration) func(context.Context) (*fakeResource, error) {
+	return func(context.Context) (*fakeResource, error) {
+		calls.Add(1)
+		time.Sleep(delay)
+		panic(v)
+	}
+}
+
 // TestPoolGetOrCreateCreatesOnceAndReuses pins lazy creation and reuse of a single entry.
 func TestPoolGetOrCreateCreatesOnceAndReuses(t *testing.T) {
 	tr := newCloseTracker()
@@ -730,6 +741,110 @@ func TestPoolConcurrentCreateFailureCountsErrorOnce(t *testing.T) {
 
 	assert.Equal(t, int32(1), calls.Load(), "singleflight must collapse the failing create to one call")
 	assert.Equal(t, 1, p.Stats().Errors, "a single collapsed create failure counts once, not once per waiter")
+}
+
+// TestPoolGetOrCreateRecoversCreatePanic pins that a panic inside the create function is
+// recovered in the singleflight leader and surfaced as an error rendered by TYPE only (ADR-081):
+// the panic value never reaches the error text, and the pool counts the failure once without
+// crediting a creation.
+func TestPoolGetOrCreateRecoversCreatePanic(t *testing.T) {
+	const marker = "marker-abc123"
+	tests := []struct {
+		name     string
+		panicVal any
+		wantType string
+	}{
+		{name: "error_value", panicVal: errors.New(marker), wantType: "*errors.errorString"},
+		{name: "bare_string", panicVal: marker, wantType: "string"},
+		{name: "struct_value", panicVal: struct{ Secret string }{marker}, wantType: "struct { Secret string }"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := newCloseTracker()
+			p := New(0, 0, tr.closer)
+			defer p.Close()
+
+			var calls atomic.Int32
+			v, rel, err := p.GetOrCreate(context.Background(), keyOne, panickingConnector(&calls, tt.panicVal, 0))
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `resourcepool: panic during create for key "key-1"`)
+			assert.Contains(t, err.Error(), tt.wantType)
+			assert.NotContains(t, err.Error(), marker, "the panic value must never reach the error text")
+			assert.Nil(t, v)
+			assert.Nil(t, rel)
+
+			st := p.Stats()
+			assert.Equal(t, 1, st.Errors)
+			assert.Equal(t, 0, st.TotalCreated)
+			assert.Equal(t, 0, st.Size)
+		})
+	}
+}
+
+// TestPoolConcurrentCreatePanicCountsErrorOnce pins that a create PANIC collapsed across N
+// concurrent callers runs the create once, hands every waiter the same marker-free error, and
+// increments Errors exactly once — in the leader — not once per blocked caller.
+func TestPoolConcurrentCreatePanicCountsErrorOnce(t *testing.T) {
+	const marker = "marker-abc123"
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+
+	var calls atomic.Int32
+	create := panickingConnector(&calls, errors.New(marker), 20*time.Millisecond)
+
+	const workers = 8
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	errs := make([]string, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			v, rel, err := p.GetOrCreate(context.Background(), keyOne, create)
+			if assert.Error(t, err) {
+				errs[i] = err.Error()
+			}
+			assert.Nil(t, v)
+			assert.Nil(t, rel)
+		}()
+	}
+	wg.Wait()
+
+	for i := range errs {
+		assert.Equal(t, errs[0], errs[i], "every collapsed caller must receive the same error")
+		assert.NotContains(t, errs[i], marker)
+	}
+	assert.Contains(t, errs[0], `resourcepool: panic during create for key "key-1"`)
+	assert.Equal(t, int32(1), calls.Load(), "singleflight must collapse the panicking create to one call")
+	assert.Equal(t, 1, p.Stats().Errors, "a single collapsed create panic counts once, not once per waiter")
+	assert.Equal(t, 0, p.Stats().TotalCreated)
+}
+
+// TestPoolUsableAfterCreatePanic pins that the pool survives a recovered create panic: the pool
+// mutex is not held across the unwind (createEntry calls create before its first Lock), so a
+// later create for the same key runs normally instead of deadlocking.
+func TestPoolUsableAfterCreatePanic(t *testing.T) {
+	tr := newCloseTracker()
+	p := New(0, 0, tr.closer)
+	defer p.Close()
+	ctx := context.Background()
+
+	var calls atomic.Int32
+	_, _, err := p.GetOrCreate(ctx, keyOne, panickingConnector(&calls, errors.New("boom"), 0))
+	require.Error(t, err)
+
+	v, rel, err := p.GetOrCreate(ctx, keyOne, keyedCreate(keyOne))
+	require.NoError(t, err)
+	require.NotNil(t, rel)
+	defer rel()
+	assert.Equal(t, keyOne, v.id)
+
+	st := p.Stats()
+	assert.Equal(t, 1, st.TotalCreated)
+	assert.Equal(t, 1, st.Errors)
+	assert.Equal(t, 1, st.Size)
 }
 
 // TestPoolRemoveClosesUnleased verifies Remove hands back an unleased resource for the caller
