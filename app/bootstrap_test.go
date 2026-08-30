@@ -34,6 +34,7 @@ const (
 type testObservabilityProvider struct {
 	loggerProvider *sdklog.LoggerProvider
 	disableStdout  bool
+	shutdownErr    error
 }
 
 func (m *testObservabilityProvider) TracerProvider() trace.TracerProvider {
@@ -53,7 +54,7 @@ func (m *testObservabilityProvider) ShouldDisableStdout() bool {
 }
 
 func (m *testObservabilityProvider) Shutdown(context.Context) error {
-	return nil
+	return m.shutdownErr
 }
 
 func (m *testObservabilityProvider) ForceFlush(context.Context) error {

@@ -427,8 +427,10 @@ func (a *App) shutdownConsumers() {
 	a.messagingManager.StopConsumers()
 }
 
-// shutdownObservability flushes and shuts down the observability provider
-func (a *App) shutdownObservability(ctx context.Context, errs *[]error) {
+// shutdownObservability flushes and shuts down the observability provider. The phase is
+// best-effort: a telemetry sink that is unreachable is not an application failure, so its
+// error is warned once and never folded into the shutdown error (ADR-029 amendment).
+func (a *App) shutdownObservability(ctx context.Context) {
 	if a.observability == nil {
 		return
 	}
@@ -443,11 +445,11 @@ func (a *App) shutdownObservability(ctx context.Context, errs *[]error) {
 
 	a.logger.Info().Msg("Shutting down observability provider")
 	if err := a.observability.Shutdown(ctx); err != nil {
-		*errs = append(*errs, fmt.Errorf("observability: %w", err))
-		a.logger.Error().Err(err).Msg("Failed to shutdown observability")
-	} else {
-		a.logger.Info().Dur("duration", time.Since(obsStart)).Msg("Observability shutdown completed")
+		a.logger.Warn().Err(err).Dur("duration", time.Since(obsStart)).Msg(observabilityShutdownWarnMsg)
+		return
 	}
+
+	a.logger.Info().Dur("duration", time.Since(obsStart)).Msg("Observability shutdown completed")
 }
 
 // shutdownClosers closes all remaining resources registered with the app
@@ -500,7 +502,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	}, &errs)
 
 	// 4. Flush and shutdown observability (export pending telemetry).
-	a.shutdownObservability(ctx, &errs)
+	a.shutdownObservability(ctx)
 
 	// 5. Close remaining resources (DB pools, messaging connections, etc.). Each manager's
 	//    Close stops the idle-cleanup sweep it started (ADR-067), so the loops still stop

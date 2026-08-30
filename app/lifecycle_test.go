@@ -1069,3 +1069,93 @@ func TestReadyCheckReportsStreamsWhenProbed(t *testing.T) {
 	assert.Equal(t, map[string]any{statusKey: healthyStatus, "consumers": float64(2)}, body["streams_stats"])
 	assert.NotContains(t, body["streams_stats"], "stored_offsets")
 }
+
+// recordingCloser records that its Close ran, so a test can prove the closer phase still
+// executes after an observability teardown failure.
+type recordingCloser struct {
+	closed bool
+}
+
+func (c *recordingCloser) Close() error {
+	c.closed = true
+	return nil
+}
+
+// TestShutdownObservabilityFailureIsBestEffort pins the posture shutdownObservability
+// documents: the phase reports its failure and shutdown carries on (#1225).
+func TestShutdownObservabilityFailureIsBestEffort(t *testing.T) {
+	tests := []struct {
+		name        string
+		shutdownErr error
+	}{
+		{
+			name:        "plain_error_is_warned_not_returned",
+			shutdownErr: errors.New("collector unreachable"),
+		},
+		{
+			name:        "deadline_exceeded_is_warned_not_returned",
+			shutdownErr: fmt.Errorf("observability shutdown: %w", context.DeadlineExceeded),
+		},
+		{
+			name:        "success_logs_no_warning",
+			shutdownErr: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &recLogger{}
+			closer := &recordingCloser{}
+			cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+			a := &App{
+				cfg:           cfg,
+				logger:        rec,
+				registry:      NewModuleRegistry(&ModuleDeps{Logger: rec, Config: cfg}),
+				observability: &testObservabilityProvider{shutdownErr: tc.shutdownErr},
+				closers:       []namedCloser{{name: "recording-resource", closer: closer}},
+			}
+
+			err := a.Shutdown(context.Background())
+
+			assert.NoError(t, err, "observability teardown must never fail the shutdown")
+			assert.True(t, closer.closed, "closers must still run after an observability failure")
+
+			if tc.shutdownErr == nil {
+				assert.Zero(t, loggedCount(rec, observabilityShutdownWarnMsg),
+					"a successful observability shutdown must not warn")
+				assert.True(t, loggedMsgContains(rec, "Observability shutdown completed"))
+				return
+			}
+			require.Equal(t, 1, loggedCount(rec, observabilityShutdownWarnMsg),
+				"exactly one line must carry the failure")
+			event, ok := loggedEvent(rec, observabilityShutdownWarnMsg)
+			require.True(t, ok)
+			assert.Equal(t, "warn", event.level)
+			assert.Equal(t, tc.shutdownErr.Error(), event.err)
+			assert.Contains(t, event.dur, "duration", "the line carries the phase duration")
+		})
+	}
+}
+
+// TestShutdownObservabilityFailureDoesNotMaskCloserFailure pins that a real application
+// failure alongside a telemetry sink failure is still returned, and that the returned error
+// names only the application failure.
+func TestShutdownObservabilityFailureDoesNotMaskCloserFailure(t *testing.T) {
+	rec := &recLogger{}
+	cfg := &config.Config{App: config.AppConfig{Name: testApp, Env: "test", Version: "1.0.0"}}
+	a := &App{
+		cfg:           cfg,
+		logger:        rec,
+		registry:      NewModuleRegistry(&ModuleDeps{Logger: rec, Config: cfg}),
+		observability: &testObservabilityProvider{shutdownErr: errors.New("collector unreachable")},
+		closers:       []namedCloser{{name: failingResource, closer: &failingCloser{}}},
+	}
+
+	err := a.Shutdown(context.Background())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), failingResource)
+	assert.Contains(t, err.Error(), errorCloseFailed)
+	assert.NotContains(t, err.Error(), "collector unreachable")
+	assert.NotContains(t, err.Error(), "observability")
+}
