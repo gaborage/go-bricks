@@ -1059,7 +1059,7 @@ func TestRelayKeyNamespacesDistinctScopes(t *testing.T) {
 		"one tenant's rows share a key across exchanges, which is the ordering a tenant needs")
 }
 
-// TestRelayLoopCountsParkedRows asserts the parked COUNT, not just the parking behaviour.
+// TestRelayLoopCountsParkedRows asserts the parked COUNT, not just the parking behavior.
 // The count is what logCycle reports and what makes a cycle's numbers sum to its batch, so a
 // test that only observes which rows were published leaves it unpinned.
 func TestRelayLoopCountsParkedRows(t *testing.T) {
