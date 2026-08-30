@@ -59,6 +59,10 @@ type ManagerOptions struct {
 	OffsetStoreInterval time.Duration
 	// Logger receives consumer lifecycle and handler-failure events. Required.
 	Logger logger.Logger
+	// Hold is the ledger consumers declaring Hold park into. Nil means no consumer
+	// may declare one — the framework wires it from the inbox's hold, which lives
+	// on the control-plane database.
+	Hold HoldLedger
 }
 
 // consumerHandle is the subset of the client's reliable consumers the manager
@@ -84,6 +88,9 @@ type runningConsumer struct {
 	// shutdown flush needs it; every in-flight commit goes through the consumer
 	// the client hands to the delivery callback.
 	storerFor func(streamName string) offsetStorer
+	// runner is this consumer's delivery state. The drain reaches a holding
+	// consumer's held set through it.
+	runner *consumerRunner
 }
 
 // Manager owns the single stream-protocol Environment of a single-tenant service
@@ -191,6 +198,14 @@ func (m *Manager) Start(ctx context.Context, decls *Declarations) error {
 	// StopConsumers dial over the live environment and orphan it.
 	if m.env != nil {
 		return errors.New("streams manager already started: Close it before starting again")
+	}
+
+	// Before the dial: a consumer that declares Hold with no ledger behind it would
+	// behave like one that skips, which is the failure the hold exists to prevent.
+	// Refusing here costs a caller nothing but a startup error; refusing after the
+	// dial would cost a connection nobody closes.
+	if err := m.requireHoldLedger(decls); err != nil {
+		return err
 	}
 
 	// The dial is a blocking broker round trip the client gives no context for —
@@ -345,6 +360,9 @@ func (m *Manager) startConsumer(ctx context.Context, env environment, decl *cons
 // startStreamConsumer starts one reliable consumer on a plain stream.
 func (m *Manager) startStreamConsumer(ctx context.Context, env environment, decl *consumerDeclaration) error {
 	runner := m.newRunner(ctx, decl)
+	if err := m.loadHeld(ctx, runner); err != nil {
+		return err
+	}
 
 	opts := stream.NewConsumerOptions().
 		SetConsumerName(decl.Name).
@@ -363,6 +381,7 @@ func (m *Manager) startStreamConsumer(ctx context.Context, env environment, decl
 		// it across a blocking consumer Close.
 		opts = opts.SetSingleActiveConsumer(stream.NewSingleActiveConsumer(
 			func(streamName string, _ bool) stream.OffsetSpecification {
+				m.reloadHeldOnPromotion(runner)
 				return m.resolveOffset(env, decl.Name, streamName, decl.Start, runner.offsets)
 			}))
 	}
@@ -385,6 +404,9 @@ func (m *Manager) startStreamConsumer(ctx context.Context, env environment, decl
 // a super stream. env is the caller's snapshot of m.env, taken under m.mu.
 func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment, decl *consumerDeclaration) error {
 	runner := m.newRunner(ctx, decl)
+	if err := m.loadHeld(ctx, runner); err != nil {
+		return err
+	}
 
 	// Always a single active consumer group. The client attaches every partition
 	// with one shared offset specification, so this callback — which the broker
@@ -398,6 +420,7 @@ func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment,
 		SetConsumerName(decl.Name).
 		SetSingleActiveConsumer(stream.NewSingleActiveConsumer(
 			func(partition string, _ bool) stream.OffsetSpecification {
+				m.reloadHeldOnPromotion(runner)
 				return m.resolveOffset(env, decl.Name, partition, decl.Start, runner.offsets)
 			}))
 
@@ -418,7 +441,7 @@ func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment,
 
 // newRunner builds the delivery callback state of one declared consumer.
 func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *consumerRunner {
-	return &consumerRunner{
+	runner := &consumerRunner{
 		name:           decl.Name,
 		handler:        decl.Handler,
 		offsets:        m.newOffsetBook(),
@@ -428,6 +451,11 @@ func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *con
 		baseCtx:        ctx,
 		retry:          toDeliveryRetry(resolveRetry(decl)),
 	}
+	if decl.Hold {
+		runner.hold = m.opts.Hold
+		runner.held = newHeldSet()
+	}
+	return runner
 }
 
 // trackConsumer records a started consumer for readiness, stats and shutdown.
@@ -438,6 +466,7 @@ func (m *Manager) trackConsumer(decl *consumerDeclaration, handle consumerHandle
 		handle:    handle,
 		offsets:   runner.offsets,
 		storerFor: storerFor,
+		runner:    runner,
 	})
 
 	m.log.Info().

@@ -211,3 +211,54 @@ func (r *consumerRunner) parkFailed(res *delivery.Result, streamName string, off
 	// Recorded as a success: the delivery is settled, just not by the handler.
 	r.offsets.trackerFor(streamName).record(offset, nil, store)
 }
+
+// requireHoldLedger refuses a declaration set that asks for a hold this manager
+// cannot provide. Checked before the dial: the answer does not depend on the
+// broker, and failing after it would leak a connection.
+func (m *Manager) requireHoldLedger(decls *Declarations) error {
+	if m.opts.Hold != nil {
+		return nil
+	}
+	for _, decl := range decls.consumers {
+		if decl.Hold {
+			return fmt.Errorf(
+				"streams: consumer %q on %s %q declares Hold but no hold ledger is configured; "+
+					"set inbox.enabled, inbox.tenancy: shared and inbox.hold.enabled",
+				decl.Name, streamKindLabel(decl.Super), decl.Stream)
+		}
+	}
+	return nil
+}
+
+// loadHeld fills a holding consumer's set before it consumes. A failure fails
+// startup: a partition that does not know which tenants are held would deliver a
+// held tenant's later message ahead of the one it is held behind.
+func (m *Manager) loadHeld(ctx context.Context, runner *consumerRunner) error {
+	if runner.hold == nil {
+		return nil
+	}
+
+	tenants, err := runner.hold.HeldTenants(ctx, runner.name)
+	if err != nil {
+		return fmt.Errorf("failed to load held tenants for consumer %q: %w", runner.name, err)
+	}
+	runner.held.replace(tenants)
+	return nil
+}
+
+// reloadHeldOnPromotion refreshes the set when this member is promoted to a
+// partition. The promotion callback cannot fail the promotion — the client offers
+// no way to refuse one — so a failed read is reported and the last known set
+// stands, which is stale rather than empty: a tenant wrongly still held costs one
+// detour through the ledger, where a tenant wrongly released costs the ordering.
+func (m *Manager) reloadHeldOnPromotion(runner *consumerRunner) {
+	if runner.hold == nil {
+		return
+	}
+
+	if err := m.loadHeld(runner.baseCtx, runner); err != nil {
+		m.log.Error().Err(err).
+			Str(logFieldConsumer, runner.name).
+			Msg("Could not reload held tenants on promotion; gating from the last known set")
+	}
+}
