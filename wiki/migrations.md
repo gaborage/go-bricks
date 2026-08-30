@@ -6152,8 +6152,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 
 - detect: read the KEYS you chose under three maps — `databases.<name>`,
   `multitenant.tenants.<id>` and `keystore.keys.<name>` — in every config file AND every overlay,
-  `config.yaml` and `config.<env>.yaml` alike. `git grep -nE '^\s{2,}[A-Za-z0-9_.-]+:' -- '*.yaml'`
-  narrowed to those three blocks, or read them by eye: the question is whether any key carries a
+  `config.yaml` and `config.<env>.yaml` alike. `git grep -nE '^[[:space:]]{2,}[A-Za-z0-9_.-]+:' -- '*.yaml'`
+  narrowed to those three blocks (`[[:space:]]`, never `\s` — `git grep -E` has no PCRE escape and a
+  pattern carrying one silently matches nothing, which would report "not affected" to every
+  consumer), or read them by eye: the question is whether any key carries a
   character outside `[a-z0-9-]` — an underscore and an uppercase letter are the two that occur in
   practice. A hand-built `config.Config` counts too: the check runs in `config.Validate`, which every
   construction path calls (ADR-064), so a literal `map[string]DatabaseConfig{"report_db": …}` in Go
