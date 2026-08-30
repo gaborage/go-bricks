@@ -59,6 +59,9 @@ type ManagerOptions struct {
 	OffsetStoreInterval time.Duration
 	// Logger receives consumer lifecycle and handler-failure events. Required.
 	Logger logger.Logger
+	// TenantStamps makes every delivery's tenant stamp seed the handler context:
+	// true only under multitenant.enabled together with messaging.tenancy: shared.
+	TenantStamps bool
 }
 
 // consumerHandle is the subset of the client's reliable consumers the manager
@@ -399,12 +402,14 @@ func (m *Manager) startSuperStreamConsumer(ctx context.Context, env environment,
 // newRunner builds the delivery callback state of one declared consumer.
 func (m *Manager) newRunner(ctx context.Context, decl *consumerDeclaration) *consumerRunner {
 	return &consumerRunner{
-		name:    decl.Name,
-		handler: decl.Handler,
-		offsets: m.newOffsetBook(),
-		log:     m.log,
-		baseCtx: ctx,
-		retry:   toDeliveryRetry(resolveRetry(decl)),
+		name:           decl.Name,
+		handler:        decl.Handler,
+		offsets:        m.newOffsetBook(),
+		log:            m.log,
+		tenantStamps:   m.opts.TenantStamps,
+		tenantOptional: decl.TenantOptional,
+		baseCtx:        ctx,
+		retry:          toDeliveryRetry(resolveRetry(decl)),
 	}
 }
 

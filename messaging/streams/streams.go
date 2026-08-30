@@ -147,6 +147,11 @@ type ConsumerOptions struct {
 	// DefaultHoldRetry when Retry is nil; the ledger the parked delivery lands in
 	// arrives with the hold itself.
 	Hold bool
+	// TenantOptional lets this consumer run a delivery that carries no tenant stamp
+	// (a control-plane consumer). Default false: a consumer that needs a tenant fails
+	// the delivery closed rather than running the handler without one. It never
+	// admits a stamp that is present but unusable.
+	TenantOptional bool
 }
 
 // SuperStreamConsumerOptions declares one consumer over every partition of a
@@ -183,4 +188,8 @@ type SuperStreamConsumerOptions struct {
 	// DefaultHoldRetry when Retry is nil; the ledger the parked delivery lands in
 	// arrives with the hold itself.
 	Hold bool
+	// TenantOptional lets this consumer run a delivery that carries no tenant stamp
+	// (a control-plane consumer). Default false: fail closed. It never admits a
+	// stamp that is present but unusable.
+	TenantOptional bool
 }

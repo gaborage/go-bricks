@@ -214,6 +214,12 @@ type consumerRunner struct {
 	// retry bounds in-place re-invocation of the handler; nil is one attempt.
 	retry *delivery.Retry
 
+	// tenantStamps and tenantOptional are handed to the shared delivery pipeline,
+	// which owns the read: both lanes must refuse the same deliveries with the same
+	// text, so this lane carries the settings rather than the rule.
+	tenantStamps   bool
+	tenantOptional bool
+
 	// baseCtx is held rather than passed because the client's MessagesHandler
 	// carries no context of its own. The manager cancels it in StopConsumers.
 	baseCtx context.Context // NOSONAR S8242: no parameter to pass it through - the vendor callback signature is fixed
@@ -244,9 +250,11 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 		// application properties; until now nobody read them back. ExtractFromHeaders
 		// is nil-safe and propertyAccessor is a map type, so a message with no
 		// properties needs no guard.
-		Carrier:     propertyAccessor(message.ApplicationProperties),
-		Destination: streamName,
-		BodySize:    len(msg.Data),
+		Carrier:        propertyAccessor(message.ApplicationProperties),
+		TenantStamps:   r.tenantStamps,
+		TenantOptional: r.tenantOptional,
+		Destination:    streamName,
+		BodySize:       len(msg.Data),
 		SpanExtras: []attribute.KeyValue{
 			attribute.String(attrConsumerName, r.name),
 			attribute.Int64(attrStreamOffset, offset),

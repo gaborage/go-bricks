@@ -223,7 +223,7 @@ func TestPrepareStreamConsumersRejectsMultiTenantBypass(t *testing.T) {
 	err := a.prepareStreamConsumers(context.Background())
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "single-tenant only")
+	assert.Contains(t, err.Error(), "single-tenant mode or messaging.tenancy: shared")
 	assert.Nil(t, a.streamsManager, "no Environment is built for a multi-tenant service")
 	assert.Empty(t, a.closers)
 }
@@ -235,6 +235,31 @@ func TestPrepareStreamConsumersAllowsSingleTenant(t *testing.T) {
 	a.cfg.Multitenant.Enabled = false
 
 	require.NoError(t, a.assertStreamsSingleTenant())
+}
+
+// TestPrepareStreamConsumersAdmitsSharedTenancy is the half this slice adds: the
+// gate refuses PER-TENANT stream consumption, which would need one Environment per
+// tenant, not multi-tenancy as such. Under messaging.tenancy: shared the lane
+// consumes once on the control-plane key, exactly as single-tenant does.
+func TestPrepareStreamConsumersAdmitsSharedTenancy(t *testing.T) {
+	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
+	a.cfg.Multitenant.Enabled = true
+	a.cfg.Messaging.Tenancy = config.TenancyShared
+
+	require.NoError(t, a.assertStreamsSingleTenant())
+}
+
+// TestPrepareStreamConsumersStillRejectsPerTenant keeps the refusal pinned for the
+// tenancy that has no runtime: multi-tenant with per-tenant messaging.
+func TestPrepareStreamConsumersStillRejectsPerTenant(t *testing.T) {
+	a := newStreamsApp(t, config.StreamsConfig{}, &minimalModule{name: "plain"})
+	a.cfg.Multitenant.Enabled = true
+	a.cfg.Messaging.Tenancy = config.TenancyPerTenant
+
+	err := a.assertStreamsSingleTenant()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "per-tenant stream consumption")
 }
 
 func TestWarnIfPlaintextStreamURI(t *testing.T) {

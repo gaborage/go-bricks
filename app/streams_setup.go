@@ -50,6 +50,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 		OffsetStoreCount:    cfg.OffsetStore.CountBeforeStorage,
 		OffsetStoreInterval: cfg.OffsetStore.FlushInterval,
 		Logger:              a.logger,
+		TenantStamps:        a.multiTenant() && a.sharedMessaging(),
 	})
 
 	// A service that declared streams and cannot start them would serve HTTP while
@@ -71,7 +72,10 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	return nil
 }
 
-// assertStreamsSingleTenant re-asserts the tenancy invariant at runtime.
+// assertStreamsSingleTenant re-asserts the tenancy invariant at runtime: streams
+// are consumed on one key, which is the deployment's own under single-tenant and the
+// control-plane key under messaging.tenancy: shared. Only per-tenant tenancy would
+// need one Environment per tenant, and that is what stays refused.
 //
 // SECURITY: config.Validate already rejects multitenant.enabled beside a stream URI,
 // and Builder.WithConfig now runs it on every app.NewWithConfig call — but an App
@@ -80,12 +84,14 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 // handlers against one shared Environment with no tenant in context, which is
 // precisely what the gate exists to prevent.
 func (a *App) assertStreamsSingleTenant() error {
-	if !a.cfg.Multitenant.Enabled {
+	if !a.cfg.Multitenant.Enabled || a.sharedMessaging() {
 		return nil
 	}
-	return errors.New("messaging.streams is single-tenant only; multi-tenant stream consumption " +
-		"is not yet supported, but stream declarations were registered with multitenant.enabled: true; " +
-		"config.Validate rejects this combination and a config built without it is re-checked here")
+	return errors.New("messaging.streams needs single-tenant mode or messaging.tenancy: shared; " +
+		"per-tenant stream consumption would need one Environment per tenant and is not supported, " +
+		"but stream declarations were registered with multitenant.enabled: true and per-tenant " +
+		"messaging tenancy; config.Validate rejects this combination and a config built without it " +
+		"is re-checked here")
 }
 
 // warnIfPlaintextStreamURI flags a plaintext stream endpoint outside development:

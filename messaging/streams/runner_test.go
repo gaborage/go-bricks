@@ -13,6 +13,8 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
+	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 var errHandlerFailed = errors.New("handler failed")
@@ -431,6 +433,87 @@ func TestRunnerDeliverPassesMessageToHandler(t *testing.T) {
 	assert.Equal(t, testStream, got.Stream)
 	assert.Equal(t, map[string]any{"kind": "test"}, got.Properties)
 	assert.Equal(t, []int64{55}, storer.offsets())
+}
+
+// TestRunnerDeliverSeedsTheTenantStamp pins that this lane hands the shared
+// pipeline its two tenancy fields and settles what comes back. The stamp rules —
+// precedence, the error text, fail-closed, the TenantOptional carve-out — belong to
+// messaging/internal/delivery, which both lanes run, and are tabled there. What is
+// this lane's is that an unusable stamp leaves the offset UNCOMMITTED, so the
+// message is redelivered rather than silently skipped.
+func TestRunnerDeliverSeedsTheTenantStamp(t *testing.T) {
+	const acme = "acme"
+
+	stamped := func(body, tenant string) *amqp.Message {
+		msg := amqpMessage(body)
+		msg.ApplicationProperties[tenantstamp.Header] = tenant
+		return msg
+	}
+
+	t.Run("stamped_delivery_seeds_the_handler", func(t *testing.T) {
+		clock := newFakeClock()
+		var seen string
+		runner := newTestRunner(t, func(ctx context.Context, _ *Message) error {
+			seen, _ = multitenant.GetTenant(ctx)
+			return nil
+		}, newOffsetTracker(1, time.Hour, clock.Now))
+		runner.tenantStamps = true
+		storer := &fakeStorer{}
+
+		runner.deliver(testStream, 55, stamped("payload", acme), storer)
+
+		assert.Equal(t, acme, seen)
+		assert.Equal(t, []int64{55}, storer.offsets())
+	})
+
+	t.Run("unusable_stamp_leaves_the_offset_uncommitted", func(t *testing.T) {
+		clock := newFakeClock()
+		calls := 0
+		runner := newTestRunner(t, func(context.Context, *Message) error {
+			calls++
+			return nil
+		}, newOffsetTracker(1, time.Hour, clock.Now))
+		runner.tenantStamps = true
+		storer := &fakeStorer{}
+
+		runner.deliver(testStream, 61, amqpMessage("payload"), storer)
+
+		assert.Zero(t, calls, "the handler must never see a delivery with no usable tenant")
+		assert.Empty(t, storer.offsets(),
+			"an unusable stamp must not advance the offset; the message is redelivered, not skipped")
+	})
+
+	t.Run("tenant_optional_runs_without_a_stamp", func(t *testing.T) {
+		clock := newFakeClock()
+		calls := 0
+		runner := newTestRunner(t, func(context.Context, *Message) error {
+			calls++
+			return nil
+		}, newOffsetTracker(1, time.Hour, clock.Now))
+		runner.tenantStamps = true
+		runner.tenantOptional = true
+		storer := &fakeStorer{}
+
+		runner.deliver(testStream, 62, amqpMessage("payload"), storer)
+
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, []int64{62}, storer.offsets())
+	})
+
+	t.Run("stamps_off_ignores_the_property", func(t *testing.T) {
+		clock := newFakeClock()
+		var seen string
+		runner := newTestRunner(t, func(ctx context.Context, _ *Message) error {
+			seen, _ = multitenant.GetTenant(ctx)
+			return nil
+		}, newOffsetTracker(1, time.Hour, clock.Now))
+		storer := &fakeStorer{}
+
+		runner.deliver(testStream, 63, stamped("payload", acme), storer)
+
+		assert.Empty(t, seen, "under per-tenant tenancy the replay key is authoritative")
+		assert.Equal(t, []int64{63}, storer.offsets())
+	})
 }
 
 func TestRunnerDeliverHandlerErrorSkipsOffsetCommit(t *testing.T) {
