@@ -21,12 +21,16 @@ import (
 )
 
 const (
-	serverErrorMsg      = "server error: %w"
-	disabledStatus      = "disabled"
-	healthyStatus       = "healthy"
-	unhealthyStatus     = "unhealthy"
-	notConfiguredStatus = "not_configured"
-	readyStatus         = "ready"
+	serverErrorMsg = "server error: %w"
+	// observabilityShutdownWarnMsg reports a best-effort observability teardown that failed:
+	// the telemetry sink is not an application dependency, so the failure never reaches the
+	// error App.Run returns (ADR-029 amendment).
+	observabilityShutdownWarnMsg = "Observability shutdown failed; telemetry may have been lost"
+	disabledStatus               = "disabled"
+	healthyStatus                = "healthy"
+	unhealthyStatus              = "unhealthy"
+	notConfiguredStatus          = "not_configured"
+	readyStatus                  = "ready"
 	// perTenantStatus marks a component whose configuration is resolved per tenant and
 	// is therefore not probed by the fixed-key readiness check. Distinct from
 	// not_configured, which would claim the service has no database at all — false on a

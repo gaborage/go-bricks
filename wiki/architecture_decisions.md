@@ -348,6 +348,8 @@ modules → observability → manager cleanup loops → closers**, with a new ad
 `Manager.StopConsumers()` that quiesces consumers (idempotent) without closing connections.
 Superseded in part by [ADR-067](adr_067_lifecycle_slots.md): the manager-cleanup-loop phase is
 gone — each manager stops its own sweep in `Close()`, which the closers still run last.
+Amended 2026-08-29: the observability phase is best-effort — its failures are warned, never
+folded into the error `App.Run()` returns (#1225).
 
 **Behavioral change (not an API break):** the framework stops admitting new HTTP requests and
 AMQP deliveries before modules are torn down (consumers are cancelled, not synchronously
