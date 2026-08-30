@@ -206,6 +206,6 @@ func TestRunnerDoesNotGateAnotherTenant(t *testing.T) {
 	parks := ledger.parked()
 	require.Len(t, parks, 1, "and only the held tenant's message is parked")
 	assert.Equal(t, "tenant-a", parks[0].TenantID)
-	assert.False(t, runner.held.has("tenant-b"), "a held neighbour does not hold this tenant")
+	assert.False(t, runner.held.has("tenant-b"), "a held neighbor does not hold this tenant")
 	assert.Equal(t, []int64{41, 42}, storer.offsets(), "the partition keeps moving")
 }
