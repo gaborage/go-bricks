@@ -35,6 +35,10 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 		return err
 	}
 
+	if err := a.assertSharedMessagingRuntimeExists(); err != nil {
+		return err
+	}
+
 	if err := a.startSlots(ctx); err != nil {
 		return err
 	}
@@ -63,6 +67,20 @@ func (a *App) prepareRuntime(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// assertSharedMessagingRuntimeExists refuses a configuration config.Validate now
+// accepts but this binary cannot serve. messaging.tenancy: shared is validated by
+// the config layer one slice before the runtime that acts on it exists, so between
+// those two merges a deployment could boot with per-tenant replay while its config
+// says shared. Fail closed until the classic-lane slice lands, which deletes this.
+func (a *App) assertSharedMessagingRuntimeExists() error {
+	if a.cfg == nil || !a.cfg.Multitenant.Enabled || a.cfg.Messaging.Tenancy != config.TenancyShared {
+		return nil
+	}
+	return errors.New("messaging.tenancy: shared is not yet served by this build; " +
+		"the shared messaging runtime lands with the classic-lane slice — " +
+		"set messaging.tenancy: per-tenant until then")
 }
 
 // startSlots runs every kind's start phase in registration order. A fatal error aborts
