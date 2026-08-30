@@ -99,3 +99,22 @@ func TestRegisterModuleInjectsTheReplayerSource(t *testing.T) {
 	require.NotNil(t, module.replayer, "the module is handed a source at registration")
 	assert.Nil(t, module.replayer(), "which answers nil until a manager can drain")
 }
+
+// TestHoldWithoutADrainFailsStartup pins the structural guard: a hold ledger
+// nothing can drain is a PERMANENT hold — parked messages would wait for a replay
+// that never runs, and only hand-written SQL would release them. The capability
+// checked is the manager's own, so the guard dissolves when the manager gains the
+// methods rather than needing a wiring step to be remembered.
+func TestHoldWithoutADrainFailsStartup(t *testing.T) {
+	err := assertHoldIsDrainable(&stubHoldLedger{})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot drain it")
+	assert.Contains(t, err.Error(), "inbox.hold.enabled")
+}
+
+// TestNoHoldNeedsNoDrain is the other half: the guard says nothing at all to a
+// deployment that configured no hold, which is every deployment today.
+func TestNoHoldNeedsNoDrain(t *testing.T) {
+	assert.NoError(t, assertHoldIsDrainable(nil))
+}
