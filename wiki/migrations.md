@@ -5981,10 +5981,6 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   [ADR-086](adr_086_mask_inside_opaque_payloads.md) · issue #1133 · JWT, XML and form-encoded
   payloads remain uninspected by design
 
----
-
-*The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*
-
 ### [C61.19] an unpublishable outbox destination is refused at Publish and parked by the relay · silent-behavior · when: match
 
 - detect: the question is whether an outbox event's destination can exceed 255 BYTES — bytes, not
@@ -6042,6 +6038,10 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
   `outbox/publisher.go` (`Publish`) · `outbox/relay.go` (`publishRecord`, `deadLetterPoison`) ·
   `outbox/module.go` (`validateDefaultExchange`) · `messaging/publish_destination.go`
   (`ValidatePublishDestination`) · `[C61.17]` (the publish-door rule this one reuses) · issue #1229
+
+---
+
+*The sections below are reference material: the two config-key rename lookup tables (linked from atoms C401.1 and C41.7), followed by pre-v0.39 changes retained for consumers upgrading from older releases.*
 
 ## Config Keys — Flat-Smushed Rename (ADR-024)
 
