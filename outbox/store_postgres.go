@@ -3,9 +3,12 @@ package outbox
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/sqlid"
 )
@@ -211,4 +214,30 @@ func (s *postgresStore) CreateTable(ctx context.Context, db dbtypes.Interface) e
 	}
 
 	return nil
+}
+
+// Lead takes the ledger's leader row FOR UPDATE NOWAIT in a transaction held until
+// Release. The row lock IS the claim, so the transaction stays open for the cycle.
+func (s *postgresStore) Lead(ctx context.Context, db dbtypes.Interface) (Leadership, error) {
+	leaderTable := sqlid.LeaderTableName(s.tableName)
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("outbox postgres: begin leader transaction failed: %w", err)
+	}
+
+	var id int64
+	query := fmt.Sprintf(`SELECT id FROM %s WHERE id = 1 FOR UPDATE NOWAIT`, leaderTable)
+	if err := tx.QueryRow(ctx, query).Scan(&id); err != nil {
+		_ = tx.Rollback(ctx)
+		switch {
+		case database.IsLockNotAvailable(err):
+			return nil, ErrNotLeader
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, fmt.Errorf("outbox postgres: leader row missing in %s; run the documented migration", leaderTable)
+		default:
+			return nil, fmt.Errorf("outbox postgres: take leader row failed: %w", err)
+		}
+	}
+
+	return &leadership{tx: tx, probeStmt: `SELECT 1`}, nil
 }

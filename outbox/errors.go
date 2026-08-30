@@ -14,4 +14,8 @@ var (
 	// ErrStreamNotAnOutboxTarget is returned when an event names a stream the relay
 	// was not configured to publish to.
 	ErrStreamNotAnOutboxTarget = errors.New("outbox: stream is not listed in outbox.superstreams")
+
+	// ErrNotLeader is returned by Store.Lead when another relay instance holds the
+	// ledger's leader row.
+	ErrNotLeader = errors.New("outbox: another relay instance leads this ledger")
 )

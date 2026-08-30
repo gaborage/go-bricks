@@ -482,6 +482,14 @@ func (s *lazyStore) DeletePublished(ctx context.Context, db dbtypes.Interface, b
 	return store.DeletePublished(ctx, db, before)
 }
 
+func (s *lazyStore) Lead(ctx context.Context, db dbtypes.Interface) (Leadership, error) {
+	store, err := s.module.ensureStoreInitialized(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return store.Lead(ctx, db)
+}
+
 func (s *lazyStore) CreateTable(ctx context.Context, db dbtypes.Interface) error {
 	store, err := s.module.ensureStoreInitialized(ctx)
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	oranet "github.com/sijms/go-ora/v2/network"
+
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
@@ -485,4 +487,40 @@ func TestOracleStoreFetchPendingEmptyStreamIsAMQPLane(t *testing.T) {
 	assert.Equal(t, LaneAMQP, out[0].Lane)
 	assert.Empty(t, out[0].Stream)
 	assert.Empty(t, out[0].PartitionKey)
+}
+
+// --- Lead --------------------------------------------------------------------
+
+func TestOracleStoreLeadAcquiresRow(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	tx := db.ExpectTransaction()
+	tx.ExpectQuery(`FOR UPDATE NOWAIT`).WillReturnRows(dbtesting.NewRowSet("id").AddRow(int64(1)))
+	tx.ExpectExec(`SELECT 1 FROM dual`).WillReturnRowsAffected(0)
+
+	lead, err := store.Lead(t.Context(), db)
+	require.NoError(t, err)
+	require.NotNil(t, lead)
+
+	log := tx.QueryLog()
+	require.Len(t, log, 1)
+	assert.Contains(t, log[0].SQL, "GOBRICKS_OUTBOX_leader")
+	assert.Contains(t, log[0].SQL, "FOR UPDATE NOWAIT")
+
+	require.NoError(t, lead.Probe(t.Context()))
+	require.NoError(t, lead.Release(t.Context()))
+	dbtesting.AssertRolledBack(t, tx)
+}
+
+func TestOracleStoreLeadNotLeader(t *testing.T) {
+	store := newOracleTestStore(t)
+	db := dbtesting.NewTestDB(dbtypes.Oracle)
+	tx := db.ExpectTransaction()
+	tx.ExpectQuery(`FOR UPDATE NOWAIT`).WillReturnError(&oranet.OracleError{ErrCode: 54})
+
+	lead, err := store.Lead(t.Context(), db)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNotLeader)
+	assert.Nil(t, lead)
+	dbtesting.AssertRolledBack(t, tx)
 }
