@@ -230,22 +230,28 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 // because messaging keeps its constant unexported; it becomes an import once that is exported.
 const tenantStampHeader = "x-tenant-id"
 
-// relayKey is the key a row is ordered under within a cycle. The stream lane orders by its
-// partition key; the AMQP lane orders by the tenant stamp when the row carries one, so two
-// tenants publishing the same routing key do not block each other, and otherwise by the
-// destination the row is actually published to — exchange AND routing key, so two rows aimed
-// at different exchanges never park each other merely for sharing a routing-key convention.
-// A row whose headers will not decode arrives here with nil headers and is keyed by its
-// destination; it is poison and publishRecord dead-letters it, so it holds its siblings only
-// until it does.
+// relayKey is the key a row is ordered under within a cycle. Every key is namespaced by the
+// scope it orders within, because parking is head-of-line blocking: two rows that share a key
+// but not a destination block each other for nothing.
+//
+// Stream lane: the stream AND the partition key, so rows aimed at different super streams do
+// not park each other merely for carrying the same tenant's key. AMQP lane: the tenant stamp
+// when the row carries one — deliberately spanning that tenant's exchanges, which is the
+// ordering an event stream for one tenant needs — and otherwise the destination the row is
+// actually published to, exchange and routing key together.
+//
+// The lane prefix keeps the two spaces apart, so a stream row partitioned by "acme" and an
+// AMQP row stamped "acme" are not treated as one key. A row whose headers will not decode
+// arrives with nil headers and is keyed by its destination; it is poison and publishRecord
+// dead-letters it, so it holds its siblings only until it does.
 func relayKey(record *Record, headers map[string]any) string {
 	if record.Lane == LaneStream {
-		return record.PartitionKey
+		return LaneStream + ":" + record.Stream + ":" + record.PartitionKey
 	}
 	if stamp, ok := headers[tenantStampHeader].(string); ok && stamp != "" {
-		return stamp
+		return LaneAMQP + ":tenant:" + stamp
 	}
-	return record.Exchange + ":" + record.RoutingKey
+	return LaneAMQP + ":" + record.Exchange + ":" + record.RoutingKey
 }
 
 // markOutage advances retry_count for every pending record without attempting a publish,

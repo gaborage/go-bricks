@@ -1020,3 +1020,27 @@ func TestRelayOutagePathMarksUnderLeadership(t *testing.T) {
 	assert.Equal(t, 2, store.MarkFailedCalls)
 	assert.Equal(t, 1, store.ReleaseCalls)
 }
+
+// TestRelayKeyNamespacesDistinctScopes pins that parking never couples rows which merely
+// share a string. Before the lane prefix, a stream row partitioned by "acme" and an AMQP row
+// stamped "acme" produced the same key, as did two stream rows on DIFFERENT streams sharing a
+// partition key — so a failure on one would park the other for nothing.
+func TestRelayKeyNamespacesDistinctScopes(t *testing.T) {
+	stamped := map[string]any{tenantStampHeader: "acme"}
+
+	streamOrders := relayKey(&Record{Lane: LaneStream, Stream: "orders", PartitionKey: "acme"}, nil)
+	streamCustomers := relayKey(&Record{Lane: LaneStream, Stream: "customers", PartitionKey: "acme"}, nil)
+	amqpStamped := relayKey(&Record{Exchange: "ex", RoutingKey: "created"}, stamped)
+	amqpPlain := relayKey(&Record{Exchange: "ex", RoutingKey: "created"}, nil)
+
+	assert.NotEqual(t, streamOrders, streamCustomers, "different streams are different scopes")
+	assert.NotEqual(t, streamOrders, amqpStamped, "a partition key and a tenant stamp are different scopes")
+	assert.NotEqual(t, amqpStamped, amqpPlain, "a stamped row orders by tenant, not by destination")
+
+	// Same scope still collapses to one key, which is what parking depends on.
+	assert.Equal(t, streamOrders,
+		relayKey(&Record{Lane: LaneStream, Stream: "orders", PartitionKey: "acme"}, nil))
+	assert.Equal(t, amqpStamped,
+		relayKey(&Record{Exchange: "other", RoutingKey: "shipped"}, stamped),
+		"one tenant's rows share a key across exchanges, which is the ordering a tenant needs")
+}

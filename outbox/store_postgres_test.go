@@ -523,4 +523,9 @@ func TestPostgresStoreLeadProbeReportsDeadTransaction(t *testing.T) {
 	lead, err := store.Lead(t.Context(), db)
 	require.NoError(t, err)
 	assert.ErrorIs(t, lead.Probe(t.Context()), wantErr)
+
+	// A failed probe does not release the claim: the caller still must, and Release must
+	// succeed so the transaction is rolled back rather than left open.
+	require.NoError(t, lead.Release(t.Context()))
+	dbtesting.AssertRolledBack(t, tx)
 }

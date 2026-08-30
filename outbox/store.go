@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/gaborage/go-bricks/database"
-
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/sqlid"
 )
