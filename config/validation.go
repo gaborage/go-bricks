@@ -1327,25 +1327,26 @@ func validateNamedDatabaseName(name string, mt *MultitenantConfig) error {
 			Action:   "provide a non-empty key for each entry in databases section",
 		}
 	}
-	if strings.HasPrefix(name, NamedDatabasePrefix) {
-		return &ConfigError{
-			Category: errCategoryInvalid,
-			Field:    fmt.Sprintf(databasesFieldPrefix, name),
-			Message:  fmt.Sprintf("name cannot start with reserved prefix '%s'", NamedDatabasePrefix),
-			Action:   fmt.Sprintf("rename databases.%s to remove the '%s' prefix", name, NamedDatabasePrefix),
-		}
-	}
 	// A '.' collides with koanf's path delimiter: constructed section paths
-	// (databases.<name>, and this name's own error Field above) become
-	// ambiguous, so the bare "databases" Field is used here rather than
-	// fmt.Sprintf(databasesFieldPrefix, name) — embedding the dotted name
-	// would reproduce the same ambiguity in the error itself.
+	// (databases.<name>) become ambiguous, so the bare "databases" Field is used
+	// here rather than fmt.Sprintf(databasesFieldPrefix, name) — embedding the
+	// dotted name would reproduce the same ambiguity in the error itself. This
+	// runs BEFORE the reserved-prefix rule below, which does embed the name: a
+	// name breaking both (`gb_.foo`) must still be reported against the parent.
 	if strings.Contains(name, ".") {
 		return &ConfigError{
 			Category: errCategoryInvalid,
 			Field:    fieldDatabases,
 			Message:  fmt.Sprintf("database name %q cannot contain '.' (the config path delimiter)", name),
 			Action:   "rename the databases entry without dots",
+		}
+	}
+	if strings.HasPrefix(name, NamedDatabasePrefix) {
+		return &ConfigError{
+			Category: errCategoryInvalid,
+			Field:    fmt.Sprintf(databasesFieldPrefix, name),
+			Message:  fmt.Sprintf("name cannot start with reserved prefix '%s'", NamedDatabasePrefix),
+			Action:   fmt.Sprintf("rename databases.%s to remove the '%s' prefix", name, NamedDatabasePrefix),
 		}
 	}
 	// Everything the dot rule above does not already reject is judged by the

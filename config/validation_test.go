@@ -7031,6 +7031,31 @@ func TestValidateRejectsSectionNamesUnreachableByEnv(t *testing.T) {
 	}
 }
 
+// TestValidateNamedDatabaseReportsADottedReservedNameAgainstTheParent: a name can
+// break two rules at once. The reserved-prefix error embeds the name in its Field
+// (databases.<name>), which is exactly what a dotted name makes ambiguous — so the
+// dot rule has to win, whichever other rule also matches.
+func TestValidateNamedDatabaseReportsADottedReservedNameAgainstTheParent(t *testing.T) {
+	databases := map[string]DatabaseConfig{
+		NamedDatabasePrefix + ".foo": {
+			Type:     PostgreSQL,
+			Host:     dbLocalField,
+			Port:     5432,
+			Database: "db",
+			Username: "user",
+		},
+	}
+	mt := MultitenantConfig{Enabled: false}
+
+	err := checkNamedDatabases(databases, &mt)
+
+	require.Error(t, err)
+	var cfgErr *ConfigError
+	require.ErrorAs(t, err, &cfgErr)
+	assert.Equal(t, fieldDatabases, cfgErr.Field, "a dotted name never embeds itself in the Field, whatever else it violates")
+	assert.ErrorContains(t, err, "'.'")
+}
+
 // TestValidateAcceptsEnvReachableSectionNames pins the other half: the rule
 // admits every name the transform round-trips, hyphen included.
 func TestValidateAcceptsEnvReachableSectionNames(t *testing.T) {
