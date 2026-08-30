@@ -316,14 +316,18 @@ type preWarmSubject string
 // whether the kind resolves per tenant rather than on the control-plane key. They are
 // distinct types because they are adjacent arguments of the same underlying type with
 // opposite meanings: as plain bools a transposed pair compiles silently and inverts
-// warm-vs-skip. A kind resolved per tenant has no fixed key to warm; one resolved on
-// the control-plane key does, even when multitenant.enabled is true
-// (messaging.tenancy: shared).
+// warm-vs-skip.
 type (
 	kindPresent   bool
 	kindPerTenant bool
 )
 
+// preWarmKind opens the kind's fixed-key resource once at startup so the first
+// request does not pay the dial. It warms only a kind resolved on the control-plane
+// key: a per-tenant kind has no fixed key to warm, and which of the two a kind is
+// no longer follows from the deployment being multi-tenant — under
+// messaging.tenancy: shared the messaging kind resolves on the control-plane key
+// while the database beside it still resolves per tenant.
 func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubject, present kindPresent,
 	perTenant kindPerTenant, warm func(context.Context) error,
 ) error {
@@ -331,20 +335,20 @@ func (a *App) preWarmKind(ctx context.Context, kind string, subject preWarmSubje
 		return nil
 	}
 	if !present {
-		a.logger.Debug().Msgf("Skipping single-tenant %s pre-warming: manager unavailable", kind)
+		a.logger.Debug().Msgf("Skipping control-plane %s pre-warming: manager unavailable", kind)
 		return nil
 	}
 
 	if err := warm(ctx); err != nil {
 		if config.IsNotConfigured(err) {
-			a.logger.Debug().Msgf("Skipping single-tenant %s pre-warming: not configured", kind)
+			a.logger.Debug().Msgf("Skipping control-plane %s pre-warming: not configured", kind)
 			return nil
 		}
-		a.logger.Warn().Err(err).Msgf("Failed to pre-warm single-tenant %s", subject)
+		a.logger.Warn().Err(err).Msgf("Failed to pre-warm control-plane %s", subject)
 		return fmt.Errorf("%s pre-warming failed: %w", kind, err)
 	}
 
-	a.logger.Info().Msgf("Pre-warmed single-tenant %s", subject)
+	a.logger.Info().Msgf("Pre-warmed control-plane %s", subject)
 	return nil
 }
 

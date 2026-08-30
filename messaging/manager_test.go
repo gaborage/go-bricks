@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/gaborage/go-bricks/logger"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 type stubMessagingSource struct {
@@ -171,67 +172,102 @@ func TestMessagingManagerCachesPublishersPerKey(t *testing.T) {
 	assert.Equal(t, 1, factoryCalls[amqpHost])
 }
 
-// TestMessagingManagerSetsTheReplayKeyOnItsClients pins the wiring the tenant
-// stamp depends on: the key a publisher was pooled under reaches the client, so
-// its publish door can use it as a stamp source. The stamping itself, and the
-// precedence between this key and the context tenant, are pinned at that door by
-// TestPublishToExchangeTenantStampPrecedence.
-func TestMessagingManagerSetsTheReplayKeyOnItsClients(t *testing.T) {
-	newManagerWithRealClient := func(t *testing.T, key string) *AMQPClientImpl {
+// TestMessagingManagerStampsEveryClientItHandsOut pins the wiring the tenant stamp
+// depends on. The factory is replaceable (app.Options.MessagingClientFactory), so
+// this must hold for a client the FRAMEWORK never built: a deployment with its own
+// factory that published unstamped would, under messaging.tenancy: shared, have its
+// own consumers nack every delivery with nothing at startup saying why.
+func TestMessagingManagerStampsEveryClientItHandsOut(t *testing.T) {
+	lease := func(t *testing.T, key string, client AMQPClient) AMQPClient {
 		t.Helper()
-		var created *AMQPClientImpl
-		factory := func(url string, log logger.Logger) AMQPClient {
-			created = &AMQPClientImpl{m: &sync.RWMutex{}, brokerURL: url, log: log, done: make(chan bool)}
-			return created
-		}
-		source := &stubMessagingSource{urls: map[string]string{key: amqpHost}}
-		manager := NewMessagingManager(source, logger.New("error", false),
-			ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute}, factory)
-		t.Cleanup(func() { _ = manager.Close() })
-
-		_, release, err := manager.Publisher(context.Background(), key)
-		require.NoError(t, err)
-		release()
-		require.NotNil(t, created)
-		return created
-	}
-
-	t.Run("per_tenant_key", func(t *testing.T) {
-		assert.Equal(t, tenantID, newManagerWithRealClient(t, tenantID).replayKey)
-	})
-
-	t.Run("control_plane_key", func(t *testing.T) {
-		assert.Empty(t, newManagerWithRealClient(t, "").replayKey,
-			"the control-plane client has no tenant of its own; the context is the only source")
-	})
-
-	// The manager talks to the optional interface, not to *AMQPClientImpl, so a
-	// double that opts in is told its key too — and one that does not is left alone
-	// rather than being a special case in the manager.
-	t.Run("any_client_that_opts_in_is_told", func(t *testing.T) {
-		client := &replayKeyStub{}
-		source := &stubMessagingSource{urls: map[string]string{tenantID: amqpHost}}
-		manager := NewMessagingManager(source, logger.New("error", false),
+		manager := NewMessagingManager(
+			&stubMessagingSource{urls: map[string]string{key: amqpHost}},
+			logger.New("error", false),
 			ManagerOptions{MaxPublishers: 5, IdleTTL: time.Minute},
 			func(string, logger.Logger) AMQPClient { return client })
 		t.Cleanup(func() { _ = manager.Close() })
 
-		_, release, err := manager.Publisher(context.Background(), tenantID)
+		pub, release, err := manager.Publisher(context.Background(), key)
 		require.NoError(t, err)
-		release()
+		t.Cleanup(release)
+		return pub
+	}
 
-		assert.Equal(t, tenantID, client.key)
+	t.Run("a_consumer_supplied_client_is_stamped_too", func(t *testing.T) {
+		// stubAMQPClient is exactly what a consumer's own ClientFactory returns: an
+		// AMQPClient the framework did not build and cannot recognise by type.
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
+
+		require.NoError(t, pub.PublishToExchange(
+			multitenant.SetTenant(context.Background(), tenantID),
+			PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
+
+		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
+	})
+
+	t.Run("the_replay_key_stamps_when_the_context_has_no_tenant", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
+
+		require.NoError(t, pub.PublishToExchange(context.Background(),
+			PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
+
+		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
+	})
+
+	t.Run("the_control_plane_client_carries_no_stamp_without_a_tenant", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, "", client)
+
+		require.NoError(t, pub.PublishToExchange(context.Background(),
+			PublishOptions{Exchange: genericEx, RoutingKey: "rk"}, []byte("payload")))
+
+		assert.NotContains(t, client.lastHeaders, TenantStampHeader)
+	})
+
+	t.Run("a_caller_supplied_stamp_is_refused_before_the_client", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
+
+		err := pub.PublishToExchange(multitenant.SetTenant(context.Background(), tenantID),
+			PublishOptions{
+				Exchange: genericEx, RoutingKey: "rk",
+				Headers: map[string]any{TenantStampHeader: tenantID},
+			}, []byte("payload"))
+
+		require.ErrorIs(t, err, ErrTenantStampConflict)
+		assert.Zero(t, client.publishes, "a refused publish never reaches the client")
+	})
+
+	t.Run("the_callers_header_map_is_never_written_to", func(t *testing.T) {
+		client := &recordingStubClient{}
+		pub := lease(t, tenantID, client)
+		callerHeaders := map[string]any{"keep": "me"}
+
+		require.NoError(t, pub.PublishToExchange(context.Background(),
+			PublishOptions{Exchange: genericEx, RoutingKey: "rk", Headers: callerHeaders},
+			[]byte("payload")))
+
+		assert.Equal(t, map[string]any{"keep": "me"}, callerHeaders)
+		assert.Equal(t, tenantID, client.lastHeaders[TenantStampHeader])
+		assert.Equal(t, "me", client.lastHeaders["keep"])
 	})
 }
 
-// replayKeyStub is a client that opts into replayKeySetter without being the real
-// AMQP client.
-type replayKeyStub struct {
+// recordingStubClient is a client the framework did not build: it records what
+// actually reached it, so a test can tell a stamped publish from an unstamped one.
+type recordingStubClient struct {
 	stubAMQPClient
-	key string
+	lastHeaders map[string]any
+	publishes   int
 }
 
-func (s *replayKeyStub) setReplayKey(key string) { s.key = key }
+func (c *recordingStubClient) PublishToExchange(_ context.Context, options PublishOptions, _ []byte) error {
+	c.publishes++
+	c.lastHeaders = options.Headers
+	return nil
+}
 
 func TestMessagingManagerEnsureConsumersIdempotent(t *testing.T) {
 	ctx := context.Background()

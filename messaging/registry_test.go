@@ -224,7 +224,7 @@ func TestNewRegistrySimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	logger := &stubLogger{}
 
-	registry := NewRegistry(client, logger)
+	registry := NewRegistry(client, logger, false)
 
 	require.NotNil(t, registry)
 	assert.Equal(t, client, registry.client)
@@ -242,7 +242,7 @@ func TestNewRegistrySimple(t *testing.T) {
 func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	logger := &stubLogger{}
-	registry := NewRegistry(client, logger)
+	registry := NewRegistry(client, logger, false)
 
 	// Register infrastructure
 	registry.RegisterExchange(&ExchangeDeclaration{
@@ -277,7 +277,7 @@ func TestRegistryDeclareInfrastructureSuccessSimple(t *testing.T) {
 // the pattern documented for users (see wiki/messaging.md).
 func TestRegistryDeclareInfrastructurePassesArgs(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	ex := NewTopicExchange("args.exchange")
 	ex.Args["alternate-exchange"] = "orders.alt"
@@ -301,7 +301,7 @@ func TestRegistryDeclareInfrastructurePassesArgs(t *testing.T) {
 
 func TestRegistryDeclareInfrastructureClientNotReadyTimeoutSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: false}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	// Use a longer timeout to avoid flakes, but still test the timeout behavior
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -322,7 +322,7 @@ func TestRegistryDeclareInfrastructureExchangeDeclarationErrorSimple(t *testing.
 		isReady:            true,
 		declareExchangeErr: errors.New("exchange declaration failed"),
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	registry.RegisterExchange(&ExchangeDeclaration{
 		Name: testExchangeName,
@@ -343,7 +343,7 @@ func TestRegistryStartConsumersSuccessSimple(t *testing.T) {
 		isReady:      true,
 		deliveryChan: deliveries,
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	handler := &testHandler{}
 	registry.RegisterConsumer(&ConsumerDeclaration{
@@ -363,7 +363,7 @@ func TestRegistryStartConsumersSuccessSimple(t *testing.T) {
 }
 
 func TestRegistryStartConsumersClientNotReadySimple(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{isReady: false}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{isReady: false}, &stubLogger{}, false)
 
 	err := registry.StartConsumers(context.Background())
 
@@ -372,7 +372,7 @@ func TestRegistryStartConsumersClientNotReadySimple(t *testing.T) {
 }
 
 func TestRegistryStopConsumersSuccessSimple(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{}, false)
 
 	// Simulate active consumers
 	ctx, cancel := context.WithCancel(context.Background())
@@ -395,7 +395,7 @@ func TestRegistryStopConsumersSuccessSimple(t *testing.T) {
 }
 
 func TestRegistryValidatePublisherSimple(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	registry.RegisterPublisher(&PublisherDeclaration{
 		Exchange:   testExchangeName,
@@ -411,7 +411,7 @@ func TestRegistryValidatePublisherSimple(t *testing.T) {
 }
 
 func TestRegistryValidateConsumerSimple(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	registry.RegisterConsumer(&ConsumerDeclaration{
 		Queue: testQueueName,
@@ -425,7 +425,7 @@ func TestRegistryValidateConsumerSimple(t *testing.T) {
 }
 
 func TestRegistryPublishersSimple(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	// Initially empty
 	publishers := registry.Publishers()
@@ -455,7 +455,7 @@ func TestRegistryPublishersSimple(t *testing.T) {
 }
 
 func TestRegistryConsumersSimple(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	// Initially empty
 	consumers := registry.Consumers()
@@ -485,7 +485,7 @@ func TestRegistryConsumersSimple(t *testing.T) {
 func TestRegistryRegisterAfterDeclaredSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
 	logger := &stubLogger{}
-	registry := NewRegistry(client, logger)
+	registry := NewRegistry(client, logger, false)
 
 	// Declare infrastructure first
 	err := registry.DeclareInfrastructure(t.Context())
@@ -515,7 +515,7 @@ func TestRegistryRegisterAfterDeclaredSimple(t *testing.T) {
 
 func TestRegistryDeclareInfrastructureAlreadyDeclaredSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	// First declaration
 	err := registry.DeclareInfrastructure(t.Context())
@@ -528,7 +528,7 @@ func TestRegistryDeclareInfrastructureAlreadyDeclaredSimple(t *testing.T) {
 }
 
 func TestRegistryDeclareInfrastructureNilClientSimple(t *testing.T) {
-	registry := NewRegistry(nil, &stubLogger{})
+	registry := NewRegistry(nil, &stubLogger{}, false)
 
 	err := registry.DeclareInfrastructure(t.Context())
 
@@ -541,7 +541,7 @@ func TestRegistryStartConsumersConsumeErrorSimple(t *testing.T) {
 		isReady:    true,
 		consumeErr: errors.New("consume error"),
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	handler := &testHandler{}
 	registry.RegisterConsumer(&ConsumerDeclaration{
@@ -559,7 +559,7 @@ func TestRegistryStartConsumersConsumeErrorSimple(t *testing.T) {
 
 func TestRegistryStartConsumersNoHandlersSimple(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	// Register consumer without handler (documentation only)
 	registry.RegisterConsumer(&ConsumerDeclaration{
@@ -579,7 +579,7 @@ func TestRegistryStartConsumersNoHandlersSimple(t *testing.T) {
 }
 
 func TestRegistryStopConsumersNotActiveSimple(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	// StopConsumers when not active should be no-op
 	registry.StopConsumers()
@@ -591,7 +591,7 @@ func TestRegistryStopConsumersNotActiveSimple(t *testing.T) {
 // ===== Getter Methods Tests =====
 
 func TestRegistryExchanges(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	// Initially empty
 	exchanges := registry.Exchanges()
@@ -625,7 +625,7 @@ func TestRegistryExchanges(t *testing.T) {
 }
 
 func TestRegistryQueues(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	// Initially empty
 	queues := registry.Queues()
@@ -658,7 +658,7 @@ func TestRegistryQueues(t *testing.T) {
 }
 
 func TestRegistryBindings(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	// Initially empty
 	bindings := registry.Bindings()
@@ -699,7 +699,7 @@ func TestRegistryDeclareInfrastructureQueueDeclarationError(t *testing.T) {
 		isReady:         true,
 		declareQueueErr: errors.New("queue declaration failed"),
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	registry.RegisterQueue(&QueueDeclaration{
 		Name:    testQueueName,
@@ -717,7 +717,7 @@ func TestRegistryDeclareInfrastructureBindingError(t *testing.T) {
 		isReady:      true,
 		bindQueueErr: errors.New("binding failed"),
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	registry.RegisterBinding(&BindingDeclaration{
 		Queue:      testQueueName,
@@ -733,7 +733,7 @@ func TestRegistryDeclareInfrastructureBindingError(t *testing.T) {
 
 func TestRegistryDeclareInfrastructureContextCancellation(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: false}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -748,7 +748,7 @@ func TestRegistryDeclareInfrastructureContextCancellation(t *testing.T) {
 
 func TestRegistryDeclareInfrastructureClientBecomesReady(t *testing.T) {
 	client, readySignal := newControllableMockClient()
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	registry.RegisterExchange(&ExchangeDeclaration{
 		Name: testExchangeName,
@@ -794,7 +794,7 @@ func TestRegistryHandleMessagesContextCancellation(t *testing.T) {
 		isReady:      true,
 		deliveryChan: deliveries,
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	handler := &testHandler{}
 	consumer := &ConsumerDeclaration{
@@ -833,7 +833,7 @@ func TestRegistryHandleMessagesChannelClosure(t *testing.T) {
 		isReady:      true,
 		deliveryChan: deliveries,
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	handler := &testHandler{}
 	consumer := &ConsumerDeclaration{
@@ -873,7 +873,7 @@ func TestRegistryHandleMessagesWithDelivery(t *testing.T) {
 		isReady:      true,
 		deliveryChan: deliveries,
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	// Create a handler that signals when message is processed
 	handler := &countingTestHandler{}
@@ -1018,7 +1018,7 @@ func (l *panicEventLogger) WithFields(_ map[string]any) gobrickslogger.Logger { 
 // TestRunSettlesEvenWhenTheDeliveryTailPanics. What stays here is the lane's own
 // half: that its Settle closure nacks without requeue on a Panicked result.
 func TestRegistryProcessMessagePanicInTheTailNacksWithoutRequeue(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 	consumer := &ConsumerDeclaration{
 		Queue: testQueueName, EventType: testEventType,
 		Handler: &countingTestHandler{}, AutoAck: false,
@@ -1040,7 +1040,7 @@ func TestRegistryProcessMessagePanicInTheTailNacksWithoutRequeue(t *testing.T) {
 // ===== processMessage Tests =====
 
 func TestRegistryProcessMessageSuccess(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
@@ -1108,7 +1108,7 @@ func TestRegistryProcessMessageTenantStamp(t *testing.T) {
 	const acme = "acme"
 
 	t.Run("stamped_delivery_seeds_the_handler", func(t *testing.T) {
-		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 		registry.tenantStamps = true
 		handler := &tenantRecordingHandler{}
 		acker := &mockAcknowledger{}
@@ -1132,7 +1132,7 @@ func TestRegistryProcessMessageTenantStamp(t *testing.T) {
 	// lane settles any failure — nacked, never requeued, so a bad stamp cannot
 	// loop forever.
 	t.Run("unusable_stamp_nacks_without_requeue", func(t *testing.T) {
-		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 		registry.tenantStamps = true
 		handler := &tenantRecordingHandler{}
 		acker := &mockAcknowledger{}
@@ -1158,7 +1158,7 @@ func TestRegistryProcessMessageTenantStamp(t *testing.T) {
 	// TenantOptional reaches the pipeline from the consumer declaration, not from
 	// the registry — this is the wiring, not the rule.
 	t.Run("tenant_optional_reaches_the_pipeline", func(t *testing.T) {
-		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 		registry.tenantStamps = true
 		handler := &tenantRecordingHandler{}
 		acker := &mockAcknowledger{}
@@ -1183,7 +1183,7 @@ func TestRegistryProcessMessageTenantStamp(t *testing.T) {
 }
 
 func TestRegistryProcessMessageHandlerError(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{
 		testHandler: testHandler{retErr: errors.New("handler error")},
@@ -1222,7 +1222,7 @@ func TestRegistryProcessMessageHandlerError(t *testing.T) {
 }
 
 func TestRegistryProcessMessageAutoAck(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
@@ -1257,7 +1257,7 @@ func TestRegistryProcessMessageAutoAck(t *testing.T) {
 }
 
 func TestRegistryProcessMessageAckError(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
@@ -1294,7 +1294,7 @@ func TestRegistryProcessMessageAckError(t *testing.T) {
 }
 
 func TestRegistryProcessMessageNackError(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{
 		testHandler: testHandler{retErr: errors.New("handler error")},
@@ -1357,7 +1357,7 @@ func (h *panicTestHandler) CallCount() int {
 }
 
 func TestRegistryProcessMessageHandlerPanic(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &panicTestHandler{panicMsg: "nil pointer dereference"}
 	consumer := &ConsumerDeclaration{
@@ -1397,7 +1397,7 @@ func TestRegistryProcessMessageHandlerPanic(t *testing.T) {
 }
 
 func TestRegistryProcessMessageHandlerPanicNack(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &panicTestHandler{panicMsg: "test panic"}
 	consumer := &ConsumerDeclaration{
@@ -1430,7 +1430,7 @@ func TestRegistryProcessMessageHandlerPanicNack(t *testing.T) {
 }
 
 func TestRegistryProcessMessageHandlerPanicLogging(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &panicTestHandler{panicMsg: "critical error"}
 	consumer := &ConsumerDeclaration{
@@ -1479,7 +1479,7 @@ func TestRegistryHandleMessagesContinuesAfterPanic(t *testing.T) {
 		deliveryChan: deliveries,
 		isReady:      true,
 	}
-	registry := NewRegistry(mockClient, &stubLogger{})
+	registry := NewRegistry(mockClient, &stubLogger{}, false)
 
 	// Handler panics on all messages
 	panicHandler := &panicTestHandler{panicMsg: "first message panic"}
@@ -1539,7 +1539,7 @@ func TestRegistryMultipleConsumersPanicIsolation(t *testing.T) {
 	deliveries2 := make(chan amqp.Delivery, 1)
 
 	mockClient := &simpleMockAMQPClient{isReady: true}
-	registry := NewRegistry(mockClient, &stubLogger{})
+	registry := NewRegistry(mockClient, &stubLogger{}, false)
 
 	// Consumer 1 panics, Consumer 2 succeeds
 	panicHandler := &panicTestHandler{panicMsg: "consumer 1 panic"}
@@ -1612,7 +1612,7 @@ func TestRegistryMultipleConsumersPanicIsolation(t *testing.T) {
 }
 
 func TestRegistryProcessMessageHandlerPanicWithAutoAck(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &panicTestHandler{panicMsg: "panic with autoack"}
 	consumer := &ConsumerDeclaration{
@@ -1659,7 +1659,7 @@ func TestRegistryStartConsumersWithMultipleConsumers(t *testing.T) {
 			"queue-2": deliveries2,
 		},
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	handler1 := &testHandler{}
 	handler2 := &testHandler{}
@@ -1692,7 +1692,7 @@ func TestRegistryStartConsumersWithPartialFailure(t *testing.T) {
 			"failing-queue": errors.New("consume failed"),
 		},
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	handler1 := &testHandler{}
 	handler2 := &testHandler{}
@@ -1748,7 +1748,7 @@ func TestRegistryStartConsumersAlreadyStarted(t *testing.T) {
 		isReady:      true,
 		deliveryChan: deliveries,
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	handler := &testHandler{}
 	registry.RegisterConsumer(&ConsumerDeclaration{
@@ -1772,7 +1772,7 @@ func TestRegistryStartConsumersAlreadyStarted(t *testing.T) {
 }
 
 func TestRegistryStartConsumersNilClient(t *testing.T) {
-	registry := NewRegistry(nil, &stubLogger{})
+	registry := NewRegistry(nil, &stubLogger{}, false)
 
 	err := registry.StartConsumers(context.Background())
 	assert.Error(t, err)
@@ -1781,7 +1781,7 @@ func TestRegistryStartConsumersNilClient(t *testing.T) {
 
 func TestRegistryStartConsumersOnlyDocumentationConsumers(t *testing.T) {
 	client := &simpleMockAMQPClient{isReady: true}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 
 	// Register consumer without handler (documentation only)
 	registry.RegisterConsumer(&ConsumerDeclaration{
@@ -1799,7 +1799,7 @@ func TestRegistryStartConsumersOnlyDocumentationConsumers(t *testing.T) {
 }
 
 func TestRegistryRegisterPublisherNeverBlocked(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{}, false)
 
 	// Publishers can be registered even after declaration (unlike exchanges/queues/bindings)
 	err := registry.DeclareInfrastructure(t.Context())
@@ -1817,7 +1817,7 @@ func TestRegistryRegisterPublisherNeverBlocked(t *testing.T) {
 }
 
 func TestRegistryRegisterConsumerNeverBlocked(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{}, false)
 
 	// Consumers can be registered even after declaration (unlike exchanges/queues/bindings)
 	err := registry.DeclareInfrastructure(t.Context())
@@ -1889,7 +1889,7 @@ func TestWorkerPoolConcurrentProcessing(t *testing.T) {
 		deliveryChan: deliveries,
 		isReady:      true,
 	}
-	registry := NewRegistry(mockClient, &stubLogger{})
+	registry := NewRegistry(mockClient, &stubLogger{}, false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
@@ -1974,7 +1974,7 @@ func TestWorkerPoolGracefulShutdown(t *testing.T) {
 		deliveryChan: deliveries,
 		isReady:      true,
 	}
-	registry := NewRegistry(mockClient, &stubLogger{})
+	registry := NewRegistry(mockClient, &stubLogger{}, false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
@@ -2069,7 +2069,7 @@ func BenchmarkSequentialVsConcurrent(b *testing.B) {
 				deliveryChan: deliveries,
 				isReady:      true,
 			}
-			registry := NewRegistry(mockClient, &stubLogger{})
+			registry := NewRegistry(mockClient, &stubLogger{}, false)
 
 			consumer := &ConsumerDeclaration{
 				Queue:         testBenchQueue,
@@ -2103,7 +2103,7 @@ func BenchmarkSequentialVsConcurrent(b *testing.B) {
 				deliveryChan: deliveries,
 				isReady:      true,
 			}
-			registry := NewRegistry(mockClient, &stubLogger{})
+			registry := NewRegistry(mockClient, &stubLogger{}, false)
 
 			consumer := &ConsumerDeclaration{
 				Queue:         testBenchQueue,
@@ -2137,7 +2137,7 @@ func BenchmarkSequentialVsConcurrent(b *testing.B) {
 				deliveryChan: deliveries,
 				isReady:      true,
 			}
-			registry := NewRegistry(mockClient, &stubLogger{})
+			registry := NewRegistry(mockClient, &stubLogger{}, false)
 
 			consumer := &ConsumerDeclaration{
 				Queue:         testBenchQueue,
@@ -2229,7 +2229,7 @@ func TestRegistryConsumerResubscribesAfterDeliveryChannelCloses(t *testing.T) {
 		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
 		results:              []consumeResult{{ch: ch1}, {ch: ch2}},
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 	registry.resubscribeDelay = 5 * time.Millisecond // fast re-subscribe for the test
 
 	handler := &countingTestHandler{}
@@ -2291,7 +2291,7 @@ func TestRegistryConsumerResubscribeRetriesUntilClientReady(t *testing.T) {
 			{ch: ch2},              // client ready again
 		},
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 	registry.resubscribeDelay = 5 * time.Millisecond
 
 	handler := &countingTestHandler{}
@@ -2348,7 +2348,7 @@ func TestRegistryConsumerSupervisorStopsOnContextCancel(t *testing.T) {
 		// success channel) and we can cancel while it is actively retrying.
 		exhaustedErr: errNotConnected,
 	}
-	registry := NewRegistry(client, &stubLogger{})
+	registry := NewRegistry(client, &stubLogger{}, false)
 	registry.resubscribeDelay = 5 * time.Millisecond
 
 	registry.RegisterConsumer(&ConsumerDeclaration{
@@ -2424,7 +2424,7 @@ func TestRegistryProcessMessageRecordsConsumeMetricsOnSuccess(t *testing.T) {
 	mp, cleanup := setupConsumeMetrics(t)
 	defer cleanup()
 
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &sleepingCountingHandler{sleepFor: time.Millisecond}
 	consumer := &ConsumerDeclaration{
@@ -2468,7 +2468,7 @@ func TestRegistryProcessMessageRecordsConsumeMetricsOnError(t *testing.T) {
 	mp, cleanup := setupConsumeMetrics(t)
 	defer cleanup()
 
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &sleepingCountingHandler{
 		countingTestHandler: countingTestHandler{
@@ -2522,7 +2522,7 @@ func TestRegistryProcessMessageCountsExactlyOncePerDelivery(t *testing.T) {
 	mp, cleanup := setupConsumeMetrics(t)
 	defer cleanup()
 
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &sleepingCountingHandler{sleepFor: time.Millisecond}
 	consumer := &ConsumerDeclaration{
@@ -2563,7 +2563,7 @@ func TestRegistryProcessMessageStartsReceiveSpan(t *testing.T) {
 	exporter, cleanup := setupTestTracing(t)
 	defer cleanup()
 
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
@@ -2598,7 +2598,7 @@ func TestRegistryProcessMessagePanicMarksSpanError(t *testing.T) {
 	exporter, cleanup := setupTestTracing(t)
 	defer cleanup()
 
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &panicTestHandler{panicMsg: "boom"}
 	consumer := &ConsumerDeclaration{
@@ -2773,7 +2773,7 @@ var _ gobrickslogger.Logger = (*recordingLogger)(nil)
 
 func TestRegistryProcessMessageStampsCorrelationIDOnSuccessLines(t *testing.T) {
 	const wantTraceID = "req-119"
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
@@ -2849,7 +2849,7 @@ func TestRegistryProcessMessageCorrelationIDIsStableAcrossLines(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 			consumer := &ConsumerDeclaration{
 				Queue:     testQueueName,
 				EventType: testEventType,
@@ -2903,7 +2903,7 @@ func TestRegistryProcessMessageCorrelationIDIsStableAcrossLines(t *testing.T) {
 
 func TestRegistryProcessMessageFailureLineSeparatesTheTraceAndAMQPCorrelationIDs(t *testing.T) {
 	const wantTraceID = "req-119"
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{testHandler: testHandler{retErr: errors.New("handler error")}}
 	consumer := &ConsumerDeclaration{
@@ -2935,7 +2935,7 @@ func TestRegistryProcessMessageFailureLineSeparatesTheTraceAndAMQPCorrelationIDs
 
 func TestRegistryProcessMessagePanicLineSeparatesTheTraceAndAMQPCorrelationIDs(t *testing.T) {
 	const wantTraceID = "req-119"
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &panicTestHandler{panicMsg: "boom"}
 	consumer := &ConsumerDeclaration{
@@ -2972,84 +2972,56 @@ func TestRegistryProcessMessagePanicLineSeparatesTheTraceAndAMQPCorrelationIDs(t
 // the success path silent while still paying the full WithContext/WithFields
 // cost, which is exactly what is being measured.
 func TestRegistryProcessMessagePerDeliveryLoggerAllocs(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
-	log := gobrickslogger.New("error", false)
+	measure := func(t *testing.T, tenantStamps bool, headers amqp.Table) float64 {
+		t.Helper()
+		registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, tenantStamps)
+		log := gobrickslogger.New("error", false)
+		consumer := &ConsumerDeclaration{
+			Queue:     testQueueName,
+			EventType: testEventType,
+			Handler:   &countingTestHandler{},
+		}
+		delivery := &amqp.Delivery{
+			MessageId:    testMessageID,
+			RoutingKey:   testRoutingKey,
+			Exchange:     testExchangeName,
+			DeliveryTag:  123,
+			Body:         []byte(testMessageBody),
+			Headers:      headers,
+			Acknowledger: &mockAcknowledger{},
+		}
+		ctx := context.Background()
 
-	handler := &countingTestHandler{}
-	consumer := &ConsumerDeclaration{
-		Queue:     testQueueName,
-		EventType: testEventType,
-		Handler:   handler,
-		AutoAck:   false,
+		return testing.AllocsPerRun(200, func() {
+			registry.processMessage(ctx, consumer, delivery, log)
+		})
 	}
 
-	delivery := &amqp.Delivery{
-		MessageId:    testMessageID,
-		RoutingKey:   testRoutingKey,
-		Exchange:     testExchangeName,
-		DeliveryTag:  123,
-		Body:         []byte(testMessageBody),
-		Headers:      amqp.Table{gobrickstrace.HeaderXRequestID: "req-119"},
-		Acknowledger: &mockAcknowledger{},
-	}
-	ctx := context.Background()
-
-	avg := testing.AllocsPerRun(200, func() {
-		registry.processMessage(ctx, consumer, delivery, log)
+	stampsOff := measure(t, false, amqp.Table{gobrickstrace.HeaderXRequestID: "req-119"})
+	stampsOn := measure(t, true, amqp.Table{
+		gobrickstrace.HeaderXRequestID: "req-119",
+		TenantStampHeader:              "acme",
 	})
-	t.Logf("processMessage allocs/op = %.1f", avg)
-	// Ceiling fixed at 42.0 (advisor resolution 2026-08-09): measured BEFORE =
-	// 47.0, AFTER = 38.0 allocs/op — fails the old per-delivery WithFields
-	// layer, passes the new per-event stamps with headroom. 38.0 predates
-	// PR2a's tracking collapse, which had already dropped this tree's baseline
-	// to 34.0 before the delivery pipeline (ADR-068) landed at 29.0 allocs/op
-	// (25–27 once it shared its span options and cached its tracer — the exact
-	// figure is order-dependent: earlier tests warm the meter/tracer globals),
-	// and to 23.0 once the lane stopped boxing its header carrier and building
-	// the metric destination through fmt.
-	assert.Less(t, avg, 42.0, "the per-delivery WithFields layer is back")
-}
+	t.Logf("allocs/op: stamps off = %.1f, on = %.1f", stampsOff, stampsOn)
 
-// TestRegistryProcessMessagePerDeliveryStampAllocs is the same tripwire for the
-// path the one above does NOT reach: it runs with tenantStamps unset, so the
-// stamp read is skipped entirely and its budget says nothing about it. This one
-// turns stamps on and gives the delivery a valid stamp.
-//
-// The stamp itself is a header lookup through the accessor the pipeline already
-// built; the cost above the baseline is multitenant.SetTenant's context.WithValue,
-// which every tenant-aware path pays once per delivery by design.
-func TestRegistryProcessMessagePerDeliveryStampAllocs(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
-	registry.tenantStamps = true
-	log := gobrickslogger.New("error", false)
+	// Ceiling fixed at 42.0 (advisor resolution 2026-08-09): measured BEFORE = 47.0,
+	// AFTER = 38.0 allocs/op — fails the old per-delivery WithFields layer, passes the
+	// new per-event stamps with headroom. 38.0 predates PR2a's tracking collapse, which
+	// had already dropped this tree's baseline to 34.0 before the delivery pipeline
+	// (ADR-068) landed at 29.0 allocs/op (25–27 once it shared its span options and
+	// cached its tracer — the exact figure is order-dependent: earlier tests warm the
+	// meter/tracer globals), and to 23.0 once the lane stopped boxing its header carrier
+	// and building the metric destination through fmt.
+	assert.Less(t, stampsOff, 42.0, "the per-delivery WithFields layer is back")
 
-	handler := &countingTestHandler{}
-	consumer := &ConsumerDeclaration{
-		Queue:     testQueueName,
-		EventType: testEventType,
-		Handler:   handler,
-	}
-
-	delivery := &amqp.Delivery{
-		MessageId:    testMessageID,
-		RoutingKey:   testRoutingKey,
-		Exchange:     testExchangeName,
-		DeliveryTag:  123,
-		Body:         []byte(testMessageBody),
-		Headers:      amqp.Table{gobrickstrace.HeaderXRequestID: "req-119", TenantStampHeader: "acme"},
-		Acknowledger: &mockAcknowledger{},
-	}
-	ctx := context.Background()
-
-	avg := testing.AllocsPerRun(200, func() {
-		registry.processMessage(ctx, consumer, delivery, log)
-	})
-	t.Logf("processMessage with stamps allocs/op = %.1f", avg)
-	// Measured 28.0 against the 24.0 of the stamps-off path: +2 for SetTenant's
-	// valueCtx and its boxed string, the rest run-order noise in the warmed
-	// meter/tracer globals. Same 42.0 ceiling as the sibling above, so a
-	// regression that reintroduces a per-delivery allocation layer fails both.
-	assert.Less(t, avg, 42.0, "the stamp read grew a per-delivery allocation layer")
+	// The stamp's own cost is asserted as a DELTA, not an absolute: both figures move
+	// together by a couple of allocations depending on which tests warmed the meter and
+	// tracer globals first, so an absolute ceiling tight enough to be meaningful here
+	// would be flaky. Reading the carrier allocates nothing; the whole delta is
+	// multitenant.SetTenant's valueCtx and its boxed string, which every tenant-aware
+	// delivery pays by design.
+	assert.LessOrEqual(t, stampsOn-stampsOff, 3.0,
+		"the tenant stamp read grew an allocation layer beyond SetTenant's context value")
 }
 
 // TestRegistryProcessMessageLogsDebugFieldsWhenEnabled proves the Step 1 guard
@@ -3058,7 +3030,7 @@ func TestRegistryProcessMessagePerDeliveryStampAllocs(t *testing.T) {
 // in order.
 func TestRegistryProcessMessageLogsDebugFieldsWhenEnabled(t *testing.T) {
 	const wantTraceID = "req-118-enabled"
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
@@ -3099,7 +3071,7 @@ func TestRegistryProcessMessageLogsDebugFieldsWhenEnabled(t *testing.T) {
 // success line is unaffected (the guard did not swallow the rest of the
 // function).
 func TestRegistryProcessMessageSkipsDebugFieldBuildWhenDisabled(t *testing.T) {
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 
 	handler := &countingTestHandler{}
 	consumer := &ConsumerDeclaration{
@@ -3145,7 +3117,7 @@ func TestRegistryProcessMessageSpanCarriesEveryDeliveryAttribute(t *testing.T) {
 	exporter, cleanup := setupTestTracing(t)
 	defer cleanup()
 
-	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 	consumer := &ConsumerDeclaration{
 		Queue:     testQueueName,
 		EventType: testEventType,
@@ -3203,7 +3175,7 @@ func TestConsumeOptionsForwardsArgs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+			registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{}, false)
 
 			declared := map[string]any{argStreamOffset: streamOffsetFirst}
 			opts := registry.consumeOptionsFor(&ConsumerDeclaration{
@@ -3263,7 +3235,7 @@ func newStreamResumeRegistry(t *testing.T, streamQueue bool, declaredArgs map[st
 		simpleMockAMQPClient: &simpleMockAMQPClient{isReady: true},
 		results:              []consumeResult{{ch: ch1}, {ch: ch2}},
 	}
-	registry = NewRegistry(client, &stubLogger{})
+	registry = NewRegistry(client, &stubLogger{}, false)
 	registry.resubscribeDelay = 5 * time.Millisecond
 
 	queue := &QueueDeclaration{Name: testStreamQueue, Durable: true, Args: map[string]any{}}
@@ -3456,7 +3428,7 @@ func TestConsumeOptionsWidensIntStreamOffset(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{})
+			registry := NewRegistry(&simpleMockAMQPClient{isReady: true}, &stubLogger{}, false)
 			snapshot := maps.Clone(tt.declared)
 
 			opts := registry.consumeOptionsFor(&ConsumerDeclaration{

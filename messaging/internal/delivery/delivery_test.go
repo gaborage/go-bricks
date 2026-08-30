@@ -248,8 +248,14 @@ func TestRunRefusesAnUnusableStampWithoutCallingTheHandler(t *testing.T) {
 		notText  string
 	}{
 		{name: "missing", stamp: nil, wantText: "tenant stamp missing (0 bytes)"},
-		{name: "not_a_string", stamp: 42, wantText: "tenant stamp not a string (0 bytes)"},
+		{name: "not_a_string", stamp: 42, wantText: "tenant stamp not a string (int)"},
 		{name: "invalid", stamp: "Acme", wantText: "tenant stamp invalid (4 bytes)", notText: "Acme"},
+		{
+			name:     "optional_still_refuses_a_non_string",
+			stamp:    42,
+			optional: true,
+			wantText: "tenant stamp not a string (int)",
+		},
 		{
 			name:     "optional_still_refuses_invalid",
 			stamp:    strings.Repeat("a", 300),
@@ -285,6 +291,24 @@ func TestRunRefusesAnUnusableStampWithoutCallingTheHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRunSeedsAnOptionalConsumerThatDoesGetAStamp: TenantOptional relaxes what a
+// MISSING stamp means, nothing else — a control-plane consumer that does receive a
+// valid stamp must still run under that tenant, not tenant-less.
+func TestRunSeedsAnOptionalConsumerThatDoesGetAStamp(t *testing.T) {
+	h := newHarness(t)
+	var seen string
+	req := h.request(func(ctx context.Context, _ logger.Logger, _ string) error {
+		seen, _ = multitenant.GetTenant(ctx)
+		return nil
+	})
+	req.TenantStamps = true
+	req.TenantOptional = true
+	req.Carrier = mapCarrier{tenantstamp.Header: "acme"}
+
+	assert.Equal(t, Succeeded, h.runRequest(req).Outcome)
+	assert.Equal(t, "acme", seen)
 }
 
 // TestRunLetsAnOptionalConsumerRunWithoutAStamp is the one case TenantOptional

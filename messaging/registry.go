@@ -70,9 +70,11 @@ type Registry struct {
 	declared        bool
 	consumersActive bool
 	cancelConsumers context.CancelFunc
-	// tenantStamps makes every delivery's tenant stamp seed the handler context.
-	// Set from ManagerOptions.TenantStamps when the manager builds this registry:
+	// tenantStamps makes every delivery's tenant stamp seed the handler context:
 	// true only under multitenant.enabled together with messaging.tenancy: shared.
+	// Set once by NewRegistry and never written again, so it needs no mutex and is
+	// deliberately absent from the "Mutex protects" list above — a setter would have
+	// made correctness depend on being called before StartConsumers.
 	tenantStamps bool
 	// resubscribeDelay is the backoff between consumer re-subscribe attempts
 	// after a delivery-channel close. Defaults to defaultConsumerResubscribeDelay;
@@ -142,10 +144,11 @@ type ConsumerDeclaration struct {
 }
 
 // NewRegistry creates a new messaging registry
-func NewRegistry(client AMQPClient, log logger.Logger) *Registry {
+func NewRegistry(client AMQPClient, log logger.Logger, tenantStamps bool) *Registry {
 	return &Registry{
 		client:           client,
 		logger:           log,
+		tenantStamps:     tenantStamps,
 		exchanges:        make(map[string]*ExchangeDeclaration),
 		queues:           make(map[string]*QueueDeclaration),
 		bindings:         make([]*BindingDeclaration, 0),

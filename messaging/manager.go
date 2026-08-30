@@ -292,8 +292,7 @@ func (m *Manager) ensureConsumersInternal(ctx context.Context, key string, decls
 	}
 
 	// Create registry and replay declarations
-	registry := NewRegistry(client, m.logger)
-	registry.tenantStamps = m.tenantStamps
+	registry := NewRegistry(client, m.logger, m.tenantStamps)
 	if err := decls.ReplayToRegistry(registry); err != nil {
 		m.closeClientOnRollback(client, key, "replay_declarations")
 		return fmt.Errorf("failed to replay messaging declarations: %w", err)
@@ -393,25 +392,17 @@ func (m *Manager) Publisher(ctx context.Context, key string) (AMQPClient, Releas
 // client creation — the pool owns all lease/LRU/eviction bookkeeping. Invoked inside the
 // pool's create callback, so singleflight guarantees one call per key per creation.
 //
-// The key reaches the client through an optional interface rather than a concrete
-// type, so the manager stays coupled to AMQPClient and a client that has no publish
-// door to stamp from — a test double, an adapter — simply does not implement it.
+// Every client is wrapped, whatever produced it: the factory is replaceable
+// (app.Options.MessagingClientFactory), so a stamp that depended on the concrete
+// type would be silently absent for a deployment with its own factory — and under
+// messaging.tenancy: shared that deployment's consumers would nack every delivery.
 func (m *Manager) createPublisher(ctx context.Context, key string) (AMQPClient, error) {
 	// Create the AMQP client (error is already well-formatted from createAMQPClient)
 	client, err := m.createAMQPClient(ctx, key)
 	if err != nil {
 		return nil, err
 	}
-	if setter, ok := client.(replayKeySetter); ok {
-		setter.setReplayKey(key)
-	}
-	return client, nil
-}
-
-// replayKeySetter is implemented by clients that stamp the tenant onto their
-// publishes and therefore need to know which key they were pooled under.
-type replayKeySetter interface {
-	setReplayKey(key string)
+	return newStampingPublisher(client, key), nil
 }
 
 // createAMQPClient creates a new AMQP client for the given key

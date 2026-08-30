@@ -54,18 +54,18 @@ func Write(id string, set func(key string, value any)) {
 	}
 }
 
-// CheckCallerHeaders rejects caller-supplied headers whose stamp is not the one
-// the framework resolved. An identical value is accepted rather than refused:
-// it claims nothing the framework was not already going to write.
-func CheckCallerHeaders(headers map[string]any, stamp string) error {
-	value, ok := headers[Header]
-	if !ok {
-		return nil
+// CheckCallerHeaders rejects any caller-supplied stamp, whatever its value.
+//
+// A value identical to the one the framework would write is refused too: the
+// framework is the stamp's only writer, and a caller that sets the header is
+// claiming a field it does not own even when it happens to guess right. Accepting
+// the match would also make the rule depend on what the framework resolved, which
+// a caller cannot see.
+func CheckCallerHeaders(headers map[string]any) error {
+	if _, ok := headers[Header]; ok {
+		return ErrConflict
 	}
-	if id, isString := value.(string); isString && id == stamp && stamp != "" {
-		return nil
-	}
-	return ErrConflict
+	return nil
 }
 
 // Reasons a stamp cannot be used. ReasonMissing is the only one a tenant-optional
@@ -84,9 +84,16 @@ const (
 type ReadError struct {
 	Reason string
 	Len    int
+	// Type is the carrier value's Go type, set only for ReasonNotString where a
+	// byte length would be meaningless. Rendered with %T at the point of capture,
+	// never the value itself.
+	Type string
 }
 
 func (e *ReadError) Error() string {
+	if e.Type != "" {
+		return fmt.Sprintf("tenant stamp %s (%s)", e.Reason, e.Type)
+	}
 	return fmt.Sprintf("tenant stamp %s (%d bytes)", e.Reason, e.Len)
 }
 
@@ -101,7 +108,10 @@ func Read(get func(key string) any) (string, error) {
 
 	id, ok := value.(string)
 	if !ok {
-		return "", &ReadError{Reason: ReasonNotString}
+		// The length of a non-string says nothing (it has none), and the value is
+		// producer-written, so the type is the only safe diagnostic — ADR-081's rule
+		// for a value whose provenance is not ours.
+		return "", &ReadError{Reason: ReasonNotString, Type: fmt.Sprintf("%T", value)}
 	}
 
 	if err := multitenant.ValidateTenantID(id); err != nil {

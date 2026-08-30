@@ -18,7 +18,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	"github.com/gaborage/go-bricks/observability"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -29,13 +28,8 @@ import (
 // AMQPClientImpl provides an AMQP implementation of the messaging client interface.
 // It includes automatic reconnection, retry logic, and AMQP-specific features.
 type AMQPClientImpl struct {
-	m         *sync.RWMutex
-	brokerURL string
-	// replayKey is the key this client was pooled under: a tenant for a
-	// per-tenant client, "" for a control-plane one. It is a stamp SOURCE, not
-	// just a label — see tenantstamp.Resolve for how it and the context tenant
-	// combine. Set once at creation, before the client is shared.
-	replayKey  string
+	m          *sync.RWMutex
+	brokerURL  string
 	log        logger.Logger
 	connection amqpConnection
 	channel    amqpChannel
@@ -342,28 +336,8 @@ func createPublishSpan(ctx context.Context, options PublishOptions, dataLen int,
 	return ctx, span
 }
 
-// setReplayKey records the key this client was pooled under. Called once by the
-// manager at creation, before the client is shared with any publisher.
-func (c *AMQPClientImpl) setReplayKey(key string) {
-	c.replayKey = key
-}
-
-// tenantStamp resolves the tenant this publish is stamped with and refuses a
-// caller-supplied stamp that disagrees with it. Both doors call it before any
-// frame is built, so a refused publish never reaches the channel.
-func (c *AMQPClientImpl) tenantStamp(ctx context.Context, callerHeaders map[string]any) (string, error) {
-	stamp, err := tenantstamp.Resolve(ctx, c.replayKey)
-	if err != nil {
-		return "", err
-	}
-	if err := tenantstamp.CheckCallerHeaders(callerHeaders, stamp); err != nil {
-		return "", err
-	}
-	return stamp, nil
-}
-
 // preparePublishing creates an AMQP publishing message with headers, trace context, and message IDs.
-func preparePublishing(ctx context.Context, options PublishOptions, data []byte, stamp string) amqp.Publishing {
+func preparePublishing(ctx context.Context, options PublishOptions, data []byte) amqp.Publishing {
 	publishing := amqp.Publishing{
 		ContentType: contentTypeOctetStream,
 		Body:        data,
@@ -377,8 +351,6 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte,
 	// Inject trace headers using centralized trace package
 	accessor := amqpHeaderAccessor{headers: publishing.Headers}
 	gobrickstrace.InjectIntoHeaders(ctx, accessor)
-
-	tenantstamp.Write(stamp, accessor.Set)
 
 	// AMQP-specific: populate CorrelationId and MessageId.
 	//
@@ -435,31 +407,25 @@ func preparePublishing(ctx context.Context, options PublishOptions, data []byte,
 // included.
 func (c *AMQPClientImpl) publishPrologue(
 	ctx context.Context, options PublishOptions, dataLen int,
-) (spanCtx context.Context, span trace.Span, publishStart time.Time, stamp string, err error) {
+) (spanCtx context.Context, span trace.Span, publishStart time.Time, err error) {
 	if err := ValidatePublishDestination(options); err != nil {
-		return ctx, nil, time.Time{}, "", err
+		return ctx, nil, time.Time{}, err
 	}
-
-	resolvedStamp, stampErr := c.tenantStamp(ctx, options.Headers)
-	if stampErr != nil {
-		return ctx, nil, time.Time{}, "", stampErr
-	}
-	stamp = resolvedStamp
 
 	startTime := time.Now()
 	ctx, span = createPublishSpan(ctx, options, dataLen, startTime)
 
 	if err := c.publishPreflight(ctx, options, startTime, span); err != nil {
 		span.End()
-		return ctx, nil, time.Time{}, "", err
+		return ctx, nil, time.Time{}, err
 	}
 
-	return ctx, span, time.Now(), stamp, nil
+	return ctx, span, time.Now(), nil
 }
 
 // PublishToExchange publishes a message to a specific exchange with routing key.
 func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishOptions, data []byte) error {
-	ctx, span, publishStart, stamp, err := c.publishPrologue(ctx, options, len(data))
+	ctx, span, publishStart, err := c.publishPrologue(ctx, options, len(data))
 	if err != nil {
 		return err
 	}
@@ -480,7 +446,7 @@ func (c *AMQPClientImpl) PublishToExchange(ctx context.Context, options PublishO
 		default:
 		}
 
-		publishing := preparePublishing(ctx, options, data, stamp)
+		publishing := preparePublishing(ctx, options, data)
 		messageID := publishing.MessageId
 		correlationID := publishing.CorrelationId
 
@@ -1292,17 +1258,12 @@ func (c *AMQPClientImpl) unsafePublish(ctx context.Context, options PublishOptio
 		return err
 	}
 
-	stamp, err := c.tenantStamp(ctx, options.Headers)
-	if err != nil {
-		return err
-	}
-
 	channel, err := c.readyChannel()
 	if err != nil {
 		return err
 	}
 
-	publishing := preparePublishing(ctx, options, data, stamp)
+	publishing := preparePublishing(ctx, options, data)
 
 	return channel.PublishWithContext(
 		ctx,

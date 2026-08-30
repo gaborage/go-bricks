@@ -193,7 +193,7 @@ func TestProcessMessageSinksNeverEmitAnUnvouchedIdentifier(t *testing.T) {
 			exporter, cleanup := setupTestTracing(t)
 			defer cleanup()
 
-			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 			consumer := &ConsumerDeclaration{
 				Queue:     testQueueName,
 				EventType: testEventType,
@@ -263,7 +263,7 @@ func TestProcessMessageSuccessLineOmitsAnUnvouchedMessageID(t *testing.T) {
 		{name: "injected", messageID: poisonedID},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{}, false)
 			consumer := &ConsumerDeclaration{
 				Queue:     testQueueName,
 				EventType: testEventType,

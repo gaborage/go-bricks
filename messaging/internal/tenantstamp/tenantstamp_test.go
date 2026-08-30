@@ -71,25 +71,22 @@ func TestCheckCallerHeaders(t *testing.T) {
 	tests := []struct {
 		name    string
 		headers map[string]any
-		stamp   string
 		wantErr bool
 	}{
-		{name: "check_nil", headers: nil, stamp: testTenant},
-		{name: "check_clean", headers: map[string]any{"a": 1}, stamp: testTenant},
-		{name: "check_equal_accepted", headers: map[string]any{Header: testTenant}, stamp: testTenant},
-		{name: "check_differs", headers: map[string]any{Header: "globex"}, stamp: testTenant, wantErr: true},
-		{name: "check_present_without_stamp", headers: map[string]any{Header: testTenant}, wantErr: true},
-		{name: "check_empty_value", headers: map[string]any{Header: ""}, stamp: testTenant, wantErr: true},
-		{name: "check_not_a_string", headers: map[string]any{Header: 42}, stamp: testTenant, wantErr: true},
-		// An empty caller value against an empty stamp: the two "match", but a
-		// control-plane publish carries no stamp at all, so a caller writing the
-		// header is still claiming to own a field only the framework writes.
-		{name: "check_empty_value_without_stamp", headers: map[string]any{Header: ""}, wantErr: true},
+		{name: "check_nil", headers: nil},
+		{name: "check_clean", headers: map[string]any{"a": 1}},
+		// Every shape of a caller-supplied stamp is refused, including one that
+		// matches what the framework would have written: the framework is the only
+		// writer, and a caller guessing right still claims a field it does not own.
+		{name: "check_present", headers: map[string]any{Header: testTenant}, wantErr: true},
+		{name: "check_empty_value", headers: map[string]any{Header: ""}, wantErr: true},
+		{name: "check_not_a_string", headers: map[string]any{Header: 42}, wantErr: true},
+		{name: "check_nil_value", headers: map[string]any{Header: nil}, wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := CheckCallerHeaders(tt.headers, tt.stamp)
+			err := CheckCallerHeaders(tt.headers)
 
 			if !tt.wantErr {
 				require.NoError(t, err)
@@ -110,7 +107,7 @@ func TestRead(t *testing.T) {
 	}{
 		{name: "read_ok", value: testTenant, wantID: testTenant},
 		{name: "read_missing", value: nil, wantText: "tenant stamp missing (0 bytes)"},
-		{name: "read_not_string", value: 42, wantText: "not a string"},
+		{name: "read_not_string", value: 42, wantText: "tenant stamp not a string (int)"},
 		{name: "read_invalid", value: "Acme", wantText: "4 bytes", notText: "Acme"},
 		{
 			name:     "read_invalid_long",
@@ -122,7 +119,13 @@ func TestRead(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			id, err := Read(func(string) any { return tt.value })
+			var askedFor []string
+			id, err := Read(func(key string) any {
+				askedFor = append(askedFor, key)
+				return tt.value
+			})
+			assert.Equal(t, []string{Header}, askedFor,
+				"Read must ask the carrier for the stamp header, not some other key")
 
 			if tt.wantID != "" {
 				require.NoError(t, err)

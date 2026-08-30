@@ -261,7 +261,7 @@ func TestPreWarmGateIsPerKind(t *testing.T) {
 
 		require.NoError(t, fatal)
 		require.NoError(t, advisory)
-		assert.Zero(t, loggedCount(rec, "Pre-warmed single-tenant database connection"),
+		assert.Zero(t, loggedCount(rec, "Pre-warmed control-plane database connection"),
 			"the database is still resolved per tenant when only messaging is shared")
 	})
 }
