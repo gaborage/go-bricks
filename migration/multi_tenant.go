@@ -328,6 +328,11 @@ func runOne(
 		res.Duration = time.Since(start)
 		return res
 	}
+	if dbCfg == nil {
+		res.Err = fmt.Errorf("resolve db config: %w", database.ErrNoDatabaseConfig)
+		res.Duration = time.Since(start)
+		return res
+	}
 	res.Vendor = dbCfg.Type
 
 	defaults := migrator.DefaultMigrationConfigForVendor(dbCfg.Type)

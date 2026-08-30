@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -305,4 +306,56 @@ func TestRunQuiesceClearNoOpEmitsJSON(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, runQuiesceClear(context.Background(), &out, ctrl, "ops", true))
 	assert.Contains(t, out.String(), `"active": false`, "clear --json must emit machine-readable output on the no-op path")
+}
+
+func TestResolveControlPlaneConfigRejectsNilConfig(t *testing.T) {
+	boom := errors.New("vault down")
+	tests := []struct {
+		name     string
+		provider *stubProvider
+		errFrags []string
+	}{
+		{
+			name:     "nil_config_and_nil_error",
+			provider: &stubProvider{},
+			errFrags: []string{"no configuration", "tenant-a"},
+		},
+		{
+			name:     "provider_error",
+			provider: &stubProvider{err: boom},
+			errFrags: []string{"resolve control-plane db config for", "vault down"},
+		},
+		{
+			name:     "non_postgresql_vendor",
+			provider: &stubProvider{cfg: &config.DatabaseConfig{Type: "oracle"}},
+			errFrags: []string{"PostgreSQL-only in v1"},
+		},
+		{
+			name:     "postgresql_vendor",
+			provider: &stubProvider{cfg: &config.DatabaseConfig{Type: config.PostgreSQL}},
+		},
+		{
+			name:     "empty_vendor",
+			provider: &stubProvider{cfg: &config.DatabaseConfig{}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg *config.DatabaseConfig
+			var err error
+			require.NotPanics(t, func() {
+				cfg, err = resolveControlPlaneConfig(context.Background(), tt.provider, "tenant-a")
+			})
+			if len(tt.errFrags) == 0 {
+				require.NoError(t, err)
+				assert.NotNil(t, cfg)
+				return
+			}
+			require.Error(t, err)
+			for _, frag := range tt.errFrags {
+				assert.ErrorContains(t, err, frag)
+			}
+		})
+	}
 }

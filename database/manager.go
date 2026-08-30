@@ -16,6 +16,8 @@ import (
 type DBConfigProvider interface {
 	// DBConfig returns the database configuration for the given key.
 	// For single-tenant apps, key will be "". For multi-tenant, key will be the tenant ID.
+	// An implementation MUST return either a non-nil configuration or a non-nil error;
+	// the manager rejects a (nil, nil) result with ErrNoDatabaseConfig.
 	DBConfig(ctx context.Context, key string) (*config.DatabaseConfig, error)
 }
 
@@ -35,6 +37,10 @@ type ReleaseFunc func()
 // DbManager exposed no closed-state error before the resourcepool rewire, so this
 // closes F22 while keeping the public surface unchanged.
 var errManagerClosed = errors.New("database: manager closed")
+
+// ErrNoDatabaseConfig is returned when a DBConfigProvider hands back a nil configuration
+// with a nil error, a contract violation the manager rejects instead of dereferencing.
+var ErrNoDatabaseConfig = errors.New("database: config provider returned no configuration")
 
 // DbManager manages database connections by string keys.
 // It provides lazy initialization, LRU eviction, and cleanup for database connections.
@@ -104,7 +110,9 @@ func NewDbManager(resourceSource DBConfigProvider, log logger.Logger, opts DbMan
 // run, Get fails closed rather than resurrecting a connection (F22) — except a caller
 // already mid-Get on a fresh connection another borrower holds, who may still receive
 // that live handle after Close returns; it closes exactly once, at its final release.
-// On error the returned ReleaseFunc is nil — check err first.
+// On error the returned ReleaseFunc is nil — check err first. A provider that breaks the
+// DBConfigProvider contract by returning (nil, nil) yields an error a caller can match
+// with errors.Is against ErrNoDatabaseConfig.
 func (m *DbManager) Get(ctx context.Context, key string) (Interface, ReleaseFunc, error) {
 	if m.pool == nil {
 		// Zero-value manager (never built via NewDbManager): unusable, fail closed rather
@@ -133,6 +141,9 @@ func (m *DbManager) createConnection(ctx context.Context, key string) (Interface
 	dbConfig, err := m.resourceSource.DBConfig(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get database config for key %s: %w", key, err)
+	}
+	if dbConfig == nil {
+		return nil, fmt.Errorf("%w for key %s", ErrNoDatabaseConfig, key)
 	}
 	// Shallow-clone before defaulting: providers may return long-lived shared configs.
 	cfgCopy := *dbConfig

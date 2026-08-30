@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gaborage/go-bricks/config"
+	"github.com/gaborage/go-bricks/database"
 	"github.com/gaborage/go-bricks/migration"
 )
 
@@ -268,12 +269,9 @@ func openControlPlaneDB(ctx context.Context, flags *CommonFlags) (db *sql.DB, cl
 	if err != nil {
 		return nil, nil, err
 	}
-	dbCfg, err := provider.DBConfig(ctx, flags.Tenant)
+	dbCfg, err := resolveControlPlaneConfig(ctx, provider, flags.Tenant)
 	if err != nil {
-		return nil, nil, fmt.Errorf("resolve control-plane db config for %q: %w", flags.Tenant, err)
-	}
-	if dbCfg.Type != "" && dbCfg.Type != config.PostgreSQL {
-		return nil, nil, fmt.Errorf("quiesce is PostgreSQL-only in v1; control-plane target is %q", dbCfg.Type)
+		return nil, nil, err
 	}
 
 	opened, err := sql.Open("pgx", controlPlaneDSN(dbCfg))
@@ -285,6 +283,24 @@ func openControlPlaneDB(ctx context.Context, flags *CommonFlags) (db *sql.DB, cl
 		return nil, nil, fmt.Errorf("connect control-plane db: %w", err)
 	}
 	return opened, func() { _ = opened.Close() }, nil
+}
+
+// resolveControlPlaneConfig resolves the tenant's database section and checks it is a
+// usable PostgreSQL control-plane target.
+func resolveControlPlaneConfig(ctx context.Context, provider database.DBConfigProvider, tenant string) (*config.DatabaseConfig, error) {
+	dbCfg, err := provider.DBConfig(ctx, tenant)
+	if err != nil {
+		return nil, fmt.Errorf("resolve control-plane db config for %q: %w", tenant, err)
+	}
+	if dbCfg == nil {
+		// Local error: this module pins a RELEASED go-bricks, so database.ErrNoDatabaseConfig
+		// does not exist here until the next tag — switching to it rides the pin bump.
+		return nil, fmt.Errorf("resolve control-plane db config for %q: provider returned no configuration", tenant)
+	}
+	if dbCfg.Type != "" && dbCfg.Type != config.PostgreSQL {
+		return nil, fmt.Errorf("quiesce is PostgreSQL-only in v1; control-plane target is %q", dbCfg.Type)
+	}
+	return dbCfg, nil
 }
 
 // controlPlaneDSN builds a pgx DSN, mirroring the framework's database/postgresql
