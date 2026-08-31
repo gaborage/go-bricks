@@ -5,12 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
-	"unicode"
 
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/leasescope"
+	"github.com/gaborage/go-bricks/internal/ledgererr"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
 	"github.com/gaborage/go-bricks/multitenant"
@@ -397,7 +396,7 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 // failures never reach here — they call markRecordFailed directly and are never parked.
 func (r *Relay) deadLetterPoison(ctx context.Context, log logger.Logger, db dbtypes.Interface, record *Record, errMsg string) publishOutcome {
 	if record.RetryCount+1 >= r.config.MaxRetries {
-		if err := r.store.MarkDeadLettered(ctx, db, record.ID, boundPersistedError(errMsg)); err != nil {
+		if err := r.store.MarkDeadLettered(ctx, db, record.ID, ledgererr.Bound(errMsg)); err != nil {
 			log.Error().Err(err).Str("eventID", record.ID).Msg("Failed to dead-letter outbox event")
 			return outcomeFailed
 		}
@@ -411,64 +410,9 @@ func (r *Relay) deadLetterPoison(ctx context.Context, log logger.Logger, db dbty
 	return outcomeFailed
 }
 
-// maxPersistedErrorBytes bounds the diagnostic text the relay writes to a
-// record's error column. Both ledgers declare that column unbounded (`error
-// TEXT` on PostgreSQL, `error_msg CLOB` on Oracle), and the value written there
-// is not ours: it is err.Error() from a broker or driver, which can carry
-// server-supplied text of any length. A record that keeps failing rewrites the
-// column every cycle, so an unbounded error is unbounded storage per retry, on
-// the one table a service cannot drop.
-//
-// 1 KiB holds a broker error with its context and truncates only the pathological.
-const maxPersistedErrorBytes = 1024
-
-// truncationMarker is appended in place of the bytes dropped, so a reader can
-// tell a short error from a shortened one.
-const truncationMarker = "...[truncated]"
-
-// boundPersistedError makes an arbitrary error string safe to store.
-//
-// Unlike an inbound trace identifier — where truncation silently forges
-// correlation by mapping distinct upstream ids onto one, so a bad value is
-// DISCARDED — this text is diagnostic and nothing keys on it. A truncated error
-// still says what went wrong, while discarding one would throw away the only
-// record of why a record is stuck. So truncation is the right answer here, and
-// the marker keeps it honest.
-//
-// Three things happen, in order:
-//   - Invalid UTF-8 is dropped. PostgreSQL rejects it outright, which would fail
-//     the UPDATE and leave retry_count un-advanced — a record retrying forever
-//     because the framework could not write down why it failed.
-//   - Control bytes become spaces. This text is read back into logs and
-//     dashboards, and a broker-supplied newline should not be able to forge a
-//     log line there. Only control bytes: ToValidUTF8 has already removed every
-//     invalid sequence, so a U+FFFD reaching here is one the sender actually
-//     wrote, and substituting it would drop a character nothing is wrong with.
-//   - The result is capped without leaving a half-encoded character in the
-//     column.
-func boundPersistedError(errMsg string) string {
-	cleaned := strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, strings.ToValidUTF8(errMsg, ""))
-
-	if len(cleaned) <= maxPersistedErrorBytes {
-		return cleaned
-	}
-
-	// Slicing at a byte offset can land mid-rune; ToValidUTF8 drops the partial
-	// tail, so the column never receives a half-encoded character. Doing it this
-	// way rather than walking back to a rune start keeps the boundary out of the
-	// code: there is no index to be off by one on.
-	keep := maxPersistedErrorBytes - len(truncationMarker)
-	return strings.ToValidUTF8(cleaned[:keep], "") + truncationMarker
-}
-
 // markRecordFailed marks an outbox record as failed, logging any secondary errors.
 func (r *Relay) markRecordFailed(ctx context.Context, log logger.Logger, db dbtypes.Interface, eventID, errMsg string) {
-	if markErr := r.store.MarkFailed(ctx, db, eventID, boundPersistedError(errMsg)); markErr != nil {
+	if markErr := r.store.MarkFailed(ctx, db, eventID, ledgererr.Bound(errMsg)); markErr != nil {
 		log.Error().
 			Err(markErr).
 			Str("eventID", eventID).

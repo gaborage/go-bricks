@@ -41,6 +41,14 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 		return err
 	}
 
+	hold, err := a.holdLedger()
+	if err != nil {
+		return err
+	}
+	if err := assertHoldIsDrainable(hold); err != nil {
+		return err
+	}
+
 	cfg := a.cfg.Messaging.Streams
 	a.warnIfPlaintextStreamURI(cfg.URI)
 	mgr := streams.NewManager(streams.ManagerOptions{
@@ -50,6 +58,7 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 		OffsetStoreCount:    cfg.OffsetStore.CountBeforeStorage,
 		OffsetStoreInterval: cfg.OffsetStore.FlushInterval,
 		Logger:              a.logger,
+		Hold:                hold,
 	})
 	mgr.SetTenantStamps(a.multiTenant() && a.sharedMessaging())
 
@@ -138,4 +147,40 @@ func (a *App) shutdownStreamConsumers() {
 	}
 	a.logger.Info().Msg("Stopping stream consumers")
 	a.streamsManager.StopConsumers()
+}
+
+// holdLedger is the one ledger stream consumers park into, or nil when no module
+// offers one. Two providers is a configuration error rather than a choice: the
+// hold's order guarantee is per tenant per consumer, and two ledgers would split
+// one consumer's held set between them.
+func (a *App) holdLedger() (streams.HoldLedger, error) {
+	var found streams.HoldLedger
+	for _, provider := range a.holdLedgers {
+		ledger := provider.HoldLedger()
+		if ledger == nil {
+			continue
+		}
+		if found != nil {
+			return nil, errors.New("two modules provide a hold ledger; stream consumers can park into only one")
+		}
+		found = ledger
+	}
+	return found, nil
+}
+
+// assertHoldIsDrainable refuses a hold nothing can replay. A parked message would
+// wait for a drain that never runs, and only hand-written SQL would release it —
+// so a build without one refuses the configuration instead of accepting messages
+// it cannot give back. The capability is the manager's, so this asks the type
+// itself: the guard dissolves when the manager gains the methods, with no wiring
+// step to remember.
+func assertHoldIsDrainable(hold streams.HoldLedger) error {
+	if hold == nil {
+		return nil
+	}
+	if _, drains := any((*streams.Manager)(nil)).(streams.HoldReplayer); !drains {
+		return errors.New("a hold ledger is configured but this build cannot drain it: " +
+			"parked messages would never be replayed; disable inbox.hold.enabled until the hold drain is available")
+	}
+	return nil
 }

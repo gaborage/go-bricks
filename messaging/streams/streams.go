@@ -143,9 +143,16 @@ type ConsumerOptions struct {
 	// because the waits run inside the partition's own delivery callback; a failure
 	// that needs more patience than that belongs in the hold.
 	Retry *RetryOptions
-	// Hold asks for per-tenant parking of a failed delivery. Today it selects
-	// DefaultHoldRetry when Retry is nil; the ledger the parked delivery lands in
-	// arrives with the hold itself.
+	// Hold parks a failed delivery per tenant so the tenant's later messages wait
+	// behind it while the rest of the partition keeps flowing.
+	//
+	// SECURITY: the tenant is read from the producer-written stamp, which is
+	// identification and not authorization (ADR-039's rule for HTTP resolvers,
+	// applied here). A producer that can publish to this stream therefore chooses
+	// which tenant a message is held under, and a failure it induces holds THAT
+	// tenant until the hold drains. Isolating producers — per-tenant credentials
+	// or vhosts — stays the deployment's job, and it matters more here than for a
+	// delivery that is merely mis-attributed.
 	Hold bool
 	// TenantOptional lets this consumer run a delivery that carries no tenant stamp
 	// (a control-plane consumer). Default false: a consumer that needs a tenant fails
@@ -184,9 +191,16 @@ type SuperStreamConsumerOptions struct {
 	// because the waits run inside the partition's own delivery callback; a failure
 	// that needs more patience than that belongs in the hold.
 	Retry *RetryOptions
-	// Hold asks for per-tenant parking of a failed delivery. Today it selects
-	// DefaultHoldRetry when Retry is nil; the ledger the parked delivery lands in
-	// arrives with the hold itself.
+	// Hold parks a failed delivery per tenant so the tenant's later messages wait
+	// behind it while the rest of the partition keeps flowing.
+	//
+	// SECURITY: the tenant is read from the producer-written stamp, which is
+	// identification and not authorization (ADR-039's rule for HTTP resolvers,
+	// applied here). A producer that can publish to this stream therefore chooses
+	// which tenant a message is held under, and a failure it induces holds THAT
+	// tenant until the hold drains. Isolating producers — per-tenant credentials
+	// or vhosts — stays the deployment's job, and it matters more here than for a
+	// delivery that is merely mis-attributed.
 	Hold bool
 	// TenantOptional lets this consumer run a delivery that carries no tenant stamp
 	// (a control-plane consumer). Default false: fail closed. It never admits a

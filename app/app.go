@@ -93,6 +93,9 @@ type App struct {
 	// streamsManager exists only from prepareRuntime onward; see streamsSlot in slot.go
 	// for why its probe and closer are registered separately from the build-time walks.
 	streamsManager *streams.Manager
+	// holdLedgers are the modules offering a hold ledger, captured at registration.
+	// More than one is a configuration error the streams setup reports.
+	holdLedgers []holdLedgerProvider
 
 	closers      []namedCloser
 	healthProbes []Prober
@@ -255,7 +258,26 @@ func (a *App) RegisterModule(module Module) error {
 	if setter, ok := module.(sharedResolverSetter); ok {
 		setter.SetSharedResolvers(a.sharedDBResolver(), a.sharedMessagingResolver())
 	}
-	return a.registry.Register(module)
+
+	if setter, ok := module.(holdReplayerSetter); ok {
+		// A source, not a value: the streams manager is built later, in
+		// prepareStreamConsumers, so a value captured here would always be nil. The
+		// manager becomes the replayer when the drain that drives it lands; until
+		// then the source answers nil, which is what a module with no drain to run
+		// does with it.
+		setter.SetHoldReplayer(func() streams.HoldReplayer { return nil })
+	}
+	if err := a.registry.Register(module); err != nil {
+		return err
+	}
+
+	// Only after the registry accepted it: a module rejected as a duplicate must not
+	// leave its ledger behind, where it would count toward "two modules provide a
+	// hold ledger" and refuse a startup that is actually fine.
+	if provider, ok := module.(holdLedgerProvider); ok {
+		a.holdLedgers = append(a.holdLedgers, provider)
+	}
+	return nil
 }
 
 // sharedDBResolver returns a resolver for the control-plane ("" key) database,

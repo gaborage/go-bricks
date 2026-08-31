@@ -12,6 +12,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // Module implements the GoBricks Module interface for the consumer-side inbox.
@@ -43,7 +44,15 @@ type Module struct {
 	cfg       config.InboxConfig
 
 	stores tenantstore.Cache[Store] // one store per tenant ("" = single-tenant)
+	// holdStores holds the hold ledger's store. Always the control-plane key: a
+	// hold lives on that database and nowhere else.
+	holdStores   tenantstore.Cache[HoldStore]
+	holdReplayer func() streams.HoldReplayer
 }
+
+// moduleName is what this module answers to, and the prefix its store errors and
+// table diagnostics carry.
+const moduleName = "inbox"
 
 // NewModule creates a new inbox Module instance.
 func NewModule() *Module {
@@ -52,7 +61,7 @@ func NewModule() *Module {
 
 // Name implements app.Module.
 func (m *Module) Name() string {
-	return "inbox"
+	return moduleName
 }
 
 // SetSharedResolvers injects the control-plane ("" key) resolvers. Called by
@@ -69,6 +78,10 @@ func (m *Module) SetSharedResolvers(
 // sharedLedger reports whether the inbox is configured for shared
 // (control-plane) tenancy rather than the default per-tenant fan-out.
 func (m *Module) sharedLedger() bool { return m.cfg.Tenancy == config.TenancyShared }
+
+// holdEnabled reports whether this module runs a hold ledger: an enabled inbox
+// that asked for one.
+func (m *Module) holdEnabled() bool { return m.cfg.Enabled && m.cfg.Hold.Enabled }
 
 // Init implements app.Module.
 func (m *Module) Init(deps *app.ModuleDeps) error {
@@ -89,6 +102,15 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 		return nil
 	}
 
+	// A hold parks one tenant's messages so the others keep flowing, which only
+	// works on the control-plane ledger: a tenant whose own database is down cannot
+	// hold its own messages there. Checked after the disabled return, so a stray
+	// hold key on a disabled inbox stays the no-op the rest of the module is.
+	if m.cfg.Hold.Enabled && !m.sharedLedger() {
+		return errors.New("inbox: hold requires inbox.tenancy: shared — a tenant whose database is down " +
+			"cannot hold its own messages; set inbox.tenancy: shared or disable inbox.hold")
+	}
+
 	// Guards direct construction only: app.RegisterModule always wires a non-nil
 	// resolver, so this never fires through the normal registration path.
 	// verifyStartupDatabase (below) is the real fail-fast for an enabled inbox.
@@ -103,7 +125,7 @@ func (m *Module) Init(deps *app.ModuleDeps) error {
 	// this is a no-op in effect, but the resolver must still have been injected.
 	if m.sharedLedger() {
 		if m.sharedDB == nil {
-			return tenantstore.SharedResolversRequired("inbox")
+			return tenantstore.SharedResolversRequired(moduleName)
 		}
 		m.getDB = m.sharedDB
 		if err := tenantstore.RejectSharedWithStaticTenants("inbox", m.config); err != nil {
@@ -152,6 +174,10 @@ func (m *Module) verifyStartupDatabase() error {
 	}
 	if _, err := store.DeleteProcessed(ctx, db, time.Unix(0, 0).UTC()); err != nil {
 		return tenantstore.TableUnusableError("inbox", m.cfg.TableName, "inbox.autocreatetable", err)
+	}
+
+	if m.holdEnabled() {
+		return m.verifyHoldDatabase(ctx, db)
 	}
 	return nil
 }

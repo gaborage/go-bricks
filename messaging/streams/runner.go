@@ -13,6 +13,7 @@ import (
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
+	"github.com/gaborage/go-bricks/multitenant"
 )
 
 const (
@@ -220,6 +221,17 @@ type consumerRunner struct {
 	tenantStamps   bool
 	tenantOptional bool
 
+	// hold is the ledger a failed delivery is parked in, and the ONE thing that
+	// says whether this consumer holds: held is always present, so no pair of
+	// fields has to be kept in step for the gate to be safe.
+	hold HoldLedger
+	// held is this consumer's view of which tenants are held; the drain replaces
+	// it, a park adds to it. Empty and unused for a consumer that does not hold.
+	held *heldSet
+	// holdBackoff is the first wait between failed ledger writes, doubling to
+	// holdBackoffMax. A field so a test does not have to sleep for real.
+	holdBackoff time.Duration
+
 	// baseCtx is held rather than passed because the client's MessagesHandler
 	// carries no context of its own. The manager cancels it in StopConsumers.
 	baseCtx context.Context // NOSONAR S8242: no parameter to pass it through - the vendor callback signature is fixed
@@ -245,6 +257,31 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 		Properties: message.ApplicationProperties,
 	}
 
+	// A partition whose gate is closed has not been told what the ledger holds, so
+	// it WAITS here rather than skipping: a stream never redelivers, and a later
+	// success would commit an offset past the skipped ones, losing them silently.
+	//
+	// Blocking here stalls this consumer's own dispatch goroutine, not the
+	// connection: the client drains one chunk channel per consumer
+	// (rabbitmq-stream-go-client v1.8.3, client.go:1087). That isolation holds only
+	// while the chunk buffer absorbs — sendChunk blocks once it is full
+	// (consumer.go:418) — after which the wait back-pressures the broker, which is
+	// what a consumer that cannot safely consume should be saying. The reload that
+	// opens the gate runs on its own goroutine, so it is not waiting on this one.
+	if r.hold != nil && !r.held.awaitOpen(r.baseCtx) {
+		// The consumer is stopping. Nothing is committed, and a restart resumes from
+		// the last stored offset, which is at or before this message.
+		return
+	}
+
+	// tenant is written by the Handle closure and read by the Settle closure. Both
+	// run on THIS goroutine — the client calls deliver from the partition's own
+	// read loop, one delivery at a time, and Settle runs inside Run's deferred
+	// tail — so the local needs no guard. It stays empty exactly when the pipeline
+	// refused the delivery before the handler, which is the case with no tenant to
+	// hold and therefore nothing to park.
+	var tenant string
+
 	delivery.Run(r.baseCtx, &delivery.Request{
 		// The publisher already injects traceparent and X-Request-ID into these
 		// application properties; until now nobody read them back. ExtractFromHeaders
@@ -263,6 +300,13 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 		Log:     r.log,
 		Retry:   r.retry,
 		Handle: func(msgCtx context.Context, _ logger.Logger, _ string) error {
+			// The pipeline seeded the tenant before calling us (it refuses the
+			// delivery outright when the stamp cannot be read), so this is where the
+			// runner learns it.
+			tenant, _ = multitenant.TenantID(msgCtx)
+			if r.gates(tenant) {
+				return r.park(msgCtx, heldMessageOf(r.name, streamName, offset, tenant, msg, message), true)
+			}
 			// The handler signature is unchanged (ADR-069 follow-up decision Q1):
 			// a handler reads the trace id from msgCtx via trace.IDFromContext.
 			return r.handler(msgCtx, msg)
@@ -271,6 +315,10 @@ func (r *consumerRunner) deliver(streamName string, offset int64, message *amqp.
 			r.logOutcome(res, streamName, offset)
 		},
 		Settle: func(res *delivery.Result) {
+			if r.parks(res, tenant) {
+				r.parkFailed(res, streamName, offset, tenant, msg, message, store)
+				return
+			}
 			r.commitOffset(res, streamName, offset, store)
 		},
 	})
@@ -303,11 +351,18 @@ func (r *consumerRunner) logOutcome(res *delivery.Result, streamName string, off
 // batching tracker, which commits the batch high-water mark only when every
 // message in it succeeded (ADR-059).
 func (r *consumerRunner) commitOffset(res *delivery.Result, streamName string, offset int64, store offsetStorer) {
-	if storeErr := r.offsets.trackerFor(streamName).record(offset, res.Err, store); storeErr != nil {
-		// res.Log, not r.log: the pipeline's context-bound logger carries the
-		// trace_id and span_id a real ZeroLogger contributes, exactly as the
-		// classic lane's ack/nack failure lines do.
-		res.Log.Warn().Err(storeErr).
+	r.recordSettled(res.Log, streamName, offset, res.Err, store)
+}
+
+// recordSettled hands one settled delivery to the batching tracker and reports a
+// commit that failed. handleErr nil means the offset may advance — which a parked
+// delivery also earns, since the ledger owns the message once the park lands.
+func (r *consumerRunner) recordSettled(log logger.Logger, streamName string, offset int64, handleErr error, store offsetStorer) {
+	if storeErr := r.offsets.trackerFor(streamName).record(offset, handleErr, store); storeErr != nil {
+		// The context-bound logger, not r.log: it carries the trace_id and span_id a
+		// real ZeroLogger contributes, exactly as the classic lane's ack/nack failure
+		// lines do.
+		log.Warn().Err(storeErr).
 			Str(logFieldStream, streamName).
 			Str(logFieldConsumer, r.name).
 			Int64(logFieldOffset, offset).
