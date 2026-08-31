@@ -6286,9 +6286,12 @@ None of them is exhaustive — all three are line-oriented and blind to an impor
 - verify: after upgrading, `SELECT seq, lane FROM gobricks_outbox ORDER BY seq LIMIT 5` returns
   rows with `lane = 'amqp'`; a relay cycle logs `parked=0` on a healthy tick; with two replicas
   running, exactly one logs a cycle summary and the other logs `another instance leads this
-  ledger` at DEBUG. If you migrated a BACKLOG, confirm the backfill ran before the index by
-  reading `SELECT id, seq FROM gobricks_outbox ORDER BY created_at, id LIMIT 5` and checking `seq`
-  ascends with it — an unbackfilled ledger drains in an arbitrary order exactly once, invisibly.
+  ledger` at DEBUG. If you migrated a BACKLOG, confirm migration history shows the `seq`
+  backfill ran before the pending-index creation, and
+  `SELECT COUNT(*) FROM gobricks_outbox WHERE seq IS NULL` is 0 — every row has a
+  sequence. Do not expect `seq` to match `created_at` order: the backfill is heap
+  order on PostgreSQL and rowid order on Oracle. An unbackfilled ledger drains in
+  an arbitrary order exactly once, invisibly.
 - ref: `outbox/store.go` (`Record`, `Store.Lead`, `Leadership`, `leadRow`) ·
   `outbox/store_postgres.go` · `outbox/store_oracle.go` · `outbox/relay.go` (`relayKey`,
   `runRelayLoop`) · `outbox/publisher.go` · `database/errors.go` (`IsLockNotAvailable`) ·

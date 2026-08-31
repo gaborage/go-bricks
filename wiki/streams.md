@@ -492,6 +492,11 @@ transactional outbox instead of calling a publisher directly: list the target in
 `outbox.superstreams`, give the event a `Stream`, and the relay publishes it on this lane with
 the row's tenant stamp as the partition key ([outbox.md](outbox.md#lanes-and-ordering)).
 
+A non-empty `outbox.superstreams` requires `messaging.streams.uri`. Every listed name must
+already be declared as a super stream (`DeclareSuperStream`) before the outbox creates its
+publisher — otherwise startup fails with "undeclared super stream". See
+[C61.23](migrations.md) for the hop that added the stream leg.
+
 The consequence to know: the outbox declares one publisher per listed super stream, and a
 super stream accepts only ONE publisher per process. So a target the outbox owns cannot also be
 published to directly by another module in the same service — that second declaration is
