@@ -535,3 +535,32 @@ func (m *mockTenantStoreInvalidPort) BrokerURL(_ context.Context, _ string) (str
 func (m *mockTenantStoreInvalidPort) IsDynamic() bool {
 	return false
 }
+
+// TestFactoryResolverDottedTenantIDSuppressesEnvHint drives the reachable producer of the
+// flattening trap end to end: TenantStore.AddTenant takes a FREE-FORM tenant id — the resolver
+// grammar constrains the static config, not the dynamic store — so "acme.corp" reaches the
+// runtime cache door, whose empty-host branch raises NewMissingFieldError. Flattened, its
+// variable would name tenant "acme", sub-key "corp"; the engine therefore emits the YAML-only
+// hint, whose path carries the dotted id verbatim.
+func TestFactoryResolverDottedTenantIDSuppressesEnvHint(t *testing.T) {
+	const dottedTenant = "acme.corp"
+
+	store := config.NewTenantStore(&config.Config{})
+	store.AddTenant(dottedTenant, &config.TenantEntry{
+		Cache: config.CacheConfig{Enabled: true, Type: config.CacheTypeRedis},
+	})
+
+	resolver := NewFactoryResolver(nil)
+	connector := resolver.CacheConnector(store, logger.New("debug", true))
+
+	c, err := connector(context.Background(), dottedTenant)
+
+	assert.Nil(t, c)
+	var configErr *config.ConfigError
+	require.ErrorAs(t, err, &configErr)
+	assert.Equal(t, "missing", configErr.Category)
+	assert.Equal(t, "multitenant.tenants.acme.corp.cache.redis.host", configErr.Field)
+	assert.Equal(t, "add multitenant.tenants.acme.corp.cache.redis.host to config.yaml", configErr.Action)
+	assert.NotContains(t, configErr.Action, "env var")
+	assert.NotContains(t, err.Error(), "MULTITENANT_TENANTS_ACME_CORP")
+}

@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.61.0](https://github.com/gaborage/go-bricks/compare/v0.60.0...v0.61.0) (2026-08-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **app:** make the streams lane opt-in at the build graph ([#1268](https://github.com/gaborage/go-bricks/issues/1268))
+* **app,cache:** address a tenant's cache config error to that tenant ([#1248](https://github.com/gaborage/go-bricks/issues/1248))
+* **outbox:** drain each ledger key-ordered under one relay leader ([#1245](https://github.com/gaborage/go-bricks/issues/1245))
+* **outbox:** order the ledger by a sequence and mark each row's lane ([#1241](https://github.com/gaborage/go-bricks/issues/1241))
+* **config:** reject section names unreachable by env var ([#1243](https://github.com/gaborage/go-bricks/issues/1243))
+* **database:** one acceptance rule for BuildUpsert column keys ([#1221](https://github.com/gaborage/go-bricks/issues/1221))
+* **trace:** validate a pre-set traceparent before re-emitting it ([#1220](https://github.com/gaborage/go-bricks/issues/1220))
+* **migration:** build the PostgreSQL Flyway JDBC URL in the framework ([#1188](https://github.com/gaborage/go-bricks/issues/1188))
+* **database:** validate RawExpression aliases against the grammar ([#1203](https://github.com/gaborage/go-bricks/issues/1203))
+* **observability:** record span errors by type at every sink ([#1189](https://github.com/gaborage/go-bricks/issues/1189))
+* **server:** stop echoing request input in 400 error details ([#1181](https://github.com/gaborage/go-bricks/issues/1181))
+
+### Added
+
+* **app:** shared messaging tenancy on the classic lane ([#1244](https://github.com/gaborage/go-bricks/issues/1244)) ([80e3d71](https://github.com/gaborage/go-bricks/commit/80e3d71d82b7d0d8601f767cc33e9d83e46daf90))
+* **config:** give the messaging kind a tenancy ([#1240](https://github.com/gaborage/go-bricks/issues/1240)) ([cbd2b26](https://github.com/gaborage/go-bricks/commit/cbd2b26b3f4cbfcb70b4f92dbf4218cbb98e0a6d))
+* **database:** Having accepts qb.Expr and joins the annotation rule ([#1195](https://github.com/gaborage/go-bricks/issues/1195)) ([3093719](https://github.com/gaborage/go-bricks/commit/3093719cccc96bfba0597ded9ea6fbbc6341f856))
+* **inbox:** drain the per-tenant hold and publish its backlog ([#1264](https://github.com/gaborage/go-bricks/issues/1264)) ([4665b64](https://github.com/gaborage/go-bricks/commit/4665b64b336bb936edb89bb9756cc43fc670ac73))
+* **inbox:** park a failed stream delivery in a per-tenant hold ([#1253](https://github.com/gaborage/go-bricks/issues/1253)) ([479552d](https://github.com/gaborage/go-bricks/commit/479552dcd086b6bc4eca6f696b2433de5a146c1b))
+* **logger:** add ErrorRedactor hook at the LogEvent.Err seam ([#1183](https://github.com/gaborage/go-bricks/issues/1183)) ([02b3ba0](https://github.com/gaborage/go-bricks/commit/02b3ba020b6b2f258e56895904dcb2ae6fdbc3e6))
+* **messaging:** record settlement outcome on both lanes ([#1269](https://github.com/gaborage/go-bricks/issues/1269)) ([8c5aef1](https://github.com/gaborage/go-bricks/commit/8c5aef1f4cd9b3b851038e3090b03566b59e45b0)), closes [#1064](https://github.com/gaborage/go-bricks/issues/1064)
+* **messaging:** retry a failed stream delivery in place within a bound ([#1242](https://github.com/gaborage/go-bricks/issues/1242)) ([da4a5ee](https://github.com/gaborage/go-bricks/commit/da4a5ee4d3dba902955fb2ad7515793acc65efcd))
+* **messaging:** shared messaging tenancy on the streams lane ([#1246](https://github.com/gaborage/go-bricks/issues/1246)) ([94c7b85](https://github.com/gaborage/go-bricks/commit/94c7b854c120930e58c71a09c4cf76a1938c6bb8))
+* **outbox:** drain each ledger key-ordered under one relay leader ([#1245](https://github.com/gaborage/go-bricks/issues/1245)) ([723e9a0](https://github.com/gaborage/go-bricks/commit/723e9a05b385333fb5dabcbd79c544c4516ae4d0))
+* **outbox:** order the ledger by a sequence and mark each row's lane ([#1241](https://github.com/gaborage/go-bricks/issues/1241)) ([8ac578e](https://github.com/gaborage/go-bricks/commit/8ac578e1fcf9869b294af7848ef34b62d4c474bd))
+* **outbox:** publish stream-lane rows through the native streams lane ([#1254](https://github.com/gaborage/go-bricks/issues/1254)) ([8690827](https://github.com/gaborage/go-bricks/commit/869082793ae9feb7d9bb24ca07c4ef0cc89ed032))
+
+
+### Fixed
+
+* **app,cache:** address a tenant's cache config error to that tenant ([#1248](https://github.com/gaborage/go-bricks/issues/1248)) ([70434ed](https://github.com/gaborage/go-bricks/commit/70434edb706c46b5c045f127df4796cdc2756358))
+* **app:** make the streams lane opt-in at the build graph ([#1268](https://github.com/gaborage/go-bricks/issues/1268)) ([a8068d2](https://github.com/gaborage/go-bricks/commit/a8068d29852c0ab9e7ce6b9756f23618b3bdef2c)), closes [#1169](https://github.com/gaborage/go-bricks/issues/1169)
+* **app:** recover a panicking create inside the resource pool ([#1237](https://github.com/gaborage/go-bricks/issues/1237)) ([8ab1216](https://github.com/gaborage/go-bricks/commit/8ab1216d9d972d79cc80e246e837145f9147d97d))
+* **app:** stop folding a telemetry sink outage into shutdown ([#1235](https://github.com/gaborage/go-bricks/issues/1235)) ([b0204cf](https://github.com/gaborage/go-bricks/commit/b0204cfbebfcff971b1cca8b9410d8e24b2d690b))
+* **config:** reject section names unreachable by env var ([#1243](https://github.com/gaborage/go-bricks/issues/1243)) ([d8d61e2](https://github.com/gaborage/go-bricks/commit/d8d61e217d96e729dee50e78f162c17b14be3a41))
+* **database:** first deferred error wins; sort struct-driven columns ([#1199](https://github.com/gaborage/go-bricks/issues/1199)) ([44c0145](https://github.com/gaborage/go-bricks/commit/44c0145899ded00e97b84d93317621af2688bd63))
+* **database:** identifier validators return the normalized identifier ([#1198](https://github.com/gaborage/go-bricks/issues/1198)) ([51def4b](https://github.com/gaborage/go-bricks/commit/51def4ba45249672dac8446c6f84dd3bec91d0eb))
+* **database:** jf.Eq renders nil and slices like f.Eq ([#1204](https://github.com/gaborage/go-bricks/issues/1204)) ([c18870d](https://github.com/gaborage/go-bricks/commit/c18870d3e60748ae5869c33185659173f5045df7))
+* **database:** one acceptance rule for BuildUpsert column keys ([#1221](https://github.com/gaborage/go-bricks/issues/1221)) ([b156dd8](https://github.com/gaborage/go-bricks/commit/b156dd8ade3494979ee36fce0ef799bd061f8df2))
+* **database:** quote only the identifier in Oracle ORDER BY and From ([#1194](https://github.com/gaborage/go-bricks/issues/1194)) ([e781676](https://github.com/gaborage/go-bricks/commit/e7816760599f3f81c4bcca7cd56bbc457a3dfb8c))
+* **database:** quote reserved-word columns on Insert Columns and SetMap ([#1186](https://github.com/gaborage/go-bricks/issues/1186)) ([4c4bed9](https://github.com/gaborage/go-bricks/commit/4c4bed927b2d38e31547aacd77308c07954bec99))
+* **database:** quote-aware dot split; drop the function pass-through ([#1191](https://github.com/gaborage/go-bricks/issues/1191)) ([db5bb11](https://github.com/gaborage/go-bricks/commit/db5bb1104c4661352d4923cc9bcedf4d8df6515f))
+* **database:** reject a nil config from a DBConfigProvider ([#1234](https://github.com/gaborage/go-bricks/issues/1234)) ([1453c3c](https://github.com/gaborage/go-bricks/commit/1453c3c7ec1dd45c46eab0c859a7a63a1f446a55))
+* **database:** resolve nil operands at every filter door ([#1222](https://github.com/gaborage/go-bricks/issues/1222)) ([3fbdc7b](https://github.com/gaborage/go-bricks/commit/3fbdc7b714ee6b52ba47000a85f83b21335beae9))
+* **database:** validate RawExpression aliases against the grammar ([#1203](https://github.com/gaborage/go-bricks/issues/1203)) ([7d04ef9](https://github.com/gaborage/go-bricks/commit/7d04ef93202e5c92a83254d5702007dd6c9c5613))
+* **deps:** update aws-sdk-go-v2 monorepo ([#1103](https://github.com/gaborage/go-bricks/issues/1103)) ([813d537](https://github.com/gaborage/go-bricks/commit/813d53740d9f28e874e7397464fe2d17250f1cc2))
+* **deps:** update aws-sdk-go-v2 monorepo ([#1215](https://github.com/gaborage/go-bricks/issues/1215)) ([0cec61d](https://github.com/gaborage/go-bricks/commit/0cec61d8d6eb0a7a056ee9bc9c5ae432126989df))
+* **deps:** update module github.com/stretchr/testify to v1.12.1 ([#1086](https://github.com/gaborage/go-bricks/issues/1086)) ([bdf5583](https://github.com/gaborage/go-bricks/commit/bdf5583f00a71b37f68c224f5de281b90cf6c562))
+* **deps:** update module go.opentelemetry.io/contrib/instrumentation/runtime to v0.71.0 ([#1214](https://github.com/gaborage/go-bricks/issues/1214)) ([46a242a](https://github.com/gaborage/go-bricks/commit/46a242a17e874131afecdc891797fd98fa4f2cf2))
+* **deps:** update module google.golang.org/grpc to v1.83.2 ([#1210](https://github.com/gaborage/go-bricks/issues/1210)) ([a1e5d86](https://github.com/gaborage/go-bricks/commit/a1e5d8669ebecb30d11385d3cfdae7b146bf96fb))
+* **deps:** update opentelemetry-go monorepo ([#1211](https://github.com/gaborage/go-bricks/issues/1211)) ([bd71d94](https://github.com/gaborage/go-bricks/commit/bd71d94e7a56bf951df9db09714bf73f26b3e5a6))
+* **logger:** mask and redact the error field at the Err seam ([#1223](https://github.com/gaborage/go-bricks/issues/1223)) ([c719edf](https://github.com/gaborage/go-bricks/commit/c719edf4803659309a611c03aa397edd6d9289f2))
+* **logger:** mask inside opaque payloads ([#1227](https://github.com/gaborage/go-bricks/issues/1227)) ([55e5fad](https://github.com/gaborage/go-bricks/commit/55e5fad04df3aa36989ef6c1a1fe382118464834))
+* **messaging:** bound the publish frame's caller-supplied shortstrs ([#1228](https://github.com/gaborage/go-bricks/issues/1228)) ([dc03ecb](https://github.com/gaborage/go-bricks/commit/dc03ecb52e399f543a64b7f2378bd9353aea4f67))
+* **messaging:** gate the decode summary's field path on the payload type ([#1176](https://github.com/gaborage/go-bricks/issues/1176)) ([de4d94d](https://github.com/gaborage/go-bricks/commit/de4d94d6d340d11de01aaf33f88d17e429bec930))
+* **messaging:** skip a publish attempt the deadline cannot finish ([#1267](https://github.com/gaborage/go-bricks/issues/1267)) ([753de22](https://github.com/gaborage/go-bricks/commit/753de221b8b369593f76b719e3820c4d4cac615a)), closes [#1137](https://github.com/gaborage/go-bricks/issues/1137)
+* **migration:** build the PostgreSQL Flyway JDBC URL in the framework ([#1188](https://github.com/gaborage/go-bricks/issues/1188)) ([e31d290](https://github.com/gaborage/go-bricks/commit/e31d2904c9faee4874a5d2c9f0d828ffc917fceb))
+* **observability:** pin the OTLP exporter tests against the shutdown race ([#1226](https://github.com/gaborage/go-bricks/issues/1226)) ([ac2eb3d](https://github.com/gaborage/go-bricks/commit/ac2eb3d53844aac631ec564f233fd4923a82fca9))
+* **observability:** record span errors by type at every sink ([#1189](https://github.com/gaborage/go-bricks/issues/1189)) ([9267634](https://github.com/gaborage/go-bricks/commit/926763495c4829db67902c8c599032b5e80ef181))
+* **outbox:** dead-letter a destination the broker can never accept ([#1238](https://github.com/gaborage/go-bricks/issues/1238)) ([3c9606e](https://github.com/gaborage/go-bricks/commit/3c9606e5dc1d8081b5de9cbf8463e39af27c9d58))
+* **server:** catch panics thrown outside Echo's Recover ([#1224](https://github.com/gaborage/go-bricks/issues/1224)) ([9693566](https://github.com/gaborage/go-bricks/commit/9693566b64af65894131c1865f36dd3b13fc06fe))
+* **server:** re-pin the alloc tripwires for the Go 1.27 toolchain ([#1180](https://github.com/gaborage/go-bricks/issues/1180)) ([64d38da](https://github.com/gaborage/go-bricks/commit/64d38da8a6718732a40e1003fe463efff732a797))
+* **server:** stop echoing request input in 400 error details ([#1181](https://github.com/gaborage/go-bricks/issues/1181)) ([19d5413](https://github.com/gaborage/go-bricks/commit/19d54132cb282126e41da05416561a210f310656))
+* **trace:** validate a pre-set traceparent before re-emitting it ([#1220](https://github.com/gaborage/go-bricks/issues/1220)) ([aad091b](https://github.com/gaborage/go-bricks/commit/aad091b7e0b9a13d26a5108864e2cd9908156ae2))
+
+
+### Changed
+
+* **database:** collapse the f./jf. twin predicate shells ([#1274](https://github.com/gaborage/go-bricks/issues/1274)) ([d4a5a52](https://github.com/gaborage/go-bricks/commit/d4a5a522991277227e18dffca97b2683feb81bfd))
+* **database:** one oracle quoting module in sqllex ([#1271](https://github.com/gaborage/go-bricks/issues/1271)) ([cfd0d55](https://github.com/gaborage/go-bricks/commit/cfd0d5577da47cfc1a2ec80d680ee7ee697401af)), closes [#1257](https://github.com/gaborage/go-bricks/issues/1257)
+* **database:** spell the fast-path test without comparison literals ([#1273](https://github.com/gaborage/go-bricks/issues/1273)) ([f6993c2](https://github.com/gaborage/go-bricks/commit/f6993c204bba300d64bf124aa378403fbcf1e4b2))
+* **messaging:** drop the recording logger's stored context ([#1239](https://github.com/gaborage/go-bricks/issues/1239)) ([c95c839](https://github.com/gaborage/go-bricks/commit/c95c8391ad297ac4ade0f87f68ab87e655bba043))
+* **messaging:** extract one saturating backoff helper ([#1266](https://github.com/gaborage/go-bricks/issues/1266)) ([ec55f8a](https://github.com/gaborage/go-bricks/commit/ec55f8a68b625fd7d6cf9c14b41cd09851b79987)), closes [#1249](https://github.com/gaborage/go-bricks/issues/1249)
+
 ## [0.60.0](https://github.com/gaborage/go-bricks/compare/v0.59.0...v0.60.0) (2026-08-24)
 
 
