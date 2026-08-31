@@ -2,8 +2,11 @@ package inbox
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,7 +36,9 @@ const (
 // the ledger is the control-plane database, so every replica sees the same holds
 // and the lease is what stops them replaying the same tenant at once.
 type HoldDrain struct {
-	store    HoldStore
+	// storeFor resolves the hold store on first use: the vendor is not known until
+	// a connection is, the same reason the inbox ledger's store is lazy.
+	storeFor func(context.Context) (HoldStore, error)
 	getDB    func(context.Context) (dbtypes.Interface, error)
 	replayer func() streams.HoldReplayer
 	cfg      config.InboxHoldConfig
@@ -52,6 +57,13 @@ type HoldDrain struct {
 	now func() time.Time
 }
 
+// holdPass is one drain pass's resolved dependencies: the control-plane database
+// and the store that speaks its dialect, settled once rather than per statement.
+type holdPass struct {
+	db    dbtypes.Interface
+	store HoldStore
+}
+
 // Execute runs one drain pass over every holding consumer.
 func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
 	log := jobCtx.Logger()
@@ -68,10 +80,15 @@ func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
 	if err != nil {
 		return fmt.Errorf("inbox hold drain: resolve database failed: %w", err)
 	}
+	store, err := d.storeFor(jobCtx)
+	if err != nil {
+		return fmt.Errorf("inbox hold drain: resolve store failed: %w", err)
+	}
+	pass := &holdPass{db: db, store: store}
 
 	var errs []error
 	for _, consumer := range replayer.HoldConsumers() {
-		if err := d.drainConsumer(jobCtx, log, db, replayer, consumer); err != nil {
+		if err := d.drainConsumer(jobCtx, log, pass, replayer, consumer); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -81,23 +98,23 @@ func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
 // drainConsumer runs one consumer's pass and then tells its runners what the
 // ledger still holds — the reload every replica depends on to learn about
 // releases another replica made.
-func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, db dbtypes.Interface,
+func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, pass *holdPass,
 	replayer streams.HoldReplayer, consumer string) error {
-	due, err := d.store.DueTenants(ctx, db, consumer, holdDrainTenantsPerPass)
+	due, err := pass.store.DueTenants(ctx, pass.db, consumer, holdDrainTenantsPerPass)
 	if err != nil {
 		return err
 	}
 
 	var errs []error
 	for i := range due {
-		if err := d.drainTenant(ctx, log, db, replayer, consumer, &due[i]); err != nil {
+		if err := d.drainTenant(ctx, log, pass, replayer, consumer, &due[i]); err != nil {
 			errs = append(errs, err)
 		}
 	}
 
 	// Reload and snapshot even when a tenant failed: the set and the gauges
 	// describe the ledger, not this pass.
-	if err := d.reloadAndSnapshot(ctx, db, replayer, consumer); err != nil {
+	if err := d.reloadAndSnapshot(ctx, pass, replayer, consumer); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -106,7 +123,7 @@ func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, db dbt
 // drainTenant replays one tenant's rows under a lease. A panic in a replay is
 // contained here: the tenant that caused it is reported by TYPE (ADR-081) and the
 // pass continues with the next one.
-func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, db dbtypes.Interface,
+func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *holdPass,
 	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -114,7 +131,7 @@ func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, db dbtyp
 		}
 	}()
 
-	taken, err := d.store.AcquireLease(ctx, db, consumer, tenant.TenantID, d.owner, d.cfg.LeaseDuration)
+	taken, err := pass.store.AcquireLease(ctx, pass.db, consumer, tenant.TenantID, d.owner, d.cfg.LeaseDuration)
 	if err != nil {
 		return err
 	}
@@ -124,25 +141,25 @@ func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, db dbtyp
 	}
 
 	d.warnIfTooOld(log, consumer, tenant)
-	return d.replayTenantRows(ctx, log, db, replayer, consumer, tenant)
+	return d.replayTenantRows(ctx, log, pass, replayer, consumer, tenant)
 }
 
 // replayTenantRows replays at most one batch of a tenant's rows, in ledger order.
 // One batch per pass, deliberately: a tenant with thousands of held rows must not
 // own the drain for one long job run, and the next pass picks up where this one
 // stopped. A short batch means the tenant is drained, so it is released.
-func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, db dbtypes.Interface,
+func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pass *holdPass,
 	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant) error {
-	rows, err := d.store.NextRows(ctx, db, consumer, tenant.TenantID, holdDrainRowsPerRead)
+	rows, err := pass.store.NextRows(ctx, pass.db, consumer, tenant.TenantID, holdDrainRowsPerRead)
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
-		return d.releaseTenant(ctx, log, db, consumer, tenant)
+		return d.releaseTenant(ctx, log, pass, consumer, tenant)
 	}
 
 	for i := range rows {
-		done, err := d.replayRow(ctx, log, db, replayer, consumer, tenant, &rows[i])
+		done, err := d.replayRow(ctx, log, pass, replayer, consumer, tenant, &rows[i])
 		if err != nil || !done {
 			return err
 		}
@@ -150,7 +167,7 @@ func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, db 
 
 	if len(rows) < holdDrainRowsPerRead {
 		// The batch was not full, so nothing is left behind it.
-		return d.releaseTenant(ctx, log, db, consumer, tenant)
+		return d.releaseTenant(ctx, log, pass, consumer, tenant)
 	}
 	return nil
 }
@@ -158,13 +175,13 @@ func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, db 
 // replayRow replays one row, reporting whether the tenant may continue. A failure
 // defers the tenant: everything behind this row stays parked, which is the order
 // the hold exists to keep.
-func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, db dbtypes.Interface,
+func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *holdPass,
 	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant, row *HoldRow) (bool, error) {
 	if err := replayer.Replay(ctx, consumer, heldMessageOf(row)); err != nil {
-		return false, d.deferTenant(ctx, log, db, consumer, tenant, row, err)
+		return false, d.deferTenant(ctx, log, pass, consumer, tenant, row, err)
 	}
 
-	deleted, err := d.store.DeleteRow(ctx, db, consumer, row.Stream, row.Offset, tenant.TenantID, d.owner)
+	deleted, err := pass.store.DeleteRow(ctx, pass.db, consumer, row.Stream, row.Offset, tenant.TenantID, d.owner)
 	if err != nil {
 		return false, err
 	}
@@ -182,11 +199,11 @@ func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, db dbtypes
 }
 
 // deferTenant records a failed replay and backs the tenant off.
-func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, db dbtypes.Interface,
+func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *holdPass,
 	consumer string, tenant *HoldTenant, row *HoldRow, replayErr error) error {
 	backoff := d.backoffFor(tenant.Attempts + 1)
 
-	if _, err := d.store.Defer(ctx, db, consumer, tenant.TenantID, d.owner, backoff, replayErr.Error()); err != nil {
+	if _, err := pass.store.Defer(ctx, pass.db, consumer, tenant.TenantID, d.owner, backoff, replayErr.Error()); err != nil {
 		return err
 	}
 
@@ -203,9 +220,9 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, db dbtyp
 }
 
 // releaseTenant drops the tenant's marker once its last row is replayed.
-func (d *HoldDrain) releaseTenant(ctx context.Context, log logger.Logger, db dbtypes.Interface,
+func (d *HoldDrain) releaseTenant(ctx context.Context, log logger.Logger, pass *holdPass,
 	consumer string, tenant *HoldTenant) error {
-	released, err := d.store.Release(ctx, db, consumer, tenant.TenantID, d.owner)
+	released, err := pass.store.Release(ctx, pass.db, consumer, tenant.TenantID, d.owner)
 	if err != nil {
 		return err
 	}
@@ -237,20 +254,34 @@ func (d *HoldDrain) warnIfTooOld(log logger.Logger, consumer string, tenant *Hol
 
 // reloadAndSnapshot tells the runners what the ledger holds and refreshes what
 // the gauges report.
-func (d *HoldDrain) reloadAndSnapshot(ctx context.Context, db dbtypes.Interface,
+func (d *HoldDrain) reloadAndSnapshot(ctx context.Context, pass *holdPass,
 	replayer streams.HoldReplayer, consumer string) error {
-	held, err := d.store.HeldTenants(ctx, db, consumer)
+	held, err := pass.store.HeldTenants(ctx, pass.db, consumer)
 	if err != nil {
 		return err
 	}
 	replayer.ReloadHeld(consumer, held)
 
-	stats, err := d.store.Stats(ctx, db, consumer)
+	stats, err := pass.store.Stats(ctx, pass.db, consumer)
 	if err != nil {
 		return err
 	}
 	d.snapshot(consumer).Store(&stats)
 	return nil
+}
+
+// snapshots is what the gauges read: one reading per consumer the drain has
+// visited. Copied under the lock, because the caller iterates it on the
+// exporter's own goroutine while a pass may be adding a consumer.
+func (d *HoldDrain) snapshots() map[string]*HoldStats {
+	d.statsMu.RLock()
+	defer d.statsMu.RUnlock()
+
+	out := make(map[string]*HoldStats, len(d.stats))
+	for consumer, cell := range d.stats {
+		out[consumer] = cell.Load()
+	}
+	return out
 }
 
 // snapshot is this consumer's stats cell, created on first use. The map is
@@ -302,4 +333,27 @@ func heldMessageOf(row *HoldRow) *streams.HeldMessage {
 		Data:     row.Data,
 		HeldAt:   row.HeldAt,
 	}
+}
+
+// holdMeterName is the instrumentation scope the hold's gauges report under.
+const holdMeterName = "go-bricks/inbox"
+
+// holdOwnerID identifies this replica in a lease: the host it runs on, its
+// process, and enough randomness that two processes on one host, or a restart
+// reusing a pid, never share an owner. A lease is only safe if its owner is
+// unique to the drainer holding it.
+func holdOwnerID() string {
+	host, err := os.Hostname()
+	if err != nil {
+		host = "unknown-host"
+	}
+
+	var random [8]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		// crypto/rand does not fail in practice; if it ever does, the pid and host
+		// still separate replicas, and a duplicate owner costs a redundant replay
+		// rather than a lost message.
+		return fmt.Sprintf("%s/%d", host, os.Getpid())
+	}
+	return fmt.Sprintf("%s/%d/%s", host, os.Getpid(), hex.EncodeToString(random[:]))
 }
