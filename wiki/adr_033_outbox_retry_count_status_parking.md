@@ -18,12 +18,23 @@
 > not match, and they will not match on any later cycle either, so it parks rather than
 > retrying forever.
 >
-> A fifth OUTCOME joins the four the relay already had. A row can now be PARKED: when an earlier row of the same
-> ordering key failed in this cycle, the row is neither published nor marked and its
-> `retry_count` does NOT advance — it simply waits for the next cycle in sequence order. Only
-> `outcomeFailed` parks a key; a dead-lettered row is terminal and a delivered-but-unrecorded
-> row was delivered, so neither holds anything behind it. A dashboard reading `retry_count` as
-> liveness should know that a parked row's count is deliberately still.
+> A fifth OUTCOME joins the four the relay already had. A row can now be PARKED: it is
+> neither published nor marked and its `retry_count` does NOT advance — it simply waits for
+> the next cycle in sequence order. Two things park a row, at different scopes.
+>
+> **By ordering key.** An earlier row of the SAME key failed this cycle. `outcomeFailed` and
+> `outcomeStreamDown` both park their key; a dead-lettered row is terminal and a
+> delivered-but-unrecorded row was delivered, so neither holds anything behind it.
+>
+> **By stream.** `outcomeStreamDown` additionally holds every later row of THAT stream,
+> whatever their ordering keys, because the evidence is about the producer rather than the
+> row: a stalled producer would charge each of them the full `outbox.publishtimeout` in turn.
+> It is scoped to the one stream — each super stream has its own producer, so rows aimed at a
+> healthy stream, and every AMQP row, still drain the same cycle. The FIRST stream-down row is
+> attempted and so advances its own `retry_count`; the rows skipped behind it advance nothing.
+>
+> A dashboard reading `retry_count` as liveness should know that a parked row's count is
+> deliberately still.
 >
 > **Amended (2026-08-29, a second poison class):** this ADR classified every broker-side
 > publish failure as connectivity, leaving undecodable headers as its single poison class. That was
