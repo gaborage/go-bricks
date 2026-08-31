@@ -104,4 +104,22 @@ func TestIsPayloadFailureReadsThroughTheWrapChain(t *testing.T) {
 	assert.False(t, isPayloadFailure(nil))
 	assert.False(t, isPayloadFailure(errHandlerFailed))
 	assert.False(t, isPayloadFailure(delivery.Permanent(errHandlerFailed)))
+
+	// PayloadError's fields are exported, so a handler can return one the typed
+	// pipeline never built. A stage neither constant names is NOT poison: reading
+	// it as poison would skip a failure the hold should have parked, discarding
+	// the message. Is() refuses the same stages, so the two cannot disagree.
+	for _, stage := range []PayloadStage{"", "decoding", "DECODE"} {
+		unknown := &PayloadError{Consumer: testConsumerName, Stage: stage}
+
+		assert.False(t, isPayloadFailure(unknown), "stage %q", stage)
+		assert.False(t, isPayloadFailure(delivery.Permanent(unknown)), "stage %q wrapped", stage)
+		assert.False(t, isPayloadFailure(fmt.Errorf("wrapped: %w", unknown)), "stage %q wrapped", stage)
+	}
+
+	// The two the pipeline does produce stay poison, so the gate above cannot
+	// pass by refusing everything.
+	for _, stage := range []PayloadStage{PayloadStageDecode, PayloadStageValidate} {
+		assert.True(t, isPayloadFailure(&PayloadError{Consumer: testConsumerName, Stage: stage}), "stage %q", stage)
+	}
 }

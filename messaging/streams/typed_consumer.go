@@ -102,6 +102,19 @@ func checkTypedConsumerArgs[O any](decls *Declarations, opts *O, handlerOf func(
 	}
 }
 
+// withoutMeta adapts a metadata-free fn to the WithMeta shape the declaration
+// helpers share. It preserves NIL deliberately: wrapping a nil fn would produce a
+// non-nil closure that sails past the declaration's wiring guard and nil-panics
+// on the first delivery instead — a startup mistake presenting as silent message
+// loss, which is the failure mode the guard exists to prevent.
+func withoutMeta[T any](fn func(context.Context, T) error) func(context.Context, T, *Message) error {
+	if fn == nil {
+		return nil
+	}
+
+	return func(ctx context.Context, payload T, _ *Message) error { return fn(ctx, payload) }
+}
+
 // DeclareTypedConsumer registers a stream consumer whose handler decodes the
 // message body into T and validates it against the struct's `validate` tags
 // before calling fn. It is the streams-lane mirror of
@@ -124,9 +137,7 @@ func checkTypedConsumerArgs[O any](decls *Declarations, opts *O, handlerOf func(
 // Handler — all three are declaration-time wiring mistakes, which this lane
 // already fails startup on for duplicate registrations.
 func DeclareTypedConsumer[T any](decls *Declarations, opts *ConsumerOptions, fn func(context.Context, T) error) {
-	DeclareTypedConsumerWithMeta(decls, opts, func(ctx context.Context, payload T, _ *Message) error {
-		return fn(ctx, payload)
-	})
+	DeclareTypedConsumerWithMeta(decls, opts, withoutMeta(fn))
 }
 
 // DeclareTypedConsumerWithMeta is DeclareTypedConsumer for an fn that also needs
@@ -145,9 +156,7 @@ func DeclareTypedConsumerWithMeta[T any](decls *Declarations, opts *ConsumerOpti
 // a super stream. fn is called CONCURRENTLY across partitions — see Handler — so
 // it must be safe for concurrent use.
 func DeclareTypedSuperStreamConsumer[T any](decls *Declarations, opts *SuperStreamConsumerOptions, fn func(context.Context, T) error) {
-	DeclareTypedSuperStreamConsumerWithMeta(decls, opts, func(ctx context.Context, payload T, _ *Message) error {
-		return fn(ctx, payload)
-	})
+	DeclareTypedSuperStreamConsumerWithMeta(decls, opts, withoutMeta(fn))
 }
 
 // DeclareTypedSuperStreamConsumerWithMeta is DeclareTypedSuperStreamConsumer for

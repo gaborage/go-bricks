@@ -118,5 +118,14 @@ func (e *PayloadError) Is(target error) bool {
 // handler marks the error Permanent and a lane caller may wrap it further.
 func isPayloadFailure(err error) bool {
 	var payloadErr *PayloadError
-	return errors.As(err, &payloadErr)
+	if !errors.As(err, &payloadErr) {
+		return false
+	}
+
+	// A Stage neither constant names is not one the typed pipeline produced:
+	// PayloadError's fields are exported, so a handler can return a hand-built or
+	// mislabeled one. Reading that as poison would SKIP a failure the hold should
+	// have parked, which discards the message. Is() maps no sentinel onto an
+	// unknown stage either, so the two readings cannot disagree.
+	return payloadErr.Stage == PayloadStageDecode || payloadErr.Stage == PayloadStageValidate
 }

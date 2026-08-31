@@ -98,12 +98,16 @@ than each consumer's. A holding consumer can no longer be stopped indefinitely b
 one malformed message. The two lanes' failure vocabulary stays in step by
 construction, not by review.
 
-**Negative.** A payload failure is *dropped* — the offset advances past it on the
-next success and a stream never redelivers. That is deliberate (it is ADR-059's
-existing settlement) but it means poison is visible only in logs and metrics,
-never in a ledger an operator can read back. A consumer that needs the body kept
-should validate loosely (`T` with no `validate` tags) and park the rejection
-itself from inside the handler.
+**Negative.** A payload failure is ultimately *dropped*, and nothing durable
+records it. Precisely: its own offset is never committed, so the skip becomes
+final only once a LATER delivery succeeds and commits a higher offset — until
+then a restart resumes from the last stored offset and redelivers the poison,
+which is harmless because the screen and the handler reject it identically and
+skip it again. That is ADR-059's existing settlement, but it means poison lives
+in the failure log line and the consume metric alone, never in a ledger an
+operator can read back. A consumer that needs the body kept should validate
+loosely (`T` with no `validate` tags) and park the rejection itself from inside
+the handler.
 
 **Neutral.** `streams.PayloadError.Unwrap()` still reaches the raw cause, which
 MAY carry payload-derived text. Logging it is opt-in and on the caller, exactly as

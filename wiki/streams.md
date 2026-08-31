@@ -180,10 +180,18 @@ every replica, so the lane:
   does not hold.
 
 Parking one would defer that tenant on every drain pass, forever — the opposite
-of what the hold exists for. The consequence is that poison is **dropped**: a
-stream never redelivers, so it survives only in the failure log line and the
-consume metric. A consumer that must keep the body should take `T` without
-`validate` tags and park the rejection itself from inside the handler.
+of what the hold exists for.
+
+The consequence is that poison is ultimately **dropped**, with nothing durable
+recording it. As everywhere else on this lane, "skipped" only becomes true once a
+LATER delivery succeeds and commits a higher offset: the poison's own offset is
+never committed, so a restart before that later commit resumes from the last
+stored offset and **redelivers** it. That is harmless — the screen and the handler
+reject the same bytes the same way, so it is simply skipped again — but it does
+mean one malformed message can be logged more than once. Once a later success
+commits past it, it survives only in the failure log line and the consume metric.
+A consumer that must keep the body should take `T` without `validate` tags and
+park the rejection itself from inside the handler.
 
 Match the two modes with `errors.Is` against `streams.ErrPayloadUndecodable` and
 `streams.ErrPayloadInvalid`; `errors.As` to `*streams.PayloadError` reaches

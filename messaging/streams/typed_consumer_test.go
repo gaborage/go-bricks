@@ -362,6 +362,16 @@ func TestDeclareTypedConsumerPanicsOnWiringMistakes(t *testing.T) {
 			},
 		},
 		{
+			// The plain variants adapt fn to the WithMeta shape, so a nil fn must
+			// survive as nil rather than becoming a non-nil closure that passes the
+			// guard and nil-panics on the first delivery instead.
+			name: "nil_handler_function_via_the_plain_variant",
+			want: "streams: DeclareTypedConsumerWithMeta requires a non-nil handler function",
+			panic: func() {
+				DeclareTypedConsumer[streamOrder](NewDeclarations(), &ConsumerOptions{}, nil)
+			},
+		},
+		{
 			name:  "super_nil_declarations",
 			want:  "streams: DeclareTypedSuperStreamConsumerWithMeta requires a non-nil *Declarations",
 			panic: func() { DeclareTypedSuperStreamConsumer(nil, &SuperStreamConsumerOptions{}, fn) },
@@ -376,6 +386,15 @@ func TestDeclareTypedConsumerPanicsOnWiringMistakes(t *testing.T) {
 			want: "DeclareTypedSuperStreamConsumerWithMeta builds the handler itself",
 			panic: func() {
 				DeclareTypedSuperStreamConsumer(NewDeclarations(), &SuperStreamConsumerOptions{Handler: taken}, fn)
+			},
+		},
+		{
+			// The super-stream plain variant adapts fn the same way, so it fails at
+			// declaration too rather than on the first delivery.
+			name: "super_nil_handler_function_via_the_plain_variant",
+			want: "streams: DeclareTypedSuperStreamConsumerWithMeta requires a non-nil handler function",
+			panic: func() {
+				DeclareTypedSuperStreamConsumer[streamOrder](NewDeclarations(), &SuperStreamConsumerOptions{}, nil)
 			},
 		},
 		{
