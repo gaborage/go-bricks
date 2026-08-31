@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gaborage/go-bricks/observability"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/gaborage/go-bricks/observability"
 )
 
 func TestDatabaseSectionConstructorsNamePathAndPlacement(t *testing.T) {
@@ -498,6 +499,7 @@ func TestQualifiedActionEnvVarActuallyReachesTheKey(t *testing.T) {
 	require.NoError(t, err, "following the hint must resolve the failure, not move it")
 	assert.Equal(t, 5432, cfg.Databases["reporting"].Port)
 }
+
 func TestValidateDatabaseSuccess(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2187,6 +2189,41 @@ func TestValidateAllowsLongEnoughDatabasePassword(t *testing.T) {
 	cfg := createValidFullConfig()
 	cfg.Database.Password = "longenough-pw"
 	require.NoError(t, Validate(cfg))
+}
+
+// The bound is <, not <=: a password of exactly MinDatabasePasswordLength is long
+// enough for migration.redactPassword to substring-redact, so it is accepted.
+func TestValidateAllowsPasswordOfExactlyMinimumLength(t *testing.T) {
+	cfg := createValidFullConfig()
+	cfg.Database.Password = strings.Repeat("p", MinDatabasePasswordLength)
+	require.NoError(t, Validate(cfg))
+}
+
+// Both ends of the optional-port range are inclusive, and 0 means "unset" rather
+// than "invalid" — the field is optional precisely because a DSN can carry the port.
+func TestValidateOptionalDatabasePortBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		port    int
+		wantErr bool
+	}{
+		{name: "unset_port_accepted", port: 0},
+		{name: "lowest_port_accepted", port: 1},
+		{name: "highest_port_accepted", port: 65535},
+		{name: "negative_port_rejected", port: -1, wantErr: true},
+		{name: "port_above_range_rejected", port: 65536, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateOptionalDatabasePort(tt.port)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), fieldDatabasePort)
+		})
+	}
 }
 
 // normalizeAndCheckNamedDatabases runs both halves of the named-database

@@ -396,17 +396,20 @@ func validateRequiredDatabasePort(port int) error {
 // is clamped here to keep the reported value (startup log, Stats(), OTEL gauges)
 // truthful. An explicit idle below max is honored. See ADR-025.
 func applyConnectionCountDefaults(cfg *DatabaseConfig) error {
+	if cfg.Pool.Max.Connections < 0 {
+		return NewValidationError("database.pool.max.connections", errMustBeNonNegative)
+	}
 	if cfg.Pool.Max.Connections == 0 {
 		cfg.Pool.Max.Connections = defaultPoolMaxConnections
-	} else if cfg.Pool.Max.Connections < 0 {
-		return NewValidationError("database.pool.max.connections", errMustBeNonNegative)
 	}
 
 	if cfg.Pool.Idle.Connections < 0 {
 		return NewValidationError("database.pool.idle.connections", errMustBeNonNegative)
 	}
-	if cfg.Pool.Idle.Connections == 0 || cfg.Pool.Idle.Connections > cfg.Pool.Max.Connections {
+	if cfg.Pool.Idle.Connections == 0 {
 		cfg.Pool.Idle.Connections = cfg.Pool.Max.Connections
+	} else {
+		cfg.Pool.Idle.Connections = min(cfg.Pool.Idle.Connections, cfg.Pool.Max.Connections)
 	}
 	return nil
 }
@@ -481,17 +484,19 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 	}
 
 	// Apply default idle time - closes connections before NAT/firewall timeout
+	if cfg.Pool.Idle.Time < 0 {
+		return NewValidationError("database.pool.idle.time", errMustBeNonNegative)
+	}
 	if cfg.Pool.Idle.Time == 0 {
 		cfg.Pool.Idle.Time = defaultPoolIdleTime
-	} else if cfg.Pool.Idle.Time < 0 {
-		return NewValidationError("database.pool.idle.time", errMustBeNonNegative)
 	}
 
 	// Apply default connection lifetime - forces periodic recycling
+	if cfg.Pool.Lifetime.Max < 0 {
+		return NewValidationError("database.pool.lifetime.max", errMustBeNonNegative)
+	}
 	if cfg.Pool.Lifetime.Max == 0 {
 		cfg.Pool.Lifetime.Max = defaultPoolLifetimeMax
-	} else if cfg.Pool.Lifetime.Max < 0 {
-		return NewValidationError("database.pool.lifetime.max", errMustBeNonNegative)
 	}
 
 	// Apply keep-alive defaults for cloud deployments. Enabled and Interval are
@@ -504,10 +509,11 @@ func applyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 		enabled := defaultKeepAliveEnabled
 		cfg.Pool.KeepAlive.Enabled = &enabled
 	}
+	if cfg.Pool.KeepAlive.Interval < 0 {
+		return NewValidationError("database.pool.keepalive.interval", errMustBeNonNegative)
+	}
 	if cfg.Pool.KeepAlive.Interval == 0 {
 		cfg.Pool.KeepAlive.Interval = defaultKeepAliveInterval
-	} else if cfg.Pool.KeepAlive.Interval < 0 {
-		return NewValidationError("database.pool.keepalive.interval", errMustBeNonNegative)
 	}
 
 	if cfg.Query.Log.MaxLength < 0 {
