@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-08-31
-- **Related**: [ADR-059](adr_059_streams_consumption.md) (the lane this hook links) · [ADR-045](adr_045_no_producer_side_manager_interfaces.md) (the manager stays concrete; the seam is a factory, not a second implementation) · [ADR-063](adr_063_streams_native_publishing.md) (publish surface, unchanged) · [ADR-089 reserved](../docs/superpowers/plans/2026-08-29-inbox-per-tenant-hold.md) (hold port, now implemented through the same seam)
+- **Related**: [ADR-059](adr_059_streams_consumption.md) (the lane this hook links) · [ADR-045](adr_045_no_producer_side_manager_interfaces.md) (the manager stays concrete; the seam is a factory, not a second implementation) · [ADR-063](adr_063_streams_native_publishing.md) (publish surface, unchanged) · [ADR-089](adr_089_per_tenant_hold_on_the_streams_lane.md) (hold port, implemented through the same seam)
 
 ## Context
 

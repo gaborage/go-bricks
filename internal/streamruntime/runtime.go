@@ -92,7 +92,11 @@ type HoldLedger interface {
 type HoldReplayer interface {
 	HoldConsumers() []string
 	Replay(ctx context.Context, consumer string, msg *HeldMessage) error
-	ReloadHeld(consumer string, tenants []string)
+	// ReloadHeld refreshes one consumer's held set from the ledger. It takes no
+	// listing: the generation that guards the set has to be read BEFORE the ledger
+	// is, and only the streams package holds it, so the read belongs on that side
+	// of the port.
+	ReloadHeld(ctx context.Context, consumer string) error
 }
 
 var (

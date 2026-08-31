@@ -12,6 +12,10 @@ import (
 // imports. None of them may pull messaging/streams or the vendor client
 // (ADR-091). Listed explicitly so a new core package that re-introduces the
 // edge is a test failure rather than a tidy surprise.
+//
+// outbox is omitted: it imports messaging/streams to declare native publishers
+// for outbox.superstreams. inbox must stay off that import (hold types live on
+// the seam).
 var corePackages = []string{
 	"github.com/gaborage/go-bricks/app",
 	"github.com/gaborage/go-bricks/cache",
@@ -25,7 +29,6 @@ var corePackages = []string{
 	"github.com/gaborage/go-bricks/migration",
 	"github.com/gaborage/go-bricks/multitenant",
 	"github.com/gaborage/go-bricks/observability",
-	"github.com/gaborage/go-bricks/outbox",
 	"github.com/gaborage/go-bricks/scheduler",
 	"github.com/gaborage/go-bricks/server",
 }

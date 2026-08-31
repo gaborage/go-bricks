@@ -261,10 +261,17 @@ func (a *App) RegisterModule(module Module) error {
 	if setter, ok := module.(holdReplayerSetter); ok {
 		// A source, not a value: the streams manager is built later, in
 		// prepareStreamConsumers, so a value captured here would always be nil. The
-		// manager becomes the replayer when the drain that drives it lands; until
-		// then the source answers nil, which is what a module with no drain to run
-		// does with it.
-		setter.SetHoldReplayer(func() HoldReplayer { return nil })
+		// nil check keeps a typed-nil manager out of the interface, where it would
+		// satisfy HoldReplayer while dereferencing nothing. The field is a
+		// streamHandle (lifecycle methods only), so the drain port is a second
+		// assertion — *streams.Manager implements both.
+		setter.SetHoldReplayer(func() HoldReplayer {
+			if a.streamsManager == nil {
+				return nil
+			}
+			replayer, _ := a.streamsManager.(HoldReplayer)
+			return replayer
+		})
 	}
 	if err := a.registry.Register(module); err != nil {
 		return err

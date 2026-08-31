@@ -12,6 +12,7 @@ import (
 	"github.com/gaborage/go-bricks/internal/ledgererr"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
+	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/multitenant"
 	"github.com/gaborage/go-bricks/scheduler"
 	gobrickstrace "github.com/gaborage/go-bricks/trace"
@@ -33,6 +34,12 @@ type Relay struct {
 	config       config.OutboxConfig
 	getDB        func(context.Context) (dbtypes.Interface, error)
 	getMessaging func(context.Context) (messaging.AMQPClient, error)
+
+	// streamPublisher resolves a super stream's publisher. The module writes its map once in
+	// DeclareStreams — which startSlots runs before RegisterJobs, so before any cycle — and
+	// only reads it after, so this needs no lock. A relay with no configured targets still
+	// gets a closure; it simply finds nothing.
+	streamPublisher func(name string) (streamPublisher, bool)
 	// tenants lists the tenant keys to relay each cycle. Always non-empty: a single
 	// "" entry for single-tenant mode (multitenant.SetTenant with "" is a no-op) and
 	// for shared (control-plane) tenancy, or the configured static multitenant tenant
@@ -75,6 +82,19 @@ const (
 	// outage semantics markOutage applies at cycle start, instead of letting every
 	// remaining record pay its own serial readiness pre-flight wait.
 	outcomeBrokerDown
+	// outcomeStreamDown is the stream lane's counterpart: this record's publish failed in a
+	// way that says the PRODUCER is not carrying messages — unbound, or bound but not
+	// confirming within the per-record deadline. The row itself is marked failed; what the
+	// outcome adds is that paying the same deadline for every remaining stream row would
+	// hold the leader transaction for batchsize × publishtimeout, so the rest of the stream
+	// rows are left for the next cycle. AMQP rows in the same batch are unaffected: the two
+	// lanes are separate connections and one being down says nothing about the other.
+	//
+	// Residual, deliberately: the FIRST stalled row of a cycle still pays one PublishTimeout,
+	// because a stall is only observable by waiting for it. That is bounded at one timeout
+	// per cycle rather than one per row. streams.Publisher exposes no readiness probe today;
+	// if one ever lands, it belongs in front of this same outcome and removes that residual.
+	outcomeStreamDown
 )
 
 // relayTenant runs a single relay cycle for the given (tenant-scoped) context.
@@ -131,7 +151,23 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 	// level (and, in multi-tenant mode, names the affected tenant) instead of silently
 	// reporting success forever under a permanent misconfiguration.
 	if !brokerUsable {
-		r.markOutage(ctx, log, db, lead, records)
+		// The AMQP client being down says nothing about the stream lane: it is a separate
+		// protocol on a separate connection. Only the rows that would have gone over AMQP
+		// take the outage path; stream rows still drain, so an AMQP outage no longer stalls
+		// a super stream or inflates its rows' retry_count.
+		brokerFree, amqpRows := partitionByLane(records)
+		marked := r.markOutage(ctx, log, db, lead, amqpRows)
+		if len(brokerFree) == 0 {
+			return brokerUnavailableErr(msgErr)
+		}
+
+		res := r.runRelayLoop(ctx, log, db, msgClient, lead, brokerFree)
+		res.failed += marked
+		r.logCycle(log, tenantID, res, len(records))
+		if res.leadershipErr != nil {
+			return res.leadershipErr
+		}
+		// The AMQP half still failed, so the cycle still reports the outage.
 		return brokerUnavailableErr(msgErr)
 	}
 
@@ -147,6 +183,25 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 		return brokerUnavailableErr(res.outageErr)
 	}
 	return nil
+}
+
+// partitionByLane splits a batch into the rows whose delivery depends on the AMQP client and
+// the rest, keeping each group's sequence order. Only an explicit amqp lane — and the empty
+// lane, which is what a row written before the column existed carries — waits on that client.
+// A row naming a lane this build does not know goes with the others: it needs no broker at
+// all, since publishRecord dead-letters it as poison, and routing it through the outage path
+// would instead bump its retry_count every cycle until the broker returned.
+func partitionByLane(records []Record) (other, amqp []Record) {
+	// Indexed rather than ranged by value: a Record is large enough that copying one per
+	// iteration is worth avoiding, and the append copies it anyway.
+	for i := range records {
+		if records[i].Lane == LaneAMQP || records[i].Lane == "" {
+			amqp = append(amqp, records[i])
+		} else {
+			other = append(other, records[i])
+		}
+	}
+	return other, amqp
 }
 
 // relayBatchResult holds the per-record bookkeeping counts from one relay cycle's
@@ -170,6 +225,9 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 	// Keys whose head failed this cycle. A later row of a parked key is left untouched —
 	// not even its retry_count moves — so the key keeps its order across cycles.
 	parked := make(map[string]struct{})
+	// Streams whose producer proved unready this cycle. Held per stream, not batch-wide: one
+	// stalled super stream says nothing about the others, which are separate producers.
+	streamsDown := make(map[string]struct{})
 	for i := range records {
 		// Stop cleanly on shutdown/cancel: leave the rest pending for the next startup
 		// rather than bumping their retry_count on the way down.
@@ -187,6 +245,13 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 		// A decode failure yields nil headers, so the key falls back to the routing key
 		// while publishRecord dead-letters the row as poison.
 		headers, decodeErr := decodeHeaders(records[i].Headers)
+		if _, down := streamsDown[records[i].Stream]; down && records[i].Lane == LaneStream {
+			// That stream's producer is not carrying messages; its remaining rows wait for the
+			// next cycle untouched rather than each paying the publish deadline. Rows aimed at
+			// a healthy stream are unaffected.
+			res.parked++
+			continue
+		}
 		key := relayKey(&records[i], headers)
 		if _, isParked := parked[key]; isParked {
 			res.parked++
@@ -217,6 +282,10 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 			res.outageErr = pubErr
 			res.failed += r.markOutage(ctx, log, db, lead, records[i+1:])
 			return res
+		case outcomeStreamDown:
+			res.failed++
+			parked[key] = struct{}{}
+			streamsDown[records[i].Stream] = struct{}{}
 		case outcomeAborted:
 			// Shutting down mid-publish — stop without counting this record.
 			return res
@@ -224,10 +293,6 @@ func (r *Relay) runRelayLoop(ctx context.Context, log logger.Logger, db dbtypes.
 	}
 	return res
 }
-
-// tenantStampHeader is the header the messaging layer stamps a tenant into. Mirrored here
-// because messaging keeps its constant unexported; it becomes an import once that is exported.
-const tenantStampHeader = "x-tenant-id"
 
 // relayKey is the key a row is ordered under within a cycle. Every key is namespaced by the
 // scope it orders within, because parking is head-of-line blocking: two rows that share a key
@@ -244,13 +309,22 @@ const tenantStampHeader = "x-tenant-id"
 // arrives with nil headers and is keyed by its destination; it is poison and publishRecord
 // dead-letters it, so it holds its siblings only until it does.
 func relayKey(record *Record, headers map[string]any) string {
-	if record.Lane == LaneStream {
+	switch record.Lane {
+	case LaneStream:
 		return LaneStream + ":" + record.Stream + ":" + record.PartitionKey
+	case LaneAMQP, "":
+		if stamp, ok := headers[messaging.TenantStampHeader].(string); ok && stamp != "" {
+			return LaneAMQP + ":tenant:" + stamp
+		}
+		return LaneAMQP + ":" + record.Exchange + ":" + record.RoutingKey
+	default:
+		// A lane this build does not know is poison, and poison is never parkable: it must
+		// reach publishRecord to be dead-lettered. Sharing the AMQP namespace would let a
+		// failing AMQP row on the same destination park it first, so it would wait behind a
+		// row it has nothing to do with instead of being classified. Its own id shares with
+		// nothing, so it is always attempted and parks nothing else.
+		return "unknown:" + record.ID
 	}
-	if stamp, ok := headers[tenantStampHeader].(string); ok && stamp != "" {
-		return LaneAMQP + ":tenant:" + stamp
-	}
-	return LaneAMQP + ":" + record.Exchange + ":" + record.RoutingKey
 }
 
 // markOutage advances retry_count for every pending record without attempting a publish,
@@ -332,6 +406,40 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 	// consume span surface — breaking trace continuity on the error path.
 	pubCtx := gobrickstrace.ExtractFromHeaders(ctx, &mapHeaderAccessor{headers: headers})
 
+	// Move the row's tenant onto the publish context. The framework is the stamp's ONLY
+	// writer (ADR-087), and a stamp replayed out of storage is caller-supplied from a
+	// publisher's point of view — so any header spelling it must go, and the value must
+	// travel by context instead.
+	//
+	// Where the row keeps its tenant differs by lane, because the writers differ: a
+	// stream-lane row records it as the PARTITION KEY (Publish refuses one without a
+	// tenant) and never in its headers, while an AMQP row carries whatever stamp was
+	// persisted with it. Reading only the header would leave a stream row unstamped under
+	// outbox.tenancy=shared, where the cycle's own context carries no tenant either.
+	stamp := ""
+	if record.Lane == LaneStream {
+		stamp = record.PartitionKey
+	} else if persisted, ok := headers[messaging.TenantStampHeader].(string); ok {
+		stamp = persisted
+	}
+	// Delete on PRESENCE, not on a non-empty value: the conflict check keys on the header
+	// existing at all, so an empty-valued one left behind fails every publish.
+	delete(headers, messaging.TenantStampHeader)
+	if stamp != "" {
+		pubCtx = multitenant.SetTenant(pubCtx, stamp)
+	}
+
+	switch record.Lane {
+	case LaneAMQP, "":
+		// today's path, below
+	case LaneStream:
+		return r.publishStreamRecord(ctx, pubCtx, log, db, headers, record)
+	default:
+		// A lane this build does not know is message-intrinsic: it will read the same way
+		// every cycle, so it parks rather than retrying forever.
+		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("unknown lane %q", record.Lane)), nil
+	}
+
 	opts := messaging.PublishOptions{
 		Exchange:   record.Exchange,
 		RoutingKey: record.RoutingKey,
@@ -353,7 +461,10 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 		// header key) is refused before any channel work and is refused identically
 		// every cycle: message-intrinsic, so it is poison on the same path as an
 		// undecodable header rather than connectivity.
-		if errors.Is(err, messaging.ErrInvalidPublishDestination) {
+		if errors.Is(err, messaging.ErrInvalidPublishDestination) ||
+			errors.Is(err, messaging.ErrTenantStampConflict) {
+			// A stamp conflict is deterministic in the row, not the broker: it will read
+			// the same way every cycle, so it parks rather than retrying forever.
 			return r.deadLetterPoison(ctx, log, db, record, err.Error()), nil
 		}
 		// Every other broker-side publish failure — NOT-connected, confirmation timeout, deadline,
@@ -376,6 +487,12 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 		return outcomeFailed, nil
 	}
 
+	return r.recordPublished(ctx, log, db, record), nil
+}
+
+// recordPublished marks a delivered record published. Shared by both lanes: the delivery
+// happened either way, so a failed mark must not bump retry_count on either.
+func (r *Relay) recordPublished(ctx context.Context, log logger.Logger, db dbtypes.Interface, record *Record) publishOutcome {
 	if err := r.store.MarkPublished(ctx, db, record.ID); err != nil {
 		log.Error().
 			Err(err).
@@ -383,10 +500,63 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 			Msg("Failed to mark outbox event as published")
 		// The message WAS delivered; do not bump retry_count. It re-delivers next
 		// cycle and the consumer dedups via the x-outbox-event-id header.
-		return outcomePublishedUnrecorded, nil
+		return outcomePublishedUnrecorded
+	}
+	return outcomePublished
+}
+
+// publishStreamRecord publishes a stream-lane row through its super stream's publisher.
+// The partition key is the row's tenant stamp, which the streams publisher hashes to pick a
+// partition; the stamp itself is NOT put in Properties — publishRecord moved it onto pubCtx
+// and the publisher stamps it from there, so the relay never supplies a caller-set one.
+//
+// Two contexts, both leading: ctx is the cycle's, and bookkeeping runs on it so an expired
+// publish deadline never fails a Mark; pubCtx carries the trace and the tenant and is what the
+// publish itself is bounded against.
+func (r *Relay) publishStreamRecord(ctx, pubCtx context.Context, log logger.Logger, db dbtypes.Interface, headers map[string]any, record *Record) (publishOutcome, error) {
+	// Both of these are config drift on a persisted row — a target removed from
+	// outbox.superstreams between deploys, or a row written without a key — and read the
+	// same way every cycle, so they park rather than retry.
+	if r.streamPublisher == nil {
+		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("stream %q is not an outbox target", record.Stream)), nil
+	}
+	pub, ok := r.streamPublisher(record.Stream)
+	if !ok {
+		return r.deadLetterPoison(ctx, log, db, record, fmt.Sprintf("stream %q is not an outbox target", record.Stream)), nil
+	}
+	if record.PartitionKey == "" {
+		return r.deadLetterPoison(ctx, log, db, record, "stream row has no partition key"), nil
 	}
 
-	return outcomePublished, nil
+	recCtx, cancel := context.WithTimeout(pubCtx, r.config.PublishTimeout)
+	err := pub.Publish(recCtx, &streams.PublishMessage{
+		Data:       record.Payload,
+		Properties: headers,
+		RoutingKey: record.PartitionKey,
+	})
+	cancel()
+	if err != nil {
+		// Shutdown is not a delivery failure — do not advance retry_count.
+		if errors.Is(err, context.Canceled) || errors.Is(err, streams.ErrPublisherClosed) {
+			return outcomeAborted, nil
+		}
+		if errors.Is(err, messaging.ErrTenantStampConflict) {
+			// Message-intrinsic, as on the AMQP lane: the row will conflict identically
+			// every cycle, so it parks instead of retrying forever.
+			return r.deadLetterPoison(ctx, log, db, record, err.Error()), nil
+		}
+		// Everything else is connectivity: a publisher not yet started, the per-record
+		// deadline, or a broker that would not confirm. None means the message is bad.
+		r.markRecordFailed(ctx, log, db, record.ID, err.Error())
+		if errors.Is(err, streams.ErrPublisherNotStarted) || errors.Is(err, context.DeadlineExceeded) {
+			// Evidence THIS stream's producer is not carrying messages right now, not that
+			// this row is special. Stop spending the deadline on that stream's other rows.
+			return outcomeStreamDown, nil
+		}
+		return outcomeFailed, nil
+	}
+
+	return r.recordPublished(ctx, log, db, record), nil
 }
 
 // deadLetterPoison handles a poison record — undecodable headers, or a destination past the

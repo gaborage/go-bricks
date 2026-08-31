@@ -19,9 +19,19 @@ import (
 // fakeRegistrar captures DailyAt registrations. Implements app.JobRegistrar.
 type fakeRegistrar struct {
 	dailyJobs map[string]any
+	// fixedRateJobs records the interval each fixed-rate job asked for, which is
+	// what the hold drain's registration is about.
+	fixedRateJobs map[string]time.Duration
 }
 
-func (r *fakeRegistrar) FixedRate(string, any, time.Duration) error { return nil }
+func (r *fakeRegistrar) FixedRate(jobID string, _ any, interval time.Duration) error {
+	if r.fixedRateJobs == nil {
+		r.fixedRateJobs = map[string]time.Duration{}
+	}
+	r.fixedRateJobs[jobID] = interval
+	return nil
+}
+
 func (r *fakeRegistrar) DailyAt(jobID string, job any, _ time.Time) error {
 	if r.dailyJobs == nil {
 		r.dailyJobs = map[string]any{}
@@ -425,4 +435,45 @@ func TestModuleInitIgnoresAHoldOnADisabledInbox(t *testing.T) {
 
 	require.NoError(t, m.Init(deps))
 	assert.False(t, m.holdEnabled())
+}
+
+// TestRegisterJobsAddsTheHoldDrain pins that an enabled hold schedules its drain
+// at the configured interval — without it, parked messages are never replayed.
+func TestRegisterJobsAddsTheHoldDrain(t *testing.T) {
+	m := NewModule()
+	m.SetSharedResolvers(func(context.Context) (dbtypes.Interface, error) {
+		db := probeReadyDB()
+		db.ExpectQuery(`SELECT tenant_id`).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
+		return db, nil
+	}, nil)
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox: config.InboxConfig{
+			Enabled: true, RetentionPeriod: time.Hour, Tenancy: config.TenancyShared,
+			Hold: config.InboxHoldConfig{Enabled: true},
+		},
+	}
+	require.NoError(t, m.Init(deps))
+
+	reg := &fakeRegistrar{}
+	require.NoError(t, m.RegisterJobs(reg))
+
+	assert.Equal(t, DefaultHoldDrainInterval, reg.fixedRateJobs[holdDrainJobID],
+		"the drain runs at the configured interval")
+}
+
+// TestRegisterJobsWithoutAHoldAddsNoDrain is the other half: an inbox with no
+// hold schedules nothing to drain.
+func TestRegisterJobsWithoutAHoldAddsNoDrain(t *testing.T) {
+	m := NewModule()
+	deps := testDeps()
+	deps.Config = &config.Config{
+		Inbox: config.InboxConfig{Enabled: true, RetentionPeriod: time.Hour, Tenancy: config.TenancyPerTenant},
+	}
+	require.NoError(t, m.Init(deps))
+
+	reg := &fakeRegistrar{}
+	require.NoError(t, m.RegisterJobs(reg))
+
+	assert.NotContains(t, reg.fixedRateJobs, holdDrainJobID)
 }

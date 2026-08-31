@@ -57,9 +57,6 @@ func (a *App) prepareStreamConsumers(ctx context.Context) error {
 	if holdErr != nil {
 		return holdErr
 	}
-	if drainErr := assertHoldIsDrainable(hold, rt); drainErr != nil {
-		return drainErr
-	}
 
 	cfg := a.cfg.Messaging.Streams
 	a.warnIfPlaintextStreamURI(cfg.URI)
@@ -190,21 +187,4 @@ func (a *App) holdLedger() (HoldLedger, error) {
 		found = ledger
 	}
 	return found, nil
-}
-
-// assertHoldIsDrainable refuses a hold nothing can replay. A parked message would
-// wait for a drain that never runs, and only hand-written SQL would release it —
-// so a build without one refuses the configuration instead of accepting messages
-// it cannot give back. The capability is the manager's, so this asks the
-// registered runtime: the guard dissolves when the manager gains the methods,
-// with no wiring step to remember.
-func assertHoldIsDrainable(hold HoldLedger, rt StreamRuntime) error {
-	if hold == nil {
-		return nil
-	}
-	if rt == nil || !rt.CanDrainHold() {
-		return errors.New("a hold ledger is configured but this build cannot drain it: " +
-			"parked messages would never be replayed; disable inbox.hold.enabled until the hold drain is available")
-	}
-	return nil
 }
