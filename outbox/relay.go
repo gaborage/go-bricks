@@ -363,7 +363,7 @@ func (r *Relay) publishRecord(ctx context.Context, log logger.Logger, db dbtypes
 	case LaneAMQP, "":
 		// today's path, below
 	case LaneStream:
-		return r.publishStreamRecord(ctx, log, db, pubCtx, headers, record)
+		return r.publishStreamRecord(ctx, pubCtx, log, db, headers, record)
 	default:
 		// A lane this build does not know is message-intrinsic: it will read the same way
 		// every cycle, so it parks rather than retrying forever.
@@ -437,9 +437,13 @@ func (r *Relay) recordPublished(ctx context.Context, log logger.Logger, db dbtyp
 
 // publishStreamRecord publishes a stream-lane row through its super stream's publisher.
 // The partition key is the row's tenant stamp, which the streams publisher hashes to pick a
-// partition; the stamp itself is NOT put in Properties — plan A's rehydration leaves it on
-// pubCtx and the publisher stamps it from there, so the relay never supplies a caller-set one.
-func (r *Relay) publishStreamRecord(ctx context.Context, log logger.Logger, db dbtypes.Interface, pubCtx context.Context, headers map[string]any, record *Record) (publishOutcome, error) {
+// partition; the stamp itself is NOT put in Properties — publishRecord moved it onto pubCtx
+// and the publisher stamps it from there, so the relay never supplies a caller-set one.
+//
+// Two contexts, both leading: ctx is the cycle's, and bookkeeping runs on it so an expired
+// publish deadline never fails a Mark; pubCtx carries the trace and the tenant and is what the
+// publish itself is bounded against.
+func (r *Relay) publishStreamRecord(ctx, pubCtx context.Context, log logger.Logger, db dbtypes.Interface, headers map[string]any, record *Record) (publishOutcome, error) {
 	// Both of these are config drift on a persisted row — a target removed from
 	// outbox.superstreams between deploys, or a row written without a key — and read the
 	// same way every cycle, so they park rather than retry.
