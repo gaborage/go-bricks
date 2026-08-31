@@ -129,7 +129,7 @@ func TestTheReplayerSourceYieldsTheManager(t *testing.T) {
 
 	assert.Nil(t, module.replayer(), "no manager yet, so no replayer")
 
-	a.streamsManager = streams.NewManager(&streams.ManagerOptions{
+	a.streamsManager = streams.NewManager(streams.ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 	})

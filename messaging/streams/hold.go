@@ -446,9 +446,14 @@ func (m *Manager) HoldConsumers() []string {
 // consumer this replica does not run is a no-op: the ledger is shared and
 // deployments differ in which consumers they start.
 func (m *Manager) ReloadHeld(consumer string, tenants []string) {
-	if runner := m.runnerFor(consumer); runner != nil {
-		runner.held.replace(tenants)
+	runner := m.runnerFor(consumer)
+	if runner == nil {
+		return
 	}
+	// Generation-checked like every other replace: the drain read this listing from
+	// the same ledger the parks write to, so a park landing after that read wins
+	// and the drain's next pass carries it.
+	runner.held.replace(runner.held.generationAt(), runner.held.epochAt(), tenants)
 }
 
 // Replay puts a held message back through the lane. It returns the handler's own

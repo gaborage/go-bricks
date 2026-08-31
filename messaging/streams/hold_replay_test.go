@@ -17,7 +17,7 @@ import (
 // against a fake environment, which is how a holding consumer exists at all.
 func holdManagerOn(t *testing.T, ledger HoldLedger, decls *Declarations) *Manager {
 	t.Helper()
-	m := NewManager(&ManagerOptions{
+	m := NewManager(ManagerOptions{
 		URI:    "rabbitmq-stream://localhost:5552/%2f",
 		Logger: logger.New("error", false),
 		Hold:   ledger,
