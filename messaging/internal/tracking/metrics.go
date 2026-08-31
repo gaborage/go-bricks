@@ -27,6 +27,7 @@ const (
 	metricConnectionClose  = "messaging.connection.close"
 	metricChannelCreate    = "messaging.channel.create"
 	metricChannelClose     = "messaging.channel.close"
+	metricSettlementTotal  = "messaging.settlement.total"
 
 	// Attribute keys (following OTel semconv)
 	attrMessagingSystem             = "messaging.system"
@@ -37,6 +38,18 @@ const (
 	attrMessagingRabbitMQRoutingKey = "messaging.rabbitmq.routing_key"
 	attrMessagingRabbitMQQueue      = "messaging.rabbitmq.queue"
 	attrRetryReason                 = "retry.reason"
+	attrLane                        = "lane"
+	attrOutcome                     = "outcome"
+
+	// Settlement lanes and outcomes. The attribute set is exactly these two
+	// keys; a settle error records OutcomeFailed instead of the success value.
+	LaneClassic = "classic"
+	LaneStreams = "streams"
+
+	OutcomeAcked     = "acked"
+	OutcomeNacked    = "nacked"
+	OutcomeCommitted = "committed"
+	OutcomeFailed    = "failed"
 
 	// Operation types
 	operationPublish = "publish"
@@ -63,6 +76,7 @@ var (
 	amqpConnectionClose  metric.Int64Counter
 	amqpChannelCreate    metric.Int64Counter
 	amqpChannelClose     metric.Int64Counter
+	amqpSettlementTotal  metric.Int64Counter
 )
 
 // logMetricError logs a metric initialization or registration error to stderr.
@@ -146,6 +160,13 @@ func initAMQPMeter() {
 		metric.WithUnit("{channel}"),
 	)
 	logMetricError(metricChannelClose, err)
+
+	amqpSettlementTotal, err = amqpMeter.Int64Counter(
+		metricSettlementTotal,
+		metric.WithDescription("Number of consume-lane settlement outcomes"),
+		metric.WithUnit("{settlement}"),
+	)
+	logMetricError(metricSettlementTotal, err)
 }
 
 // getAMQPMeter returns the initialized AMQP meter, initializing it if necessary.
@@ -399,4 +420,29 @@ func RecordConnectionEvent(eventType string, err error) {
 // eventType should be "create" or "close".
 func RecordChannelEvent(eventType string, err error) {
 	recordLifecycleEvent(eventType, err, amqpChannelCreate, amqpChannelClose)
+}
+
+// RecordSettlement records one settle result after the lane's ack, nack, or
+// offset-commit call returns. A non-nil err records outcome=failed; otherwise
+// successOutcome is recorded. Attributes are exactly {lane, outcome}.
+//
+// The consume path initializes the instruments first, so this does not call
+// getAMQPMeter: a leftover worker settling after a test reset must not race
+// meterOnce. The counter pointer is snapshotted under meterInitMu so a
+// concurrent ResetMeterForTesting cannot tear the read.
+func RecordSettlement(lane, successOutcome string, err error) {
+	meterInitMu.Lock()
+	counter := amqpSettlementTotal
+	meterInitMu.Unlock()
+	if counter == nil {
+		return
+	}
+	outcome := successOutcome
+	if err != nil {
+		outcome = OutcomeFailed
+	}
+	counter.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String(attrLane, lane),
+		attribute.String(attrOutcome, outcome),
+	))
 }

@@ -10,11 +10,16 @@ import (
 	"github.com/rabbitmq/rabbitmq-stream-go-client/pkg/amqp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 	"github.com/gaborage/go-bricks/messaging/internal/tenantstamp"
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	"github.com/gaborage/go-bricks/multitenant"
+	obtest "github.com/gaborage/go-bricks/observability/testing"
 )
 
 var errHandlerFailed = errors.New("handler failed")
@@ -643,4 +648,72 @@ func TestStreamsPermanentMarksTheErrorForTheLane(t *testing.T) {
 
 	assert.Equal(t, 1, calls, "a permanent error is not retried")
 	assert.Empty(t, storer.offsets())
+}
+
+func setupSettlementMetrics(t *testing.T) *obtest.TestMeterProvider {
+	t.Helper()
+	prev := otel.GetMeterProvider()
+	mp := obtest.NewTestMeterProvider()
+	otel.SetMeterProvider(mp)
+	tracking.ResetMeterForTesting()
+	t.Cleanup(func() {
+		otel.SetMeterProvider(prev)
+		tracking.ResetMeterForTesting()
+		require.NoError(t, mp.Shutdown(context.Background()))
+	})
+	return mp
+}
+
+func TestRunnerDeliverRecordsSettlementCommitted(t *testing.T) {
+	mp := setupSettlementMetrics(t)
+	clock := newFakeClock()
+	runner := newTestRunner(t, func(context.Context, *Message) error { return nil },
+		newOffsetTracker(1, time.Hour, clock.Now))
+
+	runner.deliver(testStream, 12, amqpMessage("payload"), &fakeStorer{})
+
+	assertExactlyLaneAndOutcome(t, settlementAttrs(t, mp.Collect(t)), tracking.LaneStreams, tracking.OutcomeCommitted)
+}
+
+func TestRunnerDeliverRecordsSettlementFailedOnStoreError(t *testing.T) {
+	mp := setupSettlementMetrics(t)
+	clock := newFakeClock()
+	runner := newTestRunner(t, func(context.Context, *Message) error { return nil },
+		newOffsetTracker(1, time.Hour, clock.Now))
+
+	runner.deliver(testStream, 12, amqpMessage("payload"), &fakeStorer{failNow: true})
+
+	assertExactlyLaneAndOutcome(t, settlementAttrs(t, mp.Collect(t)), tracking.LaneStreams, tracking.OutcomeFailed)
+}
+
+func TestRunnerDeliverHandlerErrorRecordsNoSettlement(t *testing.T) {
+	mp := setupSettlementMetrics(t)
+	clock := newFakeClock()
+	runner := newTestRunner(t, func(context.Context, *Message) error { return errHandlerFailed },
+		newOffsetTracker(1, time.Hour, clock.Now))
+
+	runner.deliver(testStream, 61, amqpMessage("payload"), &fakeStorer{})
+
+	assert.Nil(t, obtest.FindMetric(mp.Collect(t), "messaging.settlement.total"),
+		"a skipped offset is not a commit, so it must not increment the settlement counter")
+}
+
+func settlementAttrs(t *testing.T, rm metricdata.ResourceMetrics) []attribute.KeyValue {
+	t.Helper()
+	m := obtest.FindMetric(rm, "messaging.settlement.total")
+	require.NotNil(t, m)
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, sum.DataPoints, 1)
+	assert.Equal(t, int64(1), sum.DataPoints[0].Value)
+	return sum.DataPoints[0].Attributes.ToSlice()
+}
+
+func assertExactlyLaneAndOutcome(t *testing.T, attrs []attribute.KeyValue, lane, outcome string) {
+	t.Helper()
+	got := make(map[string]string, len(attrs))
+	for _, attr := range attrs {
+		got[string(attr.Key)] = attr.Value.AsString()
+	}
+	assert.Equal(t, map[string]string{"lane": lane, "outcome": outcome}, got)
 }
