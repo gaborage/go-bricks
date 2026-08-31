@@ -99,7 +99,8 @@ func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
 // ledger still holds — the reload every replica depends on to learn about
 // releases another replica made.
 func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string) error {
+	replayer streams.HoldReplayer, consumer string,
+) error {
 	due, err := pass.store.DueTenants(ctx, pass.db, consumer, holdDrainTenantsPerPass)
 	if err != nil {
 		return err
@@ -124,7 +125,8 @@ func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, pass *
 // contained here: the tenant that caused it is reported by TYPE (ADR-081) and the
 // pass continues with the next one.
 func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant) (err error) {
+	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant,
+) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("inbox hold drain: tenant %q: panic (type: %T)", tenant.TenantID, recovered)
@@ -149,7 +151,8 @@ func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *ho
 // own the drain for one long job run, and the next pass picks up where this one
 // stopped. A short batch means the tenant is drained, so it is released.
 func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant) error {
+	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant,
+) error {
 	rows, err := pass.store.NextRows(ctx, pass.db, consumer, tenant.TenantID, holdDrainRowsPerRead)
 	if err != nil {
 		return err
@@ -176,7 +179,8 @@ func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pas
 // defers the tenant: everything behind this row stays parked, which is the order
 // the hold exists to keep.
 func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant, row *HoldRow) (bool, error) {
+	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant, row *HoldRow,
+) (bool, error) {
 	if err := replayer.Replay(ctx, consumer, heldMessageOf(row)); err != nil {
 		return false, d.deferTenant(ctx, log, pass, consumer, tenant, row, err)
 	}
@@ -200,7 +204,8 @@ func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *hold
 
 // deferTenant records a failed replay and backs the tenant off.
 func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *holdPass,
-	consumer string, tenant *HoldTenant, row *HoldRow, replayErr error) error {
+	consumer string, tenant *HoldTenant, row *HoldRow, replayErr error,
+) error {
 	backoff := d.backoffFor(tenant.Attempts + 1)
 
 	if _, err := pass.store.Defer(ctx, pass.db, consumer, tenant.TenantID, d.owner, backoff, replayErr.Error()); err != nil {
@@ -221,7 +226,8 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 
 // releaseTenant drops the tenant's marker once its last row is replayed.
 func (d *HoldDrain) releaseTenant(ctx context.Context, log logger.Logger, pass *holdPass,
-	consumer string, tenant *HoldTenant) error {
+	consumer string, tenant *HoldTenant,
+) error {
 	released, err := pass.store.Release(ctx, pass.db, consumer, tenant.TenantID, d.owner)
 	if err != nil {
 		return err
@@ -255,7 +261,8 @@ func (d *HoldDrain) warnIfTooOld(log logger.Logger, consumer string, tenant *Hol
 // reloadAndSnapshot tells the runners what the ledger holds and refreshes what
 // the gauges report.
 func (d *HoldDrain) reloadAndSnapshot(ctx context.Context, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string) error {
+	replayer streams.HoldReplayer, consumer string,
+) error {
 	held, err := pass.store.HeldTenants(ctx, pass.db, consumer)
 	if err != nil {
 		return err
@@ -296,7 +303,7 @@ func (d *HoldDrain) snapshot(consumer string) *atomic.Pointer[HoldStats] {
 
 	d.statsMu.Lock()
 	defer d.statsMu.Unlock()
-	if cell, ok := d.stats[consumer]; ok {
+	if cell, ok = d.stats[consumer]; ok {
 		return cell
 	}
 	if d.stats == nil {

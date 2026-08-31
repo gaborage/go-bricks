@@ -31,6 +31,7 @@ func (r *fakeRegistrar) FixedRate(jobID string, _ any, interval time.Duration) e
 	r.fixedRateJobs[jobID] = interval
 	return nil
 }
+
 func (r *fakeRegistrar) DailyAt(jobID string, job any, _ time.Time) error {
 	if r.dailyJobs == nil {
 		r.dailyJobs = map[string]any{}

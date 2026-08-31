@@ -40,12 +40,14 @@ type fakeHoldReplayer struct {
 	reloaded  map[string][]string
 	failAt    map[int64]error
 	panicAt   int64
+	panicked  bool
 }
 
 func (f *fakeHoldReplayer) HoldConsumers() []string { return f.consumers }
 
 func (f *fakeHoldReplayer) Replay(_ context.Context, _ string, msg *streams.HeldMessage) error {
-	if msg.Offset == f.panicAt {
+	if msg.Offset == f.panicAt && !f.panicked {
+		f.panicked = true
 		panic("replay exploded")
 	}
 	f.replayed = append(f.replayed, msg.Offset)
@@ -92,17 +94,24 @@ func drainCtx(db dbtypes.Interface) *fakeHoldJobCtx {
 	return &fakeHoldJobCtx{Context: context.Background(), log: logger.New("error", false), db: db}
 }
 
-// dueTenantRows is what DueTenants answers with for one tenant.
-func dueTenantRows(tenant string, heldSince time.Time) *dbtesting.RowSet {
-	return dbtesting.NewRowSet("consumer", "tenant_id", "held_since", "attempts", "next_attempt_at", "last_error").
-		AddRow(testHoldConsumer, tenant, heldSince, 0, heldSince, "")
+// dueTenantRows is what DueTenants answers with, one row per tenant in the order
+// the drain will take them.
+func dueTenantRows(heldSince time.Time, tenants ...string) *dbtesting.RowSet {
+	rows := dbtesting.NewRowSet("consumer", "tenant_id", "held_since", "attempts", "next_attempt_at", "last_error")
+	for _, tenant := range tenants {
+		rows.AddRow(testHoldConsumer, tenant, heldSince, 0, heldSince, "")
+	}
+	return rows
 }
 
 // heldRows is what NextRows answers with, in offset order.
-func heldRows(tenant string, offsets ...int64) *dbtesting.RowSet {
+// heldRows is what NextRows answers with. A TestDB expectation is matched by
+// substring and never consumed, so every tenant in a pass reads this same set —
+// which is why the rows carry one tenant and tests assert on offsets.
+func heldRows(offsets ...int64) *dbtesting.RowSet {
 	rows := dbtesting.NewRowSet("consumer", "stream", "stream_offset", "tenant_id", "data", "properties", "held_at")
 	for _, offset := range offsets {
-		rows.AddRow(testHoldConsumer, testHoldStream, offset, tenant, []byte("payload"), nil, time.Now())
+		rows.AddRow(testHoldConsumer, testHoldStream, offset, testHoldTenant, []byte("payload"), nil, time.Now())
 	}
 	return rows
 }
@@ -113,9 +122,9 @@ func heldRows(tenant string, offsets ...int64) *dbtesting.RowSet {
 // ledger still holds.
 func TestDrainReplaysInOrderAndReleases(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(testHoldTenant, time.Now()))
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now(), testHoldTenant))
 	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1) // AcquireLease
-	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(testHoldTenant, 3, 4, 5))
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(3, 4, 5))
 	db.ExpectExec(`DELETE FROM ` + holdTable).WillReturnRowsAffected(1)
 	db.ExpectExec(`DELETE FROM ` + holdTenantTable).WillReturnRowsAffected(1) // Release
 	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
@@ -137,9 +146,9 @@ func TestDrainReplaysInOrderAndReleases(t *testing.T) {
 // rather than released.
 func TestDrainStopsTheTenantAtTheFirstFailure(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(testHoldTenant, time.Now()))
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now(), testHoldTenant))
 	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
-	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(testHoldTenant, 3, 4, 5))
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(3, 4, 5))
 	db.ExpectExec(`DELETE FROM ` + holdTable).WillReturnRowsAffected(1)
 	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
 		dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
@@ -163,7 +172,7 @@ func TestDrainStopsTheTenantAtTheFirstFailure(t *testing.T) {
 // pass does no work for that tenant at all.
 func TestDrainSkipsATenantAnotherReplicaHolds(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(testHoldTenant, time.Now()))
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now(), testHoldTenant))
 	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(0) // the lease is taken
 	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
 		dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
@@ -193,9 +202,9 @@ func TestDrainWithoutStreamsDoesNothing(t *testing.T) {
 // reported by TYPE and the other tenants still drain.
 func TestDrainSurvivesAPanicInOneTenant(t *testing.T) {
 	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
-	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(testHoldTenant, time.Now()))
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now(), testHoldTenant))
 	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
-	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(testHoldTenant, 3))
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(3))
 	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
 		dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
 	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
@@ -209,4 +218,32 @@ func TestDrainSurvivesAPanicInOneTenant(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), testHoldTenant)
 	assert.Contains(t, err.Error(), "panic (type: string)", "the panic value is reported by type")
+}
+
+// TestDrainContinuesAfterATenantPanics pins that one tenant's panic is contained
+// to that tenant: the pass still drains the tenants behind it, which is the whole
+// point of holding per tenant rather than stalling the partition.
+func TestDrainContinuesAfterATenantPanics(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(
+		dueTenantRows(time.Now(), testHoldTenant, otherHoldTenant))
+	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(3, 4, 5))
+	db.ExpectExec(`DELETE FROM ` + holdTable).WillReturnRowsAffected(1)
+	db.ExpectExec(`DELETE FROM ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
+		dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(1), int64(3), time.Now()))
+
+	// The panic hits the first replay, which belongs to the first due tenant.
+	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}, panicAt: 3}
+	drain := newHoldDrain(db, replayer)
+
+	err := drain.Execute(drainCtx(db))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), testHoldTenant, "the panicking tenant is named")
+	assert.Equal(t, []int64{3, 4, 5}, replayer.replayed,
+		"the tenant behind the panic still drained, in order")
 }
