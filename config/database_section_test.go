@@ -12,13 +12,13 @@ import (
 func TestDatabaseSectionConstructorsNamePathAndPlacement(t *testing.T) {
 	tests := []struct {
 		name          string
-		section       dbSection
+		section       section
 		wantPath      string
-		wantPlacement dbPlacement
+		wantPlacement placement
 	}{
-		{name: "root", section: rootDatabaseSection(), wantPath: "database", wantPlacement: dbPlacementRoot},
-		{name: "named", section: namedDatabaseSection("reporting"), wantPath: "databases.reporting", wantPlacement: dbPlacementNamed},
-		{name: "tenant", section: tenantDatabaseSection("acme"), wantPath: "multitenant.tenants.acme.database", wantPlacement: dbPlacementTenant},
+		{name: "root", section: rootDatabaseSection(), wantPath: "database", wantPlacement: placementRoot},
+		{name: "named", section: namedDatabaseSection("reporting"), wantPath: "databases.reporting", wantPlacement: placementNamed},
+		{name: "tenant", section: tenantDatabaseSection("acme"), wantPath: "multitenant.tenants.acme.database", wantPlacement: placementTenant},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -87,7 +87,7 @@ func TestNormalizeDatabaseSectionPlacementRules(t *testing.T) {
 	}
 	tests := []struct {
 		name         string
-		section      dbSection
+		section      section
 		cfg          DatabaseConfig
 		wantErr      string
 		wantCategory string
@@ -148,7 +148,7 @@ func TestNormalizeDatabaseSectionQualifiesFieldWithSectionPath(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		section   dbSection
+		section   section
 		cfg       DatabaseConfig
 		wantField string
 	}{
@@ -177,7 +177,7 @@ func TestNormalizeDatabaseSectionQualifiesFieldWithSectionPath(t *testing.T) {
 			var cfgErr *ConfigError
 			require.ErrorAs(t, err, &cfgErr)
 			assert.Equal(t, tt.wantField, cfgErr.Field)
-			if tt.section.placement != dbPlacementRoot {
+			if tt.section.placement != placementRoot {
 				assert.False(t, strings.HasPrefix(err.Error(), tt.section.path+": "),
 					"the path is carried by Field; a wrapper prefix would print it twice")
 				// The error proper names the path once. An Action may name it a second
@@ -197,7 +197,7 @@ func TestNormalizeDatabaseSectionQualifiesFieldWithSectionPath(t *testing.T) {
 // trusting that two hand-typed tables agree: ADR-076's whole point is that a key has ONE
 // spelling per section, and the delivered-empty check (ADR-051) is the other producer of it.
 func TestQualifiedFieldMatchesDeliveredEmptySpelling(t *testing.T) {
-	sections := []dbSection{
+	sections := []section{
 		rootDatabaseSection(),
 		namedDatabaseSection("reporting"),
 		tenantDatabaseSection("acme"),
@@ -226,7 +226,7 @@ func TestRuntimeDoorSpellingMatchesStartupDoor(t *testing.T) {
 	tests := []struct {
 		name    string
 		key     string
-		section dbSection
+		section section
 	}{
 		{name: "root", key: "", section: rootDatabaseSection()},
 		{name: "named", key: NamedDatabasePrefix + "reporting", section: namedDatabaseSection("reporting")},
@@ -264,7 +264,7 @@ func TestSectionForResourceKey(t *testing.T) {
 	tests := []struct {
 		name string
 		key  string
-		want dbSection
+		want section
 	}{
 		{name: "empty_is_root", key: "", want: rootDatabaseSection()},
 		{name: "named_prefix", key: NamedDatabasePrefix + "reporting", want: namedDatabaseSection("reporting")},
@@ -332,7 +332,7 @@ func TestForEachDatabaseSectionWalksRootNamedThenGatedTenantsInSortedOrder(t *te
 		Multitenant: MultitenantConfig{Enabled: true, Tenants: map[string]TenantEntry{"t2": {}, "t1": {}}},
 	}
 	var seen []string
-	require.NoError(t, forEachDatabaseSection(cfg, func(s dbSection, _ *DatabaseConfig) error {
+	require.NoError(t, forEachDatabaseSection(cfg, func(s section, _ *DatabaseConfig) error {
 		seen = append(seen, s.path)
 		return nil
 	}))
@@ -345,7 +345,7 @@ func TestForEachDatabaseSectionWalksRootNamedThenGatedTenantsInSortedOrder(t *te
 func TestForEachDatabaseSectionSkipsTenantsWhenMultitenantDisabled(t *testing.T) {
 	cfg := &Config{Multitenant: MultitenantConfig{Tenants: map[string]TenantEntry{"t1": {}}}}
 	var seen []string
-	require.NoError(t, forEachDatabaseSection(cfg, func(s dbSection, _ *DatabaseConfig) error {
+	require.NoError(t, forEachDatabaseSection(cfg, func(s section, _ *DatabaseConfig) error {
 		seen = append(seen, s.path)
 		return nil
 	}))
@@ -357,7 +357,7 @@ func TestForEachDatabaseSectionWritesMapEntriesBack(t *testing.T) {
 		Databases:   map[string]DatabaseConfig{"r": {}},
 		Multitenant: MultitenantConfig{Enabled: true, Tenants: map[string]TenantEntry{"t": {}}},
 	}
-	require.NoError(t, forEachDatabaseSection(cfg, func(_ dbSection, db *DatabaseConfig) error {
+	require.NoError(t, forEachDatabaseSection(cfg, func(_ section, db *DatabaseConfig) error {
 		db.Host = "written"
 		return nil
 	}))
@@ -369,7 +369,7 @@ func TestForEachDatabaseSectionWritesMapEntriesBack(t *testing.T) {
 func TestForEachDatabaseSectionStopsAtFirstError(t *testing.T) {
 	cfg := &Config{Databases: map[string]DatabaseConfig{"a": {}, "b": {}}}
 	calls := 0
-	err := forEachDatabaseSection(cfg, func(s dbSection, _ *DatabaseConfig) error {
+	err := forEachDatabaseSection(cfg, func(s section, _ *DatabaseConfig) error {
 		calls++
 		if s.path == "databases.a" {
 			return errors.New("stop")

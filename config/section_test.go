@@ -8,6 +8,74 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// sectionEngineTestCases names one root and one non-root section per kind this engine
+// addresses, so a guarantee the engine makes can be pinned once and proven identical across
+// every kind it serves — rather than once per kind, which is what cache_section.go used to be.
+func sectionEngineTestCases() []struct {
+	name string
+	root section
+	sub  section
+} {
+	return []struct {
+		name string
+		root section
+		sub  section
+	}{
+		{name: "database", root: rootDatabaseSection(), sub: tenantDatabaseSection("acme")},
+		{name: "cache", root: rootCacheSection(), sub: tenantCacheSection("acme")},
+	}
+}
+
+// TestSectionQualifyRootIsIdentity pins the identity guarantee every kind's root section gets
+// from the shared engine: the SAME error value comes back, not a copy that merely compares
+// equal — what keeps a single-tenant deployment's errors byte-identical. cache_section.go used
+// to prove this only for cache; the engine now proves it once, for every kind it serves.
+func TestSectionQualifyRootIsIdentity(t *testing.T) {
+	for _, tt := range sectionEngineTestCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewMissingFieldError(tt.root.rootField+".host", "X_HOST", tt.root.rootField+".host")
+
+			got := tt.root.qualify(err)
+
+			assert.Same(t, err, got)
+		})
+	}
+}
+
+// TestSectionQualifyWrapsANonConfigError covers the branch that has no field to move: a plain
+// error is wrapped with the section path in the message instead — the one place a path is
+// allowed into the message rather than the field. Both kinds share the same fallback.
+func TestSectionQualifyWrapsANonConfigError(t *testing.T) {
+	for _, tt := range sectionEngineTestCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			sentinel := errors.New("dial refused")
+
+			got := tt.sub.qualify(sentinel)
+
+			require.ErrorIs(t, got, sentinel)
+			assert.Contains(t, got.Error(), tt.sub.path)
+		})
+	}
+}
+
+// TestSectionQualifyClonesDetails pins that the qualified copy owns its Details: a caller
+// mutating the returned slice must not reach the error it was built from. Both kinds share the
+// same qualifyConfigError call and therefore the same guarantee.
+func TestSectionQualifyClonesDetails(t *testing.T) {
+	for _, tt := range sectionEngineTestCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := NewConnectionError(tt.sub.rootField, "dial refused", []string{"check the host"})
+			require.NotEmpty(t, orig.Details)
+
+			var qualified *ConfigError
+			require.ErrorAs(t, tt.sub.qualify(orig), &qualified)
+			qualified.Details[0] = "mutated"
+
+			assert.NotEqual(t, "mutated", orig.Details[0])
+		})
+	}
+}
+
 // TestQualifyCacheConfigErrorForKeyAddressesResourceKey drives the EXPORTED door the app's
 // runtime cache factory calls, so the key-to-section translation is pinned at the surface a
 // consumer sees rather than only through checkTenantCache.
@@ -70,41 +138,13 @@ func TestQualifyCacheConfigErrorForKeyAddressesResourceKey(t *testing.T) {
 	}
 }
 
-// TestQualifyCacheConfigErrorForKeyRootIsIdentity pins the byte-identity the empty key buys: the
-// SAME error value comes back, not a copy that merely compares equal, which is what lets a
-// single-tenant deployment's errors stay exactly as they were.
-func TestQualifyCacheConfigErrorForKeyRootIsIdentity(t *testing.T) {
-	err := NewMissingFieldError("cache.redis.host", "CACHE_REDIS_HOST", "cache.redis.host")
-
-	got := QualifyCacheConfigErrorForKey(err, "")
-
-	assert.Same(t, err, got)
+// TestQualifyCacheConfigErrorForKeyNilErrorIsNil pins the door's own nil guard: a nil error
+// comes back nil regardless of key, so a caller need not check before qualifying. This is the
+// door's own convenience rather than a generic engine guarantee — section.qualify is never
+// invoked with a nil err by any other caller, so the guard lives here, not on the engine.
+func TestQualifyCacheConfigErrorForKeyNilErrorIsNil(t *testing.T) {
 	assert.Nil(t, QualifyCacheConfigErrorForKey(nil, "acme"))
 	assert.Nil(t, QualifyCacheConfigErrorForKey(nil, ""))
-}
-
-// TestQualifyCacheConfigErrorForKeyWrapsANonConfigError covers the branch that has no field to
-// move: the path reaches the message instead, the one place qualifyConfigError allows it.
-func TestQualifyCacheConfigErrorForKeyWrapsANonConfigError(t *testing.T) {
-	sentinel := errors.New("dial refused")
-
-	got := QualifyCacheConfigErrorForKey(sentinel, "acme")
-
-	require.ErrorIs(t, got, sentinel)
-	assert.Contains(t, got.Error(), "multitenant.tenants.acme.cache")
-}
-
-// TestQualifyCacheConfigErrorForKeyClonesDetails pins that the qualified copy owns its Details:
-// a caller mutating the returned slice must not reach the error it was built from.
-func TestQualifyCacheConfigErrorForKeyClonesDetails(t *testing.T) {
-	orig := NewConnectionError("cache", "dial refused", []string{"check the Redis host"})
-	require.NotEmpty(t, orig.Details)
-
-	var qualified *ConfigError
-	require.ErrorAs(t, QualifyCacheConfigErrorForKey(orig, "acme"), &qualified)
-	qualified.Details[0] = "mutated"
-
-	assert.NotEqual(t, "mutated", orig.Details[0])
 }
 
 // TestCheckTenantCacheAddressesTheTenant pins the STARTUP door's spelling across the extraction:
@@ -121,7 +161,9 @@ func TestCheckTenantCacheAddressesTheTenant(t *testing.T) {
 // TestRequalifyActionRewritesOnlyItsOwnGeneratedHints is the guard half of the widening: the
 // function now reads the key out of the hint rather than rebuilding it from Field, which is
 // what lets the not-configured hint travel — and every untouched row here is what keeps that
-// from becoming "rewrite any action that looks like a hint".
+// from becoming "rewrite any action that looks like a hint". The table already spans both
+// kinds (a database hint sits beside the cache ones), which is what keeps this one test from
+// needing a per-kind twin.
 func TestRequalifyActionRewritesOnlyItsOwnGeneratedHints(t *testing.T) {
 	const (
 		orig      = "cache"

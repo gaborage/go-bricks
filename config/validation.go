@@ -882,12 +882,12 @@ func deliveredEmptyListAction(key string) string {
 // abort again. Sorted, so the startup error is deterministic.
 func validateNoDeliveredEmptyDatabase(cfg *Config) error {
 	var offending []string
-	_ = forEachDatabaseSection(cfg, func(section dbSection, db *DatabaseConfig) error {
+	_ = forEachDatabaseSection(cfg, func(sec section, db *DatabaseConfig) error {
 		if IsDatabaseConfigured(db) {
 			return nil
 		}
 		for _, k := range databaseIdentityKeys {
-			if key := section.path + "." + k; cfg.Exists(key) {
+			if key := sec.path + "." + k; cfg.Exists(key) {
 				offending = append(offending, key)
 			}
 		}
@@ -1084,7 +1084,7 @@ func ApplyDatabasePoolDefaults(cfg *DatabaseConfig) error {
 // module pinned to a RELEASED go-bricks, so an arity change there cannot compile until the
 // next tag — see C60.19.
 func ApplyDatabasePoolDefaultsForKey(cfg *DatabaseConfig, resourceKey string) error {
-	section := sectionForResourceKey(resourceKey)
+	section := kindDatabase(resourceKey)
 	if cfg == nil {
 		return section.qualify(NewValidationError(fieldDatabase, "configuration is nil"))
 	}

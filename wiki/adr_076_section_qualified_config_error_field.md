@@ -4,6 +4,15 @@
 - **Date**: 2026-08-20
 - **Related**: [ADR-047](adr_047_database_absence_vs_misconfiguration.md) (absence vs misconfiguration, which is what the root section's placement rule encodes) · [ADR-051](adr_051_delivered_empty_database_identity.md) (the delivered-empty check, whose key spelling this now matches)
 
+> **Amended (2026-08-31, one engine for every kind):** the database placement logic and the
+> cache addendum below were independent reimplementations of the same root/named/tenant
+> rewrite; `cache_section.go`'s 35 lines are now one unexported `section` type in
+> `config/section.go`, keyed by kind (`database`/`cache`) and resource key, backing the
+> "cannot drift" promise for both. `QualifyCacheConfigErrorForKey` and
+> `ApplyDatabasePoolDefaultsForKey` are its two doors; every door wraps its whole return once,
+> at the function boundary, so a forgotten branch (#1248) is now structurally impossible. No
+> Field, Action, or rendered message changed.
+
 > **Amended (2026-08-30, the runtime CACHE door):** this ADR moved the SECTION path into
 > `Field` for database sections, and `[C60.19]` extended it to the database RUNTIME door, which
 > resolves a dynamic tenant by resource key. The cache factory beside it was left out and kept

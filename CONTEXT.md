@@ -13,9 +13,11 @@ One database configuration block, wherever it sits in the tree — the root
 _Avoid_: database config, DB block, DSN block
 
 **Placement**:
-Where a database section sits in the tree: `root`, `named`, or `tenant`.
-Placement decides whether the section may be absent, whether a `manager` block
-is allowed, and how its errors are addressed.
+Where a resource kind's section sits in the tree: `root`, `named`, or `tenant`,
+though not every kind uses every value — a database section may be any of the
+three, a cache section only `root` or `tenant` (caches have no named
+siblings). Placement decides whether the section may be absent, whether a
+`manager` block is allowed, and how its errors are addressed.
 _Avoid_: role, kind, level, scope
 
 **Normalization**:
