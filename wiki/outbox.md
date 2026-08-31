@@ -461,11 +461,24 @@ drainer owns this tenant until this instant". Every write the drain makes carrie
 the lease predicate in the statement itself, so a drainer whose lease expired
 mid-pass writes nothing. A crashed drainer costs one `leaseduration` of waiting,
 after which the next pass picks the tenant up. `leaseduration` is therefore also
-the time bound on a replayed handler.
+the time bound on a replayed handler: the drain gives each replay a deadline at
+the lease's end, and stops the batch there with the remaining rows still held. A
+pass that stops with work left — because the batch was full or the lease ran out
+— hands the lease back rather than idling on it, so the next pass can start at
+once on any replica.
 
 **Operator purge.** A held message is never dropped automatically — there is no
 retention on these tables. To abandon one tenant's backlog, delete its rows
 first, then its marker (the marker cannot be released while rows remain):
+
+PostgreSQL:
+
+```sql
+DELETE FROM gobricks_inbox_hold        WHERE consumer = $1 AND tenant_id = $2;
+DELETE FROM gobricks_inbox_hold_tenant WHERE consumer = $1 AND tenant_id = $2;
+```
+
+Oracle:
 
 ```sql
 DELETE FROM gobricks_inbox_hold        WHERE consumer = :consumer AND tenant_id = :tenant;

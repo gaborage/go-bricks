@@ -35,12 +35,13 @@ func (c *fakeHoldJobCtx) Config() *config.Config      { return nil }
 // fakeHoldReplayer records what the drain replayed and what it was told to
 // reload, and can fail or panic for a chosen offset.
 type fakeHoldReplayer struct {
-	consumers []string
-	replayed  []int64
-	reloaded  map[string][]string
-	failAt    map[int64]error
-	panicAt   int64
-	panicked  bool
+	consumers  []string
+	replayed   []int64
+	properties []map[string]any
+	reloaded   map[string][]string
+	failAt     map[int64]error
+	panicAt    int64
+	panicked   bool
 }
 
 func (f *fakeHoldReplayer) HoldConsumers() []string { return f.consumers }
@@ -51,6 +52,7 @@ func (f *fakeHoldReplayer) Replay(_ context.Context, _ string, msg *streams.Held
 		panic("replay exploded")
 	}
 	f.replayed = append(f.replayed, msg.Offset)
+	f.properties = append(f.properties, msg.Properties)
 	return f.failAt[msg.Offset]
 }
 
@@ -81,6 +83,19 @@ func newHoldDrain(db dbtypes.Interface, replayer streams.HoldReplayer) *HoldDrai
 		owner: "replica-1",
 		now:   time.Now,
 	}
+}
+
+// recordingHoldStore counts the calls a missing statement would otherwise hide:
+// an unmatched TestDB expectation only fires when a query RUNS, so "never called"
+// and "called correctly" look identical from the database side.
+type recordingHoldStore struct {
+	HoldStore
+	leasesYielded int
+}
+
+func (r *recordingHoldStore) ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error {
+	r.leasesYielded++
+	return r.HoldStore.ReleaseLease(ctx, db, consumer, tenant, owner)
 }
 
 func mustPostgresHoldStore() HoldStore {
@@ -247,4 +262,131 @@ func TestDrainContinuesAfterATenantPanics(t *testing.T) {
 	assert.Contains(t, err.Error(), testHoldTenant, "the panicking tenant is named")
 	assert.Equal(t, []int64{3, 4, 5}, replayer.replayed,
 		"the tenant behind the panic still drained, in order")
+}
+
+// heldRowsWithProperties is a batch whose rows carry the JSON blob Park writes.
+func heldRowsWithProperties(properties []byte, offsets ...int64) *dbtesting.RowSet {
+	rows := dbtesting.NewRowSet("consumer", "stream", "stream_offset", "tenant_id", "data", "properties", "held_at")
+	for _, offset := range offsets {
+		rows.AddRow(testHoldConsumer, testHoldStream, offset, testHoldTenant, []byte("payload"), properties, time.Now())
+	}
+	return rows
+}
+
+// TestDrainReplaysTheParkedProperties pins that a replayed message is the message
+// that was parked: Park stores the producer's properties as JSON, and the replay
+// has to decode them — they carry the trace carrier the lane reads.
+func TestDrainReplaysTheParkedProperties(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now(), testHoldTenant))
+	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(
+		heldRowsWithProperties([]byte(`{"traceparent":"00-abc-def-01"}`), 3))
+	db.ExpectExec(`DELETE FROM ` + holdTable).WillReturnRowsAffected(1)
+	db.ExpectExec(`DELETE FROM ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(dbtesting.NewRowSet("tenant_id"))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(0), int64(0), nil))
+
+	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
+	drain := newHoldDrain(db, replayer)
+
+	require.NoError(t, drain.Execute(drainCtx(db)))
+
+	require.Len(t, replayer.properties, 1)
+	assert.Equal(t, map[string]any{"traceparent": "00-abc-def-01"}, replayer.properties[0],
+		"the parked properties reach the handler")
+}
+
+// TestDrainDefersAnUndecodableRow pins that a row whose properties cannot be
+// decoded defers the tenant rather than replaying a message missing them: no
+// retry fixes the blob, and the tenant's order must survive the operator's look.
+func TestDrainDefersAnUndecodableRow(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now(), testHoldTenant))
+	db.ExpectExec(`UPDATE ` + holdTenantTable).WillReturnRowsAffected(1)
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(
+		heldRowsWithProperties([]byte(`{"broken`), 3))
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
+		dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(1), int64(1), time.Now()))
+
+	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
+	drain := newHoldDrain(db, replayer)
+
+	require.NoError(t, drain.Execute(drainCtx(db)))
+
+	assert.Empty(t, replayer.replayed, "an undecodable row is never handed to the handler")
+}
+
+// TestDrainYieldsTheLeaseAfterAFullBatch pins that a pass which stops with rows
+// still held hands the lease back. Holding it until it expires would make every
+// other replica — and this one's next pass — wait out the lease for no reason.
+func TestDrainYieldsTheLeaseAfterAFullBatch(t *testing.T) {
+	offsets := make([]int64, holdDrainRowsPerRead)
+	for i := range offsets {
+		offsets[i] = int64(i + 1)
+	}
+
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now(), testHoldTenant))
+	// Matched on the clock expression only AcquireLease writes, so the lease
+	// handback below needs its own expectation rather than borrowing this one.
+	db.ExpectExec(`lease_until = NOW() +`).WillReturnRowsAffected(1)
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(offsets...))
+	db.ExpectExec(`DELETE FROM ` + holdTable).WillReturnRowsAffected(1)
+	db.ExpectExec(`SET lease_owner = $1, lease_until = $2`).WillReturnRowsAffected(1)
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
+		dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(1), int64(1), time.Now()))
+
+	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
+	store := &recordingHoldStore{HoldStore: mustPostgresHoldStore()}
+	drain := newHoldDrain(db, replayer)
+	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
+
+	require.NoError(t, drain.Execute(drainCtx(db)))
+
+	assert.Len(t, replayer.replayed, holdDrainRowsPerRead, "the whole batch replayed")
+	assert.Equal(t, 1, store.leasesYielded, "the lease goes back while rows remain")
+}
+
+// TestDrainStopsWhenTheLeaseRunsOut pins the lease as the bound on the work: once
+// it is spent, the pass stops with rows still held and hands the lease back,
+// rather than replaying a tenant another replica may already have taken.
+func TestDrainStopsWhenTheLeaseRunsOut(t *testing.T) {
+	db := dbtesting.NewTestDB(dbtypes.PostgreSQL)
+	db.ExpectQuery(`next_attempt_at <= NOW()`).WillReturnRows(dueTenantRows(time.Now(), testHoldTenant))
+	db.ExpectExec(`lease_until = NOW() +`).WillReturnRowsAffected(1)
+	db.ExpectQuery(`ORDER BY stream, stream_offset`).WillReturnRows(heldRows(3, 4, 5))
+	db.ExpectExec(`DELETE FROM ` + holdTable).WillReturnRowsAffected(1)
+	db.ExpectExec(`SET lease_owner = $1, lease_until = $2`).WillReturnRowsAffected(1)
+	db.ExpectQuery(`SELECT tenant_id FROM ` + holdTenantTable).WillReturnRows(
+		dbtesting.NewRowSet("tenant_id").AddRow(testHoldTenant))
+	db.ExpectQuery(`SELECT COUNT`).WillReturnRows(
+		dbtesting.NewRowSet("tenants", "rows", "oldest").AddRow(int64(1), int64(2), time.Now()))
+
+	replayer := &fakeHoldReplayer{consumers: []string{testHoldConsumer}}
+	store := &recordingHoldStore{HoldStore: mustPostgresHoldStore()}
+	drain := newHoldDrain(db, replayer)
+	drain.resolve = func(context.Context) (dbtypes.Interface, HoldStore, error) { return db, store, nil }
+	// A clock the first row spends: the deadline check passes once, then every
+	// later reading is past the lease.
+	start := time.Now()
+	checks := 0
+	drain.now = func() time.Time {
+		checks++
+		if checks <= 3 {
+			return start
+		}
+		return start.Add(2 * drain.cfg.LeaseDuration)
+	}
+
+	require.NoError(t, drain.Execute(drainCtx(db)))
+
+	assert.Equal(t, []int64{3}, replayer.replayed,
+		"the pass stops at the deadline instead of draining the batch")
+	assert.Equal(t, 1, store.leasesYielded, "a spent lease is handed back, not left to expire")
 }

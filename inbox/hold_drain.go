@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -140,7 +141,10 @@ func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *ho
 	}
 
 	d.warnIfTooOld(log, consumer, tenant)
-	return d.replayTenantRows(ctx, log, pass, replayer, consumer, tenant)
+	// The lease is what makes this replica the tenant's only drainer, so it is also
+	// the bound on the work: past this instant another replica may take the tenant,
+	// and two handlers replaying one tenant's rows is the ordering guarantee gone.
+	return d.replayTenantRows(ctx, log, pass, replayer, consumer, tenant, d.now().Add(d.cfg.LeaseDuration))
 }
 
 // replayTenantRows replays at most one batch of a tenant's rows, in ledger order.
@@ -148,7 +152,7 @@ func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *ho
 // own the drain for one long job run, and the next pass picks up where this one
 // stopped. A short batch means the tenant is drained, so it is released.
 func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant,
+	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant, deadline time.Time,
 ) error {
 	rows, err := pass.store.NextRows(ctx, pass.db, consumer, tenant.TenantID, holdDrainRowsPerRead)
 	if err != nil {
@@ -159,7 +163,19 @@ func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pas
 	}
 
 	for i := range rows {
-		done, err := d.replayRow(ctx, log, pass, replayer, consumer, tenant, &rows[i])
+		if !d.now().Before(deadline) {
+			// The lease ran out with rows still held. Stopping is not a failure — the
+			// tenant keeps its place and its backoff — so hand the lease back rather
+			// than making every other replica wait for it to expire.
+			log.Warn().
+				Str("consumer", consumer).
+				Str("tenant", tenant.TenantID).
+				Int("replayed", i).
+				Msg("Hold lease spent mid-batch; the rest stays for the next pass")
+			return d.yieldLease(ctx, pass, consumer, tenant)
+		}
+
+		done, err := d.replayRow(ctx, log, pass, replayer, consumer, tenant, &rows[i], deadline)
 		if err != nil || !done {
 			return err
 		}
@@ -169,16 +185,37 @@ func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pas
 		// The batch was not full, so nothing is left behind it.
 		return d.releaseTenant(ctx, log, pass, consumer, tenant)
 	}
-	return nil
+	// A full batch leaves rows behind. The next batch is any replica's to take, so
+	// the lease goes back now instead of idling until it expires.
+	return d.yieldLease(ctx, pass, consumer, tenant)
+}
+
+// yieldLease hands the tenant back while it is still held, so the next pass — on
+// this replica or another — starts immediately rather than after the lease runs
+// out.
+func (d *HoldDrain) yieldLease(ctx context.Context, pass *holdPass, consumer string, tenant *HoldTenant) error {
+	return pass.store.ReleaseLease(ctx, pass.db, consumer, tenant.TenantID, d.owner)
 }
 
 // replayRow replays one row, reporting whether the tenant may continue. A failure
 // defers the tenant: everything behind this row stays parked, which is the order
 // the hold exists to keep.
 func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant, row *HoldRow,
+	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant, row *HoldRow, deadline time.Time,
 ) (bool, error) {
-	if err := replayer.Replay(ctx, consumer, heldMessageOf(row)); err != nil {
+	msg, err := heldMessageOf(row)
+	if err != nil {
+		// The row is unreadable, which no retry fixes; deferring keeps it — and the
+		// tenant's order — while the WARN names the row an operator has to look at.
+		return false, d.deferTenant(ctx, log, pass, consumer, tenant, row, err)
+	}
+
+	// The handler runs under the lease, not the job: a replay still running after
+	// the lease expired is a second drainer's tenant being replayed twice.
+	replayCtx, cancel := context.WithDeadline(ctx, deadline)
+	err = replayer.Replay(replayCtx, consumer, msg)
+	cancel()
+	if err != nil {
 		return false, d.deferTenant(ctx, log, pass, consumer, tenant, row, err)
 	}
 
@@ -313,15 +350,26 @@ func (d *HoldDrain) backoffFor(attempts int) time.Duration {
 }
 
 // heldMessageOf renders a ledger row as the lane's held message.
-func heldMessageOf(row *HoldRow) *streams.HeldMessage {
-	return &streams.HeldMessage{
-		Consumer: row.Consumer,
-		Stream:   row.Stream,
-		Offset:   row.Offset,
-		TenantID: row.TenantID,
-		Data:     row.Data,
-		HeldAt:   row.HeldAt,
+func heldMessageOf(row *HoldRow) (*streams.HeldMessage, error) {
+	// Park stored the producer's properties as JSON. They carry the message's
+	// application properties — the trace carrier among them — so a replay without
+	// them is not the message that was parked.
+	var properties map[string]any
+	if len(row.Properties) > 0 {
+		if err := json.Unmarshal(row.Properties, &properties); err != nil {
+			return nil, fmt.Errorf("inbox hold drain: decode properties failed: %w", err)
+		}
 	}
+
+	return &streams.HeldMessage{
+		Consumer:   row.Consumer,
+		Stream:     row.Stream,
+		Offset:     row.Offset,
+		TenantID:   row.TenantID,
+		Data:       row.Data,
+		Properties: properties,
+		HeldAt:     row.HeldAt,
+	}, nil
 }
 
 // holdMeterName is the instrumentation scope the hold's gauges report under.
