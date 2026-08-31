@@ -19,11 +19,14 @@ type otherFilter struct {
 	sql string
 }
 
+//nolint:revive // ToSql is required by squirrel.Sqlizer interface (lowercase 's')
 func (o otherFilter) ToSql() (sql string, args []any, err error) { return o.sql, nil, nil }
 func (o otherFilter) ToSQL() (sql string, args []any, err error) { return o.ToSql() }
 
-var _ dbtypes.Filter = otherFilter{}
-var _ dbtypes.JoinFilter = otherFilter{}
+var (
+	_ dbtypes.Filter     = otherFilter{}
+	_ dbtypes.JoinFilter = otherFilter{}
+)
 
 func TestCombineLogicalSkipsNilFilters(t *testing.T) {
 	filters := []dbtypes.Filter{
