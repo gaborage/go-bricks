@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtesting "github.com/gaborage/go-bricks/database/testing"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
-	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // holdModule is an initialized module with the hold on, whose shared resolver
@@ -65,7 +65,7 @@ func TestHoldLedgerParksThroughTheSharedResolver(t *testing.T) {
 	ledger := m.HoldLedger()
 	require.NotNil(t, ledger)
 
-	err := ledger.Park(t.Context(), &streams.HeldMessage{
+	err := ledger.Park(t.Context(), &app.HeldMessage{
 		Consumer:   "orders-processor",
 		Stream:     "orders-0",
 		Offset:     41,
@@ -94,7 +94,7 @@ func TestHoldLedgerParksWithoutProperties(t *testing.T) {
 	tx.ExpectExec(`INSERT INTO gobricks_inbox_hold`).WillReturnRowsAffected(1)
 	m := holdModule(t, db)
 
-	err := m.HoldLedger().Park(t.Context(), &streams.HeldMessage{
+	err := m.HoldLedger().Park(t.Context(), &app.HeldMessage{
 		Consumer: "orders-processor", Stream: "orders-0", Offset: 41, TenantID: "tenant-a",
 	})
 

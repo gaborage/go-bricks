@@ -11,47 +11,21 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/gaborage/go-bricks/internal/ledgererr"
+	"github.com/gaborage/go-bricks/internal/streamruntime"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging/internal/delivery"
 	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 	"github.com/gaborage/go-bricks/multitenant"
 )
 
-// HeldMessage is one parked delivery as the ledger sees it. It carries the bytes
-// rather than a reference, because the delivery that produced it is settled and
-// gone by the time anything replays it.
-type HeldMessage struct {
-	Consumer   string
-	Stream     string
-	Offset     int64
-	TenantID   string
-	Data       []byte
-	Properties map[string]any
-	HeldAt     time.Time
-}
-
-// HoldLedger is the port a runner parks through. It is implemented outside this
-// package — the ledger is two tables on the control-plane database, which this
-// package cannot reach without an import cycle.
-//
-// Park is idempotent on (Consumer, Stream, Offset) and marks the tenant held in
-// the same write: a row whose tenant is not held would be replayed by nothing.
-type HoldLedger interface {
-	Park(ctx context.Context, msg *HeldMessage) error
-	HeldTenants(ctx context.Context, consumer string) ([]string, error)
-}
-
-// HoldReplayer is what the drain drives to put a held message back through the
-// lane, and how it tells a runner which tenants the ledger still holds.
-type HoldReplayer interface {
-	HoldConsumers() []string
-	Replay(ctx context.Context, consumer string, msg *HeldMessage) error
-	// ReloadHeld refreshes one consumer's held set from the ledger. It takes no
-	// listing: the generation that guards the set has to be read BEFORE the ledger
-	// is, and only this package holds it, so the read belongs on this side of the
-	// port.
-	ReloadHeld(ctx context.Context, consumer string) error
-}
+// The hold port lives on the streamruntime seam so inbox can implement it
+// without importing this package (ADR-091). The aliases keep the streams
+// spelling for lane callers.
+type (
+	HeldMessage  = streamruntime.HeldMessage
+	HoldLedger   = streamruntime.HoldLedger
+	HoldReplayer = streamruntime.HoldReplayer
+)
 
 // heldSet is one consumer's view of which tenants are held, plus whether the
 // gate is CLOSED — the state a partition is in between a promotion and the

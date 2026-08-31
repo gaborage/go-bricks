@@ -12,7 +12,6 @@ import (
 	"github.com/gaborage/go-bricks/internal/tenantstore"
 	"github.com/gaborage/go-bricks/logger"
 	"github.com/gaborage/go-bricks/messaging"
-	"github.com/gaborage/go-bricks/messaging/streams"
 )
 
 // Module implements the GoBricks Module interface for the consumer-side inbox.
@@ -47,7 +46,7 @@ type Module struct {
 	// holdStores holds the hold ledger's store. Always the control-plane key: a
 	// hold lives on that database and nowhere else.
 	holdStores   tenantstore.Cache[HoldStore]
-	holdReplayer func() streams.HoldReplayer
+	holdReplayer func() app.HoldReplayer
 	// holdDrain is created at Init when the hold is on, so the scheduled job and
 	// the gauges read the same snapshots.
 	holdDrain *HoldDrain

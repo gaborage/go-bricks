@@ -285,7 +285,10 @@ func (s *streamsSlot) start(ctx context.Context) (advisory, fatal error) {
 func (s *streamsSlot) stop(context.Context) { s.app.shutdownStreamConsumers() }
 
 func (s *streamsSlot) closer() (namedCloser, bool) {
-	return slotCloser("streams manager", s.app.streamsManager)
+	if s.app.streamsManager == nil {
+		return namedCloser{}, false
+	}
+	return namedCloser{name: "streams manager", closer: s.app.streamsManager}, true
 }
 
 // slotCloser hands a built manager to the FIFO close list. The nil test runs on the concrete

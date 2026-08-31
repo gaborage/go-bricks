@@ -2,6 +2,10 @@
 
 GoBricks consumes RabbitMQ streams over the **native stream protocol** (default
 port 5552, `rabbitmq_stream` plugin) through the `messaging/streams` package.
+The lane is **opt-in at the build graph** (ADR-091): import
+`github.com/gaborage/go-bricks/messaging/streams` (a blank import is enough)
+so the package can register its runtime factory. A `messaging.streams.uri`
+without that import fails startup naming it; no URI and no import starts clean.
 Streams are append-only replicated logs: reads are non-destructive, positions are
 offsets, and the broker itself remembers where a named consumer got to.
 
@@ -77,8 +81,9 @@ messaging:
 
 ## Declaring streams and consumers
 
-Implement `app.StreamDeclarer` on a module; the framework calls it during
-startup, validates every declaration at once, and starts the consumers.
+Implement `streams.StreamDeclarer` on a module (`DeclareStreams(*streams.Declarations)`);
+the framework calls it during startup, validates every declaration at once, and starts
+the consumers. The import that declares topology is also the import that links the lane.
 
 ```go
 func (m *Module) DeclareStreams(decls *streams.Declarations) {
@@ -486,6 +491,11 @@ A service that needs its super-stream publishes to survive a crash publishes the
 transactional outbox instead of calling a publisher directly: list the target in
 `outbox.superstreams`, give the event a `Stream`, and the relay publishes it on this lane with
 the row's tenant stamp as the partition key ([outbox.md](outbox.md#lanes-and-ordering)).
+
+A non-empty `outbox.superstreams` requires `messaging.streams.uri`. Every listed name must
+already be declared as a super stream (`DeclareSuperStream`) before the outbox creates its
+publisher — otherwise startup fails with "undeclared super stream". See
+[C61.23](migrations.md) for the hop that added the stream leg.
 
 The consequence to know: the outbox declares one publisher per listed super stream, and a
 super stream accepts only ONE publisher per process. So a target the outbox owns cannot also be
