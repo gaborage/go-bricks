@@ -336,6 +336,8 @@ func (q *holdQueries) ListTenants(ctx context.Context, db dbtypes.Interface, con
 }
 
 func (q *holdQueries) DueTenants(ctx context.Context, db dbtypes.Interface, consumer string, limit int) ([]HoldTenant, error) {
+	// SECURITY: Manual SQL review completed - a constant expression over a fixed
+	// column, as in ListTenants; no interpolation and no caller value.
 	noError, err := q.qb.Expr(q.noError)
 	if err != nil {
 		return nil, q.wrap("build due tenants query failed", err)
@@ -422,12 +424,18 @@ func (q *holdQueries) Release(ctx context.Context, db dbtypes.Interface, consume
 	rowsRemain := q.qb.Select(one).From(q.table).
 		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant)))
 
+	// SECURITY: Manual SQL review completed - constant text over a fixed column and
+	// the vendor's own clock keyword, which the constructor sets; no identifier is
+	// interpolated and every caller value (consumer, tenant, owner) is bound by the
+	// typed Eq predicates beside it.
+	leaseHeld := f.Raw(colLeaseUntil + " > " + q.now)
+
 	query, args, err := q.qb.Delete(q.tenantTable).
 		Where(f.And(
 			f.Eq(colConsumer, consumer),
 			f.Eq(colTenantID, tenant),
 			f.Eq(colLeaseOwner, owner),
-			f.Raw(colLeaseUntil+" > "+q.now),
+			leaseHeld,
 			f.NotExists(rowsRemain),
 		)).
 		ToSQL()
