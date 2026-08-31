@@ -247,19 +247,19 @@ func BenchmarkParseStructDirect(b *testing.B) {
 func BenchmarkOracleQuoting(b *testing.B) {
 	b.Run("Simple column (no quoting)", func(b *testing.B) {
 		for b.Loop() {
-			_ = oracleQuoteIdentifier("user_id")
+			_ = sqllex.QuoteOracleIdentifier("user_id")
 		}
 	})
 
 	b.Run("Reserved word (quoting required)", func(b *testing.B) {
 		for b.Loop() {
-			_ = oracleQuoteIdentifier("number")
+			_ = sqllex.QuoteOracleIdentifier("number")
 		}
 	})
 
 	b.Run("Already quoted (no-op)", func(b *testing.B) {
 		for b.Loop() {
-			_ = oracleQuoteIdentifier(`"NUMBER"`)
+			_ = sqllex.QuoteOracleIdentifier(`"NUMBER"`)
 		}
 	})
 }

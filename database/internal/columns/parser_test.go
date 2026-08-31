@@ -298,6 +298,16 @@ func TestValidateDBTag(t *testing.T) {
 			expectError: true,
 		},
 		{
+			// Grammar pin: a db tag is never qualified, so the shared renderer's
+			// dotted-name splitting (sqllex.QuoteOracleIdentifier) stays
+			// unreachable from struct parsing.
+			name:        "invalid qualified tag",
+			tag:         "schema.column",
+			structName:  "User",
+			fieldName:   "ID",
+			expectError: true,
+		},
+		{
 			name:        "invalid double quotes",
 			tag:         `"id"`,
 			structName:  "User",
@@ -344,58 +354,6 @@ func TestIsOracleReservedWord(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := sqllex.IsOracleReservedWord(tt.identifier)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-// TestOracleQuoteIdentifier tests Oracle identifier quoting logic
-func TestOracleQuoteIdentifier(t *testing.T) {
-	tests := []struct {
-		name   string
-		column string
-		want   string
-	}{
-		{
-			name:   "simple column",
-			column: "id",
-			want:   "id",
-		},
-		{
-			name:   "reserved word NUMBER",
-			column: "number",
-			want:   `"number"`,
-		},
-		{
-			name:   "reserved word LEVEL",
-			column: "level",
-			want:   `"level"`,
-		},
-		{
-			name:   "reserved word SIZE",
-			column: "size",
-			want:   `"size"`,
-		},
-		{
-			name:   "already quoted",
-			column: `"ID"`,
-			want:   `"ID"`,
-		},
-		{
-			name:   "empty string",
-			column: "",
-			want:   "",
-		},
-		{
-			name:   "whitespace trimmed",
-			column: "  id  ",
-			want:   "id",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := oracleQuoteIdentifier(tt.column)
 			assert.Equal(t, tt.want, got)
 		})
 	}

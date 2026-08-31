@@ -206,6 +206,13 @@ annotation (CLAUDE.md, Security Guidelines). A door whose shape no existing
 context describes earns a new one rather than the nearest fit.
 _Avoid_: validation mode, identifier type, grammar level
 
+**Renderer**:
+The per-vendor module that turns validated identifier arguments and
+vendor-divergent expressions into SQL text, chosen once per builder so no door
+branches on the vendor itself. Validation happens at the door against an
+identifier context; rendering happens behind the renderer's seam.
+_Avoid_: dialect, driver, vendor handler, quoting helper
+
 ### Testing
 
 **Tripwire guard**:
