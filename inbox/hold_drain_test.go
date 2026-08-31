@@ -547,14 +547,14 @@ func TestWarnIfTooOldFiresOnlyPastTheThreshold(t *testing.T) {
 	drain := &HoldDrain{cfg: config.InboxHoldConfig{MaxAge: time.Hour}, now: func() time.Time { return now }}
 
 	atThreshold := captureDrainLogs(t, func() {
-		drain.warnIfTooOld(logger.New("warn", false), testHoldConsumer, &HoldTenant{
+		drain.warnIfTooOld(logger.New("warn", false), &holdPass{consumer: testHoldConsumer}, &HoldTenant{
 			TenantID: testHoldTenant, HeldSince: now.Add(-time.Hour),
 		})
 	})
 	assert.NotContains(t, atThreshold, "Hold exceeds max age", "held exactly the max age is not past it")
 
 	pastThreshold := captureDrainLogs(t, func() {
-		drain.warnIfTooOld(logger.New("warn", false), testHoldConsumer, &HoldTenant{
+		drain.warnIfTooOld(logger.New("warn", false), &holdPass{consumer: testHoldConsumer}, &HoldTenant{
 			TenantID: testHoldTenant, HeldSince: now.Add(-time.Hour - time.Second),
 		})
 	})

@@ -59,11 +59,22 @@ type HoldDrain struct {
 	now func() time.Time
 }
 
-// holdPass is one drain pass's resolved dependencies: the control-plane database
-// and the store that speaks its dialect, settled once rather than per statement.
+// holdPass is one consumer's pass: the control-plane database, the store that
+// speaks its dialect, the runners to replay through and whose consumer it is —
+// settled once rather than threaded through every step separately.
 type holdPass struct {
-	db    dbtypes.Interface
-	store HoldStore
+	db       dbtypes.Interface
+	store    HoldStore
+	replayer streams.HoldReplayer
+	consumer string
+}
+
+// heldTenant is one tenant's turn under a lease: the ledger's row for it, and the
+// instant this replica must stop working on it. The two are inseparable — the
+// deadline means nothing without the tenant whose lease granted it.
+type heldTenant struct {
+	tenant   *HoldTenant
+	deadline time.Time
 }
 
 // Execute runs one drain pass over every holding consumer.
@@ -82,11 +93,11 @@ func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
 	if err != nil {
 		return err
 	}
-	pass := &holdPass{db: db, store: store}
 
 	var errs []error
 	for _, consumer := range replayer.HoldConsumers() {
-		if err := d.drainConsumer(jobCtx, log, pass, replayer, consumer); err != nil {
+		pass := &holdPass{db: db, store: store, replayer: replayer, consumer: consumer}
+		if err := d.drainConsumer(jobCtx, log, pass); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -96,24 +107,22 @@ func (d *HoldDrain) Execute(jobCtx scheduler.JobContext) error {
 // drainConsumer runs one consumer's pass and then tells its runners what the
 // ledger still holds — the reload every replica depends on to learn about
 // releases another replica made.
-func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string,
-) error {
-	due, err := pass.store.DueTenants(ctx, pass.db, consumer, holdDrainTenantsPerPass)
+func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, pass *holdPass) error {
+	due, err := pass.store.DueTenants(ctx, pass.db, pass.consumer, holdDrainTenantsPerPass)
 	if err != nil {
 		return err
 	}
 
 	var errs []error
 	for i := range due {
-		if err := d.drainTenant(ctx, log, pass, replayer, consumer, &due[i]); err != nil {
+		if err := d.drainTenant(ctx, log, pass, &due[i]); err != nil {
 			errs = append(errs, err)
 		}
 	}
 
 	// Reload and snapshot even when a tenant failed: the set and the gauges
 	// describe the ledger, not this pass.
-	if err := d.reloadAndSnapshot(ctx, pass, replayer, consumer); err != nil {
+	if err := d.reloadAndSnapshot(ctx, pass); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -123,7 +132,7 @@ func (d *HoldDrain) drainConsumer(ctx context.Context, log logger.Logger, pass *
 // contained here: the tenant that caused it is reported by TYPE (ADR-081) and the
 // pass continues with the next one.
 func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant,
+	tenant *HoldTenant,
 ) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -131,7 +140,7 @@ func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *ho
 		}
 	}()
 
-	taken, err := pass.store.AcquireLease(ctx, pass.db, consumer, tenant.TenantID, d.owner, d.cfg.LeaseDuration)
+	taken, err := pass.store.AcquireLease(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner, d.cfg.LeaseDuration)
 	if err != nil {
 		return err
 	}
@@ -140,8 +149,8 @@ func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *ho
 		return nil
 	}
 
-	d.warnIfTooOld(log, consumer, tenant)
-	return d.replayTenantRows(ctx, log, pass, replayer, consumer, tenant, d.leaseDeadline())
+	d.warnIfTooOld(log, pass, tenant)
+	return d.replayTenantRows(ctx, log, pass, &heldTenant{tenant: tenant, deadline: d.leaseDeadline()})
 }
 
 // leaseDeadline is how long this replica may keep replaying the tenant it just
@@ -166,30 +175,31 @@ func (d *HoldDrain) leaseDeadline() time.Time {
 // own the drain for one long job run, and the next pass picks up where this one
 // stopped. A short batch means the tenant is drained, so it is released.
 func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant, deadline time.Time,
+	held *heldTenant,
 ) error {
-	rows, err := pass.store.NextRows(ctx, pass.db, consumer, tenant.TenantID, holdDrainRowsPerRead)
+	tenant := held.tenant
+	rows, err := pass.store.NextRows(ctx, pass.db, pass.consumer, tenant.TenantID, holdDrainRowsPerRead)
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
-		return d.releaseTenant(ctx, log, pass, consumer, tenant)
+		return d.releaseTenant(ctx, log, pass, tenant)
 	}
 
 	for i := range rows {
-		if !d.now().Before(deadline) {
+		if !d.now().Before(held.deadline) {
 			// The lease ran out with rows still held. Stopping is not a failure — the
 			// tenant keeps its place and its backoff — so hand the lease back rather
 			// than making every other replica wait for it to expire.
 			log.Warn().
-				Str("consumer", consumer).
+				Str("consumer", pass.consumer).
 				Str("tenant", tenant.TenantID).
 				Int("replayed", i).
 				Msg("Hold lease spent mid-batch; the rest stays for the next pass")
-			return d.yieldLease(ctx, pass, consumer, tenant)
+			return d.yieldLease(ctx, pass, tenant)
 		}
 
-		done, err := d.replayRow(ctx, log, pass, replayer, consumer, tenant, &rows[i], deadline)
+		done, err := d.replayRow(ctx, log, pass, held, &rows[i])
 		if err != nil || !done {
 			return err
 		}
@@ -197,43 +207,44 @@ func (d *HoldDrain) replayTenantRows(ctx context.Context, log logger.Logger, pas
 
 	if len(rows) < holdDrainRowsPerRead {
 		// The batch was not full, so nothing is left behind it.
-		return d.releaseTenant(ctx, log, pass, consumer, tenant)
+		return d.releaseTenant(ctx, log, pass, tenant)
 	}
 	// A full batch leaves rows behind. The next batch is any replica's to take, so
 	// the lease goes back now instead of idling until it expires.
-	return d.yieldLease(ctx, pass, consumer, tenant)
+	return d.yieldLease(ctx, pass, tenant)
 }
 
 // yieldLease hands the tenant back while it is still held, so the next pass — on
 // this replica or another — starts immediately rather than after the lease runs
 // out.
-func (d *HoldDrain) yieldLease(ctx context.Context, pass *holdPass, consumer string, tenant *HoldTenant) error {
-	return pass.store.ReleaseLease(ctx, pass.db, consumer, tenant.TenantID, d.owner)
+func (d *HoldDrain) yieldLease(ctx context.Context, pass *holdPass, tenant *HoldTenant) error {
+	return pass.store.ReleaseLease(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner)
 }
 
 // replayRow replays one row, reporting whether the tenant may continue. A failure
 // defers the tenant: everything behind this row stays parked, which is the order
 // the hold exists to keep.
 func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string, tenant *HoldTenant, row *HoldRow, deadline time.Time,
+	held *heldTenant, row *HoldRow,
 ) (bool, error) {
+	tenant := held.tenant
 	msg, err := heldMessageOf(row)
 	if err != nil {
 		// The row is unreadable, which no retry fixes; deferring keeps it — and the
 		// tenant's order — while the WARN names the row an operator has to look at.
-		return false, d.deferTenant(ctx, log, pass, consumer, tenant, row, err)
+		return false, d.deferTenant(ctx, log, pass, tenant, row, err)
 	}
 
 	// The handler runs under the lease, not the job: a replay still running after
 	// the lease expired is a second drainer's tenant being replayed twice.
-	replayCtx, cancel := context.WithDeadline(ctx, deadline)
-	err = replayer.Replay(replayCtx, consumer, msg)
+	replayCtx, cancel := context.WithDeadline(ctx, held.deadline)
+	err = pass.replayer.Replay(replayCtx, pass.consumer, msg)
 	cancel()
 	if err != nil {
-		return false, d.deferTenant(ctx, log, pass, consumer, tenant, row, err)
+		return false, d.deferTenant(ctx, log, pass, tenant, row, err)
 	}
 
-	deleted, err := pass.store.DeleteRow(ctx, pass.db, consumer, row.Stream, row.Offset, tenant.TenantID, d.owner)
+	deleted, err := pass.store.DeleteRow(ctx, pass.db, pass.consumer, row.Stream, row.Offset, tenant.TenantID, d.owner)
 	if err != nil {
 		return false, err
 	}
@@ -241,7 +252,7 @@ func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *hold
 		// The fence refused the write: this replica no longer holds the lease, so
 		// the replay's outcome is not ours to record. Another drainer will redo it.
 		log.Warn().
-			Str("consumer", consumer).
+			Str("consumer", pass.consumer).
 			Str("tenant", tenant.TenantID).
 			Int64("offset", row.Offset).
 			Msg("Hold lease lost mid-replay; the row stays for the next pass")
@@ -252,12 +263,12 @@ func (d *HoldDrain) replayRow(ctx context.Context, log logger.Logger, pass *hold
 
 // deferTenant records a failed replay and backs the tenant off.
 func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *holdPass,
-	consumer string, tenant *HoldTenant, row *HoldRow, replayErr error,
+	tenant *HoldTenant, row *HoldRow, replayErr error,
 ) error {
 	attempt := tenant.Attempts + 1
 	backoff := d.backoffFor(attempt)
 
-	deferred, err := pass.store.Defer(ctx, pass.db, consumer, tenant.TenantID, d.owner, backoff, replayErr.Error())
+	deferred, err := pass.store.Defer(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner, backoff, replayErr.Error())
 	if err != nil {
 		return err
 	}
@@ -266,7 +277,7 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 		// the lease, so the backoff below was never persisted and logging it would
 		// describe a schedule that does not exist.
 		log.Warn().
-			Str("consumer", consumer).
+			Str("consumer", pass.consumer).
 			Str("tenant", tenant.TenantID).
 			Int64("offset", row.Offset).
 			Msg("Hold lease lost before the tenant could be deferred")
@@ -274,7 +285,7 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 	}
 
 	log.Warn().
-		Str("consumer", consumer).
+		Str("consumer", pass.consumer).
 		Str("tenant", tenant.TenantID).
 		Str("stream", row.Stream).
 		Int64("offset", row.Offset).
@@ -287,15 +298,15 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 
 // releaseTenant drops the tenant's marker once its last row is replayed.
 func (d *HoldDrain) releaseTenant(ctx context.Context, log logger.Logger, pass *holdPass,
-	consumer string, tenant *HoldTenant,
+	tenant *HoldTenant,
 ) error {
-	released, err := pass.store.Release(ctx, pass.db, consumer, tenant.TenantID, d.owner)
+	released, err := pass.store.Release(ctx, pass.db, pass.consumer, tenant.TenantID, d.owner)
 	if err != nil {
 		return err
 	}
 	if released {
 		log.Info().
-			Str("consumer", consumer).
+			Str("consumer", pass.consumer).
 			Str("tenant", tenant.TenantID).
 			Dur("held_for", d.now().Sub(tenant.HeldSince)).
 			Msg("Tenant released from hold")
@@ -305,14 +316,14 @@ func (d *HoldDrain) releaseTenant(ctx context.Context, log logger.Logger, pass *
 
 // warnIfTooOld reports a tenant held longer than the configured age. One line per
 // pass per tenant: an operator watching a stuck tenant needs to see it recur.
-func (d *HoldDrain) warnIfTooOld(log logger.Logger, consumer string, tenant *HoldTenant) {
+func (d *HoldDrain) warnIfTooOld(log logger.Logger, pass *holdPass, tenant *HoldTenant) {
 	held := d.now().Sub(tenant.HeldSince)
 	if held <= d.cfg.MaxAge {
 		return
 	}
 
 	log.Warn().
-		Str("consumer", consumer).
+		Str("consumer", pass.consumer).
 		Str("tenant", tenant.TenantID).
 		Dur("held_for", held).
 		Int("attempts", tenant.Attempts).
@@ -321,18 +332,16 @@ func (d *HoldDrain) warnIfTooOld(log logger.Logger, consumer string, tenant *Hol
 
 // reloadAndSnapshot tells the runners what the ledger holds and refreshes what
 // the gauges report.
-func (d *HoldDrain) reloadAndSnapshot(ctx context.Context, pass *holdPass,
-	replayer streams.HoldReplayer, consumer string,
-) error {
-	if err := replayer.ReloadHeld(ctx, consumer); err != nil {
+func (d *HoldDrain) reloadAndSnapshot(ctx context.Context, pass *holdPass) error {
+	if err := pass.replayer.ReloadHeld(ctx, pass.consumer); err != nil {
 		return err
 	}
 
-	stats, err := pass.store.Stats(ctx, pass.db, consumer)
+	stats, err := pass.store.Stats(ctx, pass.db, pass.consumer)
 	if err != nil {
 		return err
 	}
-	d.setSnapshot(consumer, &stats)
+	d.setSnapshot(pass.consumer, &stats)
 	return nil
 }
 
