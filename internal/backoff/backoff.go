@@ -30,14 +30,12 @@ const MaxDuration = time.Duration(math.MaxInt64)
 // it uncapped (the delivery policy's optional MaxBackoff).
 //
 // A non-positive base is 0: callers that want a package default apply it
-// first. A negative shift is no doublings, so a computed exponent cannot
-// wrap through uint and saturate by accident.
+// first. A negative shift waits nothing, so a computed exponent cannot wrap
+// through uint and saturate by accident.
 func Saturating(base, maxDelay time.Duration, shift int) time.Duration {
-	if base <= 0 {
-		return 0
-	}
+	base = max(base, 0)
 	if shift < 0 {
-		shift = 0
+		return 0
 	}
 
 	// A shift of 63 or more leaves MaxDuration>>shift at zero, which no

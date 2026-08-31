@@ -29,7 +29,7 @@ func TestSaturatingPinsThePreRefactorSeries(t *testing.T) {
 		{name: "zero_base_never_saturates", base: 0, maxDelay: 0, shift: 65, want: 0},
 		{name: "uncapped_zero_max_leaves_the_shift", base: base, maxDelay: 0, shift: 3, want: 8 * base},
 		{name: "negative_max_is_uncapped", base: base, maxDelay: -time.Second, shift: 3, want: 8 * base},
-		{name: "negative_shift_is_no_doubling", base: base, maxDelay: maxDelay, shift: -1, want: base},
+		{name: "negative_shift_waits_nothing", base: base, maxDelay: maxDelay, shift: -1, want: 0},
 		{name: "max_smaller_than_base_clamps_to_max", base: 5 * time.Second, maxDelay: time.Second, shift: 0, want: time.Second},
 	}
 
