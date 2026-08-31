@@ -176,11 +176,13 @@ func (r *Relay) relayTenant(ctx context.Context, log logger.Logger, tenantID str
 // partitionByLane splits a batch into the rows the stream lane serves and the rest, keeping
 // each group's sequence order. Only the AMQP group depends on the AMQP client's health.
 func partitionByLane(records []Record) (stream, amqp []Record) {
-	for _, r := range records {
-		if r.Lane == LaneStream {
-			stream = append(stream, r)
+	// Indexed rather than ranged by value: a Record is large enough that copying one per
+	// iteration is worth avoiding, and the append copies it anyway.
+	for i := range records {
+		if records[i].Lane == LaneStream {
+			stream = append(stream, records[i])
 		} else {
-			amqp = append(amqp, r)
+			amqp = append(amqp, records[i])
 		}
 	}
 	return stream, amqp
