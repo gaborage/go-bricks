@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gaborage/go-bricks/database"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/internal/ledgererr"
 )
@@ -12,6 +13,15 @@ import (
 // PostgreSQL DDL for the hold's two tables and their indexes. The row table
 // keys on the delivery's identity; the tenant table carries one row per held
 // tenant, which is what the drain leases and what a runner's held set reads.
+// postgresNoError renders an absent last_error as the empty string.
+//
+// SECURITY: Manual SQL review completed - a constant expression over a fixed
+// column name, no interpolation and no caller input; it is an Expr only because
+// the builder's projection accepts identifiers alone.
+func (s *postgresHoldStore) noError() (dbtypes.RawExpression, error) {
+	return s.qb.Expr(`COALESCE(` + colLastError + `, '')`)
+}
+
 const (
 	postgresCreateHoldTableSQL = `
 CREATE TABLE IF NOT EXISTS %s (
@@ -45,10 +55,13 @@ CREATE INDEX IF NOT EXISTS idx_%s_tenant_order ON %s (consumer, tenant_id, strea
 CREATE INDEX IF NOT EXISTS idx_%s_tenant_due ON %s (consumer, next_attempt_at)`
 )
 
-// postgresHoldStore implements HoldStore for PostgreSQL.
+// postgresHoldStore implements HoldStore for PostgreSQL. Statements are built
+// through the query builder, which renders this vendor's placeholders; the two
+// table names are the constructor's own validated values.
 type postgresHoldStore struct {
 	table       string
 	tenantTable string
+	qb          *database.QueryBuilder
 }
 
 // NewPostgresHoldStore creates a PostgreSQL hold store, refusing a table name
@@ -60,6 +73,7 @@ func NewPostgresHoldStore(tableName string) (HoldStore, error) {
 	return &postgresHoldStore{
 		table:       tableName,
 		tenantTable: tableName + holdTenantTableSuffix,
+		qb:          database.NewQueryBuilder(dbtypes.PostgreSQL),
 	}, nil
 }
 
@@ -77,26 +91,41 @@ func (s *postgresHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRo
 	// to release this tenant blocks until the row below is committed and its
 	// no-rows-remain check sees it. Inserting the row first would let a release
 	// commit in between, leaving a held row with nothing holding its tenant.
-	upsert := fmt.Sprintf(
-		`INSERT INTO %s (consumer, tenant_id, held_since, attempts, next_attempt_at)
-		 VALUES ($1, $2, NOW(), 0, NOW())
+	//
+	// SECURITY: Manual SQL review completed - the only interpolated identifier is
+	// the tenant table from the constructor-validated config; the consumer and the
+	// tenant are bound. Raw because the lock is a DO UPDATE that touches a CONFLICT
+	// column, which BuildUpsert refuses on every vendor for Oracle MERGE parity
+	// (ORA-38104) — and every other column here would change data rather than take
+	// a lock. held_since, attempts and next_attempt_at take the DDL's defaults.
+	marker := fmt.Sprintf(
+		`INSERT INTO %s (consumer, tenant_id) VALUES ($1, $2)
 		 ON CONFLICT (consumer, tenant_id) DO UPDATE SET consumer = EXCLUDED.consumer`,
 		s.tenantTable,
 	)
-	if _, err := tx.Exec(ctx, upsert, row.Consumer, row.TenantID); err != nil {
+	if _, err := tx.Exec(ctx, marker, row.Consumer, row.TenantID); err != nil {
 		return false, fmt.Errorf("inbox postgres: mark tenant held failed: %w", err)
 	}
 
-	insert := fmt.Sprintf(
-		`INSERT INTO %s (consumer, stream, stream_offset, tenant_id, data, properties, held_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, NOW())
-		 ON CONFLICT (consumer, stream, stream_offset) DO NOTHING`,
-		s.table,
+	// held_at takes its column default too.
+	insert, insertArgs, err := s.qb.BuildUpsert(s.table,
+		[]string{colConsumer, colStream, colStreamOffset},
+		map[string]any{
+			colConsumer: row.Consumer, colStream: row.Stream, colStreamOffset: row.Offset,
+			colTenantID: row.TenantID, colData: row.Data, colProperties: row.Properties,
+		},
+		// No update columns: a redelivered offset is already parked, so the insert
+		// does nothing rather than rewriting it.
+		nil,
 	)
-	res, err := tx.Exec(ctx, insert, row.Consumer, row.Stream, row.Offset, row.TenantID, row.Data, row.Properties)
+	if err != nil {
+		return false, fmt.Errorf("inbox postgres: build park row failed: %w", err)
+	}
+	res, err := tx.Exec(ctx, insert, insertArgs...)
 	if err != nil {
 		return false, fmt.Errorf("inbox postgres: park row failed: %w", err)
 	}
+
 	inserted, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("inbox postgres: rows affected failed: %w", err)
@@ -105,34 +134,67 @@ func (s *postgresHoldStore) Park(ctx context.Context, tx dbtypes.Tx, row *HoldRo
 }
 
 func (s *postgresHoldStore) HeldTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]string, error) {
-	query := fmt.Sprintf(`SELECT tenant_id FROM %s WHERE consumer = $1`, s.tenantTable)
-	return scanTenantIDs(ctx, db, query, consumer)
+	f := s.qb.Filter()
+	query, args, err := s.qb.Select(colTenantID).From(s.tenantTable).
+		Where(f.Eq(colConsumer, consumer)).
+		ToSQL()
+	if err != nil {
+		return nil, fmt.Errorf("inbox postgres: build held tenants query failed: %w", err)
+	}
+	return scanTenantIDs(ctx, db, query, args...)
 }
 
 func (s *postgresHoldStore) ListTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]HoldTenant, error) {
-	query := fmt.Sprintf(
-		`SELECT consumer, tenant_id, held_since, attempts, next_attempt_at, COALESCE(last_error, '')
-		 FROM %s WHERE consumer = $1 ORDER BY held_since`,
-		s.tenantTable,
-	)
-	return scanHoldTenants(ctx, db, "list tenants", query, consumer)
+	noError, err := s.noError()
+	if err != nil {
+		return nil, fmt.Errorf("inbox postgres: build list tenants query failed: %w", err)
+	}
+
+	f := s.qb.Filter()
+	query, args, err := s.qb.Select(holdTenantColumns(noError)...).From(s.tenantTable).
+		Where(f.Eq(colConsumer, consumer)).
+		OrderBy(colHeldSince).
+		ToSQL()
+	if err != nil {
+		return nil, fmt.Errorf("inbox postgres: build list tenants query failed: %w", err)
+	}
+	return scanHoldTenants(ctx, db, "list tenants", query, args...)
 }
 
 func (s *postgresHoldStore) DueTenants(ctx context.Context, db dbtypes.Interface, consumer string, limit int) ([]HoldTenant, error) {
-	query := fmt.Sprintf(
-		`SELECT consumer, tenant_id, held_since, attempts, next_attempt_at, COALESCE(last_error, '')
-		 FROM %s
-		 WHERE consumer = $1 AND next_attempt_at <= NOW() AND (lease_until IS NULL OR lease_until < NOW())
-		 ORDER BY held_since LIMIT $2`,
-		s.tenantTable,
-	)
-	return scanHoldTenants(ctx, db, "list due tenants", query, consumer, limit)
+	noError, err := s.noError()
+	if err != nil {
+		return nil, fmt.Errorf("inbox postgres: build due tenants query failed: %w", err)
+	}
+
+	f := s.qb.Filter()
+	// SECURITY: Manual SQL review completed - both predicates are constant text
+	// over fixed column names and the database's own clock: no identifier is
+	// interpolated, no caller value is concatenated, and the only bound value is
+	// the consumer, which the typed Eq carries.
+	due := f.Raw(colNextAttemptAt + ` <= NOW()`)
+	free := f.Raw(`(` + colLeaseUntil + ` IS NULL OR ` + colLeaseUntil + ` < NOW())`)
+
+	query, args, err := s.qb.Select(holdTenantColumns(noError)...).From(s.tenantTable).
+		Where(f.And(f.Eq(colConsumer, consumer), due, free)).
+		OrderBy(colHeldSince).
+		Limit(uint64(limit)).
+		ToSQL()
+	if err != nil {
+		return nil, fmt.Errorf("inbox postgres: build due tenants query failed: %w", err)
+	}
+	return scanHoldTenants(ctx, db, "list due tenants", query, args...)
 }
 
 // AcquireLease takes the lease when it is free or already this owner's. The
 // lease_until comparison is the database's own clock, so replicas need not agree
 // on the time, only on the row.
 func (s *postgresHoldStore) AcquireLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, lease time.Duration) (bool, error) {
+	// SECURITY: Manual SQL review completed - the only interpolated identifier is
+	// the tenant table from the constructor-validated config; every value (owner,
+	// lease seconds, consumer, tenant) is bound. Raw because the SET side assigns
+	// an EXPRESSION over the database clock, which the builder's Set carries only
+	// as a bound value — see the migration note in the lane report.
 	query := fmt.Sprintf(
 		`UPDATE %s SET lease_owner = $1, lease_until = NOW() + ($2 * INTERVAL '1 second')
 		 WHERE consumer = $3 AND tenant_id = $4
@@ -143,41 +205,80 @@ func (s *postgresHoldStore) AcquireLease(ctx context.Context, db dbtypes.Interfa
 }
 
 func (s *postgresHoldStore) ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error {
-	query := fmt.Sprintf(
-		`UPDATE %s SET lease_owner = NULL, lease_until = NULL
-		 WHERE consumer = $1 AND tenant_id = $2 AND lease_owner = $3`,
-		s.tenantTable,
-	)
-	if _, err := db.Exec(ctx, query, consumer, tenant, owner); err != nil {
+	f := s.qb.Filter()
+	query, args, err := s.qb.Update(s.tenantTable).
+		SetMap(map[string]any{colLeaseOwner: nil, colLeaseUntil: nil}).
+		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant), f.Eq(colLeaseOwner, owner))).
+		ToSQL()
+	if err != nil {
+		return fmt.Errorf("inbox postgres: build release lease query failed: %w", err)
+	}
+	if _, err := db.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("inbox postgres: release lease failed: %w", err)
 	}
 	return nil
 }
 
 func (s *postgresHoldStore) NextRows(ctx context.Context, db dbtypes.Interface, consumer, tenant string, limit int) ([]HoldRow, error) {
-	query := fmt.Sprintf(
-		`SELECT consumer, stream, stream_offset, tenant_id, data, properties, held_at
-		 FROM %s WHERE consumer = $1 AND tenant_id = $2
-		 ORDER BY stream, stream_offset LIMIT $3`,
-		s.table,
-	)
-	return scanHoldRows(ctx, db, query, consumer, tenant, limit)
+	f := s.qb.Filter()
+	query, args, err := s.qb.Select(holdRowColumns()...).From(s.table).
+		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant))).
+		OrderBy(colStream, colStreamOffset).
+		Limit(uint64(limit)).
+		ToSQL()
+	if err != nil {
+		return nil, fmt.Errorf("inbox postgres: build next rows query failed: %w", err)
+	}
+	return scanHoldRows(ctx, db, query, args...)
 }
 
 // DeleteRow removes a replayed row only while this owner still holds the lease.
 // A zero-row result is lease loss, not a missing row: another drainer may already
 // be replaying the tenant, and deleting under it would lose the message.
 func (s *postgresHoldStore) DeleteRow(ctx context.Context, db dbtypes.Interface, consumer, stream string, offset int64, tenant, owner string) (bool, error) {
-	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE consumer = $1 AND stream = $2 AND stream_offset = $3
-		   AND EXISTS (SELECT 1 FROM %s t WHERE t.consumer = $1 AND t.tenant_id = $4
-		               AND t.lease_owner = $5 AND t.lease_until > NOW())`,
-		s.table, s.tenantTable,
-	)
-	return affectedOne(ctx, db, "delete held row", query, consumer, stream, offset, tenant, owner)
+	f := s.qb.Filter()
+	// The fence is a subquery over the tenant table, in the SAME statement as the
+	// delete: checking the lease first and deleting second would reopen the window
+	// the lease exists to close.
+	// SECURITY: Manual SQL review completed - the literal 1 is a constant
+	// projection; EXISTS ignores it, and the builder accepts only identifiers in a
+	// projection, so it arrives as an Expr.
+	one, err := s.qb.Expr("1")
+	if err != nil {
+		return false, fmt.Errorf("inbox postgres: build delete held row query failed: %w", err)
+	}
+
+	lease := s.qb.Select(one).From(s.tenantTable).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colTenantID, tenant),
+			f.Eq(colLeaseOwner, owner),
+			// SECURITY: Manual SQL review completed - constant text over a fixed column
+			// and the database's own clock; no identifier interpolated, no value
+			// concatenated.
+			f.Raw(colLeaseUntil+` > NOW()`),
+		))
+
+	query, args, err := s.qb.Delete(s.table).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colStream, stream),
+			f.Eq(colStreamOffset, offset),
+			f.Exists(lease),
+		)).
+		ToSQL()
+	if err != nil {
+		return false, fmt.Errorf("inbox postgres: build delete held row query failed: %w", err)
+	}
+	return affectedOne(ctx, db, "delete held row", query, args...)
 }
 
 func (s *postgresHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, backoff time.Duration, lastErr string) (bool, error) {
+	// SECURITY: Manual SQL review completed - the only interpolated identifier is
+	// the tenant table from the constructor-validated config; the backoff, the
+	// bounded error text, the consumer, the tenant and the owner are all bound.
+	// Raw because the SET side both INCREMENTS a column and assigns an expression
+	// over the database clock, neither of which the builder's Set can carry.
 	query := fmt.Sprintf(
 		`UPDATE %s SET attempts = attempts + 1,
 		        next_attempt_at = NOW() + ($1 * INTERVAL '1 second'),
@@ -191,16 +292,41 @@ func (s *postgresHoldStore) Defer(ctx context.Context, db dbtypes.Interface, con
 // Release drops the tenant's marker once its last row is gone, under the lease.
 // The NOT EXISTS keeps a tenant held whose rows a concurrent park just added.
 func (s *postgresHoldStore) Release(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) (bool, error) {
-	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE consumer = $1 AND tenant_id = $2
-		   AND lease_owner = $3 AND lease_until > NOW()
-		   AND NOT EXISTS (SELECT 1 FROM %s r WHERE r.consumer = $1 AND r.tenant_id = $2)`,
-		s.tenantTable, s.table,
-	)
-	return affectedOne(ctx, db, "release tenant", query, consumer, tenant, owner)
+	f := s.qb.Filter()
+	// SECURITY: Manual SQL review completed - the literal 1 is a constant
+	// projection EXISTS ignores; the clock predicate is constant text over a fixed
+	// column. No identifier interpolated, no value concatenated.
+	one, err := s.qb.Expr("1")
+	if err != nil {
+		return false, fmt.Errorf("inbox postgres: build release tenant query failed: %w", err)
+	}
+
+	// One statement, again on purpose: a tenant whose rows a concurrent park just
+	// added must stay held, and checking then deleting would let that park land in
+	// between.
+	rowsRemain := s.qb.Select(one).From(s.table).
+		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant)))
+
+	query, args, err := s.qb.Delete(s.tenantTable).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colTenantID, tenant),
+			f.Eq(colLeaseOwner, owner),
+			f.Raw(colLeaseUntil+` > NOW()`),
+			f.NotExists(rowsRemain),
+		)).
+		ToSQL()
+	if err != nil {
+		return false, fmt.Errorf("inbox postgres: build release tenant query failed: %w", err)
+	}
+	return affectedOne(ctx, db, "release tenant", query, args...)
 }
 
 func (s *postgresHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error) {
+	// SECURITY: Manual SQL review completed - both table names come from the
+	// constructor-validated config and the consumer is bound three times. Raw
+	// because this is three correlated aggregate subqueries in one projection,
+	// which the builder's Select cannot compose.
 	query := fmt.Sprintf(
 		`SELECT (SELECT COUNT(*) FROM %s WHERE consumer = $1),
 		        (SELECT COUNT(*) FROM %s WHERE consumer = $1),

@@ -58,6 +58,7 @@ CREATE INDEX idx_%s_tenant_due ON %s (consumer, next_attempt_at)`
 type oracleHoldStore struct {
 	table       string
 	tenantTable string
+	qb          *database.QueryBuilder
 }
 
 // NewOracleHoldStore creates an Oracle hold store, refusing a table name whose
@@ -69,6 +70,7 @@ func NewOracleHoldStore(tableName string) (HoldStore, error) {
 	return &oracleHoldStore{
 		table:       tableName,
 		tenantTable: tableName + holdTenantTableSuffix,
+		qb:          database.NewQueryBuilder(dbtypes.Oracle),
 	}, nil
 }
 
@@ -147,32 +149,73 @@ func (s *oracleHoldStore) holdTenantMarker(ctx context.Context, tx dbtypes.Tx, r
 }
 
 func (s *oracleHoldStore) HeldTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]string, error) {
-	query := fmt.Sprintf(`SELECT tenant_id FROM %s WHERE consumer = :1`, s.tenantTable)
-	return scanTenantIDs(ctx, db, query, consumer)
+	f := s.qb.Filter()
+	query, args, err := s.qb.Select(colTenantID).From(s.tenantTable).
+		Where(f.Eq(colConsumer, consumer)).
+		ToSQL()
+	if err != nil {
+		return nil, fmt.Errorf("inbox oracle: build held tenants query failed: %w", err)
+	}
+	return scanTenantIDs(ctx, db, query, args...)
 }
 
 func (s *oracleHoldStore) ListTenants(ctx context.Context, db dbtypes.Interface, consumer string) ([]HoldTenant, error) {
-	query := fmt.Sprintf(
-		`SELECT consumer, tenant_id, held_since, attempts, next_attempt_at, NVL(last_error, ' ')
-		 FROM %s WHERE consumer = :1 ORDER BY held_since`,
-		s.tenantTable,
-	)
-	return scanHoldTenants(ctx, db, "list tenants", query, consumer)
+	noError, err := s.noError()
+	if err != nil {
+		return nil, fmt.Errorf("inbox oracle: build list tenants query failed: %w", err)
+	}
+
+	f := s.qb.Filter()
+	query, args, err := s.qb.Select(holdTenantColumns(noError)...).From(s.tenantTable).
+		Where(f.Eq(colConsumer, consumer)).
+		OrderBy(colHeldSince).
+		ToSQL()
+	if err != nil {
+		return nil, fmt.Errorf("inbox oracle: build list tenants query failed: %w", err)
+	}
+	return scanHoldTenants(ctx, db, "list tenants", query, args...)
 }
 
 func (s *oracleHoldStore) DueTenants(ctx context.Context, db dbtypes.Interface, consumer string, limit int) ([]HoldTenant, error) {
-	query := fmt.Sprintf(
-		`SELECT consumer, tenant_id, held_since, attempts, next_attempt_at, NVL(last_error, ' ')
-		 FROM %s
-		 WHERE consumer = :1 AND next_attempt_at <= SYSTIMESTAMP
-		   AND (lease_until IS NULL OR lease_until < SYSTIMESTAMP)
-		 ORDER BY held_since FETCH FIRST :2 ROWS ONLY`,
-		s.tenantTable,
-	)
-	return scanHoldTenants(ctx, db, "list due tenants", query, consumer, limit)
+	noError, err := s.noError()
+	if err != nil {
+		return nil, fmt.Errorf("inbox oracle: build due tenants query failed: %w", err)
+	}
+
+	f := s.qb.Filter()
+	// SECURITY: Manual SQL review completed - both predicates are constant text
+	// over fixed column names and the database's own clock; no identifier is
+	// interpolated and no caller value concatenated.
+	due := f.Raw(colNextAttemptAt + ` <= SYSTIMESTAMP`)
+	free := f.Raw(`(` + colLeaseUntil + ` IS NULL OR ` + colLeaseUntil + ` < SYSTIMESTAMP)`)
+
+	query, args, err := s.qb.Select(holdTenantColumns(noError)...).From(s.tenantTable).
+		Where(f.And(f.Eq(colConsumer, consumer), due, free)).
+		OrderBy(colHeldSince).
+		Limit(uint64(limit)).
+		ToSQL()
+	if err != nil {
+		return nil, fmt.Errorf("inbox oracle: build due tenants query failed: %w", err)
+	}
+	return scanHoldTenants(ctx, db, "list due tenants", query, args...)
+}
+
+// noError renders an absent last_error as the empty string.
+//
+// SECURITY: Manual SQL review completed - a constant expression over a fixed
+// column name; it is an Expr only because the builder's projection accepts
+// identifiers alone. NVL rather than COALESCE, and a SPACE rather than ”,
+// because Oracle folds an empty string literal to NULL — the shared scanner
+// trims it back.
+func (s *oracleHoldStore) noError() (dbtypes.RawExpression, error) {
+	return s.qb.Expr(`NVL(` + colLastError + `, ' ')`)
 }
 
 func (s *oracleHoldStore) AcquireLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, lease time.Duration) (bool, error) {
+	// SECURITY: Manual SQL review completed - the only interpolated identifier is
+	// the tenant table from the constructor-validated config; every value is bound.
+	// Raw because the SET side assigns an EXPRESSION over the database clock,
+	// which the builder's Set carries only as a bound value.
 	query := fmt.Sprintf(
 		`UPDATE %s SET lease_owner = :1, lease_until = SYSTIMESTAMP + NUMTODSINTERVAL(:2, 'SECOND')
 		 WHERE consumer = :3 AND tenant_id = :4
@@ -183,38 +226,71 @@ func (s *oracleHoldStore) AcquireLease(ctx context.Context, db dbtypes.Interface
 }
 
 func (s *oracleHoldStore) ReleaseLease(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) error {
-	query := fmt.Sprintf(
-		`UPDATE %s SET lease_owner = NULL, lease_until = NULL
-		 WHERE consumer = :1 AND tenant_id = :2 AND lease_owner = :3`,
-		s.tenantTable,
-	)
-	if _, err := db.Exec(ctx, query, consumer, tenant, owner); err != nil {
+	f := s.qb.Filter()
+	query, args, err := s.qb.Update(s.tenantTable).
+		SetMap(map[string]any{colLeaseOwner: nil, colLeaseUntil: nil}).
+		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant), f.Eq(colLeaseOwner, owner))).
+		ToSQL()
+	if err != nil {
+		return fmt.Errorf("inbox oracle: build release lease query failed: %w", err)
+	}
+	if _, err := db.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("inbox oracle: release lease failed: %w", err)
 	}
 	return nil
 }
 
 func (s *oracleHoldStore) NextRows(ctx context.Context, db dbtypes.Interface, consumer, tenant string, limit int) ([]HoldRow, error) {
-	query := fmt.Sprintf(
-		`SELECT consumer, stream, stream_offset, tenant_id, data, properties, held_at
-		 FROM %s WHERE consumer = :1 AND tenant_id = :2
-		 ORDER BY stream, stream_offset FETCH FIRST :3 ROWS ONLY`,
-		s.table,
-	)
-	return scanHoldRows(ctx, db, query, consumer, tenant, limit)
+	f := s.qb.Filter()
+	query, args, err := s.qb.Select(holdRowColumns()...).From(s.table).
+		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant))).
+		OrderBy(colStream, colStreamOffset).
+		Limit(uint64(limit)).
+		ToSQL()
+	if err != nil {
+		return nil, fmt.Errorf("inbox oracle: build next rows query failed: %w", err)
+	}
+	return scanHoldRows(ctx, db, query, args...)
 }
 
 func (s *oracleHoldStore) DeleteRow(ctx context.Context, db dbtypes.Interface, consumer, stream string, offset int64, tenant, owner string) (bool, error) {
-	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE consumer = :1 AND stream = :2 AND stream_offset = :3
-		   AND EXISTS (SELECT 1 FROM %s t WHERE t.consumer = :1 AND t.tenant_id = :4
-		               AND t.lease_owner = :5 AND t.lease_until > SYSTIMESTAMP)`,
-		s.table, s.tenantTable,
-	)
-	return affectedOne(ctx, db, "delete held row", query, consumer, stream, offset, tenant, owner)
+	f := s.qb.Filter()
+	// SECURITY: Manual SQL review completed - the literal 1 is a constant
+	// projection EXISTS ignores; the clock predicate is constant text over a fixed
+	// column.
+	one, err := s.qb.Expr("1")
+	if err != nil {
+		return false, fmt.Errorf("inbox oracle: build delete held row query failed: %w", err)
+	}
+
+	// The fence is a subquery in the SAME statement as the delete: checking the
+	// lease first and deleting second would reopen the window it exists to close.
+	lease := s.qb.Select(one).From(s.tenantTable).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colTenantID, tenant),
+			f.Eq(colLeaseOwner, owner),
+			f.Raw(colLeaseUntil+` > SYSTIMESTAMP`),
+		))
+
+	query, args, err := s.qb.Delete(s.table).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colStream, stream),
+			f.Eq(colStreamOffset, offset),
+			f.Exists(lease),
+		)).
+		ToSQL()
+	if err != nil {
+		return false, fmt.Errorf("inbox oracle: build delete held row query failed: %w", err)
+	}
+	return affectedOne(ctx, db, "delete held row", query, args...)
 }
 
 func (s *oracleHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string, backoff time.Duration, lastErr string) (bool, error) {
+	// SECURITY: Manual SQL review completed - identifier from constructor-validated
+	// config; the backoff, bounded error text, consumer, tenant and owner are bound.
+	// Raw because the SET side increments a column and assigns a clock expression.
 	query := fmt.Sprintf(
 		`UPDATE %s SET attempts = attempts + 1,
 		        next_attempt_at = SYSTIMESTAMP + NUMTODSINTERVAL(:1, 'SECOND'),
@@ -226,16 +302,37 @@ func (s *oracleHoldStore) Defer(ctx context.Context, db dbtypes.Interface, consu
 }
 
 func (s *oracleHoldStore) Release(ctx context.Context, db dbtypes.Interface, consumer, tenant, owner string) (bool, error) {
-	query := fmt.Sprintf(
-		`DELETE FROM %s WHERE consumer = :1 AND tenant_id = :2
-		   AND lease_owner = :3 AND lease_until > SYSTIMESTAMP
-		   AND NOT EXISTS (SELECT 1 FROM %s r WHERE r.consumer = :1 AND r.tenant_id = :2)`,
-		s.tenantTable, s.table,
-	)
-	return affectedOne(ctx, db, "release tenant", query, consumer, tenant, owner)
+	f := s.qb.Filter()
+	// SECURITY: Manual SQL review completed - as in DeleteRow: a constant
+	// projection and a constant clock predicate, no interpolation, values bound.
+	one, err := s.qb.Expr("1")
+	if err != nil {
+		return false, fmt.Errorf("inbox oracle: build release tenant query failed: %w", err)
+	}
+
+	rowsRemain := s.qb.Select(one).From(s.table).
+		Where(f.And(f.Eq(colConsumer, consumer), f.Eq(colTenantID, tenant)))
+
+	query, args, err := s.qb.Delete(s.tenantTable).
+		Where(f.And(
+			f.Eq(colConsumer, consumer),
+			f.Eq(colTenantID, tenant),
+			f.Eq(colLeaseOwner, owner),
+			f.Raw(colLeaseUntil+` > SYSTIMESTAMP`),
+			f.NotExists(rowsRemain),
+		)).
+		ToSQL()
+	if err != nil {
+		return false, fmt.Errorf("inbox oracle: build release tenant query failed: %w", err)
+	}
+	return affectedOne(ctx, db, "release tenant", query, args...)
 }
 
 func (s *oracleHoldStore) Stats(ctx context.Context, db dbtypes.Interface, consumer string) (HoldStats, error) {
+	// SECURITY: Manual SQL review completed - both table names come from the
+	// constructor-validated config, the consumer is bound three times. Raw because
+	// this is three aggregate subqueries in one projection over dual, which the
+	// builder's Select cannot compose.
 	query := fmt.Sprintf(
 		`SELECT (SELECT COUNT(*) FROM %s WHERE consumer = :1),
 		        (SELECT COUNT(*) FROM %s WHERE consumer = :1),

@@ -78,11 +78,11 @@ func TestHoldLedgerParksThroughTheSharedResolver(t *testing.T) {
 	require.NoError(t, err)
 	execs := tx.ExecLog()
 	require.Len(t, execs, 2, "one park is the tenant marker and its row")
-	encoded, ok := execs[1].Args[5].([]byte)
-	require.True(t, ok, "properties reach the column as bytes")
-	var decoded map[string]any
-	require.NoError(t, json.Unmarshal(encoded, &decoded))
-	assert.Equal(t, "tenant-a", decoded["x-tenant-id"])
+	// Located rather than indexed: the row insert is built by the query builder,
+	// which orders columns its own way. The row's DATA is JSON too, so the
+	// properties are identified by what they decode to, not by shape.
+	assert.True(t, boundJSONHas(execs[1].Args, "x-tenant-id", "tenant-a"),
+		"the properties reach the column as the JSON a replay decodes back")
 }
 
 // TestHoldLedgerParksWithoutProperties pins the nil-map case: a message with no
@@ -101,7 +101,11 @@ func TestHoldLedgerParksWithoutProperties(t *testing.T) {
 	require.NoError(t, err)
 	execs := tx.ExecLog()
 	require.Len(t, execs, 2)
-	assert.Nil(t, execs[1].Args[5], "no properties means no bytes, not an encoded nil")
+	assert.False(t, boundJSONHas(execs[1].Args, "x-tenant-id", "tenant-a"),
+		"no properties means no encoded map at all")
+	for _, arg := range execs[1].Args {
+		assert.NotEqual(t, []byte("null"), arg, "and not the four bytes of an encoded nil")
+	}
 }
 
 // TestHoldLedgerReadsTheHeldTenants pins the other half of the port.
@@ -139,4 +143,24 @@ func TestInitProbesTheHoldTable(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "gobricks_inbox_hold")
+}
+
+// boundJSONHas reports whether any bound argument is a JSON object carrying
+// key=value. Identifying the properties by content rather than by position keeps
+// the assertion honest when the query builder reorders an insert's columns.
+func boundJSONHas(args []any, key, value string) bool {
+	for _, arg := range args {
+		encoded, ok := arg.([]byte)
+		if !ok {
+			continue
+		}
+		var decoded map[string]any
+		if json.Unmarshal(encoded, &decoded) != nil {
+			continue
+		}
+		if decoded[key] == value {
+			return true
+		}
+	}
+	return false
 }

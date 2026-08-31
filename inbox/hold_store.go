@@ -11,6 +11,38 @@ import (
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
+// The hold's column names, shared by both vendors' statements so a rename moves
+// in one place rather than across thirty string literals.
+const (
+	colConsumer      = "consumer"
+	colTenantID      = "tenant_id"
+	colStream        = "stream"
+	colStreamOffset  = "stream_offset"
+	colData          = "data"
+	colProperties    = "properties"
+	colHeldAt        = "held_at"
+	colHeldSince     = "held_since"
+	colAttempts      = "attempts"
+	colNextAttemptAt = "next_attempt_at"
+	colLastError     = "last_error"
+	colLeaseOwner    = "lease_owner"
+	colLeaseUntil    = "lease_until"
+)
+
+// holdTenantColumns is the six-column tenant projection both vendors select, in
+// the order scanHoldTenants reads them. lastError is the vendor's own expression
+// for "no error" — COALESCE on PostgreSQL, NVL on Oracle, which differ because
+// Oracle folds an empty string to NULL — and it arrives as a RawExpression
+// because the builder accepts only identifiers in a projection.
+func holdTenantColumns(lastError dbtypes.RawExpression) []any {
+	return []any{colConsumer, colTenantID, colHeldSince, colAttempts, colNextAttemptAt, lastError}
+}
+
+// holdRowColumns is the seven-column row projection, in scanHoldRows' order.
+func holdRowColumns() []any {
+	return []any{colConsumer, colStream, colStreamOffset, colTenantID, colData, colProperties, colHeldAt}
+}
+
 // holdTenantTableSuffix names the second table, derived from the configured one:
 // the rows live in <tablename>, the per-tenant drain state in <tablename>_tenant.
 const holdTenantTableSuffix = "_tenant"

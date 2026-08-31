@@ -98,10 +98,13 @@ func TestOracleHoldStoreParkDetectsADuplicateByTheViolation(t *testing.T) {
 // TestOracleHoldStoreUsesItsOwnDialect pins the spellings that differ from
 // PostgreSQL's: SYSTIMESTAMP, FETCH FIRST, NUMTODSINTERVAL and dual.
 func TestOracleHoldStoreUsesItsOwnDialect(t *testing.T) {
-	t.Run("due_tenants_fetch_first", func(t *testing.T) {
+	// The builder spells the row limit FETCH NEXT, Oracle's synonym for the
+	// FETCH FIRST this store used to write by hand, and inlines the count rather
+	// than binding it.
+	t.Run("due_tenants_limits_the_rows", func(t *testing.T) {
 		store := newOracleHoldTestStore(t)
 		db := dbtesting.NewTestDB(dbtypes.Oracle)
-		db.ExpectQuery(`FETCH FIRST`).WillReturnRows(tenantRowSet(time.Now()))
+		db.ExpectQuery(`FETCH NEXT`).WillReturnRows(tenantRowSet(time.Now()))
 
 		tenants, err := store.DueTenants(t.Context(), db, testHoldConsumer, 10)
 
