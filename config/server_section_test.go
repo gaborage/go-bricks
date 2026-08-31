@@ -207,6 +207,35 @@ func TestValidateServerFailures(t *testing.T) {
 			expectedError: "server.timeout.write must be positive",
 		},
 		{
+			// The bound is <=, not <: zero is a delivered value, not "unset".
+			name: "middleware_timeout_zero_rejected",
+			cfg: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 0,
+					Shutdown:   10 * time.Second,
+				},
+			},
+			expectedError: "server.timeout.middleware must be positive",
+		},
+		{
+			// Same bound on the shutdown budget, reached only once the
+			// middleware/write pair above it is valid.
+			name: "shutdown_timeout_zero_rejected",
+			cfg: ServerConfig{
+				Port: 8080,
+				Timeout: TimeoutConfig{
+					Read:       15 * time.Second,
+					Write:      30 * time.Second,
+					Middleware: 5 * time.Second,
+					Shutdown:   0,
+				},
+			},
+			expectedError: "server.timeout.shutdown must be positive",
+		},
+		{
 			name: "middleware_timeout_equal_to_write_timeout",
 			cfg: ServerConfig{
 				Port: 8080,

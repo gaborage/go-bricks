@@ -429,6 +429,13 @@ func TestValidateMessagingRejectsMaxDelayBelowDelay(t *testing.T) {
 		require.NoError(t, normalizeAndCheckMessaging(cfg, false))
 	})
 
+	// The bound is <, not <=: an equal pair is a fixed, non-growing backoff,
+	// which computeBackoff honors exactly as written.
+	t.Run("maxdelay_equal_to_delay_accepted", func(t *testing.T) {
+		cfg := &MessagingConfig{Reconnect: ReconnectConfig{Delay: 5 * time.Second, MaxDelay: 5 * time.Second}}
+		require.NoError(t, normalizeAndCheckMessaging(cfg, false))
+	})
+
 	t.Run("defaults_accepted", func(t *testing.T) {
 		require.NoError(t, normalizeAndCheckMessaging(&MessagingConfig{}, false))
 	})
