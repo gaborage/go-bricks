@@ -1372,22 +1372,36 @@ func TestRelayUnknownLanesDoNotParkEachOther(t *testing.T) {
 // failure is evidence enough to leave the rest of the stream rows for the next cycle. AMQP
 // rows in the same batch are a separate connection and must still drain.
 func TestRelayUnreadyStreamProducerEndsTheStreamLaneOnly(t *testing.T) {
-	s1, s2 := streamRow(), streamRow()
-	s2.ID, s2.PartitionKey = "S2", "beta" // a different key, so parking cannot explain the skip
-	store := &fakeStore{FetchPendingResult: []Record{
+	s1, s2, s3 := streamRow(), streamRow(), streamRow()
+	// Distinct keys, so parking cannot explain either skip; two of them, so the skip tally has
+	// to ACCUMULATE rather than merely be set.
+	s2.ID, s2.PartitionKey = "S2", "beta"
+	s3.ID, s3.PartitionKey = "S3", "gamma"
+	records := []Record{
 		s1,
 		{ID: "A1", Exchange: "ex", RoutingKey: "a"},
 		s2,
-	}}
+		s3,
+	}
+	store := &fakeStore{FetchPendingResult: records}
 	amqp := newFakeAMQP()
 	pub := &fakeStreamPublisher{Err: streams.ErrPublisherNotStarted}
 	r := newRelayWithFakes(store, amqp, map[string]streamPublisher{"customers": pub})
 	db := dbtesting.NewTestDB("postgresql")
+	ctx := newFakeJobCtx(db, amqp)
 
-	require.NoError(t, r.Execute(newFakeJobCtx(db, amqp)))
+	lead, err := store.Lead(ctx, db)
+	require.NoError(t, err)
+	res := r.runRelayLoop(ctx, ctx.Logger(), db, amqp, lead, records)
 
 	assert.Equal(t, 1, pub.Calls,
-		"the second stream row is left for the next cycle rather than paying the deadline again")
+		"the later stream rows are left for the next cycle rather than paying the deadline again")
 	assert.Equal(t, 1, amqp.PublishCalls, "the AMQP row drains; the lanes are separate connections")
 	assert.Equal(t, 1, store.MarkFailedCalls, "only the attempted stream row advanced retry_count")
+	assert.Equal(t, 1, res.failed, "the row that met the stalled producer is charged a failure")
+	assert.Equal(t, 2, res.parked, "both untried stream rows are held, not just the first")
+	assert.Equal(t, 1, res.published, "the AMQP row is the only publish this cycle")
+	assert.Equal(t, len(records),
+		res.published+res.unrecorded+res.failed+res.deadlettered+res.parked,
+		"every fetched row is accounted for exactly once")
 }
