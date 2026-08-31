@@ -440,7 +440,9 @@ Each delivery opens a Consumer-kind span named `"<stream> receive"` under the
 plus `messaging.client.consumed.messages` with `messaging.system=rabbitmq`,
 `messaging.operation.name=receive`, `messaging.destination.name=<stream>`, and
 `error.type` when handling failed. The consumed counter increments once per
-delivery regardless of the outcome — `error.type` separates them.
+delivery regardless of the outcome — `error.type` separates them. After the
+offset commit returns, the lane increments `messaging.settlement.total` with
+`lane=streams` and `outcome=committed` or `failed`.
 
 Each publish opens a Producer-kind span named `"<stream> publish"` on the same
 tracer, carrying `messaging.message.body.size`, and records

@@ -3464,3 +3464,108 @@ func TestStartConsumerWidensDeclaredIntOffset(t *testing.T) {
 
 	registry.StopConsumers()
 }
+
+func TestRegistryProcessMessageRecordsSettlementOutcome(t *testing.T) {
+	tests := []struct {
+		name        string
+		handler     MessageHandler
+		acker       *mockAcknowledger
+		wantOutcome string
+	}{
+		{
+			name:        "ack_success",
+			handler:     &countingTestHandler{},
+			acker:       &mockAcknowledger{},
+			wantOutcome: tracking.OutcomeAcked,
+		},
+		{
+			name:        "nack_success",
+			handler:     &countingTestHandler{testHandler: testHandler{retErr: errors.New("handler error")}},
+			acker:       &mockAcknowledger{},
+			wantOutcome: tracking.OutcomeNacked,
+		},
+		{
+			name:        "ack_failure",
+			handler:     &countingTestHandler{},
+			acker:       &mockAcknowledger{ackErr: errors.New("ack failed")},
+			wantOutcome: tracking.OutcomeFailed,
+		},
+		{
+			name:        "nack_failure",
+			handler:     &countingTestHandler{testHandler: testHandler{retErr: errors.New("handler error")}},
+			acker:       &mockAcknowledger{nackErr: errors.New("nack failed")},
+			wantOutcome: tracking.OutcomeFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp, cleanup := setupConsumeMetrics(t)
+			defer cleanup()
+
+			registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+			consumer := &ConsumerDeclaration{
+				Queue:     testQueueName,
+				EventType: testEventType,
+				Handler:   tt.handler,
+				AutoAck:   false,
+			}
+			delivery := &amqp.Delivery{
+				MessageId:    testMessageID,
+				RoutingKey:   testRoutingKey,
+				Exchange:     testExchangeName,
+				DeliveryTag:  123,
+				Body:         []byte(testMessageBody),
+				Headers:      amqp.Table{},
+				Acknowledger: tt.acker,
+			}
+
+			registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+
+			assertExactlyLaneAndOutcome(t, settlementAttrs(t, mp.Collect(t)), tracking.LaneClassic, tt.wantOutcome)
+		})
+	}
+}
+
+func TestRegistryProcessMessageAutoAckRecordsNoSettlement(t *testing.T) {
+	mp, cleanup := setupConsumeMetrics(t)
+	defer cleanup()
+
+	registry := NewRegistry(&simpleMockAMQPClient{}, &stubLogger{})
+	consumer := &ConsumerDeclaration{
+		Queue:     testQueueName,
+		EventType: testEventType,
+		Handler:   &countingTestHandler{},
+		AutoAck:   true,
+	}
+	delivery := &amqp.Delivery{
+		DeliveryTag:  123,
+		Body:         []byte(testMessageBody),
+		Acknowledger: &mockAcknowledger{},
+	}
+
+	registry.processMessage(context.Background(), consumer, delivery, &stubLogger{})
+
+	assert.Nil(t, obtest.FindMetric(mp.Collect(t), "messaging.settlement.total"),
+		"AutoAck is not a settle call, so it must not increment the settlement counter")
+}
+
+func settlementAttrs(t *testing.T, rm metricdata.ResourceMetrics) []attribute.KeyValue {
+	t.Helper()
+	m := obtest.FindMetric(rm, "messaging.settlement.total")
+	require.NotNil(t, m)
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, sum.DataPoints, 1)
+	assert.Equal(t, int64(1), sum.DataPoints[0].Value)
+	return sum.DataPoints[0].Attributes.ToSlice()
+}
+
+func assertExactlyLaneAndOutcome(t *testing.T, attrs []attribute.KeyValue, lane, outcome string) {
+	t.Helper()
+	got := make(map[string]string, len(attrs))
+	for _, attr := range attrs {
+		got[string(attr.Key)] = attr.Value.AsString()
+	}
+	assert.Equal(t, map[string]string{"lane": lane, "outcome": outcome}, got)
+}

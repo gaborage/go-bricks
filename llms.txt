@@ -4673,6 +4673,7 @@ When `observability.enabled: true`, the framework auto-emits:
 | Messaging | `messaging.client.publish.retries` | Counter | `messaging.destination.name` |
 | Messaging | `messaging.connection.create` / `.close` | Counter | — |
 | Messaging | `messaging.channel.create` / `.close` | Counter | — |
+| Messaging | `messaging.settlement.total` | Counter | `lane` (`classic`/`streams`), `outcome` (`acked`/`nacked`/`committed`/`failed`) |
 | Cache | `cache.hit` / `cache.miss` | Counter | `cache.operation` |
 | Cache | `db.client.operation.duration` (cache shares the OTel db client family) | Histogram (s) | `db.system.name=redis` |
 | Cache manager | `cache.manager.active_caches` | UpDownCounter | — |

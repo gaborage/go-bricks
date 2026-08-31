@@ -53,6 +53,7 @@ func TestInitAMQPMeter(t *testing.T) {
 	assert.NotNil(t, amqpConnectionClose, "Connection close counter should be initialized")
 	assert.NotNil(t, amqpChannelCreate, "Channel create counter should be initialized")
 	assert.NotNil(t, amqpChannelClose, "Channel close counter should be initialized")
+	assert.NotNil(t, amqpSettlementTotal, "Settlement total counter should be initialized")
 
 	// Verify meter returns same instance on subsequent calls
 	meter2 := getAMQPMeter()
@@ -571,4 +572,60 @@ func TestRecordStreamPublishZeroDurationSkipsHistogram(t *testing.T) {
 
 	assert.Nil(t, obtest.FindMetric(rm, metricOperationDuration), "zero duration records no histogram sample")
 	obtest.AssertMetricValue(t, rm, metricMessagesSent, int64(1))
+}
+
+func TestRecordSettlementPinsLaneAndOutcome(t *testing.T) {
+	tests := []struct {
+		name           string
+		lane           string
+		successOutcome string
+		err            error
+		wantOutcome    string
+	}{
+		{name: "classic_acked", lane: LaneClassic, successOutcome: OutcomeAcked, wantOutcome: OutcomeAcked},
+		{name: "classic_nacked", lane: LaneClassic, successOutcome: OutcomeNacked, wantOutcome: OutcomeNacked},
+		{name: "classic_failed", lane: LaneClassic, successOutcome: OutcomeAcked, err: errors.New("ack failed"), wantOutcome: OutcomeFailed},
+		{name: "streams_committed", lane: LaneStreams, successOutcome: OutcomeCommitted, wantOutcome: OutcomeCommitted},
+		{name: "streams_failed", lane: LaneStreams, successOutcome: OutcomeCommitted, err: errors.New("store failed"), wantOutcome: OutcomeFailed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp := setupMeter(t)
+			RecordSettlement(tt.lane, tt.successOutcome, tt.err)
+
+			rm := mp.Collect(t)
+			obtest.AssertMetricExists(t, rm, metricSettlementTotal)
+			assertExactlyLaneAndOutcome(t, settlementAttrs(t, rm), tt.lane, tt.wantOutcome)
+		})
+	}
+}
+
+func TestRecordSettlementAttributeSetIsExactlyLaneAndOutcome(t *testing.T) {
+	mp := setupMeter(t)
+	RecordSettlement(LaneClassic, OutcomeNacked, nil)
+
+	attrs := settlementAttrs(t, mp.Collect(t))
+	require.Len(t, attrs, 2, "settlement carries only lane and outcome")
+	assertExactlyLaneAndOutcome(t, attrs, LaneClassic, OutcomeNacked)
+}
+
+func settlementAttrs(t *testing.T, rm metricdata.ResourceMetrics) []attribute.KeyValue {
+	t.Helper()
+	m := obtest.FindMetric(rm, metricSettlementTotal)
+	require.NotNil(t, m)
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, sum.DataPoints, 1)
+	assert.Equal(t, int64(1), sum.DataPoints[0].Value)
+	return sum.DataPoints[0].Attributes.ToSlice()
+}
+
+func assertExactlyLaneAndOutcome(t *testing.T, attrs []attribute.KeyValue, lane, outcome string) {
+	t.Helper()
+	got := make(map[string]string, len(attrs))
+	for _, attr := range attrs {
+		got[string(attr.Key)] = attr.Value.AsString()
+	}
+	assert.Equal(t, map[string]string{attrLane: lane, attrOutcome: outcome}, got)
 }
