@@ -170,8 +170,11 @@ func TestAReloadNeverErasesAParkThatRacedIt(t *testing.T) {
 func TestTheGenerationOnlyEverAdvances(t *testing.T) {
 	set := newHeldSet()
 
-	seen := []uint64{set.generationAt()}
-	for _, tenant := range []string{"a", "b", "c", "d"} {
+	tenants := []string{"a", "b", "c", "d"}
+	seen := make([]uint64, 0, len(tenants)+1)
+	seen = append(seen, set.generationAt())
+
+	for _, tenant := range tenants {
 		set.add(tenant)
 		seen = append(seen, set.generationAt())
 	}
@@ -183,7 +186,7 @@ func TestTheGenerationOnlyEverAdvances(t *testing.T) {
 		"and no value is ever handed out twice")
 }
 
-// TestTwoParksStillRefuseAStaleReplace is the behaviour that rests on it: a
+// TestTwoParksStillRefuseAStaleReplace is the behavior that rests on it: a
 // listing read before several parks is refused, not merely one park.
 func TestTwoParksStillRefuseAStaleReplace(t *testing.T) {
 	set := newHeldSet()
