@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gaborage/go-bricks/app"
 	"github.com/gaborage/go-bricks/config"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 	"github.com/gaborage/go-bricks/logger"
-	"github.com/gaborage/go-bricks/messaging/streams"
 	"github.com/gaborage/go-bricks/scheduler"
 )
 
@@ -42,7 +42,7 @@ type HoldDrain struct {
 	// the inbox ledger's store is lazy. One resolver rather than two, because the
 	// ledger's own calls already take the pair from a single seam.
 	resolve  func(context.Context) (dbtypes.Interface, HoldStore, error)
-	replayer func() streams.HoldReplayer
+	replayer func() app.HoldReplayer
 	cfg      config.InboxHoldConfig
 	// owner identifies this replica in the lease. Minted once, because a lease
 	// taken under one name must be renewable and releasable under the same one.
@@ -65,7 +65,7 @@ type HoldDrain struct {
 type holdPass struct {
 	db       dbtypes.Interface
 	store    HoldStore
-	replayer streams.HoldReplayer
+	replayer app.HoldReplayer
 	consumer string
 }
 
@@ -388,7 +388,7 @@ func (d *HoldDrain) backoffFor(attempts int) time.Duration {
 }
 
 // heldMessageOf renders a ledger row as the lane's held message.
-func heldMessageOf(row *HoldRow) (*streams.HeldMessage, error) {
+func heldMessageOf(row *HoldRow) (*app.HeldMessage, error) {
 	// Park stored the producer's properties as JSON. They carry the message's
 	// application properties — the trace carrier among them — so a replay without
 	// them is not the message that was parked.
@@ -399,7 +399,7 @@ func heldMessageOf(row *HoldRow) (*streams.HeldMessage, error) {
 		}
 	}
 
-	return &streams.HeldMessage{
+	return &app.HeldMessage{
 		Consumer:   row.Consumer,
 		Stream:     row.Stream,
 		Offset:     row.Offset,
