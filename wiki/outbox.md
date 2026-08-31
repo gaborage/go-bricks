@@ -452,6 +452,14 @@ CREATE INDEX idx_gobricks_inbox_hold_tenant_due
     ON gobricks_inbox_hold_tenant (consumer, next_attempt_at);
 ```
 
+**Oracle prerequisite.** `inbox.hold.tablename` is bounded at 46 bytes because the
+longest name derived from it, `idx_<tablename>_tenant_order`, adds 17 bytes and
+must fit PostgreSQL's 63-byte identifier limit. Oracle allows 128 bytes only at
+`COMPATIBLE = 12.2` or higher; below that its limit is 30, where even the default
+`gobricks_inbox_hold` cannot produce that index (17 + 19 = 36). On an instance
+under 12.2, either raise `COMPATIBLE`, or choose a `tablename` of at most 13
+bytes so the derived name stays within 30.
+
 Substitute your own `inbox.hold.tablename` throughout if you changed it; the
 tenant table is always that name with `_tenant` appended, and the index names are
 derived from it, which is why the configured name is bounded at 46 bytes.
@@ -484,6 +492,13 @@ Oracle:
 DELETE FROM gobricks_inbox_hold        WHERE consumer = :consumer AND tenant_id = :tenant;
 DELETE FROM gobricks_inbox_hold_tenant WHERE consumer = :consumer AND tenant_id = :tenant;
 ```
+
+**Quiesce the drain first.** The statements above are fenced, so a purge cannot
+corrupt a drainer's bookkeeping — but a fence does not reach into a handler that
+is already running, and deleting a row mid-replay leaves that replay's side
+effects with nothing recording that they happened. Stop the consumer (or the
+replicas running its drain), wait out one `inbox.hold.leaseduration` so any
+in-flight pass has finished or lost its lease, and only then purge.
 
 Run both against the names your `inbox.hold.tablename` configures. Those messages
 are gone: nothing else holds a copy once the offset was committed.

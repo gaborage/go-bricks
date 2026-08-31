@@ -200,8 +200,9 @@ operator's `DELETE`. The backlog is visible as the gauges
 longer than `inbox.hold.maxage`.
 
 A holding consumer that declares no `Retry` gets `streams.DefaultHoldRetry` (3
-attempts, 200ms initial, 2s cap); one that does not hold keeps the single
-attempt above. `Hold: true` requires an `inbox` hold ledger with
+attempts, 200ms initial, 2s cap). The single-attempt default is therefore a
+NON-holding consumer's: one that neither holds nor declares a `Retry` still gets
+exactly one attempt. `Hold: true` requires an `inbox` hold ledger with
 `inbox.tenancy: shared` — see [outbox.md](outbox.md#hold-ledger) for the tables
 and keys — and a consumer declaring `Hold` without one fails startup.
 
@@ -231,7 +232,7 @@ A consumer may ask for a bounded in-place retry: `Retry: &streams.RetryOptions{M
 
 Two outcomes end the retries early. A panic is never retried: a handler that panics on a message panics on it again. Neither is an error the handler wrapped in `streams.Permanent(err)`, which is its claim that retrying cannot help; the wrapper renders and unwraps as the original error, so nothing downstream has to know about it.
 
-**The waits happen inside the partition's own delivery callback**, which is why a policy is bounded: `Validate` refuses more than `streams.MaxRetryAttempts` (10) attempts, or a policy whose worst-case total wait exceeds `streams.MaxRetryWait` (1 minute); the error names that total as a lower bound, since the walk stops at the wait that proves the crossing. That budget is one tenant's failure spending every OTHER tenant's throughput on the same partition, so a failure needing more patience than a minute is not a retry at all. Where such a failure should go instead is not something this lane answers yet: today a delivery that exhausts its policy is skipped, exactly as an unretried failure always was.
+**The waits happen inside the partition's own delivery callback**, which is why a policy is bounded: `Validate` refuses more than `streams.MaxRetryAttempts` (10) attempts, or a policy whose worst-case total wait exceeds `streams.MaxRetryWait` (1 minute); the error names that total as a lower bound, since the walk stops at the wait that proves the crossing. That budget is one tenant's failure spending every OTHER tenant's throughput on the same partition, so a failure needing more patience than a minute is not a retry at all. Where such a failure goes instead depends on `Hold`: without it, a delivery that exhausts its policy is skipped, exactly as an unretried failure always was; with it, the tenant is held and the message parked for the drain to replay (see **Retry, then hold** above).
 
 The context the wait selects on is the consumer's, so `StopConsumers` cuts a pending backoff rather than sleeping it out.
 

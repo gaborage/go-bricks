@@ -52,9 +52,10 @@ does not hold keeps ADR-059's single attempt unless it names a policy itself.
 
 ### 2. When the delivery settles on a failure, the tenant is held
 
-Any delivery that ends with an error parks — the retries running out, a
-`streams.Permanent(err)` that refused them, or a recovered panic that was never
-eligible for them. Five steps, in order:
+For a consumer that declares `Hold: true`, any delivery that ends with an error
+parks — the retries running out, a `streams.Permanent(err)` that refused them, or
+a recovered panic that was never eligible for them. A consumer that does not hold
+is unchanged: it skips, exactly as ADR-059 describes. Five steps, in order:
 
 1. **Gate.** Before delivering, the runner checks whether the message's tenant is
    in the consumer's held set. A held tenant's message is not delivered — it is

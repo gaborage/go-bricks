@@ -76,5 +76,7 @@ func holdAgeSeconds(now func() time.Time, oldest time.Time) float64 {
 	if oldest.IsZero() {
 		return 0
 	}
-	return now().Sub(oldest).Seconds()
+	// The row's timestamp is the ledger's clock and now() is this process's, so a
+	// held_since slightly in the future is a clock difference, not a negative age.
+	return max(now().Sub(oldest).Seconds(), 0)
 }

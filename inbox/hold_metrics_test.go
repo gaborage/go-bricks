@@ -64,3 +64,16 @@ func TestHoldGaugesStopAfterUnregister(t *testing.T) {
 	assert.Nil(t, obtest.FindMetric(rm, metricHoldTenants),
 		"an unregistered callback reports nothing")
 }
+
+// TestHoldAgeSeconds pins the gauge's age, including the two readings that are
+// not an elapsed duration at all: an empty hold has no oldest row, and a row
+// stamped by the ledger's clock can sit slightly ahead of this process's.
+func TestHoldAgeSeconds(t *testing.T) {
+	now := time.Now()
+	clock := func() time.Time { return now }
+
+	assert.Zero(t, holdAgeSeconds(clock, time.Time{}), "an empty hold has no age")
+	assert.InDelta(t, 90.0, holdAgeSeconds(clock, now.Add(-90*time.Second)), 0.001)
+	assert.Zero(t, holdAgeSeconds(clock, now.Add(time.Minute)),
+		"a row from a clock that runs ahead reads as zero, never negative")
+}

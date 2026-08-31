@@ -104,6 +104,7 @@ type recordingHoldStore struct {
 	// computed attempt number is observable.
 	deferredBackoff time.Duration
 	deferErr        error
+	deferRefused    bool
 	releaseErr      error
 	statsErr        error
 	// rowsByTenant answers NextRows per tenant. A TestDB expectation is matched by
@@ -135,6 +136,9 @@ func (r *recordingHoldStore) Defer(ctx context.Context, db dbtypes.Interface, co
 	r.deferredBackoff = backoff
 	if r.deferErr != nil {
 		return false, r.deferErr
+	}
+	if r.deferRefused {
+		return false, nil
 	}
 	return r.HoldStore.Defer(ctx, db, consumer, tenant, owner, backoff, lastErr)
 }
@@ -654,4 +658,60 @@ func TestDrainReportsEveryLedgerFailure(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
+}
+
+// TestLeaseDeadlineStaysInsideTheLease pins the safety margin. The lease expires
+// on the DATABASE's clock, and this process can only sample its own after the
+// acquire round trip has already spent part of it, so a deadline at the full
+// duration lands past the real expiry — where a second replica may already hold
+// the tenant.
+func TestLeaseDeadlineStaysInsideTheLease(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name  string
+		lease time.Duration
+		want  time.Duration
+	}{
+		{"a_minute_lease_keeps_six_seconds_back", time.Minute, 54 * time.Second},
+		{"a_ten_second_lease_keeps_one", 10 * time.Second, 9 * time.Second},
+		// The margin has a floor: a tenth of a very short lease would not cover a
+		// round trip at all.
+		{"a_short_lease_keeps_the_floor", 2 * time.Second, time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			drain := &HoldDrain{
+				cfg: config.InboxHoldConfig{LeaseDuration: tc.lease},
+				now: func() time.Time { return now },
+			}
+
+			deadline := drain.leaseDeadline()
+
+			assert.Equal(t, now.Add(tc.want), deadline)
+			assert.True(t, deadline.Before(now.Add(tc.lease)),
+				"the deadline is inside the lease, not at its edge")
+		})
+	}
+}
+
+// TestDrainDoesNotReportABackoffItNeverWrote pins the defer's fence: a replica
+// that lost the lease mid-pass writes nothing, so logging the backoff it computed
+// would describe a schedule the ledger does not have.
+func TestDrainDoesNotReportABackoffItNeverWrote(t *testing.T) {
+	db := dueTenantDB(t)
+	replayer := &fakeHoldReplayer{
+		consumers: []string{testHoldConsumer},
+		failAt:    map[int64]error{3: errors.New("handler said no")},
+	}
+	store := &recordingHoldStore{HoldStore: mustPostgresHoldStore(), deferRefused: true}
+
+	out := captureDrainLogs(t, func() {
+		// Built inside the capture and at WARN: zerolog binds its writer when the
+		// logger is made, and drainCtx's own logger is quieter than this line.
+		jobCtx := &fakeHoldJobCtx{Context: context.Background(), log: logger.New("warn", false), db: db}
+		require.NoError(t, drainWithStore(db, replayer, store).Execute(jobCtx))
+	})
+
+	assert.Contains(t, out, "Hold lease lost before the tenant could be deferred")
+	assert.NotContains(t, out, "tenant deferred", "no schedule is claimed that was not written")
+	assert.NotContains(t, out, "next_attempt_in", "and no backoff is reported")
 }

@@ -141,10 +141,24 @@ func (d *HoldDrain) drainTenant(ctx context.Context, log logger.Logger, pass *ho
 	}
 
 	d.warnIfTooOld(log, consumer, tenant)
-	// The lease is what makes this replica the tenant's only drainer, so it is also
-	// the bound on the work: past this instant another replica may take the tenant,
-	// and two handlers replaying one tenant's rows is the ordering guarantee gone.
-	return d.replayTenantRows(ctx, log, pass, replayer, consumer, tenant, d.now().Add(d.cfg.LeaseDuration))
+	return d.replayTenantRows(ctx, log, pass, replayer, consumer, tenant, d.leaseDeadline())
+}
+
+// leaseDeadline is how long this replica may keep replaying the tenant it just
+// leased. The lease is what makes this replica the tenant's only drainer, so it
+// is also the bound on the work: past its expiry another replica may take the
+// tenant, and two handlers replaying one tenant's rows is the ordering guarantee
+// gone.
+//
+// The expiry itself is the DATABASE's — `lease_until` was computed from the
+// ledger's clock — and this process can only sample its own, after the acquire
+// round trip has already spent part of the lease. A local now plus the full
+// duration therefore lands AFTER the real expiry by the round trip plus whatever
+// the two clocks disagree by. The margin below buys back both, so the deadline
+// stays inside the lease rather than just past it.
+func (d *HoldDrain) leaseDeadline() time.Time {
+	margin := max(d.cfg.LeaseDuration/10, time.Second)
+	return d.now().Add(d.cfg.LeaseDuration - margin)
 }
 
 // replayTenantRows replays at most one batch of a tenant's rows, in ledger order.
@@ -243,8 +257,20 @@ func (d *HoldDrain) deferTenant(ctx context.Context, log logger.Logger, pass *ho
 	attempt := tenant.Attempts + 1
 	backoff := d.backoffFor(attempt)
 
-	if _, err := pass.store.Defer(ctx, pass.db, consumer, tenant.TenantID, d.owner, backoff, replayErr.Error()); err != nil {
+	deferred, err := pass.store.Defer(ctx, pass.db, consumer, tenant.TenantID, d.owner, backoff, replayErr.Error())
+	if err != nil {
 		return err
+	}
+	if !deferred {
+		// The fence refused the write, as in replayRow: this replica no longer holds
+		// the lease, so the backoff below was never persisted and logging it would
+		// describe a schedule that does not exist.
+		log.Warn().
+			Str("consumer", consumer).
+			Str("tenant", tenant.TenantID).
+			Int64("offset", row.Offset).
+			Msg("Hold lease lost before the tenant could be deferred")
+		return nil
 	}
 
 	log.Warn().
