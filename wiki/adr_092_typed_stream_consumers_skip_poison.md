@@ -105,9 +105,15 @@ then a restart resumes from the last stored offset and redelivers the poison,
 which is harmless because the screen and the handler reject it identically and
 skip it again. That is ADR-059's existing settlement, but it means poison lives
 in the failure log line and the consume metric alone, never in a ledger an
-operator can read back. A consumer that needs the body kept should validate
-loosely (`T` with no `validate` tags) and park the rejection itself from inside
-the handler.
+operator can read back.
+
+Retaining a rejected body is only partly in the consumer's reach, and the two
+stages differ. A **validation-invalid** payload decoded cleanly, so declaring `T`
+with no `validate` tags lets it through to the handler, which can then park the
+rejection itself. An **undecodable** body never reaches the handler at all — there
+is no `T` to hand it — so no typed declaration can retain it; a consumer that must
+see those bytes has to consume that stream through a hand-written `Handler` on
+`DeclareConsumer`, which is given `msg.Data` raw, and do its own decoding.
 
 **Neutral.** `streams.PayloadError.Unwrap()` still reaches the raw cause, which
 MAY carry payload-derived text. Logging it is opt-in and on the caller, exactly as

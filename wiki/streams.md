@@ -190,8 +190,14 @@ stored offset and **redelivers** it. That is harmless — the screen and the han
 reject the same bytes the same way, so it is simply skipped again — but it does
 mean one malformed message can be logged more than once. Once a later success
 commits past it, it survives only in the failure log line and the consume metric.
-A consumer that must keep the body should take `T` without `validate` tags and
-park the rejection itself from inside the handler.
+
+Keeping a rejected body is only partly in your reach, and the two stages differ.
+A **validation-invalid** payload decoded fine, so declaring `T` without
+`validate` tags lets it reach the handler, which can park the rejection itself.
+An **undecodable** body never reaches the handler — there is no `T` to hand it —
+so no typed declaration can retain it. To see those bytes, consume that stream
+with a hand-written `Handler` on `DeclareConsumer` instead: it is given
+`msg.Data` raw and does its own decoding.
 
 Match the two modes with `errors.Is` against `streams.ErrPayloadUndecodable` and
 `streams.ErrPayloadInvalid`; `errors.As` to `*streams.PayloadError` reaches
