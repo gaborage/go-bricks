@@ -34,11 +34,11 @@ const (
 // and a negative one would wrap through uint64 into a number no query should
 // carry; anything below one asks for nothing, which the smallest legal limit
 // expresses honestly.
+// Written as a clamp rather than a branch: a comparison here has no observable
+// boundary — the only input the two spellings could disagree on is 1, which both
+// answer with 1 — so there would be nothing for a test to falsify.
 func boundedLimit(limit int) uint64 {
-	if limit < 1 {
-		return 1
-	}
-	return uint64(limit)
+	return uint64(max(limit, 1))
 }
 
 // holdTenantColumns is the six-column tenant projection both vendors select, in
@@ -387,7 +387,8 @@ func (q *holdQueries) NextRows(ctx context.Context, db dbtypes.Interface, consum
 // fence is a subquery in the SAME statement: checking the lease first and
 // deleting second would reopen the window the lease exists to close.
 func (q *holdQueries) DeleteRow(ctx context.Context, db dbtypes.Interface,
-	consumer, stream string, offset int64, tenant, owner string) (bool, error) {
+	consumer, stream string, offset int64, tenant, owner string,
+) (bool, error) {
 	f := q.qb.Filter()
 	lease, err := q.leaseHeldBy(f, consumer, tenant, owner)
 	if err != nil {
