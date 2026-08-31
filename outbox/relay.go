@@ -90,6 +90,11 @@ const (
 	// hold the leader transaction for batchsize × publishtimeout, so the rest of the stream
 	// rows are left for the next cycle. AMQP rows in the same batch are unaffected: the two
 	// lanes are separate connections and one being down says nothing about the other.
+	//
+	// Residual, deliberately: the FIRST stalled row of a cycle still pays one PublishTimeout,
+	// because a stall is only observable by waiting for it. That is bounded at one timeout
+	// per cycle rather than one per row. streams.Publisher exposes no readiness probe today;
+	// if one ever lands, it belongs in front of this same outcome and removes that residual.
 	outcomeStreamDown
 )
 
