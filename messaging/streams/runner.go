@@ -117,10 +117,15 @@ func (t *offsetTracker) flush(store offsetStorer) error {
 // storeLocked commits the last successfully handled offset. On failure the
 // pending counter is deliberately left intact so the next message retries.
 func (t *offsetTracker) storeLocked(store offsetStorer) error {
+	var err error
 	if store == nil {
-		return errNoOffsetStorer
+		err = errNoOffsetStorer
+	} else {
+		err = store.StoreCustomOffset(t.lastHandledOK)
 	}
-	if err := store.StoreCustomOffset(t.lastHandledOK); err != nil {
+	// After the commit attempt: success is committed, a store error is failed.
+	tracking.RecordSettlement(tracking.LaneStreams, tracking.OutcomeCommitted, err)
+	if err != nil {
 		return err
 	}
 	t.storedOffset = t.lastHandledOK

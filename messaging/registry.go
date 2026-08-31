@@ -14,6 +14,7 @@ import (
 
 	"github.com/gaborage/go-bricks/logger"
 	pipeline "github.com/gaborage/go-bricks/messaging/internal/delivery"
+	"github.com/gaborage/go-bricks/messaging/internal/tracking"
 )
 
 // defaultConsumerResubscribeDelay is the wait between consumer re-subscribe
@@ -872,7 +873,9 @@ func logOutcome(res *pipeline.Result, consumer *ConsumerDeclaration, delivery *a
 // ackMessage acknowledges a handled message.
 // Logs any ack errors but does not propagate them (robustness over strict error handling).
 func ackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
-	if err := delivery.Ack(false); err != nil {
+	err := delivery.Ack(false)
+	tracking.RecordSettlement(tracking.LaneClassic, tracking.OutcomeAcked, err)
+	if err != nil {
 		log.Error().
 			Str("correlation_id", traceID).
 			Err(err).
@@ -888,7 +891,9 @@ func ackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
 // DeclareQueueWithDLQ declares that full route in one call.
 // Logs any nack errors but does not propagate them (robustness over strict error handling).
 func nackMessage(delivery *amqp.Delivery, log logger.Logger, traceID string) {
-	if err := delivery.Nack(false, false); err != nil {
+	err := delivery.Nack(false, false)
+	tracking.RecordSettlement(tracking.LaneClassic, tracking.OutcomeNacked, err)
+	if err != nil {
 		log.Error().
 			Str("correlation_id", traceID).
 			Err(err).
