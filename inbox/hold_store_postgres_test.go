@@ -19,6 +19,7 @@ const (
 	holdTenantTable  = "gobricks_inbox_hold_tenant"
 	testHoldConsumer = "orders-processor"
 	testHoldTenant   = "tenant-a"
+	otherHoldTenant  = "tenant-b"
 	testHoldOwner    = "replica-1"
 	testHoldStream   = "orders-0"
 )
