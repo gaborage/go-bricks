@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -176,7 +177,7 @@ func (qb *QueryBuilder) upsertColumnName(column string) string {
 		return qb.EscapeIdentifier(column)
 	}
 
-	rendered := oracleQuoteIdentifier(column)
+	rendered := sqllex.QuoteOracleIdentifier(column)
 	if len(rendered) >= 2 && rendered[0] == '"' && rendered[len(rendered)-1] == '"' {
 		// The unescape is kept though no key reaching here can carry a doubled
 		// quote any more: reading an escaped rendering as the name it denotes is
@@ -223,7 +224,7 @@ func isAcceptableUpsertColumnKey(key string) bool {
 	// for that parse.
 	return !keyCarriesInteriorQuote(key) &&
 		!keyIsFunctionShaped(key) &&
-		isSingleColumnName(oracleQuoteIdentifier(key))
+		isSingleColumnName(sqllex.QuoteOracleIdentifier(key))
 }
 
 // keyCarriesInteriorQuote reports whether a caller's key carries a quote
@@ -244,7 +245,7 @@ func isAcceptableUpsertColumnKey(key string) bool {
 // (database.Raw, with its // SECURITY: annotation). Refusing the spelling here
 // is what leaves ONE acceptance rule at this door (#1187).
 func keyCarriesInteriorQuote(key string) bool {
-	if isQuotedString(key) {
+	if sqllex.IsQuotedString(key) {
 		return strings.Contains(key[1:len(key)-1], `"`)
 	}
 	return strings.Contains(key, `"`)
@@ -268,7 +269,7 @@ func keyCarriesInteriorQuote(key string) bool {
 // key carrying a parenthesis is not a bare identifier, and a caller who means
 // such a column can still say so by quoting it.
 func keyIsFunctionShaped(key string) bool {
-	return !isQuotedIdentifier(key) && strings.ContainsAny(key, "()")
+	return !sqllex.IsQuotedIdentifier(key) && strings.ContainsAny(key, "()")
 }
 
 // isSingleColumnName reports whether a rendered identifier is one column name
@@ -286,7 +287,7 @@ func keyIsFunctionShaped(key string) bool {
 // is not the seam to economize on. Its other clauses — empty, qualified, not a
 // valid segment — remain load-bearing on their own.
 func isSingleColumnName(rendered string) bool {
-	if rendered == "" || strings.Contains(rendered, ".") || !validateSegment(rendered) {
+	if rendered == "" || strings.Contains(rendered, ".") || !sqllex.ValidateSegment(rendered) {
 		return false
 	}
 	if rendered[0] != '"' {
@@ -298,43 +299,7 @@ func isSingleColumnName(rendered string) bool {
 	// quotes and a non-empty interior, so these bounds are exact and need no
 	// guard of their own. A quote surviving between them ends the identifier
 	// early and turns the remainder into SQL.
-	return !hasUnescapedQuote(rendered[1 : len(rendered)-1])
-}
-
-// hasUnescapedQuote reports whether text carries a quote that is not part of a
-// doubled "" escape. It reads renderings only: the upsert door judges the KEY
-// with keyCarriesInteriorQuote, which is stricter — a rendering may legitimately
-// carry a doubled quote, a caller's identifier argument may not.
-func hasUnescapedQuote(text string) bool {
-	return strings.Contains(strings.ReplaceAll(text, `""`, ""), `"`)
-}
-
-// isQuotedIdentifier reports whether text is ALREADY a well-formed quoted
-// identifier: wrapped in quotes with every interior quote doubled. Re-quoting
-// one of these would change the name it denotes, which is why the renderers pass
-// it through. Wrapping alone does not qualify — `role" = 'admin', "name` is
-// wrapped and is two SQL tokens.
-func isQuotedIdentifier(text string) bool {
-	return isQuotedString(text) && !hasUnescapedQuote(text[1:len(text)-1])
-}
-
-// quoteIdentifierLiteral wraps text in quotes with every interior quote doubled,
-// which is how Oracle and PostgreSQL both spell a quote inside a name. A quote
-// left undoubled ends the identifier early, so the remainder is parsed as SQL.
-//
-// Collapsing precedes doubling because a key arrives in escaped form: `a""b`
-// already denotes the one-quote name `a"b`, the reading upsertColumnName applies
-// to it. Doubling blind would rename that column. Collapsing first makes the
-// pass idempotent — an already-escaped key survives unchanged, and a lone quote
-// is the only thing that gains a partner.
-func quoteIdentifierLiteral(text string) string {
-	if !strings.ContainsRune(text, '"') {
-		// The overwhelming case, and the hot one: one scan, one allocation, the
-		// same cost this had before it learned to escape.
-		return `"` + text + `"`
-	}
-	collapsed := strings.ReplaceAll(text, `""`, `"`)
-	return `"` + strings.ReplaceAll(collapsed, `"`, `""`) + `"`
+	return !sqllex.HasUnescapedQuote(rendered[1 : len(rendered)-1])
 }
 
 // escapeIdentifiers returns a new slice containing the escaped form of each identifier using qb.EscapeIdentifier.

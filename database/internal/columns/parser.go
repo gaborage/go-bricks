@@ -14,27 +14,6 @@ import (
 // door validates against, sourced from sqllex rather than spelled again here.
 var validDBTagPattern = regexp.MustCompile(`^` + sqllex.IdentifierSegment + `$`)
 
-// oracleQuoteIdentifier applies Oracle-specific quoting rules to an identifier.
-// Reserved words are quoted with double quotes using the canonical list from sqllex package.
-func oracleQuoteIdentifier(column string) string {
-	trimmed := strings.TrimSpace(column)
-	if trimmed == "" {
-		return trimmed
-	}
-
-	// Don't double-quote already quoted identifiers
-	if len(trimmed) >= 2 && trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"' {
-		return trimmed
-	}
-
-	// Quote Oracle reserved words
-	if sqllex.IsOracleReservedWord(trimmed) {
-		return `"` + trimmed + `"`
-	}
-
-	return trimmed
-}
-
 // parseStruct extracts column metadata from a struct type using reflection.
 // It processes `db:"column_name"` tags and applies vendor-specific column quoting.
 //
@@ -148,7 +127,7 @@ func validateDBTag(tag, structName, fieldName string) error {
 func applyVendorQuoting(vendor, column string) string {
 	switch vendor {
 	case dbtypes.Oracle:
-		return oracleQuoteIdentifier(column)
+		return sqllex.QuoteOracleIdentifier(column)
 	case dbtypes.PostgreSQL:
 		// PostgreSQL typically doesn't need quoting for standard column names
 		return column

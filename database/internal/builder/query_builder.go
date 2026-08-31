@@ -12,6 +12,7 @@ import (
 	"github.com/Masterminds/squirrel"
 
 	colreg "github.com/gaborage/go-bricks/database/internal/columns"
+	"github.com/gaborage/go-bricks/database/internal/sqllex"
 	dbtypes "github.com/gaborage/go-bricks/database/types"
 )
 
@@ -711,15 +712,15 @@ func (qb *QueryBuilder) EscapeIdentifier(identifier string) string {
 	// trust boundary, not a post-validation step: a malformed identifier is a
 	// live input here, not an unreachable branch. It stays safe by escaping, and
 	// splitIdentifierSegments hands back the whole string when it cannot parse it.
-	parts := splitIdentifierSegments(identifier)
+	parts := sqllex.SplitIdentifierSegments(identifier)
 	for i, part := range parts {
-		if isQuotedIdentifier(part) {
+		if sqllex.IsQuotedIdentifier(part) {
 			// Already a well-formed quoted identifier; re-quoting would rename it.
 			continue
 		}
 		// All vendors now preserve case for quoted identifiers, and an interior
 		// quote is doubled so it cannot end the identifier early.
-		parts[i] = quoteIdentifierLiteral(part)
+		parts[i] = sqllex.QuoteIdentifierLiteral(part)
 	}
 
 	return strings.Join(parts, ".")
